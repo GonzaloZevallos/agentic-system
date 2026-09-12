@@ -59,7 +59,7 @@ El texto de PM que gobierna el resto de la tarea: comportamiento, flujo, diseño
 _Avoid_: spec, requerimientos
 
 **Flag**:
-Marca de alcance sobre una tarea, como "toca UI" o "toca textos". Los propone Product Analyst y los valida PM.
+Marca de alcance sobre una tarea, como "toca UI" o "toca textos", tomada del vocabulario de flags del producto. Los propone Product Analyst y los valida PM; el set validado reemplaza al propuesto.
 
 **Pieza integrada**:
 El código de todas las subtareas unido por el Developer integrador y revisado por Tech Lead.
@@ -83,7 +83,7 @@ Máximo de devoluciones por par antes de escalar. Hoy 2.
 Entrega de la tarea al humano por PjM, con historial y motivo. Pausa la tarea.
 
 **Fallo de rol**:
-El rol se rompe: excepción del harness, turnos agotados sin resultado, salida estructurada ausente o inválida, texto vacío. Distinto de devolución; no cuenta para el límite.
+El rol se rompe: excepción del harness, turnos agotados sin resultado, salida estructurada ausente o inválida, `markdown` vacío. Distinto de devolución; no cuenta para el límite.
 _Avoid_: error (demasiado amplio)
 
 **Handoff**:
@@ -111,7 +111,7 @@ Los issues con la etiqueta `needs-human`.
 Las definiciones acumuladas que mantiene PM.
 
 **Contexto de producto**:
-El directorio que el sistema recibe como parámetro con todo lo que varía por producto.
+La raíz del repo del producto, que el sistema recibe como parámetro. Ahí está todo lo que varía por producto: el código, los ADRs y `.agentic/`.
 
 **Override de prompt**:
 Un prompt de rol que vive en el repo del producto y pisa el default del sistema.

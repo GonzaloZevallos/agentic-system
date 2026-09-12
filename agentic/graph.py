@@ -1,103 +1,165 @@
-"""LangGraph wiring for the feature path, first slice: PjM -> Product Analyst -> PM.
+"""Feature path, first slice: PjM -> Product Analyst -> PM, with the PM→Product
+Analyst return loop and escalation to the human.
 
-Context rule from DISENO.md: a role receives only what the previous role wrote
-in its "For the next role" block, with the full document kept on disk as backup.
+Context rule (DISENO.md, 6): each role reads, in full, the sections it declares
+in `Role.reads`. Not the previous role's handoff: a validator that only sees a
+summary returns over gaps that were never there.
+
+Escalation ends the run with `status: waiting_on_human` for now. `interrupt()`
+and `agentic resume` come with the checkpointer (ADR-0003).
+
+The module exports `graph` uncompiled for `langgraph dev`; the CLI compiles it.
 """
+
 from __future__ import annotations
 
-import re
-from typing import Annotated, TypedDict
-
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 
-from . import document
-from .agent import Output, Role, run
-from .roles import PJM, PM, PRODUCT_ANALYST
+from . import document, flags
+from .agent import Output, RoleFailure, run
+from .configuration import Configuration
+from .roles import ORIGINAL, PAIR_PM_PA, PJM, PM, PRODUCT_ANALYST, Role
+from .state import Status, TaskInput, TaskState
 
-_HANDOFF_SECTION = re.compile(r"##\s*For the next role\s*\n(.+)", re.S | re.I)
-
-
-def _accumulate(current: float, new: float) -> float:
-    return current + new
+WAITING_ON_HUMAN: Status = "waiting_on_human"
 
 
-class TaskState(TypedDict, total=False):
-    id: str
-    title: str
-    description: str
-    type: str
-    status: str
-    current_role: str
-    flags: dict
-    escalated: str | None
-    sections: dict[str, str]
-    handoff: str
-    cost_usd: Annotated[float, _accumulate]
+def context_for(state: TaskState, role: Role) -> str:
+    """The role's input: the sections it declares, in document order, that exist."""
+    sections = state.get("sections", {})
+    parts = []
+    for name in role.reads:
+        if name == ORIGINAL:
+            parts.append(f"## {ORIGINAL}\n\n{state['title']}\n\n{state['description']}")
+        elif name in sections:
+            parts.append(f"## {name}\n\n{sections[name]}")
+    return "\n\n".join(parts)
 
 
-def _handoff_of(output: Output) -> str:
-    """The block the next role reads. Falls back to the whole text."""
-    match = _HANDOFF_SECTION.search(output.text)
-    return match.group(1).strip() if match else output.text
+async def _run_role(
+    state: TaskState, role: Role, config: RunnableConfig, **placeholders: object
+) -> tuple[Output | None, TaskState]:
+    """Run a role and build the state patch. On `RoleFailure` the patch is an escalation."""
+    cfg = Configuration.from_runnable_config(config)
+    vocabulary = flags.load(cfg.product_dir)
+    loaded = role.prompt(
+        cfg.product_dir,
+        max_returns=cfg.max_returns_per_pair,
+        flags=flags.describe(vocabulary),
+        **placeholders,
+    )
+    patch: TaskState = {"current_role": role.name, "prompts": {role.slug: loaded.hash}}
+    try:
+        output = await run(
+            role,
+            context_for(state, role),
+            system_prompt=loaded.text,
+            model=cfg.model_for(role.slug, role.kind),
+            retries=cfg.role_retries,
+            flags=vocabulary,
+        )
+    except RoleFailure as exc:
+        patch |= {"failures": exc.failures, "escalated": str(exc), "status": WAITING_ON_HUMAN}
+        _persist(state, patch, cfg)
+        return None, patch
 
-
-def _record(state: TaskState, role: Role, output: Output, **extra) -> TaskState:
-    """Build the state patch for a finished role and persist the document.
-
-    `cost_usd` is a reducer field, so the patch carries only this role's cost
-    while the document needs the running total.
-    """
-    sections = dict(state.get("sections", {}))
-    sections[role.name] = output.text
-    patch: TaskState = {
-        "sections": sections,
-        "handoff": _handoff_of(output),
-        "current_role": role.name,
+    patch |= {
+        "sections": {role.name: output.text},
+        "failures": output.failures,
         "cost_usd": output.cost_usd,
-        **extra,
     }
-    total = state.get("cost_usd", 0.0) + output.cost_usd
-    document.write({**state, **patch, "cost_usd": total})
+    return output, patch
+
+
+def _persist(state: TaskState, patch: TaskState, cfg: Configuration) -> None:
+    """Write the document with the reducers applied by hand: the patch is partial."""
+    merged: dict = {**state, **patch}
+    merged["cost_usd"] = state.get("cost_usd", 0.0) + patch.get("cost_usd", 0.0)
+    merged["failures"] = state.get("failures", []) + patch.get("failures", [])
+    for key in ("sections", "prompts", "returns"):
+        merged[key] = {**state.get(key, {}), **patch.get(key, {})}
+    document.write(merged, cfg.product_dir)
+
+
+async def classify(state: TaskState, config: RunnableConfig) -> TaskState:
+    output, patch = await _run_role(state, PJM, config)
+    if output is None:
+        return patch
+    task_type = output.data["type"]
+    patch["type"] = task_type
+    if output.data["confidence"] == "low":
+        # Low confidence is an escalation, not a guess. PjM does not re-route
+        # while a task waits on the human (DISENO.md, 3).
+        patch["escalated"] = f"PjM could not classify with confidence: {output.data['reason']}"
+        patch["status"] = WAITING_ON_HUMAN
+    elif task_type != "feature":
+        # The task left the inbox and the system cannot carry it yet: the human must see it.
+        patch["escalated"] = f"{task_type} path not implemented yet"
+        patch["status"] = WAITING_ON_HUMAN
+    _persist(state, patch, Configuration.from_runnable_config(config))
     return patch
 
 
-async def classify(state: TaskState) -> TaskState:
-    output = await run(PJM, f"Task: {state['title']}\n\n{state['description']}")
-    extra: dict = {"type": output.data.get("type", "unknown")}
-    # Low confidence is an escalation, not a guess. DISENO.md: PjM never re-routes
-    # on its own while a task waits on the human.
-    if output.data.get("confidence") == "low":
-        extra["escalated"] = "PjM could not classify with confidence"
-        extra["status"] = "waiting_on_human"
-    return _record(state, PJM, output, **extra)
+async def define(state: TaskState, config: RunnableConfig) -> TaskState:
+    output, patch = await _run_role(state, PRODUCT_ANALYST, config)
+    if output is None:
+        return patch
+    patch["flags"] = output.data["flags"]
+    patch["status"] = "defined"
+    _persist(state, patch, Configuration.from_runnable_config(config))
+    return patch
 
 
-async def define(state: TaskState) -> TaskState:
-    prompt = f"Feature: {state['title']}\n\n{state['description']}\n\nFrom PjM:\n{state['handoff']}"
-    return _record(state, PRODUCT_ANALYST, await run(PRODUCT_ANALYST, prompt))
+async def validate(state: TaskState, config: RunnableConfig) -> TaskState:
+    cfg = Configuration.from_runnable_config(config)
+    used = state.get("returns", {}).get(PAIR_PM_PA, 0)
+    remaining = cfg.max_returns_per_pair - used
+    output, patch = await _run_role(state, PM, config, remaining_returns=remaining)
+    if output is None:
+        return patch
+
+    patch["flags"] = output.data["flags"]
+    if output.data["verdict"] == "approved":
+        patch["status"] = "definition_ready"
+    elif remaining > 0:
+        patch["returns"] = {PAIR_PM_PA: used + 1}
+        patch["status"] = "returned"
+    else:
+        # The pair hit its limit: escalate, always (DISENO.md, 3). PM knew this was
+        # its last return, so the reason is written for the human.
+        limit = cfg.max_returns_per_pair
+        patch["escalated"] = f"{PAIR_PM_PA} hit {limit} returns: {output.data['reason']}"
+        patch["status"] = WAITING_ON_HUMAN
+    _persist(state, patch, cfg)
+    return patch
 
 
-async def validate(state: TaskState) -> TaskState:
-    prompt = f"Feature: {state['title']}\n\nFrom the Product Analyst:\n{state['handoff']}"
-    output = await run(PM, prompt)
-    return _record(state, PM, output, status="definition_ready")
+def after_classify(state: TaskState) -> str:
+    return END if state.get("escalated") else "define"
 
 
-def _after_classify(state: TaskState) -> str:
+def after_define(state: TaskState) -> str:
+    return END if state.get("escalated") else "validate"
+
+
+def after_validate(state: TaskState) -> str:
     if state.get("escalated"):
         return END
-    # Only the feature path exists so far; bug and platform_enhancement stop here.
-    return "define" if state.get("type") == "feature" else END
+    return "define" if state.get("status") == "returned" else END
 
 
-def build():
-    graph = StateGraph(TaskState)
+def build_graph() -> StateGraph:
+    graph = StateGraph(TaskState, input_schema=TaskInput)
     graph.add_node("classify", classify)
     graph.add_node("define", define)
     graph.add_node("validate", validate)
 
     graph.add_edge(START, "classify")
-    graph.add_conditional_edges("classify", _after_classify, {"define": "define", END: END})
-    graph.add_edge("define", "validate")
-    graph.add_edge("validate", END)
-    return graph.compile()
+    graph.add_conditional_edges("classify", after_classify, {"define": "define", END: END})
+    graph.add_conditional_edges("define", after_define, {"validate": "validate", END: END})
+    graph.add_conditional_edges("validate", after_validate, {"define": "define", END: END})
+    return graph
+
+
+graph = build_graph()

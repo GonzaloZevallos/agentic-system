@@ -279,7 +279,9 @@ Dispara cuando detecta un patrón negativo.
 - Analiza competidores para tener criterio sobre el comportamiento.
 - Redacta la definición de comportamiento.
 - Define qué métricas de negocio aporta la funcionalidad y cómo se obtienen.
-- Marca los flags. Los flags no son una lista fija: PM define por tarea cuáles aplican.
+- Marca los flags. El vocabulario de flags es cerrado y lo define el producto en
+  `.agentic/flags.yaml`, con un default mínimo del sistema; Product Analyst marca cada uno
+  sí/no y el set validado por PM reemplaza al propuesto.
 - Consulta a PM si la tarea es ambigua.
 
 **En bug**
@@ -530,6 +532,7 @@ Forma del repo del producto:
 | `.agentic/tasks/` | Documento único por tarea | Los roles, sección por sección |
 | `.agentic/producto/` | Definiciones acumuladas, la fuente de verdad de producto | PM |
 | `.agentic/prompts/` | Overrides de prompts por rol, si los hay (ADR-0005) | PjM |
+| `.agentic/flags.yaml` | Vocabulario de flags del producto, pisa el default del sistema | Humano, después PM |
 | `.agentic/state.sqlite` | Checkpointer del grafo, fuera del control de versiones (ADR-0003) | El sistema |
 
 Los ADRs viven con el código, no bajo `.agentic/`, porque son del producto y los lee
@@ -640,14 +643,14 @@ existe justamente para pagar ese costo solo donde compre calidad.
 | 3 | ~~ADRs~~ **resuelto**: `docs/adr/`, primero el humano, después Tech Lead, valida el efímero | — |
 | 4 | Frecuencia de cada reloj proactivo | Etapa 5 |
 | 5 | Señales y umbrales de SRE/Ops para decidir que algo es bug, más deduplicación | SRE/Ops, etapa 5 |
-| 6 | Lista de secciones que lee cada rol, una por rol | Implementar |
+| 6 | ~~Lista de secciones que lee cada rol~~ **resuelto**: `Role.reads`, la entrada del rol son esas secciones completas. Cada rol nuevo declara la suya al entrar | — |
 | 7 | UX Lead, Design Lead y Tech Writer en detalle | Etapa 4 |
 | 8 | Criterio de clasificación de PjM y qué hace si duda | PjM |
 | 9 | Cuántos Tech Leads existen en el sistema | Sin responder |
 | 10 | ~~Versionado de prompts~~ **resuelto**: `.md` por rol con overlay en el producto, hash por tarea (ADR-0005). Falta el versionado de **parámetros** de `Configuration` | Mejora del proceso de PjM |
 | 11 | Las cinco tareas del set de evaluación, todavía sin escribir | Medir cualquier cosa |
 | 12 | El v0 del gimnasio, todavía sin construir | Etapa 1 en adelante |
-| 13 | Campos exactos de `Configuration` y esquemas estructurados de cada rol (sección 14) | Implementar |
+| 13 | ~~Campos de `Configuration` y esquemas~~ **resuelto**: `agentic/configuration.py` y `agentic/schemas.py`, uno por rol implementado. Los roles que faltan agregan su esquema al entrar | — |
 | 14 | Script que corre el set de cinco tareas y escribe el JSONL de resultados (sección 14) | Medir |
 
 **Resueltos desde la versión anterior**: el stack y el runtime de agentes (LangGraph para el
@@ -697,7 +700,8 @@ entorno > `config["configurable"]` > default. Cada nodo la lee al inicio. Campos
 modelo de pensadores, modelo de validadores, máximo de devoluciones por par (2), reintentos
 por fallo de rol (1), ventana de evaluación (10), directorio de contexto de producto. Cada
 `Role` declara `kind` (pensador o validador) y `Configuration` mapea kind → modelo, con
-override por rol. Sin metadata de UI: no se usa Open Agent Platform.
+override por rol. Sin metadata de UI: no se usa Open Agent Platform. `product_dir` es obligatorio: sin él
+la CLI falla, porque el sistema no tiene un lugar sano donde escribir por defecto (ADR-0002).
 
 ### Prompts
 
@@ -712,8 +716,10 @@ de PjM, en código, nunca del modelo. Overlay y versionado: ADR-0005.
 
 Lo que PjM procesa mecánicamente (clasificación con confianza, veredicto con motivo, flags,
 mapa de subtareas) se define como esquema Pydantic y se pasa al SDK como `json_schema`. El
-Markdown de la sección sigue siendo texto libre. Una salida estructurada ausente o inválida
-es fallo de rol, no un diccionario vacío.
+Markdown de la sección sigue siendo texto libre, pero viaja como campo `markdown` del mismo
+esquema: el SDK termina el turno en cuanto el modelo llama a la herramienta de salida
+estructurada, así que una respuesta de texto aparte nunca llega. Una salida estructurada
+ausente o inválida, o un `markdown` vacío, es fallo de rol, no un diccionario vacío.
 
 ### Estado del grafo
 

@@ -1,0 +1,4 @@
+# Default flag vocabulary. A product overrides it entirely with `.agentic/flags.yaml`.
+# Product Analyst proposes a value for every flag; PM's validated set replaces it.
+touches_ui: The change adds or alters something a user sees or interacts with.
+touches_copy: The change adds or alters user-facing text.
