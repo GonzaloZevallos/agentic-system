@@ -168,12 +168,16 @@ El validador **reporta** cada devolución a PjM, y cuentan para el límite.
 
 ### Cola de escalados
 
-El humano revisa **en lote, una vez por día**. Los escalados se acumulan en una cola y no
-interrumpen. Una tarea escalada queda pausada y se retoma desde el mismo punto cuando el
-humano responde, con el contador de ese par reseteado.
+El humano revisa **en lote, una vez por día**. Los escalados se acumulan y no interrumpen.
+Una tarea escalada queda pausada y se retoma desde el mismo punto cuando el humano responde,
+con el contador de ese par reseteado.
 
-Esto exige estado durable: el grafo se frena, el estado sobrevive al proceso, y la respuesta
-del humano lo reanuda donde estaba.
+La cola no se construye: es la **etiqueta `needs-human`** en el issue, más el historial de
+devoluciones en un comentario. Revisar es filtrar por esa etiqueta. Responder es sacarla y
+dejar la decisión en un comentario.
+
+Esto exige estado durable del lado del sistema: el grafo se frena, el estado sobrevive al
+proceso, y la respuesta del humano lo reanuda donde estaba.
 
 ### Fallo de rol
 
@@ -329,6 +333,8 @@ Uno por tarea. **Nunca codea, siempre delega.**
 4. Decide si la 2ª pasada necesita QA Seguridad y/o QA Performance.
 5. Parte en subtareas, marca las paralelizables, prioriza por valor entregado rápido. Puede
    consultar el orden con PM.
+5b. Escribe un ADR en `docs/adr/` cuando una decisión técnica sobrevive a la tarea. El
+   efímero lo valida en el mismo pingpong.
 6. Informa a PjM: plan de subtareas, Developers asignados, QAs convocados.
 
 **Ejecución**
@@ -396,6 +402,8 @@ es señal de adelantarlos.
 
 ## 5. Entradas del sistema
 
+Todo lo que genera una tarea la genera como **issue de GitHub con la etiqueta `agentic`**.
+
 | Fuente | Rol | Reloj | Genera | Aprobación humana |
 |---|---|---|---|---|
 | Humano | — | — | cualquier tipo | — |
@@ -404,6 +412,9 @@ es señal de adelantarlos.
 | Competidores | PM | propio | features | Sí |
 | Métricas | Data Analyst | propio | insumo para PM | — |
 | Feedback de usuarios | Customer Insights | propio | insumo para PM | — |
+
+Los roles proactivos que necesitan aprobación humana crean el issue **sin** la etiqueta
+`agentic`. Ponerla es la aprobación.
 
 Cada rol proactivo tiene su **propio reloj**, no hay un ciclo central que los despierte.
 
@@ -415,10 +426,23 @@ recién ahí entran a PjM.
 
 ## 6. Transporte de información
 
-**Un documento único por tarea.** Vive en disco o en un store. Cada rol lee lo que necesita
-y escribe su sección. Se eligió sobre mensajes directos entre agentes porque da trazabilidad
-total a PjM sin esfuerzo extra, permite reintentos, y cualquier rol puede releer sin pedirle
-nada a nadie.
+**Un documento único por tarea.** Un archivo en `.agentic/tasks/` del repo del producto. Cada
+rol lee lo que necesita y escribe su sección. Se eligió sobre mensajes directos entre agentes
+porque da trazabilidad total a PjM sin esfuerzo extra, permite reintentos, y cualquier rol
+puede releer sin pedirle nada a nadie.
+
+**GitHub issues es la bandeja de entrada, no el documento.** Las tareas entran como issues
+del repo del producto. El sistema toma solo los que llevan la etiqueta `agentic`, que pone
+un humano: es el interruptor que evita que el sistema se meta en cualquier issue suelto.
+
+PjM sincroniza hacia el issue lo que le sirve a un humano: la etiqueta de clasificación, la
+etiqueta de estado, un comentario de resumen al cerrar, y el cierre. El detalle de trabajo
+no va al issue.
+
+Se eligió el archivo sobre el issue como documento porque cada rol lee **secciones por
+nombre**, y parsear eso de comentarios de GitHub es frágil y cuesta una llamada de API por
+lectura. El archivo se grepea, se versiona y entra en el checkpoint. La contra asumida es
+que hay sincronización que se puede desfasar; el issue es siempre el lado derivado.
 
 **Formato híbrido.** Markdown para el contenido que producen los agentes, porque los modelos
 lo leen y escriben bien y es auditable a mano. Frontmatter YAML para lo que PjM procesa
@@ -496,9 +520,22 @@ adaptador se extrae cuando aparezca el segundo producto.
 
 **Repositorios separados.** El sistema agéntico vive en su propio repo. El producto vive en
 otro. El sistema nunca escribe dentro de su propio repo cuando trabaja: todo lo que produce
-(documentos de tarea, definiciones acumuladas, ADRs, código) se escribe en el directorio del
+(documentos de tarea, definiciones acumuladas, ADRs, código) se escribe en el repo del
 producto. Si no fuera así, la historia de un producto ensuciaría el repo del sistema y un
 segundo producto se mezclaría con el primero.
+
+Forma del repo del producto:
+
+| Ruta | Contenido | Quién escribe |
+|---|---|---|
+| código de la app | El producto | Developer |
+| `docs/adr/` | ADRs numerados | Humano el primero, después Tech Lead |
+| `.agentic/tasks/` | Documento único por tarea | Los roles, sección por sección |
+| `.agentic/producto/` | Definiciones acumuladas, la fuente de verdad de producto | PM |
+
+Los ADRs viven con el código, no bajo `.agentic/`, porque son del producto y los lee
+cualquiera. Los valida el Tech Lead efímero en el pingpong, y el humano los ve igual al
+revisar el diff antes de mergear.
 
 ### El producto de prueba
 
@@ -600,8 +637,8 @@ existe justamente para pagar ese costo solo donde compre calidad.
 | # | Pendiente | Bloquea |
 |---|---|---|
 | 1 | Formato concreto de la definición de comportamiento | Implementar Product Analyst y PM |
-| 2 | Fuente de verdad de producto: **dónde vive ya está resuelto** (directorio de contexto de producto). Falta cómo se acumula y quién la mantiene | Product Analyst en bugs, PM |
-| 3 | ADRs: quién los escribe y quién los valida. El primero lo escribe el humano con el stack del v0 | Tech Lead |
+| 2 | Fuente de verdad de producto: vive en `.agentic/producto/` y la mantiene PM. Falta el formato y cómo se acumula | Product Analyst en bugs, PM |
+| 3 | ~~ADRs~~ **resuelto**: `docs/adr/`, primero el humano, después Tech Lead, valida el efímero | — |
 | 4 | Frecuencia de cada reloj proactivo | Etapa 5 |
 | 5 | Señales y umbrales de SRE/Ops para decidir que algo es bug, más deduplicación | SRE/Ops, etapa 5 |
 | 6 | Lista de secciones que lee cada rol, una por rol | Implementar |
