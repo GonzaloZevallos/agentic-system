@@ -4,3 +4,6 @@ __pycache__/
 .env
 tasks/
 .claude/
+
+# Estado local de `langgraph dev`
+.langgraph_api/
