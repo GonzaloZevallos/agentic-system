@@ -1,7 +1,8 @@
 # Sistema agéntico de desarrollo
 
-Estado consolidado del diseño. Reemplaza a la conversación de origen
-(`docs/conversacion-origen.md`), que se conserva solo como historial.
+Estado consolidado del diseño. Reemplaza a la conversación de origen en claude.ai
+(share: `16d37910-919c-4167-9984-48fcf32ffe1e`), cuyo volcado se borró del repo el
+2026-09-12 y queda en el historial de git.
 
 Convención de nombres fijada: **PjM** = Project Manager (ex "Lead"), **PM** = Product Manager.
 
