@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "feature": "./agentic/graph.py:graph"
+  },
+  "env": ".env"
+}
