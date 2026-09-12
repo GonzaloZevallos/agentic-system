@@ -5,6 +5,10 @@ Estado consolidado del diseño. Reemplaza a la conversación de origen
 
 Convención de nombres fijada: **PjM** = Project Manager (ex "Lead"), **PM** = Product Manager.
 
+Las secciones 8 a 11 salieron de una sesión de interrogatorio al diseño y son las que lo
+aterrizan: qué producto, cómo se mide, con qué modelos y en qué orden se construye. Si algo
+en las secciones 1 a 7 las contradice, mandan las nuevas.
+
 ---
 
 ## 1. Roles
@@ -162,6 +166,27 @@ El validador **reporta** cada devolución a PjM, y cuentan para el límite.
 - Si el par que llega al límite es Tech Lead→Developer, se corta esa subtarea. El resto
   sigue, salvo lo que dependa de ella.
 
+### Cola de escalados
+
+El humano revisa **en lote, una vez por día**. Los escalados se acumulan en una cola y no
+interrumpen. Una tarea escalada queda pausada y se retoma desde el mismo punto cuando el
+humano responde, con el contador de ese par reseteado.
+
+Esto exige estado durable: el grafo se frena, el estado sobrevive al proceso, y la respuesta
+del humano lo reanuda donde estaba.
+
+### Fallo de rol
+
+Distinto de una devolución. Es el rol que se rompe: JSON inválido, salida vacía, se le
+acaban los turnos.
+
+- **Un reintento**, pasándole el error como entrada.
+- Si falla de nuevo, **escala al humano**. No cuenta para el límite de devoluciones del par.
+
+Un reintento con el error explicado arregla casi todos los casos de formato. Más reintentos
+es gastar en un rol que ya se rompió; escalar al primer fallo llena la cola de cosas que se
+arreglaban solas.
+
 ### Enrutamiento de devoluciones de QA
 
 - Rechazo por comportamiento → vía PjM, a PM.
@@ -297,7 +322,9 @@ Uno por tarea. **Nunca codea, siempre delega.**
 **Análisis**
 
 1. Propone la solución técnica.
-2. La pingponea con un **segundo Tech Lead efímero** hasta validarla.
+2. La pingponea con un **segundo Tech Lead efímero** hasta validarla. El efímero corre con
+   modelo más capaz y **prompt de adversario**: su trabajo es encontrar el fallo, no validar.
+   Sin esas dos asimetrías el pingpong solo ratifica.
 3. Revisa y ajusta el plan de tests funcionales.
 4. Decide si la 2ª pasada necesita QA Seguridad y/o QA Performance.
 5. Parte en subtareas, marca las paralelizables, prioriza por valor entregado rápido. Puede
@@ -306,7 +333,9 @@ Uno por tarea. **Nunca codea, siempre delega.**
 
 **Ejecución**
 
-- Despliega un Developer por subtarea.
+- Despliega un Developer por subtarea. Cada Developer es un **nodo del grafo**, no un
+  subagente escondido dentro de la llamada de Tech Lead: PjM tiene que saber qué Developer
+  hizo qué subtarea para poder enrutar los rechazos técnicos de QA.
 - Responde consultas de Developers y escala a PM o QA si hace falta.
 - Revisa **cada subtarea** al entregarse y también **la integración**.
 - Si rechaza, vuelve **al mismo Developer**. Nunca reasigna a otro.
@@ -324,6 +353,11 @@ técnico y ADRs con los Tech Leads por tarea.
 - Implementa código y tests: unitarios, de integración y e2e según sea necesario.
 - Consulta solo a Tech Lead. Tech Lead escala si hace falta.
 - Entrega código, resumen de cambios, decisiones técnicas y supuestos tomados.
+
+**Herramientas y permisos**. Es el único rol que ejecuta: lectura y escritura de archivos,
+bash y tests, **sin aprobación humana por comando**. La jaula es el directorio del producto,
+más un tope de costo por llamada. Pedir aprobación comando por comando rompe la revisión en
+lote: el sistema quedaría congelado esperando al humano en cada paso.
 
 ### QA Lead y los tres QA
 
@@ -390,10 +424,15 @@ nada a nadie.
 lo leen y escriben bien y es auditable a mano. Frontmatter YAML para lo que PjM procesa
 mecánicamente.
 
-**Contexto por rol.** Cada rol recibe por defecto **solo lo que produjo el rol previo**. Es
-lo más barato en tokens y evita que el agente se distraiga. Para que no se pierda
-información, cada rol escribe su salida pensando en el siguiente: incluye lo que ese rol
-necesita, no todo lo que sabe. El documento único queda como respaldo consultable.
+**Contexto por rol.** Cada rol declara en su definición la **lista fija de secciones** del
+documento que lee. No recibe solo lo del rol previo: Tech Lead lee la definición
+consolidada de PM y los casos de QA, no el resumen del resumen.
+
+La lista es declarativa y no la decide el modelo en tiempo de ejecución. Así PjM la puede
+registrar, y cuando un rol falla se puede ver si le faltaba información.
+
+Cada rol igual cierra con un bloque **"Para el siguiente rol"**, que sigue siendo útil como
+handoff explícito, pero ya no es lo único que viaja.
 
 ### Esqueleto del documento
 
@@ -438,25 +477,142 @@ No aplica a bugs ni a platform enhancements.
 
 ---
 
-## 8. Pendientes
+## 8. Producto de prueba y costura
+
+El sistema es **agnóstico al producto**. Lo que cambia por producto entra como parámetro;
+lo que no cambia es el proceso.
+
+| Del producto (parámetro) | Del sistema (fijo) |
+|---|---|
+| Repositorio | Roles y sus prompts |
+| Definiciones acumuladas (fuente de verdad de producto) | Caminos y ruteo |
+| ADRs | Conteo de devoluciones y control de loops |
+| Acceso a métricas | Documento único y sus secciones |
+
+**Forma de la costura**: un **directorio de contexto de producto** que el sistema recibe
+como parámetro. Se eligió sobre un adaptador con funciones porque todavía no se sabe qué
+varía de verdad entre productos, y no se puede generalizar sobre un solo ejemplo. El
+adaptador se extrae cuando aparezca el segundo producto.
+
+### El producto de prueba
+
+**SaaS B2B para dueños de gimnasios**: socios, suscripciones, asistencia y métricas de
+negocio. Se eligió porque tiene métricas reales y discutibles (churn, asistencia promedio,
+recupero de inactivos, ingreso recurrente), lo que hace que la regla de "no está terminada
+si no sale medida" se pueda probar de verdad y no quede como teatro.
+
+**Stack**: Python, FastAPI, SQLite, pytest. **Solo API, sin frontend.**
+
+Sin frontend, UX Designer, UX Lead, UI Designer y Design Lead no tienen nada que hacer. Eso
+es deliberado: entran cuando haya interfaz, no antes.
+
+### La versión cero la construye el humano
+
+El sistema **mantiene y hace crecer** un producto; no lo pare. En greenfield la mitad de los
+roles no tiene insumo: no hay definiciones anteriores contra las cuales comparar un bug, no
+hay producción que monitorear, no hay usuarios que dejen feedback.
+
+Por eso el v0 lo escribe el humano a mano: **socios, suscripciones y asistencia, con tests y
+CI**. Las métricas quedan **afuera a propósito**, para que la primera tarea real del sistema
+sea el dashboard y ejercite la regla de medición.
+
+Los tests y el CI van en el v0 porque son el criterio de éxito del sistema. Sin ellos no hay
+nada que medir.
+
+---
+
+## 9. Criterio de éxito y evaluación
+
+Sin esto, la mejora del proceso de PjM no es mejora, es deriva.
+
+**Set fijo de cinco tareas.** Salen de lo que el humano vaya postergando mientras arma el
+v0: tareas reales, escritas por alguien con el problema en la mano. Se re-corren idénticas
+contra cada versión de los prompts. Cinco tareas distintas cada vez no miden nada, porque no
+se puede separar si mejoró el prompt o si las tareas eran más fáciles.
+
+**Puntaje binario y estricto.** Una tarea cuenta solo si el diff pasa los tests y el humano
+lo mergea **sin tocar**. No hay crédito parcial: es lo único que no se corre con el humor
+del día.
+
+**Nota aparte.** Cada tarea deja anotado qué le faltó. No puntúa, pero dice qué prompt tocar
+sin ensuciar el número.
+
+**Línea de base.** Cada vez que se cambia un prompt o un parámetro, se re-corre el set
+entero. Requiere versionado de prompts, que ya era condición para poder revertir.
+
+---
+
+## 10. Modelos por rol
+
+Un validador que comparte modelo, prompt e información con el pensador **ratifica, no
+valida**. La regla es que todo validador traiga una fuente que el pensador no tuvo.
+
+| | Modelo | Por qué |
+|---|---|---|
+| Pensadores | Sonnet | Son los que más llamadas hacen |
+| Validadores | Opus | Asimetría más barata de implementar y de medir |
+
+Las otras fuentes de asimetría, cuando existen, valen más que el modelo: QA Funcional
+ejecuta tests contra el producto real, QA Seguridad y Performance leen código real, Data
+Analyst consulta métricas reales. Esos validadores se ganan el lugar solos.
+
+Los que no traen información nueva (Tech Lead efímero, PM sobre Product Analyst) dependen
+enteramente de la asimetría de modelo y de prompt. Si no la tienen, sobran.
+
+---
+
+## 11. Orden de implementación
+
+Los 17 roles quedan en el diseño. Lo que se ordena es el orden en que se construyen.
+
+**Regla**: cada rol nuevo tiene que mostrar que las cinco tareas salen **mejor con él que
+sin él**. Es lo que convierte la intuición de organigrama en una hipótesis que se puede
+refutar.
+
+| Etapa | Roles | Por qué ahí |
+|---|---|---|
+| 1 | PjM, Product Analyst, PM, Tech Lead, Developer | Mínimo para llegar a un diff medible |
+| 2 | QA Lead, QA Funcional | Primer validador con información nueva real |
+| 3 | Data Analyst, QA Seguridad, QA Performance | Cuando haya métricas y código que valga auditar |
+| 4 | UX, UI, Design Lead, Tech Writer | Cuando haya frontend |
+| 5 | SRE/Ops, Customer Insights | Cuando haya producción y usuarios |
+
+**Consecuencia asumida**: el camino de bug no se puede ejercitar hasta que el producto tenga
+definiciones acumuladas. Las primeras tareas del sistema son todas features.
+
+**Riesgo conocido de la estructura por roles.** Un organigrama humano existe porque las
+personas tienen contexto limitado, no se pueden clonar, y alguien rinde cuentas. Los agentes
+no tienen ninguna de las tres restricciones. Copiar la forma sin el motivo trae dos costos
+reales: los errores se componen a lo largo de la cadena de handoffs, y con muchos roles no
+se puede atribuir cuál arruinó el resultado. La regla de que cada rol se gane el lugar
+existe justamente para pagar ese costo solo donde compre calidad.
+
+---
+
+## 12. Pendientes
 
 | # | Pendiente | Bloquea |
 |---|---|---|
 | 1 | Formato concreto de la definición de comportamiento | Implementar Product Analyst y PM |
-| 2 | Fuente de verdad de producto: qué es, cómo se acumula, quién la mantiene | Product Analyst en bugs, PM |
-| 3 | ADRs: quién los escribe, quién los valida, cómo los lee Tech Lead | Tech Lead |
-| 4 | Frecuencia de cada reloj proactivo | SRE/Ops, PM, Data Analyst, Customer Insights, Tech Lead proactivo |
-| 5 | Señales y umbrales de SRE/Ops para decidir que algo es bug, más deduplicación | SRE/Ops |
-| 6 | Entradas y salidas exactas de cada rol, más allá del esqueleto de secciones | Implementar |
-| 7 | UX Lead, Design Lead y Tech Writer en detalle | Menor |
+| 2 | Fuente de verdad de producto: **dónde vive ya está resuelto** (directorio de contexto de producto). Falta cómo se acumula y quién la mantiene | Product Analyst en bugs, PM |
+| 3 | ADRs: quién los escribe y quién los valida. El primero lo escribe el humano con el stack del v0 | Tech Lead |
+| 4 | Frecuencia de cada reloj proactivo | Etapa 5 |
+| 5 | Señales y umbrales de SRE/Ops para decidir que algo es bug, más deduplicación | SRE/Ops, etapa 5 |
+| 6 | Lista de secciones que lee cada rol, una por rol | Implementar |
+| 7 | UX Lead, Design Lead y Tech Writer en detalle | Etapa 4 |
 | 8 | Criterio de clasificación de PjM y qué hace si duda | PjM |
-| 9 | Cuántos Tech Leads existen en el sistema | Sin responder en la conversación |
-| 10 | Versionado de prompts y parámetros | Mejora del proceso de PjM |
-| 11 | Nada de esto está implementado: falta elegir stack y runtime de agentes | Todo |
+| 9 | Cuántos Tech Leads existen en el sistema | Sin responder |
+| 10 | Versionado de prompts y parámetros | Mejora del proceso de PjM y línea de base del set |
+| 11 | Las cinco tareas del set de evaluación, todavía sin escribir | Medir cualquier cosa |
+| 12 | El v0 del gimnasio, todavía sin construir | Etapa 1 en adelante |
+
+**Resueltos desde la versión anterior**: el stack y el runtime de agentes (LangGraph para el
+flujo entre roles, Claude Agent SDK como harness de cada rol, autenticado con suscripción),
+dónde vive la fuente de verdad de producto, y qué producto se usa de prueba.
 
 ---
 
-## 9. Decisiones que fueron reemplazadas
+## 13. Decisiones que fueron reemplazadas
 
 Se anotan para no reintroducirlas por error.
 
@@ -472,3 +628,6 @@ Se anotan para no reintroducirlas por error.
 | UX entra en bugs de flujo | Un bug de flujo es funcional, lo valida PM |
 | PM y Data Analyst validan en paralelo | PM primero, Data Analyst después |
 | Tech Writer queda bajo PM | Tech Writer es independiente |
+| Cada rol recibe solo lo que produjo el rol previo | Cada rol declara la lista de secciones que lee |
+| El pingpong del Tech Lead es con un igual | El efímero usa modelo más capaz y prompt de adversario |
+| Los 17 roles se construyen todos y después se mide | Se construyen de a uno y cada uno se gana el lugar |
