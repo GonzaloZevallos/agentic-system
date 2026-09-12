@@ -1,13 +1,18 @@
 # Sistema agéntico de desarrollo
 
-Estado consolidado del diseño. Reemplaza a la conversación de origen
-(`docs/conversacion-origen.md`), que se conserva solo como historial.
+Estado consolidado del diseño. Reemplaza a la conversación de origen en claude.ai
+(share: `16d37910-919c-4167-9984-48fcf32ffe1e`), cuyo volcado se borró del repo el
+2026-09-12 y queda en el historial de git.
 
 Convención de nombres fijada: **PjM** = Project Manager (ex "Lead"), **PM** = Product Manager.
 
 Las secciones 8 a 11 salieron de una sesión de interrogatorio al diseño y son las que lo
-aterrizan: qué producto, cómo se mide, con qué modelos y en qué orden se construye. Si algo
-en las secciones 1 a 7 las contradice, mandan las nuevas.
+aterrizan: qué producto, cómo se mide, con qué modelos y en qué orden se construye. La
+sección 14 salió de contrastar el diseño con `langchain-ai/open_deep_research` y fija cómo
+se escribe el código. Si algo en las secciones 1 a 7 las contradice, mandan las nuevas.
+
+El vocabulario está en `CONTEXT.md`. Las decisiones con trade-off real están en `docs/adr/`
+de este repo; acá se citan, no se re-argumentan.
 
 ---
 
@@ -248,7 +253,8 @@ Dispara cuando detecta un patrón negativo.
   por una.
 - Como las dos ventanas coinciden en 10, cada resumen trae el veredicto de las mejoras del
   ciclo anterior.
-- Requiere versionado de prompts y parámetros para poder revertir.
+- Requiere versionado de prompts y parámetros para poder revertir: los overrides viven en
+  el repo del producto y cada tarea registra el hash de los prompts que corrió (ADR-0005).
 
 ### PM — Product Manager
 
@@ -427,9 +433,8 @@ recién ahí entran a PjM.
 ## 6. Transporte de información
 
 **Un documento único por tarea.** Un archivo en `.agentic/tasks/` del repo del producto. Cada
-rol lee lo que necesita y escribe su sección. Se eligió sobre mensajes directos entre agentes
-porque da trazabilidad total a PjM sin esfuerzo extra, permite reintentos, y cualquier rol
-puede releer sin pedirle nada a nadie.
+rol lee lo que necesita y escribe su sección. Por qué un archivo y no mensajes ni el issue:
+ADR-0001.
 
 **GitHub issues es la bandeja de entrada, no el documento.** Las tareas entran como issues
 del repo del producto. El sistema toma solo los que llevan la etiqueta `agentic`, que pone
@@ -438,11 +443,6 @@ un humano: es el interruptor que evita que el sistema se meta en cualquier issue
 PjM sincroniza hacia el issue lo que le sirve a un humano: la etiqueta de clasificación, la
 etiqueta de estado, un comentario de resumen al cerrar, y el cierre. El detalle de trabajo
 no va al issue.
-
-Se eligió el archivo sobre el issue como documento porque cada rol lee **secciones por
-nombre**, y parsear eso de comentarios de GitHub es frágil y cuesta una llamada de API por
-lectura. El archivo se grepea, se versiona y entra en el checkpoint. La contra asumida es
-que hay sincronización que se puede desfasar; el issue es siempre el lado derivado.
 
 **Formato híbrido.** Markdown para el contenido que producen los agentes, porque los modelos
 lo leen y escriben bien y es auditable a mano. Frontmatter YAML para lo que PjM procesa
@@ -518,11 +518,8 @@ como parámetro. Se eligió sobre un adaptador con funciones porque todavía no 
 varía de verdad entre productos, y no se puede generalizar sobre un solo ejemplo. El
 adaptador se extrae cuando aparezca el segundo producto.
 
-**Repositorios separados.** El sistema agéntico vive en su propio repo. El producto vive en
-otro. El sistema nunca escribe dentro de su propio repo cuando trabaja: todo lo que produce
-(documentos de tarea, definiciones acumuladas, ADRs, código) se escribe en el repo del
-producto. Si no fuera así, la historia de un producto ensuciaría el repo del sistema y un
-segundo producto se mezclaría con el primero.
+**Repositorios separados** (ADR-0002). El sistema vive en su propio repo, el producto en
+otro, y el sistema nunca escribe dentro del suyo cuando trabaja.
 
 Forma del repo del producto:
 
@@ -532,6 +529,8 @@ Forma del repo del producto:
 | `docs/adr/` | ADRs numerados | Humano el primero, después Tech Lead |
 | `.agentic/tasks/` | Documento único por tarea | Los roles, sección por sección |
 | `.agentic/producto/` | Definiciones acumuladas, la fuente de verdad de producto | PM |
+| `.agentic/prompts/` | Overrides de prompts por rol, si los hay (ADR-0005) | PjM |
+| `.agentic/state.sqlite` | Checkpointer del grafo, fuera del control de versiones (ADR-0003) | El sistema |
 
 Los ADRs viven con el código, no bajo `.agentic/`, porque son del producto y los lee
 cualquiera. Los valida el Tech Lead efímero en el pingpong, y el humano los ve igual al
@@ -645,9 +644,11 @@ existe justamente para pagar ese costo solo donde compre calidad.
 | 7 | UX Lead, Design Lead y Tech Writer en detalle | Etapa 4 |
 | 8 | Criterio de clasificación de PjM y qué hace si duda | PjM |
 | 9 | Cuántos Tech Leads existen en el sistema | Sin responder |
-| 10 | Versionado de prompts y parámetros | Mejora del proceso de PjM y línea de base del set |
+| 10 | ~~Versionado de prompts~~ **resuelto**: `.md` por rol con overlay en el producto, hash por tarea (ADR-0005). Falta el versionado de **parámetros** de `Configuration` | Mejora del proceso de PjM |
 | 11 | Las cinco tareas del set de evaluación, todavía sin escribir | Medir cualquier cosa |
 | 12 | El v0 del gimnasio, todavía sin construir | Etapa 1 en adelante |
+| 13 | Campos exactos de `Configuration` y esquemas estructurados de cada rol (sección 14) | Implementar |
+| 14 | Script que corre el set de cinco tareas y escribe el JSONL de resultados (sección 14) | Medir |
 
 **Resueltos desde la versión anterior**: el stack y el runtime de agentes (LangGraph para el
 flujo entre roles, Claude Agent SDK como harness de cada rol, autenticado con suscripción),
@@ -674,3 +675,102 @@ Se anotan para no reintroducirlas por error.
 | Cada rol recibe solo lo que produjo el rol previo | Cada rol declara la lista de secciones que lee |
 | El pingpong del Tech Lead es con un igual | El efímero usa modelo más capaz y prompt de adversario |
 | Los 17 roles se construyen todos y después se mide | Se construyen de a uno y cada uno se gana el lugar |
+
+---
+
+## 14. Arquitectura del código
+
+Sale de una sesión de interrogatorio contra `langchain-ai/open_deep_research` (ODR), un
+sistema de investigación multi-agente sobre LangGraph. Se adoptan sus patrones de grafo, no
+su setup: ODR no tiene tests unitarios, ni CI, ni ADRs.
+
+### Paquete
+
+`agentic/` se parte en `state.py`, `configuration.py`, `prompts/`, `roles.py`, `agent.py`
+(harness sobre Claude Agent SDK), `document.py` y `graph.py`. Regla: `state` y
+`configuration` no importan nada del proyecto.
+
+### Configuración
+
+Una clase `Configuration` Pydantic con `from_runnable_config`. Precedencia: variable de
+entorno > `config["configurable"]` > default. Cada nodo la lee al inicio. Campos iniciales:
+modelo de pensadores, modelo de validadores, máximo de devoluciones por par (2), reintentos
+por fallo de rol (1), ventana de evaluación (10), directorio de contexto de producto. Cada
+`Role` declara `kind` (pensador o validador) y `Configuration` mapea kind → modelo, con
+override por rol. Sin metadata de UI: no se usa Open Agent Platform.
+
+### Prompts
+
+Un `agentic/prompts/<rol>.md` por rol, con placeholders para fecha y límites. Convenciones
+tomadas de ODR: secciones con tags XML (`<Task>`, `<Hard Limits>`, `<Show Your Thinking>`),
+presupuestos numéricos explícitos y criterios de parada escritos. El validador recibe en el
+prompt las **devoluciones restantes de su par**: un validador que sabe que es su última
+devolución cierra el motivo para el humano en vez de pedir otro ajuste. El corte sigue siendo
+de PjM, en código, nunca del modelo. Overlay y versionado: ADR-0005.
+
+### Salida estructurada
+
+Lo que PjM procesa mecánicamente (clasificación con confianza, veredicto con motivo, flags,
+mapa de subtareas) se define como esquema Pydantic y se pasa al SDK como `json_schema`. El
+Markdown de la sección sigue siendo texto libre. Una salida estructurada ausente o inválida
+es fallo de rol, no un diccionario vacío.
+
+### Estado del grafo
+
+- `TaskInput` mínimo como `input` schema: id, título, descripción.
+- Contadores por par con un reducer de override: resetear el par cuando el humano responde es
+  un update explícito, no un dict copiado a mano. La clave del par Tech Lead→Developer
+  incluye el id de subtarea.
+- El subgrafo técnico declara `output` schema: salen la pieza integrada y el mapa de
+  subtareas, no la conversación interna de cada Developer (ADR-0004).
+- `thread_id` es el id de la tarea. Checkpointer SqliteSaver en el producto (ADR-0003).
+
+### Pausa y reanudación
+
+Escalado con `interrupt()`, reanudación con `Command(resume=decisión)` (ADR-0003). La CLI
+`agentic resume` busca tareas pausadas cuyo issue ya no tiene `needs-human`, lee el último
+comentario y reanuda. En la etapa 5 la reemplaza un poller con reloj propio, que es el mismo
+mecanismo que necesitan los roles proactivos.
+
+### Fallo de rol
+
+Mecánicamente es una de cuatro cosas: excepción del SDK, `max_turns` agotado sin resultado,
+salida estructurada ausente o inválida, texto vacío. El reintento vive en `agent.run`: atrapa,
+reintenta una vez con el error agregado al prompt, y si vuelve a fallar lanza `RoleFailure`,
+que el nodo convierte en escalado. Se descartó `RetryPolicy` de LangGraph porque reintenta el
+nodo sin pasarle el error al modelo. Todo fallo, reintentado o no, queda en el estado para las
+métricas de PjM.
+
+### Fan-out
+
+Developers en paralelo con `Send` (ADR-0004).
+
+### Tooling
+
+`pyproject.toml` con `uv.lock`, ruff con `E F I UP` (sin `D`: docstrings obligatorios en 17
+roles es ruido ahora), pytest, GitHub Actions corriendo ruff y pytest en cada PR,
+`langgraph.json` para `langgraph dev` y Studio, `.env.example`. El grafo se exporta sin
+compilar; la CLI lo compila con el checkpointer.
+
+### Evaluación
+
+LangSmith solo para tracing. El puntaje sigue siendo el de la sección 9: binario, humano. Un
+script corre el set de cinco tareas y escribe un JSONL versionado en este repo con: hash de
+prompts, `Configuration` completa, costo, resultado binario y nota. Además, evals de nodo
+intermedio como tests de pytest ("PjM clasifica estas descripciones así", "PM devuelve esta
+definición incompleta"), marcados `llm` y **excluidos de CI**: el SDK se autentica con la
+suscripción, que GitHub Actions no tiene. CI corre solo tests puros: parser del documento,
+reducers, configuración, ruteo con salidas grabadas.
+
+### Descartado de ODR
+
+| Práctica de ODR | Por qué no |
+|---|---|
+| `asyncio.gather` dentro de un nodo para el fan-out | Esconde a los Developers de PjM (ADR-0004) |
+| Terminar el turno para esperar al humano | La pausa puede caer en cualquier par (ADR-0003) |
+| Jueces LLM como puntaje | El puntaje es binario y humano (sección 9) |
+| Metadata `x_oap_ui_config` en la configuración | No hay UI de plataforma |
+| `think_tool` como herramienta de reflexión | El harness de cada rol ya razona |
+| Reglas ruff `D` de docstrings obligatorios | Ruido en esta etapa |
+| Carpeta `legacy/` ejecutable | No hay versiones anteriores que conservar |
+| Ausencia de tests y CI | No es una práctica, es un hueco |
