@@ -9,6 +9,7 @@ import argparse
 import uuid
 
 import anyio
+from dotenv import load_dotenv
 
 from .configuration import Configuration, MissingProductDir
 from .document import path_for
@@ -16,6 +17,8 @@ from .graph import graph
 
 
 def main() -> None:
+    # `.env` in the working directory, if any. Real env vars win over it.
+    load_dotenv()
     parser = argparse.ArgumentParser(prog="agentic")
     sub = parser.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run", help="run one task through the feature path")
