@@ -43,7 +43,9 @@ def main() -> None:
 
 
 def preflight(cfg: Configuration) -> None:
-    """Fail before spending money if a product overlay is malformed."""
+    """Fail before spending money if the product dir or one of its overlays is off."""
+    if not cfg.agentic_dir.is_dir():
+        raise ValueError(f"{cfg.product_dir} is not a product repo: no .agentic/ directory")
     vocabulary = flags.load(cfg.product_dir)
     for role in (PJM, PRODUCT_ANALYST, PM):
         role.prompt(
