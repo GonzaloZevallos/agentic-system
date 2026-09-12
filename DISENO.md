@@ -494,6 +494,12 @@ como parámetro. Se eligió sobre un adaptador con funciones porque todavía no 
 varía de verdad entre productos, y no se puede generalizar sobre un solo ejemplo. El
 adaptador se extrae cuando aparezca el segundo producto.
 
+**Repositorios separados.** El sistema agéntico vive en su propio repo. El producto vive en
+otro. El sistema nunca escribe dentro de su propio repo cuando trabaja: todo lo que produce
+(documentos de tarea, definiciones acumuladas, ADRs, código) se escribe en el directorio del
+producto. Si no fuera así, la historia de un producto ensuciaría el repo del sistema y un
+segundo producto se mezclaría con el primero.
+
 ### El producto de prueba
 
 **SaaS B2B para dueños de gimnasios**: socios, suscripciones, asistencia y métricas de
