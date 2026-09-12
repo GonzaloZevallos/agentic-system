@@ -37,6 +37,8 @@ class Failure(TypedDict):
     role: str
     attempt: int
     error: str
+    # A failed attempt still cost money; PjM's metrics need it.
+    cost_usd: float
 
 
 class TaskState(TaskInput, total=False):

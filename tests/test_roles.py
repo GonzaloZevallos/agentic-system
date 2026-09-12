@@ -31,3 +31,14 @@ def test_reads_include_own_section_for_returns():
     assert "Product Analyst" in PRODUCT_ANALYST.reads
     assert "PM" in PRODUCT_ANALYST.reads
     assert "Product Analyst" in PM.reads
+
+
+def test_missing_placeholder_is_an_error(tmp_path):
+    # An overlay may copy a placeholder its role never receives; it must not ship as `{{...}}`.
+    overlay = tmp_path / ".agentic/prompts/pjm.md"
+    overlay.parent.mkdir(parents=True)
+    overlay.write_text("Left: {{remaining_returns}}")
+    import pytest
+
+    with pytest.raises(ValueError, match="remaining_returns"):
+        PJM.prompt(tmp_path)

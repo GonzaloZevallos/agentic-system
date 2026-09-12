@@ -45,9 +45,10 @@ class Script:
         self.queues = {k: list(v) for k, v in queues.items()}
         self.calls = []
 
-    async def __call__(self, role, prompt, *, system_prompt, model, retries, flags):
+    async def __call__(self, role, prompt, *, system_prompt, model, retries, flags, cwd):
         self.calls.append((role.slug, prompt, system_prompt, model))
         assert set(flags) == {"touches_ui", "touches_copy"}
+        assert cwd is not None  # the SDK subprocess runs in the product dir
         item = self.queues[role.slug].pop(0)
         if isinstance(item, Exception):
             raise item
@@ -152,8 +153,13 @@ async def test_return_limit_escalates(monkeypatch, config):
 
 async def test_role_failure_escalates_and_keeps_failures(monkeypatch, config, tmp_path):
     failures = [
-        {"role": "Product Analyst", "attempt": 1, "error": "structured output missing"},
-        {"role": "Product Analyst", "attempt": 2, "error": "empty text reply"},
+        {
+            "role": "Product Analyst",
+            "attempt": 1,
+            "error": "no structured output",
+            "cost_usd": 0.05,
+        },
+        {"role": "Product Analyst", "attempt": 2, "error": "empty markdown", "cost_usd": 0.03},
     ]
     script = Script(
         pjm=[classified()], product_analyst=[RoleFailure(PRODUCT_ANALYST, failures)], pm=[]
@@ -163,6 +169,7 @@ async def test_role_failure_escalates_and_keeps_failures(monkeypatch, config, tm
     assert final["status"] == g.WAITING_ON_HUMAN
     assert final["escalated"].startswith("Product Analyst failed 2 times")
     assert final["failures"] == failures
+    assert final["cost_usd"] == pytest.approx(0.01 + 0.05 + 0.03)  # failed attempts still cost
     assert PRODUCT_ANALYST.name not in final["sections"]
     doc = read(tmp_path / ".agentic/tasks/T-1.md")
     assert doc["failures"] == 2
@@ -171,7 +178,9 @@ async def test_role_failure_escalates_and_keeps_failures(monkeypatch, config, tm
 
 async def test_retried_failure_is_recorded_but_not_escalated(monkeypatch, config):
     retried = defined()
-    retried.failures = [{"role": "Product Analyst", "attempt": 1, "error": "invalid"}]
+    retried.failures = [
+        {"role": "Product Analyst", "attempt": 1, "error": "invalid", "cost_usd": 0.02}
+    ]
     script = Script(pjm=[classified()], product_analyst=[retried], pm=[verdict("approved")])
     final = await run_graph(monkeypatch, script, config)
     assert final["status"] == "definition_ready"

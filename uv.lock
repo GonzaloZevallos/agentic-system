@@ -28,7 +28,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "anyio", specifier = ">=4.0" },
-    { name = "claude-agent-sdk", specifier = ">=0.2" },
+    { name = "claude-agent-sdk", specifier = ">=0.2.152" },
     { name = "langgraph", specifier = ">=1.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "python-dotenv", specifier = ">=1.2.3" },

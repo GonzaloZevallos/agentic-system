@@ -49,3 +49,17 @@ def test_model_for_kind_and_override():
     assert cfg.model_for("pjm", "thinker") == cfg.thinker_model
     assert cfg.model_for("product_analyst", "validator") == cfg.validator_model
     assert cfg.model_for("pm", "validator") == "custom"
+
+
+def test_empty_env_is_unset(monkeypatch):
+    # `AGENTIC_PRODUCT_DIR=` must not silently become Path(".") (ADR-0002).
+    monkeypatch.setenv("AGENTIC_PRODUCT_DIR", "")
+    with pytest.raises(MissingProductDir):
+        Configuration.from_runnable_config(None)
+
+
+def test_counters_have_lower_bounds():
+    with pytest.raises(ValueError):
+        Configuration(product_dir=Path("/tmp/p"), role_retries=-1)
+    with pytest.raises(ValueError):
+        Configuration(product_dir=Path("/tmp/p"), evaluation_window=0)

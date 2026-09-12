@@ -6,14 +6,18 @@
 from __future__ import annotations
 
 import argparse
+import os
+import sys
 import uuid
 
 import anyio
 from dotenv import load_dotenv
 
-from .configuration import Configuration, MissingProductDir
+from . import flags
+from .configuration import ENV_PREFIX, Configuration, MissingProductDir
 from .document import path_for
 from .graph import graph
+from .roles import PJM, PM, PRODUCT_ANALYST
 
 
 def main() -> None:
@@ -27,18 +31,31 @@ def main() -> None:
     run.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
     args = parser.parse_args()
 
-    configurable = {}
     if args.product_dir:
-        configurable["product_dir"] = args.product_dir
+        # The env var outranks `configurable`, so an explicit flag has to go in as env.
+        os.environ[ENV_PREFIX + "PRODUCT_DIR"] = args.product_dir
     try:
-        anyio.run(_run, args.title, args.description, configurable)
-    except MissingProductDir as exc:
+        cfg = Configuration.from_runnable_config(None)
+        preflight(cfg)
+    except (MissingProductDir, ValueError, OSError) as exc:
         parser.exit(2, f"agentic: {exc}\n")
+    anyio.run(_run, args.title, args.description, cfg)
 
 
-async def _run(title: str, description: str, configurable: dict) -> None:
-    config = {"configurable": configurable}
-    cfg = Configuration.from_runnable_config(config)
+def preflight(cfg: Configuration) -> None:
+    """Fail before spending money if a product overlay is malformed."""
+    vocabulary = flags.load(cfg.product_dir)
+    for role in (PJM, PRODUCT_ANALYST, PM):
+        role.prompt(
+            cfg.product_dir,
+            max_returns=cfg.max_returns_per_pair,
+            remaining_returns=cfg.max_returns_per_pair,
+            flags=flags.describe(vocabulary),
+        )
+
+
+async def _run(title: str, description: str, cfg: Configuration) -> None:
+    config = {"configurable": {}}
     task_id = f"T-{uuid.uuid4().hex[:8]}"
     config["configurable"]["thread_id"] = task_id
 
@@ -55,3 +72,5 @@ async def _run(title: str, description: str, configurable: dict) -> None:
         print(f"escalated: {final['escalated']}")
     print(f"cost:      ${final.get('cost_usd', 0):.4f}")
     print(f"doc:       {path_for(task_id, cfg.product_dir)}")
+    if final.get("escalated"):
+        sys.exit(1)

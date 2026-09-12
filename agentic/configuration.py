@@ -29,10 +29,10 @@ class Configuration(BaseModel):
     validator_model: str = "claude-opus-5"
     # Per-role override, keyed by role slug. Wins over the kind mapping.
     model_overrides: dict[str, str] = Field(default_factory=dict)
-    max_returns_per_pair: int = 2
-    role_retries: int = 1
+    max_returns_per_pair: int = Field(default=2, ge=0)
+    role_retries: int = Field(default=1, ge=0)
     # Closed tasks PjM watches before judging a process change (DISENO.md, 4).
-    evaluation_window: int = 10
+    evaluation_window: int = Field(default=10, ge=1)
     # Root of the product repo, the product context (DISENO.md, 8). Required: the
     # system never writes inside its own repo (ADR-0002), so there is no sane default.
     product_dir: Path
@@ -43,7 +43,7 @@ class Configuration(BaseModel):
         values: dict[str, Any] = {}
         for name, field in cls.model_fields.items():
             env = os.environ.get(ENV_PREFIX + name.upper())
-            if env is not None:
+            if env:  # an empty variable is unset, not Path(".")
                 values[name] = _from_env(env, field.annotation)
             elif name in configurable:
                 values[name] = configurable[name]

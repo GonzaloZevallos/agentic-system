@@ -58,9 +58,15 @@ async def _run_role(
             model=cfg.model_for(role.slug, role.kind),
             retries=cfg.role_retries,
             flags=vocabulary,
+            cwd=cfg.product_dir,
         )
     except RoleFailure as exc:
-        patch |= {"failures": exc.failures, "escalated": str(exc), "status": WAITING_ON_HUMAN}
+        patch |= {
+            "failures": exc.failures,
+            "cost_usd": exc.cost_usd,
+            "escalated": str(exc),
+            "status": WAITING_ON_HUMAN,
+        }
         _persist(state, patch, cfg)
         return None, patch
 

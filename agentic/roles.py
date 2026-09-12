@@ -9,6 +9,7 @@ before it is committed.
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -20,6 +21,7 @@ PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 OVERLAY_SUBDIR = Path(".agentic/prompts")
 # Pseudo-section every role may declare: the task as it entered.
 ORIGINAL = "Original request"
+_PLACEHOLDER = re.compile(r"\{\{(\w+)\}\}")
 
 
 @dataclass(frozen=True)
@@ -48,10 +50,15 @@ class Role:
         if not source.exists():
             source = PROMPTS_DIR / f"{self.slug}.md"
         raw = source.read_text(encoding="utf-8")
-        text = raw
-        for key, value in {"date": date.today().isoformat(), **placeholders}.items():
-            text = text.replace("{{" + key + "}}", str(value))
-        return Prompt(text=text, hash=prompt_hash(raw), source=source)
+        values = {"date": date.today().isoformat(), **placeholders}
+
+        def fill(match: re.Match[str]) -> str:
+            key = match.group(1)
+            if key not in values:
+                raise ValueError(f"{source}: no value for placeholder {{{{{key}}}}}")
+            return str(values[key])
+
+        return Prompt(text=_PLACEHOLDER.sub(fill, raw), hash=prompt_hash(raw), source=source)
 
 
 def prompt_hash(raw: str) -> str:

@@ -483,8 +483,8 @@ timestamps por etapa, escalados, subtareas.
 | PM (final) | Validación de producto |
 | PjM | Cierre y métricas de la tarea |
 
-Cada sección cierra con un bloque fijo **"Para el siguiente rol"**. Eso es lo que lee el
-siguiente por defecto.
+Cada sección cierra con un bloque fijo **"Para el siguiente rol"**, un handoff explícito
+que acompaña a las secciones completas que el siguiente rol declara leer.
 
 ---
 

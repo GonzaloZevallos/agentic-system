@@ -16,8 +16,9 @@ it will need tools and a deliberate permission mode.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
-from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
+from claude_agent_sdk import ClaudeAgentOptions, ResultError, ResultMessage, query
 from pydantic import ValidationError
 
 from . import schemas
@@ -29,11 +30,18 @@ class RoleFailure(Exception):
     def __init__(self, role: Role, failures: list[Failure]):
         self.role = role
         self.failures = failures
-        super().__init__(f"{role.name} failed {len(failures)} times: {failures[-1]['error']}")
+        last = failures[-1]["error"] if failures else "no attempts were made"
+        super().__init__(f"{role.name} failed {len(failures)} times: {last}")
+
+    @property
+    def cost_usd(self) -> float:
+        return sum(f["cost_usd"] for f in self.failures)
 
 
 class _AttemptFailed(Exception):
-    pass
+    def __init__(self, error: str, cost_usd: float = 0.0):
+        super().__init__(error)
+        self.cost_usd = cost_usd
 
 
 @dataclass
@@ -42,7 +50,8 @@ class Output:
     data: dict
     cost_usd: float = 0.0
     turns: int = 0
-    # Failed attempts before this output. Empty on a clean run.
+    # Failed attempts before this output. Empty on a clean run. Their cost is
+    # already included in `cost_usd`: a paid attempt counts even when it failed.
     failures: list[Failure] = field(default_factory=list)
 
 
@@ -54,15 +63,21 @@ async def run(
     model: str,
     retries: int,
     flags: dict[str, str],
+    cwd: Path | None = None,
 ) -> Output:
     failures: list[Failure] = []
-    for attempt in range(1, retries + 2):
+    for attempt in range(1, max(retries, 0) + 2):
         try:
-            output = await _once(role, _with_error(prompt, failures), system_prompt, model, flags)
+            output = await _once(
+                role, _with_error(prompt, failures), system_prompt, model, flags, cwd
+            )
         except _AttemptFailed as exc:
-            failures.append({"role": role.name, "attempt": attempt, "error": str(exc)})
+            failures.append(
+                {"role": role.name, "attempt": attempt, "error": str(exc), "cost_usd": exc.cost_usd}
+            )
             continue
         output.failures = failures
+        output.cost_usd += sum(f["cost_usd"] for f in failures)
         return output
     raise RoleFailure(role, failures)
 
@@ -77,11 +92,17 @@ def _with_error(prompt: str, failures: list[Failure]) -> str:
 
 
 async def _once(
-    role: Role, prompt: str, system_prompt: str, model: str, flags: dict[str, str]
+    role: Role,
+    prompt: str,
+    system_prompt: str,
+    model: str,
+    flags: dict[str, str],
+    cwd: Path | None,
 ) -> Output:
     options = ClaudeAgentOptions(
         system_prompt=system_prompt,
-        allowed_tools=[],
+        tools=[],  # no built-in tools at all; `allowed_tools` would only skip the permission prompt
+        cwd=cwd,
         model=model,
         effort=role.effort,
         max_turns=role.max_turns,
@@ -94,29 +115,36 @@ async def _once(
         async for message in query(prompt=prompt, options=options):
             if isinstance(message, ResultMessage):
                 result = message
+    except ResultError as exc:
+        # The CLI reports the failed result, then exits non-zero; the SDK turns
+        # that into ResultError after yielding the ResultMessage.
+        cost = (result.total_cost_usd or 0.0) if result else 0.0
+        if exc.subtype == "error_max_turns":
+            raise _AttemptFailed(
+                f"max_turns ({role.max_turns}) exhausted without a result", cost
+            ) from exc
+        raise _AttemptFailed(f"run failed ({exc.subtype}): {'; '.join(exc.errors)}", cost) from exc
     except Exception as exc:  # the SDK raises its own hierarchy; all of it is a role failure
         raise _AttemptFailed(f"SDK error: {exc}") from exc
 
     if result is None:
         raise _AttemptFailed("run ended without a result message")
+    cost = result.total_cost_usd or 0.0
+    if result.subtype == "error_max_turns":
+        raise _AttemptFailed(f"max_turns ({role.max_turns}) exhausted without a result", cost)
     if result.is_error:
-        raise _AttemptFailed(f"run ended in error: {'; '.join(result.errors or [result.subtype])}")
-    if result.subtype == "error_max_turns" or result.terminal_reason == "max_turns":
-        raise _AttemptFailed(f"max_turns ({role.max_turns}) exhausted without a result")
+        raise _AttemptFailed(
+            f"run ended in error: {'; '.join(result.errors or [result.subtype])}", cost
+        )
 
     if result.structured_output is None:
-        raise _AttemptFailed("structured output missing; it is required")
+        raise _AttemptFailed("structured output missing; it is required", cost)
     try:
         data = schemas.validate(role.schema, result.structured_output, flags)
     except (ValidationError, ValueError) as exc:
-        raise _AttemptFailed(f"structured output invalid: {exc}") from exc
+        raise _AttemptFailed(f"structured output invalid: {exc}", cost) from exc
     text = data.pop("markdown").strip()
     if not text:
-        raise _AttemptFailed("`markdown` is empty; the Markdown section is required")
+        raise _AttemptFailed("`markdown` is empty; the Markdown section is required", cost)
 
-    return Output(
-        text=text,
-        data=data,
-        cost_usd=result.total_cost_usd or 0.0,
-        turns=result.num_turns,
-    )
+    return Output(text=text, data=data, cost_usd=cost, turns=result.num_turns)

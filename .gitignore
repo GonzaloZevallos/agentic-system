@@ -2,7 +2,5 @@
 __pycache__/
 *.pyc
 .env
-# Dev runs without AGENTIC_PRODUCT_DIR land here. The system must not write in its own repo (ADR-0002).
-.agentic/
 tasks/
 .claude/
