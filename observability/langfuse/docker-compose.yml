@@ -133,6 +133,21 @@ services:
       LANGFUSE_IN_APP_AGENT_MAX_ACTIVE_RUNS_PER_USER: ${LANGFUSE_IN_APP_AGENT_MAX_ACTIVE_RUNS_PER_USER:-}
       LANGFUSE_IN_APP_AGENT_MAX_ACTIVE_RUNS_PER_ORG: ${LANGFUSE_IN_APP_AGENT_MAX_ACTIVE_RUNS_PER_ORG:-}
 
+  otel-collector:
+    # Puente sin auth para Claude Code; ver otel-collector.yaml.
+    image: docker.io/otel/opentelemetry-collector:latest
+    restart: always
+    depends_on:
+      langfuse-web:
+        condition: service_started
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    environment:
+      LANGFUSE_OTEL_BASIC: ${LANGFUSE_OTEL_BASIC:?set in .env}
+    ports:
+      - 127.0.0.1:4318:4318
+
   clickhouse:
     image: docker.io/clickhouse/clickhouse-server:25.12
     restart: always
