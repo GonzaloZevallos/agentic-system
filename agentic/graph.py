@@ -34,7 +34,8 @@ def context_for(state: TaskState, role: Role, product_knowledge: str = "") -> st
     parts = [product_knowledge] if product_knowledge else []
     for name in role.reads:
         if name == ORIGINAL:
-            parts.append(f"## {ORIGINAL}\n\n{state['title']}\n\n{state['description']}")
+            request = document.demote(state["description"])
+            parts.append(f"## {ORIGINAL}\n\n{state['title']}\n\n{request}")
         elif name in sections:
             parts.append(f"## {name}\n\n{sections[name]}")
     return "\n\n".join(parts)

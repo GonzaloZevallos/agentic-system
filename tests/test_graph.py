@@ -9,7 +9,11 @@ from agentic.roles import PAIR_PM_PA, PJM, PM, PRODUCT_ANALYST
 
 pytestmark = pytest.mark.anyio
 
-TASK = {"id": "T-1", "title": "Export report", "description": "Users want CSV."}
+TASK = {
+    "id": "T-1",
+    "title": "Export report",
+    "description": "Users want CSV.\n\n## Why\n\nAudits.",
+}
 
 
 def classified(type_="feature", confidence="high"):
@@ -119,6 +123,9 @@ async def test_approval_writes_the_product_knowledge(monkeypatch, config, tmp_pa
 
     # Product roles read the knowledge, whole, before the task document; PjM does not.
     assert "## Product knowledge" not in script.calls[0][1]
+    # The request's own headings never look like sections, in context or in the file.
+    assert "### Why" in script.calls[0][1] and "\n## Why" not in script.calls[0][1]
+    assert "\n## Why" not in (tmp_path / ".agentic/tasks/T-1.md").read_text()
     for call in script.calls[1:]:
         assert call[1].startswith("## Product knowledge")
         assert "A business." in call[1] and "Old." in call[1]

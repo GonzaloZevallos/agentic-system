@@ -26,6 +26,13 @@ ORIGINAL = "Original request"
 _FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\n", re.S)
 _SECTION = re.compile(r"^## (.+?)\s*$", re.M)
 _VERSION = re.compile(r"^(.*) \(v(\d+)\)$")
+_HEADING = re.compile(r"^(#{2,})(?=\s)", re.M)
+
+
+def demote(text: str) -> str:
+    """Push `##` and deeper headings one level down, so a request pasted from an issue
+    cannot open sections of its own."""
+    return _HEADING.sub(r"#\1", text)
 
 
 def path_for(task_id: str, product_dir: Path) -> Path:
@@ -57,7 +64,7 @@ def write(state: dict, product_dir: Path) -> Path:
         "---",
         "",
         f"# {state['title']}\n",
-        f"## {ORIGINAL}\n\n{state['description'].strip()}\n",
+        f"## {ORIGINAL}\n\n{demote(state['description'].strip())}\n",
     ]
     for name, text in ordered(state.get("sections", {})).items():
         parts.append(f"## {name}\n\n{text.strip()}\n")

@@ -161,8 +161,31 @@ async def test_observer_sees_the_stream_and_the_printer_renders_it(monkeypatch):
                 "delta": {"type": "text_delta", "text": "feature."},
             },
         )
+        yield StreamEvent(uuid="7", session_id=sid, event={"type": "content_block_stop"})
+        yield StreamEvent(
+            uuid="8",
+            session_id=sid,
+            event={
+                "type": "content_block_start",
+                "content_block": {"type": "tool_use", "name": "StructuredOutput", "input": {}},
+            },
+        )
+        for n, chunk in enumerate(('{"markdown": "### Verdict\\n', 'ok"}')):
+            yield StreamEvent(
+                uuid=str(9 + n),
+                session_id=sid,
+                event={
+                    "type": "content_block_delta",
+                    "delta": {"type": "input_json_delta", "partial_json": chunk},
+                },
+            )
+        yield StreamEvent(uuid="11", session_id=sid, event={"type": "content_block_stop"})
         yield AssistantMessage(
             content=[ToolUseBlock(id="t", name="Read", input={"path": "x"})], model="m"
+        )
+        yield AssistantMessage(
+            content=[ToolUseBlock(id="t2", name="StructuredOutput", input={"markdown": "x"})],
+            model="m",
         )
         yield ResultMessage(
             subtype="success",
@@ -187,8 +210,28 @@ async def test_observer_sees_the_stream_and_the_printer_renders_it(monkeypatch):
     assert seen_options[0].include_partial_messages is True
     assert buffer.getvalue() == (
         "[PjM] thinking:\nhmm\n[PjM]:\nClear feature.\n"
+        '[PjM] delivery:\n{"markdown": "### Verdict\nok"}\n'
         '[PjM] tool Read {"path": "x"}\n[PjM] done: 1 turns, $0.5000\n'
     )
+
+
+def test_printer_skips_empty_thinking():
+    import io
+
+    from claude_agent_sdk import StreamEvent
+
+    from agentic.observe import Printer
+
+    buffer = io.StringIO()
+    printer = Printer("PM", buffer)
+    for event in (
+        {"type": "content_block_start", "content_block": {"type": "thinking"}},
+        {"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": ""}},
+        {"type": "content_block_delta", "delta": {"type": "signature_delta", "signature": "x"}},
+        {"type": "content_block_stop"},
+    ):
+        printer(StreamEvent(uuid="u", session_id="s", event=event))
+    assert buffer.getvalue() == ""
 
 
 async def test_without_observer_no_partial_messages(monkeypatch):

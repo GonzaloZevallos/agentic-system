@@ -85,6 +85,19 @@ def test_superseded_sections_are_written_before_the_current_one(tmp_path):
     )
 
 
+def test_request_headings_cannot_open_sections(tmp_path):
+    """An issue body brings its own `##`; in the document they go one level down."""
+    state = {
+        "id": "T-3",
+        "title": "t",
+        "description": "## Current behaviour\n\nNone.\n\n### Notes\n\n#not a heading",
+        "sections": {"PjM": "ok"},
+    }
+    data = document.read(document.write(state, tmp_path))
+    assert data["description"] == "### Current behaviour\n\nNone.\n\n#### Notes\n\n#not a heading"
+    assert list(data["sections"]) == ["PjM"]
+
+
 def test_read_rejects_missing_frontmatter(tmp_path):
     path = tmp_path / "bad.md"
     path.write_text("# no frontmatter\n")
