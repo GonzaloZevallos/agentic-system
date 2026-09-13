@@ -1,4 +1,4 @@
-"""Runtime configuration. Imports nothing from the project (DISENO.md, 14).
+"""Runtime configuration. Imports nothing from the project (README.md, 14).
 
 Precedence: environment variable `AGENTIC_<FIELD>` > `config["configurable"]` > default.
 Every node reads it at the start of its run.
@@ -24,18 +24,18 @@ class MissingProductDir(ValueError):
 
 class Configuration(BaseModel):
     # Thinkers make most of the calls; validators need a model the thinker did not
-    # have, which is the cheapest asymmetry to build and measure (DISENO.md, 10).
+    # have, which is the cheapest asymmetry to build and measure (README.md, 10).
     thinker_model: str = "claude-sonnet-5"
     validator_model: str = "claude-opus-5"
     # Per-role override, keyed by role slug. Wins over the kind mapping.
     model_overrides: dict[str, str] = Field(default_factory=dict)
     max_returns_per_pair: int = Field(default=2, ge=0)
     role_retries: int = Field(default=1, ge=0)
-    # Closed tasks PjM watches before judging a process change (DISENO.md, 4).
+    # Closed tasks PjM watches before judging a process change (README.md, 4).
     evaluation_window: int = Field(default=10, ge=1)
     # Stream each role's generation to stderr (`agentic run --verbose`).
     verbose: bool = False
-    # Root of the product repo, the product context (DISENO.md, 8). Required: the
+    # Root of the product repo, the product context (README.md, 8). Required: the
     # system never writes inside its own repo (ADR-0002), so there is no sane default.
     product_dir: Path
 

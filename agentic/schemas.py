@@ -1,4 +1,4 @@
-"""Structured outputs: what PjM processes mechanically (DISENO.md, 14).
+"""Structured outputs: what PjM processes mechanically (README.md, 14).
 
 Each schema goes to the SDK as `json_schema`. The Markdown section travels as
 the `markdown` field, free text inside the same output: the SDK ends the turn
@@ -24,7 +24,7 @@ class RoleOutput(BaseModel):
 
 class Classification(RoleOutput):
     type: TaskType
-    # Low confidence escalates to the human; PjM never guesses (DISENO.md, 4).
+    # Low confidence escalates to the human; PjM never guesses (README.md, 4).
     confidence: Literal["high", "low"]
     reason: str = Field(description="One line")
 

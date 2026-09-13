@@ -37,7 +37,7 @@ class Role:
     slug: str
     kind: RoleKind
     schema: type[RoleOutput]
-    # Sections of the task document this role reads, in full (DISENO.md, 6).
+    # Sections of the task document this role reads, in full (README.md, 6).
     # Declarative, so PjM can record it and see what a failing role was missing.
     # A role that lists itself reads its own previous section on a return.
     reads: tuple[str, ...] = (ORIGINAL,)

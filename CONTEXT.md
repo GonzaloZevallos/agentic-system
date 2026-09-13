@@ -2,7 +2,7 @@
 
 Un equipo de desarrollo modelado como 17 roles agénticos más un humano, que mantiene y hace
 crecer un producto que vive en otro repo. Este glosario fija el vocabulario; el proceso está
-en DISENO.md y las decisiones con trade-off en `docs/adr/`.
+en README.md y las decisiones con trade-off en `docs/adr/`.
 
 ## Language
 

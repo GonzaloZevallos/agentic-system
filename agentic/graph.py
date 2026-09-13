@@ -1,7 +1,7 @@
 """Feature path, first slice: PjM -> Product Analyst -> PM, with the PM→Product
 Analyst return loop and escalation to the human.
 
-Context rule (DISENO.md, 6): each role reads, in full, the sections it declares
+Context rule (README.md, 6): each role reads, in full, the sections it declares
 in `Role.reads`. Not the previous role's handoff: a validator that only sees a
 summary returns over gaps that were never there.
 
@@ -124,7 +124,7 @@ async def classify(state: TaskState, config: RunnableConfig) -> TaskState:
     patch["type"] = task_type
     if output.data["confidence"] == "low":
         # Low confidence is an escalation, not a guess. PjM does not re-route
-        # while a task waits on the human (DISENO.md, 3).
+        # while a task waits on the human (README.md, 3).
         patch["escalated"] = f"PjM could not classify with confidence: {output.data['reason']}"
         patch["status"] = WAITING_ON_HUMAN
     elif task_type != "feature":
@@ -177,7 +177,7 @@ async def validate(state: TaskState, config: RunnableConfig) -> TaskState:
         patch["returns"] = {PAIR_PM_PA: used + 1}
         patch["status"] = "returned"
     else:
-        # The pair hit its limit: escalate, always (DISENO.md, 3). PM knew this was
+        # The pair hit its limit: escalate, always (README.md, 3). PM knew this was
         # its last return, so the reason is written for the human.
         limit = cfg.max_returns_per_pair
         patch["escalated"] = f"{PAIR_PM_PA} hit {limit} returns: {output.data['reason']}"

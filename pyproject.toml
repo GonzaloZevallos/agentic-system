@@ -40,7 +40,7 @@ select = ["E", "F", "I", "UP"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# `llm` tests call the SDK with the subscription; CI does not have it (DISENO.md, 14).
+# `llm` tests call the SDK with the subscription; CI does not have it (README.md, 14).
 # Run them on purpose: `uv run pytest -m llm`.
 addopts = "-m 'not llm'"
 markers = ["llm: calls a real model through the Claude Agent SDK"]

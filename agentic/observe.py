@@ -7,7 +7,7 @@ name. It is what `agentic run --verbose` shows.
 The spans make a task one trace in Langfuse: `task_span` around the graph run,
 `role_span` around each role, and `traceparent()` handed to the Claude Code
 subprocess, whose own OpenTelemetry spans then nest under the role. Nothing is
-exported unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set (DISENO.md, 14).
+exported unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set (README.md, 14).
 """
 
 from __future__ import annotations

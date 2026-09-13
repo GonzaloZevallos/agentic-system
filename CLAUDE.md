@@ -1,12 +1,12 @@
 # agentic-system
 
 Sistema agéntico de desarrollo: 17 roles sobre LangGraph + Claude Agent SDK.
-`DISENO.md` es el estado consolidado del diseño; leerlo antes de proponer
+`README.md` es el estado consolidado del diseño; leerlo antes de proponer
 arquitectura o roles. Su sección 13 lista decisiones ya reemplazadas: no
 reintroducirlas.
 
 Este repo es el **sistema**. El producto sobre el que trabaja vive en otro repo
-y el sistema nunca escribe acá cuando corre (DISENO.md, sección 8).
+y el sistema nunca escribe acá cuando corre (README.md, sección 8).
 
 ## Agent skills
 
