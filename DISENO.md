@@ -212,8 +212,8 @@ Esto exige que Tech Lead informe a PjM el mapa de subtareas y Developers al crea
 | Platform enhancement | QA |
 
 UX Lead, Design Lead y Tech Writer **no aprueban al cierre**. Esa regla existió y fue
-reemplazada: PM es la única fuente de verdad de producto porque construyó la definición
-junto con ellos. PM puede consultar a los leads, pero la aprobación es suya. Si el
+reemplazada: PM es el único que valida producto porque construyó la definición junto con
+ellos. PM puede consultar a los leads, pero la aprobación es suya. Si el
 Developer se desvía del diseño o de los textos, es PM quien lo detecta y lo devuelve.
 
 ---
@@ -260,8 +260,11 @@ Dispara cuando detecta un patrón negativo.
 
 - Valida la definición y los flags que redacta Product Analyst.
 - Delega en orden a UX Lead, Design Lead y Tech Writer según los flags.
-- Consolida la definición única. Es su dueño y la fuente de verdad de producto:
-  comportamiento, flujo, diseño y textos.
+- Consolida la definición única. Es su dueño: comportamiento, flujo, diseño y textos.
+- **Destila al aprobar**: devuelve en su salida estructurada el archivo completo de cada
+  capacidad que la tarea tocó (`docs/product/<capacidad>.md`) y los términos nuevos o
+  corregidos del glosario del producto (`CONTEXT.md`). Los escribe el grafo; PM no tiene
+  tools. Aprobar una feature sin destilar es salida inválida, o sea fallo de rol.
 - Valida la implementación final de producto. Puede consultar a UX Lead y Design Lead.
 - Valida que la feature salga medida.
 - Evalúa el aporte al negocio de cada funcionalidad antes de aprobar.
@@ -272,7 +275,8 @@ Dispara cuando detecta un patrón negativo.
 
 ### Product Analyst
 
-**Entradas**: la tarea, las definiciones anteriores, acceso al producto real para explorarlo.
+**Entradas**: la tarea, el conocimiento de producto (`docs/product/` y `CONTEXT.md` del
+producto, completos), acceso al producto real para explorarlo.
 
 **En feature**
 
@@ -287,7 +291,7 @@ Dispara cuando detecta un patrón negativo.
 **En bug**
 
 1. Reproduce en el producto real.
-2. Compara contra las definiciones anteriores.
+2. Compara contra la definición vigente de la capacidad en `docs/product/`.
 3. Con definición previa, dictamina bug o comportamiento esperado.
 4. Sin definición previa, consulta a PM, que decide.
 
@@ -436,7 +440,10 @@ recién ahí entran a PjM.
 
 **Un documento único por tarea.** Un archivo en `.agentic/tasks/` del repo del producto. Cada
 rol lee lo que necesita y escribe su sección. Por qué un archivo y no mensajes ni el issue:
-ADR-0001.
+ADR-0001. Es el **registro crudo** del trabajo: guarda también lo que una devolución pisó y
+las corridas de cada rol. Lo vigente se destila de ahí al conocimiento de producto
+(`docs/product/`, ADR-0006); ningún rol lee tareas viejas para saber cómo se comporta el
+producto.
 
 **GitHub issues es la bandeja de entrada, no el documento.** Las tareas entran como issues
 del repo del producto. El sistema toma solo los que llevan la etiqueta `agentic`, que pone
@@ -463,7 +470,8 @@ handoff explícito, pero ya no es lo único que viaja.
 ### Esqueleto del documento
 
 **Frontmatter, mantenido por PjM**: id, tipo, estado, rol actual, flags, contadores por par,
-timestamps por etapa, escalados, subtareas.
+timestamps por etapa, escalados, subtareas, hash de prompts, corridas por rol (`runs`: rol,
+sección, `session_id`, modelo, costo, turnos) y fallos con su texto.
 
 **Secciones**
 
@@ -485,6 +493,10 @@ timestamps por etapa, escalados, subtareas.
 
 Cada sección cierra con un bloque fijo **"Para el siguiente rol"**, un handoff explícito
 que acompaña a las secciones completas que el siguiente rol declara leer.
+
+Cuando un rol vuelve a entregar tras una devolución, su sección anterior queda como
+`## <Rol> (vN)` y la vigente sin sufijo. Los roles leen solo las vigentes; las versiones
+son para PjM al escalar con historial y para comparar corridas.
 
 ---
 
@@ -511,7 +523,7 @@ lo que no cambia es el proceso.
 | Del producto (parámetro) | Del sistema (fijo) |
 |---|---|
 | Repositorio | Roles y sus prompts |
-| Definiciones acumuladas (fuente de verdad de producto) | Caminos y ruteo |
+| Conocimiento de producto | Caminos y ruteo |
 | ADRs | Conteo de devoluciones y control de loops |
 | Acceso a métricas | Documento único y sus secciones |
 
@@ -528,16 +540,18 @@ Forma del repo del producto:
 | Ruta | Contenido | Quién escribe |
 |---|---|---|
 | código de la app | El producto | Developer |
+| `docs/product/` | Conocimiento de producto: una definición vigente por capacidad, métricas incluidas | PM al aprobar, vía el grafo |
 | `docs/adr/` | ADRs numerados | Humano el primero, después Tech Lead |
-| `.agentic/tasks/` | Documento único por tarea | Los roles, sección por sección |
-| `.agentic/producto/` | Definiciones acumuladas, la fuente de verdad de producto | PM |
+| `CONTEXT.md` | Glosario del producto | Humano el primero, después PM |
+| `.agentic/tasks/` | Documento único por tarea, registro crudo del trabajo | Los roles, sección por sección |
 | `.agentic/prompts/` | Overrides de prompts por rol, si los hay (ADR-0005) | PjM |
 | `.agentic/flags.yaml` | Vocabulario de flags del producto, pisa el default del sistema | Humano, después PM |
 | `.agentic/state.sqlite` | Checkpointer del grafo, fuera del control de versiones (ADR-0003) | El sistema |
 
-Los ADRs viven con el código, no bajo `.agentic/`, porque son del producto y los lee
-cualquiera. Los valida el Tech Lead efímero en el pingpong, y el humano los ve igual al
-revisar el diff antes de mergear.
+El conocimiento de producto (definiciones, ADRs, glosario) vive con los docs humanos, no
+bajo `.agentic/`, porque es del producto y lo lee cualquiera; `.agentic/` es maquinaria del
+sistema (ADR-0006). Los ADRs los valida el Tech Lead efímero en el pingpong, y el humano ve
+todo el conocimiento igual al revisar el diff antes de mergear.
 
 ### El producto de prueba
 
@@ -623,7 +637,7 @@ refutar.
 | 5 | SRE/Ops, Customer Insights | Cuando haya producción y usuarios |
 
 **Consecuencia asumida**: el camino de bug no se puede ejercitar hasta que el producto tenga
-definiciones acumuladas. Las primeras tareas del sistema son todas features.
+conocimiento de producto escrito. Las primeras tareas del sistema son todas features.
 
 **Riesgo conocido de la estructura por roles.** Un organigrama humano existe porque las
 personas tienen contexto limitado, no se pueden clonar, y alguien rinde cuentas. Los agentes
@@ -639,7 +653,7 @@ existe justamente para pagar ese costo solo donde compre calidad.
 | # | Pendiente | Bloquea |
 |---|---|---|
 | 1 | Formato concreto de la definición de comportamiento | Implementar Product Analyst y PM |
-| 2 | Fuente de verdad de producto: vive en `.agentic/producto/` y la mantiene PM. Falta el formato y cómo se acumula | Product Analyst en bugs, PM |
+| 2 | ~~Fuente de verdad de producto~~ **resuelto**: conocimiento de producto en `docs/product/`, un archivo por capacidad, destilado por PM al aprobar (ADR-0006). Las definiciones del v0 las escribe el humano | — |
 | 3 | ~~ADRs~~ **resuelto**: `docs/adr/`, primero el humano, después Tech Lead, valida el efímero | — |
 | 4 | Frecuencia de cada reloj proactivo | Etapa 5 |
 | 5 | Señales y umbrales de SRE/Ops para decidir que algo es bug, más deduplicación | SRE/Ops, etapa 5 |
@@ -655,7 +669,7 @@ existe justamente para pagar ese costo solo donde compre calidad.
 
 **Resueltos desde la versión anterior**: el stack y el runtime de agentes (LangGraph para el
 flujo entre roles, Claude Agent SDK como harness de cada rol, autenticado con suscripción),
-dónde vive la fuente de verdad de producto, y qué producto se usa de prueba.
+dónde vive el conocimiento de producto, y qué producto se usa de prueba.
 
 ---
 
@@ -678,6 +692,9 @@ Se anotan para no reintroducirlas por error.
 | Cada rol recibe solo lo que produjo el rol previo | Cada rol declara la lista de secciones que lee |
 | El pingpong del Tech Lead es con un igual | El efímero usa modelo más capaz y prompt de adversario |
 | Los 17 roles se construyen todos y después se mide | Se construyen de a uno y cada uno se gana el lugar |
+| Las definiciones acumuladas viven en `.agentic/producto/` | Conocimiento de producto en `docs/product/`, con los docs humanos (ADR-0006) |
+| El documento de tarea es "fuente de verdad" y no guarda historial | Es el registro crudo del trabajo: guarda entregas pisadas y corridas por rol. Lo vigente se destila |
+| LangSmith para tracing | Langfuse local, alimentado por el OpenTelemetry nativo de Claude Code |
 
 ---
 
@@ -690,8 +707,9 @@ su setup: ODR no tiene tests unitarios, ni CI, ni ADRs.
 ### Paquete
 
 `agentic/` se parte en `state.py`, `configuration.py`, `prompts/`, `roles.py`, `agent.py`
-(harness sobre Claude Agent SDK), `document.py` y `graph.py`. Regla: `state` y
-`configuration` no importan nada del proyecto.
+(harness sobre Claude Agent SDK), `document.py`, `knowledge.py` (lee y escribe el
+conocimiento de producto), `observe.py` (stream a terminal y spans) y `graph.py`. Regla:
+`state` y `configuration` no importan nada del proyecto.
 
 ### Configuración
 
@@ -751,6 +769,17 @@ métricas de PjM.
 
 Developers en paralelo con `Send` (ADR-0004).
 
+### Observabilidad
+
+Tres capas, de más inmediata a más durable. `agentic run --verbose` vuelca a stderr el
+stream del SDK (texto, thinking si el rol lo tiene, tool calls) con prefijo de rol: es la
+única forma de ver generar. Claude Code exporta OpenTelemetry nativo; un collector en
+`observability/langfuse/` lo reenvía a un Langfuse local, porque el exportador de Claude
+Code no puede mandar un header `Authorization: Basic` entero. El grafo abre un span por
+tarea y uno por rol y pasa `TRACEPARENT` al subproceso, así una tarea es un trace con los
+roles anidados. Por último, el `session_id` de cada corrida queda en el documento de tarea:
+`claude -r <id>` en el repo del producto reabre la sesión del rol.
+
 ### Tooling
 
 `pyproject.toml` con `uv.lock`, ruff con `E F I UP` (sin `D`: docstrings obligatorios en 17
@@ -760,7 +789,7 @@ compilar; la CLI lo compila con el checkpointer.
 
 ### Evaluación
 
-LangSmith solo para tracing. El puntaje sigue siendo el de la sección 9: binario, humano. Un
+Langfuse solo para tracing. El puntaje sigue siendo el de la sección 9: binario, humano. Un
 script corre el set de cinco tareas y escribe un JSONL versionado en este repo con: hash de
 prompts, `Configuration` completa, costo, resultado binario y nota. Además, evals de nodo
 intermedio como tests de pytest ("PjM clasifica estas descripciones así", "PM devuelve esta

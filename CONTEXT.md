@@ -20,7 +20,7 @@ El rol que clasifica, enruta, registra todo, controla loops y cierra.
 _Avoid_: Lead, orquestador
 
 **PM** (Product Manager):
-Dueño de la definición única y única fuente de verdad de producto.
+Dueño de la definición única y del conocimiento de producto, que destila al aprobar.
 
 **Pensador**:
 Rol que produce: Product Analyst, UX Designer, UI Designer, Developer, Tech Writer.
@@ -92,11 +92,18 @@ El bloque "Para el siguiente rol" con que cierra cada sección.
 **Cierre**:
 PjM da por terminada la tarea. Requiere las aprobaciones del tipo.
 
+**Destilado**:
+El paso en que PM vuelca lo que una tarea dejó vigente al conocimiento de producto: la
+definición de cada capacidad tocada y los términos del glosario. PM devuelve el texto, el
+grafo escribe.
+
 ### Artefactos
 
 **Documento de tarea**:
-Un archivo por tarea con frontmatter YAML de PjM y una sección Markdown por rol. Fuente de verdad del trabajo de la tarea.
-_Avoid_: log, historial
+Un archivo por tarea con frontmatter YAML de PjM y una sección Markdown por rol. El registro
+crudo del trabajo de la tarea, materia prima del conocimiento de producto: guarda también las
+entregas que una devolución pisó y las corridas de cada rol. Nadie lee tareas viejas para
+saber qué está vigente; para eso está el conocimiento de producto.
 
 **Sección**:
 La parte del documento que escribe un rol. Cada rol declara qué secciones lee.
@@ -107,8 +114,15 @@ Los issues de GitHub del repo del producto con la etiqueta `agentic`. La entrada
 **Cola de escalados**:
 Los issues con la etiqueta `needs-human`.
 
-**Fuente de verdad de producto**:
-Las definiciones acumuladas que mantiene PM.
+**Conocimiento de producto**:
+Lo destilado y vigente sobre el producto, en el repo del producto y fuera de `.agentic/`: una
+definición por capacidad (métricas incluidas), los ADRs y el glosario. Lo mantiene PM, salvo
+los ADRs, que escribe Tech Lead.
+_Avoid_: fuente de verdad, specs
+
+**Capacidad**:
+La unidad en que se organiza el conocimiento de producto: un archivo por concepto del
+glosario del producto, con su comportamiento vigente y sus métricas.
 
 **Contexto de producto**:
 La raíz del repo del producto, que el sistema recibe como parámetro. Ahí está todo lo que varía por producto: el código, los ADRs y `.agentic/`.
