@@ -70,10 +70,25 @@ async def _run_role(
         _persist(state, patch, cfg)
         return None, patch
 
+    sections = {role.name: output.text}
+    version = 1 + sum(1 for r in state.get("runs", []) if r["role"] == role.name)
+    if role.name in state.get("sections", {}):
+        # A return: the delivery being replaced stays in the document as history.
+        sections[f"{role.name} (v{version - 1})"] = state["sections"][role.name]
     patch |= {
-        "sections": {role.name: output.text},
+        "sections": sections,
         "failures": output.failures,
         "cost_usd": output.cost_usd,
+        "runs": [
+            {
+                "role": role.name,
+                "version": version,
+                "session_id": output.session_id,
+                "model": output.model,
+                "cost_usd": output.cost_usd,
+                "turns": output.turns,
+            }
+        ],
     }
     return output, patch
 
@@ -82,7 +97,8 @@ def _persist(state: TaskState, patch: TaskState, cfg: Configuration) -> None:
     """Write the document with the reducers applied by hand: the patch is partial."""
     merged: dict = {**state, **patch}
     merged["cost_usd"] = state.get("cost_usd", 0.0) + patch.get("cost_usd", 0.0)
-    merged["failures"] = state.get("failures", []) + patch.get("failures", [])
+    for key in ("failures", "runs"):
+        merged[key] = state.get(key, []) + patch.get(key, [])
     for key in ("sections", "prompts", "returns"):
         merged[key] = {**state.get(key, {}), **patch.get(key, {})}
     document.write(merged, cfg.product_dir)

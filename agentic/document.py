@@ -6,6 +6,10 @@ the source of truth; the GitHub issue is derived from it (ADR-0001).
 
 Layout: `## <section>` headings at column 0 delimit sections. Roles are told to
 use `###` and below inside their own section, so the split is unambiguous.
+
+The document is the raw record of the task (ADR-0006): a delivery superseded by a
+return keeps its section as `## <role> (vN)`, written right before the current
+one, and the frontmatter lists every run with its Claude Code session id.
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ ORIGINAL = "Original request"
 
 _FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\n", re.S)
 _SECTION = re.compile(r"^## (.+?)\s*$", re.M)
+_VERSION = re.compile(r"^(.*) \(v(\d+)\)$")
 
 
 def path_for(task_id: str, product_dir: Path) -> Path:
@@ -36,11 +41,14 @@ def write(state: dict, product_dir: Path) -> Path:
         "current_role": state.get("current_role"),
         "flags": state.get("flags", {}),
         "returns": state.get("returns", {}),
-        "failures": len(state.get("failures", [])),
         "escalated": state.get("escalated"),
         "cost_usd": round(state.get("cost_usd", 0.0), 4),
         "prompts": state.get("prompts", {}),
         "system_commit": system_commit(),
+        "runs": [dict(r, cost_usd=round(r["cost_usd"], 4)) for r in state.get("runs", [])],
+        "failures": [
+            dict(f, cost_usd=round(f.get("cost_usd", 0.0), 4)) for f in state.get("failures", [])
+        ],
     }
 
     parts = [
@@ -51,13 +59,32 @@ def write(state: dict, product_dir: Path) -> Path:
         f"# {state['title']}\n",
         f"## {ORIGINAL}\n\n{state['description'].strip()}\n",
     ]
-    for role, text in state.get("sections", {}).items():
-        parts.append(f"## {role}\n\n{text.strip()}\n")
+    for name, text in ordered(state.get("sections", {})).items():
+        parts.append(f"## {name}\n\n{text.strip()}\n")
 
     path = path_for(state["id"], product_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(parts), encoding="utf-8")
     return path
+
+
+def ordered(sections: dict[str, str]) -> dict[str, str]:
+    """Sections in delivery order: each role's `(vN)` versions, ascending, then its current."""
+    versions: dict[str, list[tuple[int, str]]] = {}
+    for name in sections:
+        if match := _VERSION.match(name):
+            versions.setdefault(match.group(1), []).append((int(match.group(2)), name))
+    result: dict[str, str] = {}
+    for name in sections:
+        if _VERSION.match(name):
+            continue
+        for _, old in sorted(versions.pop(name, [])):
+            result[old] = sections[old]
+        result[name] = sections[name]
+    for orphans in versions.values():  # a version without a current section: keep it anyway
+        for _, old in sorted(orphans):
+            result[old] = sections[old]
+    return result
 
 
 def read(path: Path) -> dict:

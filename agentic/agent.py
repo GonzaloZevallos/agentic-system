@@ -50,6 +50,9 @@ class Output:
     data: dict
     cost_usd: float = 0.0
     turns: int = 0
+    # Claude Code session of the successful attempt: `claude -r <id>` reopens it.
+    session_id: str = ""
+    model: str = ""
     # Failed attempts before this output. Empty on a clean run. Their cost is
     # already included in `cost_usd`: a paid attempt counts even when it failed.
     failures: list[Failure] = field(default_factory=list)
@@ -147,4 +150,11 @@ async def _once(
     if not text:
         raise _AttemptFailed("`markdown` is empty; the Markdown section is required", cost)
 
-    return Output(text=text, data=data, cost_usd=cost, turns=result.num_turns)
+    return Output(
+        text=text,
+        data=data,
+        cost_usd=cost,
+        turns=result.num_turns,
+        session_id=result.session_id,
+        model=model,
+    )

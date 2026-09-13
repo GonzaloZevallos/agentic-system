@@ -49,6 +49,36 @@ async def test_second_failure_raises_role_failure_with_cost(monkeypatch):
     assert str(info.value) == "PjM failed 2 times: b"
 
 
+async def test_once_keeps_the_session_id_and_model(monkeypatch):
+    """`_once` with the SDK's `query` replaced: the result's session id lands in `Output`."""
+    from claude_agent_sdk import ResultMessage
+
+    result = ResultMessage(
+        subtype="success",
+        duration_ms=1,
+        duration_api_ms=1,
+        is_error=False,
+        num_turns=2,
+        session_id="sess-123",
+        total_cost_usd=0.02,
+        structured_output={
+            "markdown": "ok",
+            "type": "feature",
+            "confidence": "high",
+            "reason": "r",
+        },
+    )
+
+    async def fake_query(prompt, options):
+        yield result
+
+    monkeypatch.setattr(agent, "query", fake_query)
+    out = await agent._once(PJM, "p", "s", "model-x", {}, None)
+    assert out.session_id == "sess-123"
+    assert out.model == "model-x"
+    assert out.turns == 2
+
+
 async def test_zero_retries_means_one_attempt(monkeypatch):
     scripted(monkeypatch, [_AttemptFailed("a")])
     with pytest.raises(RoleFailure) as info:

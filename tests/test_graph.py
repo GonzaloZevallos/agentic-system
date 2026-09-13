@@ -132,8 +132,19 @@ async def test_return_loops_back_then_approves(monkeypatch, config):
     second_validate = script.calls[4][1]
     assert "v2" in second_validate and "### Verdict\n\nreturned" in second_validate
     assert "You have 1 left" in script.calls[4][2]
-    # The section holds the latest attempt, not both.
+    # The current section holds the latest delivery; the returned one stays as history.
     assert "v2" in final["sections"][PRODUCT_ANALYST.name]
+    assert "v1" in final["sections"][f"{PRODUCT_ANALYST.name} (v1)"]
+    assert "returned" in final["sections"][f"{PM.name} (v1)"]
+    assert [(r["role"], r["version"]) for r in final["runs"]] == [
+        ("PjM", 1),
+        ("Product Analyst", 1),
+        ("PM", 1),
+        ("Product Analyst", 2),
+        ("PM", 2),
+    ]
+    # History is not context: the second PM pass reads only current sections.
+    assert "(v1)" not in script.calls[4][1]
 
 
 async def test_return_limit_escalates(monkeypatch, config):
@@ -172,7 +183,10 @@ async def test_role_failure_escalates_and_keeps_failures(monkeypatch, config, tm
     assert final["cost_usd"] == pytest.approx(0.01 + 0.05 + 0.03)  # failed attempts still cost
     assert PRODUCT_ANALYST.name not in final["sections"]
     doc = read(tmp_path / ".agentic/tasks/T-1.md")
-    assert doc["failures"] == 2
+    assert [f["error"] for f in doc["failures"]] == ["no structured output", "empty markdown"]
+    assert doc["runs"] == [
+        {"role": "PjM", "version": 1, "session_id": "", "model": "", "cost_usd": 0.01, "turns": 0}
+    ]
     assert doc["status"] == g.WAITING_ON_HUMAN
 
 
