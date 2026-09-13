@@ -1,4 +1,4 @@
-"""Graph state. Imports nothing from the project (DISENO.md, 14).
+"""Graph state. Imports nothing from the project (README.md, 14).
 
 Reducers:
 - `add` accumulates cost across roles.

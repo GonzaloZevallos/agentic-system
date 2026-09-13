@@ -2,7 +2,7 @@
 
 Authenticates through the Claude Code subscription, not an API key.
 
-A role failure is one of four things (DISENO.md, 3 and 14): an SDK exception,
+A role failure is one of four things (README.md, 3 and 14): an SDK exception,
 `max_turns` exhausted without a result, a missing or invalid structured output,
 or an empty `markdown` field. `run` retries once with the error appended to the prompt; a
 second failure raises `RoleFailure`, which the node turns into an escalation.
