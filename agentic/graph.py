@@ -59,17 +59,18 @@ async def _run_role(
     )
     patch: TaskState = {"current_role": role.name, "prompts": {role.slug: loaded.hash}}
     try:
-        output = await run(
-            role,
-            context_for(state, role, product_knowledge),
-            system_prompt=loaded.text,
-            model=cfg.model_for(role.slug, role.kind),
-            retries=cfg.role_retries,
-            flags=vocabulary,
-            cwd=cfg.product_dir,
-            check=check,
-            observer=observe.Printer(role.name) if cfg.verbose else None,
-        )
+        with observe.role_span(role.name):
+            output = await run(
+                role,
+                context_for(state, role, product_knowledge),
+                system_prompt=loaded.text,
+                model=cfg.model_for(role.slug, role.kind),
+                retries=cfg.role_retries,
+                flags=vocabulary,
+                cwd=cfg.product_dir,
+                check=check,
+                observer=observe.Printer(role.name) if cfg.verbose else None,
+            )
     except RoleFailure as exc:
         patch |= {
             "failures": exc.failures,

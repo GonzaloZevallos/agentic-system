@@ -22,7 +22,7 @@ from pathlib import Path
 from claude_agent_sdk import ClaudeAgentOptions, Message, ResultError, ResultMessage, query
 from pydantic import ValidationError
 
-from . import schemas
+from . import observe, schemas
 from .roles import Role
 from .state import Failure
 
@@ -128,6 +128,8 @@ async def _once(
         setting_sources=[],  # ignore project CLAUDE.md and settings
         # Deltas as they are generated; without an observer nobody would read them.
         include_partial_messages=observer is not None,
+        # Claude Code parents its own spans under the role's (SDK mode honours it).
+        env={"TRACEPARENT": parent} if (parent := observe.traceparent()) else {},
     )
 
     result: ResultMessage | None = None

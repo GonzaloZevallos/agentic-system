@@ -17,7 +17,7 @@ from pathlib import Path
 import anyio
 from dotenv import load_dotenv
 
-from . import flags
+from . import flags, observe
 from .configuration import ENV_PREFIX, Configuration, MissingProductDir
 from .document import path_for
 from .graph import graph
@@ -109,9 +109,11 @@ def issue_task(number: int, product_dir: Path) -> tuple[str, str, str]:
 async def _run(task_id: str, title: str, description: str, cfg: Configuration) -> None:
     config = {"configurable": {"thread_id": task_id}}
 
-    final = await graph.compile().ainvoke(
-        {"id": task_id, "title": title, "description": description}, config=config
-    )
+    with observe.task_span(task_id, title):
+        final = await graph.compile().ainvoke(
+            {"id": task_id, "title": title, "description": description}, config=config
+        )
+    observe.flush()
     print(f"\nid:        {task_id}")
     print(f"type:      {final.get('type')}")
     print(f"status:    {final.get('status', 'open')}")
