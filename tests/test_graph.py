@@ -53,7 +53,7 @@ class Script:
         self.checks = {}
 
     async def __call__(
-        self, role, prompt, *, system_prompt, model, retries, flags, cwd, check=None
+        self, role, prompt, *, system_prompt, model, retries, flags, cwd, check=None, observer=None
     ):
         self.calls.append((role.slug, prompt, system_prompt, model))
         self.checks[role.slug] = check

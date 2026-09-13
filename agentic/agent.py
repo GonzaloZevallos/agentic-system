@@ -19,7 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from claude_agent_sdk import ClaudeAgentOptions, ResultError, ResultMessage, query
+from claude_agent_sdk import ClaudeAgentOptions, Message, ResultError, ResultMessage, query
 from pydantic import ValidationError
 
 from . import schemas
@@ -69,14 +69,23 @@ async def run(
     flags: dict[str, str],
     cwd: Path | None = None,
     check: Callable[[dict], None] | None = None,
+    observer: Callable[[Message], None] | None = None,
 ) -> Output:
     """`check` is the node's own rule over the validated output (raise `ValueError`);
-    breaking it is a role failure like any other, so the model gets the error back."""
+    breaking it is a role failure like any other, so the model gets the error back.
+    `observer` sees every message of the stream, partial ones included."""
     failures: list[Failure] = []
     for attempt in range(1, max(retries, 0) + 2):
         try:
             output = await _once(
-                role, _with_error(prompt, failures), system_prompt, model, flags, cwd, check
+                role,
+                _with_error(prompt, failures),
+                system_prompt,
+                model,
+                flags,
+                cwd,
+                check,
+                observer,
             )
         except _AttemptFailed as exc:
             failures.append(
@@ -106,6 +115,7 @@ async def _once(
     flags: dict[str, str],
     cwd: Path | None,
     check: Callable[[dict], None] | None = None,
+    observer: Callable[[Message], None] | None = None,
 ) -> Output:
     options = ClaudeAgentOptions(
         system_prompt=system_prompt,
@@ -116,11 +126,15 @@ async def _once(
         max_turns=role.max_turns,
         output_format={"type": "json_schema", "schema": schemas.json_schema(role.schema, flags)},
         setting_sources=[],  # ignore project CLAUDE.md and settings
+        # Deltas as they are generated; without an observer nobody would read them.
+        include_partial_messages=observer is not None,
     )
 
     result: ResultMessage | None = None
     try:
         async for message in query(prompt=prompt, options=options):
+            if observer is not None:
+                observer(message)
             if isinstance(message, ResultMessage):
                 result = message
     except ResultError as exc:

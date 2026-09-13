@@ -18,7 +18,7 @@ from collections.abc import Callable
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 
-from . import document, flags, knowledge
+from . import document, flags, knowledge, observe
 from .agent import Output, RoleFailure, run
 from .configuration import Configuration
 from .roles import ORIGINAL, PAIR_PM_PA, PJM, PM, PRODUCT_ANALYST, Role
@@ -68,6 +68,7 @@ async def _run_role(
             flags=vocabulary,
             cwd=cfg.product_dir,
             check=check,
+            observer=observe.Printer(role.name) if cfg.verbose else None,
         )
     except RoleFailure as exc:
         patch |= {

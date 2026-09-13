@@ -31,6 +31,17 @@ def test_flag_beats_env(monkeypatch, tmp_path):
     cli.main()
     assert seen["cfg"].product_dir == from_flag
     assert seen["task_id"].startswith("T-")
+    assert seen["cfg"].verbose is False
+
+
+def test_verbose_reaches_the_configuration(monkeypatch, tmp_path):
+    root = product(tmp_path, "p")
+    seen = capture_run(monkeypatch)
+    monkeypatch.setattr(
+        "sys.argv", ["agentic", "run", "t", "d", "--verbose", "--product-dir", str(root)]
+    )
+    cli.main()
+    assert seen["cfg"].verbose is True
 
 
 def test_preflight_rejects_a_dir_without_agentic(monkeypatch, tmp_path):

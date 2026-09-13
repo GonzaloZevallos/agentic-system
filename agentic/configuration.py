@@ -33,6 +33,8 @@ class Configuration(BaseModel):
     role_retries: int = Field(default=1, ge=0)
     # Closed tasks PjM watches before judging a process change (DISENO.md, 4).
     evaluation_window: int = Field(default=10, ge=1)
+    # Stream each role's generation to stderr (`agentic run --verbose`).
+    verbose: bool = False
     # Root of the product repo, the product context (DISENO.md, 8). Required: the
     # system never writes inside its own repo (ADR-0002), so there is no sane default.
     product_dir: Path

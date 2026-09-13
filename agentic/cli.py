@@ -39,6 +39,9 @@ def main() -> None:
         help="take title and description from GitHub issue N of the product repo (needs gh)",
     )
     run.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
+    run.add_argument(
+        "--verbose", action="store_true", help="stream each role's generation to stderr"
+    )
     args = parser.parse_args()
 
     if args.issue is None and (args.title is None or args.description is None):
@@ -46,9 +49,11 @@ def main() -> None:
     if args.issue is not None and args.title is not None:
         run.error("--issue replaces the title and description; give one or the other")
 
+    # The env var outranks `configurable`, so an explicit flag has to go in as env.
     if args.product_dir:
-        # The env var outranks `configurable`, so an explicit flag has to go in as env.
         os.environ[ENV_PREFIX + "PRODUCT_DIR"] = args.product_dir
+    if args.verbose:
+        os.environ[ENV_PREFIX + "VERBOSE"] = "1"
     try:
         cfg = Configuration.from_runnable_config(None)
         preflight(cfg)
