@@ -41,6 +41,8 @@ class Role:
     # Declarative, so PjM can record it and see what a failing role was missing.
     # A role that lists itself reads its own previous section on a return.
     reads: tuple[str, ...] = (ORIGINAL,)
+    # Product roles also receive the product knowledge, whole (ADR-0006).
+    reads_knowledge: bool = False
     effort: str = "medium"
     max_turns: int = 4
 
@@ -80,6 +82,7 @@ PRODUCT_ANALYST = Role(
     kind="thinker",
     schema=Definition,
     reads=(ORIGINAL, "PjM", "Product Analyst", "PM"),
+    reads_knowledge=True,
 )
 
 PM = Role(
@@ -88,6 +91,7 @@ PM = Role(
     kind="validator",
     schema=Verdict,
     reads=(ORIGINAL, "Product Analyst", "PM"),
+    reads_knowledge=True,
 )
 
 PAIR_PM_PA = f"{PM.name}→{PRODUCT_ANALYST.name}"

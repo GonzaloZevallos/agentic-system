@@ -1,7 +1,7 @@
 import pytest
 
 from agentic import schemas
-from agentic.schemas import Classification, Definition
+from agentic.schemas import Classification, Definition, Verdict
 
 VOCAB = {"touches_ui": "UI", "touches_copy": "copy"}
 
@@ -29,6 +29,28 @@ def test_validate_rejects_invented_or_missing_flags():
         schemas.validate(
             Definition, {"markdown": "x", "flags": {"touches_ui": True, "ui_change": True}}, VOCAB
         )
+
+
+def test_verdict_carries_the_distillation_and_the_schema_has_no_refs():
+    out = schemas.json_schema(Verdict, VOCAB)
+    assert "$defs" not in out and "$ref" not in str(out)
+    assert out["properties"]["definitions"]["items"]["properties"]["capability"]
+    assert {"definitions", "glossary"} <= set(out["required"])
+
+    data = schemas.validate(
+        Verdict,
+        {
+            "markdown": "x",
+            "verdict": "approved",
+            "reason": "r",
+            "flags": {"touches_ui": True, "touches_copy": False},
+            "definitions": [{"capability": "metrics", "content": "# Metrics"}],
+            "glossary": [{"term": "Churn", "definition": "Members who leave.", "avoid": ""}],
+        },
+        VOCAB,
+    )
+    assert data["definitions"][0]["capability"] == "metrics"
+    assert data["glossary"][0]["term"] == "Churn"
 
 
 def test_validate_rejects_bad_type():

@@ -15,6 +15,7 @@ it will need tools and a deliberate permission mode.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -67,12 +68,15 @@ async def run(
     retries: int,
     flags: dict[str, str],
     cwd: Path | None = None,
+    check: Callable[[dict], None] | None = None,
 ) -> Output:
+    """`check` is the node's own rule over the validated output (raise `ValueError`);
+    breaking it is a role failure like any other, so the model gets the error back."""
     failures: list[Failure] = []
     for attempt in range(1, max(retries, 0) + 2):
         try:
             output = await _once(
-                role, _with_error(prompt, failures), system_prompt, model, flags, cwd
+                role, _with_error(prompt, failures), system_prompt, model, flags, cwd, check
             )
         except _AttemptFailed as exc:
             failures.append(
@@ -101,6 +105,7 @@ async def _once(
     model: str,
     flags: dict[str, str],
     cwd: Path | None,
+    check: Callable[[dict], None] | None = None,
 ) -> Output:
     options = ClaudeAgentOptions(
         system_prompt=system_prompt,
@@ -144,6 +149,8 @@ async def _once(
         raise _AttemptFailed("structured output missing; it is required", cost)
     try:
         data = schemas.validate(role.schema, result.structured_output, flags)
+        if check is not None:
+            check(data)
     except (ValidationError, ValueError) as exc:
         raise _AttemptFailed(f"structured output invalid: {exc}", cost) from exc
     text = data.pop("markdown").strip()

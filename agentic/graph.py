@@ -13,10 +13,12 @@ The module exports `graph` uncompiled for `langgraph dev`; the CLI compiles it.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 
-from . import document, flags
+from . import document, flags, knowledge
 from .agent import Output, RoleFailure, run
 from .configuration import Configuration
 from .roles import ORIGINAL, PAIR_PM_PA, PJM, PM, PRODUCT_ANALYST, Role
@@ -25,10 +27,11 @@ from .state import Status, TaskInput, TaskState
 WAITING_ON_HUMAN: Status = "waiting_on_human"
 
 
-def context_for(state: TaskState, role: Role) -> str:
-    """The role's input: the sections it declares, in document order, that exist."""
+def context_for(state: TaskState, role: Role, product_knowledge: str = "") -> str:
+    """The role's input: the product knowledge if the role reads it, then the sections
+    it declares, in document order, that exist."""
     sections = state.get("sections", {})
-    parts = []
+    parts = [product_knowledge] if product_knowledge else []
     for name in role.reads:
         if name == ORIGINAL:
             parts.append(f"## {ORIGINAL}\n\n{state['title']}\n\n{state['description']}")
@@ -38,10 +41,15 @@ def context_for(state: TaskState, role: Role) -> str:
 
 
 async def _run_role(
-    state: TaskState, role: Role, config: RunnableConfig, **placeholders: object
+    state: TaskState,
+    role: Role,
+    config: RunnableConfig,
+    check: Callable[[dict], None] | None = None,
+    **placeholders: object,
 ) -> tuple[Output | None, TaskState]:
     """Run a role and build the state patch. On `RoleFailure` the patch is an escalation."""
     cfg = Configuration.from_runnable_config(config)
+    product_knowledge = knowledge.read(cfg.product_dir) if role.reads_knowledge else ""
     vocabulary = flags.load(cfg.product_dir)
     loaded = role.prompt(
         cfg.product_dir,
@@ -53,12 +61,13 @@ async def _run_role(
     try:
         output = await run(
             role,
-            context_for(state, role),
+            context_for(state, role, product_knowledge),
             system_prompt=loaded.text,
             model=cfg.model_for(role.slug, role.kind),
             retries=cfg.role_retries,
             flags=vocabulary,
             cwd=cfg.product_dir,
+            check=check,
         )
     except RoleFailure as exc:
         patch |= {
@@ -137,12 +146,29 @@ async def validate(state: TaskState, config: RunnableConfig) -> TaskState:
     cfg = Configuration.from_runnable_config(config)
     used = state.get("returns", {}).get(PAIR_PM_PA, 0)
     remaining = cfg.max_returns_per_pair - used
-    output, patch = await _run_role(state, PM, config, remaining_returns=remaining)
+    output, patch = await _run_role(
+        state,
+        PM,
+        config,
+        check=knowledge.approval_check(state.get("type", "")),
+        remaining_returns=remaining,
+    )
     if output is None:
         return patch
 
     patch["flags"] = output.data["flags"]
     if output.data["verdict"] == "approved":
+        # The distillation (ADR-0006): PM returned the knowledge, the graph writes it.
+        knowledge.write_definitions(
+            cfg.product_dir, {d["capability"]: d["content"] for d in output.data["definitions"]}
+        )
+        knowledge.upsert_terms(
+            cfg.product_dir,
+            {
+                t["term"]: {"definition": t["definition"], "avoid": t["avoid"]}
+                for t in output.data["glossary"]
+            },
+        )
         patch["status"] = "definition_ready"
     elif remaining > 0:
         patch["returns"] = {PAIR_PM_PA: used + 1}

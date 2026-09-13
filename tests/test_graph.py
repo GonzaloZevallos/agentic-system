@@ -26,13 +26,19 @@ def defined(n=1):
     )
 
 
-def verdict(kind, reason="r"):
+def verdict(kind, reason="r", definitions=None, glossary=None):
+    if definitions is None:
+        definitions = (
+            [{"capability": "reports", "content": "# Reports"}] if kind == "approved" else []
+        )
     return Output(
         text=f"### Verdict\n\n{kind}\n\n### For the next role\n\n{reason}",
         data={
             "verdict": kind,
             "reason": reason,
             "flags": {"touches_ui": True, "touches_copy": False},
+            "definitions": definitions,
+            "glossary": glossary or [],
         },
         cost_usd=0.2,
     )
@@ -44,9 +50,13 @@ class Script:
     def __init__(self, **queues):
         self.queues = {k: list(v) for k, v in queues.items()}
         self.calls = []
+        self.checks = {}
 
-    async def __call__(self, role, prompt, *, system_prompt, model, retries, flags, cwd):
+    async def __call__(
+        self, role, prompt, *, system_prompt, model, retries, flags, cwd, check=None
+    ):
         self.calls.append((role.slug, prompt, system_prompt, model))
+        self.checks[role.slug] = check
         assert set(flags) == {"touches_ui", "touches_copy"}
         assert cwd is not None  # the SDK subprocess runs in the product dir
         item = self.queues[role.slug].pop(0)
@@ -87,6 +97,51 @@ async def test_happy_path(monkeypatch, config, tmp_path):
     assert doc["status"] == "definition_ready"
     assert doc["cost_usd"] == 0.31
     assert doc["sections"][PM.name].startswith("### Verdict")
+
+
+async def test_approval_writes_the_product_knowledge(monkeypatch, config, tmp_path):
+    (tmp_path / "CONTEXT.md").write_text("# Product\n\n## Language\n\n**Gym**:\nA business.\n")
+    (tmp_path / "docs/product").mkdir(parents=True)
+    (tmp_path / "docs/product/members.md").write_text("# Members\n\nOld.\n")
+    script = Script(
+        pjm=[classified()],
+        product_analyst=[defined()],
+        pm=[
+            verdict(
+                "approved",
+                definitions=[{"capability": "reports", "content": "# Reports\n\nCSV export."}],
+                glossary=[{"term": "Report", "definition": "A CSV file.", "avoid": "export"}],
+            )
+        ],
+    )
+    final = await run_graph(monkeypatch, script, config)
+    assert final["status"] == "definition_ready"
+
+    # Product roles read the knowledge, whole, before the task document; PjM does not.
+    assert "## Product knowledge" not in script.calls[0][1]
+    for call in script.calls[1:]:
+        assert call[1].startswith("## Product knowledge")
+        assert "A business." in call[1] and "Old." in call[1]
+        assert "## Original request" in call[1]
+    # PM's output is checked against the task type before it counts.
+    assert script.checks["pm"] is not None and script.checks["product_analyst"] is None
+
+    assert (tmp_path / "docs/product/reports.md").read_text() == "# Reports\n\nCSV export.\n"
+    assert (tmp_path / "docs/product/members.md").read_text() == "# Members\n\nOld.\n"
+    glossary = (tmp_path / "CONTEXT.md").read_text()
+    assert "**Gym**:\nA business." in glossary
+    assert glossary.rstrip().endswith("**Report**:\nA CSV file.\n_Avoid_: export")
+
+
+async def test_return_writes_nothing(monkeypatch, config, tmp_path):
+    script = Script(
+        pjm=[classified()],
+        product_analyst=[defined(1), defined(2)],
+        pm=[verdict("returned", "gap"), verdict("approved", definitions=[])],
+    )
+    await run_graph(monkeypatch, script, config)
+    assert not (tmp_path / "docs/product").exists()
+    assert not (tmp_path / "CONTEXT.md").exists()
 
 
 async def test_models_follow_kind(monkeypatch, config):

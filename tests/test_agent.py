@@ -12,7 +12,7 @@ pytestmark = pytest.mark.anyio
 def scripted(monkeypatch, outcomes):
     calls = []
 
-    async def fake_once(role, prompt, system_prompt, model, flags, cwd):
+    async def fake_once(role, prompt, system_prompt, model, flags, cwd, check=None):
         calls.append(prompt)
         outcome = outcomes.pop(0)
         if isinstance(outcome, Exception):
@@ -77,6 +77,41 @@ async def test_once_keeps_the_session_id_and_model(monkeypatch):
     assert out.session_id == "sess-123"
     assert out.model == "model-x"
     assert out.turns == 2
+
+
+async def test_check_failure_is_a_role_failure_with_the_error_in_the_retry(monkeypatch):
+    """The node's own rule over the output goes back to the model like a schema error."""
+    from claude_agent_sdk import ResultMessage
+
+    seen_prompts = []
+
+    async def fake_query(prompt, options):
+        seen_prompts.append(prompt)
+        yield ResultMessage(
+            subtype="success",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=1,
+            session_id="s",
+            total_cost_usd=0.01,
+            structured_output={
+                "markdown": "ok",
+                "type": "feature",
+                "confidence": "high",
+                "reason": "r",
+            },
+        )
+
+    def check(data):
+        if data["confidence"] == "high":
+            raise ValueError("be humble")
+
+    monkeypatch.setattr(agent, "query", fake_query)
+    with pytest.raises(RoleFailure) as info:
+        await agent.run(PJM, "p", system_prompt="s", model="m", retries=1, flags={}, check=check)
+    assert "be humble" in str(info.value)
+    assert "be humble" in seen_prompts[1] and "be humble" not in seen_prompts[0]
 
 
 async def test_zero_retries_means_one_attempt(monkeypatch):
