@@ -83,7 +83,7 @@ Máximo de devoluciones por par antes de escalar. Hoy 2.
 Entrega de la tarea al humano por PjM, con historial y motivo. Pausa la tarea.
 
 **Fallo de rol**:
-El rol se rompe: excepción del harness, turnos agotados sin resultado, salida estructurada ausente o inválida, `markdown` vacío. Distinto de devolución; no cuenta para el límite.
+El rol se rompe: su ejecución falla, se le acaban los turnos sin resultado, la salida estructurada falta o es inválida, el `markdown` está vacío. Distinto de devolución; no cuenta para el límite.
 _Avoid_: error (demasiado amplio)
 
 **Handoff**:
@@ -95,7 +95,7 @@ PjM da por terminada la tarea. Requiere las aprobaciones del tipo.
 **Destilado**:
 El paso en que PM vuelca lo que una tarea dejó vigente al conocimiento de producto: la
 definición de cada capacidad tocada y los términos del glosario. PM devuelve el texto, el
-grafo escribe.
+sistema escribe.
 
 ### Artefactos
 
@@ -136,7 +136,7 @@ Las cinco tareas fijas que se re-corren idénticas contra cada versión de promp
 ### Repos
 
 **Sistema**:
-Este repo: roles, prompts, caminos, grafo.
+Este repo: roles, prompts, caminos y las reglas del proceso.
 
 **Producto**:
 El repo sobre el que trabaja el sistema. El sistema nunca escribe en el repo del sistema mientras corre.

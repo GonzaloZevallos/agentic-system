@@ -530,7 +530,9 @@ lo que no cambia es el proceso.
 **Forma de la costura**: un **directorio de contexto de producto** que el sistema recibe
 como parámetro. Se eligió sobre un adaptador con funciones porque todavía no se sabe qué
 varía de verdad entre productos, y no se puede generalizar sobre un solo ejemplo. El
-adaptador se extrae cuando aparezca el segundo producto.
+adaptador se extrae cuando aparezca el segundo producto. Los ports de la arquitectura
+hexagonal (ADR-0007) no son ese adaptador: los define lo que el sistema necesita, tienen
+una sola implementación sobre este directorio, y este sigue siendo el único parámetro.
 
 **Repositorios separados** (ADR-0002). El sistema vive en su propio repo, el producto en
 otro, y el sistema nunca escribe dentro del suyo cuando trabaja.
@@ -695,6 +697,7 @@ Se anotan para no reintroducirlas por error.
 | Las definiciones acumuladas viven en `.agentic/producto/` | Conocimiento de producto en `docs/product/`, con los docs humanos (ADR-0006) |
 | El documento de tarea es "fuente de verdad" y no guarda historial | Es el registro crudo del trabajo: guarda entregas pisadas y corridas por rol. Lo vigente se destila |
 | LangSmith para tracing | Langfuse local, alimentado por el OpenTelemetry nativo de Claude Code |
+| Paquete plano, un módulo por tema, con las reglas dentro de los nodos del grafo | Hexagonal: dominio, aplicación con ports, adaptadores; LangGraph es un adaptador (ADR-0007) |
 
 ---
 
@@ -706,14 +709,23 @@ su setup: ODR no tiene tests unitarios, ni CI, ni ADRs.
 
 ### Paquete
 
-`agentic/` se parte en `state.py`, `configuration.py`, `prompts/`, `roles.py`, `agent.py`
-(harness sobre Claude Agent SDK), `document.py`, `knowledge.py` (lee y escribe el
-conocimiento de producto), `observe.py` (stream a terminal y spans) y `graph.py`. Regla:
-`state` y `configuration` no importan nada del proyecto.
+Arquitectura hexagonal (ADR-0007), tres capas con regla de dependencia estricta, vigilada
+por un test sobre los imports:
+
+| Capa | Contenido | Importa |
+|---|---|---|
+| `domain/` | `roles.py` y `prompts/`, `task.py` (estado y reducers), `document.py`, `knowledge.py`, `schemas.py`, `flags.py`, `rules.py` (límite por par, versionado, ruteo), `configuration.py` | Nada del proyecto ni de la infraestructura |
+| `application/` | `ports.py` (`RoleRunner`, `TaskDocuments`, `ProductKnowledge`, `Prompts`, `FlagVocabulary`, `Inbox`) y un caso de uso por nodo: `classify`, `define`, `validate_definition`, sobre `run_role` | Solo el dominio |
+| `adapters/` | `claude_sdk/` (harness y `Printer`), `filesystem/`, `github/`, `otel/`, `langgraph/` (el grafo: nodos, ruteo, spans; mañana `interrupt()`, `Send`, checkpointer) | Dominio y aplicación |
+| raíz | `composition.py` arma los ports reales; `cli.py` es el adaptador de entrada | Todo |
+
+LangGraph es un adaptador: los casos de uso son funciones async puras que reciben
+`Configuration` y `Ports`, y el grafo solo cablea. El escalado es un dato del patch que
+devuelve el caso de uso; pausar sobre él es del adaptador. Los tests espejan las capas.
 
 ### Configuración
 
-Una clase `Configuration` Pydantic con `from_runnable_config`. Precedencia: variable de
+Una clase `Configuration` Pydantic con `from_sources(overrides, env)`. Precedencia: variable de
 entorno > `config["configurable"]` > default. Cada nodo la lee al inicio. Campos iniciales:
 modelo de pensadores, modelo de validadores, máximo de devoluciones por par (2), reintentos
 por fallo de rol (1), ventana de evaluación (10), directorio de contexto de producto. Cada
@@ -723,7 +735,8 @@ la CLI falla, porque el sistema no tiene un lugar sano donde escribir por defect
 
 ### Prompts
 
-Un `agentic/prompts/<rol>.md` por rol, con placeholders para fecha y límites. Convenciones
+Un `agentic/domain/prompts/<rol>.md` por rol, con placeholders para fecha y límites: el
+prompt es parte de la definición del rol, como `Role.reads`. Convenciones
 tomadas de ODR: secciones con tags XML (`<Task>`, `<Hard Limits>`, `<Show Your Thinking>`),
 presupuestos numéricos explícitos y criterios de parada escritos. El validador recibe en el
 prompt las **devoluciones restantes de su par**: un validador que sabe que es su última
@@ -759,9 +772,10 @@ mecanismo que necesitan los roles proactivos.
 ### Fallo de rol
 
 Mecánicamente es una de cuatro cosas: excepción del SDK, `max_turns` agotado sin resultado,
-salida estructurada ausente o inválida, texto vacío. El reintento vive en `agent.run`: atrapa,
-reintenta una vez con el error agregado al prompt, y si vuelve a fallar lanza `RoleFailure`,
-que el nodo convierte en escalado. Se descartó `RetryPolicy` de LangGraph porque reintenta el
+salida estructurada ausente o inválida, texto vacío. El port `RoleRunner` devuelve la salida
+cruda o lanza `AttemptFailed`; la validación y el reintento viven en `application.run_role`:
+atrapa, reintenta una vez con el error agregado al prompt, y si vuelve a fallar lanza
+`RoleFailure`, que el caso de uso convierte en escalado. Se descartó `RetryPolicy` de LangGraph porque reintenta el
 nodo sin pasarle el error al modelo. Todo fallo, reintentado o no, queda en el estado para las
 métricas de PjM.
 
@@ -785,7 +799,7 @@ roles anidados. Por último, el `session_id` de cada corrida queda en el documen
 `pyproject.toml` con `uv.lock`, ruff con `E F I UP` (sin `D`: docstrings obligatorios en 17
 roles es ruido ahora), pytest, GitHub Actions corriendo ruff y pytest en cada PR,
 `langgraph.json` para `langgraph dev` y Studio, `.env.example`. El grafo se exporta sin
-compilar; la CLI lo compila con el checkpointer.
+compilar desde `agentic.composition`, el composition root; la CLI lo compila con el checkpointer.
 
 ### Evaluación
 

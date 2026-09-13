@@ -2,8 +2,10 @@
 
 import pytest
 
-from agentic.agent import run
-from agentic.roles import PJM
+from agentic.adapters.claude_sdk import ClaudeSdkRunner
+from agentic.adapters.filesystem import FilesystemPrompts
+from agentic.application.run_role import run_with_retry
+from agentic.domain.roles import PJM, render
 
 pytestmark = [pytest.mark.llm, pytest.mark.anyio]
 
@@ -30,14 +32,16 @@ CASES = [
 
 @pytest.mark.parametrize("title,description,expected", CASES)
 async def test_pjm_classifies(title, description, expected, tmp_path):
-    prompt = PJM.prompt(tmp_path)
-    output = await run(
+    prompt = render(*FilesystemPrompts(tmp_path).raw(PJM))
+    output = await run_with_retry(
         PJM,
         f"Task: {title}\n\n{description}",
         system_prompt=prompt.text,
         model="claude-sonnet-5",
         retries=1,
-        flags={},
+        vocabulary={},
+        cwd=tmp_path,
+        runner=ClaudeSdkRunner(),
     )
     assert output.data["type"] == expected
     assert output.data["confidence"] == "high"

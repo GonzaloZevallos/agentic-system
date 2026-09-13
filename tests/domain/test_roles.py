@@ -1,0 +1,43 @@
+from pathlib import Path
+
+import pytest
+
+from agentic.domain.roles import PJM, PM, PRODUCT_ANALYST, PROMPTS_DIR, ROLES, prompt_hash, render
+
+
+def test_render_fills_placeholders_and_hashes_the_raw_text():
+    raw = (PROMPTS_DIR / "pm.md").read_text()
+    loaded = render(
+        raw, PROMPTS_DIR / "pm.md", max_returns=2, remaining_returns=1, flags="- `touches_ui`: x"
+    )
+    assert "{{" not in loaded.text
+    assert "- `touches_ui`: x" in loaded.text
+    assert "You have 1 left" in loaded.text
+    assert "allows 2 returns" in loaded.text
+    assert loaded.source == PROMPTS_DIR / "pm.md"
+    assert loaded.hash == prompt_hash(raw)
+    assert loaded.hash != prompt_hash(raw + " ")
+
+
+def test_date_is_filled_by_default():
+    loaded = render("Tuned prompt for {{date}}.", Path("/x/pjm.md"))
+    assert loaded.text.startswith("Tuned prompt for 20")
+
+
+def test_missing_placeholder_is_an_error():
+    # An overlay may copy a placeholder its role never receives; it must not ship as `{{...}}`.
+    with pytest.raises(ValueError, match="remaining_returns"):
+        render("Left: {{remaining_returns}}", Path("/x/pjm.md"))
+
+
+def test_every_role_has_a_prompt_file():
+    assert ROLES == (PJM, PRODUCT_ANALYST, PM)
+    for role in ROLES:
+        assert (PROMPTS_DIR / f"{role.slug}.md").exists()
+
+
+def test_reads_include_own_section_for_returns():
+    # On a return the thinker must see what it wrote and what the validator said.
+    assert "Product Analyst" in PRODUCT_ANALYST.reads
+    assert "PM" in PRODUCT_ANALYST.reads
+    assert "Product Analyst" in PM.reads

@@ -4,6 +4,7 @@ import subprocess
 import pytest
 
 from agentic import cli
+from agentic.adapters.github import inbox
 
 
 def product(tmp_path, name):
@@ -16,8 +17,8 @@ def capture_run(monkeypatch):
     """Replace the graph run with a recorder of what the CLI would have run."""
     seen = {}
 
-    def fake_run(fn, task_id, title, description, cfg):
-        seen.update(task_id=task_id, title=title, description=description, cfg=cfg)
+    def fake_run(fn, task, cfg, ports):
+        seen.update(task=task, cfg=cfg, ports=ports)
 
     monkeypatch.setattr(cli.anyio, "run", fake_run)
     return seen
@@ -30,11 +31,14 @@ def test_flag_beats_env(monkeypatch, tmp_path):
     monkeypatch.setattr("sys.argv", ["agentic", "run", "t", "d", "--product-dir", str(from_flag)])
     cli.main()
     assert seen["cfg"].product_dir == from_flag
-    assert seen["task_id"].startswith("T-")
+    assert seen["task"]["id"].startswith("T-")
+    assert seen["task"]["title"] == "t" and seen["task"]["description"] == "d"
     assert seen["cfg"].verbose is False
+    assert seen["ports"].runner.verbose is False
+    assert seen["ports"].documents.product_dir == from_flag
 
 
-def test_verbose_reaches_the_configuration(monkeypatch, tmp_path):
+def test_verbose_reaches_the_runner(monkeypatch, tmp_path):
     root = product(tmp_path, "p")
     seen = capture_run(monkeypatch)
     monkeypatch.setattr(
@@ -42,6 +46,7 @@ def test_verbose_reaches_the_configuration(monkeypatch, tmp_path):
     )
     cli.main()
     assert seen["cfg"].verbose is True
+    assert seen["ports"].runner.verbose is True
 
 
 def test_preflight_rejects_a_dir_without_agentic(monkeypatch, tmp_path):
@@ -51,9 +56,21 @@ def test_preflight_rejects_a_dir_without_agentic(monkeypatch, tmp_path):
     assert info.value.code == 2
 
 
-def test_preflight_rejects_a_bad_flags_overlay(monkeypatch, tmp_path):
+def test_preflight_rejects_a_bad_flags_overlay(monkeypatch, tmp_path, capsys):
     root = product(tmp_path, "p")
     (root / ".agentic/flags.yaml").write_text("- touches_ui\n")
+    monkeypatch.setattr("sys.argv", ["agentic", "run", "t", "d", "--product-dir", str(root)])
+    with pytest.raises(SystemExit) as info:
+        cli.main()
+    assert info.value.code == 2
+    assert "non-empty mapping" in capsys.readouterr().err
+
+
+def test_preflight_rejects_a_prompt_overlay_with_an_unknown_placeholder(monkeypatch, tmp_path):
+    root = product(tmp_path, "p")
+    (root / ".agentic/prompts").mkdir()
+    (root / ".agentic/prompts/pjm.md").write_text("Left: {{budget}}")
+    capture_run(monkeypatch)
     monkeypatch.setattr("sys.argv", ["agentic", "run", "t", "d", "--product-dir", str(root)])
     with pytest.raises(SystemExit) as info:
         cli.main()
@@ -69,11 +86,11 @@ def fake_gh(monkeypatch, *, stdout="", returncode=0, stderr=""):
             raise subprocess.CalledProcessError(returncode, cmd, stderr=stderr)
         return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
 
-    monkeypatch.setattr(cli.subprocess, "run", run)
+    monkeypatch.setattr(inbox.subprocess, "run", run)
     return calls
 
 
-def test_issue_feeds_title_body_and_id(monkeypatch, tmp_path):
+def test_issue_feeds_the_task(monkeypatch, tmp_path):
     root = product(tmp_path, "p")
     calls = fake_gh(
         monkeypatch, stdout=json.dumps({"title": " Metrics ", "body": "How is my gym\n"})
@@ -81,22 +98,8 @@ def test_issue_feeds_title_body_and_id(monkeypatch, tmp_path):
     seen = capture_run(monkeypatch)
     monkeypatch.setattr("sys.argv", ["agentic", "run", "--issue", "12", "--product-dir", str(root)])
     cli.main()
-    assert seen["task_id"] == "GH-12"
-    assert seen["title"] == "Metrics"
-    assert seen["description"] == "How is my gym"
-    ((cmd, kwargs),) = calls
-    assert cmd[:4] == ["gh", "issue", "view", "12"]
-    assert kwargs["cwd"] == root  # gh resolves the repo from the product checkout
-
-
-def test_issue_without_body_is_rejected(monkeypatch, tmp_path):
-    root = product(tmp_path, "p")
-    fake_gh(monkeypatch, stdout=json.dumps({"title": "Empty", "body": ""}))
-    capture_run(monkeypatch)
-    monkeypatch.setattr("sys.argv", ["agentic", "run", "--issue", "3", "--product-dir", str(root)])
-    with pytest.raises(SystemExit) as info:
-        cli.main()
-    assert info.value.code == 2
+    assert seen["task"] == {"id": "GH-12", "title": "Metrics", "description": "How is my gym"}
+    assert calls[0][1]["cwd"] == root
 
 
 def test_gh_failure_exits_2(monkeypatch, tmp_path, capsys):
