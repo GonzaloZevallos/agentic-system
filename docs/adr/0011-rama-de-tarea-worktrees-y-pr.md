@@ -1,0 +1,43 @@
+---
+status: accepted
+date: 2026-09-13
+---
+
+# Una rama por tarea, un worktree por subtarea, y el pull request como entrega al humano
+
+Hasta acá el sistema no tocaba código: la primera corrida real (GH-12 en gym-saas) terminó
+en `definition_ready` con el conocimiento de producto destilado y ni una línea en `app/`.
+Con Tech Lead y Developer entra el código, y con él tres preguntas que el README dejaba
+implícitas: dónde escribe cada Developer, cómo se unen las subtareas, y qué recibe el
+humano al final cuando todavía no hay QA que cierre.
+
+**Cada subtarea trabaja en su propio worktree y su propia rama.** ADR-0004 decidió que
+los Developers son nodos con `Send` y corren en paralelo; dos procesos de Claude Code
+escribiendo la misma carpeta se pisan. El worktree vive bajo `.agentic/worktrees/<id>/`
+del producto, fuera del control de versiones, y la rama se llama
+`agentic/<tarea>/<subtarea>`. Al cerrar la tarea, los worktrees se borran; las ramas
+quedan, así un escalado a mitad del desarrollo no pierde el trabajo ya hecho aunque el
+checkpointer de ADR-0003 todavía no exista.
+
+**Una rama de tarea, `agentic/<tarea>`, creada al arrancar la tarea.** No al empezar a
+desarrollar: la entrevista de definición (ADR-0014) ya escribe glosario y ADRs, y eso
+tiene que viajar en la misma rama que el código. El Developer integrador une ahí las ramas
+de subtarea y corre la suite completa. Con una sola subtarea no hay integración: su rama
+es la rama de tarea.
+
+**La entrega es un pull request.** El criterio de éxito (README §9) cuenta una tarea solo
+si el humano mergea el diff sin tocarlo; eso pide un PR. El sistema lo abre desde la rama
+de tarea con la definición única y el plan de Tech Lead en el cuerpo, y deja en el issue un
+comentario con el link al PR y al documento de tarea. El estado de la tarea es
+**listo para revisión**; mientras el camino no tenga QA, el merge es el cierre. Es el
+primer adaptador de escritura a GitHub; hasta ahora solo se leía. ADR-0001 sigue en pie:
+prohíbe que los roles se hablen por el issue, no que el sistema le hable al humano.
+
+## Opciones descartadas
+
+- **Un solo Developer a la vez sobre la carpeta principal**: anula el paralelismo que
+  ADR-0004 ya decidió y deja al integrador sin trabajo que justifique su existencia.
+- **Solo la rama local, sin PR**: el humano tendría que abrirlo a mano y §9 mediría un
+  paso que el sistema no hizo.
+- **Rama de tarea creada al desarrollar**: los ADRs y términos de la entrevista quedarían
+  en la rama principal sin pasar por la revisión del PR.

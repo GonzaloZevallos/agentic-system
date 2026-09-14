@@ -549,11 +549,14 @@ Forma del repo del producto:
 | código de la app | El producto | Developer |
 | `docs/product/` | Conocimiento de producto: una definición vigente por capacidad, métricas incluidas | PM al aprobar, vía el grafo |
 | `docs/adr/` | ADRs numerados | Humano el primero, después Tech Lead |
-| `CONTEXT.md` | Glosario del producto | Humano el primero, después PM |
+| `CONTEXT.md` | Glosario del producto | Humano el primero, después PM y las entrevistas (ADR-0014) |
+| `CODING_STANDARDS.md` | Estándares de ingeniería del producto, pisa el default del sistema (ADR-0012) | Humano |
 | `.agentic/tasks/` | Documento único por tarea, registro crudo del trabajo | Los roles, sección por sección |
 | `.agentic/prompts/` | Overrides de prompts por rol, si los hay (ADR-0005) | PjM |
 | `.agentic/flags.yaml` | Vocabulario de flags del producto, pisa el default del sistema | Humano, después PM |
 | `.agentic/state.sqlite` | Checkpointer del grafo, fuera del control de versiones (ADR-0003) | El sistema |
+| `.agentic/worktrees/` | Un worktree por subtarea, fuera del control de versiones (ADR-0011) | El sistema |
+| rama `agentic/<tarea>` | La rama de tarea: entrevistas, ADRs, código integrado. Termina en un pull request (ADR-0011) | Los roles |
 
 El conocimiento de producto (definiciones, ADRs, glosario) vive con los docs humanos, no
 bajo `.agentic/`, porque es del producto y lo lee cualquiera; `.agentic/` es maquinaria del
@@ -646,6 +649,12 @@ refutar.
 **Consecuencia asumida**: el camino de bug no se puede ejercitar hasta que el producto tenga
 conocimiento de producto escrito. Las primeras tareas del sistema son todas features.
 
+**Segunda consecuencia asumida**: en la etapa 1 no hay QA, así que Tech Lead arranca sin el
+plan de tests funcionales y Developer escribe los tests desde la definición y las costuras
+que el plan declara. La tarea termina **lista para revisión**: un pull request que el humano
+mergea o no (ADR-0011). El Tech Lead efímero entra en la misma etapa, como entrevistador
+de Tech Lead (ADR-0014).
+
 **Riesgo conocido de la estructura por roles.** Un organigrama humano existe porque las
 personas tienen contexto limitado, no se pueden clonar, y alguien rinde cuentas. Los agentes
 no tienen ninguna de las tres restricciones. Copiar la forma sin el motivo trae dos costos
@@ -667,10 +676,10 @@ existe justamente para pagar ese costo solo donde compre calidad.
 | 6 | ~~Lista de secciones que lee cada rol~~ **resuelto**: `Role.reads`, la entrada del rol son esas secciones completas. Cada rol nuevo declara la suya al entrar | — |
 | 7 | UX Lead, Design Lead y Tech Writer en detalle | Etapa 4 |
 | 8 | Criterio de clasificación de PjM y qué hace si duda | PjM |
-| 9 | Cuántos Tech Leads existen en el sistema | Sin responder |
+| 9 | ~~Cuántos Tech Leads existen~~ **resuelto**: un rol, una instancia por tarea; el modo proactivo es el mismo rol. El efímero no es un rol de la lista, es el entrevistador de Tech Lead (ADR-0014) | — |
 | 10 | ~~Versionado de prompts~~ **resuelto**: `.md` por rol con overlay en el producto, hash por tarea (ADR-0005). Falta el versionado de **parámetros** de `Configuration` | Mejora del proceso de PjM |
 | 11 | Las cinco tareas del set de evaluación, todavía sin escribir | Medir cualquier cosa |
-| 12 | El v0 del gimnasio, todavía sin construir | Etapa 1 en adelante |
+| 12 | ~~El v0 del gimnasio~~ **resuelto**: existe, escrito a mano y plano. Los estándares de ingeniería aplican al código nuevo y al que cada tarea toca (ADR-0012) | — |
 | 13 | ~~Campos de `Configuration` y esquemas~~ **resuelto**: `agentic/configuration.py` y `agentic/schemas.py`, uno por rol implementado. Los roles que faltan agregan su esquema al entrar | — |
 | 14 | Script que corre el set de cinco tareas y escribe el JSONL de resultados (sección 14). Sin costo: eso ya lo da Grafana | Medir |
 | 15 | Versionado de **parámetros** de `Configuration` como label de las métricas; hoy solo van el SHA del sistema y la huella de prompts | Comparar corridas que cambian solo un parámetro |
@@ -709,6 +718,10 @@ Se anotan para no reintroducirlas por error.
 | El par es un validador y su pensador | Quien devuelve y quien recibe; QA→PM y QA→Tech Lead cuentan para el límite (ADR-0009) |
 | El cierre requiere siempre las aprobaciones del tipo | Aprobado o descartado: el bug de "comportamiento esperado" cierra descartado, sin aprobación (ADR-0009) |
 | Un solo `domain/` hasta que duela, y un solo `CONTEXT.md` | Tres módulos bajo `agentic/core/` (`process`, `knowledge`, `measurement`), cada uno hexagonal y con su glosario; `process` no importa a los otros (ADR-0010) |
+| Product Analyst escribe la definición en un tiro y PM la valida en otro | Product Analyst entrevista a PM con `grill-with-docs`; lo que PM no puede decidir va al humano como pregunta (ADR-0014) |
+| El pingpong del Tech Lead no tiene forma fija | Es una entrevista del efímero a Tech Lead, con tope de cuatro rondas, y de ahí salen los ADRs y las subtareas (ADR-0014) |
+| Los roles no tienen skills; solo prompt y esquema | Skills de Matt Pocock fijadas como submódulo, tres obligatorias por rol: `tdd`, `implement`, `code-review` (ADR-0013) |
+| La corrida termina cuando el último rol entrega | Termina en un pull request del producto, lista para revisión; el issue recibe el link (ADR-0011) |
 
 ---
 

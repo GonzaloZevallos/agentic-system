@@ -24,6 +24,9 @@ Dueño de la definición única y del conocimiento de producto, que destila al a
 **Pensador**:
 Rol que produce: Product Analyst, UX Designer, UI Designer, Developer, Tech Writer.
 
+**Ejecutar**:
+Escribir archivos del producto y correr comandos. Solo Developer ejecuta; Tech Lead lee el código y el diff, y los entrevistadores escriben únicamente el glosario y los ADRs.
+
 **Validador**:
 Rol que revisa a un pensador aportando una fuente que el pensador no tuvo.
 _Avoid_: revisor
@@ -32,7 +35,10 @@ _Avoid_: revisor
 El rol que devuelve y el rol que recibe la devolución. Las devoluciones se cuentan por par; cuando hay subtarea, por subtarea.
 
 **Tech Lead efímero**:
-Segundo Tech Lead que existe solo durante el pingpong, con modelo más capaz y prompt de adversario.
+Segundo Tech Lead que existe solo durante la entrevista técnica, con modelo más capaz y prompt de adversario. Entrevista a Tech Lead; no decide. No es un rol de la lista: es el entrevistador del pingpong.
+
+**Developer integrador**:
+El Developer que Tech Lead designa para unir las subtareas en la rama de tarea. Cuando la tarea tiene una sola subtarea, no hay integración: la rama de esa subtarea es la rama de tarea.
 
 **Rol proactivo**:
 Rol con reloj propio que genera tareas o insumos sin que nadie se lo pida.
@@ -61,7 +67,10 @@ _Avoid_: spec, requerimientos
 Marca de alcance sobre una tarea, como "toca UI" o "toca textos", tomada del vocabulario de flags del producto. Los propone Product Analyst y los valida PM; el set validado reemplaza al propuesto.
 
 **Pieza integrada**:
-El código de todas las subtareas unido por el Developer integrador y revisado por Tech Lead.
+El código de todas las subtareas unido por el Developer integrador en la rama de tarea y revisado por Tech Lead.
+
+**Rama de tarea**:
+La rama del producto donde termina el código de una tarea, una por tarea. Cada subtarea trabaja en su propia rama, aislada de las otras, y el integrador las une acá.
 
 **Corrida**:
 Una ejecución del sistema sobre una tarea, desde que entra hasta el cierre o el escalado.
@@ -75,6 +84,13 @@ contando repeticiones.
 
 **Consulta**:
 Pregunta sin entregar la tarea. No cuenta para el límite.
+
+**Entrevista**:
+Rondas de preguntas de un rol a otro para afinar una decisión antes de escribirla: el entrevistador pregunta y recomienda, el entrevistado decide. Hay dos: Product Analyst entrevista a PM sobre la definición, y el Tech Lead efímero entrevista a Tech Lead sobre la solución. Tiene tope de rondas; la transcripción entera queda en el documento de tarea. Lo que el entrevistado no puede decidir va al humano como pregunta.
+_Avoid_: pingpong, consulta (la consulta es una pregunta suelta; la entrevista es la forma del trabajo)
+
+**Pregunta para el humano**:
+Lo que un entrevistado marca como fuera de su alcance: ni el issue ni el conocimiento de producto lo deciden. Escala la tarea con la lista de preguntas.
 
 **Devolución**:
 Rechazo con entrega hacia atrás. Cuenta para el límite del par.
@@ -102,6 +118,10 @@ El bloque "Para el siguiente rol" con que cierra cada sección.
 **Cierre**:
 PjM da por terminada la tarea: aprobada, con las aprobaciones del tipo, o descartada, cuando PM dictamina que el comportamiento es el esperado.
 
+**Listo para revisión**:
+La tarea tiene su pieza integrada en un pull request del producto y espera al humano. Mientras el camino no tenga QA, el merge del humano sin tocar el diff es el cierre, y es lo único que puntúa en el set de evaluación.
+_Avoid_: terminada, cerrada (todavía no lo está)
+
 ### Artefactos
 
 **Documento de tarea**:
@@ -118,6 +138,9 @@ Los issues de GitHub del repo del producto con la etiqueta `agentic`. La entrada
 
 **Cola de escalados**:
 Los issues con la etiqueta `needs-human`.
+
+**Pull request de tarea**:
+El pull request del producto que abre el sistema desde la rama de tarea, con la definición única y el plan de Tech Lead en el cuerpo. Es la entrega al humano; el issue recibe el link al pull request y al documento de tarea. Nada más se escribe en el issue: los roles se hablan por el documento.
 
 **Override de prompt**:
 Un prompt de rol que vive en el repo del producto y pisa el default del sistema.
