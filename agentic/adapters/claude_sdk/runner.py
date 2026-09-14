@@ -19,7 +19,7 @@ from claude_agent_sdk import ClaudeAgentOptions, ResultError, ResultMessage, que
 
 from ...application.ports import AttemptFailed, RawResult
 from ...domain.roles import Role
-from ..otel import tracing
+from ..otel import telemetry
 from .printer import Printer
 from .schema import inline_refs
 
@@ -55,7 +55,7 @@ class ClaudeSdkRunner:
             # Deltas as they are generated; without an observer nobody would read them.
             include_partial_messages=observer is not None,
             # Claude Code parents its own spans under the role's (SDK mode honours it).
-            env={"TRACEPARENT": parent} if (parent := tracing.traceparent()) else {},
+            env={"TRACEPARENT": parent} if (parent := telemetry.traceparent()) else {},
         )
 
         exhausted = f"max_turns ({role.max_turns}) exhausted without a result"

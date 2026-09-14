@@ -1,0 +1,314 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "El datasource de métricas del stack (grafanacloud-<stack>-prom)",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "title": "Sistema agéntico",
+  "uid": "agentic-system",
+  "description": "Métricas del sistema (CONTEXT.md, Medición): qué cuesta una tarea terminada y cuánto de eso es retrabajo. Cada label system_version es un SHA del repo del sistema; prompts_fingerprint, el set de prompts que corrió.",
+  "tags": ["agentic-system"],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "time": { "from": "now-30d", "to": "now" },
+  "refresh": "",
+  "schemaVersion": 39,
+  "templating": {
+    "list": [
+      {
+        "name": "version",
+        "label": "Versión del sistema",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": "label_values(agentic_task_finished_total, system_version)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": { "selected": true, "text": ["All"], "value": ["$__all"] }
+      },
+      {
+        "name": "type",
+        "label": "Tipo de tarea",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": "label_values(agentic_task_finished_total, task_type)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": { "selected": true, "text": ["All"], "value": ["$__all"] }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Costo por tarea terminada",
+      "description": "Promedio en dólares de las tareas que llegaron a un fin sin escalado, en el rango elegido.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(agentic_task_cost_usd_sum{task_status!=\"waiting_on_human\", system_version=~\"$version\", task_type=~\"$type\"}[$__range])) / sum(increase(agentic_task_cost_usd_count{task_status!=\"waiting_on_human\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "currencyUSD", "decimals": 2, "color": { "mode": "fixed", "fixedColor": "text" } },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "none", "graphMode": "none", "textMode": "value" }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Retrabajo",
+      "description": "Parte del costo total gastada en corridas de rol que repiten trabajo: entregas posteriores a una devolución e intentos fallidos. Verde bajo 10 %, ámbar hasta 30 %.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(agentic_task_rework_usd_sum{system_version=~\"$version\", task_type=~\"$type\"}[$__range])) / sum(increase(agentic_task_cost_usd_sum{system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 0.1 },
+              { "color": "red", "value": 0.3 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "textMode": "value" }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Tareas terminadas",
+      "description": "Tareas que llegaron a un fin sin escalar, en el rango.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(agentic_task_finished_total{task_status!=\"waiting_on_human\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
+          "instant": true
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0, "color": { "mode": "fixed", "fixedColor": "text" } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "none", "graphMode": "none", "textMode": "value" }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Escaladas",
+      "description": "Tareas que terminaron en manos del humano, en el rango.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(agentic_task_finished_total{task_status=\"waiting_on_human\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
+          "instant": true
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0, "color": { "mode": "fixed", "fixedColor": "text" } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "none", "graphMode": "none", "textMode": "value" }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Costo por tarea terminada, por versión del sistema",
+      "description": "Promedio diario en dólares de las tareas que terminaron sin escalar. Una línea por SHA del sistema: si una versión nueva cuesta más con las mismas tareas, es el prompt.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 9 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (system_version) (increase(agentic_task_cost_usd_sum{task_status!=\"waiting_on_human\", system_version=~\"$version\", task_type=~\"$type\"}[1d])) / sum by (system_version) (increase(agentic_task_cost_usd_count{task_status!=\"waiting_on_human\", system_version=~\"$version\", task_type=~\"$type\"}[1d]))",
+          "legendFormat": "{{system_version}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "pointSize": 8,
+            "showPoints": "always",
+            "spanNulls": true,
+            "fillOpacity": 0,
+            "gradientMode": "none"
+          },
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Retrabajo sobre el costo, por versión del sistema",
+      "description": "Qué parte de cada dólar se fue en repetir trabajo, por día y por SHA. La pregunta norte del dashboard.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 9 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (system_version) (increase(agentic_task_rework_usd_sum{system_version=~\"$version\", task_type=~\"$type\"}[1d])) / sum by (system_version) (increase(agentic_task_cost_usd_sum{system_version=~\"$version\", task_type=~\"$type\"}[1d]))",
+          "legendFormat": "{{system_version}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 0,
+          "min": 0,
+          "max": 1,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "pointSize": 8,
+            "showPoints": "always",
+            "spanNulls": true,
+            "fillOpacity": 0,
+            "gradientMode": "none"
+          },
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "id": 20,
+      "type": "barchart",
+      "title": "Tareas por semana: terminadas y escaladas",
+      "description": "Si el sistema termina lo que empieza. Una barra por estado final, por semana.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "x": 0, "y": 13, "w": 12, "h": 9 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (task_status) (increase(agentic_task_finished_total{system_version=~\"$version\", task_type=~\"$type\"}[1w]))",
+          "legendFormat": "{{task_status}}",
+          "interval": "1w"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "min": 0,
+          "custom": { "lineWidth": 0, "fillOpacity": 80, "gradientMode": "none" },
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "waiting_on_human" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }]
+          }
+        ]
+      },
+      "options": {
+        "orientation": "vertical",
+        "stacking": "none",
+        "groupWidth": 0.7,
+        "barWidth": 0.9,
+        "showValue": "auto",
+        "xTickLabelRotation": 0,
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 21,
+      "type": "bargauge",
+      "title": "Duración mediana por rol",
+      "description": "Segundos que tarda una corrida de rol, mediana en el rango. Delata qué rol frena la tarea.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "x": 12, "y": 13, "w": 12, "h": 9 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le, role) (increase(agentic_role_duration_seconds_bucket[$__range])))",
+          "legendFormat": "{{role}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 0,
+          "min": 0,
+          "color": { "mode": "fixed", "fixedColor": "blue" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "namePlacement": "auto",
+        "sizing": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "values": false }
+      }
+    },
+    {
+      "id": 30,
+      "type": "table",
+      "title": "Costo por rol y modelo",
+      "description": "Dólares gastados en el rango, por rol, modelo y si fue retrabajo. Para decidir qué rol baja de modelo.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "x": 0, "y": 22, "w": 24, "h": 8 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (role, model, rework) (increase(agentic_role_cost_usd_sum[$__range]))",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        { "id": "organize", "options": { "excludeByName": { "Time": true }, "renameByName": { "Value": "USD", "role": "Rol", "model": "Modelo", "rework": "Retrabajo" } } },
+        { "id": "sortBy", "options": { "sort": [{ "field": "USD", "desc": true }] } }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "none" },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "USD" }, "properties": [{ "id": "unit", "value": "currencyUSD" }, { "id": "decimals", "value": 3 }] }
+        ]
+      },
+      "options": { "showHeader": true, "cellHeight": "sm" }
+    }
+  ]
+}

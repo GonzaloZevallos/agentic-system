@@ -667,7 +667,8 @@ existe justamente para pagar ese costo solo donde compre calidad.
 | 11 | Las cinco tareas del set de evaluación, todavía sin escribir | Medir cualquier cosa |
 | 12 | El v0 del gimnasio, todavía sin construir | Etapa 1 en adelante |
 | 13 | ~~Campos de `Configuration` y esquemas~~ **resuelto**: `agentic/configuration.py` y `agentic/schemas.py`, uno por rol implementado. Los roles que faltan agregan su esquema al entrar | — |
-| 14 | Script que corre el set de cinco tareas y escribe el JSONL de resultados (sección 14) | Medir |
+| 14 | Script que corre el set de cinco tareas y escribe el JSONL de resultados (sección 14). Sin costo: eso ya lo da Grafana | Medir |
+| 15 | Versionado de **parámetros** de `Configuration` como label de las métricas; hoy solo van el SHA del sistema y la huella de prompts | Comparar corridas que cambian solo un parámetro |
 
 **Resueltos desde la versión anterior**: el stack y el runtime de agentes (LangGraph para el
 flujo entre roles, Claude Agent SDK como harness de cada rol, autenticado con suscripción),
@@ -697,6 +698,7 @@ Se anotan para no reintroducirlas por error.
 | Las definiciones acumuladas viven en `.agentic/producto/` | Conocimiento de producto en `docs/product/`, con los docs humanos (ADR-0006) |
 | El documento de tarea es "fuente de verdad" y no guarda historial | Es el registro crudo del trabajo: guarda entregas pisadas y corridas por rol. Lo vigente se destila |
 | LangSmith para tracing | Langfuse local, alimentado por el OpenTelemetry nativo de Claude Code |
+| Los spans del sistema llevan solo id, título y rol; el JSONL de evaluación guarda el costo | Los spans llevan costo, modelo, versión y resultado; las métricas del sistema van a Grafana Cloud con la versión del sistema como label (ADR-0008) |
 | Paquete plano, un módulo por tema, con las reglas dentro de los nodos del grafo | Hexagonal: dominio, aplicación con ports, adaptadores; LangGraph es un adaptador (ADR-0007) |
 
 ---
@@ -714,9 +716,9 @@ por un test sobre los imports:
 
 | Capa | Contenido | Importa |
 |---|---|---|
-| `domain/` | `roles.py` y `prompts/`, `task.py` (estado y reducers), `document.py`, `knowledge.py`, `schemas.py`, `flags.py`, `rules.py` (límite por par, versionado, ruteo), `configuration.py` | Nada del proyecto ni de la infraestructura |
+| `domain/` | `roles.py` y `prompts/`, `task.py` (estado y reducers), `document.py`, `knowledge.py`, `schemas.py`, `flags.py`, `rules.py` (límite por par, versionado, ruteo), `metrics.py` (retrabajo, devoluciones, huella de prompts), `configuration.py` | Nada del proyecto ni de la infraestructura |
 | `application/` | `ports.py` (`RoleRunner`, `TaskDocuments`, `ProductKnowledge`, `Prompts`, `FlagVocabulary`, `Inbox`) y un caso de uso por nodo: `classify`, `define`, `validate_definition`, sobre `run_role` | Solo el dominio |
-| `adapters/` | `claude_sdk/` (harness y `Printer`), `filesystem/`, `github/`, `otel/`, `langgraph/` (el grafo: nodos, ruteo, spans; mañana `interrupt()`, `Send`, checkpointer) | Dominio y aplicación |
+| `adapters/` | `claude_sdk/` (harness y `Printer`), `filesystem/`, `github/`, `otel/` (spans y métricas del sistema), `langgraph/` (el grafo: nodos, ruteo, abre y cierra los spans; mañana `interrupt()`, `Send`, checkpointer) | Dominio y aplicación |
 | raíz | `composition.py` arma los ports reales; `cli.py` es el adaptador de entrada | Todo |
 
 LangGraph es un adaptador: los casos de uso son funciones async puras que reciben
@@ -785,14 +787,20 @@ Developers en paralelo con `Send` (ADR-0004).
 
 ### Observabilidad
 
-Tres capas, de más inmediata a más durable. `agentic run --verbose` vuelca a stderr el
+Cuatro capas, de más inmediata a más durable. `agentic run --verbose` vuelca a stderr el
 stream del SDK (texto, thinking si el rol lo tiene, tool calls) con prefijo de rol: es la
 única forma de ver generar. Claude Code exporta OpenTelemetry nativo; un collector en
-`observability/langfuse/` lo reenvía a un Langfuse local, porque el exportador de Claude
+`observability/collector/` lo reenvía a un Langfuse local, porque el exportador de Claude
 Code no puede mandar un header `Authorization: Basic` entero. El grafo abre un span por
 tarea y uno por rol y pasa `TRACEPARENT` al subproceso, así una tarea es un trace con los
-roles anidados. Por último, el `session_id` de cada corrida queda en el documento de tarea:
-`claude -r <id>` en el repo del producto reabre la sesión del rol.
+roles anidados; al cerrar cada span el adaptador le estampa lo que el caso de uso decidió
+(costo, modelo, versión de la entrega, resultado) leyendo el patch, sin que la aplicación
+lo sepa. Las métricas del sistema (CONTEXT.md, "Medición": costo por tarea, retrabajo,
+duración, devoluciones, escalados) salen del mismo adaptador y el collector las manda,
+junto con los spans del sistema y sin los de Claude Code, a Grafana Cloud, con la versión
+del sistema y la huella de prompts como labels (ADR-0008, `observability/README.md`). Por
+último, el `session_id` de cada corrida queda en el documento de tarea: `claude -r <id>` en
+el repo del producto reabre la sesión del rol.
 
 ### Tooling
 
@@ -803,9 +811,10 @@ compilar desde `agentic.composition`, el composition root; la CLI lo compila con
 
 ### Evaluación
 
-Langfuse solo para tracing. El puntaje sigue siendo el de la sección 9: binario, humano. Un
-script corre el set de cinco tareas y escribe un JSONL versionado en este repo con: hash de
-prompts, `Configuration` completa, costo, resultado binario y nota. Además, evals de nodo
+Langfuse y Grafana no puntúan. El puntaje sigue siendo el de la sección 9: binario, humano.
+Un script corre el set de cinco tareas y escribe un JSONL versionado en este repo con lo que
+ninguna métrica puede dar: hash de prompts, `Configuration` completa, resultado binario y
+nota. El costo ya está en Grafana bajo la misma huella de prompts. Además, evals de nodo
 intermedio como tests de pytest ("PjM clasifica estas descripciones así", "PM devuelve esta
 definición incompleta"), marcados `llm` y **excluidos de CI**: el SDK se autentica con la
 suscripción, que GitHub Actions no tiene. CI corre solo tests puros: parser del documento,

@@ -11,7 +11,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from agentic import composition
 from agentic.adapters.filesystem import FilesystemTaskDocuments
 from agentic.adapters.langgraph.graph import build_graph, configuration_from
-from agentic.adapters.otel import tracing
+from agentic.adapters.otel import telemetry
 from agentic.application.ports import AttemptFailed
 from agentic.composition import default_ports
 from agentic.domain.roles import PAIR_PM_PA, PJM, PM, PRODUCT_ANALYST
@@ -250,21 +250,40 @@ async def test_retried_failure_is_recorded_but_not_escalated(config):
     assert final["cost_usd"] == pytest.approx(0.33)
 
 
-async def test_each_node_opens_the_roles_span(config, monkeypatch):
+async def test_each_node_opens_and_finishes_the_roles_span(config):
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
-    monkeypatch.setattr(tracing, "_provider", provider)
-    monkeypatch.setattr(tracing, "_configured", True)
-    script = ScriptedRunner(
-        pjm=[classified()], product_analyst=[defined()], pm=[verdict("approved")]
-    )
-    with tracing.task_span("T-1", "t"):
-        await run_graph(script, config)
-    spans = {s.name: s for s in exporter.get_finished_spans()}
-    assert set(spans) == {"T-1", "PjM", "Product Analyst", "PM"}
-    task_id = spans["T-1"].get_span_context().span_id
-    assert all(spans[r].parent.span_id == task_id for r in ("PjM", "Product Analyst", "PM"))
+    telemetry.configure(tracer_provider=provider)
+    try:
+        script = ScriptedRunner(
+            pjm=[classified()],
+            product_analyst=[defined(1), defined(2)],
+            pm=[verdict("returned", "gap"), verdict("approved")],
+        )
+        with telemetry.task_span("T-1", "t") as run:
+            run.finish(await run_graph(script, config))
+    finally:
+        telemetry.configure()
+    finished = exporter.get_finished_spans()
+    assert [s.name for s in finished] == [
+        "PjM",
+        "Product Analyst",
+        "PM",
+        "Product Analyst",
+        "PM",
+        "T-1",
+    ]
+    task = finished[-1]
+    assert all(s.parent.span_id == task.get_span_context().span_id for s in finished[:-1])
+    # The role spans carry what each use case decided; the task span, the totals.
+    outcomes = [s.attributes["role.outcome"] for s in finished[:-1]]
+    assert outcomes == ["delivered", "delivered", "returned", "delivered", "delivered"]
+    assert finished[3].attributes["role.version"] == 2 and finished[3].attributes["role.rework"]
+    assert finished[1].attributes["role.model"] == "claude-sonnet-5"
+    assert task.attributes["task.status"] == "definition_ready"
+    assert task.attributes["task.returns"] == 1 and task.attributes["task.runs"] == 5
+    assert task.attributes["task.rework_usd"] == pytest.approx(0.1 + 0.2)  # PA v2 + PM v2
 
 
 def test_configuration_comes_from_configurable_and_env(monkeypatch, tmp_path):

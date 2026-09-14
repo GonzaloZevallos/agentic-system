@@ -14,4 +14,6 @@ def isolated_env(monkeypatch):
     for name in list(os.environ):
         if name.startswith("AGENTIC_"):
             monkeypatch.delenv(name)
+    # Nor the collector's endpoint: a test never exports telemetry.
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
     monkeypatch.setattr("agentic.cli.load_dotenv", lambda: None)

@@ -1,0 +1,76 @@
+# Un receptor OTLP sin auth en localhost:4318, dos destinos (ADR-0008):
+#
+# - Langfuse local recibe todas las trazas: las del sistema y las nativas de Claude
+#   Code, con prompts y respuestas. Existe porque el exportador OTel de Claude Code
+#   no puede mandar un header con espacio ("Basic <b64>") desde
+#   OTEL_EXPORTER_OTLP_HEADERS.
+# - Grafana Cloud recibe solo lo que emite el sistema (service.name agentic-system):
+#   trazas sin el título de la tarea, y las métricas del sistema. Nada de Claude
+#   Code sale a la nube: sus spans llevan contenido.
+#
+# Necesita la imagen contrib: `filter` con OTTL y `basicauth` no están en la core.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+extensions:
+  basicauth/grafana:
+    client_auth:
+      username: ${env:GRAFANA_OTLP_INSTANCE_ID}
+      password: ${env:GRAFANA_OTLP_TOKEN}
+
+processors:
+  batch:
+
+  # Deja pasar solo lo que emite el sistema. Claude Code se identifica como otro servicio.
+  filter/system_only:
+    error_mode: ignore
+    traces:
+      span:
+        - resource.attributes["service.name"] != "agentic-system"
+    metrics:
+      metric:
+        - resource.attributes["service.name"] != "agentic-system"
+
+  # El título del issue es contenido, no metadato: se queda en local.
+  attributes/drop_title:
+    actions:
+      - key: task.title
+        action: delete
+
+  # El sistema emite deltas: cada `agentic run` es un proceso nuevo y un contador
+  # acumulado que arranca en cero se lee mal en Prometheus. Acá se acumula una sola
+  # serie por label. `max_stale` largo: hay días sin corridas y el estado no debe caer.
+  deltatocumulative:
+    max_stale: 2160h
+
+exporters:
+  otlphttp/langfuse:
+    endpoint: http://langfuse-web:3000/api/public/otel
+    headers:
+      Authorization: "Basic ${env:LANGFUSE_OTEL_BASIC}"
+      x-langfuse-ingestion-version: "4"
+
+  otlphttp/grafana:
+    # https://otlp-gateway-<region>.grafana.net/otlp; el exporter agrega /v1/traces y /v1/metrics.
+    endpoint: ${env:GRAFANA_OTLP_ENDPOINT}
+    auth:
+      authenticator: basicauth/grafana
+
+service:
+  extensions: [basicauth/grafana]
+  pipelines:
+    traces/langfuse:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/langfuse]
+    traces/grafana:
+      receivers: [otlp]
+      processors: [filter/system_only, attributes/drop_title, batch]
+      exporters: [otlphttp/grafana]
+    metrics/grafana:
+      receivers: [otlp]
+      processors: [filter/system_only, deltatocumulative, batch]
+      exporters: [otlphttp/grafana]

@@ -133,6 +133,24 @@ Un prompt de rol que vive en el repo del producto y pisa el default del sistema.
 **Set de evaluación**:
 Las cinco tareas fijas que se re-corren idénticas contra cada versión de prompts.
 
+### Medición
+
+**Corrida**:
+Una ejecución del sistema sobre una tarea, desde que entra hasta el cierre o el escalado.
+_Avoid_: run, ejecución
+
+**Corrida de rol**:
+Una ejecución de un rol dentro de una corrida. Una tarea tiene tantas como roles visitó,
+contando repeticiones.
+
+**Retrabajo**:
+Corrida de rol que repite trabajo ya hecho en la tarea, sea por devolución o por fallo de
+rol. Las devoluciones internas y los Developers en paralelo no son retrabajo.
+
+**Métrica del sistema**:
+Medida sobre las corridas: costo, duración, devoluciones, escalados. Distinta de la métrica
+de producto, que vive en cada capacidad.
+
 ### Repos
 
 **Sistema**:

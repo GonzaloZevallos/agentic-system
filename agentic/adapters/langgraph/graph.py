@@ -3,8 +3,8 @@ Analyst return loop and escalation to the human.
 
 Each node reads the configuration from its `config`, builds the ports for it and
 hands both to a use case (README.md, 14: every node reads the configuration at the
-start). The rules live in the use cases; this module only wires them, opens the
-role's span and maps the domain's routing to graph edges.
+start). The rules live in the use cases; this module only wires them, opens and
+finishes the role's span and maps the domain's routing to graph edges.
 
 Escalation ends the run with `status: waiting_on_human` for now. `interrupt()`
 and `agentic resume` come with the checkpointer (ADR-0003) and will live here.
@@ -29,7 +29,7 @@ from ...domain import rules
 from ...domain.configuration import Configuration
 from ...domain.roles import PJM, PM, PRODUCT_ANALYST, Role
 from ...domain.task import TaskInput, TaskState
-from ..otel import tracing
+from ..otel import telemetry
 
 UseCase = Callable[[TaskState, Configuration, Ports], Awaitable[TaskState]]
 PortsFor = Callable[[Configuration], Ports]
@@ -43,8 +43,12 @@ def configuration_from(config: RunnableConfig | None) -> Configuration:
 def _node(use_case: UseCase, role: Role, ports_for: PortsFor):
     async def node(state: TaskState, config: RunnableConfig) -> TaskState:
         cfg = configuration_from(config)
-        with tracing.role_span(role.name):
-            return await use_case(state, cfg, ports_for(cfg))
+        # The patch is what the use case decided; the span and the metrics read it
+        # here, so the use case never sees telemetry (ADR-0007).
+        with telemetry.role_span(role.name) as run:
+            patch = await use_case(state, cfg, ports_for(cfg))
+            run.finish(patch)
+            return patch
 
     return node
 

@@ -15,7 +15,7 @@ import uuid
 import anyio
 from dotenv import load_dotenv
 
-from .adapters.otel import tracing
+from .adapters.otel import telemetry
 from .application.ports import Ports
 from .application.preflight import preflight
 from .composition import default_ports, graph
@@ -75,9 +75,10 @@ def main() -> None:
 async def _run(task: TaskInput, cfg: Configuration, ports: Ports) -> None:
     config = {"configurable": {"thread_id": task["id"]}}
 
-    with tracing.task_span(task["id"], task["title"]):
+    with telemetry.task_span(task["id"], task["title"]) as run:
         final = await graph.compile().ainvoke(task, config=config)
-    tracing.flush()
+        run.finish(final)
+    telemetry.flush()
     print(f"\nid:        {task['id']}")
     print(f"type:      {final.get('type')}")
     print(f"status:    {final.get('status', 'open')}")
