@@ -8,6 +8,9 @@ Layout, all under the product root and outside version control:
 Every operation is idempotent: asking for a checkout that exists returns it. The
 worktrees are excluded through `.git/info/exclude`, never through the product's own
 `.gitignore`, which is the product's business.
+
+The commits are the system's, so they carry the system's identity, not whatever the
+machine has in `git config` (which may be nothing: a fresh box or a background job).
 """
 
 from __future__ import annotations
@@ -26,9 +29,20 @@ class GitError(RuntimeError):
     pass
 
 
+DEFAULT_AUTHOR_NAME = "agentic-system"
+DEFAULT_AUTHOR_EMAIL = "agentic-system@users.noreply.github.com"
+
+
 class GitWorkspace:
-    def __init__(self, product_dir: Path):
+    def __init__(
+        self,
+        product_dir: Path,
+        author_name: str = DEFAULT_AUTHOR_NAME,
+        author_email: str = DEFAULT_AUTHOR_EMAIL,
+    ):
         self.product_dir = product_dir
+        self.author_name = author_name
+        self.author_email = author_email
 
     # -- checkouts --------------------------------------------------------------
 
@@ -111,8 +125,12 @@ class GitWorkspace:
             exclude.write_text("\n".join([*lines, EXCLUDE]) + "\n", encoding="utf-8")
 
     def _run(self, *args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+        identity = ["-c", f"user.name={self.author_name}", "-c", f"user.email={self.author_email}"]
         return subprocess.run(
-            ["git", *args], cwd=cwd or self.product_dir, capture_output=True, text=True
+            ["git", *identity, *args],
+            cwd=cwd or self.product_dir,
+            capture_output=True,
+            text=True,
         )
 
     def _git(self, *args: str, cwd: Path | None = None) -> str:

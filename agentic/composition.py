@@ -30,7 +30,7 @@ def default_ports(cfg: Configuration) -> Ports:
         prompts=FilesystemPrompts(cfg.product_dir),
         flags=FilesystemFlags(cfg.product_dir),
         inbox=GhInbox(cfg.product_dir),
-        workspace=GitWorkspace(cfg.product_dir),
+        workspace=GitWorkspace(cfg.product_dir, cfg.git_author_name, cfg.git_author_email),
         tracker=GhTracker(cfg.product_dir),
     )
 

@@ -42,6 +42,10 @@ class Configuration(BaseModel):
     evaluation_window: int = Field(default=10, ge=1)
     # Stream each role's generation to stderr (`agentic run --verbose`).
     verbose: bool = False
+    # Identity of the commits the system makes in the product (ADR-0011). Its own, so
+    # a machine without `git config user.*` still commits and the author says who did it.
+    git_author_name: str = "agentic-system"
+    git_author_email: str = "agentic-system@users.noreply.github.com"
     # Root of the product repo, the product context (README.md, 8). Required: the
     # system never writes inside its own repo (ADR-0002), so there is no sane default.
     product_dir: Path

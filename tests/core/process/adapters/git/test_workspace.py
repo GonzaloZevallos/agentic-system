@@ -21,11 +21,10 @@ def product(tmp_path):
     repo = tmp_path / "product"
     repo.mkdir()
     git("init", "-q", "-b", "master", cwd=repo)
-    git("config", "user.email", "t@t", cwd=repo)
-    git("config", "user.name", "t", cwd=repo)
     (repo / "README.md").write_text("v0\n")
     git("add", "-A", cwd=repo)
-    git("commit", "-q", "-m", "v0", cwd=repo)
+    # The product's first commit needs an identity; the adapter's commits must not.
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "v0", cwd=repo)
     git("remote", "add", "origin", str(remote), cwd=repo)
     return repo
 
@@ -50,6 +49,9 @@ def test_subtask_branches_off_the_task_branch_as_it_is_now(product):
     (task.path / "CONTEXT.md").write_text("glossary\n")
     sha = ws.commit_all(task.path, "GH-12: glossary")
     assert sha == ws.head(task.path) and sha != task.base
+    # Signed by the system, on a repo with no `user.*` configured at all.
+    author = git("log", "-1", "--format=%an <%ae>", cwd=task.path)
+    assert author == "agentic-system <agentic-system@users.noreply.github.com>"
     assert ws.commit_all(task.path, "nothing") is None
 
     sub = ws.subtask_checkout("GH-12", "api")
