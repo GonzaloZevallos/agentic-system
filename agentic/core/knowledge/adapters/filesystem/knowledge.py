@@ -25,6 +25,9 @@ class FilesystemKnowledge:
     def approval_check(self, task_type: str) -> Callable[[dict], None]:
         return knowledge.approval_check(task_type)
 
+    def clarification_check(self) -> Callable[[dict], None]:
+        return knowledge.clarification_check
+
     def read(self, root: Path | None = None) -> str:
         root = root or self.product_dir
         capabilities = {

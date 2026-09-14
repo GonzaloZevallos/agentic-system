@@ -21,11 +21,13 @@ from .document import ORIGINAL  # pseudo-section every role may declare: the tas
 from .schemas import (
     Answers,
     Classification,
+    Consultation,
     Definition,
     Delivery,
     InterviewTurn,
     Review,
     RoleOutput,
+    TechAnswers,
     TechPlan,
     Verdict,
 )
@@ -190,7 +192,7 @@ TECH_LEAD_INTERVIEWEE = Role(
     name="Tech Lead",
     slug="tech_lead_interviewee",
     kind="validator",
-    schema=Answers,
+    schema=TechAnswers,
     reads=(ORIGINAL, "PM"),
     reads_knowledge=True,
     reads_standards=True,
@@ -198,6 +200,18 @@ TECH_LEAD_INTERVIEWEE = Role(
     allowed=READ_CODE_RULES,
     skills=("codebase-design", "domain-modeling"),
     max_turns=12,
+)
+
+# PM answers what the Tech Lead consults during the solution interview (ADR-0014,
+# addendum), resuming its validation session; its section is PM's, so the
+# clarifications version it like a new delivery.
+PM_CONSULTANT = Role(
+    name="PM",
+    slug="pm_consultant",
+    kind="validator",
+    schema=Consultation,
+    reads=(ORIGINAL, DEFINITION_INTERVIEW, "Product Analyst", "PM"),
+    reads_knowledge=True,
 )
 
 TECH_LEAD = Role(
@@ -263,6 +277,7 @@ ROLES = (
     PM,
     TECH_LEAD_EPHEMERAL,
     TECH_LEAD_INTERVIEWEE,
+    PM_CONSULTANT,
     TECH_LEAD,
     TECH_LEAD_REVIEWER,
     DEVELOPER,
@@ -302,6 +317,9 @@ class Interview:
     interviewer: Role
     interviewee: Role
     author: Role
+    # Who the interviewee consults, in the same run, about what the definition does not
+    # settle (glossary: Consulta). Only the consultant may leave questions for the human.
+    consultant: Role | None = None
 
     @property
     def section(self) -> str:
@@ -322,5 +340,8 @@ INTERVIEW_DEFINITION = Interview(
     interviewer=PRODUCT_ANALYST_INTERVIEWER, interviewee=PM_INTERVIEWEE, author=PRODUCT_ANALYST
 )
 INTERVIEW_SOLUTION = Interview(
-    interviewer=TECH_LEAD_EPHEMERAL, interviewee=TECH_LEAD_INTERVIEWEE, author=TECH_LEAD
+    interviewer=TECH_LEAD_EPHEMERAL,
+    interviewee=TECH_LEAD_INTERVIEWEE,
+    author=TECH_LEAD,
+    consultant=PM_CONSULTANT,
 )

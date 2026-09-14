@@ -76,6 +76,9 @@ class MemoryKnowledge:
     def approval_check(self, task_type: str) -> Callable[[dict], None]:
         return knowledge.approval_check(task_type)
 
+    def clarification_check(self) -> Callable[[dict], None]:
+        return knowledge.clarification_check
+
     def distill(self, verdict: dict, root: Path | None = None) -> list[Path]:
         definitions, terms = knowledge.distillation(verdict)
         self.definitions.update(definitions)
@@ -201,6 +204,28 @@ def questions(n=1, done=False, cost=0.05, session="q") -> RawResult:
 def answers(n=1, for_human=(), cost=0.1, session="a") -> RawResult:
     return RawResult(
         {"markdown": f"**Q{n}**: accepted", "questions_for_human": list(for_human)},
+        cost,
+        1,
+        session,
+    )
+
+
+def tech_answers(n=1, for_pm=(), cost=0.1, session="t") -> RawResult:
+    return RawResult(
+        {"markdown": f"**Q{n}**: accepted", "questions_for_pm": list(for_pm)}, cost, 1, session
+    )
+
+
+def consulted(
+    n=1, for_human=(), definitions=None, glossary=None, cost=0.15, session="pm"
+) -> RawResult:
+    return RawResult(
+        {
+            "markdown": f"**Q{n}**: the stored date",
+            "questions_for_human": list(for_human),
+            "definitions": definitions or [],
+            "glossary": glossary or [],
+        },
         cost,
         1,
         session,

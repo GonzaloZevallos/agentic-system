@@ -6,9 +6,17 @@ import pytest
 from agentic.core.process.application.define import define
 from agentic.core.process.application.interview import interview
 from agentic.core.process.application.ports import AttemptFailed
-from agentic.core.process.domain.roles import INTERVIEW_DEFINITION
+from agentic.core.process.domain.roles import INTERVIEW_DEFINITION, INTERVIEW_SOLUTION
 from agentic.shared.configuration import Configuration
-from tests.fakes import ScriptedRunner, answers, defined, memory_ports, questions
+from tests.fakes import (
+    ScriptedRunner,
+    answers,
+    consulted,
+    defined,
+    memory_ports,
+    questions,
+    tech_answers,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -143,3 +151,122 @@ async def test_define_on_a_return_skips_the_interview(cfg):
     patch = await define(state, cfg, memory_ports(runner))
     assert runner.slugs == ["product_analyst"] and runner.calls[0]["resume"] is None
     assert patch["sections"]["Product Analyst (v1)"] == "v1"
+
+
+# The solution interview has a consultant (glossary: Consulta): the Tech Lead asks PM what
+# the definition does not settle, PM answers in the same run, and only PM asks the human.
+
+TL_ASK, TL_ANSWER, CONSULT = "tech_lead_ephemeral", "tech_lead_interviewee", "pm_consultant"
+PLANNED = {
+    **TASK,
+    "sections": {"PM": "### Consolidated definition\n\nSix numbers."},
+    "runs": [{"role": "PM", "section": "PM", "version": 1, "session_id": "pm-1", "cost_usd": 0.2}],
+}
+
+
+async def test_a_consultation_is_answered_by_pm_before_the_next_round(cfg):
+    runner = ScriptedRunner(
+        **{
+            TL_ASK: [questions(1, session="e1"), questions(2, session="e1"), questions(done=True)],
+            TL_ANSWER: [tech_answers(1, for_pm=["Stored end date or last day?"]), tech_answers(2)],
+            CONSULT: [
+                consulted(1, definitions=[{"capability": "dashboard", "content": "## Jobs"}])
+            ],
+        }
+    )
+    ports = memory_ports(runner)
+    transcript, patch = await interview(PLANNED, INTERVIEW_SOLUTION, cfg, ports)
+
+    assert transcript is not None
+    assert runner.slugs == [TL_ASK, TL_ANSWER, CONSULT, TL_ASK, TL_ANSWER, TL_ASK]
+    pm = runner.calls[2]
+    # PM resumes its validation session and gets only the questions, numbered.
+    assert pm["resume"] == "pm-1"
+    assert (
+        pm["prompt"] == "## Questions from Tech Lead (round 1)\n\n1. Stored end date or last day?"
+    )
+    # The interviewer reads the answers and the consultation together; the interviewee
+    # reads the consultation before the next questions.
+    assert runner.calls[3]["prompt"] == (
+        "**Q1**: accepted\n\n## PM answered (round 1)\n\n**Q1**: the stored date"
+    )
+    assert runner.calls[4]["prompt"] == (
+        "## PM answered (round 1)\n\n**Q1**: the stored date\n\n## Questions (round 2)\n\n"
+        "❓ **Q2** - **Scope**: which?\n\n➡️ a"
+    )
+    section = patch["sections"]["Interview: Tech Lead efímero→Tech Lead"]
+    assert "### Round 1: PM answers\n\n**Q1**: the stored date" in section
+    # The answers clarify PM's section; the previous text stays as history.
+    assert patch["sections"]["PM"] == (
+        "### Consolidated definition\n\nSix numbers.\n\n### Clarifications (round 1)\n\n"
+        "**Q1**: the stored date"
+    )
+    assert patch["sections"]["PM (v1)"] == "### Consolidated definition\n\nSix numbers."
+    roles = [r["role"] for r in patch["runs"]]
+    assert roles == ["Tech Lead efímero", "Tech Lead", "PM", "Tech Lead efímero", "Tech Lead"] + [
+        "Tech Lead efímero"
+    ]
+    assert patch["runs"][2]["section"] == "PM"
+    # What the answers change is distilled again.
+    assert ports.knowledge.definitions == {"dashboard": "## Jobs"}
+    assert "escalated" not in patch
+
+
+async def test_no_question_for_pm_means_no_consultation(cfg):
+    runner = ScriptedRunner(
+        **{TL_ASK: [questions(1), questions(done=True)], TL_ANSWER: [tech_answers(1)]}
+    )
+    transcript, patch = await interview(PLANNED, INTERVIEW_SOLUTION, cfg, memory_ports(runner))
+    assert transcript is not None and runner.slugs == [TL_ASK, TL_ANSWER, TL_ASK]
+    assert "PM (v1)" not in patch["sections"]
+
+
+async def test_only_pm_escalates_to_the_human_from_a_consultation(cfg):
+    runner = ScriptedRunner(
+        **{
+            TL_ASK: [questions(1), questions(done=True)],
+            TL_ANSWER: [tech_answers(1, for_pm=["Does a script count as live?"])],
+            CONSULT: [consulted(1, for_human=["Where do the metrics go?"])],
+        }
+    )
+    ports = memory_ports(runner)
+    transcript, patch = await interview(PLANNED, INTERVIEW_SOLUTION, cfg, ports)
+    assert transcript is None and runner.slugs == [TL_ASK, TL_ANSWER, CONSULT, TL_ASK]
+    assert patch["questions_for_human"] == ["Where do the metrics go?"]
+    assert patch["status"] == "waiting_on_human" and "PM could not decide 1" in patch["escalated"]
+    assert ports.knowledge.definitions == {}  # nothing changed, nothing distilled
+
+
+async def test_a_consultant_without_a_session_gets_its_context_first(cfg):
+    runner = ScriptedRunner(
+        **{
+            TL_ASK: [questions(1), questions(done=True)],
+            TL_ANSWER: [tech_answers(1, for_pm=["Which?"])],
+            CONSULT: [consulted(1)],
+        }
+    )
+    ports = memory_ports(runner)
+    ports.knowledge.text = "## Product knowledge\n\nOld."
+    state = {**PLANNED, "runs": []}
+    await interview(state, INTERVIEW_SOLUTION, cfg, ports)
+    pm = runner.calls[2]
+    assert pm["resume"] is None and pm["prompt"].startswith("## Product knowledge")
+    assert pm["prompt"].endswith("## Questions from Tech Lead (round 1)\n\n1. Which?")
+
+
+async def test_a_clarification_that_distils_a_file_without_jobs_is_a_role_failure(cfg):
+    cfg = Configuration(product_dir=cfg.product_dir, role_retries=0)
+    runner = ScriptedRunner(
+        **{
+            TL_ASK: [questions(1)],
+            TL_ANSWER: [tech_answers(1, for_pm=["Which?"])],
+            CONSULT: [
+                consulted(1, definitions=[{"capability": "dashboard", "content": "no jobs"}])
+            ],
+        }
+    )
+    ports = memory_ports(runner)
+    transcript, patch = await interview(PLANNED, INTERVIEW_SOLUTION, cfg, ports)
+    assert transcript is None and patch["status"] == "waiting_on_human"
+    assert "PM failed" in patch["escalated"] and "## Jobs" in patch["failures"][0]["error"]
+    assert ports.knowledge.definitions == {}

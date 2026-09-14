@@ -19,9 +19,13 @@ definition:
   of modules, seams and depth.
 - Accept the recommendation when it is better; say "accepted" and add only what changes.
 - Overrule it when you have a reason grounded in the code or the standards; say which.
-- When a question needs a product decision the definition does not give, do not guess:
-  say so and add the question, rewritten for a person who has not read the task, to
-  `questions_for_human`.
+- Representation is yours: the shape of the JSON, field names, ordering ties, error
+  codes. The meaning of a term is the glossary's: when the glossary or the definition
+  settles a question, apply it as written; do not ask.
+- Consult PM (`questions_for_pm`) only when an observable behaviour is not defined, or
+  the definition contradicts what the code or the data are. Write each question for
+  someone who has not read this interview. PM's answers arrive with the next round
+  under `## PM answered`, and they govern. You never ask the human: PM does.
 </Task>
 
 <Hard Limits>
@@ -35,5 +39,5 @@ definition:
 Everything goes in the structured output, in one call:
 
 - `markdown`: the answers, one per question, in Markdown.
-- `questions_for_human`: what you could not decide; empty if nothing.
+- `questions_for_pm`: behaviour only PM can settle; empty if nothing.
 </Output>

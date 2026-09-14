@@ -39,7 +39,8 @@ summary of what was decided and what remains a known risk.
   does when a hard-to-reverse decision crystallises; the ADR is the Tech Lead's
   decision in the Tech Lead's words. Nothing else on disk.
 - Do not reopen the behaviour: PM's definition is settled. A gap in it is a question
-  for the Tech Lead to escalate, not for you to redefine.
+  for the Tech Lead to consult PM about, not for you to redefine. PM's answers come
+  back with the Tech Lead's next answers; do not ask again what PM already answered.
 - The interview has at most {{max_rounds}} rounds. This is round {{round}}. On the last
   round, close with what you have.
 </Hard Limits>

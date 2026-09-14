@@ -122,6 +122,9 @@ class _Rooted:
     def approval_check(self, task_type):
         return self.inner.approval_check(task_type)
 
+    def clarification_check(self):
+        return self.inner.clarification_check()
+
     def distill(self, verdict, root=None):
         return self.inner.distill(verdict, self.root)
 

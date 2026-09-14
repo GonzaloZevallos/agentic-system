@@ -87,6 +87,35 @@ class Answers(RoleOutput):
     )
 
 
+class TechAnswers(RoleOutput):
+    """One round of the Tech Lead as interviewee: a decision per question, and what it
+    consults PM about (glossary: Consulta). It never asks the human directly."""
+
+    questions_for_pm: list[str] = Field(
+        description="Behaviour the definition does not settle or contradicts the code, one "
+        "question per line, written for someone who has not read this interview. Empty "
+        "if none"
+    )
+
+
+class Consultation(RoleOutput):
+    """PM's answers to a consultation: clarifications of the definition, the knowledge
+    they change (distilled again, ADR-0006) and what only a person can decide."""
+
+    questions_for_human: list[str] = Field(
+        description="Questions only a person can decide, one line each, written for a "
+        "person who has not read the task. Empty if none"
+    )
+    definitions: list[CapabilityFile] = Field(
+        description="The capability files whose behaviour an answer changes or completes, "
+        "each complete (not a diff) with its `## Jobs`. Empty when no answer changes the "
+        "written knowledge"
+    )
+    glossary: list[GlossaryTerm] = Field(
+        description="Terms an answer introduces or changes. Empty if none"
+    )
+
+
 class Subtask(BaseModel):
     id: str = Field(description="Slug, unique in the plan, e.g. `domain-model`, `api`")
     title: str = Field(description="One line")

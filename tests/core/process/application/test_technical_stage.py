@@ -15,12 +15,12 @@ from agentic.shared.configuration import Configuration
 from tests.fakes import (
     MemoryWorkspace,
     ScriptedRunner,
-    answers,
     delivered,
     memory_ports,
     planned,
     questions,
     reviewed,
+    tech_answers,
     verdict,
 )
 
@@ -66,7 +66,7 @@ async def test_validate_distils_into_the_task_checkout_and_commits(cfg):
 async def test_plan_interviews_in_the_task_checkout_then_writes_the_subtasks(cfg):
     runner = ScriptedRunner(
         **{ASK: [questions(1, session="e1"), questions(done=True, session="e1")]},
-        **{ANSWER: [answers(1, session="t1")]},
+        **{ANSWER: [tech_answers(1, session="t1")]},
         tech_lead=[
             planned({"id": "domain", "title": "Domain", "brief": "b", "seams": ["Dashboard"]})
         ],

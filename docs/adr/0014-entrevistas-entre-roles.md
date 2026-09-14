@@ -58,3 +58,40 @@ la definición viaja en el PR con el código que la implementa.
   costo no dice cuándo se dejó de aprender.
 - **El entrevistador solo propone términos y el sistema los escribe al aprobar**: obliga
   a un prompt que contradiga la skill y a un esquema de salida que la duplique.
+
+## Adenda 2026-09-14: la consulta a PM durante la entrevista de solución
+
+La primera corrida real (GH-12) escaló desde la entrevista Tech Lead efímero→Tech Lead
+con siete preguntas para el humano, tres distintas. Dos ya las resolvía el glosario del
+producto (el borde del vencimiento; `null` contra clave ausente es representación, del
+Tech Lead) y la tercera era de PM: había dejado como vinculante "métricas vivas el día del
+ship" en un repo sin infraestructura de métricas. El Tech Lead no tenía a quién
+preguntar: PM ya había cerrado su turno y el prompt mandaba todo hueco de producto al
+humano. El efímero incluso escribió "escalate it to the PM".
+
+Decisión: la **consulta** (glosario del proceso). El Tech Lead entrevistado devuelve
+`questions_for_pm`; al cerrar la ronda, PM las responde retomando su sesión de validación,
+su respuesta entra en la transcripción y el efímero la ve en la ronda siguiente. Las
+respuestas aclaran la definición: el sistema entrega de nuevo la sección de PM con las
+respuestas agregadas como subsección `Clarifications` (agrega, no reescribe: PM no
+reproduce su sección entera), la anterior queda como historia, y lo que cambia el
+conocimiento escrito se destila otra vez (ADR-0006) en el checkout de la tarea, que la
+etapa commitea al terminar la entrevista, también cuando escala: la aclaración vale aunque
+otra pregunta quede para el humano. Lo destilado pasa el mismo chequeo de `## Jobs` que la
+aprobación. Solo PM pregunta al humano; lo de infraestructura también, porque es quien
+fijó el requisito.
+
+Umbral del Tech Lead: la representación es suya (forma del JSON, nombres, empates); el
+significado de un término es del glosario y se aplica tal cual; consulta solo cuando un
+comportamiento observable no está definido o la definición contradice el código o los
+datos. Sin la regla, la consulta se vuelve el nuevo escalado.
+
+Fuera por ahora: el Developer no consulta; lo que encuentra al implementar va en su
+entrega y el Tech Lead lo resuelve o consulta en la revisión. Una consulta abierta en
+medio de una subtarea rompe el tope de dinero y turnos.
+
+Costo: a lo sumo un turno de PM por ronda, dentro del tope de rondas; sin límite propio.
+
+Opciones descartadas: PM como tercer participante de cada ronda (triplica turnos); PM
+responde todo al final (obliga a planificar sobre huecos); tratar la consulta como
+devolución Tech Lead→PM (contaría contra el límite de 2 y devolvería la tarea).

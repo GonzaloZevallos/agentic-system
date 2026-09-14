@@ -134,12 +134,22 @@ def approval_check(task_type: str) -> Callable[[dict], None]:
                 "approved a feature without `definitions`: return the complete updated "
                 "file of every capability this task touches (docs/product/<capability>.md)"
             )
-        for item in definitions:
-            check_slug(item["capability"])
-            if JOBS_HEADING not in item["content"]:
-                raise ValueError(
-                    f"definition of {item['capability']!r} has no `{JOBS_HEADING}` section: "
-                    "open the file with the job stories the capability serves"
-                )
+        check_definitions(definitions)
 
     return check
+
+
+def clarification_check(data: dict) -> None:
+    """The check a PM consultation must pass: whatever it distils is a valid file that
+    opens with its jobs. Distilling nothing is fine: the answers may change no text."""
+    check_definitions(data.get("definitions", []))
+
+
+def check_definitions(definitions: list[dict]) -> None:
+    for item in definitions:
+        check_slug(item["capability"])
+        if JOBS_HEADING not in item["content"]:
+            raise ValueError(
+                f"definition of {item['capability']!r} has no `{JOBS_HEADING}` section: "
+                "open the file with the job stories the capability serves"
+            )

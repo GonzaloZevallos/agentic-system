@@ -37,6 +37,15 @@ def superseded(section: str, version: int) -> str:
     return f"{section} (v{version})"
 
 
+def last_session(state: TaskState, role_name: str, section: str) -> str | None:
+    """The session id of the latest run of `role_name` that wrote `section`, to resume
+    it; None when that role never wrote there."""
+    for run in reversed(state.get("runs", [])):
+        if run["role"] == role_name and run.get("section", run["role"]) == section:
+            return run.get("session_id") or None
+    return None
+
+
 def sections_for(state: TaskState, section: str, text: str) -> dict[str, str]:
     """The new section, plus its previous delivery as history on a return."""
     sections = {section: text}

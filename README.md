@@ -842,6 +842,14 @@ sesión del SDK reanudada con `resume`, el entrevistador entrega `InterviewTurn`
 es una sección `Interview: A→B` del documento y el autor escribe después reanudando su
 propia sesión. Preguntas para el humano al final de la entrevista = escalado.
 
+La entrevista de solución tiene **consultado** (glosario: Consulta, ADR-0014 adenda): el
+Tech Lead entrevistado devuelve `TechAnswers` (`markdown`, `questions_for_pm`) y nunca
+pregunta al humano. Con preguntas, PM responde en la misma ronda (`Consultation`:
+`markdown`, `questions_for_human`, `definitions`, `glossary`) retomando su sesión de
+validación; la respuesta entra en la transcripción y en el prompt siguiente del
+entrevistador, la sección `PM` se entrega de nuevo con `### Clarifications` (la anterior
+queda como `PM (vN)`) y lo que cambia el conocimiento se destila otra vez.
+
 ### Observabilidad
 
 Cuatro capas, de más inmediata a más durable. `agentic run --verbose` vuelca a stderr el

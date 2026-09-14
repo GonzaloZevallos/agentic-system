@@ -83,14 +83,15 @@ contando repeticiones.
 ### Interacciones
 
 **Consulta**:
-Pregunta sin entregar la tarea. No cuenta para el límite.
+Pregunta de un rol al dueño de una decisión, respondida dentro de la misma corrida, sin entregar la tarea. No es devolución ni escalado y no cuenta para ningún límite. Hoy: el Tech Lead consulta a PM durante la entrevista de solución lo que la definición no dice; PM responde en la misma corrida y su respuesta aclara la definición.
+_Avoid_: pregunta para el humano (eso es lo que el dueño tampoco puede decidir)
 
 **Entrevista**:
-Rondas de preguntas de un rol a otro para afinar una decisión antes de escribirla: el entrevistador pregunta y recomienda, el entrevistado decide. Hay dos: Product Analyst entrevista a PM sobre la definición, y el Tech Lead efímero entrevista a Tech Lead sobre la solución. Tiene tope de rondas; la transcripción entera queda en el documento de tarea. Lo que el entrevistado no puede decidir va al humano como pregunta.
+Rondas de preguntas de un rol a otro para afinar una decisión antes de escribirla: el entrevistador pregunta y recomienda, el entrevistado decide. Hay dos: Product Analyst entrevista a PM sobre la definición, y el Tech Lead efímero entrevista a Tech Lead sobre la solución. Tiene tope de rondas; la transcripción entera queda en el documento de tarea. Lo que el entrevistado no puede decidir va a una consulta si la entrevista tiene consultado, y si no, al humano como pregunta.
 _Avoid_: pingpong, consulta (la consulta es una pregunta suelta; la entrevista es la forma del trabajo)
 
 **Pregunta para el humano**:
-Lo que un entrevistado marca como fuera de su alcance: ni el issue ni el conocimiento de producto lo deciden. Escala la tarea con la lista de preguntas.
+Lo que el dueño de una decisión marca como fuera de su alcance: ni el issue ni el conocimiento de producto lo deciden. En la definición la marca PM entrevistado; en la solución, PM consultado. El Tech Lead nunca pregunta al humano. Escala la tarea con la lista de preguntas al terminar la entrevista.
 
 **Devolución**:
 Rechazo con entrega hacia atrás. Cuenta para el límite del par.
