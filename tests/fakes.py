@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
-from agentic.application.ports import Ports, RawResult
-from agentic.domain.roles import PROMPTS_DIR, Role
-from agentic.domain.task import TaskInput, TaskState
+from agentic.core.knowledge.domain import knowledge
+from agentic.core.process.application.ports import Ports, RawResult
+from agentic.core.process.domain.roles import PROMPTS_DIR, Role
+from agentic.core.process.domain.task import TaskInput, TaskState
 
 VOCAB = {"touches_ui": "UI", "touches_copy": "copy"}
 
@@ -48,6 +50,9 @@ class MemoryDocuments:
 
 
 class MemoryKnowledge:
+    """Keeps what a distillation would write. The checks are the real ones: the
+    process tests care that a bad approval fails, not how the file is named."""
+
     def __init__(self, text: str = ""):
         self.text = text
         self.definitions: dict[str, str] = {}
@@ -56,15 +61,14 @@ class MemoryKnowledge:
     def read(self) -> str:
         return self.text
 
-    def write_definitions(self, definitions: dict[str, str]) -> list[Path]:
-        self.definitions.update(definitions)
-        return [Path(f"/memory/docs/product/{slug}.md") for slug in definitions]
+    def approval_check(self, task_type: str) -> Callable[[dict], None]:
+        return knowledge.approval_check(task_type)
 
-    def upsert_terms(self, terms: dict[str, dict[str, str]]) -> Path | None:
-        if not terms:
-            return None
+    def distill(self, verdict: dict) -> list[Path]:
+        definitions, terms = knowledge.distillation(verdict)
+        self.definitions.update(definitions)
         self.terms.update(terms)
-        return Path("/memory/CONTEXT.md")
+        return [Path(f"/memory/docs/product/{slug}.md") for slug in definitions]
 
 
 class MemoryPrompts:

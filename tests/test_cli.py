@@ -4,7 +4,7 @@ import subprocess
 import pytest
 
 from agentic import cli
-from agentic.adapters.github import inbox
+from agentic.core.process.adapters.github import inbox
 
 
 def product(tmp_path, name):

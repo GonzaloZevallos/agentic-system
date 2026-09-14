@@ -11,8 +11,9 @@ aterrizan: qué producto, cómo se mide, con qué modelos y en qué orden se con
 sección 14 salió de contrastar el diseño con `langchain-ai/open_deep_research` y fija cómo
 se escribe el código. Si algo en las secciones 1 a 7 las contradice, mandan las nuevas.
 
-El vocabulario está en `CONTEXT.md`. Las decisiones con trade-off real están en `docs/adr/`
-de este repo; acá se citan, no se re-argumentan.
+El vocabulario está en un `CONTEXT.md` por módulo, enumerados en `CONTEXT-MAP.md`. Las
+decisiones con trade-off real están en `docs/adr/` de este repo; acá se citan, no se
+re-argumentan.
 
 ---
 
@@ -707,6 +708,7 @@ Se anotan para no reintroducirlas por error.
 | Paquete plano, un módulo por tema, con las reglas dentro de los nodos del grafo | Hexagonal: dominio, aplicación con ports, adaptadores; LangGraph es un adaptador (ADR-0007) |
 | El par es un validador y su pensador | Quien devuelve y quien recibe; QA→PM y QA→Tech Lead cuentan para el límite (ADR-0009) |
 | El cierre requiere siempre las aprobaciones del tipo | Aprobado o descartado: el bug de "comportamiento esperado" cierra descartado, sin aprobación (ADR-0009) |
+| Un solo `domain/` hasta que duela, y un solo `CONTEXT.md` | Tres módulos bajo `agentic/core/` (`process`, `knowledge`, `measurement`), cada uno hexagonal y con su glosario; `process` no importa a los otros (ADR-0010) |
 
 ---
 
@@ -718,23 +720,32 @@ su setup: ODR no tiene tests unitarios, ni CI, ni ADRs.
 
 ### Paquete
 
-Arquitectura hexagonal (ADR-0007), tres capas con regla de dependencia estricta, vigilada
-por un test sobre los imports:
+Tres módulos bajo `agentic/core/`, cada uno hexagonal por dentro (ADR-0007) y con
+dirección fija entre ellos (ADR-0010), las dos reglas vigiladas por un test sobre los
+imports:
 
-| Capa | Contenido | Importa |
+| Módulo | Contenido | Importa |
 |---|---|---|
-| `domain/` | `roles.py` (`Role`, `Pair`) y `prompts/`, `task.py` (estado y reducers), `document.py`, `knowledge.py`, `schemas.py`, `flags.py`, `rules.py` (límite por par, versionado, ruteo), `metrics.py` (retrabajo, devoluciones, huella de prompts), `configuration.py` | Nada del proyecto ni de la infraestructura |
-| `application/` | `ports.py` (`RoleRunner`, `TaskDocuments`, `ProductKnowledge`, `Prompts`, `FlagVocabulary`, `Inbox`) y un caso de uso por nodo: `classify`, `define`, `validate_definition`, sobre `run_role` | Solo el dominio |
-| `adapters/` | `claude_sdk/` (harness y `Printer`), `filesystem/`, `github/`, `otel/` (spans y métricas del sistema), `langgraph/` (el grafo: nodos, ruteo, abre y cierra los spans; mañana `interrupt()`, `Send`, checkpointer) | Dominio y aplicación |
-| raíz | `composition.py` arma los ports reales; `cli.py` es el adaptador de entrada | Todo |
+| `shared/` | `configuration.py` | Nada del proyecto |
+| `core/process/` | `domain/`: `roles.py` (`Role`, `Pair`, `describe_flags`) y `prompts/`, `task.py` (estado y reducers), `document.py`, `schemas.py`, `rules.py` (límite por par, versionado, ruteo). `application/`: `ports.py` (`RoleRunner`, `TaskDocuments`, `ProductKnowledge`, `Prompts`, `FlagVocabulary`, `Inbox`) y un caso de uso por nodo: `classify`, `define`, `validate_definition`, sobre `run_role`. `adapters/`: `claude_sdk/` (harness y `Printer`), `filesystem/` (documentos y overlay de prompts), `github/`, `langgraph/` (el grafo: nodos, ruteo, abre y cierra los spans; mañana `interrupt()`, `Send`, checkpointer) y `telemetry.py`, el port por el que entra el tracing | `shared` |
+| `core/knowledge/` | `domain/`: `knowledge.py` (cómo se muestra, cómo se edita el glosario, qué debe traer una aprobación), `flags.py` (el vocabulario). `adapters/filesystem/`: implementa `ProductKnowledge` y `FlagVocabulary` sobre el repo del producto | `shared`, `process` |
+| `core/measurement/` | `domain/`: `metrics.py` (retrabajo, devoluciones, huella de prompts). `adapters/otel/`: spans y métricas del sistema, implementa `Telemetry` | `shared`, `process` |
+| raíz | `composition.py` arma los ports reales e inyecta la telemetría; `cli.py` es el adaptador de entrada | Todo |
+
+Dentro de cada módulo: el dominio no importa nada del proyecto salvo `shared` y otros
+dominios, la aplicación solo dominios y aplicaciones, y solo los adaptadores ven
+adaptadores, nunca los de otro módulo. `process` es el dominio central: define en sus
+ports lo que necesita del conocimiento y del tracing, y `knowledge` y `measurement` lo
+implementan sin que `process` los conozca.
 
 LangGraph es un adaptador: los casos de uso son funciones async puras que reciben
 `Configuration` y `Ports`, y el grafo solo cablea. El escalado es un dato del patch que
-devuelve el caso de uso; pausar sobre él es del adaptador. Los tests espejan las capas.
+devuelve el caso de uso; pausar sobre él es del adaptador. Los tests espejan el árbol:
+`tests/core/<módulo>/<capa>/`, `tests/shared/`, `tests/llm/`.
 
 El dominio es funcional (ADR-0009): no hay clase agregado, las invariantes son funciones
 sobre `TaskState`. Los términos del glosario que el código modela tienen un solo nombre en
-inglés, y el mapeo vive en `tests/domain/test_language.py`, no en `CONTEXT.md`. El camino
+inglés, y el mapeo vive en `tests/test_language.py`, no en los `CONTEXT.md`. El camino
 todavía es ruteo por nodo en `rules.py`; pasa a `Route` con QA Lead (pendiente 16).
 
 ### Configuración
@@ -749,7 +760,7 @@ la CLI falla, porque el sistema no tiene un lugar sano donde escribir por defect
 
 ### Prompts
 
-Un `agentic/domain/prompts/<rol>.md` por rol, con placeholders para fecha y límites: el
+Un `agentic/core/process/domain/prompts/<rol>.md` por rol, con placeholders para fecha y límites: el
 prompt es parte de la definición del rol, como `Role.reads`. Convenciones
 tomadas de ODR: secciones con tags XML (`<Task>`, `<Hard Limits>`, `<Show Your Thinking>`),
 presupuestos numéricos explícitos y criterios de parada escritos. El validador recibe en el
@@ -807,7 +818,7 @@ Code no puede mandar un header `Authorization: Basic` entero. El grafo abre un s
 tarea y uno por rol y pasa `TRACEPARENT` al subproceso, así una tarea es un trace con los
 roles anidados; al cerrar cada span el adaptador le estampa lo que el caso de uso decidió
 (costo, modelo, versión de la entrega, resultado) leyendo el patch, sin que la aplicación
-lo sepa. Las métricas del sistema (CONTEXT.md, "Medición": costo por tarea, retrabajo,
+lo sepa. Las métricas del sistema (glosario de Medición: costo por tarea, retrabajo,
 duración, devoluciones, escalados) salen del mismo adaptador y el collector las manda,
 junto con los spans del sistema y sin los de Claude Code, a Grafana Cloud, con la versión
 del sistema y la huella de prompts como labels (ADR-0008, `observability/README.md`). Por

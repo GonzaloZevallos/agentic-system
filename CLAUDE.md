@@ -22,5 +22,6 @@ Las cinco etiquetas canónicas sin renombrar: `needs-triage`, `needs-info`,
 
 ### Domain docs
 
-Single-context: `CONTEXT.md` y `docs/adr/` en la raíz, creados de forma lazy.
-See `docs/agents/domain.md`.
+Multi-context: `CONTEXT-MAP.md` en la raíz apunta a un `CONTEXT.md` por módulo en
+`agentic/core/<módulo>/`; los ADRs del sistema en `docs/adr/`, los de un módulo en
+`agentic/core/<módulo>/docs/adr/`, creados de forma lazy. See `docs/agents/domain.md`.

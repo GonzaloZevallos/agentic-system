@@ -2,10 +2,10 @@
 
 import pytest
 
-from agentic.adapters.claude_sdk import ClaudeSdkRunner
-from agentic.adapters.filesystem import FilesystemPrompts
-from agentic.application.run_role import run_with_retry
-from agentic.domain.roles import PJM, render
+from agentic.core.process.adapters.claude_sdk import ClaudeSdkRunner
+from agentic.core.process.adapters.filesystem import FilesystemPrompts
+from agentic.core.process.application.run_role import run_with_retry
+from agentic.core.process.domain.roles import PJM, render
 
 pytestmark = [pytest.mark.llm, pytest.mark.anyio]
 

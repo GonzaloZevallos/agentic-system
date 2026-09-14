@@ -15,12 +15,12 @@ import uuid
 import anyio
 from dotenv import load_dotenv
 
-from .adapters.otel import telemetry
-from .application.ports import Ports
-from .application.preflight import preflight
 from .composition import default_ports, graph
-from .domain.configuration import ENV_PREFIX, Configuration, MissingProductDir
-from .domain.task import TaskInput
+from .core.measurement.adapters.otel import telemetry
+from .core.process.application.ports import Ports
+from .core.process.application.preflight import preflight
+from .core.process.domain.task import TaskInput
+from .shared.configuration import ENV_PREFIX, Configuration, MissingProductDir
 
 
 def main() -> None:

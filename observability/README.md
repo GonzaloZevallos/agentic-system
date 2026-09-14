@@ -21,7 +21,7 @@ Solo lo que emite el sistema, identificado como `service.name: agentic-system`:
 - Un span por tarea y uno por rol, con metadatos: id de tarea, tipo, estado, costo,
   retrabajo, devoluciones, modelo, turnos, `session_id`, hash del prompt, versión del
   sistema. El collector borra `task.title` antes de mandarlo.
-- Las métricas del sistema (CONTEXT.md, "Medición"): `agentic.task.cost_usd`,
+- Las métricas del sistema (`agentic/core/measurement/CONTEXT.md`): `agentic.task.cost_usd`,
   `agentic.task.rework_usd`, `agentic.task.duration`, `agentic.task.finished`,
   `agentic.task.returns`, `agentic.role.cost_usd`, `agentic.role.duration`. Labels:
   `task.type`, `task.status`, `system.version`, `prompts.fingerprint`, `role`,
