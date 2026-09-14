@@ -18,7 +18,7 @@ from agentic.core.process.application.ports import AttemptFailed
 from agentic.core.process.domain.roles import PAIR_PM_PA, PJM, PM, PRODUCT_ANALYST
 from agentic.core.process.domain.task import WAITING_ON_HUMAN
 from agentic.shared.configuration import Configuration
-from tests.fakes import ScriptedRunner, classified, defined, verdict
+from tests.fakes import MemoryKnowledge, ScriptedRunner, classified, defined, verdict
 
 pytestmark = pytest.mark.anyio
 
@@ -322,3 +322,33 @@ async def test_composition_wires_the_real_telemetry(config, tmp_path):
     finally:
         telemetry.configure()
     assert [s.name for s in exporter.get_finished_spans()] == ["PjM"]
+
+
+async def test_a_crash_in_a_node_still_finishes_the_roles_span(config):
+    """An exception outside the use case's own failure handling (here: the knowledge
+    cannot be written) propagates, but the span closes with an outcome and cost."""
+
+    class BrokenKnowledge(MemoryKnowledge):
+        def distill(self, verdict):
+            raise OSError("read-only checkout")
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    telemetry.configure(tracer_provider=provider)
+    try:
+        script = ScriptedRunner(
+            pjm=[classified()], product_analyst=[defined()], pm=[verdict("approved")]
+        )
+
+        def ports_for(cfg):
+            return replace(default_ports(cfg), runner=script, knowledge=BrokenKnowledge())
+
+        with pytest.raises(OSError, match="read-only"):
+            await build_graph(ports_for, telemetry).compile().ainvoke(TASK, config=config)
+    finally:
+        telemetry.configure()
+    pm = exporter.get_finished_spans()[-1]
+    assert pm.name == "PM"
+    assert pm.attributes["role.outcome"] == "failed" and pm.attributes["role.cost_usd"] == 0.0
+    assert pm.status.status_code.name == "ERROR"  # the exception is on the span too

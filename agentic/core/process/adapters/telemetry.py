@@ -15,6 +15,9 @@ from ..domain.task import TaskState
 
 
 class RoleSpan(Protocol):
+    """`finish` is always called once before the span closes: with the use case's patch,
+    or with an empty one when the use case raised and nothing was delivered."""
+
     def finish(self, patch: TaskState) -> None: ...
 
 

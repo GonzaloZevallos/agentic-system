@@ -47,3 +47,48 @@ def test_upsert_terms_edits_or_creates_the_glossary(tmp_path):
     assert (
         (tmp_path / "CONTEXT.md").read_text().endswith("**Plan**:\nSold monthly.\n_Avoid_: tier\n")
     )
+
+
+def test_distill_writes_capabilities_then_glossary(tmp_path):
+    paths = FilesystemKnowledge(tmp_path).distill(
+        {
+            "definitions": [{"capability": "reports", "content": "# Reports"}],
+            "glossary": [{"term": "Report", "definition": "A CSV.", "avoid": ""}],
+        }
+    )
+    assert paths == [tmp_path / "docs/product/reports.md", tmp_path / "CONTEXT.md"]
+    assert (tmp_path / "docs/product/reports.md").read_text() == "# Reports\n"
+    assert "**Report**:\nA CSV.\n" in (tmp_path / "CONTEXT.md").read_text()
+
+
+def test_distill_checks_everything_before_writing_anything(tmp_path):
+    with pytest.raises(ValueError, match="slug"):
+        FilesystemKnowledge(tmp_path).distill(
+            {
+                "definitions": [
+                    {"capability": "reports", "content": "x"},
+                    {"capability": "Bad Slug", "content": "y"},
+                ],
+                "glossary": [],
+            }
+        )
+    assert not (tmp_path / "docs/product").exists()
+
+
+def test_distill_restores_what_was_there_when_a_write_fails(tmp_path):
+    (tmp_path / "docs/product").mkdir(parents=True)
+    (tmp_path / "docs/product/reports.md").write_text("# Reports\n\nOld.\n")
+    (tmp_path / "CONTEXT.md").mkdir()  # the glossary write will fail: it is a directory
+    with pytest.raises(OSError):
+        FilesystemKnowledge(tmp_path).distill(
+            {
+                "definitions": [
+                    {"capability": "reports", "content": "# Reports\n\nNew."},
+                    {"capability": "members", "content": "# Members"},
+                ],
+                "glossary": [{"term": "Report", "definition": "A CSV.", "avoid": ""}],
+            }
+        )
+    # The replaced file is back, the new one is gone.
+    assert (tmp_path / "docs/product/reports.md").read_text() == "# Reports\n\nOld.\n"
+    assert not (tmp_path / "docs/product/members.md").exists()

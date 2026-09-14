@@ -75,10 +75,18 @@ def main() -> None:
 async def _run(task: TaskInput, cfg: Configuration, ports: Ports) -> None:
     config = {"configurable": {"thread_id": task["id"]}}
 
-    with telemetry.task_span(task["id"], task["title"]) as run:
-        final = await graph.compile().ainvoke(task, config=config)
-        run.finish(final)
-    telemetry.flush()
+    try:
+        with telemetry.task_span(task["id"], task["title"]) as run:
+            try:
+                final = await graph.compile().ainvoke(task, config=config)
+            except Exception:
+                # The run broke outside any use case; the task span still closes with a
+                # status, so Grafana counts it (`crashed` is telemetry-only, never state).
+                run.finish({**task, "status": "crashed"})
+                raise
+            run.finish(final)
+    finally:
+        telemetry.flush()
     print(f"\nid:        {task['id']}")
     print(f"type:      {final.get('type')}")
     print(f"status:    {final.get('status', 'open')}")

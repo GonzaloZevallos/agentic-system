@@ -47,7 +47,13 @@ def _node(use_case: UseCase, role: Role, ports_for: PortsFor, telemetry: Telemet
         # The patch is what the use case decided; the span and the metrics read it
         # here, so the use case never sees telemetry (ADR-0007).
         with telemetry.role_span(role.name) as run:
-            patch = await use_case(state, cfg, ports_for(cfg))
+            try:
+                patch = await use_case(state, cfg, ports_for(cfg))
+            except Exception:
+                # Nothing was delivered; the span still closes with an outcome so the
+                # role's metrics do not silently miss the run.
+                run.finish({})
+                raise
             run.finish(patch)
             return patch
 

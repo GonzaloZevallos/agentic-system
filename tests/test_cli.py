@@ -133,3 +133,38 @@ def test_title_without_description_is_rejected(monkeypatch, tmp_path):
     with pytest.raises(SystemExit) as info:
         cli.main()
     assert info.value.code == 2
+
+
+@pytest.mark.anyio
+async def test_a_crashed_run_still_finishes_the_task_span(monkeypatch, tmp_path):
+    """The graph raising outside any use case leaves a task span with a status, so
+    the crash is counted; `crashed` exists only in telemetry, never in the state."""
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from agentic.core.measurement.adapters.otel import telemetry
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    class Broken:
+        def compile(self):
+            return self
+
+        async def ainvoke(self, task, config):
+            raise RuntimeError("checkpointer down")
+
+    monkeypatch.setattr(cli, "graph", Broken())
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    telemetry.configure(tracer_provider=provider)
+    try:
+        task = {"id": "T-9", "title": "t", "description": "d"}
+        with pytest.raises(RuntimeError, match="checkpointer"):
+            await cli._run(task, Configuration(product_dir=tmp_path), memory_ports())
+    finally:
+        telemetry.configure()
+    (span,) = exporter.get_finished_spans()
+    assert span.name == "T-9" and span.attributes["task.status"] == "crashed"
+    assert span.attributes["task.cost_usd"] == 0.0
