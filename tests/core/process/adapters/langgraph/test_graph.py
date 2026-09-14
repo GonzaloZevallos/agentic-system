@@ -17,6 +17,7 @@ from agentic.core.process.adapters.telemetry import NoTelemetry
 from agentic.core.process.application.ports import AttemptFailed
 from agentic.core.process.domain.roles import PAIR_PM_PA, PJM, PM, PRODUCT_ANALYST
 from agentic.core.process.domain.task import WAITING_ON_HUMAN
+from agentic.shared.configuration import Configuration
 from tests.fakes import ScriptedRunner, classified, defined, verdict
 
 pytestmark = pytest.mark.anyio
@@ -298,3 +299,26 @@ def test_configuration_comes_from_configurable_and_env(monkeypatch, tmp_path):
 
 def test_exported_graph_uses_the_default_ports():
     assert set(composition.graph.nodes) == {"classify", "define", "validate"}
+
+
+async def test_composition_wires_the_real_telemetry(config, tmp_path):
+    """The exported graph and the SDK runner get `core.measurement`'s telemetry, not
+    the `NoTelemetry` default: a run through `composition.graph` produces role spans."""
+    assert default_ports(Configuration(product_dir=tmp_path)).runner.telemetry is telemetry
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    telemetry.configure(tracer_provider=provider)
+    try:
+        # The nodes call `default_ports` for real; only the runner is swapped, via the
+        # module, because `composition.graph` is already wired at import time.
+        script = ScriptedRunner(pjm=[classified(confidence="low")], product_analyst=[], pm=[])
+        real = composition.ClaudeSdkRunner
+        composition.ClaudeSdkRunner = lambda **_: script
+        try:
+            await composition.graph.compile().ainvoke(TASK, config=config)
+        finally:
+            composition.ClaudeSdkRunner = real
+    finally:
+        telemetry.configure()
+    assert [s.name for s in exporter.get_finished_spans()] == ["PjM"]

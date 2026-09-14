@@ -2,8 +2,9 @@
 
 `task_span` around the graph run and `role_span` around each role yield a `Run`;
 `finish(patch)` on it stamps the run's outcome, cost and model on the span and emits
-the system metrics of CONTEXT.md, "Medición". `traceparent()` goes to the Claude Code
-subprocess, whose own spans then nest under the role. Nothing is exported unless
+the system metrics of the Medición glossary (`core/measurement/CONTEXT.md`).
+`traceparent()` goes to the Claude Code subprocess, whose own spans then nest under
+the role. Nothing is exported unless
 `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
 
 Telemetry is cross-cutting: the graph adapter opens the spans and finishes them with

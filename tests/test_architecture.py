@@ -24,6 +24,14 @@ ALLOWED = {
     "knowledge": {"shared", "process"},
     "measurement": {"shared", "process"},
 }
+# What each layer may import, by layer. `None` is a file outside the three (a module's
+# `__init__.py`): it may see the domain and the application, never the adapters.
+ALLOWED_LAYERS = {
+    "domain": {"domain"},
+    "application": {"domain", "application"},
+    None: {"domain", "application"},
+    "adapters": set(LAYERS),
+}
 
 
 def imports_of(path: Path) -> set[str]:
@@ -89,9 +97,7 @@ def violations(path: Path) -> set[str]:
             bad.add(name)
         elif other != module and other_layer == "adapters":
             bad.add(name)
-        elif layer and other_layer and LAYERS.index(other_layer) > LAYERS.index(layer):
-            bad.add(name)
-        elif layer != "adapters" and not layer and other_layer == "adapters":
+        elif other_layer is not None and other_layer not in ALLOWED_LAYERS[layer]:
             bad.add(name)
     return bad
 

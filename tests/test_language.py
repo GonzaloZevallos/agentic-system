@@ -10,6 +10,7 @@ from agentic.core.knowledge.domain import knowledge
 from agentic.core.measurement.domain import metrics
 from agentic.core.process.domain import document, roles, task
 from agentic.shared import configuration
+from tests.test_architecture import ALLOWED
 
 CORE = Path(__file__).resolve().parents[1] / "agentic" / "core"
 
@@ -54,7 +55,7 @@ def glossary_terms(context: str) -> set[str]:
 
 def test_every_context_has_a_glossary_and_the_map_lists_it():
     contexts = {p.name for p in CORE.iterdir() if p.is_dir() and (p / "__init__.py").exists()}
-    assert contexts == {"process", "knowledge", "measurement"}
+    assert contexts == set(ALLOWED) - {"shared"}  # one registry: the dependency rule's
     context_map = (CORE.parents[1] / "CONTEXT-MAP.md").read_text(encoding="utf-8")
     for context in contexts:
         assert (CORE / context / "CONTEXT.md").is_file(), context

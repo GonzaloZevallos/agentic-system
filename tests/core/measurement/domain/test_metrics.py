@@ -1,4 +1,4 @@
-"""The definitions of CONTEXT.md, "Medición", as functions over the state."""
+"""The definitions of the Medición glossary, as functions over the state."""
 
 import pytest
 

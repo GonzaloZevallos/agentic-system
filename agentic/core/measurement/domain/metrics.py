@@ -1,5 +1,5 @@
-"""System metrics over a task's state (CONTEXT.md, "Medición"). Pure functions, so the
-telemetry adapter stays thin and each definition is a unit test.
+"""System metrics over a task's state (the Medición glossary, `core/measurement/CONTEXT.md`).
+Pure functions, so the telemetry adapter stays thin and each definition is a unit test.
 
 Rework is a role run that repeats work already done in the task: a delivery with
 `version > 1` (it follows a return) or a failed attempt (paid, no delivery). Internal

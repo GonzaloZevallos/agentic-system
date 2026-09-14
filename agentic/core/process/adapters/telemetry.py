@@ -8,8 +8,7 @@ under `core.process` imports it. `NoTelemetry` is the default when nobody does.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import AbstractContextManager, nullcontext
 from typing import Protocol
 
 from ..domain.task import TaskState
@@ -31,9 +30,8 @@ class _NoSpan:
 
 
 class NoTelemetry:
-    @contextmanager
-    def role_span(self, role_name: str) -> Iterator[RoleSpan]:
-        yield _NoSpan()
+    def role_span(self, role_name: str) -> AbstractContextManager[RoleSpan]:
+        return nullcontext(_NoSpan())
 
     def traceparent(self) -> str | None:
         return None

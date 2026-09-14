@@ -11,7 +11,7 @@
   ],
   "title": "Sistema agéntico",
   "uid": "agentic-system",
-  "description": "Métricas del sistema (CONTEXT.md, Medición): qué cuesta una tarea terminada y cuánto de eso es retrabajo. Cada label system_version es un SHA del repo del sistema; prompts_fingerprint, el set de prompts que corrió.",
+  "description": "Métricas del sistema (glosario de Medición): qué cuesta una tarea terminada y cuánto de eso es retrabajo. Cada label system_version es un SHA del repo del sistema; prompts_fingerprint, el set de prompts que corrió.",
   "tags": ["agentic-system"],
   "timezone": "browser",
   "editable": true,
