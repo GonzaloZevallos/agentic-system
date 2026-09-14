@@ -25,7 +25,9 @@ Solo lo que emite el sistema, identificado como `service.name: agentic-system`:
   `agentic.task.rework_usd`, `agentic.task.duration`, `agentic.task.finished`,
   `agentic.task.returns`, `agentic.role.cost_usd`, `agentic.role.duration`. Labels:
   `task.type`, `task.status`, `system.version`, `prompts.fingerprint`, `role`,
-  `role.outcome`, `model`, `rework`. Un span siempre cierra con sus atributos: si un
+  `role.outcome`, `model`, `rework`. Son eventos: una muestra por tarea terminada y por
+  corrida de rol, exportada al cerrar (ADR-0008, adenda), nada se acumula entre corridas.
+  Un span siempre cierra con sus atributos: si un
   nodo lanza fuera del manejo de fallo del caso de uso, el rol queda `role.outcome=failed`
   y la tarea `task.status=crashed`, un valor que solo existe en telemetría, nunca en el
   estado.

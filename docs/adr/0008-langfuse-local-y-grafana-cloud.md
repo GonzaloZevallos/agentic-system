@@ -45,3 +45,37 @@ algo.
 - El JSONL de evaluación de README §14 conserva lo que ninguna métrica puede dar, el
   puntaje humano y la nota, y deja de guardar costo.
 - Retrabajo se mide por costo, no por cantidad. Las devoluciones se cuentan aparte.
+
+## Adenda 2026-09-14: las métricas son eventos, no tasas
+
+La primera corrida real dejó el dashboard vacío. Las métricas eran contadores e histogramas
+con temporalidad delta, acumulados en el collector (`deltatocumulative`) y leídos con
+`increase()`. Prometheus nunca cuenta la primera muestra de una serie, y la serie lleva
+`system_version`: en desarrollo casi cada versión corre una sola tarea, así que el panel
+de una versión nunca mostraba su primera tarea, es decir, casi ninguna. Además `increase()`
+extrapola entre muestras aisladas y Grafana Cloud limita cada consulta a 32 días, lo que
+descartó reconstruir los deltas por PromQL.
+
+Decisión: cada tarea terminada y cada corrida de rol es un **evento** que deja una
+**muestra** por métrica (glosario de Medición). Los instrumentos son gauges y el adaptador
+exporta al cerrar cada `finish`, así dos corridas con los mismos labels en el mismo minuto
+no se pisan. Los paneles suman muestras (`sum_over_time`, `count_over_time`), exactos desde
+la primera tarea de una versión. El collector deja de acumular; aplica al recrearlo.
+
+Consecuencias:
+
+- Los nombres OTel y los labels no cambian. Los nombres en Prometheus pierden los sufijos
+  `_total`, `_sum`, `_count` y `_bucket`: el corte se hizo cuando en Grafana solo había una
+  tarea de prueba y dos corridas del mismo día. La regla "se agregan, no se renombran"
+  sigue vigente desde acá.
+- Sin buckets no hay mediana por rol en PromQL sobre varias series; el panel pasa a
+  promedio, exacto.
+- Registrar y exportar es atómico (un lock): los Developers en paralelo (ADR-0004)
+  cierran en hilos distintos con los mismos labels y un gauge guarda solo el último valor
+  antes de exportar.
+- Cada cierre de rol o tarea espera el export HTTP al collector local. Con el collector
+  caído, cada cierre paga el timeout del exportador antes de seguir; la corrida no falla.
+
+Opciones descartadas: convertir en el collector (mismo resultado, pero el collector
+interpretaría y no se podía probar sin recrearlo); dejar `increase()` y esperar dos tareas
+por versión (en desarrollo no ocurre).

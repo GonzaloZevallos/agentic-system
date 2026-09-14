@@ -3,7 +3,7 @@
 import re
 
 import pytest
-from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+from opentelemetry.sdk.metrics.export import MetricReader, MetricsData
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -25,24 +25,38 @@ def spans(monkeypatch):
     telemetry.configure()
 
 
+class BatchReader(MetricReader):
+    """Keeps every export as its own batch: a `finish` flushes, so one event is one batch."""
+
+    def __init__(self):
+        super().__init__()
+        self.batches: list[MetricsData] = []
+
+    def _receive_metrics(self, metrics_data: MetricsData, timeout_millis: float = 10_000, **kw):
+        self.batches.append(metrics_data)
+
+    def shutdown(self, timeout_millis: float = 30_000, **kw):
+        pass
+
+
 @pytest.fixture
 def metrics(monkeypatch):
     monkeypatch.setenv("AGENTIC_SYSTEM_VERSION", "abc1234")
     monkeypatch.setattr(telemetry, "_version", None)
-    reader = InMemoryMetricReader()
+    reader = BatchReader()
     telemetry.configure(meter_provider=telemetry.meter_provider_for(reader))
     yield reader
     telemetry.configure()
 
 
-def points(reader: InMemoryMetricReader) -> dict[str, list]:
-    """{metric name: [data points]} of everything collected so far."""
-    data = reader.get_metrics_data()
+def points(reader: BatchReader) -> dict[str, list]:
+    """{metric name: [data points]} of everything exported so far."""
     out: dict[str, list] = {}
-    for rm in data.resource_metrics:
-        for sm in rm.scope_metrics:
-            for metric in sm.metrics:
-                out.setdefault(metric.name, []).extend(metric.data.data_points)
+    for data in reader.batches:
+        for rm in data.resource_metrics:
+            for sm in rm.scope_metrics:
+                for metric in sm.metrics:
+                    out.setdefault(metric.name, []).extend(metric.data.data_points)
     return out
 
 
@@ -150,16 +164,17 @@ def test_task_finish_emits_the_system_metrics(metrics):
         "prompts.fingerprint": telemetry.system_metrics.prompts_fingerprint(final),
     }
     (cost,) = got["agentic.task.cost_usd"]
-    assert cost.sum == 0.5 and cost.count == 1 and dict(cost.attributes) == labels
+    assert cost.value == 0.5 and dict(cost.attributes) == labels
     (rework,) = got["agentic.task.rework_usd"]
-    assert rework.sum == 0.15
-    assert got["agentic.task.finished"][0].value == 1
-    assert got["agentic.task.returns"][0].value == 1
+    assert rework.value == 0.15
+    (finished,) = got["agentic.task.finished"]
+    assert finished.value == 1
+    (returns,) = got["agentic.task.returns"]
+    assert returns.value == 1
     (duration,) = got["agentic.task.duration"]
-    assert duration.count == 1 and list(duration.explicit_bounds) == list(
-        telemetry.DURATION_BUCKETS
-    )
-    assert list(cost.explicit_bounds) == list(telemetry.COST_BUCKETS)
+    assert duration.value >= 0
+    # The finish exported on its own: the sample left the process with the event.
+    assert len(metrics.batches) == 1
 
 
 def test_role_finish_emits_duration_and_cost_by_role(metrics):
@@ -181,19 +196,69 @@ def test_role_finish_emits_duration_and_cost_by_role(metrics):
         )
     got = points(metrics)
     (cost,) = got["agentic.role.cost_usd"]
-    assert cost.sum == 0.01
+    assert cost.value == 0.01
     assert dict(cost.attributes) == {"role": "PjM", "model": "m", "rework": False}
     (duration,) = got["agentic.role.duration"]
     assert dict(duration.attributes) == {"role": "PjM", "role.outcome": "delivered"}
 
 
-def test_metrics_leave_the_process_as_deltas():
-    from opentelemetry.sdk.metrics import Counter, Histogram
-    from opentelemetry.sdk.metrics.export import AggregationTemporality
+def test_two_runs_with_the_same_labels_are_two_samples(metrics):
+    """Metrics are events: a second run never overwrites the first, and a quiet
+    period exports nothing (a gauge only carries what was set since the last export)."""
+    patch = {
+        "runs": [
+            {
+                "role": "PM",
+                "version": 1,
+                "session_id": "",
+                "model": "m",
+                "cost_usd": 0.1,
+                "turns": 1,
+            }
+        ],
+        "cost_usd": 0.1,
+    }
+    for _ in range(2):
+        with telemetry.role_span("PM") as run:
+            run.finish(patch)
+    telemetry.flush()
+    costs = points(metrics)["agentic.role.cost_usd"]
+    assert [c.value for c in costs] == [0.1, 0.1]
+    # Two events, two exports; the idle flush at the end exported nothing at all.
+    assert len(metrics.batches) == 2
 
-    exporter = telemetry.metric_exporter()
-    assert exporter._preferred_temporality[Counter] is AggregationTemporality.DELTA
-    assert exporter._preferred_temporality[Histogram] is AggregationTemporality.DELTA
+
+def test_parallel_runs_with_the_same_labels_are_two_samples(metrics):
+    """Developers run in parallel (ADR-0004) and finish on different threads. A gauge
+    keeps only the last value set before an export, so set-and-export is atomic."""
+    import threading
+
+    patch = {
+        "runs": [
+            {
+                "role": "Developer",
+                "version": 1,
+                "session_id": "",
+                "model": "m",
+                "cost_usd": 0.3,
+                "turns": 1,
+            }
+        ],
+        "cost_usd": 0.3,
+    }
+    gate = threading.Barrier(2)
+
+    def finish_one():
+        with telemetry.role_span("Developer") as run:
+            gate.wait()
+            run.finish(patch)
+
+    threads = [threading.Thread(target=finish_one) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert [c.value for c in points(metrics)["agentic.role.cost_usd"]] == [0.3, 0.3]
 
 
 def test_system_version_prefers_the_env_var(monkeypatch):

@@ -30,26 +30,26 @@ datasource Prometheus del stack (`grafanacloud-<stack>-prom`). Re-importar pisa 
 comparten `uid`.
 
 Los nombres en Prometheus son los de OpenTelemetry con puntos por guiones bajos y el sufijo
-de unidad: `agentic.task.cost_usd` es `agentic_task_cost_usd_sum` y `_count`,
-`agentic.task.duration` es `agentic_task_duration_seconds_bucket`, el contador
-`agentic.task.finished` es `agentic_task_finished_total`. Labels: `task_type`,
-`task_status`, `system_version`, `prompts_fingerprint`, `role`, `role_outcome`, `model`,
-`rework`.
+de unidad: `agentic.task.cost_usd` es `agentic_task_cost_usd`, `agentic.task.duration` es
+`agentic_task_duration_seconds`, `agentic.task.finished` es `agentic_task_finished`. Labels:
+`task_type`, `task_status`, `system_version`, `prompts_fingerprint`, `role`, `role_outcome`,
+`model`, `rework`.
 
 ## Cómo viajan las métricas
 
-El sistema emite deltas: cada `agentic run` es un proceso nuevo y un contador acumulado
-que arranca en cero se lee mal en Prometheus cuando una tarea cuesta más que la anterior.
-El collector acumula (`deltatocumulative`, estado en memoria, `max_stale` de 90 días) y
-manda una sola serie por combinación de labels. Dos consecuencias: los paneles con
-`increase()` muestran valor a partir de la **segunda** tarea en el rango, y reiniciar el
-collector reinicia la acumulación, lo que Prometheus lee como un reset de contador: la
-primera tarea después del reinicio puede contarse de menos. No es un problema para
-comparar semanas; sí lo sería para contabilidad exacta, que no es el objetivo.
+Son eventos, no tasas (ADR-0008, adenda): cada tarea terminada y cada corrida de rol deja
+**una muestra** por métrica, con su valor, exportada en el momento. Nada se acumula entre
+corridas, ni en el sistema ni en el collector. Los paneles suman muestras en el rango
+(`sum_over_time`, `count_over_time`), así que la primera tarea de una versión ya cuenta.
+Nunca usar `increase()` o `rate()` sobre estas series: no cuentan la primera muestra y
+extrapolan entre muestras aisladas.
+
+`task_status=crashed` existe solo en telemetría: la corrida rompió fuera del manejo de
+fallo. Los paneles de "terminadas" lo excluyen junto con `waiting_on_human`.
 
 ## Ver si llega
 
-**Explore → Metrics**, consulta `agentic_task_finished_total`: aparece un punto por tarea
+**Explore → Metrics**, consulta `agentic_task_finished`: aparece un punto por tarea
 corrida desde que el collector tiene las credenciales. **Explore → Traces**, filtro
 `service.name = agentic-system`: un trace por tarea, con los roles anidados y sin los spans
 de Claude Code, que se quedan en Langfuse.

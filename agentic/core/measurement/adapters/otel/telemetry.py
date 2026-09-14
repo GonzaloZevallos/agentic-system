@@ -7,6 +7,12 @@ the system metrics of the Medición glossary (`core/measurement/CONTEXT.md`).
 the role. Nothing is exported unless
 `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
 
+The metrics are events, not rates (ADR-0008, addendum): every finished task and every
+role run leaves one sample per metric, with its value. Gauges give exactly that, and a
+flush after each `finish` guarantees two runs with the same labels never collapse into
+one sample. Prometheus reads them with `sum_over_time` and `count_over_time`, exact from
+the first task of a version; `increase()` never counts the first sample of a series.
+
 Telemetry is cross-cutting: the graph adapter opens the spans and finishes them with
 the patch each use case returns, the SDK adapter propagates the context; the use
 cases never see it (ADR-0007). The collector decides where each signal goes.
@@ -16,21 +22,20 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from opentelemetry import metrics, trace
-from opentelemetry.sdk.metrics import Counter, Histogram, MeterProvider, UpDownCounter
+from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import (
-    AggregationTemporality,
     MetricExporter,
     MetricReader,
     PeriodicExportingMetricReader,
 )
-from opentelemetry.sdk.metrics.view import ExplicitBucketHistogramAggregation, View
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -44,9 +49,9 @@ SERVICE_NAME = "agentic-system"
 # agentic/core/measurement/adapters/otel/telemetry.py -> the system's repo, for its git version.
 REPO = Path(__file__).resolve().parents[5]
 
-# Default OTel buckets go 0..10000, useless for dollars and coarse for minutes.
-COST_BUCKETS = (0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 25, 50)
-DURATION_BUCKETS = (5, 15, 30, 60, 120, 300, 600, 1200, 1800, 3600)
+# The API still exports the synchronous gauge under a private name.
+Gauge = metrics._Gauge
+_EMIT_LOCK = threading.Lock()
 
 _tracer_provider: TracerProvider | None = None
 _meter_provider: MeterProvider | None = None
@@ -87,21 +92,8 @@ def _git_version() -> str:
 
 
 def meter_provider_for(reader: MetricReader) -> MeterProvider:
-    """A meter provider with the system's buckets; tests pass an in-memory reader."""
-    return MeterProvider(
-        metric_readers=[reader],
-        resource=resource(),
-        views=[
-            View(
-                instrument_name="agentic.*_usd",
-                aggregation=ExplicitBucketHistogramAggregation(COST_BUCKETS),
-            ),
-            View(
-                instrument_name="agentic.*.duration",
-                aggregation=ExplicitBucketHistogramAggregation(DURATION_BUCKETS),
-            ),
-        ],
-    )
+    """A meter provider with the system's resource; tests pass their own reader."""
+    return MeterProvider(metric_readers=[reader], resource=resource())
 
 
 def configure(
@@ -127,16 +119,12 @@ def configure(
 
 
 def metric_exporter() -> MetricExporter:
-    """OTLP over HTTP with delta temporality. Each `agentic run` is a new process whose
-    cumulative counters would restart at zero, and Prometheus reads a restart to a
-    higher value as growth. Deltas are exact; the collector, which lives on, turns them
-    into one cumulative series (`deltatocumulative`)."""
+    """OTLP over HTTP. Gauges have no temporality: each `agentic run` is a new process,
+    and a gauge sample carries its own value, so nothing accumulates across runs and the
+    collector has nothing to convert."""
     from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 
-    delta = AggregationTemporality.DELTA
-    return OTLPMetricExporter(
-        preferred_temporality={Counter: delta, Histogram: delta, UpDownCounter: delta}
-    )
+    return OTLPMetricExporter()
 
 
 def tracer() -> trace.Tracer:
@@ -157,37 +145,36 @@ def meter() -> metrics.Meter:
 
 @dataclass
 class Instruments:
-    """The system metrics, created once per meter. Names are the Prometheus names
-    minus suffixes: `agentic.task.cost_usd` lands as `agentic_task_cost_usd_sum`."""
+    """The system metrics, created once per meter, one gauge each. Prometheus names
+    are these with underscores and the unit: `agentic.task.cost_usd` lands as
+    `agentic_task_cost_usd`, `agentic.task.duration` as `agentic_task_duration_seconds`."""
 
-    task_cost: metrics.Histogram
-    task_rework: metrics.Histogram
-    task_duration: metrics.Histogram
-    task_finished: metrics.Counter
-    task_returns: metrics.Counter
-    role_cost: metrics.Histogram
-    role_duration: metrics.Histogram
+    task_cost: Gauge
+    task_rework: Gauge
+    task_duration: Gauge
+    task_finished: Gauge
+    task_returns: Gauge
+    role_cost: Gauge
+    role_duration: Gauge
 
     @classmethod
     def create(cls, m: metrics.Meter) -> Instruments:
         return cls(
-            task_cost=m.create_histogram("agentic.task.cost_usd", description="Cost of a task"),
-            task_rework=m.create_histogram(
+            task_cost=m.create_gauge("agentic.task.cost_usd", description="Cost of a task"),
+            task_rework=m.create_gauge(
                 "agentic.task.rework_usd", description="Cost of the task's rework"
             ),
-            task_duration=m.create_histogram(
+            task_duration=m.create_gauge(
                 "agentic.task.duration", unit="s", description="Wall time of a task"
             ),
-            task_finished=m.create_counter(
-                "agentic.task.finished", description="Tasks that reached an end, by status"
+            task_finished=m.create_gauge(
+                "agentic.task.finished", description="One per task that reached an end, by status"
             ),
-            task_returns=m.create_counter(
-                "agentic.task.returns", description="Returns across every pair"
+            task_returns=m.create_gauge(
+                "agentic.task.returns", description="Returns of a task, across every pair"
             ),
-            role_cost=m.create_histogram(
-                "agentic.role.cost_usd", description="Cost of one role run"
-            ),
-            role_duration=m.create_histogram(
+            role_cost=m.create_gauge("agentic.role.cost_usd", description="Cost of one role run"),
+            role_duration=m.create_gauge(
                 "agentic.role.duration", unit="s", description="Wall time of one role run"
             ),
         )
@@ -210,6 +197,14 @@ class Run:
     @property
     def elapsed(self) -> float:
         return time.monotonic() - self.started
+
+    def _emit(self, record: Callable[[Instruments], None]) -> None:
+        """One event, one export, atomically. Parallel Developers (ADR-0004) finish on
+        different threads with the same labels, and a gauge keeps only the last value
+        set before an export: without the lock, A.set, B.set, A.flush loses B."""
+        with _EMIT_LOCK:
+            record(instruments())
+            _flush_metrics()
 
 
 @dataclass
@@ -235,13 +230,16 @@ class TaskRun(Run):
                 "task.escalated": bool(final.get("escalated")),
             }
         )
-        i = instruments()
-        i.task_cost.record(cost, labels)
-        i.task_rework.record(rework, labels)
-        i.task_duration.record(self.elapsed, labels)
-        i.task_finished.add(1, labels)
-        if returns:
-            i.task_returns.add(returns, labels)
+        elapsed = self.elapsed
+
+        def record(i: Instruments) -> None:
+            i.task_cost.set(cost, labels)
+            i.task_rework.set(rework, labels)
+            i.task_duration.set(elapsed, labels)
+            i.task_finished.set(1, labels)
+            i.task_returns.set(returns, labels)
+
+        self._emit(record)
 
 
 @dataclass
@@ -271,11 +269,20 @@ class RoleRun(Run):
         for prompt_hash in patch.get("prompts", {}).values():
             attributes["role.prompt_hash"] = prompt_hash
         self.span.set_attributes(attributes)
-        i = instruments()
-        i.role_duration.record(self.elapsed, {"role": self.role, "role.outcome": outcome})
-        i.role_cost.record(
-            cost, {"role": self.role, "model": run["model"] if run else "", "rework": rework}
-        )
+        elapsed = self.elapsed
+        model = run["model"] if run else ""
+
+        def record(i: Instruments) -> None:
+            i.role_duration.set(elapsed, {"role": self.role, "role.outcome": outcome})
+            i.role_cost.set(cost, {"role": self.role, "model": model, "rework": rework})
+
+        self._emit(record)
+
+
+def _flush_metrics() -> None:
+    """Export what was set since the last export; `Run._emit` calls it per event."""
+    if _meter_provider is not None:
+        _meter_provider.force_flush()
 
 
 def _outcome(patch: TaskState, *, delivered: bool) -> str:
@@ -317,5 +324,4 @@ def flush() -> None:
     """Send what is still buffered; call before the process exits."""
     if _tracer_provider is not None:
         _tracer_provider.force_flush()
-    if _meter_provider is not None:
-        _meter_provider.force_flush()
+    _flush_metrics()

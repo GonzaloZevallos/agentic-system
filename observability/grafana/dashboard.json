@@ -11,7 +11,7 @@
   ],
   "title": "Sistema agéntico",
   "uid": "agentic-system",
-  "description": "Métricas del sistema (glosario de Medición): qué cuesta una tarea terminada y cuánto de eso es retrabajo. Cada label system_version es un SHA del repo del sistema; prompts_fingerprint, el set de prompts que corrió.",
+  "description": "Métricas del sistema (glosario de Medición): qué cuesta una tarea terminada y cuánto de eso es retrabajo. Una muestra por tarea y por corrida de rol. Cada label system_version es un SHA del repo del sistema; prompts_fingerprint, el set de prompts que corrió.",
   "tags": ["agentic-system"],
   "timezone": "browser",
   "editable": true,
@@ -26,7 +26,7 @@
         "label": "Versión del sistema",
         "type": "query",
         "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-        "query": "label_values(agentic_task_finished_total, system_version)",
+        "query": "label_values(agentic_task_finished, system_version)",
         "refresh": 2,
         "includeAll": true,
         "multi": true,
@@ -38,7 +38,7 @@
         "label": "Tipo de tarea",
         "type": "query",
         "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-        "query": "label_values(agentic_task_finished_total, task_type)",
+        "query": "label_values(agentic_task_finished, task_type)",
         "refresh": 2,
         "includeAll": true,
         "multi": true,
@@ -52,13 +52,13 @@
       "id": 1,
       "type": "stat",
       "title": "Costo por tarea terminada",
-      "description": "Promedio en dólares de las tareas que llegaron a un fin sin escalado, en el rango elegido.",
+      "description": "Promedio en dólares de las tareas que llegaron a un fin sin escalar ni caerse, en el rango elegido.",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(increase(agentic_task_cost_usd_sum{task_status!=\"waiting_on_human\", system_version=~\"$version\", task_type=~\"$type\"}[$__range])) / sum(increase(agentic_task_cost_usd_count{task_status!=\"waiting_on_human\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
+          "expr": "sum(sum_over_time(agentic_task_cost_usd{task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[$__range])) / sum(count_over_time(agentic_task_cost_usd{task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
           "instant": true
         }
       ],
@@ -72,13 +72,13 @@
       "id": 2,
       "type": "stat",
       "title": "Retrabajo",
-      "description": "Parte del costo total gastada en corridas de rol que repiten trabajo: entregas posteriores a una devolución e intentos fallidos. Verde bajo 10 %, ámbar hasta 30 %.",
+      "description": "Parte del costo total gastada en corridas de rol que repiten trabajo: entregas posteriores a una devolución e intentos fallidos. Cuenta todas las tareas, escaladas y caídas incluidas. Verde bajo 10 %, ámbar hasta 30 %.",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(increase(agentic_task_rework_usd_sum{system_version=~\"$version\", task_type=~\"$type\"}[$__range])) / sum(increase(agentic_task_cost_usd_sum{system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
+          "expr": "sum(sum_over_time(agentic_task_rework_usd{system_version=~\"$version\", task_type=~\"$type\"}[$__range])) / sum(sum_over_time(agentic_task_cost_usd{system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
           "instant": true
         }
       ],
@@ -103,13 +103,13 @@
       "id": 3,
       "type": "stat",
       "title": "Tareas terminadas",
-      "description": "Tareas que llegaron a un fin sin escalar, en el rango.",
+      "description": "Tareas que llegaron a un fin sin escalar ni caerse, en el rango.",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(increase(agentic_task_finished_total{task_status!=\"waiting_on_human\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
+          "expr": "sum(count_over_time(agentic_task_finished{task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
           "instant": true
         }
       ],
@@ -126,7 +126,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(increase(agentic_task_finished_total{task_status=\"waiting_on_human\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
+          "expr": "sum(count_over_time(agentic_task_finished{task_status=\"waiting_on_human\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
           "instant": true
         }
       ],
@@ -143,7 +143,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version) (increase(agentic_task_cost_usd_sum{task_status!=\"waiting_on_human\", system_version=~\"$version\", task_type=~\"$type\"}[1d])) / sum by (system_version) (increase(agentic_task_cost_usd_count{task_status!=\"waiting_on_human\", system_version=~\"$version\", task_type=~\"$type\"}[1d]))",
+          "expr": "sum by (system_version) (sum_over_time(agentic_task_cost_usd{task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[1d])) / sum by (system_version) (count_over_time(agentic_task_cost_usd{task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[1d]))",
           "legendFormat": "{{system_version}}"
         }
       ],
@@ -180,7 +180,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version) (increase(agentic_task_rework_usd_sum{system_version=~\"$version\", task_type=~\"$type\"}[1d])) / sum by (system_version) (increase(agentic_task_cost_usd_sum{system_version=~\"$version\", task_type=~\"$type\"}[1d]))",
+          "expr": "sum by (system_version) (sum_over_time(agentic_task_rework_usd{system_version=~\"$version\", task_type=~\"$type\"}[1d])) / sum by (system_version) (sum_over_time(agentic_task_cost_usd{system_version=~\"$version\", task_type=~\"$type\"}[1d]))",
           "legendFormat": "{{system_version}}"
         }
       ],
@@ -218,7 +218,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (task_status) (increase(agentic_task_finished_total{system_version=~\"$version\", task_type=~\"$type\"}[1w]))",
+          "expr": "sum by (task_status) (count_over_time(agentic_task_finished{system_version=~\"$version\", task_type=~\"$type\"}[1w]))",
           "legendFormat": "{{task_status}}",
           "interval": "1w"
         }
@@ -252,14 +252,14 @@
     {
       "id": 21,
       "type": "bargauge",
-      "title": "Duración mediana por rol",
-      "description": "Segundos que tarda una corrida de rol, mediana en el rango. Delata qué rol frena la tarea.",
+      "title": "Duración promedio por rol",
+      "description": "Segundos que tarda una corrida de rol, promedio en el rango. Delata qué rol frena la tarea.",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "x": 12, "y": 13, "w": 12, "h": 9 },
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.5, sum by (le, role) (increase(agentic_role_duration_seconds_bucket[$__range])))",
+          "expr": "sum by (role) (sum_over_time(agentic_role_duration_seconds[$__range])) / sum by (role) (count_over_time(agentic_role_duration_seconds[$__range]))",
           "legendFormat": "{{role}}",
           "instant": true
         }
@@ -293,7 +293,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (role, model, rework) (increase(agentic_role_cost_usd_sum[$__range]))",
+          "expr": "sum by (role, model, rework) (sum_over_time(agentic_role_cost_usd[$__range]))",
           "format": "table",
           "instant": true
         }

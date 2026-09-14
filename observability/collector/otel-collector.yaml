@@ -40,11 +40,9 @@ processors:
       - key: task.title
         action: delete
 
-  # El sistema emite deltas: cada `agentic run` es un proceso nuevo y un contador
-  # acumulado que arranca en cero se lee mal en Prometheus. Acá se acumula una sola
-  # serie por label. `max_stale` largo: hay días sin corridas y el estado no debe caer.
-  deltatocumulative:
-    max_stale: 2160h
+  # Las métricas del sistema son gauges, una muestra por evento (ADR-0008, adenda):
+  # pasan tal cual, sin acumular. Antes había un `deltatocumulative` acá; un collector
+  # levantado con la config vieja lo conserva hasta que se lo recree, y no molesta.
 
 exporters:
   otlphttp/langfuse:
@@ -72,5 +70,5 @@ service:
       exporters: [otlphttp/grafana]
     metrics/grafana:
       receivers: [otlp]
-      processors: [filter/system_only, deltatocumulative, batch]
+      processors: [filter/system_only, batch]
       exporters: [otlphttp/grafana]
