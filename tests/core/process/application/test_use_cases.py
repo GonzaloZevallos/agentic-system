@@ -10,7 +10,15 @@ from agentic.core.process.application.validate_definition import validate_defini
 from agentic.core.process.domain.roles import PAIR_PM_PA
 from agentic.core.process.domain.task import apply
 from agentic.shared.configuration import Configuration
-from tests.fakes import ScriptedRunner, classified, defined, memory_ports, questions, verdict
+from tests.fakes import (
+    REPORTS,
+    ScriptedRunner,
+    classified,
+    defined,
+    memory_ports,
+    questions,
+    verdict,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -65,7 +73,7 @@ async def test_validate_approval_distils_into_the_knowledge(cfg):
             pm=[
                 verdict(
                     "approved",
-                    definitions=[{"capability": "reports", "content": "# Reports"}],
+                    definitions=[{"capability": "reports", "content": REPORTS}],
                     glossary=[{"term": "Report", "definition": "A CSV.", "avoid": "export"}],
                 )
             ]
@@ -75,7 +83,7 @@ async def test_validate_approval_distils_into_the_knowledge(cfg):
     patch = await validate_definition(state, cfg, ports)
     assert patch["status"] == "definition_ready"
     assert patch["flags"] == {"touches_ui": True, "touches_copy": False}  # PM replaces PA's set
-    assert ports.knowledge.definitions == {"reports": "# Reports"}
+    assert ports.knowledge.definitions == {"reports": REPORTS}
     assert ports.knowledge.terms == {"Report": {"definition": "A CSV.", "avoid": "export"}}
     assert ports.runner.calls[0]["model"] == "claude-opus-5"
     assert "You have 2 left" in ports.runner.calls[0]["system_prompt"]

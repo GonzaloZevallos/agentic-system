@@ -20,6 +20,7 @@ from agentic.core.process.domain.roles import PAIR_PM_PA, PJM, PM, PRODUCT_ANALY
 from agentic.core.process.domain.task import INTEGRATION, WAITING_ON_HUMAN
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
+    REPORTS,
     MemoryKnowledge,
     MemoryTracker,
     MemoryWorkspace,
@@ -235,7 +236,7 @@ async def test_approval_writes_the_product_knowledge(config, tmp_path):
         pm=[
             verdict(
                 "approved",
-                definitions=[{"capability": "reports", "content": "# Reports\n\nCSV export."}],
+                definitions=[{"capability": "reports", "content": REPORTS}],
                 glossary=[{"term": "Report", "definition": "A CSV file.", "avoid": "export"}],
             )
         ],
@@ -259,7 +260,7 @@ async def test_approval_writes_the_product_knowledge(config, tmp_path):
     assert script.calls[6]["prompt"].startswith("## Engineering standards")
     assert "## Product knowledge" in script.calls[6]["prompt"]
 
-    assert (tmp_path / "docs/product/reports.md").read_text() == "# Reports\n\nCSV export.\n"
+    assert (tmp_path / "docs/product/reports.md").read_text() == REPORTS + "\n"
     assert (tmp_path / "docs/product/members.md").read_text() == "# Members\n\nOld.\n"
     glossary = (tmp_path / "CONTEXT.md").read_text()
     assert "**Gym**:\nA business." in glossary

@@ -94,15 +94,21 @@ def test_check_slug():
 
 
 def test_approval_check():
-    ok = {"verdict": "approved", "definitions": [{"capability": "metrics", "content": "x"}]}
+    jobs = "# Metrics\n\n## Jobs\n\n- When ..., I want ..., so I can ...\n"
+    ok = {"verdict": "approved", "definitions": [{"capability": "metrics", "content": jobs}]}
     knowledge.approval_check("feature")(ok)
+    # A definition that does not say which jobs it serves is not knowledge yet (JTBD).
+    with pytest.raises(ValueError, match="no `## Jobs` section"):
+        knowledge.approval_check("feature")(
+            {"verdict": "approved", "definitions": [{"capability": "metrics", "content": "x"}]}
+        )
     knowledge.approval_check("bug")({"verdict": "approved", "definitions": []})
     knowledge.approval_check("feature")({"verdict": "returned", "definitions": []})
     with pytest.raises(ValueError, match="without `definitions`"):
         knowledge.approval_check("feature")({"verdict": "approved", "definitions": []})
     with pytest.raises(ValueError, match="slug"):
         knowledge.approval_check("feature")(
-            {"verdict": "approved", "definitions": [{"capability": "Check Ins", "content": "x"}]}
+            {"verdict": "approved", "definitions": [{"capability": "Check Ins", "content": jobs}]}
         )
 
 

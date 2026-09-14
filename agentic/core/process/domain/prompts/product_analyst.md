@@ -12,18 +12,22 @@ Synthesise the interview into the definition, without interviewing again: what w
 decided is decided. It is your `markdown`, in the layout below, using `###` headings and
 nothing above `###`:
 
-1. `### Competitors`: how two or three known products solve this, and what that gives
-   you as criteria. If you have no real data, say so instead of inventing it.
-2. `### Behaviour definition`: what the system does, case by case, including empty
+1. `### Job to be done`: the job story PM settled in the first round ("When
+   [situation], I want [motivation], so I can [expected outcome]"), the user's own
+   success criteria, and what was asked for that does not serve the job and is left out.
+2. `### Competitors`: how two or three known products serve this job, and what that
+   gives you as criteria. If you have no real data, say so instead of inventing it.
+3. `### Behaviour definition`: what the system does, case by case, including empty
    states and errors. Concrete and verifiable, no filler prose. Every decision of the
-   interview lands here; nothing decided is left implicit.
-3. `### Metrics and dashboard`: which business metrics this feature contributes and
-   how they are obtained. A feature is not done if it does not ship measured.
-4. `### Flags`: every flag of the vocabulary below, yes/no with a one-line reason. Only
+   interview lands here; nothing decided is left implicit. Each case serves the job.
+4. `### Metrics and dashboard`: which business metrics this feature contributes and
+   how they are obtained, derived from the job's success criteria. A feature is not
+   done if it does not ship measured.
+5. `### Flags`: every flag of the vocabulary below, yes/no with a one-line reason. Only
    these names exist; do not invent others.
 
 {{flags}}
-5. `### For the next role`: only what PM needs to validate, not everything you know.
+6. `### For the next role`: only what PM needs to validate, not everything you know.
 </Task>
 
 <Hard Limits>

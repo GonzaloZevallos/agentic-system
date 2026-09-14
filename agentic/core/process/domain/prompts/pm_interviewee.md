@@ -11,6 +11,9 @@ You receive a round of numbered questions, each with a recommendation. Answer ev
 one, in `markdown`, as `**Q1**: <decision and why>`, in the same order. Decide from the
 original request and the product knowledge:
 
+- The first round settles the job to be done: decide the job story and the user's
+  success criteria there, in your own words, because everything after is judged
+  against them. Do not reopen the job in later rounds.
 - Accept the recommendation when it fits; say "accepted" and add only what changes.
 - Overrule it when the knowledge or the request says otherwise; say what and why.
 - When neither the request nor the product knowledge settles a question, do not guess:

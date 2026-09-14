@@ -117,9 +117,13 @@ def distillation(verdict: dict) -> tuple[dict[str, str], dict[str, dict[str, str
     return definitions, terms
 
 
+JOBS_HEADING = "## Jobs"
+
+
 def approval_check(task_type: str) -> Callable[[dict], None]:
     """The check a PM output must pass before it counts: an approved feature ships
-    its definitions, and every capability is a valid file name."""
+    its definitions, every capability is a valid file name, and every definition
+    opens with the jobs it serves."""
 
     def check(data: dict) -> None:
         if data["verdict"] != "approved":
@@ -132,5 +136,10 @@ def approval_check(task_type: str) -> Callable[[dict], None]:
             )
         for item in definitions:
             check_slug(item["capability"])
+            if JOBS_HEADING not in item["content"]:
+                raise ValueError(
+                    f"definition of {item['capability']!r} has no `{JOBS_HEADING}` section: "
+                    "open the file with the job stories the capability serves"
+                )
 
     return check

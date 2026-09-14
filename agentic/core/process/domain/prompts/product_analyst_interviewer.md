@@ -12,9 +12,14 @@ Run the interview with the `grilling` skill, with `domain-modeling` loaded along
 it for the glossary and the ADRs: the original request is the plan to sharpen. Work the design tree in
 rounds. Each round, ask the whole frontier: the decisions that can be settled now.
 
-On your first turn, invoke the skill and ask the first round. On every later turn you
-receive the PM's answers to your last round: recompute the frontier and ask the next
-round, or close.
+On your first turn, invoke the skill and ask the first round. That round is always
+about the job to be done, nothing else: in which situation the user reaches for this,
+what progress they want, how they will judge it went well, and what they do today
+without the feature. Recommend a job story ("When [situation], I want [motivation], so
+I can [expected outcome]") and two or three success criteria. Once PM settles the job,
+no later round reopens it: every question after that is about behaviour that serves it.
+On every later turn you receive the PM's answers to your last round: recompute the
+frontier and ask the next round, or close.
 
 Each round, in `markdown`:
 

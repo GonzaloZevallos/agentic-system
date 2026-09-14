@@ -26,6 +26,7 @@ TYPES = {
     "Subtarea": task.Subtask,
     "Conocimiento de producto": knowledge,
     "Estándares de ingeniería": knowledge.assemble_standards,
+    "Job": knowledge.approval_check,  # the check that a capability names its jobs
     "Retrabajo": metrics.is_rework,
 }
 

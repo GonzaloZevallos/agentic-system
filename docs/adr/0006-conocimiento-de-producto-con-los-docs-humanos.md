@@ -25,6 +25,10 @@ Por qué destilado y no las tareas: ante un bug sobre check-ins tras tres featur
 tocaron, Product Analyst leería tres documentos y reconstruiría a mano qué quedó vigente. Con
 un `check-ins.md` lee un archivo.
 
+## Adenda (2026-09-14): el job primero
+
+Cada archivo de capacidad abre con `## Jobs`: las job stories que la capacidad sirve, acumuladas tarea a tarea. Es lo primero que decide una feature (primera ronda de la entrevista de ADR-0014) y lo que PM usa para devolver comportamiento que no sirve a ningún job; sin esa sección la aprobación no cuenta. Se eligió la job story y no la persona: en un producto con un solo rol de usuario, la persona agrega ruido y la job story fuerza situación y resultado, que es lo que le faltaba a la primera definición real ("cómo va mi gimnasio" no decía cuándo ni para decidir qué).
+
 ## Opciones descartadas
 
 - **`.agentic/producto/`** (la decisión anterior): separa lo que escribe el sistema de lo que

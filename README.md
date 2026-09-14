@@ -285,8 +285,14 @@ producto, completos), acceso al producto real para explorarlo.
 
 **En feature**
 
-- Analiza competidores para tener criterio sobre el comportamiento.
-- Redacta la definición de comportamiento.
+- Entrevista a PM (ADR-0014). La primera ronda es siempre el **job to be done**: en qué
+  situación el usuario recurre a esto, qué progreso busca, cómo juzga que le salió bien,
+  qué hace hoy sin la feature. Sale como job story ("Cuando [situación], quiero
+  [motivación], para [resultado]") con criterios de éxito, y ninguna ronda posterior lo
+  reabre.
+- Analiza competidores para tener criterio sobre cómo sirven ese job.
+- Redacta la definición de comportamiento: el job primero, y cada caso sirve al job; lo
+  pedido que no lo sirve queda fuera, dicho explícitamente.
 - Define qué métricas de negocio aporta la funcionalidad y cómo se obtienen.
 - Marca los flags. El vocabulario de flags es cerrado y lo define el producto en
   `.agentic/flags.yaml`, con un default mínimo del sistema; Product Analyst marca cada uno
@@ -668,7 +674,7 @@ existe justamente para pagar ese costo solo donde compre calidad.
 
 | # | Pendiente | Bloquea |
 |---|---|---|
-| 1 | Formato concreto de la definición de comportamiento | Implementar Product Analyst y PM |
+| 1 | ~~Formato concreto de la definición de comportamiento~~ **resuelto**: job to be done (job story y criterios de éxito), competidores, comportamiento caso por caso, métricas derivadas de los criterios del job, flags, handoff. Vive en el prompt del Product Analyst | — |
 | 2 | ~~Fuente de verdad de producto~~ **resuelto**: conocimiento de producto en `docs/product/`, un archivo por capacidad, destilado por PM al aprobar (ADR-0006). Las definiciones del v0 las escribe el humano | — |
 | 3 | ~~ADRs~~ **resuelto**: `docs/adr/`, primero el humano, después Tech Lead, valida el efímero | — |
 | 4 | Frecuencia de cada reloj proactivo | Etapa 5 |
@@ -718,7 +724,8 @@ Se anotan para no reintroducirlas por error.
 | El par es un validador y su pensador | Quien devuelve y quien recibe; QA→PM y QA→Tech Lead cuentan para el límite (ADR-0009) |
 | El cierre requiere siempre las aprobaciones del tipo | Aprobado o descartado: el bug de "comportamiento esperado" cierra descartado, sin aprobación (ADR-0009) |
 | Un solo `domain/` hasta que duela, y un solo `CONTEXT.md` | Tres módulos bajo `agentic/core/` (`process`, `knowledge`, `measurement`), cada uno hexagonal y con su glosario; `process` no importa a los otros (ADR-0010) |
-| Product Analyst escribe la definición en un tiro y PM la valida en otro | Product Analyst entrevista a PM con `grill-with-docs`; lo que PM no puede decidir va al humano como pregunta (ADR-0014) |
+| Product Analyst escribe la definición en un tiro y PM la valida en otro | Product Analyst entrevista a PM con `grilling`; lo que PM no puede decidir va al humano como pregunta (ADR-0014) |
+| La definición arranca por el comportamiento | Arranca por el job to be done: primera ronda de la entrevista, primera sección de la definición, primera sección de cada capacidad en `docs/product/`; PM devuelve lo que no sirve al job |
 | El pingpong del Tech Lead no tiene forma fija | Es una entrevista del efímero a Tech Lead, con tope de cuatro rondas, y de ahí salen los ADRs y las subtareas (ADR-0014) |
 | Los roles no tienen skills; solo prompt y esquema | Skills de Matt Pocock fijadas como submódulo; solo las invocables por un agente, dos obligatorias: `tdd` y `code-review` (ADR-0013) |
 | La corrida termina cuando el último rol entrega | Termina en un pull request del producto, lista para revisión; el issue recibe el link (ADR-0011) |

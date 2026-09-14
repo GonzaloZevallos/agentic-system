@@ -14,7 +14,15 @@ _Avoid_: fuente de verdad, specs
 
 **Capacidad**:
 La unidad en que se organiza el conocimiento de producto: un archivo por concepto del
-glosario del producto, con su comportamiento vigente y sus métricas.
+glosario del producto, con los jobs que sirve, su comportamiento vigente y sus métricas.
+
+**Job**:
+El progreso que el usuario busca en una situación concreta, escrito como job story:
+"Cuando [situación], quiero [motivación], para [resultado esperado]", con los criterios
+con que el propio usuario juzga que le salió bien. Es lo primero que se decide en una
+feature y lo que gobierna qué comportamiento entra y cuál se descarta; una capacidad
+sirve a uno o más jobs, y se acumulan.
+_Avoid_: persona, user story, necesidad
 
 **Destilado**:
 El paso en que PM vuelca lo que una tarea dejó vigente al conocimiento de producto: la

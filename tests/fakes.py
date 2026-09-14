@@ -189,6 +189,9 @@ def memory_ports(runner: ScriptedRunner | None = None, **overrides) -> Ports:
 
 # Recorded role outputs, as the harness would hand them back.
 
+# A capability file as PM must return it: it opens with the jobs it serves.
+REPORTS = "# Reports\n\n## Jobs\n\n- When I audit, I want CSV, so I can file it.\n\nCSV export."
+
 
 def questions(n=1, done=False, cost=0.05, session="q") -> RawResult:
     text = "### Closing\n\nDecided." if done else f"❓ **Q{n}** - **Scope**: which?\n\n➡️ a"
@@ -245,9 +248,7 @@ def defined(n=1, cost=0.1) -> RawResult:
 
 def verdict(kind, reason="r", definitions=None, glossary=None, cost=0.2) -> RawResult:
     if definitions is None:
-        definitions = (
-            [{"capability": "reports", "content": "# Reports"}] if kind == "approved" else []
-        )
+        definitions = [{"capability": "reports", "content": REPORTS}] if kind == "approved" else []
     return RawResult(
         {
             "markdown": f"### Verdict\n\n{kind}\n\n### For the next role\n\n{reason}",
