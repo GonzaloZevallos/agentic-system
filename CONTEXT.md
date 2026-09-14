@@ -30,7 +30,7 @@ Rol que revisa a un pensador aportando una fuente que el pensador no tuvo.
 _Avoid_: revisor
 
 **Par**:
-Un validador y su pensador. Las devoluciones se cuentan por par.
+El rol que devuelve y el rol que recibe la devolución. Las devoluciones se cuentan por par; cuando hay subtarea, por subtarea.
 
 **Tech Lead efímero**:
 Segundo Tech Lead que existe solo durante el pingpong, con modelo más capaz y prompt de adversario.
@@ -48,7 +48,7 @@ _Avoid_: ticket, issue (el issue es la bandeja, no la tarea)
 Parte de una tarea que Tech Lead asigna a un Developer.
 
 **Camino**:
-La secuencia de roles que recorre una tarea según su tipo.
+La secuencia de roles que recorre una tarea según su tipo, solo de ida. Adónde vuelve una devolución lo decide el motivo, no el camino.
 _Avoid_: flujo, pipeline
 
 **Etapa de definición**:
@@ -73,6 +73,9 @@ Pregunta sin entregar la tarea. No cuenta para el límite.
 Rechazo con entrega hacia atrás. Cuenta para el límite del par.
 _Avoid_: rechazo (salvo para el acto puntual de QA), rebote
 
+**Motivo de devolución**:
+Por qué se devuelve: de comportamiento o técnico. Decide quién recibe una devolución de QA: PM si es de comportamiento, el Developer de la subtarea si es técnico, Tech Lead cuando el camino no tiene PM.
+
 **Devolución interna**:
 Devolución que se resuelve dentro del par sin pasar por PjM. Se reporta a PjM igual.
 
@@ -90,7 +93,7 @@ _Avoid_: error (demasiado amplio)
 El bloque "Para el siguiente rol" con que cierra cada sección.
 
 **Cierre**:
-PjM da por terminada la tarea. Requiere las aprobaciones del tipo.
+PjM da por terminada la tarea: aprobada, con las aprobaciones del tipo, o descartada, cuando PM dictamina que el comportamiento es el esperado.
 
 **Destilado**:
 El paso en que PM vuelca lo que una tarea dejó vigente al conocimiento de producto: la

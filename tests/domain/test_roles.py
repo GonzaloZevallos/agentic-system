@@ -2,7 +2,17 @@ from pathlib import Path
 
 import pytest
 
-from agentic.domain.roles import PJM, PM, PRODUCT_ANALYST, PROMPTS_DIR, ROLES, prompt_hash, render
+from agentic.domain.roles import (
+    PAIR_PM_PA,
+    PJM,
+    PM,
+    PRODUCT_ANALYST,
+    PROMPTS_DIR,
+    ROLES,
+    Pair,
+    prompt_hash,
+    render,
+)
 
 
 def test_render_fills_placeholders_and_hashes_the_raw_text():
@@ -41,3 +51,19 @@ def test_reads_include_own_section_for_returns():
     assert "Product Analyst" in PRODUCT_ANALYST.reads
     assert "PM" in PRODUCT_ANALYST.reads
     assert "Product Analyst" in PM.reads
+
+
+def test_pair_key_is_who_returns_to_whom():
+    # The key is what the state and the document store; a subtask makes it per-subtask,
+    # as Tech Lead→Developer needs (README.md, 3 and 14).
+    assert Pair(by=PM, to=PRODUCT_ANALYST).key == "PM→Product Analyst"
+    assert Pair(by=PM, to=PRODUCT_ANALYST, subtask="s1").key == "PM→Product Analyst:s1"
+    # The type says `str | None`; an empty id is still an id, not the task-level pair.
+    assert Pair(by=PM, to=PRODUCT_ANALYST, subtask="").key == "PM→Product Analyst:"
+    assert PAIR_PM_PA == Pair(by=PM, to=PRODUCT_ANALYST)
+
+
+def test_pair_is_a_value():
+    assert Pair(by=PM, to=PRODUCT_ANALYST) == Pair(by=PM, to=PRODUCT_ANALYST)
+    assert Pair(by=PM, to=PRODUCT_ANALYST) != Pair(by=PM, to=PRODUCT_ANALYST, subtask="s1")
+    assert hash(Pair(by=PM, to=PRODUCT_ANALYST)) == hash(Pair(by=PM, to=PRODUCT_ANALYST))

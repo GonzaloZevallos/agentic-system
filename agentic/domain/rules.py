@@ -5,12 +5,24 @@ Pure functions over the task state, so each one is a unit test and not a graph r
 
 from __future__ import annotations
 
+from .roles import Pair
 from .task import TaskState
 
 
-def remaining_returns(state: TaskState, pair: str, limit: int) -> int:
-    """Returns the validator of `pair` may still use before PjM escalates."""
-    return limit - state.get("returns", {}).get(pair, 0)
+def remaining_returns(state: TaskState, pair: Pair, limit: int) -> int:
+    """Returns `pair` may still use before PjM escalates."""
+    return limit - state.get("returns", {}).get(pair.key, 0)
+
+
+def record_return(state: TaskState, pair: Pair) -> dict[str, int]:
+    """The `returns` patch after one more return of `pair`."""
+    return {pair.key: state.get("returns", {}).get(pair.key, 0) + 1}
+
+
+def limit_reached(pair: Pair, limit: int, reason: str) -> str:
+    """The escalation text when `pair` used up its returns: the pair, the limit and the
+    validator's reason, written for the human."""
+    return f"{pair.key} hit {limit} returns: {reason}"
 
 
 def next_version(state: TaskState, role_name: str) -> int:

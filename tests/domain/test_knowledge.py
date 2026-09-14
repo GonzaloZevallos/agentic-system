@@ -104,3 +104,10 @@ def test_approval_check():
         knowledge.approval_check("feature")(
             {"verdict": "approved", "definitions": [{"capability": "Check Ins", "content": "x"}]}
         )
+
+
+def test_terms_reads_back_what_upsert_terms_writes():
+    text = knowledge.upsert_terms(None, {"Check-in": {"definition": "x", "avoid": ""}}, "P")
+    text = knowledge.upsert_terms(text, {"Turno": {"definition": "y", "avoid": "slot"}}, "P")
+    assert knowledge.terms(text) == ["Check-in", "Turno"]
+    assert knowledge.terms("**Bold** in prose, not a term.\n") == []

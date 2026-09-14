@@ -82,22 +82,22 @@ async def test_validate_return_counts_against_the_pair_and_writes_nothing(cfg):
     state = {**TASK, "type": "feature", "sections": {"Product Analyst": "v1"}}
     patch = await validate_definition(state, cfg, ports)
     assert patch["status"] == "returned"
-    assert patch["returns"] == {PAIR_PM_PA: 1}
+    assert patch["returns"] == {PAIR_PM_PA.key: 1}
     assert ports.knowledge.definitions == {} and ports.knowledge.terms == {}
 
     again = apply(state, patch)
     ports = memory_ports(ScriptedRunner(pm=[verdict("returned", "still")]))
     patch = await validate_definition(again, cfg, ports)
-    assert patch["returns"] == {PAIR_PM_PA: 2}
+    assert patch["returns"] == {PAIR_PM_PA.key: 2}
     assert "You have 1 left" in ports.runner.calls[0]["system_prompt"]
 
 
 async def test_validate_escalates_at_the_limit(cfg):
     ports = memory_ports(ScriptedRunner(pm=[verdict("returned", "still no metrics")]))
-    state = {**TASK, "type": "feature", "returns": {PAIR_PM_PA: 2}}
+    state = {**TASK, "type": "feature", "returns": {PAIR_PM_PA.key: 2}}
     patch = await validate_definition(state, cfg, ports)
     assert patch["status"] == "waiting_on_human"
-    assert patch["escalated"] == f"{PAIR_PM_PA} hit 2 returns: still no metrics"
+    assert patch["escalated"] == f"{PAIR_PM_PA.key} hit 2 returns: still no metrics"
     assert "returns" not in patch
     assert "You have 0 left" in ports.runner.calls[0]["system_prompt"]
 

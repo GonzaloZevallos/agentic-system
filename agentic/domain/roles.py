@@ -93,4 +93,20 @@ PM = Role(
 
 ROLES = (PJM, PRODUCT_ANALYST, PM)
 
-PAIR_PM_PA = f"{PM.name}→{PRODUCT_ANALYST.name}"
+
+@dataclass(frozen=True)
+class Pair:
+    """Who returns and who receives the return; the limit counts per pair (README.md, 3).
+    Not validator→thinker: QA returns to PM, to Tech Lead or to a Developer's subtask."""
+
+    by: Role
+    to: Role
+    subtask: str | None = None
+
+    @property
+    def key(self) -> str:
+        base = f"{self.by.name}→{self.to.name}"
+        return base if self.subtask is None else f"{base}:{self.subtask}"
+
+
+PAIR_PM_PA = Pair(by=PM, to=PRODUCT_ANALYST)

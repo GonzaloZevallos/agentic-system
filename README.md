@@ -160,7 +160,8 @@ El validador **reporta** cada devolución a PjM, y cuentan para el límite.
 
 ### Control de loops
 
-- El conteo es **por par de roles**, no global.
+- El conteo es **por par de roles**, no global. El par es quien devuelve y quien recibe,
+  no solo validador→pensador: QA→PM y QA→Tech Lead también son pares (ADR-0009).
 - Límite: **2 devoluciones** por par. También corta antes si detecta el mismo patrón
   repetido (mismo motivo entre los mismos roles).
 - Acción al cortar: **escalar al humano, siempre**. PjM entrega la tarea, el historial de
@@ -210,6 +211,9 @@ Esto exige que Tech Lead informe a PjM el mapa de subtareas y Developers al crea
 | Feature | PM y QA |
 | Bug | PM y QA |
 | Platform enhancement | QA |
+
+El cierre es **aprobado** o **descartado**: un bug cuyo dictamen PM valida como
+"comportamiento esperado" lo cierra PjM descartado, sin estas aprobaciones (sección 2).
 
 UX Lead, Design Lead y Tech Writer **no aprueban al cierre**. Esa regla existió y fue
 reemplazada: PM es el único que valida producto porque construyó la definición junto con
@@ -669,6 +673,7 @@ existe justamente para pagar ese costo solo donde compre calidad.
 | 13 | ~~Campos de `Configuration` y esquemas~~ **resuelto**: `agentic/configuration.py` y `agentic/schemas.py`, uno por rol implementado. Los roles que faltan agregan su esquema al entrar | — |
 | 14 | Script que corre el set de cinco tareas y escribe el JSONL de resultados (sección 14). Sin costo: eso ya lo da Grafana | Medir |
 | 15 | Versionado de **parámetros** de `Configuration` como label de las métricas; hoy solo van el SHA del sistema y la huella de prompts | Comparar corridas que cambian solo un parámetro |
+| 16 | El camino como dato (`Route`, solo la ida, con la tabla de devoluciones aparte) y `Status` en cinco valores más `outcome`, ya modelados en ADR-0009. Hoy el ruteo es una función por nodo en `rules.py` | Etapa 2: se implementa al entrar QA Lead, el segundo par |
 
 **Resueltos desde la versión anterior**: el stack y el runtime de agentes (LangGraph para el
 flujo entre roles, Claude Agent SDK como harness de cada rol, autenticado con suscripción),
@@ -700,6 +705,8 @@ Se anotan para no reintroducirlas por error.
 | LangSmith para tracing | Langfuse local, alimentado por el OpenTelemetry nativo de Claude Code |
 | Los spans del sistema llevan solo id, título y rol; el JSONL de evaluación guarda el costo | Los spans llevan costo, modelo, versión y resultado; las métricas del sistema van a Grafana Cloud con la versión del sistema como label (ADR-0008) |
 | Paquete plano, un módulo por tema, con las reglas dentro de los nodos del grafo | Hexagonal: dominio, aplicación con ports, adaptadores; LangGraph es un adaptador (ADR-0007) |
+| El par es un validador y su pensador | Quien devuelve y quien recibe; QA→PM y QA→Tech Lead cuentan para el límite (ADR-0009) |
+| El cierre requiere siempre las aprobaciones del tipo | Aprobado o descartado: el bug de "comportamiento esperado" cierra descartado, sin aprobación (ADR-0009) |
 
 ---
 
@@ -716,7 +723,7 @@ por un test sobre los imports:
 
 | Capa | Contenido | Importa |
 |---|---|---|
-| `domain/` | `roles.py` y `prompts/`, `task.py` (estado y reducers), `document.py`, `knowledge.py`, `schemas.py`, `flags.py`, `rules.py` (límite por par, versionado, ruteo), `metrics.py` (retrabajo, devoluciones, huella de prompts), `configuration.py` | Nada del proyecto ni de la infraestructura |
+| `domain/` | `roles.py` (`Role`, `Pair`) y `prompts/`, `task.py` (estado y reducers), `document.py`, `knowledge.py`, `schemas.py`, `flags.py`, `rules.py` (límite por par, versionado, ruteo), `metrics.py` (retrabajo, devoluciones, huella de prompts), `configuration.py` | Nada del proyecto ni de la infraestructura |
 | `application/` | `ports.py` (`RoleRunner`, `TaskDocuments`, `ProductKnowledge`, `Prompts`, `FlagVocabulary`, `Inbox`) y un caso de uso por nodo: `classify`, `define`, `validate_definition`, sobre `run_role` | Solo el dominio |
 | `adapters/` | `claude_sdk/` (harness y `Printer`), `filesystem/`, `github/`, `otel/` (spans y métricas del sistema), `langgraph/` (el grafo: nodos, ruteo, abre y cierra los spans; mañana `interrupt()`, `Send`, checkpointer) | Dominio y aplicación |
 | raíz | `composition.py` arma los ports reales; `cli.py` es el adaptador de entrada | Todo |
@@ -724,6 +731,11 @@ por un test sobre los imports:
 LangGraph es un adaptador: los casos de uso son funciones async puras que reciben
 `Configuration` y `Ports`, y el grafo solo cablea. El escalado es un dato del patch que
 devuelve el caso de uso; pausar sobre él es del adaptador. Los tests espejan las capas.
+
+El dominio es funcional (ADR-0009): no hay clase agregado, las invariantes son funciones
+sobre `TaskState`. Los términos del glosario que el código modela tienen un solo nombre en
+inglés, y el mapeo vive en `tests/domain/test_language.py`, no en `CONTEXT.md`. El camino
+todavía es ruteo por nodo en `rules.py`; pasa a `Route` con QA Lead (pendiente 16).
 
 ### Configuración
 
@@ -758,8 +770,8 @@ ausente o inválida, o un `markdown` vacío, es fallo de rol, no un diccionario 
 
 - `TaskInput` mínimo como `input` schema: id, título, descripción.
 - Contadores por par con un reducer de override: resetear el par cuando el humano responde es
-  un update explícito, no un dict copiado a mano. La clave del par Tech Lead→Developer
-  incluye el id de subtarea.
+  un update explícito, no un dict copiado a mano. La clave la deriva `Pair.key`; la del
+  par Tech Lead→Developer incluye el id de subtarea.
 - El subgrafo técnico declara `output` schema: salen la pieza integrada y el mapa de
   subtareas, no la conversación interna de cada Developer (ADR-0004).
 - `thread_id` es el id de la tarea. Checkpointer SqliteSaver en el producto (ADR-0003).

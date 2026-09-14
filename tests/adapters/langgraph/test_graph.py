@@ -166,7 +166,7 @@ async def test_return_loops_back_then_approves(config):
     final = await run_graph(script, config)
 
     assert final["status"] == "definition_ready"
-    assert final["returns"] == {PAIR_PM_PA: 1}
+    assert final["returns"] == {PAIR_PM_PA.key: 1}
     assert script.slugs == ["pjm", "product_analyst", "pm", "product_analyst", "pm"]
     second_define = script.calls[3]["prompt"]
     assert "## Product Analyst\n\n### Behaviour\n\nv1" in second_define  # its own previous
@@ -199,7 +199,7 @@ async def test_return_limit_escalates(config):
     final = await run_graph(script, config)
 
     assert final["status"] == WAITING_ON_HUMAN
-    assert final["returns"] == {PAIR_PM_PA: 2}
+    assert final["returns"] == {PAIR_PM_PA.key: 2}
     assert "hit 2 returns: still no metrics" in final["escalated"]
     assert "You have 0 left" in script.calls[-1]["system_prompt"]
     assert len(script.calls) == 7

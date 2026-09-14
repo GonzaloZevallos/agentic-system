@@ -69,7 +69,7 @@ class TaskState(TaskInput, total=False):
     # A delivery superseded by a return stays under "<role> (vN)": the document is
     # the raw record of the task, and PjM escalates with the history (ADR-0006).
     sections: Annotated[dict[str, str], merge]
-    # Returns used per validator→thinker pair, keyed like "PM→Product Analyst".
+    # Returns used per pair, keyed by `Pair.key`, like "PM→Product Analyst".
     returns: Annotated[dict[str, int], merge]
     failures: Annotated[list[Failure], operator.add]
     runs: Annotated[list[RoleRun], operator.add]

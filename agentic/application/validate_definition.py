@@ -33,11 +33,11 @@ async def validate_definition(state: TaskState, cfg: Configuration, ports: Ports
         ports.knowledge.upsert_terms(terms)
         patch["status"] = "definition_ready"
     elif remaining > 0:
-        patch["returns"] = {PAIR_PM_PA: limit - remaining + 1}
+        patch["returns"] = rules.record_return(state, PAIR_PM_PA)
         patch["status"] = "returned"
     else:
         # The pair hit its limit: escalate, always (README.md, 3). PM knew this was
         # its last return, so the reason is written for the human.
-        patch["escalated"] = f"{PAIR_PM_PA} hit {limit} returns: {output.data['reason']}"
+        patch["escalated"] = rules.limit_reached(PAIR_PM_PA, limit, output.data["reason"])
         patch["status"] = WAITING_ON_HUMAN
     return finish(state, patch, ports)

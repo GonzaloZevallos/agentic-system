@@ -24,6 +24,12 @@ LANGUAGE_HEADING = "## Language"
 
 _SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _H2 = re.compile(r"^## ", re.M)
+_TERM = re.compile(r"^\*\*(.+?)\*\*[^\n]*:$", re.M)
+
+
+def terms(glossary: str) -> list[str]:
+    """The terms a glossary defines, in order: the `**Term**...:` lines `upsert_terms` writes."""
+    return _TERM.findall(glossary)
 
 
 def check_slug(capability: str) -> None:
