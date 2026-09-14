@@ -6,7 +6,7 @@ Pure functions over the task state, so each one is a unit test and not a graph r
 from __future__ import annotations
 
 from .roles import Pair
-from .task import TaskState
+from .task import INTEGRATION, TaskState
 
 
 def remaining_returns(state: TaskState, pair: Pair, limit: int) -> int:
@@ -25,27 +25,80 @@ def limit_reached(pair: Pair, limit: int, reason: str) -> str:
     return f"{pair.key} hit {limit} returns: {reason}"
 
 
-def next_version(state: TaskState, role_name: str) -> int:
-    """The number this delivery of the role gets: one more than its runs so far."""
-    return 1 + sum(1 for r in state.get("runs", []) if r["role"] == role_name)
+def next_version(state: TaskState, section: str) -> int:
+    """The number this delivery of the section gets: one more than its runs so far.
+    Older runs without `section` wrote the section named after their role."""
+    runs = state.get("runs", [])
+    return 1 + sum(1 for r in runs if r.get("section", r["role"]) == section)
 
 
-def superseded(role_name: str, version: int) -> str:
+def superseded(section: str, version: int) -> str:
     """Section name a delivery keeps once a return replaces it."""
-    return f"{role_name} (v{version})"
+    return f"{section} (v{version})"
 
 
-def sections_for(state: TaskState, role_name: str, text: str) -> dict[str, str]:
-    """The role's new section, plus its previous delivery as history on a return."""
-    sections = {role_name: text}
-    previous = state.get("sections", {}).get(role_name)
+def sections_for(state: TaskState, section: str, text: str) -> dict[str, str]:
+    """The new section, plus its previous delivery as history on a return."""
+    sections = {section: text}
+    previous = state.get("sections", {}).get(section)
     if previous is not None:
-        sections[superseded(role_name, next_version(state, role_name) - 1)] = previous
+        sections[superseded(section, next_version(state, section) - 1)] = previous
     return sections
 
 
-# Routing of the feature path, first slice: PjM -> Product Analyst -> PM. `None` is
-# the end of the run; the graph adapter maps names to its nodes.
+# Subtasks (ADR-0011): each in its own branch, sections named after it.
+
+
+def developer_section(subtask_id: str) -> str:
+    return f"Developer: {subtask_id}"
+
+
+def review_section(subtask_id: str) -> str:
+    return f"Tech Lead: review {subtask_id}"
+
+
+def task_branch(task_id: str) -> str:
+    return f"agentic/{task_id}"
+
+
+def subtask_branch(task_id: str, subtask_id: str) -> str:
+    # A dot, not a slash: git cannot hold `agentic/GH-12` and `agentic/GH-12/api` at once.
+    return f"{task_branch(task_id)}.{subtask_id}"
+
+
+def ready_subtasks(state: TaskState) -> list[str]:
+    """Subtasks to build now: pending or returned, with every dependency approved."""
+    subtasks = state.get("subtasks", {})
+    return [
+        sid
+        for sid, sub in subtasks.items()
+        if sub.get("status") in ("pending", "returned")
+        and all(
+            subtasks.get(dep, {}).get("status") == "approved" for dep in sub.get("depends_on", [])
+        )
+    ]
+
+
+def delivered_subtasks(state: TaskState) -> list[str]:
+    return [
+        sid for sid, sub in state.get("subtasks", {}).items() if sub.get("status") == "delivered"
+    ]
+
+
+def all_approved(state: TaskState) -> bool:
+    subtasks = state.get("subtasks", {})
+    return bool(subtasks) and all(sub.get("status") == "approved" for sub in subtasks.values())
+
+
+def needs_integration(state: TaskState) -> bool:
+    """Several subtasks approved and no integration yet: the integrator joins them."""
+    subtasks = state.get("subtasks", {})
+    return INTEGRATION not in subtasks and len(subtasks) > 1 and all_approved(state)
+
+
+# Routing of the feature path (README.md, 2): PjM -> Product Analyst -> PM -> Tech Lead
+# -> Developers -> Tech Lead -> delivery. `None` is the end of the run; the graph
+# adapter maps names to its nodes and fans `develop` out per ready subtask.
 
 
 def after_classify(state: TaskState) -> str | None:
@@ -59,4 +112,24 @@ def after_define(state: TaskState) -> str | None:
 def after_validate(state: TaskState) -> str | None:
     if state.get("escalated"):
         return None
-    return "define" if state.get("status") == "returned" else None
+    return {"returned": "define", "definition_ready": "plan"}.get(state.get("status", ""))
+
+
+def after_plan(state: TaskState) -> str | None:
+    return None if state.get("escalated") else "develop"
+
+
+def after_develop(state: TaskState) -> str | None:
+    return None if state.get("escalated") else "review"
+
+
+def after_review(state: TaskState) -> str | None:
+    if state.get("escalated"):
+        return None
+    if ready_subtasks(state):
+        return "develop"
+    return "deliver" if all_approved(state) else None
+
+
+def after_deliver(state: TaskState) -> str | None:
+    return None

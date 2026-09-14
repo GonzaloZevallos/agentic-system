@@ -1,6 +1,7 @@
 """The SDK adapter with `query` replaced. No model involved."""
 
 import io
+from dataclasses import replace
 
 import pytest
 from claude_agent_sdk import AssistantMessage, ResultMessage, StreamEvent, ToolUseBlock
@@ -150,3 +151,46 @@ async def test_verbose_streams_the_generation_through_the_printer(monkeypatch, t
         '[PjM] delivery:\n{"markdown": "### Verdict\nok"}\n'
         '[PjM] tool Read {"path": "x"}\n[PjM] done: 1 turns, $0.5000\n'
     )
+
+
+async def test_a_role_that_executes_runs_unattended_with_a_budget(monkeypatch, tmp_path):
+    seen = fake_query(monkeypatch, [result()])
+    developer = replace(
+        PJM, slug="developer", tools=("Read", "Edit", "Bash"), skills=("tdd",), executes=True
+    )
+    await ClaudeSdkRunner().run_once(
+        developer,
+        "p",
+        system_prompt="s",
+        model="m",
+        json_schema={"type": "object"},
+        cwd=tmp_path,
+        max_budget_usd=3.0,
+    )
+    options = seen[0][1]
+    assert options.permission_mode == "bypassPermissions"
+    assert options.max_budget_usd == 3.0
+    assert options.tools == ["Read", "Edit", "Bash", "Skill"]  # skills need the Skill tool
+    assert options.skills == ["mattpocock-skills:tdd"]
+    assert options.plugins == [{"type": "local", "path": str(module.PLUGIN_DIR)}]
+    assert (
+        module.PLUGIN_DIR.name == "mattpocock-skills" and module.PLUGIN_DIR.parent.name == "plugins"
+    )
+    assert options.resume is None
+
+
+async def test_a_reader_role_is_caged_by_permission_rules(monkeypatch, tmp_path):
+    seen = fake_query(monkeypatch, [result()])
+    reader = replace(
+        PJM, tools=("Read", "Bash"), allowed=("Bash(git diff:*)", "Read"), skills=("code-review",)
+    )
+    await ClaudeSdkRunner().run_once(
+        reader, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path, resume="sess-1"
+    )
+    options = seen[0][1]
+    assert options.permission_mode == "default"  # anything outside the rules is denied
+    assert options.allowed_tools == ["Bash(git diff:*)", "Read", "Skill"]  # its skills included
+    assert options.tools == ["Read", "Bash", "Skill"]
+    assert options.skills == ["mattpocock-skills:code-review"]
+    assert options.max_budget_usd is None
+    assert options.resume == "sess-1"

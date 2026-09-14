@@ -15,12 +15,17 @@ humano al final cuando todavía no hay QA que cierre.
 los Developers son nodos con `Send` y corren en paralelo; dos procesos de Claude Code
 escribiendo la misma carpeta se pisan. El worktree vive bajo `.agentic/worktrees/<id>/`
 del producto, fuera del control de versiones, y la rama se llama
-`agentic/<tarea>/<subtarea>`. Al cerrar la tarea, los worktrees se borran; las ramas
-quedan, así un escalado a mitad del desarrollo no pierde el trabajo ya hecho aunque el
-checkpointer de ADR-0003 todavía no exista.
+`agentic/<tarea>.<subtarea>` (con punto: git no admite `agentic/GH-12` y
+`agentic/GH-12/api` a la vez). Una subtarea que depende de otra arranca con el código de
+esa otra: su rama aprobada se mergea en la de la dependiente antes de que el Developer
+empiece. Al entregar, los worktrees se borran (el cierre es el merge humano y el sistema
+ya no corre); las ramas quedan, así un escalado a mitad del desarrollo no pierde el
+trabajo ya hecho aunque el checkpointer de ADR-0003 todavía no exista. El integrador lo
+designa el sistema, no Tech Lead: es una subtarea más, `integration`, que entra cuando
+todas las reales están aprobadas y hay más de una.
 
-**Una rama de tarea, `agentic/<tarea>`, creada al arrancar la tarea.** No al empezar a
-desarrollar: la entrevista de definición (ADR-0014) ya escribe glosario y ADRs, y eso
+**Una rama de tarea, `agentic/<tarea>`, creada al arrancar la etapa de definición.** No
+al empezar a desarrollar (ni en la clasificación, que puede escalar antes de tocar nada): la entrevista de definición (ADR-0014) ya escribe glosario y ADRs, y eso
 tiene que viajar en la misma rama que el código. El Developer integrador une ahí las ramas
 de subtarea y corre la suite completa. Con una sola subtarea no hay integración: su rama
 es la rama de tarea.

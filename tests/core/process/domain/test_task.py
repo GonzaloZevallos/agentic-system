@@ -20,7 +20,18 @@ def test_add_accumulates_cost():
 
 
 def test_reducers_are_read_from_the_annotations():
-    assert set(REDUCERS) == {"sections", "returns", "failures", "runs", "prompts", "cost_usd"}
+    assert set(REDUCERS) == {
+        "sections",
+        "returns",
+        "failures",
+        "runs",
+        "prompts",
+        "cost_usd",
+        "subtasks",
+        "status",
+        "current_role",
+        "escalated",
+    }
     assert REDUCERS["cost_usd"] is add and REDUCERS["sections"] is merge
 
 

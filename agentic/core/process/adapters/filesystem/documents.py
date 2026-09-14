@@ -7,6 +7,7 @@ from pathlib import Path
 
 from ...domain import document
 from ...domain.task import TaskState
+from .. import plugins
 
 
 class FilesystemTaskDocuments:
@@ -19,7 +20,8 @@ class FilesystemTaskDocuments:
     def save(self, state: TaskState) -> Path:
         path = self.path_for(state["id"])
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(document.render(state, system_commit()), encoding="utf-8")
+        text = document.render(state, system_commit(), plugins.version())
+        path.write_text(text, encoding="utf-8")
         return path
 
     def load(self, task_id: str) -> dict:

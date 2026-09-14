@@ -153,6 +153,7 @@ async def test_run_role_builds_the_patch_and_the_history(tmp_path):
     assert patch["runs"] == [
         {
             "role": "Product Analyst",
+            "section": "Product Analyst",
             "version": 2,
             "session_id": "s2",
             "model": "claude-sonnet-5",

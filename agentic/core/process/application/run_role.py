@@ -8,8 +8,9 @@ escalation. The graph engine's own retry was rejected because it reruns the node
 without telling the model what went wrong.
 
 Context rule (README.md, 6): each role reads, in full, the sections it declares in
-`Role.reads`. Not the previous role's handoff: a validator that only sees a summary
-returns over gaps that were never there.
+`Role.reads`, after the engineering standards and the product knowledge if it reads
+them. Not the previous role's handoff: a validator that only sees a summary returns
+over gaps that were never there.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ from agentic.shared.configuration import Configuration
 
 from ..domain import document, rules, schemas
 from ..domain.roles import ORIGINAL, Prompt, Role, describe_flags, render
-from ..domain.task import WAITING_ON_HUMAN, Failure, TaskState, apply
+from ..domain.task import WAITING_ON_HUMAN, Failure, RoleRun, TaskState, apply
 from .ports import AttemptFailed, Ports, RoleRunner
 
 Check = Callable[[dict], None]
@@ -53,18 +54,33 @@ class Output:
     failures: list[Failure] = field(default_factory=list)
 
 
-def context_for(state: TaskState, role: Role, product_knowledge: str = "") -> str:
-    """The role's input: the product knowledge if the role reads it, then the sections
-    it declares, in document order, that exist."""
+def context_for(
+    state: TaskState,
+    role: Role,
+    product_knowledge: str = "",
+    standards: str = "",
+    extra_sections: tuple[str, ...] = (),
+) -> str:
+    """The role's input: the standards and the product knowledge if the role reads
+    them, then the sections it declares plus `extra_sections` (a subtask's own), in
+    document order, that exist."""
     sections = state.get("sections", {})
-    parts = [product_knowledge] if product_knowledge else []
-    for name in role.reads:
+    parts = [text for text in (standards, product_knowledge) if text]
+    for name in (*role.reads, *extra_sections):
         if name == ORIGINAL:
             request = document.demote(state["description"])
             parts.append(f"## {ORIGINAL}\n\n{state['title']}\n\n{request}")
         elif name in sections:
             parts.append(f"## {name}\n\n{sections[name]}")
     return "\n\n".join(parts)
+
+
+def preamble(role: Role, ports: Ports, root: Path | None = None) -> tuple[str, str]:
+    """What the role reads before the task document: (standards, product knowledge),
+    as found in the checkout the role works in."""
+    standards = ports.knowledge.standards(root) if role.reads_standards else ""
+    knowledge = ports.knowledge.read(root) if role.reads_knowledge else ""
+    return standards, knowledge
 
 
 def load_prompt(
@@ -76,6 +92,7 @@ def load_prompt(
         raw,
         source,
         max_returns=cfg.max_returns_per_pair,
+        max_turns=role.max_turns,
         flags=describe_flags(vocabulary),
         **placeholders,
     )
@@ -92,6 +109,8 @@ async def run_with_retry(
     cwd: Path,
     runner: RoleRunner,
     check: Check | None = None,
+    resume: str | None = None,
+    max_budget_usd: float | None = None,
 ) -> Output:
     """`check` is the use case's own rule over the validated output (raise `ValueError`);
     breaking it is a role failure like any other, so the model gets the error back."""
@@ -107,6 +126,8 @@ async def run_with_retry(
                 cwd,
                 runner,
                 check,
+                resume,
+                max_budget_usd,
             )
         except AttemptFailed as exc:
             failures.append(
@@ -137,6 +158,8 @@ async def _attempt(
     cwd: Path,
     runner: RoleRunner,
     check: Check | None,
+    resume: str | None,
+    max_budget_usd: float | None,
 ) -> Output:
     result = await runner.run_once(
         role,
@@ -145,6 +168,8 @@ async def _attempt(
         model=model,
         json_schema=schemas.json_schema(role.schema, vocabulary),
         cwd=cwd,
+        resume=resume,
+        max_budget_usd=max_budget_usd,
     )
     cost = result.cost_usd
     if result.structured_output is None:
@@ -168,55 +193,78 @@ async def _attempt(
     )
 
 
+def escalation(exc: RoleFailure) -> TaskState:
+    """The patch of a role that failed twice: the human sees it (README.md, 3)."""
+    return {
+        "failures": exc.failures,
+        "cost_usd": exc.cost_usd,
+        "escalated": str(exc),
+        "status": WAITING_ON_HUMAN,
+    }
+
+
+def run_record(state: TaskState, role: Role, section: str, output: Output) -> RoleRun:
+    return {
+        "role": role.name,
+        "section": section,
+        "version": rules.next_version(state, section),
+        "session_id": output.session_id,
+        "model": output.model,
+        "cost_usd": output.cost_usd,
+        "turns": output.turns,
+    }
+
+
 async def run_role(
     state: TaskState,
     role: Role,
     cfg: Configuration,
     ports: Ports,
     check: Check | None = None,
+    *,
+    section: str | None = None,
+    extra_sections: tuple[str, ...] = (),
+    cwd: Path | None = None,
+    resume: str | None = None,
+    prompt: str | None = None,
     **placeholders: object,
 ) -> tuple[Output | None, TaskState]:
     """Run a role and build the state patch. On `RoleFailure` the patch is an escalation
-    and the output is `None`. Saving the document is the caller's (`finish`)."""
-    product_knowledge = ports.knowledge.read() if role.reads_knowledge else ""
+    and the output is `None`. Saving the document is the caller's (`finish`).
+
+    `section` is where the delivery goes (the role's name by default); `cwd` where the
+    role runs (the product root by default); `resume` continues the role's earlier
+    session; `prompt` replaces the context with a shorter message when the session
+    already holds it (an interview's later rounds)."""
+    section = section or role.name
     vocabulary = ports.flags.load()
     loaded = load_prompt(role, cfg, ports, vocabulary, **placeholders)
     patch: TaskState = {"current_role": role.name, "prompts": {role.slug: loaded.hash}}
+    if prompt is None:
+        standards, knowledge = preamble(role, ports, cwd)
+        prompt = context_for(state, role, knowledge, standards, extra_sections)
     try:
         output = await run_with_retry(
             role,
-            context_for(state, role, product_knowledge),
+            prompt,
             system_prompt=loaded.text,
             model=cfg.model_for(role.slug, role.kind),
             retries=cfg.role_retries,
             vocabulary=vocabulary,
-            cwd=cfg.product_dir,
+            cwd=cwd or cfg.product_dir,
             runner=ports.runner,
             check=check,
+            resume=resume,
+            max_budget_usd=cfg.budget_for(role),
         )
     except RoleFailure as exc:
-        patch |= {
-            "failures": exc.failures,
-            "cost_usd": exc.cost_usd,
-            "escalated": str(exc),
-            "status": WAITING_ON_HUMAN,
-        }
-        return None, patch
+        return None, patch | escalation(exc)
 
     patch |= {
-        "sections": rules.sections_for(state, role.name, output.text),
+        "sections": rules.sections_for(state, section, output.text),
         "failures": output.failures,
         "cost_usd": output.cost_usd,
-        "runs": [
-            {
-                "role": role.name,
-                "version": rules.next_version(state, role.name),
-                "session_id": output.session_id,
-                "model": output.model,
-                "cost_usd": output.cost_usd,
-                "turns": output.turns,
-            }
-        ],
+        "runs": [run_record(state, role, section, output)],
     }
     return output, patch
 

@@ -10,7 +10,7 @@ from agentic.core.process.application.validate_definition import validate_defini
 from agentic.core.process.domain.roles import PAIR_PM_PA
 from agentic.core.process.domain.task import apply
 from agentic.shared.configuration import Configuration
-from tests.fakes import ScriptedRunner, classified, defined, memory_ports, verdict
+from tests.fakes import ScriptedRunner, classified, defined, memory_ports, questions, verdict
 
 pytestmark = pytest.mark.anyio
 
@@ -47,12 +47,16 @@ async def test_classify_escalates_paths_not_built_yet(cfg):
 
 
 async def test_define_reads_the_knowledge_and_proposes_flags(cfg):
-    ports = memory_ports(ScriptedRunner(product_analyst=[defined()]))
+    runner = ScriptedRunner(
+        product_analyst_interviewer=[questions(done=True)], product_analyst=[defined()]
+    )
+    ports = memory_ports(runner)
     ports.knowledge.text = "## Product knowledge\n\nOld."
     patch = await define({**TASK, "type": "feature"}, cfg, ports)
     assert patch["status"] == "defined"
     assert patch["flags"] == {"touches_ui": False, "touches_copy": True}
-    assert ports.runner.calls[0]["prompt"].startswith("## Product knowledge\n\nOld.")
+    for call in runner.calls:
+        assert call["prompt"].startswith("## Product knowledge\n\nOld.")
 
 
 async def test_validate_approval_distils_into_the_knowledge(cfg):

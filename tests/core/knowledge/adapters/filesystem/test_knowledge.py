@@ -21,6 +21,16 @@ def test_read_gathers_glossary_and_capabilities(tmp_path):
     assert "notes.txt" not in text
 
 
+def test_standards_default_to_the_systems_until_the_product_writes_its_own(tmp_path):
+    text = FilesystemKnowledge(tmp_path).standards()
+    assert text.startswith("## Engineering standards\n\n`CODING_STANDARDS.md`:\n\n````markdown\n")
+    assert "## 1. Hexagonal architecture" in text and "## 6. Strict typing" in text
+
+    (tmp_path / "CODING_STANDARDS.md").write_text("# Ours\n\nTabs.\n")
+    text = FilesystemKnowledge(tmp_path).standards()
+    assert "# Ours\n\nTabs." in text and "Hexagonal" not in text  # replaced whole
+
+
 def test_write_definitions_creates_the_directory_and_rejects_bad_slugs(tmp_path):
     knowledge = FilesystemKnowledge(tmp_path)
     paths = knowledge.write_definitions({"check-ins": "# Check-ins\n\nRules.  "})

@@ -34,6 +34,8 @@ packages = ["agentic"]
 [tool.ruff]
 line-length = 100
 target-version = "py313"
+# The skills plugin is a pinned submodule, not our code (ADR-0013).
+extend-exclude = ["agentic/plugins"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]

@@ -40,9 +40,12 @@ def relative_path(task_id: str) -> Path:
     return TASKS_SUBDIR / f"{task_id}.md"
 
 
-def render(state: dict, system_commit: str | None = None) -> str:
+def render(
+    state: dict, system_commit: str | None = None, plugins: dict[str, str] | None = None
+) -> str:
     """The document text. `system_commit` is the system's commit, for the prompt
-    version record (ADR-0005); the port that knows git supplies it."""
+    version record (ADR-0005), and `plugins` the skills plugin version (ADR-0013); the
+    port that knows the disk supplies both."""
     frontmatter = {
         "id": state["id"],
         "title": state["title"],
@@ -52,8 +55,13 @@ def render(state: dict, system_commit: str | None = None) -> str:
         "flags": state.get("flags", {}),
         "returns": state.get("returns", {}),
         "escalated": state.get("escalated"),
+        "questions_for_human": state.get("questions_for_human", []),
+        "branch": state.get("branch"),
+        "pull_request": state.get("pull_request"),
+        "subtasks": state.get("subtasks", {}),
         "cost_usd": round(state.get("cost_usd", 0.0), 4),
         "prompts": state.get("prompts", {}),
+        "plugins": plugins or {},
         "system_commit": system_commit,
         "runs": [dict(r, cost_usd=round(r["cost_usd"], 4)) for r in state.get("runs", [])],
         "failures": [

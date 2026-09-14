@@ -42,5 +42,5 @@ def test_routing_ends_on_escalation_and_loops_on_return():
     assert rules.after_define({}) == "validate"
     assert rules.after_define({"escalated": "x"}) is None
     assert rules.after_validate({"status": "returned"}) == "define"
-    assert rules.after_validate({"status": "definition_ready"}) is None
+    assert rules.after_validate({"status": "definition_ready"}) == "plan"
     assert rules.after_validate({"status": "returned", "escalated": "x"}) is None

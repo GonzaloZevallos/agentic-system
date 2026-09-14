@@ -11,11 +11,15 @@ vocabulary, so the model can only mark names that exist.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from .task import INTEGRATION
+
 TaskType = Literal["bug", "feature", "platform_enhancement"]
+SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
 class RoleOutput(BaseModel):
@@ -62,6 +66,80 @@ class Verdict(RoleOutput):
     glossary: list[GlossaryTerm] = Field(
         description="Terms that are new or whose meaning changed. Empty if none"
     )
+
+
+class InterviewTurn(RoleOutput):
+    """One round of the interviewer (ADR-0014): the questions with a recommendation
+    each, or the closing summary once the frontier is empty."""
+
+    done: bool = Field(
+        description="True when there is no question left to ask: shared understanding "
+        "reached, or nothing the interviewee could still decide"
+    )
+
+
+class Answers(RoleOutput):
+    """One round of the interviewee: a decision per question."""
+
+    questions_for_human: list[str] = Field(
+        description="Questions neither the request nor the product knowledge settle, one "
+        "line each, written for a person who has not read the task. Empty if none"
+    )
+
+
+class Subtask(BaseModel):
+    id: str = Field(description="Slug, unique in the plan, e.g. `domain-model`, `api`")
+    title: str = Field(description="One line")
+    brief: str = Field(
+        description="What to build and where, acceptance criteria, files likely touched; "
+        "everything the Developer needs and nothing else"
+    )
+    seams: list[str] = Field(
+        description="Public boundaries the tests are written at (a function, a class, an "
+        "HTTP endpoint). The Developer writes no test at any other seam"
+    )
+    depends_on: list[str] = Field(
+        default_factory=list,
+        description="Ids of subtasks that must be approved before this one starts. Empty "
+        "when it can run in parallel with the rest",
+    )
+
+
+class TechPlan(RoleOutput):
+    subtasks: list[Subtask] = Field(description="The subtasks, in the order to start them")
+
+
+class Delivery(RoleOutput):
+    summary: str = Field(description="What changed, in a few lines, for the reviewer")
+    assumptions: list[str] = Field(
+        description="Decisions taken where the brief was silent; empty if none"
+    )
+
+
+class Review(RoleOutput):
+    verdict: Literal["approved", "returned"]
+    reason: str = Field(description="One line. On `returned`, what the Developer must fix")
+
+
+def plan_check(data: dict) -> None:
+    """A plan's subtasks are slugs, each with seams, depending only on subtasks that
+    exist; `integration` is the system's own."""
+    subtasks = data.get("subtasks", [])
+    if not subtasks:
+        raise ValueError("a plan needs at least one subtask")
+    ids = [s["id"] for s in subtasks]
+    for item in subtasks:
+        if not SLUG.match(item["id"]):
+            raise ValueError(f"subtask id {item['id']!r} must be a slug (lower-case, hyphens)")
+        if item["id"] == INTEGRATION:
+            raise ValueError(f"subtask id {INTEGRATION!r} is reserved for the integration")
+        if not item["seams"]:
+            raise ValueError(f"subtask {item['id']!r} declares no seams; tests need them")
+        for dep in item["depends_on"]:
+            if dep not in ids:
+                raise ValueError(f"subtask {item['id']!r} depends on unknown subtask {dep!r}")
+    if len(set(ids)) != len(ids):
+        raise ValueError("subtask ids must be unique")
 
 
 def json_schema(schema: type[RoleOutput], vocabulary: dict[str, str]) -> dict[str, Any]:

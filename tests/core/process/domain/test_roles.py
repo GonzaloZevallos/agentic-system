@@ -45,8 +45,8 @@ def test_missing_placeholder_is_an_error():
         render("Left: {{remaining_returns}}", Path("/x/pjm.md"))
 
 
-def test_every_role_has_a_prompt_file():
-    assert ROLES == (PJM, PRODUCT_ANALYST, PM)
+def test_the_definition_stage_roles_come_first():
+    assert ROLES[0] is PJM and {PRODUCT_ANALYST, PM} <= set(ROLES)
     for role in ROLES:
         assert (PROMPTS_DIR / f"{role.slug}.md").exists()
 

@@ -17,12 +17,20 @@ import re
 from collections.abc import Callable
 from pathlib import Path
 
+from agentic.core.process.domain.schemas import SLUG
+
 PRODUCT_SUBDIR = Path("docs/product")
 GLOSSARY = "CONTEXT.md"
 HEADING = "## Product knowledge"
 LANGUAGE_HEADING = "## Language"
+# The engineering standards (ADR-0012): the product's file at its root replaces the
+# system's default whole, the same pattern as the flag vocabulary. Named so that the
+# `code-review` skill finds it by itself.
+STANDARDS = "CODING_STANDARDS.md"
+DEFAULT_STANDARDS = Path(__file__).resolve().parent / STANDARDS
+STANDARDS_HEADING = "## Engineering standards"
 
-_SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_SLUG = SLUG  # one slug rule for the whole system: capabilities, subtasks
 _H2 = re.compile(r"^## ", re.M)
 _TERM = re.compile(r"^\*\*(.+?)\*\*[^\n]*:$", re.M)
 
@@ -51,6 +59,11 @@ def assemble(glossary: str | None, capabilities: dict[str, str]) -> str:
     if not parts:
         return ""
     return HEADING + "\n\n" + "\n\n".join(parts)
+
+
+def assemble_standards(text: str) -> str:
+    """The standards as a role reads them, before the product knowledge."""
+    return STANDARDS_HEADING + "\n\n" + _fenced(STANDARDS, text)
 
 
 def _fenced(name: str, text: str) -> str:

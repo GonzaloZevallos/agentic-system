@@ -22,7 +22,10 @@ TYPES = {
     "Fallo de rol": task.Failure,
     "Corrida de rol": task.RoleRun,
     "Documento de tarea": document,
+    "Entrevista": roles.Interview,
+    "Subtarea": task.Subtask,
     "Conocimiento de producto": knowledge,
+    "Estándares de ingeniería": knowledge.assemble_standards,
     "Retrabajo": metrics.is_rework,
 }
 
@@ -32,6 +35,9 @@ STATE_FIELDS = {
     "Escalado": "escalated",
     "Sección": "sections",
     "Flag": "flags",
+    "Rama de tarea": "branch",
+    "Pull request de tarea": "pull_request",
+    "Pregunta para el humano": "questions_for_human",
 }
 
 # Glossary term -> the value of `RoleKind` that names it.

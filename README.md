@@ -680,7 +680,7 @@ existe justamente para pagar ese costo solo donde compre calidad.
 | 10 | ~~Versionado de prompts~~ **resuelto**: `.md` por rol con overlay en el producto, hash por tarea (ADR-0005). Falta el versionado de **parámetros** de `Configuration` | Mejora del proceso de PjM |
 | 11 | Las cinco tareas del set de evaluación, todavía sin escribir | Medir cualquier cosa |
 | 12 | ~~El v0 del gimnasio~~ **resuelto**: existe, escrito a mano y plano. Los estándares de ingeniería aplican al código nuevo y al que cada tarea toca (ADR-0012) | — |
-| 13 | ~~Campos de `Configuration` y esquemas~~ **resuelto**: `agentic/configuration.py` y `agentic/schemas.py`, uno por rol implementado. Los roles que faltan agregan su esquema al entrar | — |
+| 13 | ~~Campos de `Configuration` y esquemas~~ **resuelto**: `agentic/shared/configuration.py` y `agentic/core/process/domain/schemas.py`, uno por rol implementado. Los roles que faltan agregan su esquema al entrar | — |
 | 14 | Script que corre el set de cinco tareas y escribe el JSONL de resultados (sección 14). Sin costo: eso ya lo da Grafana | Medir |
 | 15 | Versionado de **parámetros** de `Configuration` como label de las métricas; hoy solo van el SHA del sistema y la huella de prompts | Comparar corridas que cambian solo un parámetro |
 | 16 | El camino como dato (`Route`, solo la ida, con la tabla de devoluciones aparte) y `Status` en cinco valores más `outcome`, ya modelados en ADR-0009. Hoy el ruteo es una función por nodo en `rules.py` | Etapa 2: se implementa al entrar QA Lead, el segundo par |
@@ -720,7 +720,7 @@ Se anotan para no reintroducirlas por error.
 | Un solo `domain/` hasta que duela, y un solo `CONTEXT.md` | Tres módulos bajo `agentic/core/` (`process`, `knowledge`, `measurement`), cada uno hexagonal y con su glosario; `process` no importa a los otros (ADR-0010) |
 | Product Analyst escribe la definición en un tiro y PM la valida en otro | Product Analyst entrevista a PM con `grill-with-docs`; lo que PM no puede decidir va al humano como pregunta (ADR-0014) |
 | El pingpong del Tech Lead no tiene forma fija | Es una entrevista del efímero a Tech Lead, con tope de cuatro rondas, y de ahí salen los ADRs y las subtareas (ADR-0014) |
-| Los roles no tienen skills; solo prompt y esquema | Skills de Matt Pocock fijadas como submódulo, tres obligatorias por rol: `tdd`, `implement`, `code-review` (ADR-0013) |
+| Los roles no tienen skills; solo prompt y esquema | Skills de Matt Pocock fijadas como submódulo; solo las invocables por un agente, dos obligatorias: `tdd` y `code-review` (ADR-0013) |
 | La corrida termina cuando el último rol entrega | Termina en un pull request del producto, lista para revisión; el issue recibe el link (ADR-0011) |
 
 ---
@@ -740,7 +740,7 @@ imports:
 | Módulo | Contenido | Importa |
 |---|---|---|
 | `shared/` | `configuration.py` | Nada del proyecto |
-| `core/process/` | `domain/`: `roles.py` (`Role`, `Pair`, `describe_flags`) y `prompts/`, `task.py` (estado y reducers), `document.py`, `schemas.py`, `rules.py` (límite por par, versionado, ruteo). `application/`: `ports.py` (`RoleRunner`, `TaskDocuments`, `ProductKnowledge`, `Prompts`, `FlagVocabulary`, `Inbox`) y un caso de uso por nodo: `classify`, `define`, `validate_definition`, sobre `run_role`. `adapters/`: `claude_sdk/` (harness y `Printer`), `filesystem/` (documentos y overlay de prompts), `github/`, `langgraph/` (el grafo: nodos, ruteo, abre y cierra los spans; mañana `interrupt()`, `Send`, checkpointer) y `telemetry.py`, el port por el que entra el tracing | `shared` |
+| `core/process/` | `domain/`: `roles.py` (`Role` con tools, reglas de permiso y skills; `Pair`; `Interview`; `describe_flags`) y `prompts/`, `task.py` (estado, subtareas y reducers), `document.py`, `schemas.py`, `rules.py` (límite por par, versionado por sección, subtareas listas, ruteo). `application/`: `ports.py` (`RoleRunner`, `TaskDocuments`, `ProductKnowledge`, `Prompts`, `FlagVocabulary`, `Inbox`, `Workspace`, `Tracker`), `interview` (rondas entre dos roles, ADR-0014) y un caso de uso por nodo: `classify`, `define`, `validate_definition`, `plan`, `develop`, `review`, `deliver`, `escalate`, sobre `run_role`. `adapters/`: `claude_sdk/` (harness con plugin de skills y jaula por rol, `Printer`), `filesystem/` (documentos y overlay de prompts), `git/` (rama de tarea y árboles de trabajo, ADR-0011), `github/` (bandeja y escritura: PR, comentarios, etiquetas), `langgraph/` (el grafo: nodos, ruteo, `Send` por subtarea, abre y cierra los spans; mañana `interrupt()` y checkpointer) y `telemetry.py`, el port por el que entra el tracing | `shared` |
 | `core/knowledge/` | `domain/`: `knowledge.py` (cómo se muestra, cómo se edita el glosario, qué debe traer una aprobación), `flags.py` (el vocabulario). `adapters/filesystem/`: implementa `ProductKnowledge` y `FlagVocabulary` sobre el repo del producto | `shared`, `process` |
 | `core/measurement/` | `domain/`: `metrics.py` (retrabajo, devoluciones, huella de prompts). `adapters/otel/`: spans y métricas del sistema, implementa `Telemetry` | `shared`, `process` |
 | raíz | `composition.py` arma los ports reales e inyecta la telemetría; `cli.py` es el adaptador de entrada | Todo |
@@ -796,8 +796,9 @@ ausente o inválida, o un `markdown` vacío, es fallo de rol, no un diccionario 
 - Contadores por par con un reducer de override: resetear el par cuando el humano responde es
   un update explícito, no un dict copiado a mano. La clave la deriva `Pair.key`; la del
   par Tech Lead→Developer incluye el id de subtarea.
-- El subgrafo técnico declara `output` schema: salen la pieza integrada y el mapa de
-  subtareas, no la conversación interna de cada Developer (ADR-0004).
+- `subtasks` es un mapa por id con reducer de override por clave: cada Developer patchea la
+  suya. `branch`, `pull_request` y `questions_for_human` son campos planos. La conversación
+  interna de cada Developer no entra al estado: queda en su sesión (ADR-0004).
 - `thread_id` es el id de la tarea. Checkpointer SqliteSaver en el producto (ADR-0003).
 
 ### Pausa y reanudación
@@ -819,7 +820,20 @@ métricas de PjM.
 
 ### Fan-out
 
-Developers en paralelo con `Send` (ADR-0004).
+Developers en paralelo con `Send` (ADR-0004): la arista condicional de `plan` y de
+`review` devuelve un `Send("develop", estado + subtask_id)` por cada subtarea lista (sin
+dependencias pendientes). Cada uno corre en su propio árbol de trabajo y rama (ADR-0011);
+`status`, `current_role` y `escalated` llevan un reducer "último gana" para que dos
+Developers en el mismo paso no choquen. La integración es una subtarea más, del integrador,
+sobre la rama de tarea.
+
+### Entrevistas
+
+Un caso de uso `interview(estado, Interview)` corre las rondas (ADR-0014): cada lado es una
+sesión del SDK reanudada con `resume`, el entrevistador entrega `InterviewTurn` (`done`,
+`markdown`), el entrevistado `Answers` (`markdown`, `questions_for_human`). La transcripción
+es una sección `Interview: A→B` del documento y el autor escribe después reanudando su
+propia sesión. Preguntas para el humano al final de la entrevista = escalado.
 
 ### Observabilidad
 

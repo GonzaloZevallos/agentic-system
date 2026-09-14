@@ -1,0 +1,3 @@
+[submodule "agentic/plugins/mattpocock-skills"]
+	path = agentic/plugins/mattpocock-skills
+	url = https://github.com/mattpocock/skills

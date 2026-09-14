@@ -32,6 +32,12 @@ class Configuration(BaseModel):
     model_overrides: dict[str, str] = Field(default_factory=dict)
     max_returns_per_pair: int = Field(default=2, ge=0)
     role_retries: int = Field(default=1, ge=0)
+    # Money cap of one run of a role that executes (README.md, 4). Exceeding it is a
+    # role failure, not a return: the return limit measures quality, not money.
+    developer_max_budget_usd: float = Field(default=3.0, gt=0)
+    # Rounds an interview may take before the interviewer closes with what it has
+    # (ADR-0014).
+    interview_max_rounds: int = Field(default=4, ge=1)
     # Closed tasks PjM watches before judging a process change (README.md, 4).
     evaluation_window: int = Field(default=10, ge=1)
     # Stream each role's generation to stderr (`agentic run --verbose`).
@@ -63,6 +69,11 @@ class Configuration(BaseModel):
         if slug in self.model_overrides:
             return self.model_overrides[slug]
         return self.thinker_model if kind == "thinker" else self.validator_model
+
+    def budget_for(self, role: Any) -> float | None:
+        """The money cap of one run: only roles that execute have one. `role` is duck
+        typed (`.executes`) because this module imports nothing from the project."""
+        return self.developer_max_budget_usd if getattr(role, "executes", False) else None
 
     @property
     def agentic_dir(self) -> Path:

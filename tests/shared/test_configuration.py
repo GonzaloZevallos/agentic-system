@@ -60,3 +60,16 @@ def test_counters_have_lower_bounds():
         Configuration(product_dir=Path("/tmp/p"), role_retries=-1)
     with pytest.raises(ValueError):
         Configuration(product_dir=Path("/tmp/p"), evaluation_window=0)
+
+
+def test_execution_budget_and_interview_rounds_have_defaults():
+    from dataclasses import replace
+
+    from agentic.core.process.domain.roles import PJM
+
+    cfg = Configuration.from_sources(PRODUCT, {})
+    assert cfg.developer_max_budget_usd == 3.0
+    assert cfg.interview_max_rounds == 4
+    # Only a role that executes gets the money cap; a reasoning role is capped by turns.
+    assert cfg.budget_for(PJM) is None
+    assert cfg.budget_for(replace(PJM, executes=True)) == 3.0

@@ -1,5 +1,6 @@
 """PM validates the definition: approves and distils, or returns it to the Product
-Analyst within the pair's limit (README.md, 3 and 4; ADR-0006)."""
+Analyst within the pair's limit (README.md, 3 and 4; ADR-0006). The distillation
+lands in the task's checkout and is committed there (ADR-0011)."""
 
 from __future__ import annotations
 
@@ -8,11 +9,13 @@ from agentic.shared.configuration import Configuration
 from ..domain import rules
 from ..domain.roles import PAIR_PM_PA, PM
 from ..domain.task import WAITING_ON_HUMAN, TaskState
+from .checkouts import task_checkout
 from .ports import Ports
 from .run_role import finish, run_role
 
 
 async def validate_definition(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
+    task = task_checkout(state, ports)
     limit = cfg.max_returns_per_pair
     remaining = rules.remaining_returns(state, PAIR_PM_PA, limit)
     output, patch = await run_role(
@@ -21,6 +24,7 @@ async def validate_definition(state: TaskState, cfg: Configuration, ports: Ports
         cfg,
         ports,
         check=ports.knowledge.approval_check(state.get("type", "")),
+        cwd=task.path,
         remaining_returns=remaining,
     )
     if output is None:
@@ -29,7 +33,8 @@ async def validate_definition(state: TaskState, cfg: Configuration, ports: Ports
     patch["flags"] = output.data["flags"]
     if output.data["verdict"] == "approved":
         # The distillation (ADR-0006): PM returned the knowledge, the system writes it.
-        ports.knowledge.distill(output.data)
+        ports.knowledge.distill(output.data, task.path)
+        ports.workspace.commit_all(task.path, f"{state['id']}: product definition")
         patch["status"] = "definition_ready"
     elif remaining > 0:
         patch["returns"] = rules.record_return(state, PAIR_PM_PA)

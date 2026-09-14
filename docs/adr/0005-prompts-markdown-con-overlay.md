@@ -5,7 +5,7 @@ date: 2026-09-12
 
 # Prompts como Markdown por rol, con una capa de overrides en el repo del producto
 
-Los prompts viven en `agentic/prompts/<rol>.md`, uno por rol, con placeholders para fecha y
+Los prompts viven en `agentic/core/process/domain/prompts/<rol>.md` (antes `agentic/prompts/`), uno por rol, con placeholders para fecha y
 límites, en vez de constantes Python. Un `.md` se diffea, se lee sin Python y PjM lo puede
 editar sin tocar código.
 

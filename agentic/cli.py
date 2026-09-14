@@ -95,6 +95,12 @@ async def _run(task: TaskInput, cfg: Configuration, ports: Ports) -> None:
     print(f"failures:  {len(final.get('failures', []))}")
     if final.get("escalated"):
         print(f"escalated: {final['escalated']}")
+    for question in final.get("questions_for_human", []):
+        print(f"question:  {question}")
+    if final.get("branch"):
+        print(f"branch:    {final['branch']}")
+    if final.get("pull_request"):
+        print(f"pr:        {final['pull_request']}")
     print(f"cost:      ${final.get('cost_usd', 0):.4f}")
     print(f"doc:       {ports.documents.path_for(task['id'])}")
     if final.get("escalated"):

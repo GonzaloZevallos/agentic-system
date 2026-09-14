@@ -25,46 +25,56 @@ class FilesystemKnowledge:
     def approval_check(self, task_type: str) -> Callable[[dict], None]:
         return knowledge.approval_check(task_type)
 
-    def read(self) -> str:
+    def read(self, root: Path | None = None) -> str:
+        root = root or self.product_dir
         capabilities = {
             path.name: path.read_text(encoding="utf-8")
-            for path in (self.product_dir / knowledge.PRODUCT_SUBDIR).glob("*.md")
+            for path in (root / knowledge.PRODUCT_SUBDIR).glob("*.md")
         }
-        return knowledge.assemble(_read(self.glossary_path), capabilities)
+        return knowledge.assemble(_read(root / knowledge.GLOSSARY), capabilities)
 
-    def distill(self, verdict: dict) -> list[Path]:
+    def standards(self, root: Path | None = None) -> str:
+        """The product's `CODING_STANDARDS.md`, or the system's default (ADR-0012)."""
+        text = _read((root or self.product_dir) / knowledge.STANDARDS)
+        if text is None:
+            text = knowledge.DEFAULT_STANDARDS.read_text(encoding="utf-8")
+        return knowledge.assemble_standards(text)
+
+    def distill(self, verdict: dict, root: Path | None = None) -> list[Path]:
         """What an approved verdict leaves: the capability files, then the glossary.
         All or nothing."""
         definitions, terms = knowledge.distillation(verdict)
-        writes = self._definitions(definitions) | self._glossary(terms)
+        root = root or self.product_dir
+        writes = self._definitions(definitions, root) | self._glossary(terms, root)
         _write_all(writes)
         return list(writes)
 
     def write_definitions(self, definitions: dict[str, str]) -> list[Path]:
         """Replace each capability file whole. Creates `docs/product/` on first use."""
-        writes = self._definitions(definitions)
+        writes = self._definitions(definitions, self.product_dir)
         _write_all(writes)
         return list(writes)
 
     def upsert_terms(self, terms: dict[str, dict[str, str]]) -> Path | None:
         """Returns the glossary path, or None when there was nothing to write."""
-        writes = self._glossary(terms)
+        writes = self._glossary(terms, self.product_dir)
         _write_all(writes)
         return self.glossary_path if writes else None
 
-    def _definitions(self, definitions: dict[str, str]) -> dict[Path, str]:
+    def _definitions(self, definitions: dict[str, str], root: Path) -> dict[Path, str]:
         for slug in definitions:
             knowledge.check_slug(slug)
         return {
-            self.product_dir / knowledge.PRODUCT_SUBDIR / f"{slug}.md": content.strip() + "\n"
+            root / knowledge.PRODUCT_SUBDIR / f"{slug}.md": content.strip() + "\n"
             for slug, content in definitions.items()
         }
 
-    def _glossary(self, terms: dict[str, dict[str, str]]) -> dict[Path, str]:
+    def _glossary(self, terms: dict[str, dict[str, str]], root: Path) -> dict[Path, str]:
         if not terms:
             return {}
-        text = knowledge.upsert_terms(_read(self.glossary_path), terms, self.product_dir.name)
-        return {self.glossary_path: text}
+        glossary = root / knowledge.GLOSSARY
+        text = knowledge.upsert_terms(_read(glossary), terms, self.product_dir.name)
+        return {glossary: text}
 
 
 def _read(path: Path) -> str | None:
