@@ -24,13 +24,13 @@ from .shared.configuration import Configuration
 
 def default_ports(cfg: Configuration) -> Ports:
     return Ports(
-        runner=ClaudeSdkRunner(verbose=cfg.verbose, telemetry=telemetry),
+        runner=ClaudeSdkRunner(verbose=cfg.verbose, telemetry=telemetry, env=cfg.git_identity),
         documents=FilesystemTaskDocuments(cfg.product_dir),
         knowledge=FilesystemKnowledge(cfg.product_dir),
         prompts=FilesystemPrompts(cfg.product_dir),
         flags=FilesystemFlags(cfg.product_dir),
         inbox=GhInbox(cfg.product_dir),
-        workspace=GitWorkspace(cfg.product_dir, cfg.git_author_name, cfg.git_author_email),
+        workspace=GitWorkspace(cfg.product_dir, cfg.git_identity),
         tracker=GhTracker(cfg.product_dir),
     )
 

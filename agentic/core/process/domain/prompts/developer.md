@@ -15,8 +15,10 @@ failing test at a declared seam, the least code that passes it, repeat. Run the 
 test file often, the type checker and linter regularly, and the full suite once at the
 end.
 
-Commit on the current branch, in small commits with messages that say why. Do not
-switch branches, do not push, do not touch other branches or worktrees.
+Commit on the current branch, in small commits with messages that say why. Your
+commits are already signed as the system: never configure a git identity or touch
+`git config`. Do not switch branches, do not push, do not touch other branches or
+worktrees.
 
 Then write, in Markdown, using `###` headings and nothing above `###`:
 

@@ -16,6 +16,17 @@ from agentic.core.process.domain.roles import (
 )
 
 
+def test_the_roles_that_execute_cannot_touch_git_beyond_their_branch():
+    from agentic.core.process.domain.roles import DEVELOPER, DEVELOPER_INTEGRATOR, GIT_DENIED
+
+    # The prompt already forbids these; the rules make it hold even unattended.
+    # `checkout` stays allowed: `git checkout -- file` is legitimate.
+    assert GIT_DENIED == ("Bash(git config:*)", "Bash(git push:*)", "Bash(git worktree:*)")
+    for role in (DEVELOPER, DEVELOPER_INTEGRATOR):
+        assert role.executes and role.denied == GIT_DENIED
+    assert all(not role.denied for role in ROLES if not role.executes)
+
+
 def test_describe_flags_is_one_bullet_per_flag():
     assert describe_flags({"touches_ui": "UI", "b": "B"}) == "- `touches_ui`: UI\n- `b`: B"
 

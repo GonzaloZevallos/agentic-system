@@ -386,7 +386,9 @@ técnico y ADRs con los Tech Leads por tarea.
 **Herramientas y permisos**. Es el único rol que ejecuta: lectura y escritura de archivos,
 bash y tests, **sin aprobación humana por comando**. La jaula es el directorio del producto,
 más un tope de costo por llamada. Pedir aprobación comando por comando rompe la revisión en
-lote: el sistema quedaría congelado esperando al humano en cada paso.
+lote: el sistema quedaría congelado esperando al humano en cada paso. Sus commits firman
+como el sistema, con la identidad que le llega en el entorno, y tres reglas se le niegan aun
+sin aprobación: `git config`, `git push` y `git worktree` (ADR-0011, adenda).
 
 ### QA Lead y los tres QA
 

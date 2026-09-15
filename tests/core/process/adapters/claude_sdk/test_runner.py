@@ -194,3 +194,18 @@ async def test_a_reader_role_is_caged_by_permission_rules(monkeypatch, tmp_path)
     assert options.skills == ["mattpocock-skills:code-review"]
     assert options.max_budget_usd is None
     assert options.resume == "sess-1"
+
+
+async def test_the_git_identity_and_the_deny_rules_reach_the_role(monkeypatch, tmp_path):
+    seen = fake_query(monkeypatch, [result()])
+    identity = {"GIT_AUTHOR_NAME": "agentic-system", "GIT_COMMITTER_NAME": "agentic-system"}
+    developer = replace(PJM, tools=("Bash",), executes=True, denied=("Bash(git config:*)",))
+    await ClaudeSdkRunner(env=identity).run_once(
+        developer, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
+    )
+    options = seen[0][1]
+    # The SDK merges `env` over the inherited environment, so every `git` the role
+    # runs commits as the system, whatever `user.*` the product's config carries.
+    assert options.env == identity
+    # Deny rules hold even in `bypassPermissions`.
+    assert options.disallowed_tools == ["Bash(git config:*)"]

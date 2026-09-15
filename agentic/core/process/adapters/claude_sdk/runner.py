@@ -8,15 +8,21 @@ use case's too: the SDK only knows JSON.
 What a role may do comes off the `Role` (README.md, 4; ADR-0013): its built-in
 tools, the permission rules that cage a role that does not execute, and the plugin
 skills it may invoke. A role that executes runs unattended (`bypassPermissions`)
-inside its working directory under a money cap; every other role runs in the
-default permission mode, where anything outside its rules is denied because nobody
-is there to approve it. Skills come from the one plugin pinned as a submodule under
+inside its working directory under a money cap, and its `denied` rules still hold
+(the SDK evaluates deny rules before the mode); every other role runs in the default
+permission mode, where anything outside its rules is denied because nobody is there
+to approve it. Skills come from the one plugin pinned as a submodule under
 `agentic/plugins/` (ADR-0013); `setting_sources=[]` keeps the user's own plugins,
 settings and CLAUDE.md out.
+
+The runner's `env` reaches every role's process on top of the inherited environment:
+the system's git identity travels there (ADR-0011, addendum), so a role that commits
+signs as the system whatever `user.*` the product's config carries.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import IO, Any
 
@@ -43,6 +49,7 @@ def options_for(
     max_budget_usd: float | None,
     traceparent: str | None,
     partial: bool,
+    env: Mapping[str, str],
 ) -> ClaudeAgentOptions:
     tools, allowed = list(role.tools), list(role.allowed)
     if role.skills and SKILL_TOOL not in tools:
@@ -55,6 +62,7 @@ def options_for(
         # No built-in tools unless the role declares them.
         tools=tools,
         allowed_tools=allowed,
+        disallowed_tools=list(role.denied),
         permission_mode="bypassPermissions" if role.executes else "default",
         skills=[f"{PLUGIN}:{skill}" for skill in role.skills] or None,
         plugins=[{"type": "local", "path": str(PLUGIN_DIR)}] if role.skills else [],
@@ -69,7 +77,7 @@ def options_for(
         # Deltas as they are generated; without an observer nobody would read them.
         include_partial_messages=partial,
         # Claude Code parents its own spans under the role's (SDK mode honours it).
-        env={"TRACEPARENT": traceparent} if traceparent else {},
+        env={**env, **({"TRACEPARENT": traceparent} if traceparent else {})},
     )
 
 
@@ -79,11 +87,14 @@ class ClaudeSdkRunner:
         verbose: bool = False,
         stream: IO[str] | None = None,
         telemetry: Telemetry = NoTelemetry(),
+        env: Mapping[str, str] | None = None,
     ):
         # `verbose` streams each role's generation to `stream` (stderr by default).
+        # `env` is added to every role's process: the git identity, for one.
         self.verbose = verbose
         self.stream = stream
         self.telemetry = telemetry
+        self.env = dict(env or {})
 
     async def run_once(
         self,
@@ -108,6 +119,7 @@ class ClaudeSdkRunner:
             max_budget_usd=max_budget_usd,
             traceparent=self.telemetry.traceparent(),
             partial=observer is not None,
+            env=self.env,
         )
 
         exhausted = f"max_turns ({role.max_turns}) exhausted without a result"

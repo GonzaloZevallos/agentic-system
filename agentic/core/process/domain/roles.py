@@ -60,11 +60,14 @@ class Role:
     max_turns: int = 4
     # What the role may do while it runs (README.md, 4; ADR-0013). `tools` are the
     # built-in tools it sees; `allowed` are permission rules ("Bash(git diff:*)",
-    # "Edit(docs/**)") that cage a role that does not execute; `skills` are the plugin
-    # skills it may invoke, by bare name. A role that `executes` writes files and runs
-    # commands unattended, inside its working directory, under a money cap: Developer.
+    # "Edit(docs/**)") that cage a role that does not execute; `denied` are rules that
+    # hold even for a role that executes unattended (ADR-0011, addendum); `skills` are
+    # the plugin skills it may invoke, by bare name. A role that `executes` writes
+    # files and runs commands unattended, inside its working directory, under a money
+    # cap: Developer.
     tools: tuple[str, ...] = ()
     allowed: tuple[str, ...] = ()
+    denied: tuple[str, ...] = ()
     skills: tuple[str, ...] = ()
     executes: bool = False
     # Product roles also receive the engineering standards, whole (ADR-0012).
@@ -117,6 +120,10 @@ WRITE_DOCS_RULES = (
     "Write(docs/**)",
 )
 EXECUTE = ("Read", "Glob", "Grep", "Edit", "Write", "Bash", "Agent", "TodoWrite")
+# What a role that commits may never do to the product's git (ADR-0011, addendum):
+# rewrite its config (the identity comes in the environment), push, or touch other
+# worktrees. `checkout` stays: `git checkout -- file` is legitimate.
+GIT_DENIED = ("Bash(git config:*)", "Bash(git push:*)", "Bash(git worktree:*)")
 
 PJM = Role(
     name="PjM",
@@ -249,6 +256,7 @@ DEVELOPER = Role(
     reads=(ORIGINAL, "PM", "Tech Lead"),
     reads_standards=True,
     tools=EXECUTE,
+    denied=GIT_DENIED,
     skills=("tdd",),
     executes=True,
     effort="high",
@@ -263,6 +271,7 @@ DEVELOPER_INTEGRATOR = Role(
     reads=(ORIGINAL, "PM", "Tech Lead"),
     reads_standards=True,
     tools=EXECUTE,
+    denied=GIT_DENIED,
     skills=("tdd", "resolving-merge-conflicts"),
     executes=True,
     effort="high",

@@ -6,6 +6,10 @@ from pathlib import Path
 import pytest
 
 from agentic.core.process.adapters.git import GitWorkspace
+from agentic.shared.configuration import Configuration
+
+# The identity as the composition root hands it in.
+IDENTITY = Configuration(product_dir=Path("/tmp/p")).git_identity
 
 
 def git(*args, cwd: Path) -> str:
@@ -30,7 +34,7 @@ def product(tmp_path):
 
 
 def test_task_checkout_is_a_worktree_on_its_own_branch_and_idempotent(product):
-    ws = GitWorkspace(product)
+    ws = GitWorkspace(product, IDENTITY)
     task = ws.task_checkout("GH-12")
     assert task.branch == "agentic/GH-12"
     assert task.path == product / ".agentic/worktrees/GH-12"
@@ -44,14 +48,20 @@ def test_task_checkout_is_a_worktree_on_its_own_branch_and_idempotent(product):
 
 
 def test_subtask_branches_off_the_task_branch_as_it_is_now(product):
-    ws = GitWorkspace(product)
+    ws = GitWorkspace(product, IDENTITY)
     task = ws.task_checkout("GH-12")
     (task.path / "CONTEXT.md").write_text("glossary\n")
     sha = ws.commit_all(task.path, "GH-12: glossary")
     assert sha == ws.head(task.path) and sha != task.base
-    # Signed by the system, on a repo with no `user.*` configured at all.
+    # Signed by the system, on a repo with no `user.*` configured at all, and the
+    # identity beats whatever `user.*` the product's config carries.
+    git("config", "user.name", "human", cwd=product)
+    git("config", "user.email", "human@example.com", cwd=product)
+    (task.path / "ADR.md").write_text("adr\n")
+    sha = ws.commit_all(task.path, "GH-12: adr")
     author = git("log", "-1", "--format=%an <%ae>", cwd=task.path)
     assert author == "agentic-system <agentic-system@users.noreply.github.com>"
+    assert git("log", "-1", "--format=%cn <%ce>", cwd=task.path) == author
     assert ws.commit_all(task.path, "nothing") is None
 
     sub = ws.subtask_checkout("GH-12", "api")
@@ -72,8 +82,22 @@ def test_subtask_branches_off_the_task_branch_as_it_is_now(product):
     assert (dep.path / "api.py").read_text() == "x\n"
 
 
+def test_the_identity_is_the_environment_the_configuration_builds(product):
+    identity = {
+        "GIT_AUTHOR_NAME": "bot",
+        "GIT_AUTHOR_EMAIL": "b@x",
+        "GIT_COMMITTER_NAME": "bot",
+        "GIT_COMMITTER_EMAIL": "b@x",
+    }
+    ws = GitWorkspace(product, identity)
+    task = ws.task_checkout("GH-12")
+    (task.path / "x").write_text("x\n")
+    ws.commit_all(task.path, "x")
+    assert git("log", "-1", "--format=%an <%ae>", cwd=task.path) == "bot <b@x>"
+
+
 def test_push_and_cleanup_keep_the_branches(product):
-    ws = GitWorkspace(product)
+    ws = GitWorkspace(product, IDENTITY)
     task = ws.task_checkout("GH-12")
     ws.subtask_checkout("GH-12", "api")
     ws.subtask_checkout("GH-13", "other")

@@ -30,6 +30,8 @@ Then write, in Markdown, using `###` headings and nothing above `###`:
 - Merge; do not rewrite. A conflict is resolved by keeping both intents, not by
   dropping one. If two subtasks genuinely contradict, say so under Integration and
   keep the suite green with the smallest change.
+- Your commits are already signed as the system: never configure a git identity or
+  touch `git config`.
 - Do not push, do not delete branches, do not touch the subtask worktrees.
 - You have at most {{max_turns}} turns and a money cap for this run.
 </Hard Limits>

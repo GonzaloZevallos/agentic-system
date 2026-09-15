@@ -10,12 +10,16 @@ worktrees are excluded through `.git/info/exclude`, never through the product's 
 `.gitignore`, which is the product's business.
 
 The commits are the system's, so they carry the system's identity, not whatever the
-machine has in `git config` (which may be nothing: a fresh box or a background job).
+machine or the product has in `git config` (which may be nothing: a fresh box or a
+background job). The identity travels as environment (`Configuration.git_identity`),
+the same the roles that commit receive, so there is one way the system signs.
 """
 
 from __future__ import annotations
 
+import os
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
 
 from ...application.ports import Checkout
@@ -29,20 +33,12 @@ class GitError(RuntimeError):
     pass
 
 
-DEFAULT_AUTHOR_NAME = "agentic-system"
-DEFAULT_AUTHOR_EMAIL = "agentic-system@users.noreply.github.com"
-
-
 class GitWorkspace:
-    def __init__(
-        self,
-        product_dir: Path,
-        author_name: str = DEFAULT_AUTHOR_NAME,
-        author_email: str = DEFAULT_AUTHOR_EMAIL,
-    ):
+    def __init__(self, product_dir: Path, identity: Mapping[str, str]):
+        # `identity` is `Configuration.git_identity`, handed in by the composition root:
+        # the one place that decides how the system signs, no default of its own here.
         self.product_dir = product_dir
-        self.author_name = author_name
-        self.author_email = author_email
+        self.identity = dict(identity)
 
     # -- checkouts --------------------------------------------------------------
 
@@ -125,10 +121,10 @@ class GitWorkspace:
             exclude.write_text("\n".join([*lines, EXCLUDE]) + "\n", encoding="utf-8")
 
     def _run(self, *args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-        identity = ["-c", f"user.name={self.author_name}", "-c", f"user.email={self.author_email}"]
         return subprocess.run(
-            ["git", *identity, *args],
+            ["git", *args],
             cwd=cwd or self.product_dir,
+            env={**os.environ, **self.identity},
             capture_output=True,
             text=True,
         )

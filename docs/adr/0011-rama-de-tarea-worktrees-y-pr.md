@@ -46,3 +46,35 @@ prohíbe que los roles se hablen por el issue, no que el sistema le hable al hum
   paso que el sistema no hizo.
 - **Rama de tarea creada al desarrollar**: los ADRs y términos de la entrevista quedarían
   en la rama principal sin pasar por la revisión del PR.
+
+## Adenda (2026-09-14): una sola identidad, en el entorno, y reglas que el Developer no salta
+
+La segunda corrida de GH-12 mostró que la identidad del sistema (`agentic-system`) sólo
+firmaba los commits del adaptador git, que la pasaba con `-c user.*`. El Developer
+commitea por su cuenta dentro de su worktree y no la recibía: en una máquina sin
+`git config user.*` su primer commit falló con "Author identity unknown" y quemó un
+intento entero; en el reintento escribió la identidad del humano en el `.git/config`
+compartido del producto y firmó ocho commits con ella.
+
+**La identidad viaja como entorno, no como config ni como flag.** `Configuration` arma
+una sola vez las cuatro variables `GIT_AUTHOR_*` y `GIT_COMMITTER_*`; el adaptador git las
+pone en el entorno de cada comando suyo, y el runner del SDK las agrega al proceso de cada
+rol, así que cualquier `git` que un rol corra por Bash firma como el sistema. En git el
+entorno le gana al config, de modo que aunque el modelo insistiera con `user.*`, el commit
+sale igual como `agentic-system`. Es un solo camino: el bug salió justo de tener dos.
+
+**Lo que el prompt prohíbe, una regla lo respalda.** Los roles que ejecutan corren en
+`bypassPermissions`, pero el SDK evalúa las reglas de denegación antes que el modo (documentado
+en "Configure permissions" del Agent SDK). Developer e integrador llevan `denied` con
+`git config`, `git push` y `git worktree`: la primera corta el camino que el modelo tomó
+para contaminar el config del producto (la mitad del bug que el entorno no cubre), las otras
+dos cubren lo que hasta ahora sólo decía el texto. Son reglas por prefijo: suben la barrera,
+no la cierran (`git -C ruta config` o editar `.git/config` a mano las esquivan); la garantía
+de que el commit sale firmado como el sistema la da el entorno, no la regla. `git checkout`
+queda afuera: `git checkout -- archivo` es un uso legítimo.
+
+Descartado: **`git config --worktree user.*` al crear cada worktree**. Necesita
+`extensions.worktreeConfig` en el `.git/config` compartido del producto, que es justo lo que
+no queremos tocar. Descartado también **una identidad por rol** (`agentic-developer`): la
+rama y el mensaje ya dicen qué rol y qué subtarea; dos identidades duplican configuración
+sin distinguir nada que el log no distinga.

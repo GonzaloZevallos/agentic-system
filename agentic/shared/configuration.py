@@ -42,8 +42,9 @@ class Configuration(BaseModel):
     evaluation_window: int = Field(default=10, ge=1)
     # Stream each role's generation to stderr (`agentic run --verbose`).
     verbose: bool = False
-    # Identity of the commits the system makes in the product (ADR-0011). Its own, so
-    # a machine without `git config user.*` still commits and the author says who did it.
+    # Identity of every commit made in the product, the adapter's and the roles' that
+    # execute (ADR-0011, addendum). The system's own, so a machine without `git config
+    # user.*` still commits and the author says who did it.
     git_author_name: str = "agentic-system"
     git_author_email: str = "agentic-system@users.noreply.github.com"
     # Root of the product repo, the product context (README.md, 8). Required: the
@@ -82,6 +83,18 @@ class Configuration(BaseModel):
     @property
     def agentic_dir(self) -> Path:
         return self.product_dir / ".agentic"
+
+    @property
+    def git_identity(self) -> dict[str, str]:
+        """The identity as environment, the one form every `git` honours and that beats
+        any `user.*` in a config: for the adapter's own commands and for the process
+        of a role that commits."""
+        return {
+            "GIT_AUTHOR_NAME": self.git_author_name,
+            "GIT_AUTHOR_EMAIL": self.git_author_email,
+            "GIT_COMMITTER_NAME": self.git_author_name,
+            "GIT_COMMITTER_EMAIL": self.git_author_email,
+        }
 
 
 def _from_env(raw: str, annotation: Any) -> Any:

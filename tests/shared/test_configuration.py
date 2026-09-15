@@ -73,3 +73,20 @@ def test_execution_budget_and_interview_rounds_have_defaults():
     # Only a role that executes gets the money cap; a reasoning role is capped by turns.
     assert cfg.budget_for(PJM) is None
     assert cfg.budget_for(replace(PJM, executes=True)) == 3.0
+
+
+def test_git_identity_is_the_environment_every_git_honours():
+    # One helper for the git adapter and for the roles that execute: the four
+    # variables win over any `user.*` in the product's config.
+    cfg = Configuration.from_sources(PRODUCT, {})
+    assert cfg.git_identity == {
+        "GIT_AUTHOR_NAME": "agentic-system",
+        "GIT_AUTHOR_EMAIL": "agentic-system@users.noreply.github.com",
+        "GIT_COMMITTER_NAME": "agentic-system",
+        "GIT_COMMITTER_EMAIL": "agentic-system@users.noreply.github.com",
+    }
+    custom = Configuration(
+        product_dir=Path("/tmp/p"), git_author_name="bot", git_author_email="b@x"
+    )
+    assert custom.git_identity["GIT_COMMITTER_NAME"] == "bot"
+    assert custom.git_identity["GIT_AUTHOR_EMAIL"] == "b@x"
