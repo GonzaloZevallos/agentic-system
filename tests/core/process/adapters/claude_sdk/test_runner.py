@@ -92,6 +92,26 @@ async def test_missing_result_and_error_results_are_attempt_failures(monkeypatch
         await run_once(ClaudeSdkRunner(), tmp_path)
 
 
+async def test_a_failed_attempt_keeps_the_session_it_left_behind(monkeypatch, tmp_path):
+    # The money cap cuts the run: the work is done, the session is alive, and a retry
+    # that resumes it delivers instead of reading everything again.
+    cut = result(is_error=True, subtype="error_max_budget_usd", total_cost_usd=3.05)
+    fake_query(monkeypatch, [cut])
+    with pytest.raises(AttemptFailed, match="error_max_budget_usd") as info:
+        await run_once(ClaudeSdkRunner(), tmp_path)
+    assert (info.value.cost_usd, info.value.session_id) == (3.05, "sess-123")
+
+    fake_query(monkeypatch, [result(subtype="error_max_turns", total_cost_usd=0.5)])
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(ClaudeSdkRunner(), tmp_path)
+    assert info.value.session_id == "sess-123"
+
+    fake_query(monkeypatch, [])  # no result at all: nothing to resume
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(ClaudeSdkRunner(), tmp_path)
+    assert info.value.session_id == ""
+
+
 async def test_sdk_exceptions_are_attempt_failures(monkeypatch, tmp_path):
     async def query(prompt, options):
         raise RuntimeError("socket closed")

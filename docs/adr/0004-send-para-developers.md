@@ -21,3 +21,27 @@ no como tool calls, así que la ventaja de `gather` no aplica y su costo (invisi
 - La clave del contador de devoluciones del par Tech Lead→Developer incluye el id de subtarea.
 - El subgrafo técnico declara un `output` schema: hacia afuera salen la pieza integrada y el
   mapa de subtareas, no la conversación interna de cada Developer.
+
+## Adenda (2026-09-14): el reintento continúa la sesión que dejó el intento fallido
+
+La segunda corrida de GH-12 mostró el costo de que la conversación del Developer quede solo
+en su sesión: en las cuatro subtareas el tope de 3 USD cortó el primer intento justo cuando
+entregaba la salida estructurada, con el trabajo ya commiteado, y el reintento arrancó una
+sesión nueva, releyó el worktree y gastó 1.4-1.8 USD más solo para reportar. En una el
+reintento también tocó el tope y la tarea escaló.
+
+**Un reintento continúa la sesión del intento que falló, si la hay.** `AttemptFailed`
+lleva el `session_id` que el SDK devuelve aun en un resultado con error (tope, turnos,
+salida inválida, entrega sin commit); `run_with_retry` reanuda esa sesión y le manda solo el
+error, porque el prompt ya está adentro. El modelo conserva lo que leyó e hizo: un
+Developer cortado al entregar, entrega. Es la misma regla que las entrevistas (ADR-0014):
+una sesión por participante. Un fallo sin sesión, el harness roto antes de abrirla, sigue
+arrancando de cero con el error agregado al prompt. Cada intento es un proceso nuevo, así
+que el tope se cuenta por intento, no por sesión.
+
+**El tope es red de seguridad, no presupuesto de trabajo.** Un tope que se dispara en toda
+corrida sana no protege nada: solo duplica el gasto. El default sube a 10 USD por intento,
+unas tres veces lo que costó una subtarea de GH-12, y sigue ajustable por
+`AGENTIC_DEVELOPER_MAX_BUDGET_USD`. Descartado que Tech Lead estime un tope por subtarea en
+el plan: no sabe estimar dólares y el plan no debe cargar con eso. Un tope por tarea que
+frene el gasto total es una decisión aparte, fuera de esta adenda.

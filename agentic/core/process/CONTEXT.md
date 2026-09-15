@@ -113,6 +113,9 @@ Entrega de la tarea al humano por PjM, con historial y motivo. Pausa la tarea.
 El rol se rompe: su ejecución falla, se le acaban los turnos sin resultado, la salida estructurada falta o es inválida, el `markdown` está vacío. Distinto de devolución; no cuenta para el límite.
 _Avoid_: error (demasiado amplio)
 
+**Reintento**:
+Nueva corrida de un rol tras un fallo de rol, con el error como entrada. Continúa la conversación del intento fallido cuando la hay. Distinto de devolución.
+
 **Handoff**:
 El bloque "Para el siguiente rol" con que cierra cada sección.
 

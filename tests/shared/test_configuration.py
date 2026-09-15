@@ -68,11 +68,11 @@ def test_execution_budget_and_interview_rounds_have_defaults():
     from agentic.core.process.domain.roles import PJM
 
     cfg = Configuration.from_sources(PRODUCT, {})
-    assert cfg.developer_max_budget_usd == 3.0
+    assert cfg.developer_max_budget_usd == 10.0
     assert cfg.interview_max_rounds == 4
     # Only a role that executes gets the money cap; a reasoning role is capped by turns.
     assert cfg.budget_for(PJM) is None
-    assert cfg.budget_for(replace(PJM, executes=True)) == 3.0
+    assert cfg.budget_for(replace(PJM, executes=True)) == 10.0
 
 
 def test_git_identity_is_the_environment_every_git_honours():

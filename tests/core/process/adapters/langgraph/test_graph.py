@@ -417,7 +417,13 @@ async def test_retried_failure_is_recorded_but_not_escalated(config):
     final = await run_graph(script, config)
     assert final["status"] == "ready_for_review"
     assert final["failures"] == [
-        {"role": "Product Analyst", "attempt": 1, "error": "invalid", "cost_usd": 0.02}
+        {
+            "role": "Product Analyst",
+            "attempt": 1,
+            "error": "invalid",
+            "cost_usd": 0.02,
+            "session_id": "",
+        }
     ]
 
 

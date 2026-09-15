@@ -39,11 +39,40 @@ async def test_retry_passes_the_error_and_sums_cost():
     out = await run_pjm(runner)
     assert out.cost_usd == pytest.approx(0.08)
     assert out.failures == [
-        {"role": "PjM", "attempt": 1, "error": "structured output missing", "cost_usd": 0.05}
+        {
+            "role": "PjM",
+            "attempt": 1,
+            "error": "structured output missing",
+            "cost_usd": 0.05,
+            "session_id": "",
+        }
     ]
+    # No session survived the failure: the retry starts over, the error appended.
     assert runner.calls[0]["prompt"] == "task"
-    assert "<PreviousAttemptFailed>\nstructured output missing" in runner.calls[1]["prompt"]
+    assert runner.calls[1]["prompt"].startswith("task\n\n<PreviousAttemptFailed>\n")
+    assert runner.calls[1]["resume"] is None
     assert runner.calls[1]["model"] == "m" and runner.calls[1]["cwd"] == Path("/p")
+
+
+async def test_retry_continues_the_session_a_failed_attempt_left():
+    # The cap or the turns cut the attempt with its session alive: the retry resumes
+    # it with the error as the next message, so the model keeps what it read and did.
+    cut = AttemptFailed("run failed (error_max_budget_usd)", 3.05, session_id="sess-1")
+    runner = ScriptedRunner(pjm=[cut, OK])
+    out = await run_pjm(runner)
+    assert out.failures[0]["session_id"] == "sess-1"
+    retry = runner.calls[1]
+    assert retry["resume"] == "sess-1"
+    assert retry["prompt"].startswith("<PreviousAttemptFailed>\nrun failed (error_max_budget_usd)")
+    assert "task" not in retry["prompt"]  # the session already has it
+
+
+async def test_an_invalid_delivery_also_keeps_its_session_for_the_retry():
+    invalid = RawResult({"markdown": "x", "type": "chore"}, 0.01, session_id="sess-2")
+    runner = ScriptedRunner(pjm=[invalid, OK])
+    out = await run_pjm(runner)
+    assert out.failures[0]["session_id"] == "sess-2"
+    assert runner.calls[1]["resume"] == "sess-2"
 
 
 async def test_second_failure_raises_role_failure_with_cost():

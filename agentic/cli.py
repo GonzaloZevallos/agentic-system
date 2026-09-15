@@ -21,11 +21,17 @@ from .core.process.application.ports import Ports
 from .core.process.application.preflight import preflight
 from .core.process.domain.task import TaskInput
 from .shared.configuration import ENV_PREFIX, Configuration, MissingProductDir
+from .shared.environment import without_own_toolchain
 
 
 def main() -> None:
     # `.env` in the working directory, if any. Real env vars win over it.
     load_dotenv()
+    # `uv run agentic` activated our venv; nothing we spawn in the product (git, a
+    # role running its tests) may inherit it. The SDK copies this process's whole
+    # environment into every role's, so the scrub is here, once, after `.env` so
+    # nothing reintroduces it and before anything runs.
+    _replace_environ(without_own_toolchain(os.environ))
     parser = argparse.ArgumentParser(prog="agentic")
     sub = parser.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run", help="run one task through the feature path")
@@ -70,6 +76,12 @@ def main() -> None:
     except (MissingProductDir, ValueError, OSError) as exc:
         parser.exit(2, f"agentic: {exc}\n")
     anyio.run(_run, task, cfg, ports)
+
+
+def _replace_environ(env: dict[str, str]) -> None:
+    for key in set(os.environ) - set(env):
+        del os.environ[key]
+    os.environ.update(env)
 
 
 async def _run(task: TaskInput, cfg: Configuration, ports: Ports) -> None:

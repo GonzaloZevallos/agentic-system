@@ -32,9 +32,11 @@ class Configuration(BaseModel):
     model_overrides: dict[str, str] = Field(default_factory=dict)
     max_returns_per_pair: int = Field(default=2, ge=0)
     role_retries: int = Field(default=1, ge=0)
-    # Money cap of one run of a role that executes (README.md, 4). Exceeding it is a
-    # role failure, not a return: the return limit measures quality, not money.
-    developer_max_budget_usd: float = Field(default=3.0, gt=0)
+    # Money cap of one attempt of a role that executes (README.md, 4): a safety net
+    # against a runaway role, well above what a subtask costs (3-4 USD in GH-12), not
+    # a work budget. Exceeding it is a role failure, not a return: the return limit
+    # measures quality, not money.
+    developer_max_budget_usd: float = Field(default=10.0, gt=0)
     # Rounds an interview may take before the interviewer closes with what it has
     # (ADR-0014).
     interview_max_rounds: int = Field(default=4, ge=1)

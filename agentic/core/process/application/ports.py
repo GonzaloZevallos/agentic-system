@@ -28,12 +28,15 @@ class RawResult:
 
 
 class AttemptFailed(Exception):
-    """The attempt broke in the harness: an exception, `max_turns` exhausted, no result.
-    The use case decides whether to retry (README.md, 3)."""
+    """The attempt broke in the harness: an exception, `max_turns` exhausted, the money
+    cap hit, no result. The use case decides whether to retry (README.md, 3), and it
+    resumes `session_id` when the attempt left one: what the model read and did is
+    still there (ADR-0004, addendum)."""
 
-    def __init__(self, error: str, cost_usd: float = 0.0):
+    def __init__(self, error: str, cost_usd: float = 0.0, session_id: str = ""):
         super().__init__(error)
         self.cost_usd = cost_usd
+        self.session_id = session_id
 
 
 class RoleRunner(Protocol):

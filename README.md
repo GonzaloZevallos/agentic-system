@@ -191,7 +191,10 @@ proceso, y la respuesta del humano lo reanuda donde estaba.
 Distinto de una devolución. Es el rol que se rompe: JSON inválido, salida vacía, se le
 acaban los turnos.
 
-- **Un reintento**, pasándole el error como entrada.
+- **Un reintento**, pasándole el error como entrada. Si el intento fallido dejó sesión
+  (el tope de costo o los turnos lo cortaron, la salida no validó), el reintento la
+  continúa en vez de arrancar de cero: el modelo conserva lo que leyó e hizo (ADR-0004,
+  adenda).
 - Si falla de nuevo, **escala al humano**. No cuenta para el límite de devoluciones del par.
 
 Un reintento con el error explicado arregla casi todos los casos de formato. Más reintentos
@@ -385,8 +388,12 @@ técnico y ADRs con los Tech Leads por tarea.
 
 **Herramientas y permisos**. Es el único rol que ejecuta: lectura y escritura de archivos,
 bash y tests, **sin aprobación humana por comando**. La jaula es el directorio del producto,
-más un tope de costo por llamada. Pedir aprobación comando por comando rompe la revisión en
-lote: el sistema quedaría congelado esperando al humano en cada paso. Sus commits firman
+más un tope de costo por intento: red de seguridad contra un rol desbocado, bien arriba de
+lo que cuesta una subtarea (10 USD por default, `AGENTIC_DEVELOPER_MAX_BUDGET_USD`), no un
+presupuesto de trabajo (ADR-0004, adenda). Pedir aprobación comando por comando rompe la
+revisión en lote: el sistema quedaría congelado esperando al humano en cada paso. Corre con
+el entorno del sistema limpio de su propia toolchain (`VIRTUAL_ENV`, `UV_*`, su `.venv/bin`
+en `PATH`), así que `pytest` y `uv run` en el producto resuelven al del producto. Sus commits firman
 como el sistema, con la identidad que le llega en el entorno, y tres reglas se le niegan aun
 sin aprobación: `git config`, `git push` y `git worktree` (ADR-0011, adenda).
 
@@ -748,7 +755,7 @@ imports:
 
 | Módulo | Contenido | Importa |
 |---|---|---|
-| `shared/` | `configuration.py` | Nada del proyecto |
+| `shared/` | `configuration.py`, `environment.py` (el entorno sin la toolchain propia) | Nada del proyecto |
 | `core/process/` | `domain/`: `roles.py` (`Role` con tools, reglas de permiso y skills; `Pair`; `Interview`; `describe_flags`) y `prompts/`, `task.py` (estado, subtareas y reducers), `document.py`, `schemas.py`, `rules.py` (límite por par, versionado por sección, subtareas listas, ruteo). `application/`: `ports.py` (`RoleRunner`, `TaskDocuments`, `ProductKnowledge`, `Prompts`, `FlagVocabulary`, `Inbox`, `Workspace`, `Tracker`), `interview` (rondas entre dos roles, ADR-0014) y un caso de uso por nodo: `classify`, `define`, `validate_definition`, `plan`, `develop`, `review`, `deliver`, `escalate`, sobre `run_role`. `adapters/`: `claude_sdk/` (harness con plugin de skills y jaula por rol, `Printer`), `filesystem/` (documentos y overlay de prompts), `git/` (rama de tarea y árboles de trabajo, ADR-0011), `github/` (bandeja y escritura: PR, comentarios, etiquetas), `langgraph/` (el grafo: nodos, ruteo, `Send` por subtarea, abre y cierra los spans; mañana `interrupt()` y checkpointer) y `telemetry.py`, el port por el que entra el tracing | `shared` |
 | `core/knowledge/` | `domain/`: `knowledge.py` (cómo se muestra, cómo se edita el glosario, qué debe traer una aprobación), `flags.py` (el vocabulario). `adapters/filesystem/`: implementa `ProductKnowledge` y `FlagVocabulary` sobre el repo del producto | `shared`, `process` |
 | `core/measurement/` | `domain/`: `metrics.py` (retrabajo, devoluciones, huella de prompts). `adapters/otel/`: spans y métricas del sistema, implementa `Telemetry` | `shared`, `process` |
@@ -821,8 +828,10 @@ mecanismo que necesitan los roles proactivos.
 
 Mecánicamente es una de cuatro cosas: excepción del SDK, `max_turns` agotado sin resultado,
 salida estructurada ausente o inválida, texto vacío. El port `RoleRunner` devuelve la salida
-cruda o lanza `AttemptFailed`; la validación y el reintento viven en `application.run_role`:
-atrapa, reintenta una vez con el error agregado al prompt, y si vuelve a fallar lanza
+cruda o lanza `AttemptFailed`, con el costo y la sesión que el intento dejó; la validación y
+el reintento viven en `application.run_role`: atrapa, reintenta una vez con el error como
+entrada (reanudando la sesión del intento fallido si la hay, o agregado al prompt de una
+sesión nueva si no), y si vuelve a fallar lanza
 `RoleFailure`, que el caso de uso convierte en escalado. Se descartó `RetryPolicy` de LangGraph porque reintenta el
 nodo sin pasarle el error al modelo. Todo fallo, reintentado o no, queda en el estado para las
 métricas de PjM.

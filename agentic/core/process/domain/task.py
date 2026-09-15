@@ -64,6 +64,9 @@ class Failure(TypedDict):
     error: str
     # A failed attempt still cost money; PjM's metrics need it.
     cost_usd: float
+    # The session the attempt left, if the harness got as far as opening one: the
+    # retry continues it, and `claude -r <id>` reopens it for the human.
+    session_id: str
 
 
 class RoleRun(TypedDict):

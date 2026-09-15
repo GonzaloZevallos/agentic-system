@@ -101,7 +101,7 @@ async def test_develop_runs_the_developer_unattended_in_the_subtask_checkout(cfg
     ports.workspace.moved.add(checkout.path)
     patch = await develop(state, cfg, ports)
     call = runner.calls[0]
-    assert call["cwd"] == checkout.path and call["max_budget_usd"] == 3.0
+    assert call["cwd"] == checkout.path and call["max_budget_usd"] == 10.0
     assert "implement one subtask, `api`" in call["system_prompt"]
     assert call["prompt"].startswith("## Engineering standards")
     assert "## PM\n\n### Consolidated definition" in call["prompt"]

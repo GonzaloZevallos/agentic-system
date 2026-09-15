@@ -2,10 +2,11 @@
 
 A role failure is one of four things (README.md, 3 and 14): the harness broke, the
 model ran out of turns, its structured output is missing or invalid, or its
-`markdown` is empty. `run_with_retry` retries once with the error appended to the
-prompt; a second failure raises `RoleFailure`, which the use case turns into an
-escalation. The graph engine's own retry was rejected because it reruns the node
-without telling the model what went wrong.
+`markdown` is empty. `run_with_retry` retries once with the error as input: inside the
+session the attempt left when there is one, appended to the prompt of a fresh session
+when there is none (ADR-0004, addendum). A second failure raises `RoleFailure`, which
+the use case turns into an escalation. The graph engine's own retry was rejected
+because it reruns the node without telling the model what went wrong.
 
 Context rule (README.md, 6): each role reads, in full, the sections it declares in
 `Role.reads`, after the engineering standards and the product knowledge if it reads
@@ -116,22 +117,29 @@ async def run_with_retry(
     breaking it is a role failure like any other, so the model gets the error back."""
     failures: list[Failure] = []
     for attempt in range(1, max(retries, 0) + 2):
+        text, session = _retry_input(prompt, failures, resume)
         try:
             output = await _attempt(
                 role,
-                _with_error(prompt, failures),
-                system_prompt,
-                model,
-                vocabulary,
-                cwd,
-                runner,
-                check,
-                resume,
-                max_budget_usd,
+                text,
+                system_prompt=system_prompt,
+                model=model,
+                vocabulary=vocabulary,
+                cwd=cwd,
+                runner=runner,
+                check=check,
+                resume=session,
+                max_budget_usd=max_budget_usd,
             )
         except AttemptFailed as exc:
             failures.append(
-                {"role": role.name, "attempt": attempt, "error": str(exc), "cost_usd": exc.cost_usd}
+                {
+                    "role": role.name,
+                    "attempt": attempt,
+                    "error": str(exc),
+                    "cost_usd": exc.cost_usd,
+                    "session_id": exc.session_id,
+                }
             )
             continue
         output.failures = failures
@@ -140,18 +148,32 @@ async def run_with_retry(
     raise RoleFailure(role, failures)
 
 
-def _with_error(prompt: str, failures: list[Failure]) -> str:
+def _retry_input(
+    prompt: str, failures: list[Failure], resume: str | None
+) -> tuple[str, str | None]:
+    """What the next attempt gets: (prompt, session to resume).
+
+    A failed attempt that left a session is continued with the error as the next
+    message and nothing else, since the prompt is already in there: the model keeps
+    what it read and did, and a Developer cut while delivering just delivers
+    (ADR-0004, addendum). One that left none, because the harness broke before
+    opening it, starts over: the caller's session if any, the error appended to the
+    prompt."""
     if not failures:
-        return prompt
-    return (
-        f"{prompt}\n\n<PreviousAttemptFailed>\n{failures[-1]['error']}\n"
-        "</PreviousAttemptFailed>\n\nRetry. Fix exactly what failed."
+        return prompt, resume
+    error = (
+        f"<PreviousAttemptFailed>\n{failures[-1]['error']}\n</PreviousAttemptFailed>\n\n"
+        "Retry. Fix exactly what failed."
     )
+    if left := failures[-1]["session_id"]:
+        return error, left
+    return f"{prompt}\n\n{error}", resume
 
 
 async def _attempt(
     role: Role,
     prompt: str,
+    *,
     system_prompt: str,
     model: str,
     vocabulary: dict[str, str],
@@ -171,18 +193,18 @@ async def _attempt(
         resume=resume,
         max_budget_usd=max_budget_usd,
     )
-    cost = result.cost_usd
+    cost, session = result.cost_usd, result.session_id
     if result.structured_output is None:
-        raise AttemptFailed("structured output missing; it is required", cost)
+        raise AttemptFailed("structured output missing; it is required", cost, session)
     try:
         data = schemas.validate(role.schema, result.structured_output, vocabulary)
         if check is not None:
             check(data)
     except ValueError as exc:
-        raise AttemptFailed(f"structured output invalid: {exc}", cost) from exc
+        raise AttemptFailed(f"structured output invalid: {exc}", cost, session) from exc
     text = data.pop("markdown").strip()
     if not text:
-        raise AttemptFailed("`markdown` is empty; the Markdown section is required", cost)
+        raise AttemptFailed("`markdown` is empty; the Markdown section is required", cost, session)
     return Output(
         text=text,
         data=data,

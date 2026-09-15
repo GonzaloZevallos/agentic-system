@@ -133,29 +133,39 @@ class ClaudeSdkRunner:
         except ResultError as exc:
             # The CLI reports the failed result, then exits non-zero; the SDK turns
             # that into ResultError after yielding the ResultMessage.
-            cost = (result.total_cost_usd or 0.0) if result else 0.0
+            cost, session = _left_behind(result)
             if exc.subtype == "error_max_turns":
-                raise AttemptFailed(exhausted, cost) from exc
+                raise AttemptFailed(exhausted, cost, session) from exc
             raise AttemptFailed(
-                f"run failed ({exc.subtype}): {'; '.join(exc.errors)}", cost
+                f"run failed ({exc.subtype}): {'; '.join(exc.errors)}", cost, session
             ) from exc
         except Exception as exc:  # the SDK raises its own hierarchy; all of it is a failure
             raise AttemptFailed(f"SDK error: {exc}") from exc
 
         if result is None:
             raise AttemptFailed("run ended without a result message")
-        # Each `query` is a new Claude Code process, so the cost is this run's alone,
-        # resumed session or not.
-        cost = result.total_cost_usd or 0.0
+        cost, session = _left_behind(result)
         if result.subtype == "error_max_turns":
-            raise AttemptFailed(exhausted, cost)
+            raise AttemptFailed(exhausted, cost, session)
         if result.is_error:
             raise AttemptFailed(
-                f"run ended in error: {'; '.join(result.errors or [result.subtype])}", cost
+                f"run ended in error: {'; '.join(result.errors or [result.subtype])}",
+                cost,
+                session,
             )
         return RawResult(
             structured_output=result.structured_output,
             cost_usd=cost,
             turns=result.num_turns,
-            session_id=result.session_id,
+            session_id=session,
         )
+
+
+def _left_behind(result: ResultMessage | None) -> tuple[float, str]:
+    """(cost, session) of a run as it ended. Each `query` is a new Claude Code process,
+    so the cost is this run's alone, resumed session or not. A failed result still
+    names its session: the money cap or the turns cut the run, but what the model did
+    is in there to resume."""
+    if result is None:
+        return 0.0, ""
+    return result.total_cost_usd or 0.0, result.session_id
