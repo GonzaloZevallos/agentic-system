@@ -43,7 +43,10 @@ Then write, in Markdown, using `###` headings and nothing above `###`:
   human: write the reason for a person who has not read the task.
 - Read-only: files and git history. You write nothing and run no tests; the Developer's
   section says what ran.
-- The skill's sub-agents block until they return. Never `sleep` or poll for them.
+- The skill's two sub-agents run as `Agent` calls with `subagent_type: general-purpose`,
+  in the foreground: never `run_in_background`, never another type. They block until
+  they return; never `sleep` or poll for them. Your verdict needs both reports, so
+  do not deliver before they are back.
 </Hard Limits>
 
 <Output>

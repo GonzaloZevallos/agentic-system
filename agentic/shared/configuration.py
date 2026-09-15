@@ -49,7 +49,8 @@ class Configuration(BaseModel):
     # The model of every sub-agent a role spawns through the Agent tool, the two of
     # the `code-review` skill among them. They read and summarise for a parent that
     # keeps its own model; on the parent's model they cost 5-10 USD a review
-    # (ADR-0013, addendum).
+    # (ADR-0013, addendum). Forced: an agent type whose definition names a model
+    # (`Explore` inherits the parent's) would otherwise ignore it (issue #19).
     subagent_model: str = "claude-sonnet-5"
     # Rounds an interview may take before the interviewer closes with what it has
     # (ADR-0014).
@@ -111,8 +112,16 @@ class Configuration(BaseModel):
     def role_env(self) -> dict[str, str]:
         """What every role's process gets on top of the inherited environment: the git
         identity and the sub-agent model, which Claude Code reads from
-        `CLAUDE_CODE_SUBAGENT_MODEL` for every Agent tool call, skills included."""
-        return {**self.git_identity, "CLAUDE_CODE_SUBAGENT_MODEL": self.subagent_model}
+        `CLAUDE_CODE_SUBAGENT_MODEL` for every Agent tool call, skills included. Alone,
+        the variable is a default: an agent type that names its model in its definition
+        or a call that passes `model` wins over it, and that is how 5 of 10 review passes
+        ran `Explore` on Opus (issue #19). `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` drops both
+        overrides, so the variable decides for every sub-agent."""
+        return {
+            **self.git_identity,
+            "CLAUDE_CODE_SUBAGENT_MODEL": self.subagent_model,
+            "CLAUDE_CODE_SUBAGENT_MODEL_FORCE": "1",
+        }
 
 
 def _from_env(raw: str, annotation: Any) -> Any:

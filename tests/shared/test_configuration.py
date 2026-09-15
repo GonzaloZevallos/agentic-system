@@ -85,10 +85,15 @@ def test_the_task_cap_has_a_default_well_above_a_healthy_run():
 
 def test_role_env_carries_the_git_identity_and_the_subagent_model():
     # What every role's process gets on top of the inherited environment: the git
-    # identity and the model the Agent tool hands to sub-agents (ADR-0013, addendum).
+    # identity and the model the Agent tool hands to sub-agents (ADR-0013, addendum),
+    # forced over the model an agent type or a call names (issue #19).
     cfg = Configuration.from_sources(PRODUCT, {})
     assert cfg.subagent_model == "claude-sonnet-5"
-    assert cfg.role_env == {**cfg.git_identity, "CLAUDE_CODE_SUBAGENT_MODEL": "claude-sonnet-5"}
+    assert cfg.role_env == {
+        **cfg.git_identity,
+        "CLAUDE_CODE_SUBAGENT_MODEL": "claude-sonnet-5",
+        "CLAUDE_CODE_SUBAGENT_MODEL_FORCE": "1",
+    }
     custom = Configuration.from_sources(PRODUCT, {"AGENTIC_SUBAGENT_MODEL": "haiku"})
     assert custom.role_env["CLAUDE_CODE_SUBAGENT_MODEL"] == "haiku"
 
