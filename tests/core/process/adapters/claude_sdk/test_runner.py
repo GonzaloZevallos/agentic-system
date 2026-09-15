@@ -61,6 +61,16 @@ async def test_raw_result_carries_session_cost_and_turns(monkeypatch, tmp_path):
     assert options.include_partial_messages is False
 
 
+async def test_no_role_sees_the_users_mcp_servers(monkeypatch, tmp_path):
+    # Without `strict_mcp_config` the CLI loads the user's own MCP servers into every
+    # role, and no role uses them (README.md, 14, Observabilidad; issue #18).
+    seen = fake_query(monkeypatch, [result()])
+    await run_once(ClaudeSdkRunner(), tmp_path)
+    options = seen[0][1]
+    assert options.strict_mcp_config is True
+    assert options.mcp_servers == {}
+
+
 async def test_raw_result_splits_the_cost_by_model(monkeypatch, tmp_path):
     # The SDK's total covers the sub-agents a role spawns; `model_usage` says how much
     # went to each model, which is how a Sonnet sub-agent shows next to an Opus parent.

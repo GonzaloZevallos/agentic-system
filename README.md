@@ -915,6 +915,12 @@ del sistema y la huella de prompts como labels (ADR-0008, `observability/README.
 último, el `session_id` de cada corrida queda en el documento de tarea: `claude -r <id>` en
 el repo del producto reabre la sesión del rol.
 
+Los roles no ven la configuración MCP del usuario: el runner pasa `strict_mcp_config` sin
+servidores, porque ningún rol declara una tool MCP y los conectores heredados de la cuenta
+(claude.ai, `~/.claude.json`) sumaban ~233k tokens releídos en cada llamada, el 67% del
+costo de la corrida 4 (issue #18). `tests/llm/test_context_size.py` vigila el contexto por
+llamada de un rol mínimo; solo muerde en una cuenta con conectores.
+
 ### Tooling
 
 `pyproject.toml` con `uv.lock`, ruff con `E F I UP` (sin `D`: docstrings obligatorios en 17

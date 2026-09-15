@@ -13,7 +13,10 @@ inside its working directory under a money cap, and its `denied` rules still hol
 permission mode, where anything outside its rules is denied because nobody is there
 to approve it. Skills come from the one plugin pinned as a submodule under
 `agentic/plugins/` (ADR-0013); `setting_sources=[]` keeps the user's own plugins,
-settings and CLAUDE.md out.
+settings and CLAUDE.md out. It does not keep their MCP servers out: those come from
+the user's Claude Code config, not from settings, and `strict_mcp_config=True` is what
+stops the CLI from loading them. No role declares an MCP tool, and inherited ones cost
+~233k tokens of tool definitions reread on every call, 67% of a run (issue #18).
 
 The runner's `env` reaches every role's process on top of the inherited environment:
 the system's git identity travels there (ADR-0011, addendum), so a role that commits
@@ -74,6 +77,8 @@ def options_for(
         max_turns=role.max_turns,
         output_format={"type": "json_schema", "schema": inline_refs(json_schema)},
         setting_sources=[],  # ignore project CLAUDE.md and settings
+        mcp_servers={},  # and only these: none (see the module docstring)
+        strict_mcp_config=True,
         # Deltas as they are generated; without an observer nobody would read them.
         include_partial_messages=partial,
         # Claude Code parents its own spans under the role's (SDK mode honours it).
