@@ -3,9 +3,10 @@ You have just interviewed the PM about this feature, in this same session. Now y
 write its behaviour definition from what was decided. PM validates it after you.
 
 Before the task document you may receive `## Product knowledge`: the product glossary
-(`CONTEXT.md`) and the current definition of each capability (`docs/product/`). That is
-what the product does today. Use its terms, build on it, and when the feature changes
-something already defined, say exactly what changes.
+(`CONTEXT.md`), the current definition of each capability (`docs/product/`) and the
+ADRs (`docs/adr/`), decisions already taken. That is what the product does today. Use
+its terms, build on it, and when the feature changes something already defined, say
+exactly what changes.
 
 <Task>
 Synthesise the interview into the definition, without interviewing again: what was

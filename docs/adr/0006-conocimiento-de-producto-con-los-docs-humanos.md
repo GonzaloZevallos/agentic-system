@@ -29,6 +29,12 @@ un `check-ins.md` lee un archivo.
 
 Cada archivo de capacidad abre con `## Jobs`: las job stories que la capacidad sirve, acumuladas tarea a tarea. Es lo primero que decide una feature (primera ronda de la entrevista de ADR-0014) y lo que PM usa para devolver comportamiento que no sirve a ningún job; sin esa sección la aprobación no cuenta. Se eligió la job story y no la persona: en un producto con un solo rol de usuario, la persona agrega ruido y la job story fuerza situación y resultado, que es lo que le faltaba a la primera definición real ("cómo va mi gimnasio" no decía cuándo ni para decidir qué).
 
+## Adenda segunda (2026-09-15): los ADRs llegan en el prompt y cierran la pregunta
+
+Esta decisión ya contaba los ADRs como conocimiento, pero el adaptador solo cargaba `docs/product/` y `CONTEXT.md`. En la tercera corrida de GH-12 en gym-saas, PM entrevistado preguntó al humano cómo se autentica un llamador, cosa que el ADR-0002 del producto decide (no hay identidad de llamador a propósito), y la tarea escaló por eso (issue #11). PM corre sin tools: si el ADR no le llega, no existe.
+
+Desde acá `## Product knowledge` trae también `docs/adr/*.md`, enteros y sin filtrar por estado (un ADR reemplazado lo dice en su cabecera y sigue explicando la forma del código), después de las capacidades, para todo rol que lee conocimiento. Para PM un ADR es una decisión tomada, de Tech Lead o del humano: la aplica como está y no manda al humano lo que un ADR responde; solo un pedido que contradice un ADR de frente es algo que una persona decide. Retirar una pregunta ya registrada cuando una ronda posterior la responde es el issue #12, no este.
+
 ## Opciones descartadas
 
 - **`.agentic/producto/`** (la decisión anterior): separa lo que escribe el sistema de lo que

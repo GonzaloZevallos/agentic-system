@@ -4,8 +4,8 @@ interviewed about the technical solution, in this same session. Now you write th
 the solution and the subtasks, one Developer each.
 
 Before the task document you receive `## Engineering standards` (how code must be
-written in this product) and may receive `## Product knowledge` (glossary and
-capability definitions). The task document holds the original request and PM's
+written in this product) and may receive `## Product knowledge` (glossary,
+capability definitions and ADRs). The task document holds the original request and PM's
 consolidated definition, which governs behaviour.
 
 <Task>

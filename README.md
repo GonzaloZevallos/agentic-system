@@ -293,8 +293,8 @@ Dispara cuando detecta un patrón negativo.
 
 ### Product Analyst
 
-**Entradas**: la tarea, el conocimiento de producto (`docs/product/` y `CONTEXT.md` del
-producto, completos), acceso al producto real para explorarlo.
+**Entradas**: la tarea, el conocimiento de producto (`docs/product/`, `docs/adr/` y
+`CONTEXT.md` del producto, completos), acceso al producto real para explorarlo.
 
 **En feature**
 
@@ -591,8 +591,11 @@ Forma del repo del producto:
 
 El conocimiento de producto (definiciones, ADRs, glosario) vive con los docs humanos, no
 bajo `.agentic/`, porque es del producto y lo lee cualquiera; `.agentic/` es maquinaria del
-sistema (ADR-0006). Los ADRs los valida el Tech Lead efímero en el pingpong, y el humano ve
-todo el conocimiento igual al revisar el diff antes de mergear.
+sistema (ADR-0006). Los tres llegan enteros en el prompt de todo rol que lee conocimiento,
+ADRs incluidos: un rol sin tools no tiene otra forma de saber qué decidió un ADR, y para PM
+un ADR cierra la pregunta, nunca va al humano (ADR-0006, adenda segunda). Los ADRs los
+valida el Tech Lead efímero en el pingpong, y el humano ve todo el conocimiento igual al
+revisar el diff antes de mergear.
 
 ### El producto de prueba
 
