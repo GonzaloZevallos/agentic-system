@@ -130,14 +130,18 @@ Devolución que se resuelve dentro del par sin pasar por PjM. Se reporta a PjM i
 Máximo de devoluciones por par antes de escalar. Hoy 2.
 
 **Escalado**:
-Lo que un rol, un par o el tope dejan dicho cuando la tarea no puede seguir sin el humano: el motivo, y las preguntas si las hay. El sistema lo entrega al humano en el issue y pausa la tarea.
+Lo que un rol, un par o el tope dejan dicho cuando la tarea no puede seguir sin el humano: el motivo de escalado, y las preguntas si las hay. El sistema lo entrega al humano en el issue y pausa la tarea.
+
+**Motivo de escalado**:
+Por qué la tarea no puede seguir sin el humano, de una lista cerrada: PjM no puede clasificarla o su camino no existe, un par llegó a su límite, un rol falló dos veces, se alcanzó el tope de tarea, o quedaron preguntas para el humano. Decide qué hace falta para reanudar.
+_Avoid_: causa, tipo de escalado
 
 **Pausa**:
 Una tarea escalada queda esperando al humano con su estado guardado, sin gastar. Se retoma desde el mismo punto.
 _Avoid_: bloqueo, espera
 
 **Decisión del humano**:
-Lo que el humano responde a un escalado. Entra al documento de tarea, la lee todo rol y no se vuelve a preguntar: vale para toda la tarea y pesa sobre lo que contradiga.
+Lo que el humano responde a un escalado: todo lo que comenta en el issue después del último aviso del sistema. Entra al documento de tarea, la lee todo rol y no se vuelve a preguntar: vale para toda la tarea y pesa sobre lo que contradiga.
 _Avoid_: respuesta, comentario
 
 **Reanudación**:
@@ -156,7 +160,7 @@ Gasto máximo de un intento de cualquier rol. Excederlo es un fallo de rol. Red 
 _Avoid_: presupuesto (eso sería lo que se espera gastar)
 
 **Tope de tarea**:
-Gasto acumulado de una tarea a partir del cual el sistema escala y pausa en vez de seguir. Crece con el plan: una base hasta que hay plan, después la base más una parte por subtarea, integración incluida, con un techo. Se mira antes de cada intento de cualquier rol. Subirlo al reanudar es decisión del humano. No es fallo de rol ni devolución y no cuenta para ningún límite. Como el tope por intento, es red de seguridad, bien arriba de lo que cuesta una tarea sana. Hoy 30 USD de base, 15 por subtarea, techo 250.
+Gasto acumulado de una tarea a partir del cual el sistema escala y pausa en vez de seguir. Crece con el plan: una base hasta que hay plan, después la base más una parte por subtarea, integración incluida, con un techo que limita esa cuenta. Se mira antes de cada intento de cualquier rol. Subirlo al reanudar es decisión del humano, que puede pasar el techo y nunca lo baja. No es fallo de rol ni devolución y no cuenta para ningún límite. Como el tope por intento, es red de seguridad, bien arriba de lo que cuesta una tarea sana. Hoy 30 USD de base, 15 por subtarea, techo 250.
 _Avoid_: presupuesto de tarea
 
 **Handoff**:

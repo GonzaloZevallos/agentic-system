@@ -46,12 +46,11 @@ class GhTracker:
         if (number := issue_number(task_id)) is not None:
             self._gh("issue", "edit", str(number), "--remove-label", label)
 
-    def last_comment(self, task_id: str) -> str | None:
+    def issue_comments(self, task_id: str) -> list[str]:
         if (number := issue_number(task_id)) is None:
-            return None
+            return []
         comments = json.loads(self._gh("issue", "view", str(number), "--json", "comments"))
-        bodies = [c.get("body") or "" for c in comments.get("comments", [])]
-        return bodies[-1] if bodies else None
+        return [c.get("body") or "" for c in comments.get("comments", [])]
 
     def _gh(self, *args: str) -> str:
         try:

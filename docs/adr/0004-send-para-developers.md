@@ -108,7 +108,7 @@ siete más la integración: un número fijo no sabe cuánto trabajo tiene la tar
 integración cuando hay más de una, contada desde que existe el plan
 (`rules.task_cap`). `run_role` lo lee del estado en cada intento, así sube apenas entra el
 plan. `Configuration`: `task_budget_base_usd` 30, `task_budget_per_subtask_usd` 15 y
-`task_max_budget_usd` pasa a ser el techo absoluto, 250. `plan_check` fija un máximo de 12
+`task_max_budget_usd` pasa a ser el techo de la fórmula, 250. `plan_check` fija un máximo de 12
 subtareas, para que el plan no suba el tope sin límite. Los números salen de la corrida 4
 y **se recalibran tras la primera corrida con el issue #18 aplicado**, que debería costar
 35-45 USD.
@@ -118,7 +118,8 @@ issue trae lo gastado por fase (definición, plan, desarrollo, revisión, sumand
 sección, y `other` para los intentos fallidos que escalaron) y la línea
 `agentic resume --issue N --task-budget X`, con X lo gastado más una subtarea. El humano
 decide: `--task-budget` sube el tope de esa corrida por encima de la fórmula y del techo,
-nunca lo baja (`task_budget_usd`; el tope en vigor es el mayor de los dos), así un monto dado
+nunca lo baja (`task_budget_usd`; el tope en vigor es el mayor de los dos; el techo limita
+la fórmula, no al humano), así un monto dado
 antes del plan no vuelve a frenar la tarea cuando el plan agranda la fórmula. `resume`
 rechaza reanudar si el tope en vigor no supera lo gastado.
 

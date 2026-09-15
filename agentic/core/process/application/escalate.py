@@ -56,6 +56,6 @@ def comment(state: TaskState, cfg: Configuration, ports: Ports) -> str:
     lines.append(f"\nTask document: `{document.relative_path(state['id'])}`")
     if resume:
         lines.append(
-            f"\nTo resume, answer in a comment if there is anything to decide, then run `{resume}`."
+            f"\nTo resume, answer in comments if there is anything to decide, then run `{resume}`."
         )
     return "\n".join(lines)

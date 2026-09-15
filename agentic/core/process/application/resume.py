@@ -1,7 +1,7 @@
 """Resuming a paused task (README.md, 3 and 14; ADR-0003, addendum).
 
-A task paused by an escalation waits in the checkpointer. The human answers in a
-comment on the issue, if there is anything to decide, and runs `agentic resume`: the
+A task paused by an escalation waits in the checkpointer. The human answers in
+comments on the issue, if there is anything to decide, and runs `agentic resume`: the
 answer enters as the `Human` section, the pair that hit its limit starts over, and the
 task goes on from where it stopped. Before spending, the human sees what will resume,
 and nothing resumes under a cap that is already spent.
@@ -15,6 +15,7 @@ The graph calls stay in the driving adapter; this module decides what they get."
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal, cast, get_type_hints
 
@@ -34,6 +35,8 @@ SYSTEM_COMMENTS = (ESCALATED, RESUMED, READY)
 STATE_FIELDS = frozenset(get_type_hints(TaskState)) - {"subtask_id"}
 
 Source = Literal["checkpoint", "document"]
+# The summary's label for the decision, whose later lines align under its first.
+DECISION = "decision:  "
 
 
 class WaitingOnHuman(Exception):
@@ -49,7 +52,7 @@ class Resumption:
     # The state as it paused, and as it resumes once the human's answer is in.
     paused: TaskState
     resumed: TaskState
-    # The human's answer, if the issue has one after the system's last comment.
+    # The human's decision: what the issue says after the system's last comment, if any.
     decision: str | None
     # Where the task goes next: a node, or the nodes a crashed run left pending.
     target: str
@@ -95,12 +98,19 @@ def _same_commit(a: str, b: str) -> bool:
     return a.startswith(b) or b.startswith(a)
 
 
-def human_reply(comment: str | None) -> str | None:
-    """The human's answer: the issue's last comment, unless the system wrote it."""
-    text = (comment or "").strip()
-    if not text or text.startswith(SYSTEM_COMMENTS):
-        return None
-    return text
+def human_decision(comments: Sequence[str]) -> str | None:
+    """The human's decision: every comment after the system's last one, joined. The
+    human may answer in several comments; all of them, and only them, enter. With no
+    system comment there is nothing the human answered: what the issue says before
+    the system ever spoke is the task, not a decision."""
+    after: list[str] | None = None
+    for body in comments:
+        text = "\n".join(body.strip().splitlines())
+        if text.startswith(SYSTEM_COMMENTS):
+            after = []
+        elif text and after is not None:
+            after.append(text)
+    return "\n\n".join(after or []) or None
 
 
 def prepare(
@@ -119,26 +129,27 @@ def prepare(
     if pending:
         resumed, target = paused, ", ".join(pending)
     else:
-        decision = human_reply(ports.tracker.last_comment(task_id))
+        decision = human_decision(ports.tracker.issue_comments(task_id))
         if decision is None and paused.get("questions_for_human"):
             raise WaitingOnHuman(
                 f"{task_id} waits on {len(paused['questions_for_human'])} question(s): "
-                "answer them in a comment on the issue, then resume"
+                "answer them in comments on the issue, then resume"
             )
         if decision is None and (pair := rules.pair_at_limit(paused.get("escalated"))):
             # The counter starts over only on an answer (README.md, 3): with nothing new,
             # the pair would return for the same reason again.
             raise WaitingOnHuman(
-                f"{task_id}: {pair} hit its return limit; decide in a comment on the issue "
+                f"{task_id}: {pair} hit its return limit; decide in comments on the issue "
                 "what the next attempt must do, then resume"
             )
         resumed = apply(paused, rules.resumed(paused, decision))
-        target = rules.resume_target(resumed)
-        if target is None:
+        next_node = rules.resume_target(resumed)
+        if next_node is None:
             raise ValueError(
                 f"{task_id} has nothing left to run ({paused.get('status', 'open')}): "
                 "start it over with `agentic run --fresh` if that is what you want"
             )
+        target = next_node
     cap = task_cap(resumed, cfg)
     spent = paused.get("cost_usd", 0.0)
     if cap <= spent:
@@ -168,7 +179,7 @@ def summary(r: Resumption, cfg: Configuration, ports: Ports) -> str:
         f"reason:    {state.get('escalated') or 'none: the run stopped without escalating'}",
         f"spent:     {state.get('cost_usd', 0.0):.2f} USD ({phases})",
         f"task cap:  {r.cap_usd:.2f} USD ({how})",
-        f"decision:  {_first_line(r.decision) if r.decision else 'none'}",
+        f"{DECISION}{_indented(r.decision) if r.decision else 'none'}",
         f"resumes:   {r.target}{_subtasks(r)}",
     ]
     lines.extend(f"session:   {line}" for line in _sessions(r))
@@ -190,9 +201,10 @@ def announce(r: Resumption, ports: Ports) -> None:
     )
 
 
-def _first_line(text: str) -> str:
-    line = text.strip().splitlines()[0]
-    return line if len(line) <= 80 else line[:77] + "..."
+def _indented(text: str) -> str:
+    # Whole: it is what enters the task document, and the human confirms it.
+    pad = " " * len(DECISION)
+    return "\n".join(pad + line if line else "" for line in text.splitlines()).lstrip()
 
 
 def _resuming_subtasks(r: Resumption) -> list[str]:

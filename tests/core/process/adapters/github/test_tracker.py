@@ -63,14 +63,14 @@ def test_gh_failures_are_value_errors():
         GhTracker(Path("/p"), Recorder(fail=True)).open_pull_request("T-1", "b", "t", "x")
 
 
-def test_a_resume_unlabels_and_reads_the_last_comment():
+def test_a_resume_unlabels_and_reads_the_comments():
     run = Recorder(stdout='{"comments": [{"body": "Escalated: x"}, {"body": "Use USD."}]}')
     tracker = GhTracker(Path("/p"), run)
     tracker.unlabel("GH-12", "needs-human")
-    assert tracker.last_comment("GH-12") == "Use USD."
+    assert tracker.issue_comments("GH-12") == ["Escalated: x", "Use USD."]
     assert run.calls == [
         ["gh", "issue", "edit", "12", "--remove-label", "needs-human"],
         ["gh", "issue", "view", "12", "--json", "comments"],
     ]
-    assert GhTracker(Path("/p"), Recorder(stdout='{"comments": []}')).last_comment("GH-1") is None
-    assert tracker.last_comment("T-abc") is None and len(run.calls) == 2
+    assert GhTracker(Path("/p"), Recorder(stdout='{"comments": []}')).issue_comments("GH-1") == []
+    assert tracker.issue_comments("T-abc") == [] and len(run.calls) == 2

@@ -197,9 +197,9 @@ class Tracker(Protocol):
 
     def unlabel(self, task_id: str, label: str) -> None: ...
 
-    def last_comment(self, task_id: str) -> str | None:
-        """The body of the issue's latest comment, whoever wrote it; None when there is
-        none or no issue."""
+    def issue_comments(self, task_id: str) -> list[str]:
+        """The bodies of the issue's comments, oldest first, whoever wrote them; none
+        when the task has no issue."""
         ...
 
 

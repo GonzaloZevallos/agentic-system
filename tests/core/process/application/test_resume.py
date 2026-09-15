@@ -95,12 +95,16 @@ def test_the_document_is_refused_when_git_moved_since():
         resume.from_document("GH-99", ports)
 
 
-def test_the_answer_is_the_last_comment_unless_the_system_wrote_it():
-    assert resume.human_reply(" Use USD. ") == "Use USD."
-    assert resume.human_reply("Escalated: PM could not decide") is None
-    assert resume.human_reply("Resumed: develop, under a task cap of 150.00 USD.") is None
-    assert resume.human_reply("Ready for review: https://x") is None
-    assert resume.human_reply(None) is None and resume.human_reply("  ") is None
+def test_the_decision_is_everything_the_human_said_after_the_system_last_spoke():
+    assert resume.human_decision(["Escalated: x", " Use USD. ", "And ARS for Argentina."]) == (
+        "Use USD.\n\nAnd ARS for Argentina."
+    )
+    earlier = ["Why MRR?", "Escalated: PM could not decide", "USD.", "Resumed: define."]
+    assert resume.human_decision(earlier) is None
+    assert resume.human_decision([*earlier, "Ready for review: https://x", "  "]) is None
+    assert resume.human_decision(["Escalated: x", "Keep it\r\nsimple."]) == "Keep it\nsimple."
+    assert resume.human_decision(["Discussed before any run."]) is None
+    assert resume.human_decision([]) is None
 
 
 def test_a_resume_under_the_formula_goes_on_to_the_returned_integration(cfg):
@@ -148,6 +152,10 @@ def test_questions_without_an_answer_keep_the_task_waiting(cfg):
     assert "Which currency?" not in str(r.resumed["questions_for_human"])
     assert "USD, always." in r.resumed["sections"]["Human"]
     assert "decision:  USD, always." in resume.summary(r, cfg, ports)
+    ports.tracker.earlier.append("ARS in Argentina.")
+    r = resume.prepare("GH-12", state, "checkpoint", cfg, ports)
+    text = resume.summary(r, cfg, ports)
+    assert "decision:  USD, always.\n\n           ARS in Argentina.\n" in text
 
 
 def test_a_run_that_crashed_resumes_its_pending_nodes_as_they_are(cfg):
@@ -159,7 +167,7 @@ def test_a_run_that_crashed_resumes_its_pending_nodes_as_they_are(cfg):
 def test_announcing_takes_the_task_out_of_the_queue(cfg):
     ports = memory_ports()
     raised = Configuration(product_dir=cfg.product_dir, task_budget_usd=125)
-    ports.tracker.earlier = ["Go on, but keep MRR per active subscription."]
+    ports.tracker.earlier = ["Escalated: " + CAP, "Go on, but keep MRR per active subscription."]
     r = resume.prepare("GH-12", paused(), "checkpoint", raised, ports)
     resume.announce(r, ports)
     assert ports.tracker.unlabeled == [("GH-12", "needs-human")]

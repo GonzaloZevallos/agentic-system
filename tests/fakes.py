@@ -212,9 +212,8 @@ class MemoryTracker:
     def unlabel(self, task_id: str, label: str) -> None:
         self.unlabeled.append((task_id, label))
 
-    def last_comment(self, task_id: str) -> str | None:
-        bodies = [*self.earlier, *(text for _, text in self.comments)]
-        return bodies[-1] if bodies else None
+    def issue_comments(self, task_id: str) -> list[str]:
+        return [*self.earlier, *(text for _, text in self.comments)]
 
 
 def memory_ports(runner: ScriptedRunner | None = None, **overrides) -> Ports:

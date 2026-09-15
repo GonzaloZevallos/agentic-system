@@ -52,10 +52,13 @@ así la misma regla sirve para el checkpoint y para el documento.
 el saver síncrono no implementa las lecturas async. El grafo exportado para `langgraph dev`
 sigue sin compilar.
 
-**`agentic resume --issue N`.** Usa el checkpoint si existe. Toma como decisión el último
-comentario del issue si no lo escribió el sistema (`Escalated:`, `Resumed:`,
-`Ready for review:`); sin decisión sale con 1 si hay preguntas pendientes o un par llegó
-a su límite, porque resetear el contador sin nada nuevo repite la misma devolución. Un tope
+**`agentic resume --issue N`.** Usa el checkpoint si existe. Toma como decisión todos los
+comentarios del issue posteriores al último del sistema (`Escalated:`, `Resumed:`,
+`Ready for review:`), juntos (sin comentario del sistema no hay decisión: lo anterior es la tarea): el humano
+puede responder en varios, y el resumen muestra la
+decisión entera antes de confirmar. Un marcador como `Decision:` queda para el poller de la
+etapa 5, que necesita saber cuándo el humano terminó. Sin decisión sale con 1 si hay
+preguntas pendientes o un par llegó a su límite, porque resetear el contador sin nada nuevo repite la misma devolución. Un tope
 alcanzado o un fallo de rol se reanudan sin decisión. Antes de gastar
 muestra la tarea, dónde se frenó, el motivo, lo gastado por fase, el tope nuevo, qué reanuda,
 las sesiones y los worktrees, y pide confirmación salvo `--yes`; `--dry-run` no gasta nada.

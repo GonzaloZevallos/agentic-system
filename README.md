@@ -188,7 +188,8 @@ primera corrida sin la fuga de MCP (issue #18).
 Se mira antes de cada intento de cualquier rol; alcanzado, el sistema escala al humano con
 el total gastado y el tope como motivo, y la tarea **pausa** (sección 14). El comentario del
 issue trae lo gastado por fase y la línea `agentic resume --issue N --task-budget X`: subir
-el tope es decisión del humano, y `--task-budget` lo sube para esa corrida, nunca lo baja.
+el tope es decisión del humano, y `--task-budget` lo sube para esa corrida, nunca lo baja: el
+techo limita la fórmula, no al humano.
 No es fallo de rol ni devolución y no cuenta para ningún límite. Como el tope por
 intento, es red de seguridad, bien arriba de lo que cuesta una tarea sana, no presupuesto de
 trabajo. En paralelo cada rama ve el total al momento del fan-out, así que el desborde
@@ -891,10 +892,10 @@ respuesta, `pause` devuelve el patch de reanudación (`rules.resumed`) y el rute
 estado dice que se frenó (`rules.resume_target`).
 
 `agentic resume --issue N [--task-budget X] [--from-document] [--dry-run] [--yes]` usa el
-checkpoint; toma como decisión el último comentario del issue que no escribió el sistema, y
-sin decisión sale con 1 si hay preguntas pendientes o un par llegó a su límite. Antes de gastar muestra la tarea, dónde se
-frenó, el motivo, lo gastado por fase, el tope, qué reanuda, las sesiones y los worktrees, y
-pide confirmación. `--from-document` es el rescate: siembra el estado desde el documento,
+checkpoint; toma como decisión todos los comentarios del issue posteriores al último del sistema,
+juntos, y sin decisión sale con 1 si hay preguntas pendientes o un par llegó a su límite.
+Antes de gastar muestra la tarea, dónde se frenó, el motivo, lo gastado por fase, el tope, la
+decisión entera, qué reanuda, las sesiones y los worktrees, y pide confirmación. `--from-document` es el rescate: siembra el estado desde el documento,
 cruzado con git, como si `escalate` acabara de correr. `agentic run` se niega a arrancar
 sobre una tarea con estado salvo `--fresh`. En la etapa 5 un poller con reloj propio llama a
 `resume`, que es el mismo mecanismo que necesitan los roles proactivos.
