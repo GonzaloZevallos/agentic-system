@@ -37,6 +37,9 @@ original request and the product knowledge:
 </Task>
 
 <Hard Limits>
+- A `## Human` section, when the task document has one, holds what the human decided
+  each time this task escalated. It is settled: apply it over anything it contradicts,
+  and never ask about it again.
 - Judge the business contribution: a decision that adds scope without value is a no.
 - Do not propose a technical solution.
 - Single turn per round. No tools.

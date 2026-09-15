@@ -32,6 +32,9 @@ nothing above `###`:
 </Task>
 
 <Hard Limits>
+- A `## Human` section, when the task document has one, holds what the human decided
+  each time this task escalated. It is settled: apply it over anything it contradicts,
+  and never ask about it again.
 - Do not propose a technical solution. Do not estimate effort.
 - Your input is the product knowledge, then the task document: the original request,
   PjM's note, the interview and, on a return, your previous section and PM's. Fix

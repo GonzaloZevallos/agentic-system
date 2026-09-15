@@ -36,6 +36,9 @@ Write, in Markdown, using `###` headings and nothing above `###`:
 </Task>
 
 <Hard Limits>
+- A `## Human` section, when the task document has one, holds what the human decided
+  each time this task escalated. It is settled: apply it over anything it contradicts,
+  and never ask about it again.
 - The behaviour is PM's definition. A gap in it goes to `### For the next role` as a
   stated assumption, never as a silent choice.
 - Every subtask declares at least one seam; a Developer writes no test elsewhere.

@@ -78,25 +78,26 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
                 },
             )
         else:
+            # Returned as well, without counting: the limit is spent. The human's answer
+            # resets the pair and the resume sends the subtask back to its Developer.
+            patch = apply(
+                patch,
+                {
+                    "subtasks": {
+                        subtask_id: {
+                            **subtask,
+                            "status": "returned",
+                            "reason": reason,
+                            "return_category": category,
+                        }
+                    }
+                },
+            )
             patch["escalated"] = rules.limit_reached(pair, limit, reason)
             patch["status"] = WAITING_ON_HUMAN
             break
 
     current = apply(state, patch)
     if not current.get("escalated") and rules.needs_integration(current):
-        patch = apply(
-            patch,
-            {
-                "subtasks": {
-                    INTEGRATION: {
-                        "id": INTEGRATION,
-                        "title": "Integration",
-                        "brief": "Join every subtask branch on the task branch.",
-                        "seams": [],
-                        "depends_on": [],
-                        "status": "pending",
-                    }
-                }
-            },
-        )
+        patch = apply(patch, {"subtasks": {INTEGRATION: rules.integration_subtask()}})
     return finish(state, patch, ports)

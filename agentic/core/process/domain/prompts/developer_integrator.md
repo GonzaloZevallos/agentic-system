@@ -27,6 +27,9 @@ Then write, in Markdown, using `###` headings and nothing above `###`:
 </Task>
 
 <Hard Limits>
+- A `## Human` section, when the task document has one, holds what the human decided
+  each time this task escalated. It is settled: apply it over anything it contradicts,
+  and never ask about it again.
 - Merge; do not rewrite. A conflict is resolved by keeping both intents, not by
   dropping one. If two subtasks genuinely contradict, say so under Integration and
   keep the suite green with the smallest change.

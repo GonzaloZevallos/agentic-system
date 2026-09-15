@@ -38,6 +38,9 @@ to true and put in `markdown` a short closing summary of what was decided.
 </Task>
 
 <Hard Limits>
+- A `## Human` section, when the task document has one, holds what the human decided
+  each time this task escalated. It is settled: apply it over anything it contradicts,
+  and never ask about it again.
 - Facts are your job: read the product knowledge and the repo before asking; never ask
   the PM something you could look up.
 - You write only the glossary (`CONTEXT.md`) and ADRs under `docs/`, as the skill does

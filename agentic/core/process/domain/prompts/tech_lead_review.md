@@ -82,6 +82,9 @@ Then write, in Markdown, using `###` headings and nothing above `###`, and no
 </Task>
 
 <Hard Limits>
+- A `## Human` section, when the task document has one, holds what the human decided
+  each time this task escalated. It is settled: apply it over anything it contradicts,
+  and never ask about it again.
 - Block only for a hard violation of a documented standard, a missing or wrong
   behaviour against the brief, tests missing at a declared seam, uncommitted work, or a
   failing suite. Never for style the linter does not enforce, never for a

@@ -2,7 +2,7 @@
 Tech Lead (interviewed by the ephemeral one) -> Developers, one per subtask, in
 parallel -> Tech Lead's review -> integration -> delivery. Returns loop PM->Product
 Analyst and Tech Lead->Developer; every escalation goes through `escalate`, which
-tells the human, and ends the run.
+tells the human, and then `pause`, which waits for the human's answer.
 
 Each node reads the configuration from its `config`, builds the ports for it and
 hands both to a use case (README.md, 14: every node reads the configuration at the
@@ -11,11 +11,16 @@ finishes the role's span and maps the domain's routing to graph edges. `develop`
 fanned out with `Send`, one node run per ready subtask (ADR-0004), so the trace
 shows which Developer built what.
 
-Escalation ends the run with `status: waiting_on_human` for now. `interrupt()`
-and `agentic resume` come with the checkpointer (ADR-0003) and will live here.
+`pause` holds the `interrupt()` (ADR-0003, addendum). A resumed node runs again from
+its start, so the interrupt cannot sit in a use case, which would pay the role again,
+nor in `escalate`, which would tell the human again: `pause` has no effects, and on
+the human's answer it returns the patch that resumes the task, and the routing goes
+where the state says the task stopped (`rules.resume_target`). A task seeded from its
+document enters the same way, as if `escalate` had just run.
 
 `build_graph` takes the ports factory; the wired, uncompiled graph is exported by
-`agentic.composition` for `langgraph dev`, and the CLI compiles it.
+`agentic.composition` for `langgraph dev`, and the CLI compiles it with the
+checkpointer, without which `interrupt()` cannot pause.
 """
 
 from __future__ import annotations
@@ -25,7 +30,7 @@ from collections.abc import Awaitable, Callable
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import Send
+from langgraph.types import Send, interrupt
 
 from agentic.shared.configuration import Configuration
 
@@ -48,6 +53,7 @@ PortsFor = Callable[[Configuration], Ports]
 Rule = Callable[[TaskState], str | None]
 
 ESCALATE = "escalate"
+PAUSE = "pause"
 
 
 def configuration_from(config: RunnableConfig | None) -> Configuration:
@@ -82,6 +88,18 @@ def _system_node(use_case: UseCase, ports_for: PortsFor):
         return await use_case(state, cfg, ports_for(cfg))
 
     return node
+
+
+async def pause(state: TaskState) -> TaskState:
+    """Wait for the human; resumed with `Command(resume={"decision": text or None})`."""
+    answer = interrupt(
+        {
+            "reason": state.get("escalated"),
+            "spent_usd": state.get("cost_usd", 0.0),
+            "questions": state.get("questions_for_human", []),
+        }
+    )
+    return rules.resumed(state, (answer or {}).get("decision"))
 
 
 def _route(rule: Rule) -> Callable[[TaskState], str]:
@@ -119,6 +137,7 @@ def build_graph(ports_for: PortsFor, telemetry: Telemetry = NoTelemetry()) -> St
     graph.add_node("review", _node(review, TECH_LEAD, ports_for, telemetry))
     graph.add_node("deliver", _system_node(deliver, ports_for))
     graph.add_node(ESCALATE, _system_node(escalate, ports_for))
+    graph.add_node(PAUSE, pause)
 
     graph.add_edge(START, "classify")
     graph.add_conditional_edges("classify", _route(rules.after_classify), ["define", ESCALATE])
@@ -132,5 +151,10 @@ def build_graph(ports_for: PortsFor, telemetry: Telemetry = NoTelemetry()) -> St
         "review", _fanout(rules.after_review), ["develop", "deliver", ESCALATE]
     )
     graph.add_conditional_edges("deliver", _route(rules.after_deliver), [END, ESCALATE])
-    graph.add_edge(ESCALATE, END)
+    graph.add_edge(ESCALATE, PAUSE)
+    graph.add_conditional_edges(
+        PAUSE,
+        _fanout(rules.resume_target),
+        ["classify", "define", "validate", "plan", "develop", "review", "deliver", ESCALATE, END],
+    )
     return graph

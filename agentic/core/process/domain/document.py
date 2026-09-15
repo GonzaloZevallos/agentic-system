@@ -24,6 +24,8 @@ from .task import RoleRun
 
 TASKS_SUBDIR = Path(".agentic/tasks")
 ORIGINAL = "Original request"
+# What the human decided on each escalation, written by the system on a resume (ADR-0003).
+HUMAN = "Human"
 
 _FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\n", re.S)
 _SECTION = re.compile(r"^## (.+?)\s*$", re.M)

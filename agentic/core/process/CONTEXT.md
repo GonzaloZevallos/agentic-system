@@ -130,7 +130,23 @@ Devolución que se resuelve dentro del par sin pasar por PjM. Se reporta a PjM i
 Máximo de devoluciones por par antes de escalar. Hoy 2.
 
 **Escalado**:
-Entrega de la tarea al humano por PjM, con historial y motivo. Pausa la tarea.
+Lo que un rol, un par o el tope dejan dicho cuando la tarea no puede seguir sin el humano: el motivo de escalado, y las preguntas si las hay. El sistema lo entrega al humano en el issue y pausa la tarea.
+
+**Motivo de escalado**:
+Por qué la tarea no puede seguir sin el humano, de una lista cerrada: PjM no puede clasificarla o su camino no existe, un par llegó a su límite, un rol falló dos veces, se alcanzó el tope de tarea, o quedaron preguntas para el humano. Decide qué hace falta para reanudar.
+_Avoid_: causa, tipo de escalado
+
+**Pausa**:
+Una tarea escalada queda esperando al humano con su estado guardado, sin gastar. Se retoma desde el mismo punto.
+_Avoid_: bloqueo, espera
+
+**Decisión del humano**:
+Lo que el humano responde a un escalado: todo lo que comenta en el issue después del último aviso del sistema. Entra al documento de tarea, la lee todo rol y no se vuelve a preguntar: vale para toda la tarea y pesa sobre lo que contradiga.
+_Avoid_: respuesta, comentario
+
+**Reanudación**:
+La tarea sigue desde donde se pausó. Hace falta una decisión del humano cuando hay preguntas abiertas o un par llegó a su límite, y con ella el contador de ese par vuelve a cero; un tope alcanzado o un fallo de rol se reanudan sin decisión. Nada se reanuda bajo un tope ya gastado. Si el estado guardado se perdió, se reconstruye desde el documento de tarea, cruzado con git.
+_Avoid_: reintento (eso es tras un fallo de rol), relanzar (eso es empezar de cero)
 
 **Fallo de rol**:
 El rol se rompe: su ejecución falla, se le acaban los turnos sin resultado, la salida estructurada falta o es inválida, el `markdown` está vacío. Distinto de devolución; no cuenta para el límite.
@@ -144,7 +160,7 @@ Gasto máximo de un intento de cualquier rol. Excederlo es un fallo de rol. Red 
 _Avoid_: presupuesto (eso sería lo que se espera gastar)
 
 **Tope de tarea**:
-Gasto acumulado de una corrida a partir del cual el sistema escala en vez de seguir. Se mira antes de cada intento de cualquier rol. No es fallo de rol ni devolución y no cuenta para ningún límite. Como el tope por intento, es red de seguridad, bien arriba de lo que cuesta una tarea sana. Hoy 100 USD.
+Gasto acumulado de una tarea a partir del cual el sistema escala y pausa en vez de seguir. Crece con el plan: una base hasta que hay plan, después la base más una parte por subtarea, integración incluida, con un techo que limita esa cuenta. Se mira antes de cada intento de cualquier rol. Subirlo al reanudar es decisión del humano, que puede pasar el techo y nunca lo baja. No es fallo de rol ni devolución y no cuenta para ningún límite. Como el tope por intento, es red de seguridad, bien arriba de lo que cuesta una tarea sana. Hoy 30 USD de base, 15 por subtarea, techo 250.
 _Avoid_: presupuesto de tarea
 
 **Handoff**:

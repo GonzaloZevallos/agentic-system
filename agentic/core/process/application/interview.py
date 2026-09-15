@@ -25,6 +25,7 @@ from pathlib import Path
 from agentic.shared.configuration import Configuration
 
 from ..domain import rules
+from ..domain.document import HUMAN
 from ..domain.roles import Interview, Role
 from ..domain.task import WAITING_ON_HUMAN, TaskState, apply
 from .ports import Ports
@@ -123,18 +124,27 @@ async def interview(
             transcript.sessions[role.slug] = output.session_id
         return output, apply(patch, turn_patch)
 
+    consulted_once = False
+
     async def consult(
         consultant: Role, questions: list[str], round_: int
     ) -> tuple[Output | None, TaskState]:
         # The consultant resumes the session in which it wrote its section, if any. Its
         # answers deliver that section again with the clarifications; the previous text
         # stays as history, like on a return.
+        nonlocal consulted_once
         before = apply(state, patch)
         resume = rules.last_session(before, consultant.name, consultant.name)
         prompt = _consultation(
             before, consultant, spec.interviewee, ports, questions, round_, cwd, transcript
         )
-        prompt = prompt if resume else _with_context(before, consultant, ports, cwd, prompt)
+        if not resume:
+            prompt = _with_context(before, consultant, ports, cwd, prompt)
+        elif not consulted_once and (human := before.get("sections", {}).get(HUMAN)):
+            # A session from before the escalation never read the human's decisions;
+            # the consultation session keeps them from here on.
+            prompt = f"## {HUMAN}\n\n{human}\n\n{prompt}"
+        consulted_once = True
         output, turn_patch = await run_role(
             before,
             consultant,

@@ -1,10 +1,19 @@
 import json
+import os
 import subprocess
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 import pytest
+from langgraph.checkpoint.memory import InMemorySaver
 
 from agentic import cli
 from agentic.core.process.adapters.github import inbox
+
+
+@asynccontextmanager
+async def in_memory(cfg):
+    yield InMemorySaver()
 
 
 def product(tmp_path, name):
@@ -17,8 +26,9 @@ def capture_run(monkeypatch):
     """Replace the graph run with a recorder of what the CLI would have run."""
     seen = {}
 
-    def fake_run(fn, task, cfg, ports):
-        seen.update(task=task, cfg=cfg, ports=ports)
+    def fake_run(work):
+        task, cfg, ports, *options = work.args
+        seen.update(fn=work.func, task=task, cfg=cfg, ports=ports, options=tuple(options))
 
     monkeypatch.setattr(cli.anyio, "run", fake_run)
     return seen
@@ -148,8 +158,11 @@ async def test_a_crashed_run_still_finishes_the_task_span(monkeypatch, tmp_path)
     from tests.fakes import memory_ports
 
     class Broken:
-        def compile(self):
+        def compile(self, checkpointer):
             return self
+
+        async def aget_state(self, config):
+            return SimpleNamespace(values={}, next=(), interrupts=())
 
         async def ainvoke(self, task, config):
             raise RuntimeError("checkpointer down")
@@ -162,9 +175,118 @@ async def test_a_crashed_run_still_finishes_the_task_span(monkeypatch, tmp_path)
     try:
         task = {"id": "T-9", "title": "t", "description": "d"}
         with pytest.raises(RuntimeError, match="checkpointer"):
-            await cli._run(task, Configuration(product_dir=tmp_path), memory_ports())
+            await cli._run(
+                task, Configuration(product_dir=tmp_path), memory_ports(), checkpointer=in_memory
+            )
     finally:
         telemetry.configure()
     (span,) = exporter.get_finished_spans()
     assert span.name == "T-9" and span.attributes["task.status"] == "crashed"
     assert span.attributes["task.cost_usd"] == 0.0
+
+
+def test_resume_takes_its_flags_and_the_cap_the_human_sets(monkeypatch, tmp_path):
+    root = product(tmp_path, "p")
+    seen = capture_run(monkeypatch)
+    argv = ["agentic", "resume", "--issue", "12", "--task-budget", "140", "--dry-run"]
+    monkeypatch.setattr("sys.argv", [*argv, "--product-dir", str(root)])
+    cli.main()
+    assert seen["fn"] is cli._resume and seen["task"] == "GH-12"
+    assert seen["options"] == (False, True, False)  # from the document, dry run, yes
+    assert seen["cfg"].task_budget_usd == 140.0
+
+
+class Saver:
+    """One in-memory checkpointer for every command of a test, as the file would be."""
+
+    def __init__(self):
+        self.saver = InMemorySaver()
+
+    @asynccontextmanager
+    async def __call__(self, cfg):
+        yield self.saver
+
+
+@pytest.mark.anyio
+async def test_a_paused_task_resumes_through_the_cli_and_run_refuses_to_redo_it(
+    monkeypatch, tmp_path, capsys
+):
+    from agentic.core.process.adapters.langgraph.graph import build_graph
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import (
+        MemoryWorkspace,
+        ScriptedRunner,
+        answers,
+        classified,
+        defined,
+        delivered,
+        memory_ports,
+        planned,
+        questions,
+        reviewed,
+        verdict,
+    )
+
+    script = ScriptedRunner(
+        pjm=[classified()],
+        product_analyst_interviewer=[questions(1), questions(done=True)],
+        pm_interviewee=[answers(1)],
+        product_analyst=[defined()],
+        pm=[verdict("approved")],
+        tech_lead_ephemeral=[questions(done=True)],
+        tech_lead=[planned()],
+        developer=[delivered()],
+        tech_lead_review=[reviewed("approved")],
+    )
+    ports = memory_ports(script)
+    ports.workspace.moved.add(MemoryWorkspace.ROOT / "GH-1")
+    monkeypatch.setattr(cli, "graph", build_graph(lambda cfg: ports))
+    monkeypatch.setenv("AGENTIC_PRODUCT_DIR", str(tmp_path))
+    monkeypatch.setenv("AGENTIC_TASK_MAX_BUDGET_USD", "0.7")
+    cfg = Configuration.from_sources({}, os.environ)
+    saver, task = Saver(), {"id": "GH-1", "title": "Export", "description": "CSV."}
+
+    with pytest.raises(SystemExit) as info:
+        await cli._run(task, cfg, ports, checkpointer=saver)
+    assert info.value.code == 1
+    assert "resume:    agentic resume --issue 1" in capsys.readouterr().out
+    with pytest.raises(cli.CannotStart, match="is paused: Developer stopped by the task cap"):
+        await cli._run(task, cfg, ports, checkpointer=saver)
+
+    # The cap in force is already spent: refused before anything is spent.
+    with pytest.raises(cli.CannotStart, match="--task-budget above 0.86"):
+        await cli._resume("GH-1", cfg, ports, yes=True, checkpointer=saver)
+    monkeypatch.setenv("AGENTIC_TASK_BUDGET_USD", "50")
+    raised = Configuration.from_sources({}, os.environ)
+    await cli._resume("GH-1", raised, ports, dry_run=True, checkpointer=saver)
+    shown = capsys.readouterr().out
+    assert "from:      checkpoint" in shown and "resumes:   develop (api)" in shown
+    assert script.slugs.count("developer") == 0  # a dry run spends nothing
+
+    await cli._resume("GH-1", raised, ports, yes=True, checkpointer=saver)
+    assert "status:    ready_for_review" in capsys.readouterr().out
+    assert ports.tracker.unlabeled == [("GH-1", "needs-human")]
+    assert [text.split(" ")[0] for _, text in ports.tracker.comments] == [
+        "Escalated:",
+        "Resumed:",
+        "Ready",
+    ]
+    with pytest.raises(cli.CannotStart, match=r"already ran \(ready_for_review\)"):
+        await cli._run(task, cfg, ports, checkpointer=saver)
+    with pytest.raises(cli.CannotStart, match="is not paused"):
+        await cli._resume("GH-1", raised, ports, yes=True, checkpointer=saver)
+
+
+@pytest.mark.anyio
+async def test_run_refuses_a_task_whose_document_is_paused_unless_fresh(tmp_path):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    ports = memory_ports()
+    task = {"id": "GH-12", "title": "t", "description": "d"}
+    ports.documents.save({**task, "escalated": "Developer stopped by the task cap"})
+    cfg = Configuration(product_dir=tmp_path)
+    with pytest.raises(cli.CannotStart) as info:
+        await cli._run(task, cfg, ports, checkpointer=Saver())
+    assert "per its document" in str(info.value) and "agentic resume --issue 12" in str(info.value)
+    assert info.value.code == 2

@@ -26,6 +26,9 @@ Write, in Markdown, using `###` headings and nothing above `###`:
 </Task>
 
 <Hard Limits>
+- A `## Human` section, when the task document has one, holds what the human decided
+  each time this task escalated. It is settled: apply it over anything it contradicts,
+  and never ask about it again.
 - Your input is the product knowledge, then the task document: the original request,
   the interview, the Product Analyst's full section and, on a second pass, your
   previous verdict. Check that your return was addressed before anything else.

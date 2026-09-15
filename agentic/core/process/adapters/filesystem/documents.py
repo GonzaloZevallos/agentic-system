@@ -24,8 +24,10 @@ class FilesystemTaskDocuments:
         path.write_text(text, encoding="utf-8")
         return path
 
-    def load(self, task_id: str) -> dict:
+    def load(self, task_id: str) -> dict | None:
         path = self.path_for(task_id)
+        if not path.is_file():
+            return None
         return document.parse(path.read_text(encoding="utf-8"), path)
 
 

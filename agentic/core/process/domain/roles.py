@@ -51,7 +51,8 @@ class Role:
     schema: type[RoleOutput]
     # Sections of the task document this role reads, in full (README.md, 6).
     # Declarative, so PjM can record it and see what a failing role was missing.
-    # A role that lists itself reads its own previous section on a return.
+    # A role that lists itself reads its own previous section on a return. The human's
+    # decisions (`HUMAN`) are not declared: every role reads them, last.
     reads: tuple[str, ...] = (ORIGINAL,)
     # Product roles also receive the product knowledge, whole (ADR-0006).
     reads_knowledge: bool = False

@@ -72,15 +72,19 @@ def test_the_money_cap_and_the_interview_rounds_have_defaults():
     assert lower.max_budget_usd == 4.0
 
 
-def test_the_task_cap_has_a_default_well_above_a_healthy_run():
-    # A safety net over the whole run, not a work budget: a healthy five-subtask task
-    # runs 75-100 USD and escalating ends the run today (ADR-0004, third addendum).
+def test_the_task_cap_is_a_base_a_share_per_subtask_and_a_ceiling():
+    # It grows with the plan instead of a fixed 100 (ADR-0004, fourth addendum); the
+    # human's own cap for a resumed run is unset unless given.
     cfg = Configuration.from_sources(PRODUCT, {})
-    assert cfg.task_max_budget_usd == 100.0
-    lower = Configuration.from_sources(PRODUCT, {"AGENTIC_TASK_MAX_BUDGET_USD": "50"})
-    assert lower.task_max_budget_usd == 50.0
+    assert (cfg.task_budget_base_usd, cfg.task_budget_per_subtask_usd) == (30.0, 15.0)
+    assert cfg.task_max_budget_usd == 250.0 and cfg.task_budget_usd is None
+    env = {"AGENTIC_TASK_MAX_BUDGET_USD": "50", "AGENTIC_TASK_BUDGET_USD": "180.5"}
+    lower = Configuration.from_sources(PRODUCT, env)
+    assert lower.task_max_budget_usd == 50.0 and lower.task_budget_usd == 180.5
     with pytest.raises(ValueError):
         Configuration(product_dir=Path("/tmp/p"), task_max_budget_usd=0)
+    with pytest.raises(ValueError):
+        Configuration(product_dir=Path("/tmp/p"), task_budget_usd=0)
 
 
 def test_role_env_carries_the_git_identity_and_the_subagent_model():

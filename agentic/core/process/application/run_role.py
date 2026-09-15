@@ -11,7 +11,8 @@ because it reruns the node without telling the model what went wrong.
 The task cap is checked here too, before every attempt, because every role passes
 through here: the routing between nodes would miss the reviews inside one node and
 the rounds of an interview. Reached, `TaskCapReached` escalates the same way, but it
-is not a role failure: the role did not break (ADR-0004, third addendum).
+is not a role failure: the role did not break (ADR-0004, third addendum). The cap is
+read off the state each time, so it grows as soon as the plan is in (fourth addendum).
 
 Context rule (README.md, 6): each role reads, in full, the sections it declares in
 `Role.reads`, after the engineering standards and the product knowledge if it reads
@@ -28,6 +29,7 @@ from pathlib import Path
 from agentic.shared.configuration import Configuration
 
 from ..domain import document, rules, schemas
+from ..domain.document import HUMAN
 from ..domain.roles import ORIGINAL, Prompt, Role, describe_flags, render
 from ..domain.task import WAITING_ON_HUMAN, Failure, RoleRun, TaskState, apply
 from .ports import AttemptFailed, Ports, RoleRunner
@@ -67,11 +69,7 @@ class TaskCapReached(Escalating):
     def __init__(self, role: Role, spent_usd: float, cap_usd: float, failures: list[Failure]):
         self.spent_usd = spent_usd
         self.cap_usd = cap_usd
-        super().__init__(
-            role,
-            failures,
-            f"{role.name} stopped by the task cap: {spent_usd:.2f} of {cap_usd:.2f} USD spent",
-        )
+        super().__init__(role, failures, rules.cap_reached(role.name, spent_usd, cap_usd))
 
 
 @dataclass
@@ -98,10 +96,11 @@ def context_for(
 ) -> str:
     """The role's input: the standards and the product knowledge if the role reads
     them, then the sections it declares plus `extra_sections` (a subtask's own), in
-    document order, that exist."""
+    document order, that exist, and last the human's decisions, which every role reads:
+    they hold for the whole task and override what they contradict."""
     sections = state.get("sections", {})
     parts = [text for text in (standards, product_knowledge) if text]
-    for name in (*role.reads, *extra_sections):
+    for name in (*role.reads, *extra_sections, HUMAN):
         if name == ORIGINAL:
             request = document.demote(state["description"])
             parts.append(f"## {ORIGINAL}\n\n{state['title']}\n\n{request}")
@@ -147,19 +146,19 @@ async def run_with_retry(
     resume: str | None = None,
     max_budget_usd: float | None = None,
     spent_usd: float = 0.0,
-    task_max_budget_usd: float | None = None,
+    task_cap_usd: float | None = None,
 ) -> Output:
     """`check` is the use case's own rule over the validated output (raise `ValueError`);
     breaking it is a role failure like any other, so the model gets the error back.
 
-    `spent_usd` is what the task spent before this call; with `task_max_budget_usd`
+    `spent_usd` is what the task spent before this call; with `task_cap_usd`
     set, an attempt that would start at or over the cap raises `TaskCapReached`
     instead. A failed attempt counts: the retry can cost another attempt cap."""
     failures: list[Failure] = []
     for attempt in range(1, max(retries, 0) + 2):
         total = spent_usd + spent(failures)
-        if task_max_budget_usd is not None and total >= task_max_budget_usd:
-            raise TaskCapReached(role, total, task_max_budget_usd, failures)
+        if task_cap_usd is not None and total >= task_cap_usd:
+            raise TaskCapReached(role, total, task_cap_usd, failures)
         text, session = _retry_input(prompt, failures, resume)
         try:
             output = await _attempt(
@@ -259,6 +258,17 @@ async def _attempt(
     )
 
 
+def task_cap(state: TaskState, cfg: Configuration) -> float:
+    """The cap in force for this state: the formula over the plan (ADR-0004, fourth
+    addendum), or the human's when a resume set a higher one. The human raises the cap,
+    never lowers it: a budget given before the plan must not stop the task again when the
+    plan makes the formula larger."""
+    formula = rules.task_cap(
+        state, cfg.task_budget_base_usd, cfg.task_budget_per_subtask_usd, cfg.task_max_budget_usd
+    )
+    return max(formula, cfg.task_budget_usd or 0.0)
+
+
 def escalation(exc: Escalating) -> TaskState:
     """The patch of a role that failed twice, or that the task cap stopped: the human
     sees it (README.md, 3)."""
@@ -326,7 +336,7 @@ async def run_role(
             resume=resume,
             max_budget_usd=cfg.max_budget_usd,
             spent_usd=state.get("cost_usd", 0.0),
-            task_max_budget_usd=cfg.task_max_budget_usd,
+            task_cap_usd=task_cap(state, cfg),
         )
     except Escalating as exc:
         return None, patch | escalation(exc)

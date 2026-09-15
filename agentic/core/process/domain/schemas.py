@@ -26,6 +26,9 @@ from .task import INTEGRATION, FindingCategory
 
 TaskType = Literal["bug", "feature", "platform_enhancement"]
 SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+# Subtasks a plan may hold: the task cap grows with each one (ADR-0004, fourth addendum),
+# so the plan cannot raise it without bound.
+MAX_SUBTASKS = 12
 
 
 class RoleOutput(BaseModel):
@@ -201,6 +204,11 @@ def plan_check(data: dict) -> None:
     subtasks = data.get("subtasks", [])
     if not subtasks:
         raise ValueError("a plan needs at least one subtask")
+    if len(subtasks) > MAX_SUBTASKS:
+        raise ValueError(
+            f"a plan holds at most {MAX_SUBTASKS} subtasks, this one has {len(subtasks)}: "
+            "join the smallest ones"
+        )
     ids = [s["id"] for s in subtasks]
     for item in subtasks:
         if not SLUG.match(item["id"]):

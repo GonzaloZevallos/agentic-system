@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 from ...domain.task import TaskInput
+from .tracker import issue_number
 
 
 class GhInbox:
@@ -36,4 +37,10 @@ class GhInbox:
         title, body = issue["title"].strip(), (issue.get("body") or "").strip()
         if not body:
             raise ValueError(f"issue #{number} has no body; the roles need a description")
-        return {"id": f"GH-{number}", "title": title, "description": body}
+        return {"id": self.task_id(number), "title": title, "description": body}
+
+    def task_id(self, number: int) -> str:
+        return f"GH-{number}"
+
+    def issue_of(self, task_id: str) -> int | None:
+        return issue_number(task_id)

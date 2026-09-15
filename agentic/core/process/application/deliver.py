@@ -16,6 +16,9 @@ from .checkouts import task_checkout
 from .ports import Ports
 from .run_role import finish
 
+# How the delivery comment starts: a resume looks past the system's comments.
+READY = "Ready for review: "
+
 
 async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
     task = task_checkout(state, ports)
@@ -23,7 +26,7 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     url = ports.tracker.open_pull_request(state["id"], task.branch, state["title"], _body(state))
     ports.tracker.comment(
         state["id"],
-        f"Ready for review: {url}\n\nTask document: `{document.relative_path(state['id'])}`",
+        f"{READY}{url}\n\nTask document: `{document.relative_path(state['id'])}`",
     )
     ports.workspace.cleanup(state["id"])
     patch: TaskState = {

@@ -61,3 +61,16 @@ def test_a_task_without_an_issue_writes_nothing_to_the_issue():
 def test_gh_failures_are_value_errors():
     with pytest.raises(ValueError, match="gh pr create failed: no auth"):
         GhTracker(Path("/p"), Recorder(fail=True)).open_pull_request("T-1", "b", "t", "x")
+
+
+def test_a_resume_unlabels_and_reads_the_comments():
+    run = Recorder(stdout='{"comments": [{"body": "Escalated: x"}, {"body": "Use USD."}]}')
+    tracker = GhTracker(Path("/p"), run)
+    tracker.unlabel("GH-12", "needs-human")
+    assert tracker.issue_comments("GH-12") == ["Escalated: x", "Use USD."]
+    assert run.calls == [
+        ["gh", "issue", "edit", "12", "--remove-label", "needs-human"],
+        ["gh", "issue", "view", "12", "--json", "comments"],
+    ]
+    assert GhTracker(Path("/p"), Recorder(stdout='{"comments": []}')).issue_comments("GH-1") == []
+    assert tracker.issue_comments("T-abc") == [] and len(run.calls) == 2
