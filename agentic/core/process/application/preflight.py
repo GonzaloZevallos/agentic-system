@@ -18,6 +18,7 @@ PLACEHOLDERS = {
     "base": "HEAD",
     "review": "a first review",
     "branches": "- none",
+    "checks": "- `tests`: `pytest`",
 }
 
 

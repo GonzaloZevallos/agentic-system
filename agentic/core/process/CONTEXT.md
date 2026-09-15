@@ -25,7 +25,7 @@ Dueño de la definición única y del conocimiento de producto, que destila al a
 Rol que produce: Product Analyst, UX Designer, UI Designer, Developer, Tech Writer.
 
 **Ejecutar**:
-Escribir archivos del producto y correr comandos sin jaula. Solo Developer ejecuta. Correr tests sin escribir no es ejecutar: Tech Lead, al revisar, lee el código y el diff y corre los tests que respaldan una objeción, y los entrevistadores escriben únicamente el glosario y los ADRs.
+Escribir archivos del producto y correr comandos sin aprobación por comando. Solo Developer ejecuta, dentro de una jaula: su checkout, un tope de costo y lo que el sistema le niega aun así. Correr los chequeos del producto sin escribir no es ejecutar: Tech Lead, al revisar, lee el código y el diff y corre los chequeos sobre el test que respalda una objeción, y los entrevistadores escriben únicamente el glosario y los ADRs.
 
 **Validador**:
 Rol que revisa a un pensador aportando una fuente que el pensador no tuvo.
@@ -97,6 +97,10 @@ _Avoid_: duda (una duda que PM resuelve con un supuesto no es pregunta)
 **Supuesto**:
 Decisión que el dueño toma sobre lo que ni el pedido ni el conocimiento resuelven pero no cambia la definición, y deja escrita en su respuesta. No va al humano.
 _Avoid_: pregunta para el humano
+
+**Puerta de entrega**:
+Lo que el sistema mira cuando un Developer entrega, antes de que la entrega cuente: que haya commit, que el árbol esté limpio y que los chequeos del producto pasen. Si algo falta, rechaza la entrega con el motivo dentro del mismo turno, como mucho dos veces; después la deja pasar con el resultado de los chequeos escrito por el sistema en la sección del Developer. Un rechazo de la puerta no es devolución ni fallo de rol.
+_Avoid_: gate, validación, hook (el mecanismo, no el concepto)
 
 **Revisión**:
 Pase de Tech Lead sobre la entrega de una subtarea o de la pieza integrada, con hallazgos y un veredicto que se deriva de ellos: aprobada o devuelta. Una subtarea tiene tantas revisiones como pases recibió.

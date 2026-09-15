@@ -78,3 +78,63 @@ Descartado: **`git config --worktree user.*` al crear cada worktree**. Necesita
 no queremos tocar. Descartado también **una identidad por rol** (`agentic-developer`): la
 rama y el mensaje ya dicen qué rol y qué subtarea; dos identidades duplican configuración
 sin distinguir nada que el log no distinga.
+
+## Adenda (2026-09-15, segunda): hooks del SDK como jaula dura, y la puerta de entrega
+
+La adenda anterior dejó dicho que las reglas de denegación "suben la barrera, no la
+cierran": son por prefijo, así que `git -C ruta config`, `--git-dir` o un Edit de
+`.git/config` pasan. Y en la corrida 4 de GH-12 dos devoluciones fueron por cosas que el
+estándar y el plan ya prohibían por escrito: dos `# type: ignore` en `dashboard-slice` y un
+fix sin commitear en `expiring-soon`. La instrucción sola no alcanzó, y cada una costó un
+pase de revisión (2.5 a 8.5 USD) más el Developer que la corrigió (issue #22).
+
+**Los roles que ejecutan corren dentro de hooks `PreToolUse` del SDK.** Un hook ve la
+llamada parseada, no un prefijo, y su deny vale también en `bypassPermissions` (doc de
+permisos del Agent SDK, verificado en 0.2.152). Las decisiones son funciones puras en
+`adapters/claude_sdk/hooks.py`, testeadas sin SDK:
+
+- **Bash**: `git config` (leer con `--get`/`--list` sí), `git push`, `git worktree`,
+  `--git-dir`, `git -C` fuera del checkout, `git commit --no-verify` y cambiar de rama
+  (`git switch`, `git checkout` sin `--`). El comando se parte con `shlex`, así que cuenta
+  después de `;`, `&&`, `|` o un salto de línea, dentro de `$(...)`, en `sh -c '...'` y
+  detrás de `VAR=valor`. El cuerpo de un heredoc no cuenta: un mensaje de commit que
+  menciona `git push` pasa.
+- **Edit y Write**: rutas dentro de `.git/` o fuera del checkout, y un `# type: ignore` o
+  `# noqa` nuevo en un archivo Python. Uno que ya estaba no es de la tarea: el estándar
+  aplica al código nuevo.
+
+Qué no cubre, a propósito: un shell que se mueve primero (`cd ..; echo > archivo`),
+archivos escritos por Bash (`sed -i`, `cat >`), comandos armados en tiempo de ejecución
+(`$VAR`, `eval`, alias, `$(...)` entre comillas dobles), symlinks que salen del checkout y
+una línea que `shlex` no parsea, que pasa. Las reglas de denegación siguen puestas, y la
+firma la sigue garantizando el entorno. La jaula sube la barrera sobre el prompt; no es un
+sandbox.
+
+**La entrega pasa por una puerta antes de contar.** Cuando el Developer o el integrador
+entregan, el sistema mira su checkout: que haya commit, que el árbol esté limpio y que los
+chequeos del producto pasen (ADR-0016, adenda). Si algo falta, rechaza la entrega con el
+motivo, el comando y las últimas líneas, y el modelo lo recibe dentro del mismo turno y
+vuelve a entregar. Rechaza como mucho dos veces por corrida de rol; después deja pasar, y
+lo que dijeron los chequeos queda al principio de la sección del Developer, escrito por el
+sistema, para que el revisor lo lea. El chequeo de commit y árbol limpio después de la
+corrida sigue como respaldo: saltarlo es fallo de rol.
+
+**La puerta es un `PreToolUse` sobre `StructuredOutput`, no un hook `Stop`.** Un spike
+contra el SDK real lo decidió. Con `output_format`, el turno termina en la llamada a la
+herramienta de salida estructurada. `Stop` dispara después, y un `block` ahí queda en la
+transcripción como `hook_blocking_error`, pero la sesión termina igual con la entrega. Un
+deny sobre `StructuredOutput` le llega al modelo como resultado de la herramienta: corre lo
+que se le pide, vuelve a entregar y el stream trae un solo `ResultMessage`, así que el corte
+en la primera entrega del runner (issue #16) no cambia. El timeout del hook es explícito:
+el de los chequeos (`AGENTIC_CHECK_TIMEOUT_S`, 600 s cada uno) más un margen. El input de
+`Stop` sí trae `background_tasks`: sirve para saber si un rol entrega con sub-agentes
+corriendo, si alguna vez hace falta.
+
+Descartado:
+
+- **Puerta como hook `Stop`**, lo que proponía el issue: no frena una entrega por salida
+  estructurada.
+- **Límite de archivos tocados fuera de las costuras**: necesita un campo estructurado en
+  `TechPlan` y cambia la huella de prompts. Pospuesto.
+- **`PostToolUse` con ruff por archivo**: vale poco al lado de la puerta y ensucia el
+  contexto.

@@ -41,13 +41,24 @@ class AttemptFailed(Exception):
         self.session_id = session_id
 
 
+class DeliveryGate(Protocol):
+    """Asked when a role hands back its delivery, before the delivery counts: a reason
+    refuses it, and the model gets the reason and delivers again (glossary: Puerta de
+    entrega). Blocking: it may run the product's checks, within `timeout_s`."""
+
+    timeout_s: float
+
+    def __call__(self) -> str | None: ...
+
+
 class RoleRunner(Protocol):
     """Runs one attempt of a role and hands back what the model produced, raw.
 
     What the role may do (tools, permission rules, skills, whether it executes) is
     read off the `Role` itself. `resume` continues an earlier session of the same
     role: an interview is one session per participant (ADR-0014). `max_budget_usd`
-    caps the money of this one run; `None` is no cap."""
+    caps the money of this one run; `None` is no cap. `gate`, when given, is asked
+    each time the model hands back its delivery, and refuses it with a reason."""
 
     async def run_once(
         self,
@@ -60,6 +71,7 @@ class RoleRunner(Protocol):
         cwd: Path,
         resume: str | None = None,
         max_budget_usd: float | None = None,
+        gate: DeliveryGate | None = None,
     ) -> RawResult: ...
 
 
@@ -108,6 +120,33 @@ class Prompts(Protocol):
 
 class FlagVocabulary(Protocol):
     def load(self) -> dict[str, str]: ...
+
+
+class ProductChecks(Protocol):
+    """The commands the product declares its code sound with (`core.knowledge`)."""
+
+    def declared(self, revision: str) -> dict[str, str]:
+        """Check name -> command, as the product's commit `revision` declares them."""
+        ...
+
+
+@dataclass(frozen=True)
+class CommandResult:
+    exit_code: int
+    # stdout and stderr, interleaved as the command wrote them.
+    output: str
+    timed_out: bool = False
+
+    @property
+    def passed(self) -> bool:
+        return self.exit_code == 0 and not self.timed_out
+
+
+class Commands(Protocol):
+    """Runs a product's command in a checkout, as a shell would, for the system itself:
+    the delivery gate. Never fails for a non-zero exit; that is the result."""
+
+    def run(self, cwd: Path, command: str, timeout_s: float) -> CommandResult: ...
 
 
 class Inbox(Protocol):
@@ -213,3 +252,5 @@ class Ports:
     inbox: Inbox
     workspace: Workspace
     tracker: Tracker
+    checks: ProductChecks
+    commands: Commands

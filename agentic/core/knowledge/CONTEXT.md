@@ -41,3 +41,7 @@ acordadas, tipado estricto. El sistema trae un default que el producto reemplaza
 un archivo en su raíz. Los leen Tech Lead y Developer; aplican al código nuevo y al que la
 tarea toca, no al que ya existía.
 _Avoid_: buenas prácticas, guía de estilo (el estilo lo impone el linter, no este archivo)
+
+**Chequeos del producto**:
+Los comandos con que el producto declara que su código está sano (tests, linter, typechecker). Los corre la puerta de entrega, y el revisor los usa para reproducir una objeción. El sistema trae un default que el producto reemplaza entero; vale la versión del commit del que salió la tarea, no la de su rama.
+_Avoid_: checks, CI, validaciones

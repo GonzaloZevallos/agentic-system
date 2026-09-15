@@ -32,7 +32,11 @@ Write, in Markdown, using `###` headings and nothing above `###`:
      the old; migrate batches, each blocked by the expand; contract deletes the old form,
      blocked by every batch.
 4. `### For the next role`: what every Developer must know before starting: conventions
-   of this repo, commands to run tests and the linter, what not to touch.
+   of this repo, commands to run tests and the linter, what not to touch. The checks
+   the product declares in `.agentic/checks.yaml` are the bar every delivery must pass,
+   as the task's base commit has them. If this task brings in a new one (a linter, a
+   type checker), a subtask leaves the code green under it and adds it to that file,
+   which applies from the next task.
 </Task>
 
 <Hard Limits>

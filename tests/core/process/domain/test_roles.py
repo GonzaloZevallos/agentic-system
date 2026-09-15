@@ -30,11 +30,19 @@ def test_the_roles_that_execute_cannot_touch_git_beyond_their_branch():
 def test_the_reviewer_runs_tests_but_writes_nothing():
     # A behaviour objection comes with the test that reproduces it (ADR-0016): the
     # reviewer may run pytest in its checkout, and still has no tool that writes.
-    from agentic.core.process.domain.roles import TECH_LEAD, TECH_LEAD_REVIEWER
+    from agentic.core.process.domain.roles import TECH_LEAD, TECH_LEAD_REVIEWER, reviewer_for
 
-    assert {"Bash(uv run pytest:*)", "Bash(pytest:*)"} <= set(TECH_LEAD_REVIEWER.allowed)
-    assert not {"Edit", "Write"} & set(TECH_LEAD_REVIEWER.tools)
-    assert not TECH_LEAD_REVIEWER.executes
+    reviewer = reviewer_for({"tests": "uv run --no-project pytest", "lint": "ruff check ."})
+    # The product's declared checks, and nothing else that runs: they replace any
+    # hardcoded test command, which did not match the product's (issue #22).
+    assert set(reviewer.allowed) - set(TECH_LEAD_REVIEWER.allowed) == {
+        "Bash(uv run --no-project pytest:*)",
+        "Bash(ruff check .:*)",
+    }
+    assert not any("pytest" in rule for rule in TECH_LEAD_REVIEWER.allowed)
+    assert reviewer.slug == TECH_LEAD_REVIEWER.slug and reviewer.tools == TECH_LEAD_REVIEWER.tools
+    assert not {"Edit", "Write"} & set(reviewer.tools)
+    assert not reviewer.executes
     assert not any("pytest" in rule for rule in TECH_LEAD.allowed)
 
 

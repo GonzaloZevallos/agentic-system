@@ -11,7 +11,9 @@ skills it may invoke. A role that executes runs unattended (`bypassPermissions`)
 inside its working directory under a money cap, and its `denied` rules still hold
 (the SDK evaluates deny rules before the mode); every other role runs in the default
 permission mode, where anything outside its rules is denied because nobody is there
-to approve it. Skills come from the one plugin pinned as a submodule under
+to approve it. A role that executes also runs inside the hooks' cage, which sees
+the parsed call where a deny rule only sees a prefix (`hooks.py`; ADR-0011, addendum).
+Skills come from the one plugin pinned as a submodule under
 `agentic/plugins/` (ADR-0013); `setting_sources=[]` keeps the user's own plugins,
 settings and CLAUDE.md out. It does not keep their MCP servers out: those come from
 the user's Claude Code config, not from settings, and `strict_mcp_config=True` is what
@@ -46,10 +48,11 @@ from claude_agent_sdk import (
     query,
 )
 
-from ...application.ports import AttemptFailed, RawResult
+from ...application.ports import AttemptFailed, DeliveryGate, RawResult
 from ...domain.roles import Role
 from ..plugins import PLUGIN, PLUGIN_DIR
 from ..telemetry import NoTelemetry, Telemetry
+from .hooks import hooks_for
 from .printer import Printer
 from .schema import inline_refs
 
@@ -69,6 +72,7 @@ def options_for(
     traceparent: str | None,
     partial: bool,
     env: Mapping[str, str],
+    gate: DeliveryGate | None = None,
 ) -> ClaudeAgentOptions:
     tools, allowed = list(role.tools), list(role.allowed)
     if role.skills and SKILL_TOOL not in tools:
@@ -99,6 +103,7 @@ def options_for(
         include_partial_messages=partial,
         # Claude Code parents its own spans under the role's (SDK mode honours it).
         env={**env, **({"TRACEPARENT": traceparent} if traceparent else {})},
+        hooks=hooks_for(role, cwd, gate) or None,
     )
 
 
@@ -128,6 +133,7 @@ class ClaudeSdkRunner:
         cwd: Path,
         resume: str | None = None,
         max_budget_usd: float | None = None,
+        gate: DeliveryGate | None = None,
     ) -> RawResult:
         observer = Printer(role.name, self.stream) if self.verbose else None
         options = options_for(
@@ -141,6 +147,7 @@ class ClaudeSdkRunner:
             traceparent=self.telemetry.traceparent(),
             partial=observer is not None,
             env=self.env,
+            gate=gate,
         )
 
         exhausted = f"max_turns ({role.max_turns}) exhausted without a result"

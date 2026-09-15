@@ -18,10 +18,11 @@ from __future__ import annotations
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import rules
-from ..domain.roles import TECH_LEAD_REVIEWER, pair_for
+from ..domain import gate, rules
+from ..domain.roles import pair_for, reviewer_for
 from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, TaskState, apply
 from .checkouts import subtask_checkout
+from .gate import declared_checks
 from .ports import Ports
 from .run_role import finish, run_role
 
@@ -29,6 +30,8 @@ from .run_role import finish, run_role
 async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
     limit = cfg.max_returns_per_pair
     patch: TaskState = {}
+    checks = declared_checks(state, ports)
+    reviewer = reviewer_for(checks)
     for subtask_id in rules.delivered_subtasks(state):
         current = apply(state, patch)
         subtask = current["subtasks"][subtask_id]
@@ -39,7 +42,7 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
         head = ports.workspace.head(checkout.path)
         output, reviewed = await run_role(
             current,
-            TECH_LEAD_REVIEWER,
+            reviewer,
             cfg,
             ports,
             section=section,
@@ -49,6 +52,7 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
             base=subtask.get("reviewed_head") or checkout.base,
             review="an incremental review" if subtask.get("reviewed_head") else "a first review",
             remaining_returns=remaining,
+            checks=gate.describe_checks(checks),
         )
         patch = apply(patch, reviewed)
         if output is None:

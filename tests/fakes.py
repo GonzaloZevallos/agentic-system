@@ -6,7 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from agentic.core.knowledge.domain import knowledge
-from agentic.core.process.application.ports import Checkout, Ports, RawResult
+from agentic.core.process.application.ports import Checkout, CommandResult, Ports, RawResult
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.roles import PROMPTS_DIR, Role
 from agentic.core.process.domain.task import TaskInput, TaskState
@@ -16,14 +16,20 @@ VOCAB = {"touches_ui": "UI", "touches_copy": "copy"}
 
 class ScriptedRunner:
     """Answers `run_once` from per-role queues and records every call it saw.
-    A queued exception is raised instead of returned."""
+    A queued exception is raised instead of returned. A gate is asked before the
+    result is handed back, as the harness does when the model delivers, and again after
+    each refusal, as a model that fixes and delivers again; `refused` keeps the reasons."""
 
     def __init__(self, **queues):
         self.queues = {k: list(v) for k, v in queues.items()}
         self.calls: list[dict] = []
+        self.refused: list[str] = []
 
     async def run_once(self, role: Role, prompt: str, **kwargs) -> RawResult:
-        self.calls.append({"slug": role.slug, "prompt": prompt, **kwargs})
+        self.calls.append({"slug": role.slug, "prompt": prompt, "role": role, **kwargs})
+        if (gate := kwargs.get("gate")) is not None:
+            while (reason := gate()) is not None:
+                self.refused.append(reason)
         queue = self.queues.get(role.slug)
         if not queue:
             raise AssertionError(f"no scripted result left for {role.slug}")
@@ -110,6 +116,32 @@ class MemoryFlags:
 
     def load(self) -> dict[str, str]:
         return self.vocabulary
+
+
+class MemoryChecks:
+    """The declared checks, whatever the revision; `revisions` says which were asked."""
+
+    def __init__(self, checks: dict[str, str] | None = None):
+        self.checks = {"tests": "pytest"} if checks is None else checks
+        self.revisions: list[str] = []
+
+    def declared(self, revision: str) -> dict[str, str]:
+        self.revisions.append(revision)
+        return self.checks
+
+
+class MemoryCommands:
+    """Answers each command from its queue, green when the queue is empty or missing;
+    `ran` keeps (cwd, command)."""
+
+    def __init__(self, **queues: list[CommandResult]):
+        self.queues = {k: list(v) for k, v in queues.items()}
+        self.ran: list[tuple[Path, str]] = []
+
+    def run(self, cwd: Path, command: str, timeout_s: float) -> CommandResult:
+        self.ran.append((cwd, command))
+        queue = self.queues.get(command)
+        return queue.pop(0) if queue else CommandResult(0, "ok")
 
 
 class MemoryInbox:
@@ -226,6 +258,8 @@ def memory_ports(runner: ScriptedRunner | None = None, **overrides) -> Ports:
         "inbox": MemoryInbox(),
         "workspace": MemoryWorkspace(),
         "tracker": MemoryTracker(),
+        "checks": MemoryChecks(),
+        "commands": MemoryCommands(),
     }
     return Ports(**{**fields, **overrides})
 
