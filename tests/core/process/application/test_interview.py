@@ -102,6 +102,44 @@ async def test_questions_for_the_human_escalate_after_the_interview_ends(cfg):
     assert "### Closing" in patch["sections"]["Interview: Product Analyst→PM"]
 
 
+async def test_a_question_repeated_across_rounds_reaches_the_human_once(cfg):
+    # Nobody answers the human's questions during the run, so PM may list one again in
+    # the next round, reworded only in spacing or case (issue #4).
+    runner = ScriptedRunner(
+        **{
+            ASK: [questions(1), questions(2), questions(done=True)],
+            ANSWER: [
+                answers(1, for_human=["Which currency?", "Who pays the fee?"]),
+                answers(2, for_human=["  which currency?  ", "Which currency?"]),
+            ],
+        }
+    )
+    transcript, patch = await interview(TASK, INTERVIEW_DEFINITION, cfg, memory_ports(runner))
+    assert transcript is None
+    assert patch["questions_for_human"] == ["Which currency?", "Who pays the fee?"]
+    assert "PM could not decide 2" in patch["escalated"]
+    # PM reads what is already with the human before the next round's questions.
+    assert runner.calls[3]["prompt"].startswith(
+        "## With the human\n\n1. Which currency?\n2. Who pays the fee?\n\n## Questions (round 2)"
+    )
+
+
+async def test_questions_for_the_human_survive_a_side_failing_later(cfg):
+    runner = ScriptedRunner(
+        **{
+            ASK: [questions(1), questions(2)],
+            ANSWER: [
+                answers(1, for_human=["Which currency?"]),
+                AttemptFailed("a", 0.02),
+                AttemptFailed("b", 0.02),
+            ],
+        }
+    )
+    transcript, patch = await interview(TASK, INTERVIEW_DEFINITION, cfg, memory_ports(runner))
+    assert transcript is None and "PM failed 2 times" in patch["escalated"]
+    assert patch["questions_for_human"] == ["Which currency?"]
+
+
 async def test_a_side_that_fails_twice_escalates_with_the_transcript_so_far(cfg):
     runner = ScriptedRunner(
         **{ASK: [questions(1)], ANSWER: [AttemptFailed("a", 0.02), AttemptFailed("b", 0.02)]}
@@ -235,6 +273,32 @@ async def test_only_pm_escalates_to_the_human_from_a_consultation(cfg):
     assert patch["questions_for_human"] == ["Where do the metrics go?"]
     assert patch["status"] == "waiting_on_human" and "PM could not decide 1" in patch["escalated"]
     assert ports.knowledge.definitions == {}  # nothing changed, nothing distilled
+
+
+async def test_a_consultation_repeated_across_rounds_reaches_the_human_once(cfg):
+    runner = ScriptedRunner(
+        **{
+            TL_ASK: [questions(1), questions(2), questions(done=True)],
+            TL_ANSWER: [
+                tech_answers(1, for_pm=["Where do the metrics go?"]),
+                tech_answers(2, for_pm=["Where do the metrics go?"]),
+            ],
+            CONSULT: [
+                consulted(1, for_human=["Where do the metrics go?"]),
+                consulted(2, for_human=["where do the metrics go?"]),
+            ],
+        }
+    )
+    transcript, patch = await interview(PLANNED, INTERVIEW_SOLUTION, cfg, memory_ports(runner))
+    assert transcript is None
+    assert patch["questions_for_human"] == ["Where do the metrics go?"]
+    assert "PM could not decide 1" in patch["escalated"]
+    # The Tech Lead and PM both read what is already with the human.
+    with_human = "## With the human\n\n1. Where do the metrics go?"
+    tech_lead_round_2, consult_round_2 = runner.calls[4]["prompt"], runner.calls[5]["prompt"]
+    assert tech_lead_round_2.startswith("## PM answered (round 1)")
+    assert f"\n\n{with_human}\n\n## Questions (round 2)" in tech_lead_round_2
+    assert consult_round_2.startswith(f"{with_human}\n\n## Questions from Tech Lead (round 2)")
 
 
 async def test_a_consultant_without_a_session_gets_its_context_first(cfg):

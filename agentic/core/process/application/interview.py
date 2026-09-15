@@ -44,6 +44,30 @@ class Transcript:
     def text(self) -> str:
         return "\n\n".join(self.rounds)
 
+    def ask_human(self, questions: list[str]) -> None:
+        """Keep a question once. Nobody answers the human during the run, so the decider
+        may list an open question again in a later round (issue #4); the prompt asks for
+        new ones only and this catches the literal repeats. A rewording still gets through."""
+        seen = {_key(q) for q in self.questions_for_human}
+        for question in questions:
+            if _key(question) not in seen:
+                seen.add(_key(question))
+                self.questions_for_human.append(question)
+
+    @property
+    def with_human(self) -> str:
+        """What is already with the human, numbered, for the roles' next prompt: the
+        one place they can see it, since a consultation shows the Tech Lead only PM's
+        prose. Empty when nothing is."""
+        if not self.questions_for_human:
+            return ""
+        listed = "\n".join(f"{n}. {q}" for n, q in enumerate(self.questions_for_human, 1))
+        return f"## With the human\n\n{listed}"
+
+
+def _key(question: str) -> str:
+    return " ".join(question.split()).casefold()
+
 
 async def interview(
     state: TaskState,
@@ -91,7 +115,9 @@ async def interview(
         # stays as history, like on a return.
         before = apply(state, patch)
         resume = rules.last_session(before, consultant.name, consultant.name)
-        prompt = _consultation(before, consultant, spec.interviewee, ports, questions, round_, cwd)
+        prompt = _consultation(
+            before, consultant, spec.interviewee, ports, questions, round_, cwd, transcript
+        )
         prompt = prompt if resume else _with_context(before, consultant, ports, cwd, prompt)
         output, turn_patch = await run_role(
             before,
@@ -130,14 +156,14 @@ async def interview(
             break
         transcript.rounds.append(f"### Round {round_}: questions\n\n{asked.text}")
 
-        prompt = _questions(state, spec, ports, asked, round_, cwd, consulted)
+        prompt = _questions(state, spec, ports, asked, round_, cwd, consulted, transcript)
         answers, patch = await turn(spec.interviewee, prompt, round_)
         if answers is None:
             return None, _record(state, spec, transcript, patch)
         transcript.rounds.append(f"### Round {round_}: answers\n\n{answers.text}")
         reply, consulted = answers.text, None
         if spec.consultant is None:
-            transcript.questions_for_human.extend(answers.data["questions_for_human"])
+            transcript.ask_human(answers.data["questions_for_human"])
             continue
 
         to_pm = answers.data["questions_for_pm"]
@@ -147,7 +173,7 @@ async def interview(
         if answered is None:
             return None, _record(state, spec, transcript, patch)
         transcript.rounds.append(f"### Round {round_}: {decider.name} answers\n\n{answered.text}")
-        transcript.questions_for_human.extend(answered.data["questions_for_human"])
+        transcript.ask_human(answered.data["questions_for_human"])
         consulted = f"## {decider.name} answered (round {round_})\n\n{answered.text}"
         reply = f"{answers.text}\n\n{consulted}"
         if answered.data["definitions"] or answered.data["glossary"]:
@@ -163,7 +189,6 @@ async def interview(
 
     patch = _record(state, spec, transcript, patch)
     if transcript.questions_for_human:
-        patch["questions_for_human"] = transcript.questions_for_human
         patch["escalated"] = (
             f"{decider.name} could not decide {len(transcript.questions_for_human)} "
             "question(s) from the request and the product knowledge; see the questions"
@@ -181,9 +206,12 @@ def _clarified(state: TaskState, section: str, round_: int, answers: str) -> str
 def _record(
     state: TaskState, spec: Interview, transcript: Transcript, patch: TaskState
 ) -> TaskState:
-    """The transcript so far as the interview's section, if any round ran."""
+    """The transcript so far as the interview's section, if any round ran, and the
+    questions already with the human, so a side failing later does not lose them."""
     if transcript.rounds:
         patch = apply(patch, {"sections": rules.sections_for(state, spec.section, transcript.text)})
+    if transcript.questions_for_human:
+        patch["questions_for_human"] = transcript.questions_for_human
     return patch
 
 
@@ -195,11 +223,15 @@ def _questions(
     round_: int,
     cwd: Path | None,
     consulted: str | None = None,
+    transcript: Transcript | None = None,
 ) -> str:
     """The interviewee's prompt: the first round carries its context before the
     questions; the session holds it from then on, so later rounds are the questions,
-    after what the consultant answered to the previous round, if anything."""
+    after what the consultant answered to the previous round, if anything, and what is
+    already with the human, so it is not raised again."""
     questions = f"## Questions (round {round_})\n\n{asked.text}"
+    if transcript is not None and transcript.with_human:
+        questions = f"{transcript.with_human}\n\n{questions}"
     if consulted:
         questions = f"{consulted}\n\n{questions}"
     if round_ > 1:
@@ -216,10 +248,15 @@ def _consultation(
     questions: list[str],
     round_: int,
     cwd: Path | None,
+    transcript: Transcript,
 ) -> str:
-    """The consultant's prompt: the questions, numbered."""
+    """The consultant's prompt: the questions, numbered, after what is already with
+    the human."""
     listed = "\n".join(f"{n}. {q}" for n, q in enumerate(questions, 1))
-    return f"## Questions from {asker.name} (round {round_})\n\n{listed}"
+    prompt = f"## Questions from {asker.name} (round {round_})\n\n{listed}"
+    if transcript.with_human:
+        prompt = f"{transcript.with_human}\n\n{prompt}"
+    return prompt
 
 
 def _with_context(state: TaskState, role: Role, ports: Ports, cwd: Path | None, text: str) -> str:

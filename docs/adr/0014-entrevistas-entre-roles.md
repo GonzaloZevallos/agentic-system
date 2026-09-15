@@ -95,3 +95,27 @@ Costo: a lo sumo un turno de PM por ronda, dentro del tope de rondas; sin límit
 Opciones descartadas: PM como tercer participante de cada ronda (triplica turnos); PM
 responde todo al final (obliga a planificar sobre huecos); tratar la consulta como
 devolución Tech Lead→PM (contaría contra el límite de 2 y devolvería la tarea).
+
+## Adenda 2026-09-14: una pregunta para el humano se plantea una sola vez
+
+Las siete preguntas de GH-12 eran tres porque el sistema acumulaba por ronda lo que el
+entrevistado devolvía en `questions_for_human`, y nadie responde al humano durante la
+corrida: el entrevistado volvía a listar en la ronda N+1 lo que dejó abierto en la N, a
+veces reformulado. La consulta lo quitó de la entrevista de solución; en la de definición
+(Product Analyst→PM) seguía, y en la consulta podía volver por el otro lado: el Tech Lead
+re-consultando lo que PM ya mandó al humano.
+
+Decisión, en dos capas. El prompt: PM entrevistado y PM consultado devuelven solo lo nuevo
+de la ronda; el Tech Lead no vuelve a consultar lo que PM derivó al humano. Para que la
+regla no dependa de la memoria de cada sesión, lo ya registrado va numerado en el prompt
+siguiente de los tres, bajo `## With the human`: es el único lugar donde el Tech Lead lo
+ve, porque de la consulta solo recibe la prosa de PM. El grafo: al acumular descarta la
+repetición literal (espacios y mayúsculas aparte), en el único punto por el que pasan las
+dos entrevistas, y el motivo del escalado cuenta la lista ya depurada; lo acumulado llega
+al estado también cuando un lado falla después, para que el escalado por fallo no lo
+pierda. Una reformulación pasa: la defensa contra eso es el prompt, y se acepta antes que
+deduplicar por significado.
+
+Descartado: que el entrevistado devuelva cada ronda la lista vigente completa y el grafo
+la reemplace en vez de extender. Permitiría retirar una pregunta resuelta después, pero
+una pregunta olvidada al re-listar se perdería en silencio, que es peor que un duplicado.

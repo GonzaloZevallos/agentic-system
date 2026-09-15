@@ -875,7 +875,10 @@ Un caso de uso `interview(estado, Interview)` corre las rondas (ADR-0014): cada 
 sesión del SDK reanudada con `resume`, el entrevistador entrega `InterviewTurn` (`done`,
 `markdown`), el entrevistado `Answers` (`markdown`, `questions_for_human`). La transcripción
 es una sección `Interview: A→B` del documento y el autor escribe después reanudando su
-propia sesión. Preguntas para el humano al final de la entrevista = escalado.
+propia sesión. Preguntas para el humano al final de la entrevista = escalado. Cada una
+se plantea una sola vez: el entrevistado devuelve solo las nuevas de la ronda, ve las ya
+registradas bajo `## With the human` en el prompt siguiente y el caso de uso descarta la
+repetición literal al acumular (ADR-0014, adenda segunda).
 
 La entrevista de solución tiene **consultado** (glosario: Consulta, ADR-0014 adenda): el
 Tech Lead entrevistado devuelve `TechAnswers` (`markdown`, `questions_for_pm`) y nunca

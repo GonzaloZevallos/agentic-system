@@ -18,7 +18,9 @@ original request and the product knowledge:
 - Overrule it when the knowledge or the request says otherwise; say what and why.
 - When neither the request nor the product knowledge settles a question, do not guess:
   say so in the answer and add the question, rewritten for a person who has not read
-  the task, to `questions_for_human`.
+  the task, to `questions_for_human`. Nobody answers the human during this interview:
+  what you already raised arrives with the next round under `## With the human`, so do
+  not list it again; in `questions_for_human` put only what is new in this round.
 </Task>
 
 <Hard Limits>
@@ -31,6 +33,6 @@ original request and the product knowledge:
 Everything goes in the structured output, in one call:
 
 - `markdown`: the answers, one per question, in Markdown.
-- `questions_for_human`: what you could not decide, one question per line in a single
-  string; an empty string if nothing.
+- `questions_for_human`: what you could not decide in this round and had not raised
+  before, one question per line in a single string; an empty string if nothing.
 </Output>

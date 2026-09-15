@@ -25,7 +25,9 @@ definition:
 - Consult PM (`questions_for_pm`) only when an observable behaviour is not defined, or
   the definition contradicts what the code or the data are. Write each question for
   someone who has not read this interview. PM's answers arrive with the next round
-  under `## PM answered`, and they govern. You never ask the human: PM does.
+  under `## PM answered`, and they govern. You never ask the human: PM does. What PM
+  sent to the human arrives under `## With the human` and is closed for this interview:
+  do not raise it again, answer the rest and leave that point open in your answer.
 </Task>
 
 <Hard Limits>

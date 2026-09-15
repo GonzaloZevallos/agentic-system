@@ -91,7 +91,7 @@ Rondas de preguntas de un rol a otro para afinar una decisión antes de escribir
 _Avoid_: pingpong, consulta (la consulta es una pregunta suelta; la entrevista es la forma del trabajo)
 
 **Pregunta para el humano**:
-Lo que el dueño de una decisión marca como fuera de su alcance: ni el issue ni el conocimiento de producto lo deciden. En la definición la marca PM entrevistado; en la solución, PM consultado. El Tech Lead nunca pregunta al humano. Escala la tarea con la lista de preguntas al terminar la entrevista.
+Lo que el dueño de una decisión marca como fuera de su alcance: ni el issue ni el conocimiento de producto lo deciden. En la definición la marca PM entrevistado; en la solución, PM consultado. El Tech Lead nunca pregunta al humano. Se plantea una sola vez: nadie la responde durante la corrida, así que lo ya planteado no se repite en rondas siguientes ni el Tech Lead lo vuelve a consultar. Escala la tarea con la lista de preguntas al terminar la entrevista.
 
 **Revisión**:
 Pase de Tech Lead sobre la entrega de una subtarea o de la pieza integrada, con veredicto: aprobada o devuelta. Una subtarea tiene tantas revisiones como pases recibió.

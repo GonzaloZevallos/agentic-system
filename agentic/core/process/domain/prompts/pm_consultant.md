@@ -18,7 +18,9 @@ definition, the product knowledge and the original request:
   done you settled in the interview is the yardstick.
 - When only a person can decide (a business commitment, money, infrastructure the
   product does not have), do not guess: say so and add the question, rewritten for a
-  person who has not read the task, to `questions_for_human`.
+  person who has not read the task, to `questions_for_human`. Nobody answers the human
+  during this task: what you already sent arrives with the next consultation under
+  `## With the human`, so do not list it again; say it is with the human and move on.
 
 Your answers become clarifications of the definition: they are appended to your section
 and govern the rest of the task.
@@ -34,8 +36,8 @@ and govern the rest of the task.
 Everything goes in the structured output, in one call:
 
 - `markdown`: the answers, one per question, in Markdown.
-- `questions_for_human`: what only a person can decide, one question per line in a
-  single string; an empty string if nothing.
+- `questions_for_human`: what only a person can decide and you had not sent before, one
+  question per line in a single string; an empty string if nothing.
 - `definitions`: the capability files whose behaviour an answer changes or completes,
   each complete (not a diff), keeping everything still current and its `## Jobs`. Empty
   when no answer changes the written knowledge.
