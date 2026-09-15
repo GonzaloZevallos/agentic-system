@@ -95,6 +95,9 @@ async def test_validate_return_counts_against_the_pair_and_writes_nothing(cfg):
     patch = await validate_definition(state, cfg, ports)
     assert patch["status"] == "returned"
     assert patch["returns"] == {PAIR_PM_PA.key: 1}
+    assert patch["return_history"] == [
+        {"pair": PAIR_PM_PA.key, "category": "definition", "reason": "gap"}
+    ]
     assert ports.knowledge.definitions == {} and ports.knowledge.terms == {}
 
     again = apply(state, patch)

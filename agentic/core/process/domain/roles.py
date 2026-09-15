@@ -98,7 +98,8 @@ def describe_flags(vocabulary: dict[str, str]) -> str:
 
 
 # Tool sets. Reading the code is not executing (glossary: Ejecutar): a reviewer sees
-# files and the diff, never writes or runs anything else.
+# files and the diff, never writes anything. Running tests is not executing either:
+# the reviewer runs the ones behind a behaviour objection (ADR-0016).
 READ_CODE = ("Read", "Glob", "Grep", "Bash")
 READ_CODE_RULES = (
     "Read",
@@ -108,6 +109,7 @@ READ_CODE_RULES = (
     "Bash(git log:*)",
     "Bash(git show:*)",
 )
+RUN_TESTS_RULES = ("Bash(uv run pytest:*)", "Bash(pytest:*)")
 # An interviewer writes only the glossary and the ADRs of the product (ADR-0014).
 WRITE_DOCS = ("Read", "Glob", "Grep", "Edit", "Write")
 WRITE_DOCS_RULES = (
@@ -243,7 +245,7 @@ TECH_LEAD_REVIEWER = Role(
     reads=(ORIGINAL, "PM", "Tech Lead"),
     reads_standards=True,
     tools=READ_CODE + ("Agent",),
-    allowed=READ_CODE_RULES + ("Agent",),
+    allowed=READ_CODE_RULES + RUN_TESTS_RULES + ("Agent",),
     skills=("code-review",),
     max_turns=20,
 )

@@ -38,6 +38,9 @@ async def validate_definition(state: TaskState, cfg: Configuration, ports: Ports
         patch["status"] = "definition_ready"
     elif remaining > 0:
         patch["returns"] = rules.record_return(state, PAIR_PM_PA)
+        patch["return_history"] = [
+            rules.return_entry(PAIR_PM_PA, rules.DEFINITION_RETURN, output.data["reason"])
+        ]
         patch["status"] = "returned"
     else:
         # The pair hit its limit: escalate, always (README.md, 3). PM knew this was

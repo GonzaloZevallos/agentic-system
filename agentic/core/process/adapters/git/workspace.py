@@ -70,6 +70,9 @@ class GitWorkspace:
     def head(self, path: Path) -> str:
         return self._git("rev-parse", "--short", "HEAD", cwd=path)
 
+    def is_clean(self, path: Path) -> bool:
+        return not self._git("status", "--porcelain", cwd=path)
+
     def merge(self, path: Path, branch: str) -> None:
         self._git("merge", "--no-edit", "-q", branch, cwd=path)
 

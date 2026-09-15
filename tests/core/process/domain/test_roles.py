@@ -27,6 +27,17 @@ def test_the_roles_that_execute_cannot_touch_git_beyond_their_branch():
     assert all(not role.denied for role in ROLES if not role.executes)
 
 
+def test_the_reviewer_runs_tests_but_writes_nothing():
+    # A behaviour objection comes with the test that reproduces it (ADR-0016): the
+    # reviewer may run pytest in its checkout, and still has no tool that writes.
+    from agentic.core.process.domain.roles import TECH_LEAD, TECH_LEAD_REVIEWER
+
+    assert {"Bash(uv run pytest:*)", "Bash(pytest:*)"} <= set(TECH_LEAD_REVIEWER.allowed)
+    assert not {"Edit", "Write"} & set(TECH_LEAD_REVIEWER.tools)
+    assert not TECH_LEAD_REVIEWER.executes
+    assert not any("pytest" in rule for rule in TECH_LEAD.allowed)
+
+
 def test_describe_flags_is_one_bullet_per_flag():
     assert describe_flags({"touches_ui": "UI", "b": "B"}) == "- `touches_ui`: UI\n- `b`: B"
 
@@ -83,3 +94,22 @@ def test_pair_is_a_value():
     assert Pair(by=PM, to=PRODUCT_ANALYST) == Pair(by=PM, to=PRODUCT_ANALYST)
     assert Pair(by=PM, to=PRODUCT_ANALYST) != Pair(by=PM, to=PRODUCT_ANALYST, subtask="s1")
     assert hash(Pair(by=PM, to=PRODUCT_ANALYST)) == hash(Pair(by=PM, to=PRODUCT_ANALYST))
+
+
+def test_the_reviewer_prompt_explains_every_return_category():
+    from agentic.core.process.domain.schemas import CATEGORIES
+
+    prompt = (PROMPTS_DIR / "tech_lead_review.md").read_text()
+    for category in CATEGORIES:
+        assert f"- `{category}`:" in prompt, category
+
+
+def test_in_the_integration_review_a_problem_between_subtasks_is_the_subtasks():
+    # The integration branch holds every subtask: what crosses them is the integrator's
+    # to fix there, so it can block. Told otherwise, the reviewer marks it `plan`.
+    from agentic.core.process.domain.schemas import Finding
+
+    prompt = (PROMPTS_DIR / "tech_lead_review.md").read_text()
+    assert "In the integration review" in prompt
+    # The schema reaches the model too: both must say the same.
+    assert "On the integration branch" in Finding.model_fields["scope"].description

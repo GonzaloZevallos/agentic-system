@@ -8,7 +8,8 @@ the role. Nothing is exported unless
 `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
 
 The metrics are events, not rates (ADR-0008, addendum): every finished task and every
-role run leaves one sample per metric, with its value. Gauges give exactly that, and a
+role run leaves one sample per metric, with its value; `agentic.task.returns` leaves one
+per category of return (ADR-0016). Gauges give exactly that, and a
 flush after each `finish` guarantees two runs with the same labels never collapse into
 one sample. Prometheus reads them with `sum_over_time` and `count_over_time`, exact from
 the first task of a version; `increase()` never counts the first sample of a series.
@@ -171,7 +172,8 @@ class Instruments:
                 "agentic.task.finished", description="One per task that reached an end, by status"
             ),
             task_returns=m.create_gauge(
-                "agentic.task.returns", description="Returns of a task, across every pair"
+                "agentic.task.returns",
+                description="Returns of a task across every pair, one sample per category",
             ),
             role_cost=m.create_gauge("agentic.role.cost_usd", description="Cost of one role run"),
             role_duration=m.create_gauge(
@@ -213,6 +215,7 @@ class TaskRun(Run):
         cost = final.get("cost_usd", 0.0)
         rework = system_metrics.rework_cost_usd(final)
         returns = system_metrics.returns_total(final)
+        by_category = system_metrics.returns_by_category(final)
         labels = {
             "task.type": final.get("type", "unknown"),
             "task.status": final.get("status", "open"),
@@ -237,7 +240,8 @@ class TaskRun(Run):
             i.task_rework.set(rework, labels)
             i.task_duration.set(elapsed, labels)
             i.task_finished.set(1, labels)
-            i.task_returns.set(returns, labels)
+            for category, count in by_category.items():
+                i.task_returns.set(count, {**labels, "return.category": category})
 
         self._emit(record)
 
@@ -268,6 +272,8 @@ class RoleRun(Run):
             }
         for prompt_hash in patch.get("prompts", {}).values():
             attributes["role.prompt_hash"] = prompt_hash
+        if categories := system_metrics.return_categories(patch):
+            attributes["role.return_categories"] = categories
         self.span.set_attributes(attributes)
         elapsed = self.elapsed
         model = run["model"] if run else ""

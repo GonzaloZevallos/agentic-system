@@ -101,3 +101,44 @@ def test_withdrawn_may_be_left_out():
     raw = {"markdown": "x", "questions_for_human": "", "withdrawn": [2, 1]}
     assert schemas.validate(Answers, raw, VOCAB)["withdrawn"] == [2, 1]
     assert schemas.json_schema(Answers, VOCAB)["properties"]["withdrawn"]["type"] == "array"
+
+
+def finding(severity="blocking", **more) -> dict:
+    return {
+        "location": "src/x.py:12",
+        "claim": "returns None for an empty list",
+        "evidence": "$ pytest tests/test_x.py::test_empty\nFAILED ... AssertionError",
+        "severity": severity,
+        "scope": "subtask",
+        "category": "spec-behaviour",
+        **more,
+    }
+
+
+def test_review_findings_are_typed_and_the_categories_closed():
+    out = schemas.json_schema(schemas.Review, VOCAB)
+    assert "verdict" not in out["properties"]  # derived from the findings (ADR-0016)
+    assert out["properties"]["findings"]["type"] == "array"
+    data = schemas.validate(
+        schemas.Review, {"markdown": "x", "reason": "r", "findings": [finding()]}, VOCAB
+    )
+    assert data["findings"][0]["category"] == "spec-behaviour"
+    with pytest.raises(ValueError):
+        schemas.validate(
+            schemas.Review,
+            {"markdown": "x", "reason": "r", "findings": [finding(category="style")]},
+            VOCAB,
+        )
+    assert set(schemas.CATEGORIES) == {
+        "standard-architecture",
+        "standard-typing-silenced",
+        "standard-seams",
+        "standard-other",
+        "spec-behaviour",
+        "spec-missing-test",
+        "spec-scope",
+        "process-uncommitted",
+        "process-suite-red",
+        "plan-calibration",
+        "integration-crosscut",
+    }

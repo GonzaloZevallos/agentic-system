@@ -34,6 +34,26 @@ def test_returns_total_sums_every_pair():
     assert metrics.returns_total({}) == 0
 
 
+def test_returns_by_category_counts_the_history():
+    history = [
+        {"pair": "Tech Lead→Developer:a", "category": "standard-typing-silenced", "reason": "r"},
+        {"pair": "Tech Lead→Developer:b", "category": "standard-typing-silenced", "reason": "r"},
+        {"pair": "PM→Product Analyst", "category": "definition", "reason": "r"},
+    ]
+    state = {"returns": {"x": 3}, "return_history": history}
+    assert metrics.returns_by_category(state) == {"standard-typing-silenced": 2, "definition": 1}
+    # A task with no returns still leaves its sample; one recorded before the history
+    # existed counts what the history lacks as `unknown`.
+    assert metrics.returns_by_category({}) == {"none": 0}
+    assert metrics.returns_by_category({"returns": {"x": 2}}) == {"unknown": 2}
+    assert metrics.return_categories({"return_history": history}) == [
+        "standard-typing-silenced",
+        "standard-typing-silenced",
+        "definition",
+    ]
+    assert metrics.return_categories({}) == []
+
+
 def test_prompts_fingerprint_ignores_order_and_is_short():
     a = metrics.prompts_fingerprint({"prompts": {"pjm": "aaa", "pm": "bbb"}})
     b = metrics.prompts_fingerprint({"prompts": {"pm": "bbb", "pjm": "aaa"}})

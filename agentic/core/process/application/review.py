@@ -6,7 +6,13 @@ enters as one more subtask for the integrator (ADR-0011).
 The first review of a subtask diffs from its base with the brief as spec. Every
 review after a return is incremental (ADR-0015): it diffs from the head the previous
 review reached, with that review's list for the Developer as spec, so what a pass
-approved is not paid for twice. Each pass records the head it reviewed."""
+approved is not paid for twice. Each pass records the head it reviewed.
+
+The reviewer hands back findings, not a verdict (ADR-0016): the subtask is returned
+only on a blocking finding, and the return takes that finding's category, which is
+what measurement counts. A block without evidence, or that this subtask's Developer
+cannot fix, is lowered by the system, never a role failure. The system writes the
+verdict, and what it lowered, at the head of the review's section."""
 
 from __future__ import annotations
 
@@ -48,7 +54,12 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
         if output is None:
             break
         subtask = {**subtask, "reviewed_head": head}
-        if output.data["verdict"] == "approved":
+        reason = output.data["reason"]
+        findings, lowered = rules.lower_unbacked_blocks(output.data["findings"])
+        category = rules.return_category(findings)
+        markdown = rules.review_markdown(category, reason, output.text, lowered)
+        patch = apply(patch, {"sections": {section: markdown}})
+        if category is None:
             patch = apply(patch, {"subtasks": {subtask_id: {**subtask, "status": "approved"}}})
         elif remaining > 0:
             patch = apply(
@@ -58,14 +69,16 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
                         subtask_id: {
                             **subtask,
                             "status": "returned",
-                            "reason": output.data["reason"],
+                            "reason": reason,
+                            "return_category": category,
                         }
                     },
                     "returns": rules.record_return(current, pair),
+                    "return_history": [rules.return_entry(pair, category, reason)],
                 },
             )
         else:
-            patch["escalated"] = rules.limit_reached(pair, limit, output.data["reason"])
+            patch["escalated"] = rules.limit_reached(pair, limit, reason)
             patch["status"] = WAITING_ON_HUMAN
             break
 

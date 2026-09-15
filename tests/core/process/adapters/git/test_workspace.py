@@ -110,3 +110,15 @@ def test_push_and_cleanup_keep_the_branches(product):
     branches = git("branch", "--format=%(refname:short)", cwd=product).splitlines()
     assert {"agentic/GH-12", "agentic/GH-12.api", "agentic/GH-13"} <= set(branches)
     ws.cleanup("GH-99")  # nothing to do, no error
+
+
+def test_a_checkout_is_clean_only_without_changes_tracked_or_not(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    assert ws.is_clean(task.path)
+    (task.path / "new.py").write_text("x\n")  # untracked counts: a Developer's new file
+    assert not ws.is_clean(task.path)
+    ws.commit_all(task.path, "GH-12: new")
+    assert ws.is_clean(task.path)
+    (task.path / "README.md").write_text("v1\n")
+    assert not ws.is_clean(task.path)

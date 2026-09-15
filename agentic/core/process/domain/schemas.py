@@ -18,11 +18,11 @@ tags instead of an array, five times in a row in one case. Lists nested in objec
 from __future__ import annotations
 
 import re
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, Field
 
-from .task import INTEGRATION
+from .task import INTEGRATION, FindingCategory
 
 TaskType = Literal["bug", "feature", "platform_enhancement"]
 SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -160,9 +160,39 @@ class Delivery(RoleOutput):
     assumptions: list[str] = Field(description="Decisions taken where the brief was silent")
 
 
+CATEGORIES: tuple[str, ...] = get_args(FindingCategory)
+Severity = Literal["blocking", "important", "observation"]
+
+
+class Finding(BaseModel):
+    """One thing the reviewer found, with what it saw (ADR-0016). Only a `blocking`
+    finding returns the subtask; `important` and `observation` travel with an approval."""
+
+    location: str = Field(description="`file:line`, or the file when it is the whole file")
+    claim: str = Field(description="What is wrong, one sentence")
+    evidence: str = Field(
+        description="The command you ran and its output, or the line of the standard or "
+        "the brief you cite. Empty only on an `observation`"
+    )
+    severity: Severity = Field(
+        description="`blocking`: the Developer must fix it before the subtask is done. "
+        "`important`: should be fixed, does not block. `observation`: a remark, or an "
+        "objection you could not reproduce"
+    )
+    scope: Literal["subtask", "plan"] = Field(
+        description="`subtask` when it can be fixed on the branch under review; `plan` when "
+        "it needs a change to the plan or to another subtask's branch. On the integration "
+        "branch a problem between subtasks is `subtask`"
+    )
+    category: FindingCategory
+
+
 class Review(RoleOutput):
-    verdict: Literal["approved", "returned"]
-    reason: str = Field(description="One line. On `returned`, what the Developer must fix")
+    reason: str = Field(
+        description="One line, why, not the verdict (the system writes it). On a return, "
+        "what the Developer must fix first; on an approval, what you verified"
+    )
+    findings: list[Finding] = Field(description="Every finding, most severe first")
 
 
 def plan_check(data: dict) -> None:

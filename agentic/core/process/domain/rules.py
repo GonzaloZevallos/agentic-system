@@ -5,8 +5,13 @@ Pure functions over the task state, so each one is a unit test and not a graph r
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from .roles import Pair
-from .task import INTEGRATION, TaskState
+from .task import INTEGRATION, FindingCategory, Return, ReturnCategory, TaskState
+
+# The category the system stamps on PM's returns of the definition (ADR-0016).
+DEFINITION_RETURN: ReturnCategory = "definition"
 
 
 def remaining_returns(state: TaskState, pair: Pair, limit: int) -> int:
@@ -17,6 +22,52 @@ def remaining_returns(state: TaskState, pair: Pair, limit: int) -> int:
 def record_return(state: TaskState, pair: Pair) -> dict[str, int]:
     """The `returns` patch after one more return of `pair`."""
     return {pair.key: state.get("returns", {}).get(pair.key, 0) + 1}
+
+
+def return_entry(pair: Pair, category: ReturnCategory, reason: str) -> Return:
+    """One entry of the return history: who returned, in which category, and the reason,
+    so README §3's "same motive between the same roles" is computable."""
+    return {"pair": pair.key, "category": category, "reason": reason}
+
+
+def return_category(findings: list[dict]) -> FindingCategory | None:
+    """The verdict of a review, derived (ADR-0016): the category of the return, the
+    first blocking finding's since the reviewer lists them most severe first, or None
+    when nothing blocks and the review approves."""
+    return next((f["category"] for f in findings if f["severity"] == "blocking"), None)
+
+
+def lower_unbacked_blocks(findings: list[dict]) -> tuple[list[dict], list[str]]:
+    """The findings as the verdict counts them, and a line for each block the system
+    lowered (ADR-0016). A block needs evidence, or it is an `observation`; and something
+    this subtask's Developer can fix, or it is `important`. Lowering instead of failing
+    the role: a field filled badly must not cost a retry, nor escalate the task."""
+    settled, lowered = [], []
+    for item in findings:
+        if item["severity"] == "blocking" and not item["evidence"].strip():
+            item = {**item, "severity": "observation"}
+            lowered.append(f"`{item['location']}` blocking lowered to observation: no evidence")
+        elif item["severity"] == "blocking" and item["scope"] != "subtask":
+            item = {**item, "severity": "important"}
+            lowered.append(
+                f"`{item['location']}` blocking lowered to important: scope {item['scope']}, "
+                "not fixable in this subtask"
+            )
+        settled.append(item)
+    return settled, lowered
+
+
+def review_markdown(
+    category: FindingCategory | None, reason: str, text: str, lowered: Sequence[str] = ()
+) -> str:
+    """A review's section as the document keeps it: the derived verdict first, written by
+    the system, with the blocks it lowered, then what the reviewer wrote. The reviewer
+    never writes the verdict, so the section cannot contradict it (ADR-0016)."""
+    verdict = "**approved**" if category is None else f"**returned** (`{category}`)"
+    parts = [f"### Verdict\n\n{verdict}: {reason}"]
+    if lowered:
+        parts.append("Lowered by the system:\n\n" + "\n".join(f"- {line}" for line in lowered))
+    return "\n\n".join([*parts, text])
 
 
 def limit_reached(pair: Pair, limit: int, reason: str) -> str:

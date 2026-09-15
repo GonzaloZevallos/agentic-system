@@ -131,6 +131,10 @@ class Workspace(Protocol):
 
     def head(self, path: Path) -> str: ...
 
+    def is_clean(self, path: Path) -> bool:
+        """No uncommitted change, tracked or untracked, under the checkout at `path`."""
+        ...
+
     def merge(self, path: Path, branch: str) -> None:
         """Bring `branch` into the checkout at `path`: a subtask starts on the code of
         the subtasks it depends on. Merging again is a no-op."""

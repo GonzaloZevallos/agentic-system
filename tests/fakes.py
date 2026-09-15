@@ -118,12 +118,14 @@ class MemoryInbox:
 
 class MemoryWorkspace:
     """Branches and worktrees as names. A Developer's commit is simulated by adding
-    its checkout path to `moved` before the run: `head` then differs from the base."""
+    its checkout path to `moved` before the run: `head` then differs from the base.
+    A path in `dirty` has uncommitted changes."""
 
     ROOT = Path("/memory/worktrees")
 
     def __init__(self):
         self.moved: set[Path] = set()
+        self.dirty: set[Path] = set()
         self.commits: list[tuple[Path, str]] = []
         self.merges: list[tuple[Path, str]] = []
         self.pushed: list[str] = []
@@ -143,6 +145,9 @@ class MemoryWorkspace:
             return "base"
         self._looks[path] = self._looks.get(path, 0) + 1
         return f"head{self._looks[path]}"
+
+    def is_clean(self, path: Path) -> bool:
+        return path not in self.dirty
 
     def merge(self, path: Path, branch: str) -> None:
         self.merges.append((path, branch))
@@ -254,9 +259,25 @@ def delivered(summary="done", cost=0.5, session="dev") -> RawResult:
     )
 
 
-def reviewed(kind="approved", reason="fine", cost=0.2) -> RawResult:
+def finding(severity="blocking", category="spec-behaviour", claim="wrong", scope="subtask"):
+    return {
+        "location": "x.py:1",
+        "claim": claim,
+        "evidence": "$ pytest tests/test_x.py\nFAILED",
+        "severity": severity,
+        "scope": scope,
+        "category": category,
+    }
+
+
+def reviewed(kind="approved", reason="fine", cost=0.2, category="spec-behaviour") -> RawResult:
+    """The verdict is derived: a return is a review with a blocking finding."""
+    findings = [finding(category=category, claim=reason)] if kind == "returned" else []
     return RawResult(
-        {"markdown": f"### Verdict\n\n{kind}", "verdict": kind, "reason": reason}, cost, 3, "rv"
+        {"markdown": "### Findings\n\nNone.", "reason": reason, "findings": findings},
+        cost,
+        3,
+        "rv",
     )
 
 

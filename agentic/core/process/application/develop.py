@@ -2,9 +2,13 @@
 The integration is a subtask like the others, built by the integrator on the task
 branch once every real subtask is approved.
 
-A delivery is a commit: a Developer that ends its turn with the branch where it
-started has delivered nothing, whatever its section says. That is a role failure,
-retried once like any other, so the model is told what was missing."""
+A delivery is a commit on a clean tree: a Developer that ends its turn with the
+branch where it started has delivered nothing, whatever its section says, and one
+that leaves changes uncommitted delivered something else than what it tested (run 4:
+the suite passed against a working tree the branch did not hold). Either is a role
+failure, retried once like any other, so the model is told what was missing. The
+delivery gate of issue #22 will catch both before the turn ends; this stays as its
+backstop."""
 
 from __future__ import annotations
 
@@ -35,6 +39,11 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             raise ValueError(
                 "no commit on the branch: a delivery is committed code, commit your "
                 "work on the current branch and then deliver"
+            )
+        if not ports.workspace.is_clean(checkout.path):
+            raise ValueError(
+                "uncommitted changes in the working tree: the branch must hold exactly "
+                "what you tested, commit them (or discard them) and then deliver"
             )
 
     section = rules.developer_section(subtask_id)
