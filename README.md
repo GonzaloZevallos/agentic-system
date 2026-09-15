@@ -761,6 +761,7 @@ Se anotan para no reintroducirlas por error.
 | El tope de costo por intento es solo del Developer | Es de todo rol, `AGENTIC_MAX_BUDGET_USD`; los subagentes de cualquier rol corren en Sonnet (ADR-0004 y ADR-0013, adendas) |
 | El único tope de costo es por intento | Hay también un tope de tarea sobre el acumulado, 100 USD, `AGENTIC_TASK_MAX_BUDGET_USD`, que escala en vez de seguir (ADR-0004, adenda tercera) |
 | Cada revisión del Tech Lead arranca desde la base de la subtarea | La primera sí; después de una devolución es incremental, desde el head ya revisado (ADR-0015) |
+| Todo lo que ni el pedido ni el conocimiento resuelven va al humano, y una pregunta registrada no se retira | Va solo lo que deja la definición indecidible; el resto es un supuesto en la respuesta. El dueño de la decisión retira por número lo que una ronda posterior resuelve (ADR-0014, adenda tercera) |
 
 ---
 
@@ -876,17 +877,23 @@ sobre la rama de tarea.
 
 Un caso de uso `interview(estado, Interview)` corre las rondas (ADR-0014): cada lado es una
 sesión del SDK reanudada con `resume`, el entrevistador entrega `InterviewTurn` (`done`,
-`markdown`), el entrevistado `Answers` (`markdown`, `questions_for_human`). La transcripción
+`markdown`), el entrevistado `Answers` (`markdown`, `questions_for_human`, `withdrawn`). La
+transcripción
 es una sección `Interview: A→B` del documento y el autor escribe después reanudando su
 propia sesión. Preguntas para el humano al final de la entrevista = escalado. Cada una
 se plantea una sola vez: el entrevistado devuelve solo las nuevas de la ronda, ve las ya
 registradas bajo `## With the human` en el prompt siguiente y el caso de uso descarta la
-repetición literal al acumular (ADR-0014, adenda segunda).
+repetición literal al acumular (ADR-0014, adenda segunda). Solo va lo que deja la definición
+indecidible; lo que no la cambia es un supuesto en la respuesta. Una pregunta registrada se
+retira cuando una ronda posterior la resuelve: el dueño de la decisión devuelve en `withdrawn` los
+números de la lista que recibió, el caso de uso las saca antes de sumar las nuevas, y el
+entrevistador también ve la lista para traer el conocimiento que la cierre (ADR-0014,
+adenda tercera).
 
 La entrevista de solución tiene **consultado** (glosario: Consulta, ADR-0014 adenda): el
 Tech Lead entrevistado devuelve `TechAnswers` (`markdown`, `questions_for_pm`) y nunca
 pregunta al humano. Con preguntas, PM responde en la misma ronda (`Consultation`:
-`markdown`, `questions_for_human`, `definitions`, `glossary`) retomando su sesión de
+`markdown`, `questions_for_human`, `withdrawn`, `definitions`, `glossary`) retomando su sesión de
 validación; la respuesta entra en la transcripción y en el prompt siguiente del
 entrevistador, la sección `PM` se entrega de nuevo con `### Clarifications` (la anterior
 queda como `PM (vN)`) y lo que cambia el conocimiento se destila otra vez.

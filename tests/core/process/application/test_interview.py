@@ -124,6 +124,63 @@ async def test_a_question_repeated_across_rounds_reaches_the_human_once(cfg):
     )
 
 
+async def test_a_question_with_the_human_is_withdrawn_when_pm_answers_it_later(cfg):
+    # Round 2 shows PM that the knowledge settles the first question (issue #12): PM
+    # withdraws it by its number in the list it received, and leaves a new one.
+    runner = ScriptedRunner(
+        **{
+            ASK: [questions(1), questions(2), questions(3), questions(done=True)],
+            ANSWER: [
+                answers(1, for_human=["Which currency?", "Who pays the fee?"]),
+                answers(2, withdrawn=[1], for_human=["Is there a fee cap?"]),
+                answers(3),
+            ],
+        }
+    )
+    transcript, patch = await interview(TASK, INTERVIEW_DEFINITION, cfg, memory_ports(runner))
+    assert transcript is None
+    assert patch["questions_for_human"] == ["Who pays the fee?", "Is there a fee cap?"]
+    assert "PM could not decide 2" in patch["escalated"]
+    # The interviewer reads the list too, before the answers, so it can bring the
+    # knowledge that closes a question; the list it reads is the one after the round.
+    assert runner.calls[2]["prompt"] == (
+        "## With the human\n\n1. Which currency?\n2. Who pays the fee?\n\n**Q1**: accepted"
+    )
+    assert runner.calls[4]["prompt"] == (
+        "## With the human\n\n1. Who pays the fee?\n2. Is there a fee cap?\n\n**Q2**: accepted"
+    )
+    assert runner.calls[5]["prompt"].startswith(
+        "## With the human\n\n1. Who pays the fee?\n2. Is there a fee cap?\n\n"
+        "## Questions (round 3)"
+    )
+
+
+async def test_withdrawing_every_question_leaves_nothing_to_escalate(cfg):
+    runner = ScriptedRunner(
+        **{
+            ASK: [questions(1), questions(2), questions(done=True)],
+            ANSWER: [answers(1, for_human=["Which currency?"]), answers(2, withdrawn=[1])],
+        }
+    )
+    transcript, patch = await interview(TASK, INTERVIEW_DEFINITION, cfg, memory_ports(runner))
+    assert transcript is not None
+    assert "escalated" not in patch and "questions_for_human" not in patch
+    # Nothing with the human: the interviewer's closing prompt carries no list.
+    assert runner.calls[4]["prompt"] == "**Q2**: accepted"
+
+
+async def test_a_number_outside_the_list_withdraws_nothing(cfg):
+    runner = ScriptedRunner(
+        **{
+            ASK: [questions(1), questions(2), questions(done=True)],
+            ANSWER: [answers(1, for_human=["Which currency?"]), answers(2, withdrawn=[0, 2])],
+        }
+    )
+    transcript, patch = await interview(TASK, INTERVIEW_DEFINITION, cfg, memory_ports(runner))
+    assert transcript is None
+    assert patch["questions_for_human"] == ["Which currency?"]
+
+
 async def test_questions_for_the_human_survive_a_side_failing_later(cfg):
     runner = ScriptedRunner(
         **{
@@ -299,6 +356,30 @@ async def test_a_consultation_repeated_across_rounds_reaches_the_human_once(cfg)
     assert tech_lead_round_2.startswith("## PM answered (round 1)")
     assert f"\n\n{with_human}\n\n## Questions (round 2)" in tech_lead_round_2
     assert consult_round_2.startswith(f"{with_human}\n\n## Questions from Tech Lead (round 2)")
+
+
+async def test_pm_withdraws_a_consulted_question_it_answers_later(cfg):
+    runner = ScriptedRunner(
+        **{
+            TL_ASK: [questions(1), questions(2), questions(done=True)],
+            TL_ANSWER: [
+                tech_answers(1, for_pm=["Where do the metrics go?"]),
+                tech_answers(2, for_pm=["Does a script count as live?"]),
+            ],
+            CONSULT: [
+                consulted(1, for_human=["Where do the metrics go?"]),
+                consulted(2, withdrawn=[1]),
+            ],
+        }
+    )
+    transcript, patch = await interview(PLANNED, INTERVIEW_SOLUTION, cfg, memory_ports(runner))
+    assert transcript is not None
+    assert "escalated" not in patch and "questions_for_human" not in patch
+    # The interviewer reads the list before the answers; PM reads it in the second
+    # consultation, before withdrawing from it.
+    with_human = "## With the human\n\n1. Where do the metrics go?"
+    assert runner.calls[3]["prompt"].startswith(f"{with_human}\n\n**Q1**: accepted")
+    assert runner.calls[5]["prompt"].startswith(with_human)
 
 
 async def test_a_consultant_without_a_session_gets_its_context_first(cfg):

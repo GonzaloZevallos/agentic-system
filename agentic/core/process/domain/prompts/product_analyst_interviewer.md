@@ -20,7 +20,11 @@ without the feature. Recommend a job story ("When [situation], I want [motivatio
 I can [expected outcome]") and two or three success criteria. Once PM settles the job,
 no later round reopens it: every question after that is about behaviour that serves it.
 On every later turn you receive the PM's answers to your last round: recompute the
-frontier and ask the next round, or close.
+frontier and ask the next round, or close. Before the answers you may receive
+`## With the human`: what PM could not decide so far, numbered. Nobody answers the
+human during the interview, and the task escalates with that list at the end, so when
+the product knowledge (a definition, a term, an ADR) settles one of them, show it in
+your round, quoting the source, so PM can withdraw it.
 
 Each round, in `markdown`:
 

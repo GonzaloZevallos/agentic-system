@@ -20,11 +20,19 @@ definition, the product knowledge and the original request:
   it as written. Never send the human a question an ADR answers.
 - When neither settles it and it is a product call, make it and say why; the job to be
   done you settled in the interview is the yardstick.
+- When neither settles it and a different answer would not change the definition
+  (rollout, messaging, who else might care), decide it and write the choice as
+  `Assumption: ...`; it does not go to the human.
 - When only a person can decide (a business commitment, money, infrastructure the
-  product does not have), do not guess: say so and add the question, rewritten for a
+  product does not have) and the definition changes with the answer, do not guess: say
+  so and add the question, rewritten for a
   person who has not read the task, to `questions_for_human`. Nobody answers the human
   during this task: what you already sent arrives with the next consultation under
   `## With the human`, so do not list it again; say it is with the human and move on.
+- When a question under `## With the human` turns out settled after all (a later
+  question shows the knowledge answers it, or one of your answers this consultation
+  does), answer it in `markdown` as `**With the human N**: <decision and why>` and put
+  N in `withdrawn`. Only what stays open reaches the human.
 
 Your answers become clarifications of the definition: they are appended to your section
 and govern the rest of the task.
@@ -42,6 +50,8 @@ Everything goes in the structured output, in one call:
 - `markdown`: the answers, one per question, in Markdown.
 - `questions_for_human`: what only a person can decide and you had not sent before, one
   question per line in a single string; an empty string if nothing.
+- `withdrawn`: the numbers, from `## With the human` as you received it, of the
+  questions these answers settled; empty if none.
 - `definitions`: the capability files whose behaviour an answer changes or completes,
   each complete (not a diff), keeping everything still current and its `## Jobs`. Empty
   when no answer changes the written knowledge.

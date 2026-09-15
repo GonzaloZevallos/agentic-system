@@ -85,11 +85,18 @@ class InterviewTurn(RoleOutput):
 
 
 class Answers(RoleOutput):
-    """One round of the interviewee: a decision per question."""
+    """One round of the interviewee: a decision per question, what it leaves for the
+    human and what it takes back from the human (issue #12)."""
 
     questions_for_human: list[str] = Field(
-        description="Questions neither the request nor the product knowledge settle, "
-        "written for a person who has not read the task"
+        description="Questions the definition cannot be settled without, that neither "
+        "the request nor the product knowledge answer, written for a person who has "
+        "not read the task"
+    )
+    withdrawn: list[int] = Field(
+        default_factory=list,
+        description="Numbers, from `## With the human` as received this round, of the "
+        "questions this round's answers settle after all; empty if none",
     )
 
 
@@ -110,6 +117,11 @@ class Consultation(RoleOutput):
     questions_for_human: list[str] = Field(
         description="Questions only a person can decide, written for a person who has "
         "not read the task"
+    )
+    withdrawn: list[int] = Field(
+        default_factory=list,
+        description="Numbers, from `## With the human` as received this consultation, "
+        "of the questions these answers settle after all; empty if none",
     )
     definitions: list[CapabilityFile] = Field(
         description="The capability files whose behaviour an answer changes or completes, "

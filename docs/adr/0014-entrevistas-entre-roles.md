@@ -119,3 +119,36 @@ deduplicar por significado.
 Descartado: que el entrevistado devuelva cada ronda la lista vigente completa y el grafo
 la reemplace en vez de extender. Permitiría retirar una pregunta resuelta después, pero
 una pregunta olvidada al re-listar se perdería en silencio, que es peor que un duplicado.
+
+## Adenda 2026-09-15: solo lo que deja la definición indecidible, y se retira lo que se resuelve
+
+La tercera corrida de GH-12 escaló desde la entrevista de definición con dos preguntas
+que no tenían que llegar al humano. Una no cambiaba la definición: PM lo escribió en la
+misma respuesta ("it is a question for the human only insofar as it affects rollout
+messaging") y la registró igual, porque el prompt mandaba al humano todo lo que ni el
+pedido ni el conocimiento resolvían. La otra la respondió la ronda siguiente: el Product
+Analyst mostró que un ADR del producto la decidía, pero una pregunta acumulada no tenía
+camino de vuelta, y la lista no vacía escala al cerrar. La corrida anterior, con el mismo
+pedido y el mismo conocimiento, se aprobó a la primera: la diferencia era muestreo.
+
+Decisión, en dos partes. **El umbral**: una pregunta va al humano solo si una respuesta
+distinta produciría una definición distinta y nada en el pedido ni en el conocimiento
+elige una. Lo que no cambia la definición PM lo decide y lo deja escrito en su respuesta
+como supuesto (glosario); el Product Analyst lo lleva a la definición desde su sesión.
+**El retiro**: el dueño de la decisión (PM entrevistado, PM consultado) devuelve en
+`withdrawn` los números, de la lista `## With the human` que recibió en esa ronda, de las
+preguntas que esa ronda resolvió, con la respuesta en su prosa. El caso de uso las saca de
+la lista antes de sumar las nuevas de la ronda, así los números son los que el prompt
+mostró; un número fuera de la lista no retira nada. Escala solo lo que sigue abierto. Para
+que el retiro ocurra a propósito y no por azar, el entrevistador también recibe
+`## With the human` antes de las respuestas, y su prompt le pide traer el conocimiento que
+cierre una pregunta, citando la fuente; retirar sigue siendo del dueño, porque las
+decisiones son del entrevistado.
+
+Esto no es lo que la adenda anterior descartó. Ahí el entrevistado re-listaba todo y el
+grafo reemplazaba, y una pregunta olvidada se perdía en silencio. Acá el retiro es
+explícito, por número y con respuesta escrita: lo que no se nombra se queda.
+
+Descartado: que el entrevistador retire (el que pregunta decidiría); que el retiro sea por
+texto (una reformulación no coincidiría); un campo estructurado para los supuestos (la
+prosa de la respuesta ya llega al autor de la definición, que escribe desde su sesión).
