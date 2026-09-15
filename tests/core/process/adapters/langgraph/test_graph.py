@@ -424,12 +424,36 @@ async def test_the_task_cap_escalates_once_during_a_fan_out(config):
     final = await run_graph(script, config, fakes=fakes)
 
     assert final["status"] == WAITING_ON_HUMAN
-    assert final["escalated"] == "Developer not run: task cap of 0.70 USD reached, 0.86 USD spent"
+    assert final["escalated"] == "Developer stopped by the task cap: 0.86 of 0.70 USD spent"
     assert "developer" not in script.slugs
     assert final["cost_usd"] == pytest.approx(0.86)
     assert fakes.tracker.labels == [("GH-1", "needs-human")]
     assert len(fakes.tracker.comments) == 1
     assert {s["status"] for s in final["subtasks"].values()} == {"pending"}
+
+
+async def test_the_task_cap_stops_the_review_loop_inside_one_node(config):
+    # Two deliveries reviewed in one `review` node: the first review takes the total
+    # from 1.86 to 2.06, so the second never starts. The routing between nodes could
+    # not have seen it (ADR-0004, third addendum).
+    config["configurable"]["task_max_budget_usd"] = 2.0
+    plan = planned({"id": "domain", "title": "Domain", "brief": "b", "seams": ["x"]})
+    script = script_for(
+        **technical(
+            tech_lead=[plan],
+            developer=[delivered("api"), delivered("domain")],
+            tech_lead_review=[reviewed("approved"), reviewed("approved")],
+        )
+    )
+    final = await run_graph(script, config)
+
+    assert final["status"] == WAITING_ON_HUMAN
+    assert final["escalated"] == "Tech Lead stopped by the task cap: 2.06 of 2.00 USD spent"
+    assert script.slugs.count("tech_lead_review") == 1
+    assert final["cost_usd"] == pytest.approx(2.06)
+    assert final["subtasks"]["api"]["status"] == "approved"
+    assert final["subtasks"]["domain"]["status"] == "delivered"
+    assert INTEGRATION not in final["subtasks"]
 
 
 async def test_retried_failure_is_recorded_but_not_escalated(config):

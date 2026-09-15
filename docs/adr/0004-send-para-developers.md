@@ -65,7 +65,7 @@ los tres Developers aprobados 18, sus tres revisiones 40, fallos 15.
 `cost_usd` del estado ya acumula todo por reducer y llega fresco a cada intento: `review`
 e `interview` aplican los patches al estado antes de la siguiente llamada, así que el
 chequeo cubre también las revisiones dentro de un nodo y las rondas de una entrevista, que
-el ruteo entre nodos no ve. Superado el tope, `run_role` devuelve el mismo patch de
+el ruteo entre nodos no ve. Alcanzado el tope, `run_role` devuelve el mismo patch de
 escalado que un fallo de rol repetido, con total gastado y tope como motivo, y el nodo
 `escalate` etiqueta y comenta sin cambios. No es fallo de rol: el rol no se rompió. El
 ruteo queda puro, sin conocer la configuración.

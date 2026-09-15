@@ -7,7 +7,7 @@ import pytest
 from agentic.core.process.application.ports import AttemptFailed, RawResult
 from agentic.core.process.application.run_role import (
     RoleFailure,
-    TaskBudgetExceeded,
+    TaskCapReached,
     context_for,
     run_role,
     run_with_retry,
@@ -89,23 +89,23 @@ async def test_second_failure_raises_role_failure_with_cost():
 async def test_the_task_cap_stops_a_role_before_its_first_attempt():
     # The task already spent the cap: nothing else runs, and it is not a role failure.
     runner = ScriptedRunner(pjm=[OK])
-    with pytest.raises(TaskBudgetExceeded) as info:
+    with pytest.raises(TaskCapReached) as info:
         await run_pjm(runner, spent_usd=100.0, task_max_budget_usd=100.0)
     assert runner.calls == []
     assert info.value.failures == [] and info.value.cost_usd == 0.0
-    assert str(info.value) == "PjM not run: task cap of 100.00 USD reached, 100.00 USD spent"
+    assert str(info.value) == "PjM stopped by the task cap: 100.00 of 100.00 USD spent"
 
 
 async def test_the_task_cap_counts_a_failed_attempt_before_the_retry():
     # The failed attempt is paid and pushes the run over the cap: the retry, which
     # could cost another attempt cap, does not happen. The failure is kept.
     runner = ScriptedRunner(pjm=[AttemptFailed("cut", 1.5, session_id="s"), OK])
-    with pytest.raises(TaskBudgetExceeded) as info:
+    with pytest.raises(TaskCapReached) as info:
         await run_pjm(runner, spent_usd=9.0, task_max_budget_usd=10.0)
     assert len(runner.calls) == 1
     assert [f["error"] for f in info.value.failures] == ["cut"]
     assert info.value.cost_usd == pytest.approx(1.5)
-    assert "10.50 USD spent" in str(info.value)
+    assert "10.50 of 10.00 USD spent" in str(info.value)
 
 
 async def test_under_the_task_cap_the_role_runs_as_usual():
@@ -256,6 +256,6 @@ async def test_run_role_escalates_when_the_task_cap_is_reached(tmp_path):
     )
     assert output is None and runner.calls == []
     assert patch["status"] == "waiting_on_human"
-    assert patch["escalated"] == "PjM not run: task cap of 50.00 USD reached, 50.00 USD spent"
+    assert patch["escalated"] == "PjM stopped by the task cap: 50.00 of 50.00 USD spent"
     assert patch["failures"] == [] and patch["cost_usd"] == 0.0
     assert "sections" not in patch and "runs" not in patch

@@ -176,7 +176,7 @@ El validador **reporta** cada devolución a PjM, y cuentan para el límite.
 ### Tope de tarea
 
 El acumulado de una corrida tiene tope: **100 USD** por default,
-`AGENTIC_TASK_MAX_BUDGET_USD`. Se mira antes de cada intento de cualquier rol; superado,
+`AGENTIC_TASK_MAX_BUDGET_USD`. Se mira antes de cada intento de cualquier rol; alcanzado,
 el sistema escala al humano con el total gastado y el tope como motivo, en vez de seguir.
 No es fallo de rol ni devolución y no cuenta para ningún límite. Como el tope por intento,
 es red de seguridad, bien arriba de lo que cuesta una tarea sana, no presupuesto de
