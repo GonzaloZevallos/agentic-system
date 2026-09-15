@@ -2,6 +2,7 @@ import pytest
 
 from agentic.core.process.domain import schemas
 from agentic.core.process.domain.schemas import (
+    Answers,
     Classification,
     Definition,
     TechAnswers,
@@ -90,3 +91,13 @@ def test_validate_rejects_bad_type_as_value_error():
     with pytest.raises(ValueError):
         raw = {"markdown": "x", "type": "chore", "confidence": "high", "reason": "r"}
         schemas.validate(Classification, raw, VOCAB)
+
+
+def test_withdrawn_may_be_left_out():
+    # Most rounds have nothing with the human, so a model that skips the field instead
+    # of writing `[]` is not a role failure (issue #12); the numbers stay an array.
+    raw = {"markdown": "x", "questions_for_human": ""}
+    assert schemas.validate(Answers, raw, VOCAB)["withdrawn"] == []
+    raw = {"markdown": "x", "questions_for_human": "", "withdrawn": [2, 1]}
+    assert schemas.validate(Answers, raw, VOCAB)["withdrawn"] == [2, 1]
+    assert schemas.json_schema(Answers, VOCAB)["properties"]["withdrawn"]["type"] == "array"

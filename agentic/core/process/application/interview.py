@@ -5,8 +5,10 @@ has the whole conversation in context.
 
 What the interviewee cannot decide goes to the human: the interview still runs to its
 end, so the human answers everything in one go, and then the task escalates with the
-list instead of a deliverable written over guesses. Whatever happens, the rounds that
-did run reach the document: it is the raw record.
+list instead of a deliverable written over guesses. A later round may settle a question
+already on the list (the interviewer brings the knowledge that answers it): the decider
+withdraws it by number, and only what is still open escalates. Whatever happens, the
+rounds that did run reach the document: it is the raw record.
 
 An interview may have a consultant (glossary: Consulta): what the interviewee asks it
 in a round is answered before the next one, in the same run. The answers join the
@@ -54,15 +56,29 @@ class Transcript:
                 seen.add(_key(question))
                 self.questions_for_human.append(question)
 
+    def withdraw(self, numbers: list[int]) -> None:
+        """Take back the questions the decider settled this round, by their number in
+        the list it read (issue #12). Runs before this round's new questions join, so
+        the numbers are the ones the prompt showed; one outside the list withdraws
+        nothing, which beats dropping the wrong question."""
+        gone = set(numbers)
+        self.questions_for_human = [
+            q for n, q in enumerate(self.questions_for_human, 1) if n not in gone
+        ]
+
     @property
     def with_human(self) -> str:
         """What is already with the human, numbered, for the roles' next prompt: the
         one place they can see it, since a consultation shows the Tech Lead only PM's
-        prose. Empty when nothing is."""
+        prose. Numbered as the decider withdraws it. Empty when nothing is."""
         if not self.questions_for_human:
             return ""
         listed = "\n".join(f"{n}. {q}" for n, q in enumerate(self.questions_for_human, 1))
         return f"## With the human\n\n{listed}"
+
+    def before(self, text: str) -> str:
+        """`text` after what is with the human, when anything is."""
+        return f"{self.with_human}\n\n{text}" if self.with_human else text
 
 
 def _key(question: str) -> str:
@@ -147,7 +163,7 @@ async def interview(
     consulted: str | None = None  # what the interviewee reads next, before the questions
     closed = False
     for round_ in range(1, max_rounds + 1):
-        asked, patch = await turn(spec.interviewer, reply, round_)
+        asked, patch = await turn(spec.interviewer, _interviewer_prompt(transcript, reply), round_)
         if asked is None:
             return None, _record(state, spec, transcript, patch)
         if asked.data["done"]:
@@ -163,6 +179,7 @@ async def interview(
         transcript.rounds.append(f"### Round {round_}: answers\n\n{answers.text}")
         reply, consulted = answers.text, None
         if spec.consultant is None:
+            transcript.withdraw(answers.data["withdrawn"])
             transcript.ask_human(answers.data["questions_for_human"])
             continue
 
@@ -173,6 +190,7 @@ async def interview(
         if answered is None:
             return None, _record(state, spec, transcript, patch)
         transcript.rounds.append(f"### Round {round_}: {decider.name} answers\n\n{answered.text}")
+        transcript.withdraw(answered.data["withdrawn"])
         transcript.ask_human(answered.data["questions_for_human"])
         consulted = f"## {decider.name} answered (round {round_})\n\n{answered.text}"
         reply = f"{answers.text}\n\n{consulted}"
@@ -182,7 +200,9 @@ async def interview(
 
     if not closed:
         # The cap hit with questions on the table: the interviewer closes with what it has.
-        asked, patch = await turn(spec.interviewer, f"{reply}\n\n{CLOSE}", max_rounds)
+        asked, patch = await turn(
+            spec.interviewer, _interviewer_prompt(transcript, f"{reply}\n\n{CLOSE}"), max_rounds
+        )
         if asked is None:
             return None, _record(state, spec, transcript, patch)
         transcript.rounds.append(f"### Closing\n\n{asked.text}")
@@ -196,6 +216,13 @@ async def interview(
         patch["status"] = WAITING_ON_HUMAN
         return None, patch
     return transcript, patch
+
+
+def _interviewer_prompt(transcript: Transcript, reply: str | None) -> str | None:
+    """The interviewer's prompt after the first round: what is with the human, so it
+    can bring the knowledge that closes a question (issue #12), then the answers.
+    `None` on the first round: the context goes instead."""
+    return None if reply is None else transcript.before(reply)
 
 
 def _clarified(state: TaskState, section: str, round_: int, answers: str) -> str:
@@ -230,8 +257,8 @@ def _questions(
     after what the consultant answered to the previous round, if anything, and what is
     already with the human, so it is not raised again."""
     questions = f"## Questions (round {round_})\n\n{asked.text}"
-    if transcript is not None and transcript.with_human:
-        questions = f"{transcript.with_human}\n\n{questions}"
+    if transcript is not None:
+        questions = transcript.before(questions)
     if consulted:
         questions = f"{consulted}\n\n{questions}"
     if round_ > 1:
@@ -253,10 +280,7 @@ def _consultation(
     """The consultant's prompt: the questions, numbered, after what is already with
     the human."""
     listed = "\n".join(f"{n}. {q}" for n, q in enumerate(questions, 1))
-    prompt = f"## Questions from {asker.name} (round {round_})\n\n{listed}"
-    if transcript.with_human:
-        prompt = f"{transcript.with_human}\n\n{prompt}"
-    return prompt
+    return transcript.before(f"## Questions from {asker.name} (round {round_})\n\n{listed}")
 
 
 def _with_context(state: TaskState, role: Role, ports: Ports, cwd: Path | None, text: str) -> str:

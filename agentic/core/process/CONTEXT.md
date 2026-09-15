@@ -91,7 +91,12 @@ Rondas de preguntas de un rol a otro para afinar una decisión antes de escribir
 _Avoid_: pingpong, consulta (la consulta es una pregunta suelta; la entrevista es la forma del trabajo)
 
 **Pregunta para el humano**:
-Lo que el dueño de una decisión marca como fuera de su alcance: ni el issue ni el conocimiento de producto (definiciones, glosario, ADRs) lo deciden; lo que un ADR decide nunca es pregunta para el humano. En la definición la marca PM entrevistado; en la solución, PM consultado. El Tech Lead nunca pregunta al humano. Se plantea una sola vez: nadie la responde durante la corrida, así que lo ya planteado no se repite en rondas siguientes ni el Tech Lead lo vuelve a consultar. Escala la tarea con la lista de preguntas al terminar la entrevista.
+Lo que el dueño de una decisión marca como fuera de su alcance: ni el issue ni el conocimiento de producto (definiciones, glosario, ADRs) lo deciden, y sin la respuesta la definición cambia. Lo que un ADR decide nunca es pregunta para el humano; lo que no cambia la definición tampoco, es un supuesto. En la definición la marca PM entrevistado; en la solución, PM consultado. El Tech Lead nunca pregunta al humano. Se plantea una sola vez: nadie la responde durante la corrida, así que lo ya planteado no se repite en rondas siguientes ni el Tech Lead lo vuelve a consultar. Se retira cuando una ronda posterior la resuelve: el dueño la responde y la saca de la lista. Escala la tarea con las preguntas que siguen abiertas al terminar la entrevista.
+_Avoid_: duda (una duda que PM resuelve con un supuesto no es pregunta)
+
+**Supuesto**:
+Decisión que el dueño toma sobre lo que ni el pedido ni el conocimiento resuelven pero no cambia la definición, y deja escrita en su respuesta. No va al humano.
+_Avoid_: pregunta para el humano
 
 **Revisión**:
 Pase de Tech Lead sobre la entrega de una subtarea o de la pieza integrada, con veredicto: aprobada o devuelta. Una subtarea tiene tantas revisiones como pases recibió.

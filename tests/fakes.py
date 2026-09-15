@@ -201,9 +201,13 @@ def questions(n=1, done=False, cost=0.05, session="q") -> RawResult:
     return RawResult({"markdown": text, "done": done}, cost, 2, session)
 
 
-def answers(n=1, for_human=(), cost=0.1, session="a") -> RawResult:
+def answers(n=1, for_human=(), withdrawn=(), cost=0.1, session="a") -> RawResult:
     return RawResult(
-        {"markdown": f"**Q{n}**: accepted", "questions_for_human": list(for_human)},
+        {
+            "markdown": f"**Q{n}**: accepted",
+            "questions_for_human": list(for_human),
+            "withdrawn": list(withdrawn),
+        },
         cost,
         1,
         session,
@@ -217,12 +221,13 @@ def tech_answers(n=1, for_pm=(), cost=0.1, session="t") -> RawResult:
 
 
 def consulted(
-    n=1, for_human=(), definitions=None, glossary=None, cost=0.15, session="pm"
+    n=1, for_human=(), withdrawn=(), definitions=None, glossary=None, cost=0.15, session="pm"
 ) -> RawResult:
     return RawResult(
         {
             "markdown": f"**Q{n}**: the stored date",
             "questions_for_human": list(for_human),
+            "withdrawn": list(withdrawn),
             "definitions": definitions or [],
             "glossary": glossary or [],
         },
