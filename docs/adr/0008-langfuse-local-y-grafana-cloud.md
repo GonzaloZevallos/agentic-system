@@ -102,6 +102,10 @@ Consecuencias:
 - El collector ya no solo filtra: traduce. Los atributos originales se conservan (se
   agregan, no se renombran). Un collector levantado con la config anterior sigue dejando
   el costo en 0 hasta que se lo recree; `observability/collector/probe.py` lo detecta.
+- Langfuse interpreta `gen_ai.usage.input_tokens` como OpenAI (input con caché incluida)
+  y le resta la caché; Anthropic lo manda sin caché. El collector suma lectura y escritura
+  de caché al input antes de mandarlo, o Langfuse lo deja en 0. La primera sonda lo
+  mostró: costo 0.00625 en vez de 0.01125, con el input sin cobrar.
 - El costo por rol en Langfuse puede quedar por debajo de `role.cost_usd`: Claude Code
   emite parte de sus llamadas fuera de toda interacción (284 de 546 en GH-12) y esas no
   cuelgan del rol, aunque sí suman al total de la traza. Re-parentarlas pediría que el

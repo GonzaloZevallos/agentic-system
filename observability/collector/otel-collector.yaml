@@ -52,6 +52,11 @@ processors:
   # sistema no manda dólares: el costo de un rol o de una tarea en Langfuse es la suma de
   # sus llamadas. `Int()` porque Langfuse no pricea un contador que llegue como texto.
   # Verificar con `uv run observability/collector/probe.py` después de recrear el collector.
+  #
+  # Langfuse lee `gen_ai.usage.input_tokens` con la convención de OpenAI, donde el input
+  # incluye la caché, y le resta lectura y escritura de caché para quedarse con el input
+  # sin cachear. Anthropic ya lo manda sin cachear, así que se le suman las dos partes de
+  # caché antes: si no, Langfuse lo deja en 0 y cobra solo caché y salida.
   transform/claude_code_usage:
     error_mode: ignore
     trace_statements:
@@ -60,6 +65,7 @@ processors:
           - name == "claude_code.llm_request"
         statements:
           - set(attributes["gen_ai.usage.input_tokens"], Int(attributes["input_tokens"])) where attributes["input_tokens"] != nil
+          - set(attributes["gen_ai.usage.input_tokens"], Int(attributes["input_tokens"]) + Int(attributes["cache_read_tokens"]) + Int(attributes["cache_creation_tokens"])) where attributes["input_tokens"] != nil and attributes["cache_read_tokens"] != nil and attributes["cache_creation_tokens"] != nil
           - set(attributes["gen_ai.usage.output_tokens"], Int(attributes["output_tokens"])) where attributes["output_tokens"] != nil
           - set(attributes["gen_ai.usage.cache_read_input_tokens"], Int(attributes["cache_read_tokens"])) where attributes["cache_read_tokens"] != nil
           - set(attributes["gen_ai.usage.cache_creation_input_tokens"], Int(attributes["cache_creation_tokens"])) where attributes["cache_creation_tokens"] != nil
