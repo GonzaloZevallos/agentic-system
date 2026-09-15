@@ -79,6 +79,17 @@ def test_role_span_nests_under_the_task_and_propagates(spans):
     assert task.span.name == "GH-12" and role.span.attributes["role"] == "PjM"
 
 
+def test_role_span_is_an_agent_for_langfuse_and_the_task_is_not(spans):
+    """Langfuse shows a role as an agent run; the task keeps its default type. Cost
+    never travels in these spans: Langfuse prices Claude Code's own calls (ADR-0008)."""
+    with telemetry.task_span("GH-12", "Metrics"), telemetry.role_span("PjM"):
+        pass
+    role, task = spans.get_finished_spans()
+    assert role.attributes["langfuse.observation.type"] == "agent"
+    assert "langfuse.observation.type" not in task.attributes
+    assert not any(k.startswith("gen_ai.") for k in role.attributes)
+
+
 def test_configure_without_endpoint_is_a_noop(monkeypatch):
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
     telemetry.configure()

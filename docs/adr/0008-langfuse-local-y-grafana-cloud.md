@@ -79,3 +79,38 @@ Consecuencias:
 Opciones descartadas: convertir en el collector (mismo resultado, pero el collector
 interpretaría y no se podía probar sin recrearlo); dejar `increase()` y esperar dos tareas
 por versión (en desarrollo no ocurre).
+
+## Adenda 2026-09-14: Langfuse pricea desde tokens; el sistema no manda dólares
+
+La corrida GH-12 de 71 USD mostró costo 0 en todas las trazas de Langfuse (issue #9). Los
+spans de Claude Code llegaban bien y anidados bajo el rol, y `claude_code.llm_request`
+entraba como generación con modelo y precio asignados, pero Claude Code manda los tokens
+con nombres propios (`input_tokens`, `output_tokens`, `cache_read_tokens`,
+`cache_creation_tokens`) y Langfuse solo pricea `gen_ai.usage.*`. Sin usage no hay costo.
+Los spans del sistema llevan `role.cost_usd` y `task.cost_usd`, que Langfuse ignora.
+
+Decisión: el collector copia esos cuatro contadores a `gen_ai.usage.*` con las claves de
+la tabla de precios de Langfuse (`transform/claude_code_usage`, solo en la pipeline de
+Langfuse) y Langfuse calcula el costo de cada llamada. El sistema no manda dólares a
+Langfuse: el costo de un rol o de una tarea ahí es la suma de sus llamadas. El span de
+rol se marca `langfuse.observation.type = agent`, que es como Langfuse llama a la corrida
+de un agente; la tarea queda sin tipo. La cifra exacta del SDK sigue en el documento de
+tarea y en Grafana.
+
+Consecuencias:
+
+- El collector ya no solo filtra: traduce. Los atributos originales se conservan (se
+  agregan, no se renombran). Un collector levantado con la config anterior sigue dejando
+  el costo en 0 hasta que se lo recree; `observability/collector/probe.py` lo detecta.
+- El costo por rol en Langfuse puede quedar por debajo de `role.cost_usd`: Claude Code
+  emite parte de sus llamadas fuera de toda interacción (284 de 546 en GH-12) y esas no
+  cuelgan del rol, aunque sí suman al total de la traza. Re-parentarlas pediría que el
+  collector supiera qué rol estaba activo, y no lo sabe.
+- Si Langfuse y el documento difieren más que un redondeo, la causa está en esas llamadas
+  sueltas o en la tabla de precios de Langfuse, no en el sistema.
+
+Opciones descartadas: mandar `gen_ai.usage.cost` con el costo del SDK en el span de rol
+y en la raíz de la tarea, como proponía el issue: Langfuse suma el costo de todas las
+observaciones de la traza, así que cada dólar contaría dos veces, y las llamadas seguirían
+en 0. Mandarlo solo en el rol: exacto, pero pierde la altitud que Langfuse existe para
+dar (cada llamada, con lectura y escritura de caché) y la raíz no puede llevar el total.

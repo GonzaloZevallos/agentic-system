@@ -3,7 +3,8 @@
 # - Langfuse local recibe todas las trazas: las del sistema y las nativas de Claude
 #   Code, con prompts y respuestas. Existe porque el exportador OTel de Claude Code
 #   no puede mandar un header con espacio ("Basic <b64>") desde
-#   OTEL_EXPORTER_OTLP_HEADERS.
+#   OTEL_EXPORTER_OTLP_HEADERS. De paso traduce los tokens de Claude Code a lo que
+#   Langfuse pricea (`transform/claude_code_usage`).
 # - Grafana Cloud recibe solo lo que emite el sistema (service.name agentic-system):
 #   trazas sin el título de la tarea, y las métricas del sistema. Nada de Claude
 #   Code sale a la nube: sus spans llevan contenido.
@@ -44,6 +45,25 @@ processors:
   # pasan tal cual, sin acumular. Antes había un `deltatocumulative` acá; un collector
   # levantado con la config vieja lo conserva hasta que se lo recree, y no molesta.
 
+  # Claude Code manda los tokens de cada llamada al modelo con nombres propios
+  # (`input_tokens`, `cache_read_tokens`...); Langfuse solo pricea `gen_ai.usage.*`. Se
+  # copian con las claves de la tabla de precios de Langfuse, sin borrar los originales,
+  # y Langfuse calcula el costo de cada `claude_code.llm_request` (ADR-0008, adenda). El
+  # sistema no manda dólares: el costo de un rol o de una tarea en Langfuse es la suma de
+  # sus llamadas. `Int()` porque Langfuse no pricea un contador que llegue como texto.
+  # Verificar con `uv run observability/collector/probe.py` después de recrear el collector.
+  transform/claude_code_usage:
+    error_mode: ignore
+    trace_statements:
+      - context: span
+        conditions:
+          - name == "claude_code.llm_request"
+        statements:
+          - set(attributes["gen_ai.usage.input_tokens"], Int(attributes["input_tokens"])) where attributes["input_tokens"] != nil
+          - set(attributes["gen_ai.usage.output_tokens"], Int(attributes["output_tokens"])) where attributes["output_tokens"] != nil
+          - set(attributes["gen_ai.usage.cache_read_input_tokens"], Int(attributes["cache_read_tokens"])) where attributes["cache_read_tokens"] != nil
+          - set(attributes["gen_ai.usage.cache_creation_input_tokens"], Int(attributes["cache_creation_tokens"])) where attributes["cache_creation_tokens"] != nil
+
 exporters:
   otlphttp/langfuse:
     endpoint: http://langfuse-web:3000/api/public/otel
@@ -62,7 +82,7 @@ service:
   pipelines:
     traces/langfuse:
       receivers: [otlp]
-      processors: [batch]
+      processors: [transform/claude_code_usage, batch]
       exporters: [otlphttp/langfuse]
     traces/grafana:
       receivers: [otlp]

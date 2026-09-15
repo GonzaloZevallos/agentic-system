@@ -10,7 +10,7 @@ sistema ──────┘                      └──> Grafana Cloud     
 
 | Directorio | Qué es |
 |---|---|
-| `collector/` | La config del OpenTelemetry Collector: recibe todo, filtra por `service.name` y reparte |
+| `collector/` | La config del OpenTelemetry Collector: recibe todo, filtra por `service.name` y reparte. `probe.py` verifica que Langfuse pricea las llamadas de Claude Code |
 | `langfuse/` | El `docker-compose` de Langfuse. También levanta el collector, porque comparte su red |
 | `grafana/` | El dashboard del sistema y cómo conectar la instancia de Grafana Cloud |
 
@@ -35,6 +35,26 @@ Solo lo que emite el sistema, identificado como `service.name: agentic-system`:
 Los spans nativos de Claude Code llevan prompts, respuestas y tool calls: se quedan en
 Langfuse. Si algún día hace falta verlos en Grafana, se cambia el filtro del collector, no
 el sistema.
+
+## Costo en Langfuse
+
+Langfuse pricea cada llamada al modelo (`claude_code.llm_request`) a partir de sus tokens
+y su tabla de precios; el collector traduce los nombres de Claude Code (`input_tokens`,
+`cache_read_tokens`...) a `gen_ai.usage.*`, que es lo único que Langfuse lee. El sistema no
+manda dólares: el costo de un rol o de una tarea en Langfuse es la suma de sus llamadas, y
+el span de rol va marcado como `agent`. La cifra exacta por rol (`role.cost_usd`, la que
+reporta el SDK) sigue en el documento de tarea y en Grafana; en Langfuse puede quedar algo
+corta porque Claude Code emite algunas llamadas fuera de toda interacción y esas no cuelgan
+de ningún rol (ADR-0008, adenda).
+
+Para comprobar que el collector traduce, después de recrearlo:
+
+```bash
+uv run observability/collector/probe.py
+```
+
+Manda una llamada de prueba y espera a que Langfuse la pricee (hasta dos minutos). Falla
+con el motivo si el collector sigue con la config vieja o Langfuse no está arriba.
 
 ## Levantar
 

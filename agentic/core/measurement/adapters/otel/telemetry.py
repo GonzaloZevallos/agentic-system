@@ -309,7 +309,13 @@ def task_span(task_id: str, title: str) -> Iterator[TaskRun]:
 
 @contextmanager
 def role_span(role_name: str) -> Iterator[RoleRun]:
-    with tracer().start_as_current_span(role_name, attributes={"role": role_name}) as span:
+    """One role run. Langfuse lists it as an agent run; its cost there is the sum of the
+    Claude Code calls nested under it, priced by Langfuse from their tokens (ADR-0008,
+    addendum). `role.cost_usd` is the system's own figure and stays an attribute: sending
+    it as cost too would count every dollar twice."""
+    with tracer().start_as_current_span(
+        role_name, attributes={"role": role_name, "langfuse.observation.type": "agent"}
+    ) as span:
         yield RoleRun(span, role=role_name)
 
 
