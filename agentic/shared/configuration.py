@@ -32,11 +32,18 @@ class Configuration(BaseModel):
     model_overrides: dict[str, str] = Field(default_factory=dict)
     max_returns_per_pair: int = Field(default=2, ge=0)
     role_retries: int = Field(default=1, ge=0)
-    # Money cap of one attempt of a role that executes (README.md, 4): a safety net
-    # against a runaway role, well above what a subtask costs (3-4 USD in GH-12), not
-    # a work budget. Exceeding it is a role failure, not a return: the return limit
+    # Money cap of one attempt of any role (README.md, 4): a safety net against a
+    # runaway role, well above what a subtask costs (3-4 USD in GH-12), not a work
+    # budget. Every role gets it, not only the ones that execute: a review with
+    # sub-agents spent 10 USD a pass in GH-12 without running a thing (ADR-0004,
+    # second addendum). Exceeding it is a role failure, not a return: the return limit
     # measures quality, not money.
-    developer_max_budget_usd: float = Field(default=10.0, gt=0)
+    max_budget_usd: float = Field(default=10.0, gt=0)
+    # The model of every sub-agent a role spawns through the Agent tool, the two of
+    # the `code-review` skill among them. They read and summarise for a parent that
+    # keeps its own model; on the parent's model they cost 5-10 USD a review
+    # (ADR-0013, addendum).
+    subagent_model: str = "claude-sonnet-5"
     # Rounds an interview may take before the interviewer closes with what it has
     # (ADR-0014).
     interview_max_rounds: int = Field(default=4, ge=1)
@@ -77,11 +84,6 @@ class Configuration(BaseModel):
             return self.model_overrides[slug]
         return self.thinker_model if kind == "thinker" else self.validator_model
 
-    def budget_for(self, role: Any) -> float | None:
-        """The money cap of one run: only roles that execute have one. `role` is duck
-        typed (`.executes`) because this module imports nothing from the project."""
-        return self.developer_max_budget_usd if getattr(role, "executes", False) else None
-
     @property
     def agentic_dir(self) -> Path:
         return self.product_dir / ".agentic"
@@ -97,6 +99,13 @@ class Configuration(BaseModel):
             "GIT_COMMITTER_NAME": self.git_author_name,
             "GIT_COMMITTER_EMAIL": self.git_author_email,
         }
+
+    @property
+    def role_env(self) -> dict[str, str]:
+        """What every role's process gets on top of the inherited environment: the git
+        identity and the sub-agent model, which Claude Code reads from
+        `CLAUDE_CODE_SUBAGENT_MODEL` for every Agent tool call, skills included."""
+        return {**self.git_identity, "CLAUDE_CODE_SUBAGENT_MODEL": self.subagent_model}
 
 
 def _from_env(raw: str, annotation: Any) -> Any:

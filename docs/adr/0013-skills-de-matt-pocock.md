@@ -58,3 +58,33 @@ al PR y las preguntas para el humano (ADR-0011, ADR-0014).
   modelo se acuerda, y lo obligatorio es lo que hace medible ADR-0012.
 - **Copiar las skills no invocables al repo sin la marca**: es un fork del plugin que
   la versión fijada ya no describe; su contenido cabe en un prompt.
+
+## Adenda (2026-09-14): los subagentes de una skill corren en Sonnet
+
+En la segunda corrida de GH-12 la revisión con `code-review` costó entre 5.5 y 10 USD por
+pase (issue #7). El pase de aprobación tenía dos turnos del Tech Lead y casi el mismo
+costo que el de devolución con veintisiete: el gasto estaba en los dos subagentes de la
+skill, que heredan el modelo del padre, Opus, y releen el repo.
+
+**Todo subagente corre en el modelo de subagentes**, `claude-sonnet-5` por default
+(`AGENTIC_SUBAGENT_MODEL`), para cualquier rol: el padre razona en su modelo, los
+subagentes leen y resumen. El runner lo pasa a cada proceso como
+`CLAUDE_CODE_SUBAGENT_MODEL`, que Claude Code aplica a cada llamada de la herramienta
+Agent, skills incluidas; ni la skill ni el sistema tienen que nombrar un agente. Cada
+corrida de rol registra en el documento el costo por modelo (`cost_by_model`, del
+`model_usage` del SDK), que es lo que explica una corrida de dos turnos y diez dólares:
+`total_cost_usd` cuenta los subagentes, `num_turns` no. Sin gauge nuevo en Grafana:
+`agentic.role.cost_usd` ya da el costo total de cada corrida de rol, con el modelo del
+padre como etiqueta, y ese total es lo que tiene que bajar; el desglose queda en el
+documento, para diagnosticar.
+
+Dos correcciones al prompt del revisor, del mismo diagnóstico. El producto no tiene
+`CODING_STANDARDS.md` propio y la skill busca estándares documentados en el repo: el
+Tech Lead pega los `## Engineering standards` que recibe en el prompt del subagente
+Standards. Y los subagentes de la skill bloquean hasta volver: el revisor no espera con
+`sleep`, que además su jaula le niega y le costaba turnos.
+
+Descartado revisar sin la skill, con `git diff` y ADR-0012 a mano: la revisión de GH-12
+encontró un agujero real (imports relativos que esquivaban el test de arquitectura) y los
+dos ejes separados son lo que hace comparable una revisión con otra. Descartado poner toda
+la revisión en Sonnet: el veredicto queda en el modelo validador (README §10).

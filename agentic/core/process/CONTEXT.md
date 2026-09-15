@@ -93,6 +93,16 @@ _Avoid_: pingpong, consulta (la consulta es una pregunta suelta; la entrevista e
 **Pregunta para el humano**:
 Lo que el dueño de una decisión marca como fuera de su alcance: ni el issue ni el conocimiento de producto lo deciden. En la definición la marca PM entrevistado; en la solución, PM consultado. El Tech Lead nunca pregunta al humano. Escala la tarea con la lista de preguntas al terminar la entrevista.
 
+**Revisión**:
+Pase de Tech Lead sobre la entrega de una subtarea o de la pieza integrada, con veredicto: aprobada o devuelta. Una subtarea tiene tantas revisiones como pases recibió.
+_Avoid_: review, code review (el nombre de la skill, no del pase)
+
+**Revisión incremental**:
+Revisión que arranca del head revisado en el pase anterior, no de la base de la subtarea, y toma la devolución anterior como lo que hay que verificar. Toda revisión después de una devolución es incremental.
+
+**Head revisado**:
+El commit hasta donde llegó la última revisión de una subtarea.
+
 **Devolución**:
 Rechazo con entrega hacia atrás. Cuenta para el límite del par.
 _Avoid_: rechazo (salvo para el acto puntual de QA), rebote

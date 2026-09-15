@@ -8,7 +8,7 @@ harness, not because a second product or harness is coming (README.md, 8).
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -25,6 +25,8 @@ class RawResult:
     turns: int = 0
     # Claude Code session of the attempt: `claude -r <id>` reopens it.
     session_id: str = ""
+    # `cost_usd` split by model: the parent's and its sub-agents' (ADR-0013, addendum).
+    cost_by_model: dict[str, float] = field(default_factory=dict)
 
 
 class AttemptFailed(Exception):

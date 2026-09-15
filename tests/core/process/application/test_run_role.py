@@ -154,6 +154,7 @@ async def test_run_role_builds_the_patch_and_the_history(tmp_path):
                 0.1,
                 3,
                 "s2",
+                cost_by_model={"claude-sonnet-5": 0.1},
             )
         ]
     )
@@ -187,6 +188,7 @@ async def test_run_role_builds_the_patch_and_the_history(tmp_path):
             "session_id": "s2",
             "model": "claude-sonnet-5",
             "cost_usd": 0.1,
+            "cost_by_model": {"claude-sonnet-5": 0.1},
             "turns": 3,
         }
     ]

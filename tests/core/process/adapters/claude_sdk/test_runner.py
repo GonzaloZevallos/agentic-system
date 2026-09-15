@@ -61,6 +61,21 @@ async def test_raw_result_carries_session_cost_and_turns(monkeypatch, tmp_path):
     assert options.include_partial_messages is False
 
 
+async def test_raw_result_splits_the_cost_by_model(monkeypatch, tmp_path):
+    # The SDK's total covers the sub-agents a role spawns; `model_usage` says how much
+    # went to each model, which is how a Sonnet sub-agent shows next to an Opus parent.
+    usage = {
+        "claude-opus-5": {"costUSD": 0.5, "inputTokens": 10},
+        "claude-sonnet-5": {"costUSD": 0.25, "inputTokens": 20},
+    }
+    fake_query(monkeypatch, [result(total_cost_usd=0.75, model_usage=usage)])
+    raw = await run_once(ClaudeSdkRunner(), tmp_path)
+    assert raw.cost_usd == 0.75
+    assert raw.cost_by_model == {"claude-opus-5": 0.5, "claude-sonnet-5": 0.25}
+    fake_query(monkeypatch, [result(model_usage=None)])
+    assert (await run_once(ClaudeSdkRunner(), tmp_path)).cost_by_model == {}
+
+
 async def test_nested_schemas_are_inlined_for_the_sdk(monkeypatch, tmp_path):
     seen = fake_query(monkeypatch, [result()])
     schema = {

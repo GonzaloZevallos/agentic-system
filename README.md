@@ -369,7 +369,10 @@ Uno por tarea. **Nunca codea, siempre delega.**
   subagente escondido dentro de la llamada de Tech Lead: PjM tiene que saber qué Developer
   hizo qué subtarea para poder enrutar los rechazos técnicos de QA.
 - Responde consultas de Developers y escala a PM o QA si hace falta.
-- Revisa **cada subtarea** al entregarse y también **la integración**.
+- Revisa **cada subtarea** al entregarse y también **la integración**, con `code-review`
+  (ADR-0013). La primera revisión va desde la base de la subtarea con el brief como spec;
+  toda revisión después de una devolución es **incremental**: desde el head que ya revisó,
+  con su propia lista para el Developer como spec (ADR-0015).
 - Si rechaza, vuelve **al mismo Developer**. Nunca reasigna a otro.
 - Designa un Developer integrador y revisa la integración final.
 - Entrega la pieza integrada a PjM → QA 2ª pasada.
@@ -388,9 +391,10 @@ técnico y ADRs con los Tech Leads por tarea.
 
 **Herramientas y permisos**. Es el único rol que ejecuta: lectura y escritura de archivos,
 bash y tests, **sin aprobación humana por comando**. La jaula es el directorio del producto,
-más un tope de costo por intento: red de seguridad contra un rol desbocado, bien arriba de
-lo que cuesta una subtarea (10 USD por default, `AGENTIC_DEVELOPER_MAX_BUDGET_USD`), no un
-presupuesto de trabajo (ADR-0004, adenda). Pedir aprobación comando por comando rompe la
+más el tope de costo por intento que tiene todo rol: red de seguridad contra un rol
+desbocado, bien arriba de lo que cuesta una subtarea (10 USD por default,
+`AGENTIC_MAX_BUDGET_USD`), no un presupuesto de trabajo (ADR-0004, adendas). Pedir
+aprobación comando por comando rompe la
 revisión en lote: el sistema quedaría congelado esperando al humano en cada paso. Corre con
 el entorno del sistema limpio de su propia toolchain (`VIRTUAL_ENV`, `UV_*`, su `.venv/bin`
 en `PATH`), así que `pytest` y `uv run` en el producto resuelven al del producto. Sus commits firman
@@ -490,8 +494,9 @@ handoff explícito, pero ya no es lo único que viaja.
 ### Esqueleto del documento
 
 **Frontmatter, mantenido por PjM**: id, tipo, estado, rol actual, flags, contadores por par,
-timestamps por etapa, escalados, subtareas, hash de prompts, corridas por rol (`runs`: rol,
-sección, `session_id`, modelo, costo, turnos) y fallos con su texto.
+timestamps por etapa, escalados, subtareas (con el head que revisó el último pase), hash de
+prompts, corridas por rol (`runs`: rol, sección, `session_id`, modelo, costo, costo por
+modelo con los subagentes, turnos) y fallos con su texto.
 
 **Secciones**
 
@@ -635,6 +640,7 @@ valida**. La regla es que todo validador traiga una fuente que el pensador no tu
 |---|---|---|
 | Pensadores | Sonnet | Son los que más llamadas hacen |
 | Validadores | Opus | Asimetría más barata de implementar y de medir |
+| Subagentes de cualquier rol | Sonnet | Leen y resumen para un padre que razona en el suyo; en Opus eran 5-10 USD por revisión (ADR-0013, adenda) |
 
 Las otras fuentes de asimetría, cuando existen, valen más que el modelo: QA Funcional
 ejecuta tests contra el producto real, QA Seguridad y Performance leen código real, Data
@@ -738,6 +744,8 @@ Se anotan para no reintroducirlas por error.
 | El pingpong del Tech Lead no tiene forma fija | Es una entrevista del efímero a Tech Lead, con tope de cuatro rondas, y de ahí salen los ADRs y las subtareas (ADR-0014) |
 | Los roles no tienen skills; solo prompt y esquema | Skills de Matt Pocock fijadas como submódulo; solo las invocables por un agente, dos obligatorias: `tdd` y `code-review` (ADR-0013) |
 | La corrida termina cuando el último rol entrega | Termina en un pull request del producto, lista para revisión; el issue recibe el link (ADR-0011) |
+| El tope de costo por intento es solo del Developer | Es de todo rol, `AGENTIC_MAX_BUDGET_USD`; los subagentes de cualquier rol corren en Sonnet (ADR-0004 y ADR-0013, adendas) |
+| Cada revisión del Tech Lead arranca desde la base de la subtarea | La primera sí; después de una devolución es incremental, desde el head ya revisado (ADR-0015) |
 
 ---
 

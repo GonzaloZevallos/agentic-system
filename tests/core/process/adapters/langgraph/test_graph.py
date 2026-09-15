@@ -407,6 +407,7 @@ async def test_role_failure_escalates_and_keeps_failures(config, tmp_path):
         "session_id": "",
         "model": "claude-sonnet-5",
         "cost_usd": 0.01,
+        "cost_by_model": {},
         "turns": 0,
     }
     assert doc["status"] == WAITING_ON_HUMAN

@@ -45,3 +45,11 @@ unas tres veces lo que costó una subtarea de GH-12, y sigue ajustable por
 `AGENTIC_DEVELOPER_MAX_BUDGET_USD`. Descartado que Tech Lead estime un tope por subtarea en
 el plan: no sabe estimar dólares y el plan no debe cargar con eso. Un tope por tarea que
 frene el gasto total es una decisión aparte, fuera de esta adenda.
+
+## Adenda (2026-09-14, segunda): el tope por intento es de todos los roles
+
+El tope cubría solo al rol que ejecuta, y en GH-12 el que gastó diez dólares en un intento
+sin ejecutar nada fue el Tech Lead revisor, con los subagentes de `code-review` (issue #7).
+**La red de seguridad es la misma para todo rol**: 10 USD por intento, ahora
+`AGENTIC_MAX_BUDGET_USD`; el nombre con `DEVELOPER` desaparece sin alias, porque nació el
+mismo día. El tope por tarea sigue siendo la decisión aparte (issue #10).

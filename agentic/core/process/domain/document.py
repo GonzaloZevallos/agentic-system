@@ -20,6 +20,8 @@ from pathlib import Path
 
 import yaml
 
+from .task import RoleRun
+
 TASKS_SUBDIR = Path(".agentic/tasks")
 ORIGINAL = "Original request"
 
@@ -63,7 +65,7 @@ def render(
         "prompts": state.get("prompts", {}),
         "plugins": plugins or {},
         "system_commit": system_commit,
-        "runs": [dict(r, cost_usd=round(r["cost_usd"], 4)) for r in state.get("runs", [])],
+        "runs": [_rounded_run(r) for r in state.get("runs", [])],
         "failures": [
             dict(f, cost_usd=round(f.get("cost_usd", 0.0), 4)) for f in state.get("failures", [])
         ],
@@ -80,6 +82,15 @@ def render(
     for name, text in ordered(state.get("sections", {})).items():
         parts.append(f"## {name}\n\n{text.strip()}\n")
     return "\n".join(parts)
+
+
+def _rounded_run(run: RoleRun) -> dict:
+    """Money in the frontmatter to four decimals. A run recorded before the split by
+    model has no `cost_by_model`, and stays without one."""
+    rounded = dict(run, cost_usd=round(run["cost_usd"], 4))
+    if "cost_by_model" in run:
+        rounded["cost_by_model"] = {m: round(c, 4) for m, c in run["cost_by_model"].items()}
+    return rounded
 
 
 def ordered(sections: dict[str, str]) -> dict[str, str]:

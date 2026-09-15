@@ -16,6 +16,7 @@ PLACEHOLDERS = {
     "round": 1,
     "subtask": "subtask",
     "base": "HEAD",
+    "review": "a first review",
     "branches": "- none",
 }
 

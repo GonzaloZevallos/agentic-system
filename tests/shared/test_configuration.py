@@ -62,17 +62,24 @@ def test_counters_have_lower_bounds():
         Configuration(product_dir=Path("/tmp/p"), evaluation_window=0)
 
 
-def test_execution_budget_and_interview_rounds_have_defaults():
-    from dataclasses import replace
-
-    from agentic.core.process.domain.roles import PJM
-
+def test_the_money_cap_and_the_interview_rounds_have_defaults():
+    # One cap for every role, not only the one that executes: a review with sub-agents
+    # spends dollars without executing anything (ADR-0004, second addendum).
     cfg = Configuration.from_sources(PRODUCT, {})
-    assert cfg.developer_max_budget_usd == 10.0
+    assert cfg.max_budget_usd == 10.0
     assert cfg.interview_max_rounds == 4
-    # Only a role that executes gets the money cap; a reasoning role is capped by turns.
-    assert cfg.budget_for(PJM) is None
-    assert cfg.budget_for(replace(PJM, executes=True)) == 10.0
+    lower = Configuration.from_sources(PRODUCT, {"AGENTIC_MAX_BUDGET_USD": "4"})
+    assert lower.max_budget_usd == 4.0
+
+
+def test_role_env_carries_the_git_identity_and_the_subagent_model():
+    # What every role's process gets on top of the inherited environment: the git
+    # identity and the model the Agent tool hands to sub-agents (ADR-0013, addendum).
+    cfg = Configuration.from_sources(PRODUCT, {})
+    assert cfg.subagent_model == "claude-sonnet-5"
+    assert cfg.role_env == {**cfg.git_identity, "CLAUDE_CODE_SUBAGENT_MODEL": "claude-sonnet-5"}
+    custom = Configuration.from_sources(PRODUCT, {"AGENTIC_SUBAGENT_MODEL": "haiku"})
+    assert custom.role_env["CLAUDE_CODE_SUBAGENT_MODEL"] == "haiku"
 
 
 def test_git_identity_is_the_environment_every_git_honours():

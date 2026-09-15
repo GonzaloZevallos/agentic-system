@@ -29,6 +29,7 @@ def test_render_then_parse_roundtrip():
                 "session_id": "s2",
                 "model": "m",
                 "cost_usd": 0.2,
+                "cost_by_model": {"m": 0.15, "sub": 0.05000001},
                 "turns": 2,
             },
         ],
@@ -47,7 +48,8 @@ def test_render_then_parse_roundtrip():
     assert data["system_commit"] == "abc123"
     assert data["returns"] == {"PM→Product Analyst": 1}
     assert data["failures"] == state["failures"]
-    assert data["runs"] == state["runs"]
+    assert data["runs"][0] == state["runs"][0]
+    assert data["runs"][1]["cost_by_model"] == {"m": 0.15, "sub": 0.05}  # rounded like costs
     assert data["cost_usd"] == 0.1235
     assert data["prompts"] == {"pjm": "abcd1234"}
     assert data["description"] == "Users want CSV."

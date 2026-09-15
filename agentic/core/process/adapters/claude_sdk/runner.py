@@ -158,7 +158,15 @@ class ClaudeSdkRunner:
             cost_usd=cost,
             turns=result.num_turns,
             session_id=session,
+            cost_by_model=_cost_by_model(result),
         )
+
+
+def _cost_by_model(result: ResultMessage) -> dict[str, float]:
+    """The total's split by model. `total_cost_usd` counts the sub-agents a role spawned
+    and `num_turns` does not, so this is what says where a two-turn run's money went."""
+    usage = result.model_usage or {}
+    return {model: float(entry.get("costUSD", 0.0)) for model, entry in usage.items()}
 
 
 def _left_behind(result: ResultMessage | None) -> tuple[float, str]:

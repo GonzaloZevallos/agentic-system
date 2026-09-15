@@ -170,6 +170,7 @@ async def test_review_approves_returns_and_adds_the_integration(cfg):
         **state["subtasks"]["domain"],
         "status": "returned",
         "reason": "no test",
+        "reviewed_head": "base",
     }
     assert patch["returns"] == {"Tech Lead→Developer:domain": 1}
     assert INTEGRATION not in patch["subtasks"]  # not until every subtask is approved
@@ -183,6 +184,37 @@ async def test_review_approves_returns_and_adds_the_integration(cfg):
     assert "You have 1 left" in runner.calls[0]["system_prompt"]
     assert patch["subtasks"]["domain"]["status"] == "approved"
     assert patch["subtasks"][INTEGRATION]["status"] == "pending"
+
+
+async def test_a_review_after_a_return_starts_from_the_head_it_reviewed(cfg):
+    # The first pass diffs from the subtask's base with the brief as spec. After a
+    # return, the next pass diffs from the head that pass reviewed, with its own
+    # `For the Developer` list as spec: what it approved is not reviewed twice (ADR-0015).
+    path = MemoryWorkspace.ROOT / "GH-12.api"
+    state = {
+        **TASK,
+        "subtasks": {
+            "api": sub("api", "delivered", branch="agentic/GH-12.api", base="base1"),
+            "b": sub("b"),  # a second subtask, so `api` has a checkout of its own
+        },
+        "sections": {**TASK["sections"], "Developer: api": "x"},
+    }
+    runner = ScriptedRunner(tech_lead_review=[reviewed("returned", "no test"), reviewed()])
+    ports = memory_ports(runner)
+    ports.workspace.moved.add(path)  # the branch has commits: its head moves on every look
+    patch = await review(state, cfg, ports)
+    first = runner.calls[0]["system_prompt"]
+    assert "from the commit `base1`" in first and "This is a first review" in first
+    assert patch["subtasks"]["api"]["reviewed_head"] == "head1"
+
+    again = apply(state, patch)
+    again["subtasks"]["api"]["status"] = "delivered"
+    patch = await review(again, cfg, ports)
+    second = runner.calls[1]["system_prompt"]
+    assert "from the commit `head1`" in second and "This is an incremental review" in second
+    assert "`base1`" not in second
+    assert patch["subtasks"]["api"]["reviewed_head"] == "head2"
+    assert patch["subtasks"]["api"]["status"] == "approved"
 
 
 async def test_review_escalates_when_the_pair_hits_its_limit(cfg):

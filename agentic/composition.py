@@ -24,7 +24,7 @@ from .shared.configuration import Configuration
 
 def default_ports(cfg: Configuration) -> Ports:
     return Ports(
-        runner=ClaudeSdkRunner(verbose=cfg.verbose, telemetry=telemetry, env=cfg.git_identity),
+        runner=ClaudeSdkRunner(verbose=cfg.verbose, telemetry=telemetry, env=cfg.role_env),
         documents=FilesystemTaskDocuments(cfg.product_dir),
         knowledge=FilesystemKnowledge(cfg.product_dir),
         prompts=FilesystemPrompts(cfg.product_dir),

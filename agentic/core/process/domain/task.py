@@ -80,6 +80,9 @@ class RoleRun(TypedDict):
     session_id: str
     model: str
     cost_usd: float
+    # `cost_usd` by model: the role's own and its sub-agents' (ADR-0013, addendum).
+    # `turns` counts the role's alone, so this is what explains a dear two-turn run.
+    cost_by_model: dict[str, float]
     turns: int
 
 
@@ -94,8 +97,11 @@ class Subtask(TypedDict, total=False):
     depends_on: list[str]
     status: SubtaskStatus
     branch: str
-    # Commit the branch started from: the review diffs from it.
+    # Commit the branch started from: the first review diffs from it.
     base: str
+    # Head the last review reached: the next one diffs from it, not from `base`
+    # (ADR-0015). Absent until the subtask has been reviewed once.
+    reviewed_head: str
     # The last review's reason, what the Developer fixes on a return.
     reason: str
 

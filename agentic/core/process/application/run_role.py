@@ -50,6 +50,8 @@ class Output:
     turns: int = 0
     session_id: str = ""
     model: str = ""
+    # The successful attempt's cost by model; a failed attempt only carries its total.
+    cost_by_model: dict[str, float] = field(default_factory=dict)
     # Failed attempts before this output. Empty on a clean run. Their cost is
     # already included in `cost_usd`: a paid attempt counts even when it failed.
     failures: list[Failure] = field(default_factory=list)
@@ -212,6 +214,7 @@ async def _attempt(
         turns=result.turns,
         session_id=result.session_id,
         model=model,
+        cost_by_model=result.cost_by_model,
     )
 
 
@@ -233,6 +236,7 @@ def run_record(state: TaskState, role: Role, section: str, output: Output) -> Ro
         "session_id": output.session_id,
         "model": output.model,
         "cost_usd": output.cost_usd,
+        "cost_by_model": output.cost_by_model,
         "turns": output.turns,
     }
 
@@ -277,7 +281,7 @@ async def run_role(
             runner=ports.runner,
             check=check,
             resume=resume,
-            max_budget_usd=cfg.budget_for(role),
+            max_budget_usd=cfg.max_budget_usd,
         )
     except RoleFailure as exc:
         return None, patch | escalation(exc)
