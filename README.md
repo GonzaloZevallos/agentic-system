@@ -188,8 +188,8 @@ primera corrida sin la fuga de MCP (issue #18).
 Se mira antes de cada intento de cualquier rol; alcanzado, el sistema escala al humano con
 el total gastado y el tope como motivo, y la tarea **pausa** (sección 14). El comentario del
 issue trae lo gastado por fase y la línea `agentic resume --issue N --task-budget X`: subir
-el tope es decisión del humano, y `--task-budget` fija el de esa corrida en lugar de la
-fórmula. No es fallo de rol ni devolución y no cuenta para ningún límite. Como el tope por
+el tope es decisión del humano, y `--task-budget` lo sube para esa corrida, nunca lo baja.
+No es fallo de rol ni devolución y no cuenta para ningún límite. Como el tope por
 intento, es red de seguridad, bien arriba de lo que cuesta una tarea sana, no presupuesto de
 trabajo. En paralelo cada rama ve el total al momento del fan-out, así que el desborde
 queda acotado por el tope por intento, y el escalado sale uno solo (ADR-0004, adendas).
@@ -204,7 +204,8 @@ La cola no se construye: es la **etiqueta `needs-human`** en el issue, más el m
 preguntas y cómo reanudar en un comentario. Revisar es filtrar por esa etiqueta. Responder es
 dejar la decisión en un comentario y correr `agentic resume --issue N`, que saca la etiqueta,
 muestra qué va a reanudar y lo gastado, y sigue. La decisión entra al documento como sección
-`Human`, que PM y Tech Lead leen.
+`Human`, que lee todo rol. Con preguntas abiertas o un par en su límite, `resume` no sigue sin
+decisión: resetear el contador sin nada nuevo repite la misma devolución.
 
 Esto exige estado durable del lado del sistema: el grafo se frena, el estado sobrevive al
 proceso en un checkpointer, y la respuesta del humano lo reanuda donde estaba (ADR-0003).
@@ -807,10 +808,10 @@ imports:
 | Módulo | Contenido | Importa |
 |---|---|---|
 | `shared/` | `configuration.py`, `environment.py` (el entorno sin la toolchain propia) | Nada del proyecto |
-| `core/process/` | `domain/`: `roles.py` (`Role` con tools, reglas de permiso y skills; `Pair`; `Interview`; `describe_flags`) y `prompts/`, `task.py` (estado, subtareas y reducers), `document.py`, `schemas.py`, `rules.py` (límite por par, versionado por sección, subtareas listas, ruteo). `application/`: `ports.py` (`RoleRunner`, `TaskDocuments`, `ProductKnowledge`, `Prompts`, `FlagVocabulary`, `Inbox`, `Workspace`, `Tracker`), `interview` (rondas entre dos roles, ADR-0014) y un caso de uso por nodo: `classify`, `define`, `validate_definition`, `plan`, `develop`, `review`, `deliver`, `escalate`, sobre `run_role`. `adapters/`: `claude_sdk/` (harness con plugin de skills y jaula por rol, `Printer`), `filesystem/` (documentos y overlay de prompts), `git/` (rama de tarea y árboles de trabajo, ADR-0011), `github/` (bandeja y escritura: PR, comentarios, etiquetas), `langgraph/` (el grafo: nodos, ruteo, `Send` por subtarea, abre y cierra los spans; mañana `interrupt()` y checkpointer) y `telemetry.py`, el port por el que entra el tracing | `shared` |
+| `core/process/` | `domain/`: `roles.py` (`Role` con tools, reglas de permiso y skills; `Pair`; `Interview`; `describe_flags`) y `prompts/`, `task.py` (estado, subtareas y reducers), `document.py`, `schemas.py`, `rules.py` (límite por par, versionado por sección, subtareas listas, ruteo, tope de tarea, reanudación). `application/`: `ports.py` (`RoleRunner`, `TaskDocuments`, `ProductKnowledge`, `Prompts`, `FlagVocabulary`, `Inbox`, `Workspace`, `Tracker`), `interview` (rondas entre dos roles, ADR-0014) y un caso de uso por nodo: `classify`, `define`, `validate_definition`, `plan`, `develop`, `review`, `deliver`, `escalate`, sobre `run_role`, más `resume` (qué hace una reanudación antes de gastar). `adapters/`: `claude_sdk/` (harness con plugin de skills y jaula por rol, `Printer`), `filesystem/` (documentos y overlay de prompts), `git/` (rama de tarea y árboles de trabajo, ADR-0011), `github/` (bandeja y escritura: PR, comentarios, etiquetas), `langgraph/` (el grafo: nodos, ruteo, `Send` por subtarea, abre y cierra los spans; `pause` con el `interrupt()`, ADR-0003) y `telemetry.py`, el port por el que entra el tracing | `shared` |
 | `core/knowledge/` | `domain/`: `knowledge.py` (cómo se muestra, cómo se edita el glosario, qué debe traer una aprobación), `flags.py` (el vocabulario). `adapters/filesystem/`: implementa `ProductKnowledge` y `FlagVocabulary` sobre el repo del producto | `shared`, `process` |
 | `core/measurement/` | `domain/`: `metrics.py` (retrabajo, devoluciones, huella de prompts). `adapters/otel/`: spans y métricas del sistema, implementa `Telemetry` | `shared`, `process` |
-| raíz | `composition.py` arma los ports reales e inyecta la telemetría; `cli.py` es el adaptador de entrada | Todo |
+| raíz | `composition.py` arma los ports reales, el checkpointer SQLite e inyecta la telemetría; `cli.py` es el adaptador de entrada (`run`, `resume`) | Todo |
 
 Dentro de cada módulo: el dominio no importa nada del proyecto salvo `shared` y otros
 dominios, la aplicación solo dominios y aplicaciones, y solo los adaptadores ven
@@ -891,7 +892,7 @@ estado dice que se frenó (`rules.resume_target`).
 
 `agentic resume --issue N [--task-budget X] [--from-document] [--dry-run] [--yes]` usa el
 checkpoint; toma como decisión el último comentario del issue que no escribió el sistema, y
-con preguntas pendientes sin respuesta sale con 1. Antes de gastar muestra la tarea, dónde se
+sin decisión sale con 1 si hay preguntas pendientes o un par llegó a su límite. Antes de gastar muestra la tarea, dónde se
 frenó, el motivo, lo gastado por fase, el tope, qué reanuda, las sesiones y los worktrees, y
 pide confirmación. `--from-document` es el rescate: siembra el estado desde el documento,
 cruzado con git, como si `escalate` acabara de correr. `agentic run` se niega a arrancar

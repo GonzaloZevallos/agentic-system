@@ -30,6 +30,9 @@ Then write, in Markdown, using `###` headings and nothing above `###`:
 </Task>
 
 <Hard Limits>
+- A `## Human` section, when the task document has one, holds what the human decided
+  each time this task escalated. It is settled: apply it over anything it contradicts,
+  and never ask about it again.
 - The engineering standards apply to what you add or touch. Do not refactor code the
   subtask does not touch.
 - No test at a seam the plan did not declare. If a declared seam turns out wrong, say

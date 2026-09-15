@@ -35,7 +35,8 @@ reanuda un nodo interrumpido desde su comienzo, re-ejecutando todo lo anterior a
 volvería a etiquetar y comentar el issue. `pause` no hace nada más que esperar: con la
 respuesta devuelve el patch de reanudación (`rules.resumed`: sin escalado, el estado que la
 tarea tenía, el contador del par que llegó al límite en cero, la decisión como sección
-`Human` y la integración si el escalado llegó antes de que la revisión la agregara), y el
+`Human`, que lee todo rol sin declararla, y la integración si el escalado llegó antes de
+que la revisión la agregara), y el
 ruteo va a donde el estado dice que se frenó (`rules.resume_target`, función pura con la
 misma información que `after_validate` y `after_review`). Un segundo escalado vuelve a
 pasar por `escalate` y `pause`. Una subtarea que llega al límite queda `returned` sin
@@ -53,10 +54,13 @@ sigue sin compilar.
 
 **`agentic resume --issue N`.** Usa el checkpoint si existe. Toma como decisión el último
 comentario del issue si no lo escribió el sistema (`Escalated:`, `Resumed:`,
-`Ready for review:`); con preguntas pendientes y sin respuesta, sale con 1. Antes de gastar
+`Ready for review:`); sin decisión sale con 1 si hay preguntas pendientes o un par llegó
+a su límite, porque resetear el contador sin nada nuevo repite la misma devolución. Un tope
+alcanzado o un fallo de rol se reanudan sin decisión. Antes de gastar
 muestra la tarea, dónde se frenó, el motivo, lo gastado por fase, el tope nuevo, qué reanuda,
 las sesiones y los worktrees, y pide confirmación salvo `--yes`; `--dry-run` no gasta nada.
-Rechaza reanudar si el tope en vigor no supera lo gastado. Quita `needs-human`, comenta
+Rechaza reanudar si el tope en vigor no supera lo gastado, o si no queda nada que correr (una
+tarea ya entregada). Quita `needs-human`, comenta
 "Resumed: …" y sigue con `Command(resume={"decision": texto})`. Un checkpoint de una
 corrida que se cayó sin escalar reanuda los nodos pendientes tal como están.
 

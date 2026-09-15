@@ -13,7 +13,8 @@ from agentic.core.process.application.run_role import (
     run_with_retry,
     task_cap,
 )
-from agentic.core.process.domain.roles import PJM, PM, PRODUCT_ANALYST
+from agentic.core.process.domain.document import HUMAN
+from agentic.core.process.domain.roles import DEVELOPER, PJM, PM, PRODUCT_ANALYST, ROLES
 from agentic.shared.configuration import Configuration
 from tests.fakes import ScriptedRunner, classified, memory_ports
 
@@ -176,6 +177,22 @@ def test_context_for_reads_declared_sections_in_document_order():
     )
 
 
+def test_every_role_reads_the_human_decisions_last_without_declaring_them():
+    # The human's decisions hold for the whole task, so no role can miss them, and the
+    # roles that enter later need not remember to declare them.
+    state = {
+        "title": "Export",
+        "description": "Users want CSV.",
+        "sections": {"Human": "### Decision 1\n\nUSD.", "Developer: api": "done"},
+    }
+    for role in ROLES:
+        assert isinstance(role.reads, tuple) and HUMAN not in role.reads, role.slug
+    text = context_for(state, DEVELOPER, extra_sections=("Developer: api",))
+    assert text.endswith("## Developer: api\n\ndone\n\n## Human\n\n### Decision 1\n\nUSD.")
+    assert context_for(state, PJM).endswith("## Human\n\n### Decision 1\n\nUSD.")
+    assert "## Human" not in context_for({**state, "sections": {}}, PJM)
+
+
 async def test_run_role_builds_the_patch_and_the_history(tmp_path):
     cfg = Configuration(product_dir=tmp_path)
     runner = ScriptedRunner(
@@ -273,3 +290,7 @@ def test_the_task_cap_in_force_grows_with_the_plan_and_the_human_overrides_it(tm
     many = {**state, "subtasks": {f"s{n}": {} for n in range(20)}}
     assert task_cap(many, cfg) == 250.0
     assert task_cap(many, Configuration(product_dir=tmp_path, task_budget_usd=400.0)) == 400.0
+    # The human raises the cap, never lowers it: a budget set before the plan does not
+    # stop the task again once the plan makes the formula larger.
+    early = Configuration(product_dir=tmp_path, task_budget_usd=45.0)
+    assert task_cap(state, early) == 45.0 and task_cap(two, early) == 75.0

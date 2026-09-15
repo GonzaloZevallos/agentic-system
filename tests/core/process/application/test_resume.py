@@ -56,6 +56,10 @@ def git_as_recorded(ports):
     )
 
 
+def raised():
+    return Configuration(product_dir="/tmp/p", task_budget_usd=125)
+
+
 @pytest.fixture
 def cfg(tmp_path):
     return Configuration(product_dir=tmp_path)
@@ -68,6 +72,8 @@ def test_the_document_seeds_the_state_without_what_is_not_state():
     ports.documents.saved[-1]["pull_request"] = None
     state = resume.from_document("GH-12", ports)
     assert state == paused()
+    assert ports.workspace.pruned == 0  # reading is not resuming: a dry run touches nothing
+    resume.announce(resume.prepare("GH-12", state, "document", raised(), ports), ports)
     assert ports.workspace.pruned == 1
 
 
@@ -160,3 +166,25 @@ def test_announcing_takes_the_task_out_of_the_queue(cfg):
     assert ports.tracker.comments == [
         ("GH-12", "Resumed: develop with your decision, under a task cap of 125.00 USD.")
     ]
+
+
+def test_a_pair_at_its_limit_waits_for_an_answer_but_the_cap_does_not(cfg):
+    # Resetting the counter with nothing new repeats the same return (README.md, 3); a
+    # cap or a role failure has nothing to decide.
+    state = paused(escalated="Tech Lead→Developer:integration hit 2 returns: MRR twice")
+    raised = Configuration(product_dir=cfg.product_dir, task_budget_usd=125)
+    ports = memory_ports()
+    ports.tracker.earlier = ["Escalated: Tech Lead→Developer:integration hit 2 returns"]
+    with pytest.raises(resume.WaitingOnHuman, match="hit its return limit"):
+        resume.prepare("GH-12", state, "checkpoint", raised, ports)
+    ports.tracker.earlier.append("Count each subscription once.")
+    r = resume.prepare("GH-12", state, "checkpoint", raised, ports)
+    assert r.resumed["returns"] == {"Tech Lead→Developer:integration": 0}
+    failed = paused(escalated="Developer failed 2 times: empty markdown")
+    assert resume.prepare("GH-12", failed, "checkpoint", raised, memory_ports()).decision is None
+
+
+def test_a_task_with_nothing_left_to_run_is_not_resumed(cfg):
+    delivered = paused(escalated=None, pull_request="https://github.com/o/r/pull/7")
+    with pytest.raises(ValueError, match="nothing left to run"):
+        resume.prepare("GH-12", delivered, "document", raised(), memory_ports())

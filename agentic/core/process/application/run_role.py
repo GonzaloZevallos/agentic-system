@@ -29,6 +29,7 @@ from pathlib import Path
 from agentic.shared.configuration import Configuration
 
 from ..domain import document, rules, schemas
+from ..domain.document import HUMAN
 from ..domain.roles import ORIGINAL, Prompt, Role, describe_flags, render
 from ..domain.task import WAITING_ON_HUMAN, Failure, RoleRun, TaskState, apply
 from .ports import AttemptFailed, Ports, RoleRunner
@@ -95,10 +96,11 @@ def context_for(
 ) -> str:
     """The role's input: the standards and the product knowledge if the role reads
     them, then the sections it declares plus `extra_sections` (a subtask's own), in
-    document order, that exist."""
+    document order, that exist, and last the human's decisions, which every role reads:
+    they hold for the whole task and override what they contradict."""
     sections = state.get("sections", {})
     parts = [text for text in (standards, product_knowledge) if text]
-    for name in (*role.reads, *extra_sections):
+    for name in (*role.reads, *extra_sections, HUMAN):
         if name == ORIGINAL:
             request = document.demote(state["description"])
             parts.append(f"## {ORIGINAL}\n\n{state['title']}\n\n{request}")
@@ -257,13 +259,14 @@ async def _attempt(
 
 
 def task_cap(state: TaskState, cfg: Configuration) -> float:
-    """The cap in force for this state: the human's, when a resume set one, or the
-    formula over the plan (ADR-0004, fourth addendum)."""
-    if cfg.task_budget_usd is not None:
-        return cfg.task_budget_usd
-    return rules.task_cap(
+    """The cap in force for this state: the formula over the plan (ADR-0004, fourth
+    addendum), or the human's when a resume set a higher one. The human raises the cap,
+    never lowers it: a budget given before the plan must not stop the task again when the
+    plan makes the formula larger."""
+    formula = rules.task_cap(
         state, cfg.task_budget_base_usd, cfg.task_budget_per_subtask_usd, cfg.task_max_budget_usd
     )
+    return max(formula, cfg.task_budget_usd or 0.0)
 
 
 def escalation(exc: Escalating) -> TaskState:

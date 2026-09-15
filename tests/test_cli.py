@@ -26,8 +26,9 @@ def capture_run(monkeypatch):
     """Replace the graph run with a recorder of what the CLI would have run."""
     seen = {}
 
-    def fake_run(fn, task, cfg, ports, *options):
-        seen.update(fn=fn, task=task, cfg=cfg, ports=ports, options=options)
+    def fake_run(work):
+        task, cfg, ports, *options = work.args
+        seen.update(fn=work.func, task=task, cfg=cfg, ports=ports, options=tuple(options))
 
     monkeypatch.setattr(cli.anyio, "run", fake_run)
     return seen

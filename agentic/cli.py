@@ -13,11 +13,14 @@ import argparse
 import os
 import sys
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
+from functools import partial
+from typing import cast
 
 import anyio
 from dotenv import load_dotenv
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import Command
 
@@ -74,7 +77,7 @@ def main() -> None:
         "--task-budget",
         type=float,
         metavar="USD",
-        help="the task cap for this run, replacing the formula (AGENTIC_TASK_BUDGET_USD)",
+        help="raise the task cap for this run, never lower it (AGENTIC_TASK_BUDGET_USD)",
     )
     resume.add_argument(
         "--from-document",
@@ -113,20 +116,22 @@ def main() -> None:
         preflight(cfg, ports)
         if args.command == "resume":
             task_id = ports.inbox.task_id(args.issue)
-            work = (_resume, task_id, cfg, ports, args.from_document, args.dry_run, args.yes)
-        elif args.issue is not None:
-            work = (_run, ports.inbox.task(args.issue), cfg, ports, args.fresh)
+            options = (args.from_document, args.dry_run, args.yes)
+            work: Callable[[], Awaitable[None]] = partial(_resume, task_id, cfg, ports, *options)
         else:
-            task = {
-                "id": f"T-{uuid.uuid4().hex[:8]}",
-                "title": args.title,
-                "description": args.description,
-            }
-            work = (_run, task, cfg, ports, args.fresh)
+            if args.issue is not None:
+                task = ports.inbox.task(args.issue)
+            else:
+                task = {
+                    "id": f"T-{uuid.uuid4().hex[:8]}",
+                    "title": args.title,
+                    "description": args.description,
+                }
+            work = partial(_run, task, cfg, ports, args.fresh)
     except (MissingProductDir, ValueError, OSError) as exc:
         parser.exit(2, f"agentic: {exc}\n")
     try:
-        anyio.run(*work)
+        anyio.run(work)
     except CannotStart as exc:
         parser.exit(exc.code, f"agentic: {exc}\n")
 
@@ -144,7 +149,7 @@ async def _run(
     fresh: bool = False,
     checkpointer: Checkpointer | None = None,
 ) -> None:
-    config = {"configurable": {"thread_id": task["id"]}}
+    config: RunnableConfig = {"configurable": {"thread_id": task["id"]}}
     async with (checkpointer or composition.checkpointer)(cfg) as saver:
         app = graph.compile(checkpointer=saver)
         if not fresh:
@@ -155,7 +160,7 @@ async def _run(
     _report(final, task["id"], ports)
 
 
-async def _refuse_a_started_task(app, config: dict, task_id: str, ports: Ports) -> None:
+async def _refuse_a_started_task(app, config: RunnableConfig, task_id: str, ports: Ports) -> None:
     """A run over a task that already has a state would rewrite its document and reuse
     its branches under another plan (issue #21)."""
     snapshot = await app.aget_state(config)
@@ -185,7 +190,7 @@ async def _resume(
     yes: bool = False,
     checkpointer: Checkpointer | None = None,
 ) -> None:
-    config = {"configurable": {"thread_id": task_id}}
+    config: RunnableConfig = {"configurable": {"thread_id": task_id}}
     async with (checkpointer or composition.checkpointer)(cfg) as saver:
         app = graph.compile(checkpointer=saver)
         snapshot = await app.aget_state(config)
@@ -197,8 +202,10 @@ async def _resume(
                 status = snapshot.values.get("status", "open")
                 raise CannotStart(f"{task_id} is not paused: its run ended ({status})")
             else:
-                crashed = () if snapshot.interrupts else tuple(snapshot.next)
-                r = resuming.prepare(task_id, snapshot.values, "checkpoint", cfg, ports, crashed)
+                # No interrupt with nodes still to run: the run crashed rather than paused.
+                pending = () if snapshot.interrupts else tuple(snapshot.next)
+                paused = cast(TaskState, snapshot.values)
+                r = resuming.prepare(task_id, paused, "checkpoint", cfg, ports, pending)
         except resuming.WaitingOnHuman as exc:
             raise CannotStart(str(exc), code=1) from exc
         except ValueError as exc:
@@ -216,13 +223,15 @@ async def _resume(
             await saver.adelete_thread(task_id)
             await app.aupdate_state(config, r.paused, as_node=ESCALATE)
         crashed = r.source == "checkpoint" and not snapshot.interrupts
-        command = None if crashed else Command(resume={"decision": r.decision})
+        command: Command | None = None if crashed else Command(resume={"decision": r.decision})
         resuming.announce(r, ports)
         final = await _invoke(app, command, config, r.paused, ports)
     _report(final, task_id, ports)
 
 
-async def _invoke(app, graph_input, config: dict, task: TaskState, ports: Ports) -> TaskState:
+async def _invoke(
+    app, graph_input, config: RunnableConfig, task: TaskInput, ports: Ports
+) -> TaskState:
     try:
         with telemetry.task_span(task["id"], task["title"]) as run:
             try:

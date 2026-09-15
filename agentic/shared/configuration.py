@@ -53,8 +53,8 @@ class Configuration(BaseModel):
     task_budget_base_usd: float = Field(default=30.0, gt=0)
     task_budget_per_subtask_usd: float = Field(default=15.0, ge=0)
     task_max_budget_usd: float = Field(default=250.0, gt=0)
-    # The cap the human sets for one run, `agentic resume --task-budget`: it replaces the
-    # formula and the ceiling. Unset, the formula decides.
+    # The cap the human sets for one run, `agentic resume --task-budget`: it raises the
+    # cap in force above the formula and the ceiling, never lowers it.
     task_budget_usd: float | None = Field(default=None, gt=0)
     # The model of every sub-agent a role spawns through the Agent tool, the two of
     # the `code-review` skill among them. They read and summarise for a parent that

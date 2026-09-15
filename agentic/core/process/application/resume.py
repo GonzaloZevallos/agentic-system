@@ -62,9 +62,6 @@ def from_document(task_id: str, ports: Ports) -> TaskState:
     if raw is None:
         raise ValueError(f"{task_id} has no task document to resume from")
     state = cast(TaskState, {k: v for k, v in raw.items() if k in STATE_FIELDS and v is not None})
-    # A worktree the human removed by hand is still registered: forget it, so asking
-    # for the checkout again recreates it.
-    ports.workspace.prune()
     if problems := disagreements(state, ports.workspace):
         listed = "\n".join(f"- {p}" for p in problems)
         raise ValueError(f"the document of {task_id} and git disagree:\n{listed}")
@@ -116,8 +113,8 @@ def prepare(
 ) -> Resumption:
     """Decide the resume. `pending` are the nodes a run that crashed left to run: it did
     not pause, so there is no answer to take and nothing to reset. Raises
-    `WaitingOnHuman` when the questions are still unanswered, `ValueError` when the cap
-    in force is already spent."""
+    `WaitingOnHuman` when the questions, or a pair at its limit, have no answer yet, and
+    `ValueError` when the cap in force is already spent."""
     decision = None
     if pending:
         resumed, target = paused, ", ".join(pending)
@@ -128,8 +125,20 @@ def prepare(
                 f"{task_id} waits on {len(paused['questions_for_human'])} question(s): "
                 "answer them in a comment on the issue, then resume"
             )
+        if decision is None and (pair := rules.pair_at_limit(paused.get("escalated"))):
+            # The counter starts over only on an answer (README.md, 3): with nothing new,
+            # the pair would return for the same reason again.
+            raise WaitingOnHuman(
+                f"{task_id}: {pair} hit its return limit; decide in a comment on the issue "
+                "what the next attempt must do, then resume"
+            )
         resumed = apply(paused, rules.resumed(paused, decision))
-        target = rules.resume_target(resumed) or "the end: nothing left to run"
+        target = rules.resume_target(resumed)
+        if target is None:
+            raise ValueError(
+                f"{task_id} has nothing left to run ({paused.get('status', 'open')}): "
+                "start it over with `agentic run --fresh` if that is what you want"
+            )
     cap = task_cap(resumed, cfg)
     spent = paused.get("cost_usd", 0.0)
     if cap <= spent:
@@ -144,7 +153,7 @@ def summary(r: Resumption, cfg: Configuration, ports: Ports) -> str:
     """What the human confirms before the resume spends anything."""
     state = r.paused
     phases = ", ".join(f"{p} {usd:.2f}" for p, usd in rules.spent_by_phase(state).items())
-    if cfg.task_budget_usd is not None:
+    if cfg.task_budget_usd is not None and cfg.task_budget_usd >= r.cap_usd:
         how = "--task-budget"
     else:
         how = (
@@ -168,11 +177,16 @@ def summary(r: Resumption, cfg: Configuration, ports: Ports) -> str:
 
 
 def announce(r: Resumption, ports: Ports) -> None:
-    """Take the task out of the queue and say on the issue that it resumed."""
+    """Take the task out of the queue and say on the issue that it resumed. A task seeded
+    from its document first forgets the worktrees the human removed by hand, so asking
+    for those checkouts again recreates them; a dry run never gets here."""
+    if r.source == "document":
+        ports.workspace.prune()
     ports.tracker.unlabel(r.task_id, NEEDS_HUMAN)
     answered = " with your decision" if r.decision else ""
     ports.tracker.comment(
-        r.task_id, f"{RESUMED}{r.target}{answered}, under a task cap of {r.cap_usd:.2f} USD."
+        r.task_id,
+        f"{RESUMED}{r.target}{answered}, under a task cap of {r.cap_usd:.2f} USD.",
     )
 
 

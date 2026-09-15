@@ -136,8 +136,12 @@ Lo que un rol, un par o el tope dejan dicho cuando la tarea no puede seguir sin 
 Una tarea escalada queda esperando al humano con su estado guardado, sin gastar. Se retoma desde el mismo punto.
 _Avoid_: bloqueo, espera
 
+**Decisión del humano**:
+Lo que el humano responde a un escalado. Entra al documento de tarea, la lee todo rol y no se vuelve a preguntar: vale para toda la tarea y pesa sobre lo que contradiga.
+_Avoid_: respuesta, comentario
+
 **Reanudación**:
-El humano responde, si hay algo que decidir, y la tarea sigue desde donde se pausó: su decisión entra al documento, el contador del par que llegó al límite vuelve a cero, y nada se reanuda bajo un tope ya gastado. Si el estado guardado se perdió, se reconstruye desde el documento de tarea, cruzado con git.
+La tarea sigue desde donde se pausó. Hace falta una decisión del humano cuando hay preguntas abiertas o un par llegó a su límite, y con ella el contador de ese par vuelve a cero; un tope alcanzado o un fallo de rol se reanudan sin decisión. Nada se reanuda bajo un tope ya gastado. Si el estado guardado se perdió, se reconstruye desde el documento de tarea, cruzado con git.
 _Avoid_: reintento (eso es tras un fallo de rol), relanzar (eso es empezar de cero)
 
 **Fallo de rol**:

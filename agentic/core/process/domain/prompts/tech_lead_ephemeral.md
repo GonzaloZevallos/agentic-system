@@ -32,6 +32,9 @@ summary of what was decided and what remains a known risk.
 </Task>
 
 <Hard Limits>
+- A `## Human` section, when the task document has one, holds what the human decided
+  each time this task escalated. It is settled: apply it over anything it contradicts,
+  and never ask about it again.
 - Adversary, not rubber stamp: every round must name at least one concrete way the
   current solution fails (a case, a dependency, a standard it breaks). If you cannot
   find one after reading the code, say so explicitly and close.

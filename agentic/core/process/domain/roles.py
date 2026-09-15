@@ -17,7 +17,7 @@ from pathlib import Path
 
 from agentic.shared.configuration import RoleKind
 
-from .document import HUMAN, ORIGINAL  # ORIGINAL: pseudo-section, the task as it entered
+from .document import ORIGINAL  # pseudo-section every role may declare: the task as it entered
 from .schemas import (
     Answers,
     Classification,
@@ -51,7 +51,8 @@ class Role:
     schema: type[RoleOutput]
     # Sections of the task document this role reads, in full (README.md, 6).
     # Declarative, so PjM can record it and see what a failing role was missing.
-    # A role that lists itself reads its own previous section on a return.
+    # A role that lists itself reads its own previous section on a return. The human's
+    # decisions (`HUMAN`) are not declared: every role reads them, last.
     reads: tuple[str, ...] = (ORIGINAL,)
     # Product roles also receive the product knowledge, whole (ADR-0006).
     reads_knowledge: bool = False
@@ -155,7 +156,7 @@ PM_INTERVIEWEE = Role(
     slug="pm_interviewee",
     kind="validator",
     schema=Answers,
-    reads=(ORIGINAL, HUMAN),
+    reads=(ORIGINAL,),
     reads_knowledge=True,
 )
 
@@ -177,7 +178,7 @@ PM = Role(
     slug="pm",
     kind="validator",
     schema=Verdict,
-    reads=(ORIGINAL, DEFINITION_INTERVIEW, "Product Analyst", "PM", HUMAN),
+    reads=(ORIGINAL, DEFINITION_INTERVIEW, "Product Analyst", "PM"),
     reads_knowledge=True,
 )
 
@@ -202,7 +203,7 @@ TECH_LEAD_INTERVIEWEE = Role(
     slug="tech_lead_interviewee",
     kind="validator",
     schema=TechAnswers,
-    reads=(ORIGINAL, "PM", HUMAN),
+    reads=(ORIGINAL, "PM"),
     reads_knowledge=True,
     reads_standards=True,
     tools=READ_CODE,
@@ -219,7 +220,7 @@ PM_CONSULTANT = Role(
     slug="pm_consultant",
     kind="validator",
     schema=Consultation,
-    reads=(ORIGINAL, DEFINITION_INTERVIEW, "Product Analyst", "PM", HUMAN),
+    reads=(ORIGINAL, DEFINITION_INTERVIEW, "Product Analyst", "PM"),
     reads_knowledge=True,
 )
 
@@ -228,7 +229,7 @@ TECH_LEAD = Role(
     slug="tech_lead",
     kind="validator",
     schema=TechPlan,
-    reads=(ORIGINAL, "PM", SOLUTION_INTERVIEW, HUMAN),
+    reads=(ORIGINAL, "PM", SOLUTION_INTERVIEW),
     reads_knowledge=True,
     reads_standards=True,
     tools=READ_CODE,
@@ -242,7 +243,7 @@ TECH_LEAD_REVIEWER = Role(
     slug="tech_lead_review",
     kind="validator",
     schema=Review,
-    reads=(ORIGINAL, "PM", "Tech Lead", HUMAN),
+    reads=(ORIGINAL, "PM", "Tech Lead"),
     reads_standards=True,
     tools=READ_CODE + ("Agent",),
     allowed=READ_CODE_RULES + RUN_TESTS_RULES + ("Agent",),

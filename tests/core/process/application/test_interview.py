@@ -307,6 +307,24 @@ async def test_a_consultation_is_answered_by_pm_before_the_next_round(cfg):
     assert "escalated" not in patch
 
 
+async def test_a_resumed_consultant_gets_the_human_decisions_its_session_never_saw(cfg):
+    # Its validation session predates the escalation, so it would answer without them;
+    # once told, the consultation session holds them and they are not repeated.
+    state = {**PLANNED, "sections": {**PLANNED["sections"], "Human": "### Decision 1\n\nUSD."}}
+    ask = [tech_answers(1, for_pm=["Currency?"]), tech_answers(2, for_pm=["Rounding?"])]
+    runner = ScriptedRunner(
+        **{
+            TL_ASK: [questions(1), questions(2), questions(done=True)],
+            TL_ANSWER: ask,
+            CONSULT: [consulted(1, session="pm-2"), consulted(2, session="pm-2")],
+        }
+    )
+    await interview(state, INTERVIEW_SOLUTION, cfg, memory_ports(runner))
+    first, second = runner.prompts(CONSULT)
+    assert first.startswith("## Human\n\n### Decision 1\n\nUSD.\n\n## Questions from Tech Lead")
+    assert "## Human" not in second
+
+
 async def test_no_question_for_pm_means_no_consultation(cfg):
     runner = ScriptedRunner(
         **{TL_ASK: [questions(1), questions(done=True)], TL_ANSWER: [tech_answers(1)]}

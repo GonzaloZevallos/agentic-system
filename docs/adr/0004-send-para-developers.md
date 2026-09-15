@@ -117,8 +117,10 @@ y **se recalibran tras la primera corrida con el issue #18 aplicado**, que deber
 issue trae lo gastado por fase (definición, plan, desarrollo, revisión, sumando `runs` por
 sección, y `other` para los intentos fallidos que escalaron) y la línea
 `agentic resume --issue N --task-budget X`, con X lo gastado más una subtarea. El humano
-decide: `--task-budget` fija el tope de esa corrida y reemplaza fórmula y techo
-(`task_budget_usd`); `resume` rechaza reanudar si el tope en vigor no supera lo gastado.
+decide: `--task-budget` sube el tope de esa corrida por encima de la fórmula y del techo,
+nunca lo baja (`task_budget_usd`; el tope en vigor es el mayor de los dos), así un monto dado
+antes del plan no vuelve a frenar la tarea cuando el plan agranda la fórmula. `resume`
+rechaza reanudar si el tope en vigor no supera lo gastado.
 
 Descartados: releer el tope en caliente durante la corrida (rompe el versionado de
 parámetros, pendiente 15 del README) y cuatro topes por fase (la fórmula ya lo expresa; la
