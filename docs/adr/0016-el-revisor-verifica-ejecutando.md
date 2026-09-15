@@ -36,8 +36,12 @@ ejecuta.
 **La revisión entrega hallazgos, no un veredicto.** `Review.findings` es una lista de
 `Finding` con `location`, `claim`, `evidence`, `severity` (`blocking`, `important`,
 `observation`), `scope` (`subtask`, `plan`) y `category`. El caso de uso deriva el
-veredicto: devuelve si y solo si hay un bloqueante. Un bloqueante sin evidencia, o con
-alcance de plan, es salida inválida, es decir fallo de rol con reintento. `reason` queda
+veredicto: devuelve si y solo si hay un bloqueante. Un bloqueante sin evidencia baja a
+observación, y uno con alcance de plan baja a importante, porque el Developer no lo puede
+arreglar en su subtarea. Los baja el sistema y lo anota en la sección: no es fallo de rol,
+porque un campo mal llenado no puede costar un reintento ni escalar la tarea. En la
+revisión de integración la rama tiene todas las subtareas, así que un problema entre ellas
+es de la subtarea y puede bloquear. `reason` queda
 como resumen de una línea para el Developer. La sección de la revisión lleva los hallazgos
 como tabla, y el sistema le antepone `### Verdict` con el veredicto derivado y el motivo:
 el revisor no escribe esa línea, así que la sección no puede contradecir lo decidido. La
@@ -70,5 +74,8 @@ huella de prompts.
   clasificación que nadie verificó al momento de devolver.
 - **Revisor que corre la suite completa**: la paga dos veces, con el Developer; lo que
   falta es la reproducción puntual de la objeción.
+- **Bloqueante sin respaldo como fallo de rol**: lo primero que se implementó. Un segundo
+  fallo escala la tarea entera por cómo el revisor llenó un campo, y cada reintento es
+  otra vuelta de una revisión de 2.5 a 8.5 USD.
 - **Revisor que escribe tests**: sería otro rol que ejecuta, con su jaula y su riesgo sobre
   la rama del Developer.

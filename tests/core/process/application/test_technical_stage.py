@@ -259,19 +259,21 @@ async def test_review_escalates_when_the_pair_hits_its_limit(cfg):
     assert "returns" not in patch and "return_history" not in patch
 
 
-async def test_a_review_without_evidence_behind_its_block_is_a_role_failure(cfg):
+async def test_a_review_whose_only_block_has_no_evidence_approves(cfg):
     from tests.fakes import finding
 
     state = {**TASK, "subtasks": {"api": sub("api", "delivered", branch="b", base="x")}}
     bare = RawResult(
-        {"markdown": "### Verdict", "reason": "r", "findings": [finding() | {"evidence": ""}]},
+        {"markdown": "### Findings", "reason": "r", "findings": [finding() | {"evidence": ""}]},
         0.2,
     )
-    runner = ScriptedRunner(tech_lead_review=[bare, bare])
+    runner = ScriptedRunner(tech_lead_review=[bare])
     patch = await review(state, cfg, memory_ports(runner))
-    assert patch["status"] == "waiting_on_human"
-    assert "no evidence" in patch["failures"][0]["error"]
-    assert "subtasks" not in patch and "returns" not in patch  # still delivered, unreviewed
+    assert len(runner.calls) == 1 and patch["failures"] == []
+    assert patch["subtasks"]["api"]["status"] == "approved" and "returns" not in patch
+    assert (
+        "blocking lowered to observation: no evidence" in patch["sections"]["Tech Lead: review api"]
+    )
 
 
 async def test_the_integrator_builds_on_the_task_branch_with_the_branches_listed(cfg):

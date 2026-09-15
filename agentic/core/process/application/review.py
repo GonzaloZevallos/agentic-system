@@ -10,14 +10,15 @@ approved is not paid for twice. Each pass records the head it reviewed.
 
 The reviewer hands back findings, not a verdict (ADR-0016): the subtask is returned
 only on a blocking finding, and the return takes that finding's category, which is
-what measurement counts. A block without evidence is a role failure, retried with
-the error. The system writes the verdict at the head of the review's section."""
+what measurement counts. A block without evidence, or that this subtask's Developer
+cannot fix, is lowered by the system, never a role failure. The system writes the
+verdict, and what it lowered, at the head of the review's section."""
 
 from __future__ import annotations
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import rules, schemas
+from ..domain import rules
 from ..domain.roles import TECH_LEAD_REVIEWER, pair_for
 from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, TaskState, apply
 from .checkouts import subtask_checkout
@@ -41,7 +42,6 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
             TECH_LEAD_REVIEWER,
             cfg,
             ports,
-            check=schemas.review_check,
             section=section,
             extra_sections=(rules.developer_section(subtask_id), section),
             cwd=checkout.path,
@@ -55,10 +55,10 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
             break
         subtask = {**subtask, "reviewed_head": head}
         reason = output.data["reason"]
-        category = rules.return_category(output.data["findings"])
-        patch = apply(
-            patch, {"sections": {section: rules.review_markdown(category, reason, output.text)}}
-        )
+        findings, lowered = rules.lower_unbacked_blocks(output.data["findings"])
+        category = rules.return_category(findings)
+        markdown = rules.review_markdown(category, reason, output.text, lowered)
+        patch = apply(patch, {"sections": {section: markdown}})
         if category is None:
             patch = apply(patch, {"subtasks": {subtask_id: {**subtask, "status": "approved"}}})
         elif remaining > 0:

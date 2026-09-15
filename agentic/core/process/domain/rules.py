@@ -5,6 +5,8 @@ Pure functions over the task state, so each one is a unit test and not a graph r
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from .roles import Pair
 from .task import INTEGRATION, FindingCategory, Return, ReturnCategory, TaskState
 
@@ -35,12 +37,37 @@ def return_category(findings: list[dict]) -> FindingCategory | None:
     return next((f["category"] for f in findings if f["severity"] == "blocking"), None)
 
 
-def review_markdown(category: FindingCategory | None, reason: str, text: str) -> str:
+def lower_unbacked_blocks(findings: list[dict]) -> tuple[list[dict], list[str]]:
+    """The findings as the verdict counts them, and a line for each block the system
+    lowered (ADR-0016). A block needs evidence, or it is an `observation`; and something
+    this subtask's Developer can fix, or it is `important`. Lowering instead of failing
+    the role: a field filled badly must not cost a retry, nor escalate the task."""
+    settled, lowered = [], []
+    for item in findings:
+        if item["severity"] == "blocking" and not item["evidence"].strip():
+            item = {**item, "severity": "observation"}
+            lowered.append(f"`{item['location']}` blocking lowered to observation: no evidence")
+        elif item["severity"] == "blocking" and item["scope"] != "subtask":
+            item = {**item, "severity": "important"}
+            lowered.append(
+                f"`{item['location']}` blocking lowered to important: scope {item['scope']}, "
+                "not fixable in this subtask"
+            )
+        settled.append(item)
+    return settled, lowered
+
+
+def review_markdown(
+    category: FindingCategory | None, reason: str, text: str, lowered: Sequence[str] = ()
+) -> str:
     """A review's section as the document keeps it: the derived verdict first, written by
-    the system, then what the reviewer wrote. The reviewer never writes the verdict, so
-    the section cannot contradict it (ADR-0016)."""
+    the system, with the blocks it lowered, then what the reviewer wrote. The reviewer
+    never writes the verdict, so the section cannot contradict it (ADR-0016)."""
     verdict = "**approved**" if category is None else f"**returned** (`{category}`)"
-    return f"### Verdict\n\n{verdict}: {reason}\n\n{text}"
+    parts = [f"### Verdict\n\n{verdict}: {reason}"]
+    if lowered:
+        parts.append("Lowered by the system:\n\n" + "\n".join(f"- {line}" for line in lowered))
+    return "\n\n".join([*parts, text])
 
 
 def limit_reached(pair: Pair, limit: int, reason: str) -> str:

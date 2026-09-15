@@ -142,11 +142,3 @@ def test_review_findings_are_typed_and_the_categories_closed():
         "plan-calibration",
         "integration-crosscut",
     }
-
-
-def test_review_check_wants_evidence_behind_a_block_and_only_on_the_subtask():
-    schemas.review_check({"findings": [finding(), finding("observation", evidence="")]})
-    with pytest.raises(ValueError, match="evidence"):
-        schemas.review_check({"findings": [finding(evidence="  ")]})
-    with pytest.raises(ValueError, match="scope"):
-        schemas.review_check({"findings": [finding(scope="plan")]})

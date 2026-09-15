@@ -38,11 +38,15 @@ Record each finding with:
 - `location`: `file:line`.
 - `claim`: what is wrong, one sentence.
 - `evidence`: the command and its output (the last lines that matter), or the exact
-  line of the standard or the brief you cite. Empty only on an `observation`.
+  line of the standard or the brief you cite. Empty only on an `observation`: the
+  system lowers a `blocking` finding without evidence to `observation`.
 - `severity`: `blocking` (the subtask is not done without it), `important` (should be
   fixed, does not block) or `observation`.
-- `scope`: `subtask` when this Developer can fix it here; `plan` when it belongs to the
-  plan, another subtask or the integration. Only a `subtask` finding can block.
+- `scope`: `subtask` when it can be fixed on the branch you are reviewing; `plan` when
+  it needs a change to the plan or to another subtask's branch. Only a `subtask`
+  finding can block: the system lowers a `blocking` finding of the plan to `important`.
+  In the integration review (`{{subtask}}` is `integration`) the branch holds every
+  subtask, so a problem between subtasks is `subtask`: the integrator fixes it there.
 - `category`, one of:
   - `standard-architecture`: a dependency or layer rule broken, e.g. a domain module
     importing an adapter, a checker blind to relative imports.

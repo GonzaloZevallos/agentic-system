@@ -57,6 +57,43 @@ def test_the_verdict_and_the_category_come_from_the_blocking_findings():
     assert rules.return_category([note, block, other]) == "spec-behaviour"
 
 
+def finding(severity="blocking", evidence="$ pytest\nFAILED", scope="subtask", at="x.py:1"):
+    return {
+        "location": at,
+        "claim": "c",
+        "evidence": evidence,
+        "severity": severity,
+        "scope": scope,
+        "category": "spec-behaviour",
+    }
+
+
+def test_a_block_without_backing_is_lowered_not_failed():
+    # Filling a field badly must not cost a retry, let alone escalate the task: the
+    # system lowers the block and says so (ADR-0016). Without evidence it is an
+    # observation; of the plan's scope, the Developer cannot fix it here: important.
+    kept = finding(at="a.py:1")
+    bare = finding(evidence="  ", at="b.py:2")
+    planned = finding(scope="plan", at="c.py:3")
+    note = finding("observation", evidence="", at="d.py:4")
+    findings, lowered = rules.lower_unbacked_blocks([kept, bare, planned, note])
+    assert [f["severity"] for f in findings] == [
+        "blocking",
+        "observation",
+        "important",
+        "observation",
+    ]
+    assert findings[0] is kept and bare["severity"] == "blocking"  # the input is untouched
+    assert lowered == [
+        "`b.py:2` blocking lowered to observation: no evidence",
+        "`c.py:3` blocking lowered to important: scope plan, not fixable in this subtask",
+    ]
+    assert rules.lower_unbacked_blocks([kept]) == ([kept], [])
+    # Both wrong: the lower level wins, since without evidence nothing supports it.
+    (both,), _ = rules.lower_unbacked_blocks([finding(evidence="", scope="plan")])
+    assert both["severity"] == "observation"
+
+
 def test_the_system_writes_the_verdict_heading_of_a_review():
     # The verdict is derived, so the reviewer never writes it: its section cannot
     # contradict what the system decided (ADR-0016).
@@ -66,6 +103,11 @@ def test_the_system_writes_the_verdict_heading_of_a_review():
     )
     assert rules.review_markdown("spec-behaviour", "no test", findings).startswith(
         "### Verdict\n\n**returned** (`spec-behaviour`): no test\n\n### Findings"
+    )
+    lowered = ["`b.py:2` blocking lowered to observation: no evidence"]
+    assert rules.review_markdown(None, "ok", findings, lowered) == (
+        "### Verdict\n\n**approved**: ok\n\nLowered by the system:\n\n"
+        f"- `b.py:2` blocking lowered to observation: no evidence\n\n{findings}"
     )
 
 

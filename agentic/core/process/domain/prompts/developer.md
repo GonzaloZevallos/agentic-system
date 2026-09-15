@@ -36,7 +36,9 @@ Then write, in Markdown, using `###` headings and nothing above `###`:
   so under Decisions and test at the nearest declared one.
 - Only Tech Lead answers questions, through the review. Do not ask; decide, and record
   the assumption.
-- On a return, fix exactly what the review lists, first.
+- On a return, fix exactly what the review lists, first. What the review's section
+  lists under `Lowered by the system` does not block: fix it only if it is cheap and
+  inside your subtask.
 - You have at most {{max_turns}} turns and a money cap for this run; a delivery with a
   failing suite is worse than a smaller one that passes.
 </Hard Limits>

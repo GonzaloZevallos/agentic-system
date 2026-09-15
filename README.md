@@ -850,8 +850,8 @@ notificación (issue #16); el corte termina el proceso con lo que tuviera corrie
 avisa en el log. Una salida estructurada
 ausente o inválida, o un `markdown` vacío, es fallo de rol, no un diccionario vacío. La
 revisión (`Review`) no trae veredicto: trae `findings`, cada uno con su categoría cerrada, y
-el caso de uso deriva el veredicto; un bloqueante sin evidencia o con alcance de plan es
-salida inválida (ADR-0016). Las
+el caso de uso deriva el veredicto; un bloqueante sin evidencia o con alcance de plan no
+cuenta como tal: el sistema lo baja y lo anota, sin fallo de rol (ADR-0016). Las
 listas de strings de primer nivel (`questions_for_pm`, `questions_for_human`,
 `assumptions`) llegan al modelo como un string de líneas y vuelven como lista: con un array
 en el esquema el modelo las escribía como texto suelto o `<item>` y el JSON no parseaba

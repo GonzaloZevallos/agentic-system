@@ -180,8 +180,9 @@ class Finding(BaseModel):
         "objection you could not reproduce"
     )
     scope: Literal["subtask", "plan"] = Field(
-        description="`subtask` when the Developer can fix it here; `plan` when it is the "
-        "plan's, another subtask's or the integration's business"
+        description="`subtask` when it can be fixed on the branch under review; `plan` when "
+        "it needs a change to the plan or to another subtask's branch. On the integration "
+        "branch a problem between subtasks is `subtask`"
     )
     category: FindingCategory
 
@@ -213,24 +214,6 @@ def plan_check(data: dict) -> None:
                 raise ValueError(f"subtask {item['id']!r} depends on unknown subtask {dep!r}")
     if len(set(ids)) != len(ids):
         raise ValueError("subtask ids must be unique")
-
-
-def review_check(data: dict) -> None:
-    """A block needs the evidence behind it, and something the Developer can fix here:
-    a finding of the plan's scope returns nothing, whatever its weight (ADR-0016)."""
-    for item in data.get("findings", []):
-        if item["severity"] == "blocking":
-            if not item["evidence"].strip():
-                raise ValueError(
-                    f"blocking finding at {item['location']!r} has no evidence: give the "
-                    "command and its output, or the text you cite, or lower it to observation"
-                )
-            if item["scope"] != "subtask":
-                raise ValueError(
-                    f"blocking finding at {item['location']!r} has scope {item['scope']!r}: "
-                    "only what the Developer can fix in this subtask blocks it; lower it to "
-                    "important"
-                )
 
 
 def json_schema(schema: type[RoleOutput], vocabulary: dict[str, str]) -> dict[str, Any]:

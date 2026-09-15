@@ -102,3 +102,14 @@ def test_the_reviewer_prompt_explains_every_return_category():
     prompt = (PROMPTS_DIR / "tech_lead_review.md").read_text()
     for category in CATEGORIES:
         assert f"- `{category}`:" in prompt, category
+
+
+def test_in_the_integration_review_a_problem_between_subtasks_is_the_subtasks():
+    # The integration branch holds every subtask: what crosses them is the integrator's
+    # to fix there, so it can block. Told otherwise, the reviewer marks it `plan`.
+    from agentic.core.process.domain.schemas import Finding
+
+    prompt = (PROMPTS_DIR / "tech_lead_review.md").read_text()
+    assert "In the integration review" in prompt
+    # The schema reaches the model too: both must say the same.
+    assert "On the integration branch" in Finding.model_fields["scope"].description
