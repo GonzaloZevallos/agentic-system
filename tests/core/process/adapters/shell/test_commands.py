@@ -23,6 +23,11 @@ def test_a_command_past_its_time_is_stopped_with_its_children(tmp_path):
     assert time.monotonic() - started < 5
 
 
+def test_output_that_is_not_utf8_is_kept_readable(tmp_path):
+    result = ShellCommands().run(tmp_path, "printf 'bad \\377 byte'", timeout_s=10)
+    assert result.passed and result.output.startswith("bad ")
+
+
 def test_the_systems_own_virtualenv_does_not_reach_the_command(tmp_path, monkeypatch):
     monkeypatch.setenv("VIRTUAL_ENV", "/system/.venv")
     result = ShellCommands().run(tmp_path, 'echo "venv=[$VIRTUAL_ENV]"', timeout_s=10)

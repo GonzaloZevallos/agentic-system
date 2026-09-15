@@ -95,8 +95,9 @@ permisos del Agent SDK, verificado en 0.2.152). Las decisiones son funciones pur
 
 - **Bash**: `git config` (leer con `--get`/`--list` sí), `git push`, `git worktree`,
   `--git-dir`, `git -C` fuera del checkout, `git commit --no-verify` y cambiar de rama
-  (`git switch`, `git checkout` sin `--`). El comando se parte con `shlex`, así que cuenta
-  después de `;`, `&&`, `|` o un salto de línea, dentro de `$(...)`, en `sh -c '...'` y
+  (`git switch`, `git checkout` sin `--`), más `GIT_DIR=`, `git -c user.*` y
+  `git -c core.hooksPath`. El comando se parte con `shlex`, así que cuenta después de `;`,
+  `&&`, `|` o un salto de línea, dentro de `$(...)`, en `sh -c '...'` o `bash -lc '...'` y
   detrás de `VAR=valor`. El cuerpo de un heredoc no cuenta: un mensaje de commit que
   menciona `git push` pasa.
 - **Edit y Write**: rutas dentro de `.git/` o fuera del checkout, y un `# type: ignore` o
@@ -105,7 +106,8 @@ permisos del Agent SDK, verificado en 0.2.152). Las decisiones son funciones pur
 
 Qué no cubre, a propósito: un shell que se mueve primero (`cd ..; echo > archivo`),
 archivos escritos por Bash (`sed -i`, `cat >`), comandos armados en tiempo de ejecución
-(`$VAR`, `eval`, alias, `$(...)` entre comillas dobles), symlinks que salen del checkout y
+(`$VAR`, `eval`, alias, `$(...)` entre comillas dobles), un script que entra a un shell
+por stdin (`bash <<EOF`), symlinks que salen del checkout y
 una línea que `shlex` no parsea, que pasa. Las reglas de denegación siguen puestas, y la
 firma la sigue garantizando el entorno. La jaula sube la barrera sobre el prompt; no es un
 sandbox.
@@ -114,7 +116,8 @@ sandbox.
 entregan, el sistema mira su checkout: que haya commit, que el árbol esté limpio y que los
 chequeos del producto pasen (ADR-0016, adenda). Si algo falta, rechaza la entrega con el
 motivo, el comando y las últimas líneas, y el modelo lo recibe dentro del mismo turno y
-vuelve a entregar. Rechaza como mucho dos veces por corrida de rol; después deja pasar, y
+vuelve a entregar. Rechaza como mucho dos veces por corrida de rol, reintento incluido;
+después deja pasar, y
 lo que dijeron los chequeos queda al principio de la sección del Developer, escrito por el
 sistema, para que el revisor lo lea. El chequeo de commit y árbol limpio después de la
 corrida sigue como respaldo: saltarlo es fallo de rol.

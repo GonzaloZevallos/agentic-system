@@ -40,6 +40,13 @@ CWD = Path("/repo/.agentic/worktrees/GH-12.api")
         "/usr/bin/git push",
         "bash -c 'git push'",
         'sh -c "git config user.name me"',
+        "bash -lc 'git push'",
+        "git commit -S -n -m x",
+        "git commit --no-verif -m x",
+        "git -c core.hooksPath=/dev/null commit -m x",
+        "git -c user.email=me@x commit -m x",
+        "GIT_DIR=/repo/.git git log",
+        "cat <<<foo\ngit push",
     ],
 )
 def test_git_denial_refuses_what_the_developer_may_never_do(command):
@@ -68,10 +75,16 @@ def test_git_denial_refuses_what_the_developer_may_never_do(command):
         "grep -rn 'git config' docs",
         "git commit -m \"$(cat <<'EOF'\nDon't push: it isn't allowed\nEOF\n)\"",
         "echo 'unbalanced",
+        "git commit -Skey -m x",
+        "git -c core.pager=cat log",
     ],
 )
 def test_git_denial_lets_the_everyday_commands_through(command):
     assert hooks.git_denial(command, CWD) is None
+
+
+def test_a_nested_shell_is_denied_once():
+    assert hooks.git_denial("sh -c 'git push'", CWD).count("Denied by the system") == 1
 
 
 def test_a_git_denial_says_what_to_do_instead():
@@ -175,6 +188,9 @@ async def test_the_edit_hook_checks_the_path_and_the_new_text(tmp_path):
     assert not await edit("Write", file_path="x.py", content="a = 1  # type: ignore\nb = 2\n")
     assert await edit("Write", file_path="y.py", content="b = f()  # type: ignore\n")
     assert await edit("Write", file_path=str(tmp_path.parent / "z.py"), content="")
+    # A binary file on disk is not Python: nothing to read, nothing to deny.
+    (tmp_path / "logo.png").write_bytes(b"\x89PNG\xff\xfe")
+    assert not await edit("Write", file_path="logo.png", content="x")
 
 
 class Gate:

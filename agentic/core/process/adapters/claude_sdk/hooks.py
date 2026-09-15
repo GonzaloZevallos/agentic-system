@@ -7,17 +7,19 @@ pure functions over the tool input; `hooks_for` wires them as `HookMatcher`s.
 
 What the cage covers, for a role that executes:
 
-- Bash: `git config` (reading is fine), `git push`, `git worktree`, `--git-dir`,
-  `git -C` outside the checkout, `git commit --no-verify`, and switching branches
-  (`git switch`, `git checkout` without `--`). Found anywhere in the command: after
-  `;`, `&&`, `|`, a newline, inside `$(...)`, `sh -c '...'`, or behind `VAR=value`.
+- Bash: `git config` (reading is fine) and `git -c user.*`, `git push`, `git worktree`,
+  `--git-dir` and `GIT_DIR=`, `git -C` outside the checkout, skipping the commit hooks
+  (`--no-verify`, `-n`, `-c core.hooksPath`), and switching branches (`git switch`,
+  `git checkout` without `--`). Found anywhere in the command: after `;`, `&&`, `|`, a
+  newline, inside `$(...)`, `sh -c '...'` or `bash -lc '...'`, or behind `VAR=value`.
 - Edit and Write: paths inside `.git/` or outside the checkout, and a new
   `# type: ignore` or `# noqa` in a Python file (engineering standards, 6).
 
 What it does not cover, and does not try to: a shell that moves first
 (`cd ..; echo > file`), files written by Bash (`sed -i`, `cat >`), a command built at
-run time (`$VAR`, `eval`, an alias, `$(...)` inside double quotes), symlinks out of
-the checkout, and any line shlex cannot parse, which passes. The cage raises the bar
+run time (`$VAR`, `eval`, an alias, `$(...)` inside double quotes), a script fed to a
+shell on stdin (`bash <<EOF`), symlinks out of the checkout, and any command shlex
+cannot parse, which passes. The cage raises the bar
 over the prompt; the system's identity in the environment still decides who signs.
 
 The delivery gate is a `PreToolUse` deny on the structured-output tool, not a `Stop`
@@ -50,12 +52,16 @@ _SEPARATORS = set(";&|()<>\n")
 _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _WRAPPERS = {"sudo", "env", "command", "exec", "time", "nohup", "xargs"}
 _SHELLS = {"sh", "bash", "zsh", "dash"}
-_HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+# `<<` and `<<-`, not the here-string `<<<`.
+_HEREDOC = re.compile(r"(?<!<)<<(?!<)-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+_GIT_ENV = {"GIT_DIR", "GIT_WORK_TREE"}
 # Global git options that take the next word as their value.
 _GIT_VALUED = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}
 _CONFIG_READS = {"--get", "--get-all", "--get-regexp", "--list", "-l"}
-# Short options of `git commit` whose value may follow glued: `-mfix` is not `-n`.
-_COMMIT_VALUED = set("mFcCtS")
+# Short options of `git commit` that take a value, glued or as the next word: `-mfix` is
+# not `-n`. `-S` takes one only glued.
+_COMMIT_VALUED = set("mFcCt")
+_COMMIT_GLUED = set("S")
 _SILENCED = re.compile(r"#\s*(type:\s*ignore|noqa)\b")
 _PYTHON = {".py", ".pyi"}
 
@@ -85,12 +91,8 @@ SILENCED = (
 def git_denial(command: str, cwd: Path, relative_to: Path | None = None) -> str | None:
     """Why the Bash `command` may not run, or None. `cwd` is the role's checkout;
     `relative_to` is where the shell stands, the checkout unless said otherwise."""
-    here = relative_to or cwd
-    for words in _commands(command):
-        reason = _denial_of(words, cwd, here)
-        if reason:
-            return _DENIED + reason
-    return None
+    reason = _reason(command, cwd, relative_to or cwd)
+    return _DENIED + reason if reason else None
 
 
 def path_denial(file_path: str, cwd: Path, relative_to: Path | None = None) -> str | None:
@@ -106,11 +108,15 @@ def path_denial(file_path: str, cwd: Path, relative_to: Path | None = None) -> s
 def silenced_denial(file_path: str, before: str, after: str) -> str | None:
     """Why replacing `before` with `after` may not happen, or None: it adds a
     suppression. One that was already there is not the task's."""
-    if Path(file_path).suffix not in _PYTHON:
+    if not is_python(file_path):
         return None
     if len(_SILENCED.findall(after)) > len(_SILENCED.findall(before)):
         return _DENIED + SILENCED
     return None
+
+
+def is_python(file_path: str) -> bool:
+    return Path(file_path).suffix in _PYTHON
 
 
 def hooks_for(role: Role, cwd: Path, gate: DeliveryGate | None) -> dict[str, list[HookMatcher]]:
@@ -155,10 +161,10 @@ def _edit(cwd: Path) -> HookCallback:
         file_path = str(tool_input.get("file_path", ""))
         here = _where(data, cwd)
         reason = path_denial(file_path, cwd, here)
-        if reason is None:
+        if reason is None and is_python(file_path):
             if "content" in tool_input:  # Write: the whole file replaces what was there
                 target = Path(_normal(file_path, here))
-                before = target.read_text(encoding="utf-8") if target.is_file() else ""
+                before = target.read_text(errors="replace") if target.is_file() else ""
                 after = str(tool_input["content"])
             else:
                 before = str(tool_input.get("old_string", ""))
@@ -202,6 +208,13 @@ def _where(data: HookInput, cwd: Path) -> Path:
 # -- parsing -------------------------------------------------------------------------
 
 
+def _reason(command: str, cwd: Path, here: Path) -> str | None:
+    for words in _commands(command):
+        if reason := _denial_of(words, cwd, here):
+            return reason
+    return None
+
+
 def _commands(command: str) -> list[list[str]]:
     """The simple commands in `command`, as words, heredoc bodies left out."""
     lexer = shlex.shlex(_without_heredocs(command), posix=True, punctuation_chars=";&|()<>\n")
@@ -234,16 +247,24 @@ def _without_heredocs(command: str) -> str:
 
 
 def _denial_of(words: list[str], cwd: Path, here: Path) -> str | None:
+    assigned = set()
     while words and (_ASSIGNMENT.match(words[0]) or words[0] in _WRAPPERS):
+        if _ASSIGNMENT.match(words[0]):
+            assigned.add(words[0].split("=", 1)[0])
         words = words[1:]
     if not words:
         return None
     program = os.path.basename(words[0])
-    if program in _SHELLS and "-c" in words[1:-1]:
-        inner = words[words.index("-c", 1) + 1]
-        return git_denial(inner, cwd, here)
+    if program in _SHELLS:
+        # The script follows the first option cluster that holds `c`: `-c`, `-lc`.
+        for i, word in enumerate(words[1:-1], start=1):
+            if word.startswith("-") and not word.startswith("--") and "c" in word:
+                return _reason(words[i + 1], cwd, here)
+        return None
     if program != "git":
         return None
+    if assigned & _GIT_ENV:
+        return GIT_DIR
     return _git(words[1:], cwd, here)
 
 
@@ -261,6 +282,12 @@ def _git(words: list[str], cwd: Path, here: Path) -> str | None:
             i += 1
         if option == "--git-dir":
             return GIT_DIR
+        if option == "-c" and value is not None:
+            key = value.split("=", 1)[0].lower()
+            if key.startswith("user."):
+                return CONFIG
+            if key == "core.hookspath":
+                return NO_VERIFY
         if option == "-C" and value is not None:
             here = Path(_normal(value, here))
             if not _inside(str(here), cwd):
@@ -290,12 +317,14 @@ def _skips_hooks(args: list[str]) -> bool:
             continue
         if arg == "--":
             return False
-        if arg == "--no-verify":
-            return True
+        if arg.startswith("--no-v") and "--no-verify".startswith(arg):
+            return True  # git takes any unambiguous prefix of a long option
         if arg.startswith("-") and not arg.startswith("--"):
             for position, letter in enumerate(arg[1:], start=1):
                 if letter == "n":
                     return True
+                if letter in _COMMIT_GLUED:
+                    break
                 if letter in _COMMIT_VALUED:
                     skip_value = position == len(arg) - 1  # the value is the next word
                     break

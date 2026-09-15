@@ -443,7 +443,7 @@ editar dentro de `.git/` o fuera de su checkout, y agregar `# type: ignore` o `#
 producto en verde. La **puerta de entrega** lo mira cuando el Developer entrega, dentro de
 su turno: si el HEAD no se movió, si queda algo sin commitear o si un chequeo falla,
 rechaza la entrega con el motivo y el modelo vuelve a entregar. Rechaza como mucho dos
-veces; después deja pasar, y el resultado de los chequeos abre la sección del Developer,
+veces por corrida, reintento incluido; después deja pasar, y el resultado de los chequeos abre la sección del Developer,
 escrito por el sistema. En la corrida 4 un fix quedó en el árbol de trabajo y la suite pasó
 contra código que la rama no tenía. El commit y el árbol limpio se chequean otra vez al
 terminar: faltar es fallo de rol y se reintenta con el error como entrada.

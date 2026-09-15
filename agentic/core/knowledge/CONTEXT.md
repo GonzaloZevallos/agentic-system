@@ -43,5 +43,5 @@ tarea toca, no al que ya existía.
 _Avoid_: buenas prácticas, guía de estilo (el estilo lo impone el linter, no este archivo)
 
 **Chequeos del producto**:
-Los comandos con que el producto declara que su código está sano (tests, linter, typechecker). Los corre la puerta de entrega, y el revisor los usa para reproducir una objeción. El sistema trae un default que el producto reemplaza entero; vale la versión del commit del que salió la tarea, no la de su rama.
+Los comandos con que el producto declara que su código está sano (tests, linter, typechecker). Los corre la puerta de entrega, y el revisor los usa para reproducir una objeción.
 _Avoid_: checks, CI, validaciones

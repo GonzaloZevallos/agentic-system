@@ -414,8 +414,8 @@ async def test_the_gate_refuses_an_uncommitted_delivery_without_running_the_chec
     ports.workspace.dirty.add(checkout.path)
     patch = await develop(state, cfg, ports)
     assert len(runner.refused) == 2 and all("uncommitted" in r for r in runner.refused)
-    # Past its refusals the gate runs the checks for the record; the backstop still fails it.
-    assert ports.commands.ran == [(checkout.path, "pytest")] * 2
+    # Past its refusals a delivery that is not one is left to the backstop, unchecked.
+    assert ports.commands.ran == []
     assert "uncommitted changes" in patch["failures"][0]["error"]
 
 

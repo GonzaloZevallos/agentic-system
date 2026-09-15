@@ -2,7 +2,8 @@
 before it counts, checked by the system when the model hands it back, not after.
 
 A delivery is committed code on a clean tree whose product checks pass (`core.knowledge`
-declares them). The gate refuses at most `REFUSALS` times per delivery: the reason goes
+declares them). The gate refuses at most `REFUSALS` times per Developer run, its retry
+included: the reason goes
 back to the model inside its turn, which is cheaper than a role failure or a review
 that returns it. Past that it lets the delivery through, and what the checks said is in
 the Developer's section, written by the system, for the reviewer to read. The commit and

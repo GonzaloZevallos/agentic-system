@@ -19,7 +19,7 @@ from ..domain import gate, rules
 from ..domain.roles import DEVELOPER, DEVELOPER_INTEGRATOR
 from ..domain.task import INTEGRATION, TaskState
 from .checkouts import subtask_checkout
-from .gate import DeliveryGate, declared_checks
+from .gate import CheckoutGate, declared_checks
 from .ports import Ports
 from .run_role import finish, run_role
 
@@ -36,13 +36,12 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             ports.workspace.merge(checkout.path, state["subtasks"][dep]["branch"])
     before = ports.workspace.head(checkout.path)
     checks = declared_checks(state, ports)
-    delivery_gate = DeliveryGate(ports, checkout.path, before, checks, cfg.check_timeout_s)
+    delivery_gate = CheckoutGate(ports, checkout.path, before, checks, cfg.check_timeout_s)
 
     def committed(_: dict) -> None:
-        if ports.workspace.head(checkout.path) == before:
-            raise ValueError(gate.NO_COMMIT)
-        if not ports.workspace.is_clean(checkout.path):
-            raise ValueError(gate.UNCOMMITTED)
+        moved = ports.workspace.head(checkout.path) != before
+        if reason := gate.refusal(moved, ports.workspace.is_clean(checkout.path), []):
+            raise ValueError(reason)
 
     section = rules.developer_section(subtask_id)
     output, patch = await run_role(

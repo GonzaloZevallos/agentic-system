@@ -24,7 +24,10 @@ def declared_checks(state: TaskState, ports: Ports) -> dict[str, str]:
     return ports.checks.declared(base or "HEAD")
 
 
-class DeliveryGate:
+class CheckoutGate:
+    """The `DeliveryGate` over one Developer's checkout. One per Developer run: the
+    refusals it has left carry over to the retry."""
+
     def __init__(
         self,
         ports: Ports,
@@ -51,13 +54,12 @@ class DeliveryGate:
         workspace = self.ports.workspace
         head = workspace.head(self.path)
         moved, clean = head != self.before, workspace.is_clean(self.path)
-        exhausted = self.refusals >= gate.REFUSALS
-        # Nothing to check before there is a commit, unless no refusal is left and all
-        # that remains is the record.
-        if (moved and clean) or exhausted:
+        # Nothing to check before there is a commit on a clean tree: a delivery without
+        # one fails the backstop anyway, and the record must hold what the head holds.
+        if moved and clean:
             self.head, self.results = head, [self._run(n, c) for n, c in self.checks.items()]
-        reason = gate.refusal(moved, clean, self.results if moved and clean else [])
-        if reason is None or exhausted:
+        reason = gate.refusal(moved, clean, self.results or [])
+        if reason is None or self.refusals >= gate.REFUSALS:
             return None
         self.refusals += 1
         return gate.refused(reason, self.refusals)

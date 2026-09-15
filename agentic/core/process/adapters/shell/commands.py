@@ -17,6 +17,9 @@ from agentic.shared.environment import without_own_toolchain
 
 from ...application.ports import CommandResult
 
+# How long to wait for the output of a command already killed.
+_DRAIN_S = 5.0
+
 
 class ShellCommands:
     def run(self, cwd: Path, command: str, timeout_s: float) -> CommandResult:
@@ -28,12 +31,21 @@ class ShellCommands:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            errors="replace",  # a check's output is read, never parsed
             start_new_session=True,
         )
         try:
             output, _ = process.communicate(timeout=timeout_s)
         except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-            output, _ = process.communicate()
-            return CommandResult(process.returncode, output or "", timed_out=True)
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass  # it ended between the timeout and the kill
+            try:
+                output, _ = process.communicate(timeout=_DRAIN_S)
+            except subprocess.TimeoutExpired:
+                # A descendant that left the group still holds the pipe: give up on it.
+                process.kill()
+                output = ""
+            return CommandResult(process.returncode or -1, output or "", timed_out=True)
         return CommandResult(process.returncode, output or "")
