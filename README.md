@@ -827,7 +827,11 @@ Lo que PjM procesa mecánicamente (clasificación con confianza, veredicto con m
 mapa de subtareas) se define como esquema Pydantic y se pasa al SDK como `json_schema`. El
 Markdown de la sección sigue siendo texto libre, pero viaja como campo `markdown` del mismo
 esquema: el SDK termina el turno en cuanto el modelo llama a la herramienta de salida
-estructurada, así que una respuesta de texto aparte nunca llega. Una salida estructurada
+estructurada, así que una respuesta de texto aparte nunca llega. El runner corta la sesión
+en el primer resultado que trae salida estructurada: un subagente que el rol dejó en
+background reabre la sesión al volver y el modelo entrega de nuevo, un resultado por
+notificación (issue #16); el corte termina el proceso con lo que tuviera corriendo y lo
+avisa en el log. Una salida estructurada
 ausente o inválida, o un `markdown` vacío, es fallo de rol, no un diccionario vacío. Las
 listas de strings de primer nivel (`questions_for_pm`, `questions_for_human`,
 `assumptions`) llegan al modelo como un string de líneas y vuelven como lista: con un array

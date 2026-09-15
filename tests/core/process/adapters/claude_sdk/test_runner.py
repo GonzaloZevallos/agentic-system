@@ -137,6 +137,58 @@ async def test_a_failed_attempt_keeps_the_session_it_left_behind(monkeypatch, tm
     assert info.value.session_id == ""
 
 
+async def test_the_run_ends_at_the_first_delivery(monkeypatch, tmp_path):
+    # A sub-agent left in the background reopens the session when it returns and the
+    # model delivers again, one ResultMessage per notification (issue #16). The first
+    # delivery is the verdict: the runner leaves the stream there, which ends the
+    # process, and the printer shows one `done`.
+    launched = AssistantMessage(
+        content=[
+            ToolUseBlock(
+                id="a1",
+                name="Agent",
+                input={"prompt": "standards", "run_in_background": True},
+            ),
+            ToolUseBlock(id="a2", name="Agent", input={"prompt": "spec"}),
+        ],
+        model="m",
+    )
+    first = result(num_turns=16, total_cost_usd=2.53, structured_output={"markdown": "v1"})
+    repeat = result(num_turns=3, total_cost_usd=2.92, structured_output={"markdown": "v2"})
+    consumed = []
+
+    async def query(prompt, options):
+        for message in (launched, first, repeat):
+            consumed.append(message)
+            yield message
+
+    monkeypatch.setattr(module, "query", query)
+    buffer = io.StringIO()
+    raw = await run_once(ClaudeSdkRunner(verbose=True, stream=buffer), tmp_path)
+    assert raw.structured_output == {"markdown": "v1"}
+    assert (raw.turns, raw.cost_usd) == (16, 2.53)
+    assert repeat not in consumed  # the generator was closed before it
+    assert buffer.getvalue().count("done:") == 1
+    # The log says why the verdict came out without its sub-agents' reports.
+    assert "delivered with 1 sub-agent(s) launched in the background" in buffer.getvalue()
+
+
+async def test_a_result_without_a_delivery_does_not_end_the_run(monkeypatch, tmp_path):
+    # Only a delivery ends the run early: a result without one leaves the stream to
+    # the SDK, as before, and the last result is what counts. Without background
+    # sub-agents there is nothing to warn about, verbose or not.
+    empty = result(structured_output=None, num_turns=1)
+    fake_query(monkeypatch, [empty, result(num_turns=2)])
+    buffer = io.StringIO()
+    raw = await run_once(ClaudeSdkRunner(stream=buffer), tmp_path)
+    assert raw.structured_output == DELIVERY and raw.turns == 2
+    assert buffer.getvalue() == ""
+
+    fake_query(monkeypatch, [empty])
+    raw = await run_once(ClaudeSdkRunner(stream=buffer), tmp_path)
+    assert raw.structured_output is None  # the use case's failure, not the runner's
+
+
 async def test_sdk_exceptions_are_attempt_failures(monkeypatch, tmp_path):
     async def query(prompt, options):
         raise RuntimeError("socket closed")

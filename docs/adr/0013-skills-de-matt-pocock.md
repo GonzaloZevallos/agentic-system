@@ -70,7 +70,11 @@ skill, que heredan el modelo del padre, Opus, y releen el repo.
 (`AGENTIC_SUBAGENT_MODEL`), para cualquier rol: el padre razona en su modelo, los
 subagentes leen y resumen. El runner lo pasa a cada proceso como
 `CLAUDE_CODE_SUBAGENT_MODEL`, que Claude Code aplica a cada llamada de la herramienta
-Agent, skills incluidas; ni la skill ni el sistema tienen que nombrar un agente. Cada
+Agent, skills incluidas; ni la skill ni el sistema tienen que nombrar un agente. Sola, la
+variable es un default: un tipo de agente que fija modelo en su definición (`Explore`
+hereda el del padre) o una llamada con `model` la pisan, y así 5 de 10 pases de revisión
+corrieron en Opus (issue #19). Va con `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`, que anula las
+dos excepciones, y el prompt del revisor fija además `general-purpose` en foreground. Cada
 corrida de rol registra en el documento el costo por modelo (`cost_by_model`, del
 `model_usage` del SDK), que es lo que explica una corrida de dos turnos y diez dólares:
 `total_cost_usd` cuenta los subagentes, `num_turns` no. Sin gauge nuevo en Grafana:

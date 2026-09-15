@@ -21,15 +21,30 @@ stops the CLI from loading them. No role declares an MCP tool, and inherited one
 The runner's `env` reaches every role's process on top of the inherited environment:
 the system's git identity travels there (ADR-0011, addendum), so a role that commits
 signs as the system whatever `user.*` the product's config carries.
+
+A run ends at its first delivery. A sub-agent the role left running in the background
+reopens the session when it returns, and the model delivers again: one `ResultMessage`
+per notification, turns and money on repeats of a verdict already taken (issue #16).
+Leaving the stream at the first result that carries a structured output closes the SDK
+generator, which ends the process and whatever it still had running.
 """
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import IO, Any
 
-from claude_agent_sdk import ClaudeAgentOptions, ResultError, ResultMessage, query
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    Message,
+    ResultError,
+    ResultMessage,
+    ToolUseBlock,
+    query,
+)
 
 from ...application.ports import AttemptFailed, RawResult
 from ...domain.roles import Role
@@ -39,6 +54,7 @@ from .printer import Printer
 from .schema import inline_refs
 
 SKILL_TOOL = "Skill"
+AGENT_TOOL = "Agent"
 
 
 def options_for(
@@ -129,12 +145,16 @@ class ClaudeSdkRunner:
 
         exhausted = f"max_turns ({role.max_turns}) exhausted without a result"
         result: ResultMessage | None = None
+        background = 0
         try:
             async for message in query(prompt=prompt, options=options):
                 if observer is not None:
                     observer(message)
+                background += _background_agents(message)
                 if isinstance(message, ResultMessage):
                     result = message
+                    if _delivered(message):
+                        break  # the first delivery is the verdict (module docstring)
         except ResultError as exc:
             # The CLI reports the failed result, then exits non-zero; the SDK turns
             # that into ResultError after yielding the ResultMessage.
@@ -149,6 +169,14 @@ class ClaudeSdkRunner:
 
         if result is None:
             raise AttemptFailed("run ended without a result message")
+        if background and _delivered(result):
+            # The prompt forbids it; when the model does it anyway, whatever those
+            # sub-agents had to say never reached the verdict, and the reader of the
+            # log should know why the cost by model looks the way it does.
+            self._warn(
+                f"[{role.name}] delivered with {background} sub-agent(s) launched in "
+                "the background; the session ended at the delivery, without them\n"
+            )
         cost, session = _left_behind(result)
         if result.subtype == "error_max_turns":
             raise AttemptFailed(exhausted, cost, session)
@@ -165,6 +193,30 @@ class ClaudeSdkRunner:
             session_id=session,
             cost_by_model=_cost_by_model(result),
         )
+
+    def _warn(self, text: str) -> None:
+        stream = self.stream or sys.stderr
+        stream.write(text)
+        stream.flush()
+
+
+def _delivered(result: ResultMessage) -> bool:
+    """A result that carries the role's delivery. Whether that delivery is valid is the
+    use case's call; here it only says the session has nothing more to give."""
+    return not result.is_error and result.structured_output is not None
+
+
+def _background_agents(message: Message) -> int:
+    """How many sub-agents this message launched with `run_in_background`."""
+    if not isinstance(message, AssistantMessage):
+        return 0
+    return sum(
+        1
+        for block in message.content
+        if isinstance(block, ToolUseBlock)
+        and block.name == AGENT_TOOL
+        and bool(block.input.get("run_in_background"))
+    )
 
 
 def _cost_by_model(result: ResultMessage) -> dict[str, float]:
