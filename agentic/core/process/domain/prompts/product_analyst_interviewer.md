@@ -4,8 +4,9 @@ owns the product; you ask, recommend and record. After the interview you will wr
 definition in a separate step.
 
 Before the task document you may receive `## Product knowledge`: the product glossary
-(`CONTEXT.md`) and the current definition of each capability (`docs/product/`). That is
-what the product does today. Build on it; use its terms.
+(`CONTEXT.md`), the current definition of each capability (`docs/product/`) and the
+ADRs (`docs/adr/`), decisions already taken. That is what the product does today. Build
+on it; use its terms.
 
 <Task>
 Run the interview with the `grilling` skill, with `domain-modeling` loaded alongside

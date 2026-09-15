@@ -9,16 +9,32 @@ def test_read_is_empty_without_files(tmp_path):
     assert FilesystemKnowledge(tmp_path).read() == ""
 
 
-def test_read_gathers_glossary_and_capabilities(tmp_path):
+def test_read_gathers_glossary_capabilities_and_adrs(tmp_path):
     (tmp_path / "CONTEXT.md").write_text(GLOSSARY)
     (tmp_path / "docs/product").mkdir(parents=True)
     (tmp_path / "docs/product/subscriptions.md").write_text("# Subscriptions\n")
     (tmp_path / "docs/product/check-ins.md").write_text("# Check-ins\n")
     (tmp_path / "docs/product/notes.txt").write_text("ignored")
+    (tmp_path / "docs/adr").mkdir()
+    (tmp_path / "docs/adr/0002-no-isolation.md").write_text("# No isolation\n")
+    (tmp_path / "docs/adr/0001-stack.md").write_text("# Stack\n")
+    (tmp_path / "docs/adr/template.txt").write_text("ignored")
     text = FilesystemKnowledge(tmp_path).read()
     assert text.startswith("## Product knowledge\n\n`CONTEXT.md`:\n\n````markdown\n# Gym")
     assert text.index("check-ins.md") < text.index("subscriptions.md")
-    assert "notes.txt" not in text
+    assert text.index("subscriptions.md") < text.index("docs/adr/0001-stack.md")
+    assert text.index("0001-stack.md") < text.index("0002-no-isolation.md")
+    assert "# No isolation" in text
+    assert "notes.txt" not in text and "template.txt" not in text
+
+
+def test_read_takes_the_adrs_from_the_given_root(tmp_path):
+    # The task's checkout: an ADR the solution interview just wrote is knowledge already.
+    checkout = tmp_path / "checkout"
+    (checkout / "docs/adr").mkdir(parents=True)
+    (checkout / "docs/adr/0003-new.md").write_text("# New\n")
+    text = FilesystemKnowledge(tmp_path).read(checkout)
+    assert "docs/adr/0003-new.md" in text and "# New" in text
 
 
 def test_standards_default_to_the_systems_until_the_product_writes_its_own(tmp_path):

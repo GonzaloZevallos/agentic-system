@@ -2,9 +2,11 @@
 
 It lives in the product repo with the human docs, not under `.agentic/` (ADR-0006):
 `docs/product/<capability>.md`, one file per capability named after a glossary
-concept, and `CONTEXT.md`, the glossary. Product Analyst and PM read all of it on
-every task. On approval PM returns the complete updated file of each capability the
-task touched plus the new or changed glossary terms, and the system writes them.
+concept, `CONTEXT.md`, the glossary, and `docs/adr/`, the decisions Tech Lead (or the
+human) already took. Every product role reads all of it on every task: a role without
+tools has no other way to learn what an ADR settles (issue #11). On approval PM
+returns the complete updated file of each capability the task touched plus the new or
+changed glossary terms, and the system writes them; the ADRs it only reads.
 
 This module shapes the text: how the knowledge is presented to a role, how a
 glossary is edited, what an approval must carry. The `ProductKnowledge` port reads
@@ -20,6 +22,7 @@ from pathlib import Path
 from agentic.core.process.domain.schemas import SLUG
 
 PRODUCT_SUBDIR = Path("docs/product")
+ADR_SUBDIR = Path("docs/adr")
 GLOSSARY = "CONTEXT.md"
 HEADING = "## Product knowledge"
 LANGUAGE_HEADING = "## Language"
@@ -48,14 +51,15 @@ def check_slug(capability: str) -> None:
         )
 
 
-def assemble(glossary: str | None, capabilities: dict[str, str]) -> str:
+def assemble(glossary: str | None, capabilities: dict[str, str], adrs: dict[str, str]) -> str:
     """Everything a product role reads before the task document: the glossary, then
-    each capability file by name, sorted. Empty if nothing exists."""
+    each capability file by name, then each ADR by name, both sorted. The ADRs go
+    last and whole, superseded ones included: their status is in the file, and a
+    replaced decision still explains the shape the code has. Empty if nothing exists."""
     parts = []
     if glossary is not None:
         parts.append(_fenced(GLOSSARY, glossary))
-    for name in sorted(capabilities):
-        parts.append(_fenced(f"{PRODUCT_SUBDIR}/{name}", capabilities[name]))
+    parts += _fenced_all(PRODUCT_SUBDIR, capabilities) + _fenced_all(ADR_SUBDIR, adrs)
     if not parts:
         return ""
     return HEADING + "\n\n" + "\n\n".join(parts)
@@ -64,6 +68,10 @@ def assemble(glossary: str | None, capabilities: dict[str, str]) -> str:
 def assemble_standards(text: str) -> str:
     """The standards as a role reads them, before the product knowledge."""
     return STANDARDS_HEADING + "\n\n" + _fenced(STANDARDS, text)
+
+
+def _fenced_all(subdir: Path, files: dict[str, str]) -> list[str]:
+    return [_fenced(f"{subdir}/{name}", files[name]) for name in sorted(files)]
 
 
 def _fenced(name: str, text: str) -> str:

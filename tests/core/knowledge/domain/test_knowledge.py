@@ -25,19 +25,30 @@ Untouched.
 
 
 def test_assemble_is_empty_without_files():
-    assert knowledge.assemble(None, {}) == ""
+    assert knowledge.assemble(None, {}, {}) == ""
 
 
-def test_assemble_fences_glossary_then_capabilities_sorted():
+def test_assemble_fences_glossary_then_capabilities_then_adrs_sorted():
     text = knowledge.assemble(
-        GLOSSARY, {"subscriptions.md": "# Subscriptions\n", "check-ins.md": "# Check-ins\n"}
+        GLOSSARY,
+        {"subscriptions.md": "# Subscriptions\n", "check-ins.md": "# Check-ins\n"},
+        {"0002-no-isolation.md": "# No isolation\n", "0001-stack.md": "# Stack\n"},
     )
     assert text.startswith(
         "## Product knowledge\n\n`CONTEXT.md`:\n\n````markdown\n# Gym Management"
     )
     assert text.index("docs/product/check-ins.md") < text.index("docs/product/subscriptions.md")
-    # Three files, each inside its own fence, so their `##` never read as task sections.
-    assert text.count("````markdown") == 3 and text.count("````") == 6
+    assert text.index("docs/product/subscriptions.md") < text.index("docs/adr/0001-stack.md")
+    assert text.index("docs/adr/0001-stack.md") < text.index("docs/adr/0002-no-isolation.md")
+    # Five files, each inside its own fence, so their `##` never read as task sections.
+    assert text.count("````markdown") == 5 and text.count("````") == 10
+
+
+def test_assemble_adrs_alone_are_knowledge():
+    text = knowledge.assemble(None, {}, {"0001-stack.md": "# Stack\n"})
+    assert text == (
+        "## Product knowledge\n\n`docs/adr/0001-stack.md`:\n\n````markdown\n# Stack\n````"
+    )
 
 
 def test_upsert_replaces_in_place_and_appends_new_terms():

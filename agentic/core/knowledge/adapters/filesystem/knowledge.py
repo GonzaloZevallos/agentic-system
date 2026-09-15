@@ -1,5 +1,6 @@
-"""`ProductKnowledge` (a `core.process` port) over `docs/product/` and `CONTEXT.md`
-of the product repo.
+"""`ProductKnowledge` (a `core.process` port) over `docs/product/`, `docs/adr/` and
+`CONTEXT.md` of the product repo. The ADRs are read, never written here: Tech Lead
+writes them with its own tools.
 
 A distillation is several files. Everything is computed and checked before the
 first write, and if a write fails what was on disk is put back: PM's approval never
@@ -30,11 +31,11 @@ class FilesystemKnowledge:
 
     def read(self, root: Path | None = None) -> str:
         root = root or self.product_dir
-        capabilities = {
-            path.name: path.read_text(encoding="utf-8")
-            for path in (root / knowledge.PRODUCT_SUBDIR).glob("*.md")
-        }
-        return knowledge.assemble(_read(root / knowledge.GLOSSARY), capabilities)
+        return knowledge.assemble(
+            _read(root / knowledge.GLOSSARY),
+            _read_dir(root / knowledge.PRODUCT_SUBDIR),
+            _read_dir(root / knowledge.ADR_SUBDIR),
+        )
 
     def standards(self, root: Path | None = None) -> str:
         """The product's `CODING_STANDARDS.md`, or the system's default (ADR-0012)."""
@@ -82,6 +83,11 @@ class FilesystemKnowledge:
 
 def _read(path: Path) -> str | None:
     return path.read_text(encoding="utf-8") if path.is_file() else None
+
+
+def _read_dir(directory: Path) -> dict[str, str]:
+    """The `.md` files directly under `directory`, by name. Empty if it does not exist."""
+    return {path.name: path.read_text(encoding="utf-8") for path in directory.glob("*.md")}
 
 
 def _write_all(writes: dict[Path, str]) -> None:
