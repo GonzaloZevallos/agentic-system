@@ -173,6 +173,16 @@ El validador **reporta** cada devolución a PjM, y cuentan para el límite.
 - Si el par que llega al límite es Tech Lead→Developer, se corta esa subtarea. El resto
   sigue, salvo lo que dependa de ella.
 
+### Tope de tarea
+
+El acumulado de una corrida tiene tope: **100 USD** por default,
+`AGENTIC_TASK_MAX_BUDGET_USD`. Se mira antes de cada intento de cualquier rol; superado,
+el sistema escala al humano con el total gastado y el tope como motivo, en vez de seguir.
+No es fallo de rol ni devolución y no cuenta para ningún límite. Como el tope por intento,
+es red de seguridad, bien arriba de lo que cuesta una tarea sana, no presupuesto de
+trabajo. En paralelo cada rama ve el total al momento del fan-out, así que el desborde
+queda acotado por el tope por intento, y el escalado sale uno solo (ADR-0004, adendas).
+
 ### Cola de escalados
 
 El humano revisa **en lote, una vez por día**. Los escalados se acumulan y no interrumpen.
@@ -393,9 +403,10 @@ técnico y ADRs con los Tech Leads por tarea.
 bash y tests, **sin aprobación humana por comando**. La jaula es el directorio del producto,
 más el tope de costo por intento que tiene todo rol: red de seguridad contra un rol
 desbocado, bien arriba de lo que cuesta una subtarea (10 USD por default,
-`AGENTIC_MAX_BUDGET_USD`), no un presupuesto de trabajo (ADR-0004, adendas). Pedir
-aprobación comando por comando rompe la
-revisión en lote: el sistema quedaría congelado esperando al humano en cada paso. Corre con
+`AGENTIC_MAX_BUDGET_USD`), no un presupuesto de trabajo (ADR-0004, adendas). Por encima,
+el tope de tarea (sección 3) frena el acumulado de toda la corrida. Pedir aprobación
+comando por comando rompe la revisión en lote: el sistema quedaría congelado esperando al
+humano en cada paso. Corre con
 el entorno del sistema limpio de su propia toolchain (`VIRTUAL_ENV`, `UV_*`, su `.venv/bin`
 en `PATH`), así que `pytest` y `uv run` en el producto resuelven al del producto. Sus commits firman
 como el sistema, con la identidad que le llega en el entorno, y tres reglas se le niegan aun
@@ -745,6 +756,7 @@ Se anotan para no reintroducirlas por error.
 | Los roles no tienen skills; solo prompt y esquema | Skills de Matt Pocock fijadas como submódulo; solo las invocables por un agente, dos obligatorias: `tdd` y `code-review` (ADR-0013) |
 | La corrida termina cuando el último rol entrega | Termina en un pull request del producto, lista para revisión; el issue recibe el link (ADR-0011) |
 | El tope de costo por intento es solo del Developer | Es de todo rol, `AGENTIC_MAX_BUDGET_USD`; los subagentes de cualquier rol corren en Sonnet (ADR-0004 y ADR-0013, adendas) |
+| El único tope de costo es por intento | Hay también un tope de tarea sobre el acumulado, 100 USD, `AGENTIC_TASK_MAX_BUDGET_USD`, que escala en vez de seguir (ADR-0004, adenda tercera) |
 | Cada revisión del Tech Lead arranca desde la base de la subtarea | La primera sí; después de una devolución es incremental, desde el head ya revisado (ADR-0015) |
 
 ---

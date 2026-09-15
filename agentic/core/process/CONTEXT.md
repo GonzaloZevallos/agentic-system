@@ -126,6 +126,14 @@ _Avoid_: error (demasiado amplio)
 **Reintento**:
 Nueva corrida de un rol tras un fallo de rol, con el error como entrada. Continúa la conversación del intento fallido cuando la hay. Distinto de devolución.
 
+**Tope por intento**:
+Gasto máximo de un intento de cualquier rol. Excederlo es un fallo de rol. Red de seguridad contra un rol desbocado, no presupuesto de trabajo. Hoy 10 USD.
+_Avoid_: presupuesto (eso sería lo que se espera gastar)
+
+**Tope de tarea**:
+Gasto acumulado de una corrida a partir del cual el sistema escala en vez de seguir. Se mira antes de cada intento de cualquier rol. No es fallo de rol ni devolución y no cuenta para ningún límite. Como el tope por intento, es red de seguridad, bien arriba de lo que cuesta una tarea sana. Hoy 100 USD.
+_Avoid_: presupuesto de tarea
+
 **Handoff**:
 El bloque "Para el siguiente rol" con que cierra cada sección.
 
