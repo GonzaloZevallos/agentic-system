@@ -34,6 +34,26 @@ WAITING_ON_HUMAN: Status = "waiting_on_human"
 # (ADR-0011). Only when there is more than one.
 INTEGRATION = "integration"
 SubtaskStatus = Literal["pending", "delivered", "approved", "returned"]
+# Why a review finding blocks, as a closed list (ADR-0016): `standard-*` is a hard
+# violation of a documented standard, `spec-*` a gap against the brief or the
+# definition, `process-*` a delivery that is not one, `plan-calibration` a threshold or
+# parameter set wrong, `integration-crosscut` a problem that spans subtasks.
+FindingCategory = Literal[
+    "standard-architecture",
+    "standard-typing-silenced",
+    "standard-seams",
+    "standard-other",
+    "spec-behaviour",
+    "spec-missing-test",
+    "spec-scope",
+    "process-uncommitted",
+    "process-suite-red",
+    "plan-calibration",
+    "integration-crosscut",
+]
+# A return's category: a review's takes its first blocking finding's; PM's returns of
+# the definition, whose reason stays free text, are all `definition`.
+ReturnCategory = FindingCategory | Literal["definition"]
 
 
 def add(current: float, new: float) -> float:
@@ -86,6 +106,15 @@ class RoleRun(TypedDict):
     turns: int
 
 
+class Return(TypedDict):
+    """One return, as the history keeps it: the pair, its category and the validator's
+    one-line reason (README.md, 3: "the same motive between the same roles", computable)."""
+
+    pair: str
+    category: ReturnCategory
+    reason: str
+
+
 class Subtask(TypedDict, total=False):
     """A part of the task assigned to one Developer (README.md, 4). Lives in its own
     branch; the pair Tech Lead→Developer counts returns per subtask."""
@@ -102,8 +131,10 @@ class Subtask(TypedDict, total=False):
     # Head the last review reached: the next one diffs from it, not from `base`
     # (ADR-0015). Absent until the subtask has been reviewed once.
     reviewed_head: str
-    # The last review's reason, what the Developer fixes on a return.
+    # The last review's reason, what the Developer fixes on a return, and its
+    # category (ADR-0016).
     reason: str
+    return_category: ReturnCategory
 
 
 class TaskState(TaskInput, total=False):
@@ -118,6 +149,8 @@ class TaskState(TaskInput, total=False):
     sections: Annotated[dict[str, str], merge]
     # Returns used per pair, keyed by `Pair.key`, like "PM→Product Analyst".
     returns: Annotated[dict[str, int], merge]
+    # Every return in order, with its category: what measurement counts.
+    return_history: Annotated[list[Return], operator.add]
     failures: Annotated[list[Failure], operator.add]
     runs: Annotated[list[RoleRun], operator.add]
     # Short hash of each prompt that ran, keyed by role slug (ADR-0005).

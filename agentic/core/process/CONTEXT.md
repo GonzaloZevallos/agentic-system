@@ -25,7 +25,7 @@ Dueño de la definición única y del conocimiento de producto, que destila al a
 Rol que produce: Product Analyst, UX Designer, UI Designer, Developer, Tech Writer.
 
 **Ejecutar**:
-Escribir archivos del producto y correr comandos. Solo Developer ejecuta; Tech Lead lee el código y el diff, y los entrevistadores escriben únicamente el glosario y los ADRs.
+Escribir archivos del producto y correr comandos sin jaula. Solo Developer ejecuta. Correr tests sin escribir no es ejecutar: Tech Lead, al revisar, lee el código y el diff y corre los tests que respaldan una objeción, y los entrevistadores escriben únicamente el glosario y los ADRs.
 
 **Validador**:
 Rol que revisa a un pensador aportando una fuente que el pensador no tuvo.
@@ -99,7 +99,7 @@ Decisión que el dueño toma sobre lo que ni el pedido ni el conocimiento resuel
 _Avoid_: pregunta para el humano
 
 **Revisión**:
-Pase de Tech Lead sobre la entrega de una subtarea o de la pieza integrada, con veredicto: aprobada o devuelta. Una subtarea tiene tantas revisiones como pases recibió.
+Pase de Tech Lead sobre la entrega de una subtarea o de la pieza integrada, con hallazgos y un veredicto que se deriva de ellos: aprobada o devuelta. Una subtarea tiene tantas revisiones como pases recibió.
 _Avoid_: review, code review (el nombre de la skill, no del pase)
 
 **Revisión incremental**:
@@ -114,6 +114,14 @@ _Avoid_: rechazo (salvo para el acto puntual de QA), rebote
 
 **Motivo de devolución**:
 Por qué se devuelve: de comportamiento o técnico. Decide quién recibe una devolución de QA: PM si es de comportamiento, el Developer de la subtarea si es técnico, Tech Lead cuando el camino no tiene PM.
+
+**Categoría de devolución**:
+El motivo de una devolución como dato, de una lista cerrada: violación de un estándar (arquitectura, tipado silenciado, costuras, otro), brecha contra la spec (comportamiento, test faltante, alcance), entrega que no es entrega (sin commitear, suite en rojo), calibración del plan o problema que cruza subtareas. Las devoluciones de PM a Product Analyst llevan la categoría de definición. Es lo que la medición cuenta y lo que hace computable "el mismo motivo entre los mismos roles". Distinta del motivo en texto, que sigue siendo para quien recibe la devolución.
+_Avoid_: tipo de devolución, motivo (para la categoría)
+
+**Hallazgo**:
+Lo que Tech Lead encuentra al revisar, con su lugar, la afirmación, la evidencia (el comando que corrió y su salida, o la cita del estándar o del brief), la severidad, el alcance y la categoría. Solo un hallazgo bloqueante sobre la subtarea la devuelve; el veredicto se deriva de los hallazgos. Una objeción de comportamiento que no se reprodujo es una observación.
+_Avoid_: comentario, issue
 
 **Devolución interna**:
 Devolución que se resuelve dentro del par sin pasar por PjM. Se reporta a PjM igual.

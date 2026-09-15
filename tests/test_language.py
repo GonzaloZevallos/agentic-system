@@ -8,7 +8,7 @@ from typing import get_args, get_type_hints
 
 from agentic.core.knowledge.domain import knowledge
 from agentic.core.measurement.domain import metrics
-from agentic.core.process.domain import document, roles, task
+from agentic.core.process.domain import document, roles, rules, schemas, task
 from agentic.shared import configuration
 from tests.test_architecture import ALLOWED
 
@@ -28,6 +28,8 @@ TYPES = {
     "Estándares de ingeniería": knowledge.assemble_standards,
     "Job": knowledge.approval_check,  # the check that a capability names its jobs
     "Retrabajo": metrics.is_rework,
+    "Hallazgo": schemas.Finding,
+    "Categoría de devolución": rules.return_category,
 }
 
 # Glossary term -> the field of the task state that holds it.

@@ -18,11 +18,11 @@ tags instead of an array, five times in a row in one case. Lists nested in objec
 from __future__ import annotations
 
 import re
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, Field
 
-from .task import INTEGRATION
+from .task import INTEGRATION, FindingCategory
 
 TaskType = Literal["bug", "feature", "platform_enhancement"]
 SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -160,9 +160,37 @@ class Delivery(RoleOutput):
     assumptions: list[str] = Field(description="Decisions taken where the brief was silent")
 
 
+CATEGORIES: tuple[str, ...] = get_args(FindingCategory)
+Severity = Literal["blocking", "important", "observation"]
+
+
+class Finding(BaseModel):
+    """One thing the reviewer found, with what it saw (ADR-0016). Only a `blocking`
+    finding returns the subtask; `important` and `observation` travel with an approval."""
+
+    location: str = Field(description="`file:line`, or the file when it is the whole file")
+    claim: str = Field(description="What is wrong, one sentence")
+    evidence: str = Field(
+        description="The command you ran and its output, or the line of the standard or "
+        "the brief you cite. Empty only on an `observation`"
+    )
+    severity: Severity = Field(
+        description="`blocking`: the Developer must fix it before the subtask is done. "
+        "`important`: should be fixed, does not block. `observation`: a remark, or an "
+        "objection you could not reproduce"
+    )
+    scope: Literal["subtask", "plan"] = Field(
+        description="`subtask` when the Developer can fix it here; `plan` when it is the "
+        "plan's, another subtask's or the integration's business"
+    )
+    category: FindingCategory
+
+
 class Review(RoleOutput):
-    verdict: Literal["approved", "returned"]
-    reason: str = Field(description="One line. On `returned`, what the Developer must fix")
+    reason: str = Field(
+        description="One line: the verdict and why. On a return, what the Developer must fix first"
+    )
+    findings: list[Finding] = Field(description="Every finding, most severe first")
 
 
 def plan_check(data: dict) -> None:
@@ -184,6 +212,24 @@ def plan_check(data: dict) -> None:
                 raise ValueError(f"subtask {item['id']!r} depends on unknown subtask {dep!r}")
     if len(set(ids)) != len(ids):
         raise ValueError("subtask ids must be unique")
+
+
+def review_check(data: dict) -> None:
+    """A block needs the evidence behind it, and something the Developer can fix here:
+    a finding of the plan's scope returns nothing, whatever its weight (ADR-0016)."""
+    for item in data.get("findings", []):
+        if item["severity"] == "blocking":
+            if not item["evidence"].strip():
+                raise ValueError(
+                    f"blocking finding at {item['location']!r} has no evidence: give the "
+                    "command and its output, or the text you cite, or lower it to observation"
+                )
+            if item["scope"] != "subtask":
+                raise ValueError(
+                    f"blocking finding at {item['location']!r} has scope {item['scope']!r}: "
+                    "only what the Developer can fix in this subtask blocks it; lower it to "
+                    "important"
+                )
 
 
 def json_schema(schema: type[RoleOutput], vocabulary: dict[str, str]) -> dict[str, Any]:

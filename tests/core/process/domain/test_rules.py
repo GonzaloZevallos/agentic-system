@@ -44,3 +44,22 @@ def test_routing_ends_on_escalation_and_loops_on_return():
     assert rules.after_validate({"status": "returned"}) == "define"
     assert rules.after_validate({"status": "definition_ready"}) == "plan"
     assert rules.after_validate({"status": "returned", "escalated": "x"}) is None
+
+
+def test_the_verdict_and_the_category_come_from_the_blocking_findings():
+    # A review returns only on a blocking finding, and the return takes the category of
+    # the first one; anything else approves, with remarks (ADR-0016).
+    block = {"severity": "blocking", "category": "spec-behaviour"}
+    other = {"severity": "blocking", "category": "standard-seams"}
+    note = {"severity": "important", "category": "standard-architecture"}
+    assert rules.return_category([]) is None
+    assert rules.return_category([note]) is None
+    assert rules.return_category([note, block, other]) == "spec-behaviour"
+
+
+def test_a_return_is_recorded_with_its_category_for_the_history():
+    assert rules.return_entry(PAIR, "definition", "no metrics") == {
+        "pair": KEY,
+        "category": "definition",
+        "reason": "no metrics",
+    }

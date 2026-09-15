@@ -6,7 +6,10 @@ Pure functions over the task state, so each one is a unit test and not a graph r
 from __future__ import annotations
 
 from .roles import Pair
-from .task import INTEGRATION, TaskState
+from .task import INTEGRATION, FindingCategory, Return, ReturnCategory, TaskState
+
+# The category the system stamps on PM's returns of the definition (ADR-0016).
+DEFINITION_RETURN: ReturnCategory = "definition"
 
 
 def remaining_returns(state: TaskState, pair: Pair, limit: int) -> int:
@@ -17,6 +20,19 @@ def remaining_returns(state: TaskState, pair: Pair, limit: int) -> int:
 def record_return(state: TaskState, pair: Pair) -> dict[str, int]:
     """The `returns` patch after one more return of `pair`."""
     return {pair.key: state.get("returns", {}).get(pair.key, 0) + 1}
+
+
+def return_entry(pair: Pair, category: ReturnCategory, reason: str) -> Return:
+    """One entry of the return history: who returned, in which category, and the reason,
+    so README §3's "same motive between the same roles" is computable."""
+    return {"pair": pair.key, "category": category, "reason": reason}
+
+
+def return_category(findings: list[dict]) -> FindingCategory | None:
+    """The verdict of a review, derived (ADR-0016): the category of the return, the
+    first blocking finding's since the reviewer lists them most severe first, or None
+    when nothing blocks and the review approves."""
+    return next((f["category"] for f in findings if f["severity"] == "blocking"), None)
 
 
 def limit_reached(pair: Pair, limit: int, reason: str) -> str:

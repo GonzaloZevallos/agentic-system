@@ -56,6 +56,7 @@ def render(
         "current_role": state.get("current_role"),
         "flags": state.get("flags", {}),
         "returns": state.get("returns", {}),
+        "return_history": state.get("return_history", []),
         "escalated": state.get("escalated"),
         "questions_for_human": state.get("questions_for_human", []),
         "branch": state.get("branch"),

@@ -23,6 +23,7 @@ def test_reducers_are_read_from_the_annotations():
     assert set(REDUCERS) == {
         "sections",
         "returns",
+        "return_history",
         "failures",
         "runs",
         "prompts",

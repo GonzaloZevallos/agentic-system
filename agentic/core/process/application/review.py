@@ -6,13 +6,18 @@ enters as one more subtask for the integrator (ADR-0011).
 The first review of a subtask diffs from its base with the brief as spec. Every
 review after a return is incremental (ADR-0015): it diffs from the head the previous
 review reached, with that review's list for the Developer as spec, so what a pass
-approved is not paid for twice. Each pass records the head it reviewed."""
+approved is not paid for twice. Each pass records the head it reviewed.
+
+The reviewer hands back findings, not a verdict (ADR-0016): the subtask is returned
+only on a blocking finding, and the return takes that finding's category, which is
+what measurement counts. A block without evidence is a role failure, retried with
+the error."""
 
 from __future__ import annotations
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import rules
+from ..domain import rules, schemas
 from ..domain.roles import TECH_LEAD_REVIEWER, pair_for
 from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, TaskState, apply
 from .checkouts import subtask_checkout
@@ -36,6 +41,7 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
             TECH_LEAD_REVIEWER,
             cfg,
             ports,
+            check=schemas.review_check,
             section=section,
             extra_sections=(rules.developer_section(subtask_id), section),
             cwd=checkout.path,
@@ -48,7 +54,9 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
         if output is None:
             break
         subtask = {**subtask, "reviewed_head": head}
-        if output.data["verdict"] == "approved":
+        reason = output.data["reason"]
+        category = rules.return_category(output.data["findings"])
+        if category is None:
             patch = apply(patch, {"subtasks": {subtask_id: {**subtask, "status": "approved"}}})
         elif remaining > 0:
             patch = apply(
@@ -58,14 +66,16 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
                         subtask_id: {
                             **subtask,
                             "status": "returned",
-                            "reason": output.data["reason"],
+                            "reason": reason,
+                            "return_category": category,
                         }
                     },
                     "returns": rules.record_return(current, pair),
+                    "return_history": [rules.return_entry(pair, category, reason)],
                 },
             )
         else:
-            patch["escalated"] = rules.limit_reached(pair, limit, output.data["reason"])
+            patch["escalated"] = rules.limit_reached(pair, limit, reason)
             patch["status"] = WAITING_ON_HUMAN
             break
 

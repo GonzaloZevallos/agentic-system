@@ -165,6 +165,9 @@ El validador **reporta** cada devolución a PjM, y cuentan para el límite.
   no solo validador→pensador: QA→PM y QA→Tech Lead también son pares (ADR-0009).
 - Límite: **2 devoluciones** por par. También corta antes si detecta el mismo patrón
   repetido (mismo motivo entre los mismos roles).
+- Cada devolución queda en el historial con su par, su **categoría de devolución**, de una
+  lista cerrada, y el motivo en texto (ADR-0016). La categoría es lo que hace computable
+  "el mismo motivo"; el corte anticipado todavía no está construido.
 - Acción al cortar: **escalar al humano, siempre**. PjM entrega la tarea, el historial de
   devoluciones y el motivo de cada una.
 - Mientras espera, la tarea queda en pausa. PjM no re-enruta.
@@ -251,7 +254,7 @@ Developer se desvía del diseño o de los textos, es PM quien lo detecta y lo de
 **Métricas que registra**
 
 - Tiempo por etapa y por rol.
-- Cantidad y motivo de devoluciones.
+- Cantidad y motivo de devoluciones, por categoría (ADR-0016).
 - Escalados al humano y su causa.
 - Tamaño de tareas: subtareas, grado de paralelismo.
 
@@ -383,6 +386,12 @@ Uno por tarea. **Nunca codea, siempre delega.**
   (ADR-0013). La primera revisión va desde la base de la subtarea con el brief como spec;
   toda revisión después de una devolución es **incremental**: desde el head que ya revisó,
   con su propia lista para el Developer como spec (ADR-0015).
+- **Verifica ejecutando** (ADR-0016): no escribe nada, pero corre con `pytest` los tests
+  que respaldan cada objeción de comportamiento, y entrega **hallazgos** con lugar,
+  afirmación, evidencia (el comando y su salida, o la cita), severidad, alcance y
+  categoría. Una objeción que no reprodujo es una observación. El veredicto no lo escribe:
+  devuelve si y solo si hay un hallazgo bloqueante sobre la subtarea. La suite completa no
+  la repite: la registra el Developer.
 - Si rechaza, vuelve **al mismo Developer**. Nunca reasigna a otro.
 - Designa un Developer integrador y revisa la integración final.
 - Entrega la pieza integrada a PjM → QA 2ª pasada.
@@ -400,7 +409,8 @@ técnico y ADRs con los Tech Leads por tarea.
 - Entrega código, resumen de cambios, decisiones técnicas y supuestos tomados.
 
 **Herramientas y permisos**. Es el único rol que ejecuta: lectura y escritura de archivos,
-bash y tests, **sin aprobación humana por comando**. La jaula es el directorio del producto,
+bash y tests, **sin aprobación humana por comando** (Tech Lead corre tests al revisar, pero
+no escribe ni corre otra cosa: eso no es ejecutar). La jaula es el directorio del producto,
 más el tope de costo por intento que tiene todo rol: red de seguridad contra un rol
 desbocado, bien arriba de lo que cuesta una subtarea (10 USD por default,
 `AGENTIC_MAX_BUDGET_USD`), no un presupuesto de trabajo (ADR-0004, adendas). Por encima,
@@ -411,6 +421,11 @@ el entorno del sistema limpio de su propia toolchain (`VIRTUAL_ENV`, `UV_*`, su 
 en `PATH`), así que `pytest` y `uv run` en el producto resuelven al del producto. Sus commits firman
 como el sistema, con la identidad que le llega en el entorno, y tres reglas se le niegan aun
 sin aprobación: `git config`, `git push` y `git worktree` (ADR-0011, adenda).
+
+**Entrega**. Una entrega es código commiteado en un árbol limpio: si el HEAD no se movió o
+queda algo sin commitear, es fallo de rol y se reintenta con el error como entrada. En la
+corrida 4 un fix quedó en el árbol de trabajo y la suite pasó contra código que la rama no
+tenía.
 
 ### QA Lead y los tres QA
 
@@ -761,6 +776,7 @@ Se anotan para no reintroducirlas por error.
 | El tope de costo por intento es solo del Developer | Es de todo rol, `AGENTIC_MAX_BUDGET_USD`; los subagentes de cualquier rol corren en Sonnet (ADR-0004 y ADR-0013, adendas) |
 | El único tope de costo es por intento | Hay también un tope de tarea sobre el acumulado, 100 USD, `AGENTIC_TASK_MAX_BUDGET_USD`, que escala en vez de seguir (ADR-0004, adenda tercera) |
 | Cada revisión del Tech Lead arranca desde la base de la subtarea | La primera sí; después de una devolución es incremental, desde el head ya revisado (ADR-0015) |
+| Tech Lead revisa de solo lectura, sin correr tests, y escribe el veredicto con un motivo libre | Corre los tests que respaldan cada objeción; entrega hallazgos con evidencia y categoría, y el veredicto se deriva de los bloqueantes (ADR-0016) |
 | Todo lo que ni el pedido ni el conocimiento resuelven va al humano, y una pregunta registrada no se retira | Va solo lo que deja la definición indecidible; el resto es un supuesto en la respuesta. El dueño de la decisión retira por número lo que una ronda posterior resuelve (ADR-0014, adenda tercera) |
 
 ---
@@ -832,7 +848,10 @@ en el primer resultado que trae salida estructurada: un subagente que el rol dej
 background reabre la sesión al volver y el modelo entrega de nuevo, un resultado por
 notificación (issue #16); el corte termina el proceso con lo que tuviera corriendo y lo
 avisa en el log. Una salida estructurada
-ausente o inválida, o un `markdown` vacío, es fallo de rol, no un diccionario vacío. Las
+ausente o inválida, o un `markdown` vacío, es fallo de rol, no un diccionario vacío. La
+revisión (`Review`) no trae veredicto: trae `findings`, cada uno con su categoría cerrada, y
+el caso de uso deriva el veredicto; un bloqueante sin evidencia o con alcance de plan es
+salida inválida (ADR-0016). Las
 listas de strings de primer nivel (`questions_for_pm`, `questions_for_human`,
 `assumptions`) llegan al modelo como un string de líneas y vuelven como lista: con un array
 en el esquema el modelo las escribía como texto suelto o `<item>` y el JSON no parseaba
@@ -875,7 +894,9 @@ Developers en paralelo con `Send` (ADR-0004): la arista condicional de `plan` y 
 dependencias pendientes). Cada uno corre en su propio árbol de trabajo y rama (ADR-0011);
 `status`, `current_role` y `escalated` llevan un reducer "último gana" para que dos
 Developers en el mismo paso no choquen. La integración es una subtarea más, del integrador,
-sobre la rama de tarea.
+sobre la rama de tarea. Cada rama guarda el documento con su propia vista del estado, así
+que la última en escribir pisa lo de sus hermanas hasta que el nodo siguiente guarda: por
+eso `escalate` guarda también, con el estado ya fusionado.
 
 ### Entrevistas
 
@@ -915,7 +936,8 @@ roles anidados; al cerrar cada span el adaptador le estampa lo que el caso de us
 lo sepa. Las métricas del sistema (glosario de Medición: costo por tarea, retrabajo,
 duración, devoluciones, escalados) salen del mismo adaptador y el collector las manda,
 junto con los spans del sistema y sin los de Claude Code, a Grafana Cloud, con la versión
-del sistema y la huella de prompts como labels (ADR-0008, `observability/README.md`). Por
+del sistema y la huella de prompts como labels (ADR-0008, `observability/README.md`);
+`agentic.task.returns` deja una muestra por categoría de devolución (ADR-0016). Por
 último, el `session_id` de cada corrida queda en el documento de tarea: `claude -r <id>` en
 el repo del producto reabre la sesión del rol.
 

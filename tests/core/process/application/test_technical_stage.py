@@ -8,6 +8,7 @@ from agentic.core.process.application.deliver import deliver
 from agentic.core.process.application.develop import develop
 from agentic.core.process.application.escalate import escalate
 from agentic.core.process.application.plan import plan
+from agentic.core.process.application.ports import RawResult
 from agentic.core.process.application.review import review
 from agentic.core.process.application.validate_definition import validate_definition
 from agentic.core.process.domain.task import INTEGRATION, apply
@@ -146,6 +147,22 @@ async def test_a_developer_that_does_not_commit_fails_and_is_retried(cfg):
     assert patch["subtasks"]["api"]["status"] == "pending"
 
 
+async def test_a_developer_that_leaves_the_tree_dirty_fails_and_is_retried(cfg):
+    # Run 4, `expiring-soon`: the fix sat in the working tree, the branch's HEAD failed
+    # the architecture test, and the suite passed against code the branch did not hold.
+    state = {**TASK, "subtasks": {"api": sub("api"), "b": sub("b")}, "subtask_id": "api"}
+    runner = ScriptedRunner(developer=[delivered(), delivered()])
+    ports = memory_ports(runner)
+    checkout = ports.workspace.subtask_checkout("GH-12", "api")
+    ports.workspace.moved.add(checkout.path)
+    ports.workspace.dirty.add(checkout.path)
+    patch = await develop(state, cfg, ports)
+    assert patch["status"] == "waiting_on_human"
+    assert "uncommitted changes" in patch["failures"][0]["error"]
+    assert "uncommitted changes" in runner.calls[1]["prompt"]
+    assert patch["subtasks"]["api"]["status"] == "pending"
+
+
 async def test_review_approves_returns_and_adds_the_integration(cfg):
     state = {
         **TASK,
@@ -170,9 +187,14 @@ async def test_review_approves_returns_and_adds_the_integration(cfg):
         **state["subtasks"]["domain"],
         "status": "returned",
         "reason": "no test",
+        "return_category": "spec-behaviour",
         "reviewed_head": "base",
     }
     assert patch["returns"] == {"Tech Lead→Developer:domain": 1}
+    assert patch["return_history"] == [
+        {"pair": "Tech Lead→Developer:domain", "category": "spec-behaviour", "reason": "no test"}
+    ]
+    assert "return_history" in ports.documents.last
     assert INTEGRATION not in patch["subtasks"]  # not until every subtask is approved
     assert set(patch["sections"]) == {"Tech Lead: review api", "Tech Lead: review domain"}
 
@@ -228,7 +250,22 @@ async def test_review_escalates_when_the_pair_hits_its_limit(cfg):
     )
     assert patch["status"] == "waiting_on_human"
     assert patch["escalated"] == "Tech Lead→Developer:api hit 2 returns: still"
-    assert "returns" not in patch
+    assert "returns" not in patch and "return_history" not in patch
+
+
+async def test_a_review_without_evidence_behind_its_block_is_a_role_failure(cfg):
+    from tests.fakes import finding
+
+    state = {**TASK, "subtasks": {"api": sub("api", "delivered", branch="b", base="x")}}
+    bare = RawResult(
+        {"markdown": "### Verdict", "reason": "r", "findings": [finding() | {"evidence": ""}]},
+        0.2,
+    )
+    runner = ScriptedRunner(tech_lead_review=[bare, bare])
+    patch = await review(state, cfg, memory_ports(runner))
+    assert patch["status"] == "waiting_on_human"
+    assert "no evidence" in patch["failures"][0]["error"]
+    assert "subtasks" not in patch and "returns" not in patch  # still delivered, unreviewed
 
 
 async def test_the_integrator_builds_on_the_task_branch_with_the_branches_listed(cfg):
@@ -275,6 +312,7 @@ async def test_escalate_labels_and_comments_with_the_questions(cfg):
     state = {**TASK, "escalated": "PM could not decide", "questions_for_human": ["Currency?"]}
     ports = memory_ports()
     assert await escalate(state, cfg, ports) == {}
+    assert ports.documents.last == state  # the merged state, as the node received it
     assert ports.tracker.labels == [("GH-12", "needs-human")]
     text = ports.tracker.comments[0][1]
     assert text.startswith("Escalated: PM could not decide") and "1. Currency?" in text

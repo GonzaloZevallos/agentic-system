@@ -124,6 +124,23 @@ def test_role_finish_stamps_the_run_on_the_span(spans):
     assert span.attributes["role.failed_attempts"] == 0
 
 
+def test_role_finish_stamps_the_categories_of_the_returns_it_made(spans):
+    history = [
+        {"pair": "Tech Lead→Developer:a", "category": "process-suite-red", "reason": "r"},
+        {"pair": "Tech Lead→Developer:b", "category": "spec-missing-test", "reason": "r"},
+    ]
+    with telemetry.role_span("Tech Lead") as run:
+        run.finish({"cost_usd": 0.2, "return_history": history})
+    with telemetry.role_span("Tech Lead") as run:
+        run.finish({"cost_usd": 0.2})
+    returned, approved = spans.get_finished_spans()
+    assert returned.attributes["role.return_categories"] == (
+        "process-suite-red",
+        "spec-missing-test",
+    )
+    assert "role.return_categories" not in approved.attributes
+
+
 def test_role_finish_on_a_broken_role(spans):
     patch = {
         "failures": [{"role": "PA", "attempt": 1, "error": "e", "cost_usd": 0.05}],
@@ -143,7 +160,12 @@ def test_task_finish_emits_the_system_metrics(metrics):
         "type": "feature",
         "status": "definition_ready",
         "cost_usd": 0.5,
-        "returns": {"PM→Product Analyst": 1},
+        "returns": {"PM→Product Analyst": 1, "Tech Lead→Developer:api": 2},
+        "return_history": [
+            {"pair": "PM→Product Analyst", "category": "definition", "reason": "r"},
+            {"pair": "Tech Lead→Developer:api", "category": "spec-behaviour", "reason": "r"},
+            {"pair": "Tech Lead→Developer:api", "category": "spec-behaviour", "reason": "r"},
+        ],
         "failures": [],
         "runs": [
             {
@@ -180,8 +202,10 @@ def test_task_finish_emits_the_system_metrics(metrics):
     assert rework.value == 0.15
     (finished,) = got["agentic.task.finished"]
     assert finished.value == 1
-    (returns,) = got["agentic.task.returns"]
-    assert returns.value == 1
+    # One sample per category of return, the task's labels plus the category.
+    returns = {p.attributes["return.category"]: p for p in got["agentic.task.returns"]}
+    assert {c: p.value for c, p in returns.items()} == {"definition": 1, "spec-behaviour": 2}
+    assert dict(returns["definition"].attributes) == {**labels, "return.category": "definition"}
     (duration,) = got["agentic.task.duration"]
     assert duration.value >= 0
     # The finish exported on its own: the sample left the process with the event.

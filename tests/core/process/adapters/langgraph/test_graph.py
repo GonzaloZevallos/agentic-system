@@ -432,6 +432,28 @@ async def test_the_task_cap_escalates_once_during_a_fan_out(config):
     assert {s["status"] for s in final["subtasks"].values()} == {"pending"}
 
 
+async def test_escalating_during_a_fan_out_saves_the_document_with_every_branch(config, tmp_path):
+    # Both Developers leave their tree dirty twice and escalate in the same superstep.
+    # Each branch saves its own view of the document, so whichever writes last loses
+    # the other's failures; `escalate` saves the merged state, and the document ends
+    # with both whatever the order.
+    fakes = Fakes()
+    fakes.workspace.dirty.update(
+        {MemoryWorkspace.ROOT / "GH-1.api", MemoryWorkspace.ROOT / "GH-1.domain"}
+    )
+    plan = planned({"id": "domain", "title": "Domain", "brief": "b", "seams": ["x"]})
+    script = script_for(**technical(tech_lead=[plan], developer=[delivered()] * 4))
+    final = await run_graph(script, config, fakes=fakes)
+
+    assert final["status"] == WAITING_ON_HUMAN
+    assert final["escalated"].startswith("Developer failed 2 times: structured output invalid")
+    assert len(final["failures"]) == 4
+    doc = FilesystemTaskDocuments(tmp_path).load("GH-1")
+    assert len(doc["failures"]) == 4
+    assert doc["status"] == WAITING_ON_HUMAN and doc["escalated"] == final["escalated"]
+    assert len(fakes.tracker.comments) == 1
+
+
 async def test_the_task_cap_stops_the_review_loop_inside_one_node(config):
     # Two deliveries reviewed in one `review` node: the first review takes the total
     # from 1.86 to 2.06, so the second never starts. The routing between nodes could

@@ -1,7 +1,13 @@
 """An escalation reaches the human through the issue (README.md, 3; ADR-0011): the
 `needs-human` label puts the task in the queue, and a comment carries the reason
 and, after an interview, the questions to answer. The state does not change: it
-already says why the run stopped."""
+already says why the run stopped.
+
+The document is saved once more, from the merged state this node receives. Each
+branch of a fan-out saves its own view of it (`finish`), so the last writer loses its
+sisters' deliveries until the next node saves again; when the cap cuts that
+superstep, this is the next node, and a resume from the document must not redo a
+subtask already delivered."""
 
 from __future__ import annotations
 
@@ -18,6 +24,7 @@ async def escalate(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSt
     reason = state.get("escalated")
     if not reason:
         return {}
+    ports.documents.save(state)
     lines = [f"Escalated: {reason}"]
     questions = state.get("questions_for_human", [])
     if questions:
