@@ -39,6 +39,13 @@ class Configuration(BaseModel):
     # second addendum). Exceeding it is a role failure, not a return: the return limit
     # measures quality, not money.
     max_budget_usd: float = Field(default=10.0, gt=0)
+    # Money cap of the whole run, checked before every attempt of any role: reached,
+    # the task escalates instead of spending more. The attempt cap never stopped a
+    # run (71 USD in GH-12 without one attempt over it). Same rule: a safety net well
+    # above a healthy run (75-100 USD for five subtasks), not a work budget, since
+    # escalating ends the run today (ADR-0004, third addendum). Parallel branches see
+    # the total at the fan-out, so the overrun is bounded by the attempt cap.
+    task_max_budget_usd: float = Field(default=100.0, gt=0)
     # The model of every sub-agent a role spawns through the Agent tool, the two of
     # the `code-review` skill among them. They read and summarise for a parent that
     # keeps its own model; on the parent's model they cost 5-10 USD a review

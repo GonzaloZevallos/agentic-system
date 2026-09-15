@@ -8,6 +8,11 @@ when there is none (ADR-0004, addendum). A second failure raises `RoleFailure`, 
 the use case turns into an escalation. The graph engine's own retry was rejected
 because it reruns the node without telling the model what went wrong.
 
+The task cap is checked here too, before every attempt, because every role passes
+through here: the routing between nodes would miss the reviews inside one node and
+the rounds of an interview. Reached, `TaskBudgetExceeded` escalates the same way, but
+it is not a role failure: the role did not break (ADR-0004, third addendum).
+
 Context rule (README.md, 6): each role reads, in full, the sections it declares in
 `Role.reads`, after the engineering standards and the product knowledge if it reads
 them. Not the previous role's handoff: a validator that only sees a summary returns
@@ -36,6 +41,24 @@ class RoleFailure(Exception):
         self.failures = failures
         last = failures[-1]["error"] if failures else "no attempts were made"
         super().__init__(f"{role.name} failed {len(failures)} times: {last}")
+
+    @property
+    def cost_usd(self) -> float:
+        return sum(f["cost_usd"] for f in self.failures)
+
+
+class TaskBudgetExceeded(Exception):
+    """The run reached its money cap before this role's next attempt. Carries the
+    attempts already paid in this call, if any: their cost counts."""
+
+    def __init__(self, role: Role, spent_usd: float, cap_usd: float, failures: list[Failure]):
+        self.role = role
+        self.spent_usd = spent_usd
+        self.cap_usd = cap_usd
+        self.failures = failures
+        super().__init__(
+            f"{role.name} not run: task cap of {cap_usd:.2f} USD reached, {spent_usd:.2f} USD spent"
+        )
 
     @property
     def cost_usd(self) -> float:
@@ -114,11 +137,20 @@ async def run_with_retry(
     check: Check | None = None,
     resume: str | None = None,
     max_budget_usd: float | None = None,
+    spent_usd: float = 0.0,
+    task_max_budget_usd: float | None = None,
 ) -> Output:
     """`check` is the use case's own rule over the validated output (raise `ValueError`);
-    breaking it is a role failure like any other, so the model gets the error back."""
+    breaking it is a role failure like any other, so the model gets the error back.
+
+    `spent_usd` is what the task spent before this call; with `task_max_budget_usd`
+    set, an attempt that would start at or over the cap raises `TaskBudgetExceeded`
+    instead. A failed attempt counts: the retry can cost another attempt cap."""
     failures: list[Failure] = []
     for attempt in range(1, max(retries, 0) + 2):
+        total = spent_usd + sum(f["cost_usd"] for f in failures)
+        if task_max_budget_usd is not None and total >= task_max_budget_usd:
+            raise TaskBudgetExceeded(role, total, task_max_budget_usd, failures)
         text, session = _retry_input(prompt, failures, resume)
         try:
             output = await _attempt(
@@ -218,8 +250,9 @@ async def _attempt(
     )
 
 
-def escalation(exc: RoleFailure) -> TaskState:
-    """The patch of a role that failed twice: the human sees it (README.md, 3)."""
+def escalation(exc: RoleFailure | TaskBudgetExceeded) -> TaskState:
+    """The patch of a role that failed twice, or that the task cap stopped: the human
+    sees it (README.md, 3)."""
     return {
         "failures": exc.failures,
         "cost_usd": exc.cost_usd,
@@ -282,8 +315,10 @@ async def run_role(
             check=check,
             resume=resume,
             max_budget_usd=cfg.max_budget_usd,
+            spent_usd=state.get("cost_usd", 0.0),
+            task_max_budget_usd=cfg.task_max_budget_usd,
         )
-    except RoleFailure as exc:
+    except (RoleFailure, TaskBudgetExceeded) as exc:
         return None, patch | escalation(exc)
 
     patch |= {

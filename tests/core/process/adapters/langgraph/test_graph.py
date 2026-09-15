@@ -413,6 +413,25 @@ async def test_role_failure_escalates_and_keeps_failures(config, tmp_path):
     assert doc["status"] == WAITING_ON_HUMAN
 
 
+async def test_the_task_cap_escalates_once_during_a_fan_out(config):
+    # The definition and the plan spend 0.86; both Developer branches start from that
+    # total, both find the cap reached, and the escalation reaches the issue once
+    # (ADR-0004, third addendum).
+    config["configurable"]["task_max_budget_usd"] = 0.7
+    fakes = Fakes()
+    plan = planned({"id": "domain", "title": "Domain", "brief": "b", "seams": ["x"]})
+    script = script_for(**technical(tech_lead=[plan]))
+    final = await run_graph(script, config, fakes=fakes)
+
+    assert final["status"] == WAITING_ON_HUMAN
+    assert final["escalated"] == "Developer not run: task cap of 0.70 USD reached, 0.86 USD spent"
+    assert "developer" not in script.slugs
+    assert final["cost_usd"] == pytest.approx(0.86)
+    assert fakes.tracker.labels == [("GH-1", "needs-human")]
+    assert len(fakes.tracker.comments) == 1
+    assert {s["status"] for s in final["subtasks"].values()} == {"pending"}
+
+
 async def test_retried_failure_is_recorded_but_not_escalated(config):
     script = script_for(product_analyst=[AttemptFailed("invalid", 0.02), defined()], **technical())
     final = await run_graph(script, config)

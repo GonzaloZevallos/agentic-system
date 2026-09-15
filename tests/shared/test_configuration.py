@@ -72,6 +72,17 @@ def test_the_money_cap_and_the_interview_rounds_have_defaults():
     assert lower.max_budget_usd == 4.0
 
 
+def test_the_task_cap_has_a_default_well_above_a_healthy_run():
+    # A safety net over the whole run, not a work budget: a healthy five-subtask task
+    # runs 75-100 USD and escalating ends the run today (ADR-0004, third addendum).
+    cfg = Configuration.from_sources(PRODUCT, {})
+    assert cfg.task_max_budget_usd == 100.0
+    lower = Configuration.from_sources(PRODUCT, {"AGENTIC_TASK_MAX_BUDGET_USD": "50"})
+    assert lower.task_max_budget_usd == 50.0
+    with pytest.raises(ValueError):
+        Configuration(product_dir=Path("/tmp/p"), task_max_budget_usd=0)
+
+
 def test_role_env_carries_the_git_identity_and_the_subagent_model():
     # What every role's process gets on top of the inherited environment: the git
     # identity and the model the Agent tool hands to sub-agents (ADR-0013, addendum).
