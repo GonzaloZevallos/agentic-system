@@ -57,6 +57,18 @@ def test_the_verdict_and_the_category_come_from_the_blocking_findings():
     assert rules.return_category([note, block, other]) == "spec-behaviour"
 
 
+def test_the_system_writes_the_verdict_heading_of_a_review():
+    # The verdict is derived, so the reviewer never writes it: its section cannot
+    # contradict what the system decided (ADR-0016).
+    findings = "### Findings\n\n| blocking | ... |"
+    assert rules.review_markdown(None, "all good", findings) == (
+        f"### Verdict\n\n**approved**: all good\n\n{findings}"
+    )
+    assert rules.review_markdown("spec-behaviour", "no test", findings).startswith(
+        "### Verdict\n\n**returned** (`spec-behaviour`): no test\n\n### Findings"
+    )
+
+
 def test_a_return_is_recorded_with_its_category_for_the_history():
     assert rules.return_entry(PAIR, "definition", "no metrics") == {
         "pair": KEY,

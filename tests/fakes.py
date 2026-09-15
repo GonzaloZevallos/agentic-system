@@ -274,7 +274,7 @@ def reviewed(kind="approved", reason="fine", cost=0.2, category="spec-behaviour"
     """The verdict is derived: a return is a review with a blocking finding."""
     findings = [finding(category=category, claim=reason)] if kind == "returned" else []
     return RawResult(
-        {"markdown": f"### Verdict\n\n{kind}", "reason": reason, "findings": findings},
+        {"markdown": "### Findings\n\nNone.", "reason": reason, "findings": findings},
         cost,
         3,
         "rv",

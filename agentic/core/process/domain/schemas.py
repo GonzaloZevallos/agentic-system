@@ -188,7 +188,8 @@ class Finding(BaseModel):
 
 class Review(RoleOutput):
     reason: str = Field(
-        description="One line: the verdict and why. On a return, what the Developer must fix first"
+        description="One line, why, not the verdict (the system writes it). On a return, "
+        "what the Developer must fix first; on an approval, what you verified"
     )
     findings: list[Finding] = Field(description="Every finding, most severe first")
 

@@ -39,8 +39,10 @@ ejecuta.
 veredicto: devuelve si y solo si hay un bloqueante. Un bloqueante sin evidencia, o con
 alcance de plan, es salida inválida, es decir fallo de rol con reintento. `reason` queda
 como resumen de una línea para el Developer. La sección de la revisión lleva los hallazgos
-como tabla. La tabla acumulada entre revisiones, con estado por hallazgo, es del issue #23,
-que lee `scope: plan` de acá.
+como tabla, y el sistema le antepone `### Verdict` con el veredicto derivado y el motivo:
+el revisor no escribe esa línea, así que la sección no puede contradecir lo decidido. La
+tabla acumulada entre revisiones, con estado por hallazgo, es del issue #23, que lee
+`scope: plan` de acá.
 
 **La categoría es cerrada.** Once valores en cuatro familias: `standard-*` (arquitectura,
 tipado silenciado, costuras, otro), `spec-*` (comportamiento, test faltante, alcance),

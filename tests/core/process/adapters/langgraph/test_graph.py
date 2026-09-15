@@ -224,7 +224,10 @@ async def test_two_subtasks_fan_out_loop_on_a_return_and_integrate(config):
     assert "Tech Lead: review domain (v1)" in final["sections"]
     rerun = script.calls[8 + 4]
     assert rerun["cwd"] == MemoryWorkspace.ROOT / "GH-1.domain"
-    assert "## Tech Lead: review domain\n\n### Verdict\n\nreturned" in rerun["prompt"]
+    assert (
+        "## Tech Lead: review domain\n\n### Verdict\n\n**returned** (`spec-behaviour`)"
+        in rerun["prompt"]
+    )
     assert "## Developer: api" not in rerun["prompt"]  # not its subtask
     integrator = script.calls[-2]
     assert "`agentic/GH-1.api` (api: API)" in integrator["system_prompt"]

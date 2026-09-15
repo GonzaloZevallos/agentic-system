@@ -11,7 +11,7 @@ approved is not paid for twice. Each pass records the head it reviewed.
 The reviewer hands back findings, not a verdict (ADR-0016): the subtask is returned
 only on a blocking finding, and the return takes that finding's category, which is
 what measurement counts. A block without evidence is a role failure, retried with
-the error."""
+the error. The system writes the verdict at the head of the review's section."""
 
 from __future__ import annotations
 
@@ -56,6 +56,9 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
         subtask = {**subtask, "reviewed_head": head}
         reason = output.data["reason"]
         category = rules.return_category(output.data["findings"])
+        patch = apply(
+            patch, {"sections": {section: rules.review_markdown(category, reason, output.text)}}
+        )
         if category is None:
             patch = apply(patch, {"subtasks": {subtask_id: {**subtask, "status": "approved"}}})
         elif remaining > 0:

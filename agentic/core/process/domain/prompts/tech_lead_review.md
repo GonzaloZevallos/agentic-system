@@ -65,15 +65,15 @@ Record each finding with:
     the same figure differently.
 
 The verdict is not yours to write: the subtask goes back to the Developer if and only
-if there is at least one `blocking` finding.
+if there is at least one `blocking` finding, and the system writes the verdict at the
+head of your section.
 
-Then write, in Markdown, using `###` headings and nothing above `###`:
+Then write, in Markdown, using `###` headings and nothing above `###`, and no
+`### Verdict` heading:
 
-1. `### Verdict`: `approved` or `returned` (returned exactly when a finding blocks),
-   with a one-line reason.
-2. `### Findings`: a table, most severe first, with columns severity, category,
+1. `### Findings`: a table, most severe first, with columns severity, category,
    location, claim, evidence (the command, shortened to what matters).
-3. `### For the Developer`: on a return, the numbered list of the blocking findings to
+2. `### For the Developer`: on a return, the numbered list of the blocking findings to
    fix, each verifiable. On an approval, nothing.
 </Task>
 
@@ -96,7 +96,8 @@ Then write, in Markdown, using `###` headings and nothing above `###`:
 <Output>
 Everything goes in the structured output, in one call:
 
-- `reason`: one line, the verdict and why.
+- `reason`: one line, why: on a return what the Developer must fix first, on an
+  approval what you verified. Not the verdict itself; the system writes it.
 - `findings`: every finding, most severe first; an empty list if none.
 - `markdown`: the full section above, in Markdown.
 </Output>

@@ -197,6 +197,12 @@ async def test_review_approves_returns_and_adds_the_integration(cfg):
     assert "return_history" in ports.documents.last
     assert INTEGRATION not in patch["subtasks"]  # not until every subtask is approved
     assert set(patch["sections"]) == {"Tech Lead: review api", "Tech Lead: review domain"}
+    assert patch["sections"]["Tech Lead: review domain"] == (
+        "### Verdict\n\n**returned** (`spec-behaviour`): no test\n\n### Findings\n\nNone."
+    )
+    assert ports.documents.last["sections"]["Tech Lead: review api"].startswith(
+        "### Verdict\n\n**approved**: fine"
+    )
 
     # The Developer of `domain` is sent back; once it is approved, the integrator enters.
     again = apply(state, patch)

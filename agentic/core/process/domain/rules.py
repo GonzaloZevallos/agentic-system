@@ -35,6 +35,14 @@ def return_category(findings: list[dict]) -> FindingCategory | None:
     return next((f["category"] for f in findings if f["severity"] == "blocking"), None)
 
 
+def review_markdown(category: FindingCategory | None, reason: str, text: str) -> str:
+    """A review's section as the document keeps it: the derived verdict first, written by
+    the system, then what the reviewer wrote. The reviewer never writes the verdict, so
+    the section cannot contradict it (ADR-0016)."""
+    verdict = "**approved**" if category is None else f"**returned** (`{category}`)"
+    return f"### Verdict\n\n{verdict}: {reason}\n\n{text}"
+
+
 def limit_reached(pair: Pair, limit: int, reason: str) -> str:
     """The escalation text when `pair` used up its returns: the pair, the limit and the
     validator's reason, written for the human."""
