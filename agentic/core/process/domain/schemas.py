@@ -7,6 +7,12 @@ or invalid structured output is a role failure, never an empty dict.
 
 `flags` is typed loosely here and tightened per run to the product's flag
 vocabulary, so the model can only mark names that exist.
+
+A top-level `list[str]` reaches the model as one string, a line per item, and comes
+back as the list (issue #8): in GH-12 every structured output the harness could not
+parse as JSON came from a role with such a field, written as bare text or `<item>`
+tags instead of an array, five times in a row in one case. Lists nested in objects
+(a subtask's seams) never failed and stay arrays.
 """
 
 from __future__ import annotations
@@ -82,8 +88,8 @@ class Answers(RoleOutput):
     """One round of the interviewee: a decision per question."""
 
     questions_for_human: list[str] = Field(
-        description="Questions neither the request nor the product knowledge settle, one "
-        "line each, written for a person who has not read the task. Empty if none"
+        description="Questions neither the request nor the product knowledge settle, "
+        "written for a person who has not read the task"
     )
 
 
@@ -92,9 +98,8 @@ class TechAnswers(RoleOutput):
     consults PM about (glossary: Consulta). It never asks the human directly."""
 
     questions_for_pm: list[str] = Field(
-        description="Behaviour the definition does not settle or contradicts the code, one "
-        "question per line, written for someone who has not read this interview. Empty "
-        "if none"
+        description="Behaviour the definition does not settle or contradicts the code, "
+        "written for someone who has not read this interview"
     )
 
 
@@ -103,8 +108,8 @@ class Consultation(RoleOutput):
     they change (distilled again, ADR-0006) and what only a person can decide."""
 
     questions_for_human: list[str] = Field(
-        description="Questions only a person can decide, one line each, written for a "
-        "person who has not read the task. Empty if none"
+        description="Questions only a person can decide, written for a person who has "
+        "not read the task"
     )
     definitions: list[CapabilityFile] = Field(
         description="The capability files whose behaviour an answer changes or completes, "
@@ -140,9 +145,7 @@ class TechPlan(RoleOutput):
 
 class Delivery(RoleOutput):
     summary: str = Field(description="What changed, in a few lines, for the reviewer")
-    assumptions: list[str] = Field(
-        description="Decisions taken where the brief was silent; empty if none"
-    )
+    assumptions: list[str] = Field(description="Decisions taken where the brief was silent")
 
 
 class Review(RoleOutput):
@@ -185,12 +188,35 @@ def json_schema(schema: type[RoleOutput], vocabulary: dict[str, str]) -> dict[st
             "required": list(vocabulary),
             "additionalProperties": False,
         }
+    for name in line_lists(schema):
+        description = out["properties"][name].get("description", "")
+        out["properties"][name] = {
+            "type": "string",
+            "description": f"{description}. One per line; an empty string if none",
+        }
     return out
+
+
+def line_lists(schema: type[RoleOutput]) -> list[str]:
+    """The top-level `list[str]` fields, the ones the model wrote as text instead of an
+    array (issue #8): lines to the model, lists to the system. Nested lists are not
+    touched; they never failed."""
+    return [name for name, info in schema.model_fields.items() if info.annotation == list[str]]
 
 
 def validate(schema: type[RoleOutput], raw: Any, vocabulary: dict[str, str]) -> dict[str, Any]:
     """Pydantic validation plus the vocabulary check. Raises `ValueError` on any gap
-    (`ValidationError` is one)."""
+    (`ValidationError` is one). A line-list field arrives as a string from the model and
+    as a list from anything older or in-process; both validate."""
+    if isinstance(raw, dict):
+        raw = {
+            **raw,
+            **{
+                name: _lines(raw[name])
+                for name in line_lists(schema)
+                if isinstance(raw.get(name), str)
+            },
+        }
     data = schema.model_validate(raw).model_dump()
     if "flags" in data:
         got, expected = set(data["flags"]), set(vocabulary)
@@ -200,3 +226,7 @@ def validate(schema: type[RoleOutput], raw: Any, vocabulary: dict[str, str]) -> 
                 f"missing: {sorted(expected - got)}"
             )
     return data
+
+
+def _lines(text: str) -> list[str]:
+    return [line.strip() for line in text.splitlines() if line.strip()]

@@ -34,7 +34,8 @@ and govern the rest of the task.
 Everything goes in the structured output, in one call:
 
 - `markdown`: the answers, one per question, in Markdown.
-- `questions_for_human`: what only a person can decide; empty if nothing.
+- `questions_for_human`: what only a person can decide, one question per line in a
+  single string; an empty string if nothing.
 - `definitions`: the capability files whose behaviour an answer changes or completes,
   each complete (not a diff), keeping everything still current and its `## Jobs`. Empty
   when no answer changes the written knowledge.

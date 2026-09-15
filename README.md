@@ -812,7 +812,11 @@ mapa de subtareas) se define como esquema Pydantic y se pasa al SDK como `json_s
 Markdown de la sección sigue siendo texto libre, pero viaja como campo `markdown` del mismo
 esquema: el SDK termina el turno en cuanto el modelo llama a la herramienta de salida
 estructurada, así que una respuesta de texto aparte nunca llega. Una salida estructurada
-ausente o inválida, o un `markdown` vacío, es fallo de rol, no un diccionario vacío.
+ausente o inválida, o un `markdown` vacío, es fallo de rol, no un diccionario vacío. Las
+listas de strings de primer nivel (`questions_for_pm`, `questions_for_human`,
+`assumptions`) llegan al modelo como un string de líneas y vuelven como lista: con un array
+en el esquema el modelo las escribía como texto suelto o `<item>` y el JSON no parseaba
+(issue #8, 20 casos en 9 sesiones de GH-12).
 
 ### Estado del grafo
 

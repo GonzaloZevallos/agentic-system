@@ -31,5 +31,6 @@ original request and the product knowledge:
 Everything goes in the structured output, in one call:
 
 - `markdown`: the answers, one per question, in Markdown.
-- `questions_for_human`: what you could not decide; empty if nothing.
+- `questions_for_human`: what you could not decide, one question per line in a single
+  string; an empty string if nothing.
 </Output>

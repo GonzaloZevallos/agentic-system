@@ -40,6 +40,7 @@ Then write, in Markdown, using `###` headings and nothing above `###`:
 Everything goes in the structured output, in one call, after your last commit:
 
 - `summary`: a few lines for the reviewer.
-- `assumptions`: decisions taken while resolving conflicts; empty if none.
+- `assumptions`: decisions taken while resolving conflicts, one per line in a single
+  string; an empty string if none.
 - `markdown`: the full section above, in Markdown.
 </Output>

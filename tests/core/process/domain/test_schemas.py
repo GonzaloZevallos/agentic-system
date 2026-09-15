@@ -1,7 +1,13 @@
 import pytest
 
 from agentic.core.process.domain import schemas
-from agentic.core.process.domain.schemas import Classification, Definition, Verdict
+from agentic.core.process.domain.schemas import (
+    Classification,
+    Definition,
+    TechAnswers,
+    TechPlan,
+    Verdict,
+)
 
 VOCAB = {"touches_ui": "UI", "touches_copy": "copy"}
 
@@ -49,6 +55,35 @@ def test_verdict_carries_the_distillation():
     )
     assert data["definitions"][0]["capability"] == "metrics"
     assert data["glossary"][0]["term"] == "Churn"
+
+
+def test_top_level_string_lists_reach_the_model_as_lines():
+    # In GH-12 every unparseable structured output came from a role whose schema had
+    # a top-level `list[str]`: the model wrote the items as bare text or `<item>` tags
+    # instead of a JSON array (issue #8). So the model gets one string, a line per
+    # item, and the system still gets the list.
+    out = schemas.json_schema(TechAnswers, VOCAB)
+    field = out["properties"]["questions_for_pm"]
+    assert field["type"] == "string" and "items" not in field
+    assert "One per line" in field["description"] and "empty" in field["description"].lower()
+    # Nested lists stay arrays: the plan's `seams` never failed.
+    plan = schemas.json_schema(TechPlan, VOCAB)
+    assert plan["$defs"]["Subtask"]["properties"]["seams"]["type"] == "array"
+
+    raw = {"markdown": "x", "questions_for_pm": "Which day counts?\n\n  Is null a value? \n"}
+    assert schemas.validate(TechAnswers, raw, VOCAB)["questions_for_pm"] == [
+        "Which day counts?",
+        "Is null a value?",
+    ]
+    assert (
+        schemas.validate(TechAnswers, {"markdown": "x", "questions_for_pm": ""}, VOCAB)[
+            "questions_for_pm"
+        ]
+        == []
+    )
+    # A list, as the fakes and an older run send it, still validates.
+    raw = {"markdown": "x", "questions_for_pm": ["a", "b"]}
+    assert schemas.validate(TechAnswers, raw, VOCAB)["questions_for_pm"] == ["a", "b"]
 
 
 def test_validate_rejects_bad_type_as_value_error():

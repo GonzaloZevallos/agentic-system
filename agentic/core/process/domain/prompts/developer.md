@@ -45,6 +45,7 @@ Then write, in Markdown, using `###` headings and nothing above `###`:
 Everything goes in the structured output, in one call, after your last commit:
 
 - `summary`: a few lines for the reviewer.
-- `assumptions`: the list from Decisions; empty if none.
+- `assumptions`: the decisions from that section, one per line in a single string; an
+  empty string if none.
 - `markdown`: the full section above, in Markdown.
 </Output>

@@ -39,5 +39,6 @@ definition:
 Everything goes in the structured output, in one call:
 
 - `markdown`: the answers, one per question, in Markdown.
-- `questions_for_pm`: behaviour only PM can settle; empty if nothing.
+- `questions_for_pm`: behaviour only PM can settle, one question per line in a single
+  string; an empty string if nothing.
 </Output>
