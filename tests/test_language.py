@@ -30,6 +30,8 @@ TYPES = {
     "Retrabajo": metrics.is_rework,
     "Hallazgo": schemas.Finding,
     "Categoría de devolución": rules.return_category,
+    "Tope de tarea": rules.task_cap,
+    "Reanudación": rules.resumed,
 }
 
 # Glossary term -> the field of the task state that holds it.

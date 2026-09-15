@@ -1,5 +1,5 @@
 """`Tracker` over the `gh` CLI in the product checkout (ADR-0011): the pull request
-of a task, and the comments and labels of its issue.
+of a task, and the comments and labels of its issue, which a resume also reads.
 
 A task id `GH-<n>` came from issue n; any other id has no issue, and writing to it
 is a no-op. `gh` resolves the repo from the checkout, as the inbox does.
@@ -7,6 +7,7 @@ is a no-op. `gh` resolves the repo from the checkout, as the inbox does.
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 from collections.abc import Callable
@@ -40,6 +41,17 @@ class GhTracker:
     def label(self, task_id: str, label: str) -> None:
         if (number := issue_number(task_id)) is not None:
             self._gh("issue", "edit", str(number), "--add-label", label)
+
+    def unlabel(self, task_id: str, label: str) -> None:
+        if (number := issue_number(task_id)) is not None:
+            self._gh("issue", "edit", str(number), "--remove-label", label)
+
+    def last_comment(self, task_id: str) -> str | None:
+        if (number := issue_number(task_id)) is None:
+            return None
+        comments = json.loads(self._gh("issue", "view", str(number), "--json", "comments"))
+        bodies = [c.get("body") or "" for c in comments.get("comments", [])]
+        return bodies[-1] if bodies else None
 
     def _gh(self, *args: str) -> str:
         try:

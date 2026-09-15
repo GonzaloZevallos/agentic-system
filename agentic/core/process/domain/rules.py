@@ -5,10 +5,22 @@ Pure functions over the task state, so each one is a unit test and not a graph r
 
 from __future__ import annotations
 
+import math
+import re
 from collections.abc import Sequence
 
-from .roles import Pair
-from .task import INTEGRATION, FindingCategory, Return, ReturnCategory, TaskState
+from .document import HUMAN, demote
+from .roles import DEVELOPER, PAIR_PM_PA, PM, PRODUCT_ANALYST, SOLUTION_INTERVIEW, TECH_LEAD, Pair
+from .task import (
+    INTEGRATION,
+    FindingCategory,
+    Return,
+    ReturnCategory,
+    RoleRun,
+    Status,
+    Subtask,
+    TaskState,
+)
 
 # The category the system stamps on PM's returns of the definition (ADR-0016).
 DEFINITION_RETURN: ReturnCategory = "definition"
@@ -74,6 +86,16 @@ def limit_reached(pair: Pair, limit: int, reason: str) -> str:
     """The escalation text when `pair` used up its returns: the pair, the limit and the
     validator's reason, written for the human."""
     return f"{pair.key} hit {limit} returns: {reason}"
+
+
+_LIMIT_REACHED = re.compile(r"^(.+?) hit \d+ returns: ")
+
+
+def pair_at_limit(reason: str | None) -> str | None:
+    """The key of the pair whose limit an escalation reason reports, the one whose
+    counter the human's answer resets (README.md, 3); None for any other escalation."""
+    match = _LIMIT_REACHED.match(reason or "")
+    return match.group(1) if match else None
 
 
 def next_version(state: TaskState, section: str) -> int:
@@ -156,6 +178,75 @@ def needs_integration(state: TaskState) -> bool:
     return INTEGRATION not in subtasks and len(subtasks) > 1 and all_approved(state)
 
 
+def integration_subtask() -> Subtask:
+    return {
+        "id": INTEGRATION,
+        "title": "Integration",
+        "brief": "Join every subtask branch on the task branch.",
+        "seams": [],
+        "depends_on": [],
+        "status": "pending",
+    }
+
+
+# The task cap (README.md, 3; ADR-0004, fourth addendum): a base for the definition and
+# the plan, a share per unit of work once the plan says how many there are.
+
+
+def work_units(state: TaskState) -> int:
+    """The subtasks of the plan, plus the integration when there is more than one, counted
+    before it exists: the cap has to cover it from the start."""
+    real = [sid for sid in state.get("subtasks", {}) if sid != INTEGRATION]
+    return len(real) + (1 if len(real) > 1 else 0)
+
+
+def task_cap(state: TaskState, base: float, per_unit: float, ceiling: float) -> float:
+    """What the run may spend: the base until there is a plan, then the base plus a share
+    per unit, never over the ceiling."""
+    return min(ceiling, base + per_unit * work_units(state))
+
+
+def cap_reached(role_name: str, spent_usd: float, cap_usd: float) -> str:
+    return f"{role_name} stopped by the task cap: {spent_usd:.2f} of {cap_usd:.2f} USD spent"
+
+
+def stopped_by_cap(reason: str | None) -> bool:
+    return " stopped by the task cap: " in (reason or "")
+
+
+def suggested_budget(state: TaskState, per_unit: float) -> int:
+    """The `--task-budget` an escalation by the cap proposes: what was spent plus one more
+    unit of work, in whole dollars. A starting point for the human, not an estimate."""
+    return math.ceil(state.get("cost_usd", 0.0) + per_unit)
+
+
+PHASES = ("definition", "plan", "development", "review")
+
+
+def phase_of(section: str) -> str:
+    """The phase a run's section belongs to. PM's consultations during the plan write
+    PM's section, so they count as definition."""
+    if section.startswith(f"{TECH_LEAD.name}: review "):
+        return "review"
+    if section.startswith(f"{DEVELOPER.name}: "):
+        return "development"
+    if section in (TECH_LEAD.name, SOLUTION_INTERVIEW):
+        return "plan"
+    return "definition"
+
+
+def spent_by_phase(state: TaskState) -> dict[str, float]:
+    """The task's cost by phase, summing its runs by section; `other` is what the runs do
+    not hold, the failed attempts that escalated, when there is any."""
+    phases = dict.fromkeys(PHASES, 0.0)
+    for run in state.get("runs", []):
+        phases[phase_of(run.get("section", run["role"]))] += run["cost_usd"]
+    other = state.get("cost_usd", 0.0) - sum(phases.values())
+    if other >= 0.005:
+        phases["other"] = other
+    return phases
+
+
 # Routing of the feature path (README.md, 2): PjM -> Product Analyst -> PM -> Tech Lead
 # -> Developers -> Tech Lead -> delivery. `None` is the end of the run; the graph
 # adapter maps names to its nodes and fans `develop` out per ready subtask.
@@ -193,3 +284,83 @@ def after_review(state: TaskState) -> str | None:
 
 def after_deliver(state: TaskState) -> str | None:
     return None
+
+
+# Pause and resume (ADR-0003): an escalation pauses the task; the human's answer resumes
+# it where it stopped. The state says where that is, so the same rules serve a paused
+# checkpoint and a state seeded from the document.
+
+
+def resumed_status(state: TaskState) -> Status:
+    """The status the task had before the escalation overwrote it, derived from what the
+    state holds, since the document keeps only `waiting_on_human` too."""
+    if state.get("pull_request"):
+        return "ready_for_review"
+    subtasks = state.get("subtasks", {})
+    if subtasks:
+        started = any(sub.get("status") != "pending" for sub in subtasks.values())
+        return "developing" if started else "planned"
+    if pair_at_limit(state.get("escalated")) == PAIR_PM_PA.key:
+        return "returned"
+    runs = state.get("runs", [])
+    written = sum(1 for r in runs if _wrote_own_section(r, PRODUCT_ANALYST.name))
+    validated = sum(1 for r in runs if _wrote_own_section(r, PM.name))
+    history = sum(1 for h in state.get("return_history", []) if h["category"] == DEFINITION_RETURN)
+    # A document from before the history has only the counter, which a resume resets.
+    returned = max(history, state.get("returns", {}).get(PAIR_PM_PA.key, 0))
+    if validated > returned:
+        return "definition_ready"
+    if written > validated:
+        return "defined"
+    return "returned" if written else "open"
+
+
+def _wrote_own_section(run: RoleRun, role_name: str) -> bool:
+    """A run of the role writing its own section: a Product Analyst's definition, a PM
+    verdict or consultation, never their turns in an interview."""
+    return run["role"] == role_name and run.get("section", run["role"]) == role_name
+
+
+def human_section(state: TaskState, reason: str | None, decision: str) -> str:
+    """The `Human` section with one more decision: every answer stays, numbered, after
+    the escalation it answers."""
+    previous = state.get("sections", {}).get(HUMAN, "")
+    number = previous.count("### Decision ") + 1
+    escalation = f"Escalated: {reason}\n\n" if reason else ""
+    entry = f"### Decision {number}\n\n{escalation}{demote(decision.strip())}"
+    return f"{previous}\n\n{entry}".strip()
+
+
+def resumed(state: TaskState, decision: str | None) -> TaskState:
+    """The patch that resumes a paused task: no escalation, the status it had, the pair
+    that hit its limit back at zero, the human's decision as a section the roles read, and
+    the integration if the escalation came before the review could add it."""
+    reason = state.get("escalated")
+    patch: TaskState = {
+        "escalated": None,
+        "status": resumed_status(state),
+        "questions_for_human": [],
+    }
+    if pair := pair_at_limit(reason):
+        patch["returns"] = {pair: 0}
+    if decision and decision.strip():
+        patch["sections"] = {HUMAN: human_section(state, reason, decision)}
+    if needs_integration(state):
+        patch["subtasks"] = {INTEGRATION: integration_subtask()}
+    return patch
+
+
+def resume_target(state: TaskState) -> str | None:
+    """Where a resumed task goes next, from the same facts the routing reads."""
+    if state.get("escalated") or state.get("pull_request"):
+        return None
+    if state.get("subtasks"):
+        if delivered_subtasks(state):
+            return "review"
+        if ready_subtasks(state):
+            return "develop"
+        return "deliver" if all_approved(state) else None
+    status = state.get("status", "open")
+    if status == "open":
+        return "define" if state.get("type") == "feature" else "classify"
+    return {"defined": "validate", "returned": "define", "definition_ready": "plan"}.get(status)

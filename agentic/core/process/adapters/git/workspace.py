@@ -6,8 +6,9 @@ Layout, all under the product root and outside version control:
     .agentic/worktrees/<task>.<subtask>/  branch agentic/<task>.<subtask>, from the task branch
 
 Every operation is idempotent: asking for a checkout that exists returns it. The
-worktrees are excluded through `.git/info/exclude`, never through the product's own
-`.gitignore`, which is the product's business.
+worktrees and the checkpointer's file (ADR-0003) are excluded through
+`.git/info/exclude`, never through the product's own `.gitignore`, which is the
+product's business.
 
 The commits are the system's, so they carry the system's identity, not whatever the
 machine or the product has in `git config` (which may be nothing: a fresh box or a
@@ -22,11 +23,14 @@ import subprocess
 from collections.abc import Mapping
 from pathlib import Path
 
+from agentic.shared.configuration import STATE_FILE
+
 from ...application.ports import Checkout
 from ...domain import rules
 
 WORKTREES = Path(".agentic/worktrees")
-EXCLUDE = f"{WORKTREES}/"
+# The glob covers SQLite's journal next to the file.
+EXCLUDES = (f"{WORKTREES}/", f"{STATE_FILE}*")
 
 
 class GitError(RuntimeError):
@@ -57,7 +61,7 @@ class GitWorkspace:
 
     def _checkout(self, branch: str, relative: Path, start: str) -> Checkout:
         path = self.product_dir / relative
-        self._exclude_worktrees()
+        self.exclude_system_files()
         if not self._branch_exists(branch):
             self._git("branch", branch, start)
             base = self._git("rev-parse", "--short", branch)
@@ -95,6 +99,44 @@ class GitWorkspace:
                 self._git("worktree", "remove", "--force", str(path))
         self._git("worktree", "prune")
 
+    def branch_head(self, branch: str) -> str | None:
+        if not self._branch_exists(branch):
+            return None
+        return self._git("rev-parse", "--short", branch)
+
+    def base_of(self, branch: str) -> str | None:
+        result = self._run("config", "--get", f"branch.{_key(branch)}.agenticBase")
+        return result.stdout.strip() or None
+
+    def worktrees(self, task_id: str) -> list[Path]:
+        root = self.product_dir / WORKTREES
+        if not root.is_dir():
+            return []
+        return sorted(
+            path
+            for path in root.iterdir()
+            if path.is_dir() and (path.name == task_id or path.name.startswith(f"{task_id}."))
+        )
+
+    def prune(self) -> None:
+        self._git("worktree", "prune")
+
+    def exclude_system_files(self) -> None:
+        """Keep what the system writes in the product out of its `git status`. Outside a
+        repository there is nothing to exclude from."""
+        found = self._run("rev-parse", "--git-common-dir")
+        if found.returncode != 0:
+            return
+        common = Path(found.stdout.strip())
+        if not common.is_absolute():
+            common = self.product_dir / common
+        exclude = common / "info" / "exclude"
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        lines = exclude.read_text(encoding="utf-8").splitlines() if exclude.is_file() else []
+        missing = [entry for entry in EXCLUDES if entry not in lines]
+        if missing:
+            exclude.write_text("\n".join([*lines, *missing]) + "\n", encoding="utf-8")
+
     # -- plumbing ---------------------------------------------------------------
 
     def _product_head(self) -> str:
@@ -110,18 +152,7 @@ class GitWorkspace:
         self._git("config", f"branch.{_key(branch)}.agenticBase", base)
 
     def _base_of(self, branch: str) -> str:
-        result = self._run("config", "--get", f"branch.{_key(branch)}.agenticBase")
-        return result.stdout.strip() or self._git("rev-parse", "--short", branch)
-
-    def _exclude_worktrees(self) -> None:
-        common = Path(self._git("rev-parse", "--git-common-dir"))
-        if not common.is_absolute():
-            common = self.product_dir / common
-        exclude = common / "info" / "exclude"
-        exclude.parent.mkdir(parents=True, exist_ok=True)
-        lines = exclude.read_text(encoding="utf-8").splitlines() if exclude.is_file() else []
-        if EXCLUDE not in lines:
-            exclude.write_text("\n".join([*lines, EXCLUDE]) + "\n", encoding="utf-8")
+        return self.base_of(branch) or self._git("rev-parse", "--short", branch)
 
     def _run(self, *args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
         return subprocess.run(

@@ -5,6 +5,8 @@ product, and git and GitHub in memory."""
 from dataclasses import replace
 
 import pytest
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -15,6 +17,7 @@ from agentic.core.measurement.adapters.otel import telemetry
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.adapters.langgraph.graph import build_graph, configuration_from
 from agentic.core.process.adapters.telemetry import NoTelemetry
+from agentic.core.process.application import resume
 from agentic.core.process.application.ports import AttemptFailed
 from agentic.core.process.domain.roles import PAIR_PM_PA, PJM, PM, PRODUCT_ANALYST
 from agentic.core.process.domain.task import INTEGRATION, WAITING_ON_HUMAN
@@ -29,6 +32,7 @@ from tests.fakes import (
     classified,
     defined,
     delivered,
+    memory_ports,
     planned,
     questions,
     reviewed,
@@ -82,9 +86,13 @@ class Fakes:
 
 
 async def run_graph(script: ScriptedRunner, config, telemetry=NoTelemetry(), fakes=None):
-    """The real ports over the temporary product, with the scripted runner in place
-    of the SDK and git and GitHub in memory. `default_ports` is what the exported
-    graph uses."""
+    return await compiled(script, telemetry, fakes).ainvoke(TASK, config=config)
+
+
+def compiled(script: ScriptedRunner, telemetry=NoTelemetry(), fakes=None, saver=None):
+    """The graph with the real ports over the temporary product, the scripted runner in
+    place of the SDK, git and GitHub in memory, and a checkpointer, as the CLI compiles
+    it. `default_ports` is what the exported graph uses."""
     fakes = fakes or Fakes()
     # Every checkout "moved": Developers commit. The knowledge is read and written in
     # the memory worktree paths, which do not exist: point them at the product.
@@ -103,7 +111,7 @@ async def run_graph(script: ScriptedRunner, config, telemetry=NoTelemetry(), fak
             knowledge=_Rooted(knowledge, cfg.product_dir),
         )
 
-    return await build_graph(ports_for, telemetry).compile().ainvoke(TASK, config=config)
+    return build_graph(ports_for, telemetry).compile(checkpointer=saver or InMemorySaver())
 
 
 class _Rooted:
@@ -553,6 +561,7 @@ def test_exported_graph_uses_the_default_ports():
         "review",
         "deliver",
         "escalate",
+        "pause",
     }
 
 
@@ -612,3 +621,130 @@ async def test_a_crash_in_a_node_still_finishes_the_roles_span(config):
     assert pm.name == "PM"
     assert pm.attributes["role.outcome"] == "failed" and pm.attributes["role.cost_usd"] == 0.0
     assert pm.status.status_code.name == "ERROR"  # the exception is on the span too
+
+
+# Pause and resume (ADR-0003, addendum): an escalation pauses in `pause`, after
+# `escalate` told the human once; the answer resumes the task where it stopped.
+
+
+def two_subtasks(**queues) -> ScriptedRunner:
+    plan = planned({"id": "domain", "title": "Domain", "brief": "b", "seams": ["x"]})
+    return script_for(
+        **technical(
+            tech_lead=[plan],
+            developer=[delivered("api"), delivered("domain")],
+            developer_integrator=[delivered("merged")],
+            tech_lead_review=[reviewed("approved")] * 3,
+            **queues,
+        )
+    )
+
+
+def raised(config, **more) -> dict:
+    """The same thread with the cap the human raises on `agentic resume`."""
+    configurable = {**config["configurable"], "task_budget_usd": 100.0, **more}
+    configurable.pop("task_max_budget_usd", None)
+    return {"configurable": configurable}
+
+
+async def test_the_task_cap_pauses_the_task_and_a_raised_cap_resumes_it_to_delivery(config):
+    config["configurable"]["task_max_budget_usd"] = 0.7
+    fakes = Fakes()
+    script = two_subtasks()
+    app = compiled(script, fakes=fakes)
+
+    paused = await app.ainvoke(TASK, config=config)
+    assert paused["status"] == WAITING_ON_HUMAN
+    (waiting,) = paused["__interrupt__"]
+    assert waiting.value == {
+        "reason": "Developer stopped by the task cap: 0.86 of 0.70 USD spent",
+        "spent_usd": pytest.approx(0.86),
+        "questions": [],
+    }
+    assert (await app.aget_state(config)).next == ("pause",)
+    assert fakes.tracker.labels == [("GH-1", "needs-human")]
+    assert "`agentic resume --issue 1 --task-budget 16`" in fakes.tracker.comments[0][1]
+
+    final = await app.ainvoke(Command(resume={"decision": None}), config=raised(config))
+    assert final["status"] == "ready_for_review" and final["escalated"] is None
+    assert script.slugs[8:] == [
+        "developer",
+        "developer",
+        "tech_lead_review",
+        "tech_lead_review",
+        "developer_integrator",
+        "tech_lead_review",
+    ]
+    assert final["cost_usd"] == pytest.approx(0.86 + 0.5 * 3 + 0.2 * 3)
+    assert "Human" not in final["sections"]  # nothing was decided
+    assert len(fakes.tracker.labels) == 1  # told once: the resume did not escalate again
+    assert fakes.tracker.comments[-1][1].startswith("Ready for review")
+
+
+async def test_a_subtask_at_its_limit_resumes_with_the_decision_and_the_pair_reset(config):
+    config["configurable"]["max_returns_per_pair"] = 0
+    fakes = Fakes()
+    script = script_for(
+        **technical(
+            developer=[delivered("v1"), delivered("v2")],
+            tech_lead_review=[reviewed("returned", "no header row"), reviewed("approved")],
+        )
+    )
+    app = compiled(script, fakes=fakes)
+    paused = await app.ainvoke(TASK, config=config)
+    assert paused["escalated"] == "Tech Lead→Developer:api hit 0 returns: no header row"
+    assert paused["subtasks"]["api"]["status"] == "returned"
+
+    decision = "Ship it without the header; the auditors import by position."
+    final = await app.ainvoke(Command(resume={"decision": decision}), config=config)
+    assert final["status"] == "ready_for_review"
+    assert final["returns"] == {"Tech Lead→Developer:api": 0}
+    human = final["sections"]["Human"]
+    assert human.startswith("### Decision 1\n\nEscalated: Tech Lead→Developer:api hit 0 returns")
+    assert human.endswith(decision)
+    developer, review = script.calls[-2], script.calls[-1]
+    assert developer["slug"] == "developer" and "no header row" in developer["prompt"]
+    assert review["slug"] == "tech_lead_review" and f"## Human\n\n{human}" in review["prompt"]
+
+
+async def test_questions_for_the_human_resume_the_interview_with_the_answer(config, tmp_path):
+    fakes = Fakes()
+    script = script_for(
+        product_analyst_interviewer=[questions(1), questions(done=True)] * 2,
+        pm_interviewee=[answers(1, for_human=["Which currency?"]), answers(1)],
+        **technical(),
+    )
+    app = compiled(script, fakes=fakes)
+    paused = await app.ainvoke(TASK, config=config)
+    assert paused["questions_for_human"] == ["Which currency?"]
+
+    final = await app.ainvoke(Command(resume={"decision": "USD, always."}), config=config)
+    assert final["status"] == "ready_for_review" and final["questions_for_human"] == []
+    interviewee = script.prompts("pm_interviewee")[1]
+    assert "## Human\n\n### Decision 1" in interviewee and "USD, always." in interviewee
+    assert "USD, always." in FilesystemTaskDocuments(tmp_path).load("GH-1")["sections"]["Human"]
+
+
+async def test_a_task_seeded_from_its_document_resumes_like_a_checkpoint(config, tmp_path):
+    # The rescue path: the checkpoint is gone, the document and git are what is left.
+    config["configurable"]["task_max_budget_usd"] = 0.7
+    fakes = Fakes()
+    script = two_subtasks()
+    await compiled(script, fakes=fakes).ainvoke(TASK, config=config)
+
+    # The Developers the cap stopped had their branches created already.
+    fakes.workspace.branches.update(
+        {"agentic/GH-1": ("t1", "base0"), "agentic/GH-1.api": ("base1", "base1")}
+    )
+    fakes.workspace.branches["agentic/GH-1.domain"] = ("base1", "base1")
+    ports = replace(memory_ports(), documents=FilesystemTaskDocuments(tmp_path))
+    ports = replace(ports, workspace=fakes.workspace)
+    state = resume.from_document("GH-1", ports)
+    app = compiled(script, fakes=fakes)  # a new, empty checkpointer
+    await app.aupdate_state(config, state, as_node="escalate")
+    final = await app.ainvoke(Command(resume={"decision": None}), config=raised(config))
+
+    assert final["status"] == "ready_for_review"
+    assert final["cost_usd"] == pytest.approx(0.86 + 0.5 * 3 + 0.2 * 3)
+    assert len(final["runs"]) == 8 + 6  # the document's runs, then the resumed ones
+    assert len(fakes.tracker.labels) == 1

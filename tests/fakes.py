@@ -51,6 +51,10 @@ class MemoryDocuments:
     def path_for(self, task_id: str) -> Path:
         return Path(f"/memory/.agentic/tasks/{task_id}.md")
 
+    def load(self, task_id: str) -> dict | None:
+        mine = [s for s in self.saved if s["id"] == task_id]
+        return dict(mine[-1]) if mine else None
+
     @property
     def last(self) -> TaskState:
         return self.saved[-1]
@@ -115,11 +119,18 @@ class MemoryInbox:
     def task(self, number: int) -> TaskInput:
         return self.issues[str(number)]
 
+    def task_id(self, number: int) -> str:
+        return f"GH-{number}"
+
+    def issue_of(self, task_id: str) -> int | None:
+        return int(task_id[3:]) if task_id.startswith("GH-") else None
+
 
 class MemoryWorkspace:
     """Branches and worktrees as names. A Developer's commit is simulated by adding
     its checkout path to `moved` before the run: `head` then differs from the base.
-    A path in `dirty` has uncommitted changes."""
+    A path in `dirty` has uncommitted changes. `branches` maps an existing branch to
+    (head, base) for the checks of a resume; `checkouts` are the worktrees on disk."""
 
     ROOT = Path("/memory/worktrees")
 
@@ -131,6 +142,9 @@ class MemoryWorkspace:
         self.pushed: list[str] = []
         self.cleaned: list[str] = []
         self._looks: dict[Path, int] = {}
+        self.branches: dict[str, tuple[str, str]] = {}
+        self.checkouts: list[Path] = []
+        self.pruned = 0
 
     def task_checkout(self, task_id: str) -> Checkout:
         return Checkout(rules.task_branch(task_id), self.ROOT / task_id, "base0")
@@ -162,6 +176,18 @@ class MemoryWorkspace:
     def cleanup(self, task_id: str) -> None:
         self.cleaned.append(task_id)
 
+    def branch_head(self, branch: str) -> str | None:
+        return self.branches[branch][0] if branch in self.branches else None
+
+    def base_of(self, branch: str) -> str | None:
+        return self.branches[branch][1] if branch in self.branches else None
+
+    def worktrees(self, task_id: str) -> list[Path]:
+        return list(self.checkouts)
+
+    def prune(self) -> None:
+        self.pruned += 1
+
 
 class MemoryTracker:
     def __init__(self, url: str = "https://github.com/o/r/pull/7"):
@@ -169,6 +195,9 @@ class MemoryTracker:
         self.pull_requests: list[tuple[str, str, str]] = []
         self.comments: list[tuple[str, str]] = []
         self.labels: list[tuple[str, str]] = []
+        self.unlabeled: list[tuple[str, str]] = []
+        # Bodies of the issue's comments before the run, oldest first.
+        self.earlier: list[str] = []
 
     def open_pull_request(self, task_id: str, branch: str, title: str, body: str) -> str:
         self.pull_requests.append((branch, title, body))
@@ -179,6 +208,13 @@ class MemoryTracker:
 
     def label(self, task_id: str, label: str) -> None:
         self.labels.append((task_id, label))
+
+    def unlabel(self, task_id: str, label: str) -> None:
+        self.unlabeled.append((task_id, label))
+
+    def last_comment(self, task_id: str) -> str | None:
+        bodies = [*self.earlier, *(text for _, text in self.comments)]
+        return bodies[-1] if bodies else None
 
 
 def memory_ports(runner: ScriptedRunner | None = None, **overrides) -> Ports:

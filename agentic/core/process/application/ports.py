@@ -70,6 +70,11 @@ class TaskDocuments(Protocol):
 
     def path_for(self, task_id: str) -> Path: ...
 
+    def load(self, task_id: str) -> dict | None:
+        """The document as its frontmatter and sections say, raw: what the system records
+        beyond the state (plugins, system commit) comes along. None when there is none."""
+        ...
+
 
 class ProductKnowledge(Protocol):
     """The distilled knowledge of the product (ADR-0006), stored with the human docs.
@@ -109,6 +114,14 @@ class Inbox(Protocol):
     """Where tasks come from: the product's GitHub issues (README.md, 5)."""
 
     def task(self, number: int) -> TaskInput: ...
+
+    def task_id(self, number: int) -> str:
+        """The id of the task issue `number` becomes, without reading the issue."""
+        ...
+
+    def issue_of(self, task_id: str) -> int | None:
+        """The issue a task came from; None for a task that did not come from one."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -150,6 +163,23 @@ class Workspace(Protocol):
         """Remove the task's worktrees. The branches stay."""
         ...
 
+    def branch_head(self, branch: str) -> str | None:
+        """The short commit `branch` points at; None when the branch does not exist."""
+        ...
+
+    def base_of(self, branch: str) -> str | None:
+        """The commit `branch` started from, as recorded when the system created it."""
+        ...
+
+    def worktrees(self, task_id: str) -> list[Path]:
+        """The task's checkouts that are on disk."""
+        ...
+
+    def prune(self) -> None:
+        """Forget checkouts whose directory is gone, so asking for them again recreates
+        them: a resume after the human removed a worktree."""
+        ...
+
 
 class Tracker(Protocol):
     """Where the human is told (ADR-0011): the pull request, the issue's comments and
@@ -164,6 +194,13 @@ class Tracker(Protocol):
     def comment(self, task_id: str, text: str) -> None: ...
 
     def label(self, task_id: str, label: str) -> None: ...
+
+    def unlabel(self, task_id: str, label: str) -> None: ...
+
+    def last_comment(self, task_id: str) -> str | None:
+        """The body of the issue's latest comment, whoever wrote it; None when there is
+        none or no issue."""
+        ...
 
 
 @dataclass(frozen=True)

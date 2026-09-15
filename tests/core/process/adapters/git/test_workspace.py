@@ -122,3 +122,32 @@ def test_a_checkout_is_clean_only_without_changes_tracked_or_not(product):
     assert ws.is_clean(task.path)
     (task.path / "README.md").write_text("v1\n")
     assert not ws.is_clean(task.path)
+
+
+def test_what_a_resume_checks_against_git(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    api = ws.subtask_checkout("GH-12", "api")
+    assert ws.branch_head("agentic/GH-12") == git("rev-parse", "--short", "HEAD", cwd=task.path)
+    assert ws.branch_head("agentic/GH-99") is None
+    assert ws.base_of(api.branch) == api.base and ws.base_of("master") is None
+    assert ws.worktrees("GH-12") == [task.path, api.path]
+    # A worktree removed by hand is forgotten by `prune`, and asking again recreates it.
+    subprocess.run(["rm", "-rf", str(api.path)], check=True)
+    ws.prune()
+    assert ws.worktrees("GH-12") == [task.path]
+    assert ws.subtask_checkout("GH-12", "api") == api and api.path.is_dir()
+
+
+def test_the_checkpointer_file_stays_out_of_the_products_status(product, tmp_path):
+    ws = GitWorkspace(product, IDENTITY)
+    ws.exclude_system_files()
+    ws.exclude_system_files()  # once each
+    (product / ".agentic").mkdir()
+    (product / ".agentic/state.sqlite").write_text("x")
+    (product / ".agentic/state.sqlite-journal").write_text("x")
+    assert git("status", "--porcelain", cwd=product) == ""
+    exclude = (product / ".git/info/exclude").read_text().splitlines()
+    assert exclude.count(".agentic/state.sqlite*") == 1
+    (tmp_path / "not-a-repo").mkdir()
+    GitWorkspace(tmp_path / "not-a-repo", IDENTITY).exclude_system_files()  # nothing to do

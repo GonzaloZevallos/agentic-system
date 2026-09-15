@@ -257,6 +257,10 @@ async def test_review_escalates_when_the_pair_hits_its_limit(cfg):
     assert patch["status"] == "waiting_on_human"
     assert patch["escalated"] == "Tech Lead→Developer:api hit 2 returns: still"
     assert "returns" not in patch and "return_history" not in patch
+    # Returned without counting, so the human's answer sends it back to its Developer.
+    api = patch["subtasks"]["api"]
+    assert api["status"] == "returned" and api["reason"] == "still"
+    assert api["return_category"] == "spec-behaviour" and api["reviewed_head"] == "base"
 
 
 async def test_a_review_whose_only_block_has_no_evidence_approves(cfg):
@@ -325,3 +329,30 @@ async def test_escalate_labels_and_comments_with_the_questions(cfg):
     text = ports.tracker.comments[0][1]
     assert text.startswith("Escalated: PM could not decide") and "1. Currency?" in text
     assert await escalate(TASK, cfg, ports) == {} and len(ports.tracker.labels) == 1
+
+
+async def test_an_escalation_by_the_task_cap_breaks_the_spending_down_and_proposes_a_cap(cfg):
+    state = {
+        **TASK,
+        "escalated": "Developer stopped by the task cap: 106.27 of 100.00 USD spent",
+        "cost_usd": 106.27,
+        "runs": [
+            {"role": "PM", "section": "PM", "cost_usd": 2.27},
+            {"role": "Developer", "section": "Developer: api", "cost_usd": 40.0},
+            {"role": "Tech Lead", "section": "Tech Lead: review api", "cost_usd": 64.0},
+        ],
+    }
+    ports = memory_ports()
+    await escalate(state, cfg, ports)
+    text = ports.tracker.comments[0][1]
+    assert "Spent by phase:\n\n- definition: 2.27 USD\n- plan: 0.00 USD" in text
+    assert "- development: 40.00 USD\n- review: 64.00 USD" in text
+    assert text.endswith("then run `agentic resume --issue 12 --task-budget 122`.")
+    # Any other escalation says how to resume, without a cap to raise.
+    ports = memory_ports()
+    await escalate({**TASK, "escalated": "PM could not decide"}, cfg, ports)
+    assert "Spent by phase" not in ports.tracker.comments[0][1]
+    assert ports.tracker.comments[0][1].endswith("`agentic resume --issue 12`.")
+    ports = memory_ports()
+    await escalate({**state, "id": "T-1"}, cfg, ports)  # no issue, no command to resume it
+    assert "agentic resume" not in ports.tracker.comments[0][1]

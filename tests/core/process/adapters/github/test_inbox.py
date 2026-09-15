@@ -31,6 +31,12 @@ def test_issue_feeds_title_body_and_id(monkeypatch, tmp_path):
     assert kwargs["cwd"] == tmp_path  # gh resolves the repo from the product checkout
 
 
+def test_the_task_id_and_the_issue_map_both_ways_without_gh(tmp_path):
+    inbox = GhInbox(tmp_path)
+    assert inbox.task_id(12) == "GH-12" and inbox.issue_of("GH-12") == 12
+    assert inbox.issue_of("T-abc") is None
+
+
 def test_issue_without_body_is_rejected(monkeypatch, tmp_path):
     fake_gh(monkeypatch, stdout=json.dumps({"title": "Empty", "body": None}))
     with pytest.raises(ValueError, match="no body"):

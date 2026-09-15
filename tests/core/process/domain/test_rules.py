@@ -1,8 +1,10 @@
-from agentic.core.process.domain import rules
+from agentic.core.process.domain import rules, task
 from agentic.core.process.domain.roles import PAIR_PM_PA
+from agentic.core.process.domain.task import INTEGRATION
 
 PAIR = PAIR_PM_PA
 KEY = PAIR.key
+DEF = {"pair": KEY, "category": "definition", "reason": "gap"}
 
 
 def test_remaining_returns_counts_down_from_the_limit():
@@ -117,3 +119,114 @@ def test_a_return_is_recorded_with_its_category_for_the_history():
         "category": "definition",
         "reason": "no metrics",
     }
+
+
+# The task cap and the phases (ADR-0004, fourth addendum).
+
+
+def subtasks(*ids):
+    return {"subtasks": {sid: {"id": sid, "status": "pending"} for sid in ids}}
+
+
+def test_the_task_cap_is_the_base_until_the_plan_then_grows_with_its_units():
+    assert rules.task_cap({}, 30, 15, 250) == 30
+    assert rules.task_cap(subtasks("api"), 30, 15, 250) == 45  # one subtask, no integration
+    assert rules.work_units(subtasks("api", "domain")) == 3  # the integration counts ahead
+    assert rules.work_units(subtasks("api", "domain", INTEGRATION)) == 3  # and only once
+    assert rules.task_cap(subtasks(*[f"s{n}" for n in range(12)]), 30, 15, 180) == 180
+
+
+def test_a_cap_escalation_is_recognised_and_proposes_one_more_unit():
+    reason = rules.cap_reached("Developer", 106.27, 100)
+    assert reason == "Developer stopped by the task cap: 106.27 of 100.00 USD spent"
+    assert rules.stopped_by_cap(reason) and not rules.stopped_by_cap("PM hit 2 returns: x")
+    assert rules.suggested_budget({"cost_usd": 106.27}, 15) == 122
+
+
+def test_spent_by_phase_sums_the_runs_by_section_and_keeps_what_they_miss():
+    runs = [
+        {"role": "PjM", "section": "PjM", "cost_usd": 0.5},
+        {"role": "PM", "section": "PM", "cost_usd": 1.0},
+        {"role": "Tech Lead", "section": "Interview: Tech Lead efímero→Tech Lead", "cost_usd": 2},
+        {"role": "Tech Lead", "section": "Tech Lead", "cost_usd": 1.0},
+        {"role": "Developer", "section": "Developer: api", "cost_usd": 3.0},
+        {"role": "Tech Lead", "section": "Tech Lead: review api", "cost_usd": 4.0},
+    ]
+    assert rules.spent_by_phase({"runs": runs, "cost_usd": 11.5}) == {
+        "definition": 1.5,
+        "plan": 3.0,
+        "development": 3.0,
+        "review": 4.0,
+    }
+    assert rules.spent_by_phase({"runs": runs, "cost_usd": 12.5})["other"] == 1.0
+
+
+# Pause and resume (ADR-0003, addendum).
+
+
+def run(role, section=None):
+    return {"role": role, "section": section or role, "cost_usd": 0.1}
+
+
+def test_the_status_before_the_escalation_is_derived_from_the_definition_runs():
+    interview = run("PM", "Interview: Product Analyst→PM")
+    assert rules.resumed_status({"runs": [run("PjM"), interview]}) == "open"
+    assert rules.resumed_status({"runs": [run("Product Analyst")]}) == "defined"
+    returned = {"runs": [run("Product Analyst"), run("PM")], "return_history": [DEF]}
+    assert rules.resumed_status(returned) == "returned"
+    approved = {"runs": [run("Product Analyst"), run("PM")]}
+    assert rules.resumed_status(approved) == "definition_ready"
+    # The last return, at the limit, is not counted, but the reason says it happened.
+    at_limit = {**approved, "escalated": rules.limit_reached(PAIR, 2, "gap")}
+    assert rules.resumed_status(at_limit) == "returned"
+    # A document from before the history has only the counter.
+    assert rules.resumed_status({**approved, "returns": {KEY: 1}}) == "returned"
+    assert rules.resumed_status(subtasks("api")) == "planned"
+    assert rules.resumed_status({"subtasks": {"api": {"status": "delivered"}}}) == "developing"
+
+
+def test_resuming_clears_the_escalation_resets_the_pair_and_keeps_the_decision():
+    state = {
+        "status": "waiting_on_human",
+        "escalated": "Tech Lead→Developer:api hit 2 returns: still",
+        "questions_for_human": ["Which currency?"],
+        "subtasks": {"api": {"id": "api", "status": "returned"}},
+    }
+    patch = rules.resumed(state, "  Keep USD.\n\n## Why\n\nAudits.  ")
+    assert patch["escalated"] is None and patch["status"] == "developing"
+    assert patch["questions_for_human"] == []
+    assert patch["returns"] == {"Tech Lead→Developer:api": 0}
+    assert patch["sections"]["Human"] == (
+        "### Decision 1\n\nEscalated: Tech Lead→Developer:api hit 2 returns: still\n\n"
+        "Keep USD.\n\n### Why\n\nAudits."
+    )
+    again = rules.human_section({"sections": {"Human": patch["sections"]["Human"]}}, "x", "Go")
+    assert again.startswith("### Decision 1") and again.endswith(
+        "### Decision 2\n\nEscalated: x\n\nGo"
+    )
+    assert "returns" not in rules.resumed(
+        {"escalated": "PjM stopped by the task cap: 1 of 1"}, None
+    )
+    assert "sections" not in rules.resumed({}, "   ")
+
+
+def test_resuming_adds_the_integration_the_review_did_not_get_to_add():
+    state = {"subtasks": {"api": {"status": "approved"}, "domain": {"status": "approved"}}}
+    patch = rules.resumed(state, None)
+    assert patch["subtasks"] == {INTEGRATION: rules.integration_subtask()}
+    assert rules.resume_target(task.apply(state, patch)) == "develop"
+
+
+def test_the_resume_target_follows_the_state():
+    assert rules.resume_target({"escalated": "x", "status": "defined"}) is None
+    assert rules.resume_target({"status": "open"}) == "classify"
+    assert rules.resume_target({"status": "open", "type": "bug"}) == "classify"
+    assert rules.resume_target({"status": "open", "type": "feature"}) == "define"
+    assert rules.resume_target({"status": "defined"}) == "validate"
+    assert rules.resume_target({"status": "returned"}) == "define"
+    assert rules.resume_target({"status": "definition_ready"}) == "plan"
+    both = {"api": {"status": "delivered"}, "domain": {"status": "pending"}}
+    assert rules.resume_target({"subtasks": both}) == "review"  # the delivery first
+    assert rules.resume_target({"subtasks": {"api": {"status": "returned"}}}) == "develop"
+    assert rules.resume_target({"subtasks": {"api": {"status": "approved"}}}) == "deliver"
+    assert rules.resume_target({"pull_request": "u", "subtasks": both}) is None

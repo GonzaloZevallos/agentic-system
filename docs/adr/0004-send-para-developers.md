@@ -95,3 +95,31 @@ intento es lo que acota el desborde en paralelo.
 
 Fuera de esta adenda: cada devolución de Tech Lead abre una sesión nueva del Developer que
 relee el worktree, la otra palanca grande de costo.
+
+## Adenda (2026-09-15, cuarta): tope de tarea base más proporcional, y alcanzarlo pausa
+
+La cuarta corrida de GH-12 escaló por el tope fijo de 100 USD con 106.27 gastados, las siete
+subtareas aprobadas y la integración devuelta, a un Developer y una revisión del pull
+request (issues #15 y #21). El tope estaba calibrado para cinco subtareas y el plan tuvo
+siete más la integración: un número fijo no sabe cuánto trabajo tiene la tarea.
+
+**El tope crece con el plan.** Antes del plan es la base; después,
+`min(techo, base + por_subtarea × unidades)`, donde las unidades son las subtareas más la
+integración cuando hay más de una, contada desde que existe el plan
+(`rules.task_cap`). `run_role` lo lee del estado en cada intento, así sube apenas entra el
+plan. `Configuration`: `task_budget_base_usd` 30, `task_budget_per_subtask_usd` 15 y
+`task_max_budget_usd` pasa a ser el techo absoluto, 250. `plan_check` fija un máximo de 12
+subtareas, para que el plan no suba el tope sin límite. Los números salen de la corrida 4
+y **se recalibran tras la primera corrida con el issue #18 aplicado**, que debería costar
+35-45 USD.
+
+**Alcanzarlo escala y pausa** (ADR-0003, adenda): ya no tira la corrida. El comentario del
+issue trae lo gastado por fase (definición, plan, desarrollo, revisión, sumando `runs` por
+sección, y `other` para los intentos fallidos que escalaron) y la línea
+`agentic resume --issue N --task-budget X`, con X lo gastado más una subtarea. El humano
+decide: `--task-budget` fija el tope de esa corrida y reemplaza fórmula y techo
+(`task_budget_usd`); `resume` rechaza reanudar si el tope en vigor no supera lo gastado.
+
+Descartados: releer el tope en caliente durante la corrida (rompe el versionado de
+parámetros, pendiente 15 del README) y cuatro topes por fase (la fórmula ya lo expresa; la
+fase solo se reporta).

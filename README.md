@@ -178,11 +178,19 @@ El validador **reporta** cada devolución a PjM, y cuentan para el límite.
 
 ### Tope de tarea
 
-El acumulado de una corrida tiene tope: **100 USD** por default,
-`AGENTIC_TASK_MAX_BUDGET_USD`. Se mira antes de cada intento de cualquier rol; alcanzado,
-el sistema escala al humano con el total gastado y el tope como motivo, en vez de seguir.
-No es fallo de rol ni devolución y no cuenta para ningún límite. Como el tope por intento,
-es red de seguridad, bien arriba de lo que cuesta una tarea sana, no presupuesto de
+El acumulado de una corrida tiene tope, y crece con el plan: **30 USD** de base hasta que
+hay plan; después, base más **15 USD por subtarea**, con la integración contada, nunca por
+encima del techo de **250 USD** (`AGENTIC_TASK_BUDGET_BASE_USD`,
+`AGENTIC_TASK_BUDGET_PER_SUBTASK_USD`, `AGENTIC_TASK_MAX_BUDGET_USD`). Un plan tiene como
+mucho 12 subtareas. Los números salen de la cuarta corrida de GH-12 y se recalibran tras la
+primera corrida sin la fuga de MCP (issue #18).
+
+Se mira antes de cada intento de cualquier rol; alcanzado, el sistema escala al humano con
+el total gastado y el tope como motivo, y la tarea **pausa** (sección 14). El comentario del
+issue trae lo gastado por fase y la línea `agentic resume --issue N --task-budget X`: subir
+el tope es decisión del humano, y `--task-budget` fija el de esa corrida en lugar de la
+fórmula. No es fallo de rol ni devolución y no cuenta para ningún límite. Como el tope por
+intento, es red de seguridad, bien arriba de lo que cuesta una tarea sana, no presupuesto de
 trabajo. En paralelo cada rama ve el total al momento del fan-out, así que el desborde
 queda acotado por el tope por intento, y el escalado sale uno solo (ADR-0004, adendas).
 
@@ -192,12 +200,14 @@ El humano revisa **en lote, una vez por día**. Los escalados se acumulan y no i
 Una tarea escalada queda pausada y se retoma desde el mismo punto cuando el humano responde,
 con el contador de ese par reseteado.
 
-La cola no se construye: es la **etiqueta `needs-human`** en el issue, más el historial de
-devoluciones en un comentario. Revisar es filtrar por esa etiqueta. Responder es sacarla y
-dejar la decisión en un comentario.
+La cola no se construye: es la **etiqueta `needs-human`** en el issue, más el motivo, las
+preguntas y cómo reanudar en un comentario. Revisar es filtrar por esa etiqueta. Responder es
+dejar la decisión en un comentario y correr `agentic resume --issue N`, que saca la etiqueta,
+muestra qué va a reanudar y lo gastado, y sigue. La decisión entra al documento como sección
+`Human`, que PM y Tech Lead leen.
 
 Esto exige estado durable del lado del sistema: el grafo se frena, el estado sobrevive al
-proceso, y la respuesta del humano lo reanuda donde estaba.
+proceso en un checkpointer, y la respuesta del humano lo reanuda donde estaba (ADR-0003).
 
 ### Fallo de rol
 
@@ -774,7 +784,8 @@ Se anotan para no reintroducirlas por error.
 | Los roles no tienen skills; solo prompt y esquema | Skills de Matt Pocock fijadas como submódulo; solo las invocables por un agente, dos obligatorias: `tdd` y `code-review` (ADR-0013) |
 | La corrida termina cuando el último rol entrega | Termina en un pull request del producto, lista para revisión; el issue recibe el link (ADR-0011) |
 | El tope de costo por intento es solo del Developer | Es de todo rol, `AGENTIC_MAX_BUDGET_USD`; los subagentes de cualquier rol corren en Sonnet (ADR-0004 y ADR-0013, adendas) |
-| El único tope de costo es por intento | Hay también un tope de tarea sobre el acumulado, 100 USD, `AGENTIC_TASK_MAX_BUDGET_USD`, que escala en vez de seguir (ADR-0004, adenda tercera) |
+| El único tope de costo es por intento | Hay también un tope de tarea sobre el acumulado, que escala en vez de seguir (ADR-0004, adenda tercera) |
+| Tope de tarea fijo en 100 USD, y escalar termina la corrida | Base más proporcional por subtarea con techo, y alcanzarlo pausa: el humano sube el tope y reanuda (ADR-0004, adenda cuarta; ADR-0003, adenda) |
 | Cada revisión del Tech Lead arranca desde la base de la subtarea | La primera sí; después de una devolución es incremental, desde el head ya revisado (ADR-0015) |
 | Tech Lead revisa de solo lectura, sin correr tests, y escribe el veredicto con un motivo libre | Corre los tests que respaldan cada objeción; entrega hallazgos con evidencia y categoría, y el veredicto se deriva de los bloqueantes (ADR-0016) |
 | Todo lo que ni el pedido ni el conocimiento resuelven va al humano, y una pregunta registrada no se retira | Va solo lo que deja la definición indecidible; el resto es un supuesto en la respuesta. El dueño de la decisión retira por número lo que una ronda posterior resuelve (ADR-0014, adenda tercera) |
@@ -866,14 +877,26 @@ en el esquema el modelo las escribía como texto suelto o `<item>` y el JSON no 
 - `subtasks` es un mapa por id con reducer de override por clave: cada Developer patchea la
   suya. `branch`, `pull_request` y `questions_for_human` son campos planos. La conversación
   interna de cada Developer no entra al estado: queda en su sesión (ADR-0004).
-- `thread_id` es el id de la tarea. Checkpointer SqliteSaver en el producto (ADR-0003).
+- `thread_id` es el id de la tarea. Checkpointer `AsyncSqliteSaver` en
+  `.agentic/state.sqlite` del producto (ADR-0003).
 
 ### Pausa y reanudación
 
-Escalado con `interrupt()`, reanudación con `Command(resume=decisión)` (ADR-0003). La CLI
-`agentic resume` busca tareas pausadas cuyo issue ya no tiene `needs-human`, lee el último
-comentario y reanuda. En la etapa 5 la reemplaza un poller con reloj propio, que es el mismo
-mecanismo que necesitan los roles proactivos.
+Escalado con `interrupt()`, reanudación con `Command(resume={"decision": texto})`
+(ADR-0003 y su adenda). El `interrupt()` vive en `pause`, un nodo sin efectos después de
+`escalate`: LangGraph reanuda un nodo desde su comienzo, así que dentro de un caso de uso
+volvería a pagar el rol y dentro de `escalate` volvería a comentar el issue. Con la
+respuesta, `pause` devuelve el patch de reanudación (`rules.resumed`) y el ruteo va a donde el
+estado dice que se frenó (`rules.resume_target`).
+
+`agentic resume --issue N [--task-budget X] [--from-document] [--dry-run] [--yes]` usa el
+checkpoint; toma como decisión el último comentario del issue que no escribió el sistema, y
+con preguntas pendientes sin respuesta sale con 1. Antes de gastar muestra la tarea, dónde se
+frenó, el motivo, lo gastado por fase, el tope, qué reanuda, las sesiones y los worktrees, y
+pide confirmación. `--from-document` es el rescate: siembra el estado desde el documento,
+cruzado con git, como si `escalate` acabara de correr. `agentic run` se niega a arrancar
+sobre una tarea con estado salvo `--fresh`. En la etapa 5 un poller con reloj propio llama a
+`resume`, que es el mismo mecanismo que necesitan los roles proactivos.
 
 ### Fallo de rol
 

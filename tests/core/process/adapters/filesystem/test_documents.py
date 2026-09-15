@@ -11,6 +11,7 @@ def test_save_then_load_in_the_product_repo(tmp_path):
     assert loaded["id"] == "T-1" and loaded["sections"] == {"PjM": "ok"}
     # The system's own commit goes into the frontmatter (ADR-0005).
     assert loaded["system_commit"] == system_commit()
+    assert documents.load("T-2") is None  # no document yet: nothing to resume from
 
 
 def test_system_commit_is_a_short_hash_or_none():

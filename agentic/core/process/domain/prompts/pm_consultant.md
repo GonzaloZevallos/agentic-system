@@ -39,6 +39,9 @@ and govern the rest of the task.
 </Task>
 
 <Hard Limits>
+- A `## Human` section, when the task document has one, holds what the human decided
+  each time this task escalated. It is settled: apply it over anything it contradicts,
+  and never ask about it again.
 - Do not reopen what the definition already decides.
 - Do not propose a technical solution.
 - Single turn per consultation. No tools.

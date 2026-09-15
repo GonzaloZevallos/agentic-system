@@ -130,7 +130,15 @@ Devolución que se resuelve dentro del par sin pasar por PjM. Se reporta a PjM i
 Máximo de devoluciones por par antes de escalar. Hoy 2.
 
 **Escalado**:
-Entrega de la tarea al humano por PjM, con historial y motivo. Pausa la tarea.
+Lo que un rol, un par o el tope dejan dicho cuando la tarea no puede seguir sin el humano: el motivo, y las preguntas si las hay. El sistema lo entrega al humano en el issue y pausa la tarea.
+
+**Pausa**:
+Una tarea escalada queda esperando al humano con su estado guardado, sin gastar. Se retoma desde el mismo punto.
+_Avoid_: bloqueo, espera
+
+**Reanudación**:
+El humano responde, si hay algo que decidir, y la tarea sigue desde donde se pausó: su decisión entra al documento, el contador del par que llegó al límite vuelve a cero, y nada se reanuda bajo un tope ya gastado. Si el estado guardado se perdió, se reconstruye desde el documento de tarea, cruzado con git.
+_Avoid_: reintento (eso es tras un fallo de rol), relanzar (eso es empezar de cero)
 
 **Fallo de rol**:
 El rol se rompe: su ejecución falla, se le acaban los turnos sin resultado, la salida estructurada falta o es inválida, el `markdown` está vacío. Distinto de devolución; no cuenta para el límite.
@@ -144,7 +152,7 @@ Gasto máximo de un intento de cualquier rol. Excederlo es un fallo de rol. Red 
 _Avoid_: presupuesto (eso sería lo que se espera gastar)
 
 **Tope de tarea**:
-Gasto acumulado de una corrida a partir del cual el sistema escala en vez de seguir. Se mira antes de cada intento de cualquier rol. No es fallo de rol ni devolución y no cuenta para ningún límite. Como el tope por intento, es red de seguridad, bien arriba de lo que cuesta una tarea sana. Hoy 100 USD.
+Gasto acumulado de una tarea a partir del cual el sistema escala y pausa en vez de seguir. Crece con el plan: una base hasta que hay plan, después la base más una parte por subtarea, integración incluida, con un techo. Se mira antes de cada intento de cualquier rol. Subirlo al reanudar es decisión del humano. No es fallo de rol ni devolución y no cuenta para ningún límite. Como el tope por intento, es red de seguridad, bien arriba de lo que cuesta una tarea sana. Hoy 30 USD de base, 15 por subtarea, techo 250.
 _Avoid_: presupuesto de tarea
 
 **Handoff**:

@@ -11,6 +11,7 @@ from agentic.core.process.application.run_role import (
     context_for,
     run_role,
     run_with_retry,
+    task_cap,
 )
 from agentic.core.process.domain.roles import PJM, PM, PRODUCT_ANALYST
 from agentic.shared.configuration import Configuration
@@ -21,7 +22,7 @@ pytestmark = pytest.mark.anyio
 OK = classified(cost=0.03)
 
 
-async def run_pjm(runner, retries=1, check=None, spent_usd=0.0, task_max_budget_usd=None):
+async def run_pjm(runner, retries=1, check=None, spent_usd=0.0, task_cap_usd=None):
     return await run_with_retry(
         PJM,
         "task",
@@ -33,7 +34,7 @@ async def run_pjm(runner, retries=1, check=None, spent_usd=0.0, task_max_budget_
         runner=runner,
         check=check,
         spent_usd=spent_usd,
-        task_max_budget_usd=task_max_budget_usd,
+        task_cap_usd=task_cap_usd,
     )
 
 
@@ -90,7 +91,7 @@ async def test_the_task_cap_stops_a_role_before_its_first_attempt():
     # The task already spent the cap: nothing else runs, and it is not a role failure.
     runner = ScriptedRunner(pjm=[OK])
     with pytest.raises(TaskCapReached) as info:
-        await run_pjm(runner, spent_usd=100.0, task_max_budget_usd=100.0)
+        await run_pjm(runner, spent_usd=100.0, task_cap_usd=100.0)
     assert runner.calls == []
     assert info.value.failures == [] and info.value.cost_usd == 0.0
     assert str(info.value) == "PjM stopped by the task cap: 100.00 of 100.00 USD spent"
@@ -101,7 +102,7 @@ async def test_the_task_cap_counts_a_failed_attempt_before_the_retry():
     # could cost another attempt cap, does not happen. The failure is kept.
     runner = ScriptedRunner(pjm=[AttemptFailed("cut", 1.5, session_id="s"), OK])
     with pytest.raises(TaskCapReached) as info:
-        await run_pjm(runner, spent_usd=9.0, task_max_budget_usd=10.0)
+        await run_pjm(runner, spent_usd=9.0, task_cap_usd=10.0)
     assert len(runner.calls) == 1
     assert [f["error"] for f in info.value.failures] == ["cut"]
     assert info.value.cost_usd == pytest.approx(1.5)
@@ -109,7 +110,7 @@ async def test_the_task_cap_counts_a_failed_attempt_before_the_retry():
 
 
 async def test_under_the_task_cap_the_role_runs_as_usual():
-    out = await run_pjm(ScriptedRunner(pjm=[OK]), spent_usd=99.0, task_max_budget_usd=100.0)
+    out = await run_pjm(ScriptedRunner(pjm=[OK]), spent_usd=99.0, task_cap_usd=100.0)
     assert out.cost_usd == pytest.approx(0.03)
 
 
@@ -246,7 +247,7 @@ async def test_run_role_turns_a_role_failure_into_an_escalation(tmp_path):
 
 
 async def test_run_role_escalates_when_the_task_cap_is_reached(tmp_path):
-    cfg = Configuration(product_dir=tmp_path, task_max_budget_usd=50.0)
+    cfg = Configuration(product_dir=tmp_path, task_budget_usd=50.0)
     runner = ScriptedRunner(pjm=[OK])
     output, patch = await run_role(
         {"id": "T-1", "title": "t", "description": "d", "cost_usd": 50.0},
@@ -259,3 +260,16 @@ async def test_run_role_escalates_when_the_task_cap_is_reached(tmp_path):
     assert patch["escalated"] == "PjM stopped by the task cap: 50.00 of 50.00 USD spent"
     assert patch["failures"] == [] and patch["cost_usd"] == 0.0
     assert "sections" not in patch and "runs" not in patch
+
+
+def test_the_task_cap_in_force_grows_with_the_plan_and_the_human_overrides_it(tmp_path):
+    # ADR-0004, fourth addendum: the base until there is a plan, then a share per
+    # subtask with the integration counted, never over the ceiling.
+    cfg = Configuration(product_dir=tmp_path)
+    state = {"id": "T-1", "title": "t", "description": "d"}
+    assert task_cap(state, cfg) == 30.0
+    two = {**state, "subtasks": {"api": {}, "domain": {}}}
+    assert task_cap(two, cfg) == 30.0 + 15.0 * 3
+    many = {**state, "subtasks": {f"s{n}": {} for n in range(20)}}
+    assert task_cap(many, cfg) == 250.0
+    assert task_cap(many, Configuration(product_dir=tmp_path, task_budget_usd=400.0)) == 400.0

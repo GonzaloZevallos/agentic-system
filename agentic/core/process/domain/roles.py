@@ -17,7 +17,7 @@ from pathlib import Path
 
 from agentic.shared.configuration import RoleKind
 
-from .document import ORIGINAL  # pseudo-section every role may declare: the task as it entered
+from .document import HUMAN, ORIGINAL  # ORIGINAL: pseudo-section, the task as it entered
 from .schemas import (
     Answers,
     Classification,
@@ -155,7 +155,7 @@ PM_INTERVIEWEE = Role(
     slug="pm_interviewee",
     kind="validator",
     schema=Answers,
-    reads=(ORIGINAL,),
+    reads=(ORIGINAL, HUMAN),
     reads_knowledge=True,
 )
 
@@ -177,7 +177,7 @@ PM = Role(
     slug="pm",
     kind="validator",
     schema=Verdict,
-    reads=(ORIGINAL, DEFINITION_INTERVIEW, "Product Analyst", "PM"),
+    reads=(ORIGINAL, DEFINITION_INTERVIEW, "Product Analyst", "PM", HUMAN),
     reads_knowledge=True,
 )
 
@@ -202,7 +202,7 @@ TECH_LEAD_INTERVIEWEE = Role(
     slug="tech_lead_interviewee",
     kind="validator",
     schema=TechAnswers,
-    reads=(ORIGINAL, "PM"),
+    reads=(ORIGINAL, "PM", HUMAN),
     reads_knowledge=True,
     reads_standards=True,
     tools=READ_CODE,
@@ -219,7 +219,7 @@ PM_CONSULTANT = Role(
     slug="pm_consultant",
     kind="validator",
     schema=Consultation,
-    reads=(ORIGINAL, DEFINITION_INTERVIEW, "Product Analyst", "PM"),
+    reads=(ORIGINAL, DEFINITION_INTERVIEW, "Product Analyst", "PM", HUMAN),
     reads_knowledge=True,
 )
 
@@ -228,7 +228,7 @@ TECH_LEAD = Role(
     slug="tech_lead",
     kind="validator",
     schema=TechPlan,
-    reads=(ORIGINAL, "PM", SOLUTION_INTERVIEW),
+    reads=(ORIGINAL, "PM", SOLUTION_INTERVIEW, HUMAN),
     reads_knowledge=True,
     reads_standards=True,
     tools=READ_CODE,
@@ -242,7 +242,7 @@ TECH_LEAD_REVIEWER = Role(
     slug="tech_lead_review",
     kind="validator",
     schema=Review,
-    reads=(ORIGINAL, "PM", "Tech Lead"),
+    reads=(ORIGINAL, "PM", "Tech Lead", HUMAN),
     reads_standards=True,
     tools=READ_CODE + ("Agent",),
     allowed=READ_CODE_RULES + RUN_TESTS_RULES + ("Agent",),
