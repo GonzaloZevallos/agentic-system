@@ -2,8 +2,15 @@
 __pycache__/
 *.pyc
 .env
-tasks/
+# Sin la barra inicial esto también ignoraba `.agentic/tasks/`, que es lo contrario:
+# el documento de tarea se commitea (ADR-0001, ADR-0017).
+/tasks/
 .claude/
+
+# Artefactos de una corrida sobre este repo como producto (ADR-0017). El documento de
+# tarea, `.agentic/tasks/`, sí entra: es el registro crudo del trabajo.
+.agentic/state.sqlite
+.agentic/worktrees/
 
 # Estado local de `langgraph dev`
 .langgraph_api/
