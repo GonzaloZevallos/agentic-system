@@ -118,16 +118,17 @@ class MemoryFlags:
         return self.vocabulary
 
 
-class MemoryChecks:
-    """The declared checks, whatever the revision; `revisions` says which were asked."""
+class MemoryStack:
+    """The product's declared checks, whatever the revision; `revisions` says which were
+    asked."""
 
     def __init__(self, checks: dict[str, str] | None = None):
-        self.checks = {"tests": "pytest"} if checks is None else checks
+        self.declared = {"tests": "pytest"} if checks is None else checks
         self.revisions: list[str] = []
 
-    def declared(self, revision: str) -> dict[str, str]:
+    def checks(self, revision: str) -> dict[str, str]:
         self.revisions.append(revision)
-        return self.checks
+        return self.declared
 
 
 class MemoryCommands:
@@ -258,7 +259,7 @@ def memory_ports(runner: ScriptedRunner | None = None, **overrides) -> Ports:
         "inbox": MemoryInbox(),
         "workspace": MemoryWorkspace(),
         "tracker": MemoryTracker(),
-        "checks": MemoryChecks(),
+        "stack": MemoryStack(),
         "commands": MemoryCommands(),
     }
     return Ports(**{**fields, **overrides})

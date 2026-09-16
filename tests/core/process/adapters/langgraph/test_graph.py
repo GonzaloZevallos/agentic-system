@@ -24,9 +24,9 @@ from agentic.core.process.domain.task import INTEGRATION, WAITING_ON_HUMAN
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
     REPORTS,
-    MemoryChecks,
     MemoryCommands,
     MemoryKnowledge,
+    MemoryStack,
     MemoryTracker,
     MemoryWorkspace,
     ScriptedRunner,
@@ -112,7 +112,7 @@ def compiled(script: ScriptedRunner, telemetry=NoTelemetry(), fakes=None, saver=
             tracker=fakes.tracker,
             knowledge=_Rooted(knowledge, cfg.product_dir),
             # The product is no repository and the checkouts are names: nothing to run.
-            checks=MemoryChecks(),
+            stack=MemoryStack(),
             commands=MemoryCommands(),
         )
 

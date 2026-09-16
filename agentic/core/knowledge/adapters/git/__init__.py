@@ -1,6 +1,6 @@
-"""The product repo's history as the store of what held at a commit: the checks
-(`.agentic/checks.yaml`) at the task's base."""
+"""The product repo's history as the store of what held at a commit: the product's
+stack (`.agentic/stack.yaml`) at the task's base."""
 
-from .checks import GitChecks
+from .stack import GitStack
 
-__all__ = ["GitChecks"]
+__all__ = ["GitStack"]

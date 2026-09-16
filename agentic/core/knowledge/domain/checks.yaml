@@ -1,4 +1,0 @@
-# Default product checks. A product replaces them entirely with `.agentic/checks.yaml`,
-# committed: the version at the task's base commit is the one that holds for the task.
-# Each check is a name and the exact command, run from the root of the checkout.
-tests: pytest

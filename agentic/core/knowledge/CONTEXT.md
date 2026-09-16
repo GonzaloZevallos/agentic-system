@@ -42,6 +42,6 @@ un archivo en su raíz. Los leen Tech Lead y Developer; aplican al código nuevo
 tarea toca, no al que ya existía.
 _Avoid_: buenas prácticas, guía de estilo (el estilo lo impone el linter, no este archivo)
 
-**Chequeos del producto**:
-Los comandos con que el producto declara que su código está sano (tests, linter, typechecker). Los corre la puerta de entrega, y el revisor los usa para reproducir una objeción.
-_Avoid_: checks, CI, validaciones
+**Stack del producto**:
+Con qué tecnología se construye y se verifica este producto, declarado por el producto en su repo. Hoy son sus chequeos: los comandos con que declara que su código está sano (tests, linter, typechecker), que corre la puerta de entrega y que el revisor usa para reproducir una objeción. El sistema impone las prácticas, nunca la herramienta.
+_Avoid_: checks, stack (a secas, cuando se habla del sistema), CI, validaciones

@@ -36,7 +36,7 @@ path::test_name`); nothing else runs:
 
 Do not run a whole check again: the system ran all of them when the Developer delivered
 and wrote the results under `### Checks` in the Developer's section. If the diff changes
-`.agentic/checks.yaml`, record it as an `observation`: the change applies from the next
+`.agentic/stack.yaml`, record it as an `observation`: the change applies from the next
 task, after the merge. An objection
 you could not reproduce is an `observation`, never `blocking`. A standard or spec
 objection cites the line of the standard or the brief instead.

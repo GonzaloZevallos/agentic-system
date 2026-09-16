@@ -17,11 +17,11 @@ from .ports import Ports
 
 
 def declared_checks(state: TaskState, ports: Ports) -> dict[str, str]:
-    """The checks that hold for this task: the ones at the commit its branch started
-    from, never the branch's own (issue #22, 7). The product's HEAD when the branch
-    carries no base, which only a branch the system did not create lacks."""
+    """The checks the product's stack declares for this task: the ones at the commit its
+    branch started from, never the branch's own (issue #22, 7). The product's HEAD when the
+    branch carries no base, which only a branch the system did not create lacks."""
     base = ports.workspace.base_of(rules.task_branch(state["id"]))
-    return ports.checks.declared(base or "HEAD")
+    return ports.stack.checks(base or "HEAD")
 
 
 class CheckoutGate:

@@ -88,13 +88,17 @@ tampoco esas reglas calzaban con los comandos reales de gym-saas (`uv run --no-p
 gym-saas no tiene `CODING_STANDARDS.md`, sus comandos están en el README y su CI solo corre
 `pytest`: nada que el sistema pudiera leer (issue #22, absorbe #34).
 
-**El producto declara sus chequeos en `.agentic/checks.yaml`**, con el mismo patrón que
+**El producto declara sus chequeos en `.agentic/stack.yaml`**, con el mismo patrón que
 `.agentic/flags.yaml`: el sistema trae un default en `core/knowledge` (un solo chequeo,
-`tests: pytest`) y el producto lo reemplaza entero. Cada chequeo es un nombre y el comando
-exacto. No se parsean `CODING_STANDARDS.md` ni la CI.
+`tests: pytest`) y el producto lo reemplaza entero. Bajo la clave `checks`, cada chequeo es un
+nombre y el comando exacto. El archivo se llama por el **stack del producto**, no por los
+chequeos, porque es donde va a vivir todo lo que depende de la tecnología elegida: cómo se
+prepara el entorno (issue #37) y qué no se puede escribir en este stack (issue #38). El sistema
+impone la práctica; la herramienta la elige el producto. No se parsean `CODING_STANDARDS.md` ni
+la CI.
 
 **Vale la versión del commit base de la tarea**, la del arranque de la corrida
-(`git show <base>:.agentic/checks.yaml`), nunca la de la rama. Una tarea que cambia el
+(`git show <base>:.agentic/stack.yaml`), nunca la de la rama. Una tarea que cambia el
 archivo no cambia la vara con que se la mide: el revisor lo anota como observación y el
 cambio rige desde la tarea siguiente, después del merge. Si la tarea trae un chequeo nuevo,
 como `ruff` y `mypy` en GH-12, es el plan del Tech Lead el que pide dejar el código en

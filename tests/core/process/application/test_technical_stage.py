@@ -14,8 +14,8 @@ from agentic.core.process.application.validate_definition import validate_defini
 from agentic.core.process.domain.task import INTEGRATION, apply
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
-    MemoryChecks,
     MemoryCommands,
+    MemoryStack,
     MemoryWorkspace,
     ScriptedRunner,
     delivered,
@@ -378,11 +378,11 @@ async def test_the_gate_runs_the_checks_declared_at_the_tasks_base_and_records_t
     checks = {"tests": "uv run pytest", "lint": "ruff check ."}
     commands = MemoryCommands(**{"ruff check .": [CommandResult(1, "E501 line too long")]})
     runner = ScriptedRunner(developer=[delivered()])
-    ports = memory_ports(runner, checks=MemoryChecks(checks), commands=commands)
+    ports = memory_ports(runner, stack=MemoryStack(checks), commands=commands)
     state, checkout = developing(ports)
     patch = await develop(state, cfg, ports)
     # The version at the task's base holds, never the branch's (issue #22, 7).
-    assert ports.checks.revisions == ["base0"]
+    assert ports.stack.revisions == ["base0"]
     assert "- `lint`: `ruff check .`" in runner.calls[0]["system_prompt"]
     # Red, the model is told inside its turn and delivers again; green, it counts.
     (reason,) = runner.refused
@@ -426,7 +426,7 @@ async def test_the_reviewer_may_run_the_declared_checks_and_reads_them(cfg):
     }
     checks = {"tests": "uv run --no-project pytest"}
     runner = ScriptedRunner(tech_lead_review=[reviewed()])
-    ports = memory_ports(runner, checks=MemoryChecks(checks))
+    ports = memory_ports(runner, stack=MemoryStack(checks))
     await review(state, cfg, ports)
     call = runner.calls[0]
     assert "Bash(uv run --no-project pytest:*)" in call["role"].allowed

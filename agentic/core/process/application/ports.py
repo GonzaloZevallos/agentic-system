@@ -122,10 +122,11 @@ class FlagVocabulary(Protocol):
     def load(self) -> dict[str, str]: ...
 
 
-class ProductChecks(Protocol):
-    """The commands the product declares its code sound with (`core.knowledge`)."""
+class ProductStack(Protocol):
+    """How the product declares its code is built and verified (`core.knowledge`), as of
+    one of its commits: the task's base, never the branch's."""
 
-    def declared(self, revision: str) -> dict[str, str]:
+    def checks(self, revision: str) -> dict[str, str]:
         """Check name -> command, as the product's commit `revision` declares them."""
         ...
 
@@ -252,5 +253,5 @@ class Ports:
     inbox: Inbox
     workspace: Workspace
     tracker: Tracker
-    checks: ProductChecks
+    stack: ProductStack
     commands: Commands
