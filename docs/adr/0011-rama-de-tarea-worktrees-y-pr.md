@@ -22,13 +22,17 @@ empiece. Al entregar, los worktrees se borran (el cierre es el merge humano y el
 ya no corre); las ramas quedan, así un escalado a mitad del desarrollo no pierde el
 trabajo ya hecho aunque el checkpointer de ADR-0003 todavía no exista. El integrador lo
 designa el sistema, no Tech Lead: es una subtarea más, `integration`, que entra cuando
-todas las reales están aprobadas y hay más de una.
+todas las reales están aprobadas y hay más de una. Entra **entregada** cuando los merges
+del fan-in fueron todo el trabajo, así se revisa la rama entera sin que ningún Developer
+cobre por un merge ya hecho, y pendiente cuando quedó un conflicto o el plan declaró
+trabajo de integración (issue #42).
 
 **Una rama de tarea, `agentic/<tarea>`, creada al arrancar la etapa de definición.** No
 al empezar a desarrollar (ni en la clasificación, que puede escalar antes de tocar nada): la entrevista de definición (ADR-0014) ya escribe glosario y ADRs, y eso
-tiene que viajar en la misma rama que el código. El Developer integrador une ahí las ramas
-de subtarea y corre la suite completa. Con una sola subtarea no hay integración: su rama
-es la rama de tarea.
+tiene que viajar en la misma rama que el código. Ahí el sistema une las ramas de subtarea,
+una por una apenas se aprueban (ADR-0004, adenda quinta), y el Developer integrador termina
+lo que ese merge no pudo. Con una sola subtarea no hay integración: su rama es la rama de
+tarea.
 
 **La entrega es un pull request.** El criterio de éxito (README §9) cuenta una tarea solo
 si el humano mergea el diff sin tocarlo; eso pide un PR. El sistema lo abre desde la rama

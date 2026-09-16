@@ -18,6 +18,8 @@ PLACEHOLDERS = {
     "base": "HEAD",
     "review": "a first review",
     "branches": "- none",
+    "invariants": "- none",
+    "proposed_invariants": "- none",
     "checks": "- `tests`: `pytest`",
 }
 

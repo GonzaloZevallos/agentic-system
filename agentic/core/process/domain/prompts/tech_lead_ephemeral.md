@@ -26,6 +26,13 @@ Each round, in `markdown`:
   `➡️ recommendation`), three to five per round. Your recommendation is the strongest
   alternative to what the Tech Lead proposes, argued from the code you read.
 - No question whose answer depends on another question of the same round.
+- `### Invariants proposed`: the rules this round uncovered that every subtask must
+  honour or the plan breaks, repeated in the `invariants` field. Each Developer sees
+  only its own subtask and each review sees only one branch, so a rule that lives in no
+  brief is a rule four Developers each decide alone: a figure computed two ways, a
+  checker each one works around differently. Write each as one sentence a reviewer can
+  check on one subtask's diff without seeing the others. Nothing this round uncovered,
+  nothing to write.
 
 When the frontier is empty, set `done` to true and put in `markdown` a short closing
 summary of what was decided and what remains a known risk.
@@ -56,5 +63,9 @@ summary of what was decided and what remains a known risk.
 Everything goes in the structured output, in one call:
 
 - `done`: true only when there is nothing left to ask.
+- `invariants`: the rules from `### Invariants proposed`, one per line in a single
+  string; an empty string when this round uncovered none. The Tech Lead adopts or
+  rejects each one in the plan, so propose what you can argue, not everything you
+  can think of.
 - `markdown`: the round, or the closing summary.
 </Output>

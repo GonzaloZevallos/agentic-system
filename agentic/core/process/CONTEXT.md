@@ -47,7 +47,7 @@ Segundo Tech Lead que existe solo durante la entrevista técnica, con modelo má
 _Campo_: sin término de arte
 
 **Developer integrador**:
-El Developer que Tech Lead designa para terminar de unir las subtareas en la rama de tarea: lo que la integración incremental no pudo mergear solo, y hacer que las piezas funcionen juntas ahora que están en la misma rama. Cuando la tarea tiene una sola subtarea, no hay integración: la rama de esa subtarea es la rama de tarea.
+El Developer que termina de unir las subtareas en la rama de tarea: lo que la integración incremental no pudo mergear solo, y el trabajo de integración que el plan declare. Corre solo si hay algo de eso; sin conflicto y sin trabajo declarado, la rama ya está unida y va directo a su revisión. La revisión de la pieza integrada, en cambio, corre siempre. Cuando la tarea tiene una sola subtarea, no hay integración: la rama de esa subtarea es la rama de tarea.
 _Campo_: sin término de arte
 
 **Rol proactivo**:
@@ -162,10 +162,20 @@ _Campo_: sin término de arte
 Traer cada subtarea a la rama de tarea apenas se aprueba, en vez de todas juntas al final. Lo hace el sistema, entre dos olas. Un merge que no aplica no es un fallo: queda anotado para el integrador.
 _Campo_: de la integración continua, de la que toma la idea (integrar seguido y chico) y no el mecanismo
 
+**Invariante**:
+Regla del plan que toda subtarea cumple, verificable sobre el diff de una sola. La propone el Tech Lead efímero desde lo que destapó la entrevista; Tech Lead la adopta en el plan o la rechaza con motivo. Llega al brief de cada Developer y la revisión la verifica como verifica el brief y las costuras. Es el único canal entre revisiones que funciona en la primera ola, porque está escrito antes de que nadie codee.
+_Avoid_: regla, restricción, contrato
+_Campo_: invariant — de Design by Contract (Meyer): una condición que se sostiene en todo momento. Allá es sobre una estructura de datos o un loop; acá es sobre un plan repartido entre subtareas que no se ven
+
 **Hallazgo**:
 Lo que Tech Lead encuentra al revisar, con su lugar, la afirmación, la evidencia (el comando que corrió y su salida, o la cita del estándar o del brief), la severidad, el alcance y la categoría. Solo un hallazgo bloqueante sobre la subtarea la devuelve; el veredicto se deriva de los hallazgos. Una objeción de comportamiento que no se reprodujo es una observación.
 _Avoid_: comentario, issue
 _Campo_: finding — de auditoría y seguridad de nube (AWS Security Finding Format), no de code review: SARIF dice result, que es el dato, y GitHub dice alert, que es la presentación
+
+**Tabla de hallazgos**:
+Los hallazgos de todas las revisiones de una tarea, cada uno con su estado: abierto, arreglado o descartado. Una fila es un lugar más una afirmación, y el veredicto de la primera vez es el que queda: una revisión posterior no relitiga lo que otra ya descartó. Una fila se cierra sólo porque un revisor la dio por saldada; dejar de nombrarla no la cierra, porque una revisión incremental tiene instrucción de no volver a mirar lo que ya aprobó. La leen el revisor, el Developer y el integrador, en la sección del documento, que lleva las abiertas; el registro crudo de todas las pasadas vive en el frontmatter. La escribe el sistema en el fan-in, que es el único lugar que ve todas las ramas de una ola; cada revisión solo agrega. Muere con la tarea.
+_Avoid_: backlog, lista de issues, deuda
+_Campo_: sin término de arte; lo más cerca es la lista de alerts de GitHub code scanning, que vive en el repositorio y no muere con el cambio que la abrió
 
 ### Cómo se rechaza trabajo
 

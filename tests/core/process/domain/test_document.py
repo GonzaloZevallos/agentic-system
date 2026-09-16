@@ -1,6 +1,7 @@
 import pytest
 
-from agentic.core.process.domain import document
+from agentic.core.process.application import resume
+from agentic.core.process.domain import document, rules
 
 
 def test_render_then_parse_roundtrip():
@@ -143,3 +144,34 @@ def test_a_document_written_before_the_rename_still_parses_into_the_state():
     assert state["change_history"][0]["category"] == "definition"
     assert state["subtasks"]["api"]["change_category"] == "spec-behaviour"
     assert "returns" not in state and "return_history" not in state
+
+def test_the_channel_survives_the_document():
+    """The document is the rescue path (`resume.from_document`): what is not in the
+    frontmatter is lost when the checkpoint is, silently and with every test green."""
+    findings = rules.finding_records(
+        "api",
+        2,
+        [
+            {
+                "location": "x.py:1",
+                "claim": "counts twice",
+                "evidence": "$ pytest\nFAILED",
+                "severity": "important",
+                "scope": "plan",
+                "category": "spec-behaviour",
+            }
+        ],
+    )
+    state = {
+        "id": "GH-1",
+        "title": "T",
+        "description": "d",
+        "invariants": ["Every subscription query folds duplicates."],
+        "integration_brief": "Wire the two ends.",
+        "findings": findings,
+        "settled_findings": ["y.py:3"],
+    }
+    back = document.parse(document.render(state))
+    for field in ("invariants", "integration_brief", "findings", "settled_findings"):
+        assert field in resume.STATE_FIELDS, field
+        assert back[field] == state[field], field

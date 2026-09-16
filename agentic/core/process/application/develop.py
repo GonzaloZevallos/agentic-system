@@ -65,6 +65,7 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         cwd=checkout.path,
         presubmit=delivery_presubmit,
         subtask=subtask_id,
+        invariants=rules.invariants_markdown(state),
         branches=_branches(state),
         checks=presubmit.describe_checks(checks),
     )

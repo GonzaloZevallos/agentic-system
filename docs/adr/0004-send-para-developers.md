@@ -209,4 +209,6 @@ segunda tarea el gasto de la primera. El grafo guarda uno por `thread_id`, que e
 tarea (ADR-0003). El CLI, una corrida por proceso, no nota la diferencia.
 
 Fuera de esta adenda: el canal entre revisiones (invariantes del plan, tabla de hallazgos,
-integrador condicional), en #42.
+integrador condicional), en #42, resuelto en la adenda de ADR-0015. La tabla se escribe
+desde este mismo nodo de fan-in, que es el único momento en que las ramas de una ola están
+mergeadas.

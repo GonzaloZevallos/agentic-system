@@ -45,12 +45,13 @@ es de la subtarea y puede bloquear. `reason` queda
 como resumen de una línea para el Developer. La sección de la revisión lleva los hallazgos
 como tabla, y el sistema le antepone `### Verdict` con el veredicto derivado y el motivo:
 el revisor no escribe esa línea, así que la sección no puede contradecir lo decidido. La
-tabla acumulada entre revisiones, con estado por hallazgo, es del issue #23, que lee
-`scope: plan` de acá.
+tabla acumulada entre revisiones, con estado por hallazgo, es del issue #42 (adenda de
+ADR-0015), que lee `scope: plan` de acá.
 
-**La categoría es cerrada.** Once valores en cuatro familias: `standard-*` (arquitectura,
+**La categoría es cerrada.** Doce valores en cuatro familias: `standard-*` (arquitectura,
 tipado silenciado, costuras, otro), `spec-*` (comportamiento, test faltante, alcance),
-`process-*` (sin commitear, suite en rojo), `plan-calibration` e `integration-crosscut`,
+`process-*` (sin commitear, suite en rojo), `plan-calibration`, `plan-invariant` (issue
+#42) e `integration-crosscut`,
 cada uno con ejemplo en el prompt del revisor. La devolución toma la categoría del primer
 bloqueante y queda en `subtasks[id].return_category` y en `return_history`, el historial
 de devoluciones del estado, junto con el par y el motivo. Las devoluciones de PM a Product

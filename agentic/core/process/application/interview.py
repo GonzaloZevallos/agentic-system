@@ -42,6 +42,10 @@ class Transcript:
     rounds: list[str] = field(default_factory=list)
     sessions: dict[str, str] = field(default_factory=dict)  # role slug -> session id
     questions_for_human: list[str] = field(default_factory=list)
+    # What the interviewer proposes for the deliverable that follows, when its schema
+    # has such a field: the solution interview's invariants (issue #42). The author
+    # decides on each one; this only carries them across.
+    invariants: list[str] = field(default_factory=list)
 
     @property
     def text(self) -> str:
@@ -56,6 +60,15 @@ class Transcript:
             if _key(question) not in seen:
                 seen.add(_key(question))
                 self.questions_for_human.append(question)
+
+    def propose(self, invariants: list[str]) -> None:
+        """Keep an invariant once, in the order it was proposed. A round may repeat what
+        an earlier one already said; the author should see each rule once."""
+        seen = {_key(line) for line in self.invariants}
+        for line in invariants:
+            if _key(line) not in seen:
+                seen.add(_key(line))
+                self.invariants.append(line)
 
     def withdraw(self, numbers: list[int]) -> None:
         """Take back the questions the decider settled this round, by their number in
@@ -176,6 +189,7 @@ async def interview(
         asked, patch = await turn(spec.interviewer, _interviewer_prompt(transcript, reply), round_)
         if asked is None:
             return None, _record(state, spec, transcript, patch)
+        transcript.propose(asked.data.get("invariants", []))
         if asked.data["done"]:
             transcript.rounds.append(f"### Closing\n\n{asked.text}")
             closed = True
@@ -215,6 +229,7 @@ async def interview(
         )
         if asked is None:
             return None, _record(state, spec, transcript, patch)
+        transcript.propose(asked.data.get("invariants", []))
         transcript.rounds.append(f"### Closing\n\n{asked.text}")
 
     patch = _record(state, spec, transcript, patch)
