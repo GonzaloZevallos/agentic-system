@@ -298,9 +298,11 @@ def memory_ports(runner: ScriptedRunner | None = None, **overrides) -> Ports:
 REPORTS = "# Reports\n\n## Jobs\n\n- When I audit, I want CSV, so I can file it.\n\nCSV export."
 
 
-def questions(n=1, done=False, cost=0.05, session="q") -> RawResult:
+def questions(n=1, done=False, cost=0.05, session="q", invariants=()) -> RawResult:
     text = "### Closing\n\nDecided." if done else f"❓ **Q{n}** - **Scope**: which?\n\n➡️ a"
-    return RawResult({"markdown": text, "done": done}, cost, 2, session)
+    return RawResult(
+        {"markdown": text, "done": done, "invariants": list(invariants)}, cost, 2, session
+    )
 
 
 def answers(n=1, for_human=(), withdrawn=(), cost=0.1, session="a") -> RawResult:
@@ -339,12 +341,22 @@ def consulted(
     )
 
 
-def planned(*subtasks: dict, cost=0.3, session="tl") -> RawResult:
+def planned(*subtasks: dict, cost=0.3, session="tl", invariants=(), integration="") -> RawResult:
     items = [
         {"id": "api", "title": "API", "brief": "Build it.", "seams": ["GET /x"]},
         *subtasks,
     ]
-    return RawResult({"markdown": "### Solution\n\nHex.", "subtasks": items}, cost, 2, session)
+    return RawResult(
+        {
+            "markdown": "### Solution\n\nHex.",
+            "subtasks": items,
+            "invariants": list(invariants),
+            "integration": integration,
+        },
+        cost,
+        2,
+        session,
+    )
 
 
 def delivered(summary="done", cost=0.5, session="dev") -> RawResult:
@@ -367,11 +379,24 @@ def finding(severity="blocking", category="spec-behaviour", claim="wrong", scope
     }
 
 
-def reviewed(kind="approved", reason="fine", cost=0.2, category="spec-behaviour") -> RawResult:
+def reviewed(
+    kind="approved",
+    reason="fine",
+    cost=0.2,
+    category="spec-behaviour",
+    findings=None,
+    settled=(),
+) -> RawResult:
     """The verdict is derived: a return is a review with a blocking finding."""
-    findings = [finding(category=category, claim=reason)] if kind == "returned" else []
+    if findings is None:
+        findings = [finding(category=category, claim=reason)] if kind == "returned" else []
     return RawResult(
-        {"markdown": "### Findings\n\nNone.", "reason": reason, "findings": findings},
+        {
+            "markdown": "### Findings\n\nNone.",
+            "reason": reason,
+            "findings": findings,
+            "settled": list(settled),
+        },
         cost,
         3,
         "rv",

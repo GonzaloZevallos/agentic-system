@@ -16,6 +16,11 @@ integrated piece so far, and a conflict surfaces one subtask at a time instead o
 at once. A merge the system cannot do on its own is left for the integrator, named in
 the integration subtask, which is what that role is for.
 
+**The findings table.** Every review appends its findings to the state and none of them
+can fold the table, because the sister branches of its wave are reviewing at the same
+time. Here the branches are merged, so here the table is written as the section the next
+wave reads (issue #42): one row per finding, the first verdict kept, only what is open.
+
 **The document, and the human.** Each branch saves the document with its own view of
 the state (`finish`), so the last one to write loses its sisters' work until something
 saves again; this is that something, with the state already merged. And an escalation
@@ -32,7 +37,7 @@ from agentic.shared.configuration import Configuration
 from ..domain import rules
 from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, Subtask, TaskState, apply
 from .checkouts import subtask_checkout, task_checkout
-from .ports import Ports
+from .ports import Checkout, Ports
 from .run_role import finish
 
 
@@ -45,11 +50,14 @@ async def integrate(state: TaskState, cfg: Configuration, ports: Ports) -> TaskS
         # in the same superstep, so which one the merge kept is a coin toss. The reason
         # is not at risk (nothing but an escalation ever writes `escalated`), but a
         # document that says `developing` about a task waiting for a human is a lie.
-        return {"status": WAITING_ON_HUMAN}
+        # The table still gets written: it is pure computation over the merged state, it
+        # touches nothing, and the human reading the document sees what this wave found
+        # instead of what the wave before it did.
+        return {"status": WAITING_ON_HUMAN, "sections": rules.findings_section(state)}
     task = task_checkout(state, ports)
-    patch: TaskState = {"branch": task.branch}
+    patch: TaskState = {"branch": task.branch, "sections": rules.findings_section(state)}
     conflicts = _merge_approved(state, task.path, ports)
-    if (integration := _integration(state, conflicts)) is not None:
+    if (integration := _integration(state, conflicts, task)) is not None:
         patch = apply(patch, {"subtasks": {INTEGRATION: integration}})
     current = apply(state, patch)
     for subtask_id in rules.dispatched_subtasks(current):
@@ -57,16 +65,29 @@ async def integrate(state: TaskState, cfg: Configuration, ports: Ports) -> TaskS
     return finish(state, patch, ports)
 
 
-def _integration(state: TaskState, conflicts: list[str]) -> Subtask | None:
+def _integration(state: TaskState, conflicts: list[str], task: Checkout) -> Subtask | None:
     """The integration subtask as this wave leaves it, or None when nothing about it
-    changed. It enters once every subtask is approved and there is more than one, and it
-    carries the branches the merges could not settle, on whatever wave those appear:
+    changed. It enters once every subtask is approved and there is more than one, whether
+    or not a Developer has anything to do on it: the whole branch is reviewed either way,
+    and it enters `delivered` when the merges were the whole job, so the review runs and
+    no integrator is paid for a merge already done (README.md, 13).
+
+    It carries the branches the merges could not settle, on whatever wave those appear:
     a conflict is not only a last-wave thing, and the integrator is told on the wave it
     shows up. The list is rewritten every time, so one the integrator resolved is gone."""
     existing = state.get("subtasks", {}).get(INTEGRATION)
-    if existing is None and not rules.needs_integration(state):
-        return None
-    wanted = {**(existing or rules.integration_subtask()), "conflicts": conflicts}
+    if existing is None:
+        if not rules.needs_integration(state):
+            return None
+        # The branch is the task branch, stamped here and not by a Developer: when the
+        # merges were the whole job no Developer runs on it, and the review, the
+        # delivery and a resume checked against git all read it off the subtask.
+        return {
+            **rules.integration_subtask(state.get("integration_brief", ""), conflicts),
+            "branch": task.branch,
+            "base": task.base,
+        }
+    wanted = {**existing, **rules.integration_work(state.get("integration_brief", ""), conflicts)}
     return None if wanted == existing else wanted
 
 

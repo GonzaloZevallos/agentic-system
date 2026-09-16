@@ -1,5 +1,5 @@
 from agentic.core.process.domain import rules, task
-from agentic.core.process.domain.roles import PAIR_PM_PA
+from agentic.core.process.domain.roles import FINDINGS, PAIR_PM_PA
 from agentic.core.process.domain.task import INTEGRATION
 
 PAIR = PAIR_PM_PA
@@ -210,10 +210,12 @@ def test_resuming_clears_the_escalation_resets_the_pair_and_keeps_the_decision()
     assert "sections" not in rules.resumed({}, "   ")
 
 
-def test_resuming_adds_the_integration_the_review_did_not_get_to_add():
+def test_resuming_leaves_the_integration_to_the_fan_in():
+    """Only the fan-in knows what its merges could not settle, so only it may add the
+    integration; a resume just points the task at it."""
     state = {"subtasks": {"api": {"status": "approved"}, "domain": {"status": "approved"}}}
     patch = rules.resumed(state, None)
-    assert patch["subtasks"] == {INTEGRATION: rules.integration_subtask()}
+    assert "subtasks" not in patch
     assert rules.resume_target(task.apply(state, patch)) == "integrate"
 
 
@@ -266,3 +268,167 @@ def test_a_dependency_that_does_not_merge_escalates_before_the_developer_costs_a
     assert "CONFLICT (content): x.py" in patch["escalated"]
     # An answer alone fixes nothing here, so the escalation says what to do instead.
     assert "by hand" in patch["escalated"]
+
+
+# The findings table (issue #42).
+
+
+def found(claim="double count", severity="blocking", scope="subtask", evidence="$ pytest\nF"):
+    return {
+        "location": "x.py:1",
+        "claim": claim,
+        "evidence": evidence,
+        "severity": severity,
+        "scope": scope,
+        "category": "spec-behaviour",
+    }
+
+
+def test_a_finding_nobody_can_check_is_dismissed_on_the_spot():
+    """An observation with no evidence is either the reviewer's hunch or a blocking the
+    system lowered for having none. Neither is a live objection for the next role."""
+    records = rules.finding_records(
+        "api", 1, [found(), found(claim="maybe", severity="observation", evidence="  ")]
+    )
+    assert [r["status"] for r in records] == ["open", "dismissed"]
+    # No evidence on the record: it is the command and its output, it already lives in
+    # the review's section, and a copy per finding per pass only grows the document.
+    assert records[0] == {
+        "subtask": "api",
+        "version": 1,
+        "location": "x.py:1",
+        "claim": "double count",
+        "severity": "blocking",
+        "scope": "subtask",
+        "category": "spec-behaviour",
+        "status": "open",
+    }
+
+
+def test_the_first_verdict_on_a_finding_is_the_one_that_stands():
+    """Same location and same claim is one row. A later review raising what an earlier
+    one dismissed does not reopen the argument, whichever subtask raises it."""
+    state = {
+        "findings": [
+            *rules.finding_records("api", 1, [found(severity="observation", evidence="")]),
+            *rules.finding_records("domain", 1, [found()]),
+        ]
+    }
+    (row,) = rules.findings_rows(state)
+    # One row, and it names every subtask that raised it: the prompts route on that
+    # column ("a row about another subtask" vs "a row about yours").
+    assert (row["status"], row["subtask"]) == ("dismissed", "api, domain")
+    assert rules.open_findings(state) == []
+
+
+def test_the_same_objection_written_twice_is_one_row():
+    """Two reviewer runs do not write the same string. A trailing space or a capital must
+    not split the row the whole feature exists to collapse."""
+    state = {
+        "findings": [
+            *rules.finding_records("api", 1, [found()]),
+            *rules.finding_records(
+                "domain", 1, [{**found(), "location": "x.py:1 ", "claim": "Double  count"}]
+            ),
+        ]
+    }
+    (row,) = rules.findings_rows(state)
+    assert row["subtask"] == "api, domain"
+
+
+def test_only_a_reviewer_saying_so_closes_a_row():
+    """A pass that stops mentioning a row usually means it did not look: every pass after
+    the first is incremental and is told not to re-read what it approved (ADR-0015).
+    Closing on silence would make the first return of a subtask wipe its carried remarks,
+    which is the exact class of thing issue #17 is about."""
+    silent = {
+        "findings": [
+            *rules.finding_records("api", 1, [found()]),
+            *rules.finding_records("api", 2, [found(claim="something else")]),
+        ]
+    }
+    rows = {row["claim"]: row["status"] for row in rules.findings_rows(silent)}
+    assert rows == {"double count": "open", "something else": "open"}
+
+    said = {**silent, "settled_findings": ["x.py:1"]}
+    assert {row["status"] for row in rules.findings_rows(said)} == {"fixed"}
+
+
+def test_the_integration_review_can_close_what_a_subtask_review_could_not():
+    """A `plan` row is by definition something no single Developer could fix, so the
+    subtask that raised it is never reviewed again. The integration review reads the
+    whole branch and is the one that settles it."""
+    raised = rules.finding_records("api", 1, [found(scope="plan", severity="important")])
+    state = {"findings": raised, "settled_findings": []}
+    assert rules.open_findings(state)
+    state["settled_findings"] = ["x.py:1"]
+    assert rules.open_findings(state) == []
+
+
+def test_what_the_roles_read_is_the_open_rows_with_the_plan_ones_first():
+    """The plan-scoped ones lead: no single Developer can fix one, so they are what the
+    next wave and the integrator have to act on. Within a scope, worst first."""
+    state = {
+        "findings": [
+            *rules.finding_records("api", 1, [found(claim="a", severity="important")]),
+            *rules.finding_records("api", 1, [found(claim="b")]),
+            *rules.finding_records(
+                "domain", 1, [found(claim="c", severity="important", scope="plan")]
+            ),
+            *rules.finding_records("domain", 1, [found(claim="d", severity="observation")]),
+        ]
+    }
+    assert [row["claim"] for row in rules.open_findings(state)] == ["c", "b", "a", "d"]
+
+    table = rules.findings_section(state)[FINDINGS]
+    # No status column: every row here is open, and a cell that always says the same
+    # thing is context three roles pay for and nobody reads.
+    assert table.startswith("| Severity | Scope | Category | Subtask | Location | Claim |")
+    assert "| important | plan | spec-behaviour | domain | `x.py:1` | c |" in table
+    assert rules.findings_section({})[FINDINGS] == "None open."
+
+
+def test_a_claim_with_a_pipe_or_a_newline_does_not_break_the_table():
+    state = {"findings": rules.finding_records("api", 1, [found(claim="a | b\nand c")])}
+    (line,) = rules.findings_section(state)[FINDINGS].splitlines()[2:]
+    assert line.endswith(r"| a \| b and c |")
+
+
+def test_the_integration_runs_a_developer_only_when_there_is_something_to_do():
+    """The system merges each approved subtask as it is approved, so joining them is not
+    a role's job any more. The integration review of the whole branch always is."""
+    plain = rules.integration_subtask()
+    assert plain["status"] == "delivered" and plain["conflicts"] == []
+    assert rules.integration_subtask(conflicts=["agentic/GH-1.api"])["status"] == "pending"
+    declared = rules.integration_subtask("Wire the two ends.")
+    assert declared["status"] == "pending" and "Wire the two ends." in declared["brief"]
+    both = rules.integration_subtask("Wire it.", ["agentic/GH-1.api"])
+    assert "Wire it." in both["brief"] and "`agentic/GH-1.api`" in both["brief"]
+
+
+def test_the_invariants_reach_a_prompt_as_a_list():
+    state = {"invariants": ["fold duplicates", "no relative imports"]}
+    assert rules.invariants_markdown(state) == "- fold duplicates\n- no relative imports"
+    assert rules.invariants_markdown({}) == "- none"
+
+
+def test_an_integration_with_nothing_to_do_enters_at_its_review():
+    """`delivered` is not a lie: the fan-in delivered it, merge by merge. What matters is
+    that the pipeline sends it to `review` and no integrator is paid for a merge already
+    done. A conflict, or work the plan declared, sends it to `develop` instead."""
+    plain = {INTEGRATION: rules.integration_subtask()}
+    assert rules.dispatched_subtasks({"subtasks": plain}) == [INTEGRATION]
+    assert rules.pipeline_entry({"subtasks": plain, "subtask_id": INTEGRATION}) == "review"
+
+    work = {INTEGRATION: rules.integration_subtask(conflicts=["agentic/GH-1.api"])}
+    assert rules.pipeline_entry({"subtasks": work, "subtask_id": INTEGRATION}) == "develop"
+
+
+def test_a_returned_integration_stops_saying_there_was_nothing_to_do():
+    """The review sent it back, so an integrator runs. A brief still reading "everything
+    is already merged" contradicts why it was woken up."""
+    nothing = rules.integration_subtask()
+    assert "already on the task branch" in nothing["brief"]
+    now = rules.integration_work("Wire the two ends.", ["agentic/GH-1.api"])
+    assert "Wire the two ends." in now["brief"] and "`agentic/GH-1.api`" in now["brief"]
+    assert now["conflicts"] == ["agentic/GH-1.api"]

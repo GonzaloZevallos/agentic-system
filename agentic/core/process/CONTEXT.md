@@ -38,7 +38,7 @@ El rol que devuelve y el rol que recibe la devolución. Las devoluciones se cuen
 Segundo Tech Lead que existe solo durante la entrevista técnica, con modelo más capaz y prompt de adversario. Entrevista a Tech Lead; no decide. No es un rol de la lista: es el entrevistador del pingpong.
 
 **Developer integrador**:
-El Developer que Tech Lead designa para terminar de unir las subtareas en la rama de tarea: lo que la integración incremental no pudo mergear solo, y hacer que las piezas funcionen juntas ahora que están en la misma rama. Cuando la tarea tiene una sola subtarea, no hay integración: la rama de esa subtarea es la rama de tarea.
+El Developer que termina de unir las subtareas en la rama de tarea: lo que la integración incremental no pudo mergear solo, y el trabajo de integración que el plan declare. Corre solo si hay algo de eso; sin conflicto y sin trabajo declarado, la rama ya está unida y va directo a su revisión. La revisión de la pieza integrada, en cambio, corre siempre. Cuando la tarea tiene una sola subtarea, no hay integración: la rama de esa subtarea es la rama de tarea.
 
 **Rol proactivo**:
 Rol con reloj propio que genera tareas o insumos sin que nadie se lo pida.
@@ -118,6 +118,14 @@ El commit hasta donde llegó la última revisión de una subtarea.
 
 **Integración incremental**:
 Traer cada subtarea a la rama de tarea apenas se aprueba, en vez de todas juntas al final. Lo hace el sistema, entre dos olas. Un merge que no aplica no es un fallo: queda anotado para el integrador.
+
+**Invariante**:
+Regla del plan que toda subtarea cumple, verificable sobre el diff de una sola. La propone el Tech Lead efímero desde lo que destapó la entrevista; Tech Lead la adopta en el plan o la rechaza con motivo. Llega al brief de cada Developer y la revisión la verifica como verifica el brief y las costuras. Es el único canal entre revisiones que funciona en la primera ola, porque está escrito antes de que nadie codee.
+_Avoid_: regla, restricción, contrato
+
+**Tabla de hallazgos**:
+Los hallazgos de todas las revisiones de una tarea, cada uno con su estado: abierto, arreglado o descartado. Una fila es un lugar más una afirmación, y el veredicto de la primera vez es el que queda: una revisión posterior no relitiga lo que otra ya descartó. Una fila se cierra sólo porque un revisor la dio por saldada; dejar de nombrarla no la cierra, porque una revisión incremental tiene instrucción de no volver a mirar lo que ya aprobó. La leen el revisor, el Developer y el integrador, en la sección del documento, que lleva las abiertas; el registro crudo de todas las pasadas vive en el frontmatter. La escribe el sistema en el fan-in, que es el único lugar que ve todas las ramas de una ola; cada revisión solo agrega. Muere con la tarea.
+_Avoid_: backlog, lista de issues, deuda
 
 **Devolución**:
 Rechazo con entrega hacia atrás. Cuenta para el límite del par.

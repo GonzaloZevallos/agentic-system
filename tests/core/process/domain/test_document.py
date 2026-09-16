@@ -1,6 +1,7 @@
 import pytest
 
-from agentic.core.process.domain import document
+from agentic.core.process.application import resume
+from agentic.core.process.domain import document, rules
 
 
 def test_render_then_parse_roundtrip():
@@ -105,3 +106,35 @@ def test_parse_rejects_missing_frontmatter():
 
 def test_relative_path():
     assert str(document.relative_path("GH-12")) == ".agentic/tasks/GH-12.md"
+
+
+def test_the_channel_survives_the_document():
+    """The document is the rescue path (`resume.from_document`): what is not in the
+    frontmatter is lost when the checkpoint is, silently and with every test green."""
+    findings = rules.finding_records(
+        "api",
+        2,
+        [
+            {
+                "location": "x.py:1",
+                "claim": "counts twice",
+                "evidence": "$ pytest\nFAILED",
+                "severity": "important",
+                "scope": "plan",
+                "category": "spec-behaviour",
+            }
+        ],
+    )
+    state = {
+        "id": "GH-1",
+        "title": "T",
+        "description": "d",
+        "invariants": ["Every subscription query folds duplicates."],
+        "integration_brief": "Wire the two ends.",
+        "findings": findings,
+        "settled_findings": ["y.py:3"],
+    }
+    back = document.parse(document.render(state))
+    for field in ("invariants", "integration_brief", "findings", "settled_findings"):
+        assert field in resume.STATE_FIELDS, field
+        assert back[field] == state[field], field

@@ -31,7 +31,26 @@ Write, in Markdown, using `###` headings and nothing above `###`:
      not a tracer bullet: sequence it expand–contract. Expand adds the new form beside
      the old; migrate batches, each blocked by the expand; contract deletes the old form,
      blocked by every batch.
-4. `### For the next role`: what every Developer must know before starting: conventions
+4. `### Invariants`: the rules every subtask must honour, the ones no single brief can
+   carry because they are true across all of them: how a figure is computed wherever it
+   is computed, which shape crosses a boundary, what a checker must resolve. Each one is
+   a single sentence, checkable on one subtask's diff alone by someone who cannot see
+   the other subtasks. The Developers build to them and the reviewer verifies each
+   delivery against them, so a rule nobody could check on one diff belongs in a brief,
+   not here. The ephemeral Tech Lead proposed these in the interview:
+
+{{proposed_invariants}}
+
+   Adopt the ones that hold, reworded as you need them, and say in one line why you
+   reject each one you drop. Add whatever the interview left out. If the subtasks
+   genuinely share no rule, say so and leave the list empty.
+5. `### Integration`: what has to happen, beyond merging the branches, for the subtasks
+   to work together: a wiring that only exists once both sides are in, a migration that
+   runs after every piece, a seam two subtasks meet at. The system merges each approved
+   subtask into the task branch as it is approved, so merging is not integration work
+   and a Developer is paid for this only when there is something here. Empty when
+   merging is the whole job, which is the normal case.
+6. `### For the next role`: what every Developer must know before starting: conventions
    of this repo, commands to run tests and the linter, what not to touch. The checks
    the product declares in `.agentic/stack.yaml` are the bar every delivery must pass,
    as the task's base commit has them. If this task brings in a new one (a linter, a
@@ -55,5 +74,10 @@ Everything goes in the structured output, in one call:
 
 - `subtasks`: one entry per subtask with `id` (slug), `title`, `brief`, `seams` and
   `depends_on` (ids of subtasks that must be approved first; empty to run in parallel).
+- `invariants`: the rules from `### Invariants`, one per line in a single string; an
+  empty string when the subtasks share none. Only the adopted ones; the rejected ones
+  live in the Markdown with their reason.
+- `integration`: `### Integration` as one string, what the integrating Developer has to
+  do beyond merging; an empty string when merging is the whole job.
 - `markdown`: the full section above, in Markdown.
 </Output>

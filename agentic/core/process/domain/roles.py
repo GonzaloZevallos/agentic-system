@@ -28,6 +28,7 @@ from .schemas import (
     InterviewTurn,
     Review,
     RoleOutput,
+    SolutionTurn,
     TechAnswers,
     TechPlan,
     Verdict,
@@ -164,6 +165,10 @@ PM_INTERVIEWEE = Role(
 # Section names of the interviews (ADR-0014); the `Interview` values below own them.
 DEFINITION_INTERVIEW = "Interview: Product Analyst→PM"
 SOLUTION_INTERVIEW = "Interview: Tech Lead efímero→Tech Lead"
+# The findings table (issue #42): every review's findings in one section, written by
+# the system at the fan-in, where the branches' work is merged. Not a role's delivery,
+# so it is never versioned: it is a live list, and the raw record is the frontmatter.
+FINDINGS = "Tech Lead: findings"
 
 PRODUCT_ANALYST = Role(
     name="Product Analyst",
@@ -189,7 +194,7 @@ TECH_LEAD_EPHEMERAL = Role(
     name="Tech Lead efímero",
     slug="tech_lead_ephemeral",
     kind="validator",
-    schema=InterviewTurn,
+    schema=SolutionTurn,
     reads=(ORIGINAL, "PM"),
     reads_knowledge=True,
     reads_standards=True,
@@ -244,7 +249,7 @@ TECH_LEAD_REVIEWER = Role(
     slug="tech_lead_review",
     kind="validator",
     schema=Review,
-    reads=(ORIGINAL, "PM", "Tech Lead"),
+    reads=(ORIGINAL, "PM", "Tech Lead", FINDINGS),
     reads_standards=True,
     tools=READ_CODE + ("Agent",),
     # Plus the product's checks, per task: `reviewer_for`.
@@ -258,7 +263,7 @@ DEVELOPER = Role(
     slug="developer",
     kind="thinker",
     schema=Delivery,
-    reads=(ORIGINAL, "PM", "Tech Lead"),
+    reads=(ORIGINAL, "PM", "Tech Lead", FINDINGS),
     reads_standards=True,
     tools=EXECUTE,
     denied=GIT_DENIED,
@@ -273,7 +278,7 @@ DEVELOPER_INTEGRATOR = Role(
     slug="developer_integrator",
     kind="thinker",
     schema=Delivery,
-    reads=(ORIGINAL, "PM", "Tech Lead"),
+    reads=(ORIGINAL, "PM", "Tech Lead", FINDINGS),
     reads_standards=True,
     tools=EXECUTE,
     denied=GIT_DENIED,
