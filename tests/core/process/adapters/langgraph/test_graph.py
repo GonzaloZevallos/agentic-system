@@ -824,7 +824,10 @@ async def test_what_one_review_found_reaches_the_next_wave_and_the_integration(c
     """Issue #17: run 4's two integration returns were already in subtask reviews as
     "worth a remark, not a charge", and nobody downstream ever saw them. They travel now,
     through the fan-in, which is the only place that sees every branch of a wave."""
-    remark = finding(severity="important", claim="counts subscriptions twice", scope="plan")
+    remark = {
+        **finding(severity="important", claim="counts subscriptions twice", scope="plan"),
+        "location": "revenue.py:12",
+    }
     plan = planned(
         {"id": "domain", "title": "Domain", "brief": "b", "seams": ["x"]},
         invariants=["Every subscription query folds duplicates."],
@@ -838,7 +841,10 @@ async def test_what_one_review_found_reaches_the_next_wave_and_the_integration(c
             tech_lead_review__api=[reviewed("approved", findings=[remark])],
             tech_lead_review__domain=[
                 reviewed("returned", "no test at the seam"),
-                reviewed("approved"),
+                # The pass that approves settles its own row, by location. Nothing else
+                # closes a row: an incremental pass is told not to re-read what it
+                # already approved, so its silence is not a verdict.
+                reviewed("approved", settled=["x.py:1"]),
             ],
             tech_lead_review=[reviewed("approved")],  # the integration
         )
@@ -851,7 +857,7 @@ async def test_what_one_review_found_reaches_the_next_wave_and_the_integration(c
     assert final["invariants"] == ["Every subscription query folds duplicates."]
     first_wave = [c for c in script.calls if c["slug"] == "developer"][0]
     assert "- Every subscription query folds duplicates." in first_wave["system_prompt"]
-    assert f"## {FINDINGS}\n\nNone yet." in first_wave["prompt"]
+    assert f"## {FINDINGS}\n\nNone open." in first_wave["prompt"]
 
     # The second wave's Developer rebuilds `domain` seeing what `api`'s review found,
     # which its own review never told it and its sister could not.
@@ -864,4 +870,7 @@ async def test_what_one_review_found_reaches_the_next_wave_and_the_integration(c
     # The raw record keeps every pass; the section keeps what is still open. Which of
     # the two branches of a wave appended first is the event loop's business.
     assert {f["subtask"] for f in final["findings"]} == {"api", "domain"}
-    assert final["sections"][FINDINGS].count("\n") == 2  # a header, its rule, one row
+    assert final["settled_findings"] == ["x.py:1"]
+    table = final["sections"][FINDINGS]
+    assert table.count("\n") == 2  # a header, its rule, one row: `domain`'s was settled
+    assert "counts subscriptions twice" in table and "no test at the seam" not in table

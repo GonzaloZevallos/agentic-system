@@ -222,6 +222,13 @@ class Review(RoleOutput):
         "what the Developer must fix first; on an approval, what you verified"
     )
     findings: list[Finding] = Field(description="Every finding, most severe first")
+    settled: list[str] = Field(
+        default_factory=list,
+        description="Locations (`file:line`) from `## Tech Lead: findings` that this "
+        "delivery settles: you looked and the objection no longer holds. One per line; "
+        "an empty string when none. A row you simply do not repeat stays open, because "
+        "an incremental review not mentioning something usually means it did not look",
+    )
 
 
 def plan_check(data: dict) -> None:

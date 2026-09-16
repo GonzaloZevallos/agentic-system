@@ -75,7 +75,15 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
     patch = apply(patch, {"sections": {section: markdown}})
     # Appended, never folded: a sister branch is reviewing at the same time and cannot
     # see this. Whoever builds the next prompt resolves the table (issue #42).
-    patch = apply(patch, {"findings": rules.finding_records(subtask_id, version, findings)})
+    patch = apply(
+        patch,
+        {
+            "findings": rules.finding_records(subtask_id, version, findings),
+            # A row closes only here, because a reviewer looked and said so. Silence is
+            # not a verdict: an incremental pass is told not to re-read what it approved.
+            "settled_findings": output.data["settled"],
+        },
+    )
     if category is None:
         patch = apply(patch, {"subtasks": {subtask_id: {**subtask, "status": "approved"}}})
         return finish(state, patch, ports)

@@ -42,8 +42,11 @@ this task, this subtask's and its sisters'. Two things to do with them:
 - A row whose `scope` is `plan`, or that came from another subtask, is a thing this
   branch may repeat. Check whether it does. If it does, it is a finding of yours, in
   your own words, with your own evidence.
-- A row that names this subtask and this diff settles is not raised again: say so in
-  `### Findings` and leave it out of your list. Raising it again keeps it open.
+- A row this delivery settles goes in `settled`, by its `location`, and out of your
+  findings. Only that closes a row. Leaving it out without listing it there keeps it
+  open, on purpose: this pass is told not to re-read what the last one approved, so
+  saying nothing about a row means you did not look, not that it is fixed. Settle only
+  what you actually checked in this checkout.
 
 Do not re-litigate a row: what an earlier review dismissed stays dismissed, and the
 system keeps the first verdict whatever you write. A table with no rows means nothing is
@@ -144,6 +147,8 @@ Then write, in Markdown, using `###` headings and nothing above `###`, and no
 <Output>
 Everything goes in the structured output, in one call:
 
+- `settled`: the `location` of every row of the findings table this delivery settles,
+  one per line; an empty string when none.
 - `reason`: one line, why: on a return what the Developer must fix first, on an
   approval what you verified. Not the verdict itself; the system writes it.
 - `findings`: every finding, most severe first; an empty list if none.

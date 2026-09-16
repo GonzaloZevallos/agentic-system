@@ -68,10 +68,23 @@ están mergeadas, escribe la sección que lee la ola siguiente. El crudo de toda
 queda en el frontmatter; la sección lleva lo abierto, que es lo que entra en el próximo
 prompt.
 
-**Qué pasada cierra una fila lo dicen las corridas, no los hallazgos.** Un pase que no
-encuentra nada no agrega nada, y es justo el pase que cierra: si la última pasada se
-contara desde los hallazgos, ninguna fila se cerraría nunca. Se cuenta desde `runs`, que
-tiene una entrada por revisión haya encontrado lo que haya encontrado.
+**Una fila se cierra porque un revisor lo dijo, nunca porque dejó de nombrarla.** El
+revisor entrega `settled`, los lugares que verificó y ya no valen. Cerrar por silencio
+sería lo contrario de lo que este mismo ADR le pide: toda pasada después de la primera es
+incremental y tiene instrucción explícita de *no* volver a mirar lo que ya aprobó, así que
+no decir nada de una fila casi siempre quiere decir "no miré". Cerrando por silencio, la
+primera devolución de cualquier subtarea le borraría a esa subtarea las observaciones que
+venía arrastrando, que es justo la clase de cosa de la que trata #17.
+
+Es también lo que deja cerrar una fila de alcance `plan`: la subtarea que la levantó ya
+está aprobada y nadie la vuelve a revisar, pero la revisión de integración lee la rama
+entera y puede darla por saldada.
+
+**La clave se normaliza.** Dos corridas del revisor no escriben el mismo string para la
+misma objeción; un espacio de más o una mayúscula partirían en dos la fila que todo esto
+existe para juntar. Misma normalización que usa la entrevista para las preguntas del
+humano. Y la columna `Subtask` nombra a **todas** las subtareas que la levantaron, porque
+los prompts rutean sobre eso ("una fila de otra subtarea" contra "una fila tuya").
 
 **No esperarle a la tabla lo que la tabla no da.** Con el pipeline de ADR-0004 adenda
 quinta, la revisión de `api` corre al mismo tiempo que la de `domain`: en la **primera ola**

@@ -104,14 +104,13 @@ def finding_records(subtask_id: str, version: int, findings: list[dict]) -> list
     A finding nobody can check is `dismissed` on the spot: an `observation` with no
     evidence is either the reviewer's own hunch or a `blocking` the system lowered for
     having none, and neither is something to hand the next role as a live objection.
-    Everything else enters `open`; only a later pass closes it."""
+    Everything else enters `open`; only a reviewer saying so closes it."""
     return [
         {
             "subtask": subtask_id,
             "version": version,
             "location": item["location"],
             "claim": item["claim"],
-            "evidence": item["evidence"],
             "severity": item["severity"],
             "scope": item["scope"],
             "category": item["category"],
@@ -124,39 +123,39 @@ def finding_records(subtask_id: str, version: int, findings: list[dict]) -> list
 
 
 def findings_rows(state: TaskState) -> list[FindingRecord]:
-    """The table: one row per `location` + `claim`, in the order it was first raised.
+    """The table: one row per `location` + `claim`, in the order it was first raised, and
+    `subtask` on a row names every subtask whose review raised it.
 
-    The first verdict is the one that stands, so a later review re-raising what an
-    earlier one dismissed does not reopen the argument; and a row the latest pass of
-    its subtask no longer raises is `fixed`, which is the only way a row closes."""
-    records = state.get("findings", [])
-    latest = _review_passes(state)
-    for record in records:
-        latest[record["subtask"]] = max(latest.get(record["subtask"], 0), record["version"])
+    Two reviewer runs do not write the same string for the same objection, so the key is
+    normalised the way the interview normalises the human's questions. The first verdict
+    is the one that stands: a later review re-raising what an earlier one dismissed does
+    not reopen the argument.
+
+    **A row closes only because a reviewer said it did.** Every pass after the first is
+    incremental (ADR-0015) and is told not to look again at what it already approved, so
+    a pass that stops mentioning a row usually means it did not look. Closing on silence
+    would make the first return of any subtask wipe that subtask's carried-forward
+    remarks, which is the exact class of thing issue #17 is about."""
+    settled = {_norm(location) for location in state.get("settled_findings", [])}
     rows: dict[tuple[str, str], FindingRecord] = {}
-    still_raised: set[tuple[str, str]] = set()
-    for record in records:
-        key = (record["location"], record["claim"])
-        rows.setdefault(key, record)
-        if record["version"] == latest[record["subtask"]]:
-            still_raised.add(key)
+    for record in state.get("findings", []):
+        key = (_norm(record["location"]), _norm(record["claim"]))
+        if (row := rows.get(key)) is None:
+            rows[key] = record
+        elif record["subtask"] not in row["subtask"].split(", "):
+            rows[key] = {**row, "subtask": f"{row['subtask']}, {record['subtask']}"}
     return [
-        row if row["status"] != "open" or key in still_raised else {**row, "status": "fixed"}
-        for key, row in rows.items()
+        {**row, "status": "fixed"}
+        if row["status"] == "open" and _norm(row["location"]) in settled
+        else row
+        for row in rows.values()
     ]
 
 
-def _review_passes(state: TaskState) -> dict[str, int]:
-    """The latest review pass of each subtask, from the runs and not from the findings:
-    a pass that found nothing appends nothing, and that is the pass that closes a row.
-    Counting only what was raised would leave every row open forever."""
-    passes: dict[str, int] = {}
-    for run in state.get("runs", []):
-        section = run.get("section", run["role"])
-        if section.startswith(REVIEW_PREFIX):
-            subtask = section[len(REVIEW_PREFIX) :]
-            passes[subtask] = max(passes.get(subtask, 0), run.get("version", 0))
-    return passes
+def _norm(text: str) -> str:
+    """Two reviews of the same objection do not write the same string; a trailing space
+    or a capital must not split one row into two."""
+    return " ".join(text.split()).casefold()
 
 
 def open_findings(state: TaskState) -> list[FindingRecord]:
@@ -169,18 +168,19 @@ def open_findings(state: TaskState) -> list[FindingRecord]:
 
 
 def findings_markdown(rows: list[FindingRecord]) -> str:
-    """The table as a Markdown table. Evidence is not in it: it is the review's own
-    section, and a command's output does not fit in a cell."""
+    """The table as a Markdown table. No evidence column: it is the review's own section,
+    and a command's output does not fit in a cell. No status column either: every row
+    here is open, and a cell that always says the same thing is context nobody reads."""
     head = (
-        "| Status | Severity | Scope | Category | Subtask | Location | Claim |\n"
-        "| --- | --- | --- | --- | --- | --- | --- |"
+        "| Severity | Scope | Category | Subtask | Location | Claim |\n"
+        "| --- | --- | --- | --- | --- | --- |"
     )
     lines = [
-        f"| {row['status']} | {row['severity']} | {row['scope']} | {row['category']} "
+        f"| {row['severity']} | {row['scope']} | {row['category']} "
         f"| {row['subtask']} | `{row['location']}` | {_cell(row['claim'])} |"
         for row in rows
     ]
-    return "\n".join([head, *lines]) if lines else "None yet."
+    return "\n".join([head, *lines]) if lines else "None open."
 
 
 def _cell(text: str) -> str:
@@ -342,23 +342,35 @@ def integration_subtask(brief: str = "", conflicts: Sequence[str] = ()) -> Subta
     the incremental merge was the whole job (README.md, 13), so the branch goes straight
     to its review with no Developer paid for a merge already done. Either way the
     integration review reads the whole branch, which is the only review that does."""
-    work = [line for line in (brief.strip(), _conflict_brief(conflicts)) if line]
+    work = integration_work(brief, conflicts)
     return {
         "id": INTEGRATION,
         "title": "Integration",
-        "brief": "\n\n".join(work) or "Every subtask branch is already on the task branch.",
+        **work,
         "seams": [],
         "depends_on": [],
-        "status": "pending" if work else "delivered",
-        "conflicts": list(conflicts),
+        "status": "pending" if work["conflicts"] or brief.strip() else "delivered",
     }
 
 
-def _conflict_brief(conflicts: Sequence[str]) -> str:
-    if not conflicts:
-        return ""
+def integration_work(brief: str, conflicts: Sequence[str]) -> Subtask:
+    """The part of the integration subtask a wave can change: what is left to do and
+    which branches are still out. Recomputed on every wave, so an integration the review
+    sent back is not still telling its Developer there was nothing to do."""
     listed = ", ".join(f"`{branch}`" for branch in conflicts)
-    return f"Merge into the task branch what the system could not: {listed}."
+    work = [
+        line
+        for line in (
+            brief.strip(),
+            f"Merge into the task branch what the system could not: {listed}." if listed else "",
+        )
+        if line
+    ]
+    return {
+        "brief": "\n\n".join(work)
+        or "Every subtask branch is already on the task branch; make the whole thing work.",
+        "conflicts": list(conflicts),
+    }
 
 
 # The task cap (README.md, 3; ADR-0004, fourth addendum): a base for the definition and

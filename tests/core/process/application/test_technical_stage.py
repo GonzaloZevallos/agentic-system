@@ -539,7 +539,7 @@ async def test_the_fan_in_settles_the_status_of_a_task_a_branch_escalated(cfg):
     state = {**TASK, "status": "developing", "escalated": "Developer failed 2 times: x"}
     ports = memory_ports(ScriptedRunner())
     patch = await integrate(state, cfg, ports)
-    assert patch == {"status": "waiting_on_human", "sections": {FINDINGS: "None yet."}}
+    assert patch == {"status": "waiting_on_human", "sections": {FINDINGS: "None open."}}
     # Nothing touches the workspace or the document while the task waits: `escalate`
     # saves it next, from the state with every branch's work already merged in.
     assert ports.workspace.merges == [] and ports.documents.saved == []
@@ -591,7 +591,12 @@ async def test_every_review_appends_its_findings_whatever_the_verdict(cfg):
 
     assert patch["subtasks"]["api"]["status"] == "approved"
     assert patch["findings"] == [
-        {**remark, "subtask": "api", "version": 1, "status": "open"},
+        {
+            **{k: v for k, v in remark.items() if k != "evidence"},
+            "subtask": "api",
+            "version": 1,
+            "status": "open",
+        }
     ]
 
 
@@ -603,15 +608,18 @@ async def test_the_fan_in_writes_the_table_the_next_wave_reads(cfg):
         "subtasks": {"api": approved("api"), "domain": approved("domain")},
         "findings": [
             *rules.finding_records("api", 1, [finding(severity="important", claim="counts twice")]),
-            *rules.finding_records("domain", 1, [finding(claim="gone", severity="observation")]),
+            *rules.finding_records(
+                "domain", 1, [{**finding(claim="gone"), "location": "gone.py:2"}]
+            ),
             *rules.finding_records("domain", 2, [finding(claim="still here")]),
         ],
+        "settled_findings": ["gone.py:2"],
     }
     patch = await integrate(state, cfg, memory_ports(ScriptedRunner()))
 
     table = patch["sections"][FINDINGS]
     assert "counts twice" in table and "still here" in table
-    assert "gone" not in table  # the latest pass of `domain` let it go: fixed, not open
+    assert "gone" not in table  # a review settled it by name: fixed, not open
 
 
 async def test_the_table_is_written_even_when_a_branch_escalated(cfg):

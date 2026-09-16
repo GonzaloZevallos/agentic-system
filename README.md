@@ -84,7 +84,8 @@ PjM clasifica
   → Tech Lead: análisis, pingpong, ajuste del plan de tests, subtareas e invariantes
   → Developers en paralelo, cada uno con su revisión de Tech Lead pegada atrás
   → entre olas, el sistema: integración incremental, tabla de hallazgos y la ola siguiente
-  → Developer integrador si quedó algo que el merge no pudo, bajo revisión de Tech Lead
+  → Developer integrador si quedó un conflicto o el plan declaró trabajo de integración
+  → revisión de la rama entera por Tech Lead, siempre, haya corrido el integrador o no
   → QA 2ª pasada (funcional + seguridad/performance si fueron convocados)
   → PM valida producto
   → PjM cierra
@@ -419,7 +420,8 @@ lo que esas cuatro entradas dicen (§13: "revisor con memoria de sesión" descar
   otras subtareas; los invariantes son lo que las cruza.
 - Lee la **tabla de hallazgos** (`## Tech Lead: findings`): lo que encontró toda revisión
   de la tarea y sigue abierto, la suya y la de sus hermanas. Chequea si esta rama repite
-  algo de ahí. No relitiga: el veredicto de la primera vez es el que queda.
+  algo de ahí. No relitiga: el veredicto de la primera vez es el que queda. Y entrega
+  `settled`, los lugares que verificó y ya no valen: es lo único que cierra una fila.
 - **Verifica ejecutando** (ADR-0016): no escribe nada, pero corre los chequeos que el
   producto declara (`.agentic/stack.yaml`) sobre el test que respalda cada objeción de
   comportamiento, y entrega **hallazgos** con lugar,
@@ -829,7 +831,7 @@ Se anotan para no reintroducirlas por error.
 | Tope de tarea fijo en 100 USD, y escalar termina la corrida | Base más proporcional por subtarea con techo, y alcanzarlo pausa: el humano sube el tope y reanuda (ADR-0004, adenda cuarta; ADR-0003, adenda) |
 | Cada revisión del Tech Lead arranca desde la base de la subtarea | La primera sí; después de una devolución es incremental, desde el head ya revisado (ADR-0015) |
 | Los Developers corren en paralelo y después Tech Lead revisa todas las entregas | Cada Developer y su revisión son una rama del fan-out: la revisión arranca cuando entrega *su* Developer (ADR-0004, adenda quinta) |
-| La integración es una subtarea final del integrador | Incremental en el fan-in, apenas se aprueba cada subtarea; el integrador y la revisión de la rama entera siguen al final (ADR-0004, adenda quinta) |
+| La integración es una subtarea final del integrador | Incremental en el fan-in, apenas se aprueba cada subtarea (ADR-0004, adenda quinta); al final queda siempre la revisión de la rama entera, y el integrador sólo si hizo falta |
 | Tech Lead designa siempre un Developer integrador | Corre solo si un merge no se resolvió solo o el plan declaró trabajo de integración; la revisión de la rama entera queda siempre (issue #42) |
 | El plan son las subtareas y nada más | Lleva además invariantes, las reglas que toda subtarea cumple, propuestas por el efímero y adoptadas o rechazadas con motivo por Tech Lead (issue #42) |
 | Una revisión solo ve su subtarea y lo que su plan dice | Ve también la tabla de hallazgos: lo que encontró toda revisión de la tarea y sigue abierto (issue #42) |
@@ -1012,10 +1014,15 @@ La **tabla de hallazgos** (`## Tech Lead: findings`) acumula los hallazgos de to
 de la tarea, con estado `open | fixed | dismissed`. Como las ramas de una ola no se ven
 entre sí, cada revisión **agrega** al estado (`findings`, reducer append-only) y nadie la
 pliega ahí: la deduplicación se aplica **al leer**, en el fan-in, que es el único lugar que
-ve todas las ramas. Una fila es un `location` + un `claim`; el veredicto de la primera vez
-es el que queda, un hallazgo sin evidencia nace `dismissed`, y una fila que la última
-pasada de su subtarea ya no levanta queda `fixed`. La sección lleva las abiertas, que es lo
-que entra en el próximo prompt; el crudo de todas las pasadas vive en el frontmatter.
+ve todas las ramas. Una fila es un `location` + un `claim`, normalizados; el veredicto de
+la primera vez es el que queda, y un hallazgo sin evidencia nace `dismissed`. Una fila se
+cierra **sólo porque un revisor lo dijo** (`Review.settled`): toda pasada después de la
+primera es incremental y tiene instrucción de no volver a mirar lo que ya aprobó, así que
+cerrar por silencio le borraría a cada subtarea, en su primera devolución, las
+observaciones que venía arrastrando. Es también lo que permite cerrar una fila de alcance
+`plan`, que la subtarea que la levantó ya no puede tocar y la revisión de integración sí.
+La sección lleva las abiertas, que es lo que entra en el próximo prompt; el crudo de todas
+las pasadas vive en el frontmatter.
 
 En la primera ola la tabla está **vacía**, que es exactamente el caso de #17: rinde en la
 segunda pasada y en la revisión de integración. Lo que la hace servible es que la vuelta de

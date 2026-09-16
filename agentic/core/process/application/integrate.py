@@ -87,7 +87,7 @@ def _integration(state: TaskState, conflicts: list[str], task: Checkout) -> Subt
             "branch": task.branch,
             "base": task.base,
         }
-    wanted = {**existing, "conflicts": conflicts}
+    wanted = {**existing, **rules.integration_work(state.get("integration_brief", ""), conflicts)}
     return None if wanted == existing else wanted
 
 

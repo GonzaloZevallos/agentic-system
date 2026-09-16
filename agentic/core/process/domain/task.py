@@ -129,7 +129,12 @@ class FindingRecord(TypedDict):
     """One finding as the table keeps it (issue #42): what the reviewer wrote, plus
     which subtask's review raised it and in which pass. Append-only and never rewritten:
     branches run at the same time and cannot see each other, so what a row means today
-    is folded when it is read, not when it is written (`rules.findings_rows`)."""
+    is folded when it is read, not when it is written (`rules.findings_rows`).
+
+    No `evidence`: it is the command and its output, it lives in the review's own
+    section, and a copy per finding per pass in the frontmatter only grows the document.
+    What the system needed it for, deciding whether anybody could check the finding, is
+    already spent by the time the record is written."""
 
     subtask: str
     # The review pass that raised it, per subtask: a later pass that does not raise it
@@ -137,7 +142,6 @@ class FindingRecord(TypedDict):
     version: int
     location: str
     claim: str
-    evidence: str
     severity: Severity
     scope: FindingScope
     category: FindingCategory
@@ -199,6 +203,11 @@ class TaskState(TaskInput, total=False):
     integration_brief: str
     # Every finding of every review, in order. Read folded, never rewritten.
     findings: Annotated[list[FindingRecord], operator.add]
+    # Locations a review declared settled. A row closes because a reviewer said it did,
+    # never because a pass stopped mentioning it: every pass after the first is
+    # incremental (ADR-0015) and is told not to look at what it already approved, so
+    # silence there means "did not look", not "fixed".
+    settled_findings: Annotated[list[str], operator.add]
     # The task branch, and the pull request once delivered.
     branch: str
     pull_request: str | None

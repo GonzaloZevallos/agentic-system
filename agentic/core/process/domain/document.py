@@ -69,6 +69,7 @@ def render(
         # Every finding of every review, raw: the `Tech Lead: findings` section below is
         # the folded, open half of this, which is what the next role reads (issue #42).
         "findings": state.get("findings", []),
+        "settled_findings": state.get("settled_findings", []),
         "cost_usd": round(state.get("cost_usd", 0.0), 4),
         "prompts": state.get("prompts", {}),
         "plugins": plugins or {},

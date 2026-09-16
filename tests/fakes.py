@@ -380,13 +380,23 @@ def finding(severity="blocking", category="spec-behaviour", claim="wrong", scope
 
 
 def reviewed(
-    kind="approved", reason="fine", cost=0.2, category="spec-behaviour", findings=None
+    kind="approved",
+    reason="fine",
+    cost=0.2,
+    category="spec-behaviour",
+    findings=None,
+    settled=(),
 ) -> RawResult:
     """The verdict is derived: a return is a review with a blocking finding."""
     if findings is None:
         findings = [finding(category=category, claim=reason)] if kind == "returned" else []
     return RawResult(
-        {"markdown": "### Findings\n\nNone.", "reason": reason, "findings": findings},
+        {
+            "markdown": "### Findings\n\nNone.",
+            "reason": reason,
+            "findings": findings,
+            "settled": list(settled),
+        },
         cost,
         3,
         "rv",
