@@ -65,6 +65,12 @@ class Configuration(BaseModel):
     # How long one product check may run inside the delivery gate before it counts as
     # failed (issue #22). The gate's hook waits for all of them.
     check_timeout_s: float = Field(default=600.0, gt=0)
+    # Roles that may run at once across the whole process (ADR-0004, fifth addendum).
+    # With the review inside each branch of the fan-out, a wave of four subtasks puts
+    # four Developers and four reviewers in flight, each reviewer with its own
+    # sub-agents. A 429 arrives as a role failure and two of those escalate the task,
+    # which is dearer than waiting for a slot.
+    max_concurrent_roles: int = Field(default=4, ge=1)
     # Rounds an interview may take before the interviewer closes with what it has
     # (ADR-0014).
     interview_max_rounds: int = Field(default=4, ge=1)

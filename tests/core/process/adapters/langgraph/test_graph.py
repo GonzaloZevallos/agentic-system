@@ -205,29 +205,28 @@ async def test_two_subtasks_fan_out_loop_on_a_return_and_integrate(config):
     script = script_for(
         **technical(
             tech_lead=[plan],
-            developer=[delivered("api"), delivered("domain"), delivered("domain again")],
+            developer__api=[delivered("api")],
+            developer__domain=[delivered("domain"), delivered("domain again")],
             developer_integrator=[delivered("merged")],
-            tech_lead_review=[
-                reviewed("approved"),
+            tech_lead_review__api=[reviewed("approved")],
+            tech_lead_review__domain=[
                 reviewed("returned", "no test at the seam"),
                 reviewed("approved"),
-                reviewed("approved"),
             ],
+            tech_lead_review=[reviewed("approved")],  # the integration, on the task branch
         )
     )
     final = await run_graph(script, config, fakes=fakes)
 
     assert final["status"] == "ready_for_review"
-    slugs = script.slugs[8:]
-    assert slugs[:2] == ["developer", "developer"]  # both subtasks in one superstep
-    assert slugs[2:] == [
-        "tech_lead_review",
-        "tech_lead_review",
-        "developer",  # only `domain` comes back
-        "tech_lead_review",
-        "developer_integrator",
-        "tech_lead_review",
-    ]
+    # Wave one builds and reviews both subtasks; wave two is only the one that came
+    # back; wave three is the integration. A review belongs to its own Developer's
+    # branch, so it no longer waits for the slowest of the wave. Which of two branches
+    # runs first inside a wave is the event loop's business, hence the sets.
+    built, reviews = script.ran("developer"), script.ran("tech_lead_review")
+    assert set(built[:2]) == {"api", "domain"} and built[2:] == ["domain"]
+    assert set(reviews[:2]) == {"api", "domain"} and reviews[2:] == ["domain", ""]
+    assert script.ran("developer_integrator") == [""]
     subtasks = final["subtasks"]
     assert {s["status"] for s in subtasks.values()} == {"approved"}
     assert subtasks["api"]["branch"] == "agentic/GH-1.api"
@@ -470,11 +469,46 @@ async def test_escalating_during_a_fan_out_saves_the_document_with_every_branch(
     assert len(fakes.tracker.comments) == 1
 
 
-async def test_the_task_cap_stops_the_review_loop_inside_one_node(config):
-    # Two deliveries reviewed in one `review` node: the first review takes the total
-    # from 1.86 to 2.06, so the second never starts. The routing between nodes could
-    # not have seen it (ADR-0004, third addendum).
+async def test_a_branch_that_escalates_does_not_lose_the_sister_that_delivered(config, tmp_path):
+    # `domain` leaves its tree dirty twice and escalates; `api` is approved in the same
+    # wave. Before the fan-in this was not testable: both branches saved the document
+    # and both wrote `status`, so whether the run ended `developing` or
+    # `waiting_on_human`, and whether `api`'s approval survived, was the event loop's
+    # call. `integrate` settles both, once, with every branch's work merged in.
+    fakes = Fakes()
+    fakes.workspace.dirty.add(MemoryWorkspace.ROOT / "GH-1.domain")
+    plan = planned({"id": "domain", "title": "Domain", "brief": "b", "seams": ["x"]})
+    script = script_for(
+        **technical(
+            tech_lead=[plan],
+            developer__api=[delivered("api")],
+            developer__domain=[delivered()] * 2,
+            tech_lead_review__api=[reviewed("approved")],
+        )
+    )
+    final = await run_graph(script, config, fakes=fakes)
+
+    assert final["status"] == WAITING_ON_HUMAN
+    assert final["escalated"].startswith("Developer failed 2 times")
+    assert final["subtasks"]["api"]["status"] == "approved"
+    assert final["subtasks"]["domain"]["status"] == "pending"
+    assert "Tech Lead: review api" in final["sections"]
+    doc = FilesystemTaskDocuments(tmp_path).load("GH-1")
+    assert doc["status"] == WAITING_ON_HUMAN and doc["escalated"] == final["escalated"]
+    assert doc["subtasks"]["api"]["status"] == "approved"
+    # Told once, however many branches came back.
+    assert fakes.tracker.labels == [("GH-1", "needs-human")]
+    assert len(fakes.tracker.comments) == 1
+
+
+async def test_the_task_cap_counts_what_the_sister_branches_spent(config):
+    # A branch of the fan-out carries a copy of the state, so `cost_usd` only tells it
+    # what the task had spent at the fan-out: on its own, each branch would spend a
+    # whole cap's worth. What every branch does share is `RunLimits` (ADR-0004, fifth
+    # addendum), and the cap is read against it. One role at a time, so the order the
+    # branches spend in is the test's, not the event loop's.
     config["configurable"]["task_max_budget_usd"] = 2.0
+    config["configurable"]["max_concurrent_roles"] = 1
     plan = planned({"id": "domain", "title": "Domain", "brief": "b", "seams": ["x"]})
     script = script_for(
         **technical(
@@ -486,11 +520,12 @@ async def test_the_task_cap_stops_the_review_loop_inside_one_node(config):
     final = await run_graph(script, config)
 
     assert final["status"] == WAITING_ON_HUMAN
-    assert final["escalated"] == "Tech Lead stopped by the task cap: 2.06 of 2.00 USD spent"
-    assert script.slugs.count("tech_lead_review") == 1
-    assert final["cost_usd"] == pytest.approx(2.06)
-    assert final["subtasks"]["api"]["status"] == "approved"
-    assert final["subtasks"]["domain"]["status"] == "delivered"
+    assert "stopped by the task cap" in final["escalated"]
+    # The definition stage and the plan cost 0.86, each Developer 0.5, each review 0.2.
+    # Whichever role would take the run past 2.00 never starts, so at most one role ran
+    # beyond the cap and the overrun is one role, not one per branch.
+    assert final["cost_usd"] < 2.0 + 0.5
+    assert script.slugs.count("developer") + script.slugs.count("tech_lead_review") < 4
     assert INTEGRATION not in final["subtasks"]
 
 
@@ -562,8 +597,8 @@ def test_exported_graph_uses_the_default_ports():
         "define",
         "validate",
         "plan",
-        "develop",
-        "review",
+        "pipeline",
+        "integrate",
         "deliver",
         "escalate",
         "pause",
@@ -753,3 +788,28 @@ async def test_a_task_seeded_from_its_document_resumes_like_a_checkpoint(config,
     assert final["cost_usd"] == pytest.approx(0.86 + 0.5 * 3 + 0.2 * 3)
     assert len(final["runs"]) == 8 + 6  # the document's runs, then the resumed ones
     assert len(fakes.tracker.labels) == 1
+
+
+async def test_two_tasks_through_one_graph_do_not_share_what_they_spent(tmp_path):
+    """`agentic.composition` builds the graph once, at import, and a `langgraph dev`
+    server runs every task through it. One `RunLimits` per graph would hand the second
+    task the first one's spend and stop it on its first role."""
+    fakes = Fakes()
+    fakes.workspace.moved.add(MemoryWorkspace.ROOT / "GH-2")
+    one = script_for(**technical())
+    both = ScriptedRunner(**{slug: queue * 2 for slug, queue in one.queues.items()})
+    # One compiled graph for the two tasks, as a `langgraph dev` server has it.
+    app = compiled(both, fakes=fakes)
+
+    # A cap one run fits under and two do not: sharing the counter would stop the
+    # second task on its first role, which is what this is about.
+    where = {"product_dir": str(tmp_path), "task_max_budget_usd": 2.0}
+    first = {"configurable": {**where, "thread_id": "GH-1"}}
+    final = await app.ainvoke(TASK, config=first)
+    assert final["status"] == "ready_for_review"
+    assert 1.0 < final["cost_usd"] < 2.0
+
+    second = {"configurable": {**where, "thread_id": "GH-2"}}
+    again = await app.ainvoke({**TASK, "id": "GH-2"}, config=second)
+    assert again["status"] == "ready_for_review"
+    assert again["cost_usd"] == pytest.approx(final["cost_usd"])

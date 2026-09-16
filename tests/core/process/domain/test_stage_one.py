@@ -153,20 +153,23 @@ def test_all_approved_ignores_nothing_and_needs_integration_only_for_several():
 
 def test_routing_through_the_technical_stage():
     assert rules.after_validate({"status": "definition_ready"}) == "plan"
-    assert rules.after_plan({"status": "planned"}) == "develop"
+    # The plan hands the first wave to the fan-in; every wave comes back to it.
+    assert rules.after_plan({"status": "planned"}) == "integrate"
     assert rules.after_plan({"escalated": "x"}) is None
+    # Inside a branch: an escalation ends the branch, it never reaches the human here.
     assert rules.after_develop({}) == "review"
     assert rules.after_develop({"escalated": "x"}) is None
-    # Something to build or rebuild: back to develop; everything approved: deliver.
-    assert rules.after_review({"subtasks": {"a": sub("returned")}}) == "develop"
-    assert rules.after_review({"subtasks": {"a": sub("approved"), "b": sub("pending")}}) == (
-        "develop"
+    # Something to build, rebuild or review: another wave; everything approved: deliver.
+    assert rules.after_integrate({"subtasks": {"a": sub("returned")}}) == "pipeline"
+    assert rules.after_integrate({"subtasks": {"a": sub("delivered")}}) == "pipeline"
+    assert rules.after_integrate({"subtasks": {"a": sub("approved"), "b": sub("pending")}}) == (
+        "pipeline"
     )
-    assert rules.after_review({"subtasks": {"a": sub("approved")}}) == "deliver"
-    assert rules.after_review({"subtasks": {"a": sub("approved"), "b": sub("approved")}}) == (
+    assert rules.after_integrate({"subtasks": {"a": sub("approved")}}) == "deliver"
+    assert rules.after_integrate({"subtasks": {"a": sub("approved"), "b": sub("approved")}}) == (
         "deliver"
     )
-    assert rules.after_review({"subtasks": {"a": sub("returned")}, "escalated": "x"}) is None
+    assert rules.after_integrate({"subtasks": {"a": sub("returned")}, "escalated": "x"}) is None
     assert rules.after_deliver({}) is None
 
 

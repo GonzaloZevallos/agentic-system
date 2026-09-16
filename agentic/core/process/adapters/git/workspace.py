@@ -77,8 +77,14 @@ class GitWorkspace:
     def is_clean(self, path: Path) -> bool:
         return not self._git("status", "--porcelain", cwd=path)
 
-    def merge(self, path: Path, branch: str) -> None:
-        self._git("merge", "--no-edit", "-q", branch, cwd=path)
+    def merge(self, path: Path, branch: str) -> str | None:
+        """A conflict is not an error of the system: the merge is undone so the
+        checkout stays clean, and the reason goes back for a role to resolve by hand."""
+        result = self._run("merge", "--no-edit", "-q", branch, cwd=path)
+        if result.returncode == 0:
+            return None
+        self._run("merge", "--abort", cwd=path)
+        return (result.stdout + result.stderr).strip() or f"`git merge {branch}` failed"
 
     def commit_all(self, path: Path, message: str) -> str | None:
         self._git("add", "-A", cwd=path)

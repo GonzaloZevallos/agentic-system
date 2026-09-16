@@ -208,11 +208,9 @@ def _indented(text: str) -> str:
 
 
 def _resuming_subtasks(r: Resumption) -> list[str]:
-    if r.target == "develop":
-        return rules.ready_subtasks(r.resumed)
-    if r.target == "review":
-        return rules.delivered_subtasks(r.resumed)
-    return []
+    """What the next wave runs, for the human to read before spending. The fan-in
+    dispatches it, so the target is `integrate` whatever the wave holds."""
+    return rules.dispatched_subtasks(r.resumed) if r.target == "integrate" else []
 
 
 def _subtasks(r: Resumption) -> str:

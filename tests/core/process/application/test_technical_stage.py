@@ -7,6 +7,7 @@ import pytest
 from agentic.core.process.application.deliver import deliver
 from agentic.core.process.application.develop import develop
 from agentic.core.process.application.escalate import escalate
+from agentic.core.process.application.integrate import integrate
 from agentic.core.process.application.plan import plan
 from agentic.core.process.application.ports import CommandResult, RawResult
 from agentic.core.process.application.review import review
@@ -169,8 +170,8 @@ async def test_a_developer_that_leaves_the_tree_dirty_fails_and_is_retried(cfg):
     assert patch["subtasks"]["api"]["status"] == "pending"
 
 
-async def test_review_approves_returns_and_adds_the_integration(cfg):
-    state = {
+def two_delivered() -> dict:
+    return {
         **TASK,
         "subtasks": {
             "api": sub("api", "delivered", branch="agentic/GH-12.api", base="base1"),
@@ -178,17 +179,37 @@ async def test_review_approves_returns_and_adds_the_integration(cfg):
         },
         "sections": {**TASK["sections"], "Developer: api": "x", "Developer: domain": "y"},
     }
-    runner = ScriptedRunner(
-        tech_lead_review=[reviewed("approved"), reviewed("returned", "no test")]
-    )
+
+
+async def test_a_review_runs_on_its_own_subtask_and_nobody_else(cfg):
+    # One run, one subtask: the review is the second half of its Developer's branch in
+    # the fan-out, so it never walks the others (ADR-0004, fifth addendum).
+    state = {**two_delivered(), "subtask_id": "api"}
+    runner = ScriptedRunner(tech_lead_review=[reviewed("approved")])
     ports = memory_ports(runner)
     patch = await review(state, cfg, ports)
-    api, domain = runner.calls
+    (api,) = runner.calls
     assert api["cwd"] == MemoryWorkspace.ROOT / "GH-12.api"
     assert "from the commit `base1`" in api["system_prompt"]
     assert "subtask `api`" in api["system_prompt"] and "You have 2 left" in api["system_prompt"]
     assert "## Developer: api\n\nx" in api["prompt"] and "## Developer: domain" not in api["prompt"]
-    assert patch["subtasks"]["api"]["status"] == "approved"
+    assert patch["subtasks"] == {
+        "api": {**state["subtasks"]["api"], "status": "approved", "reviewed_head": "base"}
+    }
+    assert set(patch["sections"]) == {"Tech Lead: review api"}
+    assert ports.documents.last["sections"]["Tech Lead: review api"].startswith(
+        "### Verdict\n\n**approved**: fine"
+    )
+    # Noticing that every subtask is approved, and adding the integration, is the
+    # fan-in's: a branch cannot see its sisters.
+    assert INTEGRATION not in patch["subtasks"]
+
+
+async def test_a_returned_review_counts_for_the_pair_and_keeps_the_reason(cfg):
+    state = {**two_delivered(), "subtask_id": "domain"}
+    runner = ScriptedRunner(tech_lead_review=[reviewed("returned", "no test")])
+    ports = memory_ports(runner)
+    patch = await review(state, cfg, ports)
     assert patch["subtasks"]["domain"] == {
         **state["subtasks"]["domain"],
         "status": "returned",
@@ -201,23 +222,17 @@ async def test_review_approves_returns_and_adds_the_integration(cfg):
         {"pair": "Tech Lead→Developer:domain", "category": "spec-behaviour", "reason": "no test"}
     ]
     assert "return_history" in ports.documents.last
-    assert INTEGRATION not in patch["subtasks"]  # not until every subtask is approved
-    assert set(patch["sections"]) == {"Tech Lead: review api", "Tech Lead: review domain"}
     assert patch["sections"]["Tech Lead: review domain"] == (
         "### Verdict\n\n**returned** (`spec-behaviour`): no test\n\n### Findings\n\nNone."
     )
-    assert ports.documents.last["sections"]["Tech Lead: review api"].startswith(
-        "### Verdict\n\n**approved**: fine"
-    )
 
-    # The Developer of `domain` is sent back; once it is approved, the integrator enters.
+    # The Developer of `domain` is sent back; the next pass spends the pair's last one.
     again = apply(state, patch)
     again["subtasks"]["domain"]["status"] = "delivered"
     runner = ScriptedRunner(tech_lead_review=[reviewed("approved")])
     patch = await review(again, cfg, memory_ports(runner))
     assert "You have 1 left" in runner.calls[0]["system_prompt"]
     assert patch["subtasks"]["domain"]["status"] == "approved"
-    assert patch["subtasks"][INTEGRATION]["status"] == "pending"
 
 
 async def test_a_review_after_a_return_starts_from_the_head_it_reviewed(cfg):
@@ -232,6 +247,7 @@ async def test_a_review_after_a_return_starts_from_the_head_it_reviewed(cfg):
             "b": sub("b"),  # a second subtask, so `api` has a checkout of its own
         },
         "sections": {**TASK["sections"], "Developer: api": "x"},
+        "subtask_id": "api",
     }
     runner = ScriptedRunner(tech_lead_review=[reviewed("returned", "no test"), reviewed()])
     ports = memory_ports(runner)
@@ -256,6 +272,7 @@ async def test_review_escalates_when_the_pair_hits_its_limit(cfg):
         **TASK,
         "subtasks": {"api": sub("api", "delivered", branch="b", base="x"), "b": sub("b")},
         "returns": {"Tech Lead→Developer:api": 2},
+        "subtask_id": "api",
     }
     patch = await review(
         state, cfg, memory_ports(ScriptedRunner(tech_lead_review=[reviewed("returned", "still")]))
@@ -272,7 +289,11 @@ async def test_review_escalates_when_the_pair_hits_its_limit(cfg):
 async def test_a_review_whose_only_block_has_no_evidence_approves(cfg):
     from tests.fakes import finding
 
-    state = {**TASK, "subtasks": {"api": sub("api", "delivered", branch="b", base="x")}}
+    state = {
+        **TASK,
+        "subtasks": {"api": sub("api", "delivered", branch="b", base="x")},
+        "subtask_id": "api",
+    }
     bare = RawResult(
         {"markdown": "### Findings", "reason": "r", "findings": [finding() | {"evidence": ""}]},
         0.2,
@@ -292,7 +313,7 @@ async def test_the_integrator_builds_on_the_task_branch_with_the_branches_listed
         "subtasks": {
             "api": sub("api", "approved", branch="agentic/GH-12.api"),
             "domain": sub("domain", "approved", branch="agentic/GH-12.domain"),
-            INTEGRATION: sub(INTEGRATION),
+            INTEGRATION: sub(INTEGRATION, conflicts=["agentic/GH-12.domain"]),
         },
         "subtask_id": INTEGRATION,
     }
@@ -302,10 +323,15 @@ async def test_the_integrator_builds_on_the_task_branch_with_the_branches_listed
     patch = await develop(state, cfg, ports)
     call = runner.calls[0]
     assert call["cwd"] == TASK_PATH
+    # What the fan-in already merged and what it left: the integrator is here for the
+    # second list, and a merge it repeats over the first is a no-op it pays for.
     assert (
-        "- `agentic/GH-12.api` (api: api)\n- `agentic/GH-12.domain` (domain: domain)"
+        "- `agentic/GH-12.api` (api: api) — already merged\n"
+        "- `agentic/GH-12.domain` (domain: domain) — **conflicts, not merged**"
         in call["system_prompt"]
     )
+    # The integration never merges its dependencies itself: the fan-in did that.
+    assert ports.workspace.merges == []
     assert patch["subtasks"][INTEGRATION]["status"] == "delivered"
     (section,) = patch["sections"]
     assert section == "Developer: integration"
@@ -423,6 +449,7 @@ async def test_the_reviewer_may_run_the_declared_checks_and_reads_them(cfg):
     state = {
         **TASK,
         "subtasks": {"api": sub("api", "delivered", branch="agentic/GH-12.api", base="b")},
+        "subtask_id": "api",
     }
     checks = {"tests": "uv run --no-project pytest"}
     runner = ScriptedRunner(tech_lead_review=[reviewed()])
@@ -431,3 +458,64 @@ async def test_the_reviewer_may_run_the_declared_checks_and_reads_them(cfg):
     call = runner.calls[0]
     assert "Bash(uv run --no-project pytest:*)" in call["role"].allowed
     assert "- `tests`: `uv run --no-project pytest`" in call["system_prompt"]
+
+
+# The fan-in (ADR-0004, fifth addendum): the system's turn between two waves.
+
+
+def approved(sid: str) -> dict:
+    return sub(sid, "approved", branch=f"agentic/GH-12.{sid}", base="base1")
+
+
+async def test_the_fan_in_merges_each_approved_subtask_into_the_task_branch(cfg):
+    state = {**TASK, "subtasks": {"api": approved("api"), "domain": approved("domain")}}
+    ports = memory_ports(ScriptedRunner())
+    patch = await integrate(state, cfg, ports)
+
+    assert ports.workspace.merges == [
+        (TASK_PATH, "agentic/GH-12.api"),
+        (TASK_PATH, "agentic/GH-12.domain"),
+    ]
+    assert patch["branch"] == "agentic/GH-12"
+    # Everything approved and more than one: the integrator's subtask enters here, not
+    # in a review, because no single branch can see that its sisters are done.
+    assert patch["subtasks"][INTEGRATION]["status"] == "pending"
+    assert patch["subtasks"][INTEGRATION]["conflicts"] == []
+    assert ports.documents.last["subtasks"][INTEGRATION]["status"] == "pending"
+
+
+async def test_a_merge_the_fan_in_cannot_do_is_left_for_the_integrator(cfg):
+    state = {**TASK, "subtasks": {"api": approved("api"), "domain": approved("domain")}}
+    ports = memory_ports(ScriptedRunner())
+    ports.workspace.conflicts.add("agentic/GH-12.domain")
+    patch = await integrate(state, cfg, ports)
+
+    # The task branch keeps what did apply; the rest is named for the role whose job
+    # resolving it is. Not an escalation: a conflict is a fact about the code.
+    assert patch["subtasks"][INTEGRATION]["conflicts"] == ["agentic/GH-12.domain"]
+    assert "escalated" not in patch
+
+
+async def test_the_fan_in_creates_the_wave_checkouts_one_at_a_time(cfg):
+    # Four `git worktree add` starting within 250 ms of each other raced for the same
+    # lock in run 4, and a lost lock was a crash with no escalation.
+    state = {**TASK, "subtasks": {"api": sub("api"), "domain": sub("domain")}}
+    ports = memory_ports(ScriptedRunner())
+    await integrate(state, cfg, ports)
+    assert ports.workspace.checkouts_made == [
+        "agentic/GH-12",
+        "agentic/GH-12.api",
+        "agentic/GH-12.domain",
+    ]
+
+
+async def test_the_fan_in_settles_the_status_of_a_task_a_branch_escalated(cfg):
+    # `status` is last-write-wins: the branch that escalated wrote `waiting_on_human`
+    # and a sister that delivered fine wrote `developing` in the same superstep.
+    state = {**TASK, "status": "developing", "escalated": "Developer failed 2 times: x"}
+    ports = memory_ports(ScriptedRunner())
+    patch = await integrate(state, cfg, ports)
+    assert patch == {"status": "waiting_on_human"}
+    # Nothing touches the workspace or the document while the task waits: `escalate`
+    # saves it next, from the state with every branch's work already merged in.
+    assert ports.workspace.merges == [] and ports.documents.saved == []

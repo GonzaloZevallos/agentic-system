@@ -112,7 +112,7 @@ def test_a_resume_under_the_formula_goes_on_to_the_returned_integration(cfg):
     ports.tracker.earlier = ["Escalated: " + CAP]
     ports.workspace.checkouts = [cfg.product_dir / ".agentic/worktrees/GH-12"]
     r = resume.prepare("GH-12", paused(cost_usd=60.0), "document", cfg, ports)
-    assert r.decision is None and r.target == "develop"
+    assert r.decision is None and r.target == "integrate"
     assert r.cap_usd == 30 + 15 * 3  # two subtasks and the integration
     assert r.resumed["escalated"] is None and r.resumed["status"] == "developing"
     text = resume.summary(r, cfg, ports)
@@ -120,7 +120,7 @@ def test_a_resume_under_the_formula_goes_on_to_the_returned_integration(cfg):
     assert "spent:     60.00 USD (definition 0.00, plan 0.00, development 25.00, " in text
     assert "review 25.00, other 10.00)" in text
     assert "task cap:  75.00 USD (base 30 + 15 x 3 units, ceiling 250)" in text
-    assert "resumes:   develop (integration)" in text
+    assert "resumes:   integrate (integration)" in text
     assert "session:   Developer: integration: d1" in text
     assert "session:   Tech Lead: review integration: r1" in text
     assert "worktree:  " + str(cfg.product_dir / ".agentic/worktrees/GH-12") in text
@@ -160,8 +160,8 @@ def test_questions_without_an_answer_keep_the_task_waiting(cfg):
 
 def test_a_run_that_crashed_resumes_its_pending_nodes_as_they_are(cfg):
     state = {**paused(cost_usd=1.0), "escalated": None, "status": "developing"}
-    r = resume.prepare("GH-12", state, "checkpoint", cfg, memory_ports(), ("develop",))
-    assert r.resumed == state and r.target == "develop" and r.decision is None
+    r = resume.prepare("GH-12", state, "checkpoint", cfg, memory_ports(), ("integrate",))
+    assert r.resumed == state and r.target == "integrate" and r.decision is None
 
 
 def test_announcing_takes_the_task_out_of_the_queue(cfg):
@@ -172,7 +172,7 @@ def test_announcing_takes_the_task_out_of_the_queue(cfg):
     resume.announce(r, ports)
     assert ports.tracker.unlabeled == [("GH-12", "needs-human")]
     assert ports.tracker.comments == [
-        ("GH-12", "Resumed: develop with your decision, under a task cap of 125.00 USD.")
+        ("GH-12", "Resumed: integrate with your decision, under a task cap of 125.00 USD.")
     ]
 
 

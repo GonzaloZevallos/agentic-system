@@ -126,3 +126,87 @@ rechaza reanudar si el tope en vigor no supera lo gastado.
 Descartados: releer el tope en caliente durante la corrida (rompe el versionado de
 parámetros, pendiente 15 del README) y cuatro topes por fase (la fórmula ya lo expresa; la
 fase solo se reporta).
+
+## Adenda (2026-09-15, quinta): el pipeline dev→review, el nodo de fan-in y el gasto del proceso
+
+La corrida 4 tardó 99.6 minutos de pared contra 119.5 de suma de nodos de rol: speedup real
+1.2×. Los Developers ya corrían en paralelo, pero `review` recorría `delivered_subtasks` en
+un `for` y, por la barrera de LangGraph, arrancaba recién cuando terminaba el último
+Developer del lote. Medido: `movable-clock` esperó 392 s a `arch-test`; en el fan-out de
+cuatro, las revisiones tardaron 693 s en serie contra 179 s en paralelo. Recuperable:
+10.7-12.5 minutos, a costo neutro (issue #23).
+
+**La revisión entra a la rama de su Developer.** Un subgrafo `develop → review` por
+subtarea, compilado y despachado con un `Send` por subtarea lista. Cada revisión arranca
+apenas entrega su Developer, sin esperar al más lento. El subgrafo entra por la revisión
+cuando la subtarea ya está entregada: ahí reanuda una corrida que el tope frenó entre las
+dos, y una entrega no se construye dos veces.
+
+Un subgrafo como nodo le devuelve al padre su estado final, y el padre lo vuelve a plegar
+con los mismos reducers: `cost_usd` contado dos veces y cada `runs`, `failures` y
+`return_history` duplicado. El envoltorio devuelve el delta (`task.delta`, inversa de
+`apply`); `subtask_id` nunca vuelve, porque el padre tiene uno por rama.
+
+**Un nodo `integrate` de fan-in, del sistema, entre cada dos olas.** El plan le entrega la
+primera ola, cada rama le devuelve lo que construyó, y una devolución es una ola más. No
+corre ningún rol, así que no cuesta, y es lo único de la etapa técnica que corre solo. Eso
+es para lo que está:
+
+- **Los checkouts.** Crearlos es `git branch` más `git worktree add` sobre el mismo `.git`;
+  en la corrida 4 los cuatro arrancaban con 250 ms de diferencia y un lock perdido era un
+  crash sin escalado. Acá se crean de a uno, antes de la ola.
+- **La rama de tarea.** Cada subtarea aprobada se mergea apenas se aprueba, no al final:
+  la rama es siempre la pieza integrada hasta ahí y un conflicto aparece de a uno. El
+  `Workspace.merge` pasa a devolver el motivo en vez de tirar `GitError`, deshace el merge
+  y deja la rama limpia; lo que no aplica queda nombrado en la subtarea de integración y
+  llega al prompt del integrador, que ve rama por rama qué ya está adentro y qué le queda.
+  Un conflicto es un hecho sobre el código, no una falla del sistema, y puede aparecer en
+  cualquier ola, no sólo en la última. Una dependencia que no se puede mergear sí frena la
+  subtarea antes de pagarla: construir sobre código que no está es trabajo tirado, y
+  desenredar dos ramas es decisión del humano; el escalado dice que una respuesta sola no
+  alcanza, que hay que mergear a mano en el worktree de la subtarea.
+- **El documento y el humano.** Cada rama guarda el documento con su propia vista, así que
+  la última pisa a sus hermanas hasta que algo vuelva a guardar: eso es este nodo, con el
+  estado ya fusionado. Y el escalado de cualquier rama se le cuenta al humano una sola vez,
+  desde acá, después de que volvieron todas. Adentro de una ola una rama no puede saber que
+  su hermana se frenó, y eso no cambia.
+- **El estado de una tarea que escaló.** `status` tiene reducer "último gana": la rama que
+  escaló escribió `waiting_on_human` y una hermana que entregó bien escribió `developing` en
+  el mismo superstep. Cuál quedó era una moneda al aire. Lo resuelve el fan-in. El motivo no
+  corría riesgo: nada más que un escalado escribe `escalated`.
+
+Con todo pasando por el fan-in, el ruteo de reanudación apunta ahí en cuanto hay plan. La
+excepción se mantiene explícita: un plan que no puede moverse (un `depends_on` a una
+subtarea que no existe, un ciclo) no tiene ola a la que reanudar, y `resume` lo dice en vez
+de sacar la tarea de la cola para no correr nada.
+
+**La vuelta de una devolución pasa por el fan-in, no por adentro de la rama.** El issue
+proponía `review → develop si returned` dentro del subgrafo. Con eso el Developer devuelto
+y su revisor quedan tan ciegos a las hermanas como hoy, que es la falla de canal de #17.
+Con la vuelta por el fan-in, la segunda ola arranca viendo lo que vio toda la primera
+(la tabla de hallazgos es #42). Cuesta una barrera por ola; las devoluciones son minoría y
+la ganancia grande es que la primera revisión no espere, que se conserva entera.
+
+**Semáforo y gasto por proceso (`application/limits.py`).** Con la revisión adentro de la
+rama, una ola de cuatro subtareas pone cuatro Developers y cuatro revisores en vuelo, más
+los subagentes de cada revisor; un 429 llega como fallo de rol y dos de esos escalan la
+tarea. `AGENTIC_MAX_CONCURRENT_ROLES`, default 4.
+
+Al lado va el gasto. La tercera adenda aceptó que el desborde en paralelo quedara acotado
+por N ramas × dos intentos × tope por intento, porque cada rama sólo ve el `cost_usd` del
+fan-out. Con la revisión adentro de la rama ese número dejó de ser aceptable: con el loop
+adentro eran 6 corridas de rol × 2 intentos × 10 USD = 120 por rama, 1440 con el máximo de
+12 subtareas, sobre un techo de 250. **El tope se lee contra la mayor de las dos vistas**,
+la del estado y la del proceso. No es estado compartido entre ramas: `RunLimits` no entra a
+`TaskState` ni al ruteo, vive una corrida y viaja en `Ports` porque es lo que un caso de uso
+recibe. Y sólo se niega a **arrancar** un intento: un rol ya corriendo nunca se corta, así
+que nada pago se tira. Una corrida reanudada arranca el contador en cero y el estado trae la
+historia, por eso la mayor de las dos.
+
+Uno por **corrida**, no por proceso: `composition` arma el grafo al importar y un servidor
+`langgraph dev` corre todas las tareas por ese objeto, así que uno por grafo le pasaría a la
+segunda tarea el gasto de la primera. El grafo guarda uno por `thread_id`, que es el id de
+tarea (ADR-0003). El CLI, una corrida por proceso, no nota la diferencia.
+
+Fuera de esta adenda: el canal entre revisiones (invariantes del plan, tabla de hallazgos,
+integrador condicional), en #42.

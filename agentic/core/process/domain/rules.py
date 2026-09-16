@@ -13,6 +13,7 @@ from .document import HUMAN, demote
 from .roles import DEVELOPER, PAIR_PM_PA, PM, PRODUCT_ANALYST, SOLUTION_INTERVIEW, TECH_LEAD, Pair
 from .task import (
     INTEGRATION,
+    WAITING_ON_HUMAN,
     FindingCategory,
     Return,
     ReturnCategory,
@@ -80,6 +81,25 @@ def review_markdown(
     if lowered:
         parts.append("Lowered by the system:\n\n" + "\n".join(f"- {line}" for line in lowered))
     return "\n\n".join([*parts, text])
+
+
+def unmergeable(subtask_id: str, dependency: str, conflict: str) -> TaskState:
+    """The patch when a subtask's dependency cannot be brought into its branch: the
+    Developer never starts, so nothing is paid, and the human untangles the two
+    branches. Not a role failure and not a return: no role did anything wrong."""
+    return {
+        # No role ran, so nothing seeded `current_role` the way `run_role` does: the
+        # human reading "paused: <role>" must see whose subtask stopped, not whoever
+        # wrote last.
+        "current_role": DEVELOPER.name,
+        "escalated": (
+            f"subtask {subtask_id!r} cannot start on {dependency!r}: "
+            f"the merge does not apply. Merge the two branches by hand in the "
+            f"subtask's worktree, then resume; an answer alone changes nothing here."
+            f"\n\n{conflict}"
+        ),
+        "status": WAITING_ON_HUMAN,
+    }
 
 
 def limit_reached(pair: Pair, limit: int, reason: str) -> str:
@@ -167,6 +187,19 @@ def delivered_subtasks(state: TaskState) -> list[str]:
     ]
 
 
+def dispatched_subtasks(state: TaskState) -> list[str]:
+    """Subtasks the next wave runs: the ones to build, and the ones already delivered
+    whose review never happened, which is where a run stopped by the cap resumes."""
+    return [*ready_subtasks(state), *delivered_subtasks(state)]
+
+
+def pipeline_entry(state: TaskState) -> str:
+    """Where a branch of the fan-out starts for its subtask: a delivery already made is
+    reviewed, never built again."""
+    subtask = state.get("subtasks", {}).get(state["subtask_id"], {})
+    return "review" if subtask.get("status") == "delivered" else "develop"
+
+
 def all_approved(state: TaskState) -> bool:
     subtasks = state.get("subtasks", {})
     return bool(subtasks) and all(sub.get("status") == "approved" for sub in subtasks.values())
@@ -249,7 +282,11 @@ def spent_by_phase(state: TaskState) -> dict[str, float]:
 
 # Routing of the feature path (README.md, 2): PjM -> Product Analyst -> PM -> Tech Lead
 # -> Developers -> Tech Lead -> delivery. `None` is the end of the run; the graph
-# adapter maps names to its nodes and fans `develop` out per ready subtask.
+# adapter maps names to its nodes and fans `pipeline` out per dispatched subtask.
+#
+# Every wave of Developers goes through `integrate`, the system's node between waves
+# (ADR-0004, fifth addendum): the plan hands it the first wave, each wave hands it
+# back what it built, and a return is a wave like any other.
 
 
 def after_classify(state: TaskState) -> str | None:
@@ -267,18 +304,20 @@ def after_validate(state: TaskState) -> str | None:
 
 
 def after_plan(state: TaskState) -> str | None:
-    return None if state.get("escalated") else "develop"
+    return None if state.get("escalated") else "integrate"
 
 
 def after_develop(state: TaskState) -> str | None:
+    """Inside a branch of the fan-out. An escalation ends the branch and nothing else:
+    who tells the human is `integrate`, once, after every branch came back."""
     return None if state.get("escalated") else "review"
 
 
-def after_review(state: TaskState) -> str | None:
+def after_integrate(state: TaskState) -> str | None:
     if state.get("escalated"):
         return None
-    if ready_subtasks(state):
-        return "develop"
+    if dispatched_subtasks(state):
+        return "pipeline"
     return "deliver" if all_approved(state) else None
 
 
@@ -355,11 +394,15 @@ def resume_target(state: TaskState) -> str | None:
     if state.get("escalated") or state.get("pull_request"):
         return None
     if state.get("subtasks"):
-        if delivered_subtasks(state):
-            return "review"
-        if ready_subtasks(state):
-            return "develop"
-        return "deliver" if all_approved(state) else None
+        # Once there is a plan every road goes through the fan-in, which decides the
+        # wave from the same facts: nothing here has to know about waves. Nothing to
+        # dispatch and not everything approved is a plan that cannot move (a
+        # `depends_on` on a subtask that does not exist, a cycle): there is no wave to
+        # resume into, and the caller says so instead of taking the task out of the
+        # queue to run nothing.
+        if dispatched_subtasks(state) or all_approved(state):
+            return "integrate"
+        return None
     status = state.get("status", "open")
     if status == "open":
         return "define" if state.get("type") == "feature" else "classify"

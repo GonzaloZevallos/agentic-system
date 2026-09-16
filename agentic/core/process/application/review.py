@@ -1,7 +1,11 @@
-"""Tech Lead reviews every delivered subtask, in its checkout, and either approves
-it or returns it to the same Developer within the pair's limit (README.md, 3 and 4).
-When all the real subtasks are approved and there are several, the integration
-enters as one more subtask for the integrator (ADR-0011).
+"""Tech Lead reviews one delivered subtask, in its checkout, and either approves it or
+returns it to the same Developer within the pair's limit (README.md, 3 and 4).
+
+One run, one subtask: the review is the second half of its Developer's branch in the
+fan-out (ADR-0004, fifth addendum), so it starts as soon as that Developer delivers
+instead of waiting for the slowest one. Which subtask is `state["subtask_id"]`, the
+same the Developer before it read. Who notices that every subtask is approved, and
+adds the integration, is the fan-in.
 
 The first review of a subtask diffs from its base with the brief as spec. Every
 review after a return is incremental (ADR-0015): it diffs from the head the previous
@@ -20,7 +24,7 @@ from agentic.shared.configuration import Configuration
 
 from ..domain import gate, rules
 from ..domain.roles import pair_for, reviewer_for
-from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, TaskState, apply
+from ..domain.task import WAITING_ON_HUMAN, TaskState, apply
 from .checkouts import subtask_checkout
 from .gate import declared_checks
 from .ports import Ports
@@ -28,80 +32,60 @@ from .run_role import finish, run_role
 
 
 async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
-    limit = cfg.max_returns_per_pair
-    patch: TaskState = {}
+    subtask_id = state["subtask_id"]
+    subtask = state["subtasks"][subtask_id]
     checks = declared_checks(state, ports)
     reviewer = reviewer_for(checks)
-    for subtask_id in rules.delivered_subtasks(state):
-        current = apply(state, patch)
-        subtask = current["subtasks"][subtask_id]
-        checkout = subtask_checkout(current, subtask_id, ports)
-        pair = pair_for(subtask_id)
-        remaining = rules.remaining_returns(current, pair, limit)
-        section = rules.review_section(subtask_id)
-        head = ports.workspace.head(checkout.path)
-        output, reviewed = await run_role(
-            current,
-            reviewer,
-            cfg,
-            ports,
-            section=section,
-            extra_sections=(rules.developer_section(subtask_id), section),
-            cwd=checkout.path,
-            subtask=subtask_id,
-            base=subtask.get("reviewed_head") or checkout.base,
-            review="an incremental review" if subtask.get("reviewed_head") else "a first review",
-            remaining_returns=remaining,
-            checks=gate.describe_checks(checks),
-        )
-        patch = apply(patch, reviewed)
-        if output is None:
-            break
-        subtask = {**subtask, "reviewed_head": head}
-        reason = output.data["reason"]
-        findings, lowered = rules.lower_unbacked_blocks(output.data["findings"])
-        category = rules.return_category(findings)
-        markdown = rules.review_markdown(category, reason, output.text, lowered)
-        patch = apply(patch, {"sections": {section: markdown}})
-        if category is None:
-            patch = apply(patch, {"subtasks": {subtask_id: {**subtask, "status": "approved"}}})
-        elif remaining > 0:
-            patch = apply(
-                patch,
-                {
-                    "subtasks": {
-                        subtask_id: {
-                            **subtask,
-                            "status": "returned",
-                            "reason": reason,
-                            "return_category": category,
-                        }
-                    },
-                    "returns": rules.record_return(current, pair),
-                    "return_history": [rules.return_entry(pair, category, reason)],
-                },
-            )
-        else:
-            # Returned as well, without counting: the limit is spent. The human's answer
-            # resets the pair and the resume sends the subtask back to its Developer.
-            patch = apply(
-                patch,
-                {
-                    "subtasks": {
-                        subtask_id: {
-                            **subtask,
-                            "status": "returned",
-                            "reason": reason,
-                            "return_category": category,
-                        }
-                    }
-                },
-            )
-            patch["escalated"] = rules.limit_reached(pair, limit, reason)
-            patch["status"] = WAITING_ON_HUMAN
-            break
+    checkout = subtask_checkout(state, subtask_id, ports)
+    pair = pair_for(subtask_id)
+    remaining = rules.remaining_returns(state, pair, cfg.max_returns_per_pair)
+    section = rules.review_section(subtask_id)
+    head = ports.workspace.head(checkout.path)
+    output, patch = await run_role(
+        state,
+        reviewer,
+        cfg,
+        ports,
+        section=section,
+        extra_sections=(rules.developer_section(subtask_id), section),
+        cwd=checkout.path,
+        subtask=subtask_id,
+        base=subtask.get("reviewed_head") or checkout.base,
+        review="an incremental review" if subtask.get("reviewed_head") else "a first review",
+        remaining_returns=remaining,
+        checks=gate.describe_checks(checks),
+    )
+    if output is None:
+        return finish(state, patch, ports)
 
-    current = apply(state, patch)
-    if not current.get("escalated") and rules.needs_integration(current):
-        patch = apply(patch, {"subtasks": {INTEGRATION: rules.integration_subtask()}})
+    subtask = {**subtask, "reviewed_head": head}
+    reason = output.data["reason"]
+    findings, lowered = rules.lower_unbacked_blocks(output.data["findings"])
+    category = rules.return_category(findings)
+    markdown = rules.review_markdown(category, reason, output.text, lowered)
+    patch = apply(patch, {"sections": {section: markdown}})
+    if category is None:
+        patch = apply(patch, {"subtasks": {subtask_id: {**subtask, "status": "approved"}}})
+        return finish(state, patch, ports)
+
+    returned = {
+        **subtask,
+        "status": "returned",
+        "reason": reason,
+        "return_category": category,
+    }
+    patch = apply(patch, {"subtasks": {subtask_id: returned}})
+    if remaining > 0:
+        patch = apply(
+            patch,
+            {
+                "returns": rules.record_return(state, pair),
+                "return_history": [rules.return_entry(pair, category, reason)],
+            },
+        )
+    else:
+        # Returned as well, without counting: the limit is spent. The human's answer
+        # resets the pair and the resume sends the subtask back to its Developer.
+        patch["escalated"] = rules.limit_reached(pair, cfg.max_returns_per_pair, reason)
+        patch["status"] = WAITING_ON_HUMAN
     return finish(state, patch, ports)

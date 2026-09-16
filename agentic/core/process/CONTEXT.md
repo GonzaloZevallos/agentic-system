@@ -38,7 +38,7 @@ El rol que devuelve y el rol que recibe la devolución. Las devoluciones se cuen
 Segundo Tech Lead que existe solo durante la entrevista técnica, con modelo más capaz y prompt de adversario. Entrevista a Tech Lead; no decide. No es un rol de la lista: es el entrevistador del pingpong.
 
 **Developer integrador**:
-El Developer que Tech Lead designa para unir las subtareas en la rama de tarea. Cuando la tarea tiene una sola subtarea, no hay integración: la rama de esa subtarea es la rama de tarea.
+El Developer que Tech Lead designa para terminar de unir las subtareas en la rama de tarea: lo que la integración incremental no pudo mergear solo, y hacer que las piezas funcionen juntas ahora que están en la misma rama. Cuando la tarea tiene una sola subtarea, no hay integración: la rama de esa subtarea es la rama de tarea.
 
 **Rol proactivo**:
 Rol con reloj propio que genera tareas o insumos sin que nadie se lo pida.
@@ -67,10 +67,14 @@ _Avoid_: spec, requerimientos
 Marca de alcance sobre una tarea, como "toca UI" o "toca textos", tomada del vocabulario de flags del producto. Los propone Product Analyst y los valida PM; el set validado reemplaza al propuesto.
 
 **Pieza integrada**:
-El código de todas las subtareas unido por el Developer integrador en la rama de tarea y revisado por Tech Lead.
+El código de todas las subtareas unido en la rama de tarea y revisado por Tech Lead. Lo une el sistema, subtarea por subtarea apenas cada una se aprueba; el Developer integrador resuelve lo que esa unión no pudo hacer sola y el trabajo de integración que el plan declare.
+
+**Ola**:
+El conjunto de subtareas que el sistema despacha junto: cada una con su Developer y su revisión, en paralelo con las demás. Entre dos olas corre el sistema solo. Una devolución se atiende en la ola siguiente, no dentro de la misma.
+_Avoid_: lote, fan-out (el mecanismo, no el concepto)
 
 **Rama de tarea**:
-La rama del producto donde termina el código de una tarea, una por tarea. Cada subtarea trabaja en su propia rama, aislada de las otras, y el integrador las une acá.
+La rama del producto donde termina el código de una tarea, una por tarea. Cada subtarea trabaja en su propia rama, aislada de las otras, y el sistema las trae acá.
 
 **Corrida**:
 Una ejecución del sistema sobre una tarea, desde que entra hasta el cierre o el escalado.
@@ -111,6 +115,9 @@ Revisión que arranca del head revisado en el pase anterior, no de la base de la
 
 **Head revisado**:
 El commit hasta donde llegó la última revisión de una subtarea.
+
+**Integración incremental**:
+Traer cada subtarea a la rama de tarea apenas se aprueba, en vez de todas juntas al final. Lo hace el sistema, entre dos olas. Un merge que no aplica no es un fallo: queda anotado para el integrador.
 
 **Devolución**:
 Rechazo con entrega hacia atrás. Cuenta para el límite del par.
@@ -164,7 +171,7 @@ Gasto máximo de un intento de cualquier rol. Excederlo es un fallo de rol. Red 
 _Avoid_: presupuesto (eso sería lo que se espera gastar)
 
 **Tope de tarea**:
-Gasto acumulado de una tarea a partir del cual el sistema escala y pausa en vez de seguir. Crece con el plan: una base hasta que hay plan, después la base más una parte por subtarea, integración incluida, con un techo que limita esa cuenta. Se mira antes de cada intento de cualquier rol. Subirlo al reanudar es decisión del humano, que puede pasar el techo y nunca lo baja. No es fallo de rol ni devolución y no cuenta para ningún límite. Como el tope por intento, es red de seguridad, bien arriba de lo que cuesta una tarea sana. Hoy 30 USD de base, 15 por subtarea, techo 250.
+Gasto acumulado de una tarea a partir del cual el sistema escala y pausa en vez de seguir. Crece con el plan: una base hasta que hay plan, después la base más una parte por subtarea, integración incluida, con un techo que limita esa cuenta. Se mira antes de cada intento de cualquier rol, contra lo que gastó la corrida entera y no sólo la rama que va a gastar. Subirlo al reanudar es decisión del humano, que puede pasar el techo y nunca lo baja. Alcanzado, lo que ya está corriendo termina: sólo frena lo que todavía no arrancó. No es fallo de rol ni devolución y no cuenta para ningún límite. Como el tope por intento, es red de seguridad, bien arriba de lo que cuesta una tarea sana. Hoy 30 USD de base, 15 por subtarea, techo 250.
 _Avoid_: presupuesto de tarea
 
 **Handoff**:

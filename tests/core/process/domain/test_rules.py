@@ -214,7 +214,7 @@ def test_resuming_adds_the_integration_the_review_did_not_get_to_add():
     state = {"subtasks": {"api": {"status": "approved"}, "domain": {"status": "approved"}}}
     patch = rules.resumed(state, None)
     assert patch["subtasks"] == {INTEGRATION: rules.integration_subtask()}
-    assert rules.resume_target(task.apply(state, patch)) == "develop"
+    assert rules.resume_target(task.apply(state, patch)) == "integrate"
 
 
 def test_the_resume_target_follows_the_state():
@@ -225,8 +225,44 @@ def test_the_resume_target_follows_the_state():
     assert rules.resume_target({"status": "defined"}) == "validate"
     assert rules.resume_target({"status": "returned"}) == "define"
     assert rules.resume_target({"status": "definition_ready"}) == "plan"
+    # With a plan every road goes through the fan-in, which decides the wave itself.
     both = {"api": {"status": "delivered"}, "domain": {"status": "pending"}}
-    assert rules.resume_target({"subtasks": both}) == "review"  # the delivery first
-    assert rules.resume_target({"subtasks": {"api": {"status": "returned"}}}) == "develop"
-    assert rules.resume_target({"subtasks": {"api": {"status": "approved"}}}) == "deliver"
+    assert rules.resume_target({"subtasks": both}) == "integrate"
+    assert rules.resume_target({"subtasks": {"api": {"status": "returned"}}}) == "integrate"
+    assert rules.resume_target({"subtasks": {"api": {"status": "approved"}}}) == "integrate"
     assert rules.resume_target({"pull_request": "u", "subtasks": both}) is None
+
+
+def test_the_fan_in_dispatches_a_delivery_before_it_is_built_again():
+    """A delivery the review never reached is reviewed, not built twice: where a run the
+    cap stopped between the two resumes."""
+    both = {"api": {"status": "delivered"}, "domain": {"status": "pending"}}
+    assert rules.dispatched_subtasks({"subtasks": both}) == ["domain", "api"]
+    assert rules.pipeline_entry({"subtasks": both, "subtask_id": "api"}) == "review"
+    assert rules.pipeline_entry({"subtasks": both, "subtask_id": "domain"}) == "develop"
+
+
+def test_a_plan_that_cannot_move_has_nothing_to_resume_into():
+    """Nothing to dispatch and not everything approved: a `depends_on` on a subtask that
+    does not exist, or a cycle. The caller says so instead of taking the task out of the
+    queue, announcing a resume and running nothing."""
+    stuck = {"api": {"status": "pending", "depends_on": ["ghost"]}}
+    assert rules.dispatched_subtasks({"subtasks": stuck}) == []
+    assert rules.resume_target({"subtasks": stuck}) is None
+    cycle = {
+        "a": {"status": "pending", "depends_on": ["b"]},
+        "b": {"status": "pending", "depends_on": ["a"]},
+    }
+    assert rules.resume_target({"subtasks": cycle}) is None
+
+
+def test_a_dependency_that_does_not_merge_escalates_before_the_developer_costs_anything():
+    patch = rules.unmergeable("api", "domain", "CONFLICT (content): x.py")
+    assert patch["status"] == "waiting_on_human"
+    # No role ran, so nothing seeded `current_role`: without this the human reads the
+    # name of whoever wrote last.
+    assert patch["current_role"] == "Developer"
+    assert "subtask 'api' cannot start on 'domain'" in patch["escalated"]
+    assert "CONFLICT (content): x.py" in patch["escalated"]
+    # An answer alone fixes nothing here, so the escalation says what to do instead.
+    assert "by hand" in patch["escalated"]

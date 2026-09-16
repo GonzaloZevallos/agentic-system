@@ -151,3 +151,28 @@ def test_the_checkpointer_file_stays_out_of_the_products_status(product, tmp_pat
     assert exclude.count(".agentic/state.sqlite*") == 1
     (tmp_path / "not-a-repo").mkdir()
     GitWorkspace(tmp_path / "not-a-repo", IDENTITY).exclude_system_files()  # nothing to do
+
+
+def test_a_merge_that_applies_returns_nothing_and_one_that_conflicts_says_why(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    api = ws.subtask_checkout("GH-12", "api")
+    domain = ws.subtask_checkout("GH-12", "domain")
+
+    # `api` touches a file of its own: the task branch takes it without a word.
+    (api.path / "api.py").write_text("get\n")
+    ws.commit_all(api.path, "api")
+    assert ws.merge(task.path, api.branch) is None
+    assert (task.path / "api.py").read_text() == "get\n"
+    assert ws.merge(task.path, api.branch) is None  # again is a no-op
+
+    # `domain` edits the same line of the same file, from the base the task branch
+    # no longer has: a conflict is a fact about the code, not a crash.
+    (domain.path / "api.py").write_text("post\n")
+    ws.commit_all(domain.path, "domain")
+    reason = ws.merge(task.path, domain.branch)
+    assert reason is not None and "api.py" in reason
+    # Undone, so the checkout is one a role can work in and nothing half-merged ships.
+    assert ws.is_clean(task.path)
+    assert (task.path / "api.py").read_text() == "get\n"
+    assert git("rev-parse", "--abbrev-ref", "HEAD", cwd=task.path) == "agentic/GH-12"

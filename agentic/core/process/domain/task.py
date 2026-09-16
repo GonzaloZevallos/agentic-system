@@ -11,7 +11,8 @@ Reducers:
 
 `apply` folds a partial patch into a state with those same reducers. The graph
 engine does the same on its side; use cases need it to save the document with
-the reducers already applied.
+the reducers already applied. `delta` is its inverse, for a pipeline that runs
+several nodes over a copy of the state and has to hand the parent what it added.
 """
 
 from __future__ import annotations
@@ -135,6 +136,9 @@ class Subtask(TypedDict, total=False):
     # category (ADR-0016).
     reason: str
     return_category: ReturnCategory
+    # Branches the fan-in could not bring into the task branch on its own. Only the
+    # integration subtask carries it: what the integrator has left to resolve.
+    conflicts: list[str]
 
 
 class TaskState(TaskInput, total=False):
@@ -163,7 +167,8 @@ class TaskState(TaskInput, total=False):
     pull_request: str | None
     # What an interviewee could not decide (ADR-0014); escalates with the task.
     questions_for_human: list[str]
-    # Which subtask a `develop` node is running: set by the fan-out, never persisted.
+    # Which subtask a branch of the fan-out is running: set by the fan-out, read by
+    # `develop` and `review`, never persisted and never handed back to the parent.
     subtask_id: str
 
 
@@ -187,3 +192,35 @@ def apply(state: TaskState, patch: TaskState) -> TaskState:
         else:
             merged[key] = reducer(merged[key], value)  # type: ignore[operator]
     return merged  # type: ignore[return-value]
+
+
+def delta(before: TaskState, after: TaskState) -> TaskState:
+    """The patch that turns `before` into `after` through the reducers:
+    `apply(before, delta(before, after))` is `after` again.
+
+    A pipeline of nodes runs over a copy of the state and ends holding the whole
+    state, not what it added. Handing that back to the parent would fold it in a
+    second time: `cost_usd` counted twice, every `runs`, `failures` and
+    `return_history` entry duplicated. `subtask_id` never travels back: it says which
+    branch ran, and the parent has as many answers as branches.
+    """
+    patch: dict = {}
+    for key, value in after.items():
+        if key == "subtask_id":
+            continue
+        if key not in before:
+            patch[key] = value
+            continue
+        old, reducer = before[key], REDUCERS.get(key)
+        if reducer is add:
+            if value != old:
+                patch[key] = value - old
+        elif reducer is operator.add:
+            if len(value) > len(old):
+                patch[key] = value[len(old) :]
+        elif reducer is merge:
+            if changed := {k: v for k, v in value.items() if k not in old or old[k] != v}:
+                patch[key] = changed
+        elif value != old:
+            patch[key] = value
+    return patch  # type: ignore[return-value]

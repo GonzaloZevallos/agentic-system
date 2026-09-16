@@ -9,10 +9,12 @@ the use case turns into an escalation. The graph engine's own retry was rejected
 because it reruns the node without telling the model what went wrong.
 
 The task cap is checked here too, before every attempt, because every role passes
-through here: the routing between nodes would miss the reviews inside one node and
-the rounds of an interview. Reached, `TaskCapReached` escalates the same way, but it
-is not a role failure: the role did not break (ADR-0004, third addendum). The cap is
-read off the state each time, so it grows as soon as the plan is in (fourth addendum).
+through here: the routing between nodes would miss the rounds of an interview.
+Reached, `TaskCapReached` escalates the same way, but it is not a role failure: the
+role did not break (ADR-0004, third addendum). The cap is read off the state each
+time, so it grows as soon as the plan is in (fourth addendum), and against what the
+whole process spent, which is what the state cannot hold once branches run in
+parallel (fifth addendum, `limits.py`).
 
 Context rule (README.md, 6): each role reads, in full, the sections it declares in
 `Role.reads`, after the engineering standards and the product knowledge if it reads
@@ -32,6 +34,7 @@ from ..domain import document, rules, schemas
 from ..domain.document import HUMAN
 from ..domain.roles import ORIGINAL, Prompt, Role, describe_flags, render
 from ..domain.task import WAITING_ON_HUMAN, Failure, RoleRun, TaskState, apply
+from .limits import RunLimits
 from .ports import AttemptFailed, DeliveryGate, Ports, RoleRunner
 
 Check = Callable[[dict], None]
@@ -148,6 +151,7 @@ async def run_with_retry(
     spent_usd: float = 0.0,
     task_cap_usd: float | None = None,
     gate: DeliveryGate | None = None,
+    limits: RunLimits | None = None,
 ) -> Output:
     """`check` is the use case's own rule over the validated output (raise `ValueError`);
     breaking it is a role failure like any other, so the model gets the error back.
@@ -156,28 +160,37 @@ async def run_with_retry(
     set, an attempt that would start at or over the cap raises `TaskCapReached`
     instead. A failed attempt counts: the retry can cost another attempt cap.
 
+    `limits` is the run as a process (`limits.py`): the money every branch of a fan-out
+    spent, which the state cannot hold, and how many roles may run at once. The cap is
+    read against whichever of the two views is larger, so a branch stops on its
+    sisters' spending too. It only refuses to start; a role already running is never
+    cut off.
+
     `gate` is handed to every attempt: the harness asks it when the model delivers."""
+    limits = limits or RunLimits()
     failures: list[Failure] = []
     for attempt in range(1, max(retries, 0) + 2):
-        total = spent_usd + spent(failures)
+        total = max(spent_usd + spent(failures), limits.spent_usd)
         if task_cap_usd is not None and total >= task_cap_usd:
             raise TaskCapReached(role, total, task_cap_usd, failures)
         text, session = _retry_input(prompt, failures, resume)
         try:
-            output = await _attempt(
-                role,
-                text,
-                system_prompt=system_prompt,
-                model=model,
-                vocabulary=vocabulary,
-                cwd=cwd,
-                runner=runner,
-                check=check,
-                resume=session,
-                max_budget_usd=max_budget_usd,
-                gate=gate,
-            )
+            async with limits.slot():
+                output = await _attempt(
+                    role,
+                    text,
+                    system_prompt=system_prompt,
+                    model=model,
+                    vocabulary=vocabulary,
+                    cwd=cwd,
+                    runner=runner,
+                    check=check,
+                    resume=session,
+                    max_budget_usd=max_budget_usd,
+                    gate=gate,
+                )
         except AttemptFailed as exc:
+            limits.record(exc.cost_usd)
             failures.append(
                 {
                     "role": role.name,
@@ -188,6 +201,7 @@ async def run_with_retry(
                 }
             )
             continue
+        limits.record(output.cost_usd)
         output.failures = failures
         output.cost_usd += spent(failures)
         return output
@@ -345,6 +359,7 @@ async def run_role(
             spent_usd=state.get("cost_usd", 0.0),
             task_cap_usd=task_cap(state, cfg),
             gate=gate,
+            limits=ports.limits,
         )
     except Escalating as exc:
         return None, patch | escalation(exc)
