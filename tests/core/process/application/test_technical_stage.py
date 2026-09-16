@@ -61,11 +61,11 @@ def sub(id_, status="pending", **more):
     }
 
 
-async def test_validate_distils_into_the_task_checkout_and_commits(cfg):
+async def test_validate_consolidates_into_the_task_checkout_and_commits(cfg):
     ports = memory_ports(ScriptedRunner(pm=[verdict("approved")]))
     patch = await validate_definition(TASK, cfg, ports)
     assert patch["status"] == "definition_ready"
-    assert ports.knowledge.distilled_in == TASK_PATH
+    assert ports.knowledge.consolidated_in == TASK_PATH
     assert ports.workspace.commits == [(TASK_PATH, "GH-12: product definition")]
     assert ports.runner.calls[0]["cwd"] == TASK_PATH
 
@@ -217,14 +217,14 @@ async def test_a_returned_review_counts_for_the_pair_and_keeps_the_reason(cfg):
         **state["subtasks"]["domain"],
         "status": "returned",
         "reason": "no test",
-        "return_category": "spec-behaviour",
+        "change_category": "spec-behaviour",
         "reviewed_head": "base",
     }
-    assert patch["returns"] == {"Tech Lead→Developer:domain": 1}
-    assert patch["return_history"] == [
+    assert patch["changes_requested"] == {"Tech Lead→Developer:domain": 1}
+    assert patch["change_history"] == [
         {"pair": "Tech Lead→Developer:domain", "category": "spec-behaviour", "reason": "no test"}
     ]
-    assert "return_history" in ports.documents.last
+    assert "change_history" in ports.documents.last
     assert patch["sections"]["Tech Lead: review domain"] == (
         "### Verdict\n\n**returned** (`spec-behaviour`): no test\n\n### Findings\n\nNone."
     )
@@ -274,7 +274,7 @@ async def test_review_escalates_when_the_pair_hits_its_limit(cfg):
     state = {
         **TASK,
         "subtasks": {"api": sub("api", "delivered", branch="b", base="x"), "b": sub("b")},
-        "returns": {"Tech Lead→Developer:api": 2},
+        "changes_requested": {"Tech Lead→Developer:api": 2},
         "subtask_id": "api",
     }
     patch = await review(
@@ -282,11 +282,11 @@ async def test_review_escalates_when_the_pair_hits_its_limit(cfg):
     )
     assert patch["status"] == "waiting_on_human"
     assert patch["escalated"] == "Tech Lead→Developer:api hit 2 returns: still"
-    assert "returns" not in patch and "return_history" not in patch
+    assert "changes_requested" not in patch and "change_history" not in patch
     # Returned without counting, so the human's answer sends it back to its Developer.
     api = patch["subtasks"]["api"]
     assert api["status"] == "returned" and api["reason"] == "still"
-    assert api["return_category"] == "spec-behaviour" and api["reviewed_head"] == "base"
+    assert api["change_category"] == "spec-behaviour" and api["reviewed_head"] == "base"
 
 
 async def test_a_review_whose_only_block_has_no_evidence_approves(cfg):
@@ -304,7 +304,7 @@ async def test_a_review_whose_only_block_has_no_evidence_approves(cfg):
     runner = ScriptedRunner(tech_lead_review=[bare])
     patch = await review(state, cfg, memory_ports(runner))
     assert len(runner.calls) == 1 and patch["failures"] == []
-    assert patch["subtasks"]["api"]["status"] == "approved" and "returns" not in patch
+    assert patch["subtasks"]["api"]["status"] == "approved" and "changes_requested" not in patch
     assert (
         "blocking lowered to observation: no evidence" in patch["sections"]["Tech Lead: review api"]
     )
@@ -403,7 +403,7 @@ def developing(ports, subtasks=("api", "domain")):
     return state, checkout
 
 
-async def test_the_gate_runs_the_checks_declared_at_the_tasks_base_and_records_them(cfg):
+async def test_the_presubmit_runs_the_checks_declared_at_the_tasks_base_and_records_them(cfg):
     checks = {"tests": "uv run pytest", "lint": "ruff check ."}
     commands = MemoryCommands(**{"ruff check .": [CommandResult(1, "E501 line too long")]})
     runner = ScriptedRunner(developer=[delivered()])
@@ -425,7 +425,7 @@ async def test_the_gate_runs_the_checks_declared_at_the_tasks_base_and_records_t
     assert patch["subtasks"]["api"]["status"] == "delivered"
 
 
-async def test_the_gate_refuses_twice_then_lets_the_reviewer_see_the_red(cfg):
+async def test_the_presubmit_refuses_twice_then_lets_the_reviewer_see_the_red(cfg):
     red = [CommandResult(1, "1 failed")] * 3
     runner = ScriptedRunner(developer=[delivered()])
     ports = memory_ports(runner, commands=MemoryCommands(pytest=red))
@@ -436,7 +436,7 @@ async def test_the_gate_refuses_twice_then_lets_the_reviewer_see_the_red(cfg):
     assert patch["subtasks"]["api"]["status"] == "delivered"
 
 
-async def test_the_gate_refuses_an_uncommitted_delivery_without_running_the_checks(cfg):
+async def test_the_presubmit_refuses_an_uncommitted_delivery_without_running_the_checks(cfg):
     runner = ScriptedRunner(developer=[delivered(), delivered()])
     ports = memory_ports(runner)
     state, checkout = developing(ports)

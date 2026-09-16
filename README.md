@@ -81,11 +81,10 @@ PjM clasifica
   → [si toca textos] Tech Writer escribe sobre flujo y diseño validados
   → PM consolida la definición única
   → QA Funcional (1ª pasada): observa la definición, casos borde, casos de prueba
-  → Tech Lead: análisis, pingpong, ajuste del plan de tests, subtareas e invariantes
+  → Tech Lead: análisis, pingpong, ajuste del plan de tests, subtareas
   → Developers en paralelo, cada uno con su revisión de Tech Lead pegada atrás
-  → entre olas, el sistema: integración incremental, tabla de hallazgos y la ola siguiente
-  → Developer integrador si quedó un conflicto o el plan declaró trabajo de integración
-  → revisión de la rama entera por Tech Lead, siempre, haya corrido el integrador o no
+  → entre olas, el sistema: integración incremental y la ola siguiente
+  → Developer integrador, bajo revisión de Tech Lead
   → QA 2ª pasada (funcional + seguridad/performance si fueron convocados)
   → PM valida producto
   → PjM cierra
@@ -377,28 +376,14 @@ Uno por tarea. **Nunca codea, siempre delega.**
 
 **Análisis**
 
-Es una **sesión de planificación**: el análisis entero corre en una sola sesión del
-modelo, la misma que la entrevista con el efímero, y por eso el plan sale sabiendo todo
-lo que se discutió. Retomable para las consultas del Developer cuando esa consulta
-exista. La **revisión no comparte esa sesión**: cada revisión es una función sin estado
-de (invariantes, brief, diff, tabla de hallazgos), y lo que una revisión sabe de otra es
-lo que esas cuatro entradas dicen (§13: "revisor con memoria de sesión" descartado).
-
 1. Propone la solución técnica.
 2. La pingponea con un **segundo Tech Lead efímero** hasta validarla. El efímero corre con
    modelo más capaz y **prompt de adversario**: su trabajo es encontrar el fallo, no validar.
-   Sin esas dos asimetrías el pingpong solo ratifica. El efímero propone además los
-   **invariantes**: las reglas que ninguna subtarea puede romper, que salen de lo que el
-   grill destapó. Tech Lead las adopta en el plan o las rechaza con motivo, y eso es lo
-   que hace medible su aporte.
+   Sin esas dos asimetrías el pingpong solo ratifica.
 3. Revisa y ajusta el plan de tests funcionales.
 4. Decide si la 2ª pasada necesita QA Seguridad y/o QA Performance.
 5. Parte en subtareas, marca las paralelizables, prioriza por valor entregado rápido. Puede
-   consultar el orden con PM. Escribe los **invariantes** del plan: las reglas que toda
-   subtarea cumple, cada una verificable sobre el diff de una sola. Son el único canal
-   entre revisiones que funciona en la primera ola, porque están escritos antes de que
-   nadie codee, y la primera ola es justo donde la tabla de hallazgos está vacía. Declara
-   también qué trabajo de integración queda más allá de mergear, si es que queda alguno.
+   consultar el orden con PM.
 5b. Escribe un ADR en `docs/adr/` cuando una decisión técnica sobrevive a la tarea. El
    efímero lo valida en el mismo pingpong.
 6. Informa a PjM: plan de subtareas, Developers asignados, QAs convocados.
@@ -415,13 +400,6 @@ lo que esas cuatro entradas dicen (§13: "revisor con memoria de sesión" descar
   (ADR-0004, adenda quinta). La primera revisión va desde la base de la subtarea con el
   brief como spec; toda revisión después de una devolución es **incremental**: desde el
   head que ya revisó, con su propia lista para el Developer como spec (ADR-0015).
-- Verifica los **invariantes** del plan sobre cada diff, además del brief y los seams: un
-  incumplimiento es bloqueante con categoría `plan-invariant`. Ese Developer no vio las
-  otras subtareas; los invariantes son lo que las cruza.
-- Lee la **tabla de hallazgos** (`## Tech Lead: findings`): lo que encontró toda revisión
-  de la tarea y sigue abierto, la suya y la de sus hermanas. Chequea si esta rama repite
-  algo de ahí. No relitiga: el veredicto de la primera vez es el que queda. Y entrega
-  `settled`, los lugares que verificó y ya no valen: es lo único que cierra una fila.
 - **Verifica ejecutando** (ADR-0016): no escribe nada, pero corre los chequeos que el
   producto declara (`.agentic/stack.yaml`) sobre el test que respalda cada objeción de
   comportamiento, y entrega **hallazgos** con lugar,
@@ -431,12 +409,9 @@ lo que esas cuatro entradas dicen (§13: "revisor con memoria de sesión" descar
   lo repite: lo corrió la puerta de entrega y está en la sección del Developer.
 - Si rechaza, vuelve **al mismo Developer**. Nunca reasigna a otro, y la vuelta pasa por el
   fan-in: la ola siguiente arranca sabiendo lo que vio toda la anterior.
-- Revisa la integración final, siempre: es la única revisión que lee la rama entera. El
-  **Developer integrador**, en cambio, corre solo si hace falta. El sistema ya trajo cada
-  subtarea aprobada a la rama de tarea apenas se aprobó, así que unir las piezas dejó de
-  ser trabajo de un rol: el integrador entra cuando un merge no se resolvió solo o cuando
-  el plan declaró trabajo de integración. Sin nada de eso, la rama va directo a su
-  revisión y nadie paga un merge ya hecho.
+- Designa un Developer integrador y revisa la integración final. El sistema ya trajo cada
+  subtarea aprobada a la rama de tarea apenas se aprobó; al integrador le queda lo que el
+  merge no pudo resolver solo, más el trabajo de integración que el plan declare.
 - Entrega la pieza integrada a PjM → QA 2ª pasada.
 
 **Modo proactivo**: con reloj propio, revisa el repositorio en busca de deuda técnica y
@@ -571,8 +546,7 @@ handoff explícito, pero ya no es lo único que viaja.
 ### Esqueleto del documento
 
 **Frontmatter, mantenido por PjM**: id, tipo, estado, rol actual, flags, contadores por par,
-timestamps por etapa, escalados, subtareas (con el head que revisó el último pase),
-invariantes del plan, hallazgos de todas las revisiones en crudo, hash de
+timestamps por etapa, escalados, subtareas (con el head que revisó el último pase), hash de
 prompts, corridas por rol (`runs`: rol, sección, `session_id`, modelo, costo, costo por
 modelo con los subagentes, turnos) y fallos con su texto.
 
@@ -587,10 +561,9 @@ modelo con los subagentes, turnos) y fallos con su texto.
 | UI Designer / Design Lead | Visual y validación |
 | Tech Writer | Textos |
 | QA Lead / Funcional (1ª) | Observaciones a la definición, casos borde, casos de prueba |
-| Tech Lead | Solución técnica, resultado del pingpong, plan de tests ajustado, QAs convocados, subtareas, invariantes, trabajo de integración |
+| Tech Lead | Solución técnica, resultado del pingpong, plan de tests ajustado, QAs convocados, subtareas |
 | Developer (una por subtarea) | Resumen, decisiones y supuestos, tests |
 | Tech Lead (revisión) | Hallazgos por subtarea y de la integración |
-| Tech Lead: findings | La tabla de hallazgos: los abiertos de toda revisión de la tarea, una fila por hallazgo. La escribe el sistema en el fan-in, no un rol; muere con la tarea |
 | QA 2ª pasada | Resultados por especialidad, exploratorio, veredicto consolidado |
 | PM (final) | Validación de producto |
 | PjM | Cierre y métricas de la tarea |
@@ -786,7 +759,7 @@ existe justamente para pagar ese costo solo donde compre calidad.
 | 13 | ~~Campos de `Configuration` y esquemas~~ **resuelto**: `agentic/shared/configuration.py` y `agentic/core/process/domain/schemas.py`, uno por rol implementado. Los roles que faltan agregan su esquema al entrar | — |
 | 14 | Script que corre el set de cinco tareas y escribe el JSONL de resultados (sección 14). Sin costo: eso ya lo da Grafana | Medir |
 | 15 | Versionado de **parámetros** de `Configuration` como label de las métricas; hoy solo van el SHA del sistema y la huella de prompts | Comparar corridas que cambian solo un parámetro |
-| 16 | El camino como dato (`Route`, solo la ida, con la tabla de devoluciones aparte) y `Status` en cinco valores más `outcome`, ya modelados en ADR-0009. Hoy el ruteo es una función por nodo en `rules.py` | Etapa 2: se implementa al entrar QA Lead, el segundo par |
+| 16 | El camino como dato (`Workflow`, solo la ida, con la tabla de devoluciones aparte) y `Status` en cinco valores más `outcome`, ya modelados en ADR-0009. Hoy el ruteo es una función por nodo en `rules.py` | Etapa 2: se implementa al entrar QA Lead, el segundo par |
 
 **Resueltos desde la versión anterior**: el stack y el runtime de agentes (LangGraph para el
 flujo entre roles, Claude Agent SDK como harness de cada rol, autenticado con suscripción),
@@ -831,14 +804,17 @@ Se anotan para no reintroducirlas por error.
 | Tope de tarea fijo en 100 USD, y escalar termina la corrida | Base más proporcional por subtarea con techo, y alcanzarlo pausa: el humano sube el tope y reanuda (ADR-0004, adenda cuarta; ADR-0003, adenda) |
 | Cada revisión del Tech Lead arranca desde la base de la subtarea | La primera sí; después de una devolución es incremental, desde el head ya revisado (ADR-0015) |
 | Los Developers corren en paralelo y después Tech Lead revisa todas las entregas | Cada Developer y su revisión son una rama del fan-out: la revisión arranca cuando entrega *su* Developer (ADR-0004, adenda quinta) |
-| La integración es una subtarea final del integrador | Incremental en el fan-in, apenas se aprueba cada subtarea (ADR-0004, adenda quinta); al final queda siempre la revisión de la rama entera, y el integrador sólo si hizo falta |
-| Tech Lead designa siempre un Developer integrador | Corre solo si un merge no se resolvió solo o el plan declaró trabajo de integración; la revisión de la rama entera queda siempre (issue #42) |
-| El plan son las subtareas y nada más | Lleva además invariantes, las reglas que toda subtarea cumple, propuestas por el efímero y adoptadas o rechazadas con motivo por Tech Lead (issue #42) |
-| Una revisión solo ve su subtarea y lo que su plan dice | Ve también la tabla de hallazgos: lo que encontró toda revisión de la tarea y sigue abierto (issue #42) |
-| El revisor tendría memoria de sesión entre revisiones | Es una función sin estado de (invariantes, brief, diff, tabla de hallazgos); la sesión es de la planificación, no de la revisión (issue #42) |
+| La integración es una subtarea final del integrador | Incremental en el fan-in, apenas se aprueba cada subtarea; el integrador y la revisión de la rama entera siguen al final (ADR-0004, adenda quinta) |
 | En paralelo el desborde del tope se acepta acotado por las ramas | Con la revisión adentro de la rama el número dejó de ser aceptable: el gasto del proceso lo comparten todas las ramas, sin estado compartido (ADR-0004, adenda quinta) |
 | Tech Lead revisa de solo lectura, sin correr tests, y escribe el veredicto con un motivo libre | Corre los tests que respaldan cada objeción; entrega hallazgos con evidencia y categoría, y el veredicto se deriva de los bloqueantes (ADR-0016) |
 | El revisor corre `pytest` con reglas fijas y el Developer copia el resultado de la suite en su sección | El producto declara su stack en `.agentic/stack.yaml`; la puerta de entrega los corre y escribe el resultado, y el revisor los usa para reproducir (ADR-0016, adenda) |
+| El glosario de Proceso agrupa 27 términos bajo "Interacciones" | Cuatro secciones que dicen qué momento del proceso nombran (cómo se piden cosas, cómo se entrega y se revisa, cómo se rechaza trabajo, cómo termina una corrida), y tres términos fundidos en el que ya los contenía (#55) |
+| La devolución se llama `Return` en el código | `ChangesRequested`, que es *request changes*, uno de los tres valores de `event` de una review de GitHub. La métrica `agentic.task.returns`, el label `return.category`, el atributo `role.return_categories`, el valor `returned` y las claves del documento de tarea **no** siguen: son dato ya escrito, y renombrarlas parte las series y rompe la reanudación de una tarea pausada (ADR-0008, adenda) |
+| La puerta de entrega se llama `DeliveryGate` en el port y `CheckoutGate` en la implementación | `Presubmit` y `CheckoutPresubmit`: es palabra por palabra el presubmit check de Software Engineering at Google, cap. 20, y ninguno de los dos nombres viejos decía lo que la cosa es (ADR-0018) |
+| Los dos `kind` de rol se llaman `thinker` y `validator` en el código | `actor` y `verifier`, del par Actor/Evaluator de Reflexion y del verifier de Cobbe 2021 y Lightman 2023. Corresponde verifier y no judge: el judge opina, el verifier ejecuta (ADR-0016). El castellano Pensador y Validador se queda (ADR-0018) |
+| El camino como dato se llama `Route` | Se llama `Workflow`, el término que usan Microsoft Agent Framework, OpenAI, Google ADK, Temporal y CrewAI Flows; `Graph` chocaría con el `StateGraph` de LangGraph, que es el adaptador (ADR-0009, adenda) |
+| El paso de PM al conocimiento se llama `distill()` en el código | `consolidate()`: en inglés `distill` se lee como knowledge distillation, comprimir un modelo grande en uno chico. El castellano "Destilado" se queda (ADR-0018) |
+| La copia del sistema que ejecuta una corrida se llama "runtime" | `stage0`, del bootstrapping de compiladores, con `stage1` y `stage2` gratis; "runtime" ya es el harness de cada rol (ADR-0018) |
 | Todo lo que ni el pedido ni el conocimiento resuelven va al humano, y una pregunta registrada no se retira | Va solo lo que deja la definición indecidible; el resto es un supuesto en la respuesta. El dueño de la decisión retira por número lo que una ronda posterior resuelve (ADR-0014, adenda tercera) |
 
 ---
@@ -858,7 +834,7 @@ imports:
 | Módulo | Contenido | Importa |
 |---|---|---|
 | `shared/` | `configuration.py`, `environment.py` (el entorno sin la toolchain propia) | Nada del proyecto |
-| `core/process/` | `domain/`: `roles.py` (`Role` con tools, reglas de permiso y skills; `Pair`; `Interview`; `describe_flags`) y `prompts/`, `task.py` (estado, subtareas y reducers), `document.py`, `schemas.py`, `rules.py` (límite por par, versionado por sección, la ola que despacha el fan-in, la tabla de hallazgos y los invariantes, ruteo, tope de tarea, reanudación), `gate.py` (qué le falta a una entrega). `application/`: `ports.py` (`RoleRunner`, `DeliveryGate`, `TaskDocuments`, `ProductKnowledge`, `Prompts`, `FlagVocabulary`, `ProductStack`, `Commands`, `Inbox`, `Workspace`, `Tracker`), `interview` (rondas entre dos roles, ADR-0014), `gate` (la puerta de entrega sobre los ports) y `limits.py` (lo que una corrida puede hacer a la vez y gastar, compartido por las ramas) y un caso de uso por nodo: `classify`, `define`, `validate_definition`, `plan`, `develop`, `review`, `integrate` (el fan-in), `deliver`, `escalate`, sobre `run_role`, más `resume` (qué hace una reanudación antes de gastar). `adapters/`: `claude_sdk/` (harness con plugin de skills, jaula por rol con `hooks.py`, `Printer`), `shell/` (corre los chequeos del producto), `filesystem/` (documentos y overlay de prompts), `git/` (rama de tarea y árboles de trabajo, ADR-0011), `github/` (bandeja y escritura: PR, comentarios, etiquetas), `langgraph/` (el grafo: nodos, ruteo, el subgrafo `develop → review` con `Send` por subtarea y el fan-in, abre y cierra los spans; `pause` con el `interrupt()`, ADR-0003) y `telemetry.py`, el port por el que entra el tracing | `shared` |
+| `core/process/` | `domain/`: `roles.py` (`Role` con tools, reglas de permiso y skills; `Pair`; `Interview`; `describe_flags`) y `prompts/`, `task.py` (estado, subtareas y reducers), `document.py`, `schemas.py`, `rules.py` (límite por par, versionado por sección, la ola que despacha el fan-in, la tabla de hallazgos y los invariantes, ruteo, tope de tarea, reanudación), `presubmit.py` (qué le falta a una entrega). `application/`: `ports.py` (`RoleRunner`, `Presubmit`, `TaskDocuments`, `ProductKnowledge`, `Prompts`, `FlagVocabulary`, `ProductStack`, `Commands`, `Inbox`, `Workspace`, `Tracker`), `interview` (rondas entre dos roles, ADR-0014), `presubmit` (la puerta de entrega sobre los ports, `CheckoutPresubmit`) y `limits.py` (lo que una corrida puede hacer a la vez y gastar, compartido por las ramas) y un caso de uso por nodo: `classify`, `define`, `validate_definition`, `plan`, `develop`, `review`, `integrate` (el fan-in), `deliver`, `escalate`, sobre `run_role`, más `resume` (qué hace una reanudación antes de gastar). `adapters/`: `claude_sdk/` (harness con plugin de skills, jaula por rol con `hooks.py`, `Printer`), `shell/` (corre los chequeos del producto), `filesystem/` (documentos y overlay de prompts), `git/` (rama de tarea y árboles de trabajo, ADR-0011), `github/` (bandeja y escritura: PR, comentarios, etiquetas), `langgraph/` (el grafo: nodos, ruteo, el subgrafo `develop → review` con `Send` por subtarea y el fan-in, abre y cierra los spans; `pause` con el `interrupt()`, ADR-0003) y `telemetry.py`, el port por el que entra el tracing | `shared` |
 | `core/knowledge/` | `domain/`: `knowledge.py` (cómo se muestra, cómo se edita el glosario, qué debe traer una aprobación), `flags.py` (el vocabulario), `stack.py` (el stack del producto y sus chequeos). `adapters/filesystem/`: implementa `ProductKnowledge` y `FlagVocabulary` sobre el repo del producto; `adapters/git/`: `ProductStack`, como lo declara el commit base | `shared`, `process` |
 | `core/measurement/` | `domain/`: `metrics.py` (retrabajo, devoluciones, huella de prompts). `adapters/otel/`: spans y métricas del sistema, implementa `Telemetry` | `shared`, `process` |
 | raíz | `composition.py` arma los ports reales, el checkpointer SQLite e inyecta la telemetría; `cli.py` es el adaptador de entrada (`run`, `resume`) | Todo |
@@ -964,7 +940,7 @@ métricas de PjM.
 Lo que se puede frenar antes de que sea un fallo se frena adentro del turno, con hooks del
 SDK (ADR-0011, adenda segunda). Un rol que ejecuta corre con `PreToolUse` sobre Bash, Edit y
 Write, que niegan con motivo lo que un prefijo no ve. La puerta de entrega es un
-`PreToolUse` sobre `StructuredOutput`: el runner recibe un `DeliveryGate` y lo pregunta cada
+`PreToolUse` sobre `StructuredOutput`: el runner recibe un `Presubmit` y lo pregunta cada
 vez que el modelo entrega. `Stop` no sirve para eso: con `output_format` dispara después de
 la entrega, y un `block` ahí no la frena. Un deny no es fallo de rol ni reintento: el modelo
 recibe el motivo y sigue en la misma sesión.
@@ -989,44 +965,9 @@ que vio toda la primera. Corre solo, que es para lo que está: crea los checkout
 (cuatro `worktree add` sobre el mismo `.git` se pisaban el lock), mergea cada subtarea
 aprobada a la rama de tarea apenas se aprueba (**integración incremental**; un merge que no
 aplica queda nombrado para el integrador, y `Workspace.merge` devuelve el motivo en vez de
-tirar), agrega la subtarea de integración cuando toca, escribe la **tabla de hallazgos**,
-guarda el documento una vez con el
+tirar), agrega la subtarea de integración cuando toca, guarda el documento una vez con el
 estado de todas las ramas, y fija el `status` de una tarea que escaló, que una hermana feliz
 podía pisar. El escalado se le cuenta al humano una sola vez, desde acá.
-
-La subtarea de integración entra apenas están todas aprobadas y hay más de una, porque la
-rama entera se revisa igual; entra **`delivered`** cuando los merges fueron todo el trabajo,
-así la rama va derecho a su revisión y ningún integrador cobra por un merge ya hecho, y
-`pending` cuando quedó un conflicto o el plan declaró trabajo de integración.
-
-### El canal entre revisiones
-
-Una revisión no sabe nada de las otras, y en la corrida 4 eso costó dos devoluciones de
-integración por cosas que ya figuraban en revisiones de subtarea como "observación, no
-cargo" (issue #17). Dos canales lo arreglan, y hacen falta los dos.
-
-Los **invariantes** son del plan: reglas que toda subtarea cumple, cada una verificable
-sobre el diff de una sola. Viajan al brief del Developer y a la revisión, que devuelve con
-categoría `plan-invariant` si el diff rompe una. Es el canal que funciona **desde la
-primera ola**, porque están escritos antes de que nadie codee.
-
-La **tabla de hallazgos** (`## Tech Lead: findings`) acumula los hallazgos de toda revisión
-de la tarea, con estado `open | fixed | dismissed`. Como las ramas de una ola no se ven
-entre sí, cada revisión **agrega** al estado (`findings`, reducer append-only) y nadie la
-pliega ahí: la deduplicación se aplica **al leer**, en el fan-in, que es el único lugar que
-ve todas las ramas. Una fila es un `location` + un `claim`, normalizados; el veredicto de
-la primera vez es el que queda, y un hallazgo sin evidencia nace `dismissed`. Una fila se
-cierra **sólo porque un revisor lo dijo** (`Review.settled`): toda pasada después de la
-primera es incremental y tiene instrucción de no volver a mirar lo que ya aprobó, así que
-cerrar por silencio le borraría a cada subtarea, en su primera devolución, las
-observaciones que venía arrastrando. Es también lo que permite cerrar una fila de alcance
-`plan`, que la subtarea que la levantó ya no puede tocar y la revisión de integración sí.
-La sección lleva las abiertas, que es lo que entra en el próximo prompt; el crudo de todas
-las pasadas vive en el frontmatter.
-
-En la primera ola la tabla está **vacía**, que es exactamente el caso de #17: rinde en la
-segunda pasada y en la revisión de integración. Lo que la hace servible es que la vuelta de
-una devolución pasa por el fan-in y no por adentro de la rama (ADR-0004, adenda quinta).
 
 Cuántos roles corren a la vez lo limita `AGENTIC_MAX_CONCURRENT_ROLES` (default 4), y el
 gasto de todas las ramas lo lleva el mismo objeto: el tope de tarea se mira contra la mayor

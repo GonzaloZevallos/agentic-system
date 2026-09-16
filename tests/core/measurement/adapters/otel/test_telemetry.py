@@ -130,7 +130,7 @@ def test_role_finish_stamps_the_categories_of_the_returns_it_made(spans):
         {"pair": "Tech Lead→Developer:b", "category": "spec-missing-test", "reason": "r"},
     ]
     with telemetry.role_span("Tech Lead") as run:
-        run.finish({"cost_usd": 0.2, "return_history": history})
+        run.finish({"cost_usd": 0.2, "change_history": history})
     with telemetry.role_span("Tech Lead") as run:
         run.finish({"cost_usd": 0.2})
     returned, approved = spans.get_finished_spans()
@@ -160,8 +160,8 @@ def test_task_finish_emits_the_system_metrics(metrics):
         "type": "feature",
         "status": "definition_ready",
         "cost_usd": 0.5,
-        "returns": {"PM→Product Analyst": 1, "Tech Lead→Developer:api": 2},
-        "return_history": [
+        "changes_requested": {"PM→Product Analyst": 1, "Tech Lead→Developer:api": 2},
+        "change_history": [
             {"pair": "PM→Product Analyst", "category": "definition", "reason": "r"},
             {"pair": "Tech Lead→Developer:api", "category": "spec-behaviour", "reason": "r"},
             {"pair": "Tech Lead→Developer:api", "category": "spec-behaviour", "reason": "r"},

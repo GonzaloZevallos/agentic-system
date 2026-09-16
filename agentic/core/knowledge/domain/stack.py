@@ -10,7 +10,7 @@ base commit, never the branch's: a task that edits it does not change the bar it
 measured against, and the change applies from the next task, after the merge.
 
 Today it declares the **checks**: the commands with which the product says its code is
-sound. Loading is the `ProductStack` port's job; running the checks (the delivery gate)
+sound. Loading is the `ProductStack` port's job; running the checks (the presubmit)
 and turning them into the reviewer's permission rules are `core.process`'s.
 """
 

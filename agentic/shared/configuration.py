@@ -19,7 +19,7 @@ ENV_PREFIX = "AGENTIC_"
 # (README.md, 8; ADR-0003).
 STATE_FILE = Path(".agentic/state.sqlite")
 
-RoleKind = Literal["thinker", "validator"]
+RoleKind = Literal["actor", "verifier"]
 
 
 class MissingProductDir(ValueError):
@@ -27,13 +27,13 @@ class MissingProductDir(ValueError):
 
 
 class Configuration(BaseModel):
-    # Thinkers make most of the calls; validators need a model the thinker did not
+    # Actors make most of the calls; verifiers need a model the actor did not
     # have, which is the cheapest asymmetry to build and measure (README.md, 10).
-    thinker_model: str = "claude-sonnet-5"
-    validator_model: str = "claude-opus-5"
+    actor_model: str = "claude-sonnet-5"
+    verifier_model: str = "claude-opus-5"
     # Per-role override, keyed by role slug. Wins over the kind mapping.
     model_overrides: dict[str, str] = Field(default_factory=dict)
-    max_returns_per_pair: int = Field(default=2, ge=0)
+    max_changes_requested_per_pair: int = Field(default=2, ge=0)
     role_retries: int = Field(default=1, ge=0)
     # Money cap of one attempt of any role (README.md, 4): a safety net against a
     # runaway role, well above what a subtask costs (3-4 USD in GH-12), not a work
@@ -62,8 +62,8 @@ class Configuration(BaseModel):
     # (ADR-0013, addendum). Forced: an agent type whose definition names a model
     # (`Explore` inherits the parent's) would otherwise ignore it (issue #19).
     subagent_model: str = "claude-sonnet-5"
-    # How long one product check may run inside the delivery gate before it counts as
-    # failed (issue #22). The gate's hook waits for all of them.
+    # How long one product check may run inside the presubmit before it counts as
+    # failed (issue #22). The presubmit's hook waits for all of them.
     check_timeout_s: float = Field(default=600.0, gt=0)
     # Roles that may run at once across the whole process (ADR-0004, fifth addendum).
     # With the review inside each branch of the fan-out, a wave of four subtasks puts
@@ -109,7 +109,7 @@ class Configuration(BaseModel):
     def model_for(self, slug: str, kind: RoleKind) -> str:
         if slug in self.model_overrides:
             return self.model_overrides[slug]
-        return self.thinker_model if kind == "thinker" else self.validator_model
+        return self.actor_model if kind == "actor" else self.verifier_model
 
     @property
     def agentic_dir(self) -> Path:

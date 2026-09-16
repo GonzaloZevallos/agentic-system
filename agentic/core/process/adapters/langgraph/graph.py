@@ -190,7 +190,7 @@ def _branch_node(ports_of: PortsOf, telemetry: Telemetry):
     """The pipeline as one node of the parent graph. It hands back what the branch
     added, not the state it ended holding: the parent folds a patch in with the same
     reducers, and the whole state would count `cost_usd` twice and duplicate every
-    `runs`, `failures` and `return_history` entry (`task.delta`)."""
+    `runs`, `failures` and `change_history` entry (`task.delta`)."""
     pipeline = _pipeline(ports_of, telemetry)
 
     async def node(state: TaskState, config: RunnableConfig) -> TaskState:

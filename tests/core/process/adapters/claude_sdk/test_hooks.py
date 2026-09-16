@@ -193,7 +193,7 @@ async def test_the_edit_hook_checks_the_path_and_the_new_text(tmp_path):
     assert not await edit("Write", file_path="logo.png", content="x")
 
 
-class Gate:
+class FakePresubmit:
     timeout_s = 120.0
 
     def __init__(self, *reasons):
@@ -205,12 +205,12 @@ class Gate:
         return self.reasons.pop(0) if self.reasons else None
 
 
-async def test_the_gate_answers_the_delivery_call():
-    gate = Gate("suite red: `pytest`\n1 failed")
-    matchers = hooks.hooks_for(DEVELOPER, CWD, gate)
+async def test_the_presubmit_answers_the_delivery_call():
+    presubmit = FakePresubmit("suite red: `pytest`\n1 failed")
+    matchers = hooks.hooks_for(DEVELOPER, CWD, presubmit)
     payload = {"tool_name": hooks.DELIVERY_TOOL, "tool_input": {"markdown": "x"}}
     assert denied(await call(matchers, "PreToolUse", payload)) == ["suite red: `pytest`\n1 failed"]
     assert denied(await call(matchers, "PreToolUse", payload)) == []
-    assert gate.calls == 2
-    (gated,) = [m for m in matchers["PreToolUse"] if m.matcher == hooks.DELIVERY_TOOL]
-    assert gated.timeout >= gate.timeout_s
+    assert presubmit.calls == 2
+    (hooked,) = [m for m in matchers["PreToolUse"] if m.matcher == hooks.DELIVERY_TOOL]
+    assert hooked.timeout >= presubmit.timeout_s

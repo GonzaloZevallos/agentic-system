@@ -1,4 +1,4 @@
-"""SDK hooks: the hard cage of a role that executes, and the delivery gate.
+"""SDK hooks: the hard cage of a role that executes, and the presubmit.
 
 Permission rules match a command by its prefix, so `git -C path config` or an Edit of
 `.git/config` walked past them (ADR-0011, addendum). A `PreToolUse` hook sees the
@@ -22,7 +22,7 @@ shell on stdin (`bash <<EOF`), symlinks out of the checkout, and any command shl
 cannot parse, which passes. The cage raises the bar
 over the prompt; the system's identity in the environment still decides who signs.
 
-The delivery gate is a `PreToolUse` deny on the structured-output tool, not a `Stop`
+The presubmit is a `PreToolUse` deny on the structured-output tool, not a `Stop`
 block: with `output_format` the turn ends at that tool call, `Stop` fires after it and
 a block there is logged but ends the session anyway (spike of issue #22, SDK 0.2.152).
 A denied delivery call reaches the model as the reason, and it delivers again.
@@ -39,7 +39,7 @@ from typing import Any
 import anyio
 from claude_agent_sdk import HookCallback, HookContext, HookInput, HookJSONOutput, HookMatcher
 
-from ...application.ports import DeliveryGate
+from ...application.ports import Presubmit
 from ...domain.roles import Role
 
 # The tool Claude Code gives the model to hand back the structured output.
@@ -119,21 +119,21 @@ def is_python(file_path: str) -> bool:
     return Path(file_path).suffix in _PYTHON
 
 
-def hooks_for(role: Role, cwd: Path, gate: DeliveryGate | None) -> dict[str, list[HookMatcher]]:
-    """The hooks of one run: the cage for a role that executes, the gate when given."""
+def hooks_for(role: Role, cwd: Path, presubmit: Presubmit | None) -> dict[str, list[HookMatcher]]:
+    """The hooks of one run: the cage for a role that executes, the presubmit when given."""
     matchers: list[HookMatcher] = []
     if role.executes:
         matchers += [
             HookMatcher(matcher="Bash", hooks=[_bash(cwd)], timeout=GUARD_TIMEOUT_S),
             HookMatcher(matcher="Edit|Write", hooks=[_edit(cwd)], timeout=GUARD_TIMEOUT_S),
         ]
-    if gate is not None:
+    if presubmit is not None:
         matchers.append(
             HookMatcher(
                 matcher=DELIVERY_TOOL,
-                hooks=[_gate(gate)],
-                # The gate runs the product's checks: its own budget, plus the answer.
-                timeout=gate.timeout_s + GUARD_TIMEOUT_S,
+                hooks=[_presubmit(presubmit)],
+                # The presubmit runs the product's checks: its own budget, plus the answer.
+                timeout=presubmit.timeout_s + GUARD_TIMEOUT_S,
             )
         )
     return {"PreToolUse": matchers} if matchers else {}
@@ -175,12 +175,12 @@ def _edit(cwd: Path) -> HookCallback:
     return hook
 
 
-def _gate(gate: DeliveryGate) -> HookCallback:
+def _presubmit(presubmit: Presubmit) -> HookCallback:
     async def hook(
         data: HookInput, tool_use_id: str | None, context: HookContext
     ) -> HookJSONOutput:
         # The checks are subprocesses: off the event loop that talks to the CLI.
-        reason = await anyio.to_thread.run_sync(gate)
+        reason = await anyio.to_thread.run_sync(presubmit)
         return _deny(reason) if reason else {}
 
     return hook

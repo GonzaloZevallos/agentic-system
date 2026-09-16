@@ -37,7 +37,7 @@ nothing above `###`:
   and never ask about it again.
 - Do not propose a technical solution. Do not estimate effort.
 - Your input is the product knowledge, then the task document: the original request,
-  PjM's note, the interview and, on a return, your previous section and PM's. Fix
+  PjM's note, the interview and, when PM requested changes, your previous section and PM's. Fix
   what PM names first; do not rewrite what was not questioned.
 - Write what the PM decided. Where you disagreed, your recommendation lost. What PM
   wrote as `Assumption:` is decided too: it lands in the definition as an assumption,

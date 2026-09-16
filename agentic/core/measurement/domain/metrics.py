@@ -25,29 +25,29 @@ def rework_cost_usd(state: TaskState) -> float:
     return runs + failures
 
 
-def returns_total(state: TaskState) -> int:
-    return sum(state.get("returns", {}).values())
+def changes_requested_total(state: TaskState) -> int:
+    return sum(state.get("changes_requested", {}).values())
 
 
-def returns_by_category(state: TaskState) -> dict[str, int]:
+def changes_by_category(state: TaskState) -> dict[str, int]:
     """Returns of the task by their category (ADR-0016). A task without returns still
     leaves one sample, `none` at 0;
     returns the count has but the history lacks (a task recorded before it) are
     `unknown`."""
     counts: dict[str, int] = {}
-    history = state.get("return_history", [])
+    history = state.get("change_history", [])
     for entry in history:
         counts[entry["category"]] = counts.get(entry["category"], 0) + 1
-    missing = returns_total(state) - len(history)
+    missing = changes_requested_total(state) - len(history)
     if missing > 0:
         counts["unknown"] = missing
     return counts or {"none": 0}
 
 
-def return_categories(patch: TaskState) -> list[str]:
+def change_categories(patch: TaskState) -> list[str]:
     """The categories of the returns one role run made, in order: a review node may
     return several subtasks in one run."""
-    return [entry["category"] for entry in patch.get("return_history", [])]
+    return [entry["category"] for entry in patch.get("change_history", [])]
 
 
 def prompts_fingerprint(state: TaskState) -> str:

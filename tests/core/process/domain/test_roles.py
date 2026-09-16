@@ -53,12 +53,12 @@ def test_describe_flags_is_one_bullet_per_flag():
 def test_render_fills_placeholders_and_hashes_the_raw_text():
     raw = (PROMPTS_DIR / "pm.md").read_text()
     loaded = render(
-        raw, PROMPTS_DIR / "pm.md", max_returns=2, remaining_returns=1, flags="- `touches_ui`: x"
+        raw, PROMPTS_DIR / "pm.md", max_changes=2, remaining_changes=1, flags="- `touches_ui`: x"
     )
     assert "{{" not in loaded.text
     assert "- `touches_ui`: x" in loaded.text
     assert "You have 1 left" in loaded.text
-    assert "allows 2 returns" in loaded.text
+    assert "allows 2 rounds of requested changes" in loaded.text
     assert loaded.source == PROMPTS_DIR / "pm.md"
     assert loaded.hash == prompt_hash(raw)
     assert loaded.hash != prompt_hash(raw + " ")
@@ -82,7 +82,7 @@ def test_the_definition_stage_roles_come_first():
 
 
 def test_reads_include_own_section_for_returns():
-    # On a return the thinker must see what it wrote and what the validator said.
+    # On a return the actor must see what it wrote and what the verifier said.
     assert "Product Analyst" in PRODUCT_ANALYST.reads
     assert "PM" in PRODUCT_ANALYST.reads
     assert "Product Analyst" in PM.reads

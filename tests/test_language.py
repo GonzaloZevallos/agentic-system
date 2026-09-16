@@ -8,7 +8,7 @@ from typing import get_args, get_type_hints
 
 from agentic.core.knowledge.domain import knowledge, stack
 from agentic.core.measurement.domain import metrics
-from agentic.core.process.domain import document, gate, roles, rules, schemas, task
+from agentic.core.process.domain import document, presubmit, roles, rules, schemas, task
 from agentic.shared import configuration
 from tests.test_architecture import ALLOWED
 
@@ -29,17 +29,17 @@ TYPES = {
     "Job": knowledge.approval_check,  # the check that a capability names its jobs
     "Retrabajo": metrics.is_rework,
     "Hallazgo": schemas.Finding,
-    "Categoría de devolución": rules.return_category,
+    "Categoría de devolución": rules.change_category,
     "Tope de tarea": rules.task_cap,
     "Reanudación": rules.resumed,
     "Decisión del humano": rules.human_section,
-    "Puerta de entrega": gate,
+    "Puerta de entrega": presubmit,
     "Stack del producto": stack,
 }
 
 # Glossary term -> the field of the task state that holds it.
 STATE_FIELDS = {
-    "Devolución": "returns",
+    "Devolución": "changes_requested",
     "Escalado": "escalated",
     "Sección": "sections",
     "Flag": "flags",
@@ -49,7 +49,7 @@ STATE_FIELDS = {
 }
 
 # Glossary term -> the value of `RoleKind` that names it.
-ROLE_KINDS = {"Pensador": "thinker", "Validador": "validator"}
+ROLE_KINDS = {"Pensador": "actor", "Validador": "verifier"}
 
 
 def module_of(obj) -> str:

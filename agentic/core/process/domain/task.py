@@ -63,7 +63,7 @@ FindingScope = Literal["subtask", "plan"]
 FindingStatus = Literal["open", "fixed", "dismissed"]
 # A return's category: a review's takes its first blocking finding's; PM's returns of
 # the definition, whose reason stays free text, are all `definition`.
-ReturnCategory = FindingCategory | Literal["definition"]
+ChangeCategory = FindingCategory | Literal["definition"]
 
 
 def add(current: float, new: float) -> float:
@@ -116,12 +116,12 @@ class RoleRun(TypedDict):
     turns: int
 
 
-class Return(TypedDict):
-    """One return, as the history keeps it: the pair, its category and the validator's
+class ChangesRequested(TypedDict):
+    """One return, as the history keeps it: the pair, its category and the verifier's
     one-line reason (README.md, 3: "the same motive between the same roles", computable)."""
 
     pair: str
-    category: ReturnCategory
+    category: ChangeCategory
     reason: str
 
 
@@ -168,7 +168,7 @@ class Subtask(TypedDict, total=False):
     # The last review's reason, what the Developer fixes on a return, and its
     # category (ADR-0016).
     reason: str
-    return_category: ReturnCategory
+    change_category: ChangeCategory
     # Branches the fan-in could not bring into the task branch on its own. Only the
     # integration subtask carries it: what the integrator has left to resolve.
     conflicts: list[str]
@@ -185,9 +185,9 @@ class TaskState(TaskInput, total=False):
     # the raw record of the task, and PjM escalates with the history (ADR-0006).
     sections: Annotated[dict[str, str], merge]
     # Returns used per pair, keyed by `Pair.key`, like "PM→Product Analyst".
-    returns: Annotated[dict[str, int], merge]
+    changes_requested: Annotated[dict[str, int], merge]
     # Every return in order, with its category: what measurement counts.
-    return_history: Annotated[list[Return], operator.add]
+    change_history: Annotated[list[ChangesRequested], operator.add]
     failures: Annotated[list[Failure], operator.add]
     runs: Annotated[list[RoleRun], operator.add]
     # Short hash of each prompt that ran, keyed by role slug (ADR-0005).
@@ -247,7 +247,7 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
     A pipeline of nodes runs over a copy of the state and ends holding the whole
     state, not what it added. Handing that back to the parent would fold it in a
     second time: `cost_usd` counted twice, every `runs`, `failures` and
-    `return_history` entry duplicated. `subtask_id` never travels back: it says which
+    `change_history` entry duplicated. `subtask_id` never travels back: it says which
     branch ran, and the parent has as many answers as branches.
     """
     patch: dict = {}

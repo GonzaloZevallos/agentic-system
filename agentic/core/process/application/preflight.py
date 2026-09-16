@@ -11,7 +11,7 @@ from .run_role import load_prompt
 # Every placeholder any prompt may use, with a value good enough to render. A prompt
 # that names one outside this set fails here, whatever role it belongs to.
 PLACEHOLDERS = {
-    "remaining_returns": 2,
+    "remaining_changes": 2,
     "max_rounds": 4,
     "round": 1,
     "subtask": "subtask",

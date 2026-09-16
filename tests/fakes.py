@@ -16,7 +16,7 @@ VOCAB = {"touches_ui": "UI", "touches_copy": "copy"}
 
 class ScriptedRunner:
     """Answers `run_once` from per-role queues and records every call it saw.
-    A queued exception is raised instead of returned. A gate is asked before the
+    A queued exception is raised instead of returned. A presubmit is asked before the
     result is handed back, as the harness does when the model delivers, and again after
     each refusal, as a model that fixes and delivers again; `refused` keeps the reasons.
 
@@ -32,8 +32,8 @@ class ScriptedRunner:
 
     async def run_once(self, role: Role, prompt: str, **kwargs) -> RawResult:
         self.calls.append({"slug": role.slug, "prompt": prompt, "role": role, **kwargs})
-        if (gate := kwargs.get("gate")) is not None:
-            while (reason := gate()) is not None:
+        if (presubmit := kwargs.get("presubmit")) is not None:
+            while (reason := presubmit()) is not None:
                 self.refused.append(reason)
         key = f"{role.slug}__{_subtask_of(kwargs.get('cwd'))}"
         queue = self.queues.get(key) or self.queues.get(role.slug)
@@ -85,7 +85,7 @@ class MemoryDocuments:
 
 
 class MemoryKnowledge:
-    """Keeps what a distillation would write. The checks are the real ones: the
+    """Keeps what a consolidation would write. The checks are the real ones: the
     process tests care that a bad approval fails, not how the file is named."""
 
     def __init__(self, text: str = "", standards: str = "## Engineering standards\n\nHex."):
@@ -107,11 +107,11 @@ class MemoryKnowledge:
     def clarification_check(self) -> Callable[[dict], None]:
         return knowledge.clarification_check
 
-    def distill(self, verdict: dict, root: Path | None = None) -> list[Path]:
-        definitions, terms = knowledge.distillation(verdict)
+    def consolidate(self, verdict: dict, root: Path | None = None) -> list[Path]:
+        definitions, terms = knowledge.consolidation(verdict)
         self.definitions.update(definitions)
         self.terms.update(terms)
-        self.distilled_in = root
+        self.consolidated_in = root
         return [Path(f"/memory/docs/product/{slug}.md") for slug in definitions]
 
 

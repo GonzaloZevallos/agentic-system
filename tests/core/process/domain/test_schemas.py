@@ -38,7 +38,7 @@ def test_validate_rejects_invented_or_missing_flags():
         )
 
 
-def test_verdict_carries_the_distillation():
+def test_verdict_carries_the_consolidation():
     out = schemas.json_schema(Verdict, VOCAB)
     assert {"definitions", "glossary"} <= set(out["required"])
 

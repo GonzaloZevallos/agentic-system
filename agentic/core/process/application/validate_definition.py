@@ -1,5 +1,5 @@
-"""PM validates the definition: approves and distils, or returns it to the Product
-Analyst within the pair's limit (README.md, 3 and 4; ADR-0006). The distillation
+"""PM validates the definition: approves and consolidates, or returns it to the Product
+Analyst within the pair's limit (README.md, 3 and 4; ADR-0006). The consolidation
 lands in the task's checkout and is committed there (ADR-0011)."""
 
 from __future__ import annotations
@@ -16,8 +16,8 @@ from .run_role import finish, run_role
 
 async def validate_definition(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
     task = task_checkout(state, ports)
-    limit = cfg.max_returns_per_pair
-    remaining = rules.remaining_returns(state, PAIR_PM_PA, limit)
+    limit = cfg.max_changes_requested_per_pair
+    remaining = rules.remaining_changes(state, PAIR_PM_PA, limit)
     output, patch = await run_role(
         state,
         PM,
@@ -25,21 +25,21 @@ async def validate_definition(state: TaskState, cfg: Configuration, ports: Ports
         ports,
         check=ports.knowledge.approval_check(state.get("type", "")),
         cwd=task.path,
-        remaining_returns=remaining,
+        remaining_changes=remaining,
     )
     if output is None:
         return finish(state, patch, ports)
 
     patch["flags"] = output.data["flags"]
     if output.data["verdict"] == "approved":
-        # The distillation (ADR-0006): PM returned the knowledge, the system writes it.
-        ports.knowledge.distill(output.data, task.path)
+        # The consolidation (ADR-0006): PM returned the knowledge, the system writes it.
+        ports.knowledge.consolidate(output.data, task.path)
         ports.workspace.commit_all(task.path, f"{state['id']}: product definition")
         patch["status"] = "definition_ready"
     elif remaining > 0:
-        patch["returns"] = rules.record_return(state, PAIR_PM_PA)
-        patch["return_history"] = [
-            rules.return_entry(PAIR_PM_PA, rules.DEFINITION_RETURN, output.data["reason"])
+        patch["changes_requested"] = rules.record_return(state, PAIR_PM_PA)
+        patch["change_history"] = [
+            rules.change_entry(PAIR_PM_PA, rules.DEFINITION_RETURN, output.data["reason"])
         ]
         patch["status"] = "returned"
     else:

@@ -139,8 +139,8 @@ class _Rooted:
     def clarification_check(self):
         return self.inner.clarification_check()
 
-    def distill(self, verdict, root=None):
-        return self.inner.distill(verdict, self.root)
+    def consolidate(self, verdict, root=None):
+        return self.inner.consolidate(verdict, self.root)
 
 
 async def test_definition_stage_then_delivery(config, tmp_path):
@@ -235,7 +235,7 @@ async def test_two_subtasks_fan_out_loop_on_a_return_and_integrate(config):
     assert {s["status"] for s in subtasks.values()} == {"approved"}
     assert subtasks["api"]["branch"] == "agentic/GH-1.api"
     assert subtasks[INTEGRATION]["branch"] == "agentic/GH-1"
-    assert final["returns"] == {"Tech Lead→Developer:domain": 1}
+    assert final["changes_requested"] == {"Tech Lead→Developer:domain": 1}
     assert "Developer: domain (v1)" in final["sections"]
     assert "Tech Lead: review domain (v1)" in final["sections"]
     rerun = script.calls[8 + 4]
@@ -292,7 +292,7 @@ async def test_approval_writes_the_product_knowledge(config, tmp_path):
 
 async def test_return_writes_nothing_and_escalation_reaches_the_issue(config, tmp_path):
     # No returns allowed: the first one escalates, and the knowledge stays untouched.
-    config["configurable"]["max_returns_per_pair"] = 0
+    config["configurable"]["max_changes_requested_per_pair"] = 0
     fakes = Fakes()
     script = script_for(pm=[verdict("returned", "gap")])
     final = await run_graph(script, config, fakes=fakes)
@@ -360,7 +360,7 @@ async def test_return_loops_back_then_approves(config):
     final = await run_graph(script, config)
 
     assert final["status"] == "ready_for_review"
-    assert final["returns"] == {PAIR_PM_PA.key: 1}
+    assert final["changes_requested"] == {PAIR_PM_PA.key: 1}
     assert script.slugs[4:8] == ["product_analyst", "pm", "product_analyst", "pm"]
     second_define = script.calls[6]
     assert second_define["resume"] is None  # the interview is not repeated
@@ -398,7 +398,7 @@ async def test_return_limit_escalates(config):
     final = await run_graph(script, config)
 
     assert final["status"] == WAITING_ON_HUMAN
-    assert final["returns"] == {PAIR_PM_PA.key: 2}
+    assert final["changes_requested"] == {PAIR_PM_PA.key: 2}
     assert "hit 2 returns: still no metrics" in final["escalated"]
     assert "You have 0 left" in script.calls[-1]["system_prompt"]
     assert len(script.calls) == 10
@@ -639,7 +639,7 @@ async def test_a_crash_in_a_node_still_finishes_the_roles_span(config):
     cannot be written) propagates, but the span closes with an outcome and cost."""
 
     class BrokenKnowledge(MemoryKnowledge):
-        def distill(self, verdict, root=None):
+        def consolidate(self, verdict, root=None):
             raise OSError("read-only checkout")
 
     exporter = InMemorySpanExporter()
@@ -727,7 +727,7 @@ async def test_the_task_cap_pauses_the_task_and_a_raised_cap_resumes_it_to_deliv
 
 
 async def test_a_subtask_at_its_limit_resumes_with_the_decision_and_the_pair_reset(config):
-    config["configurable"]["max_returns_per_pair"] = 0
+    config["configurable"]["max_changes_requested_per_pair"] = 0
     fakes = Fakes()
     script = script_for(
         **technical(
@@ -743,7 +743,7 @@ async def test_a_subtask_at_its_limit_resumes_with_the_decision_and_the_pair_res
     decision = "Ship it without the header; the auditors import by position."
     final = await app.ainvoke(Command(resume={"decision": decision}), config=config)
     assert final["status"] == "ready_for_review"
-    assert final["returns"] == {"Tech Lead→Developer:api": 0}
+    assert final["changes_requested"] == {"Tech Lead→Developer:api": 0}
     human = final["sections"]["Human"]
     assert human.startswith("### Decision 1\n\nEscalated: Tech Lead→Developer:api hit 0 returns")
     assert human.endswith(decision)

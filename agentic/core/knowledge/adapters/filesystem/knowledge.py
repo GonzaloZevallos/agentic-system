@@ -2,9 +2,9 @@
 `CONTEXT.md` of the product repo. The ADRs are read, never written here: Tech Lead
 writes them with its own tools.
 
-A distillation is several files. Everything is computed and checked before the
+A consolidation is several files. Everything is computed and checked before the
 first write, and if a write fails what was on disk is put back: PM's approval never
-leaves the product half distilled.
+leaves the product half consolidated.
 """
 
 from __future__ import annotations
@@ -44,10 +44,10 @@ class FilesystemKnowledge:
             text = knowledge.DEFAULT_STANDARDS.read_text(encoding="utf-8")
         return knowledge.assemble_standards(text)
 
-    def distill(self, verdict: dict, root: Path | None = None) -> list[Path]:
+    def consolidate(self, verdict: dict, root: Path | None = None) -> list[Path]:
         """What an approved verdict leaves: the capability files, then the glossary.
         All or nothing."""
-        definitions, terms = knowledge.distillation(verdict)
+        definitions, terms = knowledge.consolidation(verdict)
         root = root or self.product_dir
         writes = self._definitions(definitions, root) | self._glossary(terms, root)
         _write_all(writes)

@@ -118,3 +118,44 @@ y en la raíz de la tarea, como proponía el issue: Langfuse suma el costo de to
 observaciones de la traza, así que cada dólar contaría dos veces, y las llamadas seguirían
 en 0. Mandarlo solo en el rol: exacto, pero pierde la altitud que Langfuse existe para
 dar (cada llamada, con lectura y escritura de caché) y la raíz no puede llevar el total.
+
+## Adenda (2026-09-16): el nombre de la serie no sigue al del dominio
+
+El dominio renombró **Devolución** a `ChangesRequested` (issue #53): `Return` no es término
+de arte y el que la industria entera reconoce es *request changes*, uno de los tres valores
+de `event` de una review de GitHub. La medición **no lo sigue**, y esto dice por qué.
+
+Se quedan con el nombre viejo, exactamente cuatro cosas:
+
+- la métrica `agentic.task.returns`,
+- la clave de label `return.category`,
+- el atributo de span `role.return_categories`,
+- y el valor `returned` de `role.outcome`, que además es un valor de `Status` y del enum de
+  veredicto que el modelo emite.
+
+El motivo es que **renombrarlas parte la historia en dos a la altura de este commit**: las
+corridas viejas quedan bajo un nombre y las nuevas bajo otro, y ningún panel las suma. Eso
+no lo arregla el dashboard, y el valor del renombre es comunicar mejor, no arreglar un bug;
+pagar con las series es un precio desproporcionado. Las dos alternativas se descartaron:
+aceptar el corte con una anotación de Grafana deja el dashboard mintiendo para siempre sobre
+cualquier ventana que cruce la fecha, y emitir las dos métricas un tiempo mete código
+temporal que hay que acordarse de borrar, contra un set de evaluación (#27) que todavía no
+existe para marcar cuándo.
+
+**La misma regla alcanza al documento de tarea**, y ahí no es cosmética. El frontmatter sigue
+escribiendo `returns`, `return_history` y `subtasks[<id>].return_category`, porque
+`resume.from_document` lee el frontmatter de vuelta al estado: con las claves renombradas,
+una tarea pausada antes de este commit reanudaría con el contador del par **en cero y sin
+decir nada**. El issue decía que los documentos ya escritos no se migran porque son registro
+crudo; es cierto para leerlos, y falso para reanudar desde ellos.
+
+La regla, entonces, en una línea: **lo que sobrevive a la corrida conserva su nombre; lo que
+se reescribe sigue al dominio.** Series y documentos del primer grupo; código, prompts y
+variables de entorno del segundo (`AGENTIC_MAX_RETURNS_PER_PAIR` pasa a
+`AGENTIC_MAX_CHANGES_REQUESTED_PER_PAIR`, y un `.env` viejo deja de tener efecto en
+silencio). El mapeo entre los dos vive en un solo lugar, `RECORDED_AS` y
+`SUBTASK_RECORDED_AS` en `document.py`, con `render` de ida y `parse` de vuelta, y un test
+que abre un documento escrito antes del renombre.
+
+Lo que queda pendiente: si alguna vez el nombre de la serie se alinea, es una migración con
+el set de evaluación re-corrido entero, no una edición.

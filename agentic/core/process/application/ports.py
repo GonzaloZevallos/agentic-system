@@ -42,7 +42,7 @@ class AttemptFailed(Exception):
         self.session_id = session_id
 
 
-class DeliveryGate(Protocol):
+class Presubmit(Protocol):
     """Asked when a role hands back its delivery, before the delivery counts: a reason
     refuses it, and the model gets the reason and delivers again (glossary: Puerta de
     entrega). Blocking: it may run the product's checks, within `timeout_s`."""
@@ -58,7 +58,7 @@ class RoleRunner(Protocol):
     What the role may do (tools, permission rules, skills, whether it executes) is
     read off the `Role` itself. `resume` continues an earlier session of the same
     role: an interview is one session per participant (ADR-0014). `max_budget_usd`
-    caps the money of this one run; `None` is no cap. `gate`, when given, is asked
+    caps the money of this one run; `None` is no cap. `presubmit`, when given, is asked
     each time the model hands back its delivery, and refuses it with a reason."""
 
     async def run_once(
@@ -72,7 +72,7 @@ class RoleRunner(Protocol):
         cwd: Path,
         resume: str | None = None,
         max_budget_usd: float | None = None,
-        gate: DeliveryGate | None = None,
+        presubmit: Presubmit | None = None,
     ) -> RawResult: ...
 
 
@@ -90,11 +90,11 @@ class TaskDocuments(Protocol):
 
 
 class ProductKnowledge(Protocol):
-    """The distilled knowledge of the product (ADR-0006), stored with the human docs.
+    """The consolidated knowledge of the product (ADR-0006), stored with the human docs.
 
     What the knowledge must look like (capability names, what an approval carries)
     is `core.knowledge`'s rule, so it arrives through the port: `approval_check`
-    is the check PM's output must pass, `distill` writes what an approved verdict
+    is the check PM's output must pass, `consolidate` writes what an approved verdict
     leaves (ADR-0010)."""
 
     def read(self, root: Path | None = None) -> str:
@@ -110,7 +110,7 @@ class ProductKnowledge(Protocol):
 
     def clarification_check(self) -> Callable[[dict], None]: ...
 
-    def distill(self, verdict: dict, root: Path | None = None) -> list[Path]: ...
+    def consolidate(self, verdict: dict, root: Path | None = None) -> list[Path]: ...
 
 
 class Prompts(Protocol):
@@ -146,7 +146,7 @@ class CommandResult:
 
 class Commands(Protocol):
     """Runs a product's command in a checkout, as a shell would, for the system itself:
-    the delivery gate. Never fails for a non-zero exit; that is the result."""
+    the presubmit. Never fails for a non-zero exit; that is the result."""
 
     def run(self, cwd: Path, command: str, timeout_s: float) -> CommandResult: ...
 

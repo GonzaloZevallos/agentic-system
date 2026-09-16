@@ -9,7 +9,7 @@ PRODUCT = {"product_dir": "/tmp/p"}
 
 def test_defaults():
     cfg = Configuration.from_sources(PRODUCT, {})
-    assert cfg.max_returns_per_pair == 2
+    assert cfg.max_changes_requested_per_pair == 2
     assert cfg.role_retries == 1
     assert cfg.evaluation_window == 10
     assert cfg.agentic_dir == Path("/tmp/p/.agentic")
@@ -27,26 +27,26 @@ def test_product_dir_from_env():
 
 
 def test_overrides_beat_default():
-    cfg = Configuration.from_sources({"max_returns_per_pair": 5, **PRODUCT}, {})
-    assert cfg.max_returns_per_pair == 5
+    cfg = Configuration.from_sources({"max_changes_requested_per_pair": 5, **PRODUCT}, {})
+    assert cfg.max_changes_requested_per_pair == 5
     assert cfg.product_dir == Path("/tmp/p")
 
 
 def test_env_beats_overrides():
     env = {
-        "AGENTIC_MAX_RETURNS_PER_PAIR": "3",
+        "AGENTIC_MAX_CHANGES_REQUESTED_PER_PAIR": "3",
         "AGENTIC_MODEL_OVERRIDES": '{"pm": "claude-fable-5-1"}',
     }
-    cfg = Configuration.from_sources({"max_returns_per_pair": 5, **PRODUCT}, env)
-    assert cfg.max_returns_per_pair == 3
+    cfg = Configuration.from_sources({"max_changes_requested_per_pair": 5, **PRODUCT}, env)
+    assert cfg.max_changes_requested_per_pair == 3
     assert cfg.model_overrides == {"pm": "claude-fable-5-1"}
 
 
 def test_model_for_kind_and_override():
     cfg = Configuration(model_overrides={"pm": "custom"}, product_dir=Path("/tmp/p"))
-    assert cfg.model_for("pjm", "thinker") == cfg.thinker_model
-    assert cfg.model_for("product_analyst", "validator") == cfg.validator_model
-    assert cfg.model_for("pm", "validator") == "custom"
+    assert cfg.model_for("pjm", "actor") == cfg.actor_model
+    assert cfg.model_for("product_analyst", "verifier") == cfg.verifier_model
+    assert cfg.model_for("pm", "verifier") == "custom"
 
 
 def test_empty_env_is_unset():

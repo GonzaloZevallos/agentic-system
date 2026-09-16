@@ -302,7 +302,7 @@ async def test_a_consultation_is_answered_by_pm_before_the_next_round(cfg):
         "Tech Lead efímero"
     ]
     assert patch["runs"][2]["section"] == "PM"
-    # What the answers change is distilled again.
+    # What the answers change is consolidated again.
     assert ports.knowledge.definitions == {"dashboard": "## Jobs"}
     assert "escalated" not in patch
 
@@ -347,7 +347,7 @@ async def test_only_pm_escalates_to_the_human_from_a_consultation(cfg):
     assert transcript is None and runner.slugs == [TL_ASK, TL_ANSWER, CONSULT, TL_ASK]
     assert patch["questions_for_human"] == ["Where do the metrics go?"]
     assert patch["status"] == "waiting_on_human" and "PM could not decide 1" in patch["escalated"]
-    assert ports.knowledge.definitions == {}  # nothing changed, nothing distilled
+    assert ports.knowledge.definitions == {}  # nothing changed, nothing consolidated
 
 
 async def test_a_consultation_repeated_across_rounds_reaches_the_human_once(cfg):
@@ -417,7 +417,7 @@ async def test_a_consultant_without_a_session_gets_its_context_first(cfg):
     assert pm["prompt"].endswith("## Questions from Tech Lead (round 1)\n\n1. Which?")
 
 
-async def test_a_clarification_that_distils_a_file_without_jobs_is_a_role_failure(cfg):
+async def test_a_clarification_that_consolidates_a_file_without_jobs_is_a_role_failure(cfg):
     cfg = Configuration(product_dir=cfg.product_dir, role_retries=0)
     runner = ScriptedRunner(
         **{

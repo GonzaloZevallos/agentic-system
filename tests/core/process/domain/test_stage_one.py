@@ -72,8 +72,8 @@ def test_interviews_name_who_asks_who_decides_and_who_writes():
     assert {"Edit(CONTEXT.md)", "Write(docs/**)"} <= set(interviewer.allowed)
     assert "Bash" not in interviewer.tools
     # Both sides of an interview see the same rounds; the interviewee decides on Opus.
-    assert INTERVIEW_DEFINITION.interviewee.kind == "validator"
-    assert INTERVIEW_SOLUTION.interviewer.kind == "validator"
+    assert INTERVIEW_DEFINITION.interviewee.kind == "verifier"
+    assert INTERVIEW_SOLUTION.interviewer.kind == "verifier"
 
 
 def test_pair_per_subtask_is_tech_lead_to_developer():
