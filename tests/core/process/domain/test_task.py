@@ -24,8 +24,8 @@ def test_add_accumulates_cost():
 def test_reducers_are_read_from_the_annotations():
     assert set(REDUCERS) == {
         "sections",
-        "returns",
-        "return_history",
+        "changes_requested",
+        "change_history",
         "failures",
         "runs",
         "prompts",
@@ -53,7 +53,7 @@ def test_apply_uses_the_reducers_and_overrides_the_rest():
         "sections": {"Product Analyst": "b"},
         "runs": [{"role": "Product Analyst"}],
         "flags": {"touches_ui": True},
-        "returns": {"PM→Product Analyst": 1},  # absent in the state: taken as is
+        "changes_requested": {"PM→Product Analyst": 1},  # absent in the state: taken as is
     }
     merged = apply(state, patch)
     assert merged["status"] == "defined"
@@ -61,7 +61,7 @@ def test_apply_uses_the_reducers_and_overrides_the_rest():
     assert merged["sections"] == {"PjM": "a", "Product Analyst": "b"}
     assert merged["runs"] == [{"role": "PjM"}, {"role": "Product Analyst"}]
     assert merged["flags"] == {"touches_ui": True}  # no reducer: replaced
-    assert merged["returns"] == {"PM→Product Analyst": 1}
+    assert merged["changes_requested"] == {"PM→Product Analyst": 1}
     assert state["sections"] == {"PjM": "a"}  # the input is not mutated
 
 
@@ -101,9 +101,11 @@ def test_delta_is_what_a_branch_added_and_apply_puts_it_back():
 
 def test_delta_takes_a_field_the_branch_started_as_it_is():
     before = {"id": "T-1"}
-    after = {"id": "T-1", "cost_usd": 0.4, "failures": [{"role": "PjM"}], "returns": {"p": 1}}
+    after = {
+        "id": "T-1", "cost_usd": 0.4, "failures": [{"role": "PjM"}], "changes_requested": {"p": 1}
+    }
     assert delta(before, after) == {
         "cost_usd": 0.4,
         "failures": [{"role": "PjM"}],
-        "returns": {"p": 1},
+        "changes_requested": {"p": 1},
     }

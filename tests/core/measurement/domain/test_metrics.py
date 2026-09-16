@@ -29,9 +29,10 @@ def test_a_clean_task_has_no_rework():
     assert metrics.rework_cost_usd({}) == 0
 
 
-def test_returns_total_sums_every_pair():
-    assert metrics.returns_total({"returns": {"PM→Product Analyst": 2, "QA→Dev": 1}}) == 3
-    assert metrics.returns_total({}) == 0
+def test_changes_requested_total_sums_every_pair():
+    counts = {"changes_requested": {"PM→Product Analyst": 2, "QA→Dev": 1}}
+    assert metrics.changes_requested_total(counts) == 3
+    assert metrics.changes_requested_total({}) == 0
 
 
 def test_returns_by_category_counts_the_history():
@@ -40,18 +41,18 @@ def test_returns_by_category_counts_the_history():
         {"pair": "Tech Lead→Developer:b", "category": "standard-typing-silenced", "reason": "r"},
         {"pair": "PM→Product Analyst", "category": "definition", "reason": "r"},
     ]
-    state = {"returns": {"x": 3}, "return_history": history}
-    assert metrics.returns_by_category(state) == {"standard-typing-silenced": 2, "definition": 1}
+    state = {"changes_requested": {"x": 3}, "change_history": history}
+    assert metrics.changes_by_category(state) == {"standard-typing-silenced": 2, "definition": 1}
     # A task with no returns still leaves its sample; one recorded before the history
     # existed counts what the history lacks as `unknown`.
-    assert metrics.returns_by_category({}) == {"none": 0}
-    assert metrics.returns_by_category({"returns": {"x": 2}}) == {"unknown": 2}
-    assert metrics.return_categories({"return_history": history}) == [
+    assert metrics.changes_by_category({}) == {"none": 0}
+    assert metrics.changes_by_category({"changes_requested": {"x": 2}}) == {"unknown": 2}
+    assert metrics.change_categories({"change_history": history}) == [
         "standard-typing-silenced",
         "standard-typing-silenced",
         "definition",
     ]
-    assert metrics.return_categories({}) == []
+    assert metrics.change_categories({}) == []
 
 
 def test_prompts_fingerprint_ignores_order_and_is_short():

@@ -187,7 +187,7 @@ def test_a_pair_at_its_limit_waits_for_an_answer_but_the_cap_does_not(cfg):
         resume.prepare("GH-12", state, "checkpoint", raised, ports)
     ports.tracker.earlier.append("Count each subscription once.")
     r = resume.prepare("GH-12", state, "checkpoint", raised, ports)
-    assert r.resumed["returns"] == {"Tech Lead→Developer:integration": 0}
+    assert r.resumed["changes_requested"] == {"Tech Lead→Developer:integration": 0}
     failed = paused(escalated="Developer failed 2 times: empty markdown")
     assert resume.prepare("GH-12", failed, "checkpoint", raised, memory_ports()).decision is None
 

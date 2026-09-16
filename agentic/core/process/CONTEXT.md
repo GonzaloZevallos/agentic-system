@@ -152,7 +152,7 @@ Traer cada subtarea a la rama de tarea apenas se aprueba, en vez de todas juntas
 _Campo_: de la integración continua, de la que toma la idea (integrar seguido y chico) y no el mecanismo
 
 **Devolución**:
-Rechazo con entrega hacia atrás. Cuenta para el límite del par.
+Rechazo con entrega hacia atrás. Cuenta para el límite del par. En el código se llama `ChangesRequested`, y su categoría `ChangeCategory`; el veredicto sigue siendo el valor `returned`, que es dato ya escrito, igual que la métrica `agentic.task.returns` y las claves del documento de tarea (ADR-0008, adenda).
 _Avoid_: rechazo (salvo para el acto puntual de QA), rebote
 _Campo_: request changes — GitHub, uno de los tres valores de `event` de una review (APPROVE, REQUEST_CHANGES, COMMENT); el par critique + revision en Constitutional AI (Bai 2022)
 

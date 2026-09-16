@@ -128,7 +128,7 @@ def load_prompt(
     return render(
         raw,
         source,
-        max_returns=cfg.max_returns_per_pair,
+        max_changes=cfg.max_changes_requested_per_pair,
         max_turns=role.max_turns,
         flags=describe_flags(vocabulary),
         **placeholders,

@@ -33,7 +33,7 @@ class Configuration(BaseModel):
     verifier_model: str = "claude-opus-5"
     # Per-role override, keyed by role slug. Wins over the kind mapping.
     model_overrides: dict[str, str] = Field(default_factory=dict)
-    max_returns_per_pair: int = Field(default=2, ge=0)
+    max_changes_requested_per_pair: int = Field(default=2, ge=0)
     role_retries: int = Field(default=1, ge=0)
     # Money cap of one attempt of any role (README.md, 4): a safety net against a
     # runaway role, well above what a subtask costs (3-4 USD in GH-12), not a work

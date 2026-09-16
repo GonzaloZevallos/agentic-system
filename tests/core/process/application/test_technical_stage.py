@@ -214,14 +214,14 @@ async def test_a_returned_review_counts_for_the_pair_and_keeps_the_reason(cfg):
         **state["subtasks"]["domain"],
         "status": "returned",
         "reason": "no test",
-        "return_category": "spec-behaviour",
+        "change_category": "spec-behaviour",
         "reviewed_head": "base",
     }
-    assert patch["returns"] == {"Tech Lead→Developer:domain": 1}
-    assert patch["return_history"] == [
+    assert patch["changes_requested"] == {"Tech Lead→Developer:domain": 1}
+    assert patch["change_history"] == [
         {"pair": "Tech Lead→Developer:domain", "category": "spec-behaviour", "reason": "no test"}
     ]
-    assert "return_history" in ports.documents.last
+    assert "change_history" in ports.documents.last
     assert patch["sections"]["Tech Lead: review domain"] == (
         "### Verdict\n\n**returned** (`spec-behaviour`): no test\n\n### Findings\n\nNone."
     )
@@ -271,7 +271,7 @@ async def test_review_escalates_when_the_pair_hits_its_limit(cfg):
     state = {
         **TASK,
         "subtasks": {"api": sub("api", "delivered", branch="b", base="x"), "b": sub("b")},
-        "returns": {"Tech Lead→Developer:api": 2},
+        "changes_requested": {"Tech Lead→Developer:api": 2},
         "subtask_id": "api",
     }
     patch = await review(
@@ -279,11 +279,11 @@ async def test_review_escalates_when_the_pair_hits_its_limit(cfg):
     )
     assert patch["status"] == "waiting_on_human"
     assert patch["escalated"] == "Tech Lead→Developer:api hit 2 returns: still"
-    assert "returns" not in patch and "return_history" not in patch
+    assert "changes_requested" not in patch and "change_history" not in patch
     # Returned without counting, so the human's answer sends it back to its Developer.
     api = patch["subtasks"]["api"]
     assert api["status"] == "returned" and api["reason"] == "still"
-    assert api["return_category"] == "spec-behaviour" and api["reviewed_head"] == "base"
+    assert api["change_category"] == "spec-behaviour" and api["reviewed_head"] == "base"
 
 
 async def test_a_review_whose_only_block_has_no_evidence_approves(cfg):
@@ -301,7 +301,7 @@ async def test_a_review_whose_only_block_has_no_evidence_approves(cfg):
     runner = ScriptedRunner(tech_lead_review=[bare])
     patch = await review(state, cfg, memory_ports(runner))
     assert len(runner.calls) == 1 and patch["failures"] == []
-    assert patch["subtasks"]["api"]["status"] == "approved" and "returns" not in patch
+    assert patch["subtasks"]["api"]["status"] == "approved" and "changes_requested" not in patch
     assert (
         "blocking lowered to observation: no evidence" in patch["sections"]["Tech Lead: review api"]
     )

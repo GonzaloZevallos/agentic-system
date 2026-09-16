@@ -214,8 +214,12 @@ class TaskRun(Run):
     def finish(self, final: TaskState) -> None:
         cost = final.get("cost_usd", 0.0)
         rework = system_metrics.rework_cost_usd(final)
-        returns = system_metrics.returns_total(final)
-        by_category = system_metrics.returns_by_category(final)
+        # The series keeps the old name on purpose: renaming it would cut every panel
+        # in two at this commit. `agentic.task.returns`, the `return.category` label,
+        # `role.return_categories` and the `returned` outcome are data already written,
+        # so they do not follow the domain's rename (ADR-0008, addendum; ADR-0018).
+        requested = system_metrics.changes_requested_total(final)
+        by_category = system_metrics.changes_by_category(final)
         labels = {
             "task.type": final.get("type", "unknown"),
             "task.status": final.get("status", "open"),
@@ -227,7 +231,7 @@ class TaskRun(Run):
                 **labels,
                 "task.cost_usd": cost,
                 "task.rework_usd": rework,
-                "task.returns": returns,
+                "task.returns": requested,
                 "task.failures": len(final.get("failures", [])),
                 "task.runs": len(final.get("runs", [])),
                 "task.escalated": bool(final.get("escalated")),
@@ -272,7 +276,7 @@ class RoleRun(Run):
             }
         for prompt_hash in patch.get("prompts", {}).values():
             attributes["role.prompt_hash"] = prompt_hash
-        if categories := system_metrics.return_categories(patch):
+        if categories := system_metrics.change_categories(patch):
             attributes["role.return_categories"] = categories
         self.span.set_attributes(attributes)
         elapsed = self.elapsed

@@ -29,7 +29,7 @@ TYPES = {
     "Job": knowledge.approval_check,  # the check that a capability names its jobs
     "Retrabajo": metrics.is_rework,
     "Hallazgo": schemas.Finding,
-    "Categoría de devolución": rules.return_category,
+    "Categoría de devolución": rules.change_category,
     "Tope de tarea": rules.task_cap,
     "Reanudación": rules.resumed,
     "Decisión del humano": rules.human_section,
@@ -39,7 +39,7 @@ TYPES = {
 
 # Glossary term -> the field of the task state that holds it.
 STATE_FIELDS = {
-    "Devolución": "returns",
+    "Devolución": "changes_requested",
     "Escalado": "escalated",
     "Sección": "sections",
     "Flag": "flags",

@@ -12,7 +12,7 @@ def test_render_then_parse_roundtrip():
         "status": "definition_ready",
         "current_role": "PM",
         "flags": {"touches_ui": False},
-        "returns": {"PM→Product Analyst": 1},
+        "changes_requested": {"PM→Product Analyst": 1},
         "failures": [{"role": "PM", "attempt": 1, "error": "x", "cost_usd": 0.01}],
         "runs": [
             {
@@ -46,7 +46,7 @@ def test_render_then_parse_roundtrip():
     assert data["id"] == "T-1"
     assert data["type"] == "feature"
     assert data["system_commit"] == "abc123"
-    assert data["returns"] == {"PM→Product Analyst": 1}
+    assert data["changes_requested"] == {"PM→Product Analyst": 1}
     assert data["failures"] == state["failures"]
     assert data["runs"][0] == state["runs"][0]
     assert data["runs"][1]["cost_by_model"] == {"m": 0.15, "sub": 0.05}  # rounded like costs
@@ -105,3 +105,41 @@ def test_parse_rejects_missing_frontmatter():
 
 def test_relative_path():
     assert str(document.relative_path("GH-12")) == ".agentic/tasks/GH-12.md"
+
+
+def test_the_frontmatter_keeps_the_names_the_metrics_keep():
+    """A written document is data (issue #53): its keys do not follow the domain's
+    rename, or a task paused before it would resume with an empty count."""
+    text = document.render(
+        {
+            "id": "T-1",
+            "title": "t",
+            "description": "d",
+            "changes_requested": {"PM→Product Analyst": 1},
+            "change_history": [
+                {"pair": "PM→Product Analyst", "category": "definition", "reason": "r"}
+            ],
+            "subtasks": {"api": {"id": "api", "change_category": "spec-behaviour"}},
+        }
+    )
+    assert "\nreturns:" in text and "\nreturn_history:" in text
+    assert "return_category: spec-behaviour" in text
+    assert "changes_requested" not in text and "change_category" not in text
+
+
+def test_a_document_written_before_the_rename_still_parses_into_the_state():
+    old = (
+        "---\n"
+        "id: T-1\n"
+        "title: t\n"
+        "returns: {'PM→Product Analyst': 2}\n"
+        "return_history: [{pair: 'PM→Product Analyst', category: definition, reason: r}]\n"
+        "subtasks: {api: {id: api, return_category: spec-behaviour}}\n"
+        "---\n"
+        "\n# t\n\n## Original request\n\nd\n"
+    )
+    state = document.parse(old)
+    assert state["changes_requested"] == {"PM→Product Analyst": 2}
+    assert state["change_history"][0]["category"] == "definition"
+    assert state["subtasks"]["api"]["change_category"] == "spec-behaviour"
+    assert "returns" not in state and "return_history" not in state

@@ -14,9 +14,9 @@ from .roles import DEVELOPER, PAIR_PM_PA, PM, PRODUCT_ANALYST, SOLUTION_INTERVIE
 from .task import (
     INTEGRATION,
     WAITING_ON_HUMAN,
+    ChangeCategory,
+    ChangesRequested,
     FindingCategory,
-    Return,
-    ReturnCategory,
     RoleRun,
     Status,
     Subtask,
@@ -24,26 +24,26 @@ from .task import (
 )
 
 # The category the system stamps on PM's returns of the definition (ADR-0016).
-DEFINITION_RETURN: ReturnCategory = "definition"
+DEFINITION_RETURN: ChangeCategory = "definition"
 
 
-def remaining_returns(state: TaskState, pair: Pair, limit: int) -> int:
+def remaining_changes(state: TaskState, pair: Pair, limit: int) -> int:
     """Returns `pair` may still use before PjM escalates."""
-    return limit - state.get("returns", {}).get(pair.key, 0)
+    return limit - state.get("changes_requested", {}).get(pair.key, 0)
 
 
 def record_return(state: TaskState, pair: Pair) -> dict[str, int]:
     """The `returns` patch after one more return of `pair`."""
-    return {pair.key: state.get("returns", {}).get(pair.key, 0) + 1}
+    return {pair.key: state.get("changes_requested", {}).get(pair.key, 0) + 1}
 
 
-def return_entry(pair: Pair, category: ReturnCategory, reason: str) -> Return:
+def change_entry(pair: Pair, category: ChangeCategory, reason: str) -> ChangesRequested:
     """One entry of the return history: who returned, in which category, and the reason,
     so README §3's "same motive between the same roles" is computable."""
     return {"pair": pair.key, "category": category, "reason": reason}
 
 
-def return_category(findings: list[dict]) -> FindingCategory | None:
+def change_category(findings: list[dict]) -> FindingCategory | None:
     """The verdict of a review, derived (ADR-0016): the category of the return, the
     first blocking finding's since the reviewer lists them most severe first, or None
     when nothing blocks and the review approves."""
@@ -344,9 +344,9 @@ def resumed_status(state: TaskState) -> Status:
     runs = state.get("runs", [])
     written = sum(1 for r in runs if _wrote_own_section(r, PRODUCT_ANALYST.name))
     validated = sum(1 for r in runs if _wrote_own_section(r, PM.name))
-    history = sum(1 for h in state.get("return_history", []) if h["category"] == DEFINITION_RETURN)
+    history = sum(1 for h in state.get("change_history", []) if h["category"] == DEFINITION_RETURN)
     # A document from before the history has only the counter, which a resume resets.
-    returned = max(history, state.get("returns", {}).get(PAIR_PM_PA.key, 0))
+    returned = max(history, state.get("changes_requested", {}).get(PAIR_PM_PA.key, 0))
     if validated > returned:
         return "definition_ready"
     if written > validated:
@@ -381,7 +381,7 @@ def resumed(state: TaskState, decision: str | None) -> TaskState:
         "questions_for_human": [],
     }
     if pair := pair_at_limit(reason):
-        patch["returns"] = {pair: 0}
+        patch["changes_requested"] = {pair: 0}
     if decision and decision.strip():
         patch["sections"] = {HUMAN: human_section(state, reason, decision)}
     if needs_integration(state):

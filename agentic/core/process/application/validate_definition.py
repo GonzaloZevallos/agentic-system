@@ -16,8 +16,8 @@ from .run_role import finish, run_role
 
 async def validate_definition(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
     task = task_checkout(state, ports)
-    limit = cfg.max_returns_per_pair
-    remaining = rules.remaining_returns(state, PAIR_PM_PA, limit)
+    limit = cfg.max_changes_requested_per_pair
+    remaining = rules.remaining_changes(state, PAIR_PM_PA, limit)
     output, patch = await run_role(
         state,
         PM,
@@ -25,7 +25,7 @@ async def validate_definition(state: TaskState, cfg: Configuration, ports: Ports
         ports,
         check=ports.knowledge.approval_check(state.get("type", "")),
         cwd=task.path,
-        remaining_returns=remaining,
+        remaining_changes=remaining,
     )
     if output is None:
         return finish(state, patch, ports)
@@ -37,9 +37,9 @@ async def validate_definition(state: TaskState, cfg: Configuration, ports: Ports
         ports.workspace.commit_all(task.path, f"{state['id']}: product definition")
         patch["status"] = "definition_ready"
     elif remaining > 0:
-        patch["returns"] = rules.record_return(state, PAIR_PM_PA)
-        patch["return_history"] = [
-            rules.return_entry(PAIR_PM_PA, rules.DEFINITION_RETURN, output.data["reason"])
+        patch["changes_requested"] = rules.record_return(state, PAIR_PM_PA)
+        patch["change_history"] = [
+            rules.change_entry(PAIR_PM_PA, rules.DEFINITION_RETURN, output.data["reason"])
         ]
         patch["status"] = "returned"
     else:

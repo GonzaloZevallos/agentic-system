@@ -7,16 +7,16 @@ KEY = PAIR.key
 DEF = {"pair": KEY, "category": "definition", "reason": "gap"}
 
 
-def test_remaining_returns_counts_down_from_the_limit():
-    assert rules.remaining_returns({}, PAIR, 2) == 2
-    assert rules.remaining_returns({"returns": {KEY: 1}}, PAIR, 2) == 1
-    assert rules.remaining_returns({"returns": {KEY: 2}}, PAIR, 2) == 0
-    assert rules.remaining_returns({"returns": {"other": 5}}, PAIR, 2) == 2
+def test_remaining_changes_counts_down_from_the_limit():
+    assert rules.remaining_changes({}, PAIR, 2) == 2
+    assert rules.remaining_changes({"changes_requested": {KEY: 1}}, PAIR, 2) == 1
+    assert rules.remaining_changes({"changes_requested": {KEY: 2}}, PAIR, 2) == 0
+    assert rules.remaining_changes({"changes_requested": {"other": 5}}, PAIR, 2) == 2
 
 
 def test_record_return_adds_one_to_that_pair_only():
     assert rules.record_return({}, PAIR) == {KEY: 1}
-    assert rules.record_return({"returns": {KEY: 1, "other": 5}}, PAIR) == {KEY: 2}
+    assert rules.record_return({"changes_requested": {KEY: 1, "other": 5}}, PAIR) == {KEY: 2}
 
 
 def test_limit_reached_names_the_pair_the_limit_and_the_reason():
@@ -54,9 +54,9 @@ def test_the_verdict_and_the_category_come_from_the_blocking_findings():
     block = {"severity": "blocking", "category": "spec-behaviour"}
     other = {"severity": "blocking", "category": "standard-seams"}
     note = {"severity": "important", "category": "standard-architecture"}
-    assert rules.return_category([]) is None
-    assert rules.return_category([note]) is None
-    assert rules.return_category([note, block, other]) == "spec-behaviour"
+    assert rules.change_category([]) is None
+    assert rules.change_category([note]) is None
+    assert rules.change_category([note, block, other]) == "spec-behaviour"
 
 
 def finding(severity="blocking", evidence="$ pytest\nFAILED", scope="subtask", at="x.py:1"):
@@ -114,7 +114,7 @@ def test_the_system_writes_the_verdict_heading_of_a_review():
 
 
 def test_a_return_is_recorded_with_its_category_for_the_history():
-    assert rules.return_entry(PAIR, "definition", "no metrics") == {
+    assert rules.change_entry(PAIR, "definition", "no metrics") == {
         "pair": KEY,
         "category": "definition",
         "reason": "no metrics",
@@ -172,7 +172,7 @@ def test_the_status_before_the_escalation_is_derived_from_the_definition_runs():
     interview = run("PM", "Interview: Product Analyst→PM")
     assert rules.resumed_status({"runs": [run("PjM"), interview]}) == "open"
     assert rules.resumed_status({"runs": [run("Product Analyst")]}) == "defined"
-    returned = {"runs": [run("Product Analyst"), run("PM")], "return_history": [DEF]}
+    returned = {"runs": [run("Product Analyst"), run("PM")], "change_history": [DEF]}
     assert rules.resumed_status(returned) == "returned"
     approved = {"runs": [run("Product Analyst"), run("PM")]}
     assert rules.resumed_status(approved) == "definition_ready"
@@ -180,7 +180,7 @@ def test_the_status_before_the_escalation_is_derived_from_the_definition_runs():
     at_limit = {**approved, "escalated": rules.limit_reached(PAIR, 2, "gap")}
     assert rules.resumed_status(at_limit) == "returned"
     # A document from before the history has only the counter.
-    assert rules.resumed_status({**approved, "returns": {KEY: 1}}) == "returned"
+    assert rules.resumed_status({**approved, "changes_requested": {KEY: 1}}) == "returned"
     assert rules.resumed_status(subtasks("api")) == "planned"
     assert rules.resumed_status({"subtasks": {"api": {"status": "delivered"}}}) == "developing"
 
@@ -195,7 +195,7 @@ def test_resuming_clears_the_escalation_resets_the_pair_and_keeps_the_decision()
     patch = rules.resumed(state, "  Keep USD.\n\n## Why\n\nAudits.  ")
     assert patch["escalated"] is None and patch["status"] == "developing"
     assert patch["questions_for_human"] == []
-    assert patch["returns"] == {"Tech Lead→Developer:api": 0}
+    assert patch["changes_requested"] == {"Tech Lead→Developer:api": 0}
     assert patch["sections"]["Human"] == (
         "### Decision 1\n\nEscalated: Tech Lead→Developer:api hit 2 returns: still\n\n"
         "Keep USD.\n\n### Why\n\nAudits."
@@ -204,7 +204,7 @@ def test_resuming_clears_the_escalation_resets_the_pair_and_keeps_the_decision()
     assert again.startswith("### Decision 1") and again.endswith(
         "### Decision 2\n\nEscalated: x\n\nGo"
     )
-    assert "returns" not in rules.resumed(
+    assert "changes_requested" not in rules.resumed(
         {"escalated": "PjM stopped by the task cap: 1 of 1"}, None
     )
     assert "sections" not in rules.resumed({}, "   ")

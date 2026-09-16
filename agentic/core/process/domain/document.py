@@ -44,6 +44,31 @@ def relative_path(task_id: str) -> Path:
     return TASKS_SUBDIR / f"{task_id}.md"
 
 
+# Frontmatter keys that do not follow the domain's names: a document already written
+# is data, and renaming its keys would make a paused task resume with an empty count
+# (`resume.from_document` reads the frontmatter back into the state). The same rule the
+# metrics follow (ADR-0008, addendum; ADR-0018, and issue #53). State field -> key.
+RECORDED_AS = {"changes_requested": "returns", "change_history": "return_history"}
+SUBTASK_RECORDED_AS = {"change_category": "return_category"}
+
+
+def _recorded(subtask: dict) -> dict:
+    return {SUBTASK_RECORDED_AS.get(k, k): v for k, v in subtask.items()}
+
+
+def from_frontmatter(data: dict) -> dict:
+    """The inverse of what `render` writes: the frontmatter under the state's names."""
+    inverse = {key: field for field, key in RECORDED_AS.items()}
+    state = {inverse.get(k, k): v for k, v in data.items()}
+    subtask_inverse = {key: field for field, key in SUBTASK_RECORDED_AS.items()}
+    if isinstance(subtasks := state.get("subtasks"), dict):
+        state["subtasks"] = {
+            sid: {subtask_inverse.get(k, k): v for k, v in sub.items()}
+            for sid, sub in subtasks.items()
+        }
+    return state
+
+
 def render(
     state: dict, system_commit: str | None = None, plugins: dict[str, str] | None = None
 ) -> str:
@@ -57,13 +82,14 @@ def render(
         "status": state.get("status", "open"),
         "current_role": state.get("current_role"),
         "flags": state.get("flags", {}),
-        "returns": state.get("returns", {}),
-        "return_history": state.get("return_history", []),
+        # Written under their old names on purpose: see `RECORDED_AS`.
+        "returns": state.get("changes_requested", {}),
+        "return_history": state.get("change_history", []),
         "escalated": state.get("escalated"),
         "questions_for_human": state.get("questions_for_human", []),
         "branch": state.get("branch"),
         "pull_request": state.get("pull_request"),
-        "subtasks": state.get("subtasks", {}),
+        "subtasks": {sid: _recorded(sub) for sid, sub in state.get("subtasks", {}).items()},
         "cost_usd": round(state.get("cost_usd", 0.0), 4),
         "prompts": state.get("prompts", {}),
         "plugins": plugins or {},
@@ -120,7 +146,7 @@ def parse(raw: str, source: object = "document") -> dict:
     match = _FRONTMATTER.match(raw)
     if not match:
         raise ValueError(f"{source}: missing frontmatter")
-    data = yaml.safe_load(match.group(1)) or {}
+    data = from_frontmatter(yaml.safe_load(match.group(1)) or {})
     body = raw[match.end() :]
 
     sections: dict[str, str] = {}

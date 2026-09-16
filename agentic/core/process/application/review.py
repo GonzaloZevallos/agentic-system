@@ -38,7 +38,7 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
     reviewer = reviewer_for(checks)
     checkout = subtask_checkout(state, subtask_id, ports)
     pair = pair_for(subtask_id)
-    remaining = rules.remaining_returns(state, pair, cfg.max_returns_per_pair)
+    remaining = rules.remaining_changes(state, pair, cfg.max_changes_requested_per_pair)
     section = rules.review_section(subtask_id)
     head = ports.workspace.head(checkout.path)
     output, patch = await run_role(
@@ -52,7 +52,7 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
         subtask=subtask_id,
         base=subtask.get("reviewed_head") or checkout.base,
         review="an incremental review" if subtask.get("reviewed_head") else "a first review",
-        remaining_returns=remaining,
+        remaining_changes=remaining,
         checks=presubmit.describe_checks(checks),
     )
     if output is None:
@@ -61,7 +61,7 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
     subtask = {**subtask, "reviewed_head": head}
     reason = output.data["reason"]
     findings, lowered = rules.lower_unbacked_blocks(output.data["findings"])
-    category = rules.return_category(findings)
+    category = rules.change_category(findings)
     markdown = rules.review_markdown(category, reason, output.text, lowered)
     patch = apply(patch, {"sections": {section: markdown}})
     if category is None:
@@ -72,20 +72,20 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
         **subtask,
         "status": "returned",
         "reason": reason,
-        "return_category": category,
+        "change_category": category,
     }
     patch = apply(patch, {"subtasks": {subtask_id: returned}})
     if remaining > 0:
         patch = apply(
             patch,
             {
-                "returns": rules.record_return(state, pair),
-                "return_history": [rules.return_entry(pair, category, reason)],
+                "changes_requested": rules.record_return(state, pair),
+                "change_history": [rules.change_entry(pair, category, reason)],
             },
         )
     else:
         # Returned as well, without counting: the limit is spent. The human's answer
         # resets the pair and the resume sends the subtask back to its Developer.
-        patch["escalated"] = rules.limit_reached(pair, cfg.max_returns_per_pair, reason)
+        patch["escalated"] = rules.limit_reached(pair, cfg.max_changes_requested_per_pair, reason)
         patch["status"] = WAITING_ON_HUMAN
     return finish(state, patch, ports)
