@@ -592,10 +592,12 @@ No aplica a bugs ni a platform enhancements.
 
 ---
 
-## 8. Producto de prueba y costura
+## 8. Los dos productos y la costura
 
 El sistema es **agnóstico al producto**. Lo que cambia por producto entra como parámetro;
-lo que no cambia es el proceso.
+lo que no cambia es el proceso. Hay **dos productos**: el SaaS de gimnasios, que es el de
+prueba y la base del set de evaluación de §9, y el propio sistema, que desde ADR-0017 se
+desarrolla a sí mismo.
 
 | Del producto (parámetro) | Del sistema (fijo) |
 |---|---|
@@ -607,12 +609,16 @@ lo que no cambia es el proceso.
 **Forma de la costura**: un **directorio de contexto de producto** que el sistema recibe
 como parámetro. Se eligió sobre un adaptador con funciones porque todavía no se sabe qué
 varía de verdad entre productos, y no se puede generalizar sobre un solo ejemplo. El
-adaptador se extrae cuando aparezca el segundo producto. Los ports de la arquitectura
+adaptador se extrae cuando aparezca el segundo producto, que ya apareció: es el sistema
+(ADR-0017). Los ports de la arquitectura
 hexagonal (ADR-0007) no son ese adaptador: los define lo que el sistema necesita, tienen
 una sola implementación sobre este directorio, y este sigue siendo el único parámetro.
 
-**Repositorios separados** (ADR-0002). El sistema vive en su propio repo, el producto en
-otro, y el sistema nunca escribe dentro del suyo cuando trabaja.
+**Repositorios separados** (ADR-0002, adenda). Cada producto vive en su repo, y la regla
+no es que el sistema no escriba en el suyo sino que **nunca escribe en el checkout desde el
+que corre**. La corrida la ejecuta `stage0`, un checkout aparte fijado a un sha; lo que se
+edita y lo que se ejecuta son dos copias. Lo que hay que congelar durante una corrida es el
+código que la ejecuta, y eso es un checkout, no un repositorio.
 
 Forma del repo del producto:
 
@@ -629,6 +635,21 @@ Forma del repo del producto:
 | `.agentic/state.sqlite` | Checkpointer del grafo, fuera del control de versiones (ADR-0003) | El sistema |
 | `.agentic/worktrees/` | Un worktree por subtarea, fuera del control de versiones (ADR-0011) | El sistema |
 | rama `agentic/<tarea>` | La rama de tarea: entrevistas, ADRs, código integrado. Termina en un pull request (ADR-0011) | Los roles |
+
+### El sistema como segundo producto
+
+Auto-hospedado: los artefactos de una corrida sobre el sistema caen en **este mismo repo**,
+con la forma de arriba y cuatro diferencias (ADR-0017):
+
+| | El gimnasio | El sistema |
+|---|---|---|
+| Quién ejecuta | Cualquier checkout | Sólo `stage0`, fijado a un sha (#44) |
+| Tipo de tarea | feature, bug o platform enhancement | Siempre **platform enhancement** (#46): sin PM, sin flags, sin métricas de negocio |
+| Quién es el usuario | El dueño del gimnasio | El humano que escribe el issue, y el issue es el PRD |
+| Set de evaluación | Es la base de §9 | No puntúa: no tiene métricas de negocio que discutir |
+
+El glosario del producto, acá, es multi-contexto: `CONTEXT-MAP.md` y un `CONTEXT.md` por
+módulo bajo `agentic/core/`, no un archivo en la raíz (#45).
 
 El conocimiento de producto (definiciones, ADRs, glosario) vive con los docs humanos, no
 bajo `.agentic/`, porque es del producto y lo lee cualquiera; `.agentic/` es maquinaria del
@@ -808,6 +829,7 @@ Se anotan para no reintroducirlas por error.
 | En paralelo el desborde del tope se acepta acotado por las ramas | Con la revisión adentro de la rama el número dejó de ser aceptable: el gasto del proceso lo comparten todas las ramas, sin estado compartido (ADR-0004, adenda quinta) |
 | Tech Lead revisa de solo lectura, sin correr tests, y escribe el veredicto con un motivo libre | Corre los tests que respaldan cada objeción; entrega hallazgos con evidencia y categoría, y el veredicto se deriva de los bloqueantes (ADR-0016) |
 | El revisor corre `pytest` con reglas fijas y el Developer copia el resultado de la suite en su sección | El producto declara su stack en `.agentic/stack.yaml`; la puerta de entrega los corre y escribe el resultado, y el revisor los usa para reproducir (ADR-0016, adenda) |
+| El sistema nunca escribe en su repo | Nunca escribe en el **checkout** desde el que corre: el sistema es su propio segundo producto y sus artefactos caen en este repo (ADR-0017; ADR-0002, adenda) |
 | El glosario de Proceso agrupa 27 términos bajo "Interacciones" | Cuatro secciones que dicen qué momento del proceso nombran (cómo se piden cosas, cómo se entrega y se revisa, cómo se rechaza trabajo, cómo termina una corrida), y tres términos fundidos en el que ya los contenía (#55) |
 | La devolución se llama `Return` en el código | `ChangesRequested`, que es *request changes*, uno de los tres valores de `event` de una review de GitHub. La métrica `agentic.task.returns`, el label `return.category`, el atributo `role.return_categories`, el valor `returned` y las claves del documento de tarea **no** siguen: son dato ya escrito, y renombrarlas parte las series y rompe la reanudación de una tarea pausada (ADR-0008, adenda) |
 | La puerta de entrega se llama `DeliveryGate` en el port y `CheckoutGate` en la implementación | `Presubmit` y `CheckoutPresubmit`: es palabra por palabra el presubmit check de Software Engineering at Google, cap. 20, y ninguno de los dos nombres viejos decía lo que la cosa es (ADR-0018) |

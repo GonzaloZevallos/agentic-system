@@ -270,11 +270,11 @@ _Campo_: sin término de arte
 ### Repos
 
 **Sistema**:
-Este repo: roles, prompts, caminos y las reglas del proceso.
+Este repo: roles, prompts, caminos y las reglas del proceso. Es también uno de los dos productos sobre los que trabaja (ADR-0017).
 _Campo_: sin término de arte. `self-hosting`, la palabra de compiladores para el programa que se construye a sí mismo, está tomada: en Temporal y Kubernetes significa "operás vos la infra"
 
 **Producto**:
-El repo sobre el que trabaja el sistema. El sistema nunca escribe en el repo del sistema mientras corre.
+El repo sobre el que trabaja el sistema, que recibe como parámetro. Hay dos: el SaaS de gimnasios y el propio sistema, que desde ADR-0017 se desarrolla a sí mismo. El sistema nunca escribe en el checkout desde el que corre, que es stage0; que el repo del producto sea también el suyo no cambia esa regla.
 _Campo_: sin término de arte
 
 **Contexto de producto**:

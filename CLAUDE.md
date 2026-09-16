@@ -5,8 +5,13 @@ Sistema agéntico de desarrollo: 17 roles sobre LangGraph + Claude Agent SDK.
 arquitectura o roles. Su sección 13 lista decisiones ya reemplazadas: no
 reintroducirlas.
 
-Este repo es el **sistema**. El producto sobre el que trabaja vive en otro repo
-y el sistema nunca escribe acá cuando corre (README.md, sección 8).
+Este repo es el **sistema**, y desde ADR-0017 es también su propio segundo producto:
+el sistema se desarrolla a sí mismo. La regla no es que no escriba acá, es que
+**nunca escribe en el checkout desde el que corre**: una corrida la ejecuta `stage0`,
+un checkout aparte fijado a un sha, y los artefactos (`.agentic/`, la rama
+`agentic/<tarea>`, el pull request) caen en este repo. El otro producto, el SaaS de
+gimnasios, sigue en su repo y sigue siendo la base del set de evaluación
+(README.md, secciones 8 y 9).
 
 ## Agent skills
 

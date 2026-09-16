@@ -2,7 +2,8 @@
 
 Each port has one implementation today, over the product directory or the Claude
 Agent SDK. They exist to keep the rules of the process out of the disk and the
-harness, not because a second product or harness is coming (README.md, 8).
+harness, not as the product adapter: that one is now extractable, because the
+second product arrived and it is this repo (README.md, 8; ADR-0017).
 """
 
 from __future__ import annotations
