@@ -332,8 +332,13 @@ async def test_the_presubmit_becomes_a_hook_on_the_delivery_call(monkeypatch, tm
             return None
 
     await ClaudeSdkRunner().run_once(
-        PJM, "p", system_prompt="s", model="m", json_schema={},
-        cwd=tmp_path, presubmit=FakePresubmit(),
+        PJM,
+        "p",
+        system_prompt="s",
+        model="m",
+        json_schema={},
+        cwd=tmp_path,
+        presubmit=FakePresubmit(),
     )
     (matcher,) = seen[0][1].hooks["PreToolUse"]
     assert matcher.matcher == "StructuredOutput" and matcher.timeout > 300.0

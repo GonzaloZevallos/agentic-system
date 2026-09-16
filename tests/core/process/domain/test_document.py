@@ -145,6 +145,7 @@ def test_a_document_written_before_the_rename_still_parses_into_the_state():
     assert state["subtasks"]["api"]["change_category"] == "spec-behaviour"
     assert "returns" not in state and "return_history" not in state
 
+
 def test_the_channel_survives_the_document():
     """The document is the rescue path (`resume.from_document`): what is not in the
     frontmatter is lost when the checkpoint is, silently and with every test green."""

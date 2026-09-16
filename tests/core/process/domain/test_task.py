@@ -104,7 +104,10 @@ def test_delta_is_what_a_branch_added_and_apply_puts_it_back():
 def test_delta_takes_a_field_the_branch_started_as_it_is():
     before = {"id": "T-1"}
     after = {
-        "id": "T-1", "cost_usd": 0.4, "failures": [{"role": "PjM"}], "changes_requested": {"p": 1}
+        "id": "T-1",
+        "cost_usd": 0.4,
+        "failures": [{"role": "PjM"}],
+        "changes_requested": {"p": 1},
     }
     assert delta(before, after) == {
         "cost_usd": 0.4,
