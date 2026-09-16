@@ -26,17 +26,17 @@ Dueño de la definición única y del conocimiento de producto, que destila al a
 _Campo_: de la organización de software humana
 
 **Pensador**:
-Rol que produce: Product Analyst, UX Designer, UI Designer, Developer, Tech Writer.
-_Campo_: actor — Reflexion (Shinn 2023); generator en Cobbe 2021 y Lightman 2023
+Rol que produce: Product Analyst, UX Designer, UI Designer, Developer, Tech Writer. En el código y en los prompts se llama `actor`.
+_Campo_: actor — Reflexion (Shinn 2023), que lo define junto a Evaluator y Self-Reflection; generator en Cobbe 2021 y Lightman 2023
 
 **Ejecutar**:
 Escribir archivos del producto y correr comandos sin aprobación por comando. Solo Developer ejecuta, dentro de una jaula: su checkout, un tope de costo y lo que el sistema le niega aun así. Correr los chequeos del producto sin escribir no es ejecutar: Tech Lead, al revisar, lee el código y el diff y corre los chequeos sobre el test que respalda una objeción, y los entrevistadores escriben únicamente el glosario y los ADRs.
 _Campo_: sin término de arte para el permiso; el campo nombra el mecanismo (tool use), no la autonomía que le concede
 
 **Validador**:
-Rol que revisa a un pensador aportando una fuente que el pensador no tuvo.
-_Avoid_: revisor
-_Campo_: verifier — Cobbe 2021 y Lightman 2023; Evaluator en Reflexion, critic en CriticGPT, LLM-as-a-judge en Zheng 2023
+Rol que revisa a un pensador aportando una fuente que el pensador no tuvo. En el código y en los prompts se llama `verifier`, no `judge`: el judge opina y el verifier ejecuta, y desde ADR-0016 el Tech Lead corre los chequeos que respaldan cada objeción.
+_Avoid_: revisor, judge
+_Campo_: verifier — Cobbe 2021 y Lightman 2023 ("Let's Verify Step by Step"); Evaluator en Reflexion, critic en CriticGPT, LLM-as-a-judge en Zheng 2023
 
 **Par**:
 El rol que devuelve y el rol que recibe la devolución. Las devoluciones se cuentan por par; cuando hay subtarea, por subtarea.
@@ -130,6 +130,7 @@ _Campo_: sin término de arte
 
 **Puerta de entrega**:
 Lo que el sistema mira cuando un Developer entrega, antes de que la entrega cuente: que haya commit, que el árbol esté limpio y que los chequeos del producto pasen. Si algo falta, rechaza la entrega con el motivo dentro del mismo turno, como mucho dos veces; después la deja pasar con el resultado de los chequeos escrito por el sistema en la sección del Developer. Un rechazo de la puerta no es devolución ni fallo de rol.
+En el código se llama `Presubmit`, el port, y `CheckoutPresubmit`, la implementación sobre el checkout de un Developer.
 _Avoid_: gate, validación, hook (el mecanismo, no el concepto)
 _Campo_: presubmit check — Software Engineering at Google, cap. 20: "an analysis that blocks committing a pending code change". required status check en GitHub, gated commit en Azure DevOps, admission control (validating, no mutating) en Kubernetes
 

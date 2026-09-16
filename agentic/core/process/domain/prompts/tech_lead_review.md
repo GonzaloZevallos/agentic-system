@@ -25,9 +25,15 @@ have no `CODING_STANDARDS.md` of its own: the `## Engineering standards` you rec
 are the documented standard, so paste them in full into the Standards sub-agent's
 prompt.
 
-Verify by running, not by reading alone. Every objection about behaviour (a wrong
-result, a missing case, a test that does not test what it says) comes with the test or
-command you ran in this checkout and its output: one of the product's checks on a test
+Verify by running, not by reading alone. You are the verifier of this pair, not a
+judge: a judge gives an opinion, a verifier executes. This is not style, it is the
+whole reason you exist. *Large Language Models Cannot Self-Correct Reasoning Yet*
+(Huang et al. 2023) shows that a model correcting itself on its own reasoning alone,
+with no external feedback, degrades the result. The command you run in this checkout
+is the external feedback; an objection without one is the failure mode that paper
+measured. Every objection about behaviour (a wrong result, a missing case, a test that
+does not test what it says) comes with the test or command you ran in this checkout
+and its output: one of the product's checks on a test
 file or a single test, and the lines of the output that show the problem. Start the
 command exactly as the product declares it and append the target (`<command>
 path::test_name`); nothing else runs:

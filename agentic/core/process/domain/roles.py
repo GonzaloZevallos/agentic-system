@@ -132,7 +132,7 @@ GIT_DENIED = ("Bash(git config:*)", "Bash(git push:*)", "Bash(git worktree:*)")
 PJM = Role(
     name="PjM",
     slug="pjm",
-    kind="thinker",
+    kind="actor",
     schema=Classification,
     effort="low",
     max_turns=2,
@@ -142,7 +142,7 @@ PJM = Role(
 PRODUCT_ANALYST_INTERVIEWER = Role(
     name="Product Analyst",
     slug="product_analyst_interviewer",
-    kind="thinker",
+    kind="actor",
     schema=InterviewTurn,
     reads=(ORIGINAL, "PjM"),
     reads_knowledge=True,
@@ -155,7 +155,7 @@ PRODUCT_ANALYST_INTERVIEWER = Role(
 PM_INTERVIEWEE = Role(
     name="PM",
     slug="pm_interviewee",
-    kind="validator",
+    kind="verifier",
     schema=Answers,
     reads=(ORIGINAL,),
     reads_knowledge=True,
@@ -168,7 +168,7 @@ SOLUTION_INTERVIEW = "Interview: Tech Lead efímero→Tech Lead"
 PRODUCT_ANALYST = Role(
     name="Product Analyst",
     slug="product_analyst",
-    kind="thinker",
+    kind="actor",
     schema=Definition,
     reads=(ORIGINAL, "PjM", DEFINITION_INTERVIEW, "Product Analyst", "PM"),
     reads_knowledge=True,
@@ -177,7 +177,7 @@ PRODUCT_ANALYST = Role(
 PM = Role(
     name="PM",
     slug="pm",
-    kind="validator",
+    kind="verifier",
     schema=Verdict,
     reads=(ORIGINAL, DEFINITION_INTERVIEW, "Product Analyst", "PM"),
     reads_knowledge=True,
@@ -188,7 +188,7 @@ PM = Role(
 TECH_LEAD_EPHEMERAL = Role(
     name="Tech Lead efímero",
     slug="tech_lead_ephemeral",
-    kind="validator",
+    kind="verifier",
     schema=InterviewTurn,
     reads=(ORIGINAL, "PM"),
     reads_knowledge=True,
@@ -202,7 +202,7 @@ TECH_LEAD_EPHEMERAL = Role(
 TECH_LEAD_INTERVIEWEE = Role(
     name="Tech Lead",
     slug="tech_lead_interviewee",
-    kind="validator",
+    kind="verifier",
     schema=TechAnswers,
     reads=(ORIGINAL, "PM"),
     reads_knowledge=True,
@@ -219,7 +219,7 @@ TECH_LEAD_INTERVIEWEE = Role(
 PM_CONSULTANT = Role(
     name="PM",
     slug="pm_consultant",
-    kind="validator",
+    kind="verifier",
     schema=Consultation,
     reads=(ORIGINAL, DEFINITION_INTERVIEW, "Product Analyst", "PM"),
     reads_knowledge=True,
@@ -228,7 +228,7 @@ PM_CONSULTANT = Role(
 TECH_LEAD = Role(
     name="Tech Lead",
     slug="tech_lead",
-    kind="validator",
+    kind="verifier",
     schema=TechPlan,
     reads=(ORIGINAL, "PM", SOLUTION_INTERVIEW),
     reads_knowledge=True,
@@ -242,7 +242,7 @@ TECH_LEAD = Role(
 TECH_LEAD_REVIEWER = Role(
     name="Tech Lead",
     slug="tech_lead_review",
-    kind="validator",
+    kind="verifier",
     schema=Review,
     reads=(ORIGINAL, "PM", "Tech Lead"),
     reads_standards=True,
@@ -256,7 +256,7 @@ TECH_LEAD_REVIEWER = Role(
 DEVELOPER = Role(
     name="Developer",
     slug="developer",
-    kind="thinker",
+    kind="actor",
     schema=Delivery,
     reads=(ORIGINAL, "PM", "Tech Lead"),
     reads_standards=True,
@@ -271,7 +271,7 @@ DEVELOPER = Role(
 DEVELOPER_INTEGRATOR = Role(
     name="Developer",
     slug="developer_integrator",
-    kind="thinker",
+    kind="actor",
     schema=Delivery,
     reads=(ORIGINAL, "PM", "Tech Lead"),
     reads_standards=True,
@@ -314,7 +314,7 @@ ROLES = (
 @dataclass(frozen=True)
 class Pair:
     """Who returns and who receives the return; the limit counts per pair (README.md, 3).
-    Not validator→thinker: QA returns to PM, to Tech Lead or to a Developer's subtask."""
+    Not verifier→actor: QA returns to PM, to Tech Lead or to a Developer's subtask."""
 
     by: Role
     to: Role
@@ -352,7 +352,7 @@ class Interview:
         return f"Interview: {self.interviewer.name}→{self.interviewee.name}"
 
     def __post_init__(self) -> None:
-        # The author and the validator after it read the transcript by this name.
+        # The author and the verifier after it read the transcript by this name.
         if self.section not in self.author.reads:
             raise ValueError(f"{self.author.slug} must read {self.section!r}")
 

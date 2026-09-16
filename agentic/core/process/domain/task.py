@@ -108,7 +108,7 @@ class RoleRun(TypedDict):
 
 
 class Return(TypedDict):
-    """One return, as the history keeps it: the pair, its category and the validator's
+    """One return, as the history keeps it: the pair, its category and the verifier's
     one-line reason (README.md, 3: "the same motive between the same roles", computable)."""
 
     pair: str

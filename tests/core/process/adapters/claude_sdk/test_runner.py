@@ -322,17 +322,18 @@ async def test_a_role_that_executes_runs_inside_the_hooks_cage(monkeypatch, tmp_
     assert seen[0][1].hooks is None
 
 
-async def test_the_delivery_gate_becomes_a_hook_on_the_delivery_call(monkeypatch, tmp_path):
+async def test_the_presubmit_becomes_a_hook_on_the_delivery_call(monkeypatch, tmp_path):
     seen = fake_query(monkeypatch, [result()])
 
-    class Gate:
+    class FakePresubmit:
         timeout_s = 300.0
 
         def __call__(self):
             return None
 
     await ClaudeSdkRunner().run_once(
-        PJM, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path, gate=Gate()
+        PJM, "p", system_prompt="s", model="m", json_schema={},
+        cwd=tmp_path, presubmit=FakePresubmit(),
     )
     (matcher,) = seen[0][1].hooks["PreToolUse"]
     assert matcher.matcher == "StructuredOutput" and matcher.timeout > 300.0

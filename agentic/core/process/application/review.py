@@ -22,12 +22,12 @@ from __future__ import annotations
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import gate, rules
+from ..domain import presubmit, rules
 from ..domain.roles import pair_for, reviewer_for
 from ..domain.task import WAITING_ON_HUMAN, TaskState, apply
 from .checkouts import subtask_checkout
-from .gate import declared_checks
 from .ports import Ports
+from .presubmit import declared_checks
 from .run_role import finish, run_role
 
 
@@ -53,7 +53,7 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
         base=subtask.get("reviewed_head") or checkout.base,
         review="an incremental review" if subtask.get("reviewed_head") else "a first review",
         remaining_returns=remaining,
-        checks=gate.describe_checks(checks),
+        checks=presubmit.describe_checks(checks),
     )
     if output is None:
         return finish(state, patch, ports)

@@ -82,7 +82,7 @@ def test_the_definition_stage_roles_come_first():
 
 
 def test_reads_include_own_section_for_returns():
-    # On a return the thinker must see what it wrote and what the validator said.
+    # On a return the actor must see what it wrote and what the verifier said.
     assert "Product Analyst" in PRODUCT_ANALYST.reads
     assert "PM" in PRODUCT_ANALYST.reads
     assert "Product Analyst" in PM.reads

@@ -1,8 +1,8 @@
-"""The delivery gate (glossary: Puerta de entrega): what a Developer's delivery must be
+"""The presubmit (glossary: Puerta de entrega): what a Developer's delivery must be
 before it counts, checked by the system when the model hands it back, not after.
 
 A delivery is committed code on a clean tree whose product checks pass (`core.knowledge`
-declares them). The gate refuses at most `REFUSALS` times per Developer run, its retry
+declares them). The presubmit refuses at most `REFUSALS` times per Developer run, its retry
 included: the reason goes
 back to the model inside its turn, which is cheaper than a role failure or a review
 that returns it. Past that it lets the delivery through, and what the checks said is in
@@ -31,7 +31,7 @@ class CheckResult(TypedDict):
     name: str
     command: str
     passed: bool
-    # The command's output, whole; the gate and the document keep its last lines.
+    # The command's output, whole; the presubmit and the document keep its last lines.
     output: str
 
 
@@ -53,7 +53,7 @@ def refusal(moved: bool, clean: bool, results: Sequence[CheckResult]) -> str | N
 
 def refused(reason: str, count: int) -> str:
     """The reason as the model reads it, with how many refusals are left."""
-    return f"The delivery gate refused this delivery ({count} of {REFUSALS}): {reason}"
+    return f"The presubmit refused this delivery ({count} of {REFUSALS}): {reason}"
 
 
 def tail(output: str, lines: int = TAIL_LINES) -> str:

@@ -1,7 +1,7 @@
-"""The delivery gate of one Developer run, over the ports (glossary: Puerta de entrega).
+"""The presubmit of one Developer run, over the ports (glossary: Puerta de entrega).
 
 The harness asks it each time the model hands back its delivery (`RoleRunner`,
-`gate`). It looks at the checkout: a commit, a clean tree, and the product's checks as
+`presubmit`). It looks at the checkout: a commit, a clean tree, and the product's checks as
 the task's base declares them, run in that checkout. It keeps what the checks said the
 last time, so the use case can write it into the document: the system's record, not the
 Developer's word."""
@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..domain import gate, rules
-from ..domain.gate import CheckResult
+from ..domain import presubmit, rules
+from ..domain.presubmit import CheckResult
 from ..domain.task import TaskState
 from .ports import Ports
 
@@ -24,8 +24,8 @@ def declared_checks(state: TaskState, ports: Ports) -> dict[str, str]:
     return ports.stack.checks(base or "HEAD")
 
 
-class CheckoutGate:
-    """The `DeliveryGate` over one Developer's checkout. One per Developer run: the
+class CheckoutPresubmit:
+    """The `Presubmit` over one Developer's checkout. One per Developer run: the
     refusals it has left carry over to the retry."""
 
     def __init__(
@@ -58,17 +58,17 @@ class CheckoutGate:
         # one fails the backstop anyway, and the record must hold what the head holds.
         if moved and clean:
             self.head, self.results = head, [self._run(n, c) for n, c in self.checks.items()]
-        reason = gate.refusal(moved, clean, self.results or [])
-        if reason is None or self.refusals >= gate.REFUSALS:
+        reason = presubmit.refusal(moved, clean, self.results or [])
+        if reason is None or self.refusals >= presubmit.REFUSALS:
             return None
         self.refusals += 1
-        return gate.refused(reason, self.refusals)
+        return presubmit.refused(reason, self.refusals)
 
     def markdown(self) -> str | None:
         """The checks as the Developer's section opens with them; None if none ran."""
         if self.results is None or self.head is None:
             return None
-        return gate.checks_markdown(self.head, self.results)
+        return presubmit.checks_markdown(self.head, self.results)
 
     def _run(self, name: str, command: str) -> CheckResult:
         result = self.ports.commands.run(self.path, command, self.check_timeout_s)

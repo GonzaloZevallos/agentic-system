@@ -293,7 +293,7 @@ def _flush_metrics() -> None:
 
 def _outcome(patch: TaskState, *, delivered: bool) -> str:
     """failed: no delivery (the role broke). escalated: delivered, but the use case
-    handed the task to the human. returned: a validator sent it back. delivered: the rest."""
+    handed the task to the human. returned: a verifier sent it back. delivered: the rest."""
     if not delivered:
         return "failed"
     if patch.get("escalated"):

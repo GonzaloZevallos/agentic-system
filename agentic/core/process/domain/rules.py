@@ -104,7 +104,7 @@ def unmergeable(subtask_id: str, dependency: str, conflict: str) -> TaskState:
 
 def limit_reached(pair: Pair, limit: int, reason: str) -> str:
     """The escalation text when `pair` used up its returns: the pair, the limit and the
-    validator's reason, written for the human."""
+    verifier's reason, written for the human."""
     return f"{pair.key} hit {limit} returns: {reason}"
 
 

@@ -18,7 +18,7 @@ parallel (fifth addendum, `limits.py`).
 
 Context rule (README.md, 6): each role reads, in full, the sections it declares in
 `Role.reads`, after the engineering standards and the product knowledge if it reads
-them. Not the previous role's handoff: a validator that only sees a summary returns
+them. Not the previous role's handoff: a verifier that only sees a summary returns
 over gaps that were never there.
 """
 
@@ -35,7 +35,7 @@ from ..domain.document import HUMAN
 from ..domain.roles import ORIGINAL, Prompt, Role, describe_flags, render
 from ..domain.task import WAITING_ON_HUMAN, Failure, RoleRun, TaskState, apply
 from .limits import RunLimits
-from .ports import AttemptFailed, DeliveryGate, Ports, RoleRunner
+from .ports import AttemptFailed, Ports, Presubmit, RoleRunner
 
 Check = Callable[[dict], None]
 
@@ -150,7 +150,7 @@ async def run_with_retry(
     max_budget_usd: float | None = None,
     spent_usd: float = 0.0,
     task_cap_usd: float | None = None,
-    gate: DeliveryGate | None = None,
+    presubmit: Presubmit | None = None,
     limits: RunLimits | None = None,
 ) -> Output:
     """`check` is the use case's own rule over the validated output (raise `ValueError`);
@@ -166,7 +166,7 @@ async def run_with_retry(
     sisters' spending too. It only refuses to start; a role already running is never
     cut off.
 
-    `gate` is handed to every attempt: the harness asks it when the model delivers."""
+    `presubmit` is handed to every attempt: the harness asks it when the model delivers."""
     limits = limits or RunLimits()
     failures: list[Failure] = []
     for attempt in range(1, max(retries, 0) + 2):
@@ -187,7 +187,7 @@ async def run_with_retry(
                     check=check,
                     resume=session,
                     max_budget_usd=max_budget_usd,
-                    gate=gate,
+                    presubmit=presubmit,
                 )
         except AttemptFailed as exc:
             limits.record(exc.cost_usd)
@@ -242,7 +242,7 @@ async def _attempt(
     check: Check | None,
     resume: str | None,
     max_budget_usd: float | None,
-    gate: DeliveryGate | None = None,
+    presubmit: Presubmit | None = None,
 ) -> Output:
     result = await runner.run_once(
         role,
@@ -253,7 +253,7 @@ async def _attempt(
         cwd=cwd,
         resume=resume,
         max_budget_usd=max_budget_usd,
-        gate=gate,
+        presubmit=presubmit,
     )
     cost, session = result.cost_usd, result.session_id
     if result.structured_output is None:
@@ -325,7 +325,7 @@ async def run_role(
     cwd: Path | None = None,
     resume: str | None = None,
     prompt: str | None = None,
-    gate: DeliveryGate | None = None,
+    presubmit: Presubmit | None = None,
     **placeholders: object,
 ) -> tuple[Output | None, TaskState]:
     """Run a role and build the state patch. On `RoleFailure`, or when the task cap
@@ -335,7 +335,7 @@ async def run_role(
     `section` is where the delivery goes (the role's name by default); `cwd` where the
     role runs (the product root by default); `resume` continues the role's earlier
     session; `prompt` replaces the context with a shorter message when the session
-    already holds it (an interview's later rounds); `gate` is asked when it delivers."""
+    already holds it (an interview's later rounds); `presubmit` is asked when it delivers."""
     section = section or role.name
     vocabulary = ports.flags.load()
     loaded = load_prompt(role, cfg, ports, vocabulary, **placeholders)
@@ -358,7 +358,7 @@ async def run_role(
             max_budget_usd=cfg.max_budget_usd,
             spent_usd=state.get("cost_usd", 0.0),
             task_cap_usd=task_cap(state, cfg),
-            gate=gate,
+            presubmit=presubmit,
             limits=ports.limits,
         )
     except Escalating as exc:

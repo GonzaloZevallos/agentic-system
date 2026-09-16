@@ -16,7 +16,7 @@ VOCAB = {"touches_ui": "UI", "touches_copy": "copy"}
 
 class ScriptedRunner:
     """Answers `run_once` from per-role queues and records every call it saw.
-    A queued exception is raised instead of returned. A gate is asked before the
+    A queued exception is raised instead of returned. A presubmit is asked before the
     result is handed back, as the harness does when the model delivers, and again after
     each refusal, as a model that fixes and delivers again; `refused` keeps the reasons.
 
@@ -32,8 +32,8 @@ class ScriptedRunner:
 
     async def run_once(self, role: Role, prompt: str, **kwargs) -> RawResult:
         self.calls.append({"slug": role.slug, "prompt": prompt, "role": role, **kwargs})
-        if (gate := kwargs.get("gate")) is not None:
-            while (reason := gate()) is not None:
+        if (presubmit := kwargs.get("presubmit")) is not None:
+            while (reason := presubmit()) is not None:
                 self.refused.append(reason)
         key = f"{role.slug}__{_subtask_of(kwargs.get('cwd'))}"
         queue = self.queues.get(key) or self.queues.get(role.slug)

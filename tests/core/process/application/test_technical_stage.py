@@ -400,7 +400,7 @@ def developing(ports, subtasks=("api", "domain")):
     return state, checkout
 
 
-async def test_the_gate_runs_the_checks_declared_at_the_tasks_base_and_records_them(cfg):
+async def test_the_presubmit_runs_the_checks_declared_at_the_tasks_base_and_records_them(cfg):
     checks = {"tests": "uv run pytest", "lint": "ruff check ."}
     commands = MemoryCommands(**{"ruff check .": [CommandResult(1, "E501 line too long")]})
     runner = ScriptedRunner(developer=[delivered()])
@@ -422,7 +422,7 @@ async def test_the_gate_runs_the_checks_declared_at_the_tasks_base_and_records_t
     assert patch["subtasks"]["api"]["status"] == "delivered"
 
 
-async def test_the_gate_refuses_twice_then_lets_the_reviewer_see_the_red(cfg):
+async def test_the_presubmit_refuses_twice_then_lets_the_reviewer_see_the_red(cfg):
     red = [CommandResult(1, "1 failed")] * 3
     runner = ScriptedRunner(developer=[delivered()])
     ports = memory_ports(runner, commands=MemoryCommands(pytest=red))
@@ -433,7 +433,7 @@ async def test_the_gate_refuses_twice_then_lets_the_reviewer_see_the_red(cfg):
     assert patch["subtasks"]["api"]["status"] == "delivered"
 
 
-async def test_the_gate_refuses_an_uncommitted_delivery_without_running_the_checks(cfg):
+async def test_the_presubmit_refuses_an_uncommitted_delivery_without_running_the_checks(cfg):
     runner = ScriptedRunner(developer=[delivered(), delivered()])
     ports = memory_ports(runner)
     state, checkout = developing(ports)

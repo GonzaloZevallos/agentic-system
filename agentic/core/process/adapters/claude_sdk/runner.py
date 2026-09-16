@@ -48,7 +48,7 @@ from claude_agent_sdk import (
     query,
 )
 
-from ...application.ports import AttemptFailed, DeliveryGate, RawResult
+from ...application.ports import AttemptFailed, Presubmit, RawResult
 from ...domain.roles import Role
 from ..plugins import PLUGIN, PLUGIN_DIR
 from ..telemetry import NoTelemetry, Telemetry
@@ -72,7 +72,7 @@ def options_for(
     traceparent: str | None,
     partial: bool,
     env: Mapping[str, str],
-    gate: DeliveryGate | None = None,
+    presubmit: Presubmit | None = None,
 ) -> ClaudeAgentOptions:
     tools, allowed = list(role.tools), list(role.allowed)
     if role.skills and SKILL_TOOL not in tools:
@@ -103,7 +103,7 @@ def options_for(
         include_partial_messages=partial,
         # Claude Code parents its own spans under the role's (SDK mode honours it).
         env={**env, **({"TRACEPARENT": traceparent} if traceparent else {})},
-        hooks=hooks_for(role, cwd, gate) or None,
+        hooks=hooks_for(role, cwd, presubmit) or None,
     )
 
 
@@ -133,7 +133,7 @@ class ClaudeSdkRunner:
         cwd: Path,
         resume: str | None = None,
         max_budget_usd: float | None = None,
-        gate: DeliveryGate | None = None,
+        presubmit: Presubmit | None = None,
     ) -> RawResult:
         observer = Printer(role.name, self.stream) if self.verbose else None
         options = options_for(
@@ -147,7 +147,7 @@ class ClaudeSdkRunner:
             traceparent=self.telemetry.traceparent(),
             partial=observer is not None,
             env=self.env,
-            gate=gate,
+            presubmit=presubmit,
         )
 
         exhausted = f"max_turns ({role.max_turns}) exhausted without a result"

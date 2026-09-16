@@ -44,9 +44,9 @@ def test_env_beats_overrides():
 
 def test_model_for_kind_and_override():
     cfg = Configuration(model_overrides={"pm": "custom"}, product_dir=Path("/tmp/p"))
-    assert cfg.model_for("pjm", "thinker") == cfg.thinker_model
-    assert cfg.model_for("product_analyst", "validator") == cfg.validator_model
-    assert cfg.model_for("pm", "validator") == "custom"
+    assert cfg.model_for("pjm", "actor") == cfg.actor_model
+    assert cfg.model_for("product_analyst", "verifier") == cfg.verifier_model
+    assert cfg.model_for("pm", "verifier") == "custom"
 
 
 def test_empty_env_is_unset():
