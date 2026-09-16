@@ -13,7 +13,7 @@ rounds that did run reach the document: it is the raw record.
 An interview may have a consultant (glossary: Consulta): what the interviewee asks it
 in a round is answered before the next one, in the same run. The answers join the
 transcript, the interviewer sees them, and they become clarifications of the
-consultant's own section; the knowledge they change is distilled again (ADR-0006).
+consultant's own section; the knowledge they change is consolidated again (ADR-0006).
 Only the consultant leaves questions for the human.
 """
 
@@ -205,8 +205,8 @@ async def interview(
         consulted = f"## {decider.name} answered (round {round_})\n\n{answered.text}"
         reply = f"{answers.text}\n\n{consulted}"
         if answered.data["definitions"] or answered.data["glossary"]:
-            # Distilled again (ADR-0006); the caller commits the checkout after the interview.
-            ports.knowledge.distill(answered.data, cwd)
+            # Consolidated again (ADR-0006); the caller commits the checkout after the interview.
+            ports.knowledge.consolidate(answered.data, cwd)
 
     if not closed:
         # The cap hit with questions on the table: the interviewer closes with what it has.

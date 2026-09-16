@@ -90,11 +90,11 @@ class TaskDocuments(Protocol):
 
 
 class ProductKnowledge(Protocol):
-    """The distilled knowledge of the product (ADR-0006), stored with the human docs.
+    """The consolidated knowledge of the product (ADR-0006), stored with the human docs.
 
     What the knowledge must look like (capability names, what an approval carries)
     is `core.knowledge`'s rule, so it arrives through the port: `approval_check`
-    is the check PM's output must pass, `distill` writes what an approved verdict
+    is the check PM's output must pass, `consolidate` writes what an approved verdict
     leaves (ADR-0010)."""
 
     def read(self, root: Path | None = None) -> str:
@@ -110,7 +110,7 @@ class ProductKnowledge(Protocol):
 
     def clarification_check(self) -> Callable[[dict], None]: ...
 
-    def distill(self, verdict: dict, root: Path | None = None) -> list[Path]: ...
+    def consolidate(self, verdict: dict, root: Path | None = None) -> list[Path]: ...
 
 
 class Prompts(Protocol):

@@ -138,8 +138,8 @@ class _Rooted:
     def clarification_check(self):
         return self.inner.clarification_check()
 
-    def distill(self, verdict, root=None):
-        return self.inner.distill(verdict, self.root)
+    def consolidate(self, verdict, root=None):
+        return self.inner.consolidate(verdict, self.root)
 
 
 async def test_definition_stage_then_delivery(config, tmp_path):
@@ -634,7 +634,7 @@ async def test_a_crash_in_a_node_still_finishes_the_roles_span(config):
     cannot be written) propagates, but the span closes with an outcome and cost."""
 
     class BrokenKnowledge(MemoryKnowledge):
-        def distill(self, verdict, root=None):
+        def consolidate(self, verdict, root=None):
             raise OSError("read-only checkout")
 
     exporter = InMemorySpanExporter()

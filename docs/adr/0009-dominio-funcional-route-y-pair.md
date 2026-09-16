@@ -74,3 +74,24 @@ porque `Path` es `pathlib.Path`, que el dominio ya importa.
   lenguaje si entra al código.
 - README §12 registra `Route` y `Status` chico como pendiente de etapa 2; §13 anota las
   dos definiciones reemplazadas.
+
+## Adenda (2026-09-16): el Camino se llama `Workflow`, no `Route`
+
+`Route` nunca se implementó (README §12, pendiente 16: hoy el ruteo es una función por
+nodo en `rules.py`), así que el rename cuesta esta edición y no una migración. El motivo
+es que ni `route` ni `pipeline` son términos de arte en ningún framework: el dominante es
+**`workflow`** (Microsoft Agent Framework, OpenAI, Google ADK, Temporal, CrewAI Flows) y
+el segundo es `graph`, con `node` y `edge` (LangGraph, ADK v2, AgentKit).
+
+Gana `Workflow` sobre `Graph` por una razón de capas y no de gusto: `graph` ya está
+ocupado acá abajo. El `StateGraph` de LangGraph es el adaptador (ADR-0007), y llamar
+`Graph` al dato del dominio haría que "el grafo" signifique dos cosas a un archivo de
+distancia. `Workflow` nombra la secuencia de roles por tipo de tarea, que es lo que el
+dato es, sin chocar con nada.
+
+El razonamiento original vale igual con el nombre nuevo: sigue siendo solo la ida, las
+devoluciones siguen en su tabla aparte, y sigue sin implementarse hasta que entre QA Lead.
+La entrada **Camino** del glosario suma `_Campo_: workflow`.
+
+El título de este ADR y su nombre de archivo quedan como estaban: son el registro de una
+decisión fechada, y lo que se lee hoy es esta adenda.

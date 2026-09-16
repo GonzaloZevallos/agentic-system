@@ -67,7 +67,7 @@ class Verdict(RoleOutput):
     verdict: Literal["approved", "returned"]
     reason: str = Field(description="One line. On `returned`, what blocks building")
     flags: dict[str, bool] = Field(description="Every flag of the vocabulary, validated")
-    # The distillation (ADR-0006): PM returns the knowledge, the system writes it.
+    # The consolidation (ADR-0006): PM returns the knowledge, the system writes it.
     definitions: list[CapabilityFile] = Field(
         description="On `approved` for a feature, one entry per capability the task "
         "touches. Empty on `returned`"
@@ -115,7 +115,7 @@ class TechAnswers(RoleOutput):
 
 class Consultation(RoleOutput):
     """PM's answers to a consultation: clarifications of the definition, the knowledge
-    they change (distilled again, ADR-0006) and what only a person can decide."""
+    they change (consolidated again, ADR-0006) and what only a person can decide."""
 
     questions_for_human: list[str] = Field(
         description="Questions only a person can decide, written for a person who has "

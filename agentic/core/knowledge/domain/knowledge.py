@@ -1,4 +1,4 @@
-"""Product knowledge: what the system knows about the product, distilled and current.
+"""Product knowledge: what the system knows about the product, consolidated and current.
 
 It lives in the product repo with the human docs, not under `.agentic/` (ADR-0006):
 `docs/product/<capability>.md`, one file per capability named after a glossary
@@ -115,7 +115,7 @@ def _append_to_language(text: str, block: str) -> str:
     return text[:start] + section + "\n\n" + block + "\n" + ("\n" if following else "") + text[end:]
 
 
-def distillation(verdict: dict) -> tuple[dict[str, str], dict[str, dict[str, str]]]:
+def consolidation(verdict: dict) -> tuple[dict[str, str], dict[str, dict[str, str]]]:
     """What an approved verdict leaves in the knowledge: capability files by slug and
     glossary terms by name, as the `ProductKnowledge` port takes them."""
     definitions = {d["capability"]: d["content"] for d in verdict["definitions"]}
@@ -148,8 +148,8 @@ def approval_check(task_type: str) -> Callable[[dict], None]:
 
 
 def clarification_check(data: dict) -> None:
-    """The check a PM consultation must pass: whatever it distils is a valid file that
-    opens with its jobs. Distilling nothing is fine: the answers may change no text."""
+    """The check a PM consultation must pass: whatever it consolidates is a valid file that
+    opens with its jobs. Consolidating nothing is fine: the answers may change no text."""
     check_definitions(data.get("definitions", []))
 
 

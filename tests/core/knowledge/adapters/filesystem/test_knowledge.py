@@ -75,8 +75,8 @@ def test_upsert_terms_edits_or_creates_the_glossary(tmp_path):
     )
 
 
-def test_distill_writes_capabilities_then_glossary(tmp_path):
-    paths = FilesystemKnowledge(tmp_path).distill(
+def test_consolidate_writes_capabilities_then_glossary(tmp_path):
+    paths = FilesystemKnowledge(tmp_path).consolidate(
         {
             "definitions": [{"capability": "reports", "content": "# Reports"}],
             "glossary": [{"term": "Report", "definition": "A CSV.", "avoid": ""}],
@@ -87,9 +87,9 @@ def test_distill_writes_capabilities_then_glossary(tmp_path):
     assert "**Report**:\nA CSV.\n" in (tmp_path / "CONTEXT.md").read_text()
 
 
-def test_distill_checks_everything_before_writing_anything(tmp_path):
+def test_consolidate_checks_everything_before_writing_anything(tmp_path):
     with pytest.raises(ValueError, match="slug"):
-        FilesystemKnowledge(tmp_path).distill(
+        FilesystemKnowledge(tmp_path).consolidate(
             {
                 "definitions": [
                     {"capability": "reports", "content": "x"},
@@ -101,12 +101,12 @@ def test_distill_checks_everything_before_writing_anything(tmp_path):
     assert not (tmp_path / "docs/product").exists()
 
 
-def test_distill_restores_what_was_there_when_a_write_fails(tmp_path):
+def test_consolidate_restores_what_was_there_when_a_write_fails(tmp_path):
     (tmp_path / "docs/product").mkdir(parents=True)
     (tmp_path / "docs/product/reports.md").write_text("# Reports\n\nOld.\n")
     (tmp_path / "CONTEXT.md").mkdir()  # the glossary write will fail: it is a directory
     with pytest.raises(OSError):
-        FilesystemKnowledge(tmp_path).distill(
+        FilesystemKnowledge(tmp_path).consolidate(
             {
                 "definitions": [
                     {"capability": "reports", "content": "# Reports\n\nNew."},

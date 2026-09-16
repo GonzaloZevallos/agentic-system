@@ -58,11 +58,11 @@ def sub(id_, status="pending", **more):
     }
 
 
-async def test_validate_distils_into_the_task_checkout_and_commits(cfg):
+async def test_validate_consolidates_into_the_task_checkout_and_commits(cfg):
     ports = memory_ports(ScriptedRunner(pm=[verdict("approved")]))
     patch = await validate_definition(TASK, cfg, ports)
     assert patch["status"] == "definition_ready"
-    assert ports.knowledge.distilled_in == TASK_PATH
+    assert ports.knowledge.consolidated_in == TASK_PATH
     assert ports.workspace.commits == [(TASK_PATH, "GH-12: product definition")]
     assert ports.runner.calls[0]["cwd"] == TASK_PATH
 

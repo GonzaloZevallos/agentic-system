@@ -67,7 +67,7 @@ async def test_define_reads_the_knowledge_and_proposes_flags(cfg):
         assert call["prompt"].startswith("## Product knowledge\n\nOld.")
 
 
-async def test_validate_approval_distils_into_the_knowledge(cfg):
+async def test_validate_approval_consolidates_into_the_knowledge(cfg):
     ports = memory_ports(
         ScriptedRunner(
             pm=[

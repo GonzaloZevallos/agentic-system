@@ -275,3 +275,8 @@ _Campo_: sin término de arte
 **Contexto de producto**:
 La raíz del repo del producto, que el sistema recibe como parámetro. Ahí está todo lo que varía por producto: el código, los ADRs y `.agentic/`.
 _Campo_: workspace root — de las herramientas de desarrollo; `cwd` en el Claude Agent SDK
+
+**Stage0**:
+La copia del sistema, fijada a un sha, que ejecuta una corrida. No es la que se está editando: el sistema que corre y el que se modifica son dos, aunque el repo sea el mismo. Por analogía con el bootstrapping de un compilador, **stage1** es el sistema nuevo corrido por el viejo y **stage2** el sistema nuevo corrido por sí mismo; la prueba de que salió bien no es un número sino que stage3 dé idéntico a stage2.
+_Avoid_: runtime (es el harness de cada rol), sistema fijado
+_Campo_: stage0 — del bootstrapping de rustc (rustc-dev-guide), que llama "the same-result test" a la comparación de stage3 con stage2

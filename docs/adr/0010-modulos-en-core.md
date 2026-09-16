@@ -32,7 +32,7 @@ son de soporte: pueden importar el dominio y la aplicación de `process`, nunca 
 adaptadores, y no se conocen entre sí. Lo que `process` necesitaba de los otros pasa por
 ports que `process` define y ellos implementan. Eso movió tres cosas: `approval_check` y
 `distillation` dejan de ser funciones que la aplicación importa de `knowledge` y entran al
-port `ProductKnowledge` como `approval_check(task_type)` y `distill(verdict)`;
+port `ProductKnowledge` como `approval_check(task_type)` y `consolidate(verdict)`;
 `describe_flags` (cómo se ve el vocabulario en un prompt) es de `process.domain.roles`, y
 el vocabulario en sí de `knowledge`; la telemetría entra al grafo y al runner del SDK por
 un port `Telemetry` en `process/adapters/telemetry.py`, con `NoTelemetry` por defecto,

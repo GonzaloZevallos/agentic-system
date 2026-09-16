@@ -1,5 +1,5 @@
-"""PM validates the definition: approves and distils, or returns it to the Product
-Analyst within the pair's limit (README.md, 3 and 4; ADR-0006). The distillation
+"""PM validates the definition: approves and consolidates, or returns it to the Product
+Analyst within the pair's limit (README.md, 3 and 4; ADR-0006). The consolidation
 lands in the task's checkout and is committed there (ADR-0011)."""
 
 from __future__ import annotations
@@ -32,8 +32,8 @@ async def validate_definition(state: TaskState, cfg: Configuration, ports: Ports
 
     patch["flags"] = output.data["flags"]
     if output.data["verdict"] == "approved":
-        # The distillation (ADR-0006): PM returned the knowledge, the system writes it.
-        ports.knowledge.distill(output.data, task.path)
+        # The consolidation (ADR-0006): PM returned the knowledge, the system writes it.
+        ports.knowledge.consolidate(output.data, task.path)
         ports.workspace.commit_all(task.path, f"{state['id']}: product definition")
         patch["status"] = "definition_ready"
     elif remaining > 0:

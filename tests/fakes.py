@@ -85,7 +85,7 @@ class MemoryDocuments:
 
 
 class MemoryKnowledge:
-    """Keeps what a distillation would write. The checks are the real ones: the
+    """Keeps what a consolidation would write. The checks are the real ones: the
     process tests care that a bad approval fails, not how the file is named."""
 
     def __init__(self, text: str = "", standards: str = "## Engineering standards\n\nHex."):
@@ -107,11 +107,11 @@ class MemoryKnowledge:
     def clarification_check(self) -> Callable[[dict], None]:
         return knowledge.clarification_check
 
-    def distill(self, verdict: dict, root: Path | None = None) -> list[Path]:
-        definitions, terms = knowledge.distillation(verdict)
+    def consolidate(self, verdict: dict, root: Path | None = None) -> list[Path]:
+        definitions, terms = knowledge.consolidation(verdict)
         self.definitions.update(definitions)
         self.terms.update(terms)
-        self.distilled_in = root
+        self.consolidated_in = root
         return [Path(f"/memory/docs/product/{slug}.md") for slug in definitions]
 
 

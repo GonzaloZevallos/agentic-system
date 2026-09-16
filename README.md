@@ -759,7 +759,7 @@ existe justamente para pagar ese costo solo donde compre calidad.
 | 13 | ~~Campos de `Configuration` y esquemas~~ **resuelto**: `agentic/shared/configuration.py` y `agentic/core/process/domain/schemas.py`, uno por rol implementado. Los roles que faltan agregan su esquema al entrar | — |
 | 14 | Script que corre el set de cinco tareas y escribe el JSONL de resultados (sección 14). Sin costo: eso ya lo da Grafana | Medir |
 | 15 | Versionado de **parámetros** de `Configuration` como label de las métricas; hoy solo van el SHA del sistema y la huella de prompts | Comparar corridas que cambian solo un parámetro |
-| 16 | El camino como dato (`Route`, solo la ida, con la tabla de devoluciones aparte) y `Status` en cinco valores más `outcome`, ya modelados en ADR-0009. Hoy el ruteo es una función por nodo en `rules.py` | Etapa 2: se implementa al entrar QA Lead, el segundo par |
+| 16 | El camino como dato (`Workflow`, solo la ida, con la tabla de devoluciones aparte) y `Status` en cinco valores más `outcome`, ya modelados en ADR-0009. Hoy el ruteo es una función por nodo en `rules.py` | Etapa 2: se implementa al entrar QA Lead, el segundo par |
 
 **Resueltos desde la versión anterior**: el stack y el runtime de agentes (LangGraph para el
 flujo entre roles, Claude Agent SDK como harness de cada rol, autenticado con suscripción),
@@ -808,6 +808,9 @@ Se anotan para no reintroducirlas por error.
 | En paralelo el desborde del tope se acepta acotado por las ramas | Con la revisión adentro de la rama el número dejó de ser aceptable: el gasto del proceso lo comparten todas las ramas, sin estado compartido (ADR-0004, adenda quinta) |
 | Tech Lead revisa de solo lectura, sin correr tests, y escribe el veredicto con un motivo libre | Corre los tests que respaldan cada objeción; entrega hallazgos con evidencia y categoría, y el veredicto se deriva de los bloqueantes (ADR-0016) |
 | El revisor corre `pytest` con reglas fijas y el Developer copia el resultado de la suite en su sección | El producto declara su stack en `.agentic/stack.yaml`; la puerta de entrega los corre y escribe el resultado, y el revisor los usa para reproducir (ADR-0016, adenda) |
+| El camino como dato se llama `Route` | Se llama `Workflow`, el término que usan Microsoft Agent Framework, OpenAI, Google ADK, Temporal y CrewAI Flows; `Graph` chocaría con el `StateGraph` de LangGraph, que es el adaptador (ADR-0009, adenda) |
+| El paso de PM al conocimiento se llama `distill()` en el código | `consolidate()`: en inglés `distill` se lee como knowledge distillation, comprimir un modelo grande en uno chico. El castellano "Destilado" se queda (ADR-0018) |
+| La copia del sistema que ejecuta una corrida se llama "runtime" | `stage0`, del bootstrapping de compiladores, con `stage1` y `stage2` gratis; "runtime" ya es el harness de cada rol (ADR-0018) |
 | Todo lo que ni el pedido ni el conocimiento resuelven va al humano, y una pregunta registrada no se retira | Va solo lo que deja la definición indecidible; el resto es un supuesto en la respuesta. El dueño de la decisión retira por número lo que una ronda posterior resuelve (ADR-0014, adenda tercera) |
 
 ---
