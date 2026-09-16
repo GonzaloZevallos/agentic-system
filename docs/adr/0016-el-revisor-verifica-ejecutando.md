@@ -79,3 +79,37 @@ huella de prompts.
   otra vuelta de una revisión de 2.5 a 8.5 USD.
 - **Revisor que escribe tests**: sería otro rol que ejecuta, con su jaula y su riesgo sobre
   la rama del Developer.
+
+## Adenda (2026-09-15): el revisor corre los chequeos que el producto declara
+
+En el rescate de GH-12 (PR gym-saas #13) el revisor aprobó dando por buenos `ruff` y `mypy`
+porque lo decía la sección del Developer. Solo podía correr `uv run pytest` y `pytest`, y
+tampoco esas reglas calzaban con los comandos reales de gym-saas (`uv run --no-project …`).
+gym-saas no tiene `CODING_STANDARDS.md`, sus comandos están en el README y su CI solo corre
+`pytest`: nada que el sistema pudiera leer (issue #22, absorbe #34).
+
+**El producto declara sus chequeos en `.agentic/stack.yaml`**, con el mismo patrón que
+`.agentic/flags.yaml`: el sistema trae un default en `core/knowledge` (un solo chequeo,
+`tests: pytest`) y el producto lo reemplaza entero. Bajo la clave `checks`, cada chequeo es un
+nombre y el comando exacto. El archivo se llama por el **stack del producto**, no por los
+chequeos, porque es donde va a vivir todo lo que depende de la tecnología elegida: cómo se
+prepara el entorno (issue #37) y qué no se puede escribir en este stack (issue #38). El sistema
+impone la práctica; la herramienta la elige el producto. No se parsean `CODING_STANDARDS.md` ni
+la CI.
+
+**Vale la versión del commit base de la tarea**, la del arranque de la corrida
+(`git show <base>:.agentic/stack.yaml`), nunca la de la rama. Una tarea que cambia el
+archivo no cambia la vara con que se la mide: el revisor lo anota como observación y el
+cambio rige desde la tarea siguiente, después del merge. Si la tarea trae un chequeo nuevo,
+como `ruff` y `mypy` en GH-12, es el plan del Tech Lead el que pide dejar el código en
+verde con ese chequeo.
+
+**La puerta de entrega corre todos los chequeos** en el checkout del Developer y escribe el
+resultado al principio de su sección (ADR-0011, adenda segunda). Lo escribe el sistema:
+el Developer ya no copia las últimas líneas de la suite.
+
+**El revisor corre los chequeos declarados.** El sistema convierte cada comando en una regla
+`Bash(<comando>:*)`, que reemplaza las dos reglas fijas de `pytest`. El prompt los lista y
+le pide empezar el comando tal como está declarado y agregarle el archivo o el test. Los usa
+para reproducir una objeción puntual. Un chequeo entero no lo repite: ya lo corrió la
+puerta. Correr chequeos sin escribir sigue sin ser ejecutar.

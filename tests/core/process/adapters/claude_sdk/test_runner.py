@@ -306,3 +306,33 @@ async def test_the_git_identity_and_the_deny_rules_reach_the_role(monkeypatch, t
     assert options.env == identity
     # Deny rules hold even in `bypassPermissions`.
     assert options.disallowed_tools == ["Bash(git config:*)"]
+
+
+async def test_a_role_that_executes_runs_inside_the_hooks_cage(monkeypatch, tmp_path):
+    # Deny rules match a prefix; the hooks see the parsed call (ADR-0011, addendum).
+    seen = fake_query(monkeypatch, [result()])
+    developer = replace(PJM, tools=("Bash",), executes=True)
+    await ClaudeSdkRunner().run_once(
+        developer, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
+    )
+    matchers = seen[0][1].hooks["PreToolUse"]
+    assert {m.matcher for m in matchers} == {"Bash", "Edit|Write"}
+    seen = fake_query(monkeypatch, [result()])
+    await run_once(ClaudeSdkRunner(), tmp_path)
+    assert seen[0][1].hooks is None
+
+
+async def test_the_delivery_gate_becomes_a_hook_on_the_delivery_call(monkeypatch, tmp_path):
+    seen = fake_query(monkeypatch, [result()])
+
+    class Gate:
+        timeout_s = 300.0
+
+        def __call__(self):
+            return None
+
+    await ClaudeSdkRunner().run_once(
+        PJM, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path, gate=Gate()
+    )
+    (matcher,) = seen[0][1].hooks["PreToolUse"]
+    assert matcher.matcher == "StructuredOutput" and matcher.timeout > 300.0

@@ -32,7 +32,7 @@ from ..domain import document, rules, schemas
 from ..domain.document import HUMAN
 from ..domain.roles import ORIGINAL, Prompt, Role, describe_flags, render
 from ..domain.task import WAITING_ON_HUMAN, Failure, RoleRun, TaskState, apply
-from .ports import AttemptFailed, Ports, RoleRunner
+from .ports import AttemptFailed, DeliveryGate, Ports, RoleRunner
 
 Check = Callable[[dict], None]
 
@@ -147,13 +147,16 @@ async def run_with_retry(
     max_budget_usd: float | None = None,
     spent_usd: float = 0.0,
     task_cap_usd: float | None = None,
+    gate: DeliveryGate | None = None,
 ) -> Output:
     """`check` is the use case's own rule over the validated output (raise `ValueError`);
     breaking it is a role failure like any other, so the model gets the error back.
 
     `spent_usd` is what the task spent before this call; with `task_cap_usd`
     set, an attempt that would start at or over the cap raises `TaskCapReached`
-    instead. A failed attempt counts: the retry can cost another attempt cap."""
+    instead. A failed attempt counts: the retry can cost another attempt cap.
+
+    `gate` is handed to every attempt: the harness asks it when the model delivers."""
     failures: list[Failure] = []
     for attempt in range(1, max(retries, 0) + 2):
         total = spent_usd + spent(failures)
@@ -172,6 +175,7 @@ async def run_with_retry(
                 check=check,
                 resume=session,
                 max_budget_usd=max_budget_usd,
+                gate=gate,
             )
         except AttemptFailed as exc:
             failures.append(
@@ -224,6 +228,7 @@ async def _attempt(
     check: Check | None,
     resume: str | None,
     max_budget_usd: float | None,
+    gate: DeliveryGate | None = None,
 ) -> Output:
     result = await runner.run_once(
         role,
@@ -234,6 +239,7 @@ async def _attempt(
         cwd=cwd,
         resume=resume,
         max_budget_usd=max_budget_usd,
+        gate=gate,
     )
     cost, session = result.cost_usd, result.session_id
     if result.structured_output is None:
@@ -305,6 +311,7 @@ async def run_role(
     cwd: Path | None = None,
     resume: str | None = None,
     prompt: str | None = None,
+    gate: DeliveryGate | None = None,
     **placeholders: object,
 ) -> tuple[Output | None, TaskState]:
     """Run a role and build the state patch. On `RoleFailure`, or when the task cap
@@ -314,7 +321,7 @@ async def run_role(
     `section` is where the delivery goes (the role's name by default); `cwd` where the
     role runs (the product root by default); `resume` continues the role's earlier
     session; `prompt` replaces the context with a shorter message when the session
-    already holds it (an interview's later rounds)."""
+    already holds it (an interview's later rounds); `gate` is asked when it delivers."""
     section = section or role.name
     vocabulary = ports.flags.load()
     loaded = load_prompt(role, cfg, ports, vocabulary, **placeholders)
@@ -337,6 +344,7 @@ async def run_role(
             max_budget_usd=cfg.max_budget_usd,
             spent_usd=state.get("cost_usd", 0.0),
             task_cap_usd=task_cap(state, cfg),
+            gate=gate,
         )
     except Escalating as exc:
         return None, patch | escalation(exc)

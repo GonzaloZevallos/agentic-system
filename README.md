@@ -398,12 +398,13 @@ Uno por tarea. **Nunca codea, siempre delega.**
   (ADR-0013). La primera revisión va desde la base de la subtarea con el brief como spec;
   toda revisión después de una devolución es **incremental**: desde el head que ya revisó,
   con su propia lista para el Developer como spec (ADR-0015).
-- **Verifica ejecutando** (ADR-0016): no escribe nada, pero corre con `pytest` los tests
-  que respaldan cada objeción de comportamiento, y entrega **hallazgos** con lugar,
+- **Verifica ejecutando** (ADR-0016): no escribe nada, pero corre los chequeos que el
+  producto declara (`.agentic/stack.yaml`) sobre el test que respalda cada objeción de
+  comportamiento, y entrega **hallazgos** con lugar,
   afirmación, evidencia (el comando y su salida, o la cita), severidad, alcance y
   categoría. Una objeción que no reprodujo es una observación. El veredicto no lo escribe:
-  devuelve si y solo si hay un hallazgo bloqueante sobre la subtarea. La suite completa no
-  la repite: la registra el Developer.
+  devuelve si y solo si hay un hallazgo bloqueante sobre la subtarea. Un chequeo entero no
+  lo repite: lo corrió la puerta de entrega y está en la sección del Developer.
 - Si rechaza, vuelve **al mismo Developer**. Nunca reasigna a otro.
 - Designa un Developer integrador y revisa la integración final.
 - Entrega la pieza integrada a PjM → QA 2ª pasada.
@@ -432,12 +433,20 @@ humano en cada paso. Corre con
 el entorno del sistema limpio de su propia toolchain (`VIRTUAL_ENV`, `UV_*`, su `.venv/bin`
 en `PATH`), así que `pytest` y `uv run` en el producto resuelven al del producto. Sus commits firman
 como el sistema, con la identidad que le llega en el entorno, y tres reglas se le niegan aun
-sin aprobación: `git config`, `git push` y `git worktree` (ADR-0011, adenda).
+sin aprobación: `git config`, `git push` y `git worktree` (ADR-0011, adenda). Encima corre
+dentro de hooks del SDK que ven el comando parseado, no un prefijo: niegan esos tres
+también detrás de `git -C` o `sh -c`, `--git-dir`, `commit --no-verify`, cambiar de rama,
+editar dentro de `.git/` o fuera de su checkout, y agregar `# type: ignore` o `# noqa`
+(ADR-0011, adenda segunda).
 
-**Entrega**. Una entrega es código commiteado en un árbol limpio: si el HEAD no se movió o
-queda algo sin commitear, es fallo de rol y se reintenta con el error como entrada. En la
-corrida 4 un fix quedó en el árbol de trabajo y la suite pasó contra código que la rama no
-tenía.
+**Entrega**. Una entrega es código commiteado en un árbol limpio con los chequeos del
+producto en verde. La **puerta de entrega** lo mira cuando el Developer entrega, dentro de
+su turno: si el HEAD no se movió, si queda algo sin commitear o si un chequeo falla,
+rechaza la entrega con el motivo y el modelo vuelve a entregar. Rechaza como mucho dos
+veces por corrida, reintento incluido; después deja pasar, y el resultado de los chequeos abre la sección del Developer,
+escrito por el sistema. En la corrida 4 un fix quedó en el árbol de trabajo y la suite pasó
+contra código que la rama no tenía. El commit y el árbol limpio se chequean otra vez al
+terminar: faltar es fallo de rol y se reintenta con el error como entrada.
 
 ### QA Lead y los tres QA
 
@@ -790,6 +799,7 @@ Se anotan para no reintroducirlas por error.
 | Tope de tarea fijo en 100 USD, y escalar termina la corrida | Base más proporcional por subtarea con techo, y alcanzarlo pausa: el humano sube el tope y reanuda (ADR-0004, adenda cuarta; ADR-0003, adenda) |
 | Cada revisión del Tech Lead arranca desde la base de la subtarea | La primera sí; después de una devolución es incremental, desde el head ya revisado (ADR-0015) |
 | Tech Lead revisa de solo lectura, sin correr tests, y escribe el veredicto con un motivo libre | Corre los tests que respaldan cada objeción; entrega hallazgos con evidencia y categoría, y el veredicto se deriva de los bloqueantes (ADR-0016) |
+| El revisor corre `pytest` con reglas fijas y el Developer copia el resultado de la suite en su sección | El producto declara su stack en `.agentic/stack.yaml`; la puerta de entrega los corre y escribe el resultado, y el revisor los usa para reproducir (ADR-0016, adenda) |
 | Todo lo que ni el pedido ni el conocimiento resuelven va al humano, y una pregunta registrada no se retira | Va solo lo que deja la definición indecidible; el resto es un supuesto en la respuesta. El dueño de la decisión retira por número lo que una ronda posterior resuelve (ADR-0014, adenda tercera) |
 
 ---
@@ -809,8 +819,8 @@ imports:
 | Módulo | Contenido | Importa |
 |---|---|---|
 | `shared/` | `configuration.py`, `environment.py` (el entorno sin la toolchain propia) | Nada del proyecto |
-| `core/process/` | `domain/`: `roles.py` (`Role` con tools, reglas de permiso y skills; `Pair`; `Interview`; `describe_flags`) y `prompts/`, `task.py` (estado, subtareas y reducers), `document.py`, `schemas.py`, `rules.py` (límite por par, versionado por sección, subtareas listas, ruteo, tope de tarea, reanudación). `application/`: `ports.py` (`RoleRunner`, `TaskDocuments`, `ProductKnowledge`, `Prompts`, `FlagVocabulary`, `Inbox`, `Workspace`, `Tracker`), `interview` (rondas entre dos roles, ADR-0014) y un caso de uso por nodo: `classify`, `define`, `validate_definition`, `plan`, `develop`, `review`, `deliver`, `escalate`, sobre `run_role`, más `resume` (qué hace una reanudación antes de gastar). `adapters/`: `claude_sdk/` (harness con plugin de skills y jaula por rol, `Printer`), `filesystem/` (documentos y overlay de prompts), `git/` (rama de tarea y árboles de trabajo, ADR-0011), `github/` (bandeja y escritura: PR, comentarios, etiquetas), `langgraph/` (el grafo: nodos, ruteo, `Send` por subtarea, abre y cierra los spans; `pause` con el `interrupt()`, ADR-0003) y `telemetry.py`, el port por el que entra el tracing | `shared` |
-| `core/knowledge/` | `domain/`: `knowledge.py` (cómo se muestra, cómo se edita el glosario, qué debe traer una aprobación), `flags.py` (el vocabulario). `adapters/filesystem/`: implementa `ProductKnowledge` y `FlagVocabulary` sobre el repo del producto | `shared`, `process` |
+| `core/process/` | `domain/`: `roles.py` (`Role` con tools, reglas de permiso y skills; `Pair`; `Interview`; `describe_flags`) y `prompts/`, `task.py` (estado, subtareas y reducers), `document.py`, `schemas.py`, `rules.py` (límite por par, versionado por sección, subtareas listas, ruteo, tope de tarea, reanudación), `gate.py` (qué le falta a una entrega). `application/`: `ports.py` (`RoleRunner`, `DeliveryGate`, `TaskDocuments`, `ProductKnowledge`, `Prompts`, `FlagVocabulary`, `ProductStack`, `Commands`, `Inbox`, `Workspace`, `Tracker`), `interview` (rondas entre dos roles, ADR-0014), `gate` (la puerta de entrega sobre los ports) y un caso de uso por nodo: `classify`, `define`, `validate_definition`, `plan`, `develop`, `review`, `deliver`, `escalate`, sobre `run_role`, más `resume` (qué hace una reanudación antes de gastar). `adapters/`: `claude_sdk/` (harness con plugin de skills, jaula por rol con `hooks.py`, `Printer`), `shell/` (corre los chequeos del producto), `filesystem/` (documentos y overlay de prompts), `git/` (rama de tarea y árboles de trabajo, ADR-0011), `github/` (bandeja y escritura: PR, comentarios, etiquetas), `langgraph/` (el grafo: nodos, ruteo, `Send` por subtarea, abre y cierra los spans; `pause` con el `interrupt()`, ADR-0003) y `telemetry.py`, el port por el que entra el tracing | `shared` |
+| `core/knowledge/` | `domain/`: `knowledge.py` (cómo se muestra, cómo se edita el glosario, qué debe traer una aprobación), `flags.py` (el vocabulario), `stack.py` (el stack del producto y sus chequeos). `adapters/filesystem/`: implementa `ProductKnowledge` y `FlagVocabulary` sobre el repo del producto; `adapters/git/`: `ProductStack`, como lo declara el commit base | `shared`, `process` |
 | `core/measurement/` | `domain/`: `metrics.py` (retrabajo, devoluciones, huella de prompts). `adapters/otel/`: spans y métricas del sistema, implementa `Telemetry` | `shared`, `process` |
 | raíz | `composition.py` arma los ports reales, el checkpointer SQLite e inyecta la telemetría; `cli.py` es el adaptador de entrada (`run`, `resume`) | Todo |
 
@@ -911,6 +921,14 @@ sesión nueva si no), y si vuelve a fallar lanza
 `RoleFailure`, que el caso de uso convierte en escalado. Se descartó `RetryPolicy` de LangGraph porque reintenta el
 nodo sin pasarle el error al modelo. Todo fallo, reintentado o no, queda en el estado para las
 métricas de PjM.
+
+Lo que se puede frenar antes de que sea un fallo se frena adentro del turno, con hooks del
+SDK (ADR-0011, adenda segunda). Un rol que ejecuta corre con `PreToolUse` sobre Bash, Edit y
+Write, que niegan con motivo lo que un prefijo no ve. La puerta de entrega es un
+`PreToolUse` sobre `StructuredOutput`: el runner recibe un `DeliveryGate` y lo pregunta cada
+vez que el modelo entrega. `Stop` no sirve para eso: con `output_format` dispara después de
+la entrega, y un `block` ahí no la frena. Un deny no es fallo de rol ni reintento: el modelo
+recibe el motivo y sigue en la misma sesión.
 
 ### Fan-out
 

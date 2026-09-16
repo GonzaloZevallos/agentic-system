@@ -10,8 +10,16 @@ Developer's section and the reviews.
 <Task>
 Merge the subtask branches listed below into the current branch, in dependency order.
 Resolve conflicts with the `resolving-merge-conflicts` skill, keeping every subtask's
-intent. Then run the full suite, the type checker and the linter, and fix what the
-merge broke, inside the `tdd` loop if a fix needs code. Commit on the current branch.
+intent. Then run every one of the product's checks, and fix what the merge broke,
+inside the `tdd` loop if a fix needs code. Commit on the current branch.
+
+The product's checks:
+
+{{checks}}
+
+When you deliver, the system runs every check in your working directory and refuses the
+delivery, telling you why, if nothing is committed, if changes are left uncommitted, or
+if a check fails. Fix what it says, commit, and deliver again.
 
 Branches to merge:
 
@@ -20,10 +28,8 @@ Branches to merge:
 Then write, in Markdown, using `###` headings and nothing above `###`:
 
 1. `### Integration`: what was merged, which conflicts came up and how each was
-   resolved.
-2. `### Tests`: the result of the full suite, the type checker and the linter,
-   verbatim last lines.
-3. `### For the Tech Lead`: what to look at first; anything that does not fit together.
+   resolved. The system writes the checks' results at the head of your section.
+2. `### For the Tech Lead`: what to look at first; anything that does not fit together.
 </Task>
 
 <Hard Limits>

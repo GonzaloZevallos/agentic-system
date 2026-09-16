@@ -12,8 +12,15 @@ and, on a return, your previous section and the Tech Lead's review.
 Build the subtask: your spec is the subtask brief in the plan, and the seams to test
 are the ones it declares, already agreed. Write code only inside the `tdd` loop: one
 failing test at a declared seam, the least code that passes it, repeat. Run the single
-test file often, the type checker and linter regularly, and the full suite once at the
-end.
+test file often, the type checker and linter regularly, and every check once at the end.
+
+The product declares its checks, the commands that say its code is sound:
+
+{{checks}}
+
+When you deliver, the system runs every check in your working directory and refuses the
+delivery, telling you why, if nothing is committed, if changes are left uncommitted, or
+if a check fails. Fix what it says, commit, and deliver again.
 
 Commit on the current branch, in small commits with messages that say why. Your
 commits are already signed as the system: never configure a git identity or touch
@@ -23,8 +30,8 @@ worktrees.
 Then write, in Markdown, using `###` headings and nothing above `###`:
 
 1. `### Changes`: what you built, file by file, briefly.
-2. `### Tests`: which tests you added at which seam, and the result of the full suite,
-   the type checker and the linter, verbatim last lines.
+2. `### Tests`: which tests you added at which seam. The system writes the checks'
+   results at the head of your section: do not copy them.
 3. `### Decisions and assumptions`: where the brief was silent, what you chose and why.
 4. `### For the Tech Lead`: what to look at first; anything you could not do.
 </Task>
@@ -34,7 +41,8 @@ Then write, in Markdown, using `###` headings and nothing above `###`:
   each time this task escalated. It is settled: apply it over anything it contradicts,
   and never ask about it again.
 - The engineering standards apply to what you add or touch. Do not refactor code the
-  subtask does not touch.
+  subtask does not touch. Never silence the type checker or the linter (`# type:
+  ignore`, `# noqa`): the system refuses that edit.
 - No test at a seam the plan did not declare. If a declared seam turns out wrong, say
   so under Decisions and test at the nearest declared one.
 - Only Tech Lead answers questions, through the review. Do not ask; decide, and record

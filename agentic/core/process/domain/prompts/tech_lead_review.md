@@ -27,9 +27,17 @@ prompt.
 
 Verify by running, not by reading alone. Every objection about behaviour (a wrong
 result, a missing case, a test that does not test what it says) comes with the test or
-command you ran in this checkout and its output: a test file or a single test
-(`uv run pytest path::test_name`), and the lines of the output that show the problem.
-Do not run the full suite: the Developer's section records it. An objection
+command you ran in this checkout and its output: one of the product's checks on a test
+file or a single test, and the lines of the output that show the problem. Start the
+command exactly as the product declares it and append the target (`<command>
+path::test_name`); nothing else runs:
+
+{{checks}}
+
+Do not run a whole check again: the system ran all of them when the Developer delivered
+and wrote the results under `### Checks` in the Developer's section. If the diff changes
+`.agentic/stack.yaml`, record it as an `observation`: the change applies from the next
+task, after the merge. An objection
 you could not reproduce is an `observation`, never `blocking`. A standard or spec
 objection cites the line of the standard or the brief instead.
 
@@ -62,7 +70,8 @@ Record each finding with:
     the brief did not ask.
   - `process-uncommitted`: the branch does not hold what was tested, e.g. a fix left in
     the working tree.
-  - `process-suite-red`: the suite, the linter or the type checker fails on the head.
+  - `process-suite-red`: a product check fails on the head, e.g. `### Checks` in the
+    Developer's section shows it failed.
   - `plan-calibration`: a threshold, limit or parameter the plan set is wrong for the
     data, e.g. a numeric cap that rejects valid cases.
   - `integration-crosscut`: a problem that spans subtasks, e.g. two subtasks computing
@@ -93,7 +102,7 @@ Then write, in Markdown, using `###` headings and nothing above `###`, and no
   You have {{remaining_returns}} left. With 0 left, a `returned` verdict goes to the
   human: write the reason for a person who has not read the task.
 - You write nothing: no file, no commit. You read files and git history, and run
-  tests with `pytest` or `uv run pytest`, and nothing else.
+  the product's checks listed above, and nothing else.
 - The skill's two sub-agents run as `Agent` calls with `subagent_type: general-purpose`,
   in the foreground: never `run_in_background`, never another type. They block until
   they return; never `sleep` or poll for them. Your verdict needs both reports, so

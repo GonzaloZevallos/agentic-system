@@ -62,6 +62,9 @@ class Configuration(BaseModel):
     # (ADR-0013, addendum). Forced: an agent type whose definition names a model
     # (`Explore` inherits the parent's) would otherwise ignore it (issue #19).
     subagent_model: str = "claude-sonnet-5"
+    # How long one product check may run inside the delivery gate before it counts as
+    # failed (issue #22). The gate's hook waits for all of them.
+    check_timeout_s: float = Field(default=600.0, gt=0)
     # Rounds an interview may take before the interviewer closes with what it has
     # (ADR-0014).
     interview_max_rounds: int = Field(default=4, ge=1)

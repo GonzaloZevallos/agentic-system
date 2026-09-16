@@ -41,3 +41,7 @@ acordadas, tipado estricto. El sistema trae un default que el producto reemplaza
 un archivo en su raíz. Los leen Tech Lead y Developer; aplican al código nuevo y al que la
 tarea toca, no al que ya existía.
 _Avoid_: buenas prácticas, guía de estilo (el estilo lo impone el linter, no este archivo)
+
+**Stack del producto**:
+Con qué tecnología se construye y se verifica este producto, declarado por el producto en su repo. Hoy son sus chequeos: los comandos con que declara que su código está sano (tests, linter, typechecker), que corre la puerta de entrega y que el revisor usa para reproducir una objeción. El sistema impone las prácticas, nunca la herramienta.
+_Avoid_: checks, stack (a secas, cuando se habla del sistema), CI, validaciones

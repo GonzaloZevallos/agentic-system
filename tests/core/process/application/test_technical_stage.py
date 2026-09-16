@@ -8,12 +8,14 @@ from agentic.core.process.application.deliver import deliver
 from agentic.core.process.application.develop import develop
 from agentic.core.process.application.escalate import escalate
 from agentic.core.process.application.plan import plan
-from agentic.core.process.application.ports import RawResult
+from agentic.core.process.application.ports import CommandResult, RawResult
 from agentic.core.process.application.review import review
 from agentic.core.process.application.validate_definition import validate_definition
 from agentic.core.process.domain.task import INTEGRATION, apply
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
+    MemoryCommands,
+    MemoryStack,
     MemoryWorkspace,
     ScriptedRunner,
     delivered,
@@ -109,7 +111,11 @@ async def test_develop_runs_the_developer_unattended_in_the_subtask_checkout(cfg
     assert patch["subtasks"] == {
         "api": {**sub("api"), "status": "delivered", "branch": "agentic/GH-12.api", "base": "base1"}
     }
-    assert patch["sections"] == {"Developer: api": "### Changes\n\nx.py"}
+    assert patch["sections"] == {
+        "Developer: api": "### Checks\n\nRun by the system on `head2` when the Developer "
+        "delivered.\n\n| Check | Command | Result |\n|---|---|---|\n| `tests` | `pytest` "
+        "| passed |\n\n### Changes\n\nx.py"
+    }
     assert patch["runs"][0]["section"] == "Developer: api" and patch["status"] == "developing"
 
 
@@ -301,7 +307,9 @@ async def test_the_integrator_builds_on_the_task_branch_with_the_branches_listed
         in call["system_prompt"]
     )
     assert patch["subtasks"][INTEGRATION]["status"] == "delivered"
-    assert patch["sections"] == {"Developer: integration": "### Changes\n\nx.py"}
+    (section,) = patch["sections"]
+    assert section == "Developer: integration"
+    assert patch["sections"][section].endswith("| passed |\n\n### Changes\n\nx.py")
 
 
 async def test_deliver_pushes_opens_the_pull_request_and_tells_the_issue(cfg):
@@ -356,3 +364,70 @@ async def test_an_escalation_by_the_task_cap_breaks_the_spending_down_and_propos
     ports = memory_ports()
     await escalate({**state, "id": "T-1"}, cfg, ports)  # no issue, no command to resume it
     assert "agentic resume" not in ports.tracker.comments[0][1]
+
+
+def developing(ports, subtasks=("api", "domain")):
+    state = {**TASK, "subtasks": {sid: sub(sid) for sid in subtasks}, "subtask_id": "api"}
+    checkout = ports.workspace.subtask_checkout("GH-12", "api")
+    ports.workspace.moved.add(checkout.path)
+    ports.workspace.branches["agentic/GH-12"] = ("head", "base0")
+    return state, checkout
+
+
+async def test_the_gate_runs_the_checks_declared_at_the_tasks_base_and_records_them(cfg):
+    checks = {"tests": "uv run pytest", "lint": "ruff check ."}
+    commands = MemoryCommands(**{"ruff check .": [CommandResult(1, "E501 line too long")]})
+    runner = ScriptedRunner(developer=[delivered()])
+    ports = memory_ports(runner, stack=MemoryStack(checks), commands=commands)
+    state, checkout = developing(ports)
+    patch = await develop(state, cfg, ports)
+    # The version at the task's base holds, never the branch's (issue #22, 7).
+    assert ports.stack.revisions == ["base0"]
+    assert "- `lint`: `ruff check .`" in runner.calls[0]["system_prompt"]
+    # Red, the model is told inside its turn and delivers again; green, it counts.
+    (reason,) = runner.refused
+    assert "(1 of 2)" in reason and "`lint` failed: `ruff check .`" in reason
+    assert "E501 line too long" in reason
+    assert commands.ran == [(checkout.path, c) for c in [*checks.values(), *checks.values()]]
+    section = patch["sections"]["Developer: api"]
+    assert section.startswith("### Checks\n\nRun by the system on `head")
+    assert "| `lint` | `ruff check .` | passed |" in section
+    assert section.endswith("### Changes\n\nx.py")
+    assert patch["subtasks"]["api"]["status"] == "delivered"
+
+
+async def test_the_gate_refuses_twice_then_lets_the_reviewer_see_the_red(cfg):
+    red = [CommandResult(1, "1 failed")] * 3
+    runner = ScriptedRunner(developer=[delivered()])
+    ports = memory_ports(runner, commands=MemoryCommands(pytest=red))
+    state, _ = developing(ports)
+    patch = await develop(state, cfg, ports)
+    assert len(runner.refused) == 2 and "(2 of 2)" in runner.refused[1]
+    assert "| `tests` | `pytest` | **failed** |" in patch["sections"]["Developer: api"]
+    assert patch["subtasks"]["api"]["status"] == "delivered"
+
+
+async def test_the_gate_refuses_an_uncommitted_delivery_without_running_the_checks(cfg):
+    runner = ScriptedRunner(developer=[delivered(), delivered()])
+    ports = memory_ports(runner)
+    state, checkout = developing(ports)
+    ports.workspace.dirty.add(checkout.path)
+    patch = await develop(state, cfg, ports)
+    assert len(runner.refused) == 2 and all("uncommitted" in r for r in runner.refused)
+    # Past its refusals a delivery that is not one is left to the backstop, unchecked.
+    assert ports.commands.ran == []
+    assert "uncommitted changes" in patch["failures"][0]["error"]
+
+
+async def test_the_reviewer_may_run_the_declared_checks_and_reads_them(cfg):
+    state = {
+        **TASK,
+        "subtasks": {"api": sub("api", "delivered", branch="agentic/GH-12.api", base="b")},
+    }
+    checks = {"tests": "uv run --no-project pytest"}
+    runner = ScriptedRunner(tech_lead_review=[reviewed()])
+    ports = memory_ports(runner, stack=MemoryStack(checks))
+    await review(state, cfg, ports)
+    call = runner.calls[0]
+    assert "Bash(uv run --no-project pytest:*)" in call["role"].allowed
+    assert "- `tests`: `uv run --no-project pytest`" in call["system_prompt"]

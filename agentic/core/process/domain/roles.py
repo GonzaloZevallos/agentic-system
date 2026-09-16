@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
 
@@ -99,8 +100,9 @@ def describe_flags(vocabulary: dict[str, str]) -> str:
 
 
 # Tool sets. Reading the code is not executing (glossary: Ejecutar): a reviewer sees
-# files and the diff, never writes anything. Running tests is not executing either:
-# the reviewer runs the ones behind a behaviour objection (ADR-0016).
+# files and the diff, never writes anything. Running the product's checks is not
+# executing either: the reviewer runs them to reproduce an objection (ADR-0016), and
+# which commands those are the product declares (`reviewer_for`).
 READ_CODE = ("Read", "Glob", "Grep", "Bash")
 READ_CODE_RULES = (
     "Read",
@@ -110,7 +112,6 @@ READ_CODE_RULES = (
     "Bash(git log:*)",
     "Bash(git show:*)",
 )
-RUN_TESTS_RULES = ("Bash(uv run pytest:*)", "Bash(pytest:*)")
 # An interviewer writes only the glossary and the ADRs of the product (ADR-0014).
 WRITE_DOCS = ("Read", "Glob", "Grep", "Edit", "Write")
 WRITE_DOCS_RULES = (
@@ -246,7 +247,8 @@ TECH_LEAD_REVIEWER = Role(
     reads=(ORIGINAL, "PM", "Tech Lead"),
     reads_standards=True,
     tools=READ_CODE + ("Agent",),
-    allowed=READ_CODE_RULES + RUN_TESTS_RULES + ("Agent",),
+    # Plus the product's checks, per task: `reviewer_for`.
+    allowed=READ_CODE_RULES + ("Agent",),
     skills=("code-review",),
     max_turns=20,
 )
@@ -280,6 +282,18 @@ DEVELOPER_INTEGRATOR = Role(
     effort="high",
     max_turns=80,
 )
+
+
+def check_rules(checks: Mapping[str, str]) -> tuple[str, ...]:
+    """A permission rule per declared check. A prefix: the reviewer runs the command on
+    one file or one test by appending to it."""
+    return tuple(f"Bash({command}:*)" for command in checks.values())
+
+
+def reviewer_for(checks: Mapping[str, str]) -> Role:
+    """The reviewer of a task whose product declares `checks` (ADR-0016, addendum)."""
+    return replace(TECH_LEAD_REVIEWER, allowed=TECH_LEAD_REVIEWER.allowed + check_rules(checks))
+
 
 ROLES = (
     PJM,

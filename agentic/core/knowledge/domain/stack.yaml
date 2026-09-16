@@ -1,0 +1,5 @@
+# Default product stack. A product replaces it entirely with `.agentic/stack.yaml`,
+# committed: the version at the task's base commit is the one that holds for the task.
+# `checks` is a name and the exact command, run from the root of the checkout.
+checks:
+  tests: pytest

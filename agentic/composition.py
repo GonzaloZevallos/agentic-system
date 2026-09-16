@@ -19,12 +19,14 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from .core.knowledge.adapters.filesystem import FilesystemFlags, FilesystemKnowledge
+from .core.knowledge.adapters.git import GitStack
 from .core.measurement.adapters.otel import telemetry
 from .core.process.adapters.claude_sdk import ClaudeSdkRunner
 from .core.process.adapters.filesystem import FilesystemPrompts, FilesystemTaskDocuments
 from .core.process.adapters.git import GitWorkspace
 from .core.process.adapters.github import GhInbox, GhTracker
 from .core.process.adapters.langgraph.graph import build_graph
+from .core.process.adapters.shell import ShellCommands
 from .core.process.application.ports import Ports
 from .shared.configuration import Configuration
 
@@ -39,6 +41,8 @@ def default_ports(cfg: Configuration) -> Ports:
         inbox=GhInbox(cfg.product_dir),
         workspace=GitWorkspace(cfg.product_dir, cfg.git_identity),
         tracker=GhTracker(cfg.product_dir),
+        stack=GitStack(cfg.product_dir),
+        commands=ShellCommands(),
     )
 
 

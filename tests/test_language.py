@@ -6,9 +6,9 @@ from pathlib import Path
 from types import ModuleType
 from typing import get_args, get_type_hints
 
-from agentic.core.knowledge.domain import knowledge
+from agentic.core.knowledge.domain import knowledge, stack
 from agentic.core.measurement.domain import metrics
-from agentic.core.process.domain import document, roles, rules, schemas, task
+from agentic.core.process.domain import document, gate, roles, rules, schemas, task
 from agentic.shared import configuration
 from tests.test_architecture import ALLOWED
 
@@ -33,6 +33,8 @@ TYPES = {
     "Tope de tarea": rules.task_cap,
     "Reanudación": rules.resumed,
     "Decisión del humano": rules.human_section,
+    "Puerta de entrega": gate,
+    "Stack del producto": stack,
 }
 
 # Glossary term -> the field of the task state that holds it.
