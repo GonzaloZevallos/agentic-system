@@ -260,7 +260,7 @@ async def test_a_paused_task_resumes_through_the_cli_and_run_refuses_to_redo_it(
     raised = Configuration.from_sources({}, os.environ)
     await cli._resume("GH-1", raised, ports, dry_run=True, checkpointer=saver)
     shown = capsys.readouterr().out
-    assert "from:      checkpoint" in shown and "resumes:   develop (api)" in shown
+    assert "from:      checkpoint" in shown and "resumes:   integrate (api)" in shown
     assert script.slugs.count("developer") == 0  # a dry run spends nothing
 
     await cli._resume("GH-1", raised, ports, yes=True, checkpointer=saver)

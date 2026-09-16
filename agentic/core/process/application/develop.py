@@ -30,10 +30,18 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     checkout = subtask_checkout(state, subtask_id, ports)
     role = DEVELOPER_INTEGRATOR if subtask_id == INTEGRATION else DEVELOPER
     # A dependency gates the order and provides the code: its approved branch is
-    # brought in before the Developer starts (the integrator merges by itself).
+    # brought in before the Developer starts. The integration skips this: the fan-in
+    # already brought every approved branch into the task branch, and what it could not
+    # merge is exactly the integrator's job. A dependency the system cannot merge stops
+    # the subtask before it is paid for:
+    # building on code that is not there is work thrown away, and untangling two
+    # branches is the human's call, not this Developer's.
     if subtask_id != INTEGRATION:
         for dep in subtask.get("depends_on", []):
-            ports.workspace.merge(checkout.path, state["subtasks"][dep]["branch"])
+            branch = state["subtasks"][dep]["branch"]
+            if conflict := ports.workspace.merge(checkout.path, branch):
+                patch = rules.unmergeable(subtask_id, dep, conflict)
+                return finish(state, patch, ports)
     before = ports.workspace.head(checkout.path)
     checks = declared_checks(state, ports)
     delivery_gate = CheckoutGate(ports, checkout.path, before, checks, cfg.check_timeout_s)
@@ -74,10 +82,14 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
 
 
 def _branches(state: TaskState) -> str:
-    """The subtask branches, in dependency order, for the integrator's prompt."""
+    """The subtask branches, in dependency order, for the integrator's prompt, with the
+    ones the fan-in could not bring into the task branch marked: those are the merges
+    left to do by hand, and the rest are already in."""
     subtasks = state.get("subtasks", {})
+    conflicts = subtasks.get(INTEGRATION, {}).get("conflicts", [])
     lines = [
         f"- `{sub['branch']}` ({sid}: {sub.get('title', '')})"
+        + (" — **conflicts, not merged**" if sub["branch"] in conflicts else " — already merged")
         for sid, sub in subtasks.items()
         if sid != INTEGRATION and sub.get("branch")
     ]

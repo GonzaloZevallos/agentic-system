@@ -14,6 +14,7 @@ from typing import Any, Protocol
 
 from ..domain.roles import Role
 from ..domain.task import TaskInput, TaskState
+from .limits import RunLimits
 
 
 @dataclass(frozen=True)
@@ -188,9 +189,13 @@ class Workspace(Protocol):
         """No uncommitted change, tracked or untracked, under the checkout at `path`."""
         ...
 
-    def merge(self, path: Path, branch: str) -> None:
+    def merge(self, path: Path, branch: str) -> str | None:
         """Bring `branch` into the checkout at `path`: a subtask starts on the code of
-        the subtasks it depends on. Merging again is a no-op."""
+        the subtasks it depends on, and the fan-in brings each approved one into the
+        task branch. Merging again is a no-op. Returns why the merge did not happen, or
+        None; a conflict leaves the checkout as it was, for a role to resolve on its
+        own. It is a fact about the code, not a failure of the system, so the use case
+        decides what to do with it."""
         ...
 
     def commit_all(self, path: Path, message: str) -> str | None:
@@ -255,3 +260,7 @@ class Ports:
     tracker: Tracker
     stack: ProductStack
     commands: Commands
+    # Not a port: the run as a process, shared by every branch of a fan-out, with
+    # nothing outside it to talk to (`limits.py`). It rides here because `Ports` is
+    # what a use case receives.
+    limits: RunLimits = field(default_factory=RunLimits)

@@ -7,11 +7,11 @@ of its own (ADR-0003, addendum), so resuming never tells the human twice.
 An escalation by the task cap also breaks the spending down by phase and proposes a
 new cap: raising it is the human's call (ADR-0004, fourth addendum).
 
-The document is saved once more, from the merged state this node receives. Each
-branch of a fan-out saves its own view of it (`finish`), so the last writer loses its
-sisters' deliveries until the next node saves again; when the cap cuts that
-superstep, this is the next node, and a resume from the document must not redo a
-subtask already delivered."""
+The document is saved once more, from the merged state this node receives. Each branch
+of a fan-out saves its own view of it (`finish`), so the last writer loses its sisters'
+deliveries until something saves again with the state merged: in the technical stage
+that is `integrate`, which hands this node the escalation, and everywhere else it is
+this one. A resume from the document must not redo a subtask already delivered."""
 
 from __future__ import annotations
 

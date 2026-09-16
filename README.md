@@ -82,8 +82,8 @@ PjM clasifica
   → PM consolida la definición única
   → QA Funcional (1ª pasada): observa la definición, casos borde, casos de prueba
   → Tech Lead: análisis, pingpong, ajuste del plan de tests, subtareas
-  → Developers en paralelo
-  → Tech Lead revisa cada subtarea
+  → Developers en paralelo, cada uno con su revisión de Tech Lead pegada atrás
+  → entre olas, el sistema: integración incremental y la ola siguiente
   → Developer integrador, bajo revisión de Tech Lead
   → QA 2ª pasada (funcional + seguridad/performance si fueron convocados)
   → PM valida producto
@@ -395,9 +395,11 @@ Uno por tarea. **Nunca codea, siempre delega.**
   hizo qué subtarea para poder enrutar los rechazos técnicos de QA.
 - Responde consultas de Developers y escala a PM o QA si hace falta.
 - Revisa **cada subtarea** al entregarse y también **la integración**, con `code-review`
-  (ADR-0013). La primera revisión va desde la base de la subtarea con el brief como spec;
-  toda revisión después de una devolución es **incremental**: desde el head que ya revisó,
-  con su propia lista para el Developer como spec (ADR-0015).
+  (ADR-0013). Al entregarse quiere decir apenas entrega *ese* Developer: la revisión de una
+  subtarea es la segunda mitad de la rama de su Developer, no espera al resto de la ola
+  (ADR-0004, adenda quinta). La primera revisión va desde la base de la subtarea con el
+  brief como spec; toda revisión después de una devolución es **incremental**: desde el
+  head que ya revisó, con su propia lista para el Developer como spec (ADR-0015).
 - **Verifica ejecutando** (ADR-0016): no escribe nada, pero corre los chequeos que el
   producto declara (`.agentic/stack.yaml`) sobre el test que respalda cada objeción de
   comportamiento, y entrega **hallazgos** con lugar,
@@ -405,8 +407,11 @@ Uno por tarea. **Nunca codea, siempre delega.**
   categoría. Una objeción que no reprodujo es una observación. El veredicto no lo escribe:
   devuelve si y solo si hay un hallazgo bloqueante sobre la subtarea. Un chequeo entero no
   lo repite: lo corrió la puerta de entrega y está en la sección del Developer.
-- Si rechaza, vuelve **al mismo Developer**. Nunca reasigna a otro.
-- Designa un Developer integrador y revisa la integración final.
+- Si rechaza, vuelve **al mismo Developer**. Nunca reasigna a otro, y la vuelta pasa por el
+  fan-in: la ola siguiente arranca sabiendo lo que vio toda la anterior.
+- Designa un Developer integrador y revisa la integración final. El sistema ya trajo cada
+  subtarea aprobada a la rama de tarea apenas se aprobó; al integrador le queda lo que el
+  merge no pudo resolver solo, más el trabajo de integración que el plan declare.
 - Entrega la pieza integrada a PjM → QA 2ª pasada.
 
 **Modo proactivo**: con reloj propio, revisa el repositorio en busca de deuda técnica y
@@ -798,6 +803,9 @@ Se anotan para no reintroducirlas por error.
 | El único tope de costo es por intento | Hay también un tope de tarea sobre el acumulado, que escala en vez de seguir (ADR-0004, adenda tercera) |
 | Tope de tarea fijo en 100 USD, y escalar termina la corrida | Base más proporcional por subtarea con techo, y alcanzarlo pausa: el humano sube el tope y reanuda (ADR-0004, adenda cuarta; ADR-0003, adenda) |
 | Cada revisión del Tech Lead arranca desde la base de la subtarea | La primera sí; después de una devolución es incremental, desde el head ya revisado (ADR-0015) |
+| Los Developers corren en paralelo y después Tech Lead revisa todas las entregas | Cada Developer y su revisión son una rama del fan-out: la revisión arranca cuando entrega *su* Developer (ADR-0004, adenda quinta) |
+| La integración es una subtarea final del integrador | Incremental en el fan-in, apenas se aprueba cada subtarea; el integrador y la revisión de la rama entera siguen al final (ADR-0004, adenda quinta) |
+| En paralelo el desborde del tope se acepta acotado por las ramas | Con la revisión adentro de la rama el número dejó de ser aceptable: el gasto del proceso lo comparten todas las ramas, sin estado compartido (ADR-0004, adenda quinta) |
 | Tech Lead revisa de solo lectura, sin correr tests, y escribe el veredicto con un motivo libre | Corre los tests que respaldan cada objeción; entrega hallazgos con evidencia y categoría, y el veredicto se deriva de los bloqueantes (ADR-0016) |
 | El revisor corre `pytest` con reglas fijas y el Developer copia el resultado de la suite en su sección | El producto declara su stack en `.agentic/stack.yaml`; la puerta de entrega los corre y escribe el resultado, y el revisor los usa para reproducir (ADR-0016, adenda) |
 | Todo lo que ni el pedido ni el conocimiento resuelven va al humano, y una pregunta registrada no se retira | Va solo lo que deja la definición indecidible; el resto es un supuesto en la respuesta. El dueño de la decisión retira por número lo que una ronda posterior resuelve (ADR-0014, adenda tercera) |
@@ -819,7 +827,7 @@ imports:
 | Módulo | Contenido | Importa |
 |---|---|---|
 | `shared/` | `configuration.py`, `environment.py` (el entorno sin la toolchain propia) | Nada del proyecto |
-| `core/process/` | `domain/`: `roles.py` (`Role` con tools, reglas de permiso y skills; `Pair`; `Interview`; `describe_flags`) y `prompts/`, `task.py` (estado, subtareas y reducers), `document.py`, `schemas.py`, `rules.py` (límite por par, versionado por sección, subtareas listas, ruteo, tope de tarea, reanudación), `gate.py` (qué le falta a una entrega). `application/`: `ports.py` (`RoleRunner`, `DeliveryGate`, `TaskDocuments`, `ProductKnowledge`, `Prompts`, `FlagVocabulary`, `ProductStack`, `Commands`, `Inbox`, `Workspace`, `Tracker`), `interview` (rondas entre dos roles, ADR-0014), `gate` (la puerta de entrega sobre los ports) y un caso de uso por nodo: `classify`, `define`, `validate_definition`, `plan`, `develop`, `review`, `deliver`, `escalate`, sobre `run_role`, más `resume` (qué hace una reanudación antes de gastar). `adapters/`: `claude_sdk/` (harness con plugin de skills, jaula por rol con `hooks.py`, `Printer`), `shell/` (corre los chequeos del producto), `filesystem/` (documentos y overlay de prompts), `git/` (rama de tarea y árboles de trabajo, ADR-0011), `github/` (bandeja y escritura: PR, comentarios, etiquetas), `langgraph/` (el grafo: nodos, ruteo, `Send` por subtarea, abre y cierra los spans; `pause` con el `interrupt()`, ADR-0003) y `telemetry.py`, el port por el que entra el tracing | `shared` |
+| `core/process/` | `domain/`: `roles.py` (`Role` con tools, reglas de permiso y skills; `Pair`; `Interview`; `describe_flags`) y `prompts/`, `task.py` (estado, subtareas y reducers), `document.py`, `schemas.py`, `rules.py` (límite por par, versionado por sección, la ola que despacha el fan-in, ruteo, tope de tarea, reanudación), `gate.py` (qué le falta a una entrega). `application/`: `ports.py` (`RoleRunner`, `DeliveryGate`, `TaskDocuments`, `ProductKnowledge`, `Prompts`, `FlagVocabulary`, `ProductStack`, `Commands`, `Inbox`, `Workspace`, `Tracker`), `interview` (rondas entre dos roles, ADR-0014), `gate` (la puerta de entrega sobre los ports) y `limits.py` (lo que una corrida puede hacer a la vez y gastar, compartido por las ramas) y un caso de uso por nodo: `classify`, `define`, `validate_definition`, `plan`, `develop`, `review`, `integrate` (el fan-in), `deliver`, `escalate`, sobre `run_role`, más `resume` (qué hace una reanudación antes de gastar). `adapters/`: `claude_sdk/` (harness con plugin de skills, jaula por rol con `hooks.py`, `Printer`), `shell/` (corre los chequeos del producto), `filesystem/` (documentos y overlay de prompts), `git/` (rama de tarea y árboles de trabajo, ADR-0011), `github/` (bandeja y escritura: PR, comentarios, etiquetas), `langgraph/` (el grafo: nodos, ruteo, el subgrafo `develop → review` con `Send` por subtarea y el fan-in, abre y cierra los spans; `pause` con el `interrupt()`, ADR-0003) y `telemetry.py`, el port por el que entra el tracing | `shared` |
 | `core/knowledge/` | `domain/`: `knowledge.py` (cómo se muestra, cómo se edita el glosario, qué debe traer una aprobación), `flags.py` (el vocabulario), `stack.py` (el stack del producto y sus chequeos). `adapters/filesystem/`: implementa `ProductKnowledge` y `FlagVocabulary` sobre el repo del producto; `adapters/git/`: `ProductStack`, como lo declara el commit base | `shared`, `process` |
 | `core/measurement/` | `domain/`: `metrics.py` (retrabajo, devoluciones, huella de prompts). `adapters/otel/`: spans y métricas del sistema, implementa `Telemetry` | `shared`, `process` |
 | raíz | `composition.py` arma los ports reales, el checkpointer SQLite e inyecta la telemetría; `cli.py` es el adaptador de entrada (`run`, `resume`) | Todo |
@@ -932,14 +940,32 @@ recibe el motivo y sigue en la misma sesión.
 
 ### Fan-out
 
-Developers en paralelo con `Send` (ADR-0004): la arista condicional de `plan` y de
-`review` devuelve un `Send("develop", estado + subtask_id)` por cada subtarea lista (sin
-dependencias pendientes). Cada uno corre en su propio árbol de trabajo y rama (ADR-0011);
-`status`, `current_role` y `escalated` llevan un reducer "último gana" para que dos
-Developers en el mismo paso no choquen. La integración es una subtarea más, del integrador,
-sobre la rama de tarea. Cada rama guarda el documento con su propia vista del estado, así
-que la última en escribir pisa lo de sus hermanas hasta que el nodo siguiente guarda: por
-eso `escalate` guarda también, con el estado ya fusionado.
+La etapa técnica es una ola de ramas alrededor de un nodo de fan-in (ADR-0004, adenda
+quinta). Una rama es el subgrafo `pipeline`, `develop → review` para **una** subtarea,
+despachado con un `Send(estado + subtask_id)` por subtarea lista: así la revisión arranca
+apenas entrega su Developer en vez de esperar al más lento de la ola (corrida 4: 693 s en
+serie contra 179 s en paralelo). Entra por la revisión si la subtarea ya está entregada, que
+es donde reanuda una corrida frenada entre las dos. Cada rama corre en su propio árbol de
+trabajo (ADR-0011); `status`, `current_role` y `escalated` llevan reducer "último gana".
+
+Un subgrafo como nodo devuelve su estado final, y el padre lo vuelve a plegar con los mismos
+reducers: el envoltorio devuelve el delta (`task.delta`), o `cost_usd` se cuenta dos veces y
+`runs`, `failures` y `return_history` se duplican.
+
+El nodo `integrate` es el fan-in, del sistema, sin roles. El plan le entrega la primera ola y
+cada rama vuelve a él; una devolución es una ola más, así que la segunda arranca viendo lo
+que vio toda la primera. Corre solo, que es para lo que está: crea los checkouts de a uno
+(cuatro `worktree add` sobre el mismo `.git` se pisaban el lock), mergea cada subtarea
+aprobada a la rama de tarea apenas se aprueba (**integración incremental**; un merge que no
+aplica queda nombrado para el integrador, y `Workspace.merge` devuelve el motivo en vez de
+tirar), agrega la subtarea de integración cuando toca, guarda el documento una vez con el
+estado de todas las ramas, y fija el `status` de una tarea que escaló, que una hermana feliz
+podía pisar. El escalado se le cuenta al humano una sola vez, desde acá.
+
+Cuántos roles corren a la vez lo limita `AGENTIC_MAX_CONCURRENT_ROLES` (default 4), y el
+gasto de todas las ramas lo lleva el mismo objeto: el tope de tarea se mira contra la mayor
+de las dos vistas, la del estado y la del proceso, y sólo impide **arrancar** un intento
+(`application/limits.py`).
 
 ### Entrevistas
 

@@ -18,7 +18,12 @@ class ScriptedRunner:
     """Answers `run_once` from per-role queues and records every call it saw.
     A queued exception is raised instead of returned. A gate is asked before the
     result is handed back, as the harness does when the model delivers, and again after
-    each refusal, as a model that fixes and delivers again; `refused` keeps the reasons."""
+    each refusal, as a model that fixes and delivers again; `refused` keeps the reasons.
+
+    A queue named `<slug>__<subtask>` answers only that subtask's branch and wins over
+    the plain `<slug>` one. Branches of the fan-out run concurrently, so which of two
+    reviews pops first is the event loop's business: a test that cares which subtask
+    was returned scripts it by name, not by position."""
 
     def __init__(self, **queues):
         self.queues = {k: list(v) for k, v in queues.items()}
@@ -30,9 +35,10 @@ class ScriptedRunner:
         if (gate := kwargs.get("gate")) is not None:
             while (reason := gate()) is not None:
                 self.refused.append(reason)
-        queue = self.queues.get(role.slug)
+        key = f"{role.slug}__{_subtask_of(kwargs.get('cwd'))}"
+        queue = self.queues.get(key) or self.queues.get(role.slug)
         if not queue:
-            raise AssertionError(f"no scripted result left for {role.slug}")
+            raise AssertionError(f"no scripted result left for {role.slug} ({key})")
         item = queue.pop(0)
         if isinstance(item, Exception):
             raise item
@@ -44,6 +50,18 @@ class ScriptedRunner:
     @property
     def slugs(self) -> list[str]:
         return [c["slug"] for c in self.calls]
+
+    def ran(self, slug: str) -> list[str]:
+        """Which subtask each run of `slug` worked on, in order: the shape of a wave
+        without depending on how two concurrent branches interleaved."""
+        return [_subtask_of(c.get("cwd")) for c in self.calls if c["slug"] == slug]
+
+
+def _subtask_of(cwd) -> str:
+    """The subtask a checkout belongs to: `.../GH-1.api` is `api`, the task's own
+    checkout (the integration, or a lone subtask) is the empty string."""
+    name = Path(cwd).name if cwd else ""
+    return name.split(".", 1)[1] if "." in name else ""
 
 
 class MemoryDocuments:
@@ -172,18 +190,26 @@ class MemoryWorkspace:
         self.dirty: set[Path] = set()
         self.commits: list[tuple[Path, str]] = []
         self.merges: list[tuple[Path, str]] = []
+        # Branches whose merge does not apply, as a real conflict would.
+        self.conflicts: set[str] = set()
         self.pushed: list[str] = []
         self.cleaned: list[str] = []
         self._looks: dict[Path, int] = {}
         self.branches: dict[str, tuple[str, str]] = {}
         self.checkouts: list[Path] = []
+        # Every checkout asked for, in order: real ones take a lock on the same `.git`,
+        # so who asks and when is what the fan-in exists to keep serial.
+        self.checkouts_made: list[str] = []
         self.pruned = 0
 
     def task_checkout(self, task_id: str) -> Checkout:
-        return Checkout(rules.task_branch(task_id), self.ROOT / task_id, "base0")
+        branch = rules.task_branch(task_id)
+        self.checkouts_made.append(branch)
+        return Checkout(branch, self.ROOT / task_id, "base0")
 
     def subtask_checkout(self, task_id: str, subtask_id: str) -> Checkout:
         branch = rules.subtask_branch(task_id, subtask_id)
+        self.checkouts_made.append(branch)
         return Checkout(branch, self.ROOT / f"{task_id}.{subtask_id}", "base1")
 
     def head(self, path: Path) -> str:
@@ -196,8 +222,9 @@ class MemoryWorkspace:
     def is_clean(self, path: Path) -> bool:
         return path not in self.dirty
 
-    def merge(self, path: Path, branch: str) -> None:
+    def merge(self, path: Path, branch: str) -> str | None:
         self.merges.append((path, branch))
+        return f"CONFLICT in {branch}" if branch in self.conflicts else None
 
     def commit_all(self, path: Path, message: str) -> str | None:
         self.commits.append((path, message))
