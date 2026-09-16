@@ -1,7 +1,7 @@
 # Context Map
 
 Un equipo de desarrollo modelado como 17 roles agénticos más un humano, que mantiene y
-hace crecer un producto que vive en otro repo. El sistema se divide en tres contextos
+hace crecer el producto que recibe como parámetro. El sistema se divide en tres contextos
 bajo `agentic/core/`, cada uno con su glosario; el proceso está en `README.md` y las
 decisiones con trade-off en `docs/adr/` (ADR-0010).
 
