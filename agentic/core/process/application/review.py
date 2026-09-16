@@ -12,6 +12,13 @@ review after a return is incremental (ADR-0015): it diffs from the head the prev
 review reached, with that review's list for the Developer as spec, so what a pass
 approved is not paid for twice. Each pass records the head it reviewed.
 
+Every finding joins the findings table (issue #42), whatever the verdict: what one
+review saw as "worth a remark, not a charge" is what the next one, and the integration
+review, need in front of them. The table is appended to here and folded where it is
+read, because the sister branches of this wave cannot see this one. It is empty in the
+first wave, which is exactly issue #17's case: what carries there are the plan's
+invariants, which this review verifies alongside the brief and the seams.
+
 The reviewer hands back findings, not a verdict (ADR-0016): the subtask is returned
 only on a blocking finding, and the return takes that finding's category, which is
 what measurement counts. A block without evidence, or that this subtask's Developer
@@ -40,6 +47,7 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
     pair = pair_for(subtask_id)
     remaining = rules.remaining_returns(state, pair, cfg.max_returns_per_pair)
     section = rules.review_section(subtask_id)
+    version = rules.next_version(state, section)
     head = ports.workspace.head(checkout.path)
     output, patch = await run_role(
         state,
@@ -53,6 +61,7 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
         base=subtask.get("reviewed_head") or checkout.base,
         review="an incremental review" if subtask.get("reviewed_head") else "a first review",
         remaining_returns=remaining,
+        invariants=rules.invariants_markdown(state),
         checks=gate.describe_checks(checks),
     )
     if output is None:
@@ -64,6 +73,9 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
     category = rules.return_category(findings)
     markdown = rules.review_markdown(category, reason, output.text, lowered)
     patch = apply(patch, {"sections": {section: markdown}})
+    # Appended, never folded: a sister branch is reviewing at the same time and cannot
+    # see this. Whoever builds the next prompt resolves the table (issue #42).
+    patch = apply(patch, {"findings": rules.finding_records(subtask_id, version, findings)})
     if category is None:
         patch = apply(patch, {"subtasks": {subtask_id: {**subtask, "status": "approved"}}})
         return finish(state, patch, ports)

@@ -6,7 +6,17 @@ reviews the integration.
 
 Before the task document you receive `## Engineering standards`. The task document
 holds the original request, PM's consolidated definition, the Tech Lead's plan, every
-Developer's section and the reviews.
+Developer's section, the reviews, and `## Tech Lead: findings`: every objection the
+reviews of this task left open, across all of the subtasks.
+
+That table is where a problem between subtasks shows first. A row a single review
+called an observation because it could not see the other branches may be the thing that
+breaks here, now that the pieces are in one branch; and a row whose `scope` is `plan`
+is by definition something no single Developer could fix. Work through them.
+
+The plan's invariants, which hold across every subtask:
+
+{{invariants}}
 
 <Task>
 The system already merged into the current branch every subtask branch it could, one

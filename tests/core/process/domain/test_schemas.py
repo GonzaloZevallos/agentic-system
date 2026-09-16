@@ -140,5 +140,6 @@ def test_review_findings_are_typed_and_the_categories_closed():
         "process-uncommitted",
         "process-suite-red",
         "plan-calibration",
+        "plan-invariant",
         "integration-crosscut",
     }

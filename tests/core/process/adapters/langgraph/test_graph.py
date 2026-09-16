@@ -19,7 +19,7 @@ from agentic.core.process.adapters.langgraph.graph import build_graph, configura
 from agentic.core.process.adapters.telemetry import NoTelemetry
 from agentic.core.process.application import resume
 from agentic.core.process.application.ports import AttemptFailed
-from agentic.core.process.domain.roles import PAIR_PM_PA, PJM, PM, PRODUCT_ANALYST
+from agentic.core.process.domain.roles import FINDINGS, PAIR_PM_PA, PJM, PM, PRODUCT_ANALYST
 from agentic.core.process.domain.task import INTEGRATION, WAITING_ON_HUMAN
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
@@ -34,6 +34,7 @@ from tests.fakes import (
     classified,
     defined,
     delivered,
+    finding,
     memory_ports,
     planned,
     questions,
@@ -167,6 +168,7 @@ async def test_definition_stage_then_delivery(config, tmp_path):
         PM.name,
         SOLUTION,
         "Tech Lead",
+        FINDINGS,  # written by the fan-in, before the wave it hands the table to
         "Developer: api",
         "Tech Lead: review api",
     ]
@@ -226,7 +228,9 @@ async def test_two_subtasks_fan_out_loop_on_a_return_and_integrate(config):
     built, reviews = script.ran("developer"), script.ran("tech_lead_review")
     assert set(built[:2]) == {"api", "domain"} and built[2:] == ["domain"]
     assert set(reviews[:2]) == {"api", "domain"} and reviews[2:] == ["domain", ""]
-    assert script.ran("developer_integrator") == [""]
+    # Every branch merged cleanly and the plan declared no integration work, so no
+    # integrator runs: the fan-in already joined them. The integration review does.
+    assert script.ran("developer_integrator") == []
     subtasks = final["subtasks"]
     assert {s["status"] for s in subtasks.values()} == {"approved"}
     assert subtasks["api"]["branch"] == "agentic/GH-1.api"
@@ -241,9 +245,10 @@ async def test_two_subtasks_fan_out_loop_on_a_return_and_integrate(config):
         in rerun["prompt"]
     )
     assert "## Developer: api" not in rerun["prompt"]  # not its subtask
-    integrator = script.calls[-2]
-    assert "`agentic/GH-1.api` (api: API)" in integrator["system_prompt"]
-    assert "`agentic/GH-1.domain` (domain: Domain)" in integrator["system_prompt"]
+    # The integration review reads the whole task branch from where it started.
+    integration = script.calls[-1]
+    assert integration["slug"] == "tech_lead_review"
+    assert integration["cwd"] == MemoryWorkspace.ROOT / "GH-1"
 
 
 async def test_approval_writes_the_product_knowledge(config, tmp_path):
@@ -712,10 +717,10 @@ async def test_the_task_cap_pauses_the_task_and_a_raised_cap_resumes_it_to_deliv
         "developer",
         "tech_lead_review",
         "tech_lead_review",
-        "developer_integrator",
+        # No integrator: the fan-in merged both branches, so only the review runs.
         "tech_lead_review",
     ]
-    assert final["cost_usd"] == pytest.approx(0.86 + 0.5 * 3 + 0.2 * 3)
+    assert final["cost_usd"] == pytest.approx(0.86 + 0.5 * 2 + 0.2 * 3)
     assert "Human" not in final["sections"]  # nothing was decided
     assert len(fakes.tracker.labels) == 1  # told once: the resume did not escalate again
     assert fakes.tracker.comments[-1][1].startswith("Ready for review")
@@ -785,8 +790,8 @@ async def test_a_task_seeded_from_its_document_resumes_like_a_checkpoint(config,
     final = await app.ainvoke(Command(resume={"decision": None}), config=raised(config))
 
     assert final["status"] == "ready_for_review"
-    assert final["cost_usd"] == pytest.approx(0.86 + 0.5 * 3 + 0.2 * 3)
-    assert len(final["runs"]) == 8 + 6  # the document's runs, then the resumed ones
+    assert final["cost_usd"] == pytest.approx(0.86 + 0.5 * 2 + 0.2 * 3)
+    assert len(final["runs"]) == 8 + 5  # the document's runs, then the resumed ones
     assert len(fakes.tracker.labels) == 1
 
 
@@ -813,3 +818,50 @@ async def test_two_tasks_through_one_graph_do_not_share_what_they_spent(tmp_path
     again = await app.ainvoke({**TASK, "id": "GH-2"}, config=second)
     assert again["status"] == "ready_for_review"
     assert again["cost_usd"] == pytest.approx(final["cost_usd"])
+
+
+async def test_what_one_review_found_reaches_the_next_wave_and_the_integration(config):
+    """Issue #17: run 4's two integration returns were already in subtask reviews as
+    "worth a remark, not a charge", and nobody downstream ever saw them. They travel now,
+    through the fan-in, which is the only place that sees every branch of a wave."""
+    remark = finding(severity="important", claim="counts subscriptions twice", scope="plan")
+    plan = planned(
+        {"id": "domain", "title": "Domain", "brief": "b", "seams": ["x"]},
+        invariants=["Every subscription query folds duplicates."],
+    )
+    script = script_for(
+        **technical(
+            tech_lead_ephemeral=[questions(done=True, invariants=["fold duplicates"])],
+            tech_lead=[plan],
+            developer__api=[delivered("api")],
+            developer__domain=[delivered("domain"), delivered("domain again")],
+            tech_lead_review__api=[reviewed("approved", findings=[remark])],
+            tech_lead_review__domain=[
+                reviewed("returned", "no test at the seam"),
+                reviewed("approved"),
+            ],
+            tech_lead_review=[reviewed("approved")],  # the integration
+        )
+    )
+    final = await run_graph(script, config)
+    assert final["status"] == "ready_for_review"
+
+    # The ephemeral proposed; the Tech Lead adopted, and every role that builds or
+    # reviews gets the invariant, from the first wave on, when the table is still empty.
+    assert final["invariants"] == ["Every subscription query folds duplicates."]
+    first_wave = [c for c in script.calls if c["slug"] == "developer"][0]
+    assert "- Every subscription query folds duplicates." in first_wave["system_prompt"]
+    assert f"## {FINDINGS}\n\nNone yet." in first_wave["prompt"]
+
+    # The second wave's Developer rebuilds `domain` seeing what `api`'s review found,
+    # which its own review never told it and its sister could not.
+    rebuilt = [c for c in script.calls if c["slug"] == "developer"][-1]
+    assert "counts subscriptions twice" in rebuilt["prompt"]
+    # And so does the integration review, the one that reads the whole branch.
+    assert "counts subscriptions twice" in script.calls[-1]["prompt"]
+    assert script.calls[-1]["slug"] == "tech_lead_review"
+
+    # The raw record keeps every pass; the section keeps what is still open. Which of
+    # the two branches of a wave appended first is the event loop's business.
+    assert {f["subtask"] for f in final["findings"]} == {"api", "domain"}
+    assert final["sections"][FINDINGS].count("\n") == 2  # a header, its rule, one row

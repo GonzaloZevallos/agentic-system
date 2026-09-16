@@ -12,6 +12,8 @@ from agentic.core.process.application.plan import plan
 from agentic.core.process.application.ports import CommandResult, RawResult
 from agentic.core.process.application.review import review
 from agentic.core.process.application.validate_definition import validate_definition
+from agentic.core.process.domain import rules
+from agentic.core.process.domain.roles import FINDINGS
 from agentic.core.process.domain.task import INTEGRATION, apply
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
@@ -20,6 +22,7 @@ from tests.fakes import (
     MemoryWorkspace,
     ScriptedRunner,
     delivered,
+    finding,
     memory_ports,
     planned,
     questions,
@@ -477,11 +480,14 @@ async def test_the_fan_in_merges_each_approved_subtask_into_the_task_branch(cfg)
         (TASK_PATH, "agentic/GH-12.domain"),
     ]
     assert patch["branch"] == "agentic/GH-12"
-    # Everything approved and more than one: the integrator's subtask enters here, not
-    # in a review, because no single branch can see that its sisters are done.
-    assert patch["subtasks"][INTEGRATION]["status"] == "pending"
+    # Everything approved and more than one: the integration enters here, not in a
+    # review, because no single branch can see that its sisters are done. Every merge
+    # applied and the plan declared no integration work, so it enters `delivered`: the
+    # branch goes straight to its review and no integrator is paid for a merge the
+    # system already did.
+    assert patch["subtasks"][INTEGRATION]["status"] == "delivered"
     assert patch["subtasks"][INTEGRATION]["conflicts"] == []
-    assert ports.documents.last["subtasks"][INTEGRATION]["status"] == "pending"
+    assert ports.documents.last["subtasks"][INTEGRATION]["status"] == "delivered"
 
 
 async def test_a_merge_the_fan_in_cannot_do_is_left_for_the_integrator(cfg):
@@ -492,8 +498,26 @@ async def test_a_merge_the_fan_in_cannot_do_is_left_for_the_integrator(cfg):
 
     # The task branch keeps what did apply; the rest is named for the role whose job
     # resolving it is. Not an escalation: a conflict is a fact about the code.
-    assert patch["subtasks"][INTEGRATION]["conflicts"] == ["agentic/GH-12.domain"]
+    integration = patch["subtasks"][INTEGRATION]
+    assert integration["conflicts"] == ["agentic/GH-12.domain"]
+    # A conflict is what an integrator is for, so now one runs and the brief names it.
+    assert integration["status"] == "pending"
+    assert "`agentic/GH-12.domain`" in integration["brief"]
     assert "escalated" not in patch
+
+
+async def test_the_integrator_runs_when_the_plan_declared_integration_work(cfg):
+    """No conflict and the merges are the whole job: nothing for a Developer to do, and
+    the integration goes to its review delivered. Unless the plan said otherwise."""
+    state = {**TASK, "subtasks": {"api": approved("api"), "domain": approved("domain")}}
+    ports = memory_ports(ScriptedRunner())
+
+    plain = await integrate(state, cfg, ports)
+    assert plain["subtasks"][INTEGRATION]["status"] == "delivered"
+
+    declared = await integrate({**state, "integration_brief": "Wire the two ends."}, cfg, ports)
+    assert declared["subtasks"][INTEGRATION]["status"] == "pending"
+    assert "Wire the two ends." in declared["subtasks"][INTEGRATION]["brief"]
 
 
 async def test_the_fan_in_creates_the_wave_checkouts_one_at_a_time(cfg):
@@ -515,7 +539,93 @@ async def test_the_fan_in_settles_the_status_of_a_task_a_branch_escalated(cfg):
     state = {**TASK, "status": "developing", "escalated": "Developer failed 2 times: x"}
     ports = memory_ports(ScriptedRunner())
     patch = await integrate(state, cfg, ports)
-    assert patch == {"status": "waiting_on_human"}
+    assert patch == {"status": "waiting_on_human", "sections": {FINDINGS: "None yet."}}
     # Nothing touches the workspace or the document while the task waits: `escalate`
     # saves it next, from the state with every branch's work already merged in.
     assert ports.workspace.merges == [] and ports.documents.saved == []
+
+
+# The channel between reviews (issue #42).
+
+
+async def test_the_plan_keeps_the_invariants_the_ephemeral_proposed_and_it_adopted(cfg):
+    """The ephemeral proposes from what the grill uncovered; the Tech Lead decides. What
+    it adopted is the state's, and the reviewer checks each delivery against it."""
+    runner = ScriptedRunner(
+        **{
+            ASK: [
+                questions(1, session="e1", invariants=["fold duplicates", "fold duplicates"]),
+                questions(done=True, session="e1", invariants=["resolve relative imports"]),
+            ]
+        },
+        **{ANSWER: [tech_answers(1, session="t1")]},
+        tech_lead=[planned(invariants=["Every subscription query folds duplicates."])],
+    )
+    patch = await plan(TASK, cfg, memory_ports(runner))
+
+    # Proposed once each, in order, whatever a round repeats; the closing round counts.
+    assert "- fold duplicates\n- resolve relative imports" in runner.calls[-1]["system_prompt"]
+    assert patch["invariants"] == ["Every subscription query folds duplicates."]
+    assert patch["integration_brief"] == ""
+
+
+async def test_the_invariants_reach_the_developer_and_the_reviewer(cfg):
+    state = {**two_delivered(), "invariants": ["Every subscription query folds duplicates."]}
+    runner = ScriptedRunner(tech_lead_review=[reviewed("approved")])
+    await review({**state, "subtask_id": "api"}, cfg, memory_ports(runner))
+    assert "- Every subscription query folds duplicates." in runner.calls[0]["system_prompt"]
+
+    building = ScriptedRunner(developer=[delivered()])
+    ports = memory_ports(building)
+    ports.workspace.moved.add(MemoryWorkspace.ROOT / "GH-12.api")
+    await develop({**state, "subtask_id": "api"}, cfg, ports)
+    assert "- Every subscription query folds duplicates." in building.calls[0]["system_prompt"]
+
+
+async def test_every_review_appends_its_findings_whatever_the_verdict(cfg):
+    """An approval with an `important` finding is the run-4 case: "worth a remark, not a
+    charge" is exactly what came back as an integration return."""
+    remark = finding(severity="important", claim="counts twice", scope="plan")
+    runner = ScriptedRunner(tech_lead_review=[reviewed("approved", findings=[remark])])
+    patch = await review({**two_delivered(), "subtask_id": "api"}, cfg, memory_ports(runner))
+
+    assert patch["subtasks"]["api"]["status"] == "approved"
+    assert patch["findings"] == [
+        {**remark, "subtask": "api", "version": 1, "status": "open"},
+    ]
+
+
+async def test_the_fan_in_writes_the_table_the_next_wave_reads(cfg):
+    """A branch cannot fold the table: its sisters are reviewing at the same time. The
+    fan-in is where the branches are merged, so it is where the table is written."""
+    state = {
+        **TASK,
+        "subtasks": {"api": approved("api"), "domain": approved("domain")},
+        "findings": [
+            *rules.finding_records("api", 1, [finding(severity="important", claim="counts twice")]),
+            *rules.finding_records("domain", 1, [finding(claim="gone", severity="observation")]),
+            *rules.finding_records("domain", 2, [finding(claim="still here")]),
+        ],
+    }
+    patch = await integrate(state, cfg, memory_ports(ScriptedRunner()))
+
+    table = patch["sections"][FINDINGS]
+    assert "counts twice" in table and "still here" in table
+    assert "gone" not in table  # the latest pass of `domain` let it go: fixed, not open
+
+
+async def test_the_table_is_written_even_when_a_branch_escalated(cfg):
+    """The escalated fan-in touches nothing, but folding the table is pure computation:
+    the human reading the document sees what this wave found, not the wave before."""
+    state = {
+        **TASK,
+        "escalated": "Developer failed twice",
+        "subtasks": {"api": approved("api")},
+        "findings": rules.finding_records("api", 1, [finding(claim="counts twice")]),
+    }
+    ports = memory_ports(ScriptedRunner())
+    patch = await integrate(state, cfg, ports)
+
+    assert patch["status"] == "waiting_on_human"
+    assert "counts twice" in patch["sections"][FINDINGS]
+    assert ports.workspace.merges == []  # nothing was touched

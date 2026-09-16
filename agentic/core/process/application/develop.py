@@ -63,6 +63,7 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         cwd=checkout.path,
         gate=delivery_gate,
         subtask=subtask_id,
+        invariants=rules.invariants_markdown(state),
         branches=_branches(state),
         checks=gate.describe_checks(checks),
     )

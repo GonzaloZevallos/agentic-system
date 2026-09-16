@@ -38,7 +38,8 @@ SubtaskStatus = Literal["pending", "delivered", "approved", "returned"]
 # Why a review finding blocks, as a closed list (ADR-0016): `standard-*` is a hard
 # violation of a documented standard, `spec-*` a gap against the brief or the
 # definition, `process-*` a delivery that is not one, `plan-calibration` a threshold or
-# parameter set wrong, `integration-crosscut` a problem that spans subtasks.
+# parameter set wrong, `plan-invariant` a rule the plan set for every subtask that this
+# one breaks, `integration-crosscut` a problem that spans subtasks.
 FindingCategory = Literal[
     "standard-architecture",
     "standard-typing-silenced",
@@ -50,8 +51,16 @@ FindingCategory = Literal[
     "process-uncommitted",
     "process-suite-red",
     "plan-calibration",
+    "plan-invariant",
     "integration-crosscut",
 ]
+# How much a finding weighs (ADR-0016): only a `blocking` one returns the subtask, and
+# only one the branch under review can fix; anything wider is the plan's.
+Severity = Literal["blocking", "important", "observation"]
+FindingScope = Literal["subtask", "plan"]
+# Where a finding stands in the findings table: `open` until a later review of its
+# subtask stops raising it (`fixed`), or `dismissed` when nobody can check it.
+FindingStatus = Literal["open", "fixed", "dismissed"]
 # A return's category: a review's takes its first blocking finding's; PM's returns of
 # the definition, whose reason stays free text, are all `definition`.
 ReturnCategory = FindingCategory | Literal["definition"]
@@ -116,6 +125,26 @@ class Return(TypedDict):
     reason: str
 
 
+class FindingRecord(TypedDict):
+    """One finding as the table keeps it (issue #42): what the reviewer wrote, plus
+    which subtask's review raised it and in which pass. Append-only and never rewritten:
+    branches run at the same time and cannot see each other, so what a row means today
+    is folded when it is read, not when it is written (`rules.findings_rows`)."""
+
+    subtask: str
+    # The review pass that raised it, per subtask: a later pass that does not raise it
+    # again is what marks the row fixed.
+    version: int
+    location: str
+    claim: str
+    evidence: str
+    severity: Severity
+    scope: FindingScope
+    category: FindingCategory
+    # `open` or `dismissed` as written; `fixed` is only ever derived.
+    status: FindingStatus
+
+
 class Subtask(TypedDict, total=False):
     """A part of the task assigned to one Developer (README.md, 4). Lives in its own
     branch; the pair Tech Lead→Developer counts returns per subtask."""
@@ -162,6 +191,14 @@ class TaskState(TaskInput, total=False):
     cost_usd: Annotated[float, add]
     # The technical stage (ADR-0011): subtasks by id, each Developer patches its own.
     subtasks: Annotated[dict[str, Subtask], merge]
+    # Rules of the plan every subtask honours (issue #42): the one channel between
+    # reviews that works in the first wave, since it is written before anyone codes.
+    invariants: list[str]
+    # What the plan says has to be done to make the subtasks work together beyond
+    # merging them; empty when merging is enough and no integrator runs.
+    integration_brief: str
+    # Every finding of every review, in order. Read folded, never rewritten.
+    findings: Annotated[list[FindingRecord], operator.add]
     # The task branch, and the pull request once delivered.
     branch: str
     pull_request: str | None

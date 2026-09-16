@@ -31,6 +31,7 @@ def test_reducers_are_read_from_the_annotations():
         "prompts",
         "cost_usd",
         "subtasks",
+        "findings",
         "status",
         "current_role",
         "escalated",

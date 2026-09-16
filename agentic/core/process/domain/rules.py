@@ -10,11 +10,21 @@ import re
 from collections.abc import Sequence
 
 from .document import HUMAN, demote
-from .roles import DEVELOPER, PAIR_PM_PA, PM, PRODUCT_ANALYST, SOLUTION_INTERVIEW, TECH_LEAD, Pair
+from .roles import (
+    DEVELOPER,
+    FINDINGS,
+    PAIR_PM_PA,
+    PM,
+    PRODUCT_ANALYST,
+    SOLUTION_INTERVIEW,
+    TECH_LEAD,
+    Pair,
+)
 from .task import (
     INTEGRATION,
     WAITING_ON_HUMAN,
     FindingCategory,
+    FindingRecord,
     Return,
     ReturnCategory,
     RoleRun,
@@ -81,6 +91,114 @@ def review_markdown(
     if lowered:
         parts.append("Lowered by the system:\n\n" + "\n".join(f"- {line}" for line in lowered))
     return "\n\n".join([*parts, text])
+
+
+# The findings table (issue #42): the channel between reviews. Every review appends its
+# findings and nothing is ever rewritten, because branches run at the same time and
+# cannot see each other; the fold happens here, when a prompt or the document is built.
+
+
+def finding_records(subtask_id: str, version: int, findings: list[dict]) -> list[FindingRecord]:
+    """This review's findings as the table keeps them, already lowered by the system.
+
+    A finding nobody can check is `dismissed` on the spot: an `observation` with no
+    evidence is either the reviewer's own hunch or a `blocking` the system lowered for
+    having none, and neither is something to hand the next role as a live objection.
+    Everything else enters `open`; only a later pass closes it."""
+    return [
+        {
+            "subtask": subtask_id,
+            "version": version,
+            "location": item["location"],
+            "claim": item["claim"],
+            "evidence": item["evidence"],
+            "severity": item["severity"],
+            "scope": item["scope"],
+            "category": item["category"],
+            "status": "dismissed"
+            if item["severity"] == "observation" and not item["evidence"].strip()
+            else "open",
+        }
+        for item in findings
+    ]
+
+
+def findings_rows(state: TaskState) -> list[FindingRecord]:
+    """The table: one row per `location` + `claim`, in the order it was first raised.
+
+    The first verdict is the one that stands, so a later review re-raising what an
+    earlier one dismissed does not reopen the argument; and a row the latest pass of
+    its subtask no longer raises is `fixed`, which is the only way a row closes."""
+    records = state.get("findings", [])
+    latest = _review_passes(state)
+    for record in records:
+        latest[record["subtask"]] = max(latest.get(record["subtask"], 0), record["version"])
+    rows: dict[tuple[str, str], FindingRecord] = {}
+    still_raised: set[tuple[str, str]] = set()
+    for record in records:
+        key = (record["location"], record["claim"])
+        rows.setdefault(key, record)
+        if record["version"] == latest[record["subtask"]]:
+            still_raised.add(key)
+    return [
+        row if row["status"] != "open" or key in still_raised else {**row, "status": "fixed"}
+        for key, row in rows.items()
+    ]
+
+
+def _review_passes(state: TaskState) -> dict[str, int]:
+    """The latest review pass of each subtask, from the runs and not from the findings:
+    a pass that found nothing appends nothing, and that is the pass that closes a row.
+    Counting only what was raised would leave every row open forever."""
+    passes: dict[str, int] = {}
+    for run in state.get("runs", []):
+        section = run.get("section", run["role"])
+        if section.startswith(REVIEW_PREFIX):
+            subtask = section[len(REVIEW_PREFIX) :]
+            passes[subtask] = max(passes.get(subtask, 0), run.get("version", 0))
+    return passes
+
+
+def open_findings(state: TaskState) -> list[FindingRecord]:
+    """What the roles read: the rows still open, worst first, the ones the plan has to
+    settle before the subtask ones. An `important` that came with an approval lives
+    here too: that is the finding of run 4 that came back as an integration return."""
+    order = {"blocking": 0, "important": 1, "observation": 2}
+    rows = [row for row in findings_rows(state) if row["status"] == "open"]
+    return sorted(rows, key=lambda row: (row["scope"] != "plan", order[row["severity"]]))
+
+
+def findings_markdown(rows: list[FindingRecord]) -> str:
+    """The table as a Markdown table. Evidence is not in it: it is the review's own
+    section, and a command's output does not fit in a cell."""
+    head = (
+        "| Status | Severity | Scope | Category | Subtask | Location | Claim |\n"
+        "| --- | --- | --- | --- | --- | --- | --- |"
+    )
+    lines = [
+        f"| {row['status']} | {row['severity']} | {row['scope']} | {row['category']} "
+        f"| {row['subtask']} | `{row['location']}` | {_cell(row['claim'])} |"
+        for row in rows
+    ]
+    return "\n".join([head, *lines]) if lines else "None yet."
+
+
+def _cell(text: str) -> str:
+    return " ".join(text.split()).replace("|", "\\|")
+
+
+def findings_section(state: TaskState) -> dict[str, str]:
+    """The `sections` patch with the table as the roles read it: what is still open.
+
+    Only the open rows, because this section is what lands whole in the next prompt; the
+    raw record of every finding of every pass is the state, and the document's
+    frontmatter from it. Written at the fan-in, the one place that sees every branch."""
+    return {FINDINGS: findings_markdown(open_findings(state))}
+
+
+def invariants_markdown(state: TaskState) -> str:
+    """The plan's invariants as a prompt shows them."""
+    return "\n".join(f"- {line}" for line in state.get("invariants", [])) or "- none"
 
 
 def unmergeable(subtask_id: str, dependency: str, conflict: str) -> TaskState:
@@ -155,8 +273,11 @@ def developer_section(subtask_id: str) -> str:
     return f"Developer: {subtask_id}"
 
 
+REVIEW_PREFIX = f"{TECH_LEAD.name}: review "
+
+
 def review_section(subtask_id: str) -> str:
-    return f"Tech Lead: review {subtask_id}"
+    return f"{REVIEW_PREFIX}{subtask_id}"
 
 
 def task_branch(task_id: str) -> str:
@@ -206,20 +327,38 @@ def all_approved(state: TaskState) -> bool:
 
 
 def needs_integration(state: TaskState) -> bool:
-    """Several subtasks approved and no integration yet: the integrator joins them."""
+    """Several subtasks approved and no integration yet. The integration exists whenever
+    there is more than one subtask, because the whole branch is reviewed either way
+    (README.md, 4); whether a Developer runs on it is `integration_subtask`."""
     subtasks = state.get("subtasks", {})
     return INTEGRATION not in subtasks and len(subtasks) > 1 and all_approved(state)
 
 
-def integration_subtask() -> Subtask:
+def integration_subtask(brief: str = "", conflicts: Sequence[str] = ()) -> Subtask:
+    """The integration as the fan-in adds it.
+
+    `pending` when there is something for the integrator to do: a merge the system could
+    not settle, or work the plan declared when it wrote `integration`. `delivered` when
+    the incremental merge was the whole job (README.md, 13), so the branch goes straight
+    to its review with no Developer paid for a merge already done. Either way the
+    integration review reads the whole branch, which is the only review that does."""
+    work = [line for line in (brief.strip(), _conflict_brief(conflicts)) if line]
     return {
         "id": INTEGRATION,
         "title": "Integration",
-        "brief": "Join every subtask branch on the task branch.",
+        "brief": "\n\n".join(work) or "Every subtask branch is already on the task branch.",
         "seams": [],
         "depends_on": [],
-        "status": "pending",
+        "status": "pending" if work else "delivered",
+        "conflicts": list(conflicts),
     }
+
+
+def _conflict_brief(conflicts: Sequence[str]) -> str:
+    if not conflicts:
+        return ""
+    listed = ", ".join(f"`{branch}`" for branch in conflicts)
+    return f"Merge into the task branch what the system could not: {listed}."
 
 
 # The task cap (README.md, 3; ADR-0004, fourth addendum): a base for the definition and
@@ -259,7 +398,7 @@ PHASES = ("definition", "plan", "development", "review")
 def phase_of(section: str) -> str:
     """The phase a run's section belongs to. PM's consultations during the plan write
     PM's section, so they count as definition."""
-    if section.startswith(f"{TECH_LEAD.name}: review "):
+    if section.startswith(REVIEW_PREFIX):
         return "review"
     if section.startswith(f"{DEVELOPER.name}: "):
         return "development"
@@ -372,8 +511,10 @@ def human_section(state: TaskState, reason: str | None, decision: str) -> str:
 
 def resumed(state: TaskState, decision: str | None) -> TaskState:
     """The patch that resumes a paused task: no escalation, the status it had, the pair
-    that hit its limit back at zero, the human's decision as a section the roles read, and
-    the integration if the escalation came before the review could add it."""
+    that hit its limit back at zero, and the human's decision as a section the roles read.
+
+    Nothing about the integration: a resumed task goes through the fan-in, which adds it
+    from the merges it just did, and only that one knows what conflicted."""
     reason = state.get("escalated")
     patch: TaskState = {
         "escalated": None,
@@ -384,8 +525,6 @@ def resumed(state: TaskState, decision: str | None) -> TaskState:
         patch["returns"] = {pair: 0}
     if decision and decision.strip():
         patch["sections"] = {HUMAN: human_section(state, reason, decision)}
-    if needs_integration(state):
-        patch["subtasks"] = {INTEGRATION: integration_subtask()}
     return patch
 
 

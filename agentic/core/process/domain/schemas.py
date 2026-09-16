@@ -22,7 +22,7 @@ from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, Field
 
-from .task import INTEGRATION, FindingCategory
+from .task import INTEGRATION, FindingCategory, FindingScope, Severity
 
 TaskType = Literal["bug", "feature", "platform_enhancement"]
 SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -84,6 +84,20 @@ class InterviewTurn(RoleOutput):
     done: bool = Field(
         description="True when there is no question left to ask: shared understanding "
         "reached, or nothing the interviewee could still decide"
+    )
+
+
+class SolutionTurn(InterviewTurn):
+    """The ephemeral Tech Lead's round: the same as any interviewer's, plus the
+    invariants it proposes (issue #42). A schema of its own and not a field of
+    `InterviewTurn`, which is also the definition interview's: the Product Analyst
+    has no plan to set rules for."""
+
+    invariants: list[str] = Field(
+        default_factory=list,
+        description="Rules you claim every subtask must honour or the plan breaks, from "
+        "what this round uncovered. One per line, each checkable on one subtask's diff "
+        "alone. The Tech Lead adopts or rejects each one; an empty string if none",
     )
 
 
@@ -156,6 +170,19 @@ class Subtask(BaseModel):
 
 class TechPlan(RoleOutput):
     subtasks: list[Subtask] = Field(description="The subtasks, in the order to start them")
+    invariants: list[str] = Field(
+        default_factory=list,
+        description="Rules every subtask honours, each checkable on one subtask's diff "
+        "alone, e.g. `every query over subscriptions applies the duplicate fold`. The "
+        "Developers build to them and the reviewer verifies them; empty when the "
+        "subtasks share nothing",
+    )
+    integration: str = Field(
+        default="",
+        description="What has to be done to make the subtasks work together beyond "
+        "merging their branches, when the plan already knows of something. An empty "
+        "string when merging is enough: then no integrator runs",
+    )
 
 
 class Delivery(RoleOutput):
@@ -164,7 +191,6 @@ class Delivery(RoleOutput):
 
 
 CATEGORIES: tuple[str, ...] = get_args(FindingCategory)
-Severity = Literal["blocking", "important", "observation"]
 
 
 class Finding(BaseModel):
@@ -182,7 +208,7 @@ class Finding(BaseModel):
         "`important`: should be fixed, does not block. `observation`: a remark, or an "
         "objection you could not reproduce"
     )
-    scope: Literal["subtask", "plan"] = Field(
+    scope: FindingScope = Field(
         description="`subtask` when it can be fixed on the branch under review; `plan` when "
         "it needs a change to the plan or to another subtask's branch. On the integration "
         "branch a problem between subtasks is `subtask`"
