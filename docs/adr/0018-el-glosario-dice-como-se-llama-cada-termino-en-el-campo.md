@@ -156,6 +156,10 @@ son deuda: son el vocabulario del que sacar nombres cuando hagan falta, ya verif
   sistema recibe como parámetro, que es lo que el sistema sabe.
 - Los issues #51, #52, #53 y #55 escriben sus entradas contra este formato.
 - El número 0017 queda para #43, que lo reserva: este ADR es "el que sigue" según #50.
+- El reparto de arriba cuenta los 69 términos del día en que se escribió. La poda de #55
+  fundió tres de ellos (Motivo de escalado y Pausa en Escalado, Reintento en Fallo de rol) y
+  el glosario quedó en 67. Los nombres de campo no cambiaron: se mudaron adentro de la
+  entrada que los absorbió.
 - Este ADR es el registro de la evidencia, no la lista viva: la lista viva es el glosario.
   Cuando un término cambia de nombre en el campo, cambia la entrada; este ADR queda como
   estaba, igual que cualquier decisión fechada.

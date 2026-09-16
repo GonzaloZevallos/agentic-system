@@ -106,7 +106,7 @@ Una ejecución de un rol dentro de una corrida. Una tarea tiene tantas como role
 contando repeticiones.
 _Campo_: invoke_agent — OpenTelemetry GenAI semantic conventions, hoy en estado Development. Es el único nombre preciso que existe: LangGraph dice super-step, OpenAI y el Claude Agent SDK turn, CrewAI iteration, Google ADK agent call, SWE-agent step
 
-### Interacciones
+### Cómo se piden cosas
 
 **Consulta**:
 Pregunta de un rol al dueño de una decisión, respondida dentro de la misma corrida, sin entregar la tarea. No es devolución ni escalado y no cuenta para ningún límite. Hoy: el Tech Lead consulta a PM durante la entrevista de solución lo que la definición no dice; PM responde en la misma corrida y su respuesta aclara la definición.
@@ -127,6 +127,17 @@ _Campo_: sin término de arte: el mecanismo tiene nombre (interrupt, LangGraph) 
 Decisión que el dueño toma sobre lo que ni el pedido ni el conocimiento resuelven pero no cambia la definición, y deja escrita en su respuesta. No va al humano.
 _Avoid_: pregunta para el humano
 _Campo_: sin término de arte
+
+**Decisión del humano**:
+Lo que el humano responde a un escalado: todo lo que comenta en el issue después del último aviso del sistema. Entra al documento de tarea, la lee todo rol y no se vuelve a preguntar: vale para toda la tarea y pesa sobre lo que contradiga.
+_Avoid_: respuesta, comentario
+_Campo_: sin término de arte
+
+**Handoff**:
+El bloque "Para el siguiente rol" con que cierra cada sección.
+_Campo_: handoff — de OpenAI (primero Swarm, después el Agents SDK), hoy vocabulario compartido con AutoGen y langgraph-swarm. Allá es la transferencia de control a otro agente; acá es el bloque de texto que se le deja al que sigue
+
+### Cómo se entrega y se revisa
 
 **Puerta de entrega**:
 Lo que el sistema mira cuando un Developer entrega, antes de que la entrega cuente: que haya commit, que el árbol esté limpio y que los chequeos del producto pasen. Si algo falta, rechaza la entrega con el motivo dentro del mismo turno, como mucho dos veces; después la deja pasar con el resultado de los chequeos escrito por el sistema en la sección del Developer. Un rechazo de la puerta no es devolución ni fallo de rol.
@@ -151,6 +162,13 @@ _Campo_: sin término de arte
 Traer cada subtarea a la rama de tarea apenas se aprueba, en vez de todas juntas al final. Lo hace el sistema, entre dos olas. Un merge que no aplica no es un fallo: queda anotado para el integrador.
 _Campo_: de la integración continua, de la que toma la idea (integrar seguido y chico) y no el mecanismo
 
+**Hallazgo**:
+Lo que Tech Lead encuentra al revisar, con su lugar, la afirmación, la evidencia (el comando que corrió y su salida, o la cita del estándar o del brief), la severidad, el alcance y la categoría. Solo un hallazgo bloqueante sobre la subtarea la devuelve; el veredicto se deriva de los hallazgos. Una objeción de comportamiento que no se reprodujo es una observación.
+_Avoid_: comentario, issue
+_Campo_: finding — de auditoría y seguridad de nube (AWS Security Finding Format), no de code review: SARIF dice result, que es el dato, y GitHub dice alert, que es la presentación
+
+### Cómo se rechaza trabajo
+
 **Devolución**:
 Rechazo con entrega hacia atrás. Cuenta para el límite del par. En el código se llama `ChangesRequested`, y su categoría `ChangeCategory`; el veredicto sigue siendo el valor `returned`, que es dato ya escrito, igual que la métrica `agentic.task.returns` y las claves del documento de tarea (ADR-0008, adenda).
 _Avoid_: rechazo (salvo para el acto puntual de QA), rebote
@@ -159,16 +177,12 @@ _Campo_: request changes — GitHub, uno de los tres valores de `event` de una r
 **Motivo de devolución**:
 Por qué se devuelve: de comportamiento o técnico. Decide quién recibe una devolución de QA: PM si es de comportamiento, el Developer de la subtarea si es técnico, Tech Lead cuando el camino no tiene PM.
 _Campo_: sin término de arte
+Son tres términos y no uno porque cada uno tiene un lector distinto: el motivo es texto para quien recibe la devolución, la categoría es dato cerrado que la medición cuenta, y la devolución es el hecho que cuenta para el límite del par.
 
 **Categoría de devolución**:
 El motivo de una devolución como dato, de una lista cerrada: violación de un estándar (arquitectura, tipado silenciado, costuras, otro), brecha contra la spec (comportamiento, test faltante, alcance), entrega que no es entrega (sin commitear, suite en rojo), calibración del plan o problema que cruza subtareas. Las devoluciones de PM a Product Analyst llevan la categoría de definición. Es lo que la medición cuenta y lo que hace computable "el mismo motivo entre los mismos roles". Distinta del motivo en texto, que sigue siendo para quien recibe la devolución.
 _Avoid_: tipo de devolución, motivo (para la categoría)
 _Campo_: lo más cerca son las nueve etiquetas de Conventional Comments (praise, nitpick, suggestion, issue, todo, question, thought, chore, note), pero clasifican el comentario y no la devolución
-
-**Hallazgo**:
-Lo que Tech Lead encuentra al revisar, con su lugar, la afirmación, la evidencia (el comando que corrió y su salida, o la cita del estándar o del brief), la severidad, el alcance y la categoría. Solo un hallazgo bloqueante sobre la subtarea la devuelve; el veredicto se deriva de los hallazgos. Una objeción de comportamiento que no se reprodujo es una observación.
-_Avoid_: comentario, issue
-_Campo_: finding — de auditoría y seguridad de nube (AWS Security Finding Format), no de code review: SARIF dice result, que es el dato, y GitHub dice alert, que es la presentación
 
 **Devolución interna**:
 Devolución que se resuelve dentro del par sin pasar por PjM. Se reporta a PjM igual.
@@ -178,24 +192,21 @@ _Campo_: sin término de arte
 Máximo de devoluciones por par antes de escalar. Hoy 2.
 _Campo_: sin término de arte; `max_iter` en CrewAI y `max_turns` en el OpenAI Agents SDK topean el loop de un agente solo, no el ida y vuelta entre dos
 
+### Cómo termina una corrida
+
+**Listo para revisión**:
+La tarea tiene su pieza integrada en un pull request del producto y espera al humano. Mientras el camino no tenga QA, el merge del humano sin tocar el diff es el cierre, y es lo único que puntúa en el set de evaluación.
+_Avoid_: terminada, cerrada (todavía no lo está)
+_Campo_: ready for review — GitHub, el estado de un pull request que sale de draft
+
+**Cierre**:
+PjM da por terminada la tarea: aprobada, con las aprobaciones del tipo, o descartada, cuando PM dictamina que el comportamiento es el esperado.
+_Campo_: sin término de arte
+
 **Escalado**:
-Lo que un rol, un par o el tope dejan dicho cuando la tarea no puede seguir sin el humano: el motivo de escalado, y las preguntas si las hay. El sistema lo entrega al humano en el issue y pausa la tarea.
-_Campo_: escalation — de soporte y operaciones, no del campo agéntico; ahí el mecanismo es interrupt (LangGraph)
-
-**Motivo de escalado**:
-Por qué la tarea no puede seguir sin el humano, de una lista cerrada: PjM no puede clasificarla o su camino no existe, un par llegó a su límite, un rol falló dos veces, se alcanzó el tope de tarea, o quedaron preguntas para el humano. Decide qué hace falta para reanudar.
-_Avoid_: causa, tipo de escalado
-_Campo_: sin término de arte
-
-**Pausa**:
-Una tarea escalada queda esperando al humano con su estado guardado, sin gastar. Se retoma desde el mismo punto.
-_Avoid_: bloqueo, espera
-_Campo_: interrupt — LangGraph: frena el grafo, expone un valor al cliente y se reanuda con `Command(resume=...)`
-
-**Decisión del humano**:
-Lo que el humano responde a un escalado: todo lo que comenta en el issue después del último aviso del sistema. Entra al documento de tarea, la lee todo rol y no se vuelve a preguntar: vale para toda la tarea y pesa sobre lo que contradiga.
-_Avoid_: respuesta, comentario
-_Campo_: sin término de arte
+Lo que un rol, un par o el tope dejan dicho cuando la tarea no puede seguir sin el humano, con las preguntas si las hay. El sistema lo entrega al humano en el issue y pausa la tarea: queda esperando con su estado guardado, sin gastar, y se retoma desde el mismo punto. Son cinco las situaciones que lo provocan, y cuál fue decide qué hace falta para reanudar: PjM no puede clasificarla o su camino no existe, un par llegó a su límite, un rol falló dos veces, se alcanzó el tope de tarea, o quedaron preguntas para el humano. El motivo viaja como texto libre, no como dato cerrado.
+_Avoid_: motivo de escalado, causa, tipo de escalado (el motivo es parte del escalado, no otro término), pausa, bloqueo, espera
+_Campo_: escalation — de soporte y operaciones, no del campo agéntico; ahí el mecanismo es interrupt (LangGraph): frena el grafo, expone un valor al cliente y se reanuda con `Command(resume=...)`
 
 **Reanudación**:
 La tarea sigue desde donde se pausó. Hace falta una decisión del humano cuando hay preguntas abiertas o un par llegó a su límite, y con ella el contador de ese par vuelve a cero; un tope alcanzado o un fallo de rol se reanudan sin decisión. Nada se reanuda bajo un tope ya gastado. Si el estado guardado se perdió, se reconstruye desde el documento de tarea, cruzado con git.
@@ -203,13 +214,9 @@ _Avoid_: reintento (eso es tras un fallo de rol), relanzar (eso es empezar de ce
 _Campo_: resume — estándar (LangGraph, Temporal, el Claude Agent SDK)
 
 **Fallo de rol**:
-El rol se rompe: su ejecución falla, se le acaban los turnos sin resultado, la salida estructurada falta o es inválida, el `markdown` está vacío. Distinto de devolución; no cuenta para el límite.
-_Avoid_: error (demasiado amplio)
-_Campo_: sin término de arte
-
-**Reintento**:
-Nueva corrida de un rol tras un fallo de rol, con el error como entrada. Continúa la conversación del intento fallido cuando la hay. Distinto de devolución.
-_Campo_: retry — estándar
+El rol se rompe: su ejecución falla, se le acaban los turnos sin resultado, la salida estructurada falta o es inválida, el `markdown` está vacío. Se reintenta una vez con el error como entrada, continuando la conversación del intento fallido cuando la hay. Distinto de devolución; no cuenta para el límite.
+_Avoid_: error (demasiado amplio), reintento (es parte del fallo, no otro término)
+_Campo_: sin término de arte; el reintento sí lo tiene, `retry`, pero nombra la vuelta y no la rotura
 
 **Tope por intento**:
 Gasto máximo de un intento de cualquier rol. Excederlo es un fallo de rol. Red de seguridad contra un rol desbocado, no presupuesto de trabajo. Hoy 10 USD.
@@ -220,19 +227,6 @@ _Campo_: per_instance_cost_limit — SWE-agent
 Gasto acumulado de una tarea a partir del cual el sistema escala y pausa en vez de seguir. Crece con el plan: una base hasta que hay plan, después la base más una parte por subtarea, integración incluida, con un techo que limita esa cuenta. Se mira antes de cada intento de cualquier rol, contra lo que gastó la corrida entera y no sólo la rama que va a gastar. Subirlo al reanudar es decisión del humano, que puede pasar el techo y nunca lo baja. Alcanzado, lo que ya está corriendo termina: sólo frena lo que todavía no arrancó. No es fallo de rol ni devolución y no cuenta para ningún límite. Como el tope por intento, es red de seguridad, bien arriba de lo que cuesta una tarea sana. Hoy 30 USD de base, 15 por subtarea, techo 250.
 _Avoid_: presupuesto de tarea
 _Campo_: total_cost_limit — SWE-agent
-
-**Handoff**:
-El bloque "Para el siguiente rol" con que cierra cada sección.
-_Campo_: handoff — de OpenAI (primero Swarm, después el Agents SDK), hoy vocabulario compartido con AutoGen y langgraph-swarm. Allá es la transferencia de control a otro agente; acá es el bloque de texto que se le deja al que sigue
-
-**Cierre**:
-PjM da por terminada la tarea: aprobada, con las aprobaciones del tipo, o descartada, cuando PM dictamina que el comportamiento es el esperado.
-_Campo_: sin término de arte
-
-**Listo para revisión**:
-La tarea tiene su pieza integrada en un pull request del producto y espera al humano. Mientras el camino no tenga QA, el merge del humano sin tocar el diff es el cierre, y es lo único que puntúa en el set de evaluación.
-_Avoid_: terminada, cerrada (todavía no lo está)
-_Campo_: ready for review — GitHub, el estado de un pull request que sale de draft
 
 ### Artefactos
 
