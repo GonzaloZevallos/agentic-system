@@ -114,3 +114,21 @@ el Developer ya no copia las últimas líneas de la suite.
 le pide empezar el comando tal como está declarado y agregarle el archivo o el test. Los usa
 para reproducir una objeción puntual. Un chequeo entero no lo repite: ya lo corrió la
 puerta. Correr chequeos sin escribir sigue sin ser ejecutar.
+
+## Adenda (2026-09-17, segunda): declarar el stack es obligatorio
+
+El sistema traía un default (`pytest` a secas) al que caía cualquier producto que no
+declarara `.agentic/stack.yaml` en el commit base. Silencioso y peligroso a la vez: un
+producto que escribe `check:` en vez de `checks:` corría con ese default, y la puerta de
+entrega y el revisor verificaban con un comando que no era el suyo, sin que nada lo dijera.
+
+**`preflight` corta si el producto no declara su stack**, igual que ya cortaba con un
+`flags.yaml` roto: antes de gastar un peso, no a mitad de tarea. Lo lee en el `HEAD` del
+producto, que es el commit base de la próxima tarea que arranque, y carga las dos claves,
+así un `setup` que no parsea también falla ahí y no cuando nace un worktree a mitad de
+corrida. Falla también si el archivo está en la rama pero no en el commit: la versión que
+vale sigue siendo la del base.
+
+**El default deja de ser alcanzable por una corrida.** El archivo del paquete queda, pero
+sólo como plantilla que el mensaje de error imprime, así lo que el humano copia es
+exactamente un archivo válido y no un string que se desincroniza.

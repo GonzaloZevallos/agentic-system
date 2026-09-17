@@ -35,8 +35,9 @@ from pathlib import Path
 from agentic.shared.configuration import Configuration
 
 from ..domain import rules
+from ..domain.roles import DEVELOPER
 from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, Subtask, TaskState, apply
-from .checkouts import subtask_checkout, task_checkout
+from .checkouts import SetupFailed, subtask_checkout, task_checkout
 from .ports import Checkout, Ports
 from .run_role import finish
 
@@ -54,14 +55,20 @@ async def integrate(state: TaskState, cfg: Configuration, ports: Ports) -> TaskS
         # touches nothing, and the human reading the document sees what this wave found
         # instead of what the wave before it did.
         return {"status": WAITING_ON_HUMAN, "sections": rules.findings_section(state)}
-    task = task_checkout(state, ports)
-    patch: TaskState = {"branch": task.branch, "sections": rules.findings_section(state)}
-    conflicts = _merge_approved(state, task.path, ports)
-    if (integration := _integration(state, conflicts, task)) is not None:
-        patch = apply(patch, {"subtasks": {INTEGRATION: integration}})
-    current = apply(state, patch)
-    for subtask_id in rules.dispatched_subtasks(current):
-        subtask_checkout(current, subtask_id, ports)
+    # Every checkout of the wave is born here, one at a time, so the product's setup
+    # runs and a failing one stops the wave before a Developer is dispatched. Inside a
+    # branch it could not be told to the human: a branch never routes to the escalation.
+    try:
+        task = task_checkout(state, cfg, ports)
+        patch: TaskState = {"branch": task.branch, "sections": rules.findings_section(state)}
+        conflicts = _merge_approved(state, task.path, ports)
+        if (integration := _integration(state, conflicts, task)) is not None:
+            patch = apply(patch, {"subtasks": {INTEGRATION: integration}})
+        current = apply(state, patch)
+        for subtask_id in rules.dispatched_subtasks(current):
+            subtask_checkout(current, subtask_id, cfg, ports)
+    except SetupFailed as unprepared:
+        return finish(state, unprepared.patch(DEVELOPER), ports)
     return finish(state, patch, ports)
 
 

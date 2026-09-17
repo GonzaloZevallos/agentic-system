@@ -43,7 +43,7 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
     subtask = state["subtasks"][subtask_id]
     checks = declared_checks(state, ports)
     reviewer = reviewer_for(checks)
-    checkout = subtask_checkout(state, subtask_id, ports)
+    checkout = subtask_checkout(state, subtask_id, cfg, ports)
     pair = pair_for(subtask_id)
     remaining = rules.remaining_changes(state, pair, cfg.max_changes_requested_per_pair)
     section = rules.review_section(subtask_id)

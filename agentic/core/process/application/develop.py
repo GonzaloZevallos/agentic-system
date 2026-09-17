@@ -27,7 +27,7 @@ from .run_role import finish, run_role
 async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
     subtask_id = state["subtask_id"]
     subtask = state["subtasks"][subtask_id]
-    checkout = subtask_checkout(state, subtask_id, ports)
+    checkout = subtask_checkout(state, subtask_id, cfg, ports)
     role = DEVELOPER_INTEGRATOR if subtask_id == INTEGRATION else DEVELOPER
     # A dependency gates the order and provides the code: its approved branch is
     # brought in before the Developer starts. The integration skips this: the fan-in

@@ -15,7 +15,7 @@ from .run_role import finish, run_role
 
 
 async def validate_definition(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
-    task = task_checkout(state, ports)
+    task = task_checkout(state, cfg, ports)
     limit = cfg.max_changes_requested_per_pair
     remaining = rules.remaining_changes(state, PAIR_PM_PA, limit)
     output, patch = await run_role(

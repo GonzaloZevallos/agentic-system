@@ -12,14 +12,19 @@ from agentic.shared.configuration import Configuration
 
 from ..domain.roles import INTERVIEW_DEFINITION, PRODUCT_ANALYST
 from ..domain.task import TaskState, apply
-from .checkouts import task_checkout
+from .checkouts import SetupFailed, task_checkout
 from .interview import interview
 from .ports import Ports
 from .run_role import finish, run_role
 
 
 async def define(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
-    task = task_checkout(state, ports)
+    # The task's checkout is born here, so this is where the product's setup can fail.
+    # Nothing has been paid yet and no model fixes an environment that will not build.
+    try:
+        task = task_checkout(state, cfg, ports)
+    except SetupFailed as unprepared:
+        return finish(state, unprepared.patch(PRODUCT_ANALYST), ports)
     patch: TaskState = {"branch": task.branch}
     resume = None
     if state.get("status") != "returned":

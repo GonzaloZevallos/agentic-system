@@ -25,7 +25,7 @@ from .run_role import finish, run_role
 
 
 async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
-    task = task_checkout(state, ports)
+    task = task_checkout(state, cfg, ports)
     transcript, patch = await interview(state, INTERVIEW_SOLUTION, cfg, ports, cwd=task.path)
     ports.workspace.commit_all(task.path, f"{state['id']}: solution interview")
     if transcript is None:

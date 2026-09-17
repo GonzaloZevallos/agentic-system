@@ -1,9 +1,14 @@
 # The stack of this repo as a product (ADR-0017): the same commands CI runs, not an
-# approximation. The presubmit runs them on a Developer's delivery, and the reviewer
-# uses them to reproduce an objection (ADR-0016).
+# approximation. The presubmit runs the checks on a Developer's delivery, and the
+# reviewer uses them to reproduce an objection (ADR-0016).
 #
-# `uv sync --locked` is not here: it prepares the environment rather than judging the
-# code, and the stack has no key for that yet (#37, #38).
+# `setup` runs once, when the system creates a checkout, and is what keeps a worktree
+# from reaching up to this checkout's `.venv` (ADR-0011, third addendum). The three
+# checks below are `uv run` in project mode, which already builds a per-worktree
+# environment; `uv sync --locked` makes that a guarantee of the system and not a
+# property of how the commands happen to be written.
+setup:
+  deps: uv sync --locked
 checks:
   tests: uv run pytest -m "not llm"
   lint: uv run ruff check .

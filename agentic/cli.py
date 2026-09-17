@@ -30,7 +30,7 @@ from .core.measurement.adapters.otel import telemetry
 from .core.process.adapters.langgraph.graph import ESCALATE
 from .core.process.application import resume as resuming
 from .core.process.application.ports import Ports
-from .core.process.application.preflight import preflight, unfixed_stage0
+from .core.process.application.preflight import no_setup, preflight, unfixed_stage0
 from .core.process.domain.task import TaskInput, TaskState
 from .shared.configuration import ENV_PREFIX, Configuration, MissingProductDir
 from .shared.environment import without_own_toolchain
@@ -115,8 +115,9 @@ def main() -> None:
         ports = default_ports(cfg)
         preflight(cfg, ports)
         # Said and not enforced: the run is worth less, it is not wrong.
-        if (warning := unfixed_stage0(ports)) is not None:
-            print(f"agentic: {warning}", file=sys.stderr)
+        for warn in (unfixed_stage0, no_setup):
+            if (warning := warn(ports)) is not None:
+                print(f"agentic: {warning}", file=sys.stderr)
         if args.command == "resume":
             task_id = ports.inbox.task_id(args.issue)
             options = (args.from_document, args.dry_run, args.yes)

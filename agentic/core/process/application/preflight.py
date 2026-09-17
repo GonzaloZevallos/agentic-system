@@ -32,13 +32,47 @@ class RunsOnItsOwnCheckout(ValueError):
 
 
 def preflight(cfg: Configuration, ports: Ports) -> None:
-    """The run's own checkout first, then the vocabulary and every role's prompt
-    rendered: a bad flags file or an overlay with a stray placeholder fails here, not in
-    the middle of a task."""
+    """The run's own checkout first, then the product's stack, then the vocabulary and
+    every role's prompt rendered: a product that declares no stack, a bad flags file or
+    an overlay with a stray placeholder fails here, not in the middle of a task."""
     refuse_its_own_checkout(cfg, ports)
+    declared_stack(ports)
     vocabulary = ports.flags.load()
     for role in ROLES:
         load_prompt(role, cfg, ports, vocabulary, **PLACEHOLDERS)
+
+
+def declared_stack(ports: Ports) -> dict[str, str]:
+    """The product's setup as its HEAD declares it, having read the whole file.
+
+    Read at HEAD and not at a task's base: the base of the next task to start is this
+    commit, and at preflight there is no task yet. A run whose task branch already
+    exists is measured against its own base later, which can only be a commit that
+    passed through here. Both keys are loaded, so a broken `setup` fails now and not
+    when a worktree is born halfway through the run (issues #36, #37)."""
+    ports.stack.checks("HEAD")
+    return ports.stack.setup("HEAD")
+
+
+def no_setup(ports: Ports) -> str | None:
+    """Why this run cannot promise a Developer its own environment, or None when it can.
+
+    A product that declares no `setup` gets checkouts that git made and nothing else. A
+    worktree has no environment of its own, so a tool that wants one walks up to the
+    product's, and two subtasks then share it: a `pytest` that imports a sister branch's
+    code, or a `uv pip install -e .` that repoints the human's checkout (issue #37). Not
+    a refusal: a product with no dependencies has nothing to prepare, and one that does
+    may still prefer to live with it. A fact about the product, so what to do with it is
+    the caller's; the CLI says it out loud, before the money is spent."""
+    if declared_stack(ports):
+        return None
+    return (
+        # The file is named and not imported: `core.knowledge` owns it, and the
+        # dependency rule keeps the two cores apart (ADR-0010).
+        "the product declares no `setup` in .agentic/stack.yaml: every checkout shares "
+        "the product's environment, so what a Developer tests is not necessarily its "
+        "own branch (issue #37). Declare the commands that prepare a fresh checkout."
+    )
 
 
 def unfixed_stage0(ports: Ports) -> str | None:

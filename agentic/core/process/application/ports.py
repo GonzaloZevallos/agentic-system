@@ -132,6 +132,11 @@ class ProductStack(Protocol):
         """Check name -> command, as the product's commit `revision` declares them."""
         ...
 
+    def setup(self, revision: str) -> dict[str, str]:
+        """Setup step -> command, run once to prepare a fresh checkout. Empty when the
+        product declares none, which is a product that prepares nothing."""
+        ...
+
 
 @dataclass(frozen=True)
 class CommandResult:
@@ -174,6 +179,9 @@ class Checkout:
     path: Path
     # Commit the checkout started from: what a review diffs against.
     base: str
+    # True only for the call that brought it into being, so the product's setup runs
+    # once, when the checkout is born (ADR-0011, third addendum).
+    created: bool = False
 
 
 class Workspace(Protocol):

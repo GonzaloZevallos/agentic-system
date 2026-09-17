@@ -137,16 +137,21 @@ class MemoryFlags:
 
 
 class MemoryStack:
-    """The product's declared checks, whatever the revision; `revisions` says which were
-    asked."""
+    """The product's declared stack, whatever the revision; `revisions` says which were
+    asked, of either key."""
 
-    def __init__(self, checks: dict[str, str] | None = None):
+    def __init__(self, checks: dict[str, str] | None = None, setup: dict[str, str] | None = None):
         self.declared = {"tests": "pytest"} if checks is None else checks
+        self.declared_setup = {} if setup is None else setup
         self.revisions: list[str] = []
 
     def checks(self, revision: str) -> dict[str, str]:
         self.revisions.append(revision)
         return self.declared
+
+    def setup(self, revision: str) -> dict[str, str]:
+        self.revisions.append(revision)
+        return self.declared_setup
 
 
 class MemoryCommands:
@@ -212,13 +217,17 @@ class MemoryWorkspace:
 
     def task_checkout(self, task_id: str) -> Checkout:
         branch = rules.task_branch(task_id)
-        self.checkouts_made.append(branch)
-        return Checkout(branch, self.ROOT / task_id, "base0")
+        return self._made(branch, self.ROOT / task_id, "base0")
 
     def subtask_checkout(self, task_id: str, subtask_id: str) -> Checkout:
         branch = rules.subtask_branch(task_id, subtask_id)
+        return self._made(branch, self.ROOT / f"{task_id}.{subtask_id}", "base1")
+
+    def _made(self, branch: str, path: Path, base: str) -> Checkout:
+        # As the real one: only the first ask made it, so the setup runs once.
+        created = branch not in self.checkouts_made
         self.checkouts_made.append(branch)
-        return Checkout(branch, self.ROOT / f"{task_id}.{subtask_id}", "base1")
+        return Checkout(branch, path, base, created=created)
 
     def head(self, path: Path) -> str:
         # A path in `moved` advances on every look, as a branch someone commits to.

@@ -1,6 +1,7 @@
 """The git adapter against a real temporary repository with a bare remote."""
 
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -41,7 +42,10 @@ def test_task_checkout_is_a_worktree_on_its_own_branch_and_idempotent(product):
     assert (task.path / "README.md").read_text() == "v0\n"
     assert git("rev-parse", "--abbrev-ref", "HEAD", cwd=task.path) == "agentic/GH-12"
     assert task.base == git("rev-parse", "--short", "HEAD", cwd=product)
-    assert ws.task_checkout("GH-12") == task
+    # Only the call that made the worktree says so: the product's setup runs once.
+    assert task.created
+    again = ws.task_checkout("GH-12")
+    assert not again.created and replace(again, created=True) == task
     # The product's own checkout is untouched, and the worktrees never show up in it.
     assert git("rev-parse", "--abbrev-ref", "HEAD", cwd=product) == "master"
     assert git("status", "--porcelain", cwd=product) == ""

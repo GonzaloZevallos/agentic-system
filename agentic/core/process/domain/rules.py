@@ -9,6 +9,7 @@ import math
 import re
 from collections.abc import Sequence
 
+from . import presubmit
 from .document import HUMAN, demote
 from .roles import (
     DEVELOPER,
@@ -19,6 +20,7 @@ from .roles import (
     SOLUTION_INTERVIEW,
     TECH_LEAD,
     Pair,
+    Role,
 )
 from .task import (
     INTEGRATION,
@@ -215,6 +217,26 @@ def unmergeable(subtask_id: str, dependency: str, conflict: str) -> TaskState:
             f"the merge does not apply. Merge the two branches by hand in the "
             f"subtask's worktree, then resume; an answer alone changes nothing here."
             f"\n\n{conflict}"
+        ),
+        "status": WAITING_ON_HUMAN,
+    }
+
+
+def setup_unprepared(role: Role, branch: str, step: str, command: str, output: str) -> TaskState:
+    """The patch when the product's setup does not prepare a checkout the system just
+    made. Not a role failure and not a return: no role has run, and an environment that
+    will not build is not something a model fixes (issue #37). The step, the command and
+    its last lines travel, because the human fixes this outside the system."""
+    return {
+        # No role ran, so nothing seeded `current_role`: the human must see who was
+        # about to start, not whoever wrote last.
+        "current_role": role.name,
+        "escalated": (
+            f"the product's setup step {step!r} failed on {branch!r}: the checkout has "
+            f"no environment to work in, so no role starts. Fix the step, or the "
+            f"product's `setup` in `.agentic/stack.yaml`, and resume; an answer alone "
+            f"changes nothing here."
+            f"\n\n```text\n$ {command}\n{presubmit.tail(output)}\n```"
         ),
         "status": WAITING_ON_HUMAN,
     }

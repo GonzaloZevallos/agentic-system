@@ -16,9 +16,16 @@ async def in_memory(cfg):
     yield InMemorySaver()
 
 
-def product(tmp_path, name):
+def product(tmp_path, name, stack="checks:\n  tests: pytest\nsetup:\n  deps: uv sync\n"):
+    """A product as the system needs one: a repo whose HEAD declares a stack (#36)."""
     root = tmp_path / name
     (root / ".agentic").mkdir(parents=True)
+    if stack is not None:
+        (root / ".agentic/stack.yaml").write_text(stack)
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*git, "init", "-q", "-b", "master", str(root)], check=True)
+    subprocess.run([*git, "add", "-A"], cwd=root, check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "v0", "--allow-empty"], cwd=root, check=True)
     return root
 
 
@@ -316,3 +323,41 @@ def test_a_stage0_fixed_to_a_sha_says_nothing(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr("sys.argv", ["agentic", "run", "t", "d", "--product-dir", str(root)])
     cli.main()
     assert capsys.readouterr().err == ""
+
+
+def test_a_product_that_declares_no_stack_does_not_run(monkeypatch, tmp_path, capsys):
+    """Mandatory since #36: the system has no default a run can reach, so the refusal
+    carries the template the human copies."""
+    root = product(tmp_path, "p", stack=None)
+    monkeypatch.setattr("sys.argv", ["agentic", "run", "t", "d", "--product-dir", str(root)])
+    with pytest.raises(SystemExit) as info:
+        cli.main()
+    assert info.value.code == 2
+    error = capsys.readouterr().err
+    assert "declares no stack" in error and "checks:" in error
+
+
+def test_a_stack_the_working_tree_fixed_but_no_commit_holds_does_not_run(
+    monkeypatch, tmp_path, capsys
+):
+    """The commit decides, here as everywhere (ADR-0016, addendum): a file written and
+    not committed is not a declaration."""
+    root = product(tmp_path, "p", stack=None)
+    (root / ".agentic/stack.yaml").write_text("checks:\n  tests: pytest\n")
+    monkeypatch.setattr("sys.argv", ["agentic", "run", "t", "d", "--product-dir", str(root)])
+    with pytest.raises(SystemExit) as info:
+        cli.main()
+    assert info.value.code == 2
+    assert "declares no stack" in capsys.readouterr().err
+
+
+def test_a_product_without_setup_is_warned_and_the_run_goes_on(monkeypatch, tmp_path, capsys):
+    """A warning, not a refusal: a product with no dependencies prepares nothing, and
+    one that does may still choose to live with a shared environment (issue #37)."""
+    root = product(tmp_path, "p", stack="checks:\n  tests: pytest\n")
+    monkeypatch.setattr(cli, "unfixed_stage0", lambda ports: None)
+    seen = capture_run(monkeypatch)
+    monkeypatch.setattr("sys.argv", ["agentic", "run", "t", "d", "--product-dir", str(root)])
+    cli.main()
+    assert "declares no `setup`" in capsys.readouterr().err
+    assert seen["task"]["title"] == "t"
