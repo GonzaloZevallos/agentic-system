@@ -180,7 +180,9 @@ class MemoryInbox:
 class MemoryWorkspace:
     """Branches and worktrees as names. A Developer's commit is simulated by adding
     its checkout path to `moved` before the run: `head` then differs from the base.
-    A path in `dirty` has uncommitted changes. `branches` maps an existing branch to
+    A path in `dirty` has untracked files and one in `uncommitted` has changes to
+    tracked ones; only the second makes a version `+dirty`. `branches` maps an existing
+    branch to
     (head, base) for the checks of a resume; `checkouts` are the worktrees on disk."""
 
     ROOT = Path("/memory/worktrees")
@@ -190,6 +192,7 @@ class MemoryWorkspace:
         self.repositories: dict[Path, Path] = {}
         self.moved: set[Path] = set()
         self.dirty: set[Path] = set()
+        self.uncommitted: set[Path] = set()
         self.commits: list[tuple[Path, str]] = []
         self.merges: list[tuple[Path, str]] = []
         # Branches whose merge does not apply, as a real conflict would.
@@ -225,7 +228,10 @@ class MemoryWorkspace:
         return f"head{self._looks[path]}"
 
     def is_clean(self, path: Path) -> bool:
-        return path not in self.dirty
+        return path not in self.dirty and path not in self.uncommitted
+
+    def is_committed(self, path: Path) -> bool:
+        return path not in self.uncommitted
 
     def merge(self, path: Path, branch: str) -> str | None:
         self.merges.append((path, branch))

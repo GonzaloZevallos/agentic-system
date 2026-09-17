@@ -34,6 +34,17 @@ if [ ! -e "$dir/.git" ]; then
 fi
 git -C "$dir" fetch --quiet --tags origin
 sha="$(git -C "$dir" rev-parse --verify "${ref}^{commit}")"
+
+# `git checkout` keeps local modifications that do not collide with the target tree, so
+# without this the script could print "fixed to <sha>" over a tree that is still dirty
+# and still goes out `+dirty`. Refusing beats --force: whatever is in there was put by
+# hand, and this script is not the place to throw it away silently.
+if [ -n "$(git -C "$dir" status --porcelain --untracked-files=no)" ]; then
+    echo "$dir has uncommitted changes: stage0 would not be fixed to $ref." >&2
+    echo "Discard them with 'git -C $dir checkout -- .', or use another directory." >&2
+    exit 1
+fi
+
 # Detached on purpose: stage0 is a commit, never a branch a pull could move under it.
 git -C "$dir" checkout --quiet --detach "$sha"
 

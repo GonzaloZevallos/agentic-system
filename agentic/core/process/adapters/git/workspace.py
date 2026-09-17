@@ -53,7 +53,14 @@ class GitWorkspace:
         # Absolute before anything: `-C` is read from the process's directory, and so
         # would a relative answer be, which are not the same place.
         target = path.resolve()
-        result = self._run("-C", str(target), "rev-parse", "--git-common-dir")
+        try:
+            result = self._run("-C", str(target), "rev-parse", "--git-common-dir")
+        except OSError:
+            # No git on the machine, or a `product_dir` that is not there: both are "no
+            # repository" and neither is this question's to report. `default_ports` asks
+            # it on every path now, so raising here would crash the composition root
+            # before the caller ever gets to say what is actually wrong.
+            return None
         if result.returncode != 0:
             return None
         common = Path(result.stdout.strip())
@@ -92,6 +99,10 @@ class GitWorkspace:
 
     def is_clean(self, path: Path) -> bool:
         return not self._git("status", "--porcelain", cwd=path)
+
+    def is_committed(self, path: Path) -> bool:
+        # The same flags `system_version` uses, so the two never disagree about a tree.
+        return not self._git("status", "--porcelain", "--untracked-files=no", cwd=path)
 
     def merge(self, path: Path, branch: str) -> str | None:
         """A conflict is not an error of the system: the merge is undone so the

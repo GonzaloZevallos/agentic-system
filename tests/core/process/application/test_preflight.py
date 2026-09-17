@@ -6,7 +6,11 @@ from pathlib import Path
 import pytest
 
 from agentic.core.process.application import preflight as module
-from agentic.core.process.application.preflight import RunsOnItsOwnCheckout, preflight
+from agentic.core.process.application.preflight import (
+    RunsOnItsOwnCheckout,
+    preflight,
+    unfixed_stage0,
+)
 from agentic.shared.configuration import Configuration
 from tests.fakes import memory_ports
 
@@ -71,3 +75,42 @@ def test_the_checkout_is_judged_before_anything_is_read(stage0):
     ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/r/.git"})
     with pytest.raises(RunsOnItsOwnCheckout):
         preflight(Configuration(product_dir=PRODUCT), replace(ports, flags=ExplodingFlags()))
+
+
+# -- stage0 that is not fixed to anything --------------------------------------------
+
+
+def test_a_clean_stage0_says_nothing(stage0):
+    assert unfixed_stage0(ports_where(**{str(stage0): "/sys/.git"})) is None
+
+
+def test_a_dirty_stage0_is_told_before_the_run_starts(stage0):
+    """Not a refusal: editing stage0 is a deliberate act, and debugging the system is a
+    good reason for it. But finding out afterwards costs a run's worth of money."""
+    ports = ports_where(**{str(stage0): "/sys/.git"})
+    ports.workspace.uncommitted.add(stage0)
+    warning = unfixed_stage0(ports)
+    assert str(stage0) in warning and "+dirty" in warning
+    assert f"{stage0}/scripts/stage0.sh" in warning
+
+
+def test_a_package_outside_any_repository_says_nothing(stage0):
+    """An installed wheel: there is no tree to be dirty, and asking git would fail."""
+    assert unfixed_stage0(ports_where()) is None
+
+
+def test_an_untracked_file_in_stage0_is_not_what_the_warning_claims(stage0):
+    """`system_version` stamps `+dirty` from tracked changes only, so a scratch file git
+    never heard of leaves the run comparable. Warning about it would state a consequence
+    that does not happen."""
+    ports = ports_where(**{str(stage0): "/sys/.git"})
+    ports.workspace.dirty.add(stage0)  # untracked counts for a delivery, not for a version
+    assert unfixed_stage0(ports) is None
+
+
+def test_the_remedy_fixes_the_stage0_it_names(stage0):
+    """A second stage0, or one installed elsewhere: the script's default directory is
+    `~/.agentic-stage0`, so the command has to name the dirty one or it fixes another."""
+    ports = ports_where(**{str(stage0): "/sys/.git"})
+    ports.workspace.uncommitted.add(stage0)
+    assert f"scripts/stage0.sh <sha> {stage0}" in unfixed_stage0(ports)

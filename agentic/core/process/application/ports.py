@@ -198,6 +198,13 @@ class Workspace(Protocol):
         """No uncommitted change, tracked or untracked, under the checkout at `path`."""
         ...
 
+    def is_committed(self, path: Path) -> bool:
+        """No change to a **tracked** file under `path`. The looser one, and the question
+        behind the `+dirty` of a system version (ADR-0008): a scratch file git never
+        heard of does not change what the code is. A delivery asks `is_clean` instead,
+        because a new file a Developer forgot to add is missing work."""
+        ...
+
     def merge(self, path: Path, branch: str) -> str | None:
         """Bring `branch` into the checkout at `path`: a subtask starts on the code of
         the subtasks it depends on, and the fan-in brings each approved one into the

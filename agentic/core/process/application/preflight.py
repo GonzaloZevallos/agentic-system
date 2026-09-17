@@ -35,13 +35,35 @@ def preflight(cfg: Configuration, ports: Ports) -> None:
     """The run's own checkout first, then the vocabulary and every role's prompt
     rendered: a bad flags file or an overlay with a stray placeholder fails here, not in
     the middle of a task."""
-    _refuse_its_own_checkout(cfg, ports)
+    refuse_its_own_checkout(cfg, ports)
     vocabulary = ports.flags.load()
     for role in ROLES:
         load_prompt(role, cfg, ports, vocabulary, **PLACEHOLDERS)
 
 
-def _refuse_its_own_checkout(cfg: Configuration, ports: Ports) -> None:
+def unfixed_stage0(ports: Ports) -> str | None:
+    """Why this run will compare against nothing, or None when it will.
+
+    stage0 with uncommitted changes runs code that no sha names, so `system_version`
+    stamps every trace `+dirty` and the run drops out of every comparison, which is
+    exactly what that `+dirty` is for (ADR-0008). Tracked changes only, the same question
+    `system_version` asks: warning about an untracked scratch file would promise a
+    `+dirty` that never comes. Not a refusal: editing stage0 is a deliberate act and
+    debugging the system is a good reason for one. A fact about the checkout, so what to
+    do with it is the caller's; the CLI says it out loud, because finding out afterwards
+    costs a run's worth of money."""
+    if ports.workspace.repository_at(CHECKOUT) is None or ports.workspace.is_committed(CHECKOUT):
+        return None
+    return (
+        f"stage0 has uncommitted changes ({CHECKOUT}): this run goes out as `+dirty` and "
+        "compares against nothing (ADR-0008). Fix it to a sha with "
+        # The directory spelled out: the script's default is `~/.agentic-stage0`, which
+        # is not necessarily the stage0 that is dirty.
+        f"{CHECKOUT}/scripts/stage0.sh <sha> {CHECKOUT}"
+    )
+
+
+def refuse_its_own_checkout(cfg: Configuration, ports: Ports) -> None:
     """The system may develop itself, and never from the checkout it runs from: a
     Developer editing `rules.py` while `rules.py` decides its routing, and every trace
     stamped with the sha being edited, `+dirty` forever, which is the one thing that
