@@ -1,0 +1,10 @@
+# The stack of this repo as a product (ADR-0017): the same commands CI runs, not an
+# approximation. The presubmit runs them on a Developer's delivery, and the reviewer
+# uses them to reproduce an objection (ADR-0016).
+#
+# `uv sync --locked` is not here: it prepares the environment rather than judging the
+# code, and the stack has no key for that yet (#37, #38).
+checks:
+  tests: uv run pytest -m "not llm"
+  lint: uv run ruff check .
+  format: uv run ruff format --check .
