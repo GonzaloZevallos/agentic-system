@@ -118,3 +118,65 @@ def test_consolidate_restores_what_was_there_when_a_write_fails(tmp_path):
     # The replaced file is back, the new one is gone.
     assert (tmp_path / "docs/product/reports.md").read_text() == "# Reports\n\nOld.\n"
     assert not (tmp_path / "docs/product/members.md").exists()
+
+
+MAP = "# Context Map\n\n## Contexts\n\n- [Proceso](./core/process/CONTEXT.md): the roles.\n"
+PROCESS = "# Proceso\n\n## Language\n\n**Rol**:\nAn agent.\n_Campo_: role — CrewAI\n"
+
+
+def mapped(tmp_path):
+    (tmp_path / "CONTEXT-MAP.md").write_text(MAP)
+    (tmp_path / "core" / "process").mkdir(parents=True)
+    (tmp_path / "core" / "process" / "CONTEXT.md").write_text(PROCESS)
+    return FilesystemKnowledge(tmp_path)
+
+
+def test_read_follows_the_map_and_sends_it_first(tmp_path):
+    text = mapped(tmp_path).read()
+    assert text.index("CONTEXT-MAP.md") < text.index("core/process/CONTEXT.md")
+    assert "An agent." in text
+
+
+def test_a_term_goes_to_the_glossary_of_the_context_it_belongs_to(tmp_path):
+    knowledge_ = mapped(tmp_path)
+    written = knowledge_.upsert_terms(
+        {"Ola": {"definition": "A wave.", "avoid": "", "context": "process"}}
+    )
+    assert written == tmp_path / "core" / "process" / "CONTEXT.md"
+    assert "**Ola**" in (tmp_path / "core" / "process" / "CONTEXT.md").read_text()
+
+
+def test_a_rewrite_keeps_the_lines_it_does_not_own(tmp_path):
+    knowledge_ = mapped(tmp_path)
+    knowledge_.upsert_terms(
+        {"Rol": {"definition": "An agent with one job.", "avoid": "", "context": "process"}}
+    )
+    text = (tmp_path / "core" / "process" / "CONTEXT.md").read_text()
+    assert "An agent with one job." in text and "_Campo_: role — CrewAI" in text
+
+
+def test_a_term_for_a_context_the_map_does_not_know_is_an_error(tmp_path):
+    with pytest.raises(ValueError, match="billing"):
+        mapped(tmp_path).upsert_terms({"X": {"definition": "d", "avoid": "", "context": "billing"}})
+
+
+def test_a_mapped_product_needs_the_context_of_every_term(tmp_path):
+    with pytest.raises(ValueError, match="multi-context"):
+        mapped(tmp_path).upsert_terms({"X": {"definition": "d", "avoid": "", "context": ""}})
+
+
+def test_one_consolidation_writes_every_context_the_task_touched(tmp_path):
+    knowledge_ = mapped(tmp_path)
+    (tmp_path / "core" / "measurement").mkdir(parents=True)
+    (tmp_path / "core" / "measurement" / "CONTEXT.md").write_text("# M\n\n## Language\n")
+    (tmp_path / "CONTEXT-MAP.md").write_text(
+        MAP + "- [Medición](./core/measurement/CONTEXT.md): the metrics.\n"
+    )
+    knowledge_.upsert_terms(
+        {
+            "Ola": {"definition": "A wave.", "avoid": "", "context": "process"},
+            "Muestra": {"definition": "A sample.", "avoid": "", "context": "measurement"},
+        }
+    )
+    assert "**Ola**" in (tmp_path / "core" / "process" / "CONTEXT.md").read_text()
+    assert "**Muestra**" in (tmp_path / "core" / "measurement" / "CONTEXT.md").read_text()

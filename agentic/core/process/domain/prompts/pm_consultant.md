@@ -58,6 +58,7 @@ Everything goes in the structured output, in one call:
 - `definitions`: the capability files whose behaviour an answer changes or completes,
   each complete (not a diff), keeping everything still current and its `## Jobs`. Empty
   when no answer changes the written knowledge.
-- `glossary`: terms an answer introduces or changes, each with `term`, `definition` and
-  `avoid`. Empty if none.
+- `glossary`: terms an answer introduces or changes, each with `term`, `definition`,
+  `avoid` and `context`. Empty if none. `context` names the bounded context the term
+  belongs to when the knowledge came with a `CONTEXT-MAP.md`; empty otherwise.
 </Output>

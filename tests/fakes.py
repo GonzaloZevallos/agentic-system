@@ -105,7 +105,7 @@ class MemoryKnowledge:
         return knowledge.approval_check(task_type)
 
     def clarification_check(self) -> Callable[[dict], None]:
-        return knowledge.clarification_check
+        return knowledge.clarification_check()
 
     def consolidate(self, verdict: dict, root: Path | None = None) -> list[Path]:
         definitions, terms = knowledge.consolidation(verdict)

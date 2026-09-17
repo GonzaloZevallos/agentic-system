@@ -632,6 +632,7 @@ Forma del repo del producto:
 | `.agentic/tasks/` | Documento único por tarea, registro crudo del trabajo | Los roles, sección por sección |
 | `.agentic/prompts/` | Overrides de prompts por rol, si los hay (ADR-0005) | PjM |
 | `.agentic/flags.yaml` | Vocabulario de flags del producto, pisa el default del sistema | Humano, después PM |
+| `.agentic/stack.yaml` | Stack del producto: los comandos con que declara que su código está sano (ADR-0016, adenda) | Humano |
 | `.agentic/state.sqlite` | Checkpointer del grafo, fuera del control de versiones (ADR-0003) | El sistema |
 | `.agentic/worktrees/` | Un worktree por subtarea, fuera del control de versiones (ADR-0011) | El sistema |
 | rama `agentic/<tarea>` | La rama de tarea: entrevistas, ADRs, código integrado. Termina en un pull request (ADR-0011) | Los roles |
@@ -649,7 +650,13 @@ con la forma de arriba y cuatro diferencias (ADR-0017):
 | Set de evaluación | Es la base de §9 | No puntúa: no tiene métricas de negocio que discutir |
 
 El glosario del producto, acá, es multi-contexto: `CONTEXT-MAP.md` y un `CONTEXT.md` por
-módulo bajo `agentic/core/`, no un archivo en la raíz (#45).
+módulo bajo `agentic/core/`, no un archivo en la raíz. El sistema lo sabe leer: cuando el
+producto tiene mapa, un rol recibe el mapa primero (sus *Relationships* dicen qué contexto
+conoce a cuál, y eso no está en ningún glosario) y después cada `CONTEXT.md` que enlaza. Al
+escribir, **un término pertenece a un contexto**: `GlossaryTerm` lo declara y una destilación
+escribe en tantos glosarios como módulos tocó la tarea. Y una reescritura conserva las líneas
+de la entrada que no le pertenecen, `_Campo_` entre ellas: el que escribe una definición no
+es dueño de todo lo que la entrada carga (ADR-0017, ADR-0018).
 
 El conocimiento de producto (definiciones, ADRs, glosario) vive con los docs humanos, no
 bajo `.agentic/`, porque es del producto y lo lee cualquiera; `.agentic/` es maquinaria del

@@ -62,5 +62,9 @@ Everything goes in the structured output, in one call:
   existing ones kept and this task's added. A feature approved without definitions, or
   with a definition without its jobs, is invalid. Empty on `returned`.
 - `glossary`: terms the feature introduces or whose meaning changes, each with `term`,
-  `definition` and `avoid`. Only real changes; empty if none.
+  `definition`, `avoid` and `context`. Only real changes; empty if none.
+  `context` is for a product whose knowledge came with a `CONTEXT-MAP.md`: name the
+  context the term belongs to, exactly as the map names it. A task that changes
+  behaviour across contexts leaves a term in each one, never all of them in one.
+  Leave it empty when the product has a single `CONTEXT.md`.
 </Output>

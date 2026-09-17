@@ -61,6 +61,13 @@ class GlossaryTerm(BaseModel):
     term: str
     definition: str = Field(description="One to three sentences")
     avoid: str = Field(description="Comma-separated words not to use for it; may be empty")
+    # A term belongs to a bounded context, not to a file: a task that changes behaviour
+    # across modules leaves terms in each of their glossaries (issue #45).
+    context: str = Field(
+        default="",
+        description="For a product with a CONTEXT-MAP.md, the context this term belongs "
+        "to, as the map names it. Empty for a product with a single CONTEXT.md",
+    )
 
 
 class Verdict(RoleOutput):

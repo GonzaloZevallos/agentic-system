@@ -43,6 +43,51 @@ y que dos productos no se mezclen. Acá el producto *es* el sistema, y su histor
 del repo, así que lo que había que proteger no era el repo sino el código en ejecución. La
 adenda está en ADR-0002.
 
+## Qué recibe un rol que trabaja sobre el sistema (issue #45)
+
+El sistema espera del producto una forma fija (README §8) y este repo no la tenía. Lo que se
+decidió, con lo que quedó en default **dicho y no omitido**:
+
+- **`.agentic/stack.yaml`**: los tres comandos que corre CI, no una aproximación (`uv run
+  pytest -m "not llm"`, `uv run ruff check .`, `uv run ruff format --check .`). `uv sync
+  --locked` no entra: prepara el entorno en vez de juzgar el código, y el stack todavía no
+  tiene clave para eso (#37, #38).
+- **Glosario**: el adaptador aprende a seguir `CONTEXT-MAP.md`, en vez de que este repo
+  agregue un `CONTEXT.md` de raíz. Un glosario de raíz sería un duplicado de 4.600 palabras
+  mantenido a mano y sin dueño, y el adaptador sirve a cualquier producto multi-módulo. El
+  mapa va primero en lo que el rol recibe: su sección *Relationships* dice qué contexto
+  conoce a cuál, y eso no está en ningún `CONTEXT.md`.
+- **Un término pertenece a un contexto, no a un archivo.** `GlossaryTerm` suma `context`, y
+  una destilación escribe en tantos glosarios como módulos tocó la tarea. Una tarea que
+  cambia comportamiento entre módulos deja términos en cada uno, nunca todos en uno solo; sin
+  el campo, el sistema tendría que elegir un archivo por su cuenta y se equivocaría en
+  silencio. El mapa nombra sus contextos y ése es el nombre que PM usa (el del directorio
+  también resuelve). Un contexto que el mapa no conoce, o un término sin contexto en un
+  producto mapeado, son errores **del chequeo de la salida de PM**, no de la escritura:
+  `run_role` convierte un `ValueError` del chequeo en un intento fallido y reintenta con el
+  motivo como entrada, mientras que fallar al escribir mataría la corrida después de haber
+  pagado a PM. Y el mapa no puede enlazar fuera del producto: vive en el checkout que un rol
+  edita, así que un enlace relativo sería una forma de escribir fuera de su propio worktree.
+- **Una reescritura conserva las líneas que no le pertenecen.** Quien escribe una definición
+  no es dueño de toda la entrada: `_Avoid_` sí lo es, `_Campo_` (ADR-0018) y lo que un
+  producto agregue no. Sin esto, la primera vez que PM tocara un término de este repo le
+  borraría su línea `_Campo_` sin decir nada.
+- **`docs/product/` queda vacío.** El README son 10.800 palabras de estado de diseño para
+  humanos, y lo que un Developer necesita para tocar código está en `roles.py` y `rules.py`,
+  que puede leer con sus tools. Además el camino de platform enhancement no tiene PM, así que
+  lo que se escribiera ahí no tendría quién lo destile y envejecería sin dueño desde el día
+  uno. Si la primera corrida (#48) se estrella por falta de contexto, ese es el hallazgo que
+  decide entre escribir capacidades a mano o destilar el README, con evidencia.
+- **`CODING_STANDARDS.md`: el default del sistema** (ADR-0012). Describe bien lo que este
+  repo ya hace, y una copia propia serían 53 líneas duplicadas para cambiar cero.
+- **`.agentic/flags.yaml`: el default.** Platform enhancement no usa flags.
+
+**El número que hay que mirar en la primera corrida**: con todo esto, un rol de producto
+recibe unas **24 mil palabras**, unos 31 mil tokens, en cada llamada, y el número crece con
+cada ADR. Casi todo son los 19 ADRs, que `read()` manda enteros y siempre. No se toca ahora, porque elegir qué ADR importa para
+qué tarea es generalizar sobre cero ejemplos, pero es lo que más probablemente haga cara la
+corrida recursiva y conviene medirlo antes de culpar a otra cosa.
+
 ## Opciones descartadas
 
 - **Un clon aparte del sistema como "el producto"**: duplica el estado y el aislamiento ya

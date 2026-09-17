@@ -84,7 +84,9 @@ async def test_validate_approval_consolidates_into_the_knowledge(cfg):
     assert patch["status"] == "definition_ready"
     assert patch["flags"] == {"touches_ui": True, "touches_copy": False}  # PM replaces PA's set
     assert ports.knowledge.definitions == {"reports": REPORTS}
-    assert ports.knowledge.terms == {"Report": {"definition": "A CSV.", "avoid": "export"}}
+    assert ports.knowledge.terms == {
+        "Report": {"definition": "A CSV.", "avoid": "export", "context": ""}
+    }
     assert ports.runner.calls[0]["model"] == "claude-opus-5"
     assert "You have 2 left" in ports.runner.calls[0]["system_prompt"]
 

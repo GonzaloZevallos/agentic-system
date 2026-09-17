@@ -23,16 +23,35 @@ class FilesystemKnowledge:
     def glossary_path(self) -> Path:
         return self.product_dir / knowledge.GLOSSARY
 
+    def contexts(self, root: Path | None = None) -> dict[str, str]:
+        """The product's bounded contexts, by name, empty when it holds one glossary."""
+        text = _read((root or self.product_dir) / knowledge.CONTEXT_MAP)
+        return knowledge.contexts(text) if text is not None else {}
+
+    def _glossaries(self, root: Path) -> dict[str, str]:
+        """Path -> text of every glossary a role reads. A mapped product sends the map
+        first: its relationships say which context may know which, and they live
+        nowhere else (issue #45)."""
+        if not (contexts := self.contexts(root)):
+            text = _read(root / knowledge.GLOSSARY)
+            return {knowledge.GLOSSARY: text} if text is not None else {}
+        found = {knowledge.CONTEXT_MAP: _read(root / knowledge.CONTEXT_MAP)}
+        found |= {path: _read(root / path) for path in contexts.values()}
+        return {path: text for path, text in found.items() if text is not None}
+
     def approval_check(self, task_type: str) -> Callable[[dict], None]:
-        return knowledge.approval_check(task_type)
+        # The contexts go into the check, not into the write: `run_role` turns a
+        # `ValueError` here into a failed attempt and retries with the reason as
+        # input, while a raise at write time would kill the run after PM was paid.
+        return knowledge.approval_check(task_type, self.contexts())
 
     def clarification_check(self) -> Callable[[dict], None]:
-        return knowledge.clarification_check
+        return knowledge.clarification_check(self.contexts())
 
     def read(self, root: Path | None = None) -> str:
         root = root or self.product_dir
         return knowledge.assemble(
-            _read(root / knowledge.GLOSSARY),
+            self._glossaries(root),
             _read_dir(root / knowledge.PRODUCT_SUBDIR),
             _read_dir(root / knowledge.ADR_SUBDIR),
         )
@@ -60,10 +79,12 @@ class FilesystemKnowledge:
         return list(writes)
 
     def upsert_terms(self, terms: dict[str, dict[str, str]]) -> Path | None:
-        """Returns the glossary path, or None when there was nothing to write."""
+        """Returns the glossary path written, or None when there was nothing to write.
+        A mapped product may write several; the last one is returned, and the caller
+        that cares reads `contexts` itself."""
         writes = self._glossary(terms, self.product_dir)
         _write_all(writes)
-        return self.glossary_path if writes else None
+        return list(writes)[-1] if writes else None
 
     def _definitions(self, definitions: dict[str, str], root: Path) -> dict[Path, str]:
         for slug in definitions:
@@ -74,11 +95,26 @@ class FilesystemKnowledge:
         }
 
     def _glossary(self, terms: dict[str, dict[str, str]], root: Path) -> dict[Path, str]:
+        """One write per bounded context the terms belong to. A term belongs to a
+        context, not to a file: a task that changes behaviour across modules leaves
+        terms in each of their glossaries, never all in one (issue #45)."""
         if not terms:
             return {}
-        glossary = root / knowledge.GLOSSARY
-        text = knowledge.upsert_terms(_read(glossary), terms, self.product_dir.name)
-        return {glossary: text}
+        name = self.product_dir.name  # the product's, never the task checkout's
+        if not (contexts := self.contexts(root)):
+            glossary = root / knowledge.GLOSSARY
+            return {glossary: knowledge.upsert_terms(_read(glossary), terms, name)}
+        # The check already refused a term without a context or with an unknown one
+        # (`approval_check`); this is the same rule at the only other way in.
+        knowledge.check_contexts([{**e, "term": t} for t, e in terms.items()], contexts)
+        by_path: dict[Path, dict[str, dict[str, str]]] = {}
+        for term, entry in terms.items():
+            path = root / knowledge.context_path(entry["context"].strip(), contexts)
+            by_path.setdefault(path, {})[term] = entry
+        return {
+            path: knowledge.upsert_terms(_read(path), found, name)
+            for path, found in by_path.items()
+        }
 
 
 def _read(path: Path) -> str | None:
