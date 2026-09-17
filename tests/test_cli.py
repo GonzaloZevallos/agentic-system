@@ -361,3 +361,28 @@ def test_a_product_without_setup_is_warned_and_the_run_goes_on(monkeypatch, tmp_
     cli.main()
     assert "declares no `setup`" in capsys.readouterr().err
     assert seen["task"]["title"] == "t"
+
+
+def test_a_resume_checks_the_stack_at_the_tasks_base_not_only_at_head(
+    monkeypatch, tmp_path, capsys
+):
+    """A task whose branch started before the product declared a stack would pass the
+    check at HEAD and then die inside a node, where nothing escalates."""
+    root = product(tmp_path, "p", stack=None)
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*git, "branch", "agentic/GH-9"], cwd=root, check=True)
+    base = subprocess.run(
+        [*git, "rev-parse", "--short", "agentic/GH-9"], cwd=root, capture_output=True, text=True
+    ).stdout.strip()
+    subprocess.run([*git, "config", "branch.agentic/GH-9.agenticBase", base], cwd=root, check=True)
+    (root / ".agentic/stack.yaml").write_text("checks:\n  tests: pytest\n")
+    subprocess.run([*git, "add", "-A"], cwd=root, check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "stack"], cwd=root, check=True)
+
+    monkeypatch.setattr(
+        "sys.argv", ["agentic", "resume", "--issue", "9", "--product-dir", str(root)]
+    )
+    with pytest.raises(SystemExit) as info:
+        cli.main()
+    assert info.value.code == 2
+    assert "declares no stack" in capsys.readouterr().err

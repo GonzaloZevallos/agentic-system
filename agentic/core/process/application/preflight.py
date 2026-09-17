@@ -7,6 +7,7 @@ from agentic.shared.configuration import Configuration
 from agentic.shared.stage0 import CHECKOUT
 
 from ..domain.roles import ROLES
+from .checkouts import task_base
 from .ports import Ports
 from .run_role import load_prompt
 
@@ -42,16 +43,24 @@ def preflight(cfg: Configuration, ports: Ports) -> None:
         load_prompt(role, cfg, ports, vocabulary, **PLACEHOLDERS)
 
 
-def declared_stack(ports: Ports) -> dict[str, str]:
-    """The product's setup as its HEAD declares it, having read the whole file.
+def declared_stack(ports: Ports, revision: str = "HEAD") -> dict[str, str]:
+    """The product's setup as `revision` declares it, having read the whole file.
 
-    Read at HEAD and not at a task's base: the base of the next task to start is this
-    commit, and at preflight there is no task yet. A run whose task branch already
-    exists is measured against its own base later, which can only be a commit that
-    passed through here. Both keys are loaded, so a broken `setup` fails now and not
-    when a worktree is born halfway through the run (issues #36, #37)."""
-    ports.stack.checks("HEAD")
-    return ports.stack.setup("HEAD")
+    HEAD by default, the commit a task starting now would be measured against; there is
+    no task yet at preflight. Both keys are loaded, so a broken `setup` fails here and
+    not when a worktree is born halfway through the run (issues #36, #37)."""
+    ports.stack.checks(revision)
+    return ports.stack.setup(revision)
+
+
+def declared_stack_of(task_id: str, ports: Ports) -> None:
+    """The stack at the base of a task already under way, for a resume.
+
+    HEAD is not enough here: a task whose branch started before the product declared a
+    stack passes the check at HEAD and then dies inside a node, where nothing turns an
+    infrastructure error into an escalation. Cheap and worth it: the base is the commit
+    that run will actually be measured against (ADR-0016, addendum)."""
+    declared_stack(ports, task_base({"id": task_id}, ports))
 
 
 def no_setup(ports: Ports) -> str | None:
