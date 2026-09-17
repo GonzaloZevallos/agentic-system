@@ -18,14 +18,17 @@ from agentic.shared.configuration import Configuration
 from ..domain import schemas
 from ..domain.roles import INTERVIEW_SOLUTION, TECH_LEAD
 from ..domain.task import Subtask, TaskState, apply
-from .checkouts import task_checkout
+from .checkouts import SetupFailed, task_checkout
 from .interview import interview
 from .ports import Ports
 from .run_role import finish, run_role
 
 
 async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
-    task = task_checkout(state, cfg, ports)
+    try:
+        task = task_checkout(state, cfg, ports)
+    except SetupFailed as unprepared:
+        return finish(state, unprepared.patch(TECH_LEAD), ports)
     transcript, patch = await interview(state, INTERVIEW_SOLUTION, cfg, ports, cwd=task.path)
     ports.workspace.commit_all(task.path, f"{state['id']}: solution interview")
     if transcript is None:

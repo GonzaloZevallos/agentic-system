@@ -56,6 +56,13 @@ def refused(reason: str, count: int) -> str:
     return f"The presubmit refused this delivery ({count} of {REFUSALS}): {reason}"
 
 
+def said(output: str, timed_out: bool, timeout_s: float) -> str:
+    """What a product's command said, with the note that makes an empty output legible:
+    a killed process often drains nothing, so without this the human reads a blank block
+    and no reason for it."""
+    return f"{output}\n(timed out after {timeout_s:.0f} s)" if timed_out else output
+
+
 def tail(output: str, lines: int = TAIL_LINES) -> str:
     return "\n".join(output.rstrip("\n").splitlines()[-lines:])
 

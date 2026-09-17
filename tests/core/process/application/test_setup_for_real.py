@@ -89,3 +89,29 @@ def test_the_setup_comes_from_the_tasks_base_not_from_the_branch(real, product):
     domain = subtask_checkout(STATE, "domain", cfg, ports)
     assert (domain.path / "prepared.txt").exists()
     assert not (domain.path / "later.txt").exists()
+
+
+def test_a_worktree_whose_setup_failed_is_gone_and_the_branch_stays(real, product):
+    """git leaves the worktree where it is when a command fails in it, so nothing but
+    this would ever prepare it again."""
+    cfg, ports = real
+    (product / ".agentic/stack.yaml").write_text("setup:\n  mark: exit 3\nchecks:\n  t: pytest\n")
+    git("commit", "-qam", "break the setup", cwd=product)
+
+    with pytest.raises(SetupFailed):
+        subtask_checkout(STATE, "api", cfg, ports)
+
+    # The task's checkout is the first one made, so it is the one that fails here.
+    assert not (product / ".agentic/worktrees/GH-37").exists()
+    assert "agentic/GH-37" in git("branch", "--list", "agentic/GH-37", cwd=product)
+    assert "GH-37" not in git("worktree", "list", cwd=product)
+
+
+def test_the_task_worktree_git_makes_on_the_way_is_prepared_too(real, product):
+    """`GitWorkspace.subtask_checkout` makes the task's worktree to branch off it and
+    throws the `Checkout` away: without asking for it first, it is the one worktree
+    nobody ever prepares."""
+    cfg, ports = real
+    assert not (product / ".agentic/worktrees/GH-37").exists()
+    subtask_checkout(STATE, "api", cfg, ports)
+    assert (product / ".agentic/worktrees/GH-37/prepared.txt").exists()

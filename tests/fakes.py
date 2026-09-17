@@ -207,6 +207,9 @@ class MemoryWorkspace:
         self._looks: dict[Path, int] = {}
         self.branches: dict[str, tuple[str, str]] = {}
         self.checkouts: list[Path] = []
+        # The worktrees this fake has made, as a real one has them on disk.
+        self.on_disk: set[Path] = set()
+        self.discarded: list[Path] = []
         # Every checkout asked for, in order: real ones take a lock on the same `.git`,
         # so who asks and when is what the fan-in exists to keep serial.
         self.checkouts_made: list[str] = []
@@ -224,10 +227,16 @@ class MemoryWorkspace:
         return self._made(branch, self.ROOT / f"{task_id}.{subtask_id}", "base1")
 
     def _made(self, branch: str, path: Path, base: str) -> Checkout:
-        # As the real one: only the first ask made it, so the setup runs once.
-        created = branch not in self.checkouts_made
+        # As the real one: only the ask that made the worktree says so, so the setup
+        # runs once, and a discarded one is made again.
+        created = path not in self.on_disk
         self.checkouts_made.append(branch)
+        self.on_disk.add(path)
         return Checkout(branch, path, base, created=created)
+
+    def discard(self, path: Path) -> None:
+        self.discarded.append(path)
+        self.on_disk.discard(path)
 
     def head(self, path: Path) -> str:
         # A path in `moved` advances on every look, as a branch someone commits to.

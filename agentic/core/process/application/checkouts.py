@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import rules
+from ..domain import presubmit, rules
 from ..domain.roles import Role
 from ..domain.task import INTEGRATION, TaskState
 from .ports import Checkout, Ports
@@ -48,9 +48,13 @@ def task_checkout(state: TaskState, cfg: Configuration, ports: Ports) -> Checkou
 def subtask_checkout(
     state: TaskState, subtask_id: str, cfg: Configuration, ports: Ports
 ) -> Checkout:
+    # The task's checkout first, always: a subtask branches off the task branch, so the
+    # workspace makes that one on the way whether or not this call wanted it, and a
+    # worktree nobody asked for is a worktree nobody prepares.
+    task = task_checkout(state, cfg, ports)
     real = [sid for sid in state.get("subtasks", {}) if sid != INTEGRATION]
     if subtask_id == INTEGRATION or len(real) == 1:
-        return task_checkout(state, cfg, ports)
+        return task
     made = ports.workspace.subtask_checkout(state["id"], subtask_id)
     return _prepared(made, state, cfg, ports)
 
@@ -58,11 +62,18 @@ def subtask_checkout(
 def _prepared(checkout: Checkout, state: TaskState, cfg: Configuration, ports: Ports) -> Checkout:
     """The checkout with the product's setup run in it, when this call is the one that
     made it. Asking again gets the one that exists: a subtask that adds a dependency
-    installs it in its own environment, and that is its own work, not the system's."""
+    installs it in its own environment, and that is its own work, not the system's.
+
+    A checkout whose setup failed is discarded, branch and commits untouched. Otherwise
+    it would sit there half built and every later ask would report it as existing, so
+    the resume the escalation asks for would run roles in the very environment the human
+    was told to fix."""
     if not checkout.created:
         return checkout
     for step, command in ports.stack.setup(task_base(state, ports)).items():
         result = ports.commands.run(checkout.path, command, cfg.check_timeout_s)
         if not result.passed:
-            raise SetupFailed(checkout.branch, step, command, result.output)
+            ports.workspace.discard(checkout.path)
+            said = presubmit.said(result.output, result.timed_out, cfg.check_timeout_s)
+            raise SetupFailed(checkout.branch, step, command, said)
     return checkout

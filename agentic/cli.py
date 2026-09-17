@@ -137,6 +137,11 @@ def main() -> None:
                     "title": args.title,
                     "description": args.description,
                 }
+            # A task that already has a branch is measured against its own base, which
+            # may predate the day this product declared a stack: HEAD alone would let it
+            # through and it would die inside a node, where nothing escalates. A task
+            # with no branch answers HEAD here, already checked.
+            declared_stack_of(task["id"], ports)
             work = partial(_run, task, cfg, ports, args.fresh)
     except (MissingProductDir, ValueError, OSError) as exc:
         parser.exit(2, f"agentic: {exc}\n")

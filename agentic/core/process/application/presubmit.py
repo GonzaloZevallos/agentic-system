@@ -71,7 +71,5 @@ class CheckoutPresubmit:
 
     def _run(self, name: str, command: str) -> CheckResult:
         result = self.ports.commands.run(self.path, command, self.check_timeout_s)
-        output = result.output
-        if result.timed_out:
-            output = f"{output}\n(timed out after {self.check_timeout_s:.0f} s)"
+        output = presubmit.said(result.output, result.timed_out, self.check_timeout_s)
         return {"name": name, "command": command, "passed": result.passed, "output": output}

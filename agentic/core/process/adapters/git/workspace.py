@@ -136,6 +136,10 @@ class GitWorkspace:
                 self._git("worktree", "remove", "--force", str(path))
         self._git("worktree", "prune")
 
+    def discard(self, path: Path) -> None:
+        self._git("worktree", "remove", "--force", str(path))
+        self._git("worktree", "prune")
+
     def branch_head(self, branch: str) -> str | None:
         if not self._branch_exists(branch):
             return None

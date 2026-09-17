@@ -232,6 +232,11 @@ class Workspace(Protocol):
         """Remove the task's worktrees. The branches stay."""
         ...
 
+    def discard(self, path: Path) -> None:
+        """Remove one checkout, so asking for it again makes it anew. The branch stays,
+        and so does whatever was committed on it."""
+        ...
+
     def branch_head(self, branch: str) -> str | None:
         """The short commit `branch` points at; None when the branch does not exist."""
         ...

@@ -10,9 +10,9 @@ from __future__ import annotations
 from agentic.shared.configuration import Configuration
 
 from ..domain import document
-from ..domain.roles import PJM, PM, TECH_LEAD
+from ..domain.roles import DEVELOPER_INTEGRATOR, PJM, PM, TECH_LEAD
 from ..domain.task import TaskState
-from .checkouts import task_checkout
+from .checkouts import SetupFailed, task_checkout
 from .ports import Ports
 from .run_role import finish
 
@@ -21,7 +21,10 @@ READY = "Ready for review: "
 
 
 async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
-    task = task_checkout(state, cfg, ports)
+    try:
+        task = task_checkout(state, cfg, ports)
+    except SetupFailed as unprepared:
+        return finish(state, unprepared.patch(DEVELOPER_INTEGRATOR), ports)
     ports.workspace.push(task.branch)
     url = ports.tracker.open_pull_request(state["id"], task.branch, state["title"], _body(state))
     ports.tracker.comment(

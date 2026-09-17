@@ -8,6 +8,7 @@ import pytest
 
 from agentic.core.process.application.checkouts import SetupFailed, subtask_checkout, task_checkout
 from agentic.core.process.application.define import define
+from agentic.core.process.application.deliver import deliver
 from agentic.core.process.application.develop import develop
 from agentic.core.process.application.integrate import integrate
 from agentic.core.process.application.ports import CommandResult
@@ -83,7 +84,11 @@ def test_every_worktree_of_a_wave_is_prepared_not_only_the_task_one(cfg):
     ports = ports_with()
     api = subtask_checkout(state, "api", cfg, ports)
     domain = subtask_checkout(state, "domain", cfg, ports)
+    # The task's checkout too: the workspace makes it on the way to a subtask's, so it
+    # would otherwise be the one worktree nobody ever prepares.
     assert ports.commands.ran == [
+        (TASK_PATH, "uv venv"),
+        (TASK_PATH, "uv sync --locked"),
         (api.path, "uv venv"),
         (api.path, "uv sync --locked"),
         (domain.path, "uv venv"),
@@ -147,3 +152,42 @@ async def test_the_developer_works_in_a_checkout_the_fan_in_already_prepared(cfg
     await develop({**state, "subtask_id": "api"}, cfg, ports)
 
     assert [command for _, command in ports.commands.ran] == ["pytest"]  # the check, no setup
+
+
+def test_a_checkout_whose_setup_failed_is_discarded_so_the_resume_makes_it_again(cfg):
+    """Otherwise it sits there half built, every later ask reports it as existing, and
+    the resume the escalation asks for runs roles in the environment the human fixed."""
+    commands = MemoryCommands(**{"uv sync --locked": [CommandResult(1, "no lockfile")]})
+    ports = ports_with(commands=commands)
+
+    with pytest.raises(SetupFailed):
+        task_checkout(TASK, cfg, ports)
+    assert ports.workspace.discarded == [TASK_PATH]
+
+    # The human fixes the product and resumes: the checkout is made and prepared anew.
+    ports.commands.ran.clear()
+    task_checkout(TASK, cfg, ports)
+    assert ports.commands.ran == [(TASK_PATH, "uv venv"), (TASK_PATH, "uv sync --locked")]
+
+
+def test_a_setup_that_times_out_says_so(cfg):
+    """A killed process often drains nothing: without the note the human reads a blank
+    block and no reason for it."""
+    commands = MemoryCommands(**{"uv venv": [CommandResult(-9, "", timed_out=True)]})
+    ports = ports_with(commands=commands)
+    with pytest.raises(SetupFailed) as failure:
+        task_checkout(TASK, cfg, ports)
+    assert "timed out after 600 s" in failure.value.output
+
+
+async def test_a_setup_that_fails_outside_the_fan_in_still_reaches_the_human(cfg):
+    """`deliver` runs after `cleanup` removed the worktrees, so it can be the call that
+    makes one: a crash there would lose the run instead of escalating."""
+    commands = MemoryCommands(**{"uv venv": [CommandResult(1, "no python")]})
+    ports = ports_with(commands=commands)
+
+    patch = await deliver({**TASK, "subtasks": {"api": sub("api", "approved")}}, cfg, ports)
+
+    assert patch["status"] == WAITING_ON_HUMAN
+    assert "'venv' failed" in patch["escalated"]
+    assert ports.workspace.pushed == []  # nothing was delivered
