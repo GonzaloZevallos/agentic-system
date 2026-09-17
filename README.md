@@ -614,11 +614,17 @@ adaptador se extrae cuando aparezca el segundo producto, que ya apareció: es el
 hexagonal (ADR-0007) no son ese adaptador: los define lo que el sistema necesita, tienen
 una sola implementación sobre este directorio, y este sigue siendo el único parámetro.
 
-**Repositorios separados** (ADR-0002, adenda). Cada producto vive en su repo, y la regla
+**Repositorios separados** (ADR-0002, adendas). Cada producto vive en su repo, y la regla
 no es que el sistema no escriba en el suyo sino que **nunca escribe en el checkout desde el
 que corre**. La corrida la ejecuta `stage0`, un checkout aparte fijado a un sha; lo que se
 edita y lo que se ejecuta son dos copias. Lo que hay que congelar durante una corrida es el
 código que la ejecuta, y eso es un checkout, no un repositorio.
+
+Se dice sobre el checkout y **se cobra sobre el repositorio** (ADR-0002, segunda adenda): dos
+checkouts de un mismo repo comparten `.git`, así que la rama de tarea y los worktrees de un
+producto que fuera un worktree de stage0 nacerían adentro del repo que ejecuta. Por eso
+stage0 es un clon, que sí es otro repositorio, y por eso el chequeo compara el
+`--git-common-dir` de los dos lados.
 
 Forma del repo del producto:
 
@@ -644,7 +650,7 @@ con la forma de arriba y cuatro diferencias (ADR-0017):
 
 | | El gimnasio | El sistema |
 |---|---|---|
-| Quién ejecuta | Cualquier checkout | Sólo `stage0`, fijado a un sha (#44) |
+| Quién ejecuta | Cualquier checkout | Sólo `stage0`, fijado a un sha: `scripts/stage0.sh`, y `preflight` rechaza el resto (§14) |
 | Tipo de tarea | feature, bug o platform enhancement | Siempre **platform enhancement** (#46): sin PM, sin flags, sin métricas de negocio |
 | Quién es el usuario | El dueño del gimnasio | El humano que escribe el issue, y el issue es el PRD |
 | Set de evaluación | Es la base de §9 | No puntúa: no tiene métricas de negocio que discutir |
@@ -862,7 +868,7 @@ imports:
 
 | Módulo | Contenido | Importa |
 |---|---|---|
-| `shared/` | `configuration.py`, `environment.py` (el entorno sin la toolchain propia) | Nada del proyecto |
+| `shared/` | `configuration.py`, `environment.py` (el entorno que se le pasa a lo que se spawnea: sin la toolchain propia y sin la configuración propia), `stage0.py` (dónde está el checkout que ejecuta) | Nada del proyecto |
 | `core/process/` | `domain/`: `roles.py` (`Role` con tools, reglas de permiso y skills; `Pair`; `Interview`; `describe_flags`) y `prompts/`, `task.py` (estado, subtareas y reducers), `document.py`, `schemas.py`, `rules.py` (límite por par, versionado por sección, la ola que despacha el fan-in, la tabla de hallazgos y los invariantes, ruteo, tope de tarea, reanudación), `presubmit.py` (qué le falta a una entrega). `application/`: `ports.py` (`RoleRunner`, `Presubmit`, `TaskDocuments`, `ProductKnowledge`, `Prompts`, `FlagVocabulary`, `ProductStack`, `Commands`, `Inbox`, `Workspace`, `Tracker`), `interview` (rondas entre dos roles, ADR-0014), `presubmit` (la puerta de entrega sobre los ports, `CheckoutPresubmit`) y `limits.py` (lo que una corrida puede hacer a la vez y gastar, compartido por las ramas) y un caso de uso por nodo: `classify`, `define`, `validate_definition`, `plan`, `develop`, `review`, `integrate` (el fan-in), `deliver`, `escalate`, sobre `run_role`, más `resume` (qué hace una reanudación antes de gastar). `adapters/`: `claude_sdk/` (harness con plugin de skills, jaula por rol con `hooks.py`, `Printer`), `shell/` (corre los chequeos del producto), `filesystem/` (documentos y overlay de prompts), `git/` (rama de tarea y árboles de trabajo, ADR-0011), `github/` (bandeja y escritura: PR, comentarios, etiquetas), `langgraph/` (el grafo: nodos, ruteo, el subgrafo `develop → review` con `Send` por subtarea y el fan-in, abre y cierra los spans; `pause` con el `interrupt()`, ADR-0003) y `telemetry.py`, el port por el que entra el tracing | `shared` |
 | `core/knowledge/` | `domain/`: `knowledge.py` (cómo se muestra, cómo se edita el glosario, qué debe traer una aprobación), `flags.py` (el vocabulario), `stack.py` (el stack del producto y sus chequeos). `adapters/filesystem/`: implementa `ProductKnowledge` y `FlagVocabulary` sobre el repo del producto; `adapters/git/`: `ProductStack`, como lo declara el commit base | `shared`, `process` |
 | `core/measurement/` | `domain/`: `metrics.py` (retrabajo, devoluciones, huella de prompts). `adapters/otel/`: spans y métricas del sistema, implementa `Telemetry` | `shared`, `process` |
@@ -1058,6 +1064,24 @@ llamada de un rol mínimo; solo muerde en una cuenta con conectores.
 roles es ruido ahora), pytest, GitHub Actions corriendo ruff y pytest en cada PR,
 `langgraph.json` para `langgraph dev` y Studio, `.env.example`. El grafo se exporta sin
 compilar desde `agentic.composition`, el composition root; la CLI lo compila con el checkpointer.
+
+`scripts/stage0.sh <ref> [dir]` crea o actualiza **stage0**, el checkout desde el que corre
+el sistema, fijado a un sha y con su propio entorno (`~/.agentic-stage0` por default).
+Actualizarlo es un acto explícito: nombrás el commit. Es un clon y no un `git worktree`,
+que compartiría el repositorio con el checkout que se está editando. El sistema se niega a
+arrancar cuando el producto está en el mismo repositorio que el paquete que corre —compara
+el `--git-common-dir` de los dos lados, así que un worktree del propio repo también cae— y
+el mensaje dice qué usar y cómo crearlo. La regla vive en `preflight`, la puerta de arranque,
+y la pregunta también `default_ports`, porque el grafo se invoca sin la CLI desde `langgraph
+dev`, Studio y la API. Falla antes de gastar un peso. Un stage0 con cambios sin commitear no
+se rechaza, se avisa: la corrida sale `+dirty` y no compara contra nada, pero no está mal.
+Corriendo desde stage0, `system_version()` da el sha de stage0, limpio, con el producto en
+cualquier estado.
+
+El sistema tampoco le pasa su propia configuración a lo que spawnea: las `AGENTIC_*` del
+humano se le sacan a los chequeos del producto y se le anulan a los roles
+(`shared/environment.py`). Con el sistema como producto, sus chequeos leen esas mismas
+variables, y un `AGENTIC_PRODUCT_DIR` heredado habla de la corrida de afuera.
 
 ### Evaluación
 

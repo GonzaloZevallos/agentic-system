@@ -44,6 +44,29 @@ class GitWorkspace:
         self.product_dir = product_dir
         self.identity = dict(identity)
 
+    # -- the repository ---------------------------------------------------------
+
+    def repository_at(self, path: Path) -> Path | None:
+        # `-C` and not `cwd=path`: a directory that is not there would raise out of
+        # Popen instead of coming back as a failed command, and "is it a repository"
+        # has to answer for a path that may not exist at all.
+        # Absolute before anything: `-C` is read from the process's directory, and so
+        # would a relative answer be, which are not the same place.
+        target = path.resolve()
+        try:
+            result = self._run("-C", str(target), "rev-parse", "--git-common-dir")
+        except OSError:
+            # No git on the machine, or a `product_dir` that is not there: both are "no
+            # repository" and neither is this question's to report. `default_ports` asks
+            # it on every path now, so raising here would crash the composition root
+            # before the caller ever gets to say what is actually wrong.
+            return None
+        if result.returncode != 0:
+            return None
+        common = Path(result.stdout.strip())
+        # git answers relative to the checkout when the command ran inside it.
+        return common if common.is_absolute() else (target / common).resolve()
+
     # -- checkouts --------------------------------------------------------------
 
     def task_checkout(self, task_id: str) -> Checkout:
@@ -76,6 +99,10 @@ class GitWorkspace:
 
     def is_clean(self, path: Path) -> bool:
         return not self._git("status", "--porcelain", cwd=path)
+
+    def is_committed(self, path: Path) -> bool:
+        # The same flags `system_version` uses, so the two never disagree about a tree.
+        return not self._git("status", "--porcelain", "--untracked-files=no", cwd=path)
 
     def merge(self, path: Path, branch: str) -> str | None:
         """A conflict is not an error of the system: the merge is undone so the

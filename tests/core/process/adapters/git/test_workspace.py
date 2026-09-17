@@ -176,3 +176,54 @@ def test_a_merge_that_applies_returns_nothing_and_one_that_conflicts_says_why(pr
     assert ws.is_clean(task.path)
     assert (task.path / "api.py").read_text() == "get\n"
     assert git("rev-parse", "--abbrev-ref", "HEAD", cwd=task.path) == "agentic/GH-12"
+
+
+# -- the repository ------------------------------------------------------------------
+
+
+def test_a_worktree_answers_the_repository_it_was_made_from(product):
+    """Two directories, one repository: comparing paths would call them different, and
+    running the system over a worktree of its own repo is the same mistake as running it
+    over the repo (`preflight`; ADR-0017)."""
+    ws = GitWorkspace(product, IDENTITY)
+    worktree = ws.task_checkout("GH-44").path
+    assert worktree != product
+    assert ws.repository_at(worktree) == ws.repository_at(product) == (product / ".git").resolve()
+
+
+def test_a_relative_path_is_read_from_here_not_from_the_product(product, monkeypatch):
+    monkeypatch.chdir(product.parent)
+    ws = GitWorkspace(product, IDENTITY)
+    assert ws.repository_at(Path(product.name)) == (product / ".git").resolve()
+
+
+def test_outside_a_repository_there_is_none(product, tmp_path):
+    ws = GitWorkspace(product, IDENTITY)
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert ws.repository_at(plain) is None
+    assert ws.repository_at(tmp_path / "not-there") is None
+
+
+def test_without_git_there_is_no_repository_and_no_crash(product, monkeypatch):
+    """`default_ports` asks this on every path now, so a machine without git, or a
+    `product_dir` that is not there, has to answer "no repository" and not explode
+    inside the composition root."""
+    ws = GitWorkspace(product, IDENTITY)
+    monkeypatch.setattr(ws, "_run", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError("git")))
+    assert ws.repository_at(product) is None
+
+
+def test_a_product_directory_that_is_not_there_is_no_repository(tmp_path):
+    ws = GitWorkspace(tmp_path / "gone", IDENTITY)
+    assert ws.repository_at(tmp_path / "also-gone") is None
+
+
+def test_an_untracked_file_leaves_the_tree_committed_but_not_clean(product):
+    ws = GitWorkspace(product, IDENTITY)
+    assert ws.is_clean(product) and ws.is_committed(product)
+    (product / "scratch.log").write_text("noise\n")
+    assert not ws.is_clean(product)
+    assert ws.is_committed(product)  # what `system_version` asks: no `+dirty`
+    (product / "README.md").write_text("edited\n")
+    assert not ws.is_committed(product)

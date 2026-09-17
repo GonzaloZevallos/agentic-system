@@ -145,6 +145,12 @@ En el código se llama `Presubmit`, el port, y `CheckoutPresubmit`, la implement
 _Avoid_: gate, validación, hook (el mecanismo, no el concepto)
 _Campo_: presubmit check — Software Engineering at Google, cap. 20: "an analysis that blocks committing a pending code change". required status check en GitHub, gated commit en Azure DevOps, admission control (validating, no mutating) en Kubernetes
 
+**Puerta de arranque**:
+Lo que el sistema mira antes de gastar un peso, cuando una corrida arranca: que el producto no esté en el repositorio desde el que corre el sistema, que el vocabulario de flags cargue y que el prompt de cada rol renderice. Cualquiera de las tres que falle corta ahí con el motivo, y cortar no cuesta nada. Un aviso no es un rechazo: un stage0 con cambios sin commitear se dice y la corrida sigue, porque la deja incomparable pero no equivocada.
+En el código se llama `preflight`, y el rechazo por el repositorio propio lo pregunta también el composition root: el grafo se puede invocar sin pasar por la CLI.
+_Avoid_: validación, preflight (el nombre en el código, no el concepto)
+_Campo_: preflight check — de aviación, vía CI/CD (Helm y los operadores de Kubernetes lo usan así). El "preflight request" de CORS es otra cosa
+
 **Revisión**:
 Pase de Tech Lead sobre la entrega de una subtarea o de la pieza integrada, con hallazgos y un veredicto que se deriva de ellos: aprobada o devuelta. Una subtarea tiene tantas revisiones como pases recibió.
 _Avoid_: review, code review (el nombre de la skill, no del pase)
@@ -280,6 +286,11 @@ _Campo_: sin término de arte
 **Contexto de producto**:
 La raíz del repo del producto, que el sistema recibe como parámetro. Ahí está todo lo que varía por producto: el código, los ADRs y `.agentic/`.
 _Campo_: workspace root — de las herramientas de desarrollo; `cwd` en el Claude Agent SDK
+
+**Checkout**:
+Una copia de trabajo de un repo en el disco, con su rama y su árbol: un clon o un `git worktree`. Dos checkouts de un mismo repositorio son directorios distintos que comparten `.git`, o sea las mismas ramas, los mismos objetos y el mismo índice de worktrees. Por eso la regla de que el sistema nunca escribe donde corre se cobra por **repositorio** y no por directorio: escribir en un worktree del repo de stage0 es escribir en el repo que está ejecutando la corrida, aunque el directorio sea otro.
+_Avoid_: copia, working directory, repo (el repo es uno; los checkouts, varios)
+_Campo_: working tree — git, que llama "checkout" tanto al acto como al resultado
 
 **Stage0**:
 La copia del sistema, fijada a un sha, que ejecuta una corrida. No es la que se está editando: el sistema que corre y el que se modifica son dos, aunque el repo sea el mismo. Por analogía con el bootstrapping de un compilador, **stage1** es el sistema nuevo corrido por el viejo y **stage2** el sistema nuevo corrido por sí mismo; la prueba de que salió bien no es un número sino que stage3 dé idéntico a stage2.

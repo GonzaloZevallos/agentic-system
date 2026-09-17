@@ -38,3 +38,31 @@ es un checkout, no un repositorio.
 
 La tercera consecuencia de arriba se cumple con esto: el adaptador entre sistema y producto
 se extrae cuando aparezca el segundo producto, y el segundo producto apareció.
+
+## Adenda (2026-09-17): "checkout" se dice, "repositorio" se cobra
+
+La adenda de arriba dejó la regla escrita sobre el checkout, y al implementarla (#44) quedó
+claro que así escrita permite el caso que hay que prohibir. Leída al pie de la letra, un
+`git worktree` del repo de stage0 es *otro* checkout, así que correr una corrida sobre él
+no la violaría. Y sí la viola: dos checkouts de un mismo repositorio comparten `.git`, o sea
+las mismas ramas, los mismos objetos y el mismo índice de worktrees. Una corrida crea la
+rama `agentic/<tarea>` y un worktree por subtarea; si el producto es un worktree del repo de
+stage0, todo eso nace adentro del repositorio que está ejecutando la corrida, y el `git -C
+stage0` con que `system_version()` saca el sha lee un HEAD que vive en ese mismo `.git`.
+
+La regla que se cobra es entonces la más fuerte: **el sistema nunca escribe en el
+repositorio desde el que corre.** "Checkout" sigue siendo la palabra con que se dice, porque
+nombra la copia que ejecuta y es lo que hay que congelar; "repositorio" es la unidad con que
+se verifica, porque es donde el daño ocurre. El chequeo compara el `git rev-parse
+--git-common-dir` de los dos lados y no la ruta de texto, que es lo que hace que un worktree
+caiga.
+
+Esto es también lo que obliga a que stage0 sea un **clon** y no un `git worktree`: un clon
+tiene su propio `.git`, sus propios objetos y sus propias ramas, así que es un repositorio
+distinto aunque venga del mismo origen y comparta la historia. Un worktree no, y por eso
+`scripts/stage0.sh` clona.
+
+Lo que la regla no prohíbe, y conviene decirlo porque se parece: que el humano edite el
+checkout del producto mientras una corrida trabaja sobre ese mismo repositorio. Ese es el
+caso normal del sistema desarrollándose a sí mismo. Lo prohibido es que el repositorio del
+producto sea el que ejecuta, no que alguien lo toque.

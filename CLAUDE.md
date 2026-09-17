@@ -7,9 +7,10 @@ reintroducirlas.
 
 Este repo es el **sistema**, y desde ADR-0017 es también su propio segundo producto:
 el sistema se desarrolla a sí mismo. La regla no es que no escriba acá, es que
-**nunca escribe en el checkout desde el que corre**: una corrida la ejecuta `stage0`,
-un checkout aparte fijado a un sha, y los artefactos (`.agentic/`, la rama
-`agentic/<tarea>`, el pull request) caen en este repo. El otro producto, el SaaS de
+**nunca escribe en el checkout desde el que corre**, y eso se verifica por repositorio y no
+por ruta (ADR-0002, segunda adenda): una corrida la ejecuta `stage0`, un **clon** aparte
+fijado a un sha, y los artefactos (`.agentic/`, la rama `agentic/<tarea>`, el pull request)
+caen en este repo. `scripts/stage0.sh <ref> [dir]` lo crea o lo actualiza. El otro producto, el SaaS de
 gimnasios, sigue en su repo y sigue siendo la base del set de evaluación
 (README.md, secciones 8 y 9).
 

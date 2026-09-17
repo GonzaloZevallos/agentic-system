@@ -12,6 +12,7 @@ from `core.measurement` and is handed to the process adapters here, so
 
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -28,12 +29,31 @@ from .core.process.adapters.github import GhInbox, GhTracker
 from .core.process.adapters.langgraph.graph import build_graph
 from .core.process.adapters.shell import ShellCommands
 from .core.process.application.ports import Ports
+from .core.process.application.preflight import refuse_its_own_checkout
 from .shared.configuration import Configuration
+from .shared.environment import own_configuration_unset
 
 
 def default_ports(cfg: Configuration) -> Ports:
+    ports = _ports(cfg)
+    # Here and not only in `preflight`, which is the CLI's: `langgraph dev`, Studio and
+    # the LangGraph API import the wired graph and never see the CLI, and this is the
+    # door all of them share. The refusal is the application's; the root only asks
+    # (issue #44).
+    refuse_its_own_checkout(cfg, ports)
+    return ports
+
+
+def _ports(cfg: Configuration) -> Ports:
     return Ports(
-        runner=ClaudeSdkRunner(verbose=cfg.verbose, telemetry=telemetry, env=cfg.role_env),
+        # The roles get the configuration the run decided, never the one the human's
+        # shell carries: the `AGENTIC_*` of this process are unset for them, which only
+        # the composition root can do because only it sees the real environment.
+        runner=ClaudeSdkRunner(
+            verbose=cfg.verbose,
+            telemetry=telemetry,
+            env={**cfg.role_env, **own_configuration_unset(os.environ)},
+        ),
         documents=FilesystemTaskDocuments(cfg.product_dir),
         knowledge=FilesystemKnowledge(cfg.product_dir),
         prompts=FilesystemPrompts(cfg.product_dir),

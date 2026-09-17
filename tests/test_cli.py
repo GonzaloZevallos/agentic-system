@@ -88,9 +88,15 @@ def test_preflight_rejects_a_prompt_overlay_with_an_unknown_placeholder(monkeypa
 
 
 def fake_gh(monkeypatch, *, stdout="", returncode=0, stderr=""):
+    """Only `gh`. The patch lands on the `subprocess` module itself, which every adapter
+    shares, so anything else (preflight asking git about the product's repo) has to go
+    through for real."""
     calls = []
+    real = subprocess.run
 
     def run(cmd, **kwargs):
+        if cmd[0] != "gh":
+            return real(cmd, **kwargs)
         calls.append((cmd, kwargs))
         if returncode:
             raise subprocess.CalledProcessError(returncode, cmd, stderr=stderr)
@@ -290,3 +296,23 @@ async def test_run_refuses_a_task_whose_document_is_paused_unless_fresh(tmp_path
         await cli._run(task, cfg, ports, checkpointer=Saver())
     assert "per its document" in str(info.value) and "agentic resume --issue 12" in str(info.value)
     assert info.value.code == 2
+
+
+def test_a_dirty_stage0_is_said_out_loud_and_the_run_goes_on(monkeypatch, tmp_path, capsys):
+    """A warning, not a refusal: the run is worth less, it is not wrong (issue #44)."""
+    root = product(tmp_path, "p")
+    monkeypatch.setattr(cli, "unfixed_stage0", lambda ports: "stage0 has uncommitted changes")
+    seen = capture_run(monkeypatch)
+    monkeypatch.setattr("sys.argv", ["agentic", "run", "t", "d", "--product-dir", str(root)])
+    cli.main()
+    assert "stage0 has uncommitted changes" in capsys.readouterr().err
+    assert seen["task"]["title"] == "t"
+
+
+def test_a_stage0_fixed_to_a_sha_says_nothing(monkeypatch, tmp_path, capsys):
+    root = product(tmp_path, "p")
+    monkeypatch.setattr(cli, "unfixed_stage0", lambda ports: None)
+    capture_run(monkeypatch)
+    monkeypatch.setattr("sys.argv", ["agentic", "run", "t", "d", "--product-dir", str(root)])
+    cli.main()
+    assert capsys.readouterr().err == ""

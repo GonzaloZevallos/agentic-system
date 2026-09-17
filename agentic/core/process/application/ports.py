@@ -180,6 +180,14 @@ class Workspace(Protocol):
     """The product repository as git sees it (ADR-0011): one branch and worktree per
     task, one per subtask, all idempotent so a use case can ask again."""
 
+    def repository_at(self, path: Path) -> Path | None:
+        """The repository `path` belongs to, as its common directory: a worktree answers
+        the repository it was made from and not its own `.git`, so two paths in the same
+        repository always answer the same thing. That is what lets `preflight` tell
+        whether the product is the very repo the system runs from (ADR-0017), a worktree
+        of it included. None when `path` is in no repository, or when git is not there."""
+        ...
+
     def task_checkout(self, task_id: str) -> Checkout: ...
 
     def subtask_checkout(self, task_id: str, subtask_id: str) -> Checkout: ...
@@ -188,6 +196,13 @@ class Workspace(Protocol):
 
     def is_clean(self, path: Path) -> bool:
         """No uncommitted change, tracked or untracked, under the checkout at `path`."""
+        ...
+
+    def is_committed(self, path: Path) -> bool:
+        """No change to a **tracked** file under `path`. The looser one, and the question
+        behind the `+dirty` of a system version (ADR-0008): a scratch file git never
+        heard of does not change what the code is. A delivery asks `is_clean` instead,
+        because a new file a Developer forgot to add is missing work."""
         ...
 
     def merge(self, path: Path, branch: str) -> str | None:

@@ -28,7 +28,6 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from opentelemetry import metrics, trace
 from opentelemetry.sdk.metrics import MeterProvider
@@ -43,12 +42,14 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from agentic.core.process.domain.task import TaskState
+from agentic.shared.stage0 import CHECKOUT
 
 from ...domain import metrics as system_metrics
 
 SERVICE_NAME = "agentic-system"
-# agentic/core/measurement/adapters/otel/telemetry.py -> the system's repo, for its git version.
-REPO = Path(__file__).resolve().parents[5]
+# The checkout that executes this run, and whose sha the version names. With the system
+# as a product, the copy being edited is another one (`shared.stage0`; ADR-0017).
+REPO = CHECKOUT
 
 # The API still exports the synchronous gauge under a private name.
 Gauge = metrics._Gauge
@@ -66,8 +67,10 @@ def resource() -> Resource:
 
 
 def system_version() -> str:
-    """Short git SHA of this repo, `+dirty` when the tree has uncommitted changes, so a
-    run with edited prompts never passes for the committed version. `AGENTIC_SYSTEM_VERSION`
+    """Short git SHA of the checkout this run executes from, `+dirty` when its tree has
+    uncommitted changes, so a run with edited prompts never passes for the committed
+    version. Running from stage0 that tree is never the one a task edits, so the sha is
+    a real one whatever the product is doing (ADR-0017). `AGENTIC_SYSTEM_VERSION`
     overrides it; `unknown` when git is not there."""
     global _version
     if _version is None:
