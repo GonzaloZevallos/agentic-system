@@ -614,11 +614,17 @@ adaptador se extrae cuando aparezca el segundo producto, que ya apareció: es el
 hexagonal (ADR-0007) no son ese adaptador: los define lo que el sistema necesita, tienen
 una sola implementación sobre este directorio, y este sigue siendo el único parámetro.
 
-**Repositorios separados** (ADR-0002, adenda). Cada producto vive en su repo, y la regla
+**Repositorios separados** (ADR-0002, adendas). Cada producto vive en su repo, y la regla
 no es que el sistema no escriba en el suyo sino que **nunca escribe en el checkout desde el
 que corre**. La corrida la ejecuta `stage0`, un checkout aparte fijado a un sha; lo que se
 edita y lo que se ejecuta son dos copias. Lo que hay que congelar durante una corrida es el
 código que la ejecuta, y eso es un checkout, no un repositorio.
+
+Se dice sobre el checkout y **se cobra sobre el repositorio** (ADR-0002, segunda adenda): dos
+checkouts de un mismo repo comparten `.git`, así que la rama de tarea y los worktrees de un
+producto que fuera un worktree de stage0 nacerían adentro del repo que ejecuta. Por eso
+stage0 es un clon, que sí es otro repositorio, y por eso el chequeo compara el
+`--git-common-dir` de los dos lados.
 
 Forma del repo del producto:
 
