@@ -1062,11 +1062,15 @@ compilar desde `agentic.composition`, el composition root; la CLI lo compila con
 `scripts/stage0.sh <ref> [dir]` crea o actualiza **stage0**, el checkout desde el que corre
 el sistema, fijado a un sha y con su propio entorno (`~/.agentic-stage0` por default).
 Actualizarlo es un acto explícito: nombrás el commit. Es un clon y no un `git worktree`,
-que compartiría el repositorio con el checkout que se está editando. `preflight` se niega a
+que compartiría el repositorio con el checkout que se está editando. El sistema se niega a
 arrancar cuando el producto está en el mismo repositorio que el paquete que corre —compara
 el `--git-common-dir` de los dos lados, así que un worktree del propio repo también cae— y
-el mensaje dice qué usar y cómo crearlo. Falla antes de gastar un peso. Corriendo desde
-stage0, `system_version()` da el sha de stage0, limpio, con el producto en cualquier estado.
+el mensaje dice qué usar y cómo crearlo. La regla vive en `preflight`, la puerta de arranque,
+y la pregunta también `default_ports`, porque el grafo se invoca sin la CLI desde `langgraph
+dev`, Studio y la API. Falla antes de gastar un peso. Un stage0 con cambios sin commitear no
+se rechaza, se avisa: la corrida sale `+dirty` y no compara contra nada, pero no está mal.
+Corriendo desde stage0, `system_version()` da el sha de stage0, limpio, con el producto en
+cualquier estado.
 
 El sistema tampoco le pasa su propia configuración a lo que spawnea: las `AGENTIC_*` del
 humano se le sacan a los chequeos del producto y se le anulan a los roles
