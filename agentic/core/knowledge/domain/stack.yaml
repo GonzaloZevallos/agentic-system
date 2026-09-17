@@ -1,5 +1,13 @@
-# Default product stack. A product replaces it entirely with `.agentic/stack.yaml`,
-# committed: the version at the task's base commit is the one that holds for the task.
-# `checks` is a name and the exact command, run from the root of the checkout.
+# The template a product copies into `.agentic/stack.yaml` and commits. The system has no
+# default: a product that declares no stack does not run (issue #36).
+#
+# `checks`: what the product runs to say its code is sound. The presubmit runs them on a
+# Developer's delivery, and the reviewer uses them to reproduce an objection (ADR-0016).
 checks:
   tests: pytest
+# `setup`: what prepares a fresh checkout to run those checks, once, when the system
+# creates it. Optional, and what keeps a Developer's worktree from reaching for the
+# product's shared environment (ADR-0011, third addendum). For a uv project:
+#
+# setup:
+#   deps: uv sync --locked

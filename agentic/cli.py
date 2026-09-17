@@ -30,7 +30,12 @@ from .core.measurement.adapters.otel import telemetry
 from .core.process.adapters.langgraph.graph import ESCALATE
 from .core.process.application import resume as resuming
 from .core.process.application.ports import Ports
-from .core.process.application.preflight import preflight, unfixed_stage0
+from .core.process.application.preflight import (
+    declared_stack_of,
+    no_setup,
+    preflight,
+    unfixed_stage0,
+)
 from .core.process.domain.task import TaskInput, TaskState
 from .shared.configuration import ENV_PREFIX, Configuration, MissingProductDir
 from .shared.environment import without_own_toolchain
@@ -115,10 +120,12 @@ def main() -> None:
         ports = default_ports(cfg)
         preflight(cfg, ports)
         # Said and not enforced: the run is worth less, it is not wrong.
-        if (warning := unfixed_stage0(ports)) is not None:
-            print(f"agentic: {warning}", file=sys.stderr)
+        for warn in (unfixed_stage0, no_setup):
+            if (warning := warn(ports)) is not None:
+                print(f"agentic: {warning}", file=sys.stderr)
         if args.command == "resume":
             task_id = ports.inbox.task_id(args.issue)
+            declared_stack_of(task_id, ports)
             options = (args.from_document, args.dry_run, args.yes)
             work: Callable[[], Awaitable[None]] = partial(_resume, task_id, cfg, ports, *options)
         else:
@@ -130,6 +137,11 @@ def main() -> None:
                     "title": args.title,
                     "description": args.description,
                 }
+            # A task that already has a branch is measured against its own base, which
+            # may predate the day this product declared a stack: HEAD alone would let it
+            # through and it would die inside a node, where nothing escalates. A task
+            # with no branch answers HEAD here, already checked.
+            declared_stack_of(task["id"], ports)
             work = partial(_run, task, cfg, ports, args.fresh)
     except (MissingProductDir, ValueError, OSError) as exc:
         parser.exit(2, f"agentic: {exc}\n")

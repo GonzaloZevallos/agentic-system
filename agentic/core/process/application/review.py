@@ -30,9 +30,9 @@ from __future__ import annotations
 from agentic.shared.configuration import Configuration
 
 from ..domain import presubmit, rules
-from ..domain.roles import pair_for, reviewer_for
+from ..domain.roles import TECH_LEAD, pair_for, reviewer_for
 from ..domain.task import WAITING_ON_HUMAN, TaskState, apply
-from .checkouts import subtask_checkout
+from .checkouts import SetupFailed, subtask_checkout
 from .ports import Ports
 from .presubmit import declared_checks
 from .run_role import finish, run_role
@@ -43,7 +43,10 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
     subtask = state["subtasks"][subtask_id]
     checks = declared_checks(state, ports)
     reviewer = reviewer_for(checks)
-    checkout = subtask_checkout(state, subtask_id, ports)
+    try:
+        checkout = subtask_checkout(state, subtask_id, cfg, ports)
+    except SetupFailed as unprepared:
+        return finish(state, unprepared.patch(TECH_LEAD), ports)
     pair = pair_for(subtask_id)
     remaining = rules.remaining_changes(state, pair, cfg.max_changes_requested_per_pair)
     section = rules.review_section(subtask_id)

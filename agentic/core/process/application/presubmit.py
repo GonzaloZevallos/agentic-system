@@ -10,18 +10,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..domain import presubmit, rules
+from ..domain import presubmit
 from ..domain.presubmit import CheckResult
 from ..domain.task import TaskState
+from .checkouts import task_base
 from .ports import Ports
 
 
 def declared_checks(state: TaskState, ports: Ports) -> dict[str, str]:
     """The checks the product's stack declares for this task: the ones at the commit its
-    branch started from, never the branch's own (issue #22, 7). The product's HEAD when the
-    branch carries no base, which only a branch the system did not create lacks."""
-    base = ports.workspace.base_of(rules.task_branch(state["id"]))
-    return ports.stack.checks(base or "HEAD")
+    branch started from, never the branch's own (issue #22, 7)."""
+    return ports.stack.checks(task_base(state, ports))
 
 
 class CheckoutPresubmit:
@@ -72,7 +71,5 @@ class CheckoutPresubmit:
 
     def _run(self, name: str, command: str) -> CheckResult:
         result = self.ports.commands.run(self.path, command, self.check_timeout_s)
-        output = result.output
-        if result.timed_out:
-            output = f"{output}\n(timed out after {self.check_timeout_s:.0f} s)"
+        output = presubmit.said(result.output, result.timed_out, self.check_timeout_s)
         return {"name": name, "command": command, "passed": result.passed, "output": output}

@@ -442,7 +442,13 @@ sin aprobación: `git config`, `git push` y `git worktree` (ADR-0011, adenda). E
 dentro de hooks del SDK que ven el comando parseado, no un prefijo: niegan esos tres
 también detrás de `git -C` o `sh -c`, `--git-dir`, `commit --no-verify`, cambiar de rama,
 editar dentro de `.git/` o fuera de su checkout, y agregar `# type: ignore` o `# noqa`
-(ADR-0011, adenda segunda).
+(ADR-0011, adenda segunda). La jaula incluye el entorno: un worktree no tiene uno propio y
+una herramienta que busca entorno sube hasta el del producto, así que el sistema prepara
+cada checkout cuando nace, con los comandos que el producto declara en `setup`, antes de
+que entre ningún rol. Sin eso, el `pytest` de un Developer importa el código de la rama
+que escribió ese entorno último, y un `uv pip install -e .` adentro de un worktree
+repunta el de todos (ADR-0011, adenda tercera). Instalar una dependencia nueva en su
+propio entorno sí es trabajo suyo.
 
 **Entrega**. Una entrega es código commiteado en un árbol limpio con los chequeos del
 producto en verde. La **puerta de entrega** lo mira cuando el Developer entrega, dentro de
@@ -638,7 +644,7 @@ Forma del repo del producto:
 | `.agentic/tasks/` | Documento único por tarea, registro crudo del trabajo | Los roles, sección por sección |
 | `.agentic/prompts/` | Overrides de prompts por rol, si los hay (ADR-0005) | PjM |
 | `.agentic/flags.yaml` | Vocabulario de flags del producto, pisa el default del sistema | Humano, después PM |
-| `.agentic/stack.yaml` | Stack del producto: los comandos con que declara que su código está sano (ADR-0016, adenda) | Humano |
+| `.agentic/stack.yaml` | Stack del producto: `checks`, los comandos con que declara que su código está sano, y `setup`, opcional, lo que prepara un checkout recién creado. Obligatorio: sin él el sistema no arranca (ADR-0016, adendas; ADR-0011, adenda tercera) | Humano |
 | `.agentic/state.sqlite` | Checkpointer del grafo, fuera del control de versiones (ADR-0003) | El sistema |
 | `.agentic/worktrees/` | Un worktree por subtarea, fuera del control de versiones (ADR-0011) | El sistema |
 | rama `agentic/<tarea>` | La rama de tarea: entrevistas, ADRs, código integrado. Termina en un pull request (ADR-0011) | Los roles |
@@ -842,6 +848,8 @@ Se anotan para no reintroducirlas por error.
 | En paralelo el desborde del tope se acepta acotado por las ramas | Con la revisión adentro de la rama el número dejó de ser aceptable: el gasto del proceso lo comparten todas las ramas, sin estado compartido (ADR-0004, adenda quinta) |
 | Tech Lead revisa de solo lectura, sin correr tests, y escribe el veredicto con un motivo libre | Corre los tests que respaldan cada objeción; entrega hallazgos con evidencia y categoría, y el veredicto se deriva de los bloqueantes (ADR-0016) |
 | El revisor corre `pytest` con reglas fijas y el Developer copia el resultado de la suite en su sección | El producto declara su stack en `.agentic/stack.yaml`; la puerta de entrega los corre y escribe el resultado, y el revisor los usa para reproducir (ADR-0016, adenda) |
+| Un producto sin `.agentic/stack.yaml` corre con el default del sistema | No corre: `preflight` corta y muestra la plantilla. El default quedó como plantilla, inalcanzable para una corrida (ADR-0016, adenda segunda) |
+| El worktree de una subtarea la aísla | La aísla en disco, no en entorno: sin la clave `setup` que lo prepare, todos los checkouts comparten el `.venv` del producto (ADR-0011, adenda tercera) |
 | El sistema nunca escribe en su repo | Nunca escribe en el **checkout** desde el que corre: el sistema es su propio segundo producto y sus artefactos caen en este repo (ADR-0017; ADR-0002, adenda) |
 | El glosario de Proceso agrupa 27 términos bajo "Interacciones" | Cuatro secciones que dicen qué momento del proceso nombran (cómo se piden cosas, cómo se entrega y se revisa, cómo se rechaza trabajo, cómo termina una corrida), y tres términos fundidos en el que ya los contenía (#55) |
 | La devolución se llama `Return` en el código | `ChangesRequested`, que es *request changes*, uno de los tres valores de `event` de una review de GitHub. La métrica `agentic.task.returns`, el label `return.category`, el atributo `role.return_categories`, el valor `returned` y las claves del documento de tarea **no** siguen: son dato ya escrito, y renombrarlas parte las series y rompe la reanudación de una tarea pausada (ADR-0008, adenda) |

@@ -89,10 +89,14 @@ class GitWorkspace:
             self._git("branch", branch, start)
             base = self._git("rev-parse", "--short", branch)
             self._note_base(branch, base)
-        if not path.is_dir():
+        # The worktree on disk and not the branch decides `created`: the directory is
+        # what the product's setup prepares, and a branch may exist with no worktree
+        # after a `cleanup` or a resume.
+        created = not path.is_dir()
+        if created:
             path.parent.mkdir(parents=True, exist_ok=True)
             self._git("worktree", "add", str(path), branch)
-        return Checkout(branch=branch, path=path, base=self._base_of(branch))
+        return Checkout(branch=branch, path=path, base=self._base_of(branch), created=created)
 
     def head(self, path: Path) -> str:
         return self._git("rev-parse", "--short", "HEAD", cwd=path)
@@ -130,6 +134,10 @@ class GitWorkspace:
         for path in root.iterdir():
             if path.name == task_id or path.name.startswith(f"{task_id}."):
                 self._git("worktree", "remove", "--force", str(path))
+        self._git("worktree", "prune")
+
+    def discard(self, path: Path) -> None:
+        self._git("worktree", "remove", "--force", str(path))
         self._git("worktree", "prune")
 
     def branch_head(self, branch: str) -> str | None:

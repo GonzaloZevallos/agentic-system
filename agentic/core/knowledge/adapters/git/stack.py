@@ -15,17 +15,22 @@ class GitStack:
         self.product_dir = product_dir
 
     def checks(self, revision: str) -> dict[str, str]:
-        """The checks at `revision`, or the default when the file is not there."""
-        text, source = self._declaration(revision)
-        return stack.checks(yaml.safe_load(text), source)
+        data, source = self._declaration(revision)
+        return stack.checks(data, source)
 
-    def _declaration(self, revision: str) -> tuple[str, object]:
+    def setup(self, revision: str) -> dict[str, str]:
+        data, source = self._declaration(revision)
+        return stack.setup(data, source)
+
+    def _declaration(self, revision: str) -> tuple[object, object]:
+        """The file as `revision` holds it. Absent, the run stops: there is no default to
+        fall back on, and a product that declares nothing is told what to write (#36)."""
         spec = f"{revision}:{stack.OVERLAY}"
         if self._git("cat-file", "-e", spec).returncode == 0:
-            return self._git("show", spec).stdout, spec
+            return yaml.safe_load(self._git("show", spec).stdout), spec
         if self._git("rev-parse", "--verify", "-q", f"{revision}^{{commit}}").returncode:
             raise ValueError(f"no commit {revision!r} in {self.product_dir}")
-        return stack.DEFAULT.read_text(encoding="utf-8"), stack.DEFAULT
+        raise stack.not_declared(spec)
 
     def _git(self, *args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(

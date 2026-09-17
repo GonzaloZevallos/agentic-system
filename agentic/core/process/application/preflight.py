@@ -7,6 +7,7 @@ from agentic.shared.configuration import Configuration
 from agentic.shared.stage0 import CHECKOUT
 
 from ..domain.roles import ROLES
+from .checkouts import task_base
 from .ports import Ports
 from .run_role import load_prompt
 
@@ -32,13 +33,55 @@ class RunsOnItsOwnCheckout(ValueError):
 
 
 def preflight(cfg: Configuration, ports: Ports) -> None:
-    """The run's own checkout first, then the vocabulary and every role's prompt
-    rendered: a bad flags file or an overlay with a stray placeholder fails here, not in
-    the middle of a task."""
+    """The run's own checkout first, then the product's stack, then the vocabulary and
+    every role's prompt rendered: a product that declares no stack, a bad flags file or
+    an overlay with a stray placeholder fails here, not in the middle of a task."""
     refuse_its_own_checkout(cfg, ports)
+    declared_stack(ports)
     vocabulary = ports.flags.load()
     for role in ROLES:
         load_prompt(role, cfg, ports, vocabulary, **PLACEHOLDERS)
+
+
+def declared_stack(ports: Ports, revision: str = "HEAD") -> dict[str, str]:
+    """The product's setup as `revision` declares it, having read the whole file.
+
+    HEAD by default, the commit a task starting now would be measured against; there is
+    no task yet at preflight. Both keys are loaded, so a broken `setup` fails here and
+    not when a worktree is born halfway through the run (issues #36, #37)."""
+    ports.stack.checks(revision)
+    return ports.stack.setup(revision)
+
+
+def declared_stack_of(task_id: str, ports: Ports) -> None:
+    """The stack at the base of a task already under way, for a resume.
+
+    HEAD is not enough here: a task whose branch started before the product declared a
+    stack passes the check at HEAD and then dies inside a node, where nothing turns an
+    infrastructure error into an escalation. Cheap and worth it: the base is the commit
+    that run will actually be measured against (ADR-0016, addendum)."""
+    declared_stack(ports, task_base({"id": task_id}, ports))
+
+
+def no_setup(ports: Ports) -> str | None:
+    """Why this run cannot promise a Developer its own environment, or None when it can.
+
+    A product that declares no `setup` gets checkouts that git made and nothing else. A
+    worktree has no environment of its own, so a tool that wants one walks up to the
+    product's, and two subtasks then share it: a `pytest` that imports a sister branch's
+    code, or a `uv pip install -e .` that repoints the human's checkout (issue #37). Not
+    a refusal: a product with no dependencies has nothing to prepare, and one that does
+    may still prefer to live with it. A fact about the product, so what to do with it is
+    the caller's; the CLI says it out loud, before the money is spent."""
+    if declared_stack(ports):
+        return None
+    return (
+        # The file is named and not imported: `core.knowledge` owns it, and the
+        # dependency rule keeps the two cores apart (ADR-0010).
+        "the product declares no `setup` in .agentic/stack.yaml: every checkout shares "
+        "the product's environment, so what a Developer tests is not necessarily its "
+        "own branch (issue #37). Declare the commands that prepare a fresh checkout."
+    )
 
 
 def unfixed_stage0(ports: Ports) -> str | None:

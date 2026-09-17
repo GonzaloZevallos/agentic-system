@@ -18,7 +18,7 @@ from agentic.shared.configuration import Configuration
 from ..domain import presubmit, rules
 from ..domain.roles import DEVELOPER, DEVELOPER_INTEGRATOR
 from ..domain.task import INTEGRATION, TaskState
-from .checkouts import subtask_checkout
+from .checkouts import SetupFailed, subtask_checkout
 from .ports import Ports
 from .presubmit import CheckoutPresubmit, declared_checks
 from .run_role import finish, run_role
@@ -27,8 +27,11 @@ from .run_role import finish, run_role
 async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
     subtask_id = state["subtask_id"]
     subtask = state["subtasks"][subtask_id]
-    checkout = subtask_checkout(state, subtask_id, ports)
     role = DEVELOPER_INTEGRATOR if subtask_id == INTEGRATION else DEVELOPER
+    try:
+        checkout = subtask_checkout(state, subtask_id, cfg, ports)
+    except SetupFailed as unprepared:
+        return finish(state, unprepared.patch(role), ports)
     # A dependency gates the order and provides the code: its approved branch is
     # brought in before the Developer starts. The integration skips this: the fan-in
     # already brought every approved branch into the task branch, and what it could not

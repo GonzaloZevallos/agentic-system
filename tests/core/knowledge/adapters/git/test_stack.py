@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from agentic.core.knowledge.adapters.git import GitStack
+from agentic.core.knowledge.domain import stack
 
 
 def git(*args, cwd: Path) -> str:
@@ -36,10 +37,26 @@ def commit_stack(product: Path, text: str) -> str:
     return git("rev-parse", "--short", "HEAD", cwd=product)
 
 
-def test_without_the_file_at_the_base_the_default_holds(product):
+def test_without_the_file_at_the_base_there_is_no_stack_and_no_default(product):
     base = git("rev-parse", "--short", "HEAD", cwd=product)
     commit_stack(product, "checks:\n  tests: uv run pytest\n")  # after the base: not this task's
-    assert GitStack(product).checks(base) == {"tests": "pytest"}
+    with pytest.raises(stack.NotDeclared, match="declares no stack"):
+        GitStack(product).checks(base)
+
+
+def test_the_setup_is_read_from_the_same_commit(product):
+    base = commit_stack(product, "setup:\n  deps: uv sync\nchecks:\n  tests: pytest\n")
+    assert GitStack(product).setup(base) == {"deps": "uv sync"}
+
+
+def test_a_product_that_declares_no_setup_prepares_nothing(product):
+    base = commit_stack(product, "checks:\n  tests: pytest\n")
+    assert GitStack(product).setup(base) == {}
+
+
+def test_a_revision_that_is_no_commit_is_told_apart_from_a_missing_file(product):
+    with pytest.raises(ValueError, match="no commit"):
+        GitStack(product).checks("nope")
 
 
 def test_the_base_commit_decides_not_the_working_tree(product):

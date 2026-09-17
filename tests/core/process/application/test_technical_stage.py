@@ -410,8 +410,9 @@ async def test_the_presubmit_runs_the_checks_declared_at_the_tasks_base_and_reco
     ports = memory_ports(runner, stack=MemoryStack(checks), commands=commands)
     state, checkout = developing(ports)
     patch = await develop(state, cfg, ports)
-    # The version at the task's base holds, never the branch's (issue #22, 7).
-    assert ports.stack.revisions == ["base0"]
+    # The version at the task's base holds, never the branch's (issue #22, 7). Asked
+    # twice: once for the setup of the task checkout born here, once for the checks.
+    assert ports.stack.revisions == ["base0", "base0"]
     assert "- `lint`: `ruff check .`" in runner.calls[0]["system_prompt"]
     # Red, the model is told inside its turn and delivers again; green, it counts.
     (reason,) = runner.refused
@@ -526,9 +527,13 @@ async def test_the_fan_in_creates_the_wave_checkouts_one_at_a_time(cfg):
     state = {**TASK, "subtasks": {"api": sub("api"), "domain": sub("domain")}}
     ports = memory_ports(ScriptedRunner())
     await integrate(state, cfg, ports)
+    # The task's branch is asked for again before each subtask's, and answered with the
+    # worktree that exists: what must stay serial is making them, not asking.
     assert ports.workspace.checkouts_made == [
         "agentic/GH-12",
+        "agentic/GH-12",
         "agentic/GH-12.api",
+        "agentic/GH-12",
         "agentic/GH-12.domain",
     ]
 

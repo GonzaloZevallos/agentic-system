@@ -50,6 +50,11 @@ _Avoid_: buenas prácticas, guía de estilo (el estilo lo impone el linter, no e
 _Campo_: coding standards — estándar
 
 **Stack del producto**:
-Con qué tecnología se construye y se verifica este producto, declarado por el producto en su repo. Hoy son sus chequeos: los comandos con que declara que su código está sano (tests, linter, typechecker), que corre la puerta de entrega y que el revisor usa para reproducir una objeción. El sistema impone las prácticas, nunca la herramienta.
+Con qué tecnología se construye y se verifica este producto, declarado por el producto en su repo. Son sus chequeos, los comandos con que declara que su código está sano (tests, linter, typechecker), que corre la puerta de entrega y que el revisor usa para reproducir una objeción; y su preparación del entorno. El sistema impone las prácticas, nunca la herramienta. Declararlo es obligatorio: un producto que no lo declara no corre, y el sistema no tiene default que una corrida pueda alcanzar.
 _Avoid_: checks, stack (a secas, cuando se habla del sistema), CI, validaciones
 _Campo_: stack — estándar; sus comandos son los presubmit checks del producto
+
+**Preparación del entorno**:
+Los comandos con que un producto deja listo un checkout recién creado para que se pueda trabajar y correr sus chequeos en él: crear su entorno virtual, instalar dependencias, compilar lo que haga falta. Los declara el producto en su stack y los corre el sistema una sola vez, cuando el checkout nace, antes de que entre ningún rol. Es opcional: un producto sin dependencias no prepara nada, y el sistema avisa al arrancar que entonces no puede prometer aislamiento entre subtareas.
+_Avoid_: bootstrap, instalación, build (el build es del producto y puede ser un chequeo)
+_Campo_: setup — estándar; la clave se llama igual en el archivo

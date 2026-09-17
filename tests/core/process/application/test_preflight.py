@@ -5,14 +5,16 @@ from pathlib import Path
 
 import pytest
 
+from agentic.core.knowledge.domain import stack
 from agentic.core.process.application import preflight as module
 from agentic.core.process.application.preflight import (
     RunsOnItsOwnCheckout,
+    no_setup,
     preflight,
     unfixed_stage0,
 )
 from agentic.shared.configuration import Configuration
-from tests.fakes import memory_ports
+from tests.fakes import MemoryStack, memory_ports
 
 PRODUCT = Path("/repos/product")
 
@@ -69,12 +71,59 @@ class ExplodingFlags:
         raise AssertionError("the product was read before the refusal")
 
 
+class ExplodingStack:
+    def checks(self, revision: str) -> dict[str, str]:
+        raise AssertionError("the stack was read before the refusal")
+
+    def setup(self, revision: str) -> dict[str, str]:
+        raise AssertionError("the stack was read before the refusal")
+
+
 def test_the_checkout_is_judged_before_anything_is_read(stage0):
     """The cheapest check there is, so it goes first: nothing of a product that must not
     run gets opened at all."""
     ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/r/.git"})
     with pytest.raises(RunsOnItsOwnCheckout):
-        preflight(Configuration(product_dir=PRODUCT), replace(ports, flags=ExplodingFlags()))
+        preflight(
+            Configuration(product_dir=PRODUCT),
+            replace(ports, flags=ExplodingFlags(), stack=ExplodingStack()),
+        )
+
+
+class UndeclaredStack:
+    def checks(self, revision: str) -> dict[str, str]:
+        raise stack.not_declared(f"{revision}:{stack.OVERLAY}")
+
+    def setup(self, revision: str) -> dict[str, str]:
+        raise stack.not_declared(f"{revision}:{stack.OVERLAY}")
+
+
+def test_a_product_that_declares_no_stack_fails_before_a_prompt_is_rendered(stage0):
+    """Mandatory since #36, and read at HEAD, which is the base the next task starts
+    from. Before the prompts, because it is the cheaper of the two."""
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    with pytest.raises(stack.NotDeclared, match="declares no stack"):
+        preflight(
+            Configuration(product_dir=PRODUCT),
+            replace(ports, stack=UndeclaredStack(), flags=ExplodingFlags()),
+        )
+
+
+def test_the_stack_is_read_at_head_and_both_keys_are_loaded(stage0):
+    """A `setup` that does not parse must fail here, not when a worktree is born
+    halfway through the run."""
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    asked = MemoryStack(setup={"deps": "uv sync"})
+    preflight(Configuration(product_dir=PRODUCT), replace(ports, stack=asked))
+    assert asked.revisions == ["HEAD", "HEAD"]
+
+
+def test_a_product_without_setup_cannot_be_promised_an_environment_of_its_own(stage0):
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    assert no_setup(replace(ports, stack=MemoryStack(setup={"deps": "uv sync"}))) is None
+    warning = no_setup(replace(ports, stack=MemoryStack(setup={})))
+    assert warning is not None and "declares no `setup`" in warning
+    assert ".agentic/stack.yaml" in warning
 
 
 # -- stage0 that is not fixed to anything --------------------------------------------
