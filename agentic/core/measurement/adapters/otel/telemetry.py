@@ -7,6 +7,11 @@ the system metrics of the Medición glossary (`core/measurement/CONTEXT.md`).
 the role. Nothing is exported unless
 `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
 
+Every span and every metric carries the `product` the run worked on, handed in by the
+caller, because since ADR-0017 there are two and a panel that adds them up compares a
+gym SaaS with an agentic system (issue #47). Which name a product goes by is the
+product's own declaration, `.agentic/stack.yaml`; this adapter only stamps it.
+
 The metrics are events, not rates (ADR-0008, addendum): every finished task and every
 role run leaves one sample per metric, with its value; `agentic.task.returns` leaves one
 per category of return (ADR-0016). Gauges give exactly that, and a
@@ -197,6 +202,9 @@ class Run:
     """A span plus its clock. `finish` is called by the adapter that has the patch."""
 
     span: trace.Span
+    # The product this run worked on. Not a default: a sample with no product is a sample
+    # that adds up with the other product's, which is the bug (issue #47).
+    product: str = ""
     started: float = field(default_factory=time.monotonic)
 
     @property
@@ -224,6 +232,7 @@ class TaskRun(Run):
         requested = system_metrics.changes_requested_total(final)
         by_category = system_metrics.changes_by_category(final)
         labels = {
+            "product": self.product,
             "task.type": final.get("type", "unknown"),
             "task.status": final.get("status", "open"),
             "system.version": system_version(),
@@ -265,6 +274,7 @@ class RoleRun(Run):
         outcome = _outcome(patch, delivered=run is not None)
         rework = failed_attempts > 0 or (run is not None and system_metrics.is_rework(run))
         attributes: dict[str, str | int | float | bool] = {
+            "product": self.product,
             "role.outcome": outcome,
             "role.cost_usd": cost,
             "role.failed_attempts": failed_attempts,
@@ -286,8 +296,9 @@ class RoleRun(Run):
         model = run["model"] if run else ""
 
         def record(i: Instruments) -> None:
-            i.role_duration.set(elapsed, {"role": self.role, "role.outcome": outcome})
-            i.role_cost.set(cost, {"role": self.role, "model": model, "rework": rework})
+            common = {"product": self.product, "role": self.role}
+            i.role_duration.set(elapsed, {**common, "role.outcome": outcome})
+            i.role_cost.set(cost, {**common, "model": model, "rework": rework})
 
         self._emit(record)
 
@@ -311,25 +322,31 @@ def _outcome(patch: TaskState, *, delivered: bool) -> str:
 
 
 @contextmanager
-def task_span(task_id: str, title: str) -> Iterator[TaskRun]:
+def task_span(task_id: str, title: str, product: str) -> Iterator[TaskRun]:
     """The root of the task's trace; its name is what Langfuse lists. The title stays
-    local: the collector strips it before Grafana Cloud."""
+    local: the collector strips it before Grafana Cloud. `product` is on the span from
+    the start, so a crashed run is still attributable to one of the two."""
     with tracer().start_as_current_span(
-        task_id, attributes={"task.id": task_id, "task.title": title}
+        task_id, attributes={"task.id": task_id, "task.title": title, "product": product}
     ) as span:
-        yield TaskRun(span)
+        yield TaskRun(span, product=product)
 
 
 @contextmanager
-def role_span(role_name: str) -> Iterator[RoleRun]:
+def role_span(role_name: str, product: str) -> Iterator[RoleRun]:
     """One role run. Langfuse lists it as an agent run; its cost there is the sum of the
     Claude Code calls nested under it, priced by Langfuse from their tokens (ADR-0008,
     addendum). `role.cost_usd` is the system's own figure and stays an attribute: sending
     it as cost too would count every dollar twice."""
     with tracer().start_as_current_span(
-        role_name, attributes={"role": role_name, "langfuse.observation.type": "agent"}
+        role_name,
+        attributes={
+            "role": role_name,
+            "product": product,
+            "langfuse.observation.type": "agent",
+        },
     ) as span:
-        yield RoleRun(span, role=role_name)
+        yield RoleRun(span, product=product, role=role_name)
 
 
 def traceparent() -> str | None:

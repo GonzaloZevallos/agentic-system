@@ -159,3 +159,52 @@ que abre un documento escrito antes del renombre.
 
 Lo que queda pendiente: si alguna vez el nombre de la serie se alinea, es una migración con
 el set de evaluación re-corrido entero, no una edición.
+
+## Adenda (2026-09-17): cada muestra dice sobre qué producto corrió
+
+Desde ADR-0017 hay dos productos, y ninguna métrica decía cuál. `TaskRun.finish` etiquetaba
+`task.type`, `task.status`, `system.version` y `prompts.fingerprint`; con un solo producto
+eso alcanzaba, con dos los paneles suman peras con manzanas. Costo por tarea, devoluciones
+por categoría y `rework_usd` mezclaban un SaaS de gimnasios con un sistema agéntico, la
+línea de base de §9 dejaba de significar algo, y la comparación que más interesa (¿el
+sistema es más caro de mantener a sí mismo que al gimnasio?) era justo la imposible.
+
+Decisión: un label **`product`** en todo span y toda métrica, de tarea y de rol, con el
+nombre que **el producto declara** en `.agentic/stack.yaml`, clave nueva y obligatoria.
+
+Por qué declarado y no deducido. Las otras dos fuentes candidatas no sobreviven a lo que
+pasa de verdad con un repo: el **nombre del directorio** cambia con `git clone <url> otro-nombre`
+y con mover el checkout, y el **remoto** cambia en un fork y no existe en un repo que nunca
+se publicó. Un archivo versionado viaja con el repo, es el mismo en todos sus checkouts por
+construcción, y es el producto diciendo cómo se llama en vez del sistema adivinándolo. Ya
+había precedente: desde #36 el stack se declara y no se infiere, y el archivo es obligatorio,
+así que la clave nueva no agrega un modo de fallo que no existiera.
+
+Es un slug (minúsculas, dígitos y guiones) porque termina siendo valor de label en
+Prometheus y variable del dashboard: un producto con dos grafías son dos productos en
+todos los paneles.
+
+Consecuencias:
+
+- **Se agrega, no se renombra** (la regla de arriba sigue): las series viejas quedan sin
+  `product`, y un panel que filtra `product=~".*"` no las ve. Es el corte que se aceptó,
+  porque lo que hay atrás son corridas de un solo producto y el valor del label es de acá
+  en adelante.
+- El nombre es la única clave del archivo que **no** se lee en el commit base de la tarea,
+  sino en HEAD: dice *quién* es el repositorio, no qué regía en un commit. Leído en el base,
+  una tarea anterior a la clave reanudaría sin nombre, y un renombre a mitad de tarea
+  partiría sus muestras en dos labels.
+- `preflight` rechaza un producto sin nombre antes de gastar un peso. Pasada esa puerta, un
+  nombre ilegible no mata un nodo: el span sale con `unknown`, igual que `system_version`
+  cuando no hay git. Importa para la puerta que `preflight` no cubre, `langgraph dev`.
+- El dashboard suma una variable `Producto`, arranca con **uno solo** seleccionado, y todo
+  panel abre por `product`, así que elegir "All" compara los dos en vez de sumarlos.
+- El collector no cambia: el label viaja en el span y en la métrica como cualquier otro.
+- El repo del gimnasio tiene que declarar su nombre para seguir corriendo; es una línea en
+  su `.agentic/stack.yaml`.
+
+Opciones descartadas: un **atributo de recurso** OTel (`service.namespace`), que en
+Prometheus no baja a label de serie sino a `target_info`, así que no se puede filtrar un
+panel por él; una **variable de entorno** o un flag de la CLI, que hace que el mismo producto
+cambie de nombre según cómo lo invoquen y se olvide en silencio; y un archivo nuevo
+`.agentic/product.yaml`, que es un segundo obligatorio para una línea.

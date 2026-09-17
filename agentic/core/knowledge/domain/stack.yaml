@@ -1,6 +1,10 @@
 # The template a product copies into `.agentic/stack.yaml` and commits. The system has no
 # default: a product that declares no stack does not run (issue #36).
 #
+# `product`: the name this product goes by, a slug. Every span and every metric of a run
+# carries it as a label, so two products never add up in a panel (issue #47). Declared and
+# not guessed: a directory name changes when someone clones under another name.
+product: my-product
 # `checks`: what the product runs to say its code is sound. The presubmit runs them on a
 # Developer's delivery, and the reviewer uses them to reproduce an objection (ADR-0016).
 checks:

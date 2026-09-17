@@ -24,6 +24,10 @@ cd observability/langfuse && docker compose up -d --force-recreate otel-collecto
 
 ## Dashboard
 
+El dashboard arranca con **un solo producto** seleccionado en la variable `Producto`:
+desde ADR-0017 hay dos y sumarlos no significa nada. Elegir "All" los compara, no los suma,
+porque todo panel abre por `product` (issue #47).
+
 `dashboard.json` es el dashboard "Sistema agéntico", exportado con el datasource como
 input. Importarlo desde **Dashboards → New → Import**, pegando el JSON y eligiendo el
 datasource Prometheus del stack (`grafanacloud-<stack>-prom`). Re-importar pisa el anterior:
@@ -32,8 +36,9 @@ comparten `uid`.
 Los nombres en Prometheus son los de OpenTelemetry con puntos por guiones bajos y el sufijo
 de unidad: `agentic.task.cost_usd` es `agentic_task_cost_usd`, `agentic.task.duration` es
 `agentic_task_duration_seconds`, `agentic.task.finished` es `agentic_task_finished`. Labels:
-`task_type`, `task_status`, `system_version`, `prompts_fingerprint`, `role`, `role_outcome`,
-`model`, `rework`.
+`product` en todas, `task_type`, `task_status`, `system_version`, `prompts_fingerprint`,
+`role`, `role_outcome`, `model`, `rework`. Las series anteriores a #47 no llevan `product`
+y ningún panel las ve: se agregan labels, no se reescribe la historia (ADR-0008).
 
 ## Cómo viajan las métricas
 

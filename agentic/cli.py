@@ -34,6 +34,7 @@ from .core.process.application.preflight import (
     declared_stack_of,
     no_setup,
     preflight,
+    product_name,
     unfixed_stage0,
 )
 from .core.process.domain.task import TaskInput, TaskState
@@ -248,7 +249,7 @@ async def _invoke(
     app, graph_input, config: RunnableConfig, task: TaskInput, ports: Ports
 ) -> TaskState:
     try:
-        with telemetry.task_span(task["id"], task["title"]) as run:
+        with telemetry.task_span(task["id"], task["title"], product_name(ports)) as run:
             try:
                 final = await app.ainvoke(graph_input, config=config)
             except Exception:

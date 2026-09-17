@@ -65,10 +65,39 @@ def test_the_unknown_key_is_caught_reading_the_setup_too():
         stack.setup({"checks": {"tests": "pytest"}, "chekcs": {"t": "x"}}, "stack.yaml")
 
 
+def test_the_product_says_the_name_every_run_of_it_is_labelled_with():
+    assert stack.product({"product": "gym-saas", "checks": {"tests": "pytest"}}, "x") == "gym-saas"
+
+
+@pytest.mark.parametrize(
+    "name", [None, "", "  ", "Gym SaaS", "gym_saas", "-gym", "gym--saas", ["gym"]]
+)
+def test_a_name_that_is_not_a_slug_is_an_error(name):
+    """The name is a Prometheus label value and a dashboard variable: one product with
+    two spellings is two products in every panel (issue #47)."""
+    declared = {"checks": {"tests": "pytest"}}
+    if name is not None:
+        declared["product"] = name
+    with pytest.raises(ValueError, match="expected `product`"):
+        stack.product(declared, "stack.yaml")
+
+
+def test_the_name_is_trimmed_the_way_a_yaml_line_leaves_it():
+    assert stack.product({"product": " gym-saas \n", "checks": {"t": "x"}}, "x") == "gym-saas"
+
+
+def test_a_product_with_no_name_is_told_what_the_key_is_for():
+    with pytest.raises(ValueError, match="never add up"):
+        stack.product({"checks": {"tests": "pytest"}}, "stack.yaml")
+
+
 def test_the_template_is_a_file_a_product_can_copy_as_it_is():
     data = yaml.safe_load(stack.TEMPLATE.read_text())
     assert stack.checks(data, stack.TEMPLATE) == {"tests": "pytest"}
     assert stack.setup(data, stack.TEMPLATE) == {}
+    # A placeholder, and a valid one: the human renames it, and a copy that is not
+    # renamed still runs rather than dying on a key it was never told about.
+    assert stack.product(data, stack.TEMPLATE) == "my-product"
 
 
 def test_a_product_that_declares_no_stack_is_told_what_to_write():

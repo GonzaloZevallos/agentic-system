@@ -9,15 +9,24 @@ is the one at the task's base commit, never the branch's: a task that edits it d
 change the bar it is measured against, and the change applies from the next task, after
 the merge.
 
-Two keys today. **`checks`**: the commands with which the product says its code is sound.
-**`setup`**: the commands that prepare a fresh checkout to run them, optional, because a
-product with no dependencies prepares nothing. Loading is the `ProductStack` port's job;
-running the setup when a checkout is born and the checks when a Developer delivers is
-`core.process`'s.
+Three keys today. **`product`**: the name the product goes by, which every span and every
+metric of a run carries as a label (issue #47). **`checks`**: the commands with which the
+product says its code is sound. **`setup`**: the commands that prepare a fresh checkout to
+run them, optional, because a product with no dependencies prepares nothing. Loading is
+the `ProductStack` port's job; running the setup when a checkout is born and the checks
+when a Developer delivers is `core.process`'s.
+
+The name is the one part that is not read at the task's base. It says *who* the repository
+is, not what held at a commit: read at the base, a task older than the key would resume
+into a run with no name, and a rename mid-task would split one task's samples across two
+labels. It is also the only key the product cannot derive from anything else — a directory
+name changes when someone clones under another name, and a remote changes on a fork —
+which is why it is declared and not guessed.
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 # What a product copies to start, shown by the error when it declared nothing. It is a
@@ -26,7 +35,10 @@ TEMPLATE = Path(__file__).resolve().parent / "stack.yaml"
 OVERLAY = Path(".agentic/stack.yaml")
 # Every key the file may declare. An unknown one is a typo, not an extension: a product
 # that misspells `checks` would otherwise run with half a stack and never know.
-KEYS = ("setup", "checks")
+KEYS = ("product", "setup", "checks")
+# The name is a label value in Prometheus and a variable in the dashboard: a slug keeps
+# one product from arriving under two spellings and keeps the panels' regexes honest.
+SLUG = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 
 
 class NotDeclared(ValueError):
@@ -40,6 +52,22 @@ def not_declared(source: object) -> NotDeclared:
         f"back on (issue #36). Write {OVERLAY} and commit it:\n\n"
         + TEMPLATE.read_text(encoding="utf-8")
     )
+
+
+def product(data: object, source: object) -> str:
+    """The name the product goes by, the label every run of it carries (issue #47).
+
+    Required: a run whose samples land under no name, or under a name that changed when
+    the checkout moved, poisons the very comparison the label exists for (README.md, 9)."""
+    declared = _declared(data, source)
+    name = declared.get("product")
+    if not isinstance(name, str) or not SLUG.match(name.strip()):
+        raise ValueError(
+            f"{source}: expected `product`, the name this product goes by, as a slug "
+            "(lowercase letters, digits and dashes). It labels every span and every "
+            "metric of a run, so two products never add up (issue #47)."
+        )
+    return name.strip()
 
 
 def checks(data: object, source: object) -> dict[str, str]:

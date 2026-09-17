@@ -69,3 +69,13 @@ def test_a_broken_file_at_the_base_is_an_error(product):
     base = commit_stack(product, "- pytest\n")
     with pytest.raises(ValueError, match="stack.yaml: expected"):
         GitStack(product).checks(base)
+
+
+def test_the_name_is_read_at_head_and_not_at_the_tasks_base(product):
+    """The name says who the repository is, not what held at a commit: a task older than
+    the key would otherwise resume with no name at all (issue #47)."""
+    base = commit_stack(product, "checks:\n  tests: pytest\n")
+    commit_stack(product, "product: gym-saas\nchecks:\n  tests: pytest\n")
+    assert GitStack(product).product() == "gym-saas"
+    with pytest.raises(ValueError, match="expected `product`"):
+        GitStack(product).product(base)

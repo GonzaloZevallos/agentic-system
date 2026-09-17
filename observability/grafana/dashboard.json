@@ -22,11 +22,23 @@
   "templating": {
     "list": [
       {
+        "name": "product",
+        "label": "Producto",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+        "query": "label_values(agentic_task_finished, product)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": { "selected": true, "text": ["gym-saas"], "value": ["gym-saas"] }
+      },
+      {
         "name": "version",
         "label": "Versión del sistema",
         "type": "query",
         "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-        "query": "label_values(agentic_task_finished, system_version)",
+        "query": "label_values(agentic_task_finished{product=~\"$product\"}, system_version)",
         "refresh": 2,
         "includeAll": true,
         "multi": true,
@@ -38,7 +50,7 @@
         "label": "Tipo de tarea",
         "type": "query",
         "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-        "query": "label_values(agentic_task_finished, task_type)",
+        "query": "label_values(agentic_task_finished{product=~\"$product\"}, task_type)",
         "refresh": 2,
         "includeAll": true,
         "multi": true,
@@ -58,7 +70,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(sum_over_time(agentic_task_cost_usd{task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[$__range])) / sum(count_over_time(agentic_task_cost_usd{task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
+          "expr": "sum by (product) (sum_over_time(agentic_task_cost_usd{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[$__range])) / sum by (product) (count_over_time(agentic_task_cost_usd{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
+          "legendFormat": "{{product}}",
           "instant": true
         }
       ],
@@ -66,7 +79,7 @@
         "defaults": { "unit": "currencyUSD", "decimals": 2, "color": { "mode": "fixed", "fixedColor": "text" } },
         "overrides": []
       },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "none", "graphMode": "none", "textMode": "value" }
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "none", "graphMode": "none", "textMode": "auto" }
     },
     {
       "id": 2,
@@ -78,7 +91,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(sum_over_time(agentic_task_rework_usd{system_version=~\"$version\", task_type=~\"$type\"}[$__range])) / sum(sum_over_time(agentic_task_cost_usd{system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
+          "expr": "sum by (product) (sum_over_time(agentic_task_rework_usd{product=~\"$product\", system_version=~\"$version\", task_type=~\"$type\"}[$__range])) / sum by (product) (sum_over_time(agentic_task_cost_usd{product=~\"$product\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
+          "legendFormat": "{{product}}",
           "instant": true
         }
       ],
@@ -97,7 +111,7 @@
         },
         "overrides": []
       },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "textMode": "value" }
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none", "textMode": "auto" }
     },
     {
       "id": 3,
@@ -109,12 +123,13 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(count_over_time(agentic_task_finished{task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
+          "expr": "sum by (product) (count_over_time(agentic_task_finished{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
+          "legendFormat": "{{product}}",
           "instant": true
         }
       ],
       "fieldConfig": { "defaults": { "unit": "none", "decimals": 0, "color": { "mode": "fixed", "fixedColor": "text" } }, "overrides": [] },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "none", "graphMode": "none", "textMode": "value" }
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "none", "graphMode": "none", "textMode": "auto" }
     },
     {
       "id": 4,
@@ -126,12 +141,13 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(count_over_time(agentic_task_finished{task_status=\"waiting_on_human\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
+          "expr": "sum by (product) (count_over_time(agentic_task_finished{product=~\"$product\", task_status=\"waiting_on_human\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
+          "legendFormat": "{{product}}",
           "instant": true
         }
       ],
       "fieldConfig": { "defaults": { "unit": "none", "decimals": 0, "color": { "mode": "fixed", "fixedColor": "text" } }, "overrides": [] },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "none", "graphMode": "none", "textMode": "value" }
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "none", "graphMode": "none", "textMode": "auto" }
     },
     {
       "id": 10,
@@ -143,8 +159,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version) (sum_over_time(agentic_task_cost_usd{task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[1d])) / sum by (system_version) (count_over_time(agentic_task_cost_usd{task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[1d]))",
-          "legendFormat": "{{system_version}}"
+          "expr": "sum by (product, system_version) (sum_over_time(agentic_task_cost_usd{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[1d])) / sum by (product, system_version) (count_over_time(agentic_task_cost_usd{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[1d]))",
+          "legendFormat": "{{product=~\"$product\", system_version}}"
         }
       ],
       "fieldConfig": {
@@ -180,8 +196,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version) (sum_over_time(agentic_task_rework_usd{system_version=~\"$version\", task_type=~\"$type\"}[1d])) / sum by (system_version) (sum_over_time(agentic_task_cost_usd{system_version=~\"$version\", task_type=~\"$type\"}[1d]))",
-          "legendFormat": "{{system_version}}"
+          "expr": "sum by (product, system_version) (sum_over_time(agentic_task_rework_usd{product=~\"$product\", system_version=~\"$version\", task_type=~\"$type\"}[1d])) / sum by (product, system_version) (sum_over_time(agentic_task_cost_usd{product=~\"$product\", system_version=~\"$version\", task_type=~\"$type\"}[1d]))",
+          "legendFormat": "{{product=~\"$product\", system_version}}"
         }
       ],
       "fieldConfig": {
@@ -218,8 +234,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (task_status) (count_over_time(agentic_task_finished{system_version=~\"$version\", task_type=~\"$type\"}[1w]))",
-          "legendFormat": "{{task_status}}",
+          "expr": "sum by (product, task_status) (count_over_time(agentic_task_finished{product=~\"$product\", system_version=~\"$version\", task_type=~\"$type\"}[1w]))",
+          "legendFormat": "{{product=~\"$product\", task_status}}",
           "interval": "1w"
         }
       ],
@@ -259,8 +275,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (role) (sum_over_time(agentic_role_duration_seconds[$__range])) / sum by (role) (count_over_time(agentic_role_duration_seconds[$__range]))",
-          "legendFormat": "{{role}}",
+          "expr": "sum by (product, role) (sum_over_time(agentic_role_duration_seconds{product=~\"$product\"}[$__range])) / sum by (product, role) (count_over_time(agentic_role_duration_seconds{product=~\"$product\"}[$__range]))",
+          "legendFormat": "{{role}} {{product}}",
           "instant": true
         }
       ],
@@ -293,13 +309,13 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (role, model, rework) (sum_over_time(agentic_role_cost_usd[$__range]))",
+          "expr": "sum by (product, role, model, rework) (sum_over_time(agentic_role_cost_usd{product=~\"$product\"}[$__range]))",
           "format": "table",
           "instant": true
         }
       ],
       "transformations": [
-        { "id": "organize", "options": { "excludeByName": { "Time": true }, "renameByName": { "Value": "USD", "role": "Rol", "model": "Modelo", "rework": "Retrabajo" } } },
+        { "id": "organize", "options": { "excludeByName": { "Time": true }, "renameByName": { "Value": "USD", "product": "Producto", "role": "Rol", "model": "Modelo", "rework": "Retrabajo" } } },
         { "id": "sortBy", "options": { "sort": [{ "field": "USD", "desc": true }] } }
       ],
       "fieldConfig": {

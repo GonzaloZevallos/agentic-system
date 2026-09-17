@@ -27,17 +27,25 @@ PLACEHOLDERS = {
 }
 
 
+# What a span carries when the product's name cannot be read; `product_name` says when.
+UNKNOWN_PRODUCT = "unknown"
+
+
 class RunsOnItsOwnCheckout(ValueError):
     """The product is the repository the package runs from: the run would rewrite the
     code executing it (ADR-0017). A `ValueError`, so the CLI refuses with it."""
 
 
 def preflight(cfg: Configuration, ports: Ports) -> None:
-    """The run's own checkout first, then the product's stack, then the vocabulary and
-    every role's prompt rendered: a product that declares no stack, a bad flags file or
-    an overlay with a stray placeholder fails here, not in the middle of a task."""
+    """The run's own checkout first, then the product's stack and its name, then the
+    vocabulary and every role's prompt rendered: a product that declares no stack, no
+    name, a bad flags file or an overlay with a stray placeholder fails here, not in the
+    middle of a task."""
     refuse_its_own_checkout(cfg, ports)
     declared_stack(ports)
+    # Not inside `declared_stack`: that one is also read at a task's base, where a task
+    # older than the key has no name to find and must still resume (issue #47).
+    ports.stack.product()
     vocabulary = ports.flags.load()
     for role in ROLES:
         load_prompt(role, cfg, ports, vocabulary, **PLACEHOLDERS)
@@ -61,6 +69,21 @@ def declared_stack_of(task_id: str, ports: Ports) -> None:
     infrastructure error into an escalation. Cheap and worth it: the base is the commit
     that run will actually be measured against (ADR-0016, addendum)."""
     declared_stack(ports, task_base({"id": task_id}, ports))
+
+
+def product_name(ports: Ports) -> str:
+    """The product's name for the run's spans and metrics, `unknown` when it cannot be
+    read.
+
+    `preflight` is where a product with no name refuses, before anything is spent. By the
+    time a span opens the run is already under way, and a label is never worth killing a
+    node mid-task: the same `unknown` `system_version` falls back to when there is no git
+    (ADR-0008). It matters for the door `preflight` does not guard, `langgraph dev`, which
+    imports the wired graph and never sees the CLI."""
+    try:
+        return ports.stack.product()
+    except (ValueError, OSError):
+        return UNKNOWN_PRODUCT
 
 
 def no_setup(ports: Ports) -> str | None:
