@@ -186,6 +186,8 @@ class MemoryWorkspace:
     ROOT = Path("/memory/worktrees")
 
     def __init__(self):
+        # Path -> the repository it belongs to; a path outside it is in none.
+        self.repositories: dict[Path, Path] = {}
         self.moved: set[Path] = set()
         self.dirty: set[Path] = set()
         self.commits: list[tuple[Path, str]] = []
@@ -201,6 +203,9 @@ class MemoryWorkspace:
         # so who asks and when is what the fan-in exists to keep serial.
         self.checkouts_made: list[str] = []
         self.pruned = 0
+
+    def repository_at(self, path: Path) -> Path | None:
+        return self.repositories.get(Path(path))
 
     def task_checkout(self, task_id: str) -> Checkout:
         branch = rules.task_branch(task_id)

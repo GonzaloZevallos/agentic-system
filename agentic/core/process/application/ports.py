@@ -180,6 +180,14 @@ class Workspace(Protocol):
     """The product repository as git sees it (ADR-0011): one branch and worktree per
     task, one per subtask, all idempotent so a use case can ask again."""
 
+    def repository_at(self, path: Path) -> Path | None:
+        """The repository `path` belongs to, as its common directory: a worktree answers
+        the repository it was made from and not its own `.git`, so two paths in the same
+        repository always answer the same thing. That is what lets `preflight` tell
+        whether the product is the very repo the system runs from (ADR-0017), a worktree
+        of it included. None when `path` is in no repository, or when git is not there."""
+        ...
+
     def task_checkout(self, task_id: str) -> Checkout: ...
 
     def subtask_checkout(self, task_id: str, subtask_id: str) -> Checkout: ...

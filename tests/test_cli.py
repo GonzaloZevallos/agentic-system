@@ -88,9 +88,15 @@ def test_preflight_rejects_a_prompt_overlay_with_an_unknown_placeholder(monkeypa
 
 
 def fake_gh(monkeypatch, *, stdout="", returncode=0, stderr=""):
+    """Only `gh`. The patch lands on the `subprocess` module itself, which every adapter
+    shares, so anything else (preflight asking git about the product's repo) has to go
+    through for real."""
     calls = []
+    real = subprocess.run
 
     def run(cmd, **kwargs):
+        if cmd[0] != "gh":
+            return real(cmd, **kwargs)
         calls.append((cmd, kwargs))
         if returncode:
             raise subprocess.CalledProcessError(returncode, cmd, stderr=stderr)

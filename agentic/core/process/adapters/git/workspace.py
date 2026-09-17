@@ -44,6 +44,22 @@ class GitWorkspace:
         self.product_dir = product_dir
         self.identity = dict(identity)
 
+    # -- the repository ---------------------------------------------------------
+
+    def repository_at(self, path: Path) -> Path | None:
+        # `-C` and not `cwd=path`: a directory that is not there would raise out of
+        # Popen instead of coming back as a failed command, and "is it a repository"
+        # has to answer for a path that may not exist at all.
+        # Absolute before anything: `-C` is read from the process's directory, and so
+        # would a relative answer be, which are not the same place.
+        target = path.resolve()
+        result = self._run("-C", str(target), "rev-parse", "--git-common-dir")
+        if result.returncode != 0:
+            return None
+        common = Path(result.stdout.strip())
+        # git answers relative to the checkout when the command ran inside it.
+        return common if common.is_absolute() else (target / common).resolve()
+
     # -- checkouts --------------------------------------------------------------
 
     def task_checkout(self, task_id: str) -> Checkout:

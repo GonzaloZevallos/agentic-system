@@ -9,6 +9,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from agentic.core.measurement.adapters.otel import telemetry
+from agentic.shared.stage0 import CHECKOUT
 
 TRACEPARENT = re.compile(r"^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$")
 
@@ -307,3 +308,10 @@ def test_system_version_from_git_is_a_short_sha(monkeypatch):
     monkeypatch.setattr(telemetry, "_version", None)
     version = telemetry.system_version()
     assert re.match(r"^[0-9a-f]{7,}(\+dirty)?$", version) or version == "unknown"
+
+
+def test_the_version_is_the_shas_of_the_checkout_that_executes():
+    """Not the product's: running from stage0 they are two different copies, and the
+    version has to name the one whose code is doing the work (ADR-0017)."""
+    assert telemetry.REPO == CHECKOUT
+    assert (CHECKOUT / "agentic" / "shared" / "stage0.py").exists()

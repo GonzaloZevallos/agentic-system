@@ -2,8 +2,10 @@
 
 The command runs in its own process group, so a timeout stops what it spawned too
 (`uv run` starts pytest, pytest may start workers) instead of leaving them holding the
-pipe. It gets the system's environment without the system's own virtualenv, the same
-the roles get (`shared.environment`): a check must find the product's toolchain.
+pipe. It gets the system's environment without the system's own virtualenv and without
+the system's own `AGENTIC_*`, the same the roles get (`shared.environment`): a check
+must find the product's toolchain, and when the product is this repo (ADR-0017) its
+checks read those variables themselves.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ import signal
 import subprocess
 from pathlib import Path
 
-from agentic.shared.environment import without_own_toolchain
+from agentic.shared.environment import without_own_configuration, without_own_toolchain
 
 from ...application.ports import CommandResult
 
@@ -26,7 +28,7 @@ class ShellCommands:
         process = subprocess.Popen(
             ["bash", "-c", command],
             cwd=cwd,
-            env=without_own_toolchain(os.environ),
+            env=without_own_configuration(without_own_toolchain(os.environ)),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,

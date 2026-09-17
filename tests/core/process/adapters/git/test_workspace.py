@@ -176,3 +176,30 @@ def test_a_merge_that_applies_returns_nothing_and_one_that_conflicts_says_why(pr
     assert ws.is_clean(task.path)
     assert (task.path / "api.py").read_text() == "get\n"
     assert git("rev-parse", "--abbrev-ref", "HEAD", cwd=task.path) == "agentic/GH-12"
+
+
+# -- the repository ------------------------------------------------------------------
+
+
+def test_a_worktree_answers_the_repository_it_was_made_from(product):
+    """Two directories, one repository: comparing paths would call them different, and
+    running the system over a worktree of its own repo is the same mistake as running it
+    over the repo (`preflight`; ADR-0017)."""
+    ws = GitWorkspace(product, IDENTITY)
+    worktree = ws.task_checkout("GH-44").path
+    assert worktree != product
+    assert ws.repository_at(worktree) == ws.repository_at(product) == (product / ".git").resolve()
+
+
+def test_a_relative_path_is_read_from_here_not_from_the_product(product, monkeypatch):
+    monkeypatch.chdir(product.parent)
+    ws = GitWorkspace(product, IDENTITY)
+    assert ws.repository_at(Path(product.name)) == (product / ".git").resolve()
+
+
+def test_outside_a_repository_there_is_none(product, tmp_path):
+    ws = GitWorkspace(product, IDENTITY)
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert ws.repository_at(plain) is None
+    assert ws.repository_at(tmp_path / "not-there") is None
