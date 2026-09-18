@@ -323,6 +323,65 @@ async def test_the_same_payload_as_a_result_message_still_names_the_limit(monkey
     assert "run ended in error: success" not in str(info.value)
 
 
+async def test_max_turns_motive_carries_what_the_sdk_reported(monkeypatch, tmp_path):
+    # Issues #69/#81: a role that spent its turns fighting a denial deserves more than
+    # "max_turns (N) exhausted"; the model's own prose (here, a stand-in for the CLI's
+    # report of what it was doing) travels with it, and `subtype` is not repeated since
+    # it is exactly how this branch is reached in the first place.
+    fake_query(
+        monkeypatch,
+        [
+            result(
+                subtype="error_max_turns",
+                total_cost_usd=0.5,
+                result="wrote a heredoc to /tmp/test_repro.py; denied",
+            )
+        ],
+    )
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(ClaudeSdkRunner(), tmp_path)
+    assert str(info.value) == (
+        "max_turns (2) exhausted without a result: wrote a heredoc to /tmp/test_repro.py; denied"
+    )
+    assert "subtype" not in str(info.value)
+    assert info.value.reason == "max_turns"
+
+
+async def test_max_turns_motive_is_bare_when_the_sdk_reports_nothing_else(monkeypatch, tmp_path):
+    # Tier 3 of the definition (`docs/product/role-failures.md`): nothing beyond the
+    # subtype that put us in this branch is not new information, so the fixed sentence
+    # stands alone rather than being followed by a tautological "no cause reported".
+    fake_query(monkeypatch, [result(subtype="error_max_turns", total_cost_usd=0.5)])
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(ClaudeSdkRunner(), tmp_path)
+    assert str(info.value) == "max_turns (2) exhausted without a result"
+
+
+async def test_max_turns_motive_via_result_error_carries_what_the_sdk_reported(
+    monkeypatch, tmp_path
+):
+    from claude_agent_sdk import ResultError
+
+    async def query(prompt, options):
+        yield result(is_error=True, subtype="error_max_turns", total_cost_usd=0.5)
+        raise ResultError(
+            "run failed",
+            data={
+                "subtype": "error_max_turns",
+                "errors": ["cat > /tmp/test_repro.py <<EOF: permission denied"],
+            },
+        )
+
+    monkeypatch.setattr(module, "query", query)
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(ClaudeSdkRunner(), tmp_path)
+    assert str(info.value) == (
+        "max_turns (2) exhausted without a result: "
+        "cat > /tmp/test_repro.py <<EOF: permission denied"
+    )
+    assert info.value.reason == "max_turns"
+
+
 async def test_a_result_error_with_a_budget_subtype_is_the_limit_reason(monkeypatch, tmp_path):
     from claude_agent_sdk import ResultError
 

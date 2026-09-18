@@ -50,7 +50,7 @@ from claude_agent_sdk import (
 
 from ...application.ports import AttemptFailed, Presubmit, RawResult
 from ...domain.roles import Role
-from ...domain.rules import ReportedFailure, exception_motive, failure_motive
+from ...domain.rules import ReportedFailure, exception_motive, failure_motive, max_turns_motive
 from ...domain.task import FailureReason
 from ..plugins import PLUGIN, PLUGIN_DIR
 from ..telemetry import NoTelemetry, Telemetry
@@ -158,7 +158,6 @@ class ClaudeSdkRunner:
             presubmit=presubmit,
         )
 
-        exhausted = f"max_turns ({role.max_turns}) exhausted without a result"
         result: ResultMessage | None = None
         background = 0
         calls = 0
@@ -181,7 +180,12 @@ class ClaudeSdkRunner:
             # that into ResultError after yielding the ResultMessage.
             cost, session = _left_behind(result)
             if exc.subtype == "error_max_turns":
-                raise AttemptFailed(exhausted, cost, session, reason="max_turns") from exc
+                raise AttemptFailed(
+                    max_turns_motive(role.max_turns, _reported_error(exc)),
+                    cost,
+                    session,
+                    reason="max_turns",
+                ) from exc
             raise AttemptFailed(
                 failure_motive(_reported_error(exc)),
                 cost,
@@ -203,7 +207,12 @@ class ClaudeSdkRunner:
             )
         cost, session = _left_behind(result)
         if result.subtype == "error_max_turns":
-            raise AttemptFailed(exhausted, cost, session, reason="max_turns")
+            raise AttemptFailed(
+                max_turns_motive(role.max_turns, _reported_result(result)),
+                cost,
+                session,
+                reason="max_turns",
+            )
         if result.is_error:
             raise AttemptFailed(
                 failure_motive(_reported_result(result)),
