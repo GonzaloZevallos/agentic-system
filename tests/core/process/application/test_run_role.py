@@ -1,6 +1,7 @@
 """Retry semantics and delivery of one role, against a scripted runner."""
 
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
@@ -19,8 +20,9 @@ from agentic.core.process.application.run_role import (
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.document import HUMAN
 from agentic.core.process.domain.roles import DEVELOPER, PJM, PM, PRODUCT_ANALYST, ROLES
+from agentic.core.process.domain.task import FailureReason
 from agentic.shared.configuration import Configuration
-from tests.fakes import ScriptedRunner, classified, memory_ports
+from tests.fakes import ScriptedRunner, classified, delivered, memory_ports
 
 pytestmark = pytest.mark.anyio
 
@@ -216,6 +218,66 @@ async def test_role_failure_says_nothing_about_denials_when_there_were_none():
     with pytest.raises(RoleFailure) as info:
         await run_pjm(runner)
     assert str(info.value) == "PjM failed 2 times: b"
+
+
+async def test_a_max_turns_cut_with_a_session_gets_the_turn_cut_message():
+    # A cut with the work fine and a session alive (ADR-0004, seventh addendum): the
+    # retry must read `rules.turn_cut_retry_message`, never the "fix what failed"
+    # order, and still resume the session the cut attempt left.
+    cut = AttemptFailed("run failed (max_turns)", 5.0, session_id="sess-cut", reason="max_turns")
+    runner = ScriptedRunner(developer=[cut, delivered()])
+    out = await run_with_retry(
+        DEVELOPER,
+        "task",
+        system_prompt="s",
+        model="m",
+        retries=1,
+        vocabulary={},
+        cwd=Path("/p"),
+        runner=runner,
+    )
+    retry = runner.calls[1]
+    assert retry["resume"] == "sess-cut"
+    assert retry["prompt"] == rules.turn_cut_retry_message(DEVELOPER)
+    assert "PreviousAttemptFailed" not in retry["prompt"]
+    assert "Fix exactly what failed" not in retry["prompt"]
+    assert out.cost_usd == pytest.approx(5.5)
+
+
+async def test_a_max_turns_cut_with_no_session_appends_the_message_to_the_prompt():
+    # The harness broke before opening a session: the message still lands the same
+    # way today's retry appends any error, on the caller's own prompt and session.
+    cut = AttemptFailed("run failed (max_turns)", 0.5, session_id="", reason="max_turns")
+    runner = ScriptedRunner(developer=[cut, delivered()])
+    out = await run_with_retry(
+        DEVELOPER,
+        "task",
+        system_prompt="s",
+        model="m",
+        retries=1,
+        vocabulary={},
+        cwd=Path("/p"),
+        runner=runner,
+        resume="caller-session",
+    )
+    retry = runner.calls[1]
+    assert retry["resume"] == "caller-session"
+    assert retry["prompt"] == f"task\n\n{rules.turn_cut_retry_message(DEVELOPER)}"
+    assert out.cost_usd == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("reason", [r for r in get_args(FailureReason) if r != "max_turns"])
+async def test_every_other_failure_reason_keeps_todays_retry_message_byte_for_byte(reason):
+    cut = AttemptFailed("something broke", 0.05, session_id="sess-1", reason=reason)
+    runner = ScriptedRunner(pjm=[cut, OK])
+    out = await run_pjm(runner)
+    retry = runner.calls[1]
+    assert retry["resume"] == "sess-1"
+    assert retry["prompt"] == (
+        "<PreviousAttemptFailed>\nsomething broke\n</PreviousAttemptFailed>\n\n"
+        "Retry. Fix exactly what failed."
+    )
+    assert out.cost_usd == pytest.approx(0.08)
 
 
 async def test_the_task_cap_stops_a_role_before_its_first_attempt():

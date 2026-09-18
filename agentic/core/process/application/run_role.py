@@ -8,6 +8,12 @@ when there is none (ADR-0004, addendum). A second failure raises `RoleFailure`, 
 the use case turns into an escalation. The graph engine's own retry was rejected
 because it reruns the node without telling the model what went wrong.
 
+A `max_turns` cut is not an ordinary failure: the harness stopped the attempt on the
+turn cap alone, and the work up to that point may already be done. `_retry_input`
+gives that one reason its own message (`rules.turn_cut_retry_message`, ADR-0004,
+seventh addendum) instead of the "Retry. Fix exactly what failed." every other
+`FailureReason` still gets — a role whose work was fine must not be told to fix it.
+
 The task cap is checked here too, before every attempt, because every role passes
 through here: the routing between nodes would miss the rounds of an interview.
 Reached, `TaskCapReached` escalates the same way, but it is not a role failure: the
@@ -264,7 +270,7 @@ async def run_with_retry(
             prompt, resume = cold_prompt, None
             cold_fallback = True
         else:
-            text, session = _retry_input(prompt, failures, resume)
+            text, session = _retry_input(role, prompt, failures, resume)
         waited_from = time.monotonic()
         try:
             async with limits.slot():
@@ -333,7 +339,7 @@ def _now_iso() -> str:
 
 
 def _retry_input(
-    prompt: str, failures: list[Failure], resume: str | None
+    role: Role, prompt: str, failures: list[Failure], resume: str | None
 ) -> tuple[str, str | None]:
     """What the next attempt gets: (prompt, session to resume).
 
@@ -342,14 +348,24 @@ def _retry_input(
     what it read and did, and a Developer cut while delivering just delivers
     (ADR-0004, addendum). One that left none, because the harness broke before
     opening it, starts over: the caller's session if any, the error appended to the
-    prompt."""
+    prompt.
+
+    A cut for `reason == "max_turns"` swaps that error for
+    `rules.turn_cut_retry_message(role)` (ADR-0004, seventh addendum): the harness
+    stopped the attempt on the turn cap alone, so the next attempt is told that,
+    never ordered to "fix" work that did not fail. Every other reason keeps today's
+    message, byte for byte."""
     if not failures:
         return prompt, resume
-    error = (
-        f"<PreviousAttemptFailed>\n{failures[-1]['error']}\n</PreviousAttemptFailed>\n\n"
-        "Retry. Fix exactly what failed."
-    )
-    if left := failures[-1]["session_id"]:
+    last = failures[-1]
+    if last.get("reason") == "max_turns":
+        error = rules.turn_cut_retry_message(role)
+    else:
+        error = (
+            f"<PreviousAttemptFailed>\n{last['error']}\n</PreviousAttemptFailed>\n\n"
+            "Retry. Fix exactly what failed."
+        )
+    if left := last["session_id"]:
         return error, left
     return f"{prompt}\n\n{error}", resume
 
