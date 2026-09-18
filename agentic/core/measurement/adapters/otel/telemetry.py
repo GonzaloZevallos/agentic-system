@@ -182,6 +182,7 @@ class Instruments:
     role_tokens: Gauge
     role_calls: Gauge
     role_turns: Gauge
+    role_max_turns: Gauge
     role_tool_calls: Gauge
     role_subagent_cost: Gauge
     role_cold_fallback: Gauge
@@ -251,6 +252,14 @@ class Instruments:
             ),
             role_turns=m.create_gauge(
                 "agentic.role.turns", description="`num_turns` of one run record"
+            ),
+            role_max_turns=m.create_gauge(
+                "agentic.role.max_turns",
+                description=(
+                    "The role's own turn cap when one run record ran, beside "
+                    "agentic.role.turns with the same labels, so a calibration can read "
+                    "turns spent against the budget in force"
+                ),
             ),
             role_tool_calls=m.create_gauge(
                 "agentic.role.tool_calls",
@@ -553,12 +562,13 @@ class RoleRun(Run):
 
     def _emit_run(self, patch: TaskState, run: RoleRunRecord) -> None:
         """`agentic.role.cost_usd`, `.run_duration`, `.queue_wait`, plus the tokens,
-        calls, turns, tool calls and sub-agent cost of this run record, one
+        calls, turns, max turns, tool calls and sub-agent cost of this run record, one
         record-and-flush. The token-family gauges drop `system.version` from the
         labels (issue #24): a token panel groups by role and model, never by the
-        checkout that ran it. `tokens`, `calls`, `tool_calls` and `subagent_cost_usd`
-        are absent on a run recorded before this task; `turns` is not, so it is the
-        one of the five always emitted.
+        checkout that ran it. `tokens`, `calls`, `tool_calls`, `subagent_cost_usd` and
+        `max_turns` are absent on a run recorded before the field existed; `turns` is
+        not, so it is the one always emitted. `max_turns` shares `turns`'s own label
+        set (issue #81), so the two series line up in a panel without a join.
 
         `role_cost` here only ever carries this run's own delivering money (`cost_usd`
         minus `failed_cost_usd`, the fact `run_record` already recorded): a second,
@@ -587,6 +597,8 @@ class RoleRun(Run):
             if "calls" in run:
                 i.role_calls.set(run["calls"], token_labels)
             i.role_turns.set(run["turns"], token_labels)
+            if "max_turns" in run:
+                i.role_max_turns.set(run["max_turns"], token_labels)
             for tool, count in tool_calls.items():
                 i.role_tool_calls.set(count, {**token_labels, "tool": tool})
             if "subagent_cost_usd" in run:

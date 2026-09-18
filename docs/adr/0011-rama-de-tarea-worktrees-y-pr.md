@@ -195,3 +195,80 @@ checkout atrapa el fallo y lo escala con el rol que estaba por arrancar.
 Descartado: **negar `pip install` / `uv pip` / `uv venv` con los hooks**. Prohibiría el
 caso legítimo del punto anterior, y la garantía la da el entorno preparado, no la regla,
 igual que con la identidad de git en la primera adenda.
+
+## Adenda (2026-09-18, cuarta): un rol que no ejecuta también se entera de cuál es su regla
+
+Las tres adendas anteriores son sobre lo que un rol que **ejecuta** no puede hacer: la
+identidad por entorno, las reglas de denegación, los hooks, el entorno preparado. Para un
+rol que no ejecuta, la negación nunca tuvo motivo: `hooks_for` instala sus matchers sólo
+`if role.executes`, y un rol de solo lectura corre en `permission_mode="default"` con sus
+`allowed`, así que lo que no está permitido lo niega la capa de permisos con su texto
+genérico. Lo que eso cuesta está medido en la corrida de #69: el Product Analyst de bug
+intentó escribir un test de reproducción por Bash (`cat > …`), leyó la negación como un
+problema de sintaxis y reintentó con heredoc, con `python3` por stdin cinco veces y con
+`base64` en las dos direcciones, ocho turnos en variantes de lo mismo, hasta agotar sus
+turnos sin dictamen.
+
+**La negación que recibe un rol que no ejecuta nombra la regla de su rol**, no la ruta ni
+el comando que quedó afuera: que escribir está fuera de su rol, y qué sí puede hacer en su
+lugar (reproducir leyendo el código, los documentos de tarea y los tests existentes, o
+corriendo los chequeos que el producto declara). El comportamiento lo gobierna
+`docs/product/role-failures.md`.
+
+**El mecanismo es la costura de permisos del SDK, no un hook.** El SDK fijado tiene
+`can_use_tool` con `PermissionResultDeny(message=...)`, y su regla de sombra es
+exactamente nuestra semántica: no se consulta bajo `bypassPermissions` ni para lo que una
+regla de `allowed` ya aprueba. Para un rol en `default` eso significa que el callback se
+dispara justo sobre las llamadas que sus propias reglas no cubren, que es lo que un intento
+de escritura es. Con eso no hace falta decidir si `cat > f` o `sed -i` escriben: la capa de
+permisos ya decidió que no son un chequeo permitido. Un hook con detector de escritura
+sería un segundo parser de shell al lado del que ya está, y la deriva contra la que el
+propio docstring de `hooks.py` advierte.
+
+**El fallback, declarado y no especulativo: el prompt, no un matcher.** `can_use_tool` se
+cablea desde `ClaudeSDKClient` y el runner usa el camino de una sola vuelta de `query()`,
+así que la primera tarea de la subtarea es un spike contra el SDK fijado, como la segunda
+adenda ganó su diseño con el suyo: una prueba en `tests/llm/` que corre un rol de solo
+lectura contra el CLI real, intenta escribir y verifica que el texto con la regla del rol le
+llega al modelo. Si el spike muestra que `query()` no rutea el callback, **no entra
+ningún matcher**: el fallback es la frase en el prompt del rol (escribir está fuera de tu
+rol; reproducí leyendo o corriendo los chequeos declarados; una negación no es un problema
+de sintaxis), y se acepta el texto genérico de la capa de permisos.
+
+El motivo es que un hook que derive la decisión de `Role.allowed` tendría que reimplementar
+la semántica de prefijo de `Bash(<comando>:*)` contra comandos que el producto declara y que
+el prompt le pide al rol extender con un objetivo (`<comando> ruta::test`). Un matcher un
+carácter más estricto que el del SDK niega un chequeo legítimo, y el Product Analyst de bug,
+cuya única herramienta que no es lectura *es* ese chequeo, se queda sin poder reproducir
+nada: un fallo peor que el que esta adenda arregla, e invisible para los tests escritos
+contra ese mismo matcher. De ahí la regla general: **un mecanismo de negación sólo puede
+agregarle un motivo a una llamada que la capa de permisos ya iba a rechazar, nunca decidir
+por su cuenta qué puede correr un rol.** La evidencia de que la frase sola alcanza para la
+regresión medida es que en #81 el rol no intentó escribir nunca y que en #69 el prompt no le
+decía qué hacer en lugar de escribir.
+
+Bajo el fallback no hay dato: la cuenta de negaciones, su campo en `Failure` y la línea del
+documento que PM definió pierden su fuente, y eso se reporta como brecha a PM para la tarea
+siguiente, no se resuelve con un rodeo.
+
+**El texto es del dominio; los constantes del adaptador se quedan donde están.** La frase
+que nombra la regla de un rol es lenguaje del dominio y se deriva de `role.executes`,
+`role.tools` y `role.allowed`: vive en `agentic/core/process/domain/denials.py`, con su
+test unitario, y el adaptador sólo la pasa a `PermissionResultDeny.message`. Los constantes
+de la jaula del rol que ejecuta (`CONFIG`, `PUSH`, `WORKTREE`, `SILENCED`…) siguen en
+`adapters/claude_sdk/hooks.py`: son forma vieja, los estándares aplican a lo que esta tarea
+toca y no a lo que ya existía, y unificar las dos es un platform enhancement, nunca una
+edición al pasar.
+
+Consecuencias:
+
+- El texto sube la barrera del prompt; no es un sandbox nuevo. La garantía de que el rol no
+  escribe la sigue dando el permiso, igual que en la segunda adenda.
+- La prueba del spike vive en `tests/llm/`, que los chequeos declarados de este repo no
+  corren (`pytest -m "not llm"`): va acompañada de una prueba sobre `options_for`, que sí
+  corren, que falla si el cableado desaparece, y el Developer deja en su sección el extracto
+  de la corrida del spike como evidencia, porque el revisor no puede reproducirla con los
+  chequeos declarados.
+- Cuántas negaciones tuvo una corrida queda escrito en el documento, en una línea que
+  escribe el sistema cuando hubo al menos una. No lleva métrica propia: PM lo dejó como
+  supuesto en esta tarea.

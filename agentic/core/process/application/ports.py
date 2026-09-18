@@ -50,6 +50,10 @@ class RawResult:
     # the known set (Bash, Read, Edit, Write, Grep, Glob, Agent, Skill,
     # StructuredOutput) counts as `other`.
     tool_calls: dict[str, int] = field(default_factory=dict)
+    # Write attempts the SDK's permission layer denied during this run, for a role that
+    # does not execute (glossary: Negación; `claude_sdk.runner._deny_writes`). `0` for a
+    # role that executes, which never gets the callback wired at all.
+    denials: int = 0
 
 
 class AttemptFailed(Exception):
@@ -73,11 +77,16 @@ class AttemptFailed(Exception):
         cost_usd: float = 0.0,
         session_id: str = "",
         reason: FailureReason = "other",
+        denials: int = 0,
     ):
         super().__init__(motive(error, reason))
         self.cost_usd = cost_usd
         self.session_id = session_id
         self.reason = reason
+        # Write attempts the SDK denied before this attempt broke (glossary: Negación);
+        # `0` when the raise site had none to report, which is every site but the
+        # runner's own (`RawResult.denials`' own docstring).
+        self.denials = denials
 
 
 class Presubmit(Protocol):

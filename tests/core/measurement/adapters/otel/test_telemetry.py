@@ -781,6 +781,41 @@ def test_a_run_record_without_the_new_fields_emits_only_turns(metrics):
     assert turns.value == 1
 
 
+def test_role_finish_emits_one_max_turns_sample_per_run_beside_turns(metrics):
+    """`agentic.role.max_turns` is the role's cap at the time it ran, its own gauge
+    with exactly the same label set as `agentic.role.turns` beside it (issue #81): a
+    calibration reads the two series together without a third lookup. Over a patch
+    with several run records, one `max_turns` sample per run, paired to its `turns`
+    sample by identical labels."""
+    interview = "Interview: Tech Lead efímero→Tech Lead"
+    ephemeral = _run("Tech Lead efímero", "tech_lead_ephemeral", interview, 0.1)
+    ephemeral["max_turns"] = 12
+    interviewee = _run("Tech Lead", "tech_lead_interviewee", interview, 0.2)
+    interviewee["max_turns"] = 20
+    patch = {"runs": [ephemeral, interviewee], "sections": {"Tech Lead": "t"}, "cost_usd": 0.3}
+    with telemetry.role_span("Tech Lead", "tech_lead", "gym-saas") as run_span:
+        run_span.finish(patch)
+    got = points(metrics)
+    turns_by_slug = {t.attributes["role.slug"]: t for t in got["agentic.role.turns"]}
+    max_turns_by_slug = {t.attributes["role.slug"]: t for t in got["agentic.role.max_turns"]}
+    assert {s.value for s in max_turns_by_slug.values()} == {12, 20}
+    for slug, sample in max_turns_by_slug.items():
+        assert dict(sample.attributes) == dict(turns_by_slug[slug].attributes)
+
+
+def test_a_run_record_without_max_turns_emits_no_max_turns_sample(metrics):
+    """A run recorded before this field existed has `turns` but no `max_turns`: no
+    sample, no crash, `turns` unaffected (the same treatment `calls` and
+    `subagent_cost_usd` already get)."""
+    run = _run("PjM", "pjm", "PjM", 0.1)
+    with telemetry.role_span("PjM", "pjm", "gym-saas") as run_span:
+        run_span.finish({"runs": [run], "sections": {"PjM": "t"}, "cost_usd": 0.1})
+    got = points(metrics)
+    assert "agentic.role.max_turns" not in got
+    (turns,) = got["agentic.role.turns"]
+    assert turns.value == 1
+
+
 def test_role_finish_emits_cold_fallback_when_the_run_record_carries_it(metrics):
     """A run record whose `run_with_retry` dropped a stale caller session and started
     cold (ADR-0004, sixth addendum) leaves one `agentic.role.cold_fallback` sample,

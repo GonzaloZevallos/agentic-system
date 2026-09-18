@@ -316,3 +316,11 @@ _Campo_: working tree — git, que llama "checkout" tanto al acto como al result
 La copia del sistema, fijada a un sha, que ejecuta una corrida. No es la que se está editando: el sistema que corre y el que se modifica son dos, aunque el repo sea el mismo. Por analogía con el bootstrapping de un compilador, **stage1** es el sistema nuevo corrido por el viejo y **stage2** el sistema nuevo corrido por sí mismo; la prueba de que salió bien no es un número sino que stage3 dé idéntico a stage2.
 _Avoid_: runtime (es el harness de cada rol), sistema fijado
 _Campo_: stage0 — del bootstrapping de rustc (rustc-dev-guide), que llama "the same-result test" a la comparación de stage3 con stage2
+
+**Tope de turnos**:
+Máximo de turnos que un rol tiene para entregar en un intento. Se dimensiona por el trabajo que la entrega de ese rol exige, no por lo que le alcanza a otro rol que comparte el prompt base. Agotarlo sin resultado es un fallo de rol, y continuar la sesión en el reintento no lo repone.
+_Avoid_: presupuesto (eso es lo que se espera gastar), max_turns (el nombre en el código, no el concepto)
+
+**Negación**:
+El rechazo del sistema a una herramienta o un comando que el rol no tiene: le llega al rol con el motivo que nombra la regla de su rol, y queda escrita en la sección de esa corrida como una sola línea con cuántas fueron. No es fallo de rol ni devolución y no cuenta para ningún límite.
+_Avoid_: deny (el mecanismo, no el concepto), bloqueo, error de permisos

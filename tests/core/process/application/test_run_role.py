@@ -16,6 +16,7 @@ from agentic.core.process.application.run_role import (
     task_cap,
     with_context,
 )
+from agentic.core.process.domain import rules
 from agentic.core.process.domain.document import HUMAN
 from agentic.core.process.domain.roles import DEVELOPER, PJM, PM, PRODUCT_ANALYST, ROLES
 from agentic.shared.configuration import Configuration
@@ -67,6 +68,7 @@ async def test_retry_passes_the_error_and_sums_cost():
             "slug": "pjm",
             "section": "PjM",
             "cold_fallback": False,
+            "denials": 0,
         }
     ]
     # No session survived the failure: the retry starts over, the error appended.
@@ -74,6 +76,13 @@ async def test_retry_passes_the_error_and_sums_cost():
     assert runner.calls[1]["prompt"].startswith("task\n\n<PreviousAttemptFailed>\n")
     assert runner.calls[1]["resume"] is None
     assert runner.calls[1]["model"] == "m" and runner.calls[1]["cwd"] == Path("/p")
+
+
+async def test_a_failed_attempts_denials_are_recorded_on_its_failure():
+    cut = AttemptFailed("run failed (max_turns)", 0.05, denials=3)
+    runner = ScriptedRunner(pjm=[cut, OK])
+    out = await run_pjm(runner)
+    assert out.failures[0]["denials"] == 3
 
 
 async def test_retry_continues_the_session_a_failed_attempt_left():
@@ -188,6 +197,25 @@ async def test_role_failure_carries_the_last_attempts_motive_verbatim():
         await run_pjm(runner)
     assert str(info.value) == f"PjM failed 2 times: {motive}"
     assert info.value.failures[-1]["error"] == motive
+
+
+async def test_role_failure_names_the_runs_total_denials_when_there_were_any():
+    # The run's total: every recorded failure's denials, never a per-attempt figure
+    # (glossary: Negación) — attempt 1 can burn every denial fighting the permission
+    # layer and attempt 2 still fail on something else.
+    a = AttemptFailed("a", 0.01, denials=5)
+    b = AttemptFailed("b", 0.02, denials=3)
+    runner = ScriptedRunner(pjm=[a, b])
+    with pytest.raises(RoleFailure) as info:
+        await run_pjm(runner)
+    assert str(info.value) == f"PjM failed 2 times: b {rules.denial_note(PJM, 8)}"
+
+
+async def test_role_failure_says_nothing_about_denials_when_there_were_none():
+    runner = ScriptedRunner(pjm=[AttemptFailed("a", 0.05), AttemptFailed("b", 0.04)])
+    with pytest.raises(RoleFailure) as info:
+        await run_pjm(runner)
+    assert str(info.value) == "PjM failed 2 times: b"
 
 
 async def test_the_task_cap_stops_a_role_before_its_first_attempt():
@@ -351,6 +379,7 @@ async def test_run_role_builds_the_patch_and_the_history(tmp_path):
         "cost_usd": 0.1,
         "cost_by_model": {"claude-sonnet-5": 0.08, "claude-haiku-5": 0.02},
         "turns": 3,
+        "max_turns": PRODUCT_ANALYST.max_turns,
         "tokens": {"input": 100, "output": 50, "cache_read": 10, "cache_write": 5},
         "calls": 2,
         "tool_calls": {"Read": 1},
@@ -358,6 +387,7 @@ async def test_run_role_builds_the_patch_and_the_history(tmp_path):
         "resumed_from": "",
         "cold_fallback": False,
         "failed_cost_usd": 0.0,
+        "denials": 0,
     }
     # Timed inside the concurrency slot: started no later than ended, both ISO-8601 UTC.
     assert started_at <= ended_at
@@ -407,6 +437,54 @@ def test_run_record_carries_tokens_calls_and_tool_calls_from_the_output():
     assert run["calls"] == 5
     assert run["tool_calls"] == {"Bash": 3, "Read": 2}
     assert run["subagent_cost_usd"] == 0.07
+    assert run["denials"] == 0
+
+
+def test_run_record_carries_the_delivering_attempts_denials():
+    output = Output(text="ok", data={}, denials=2)
+    assert run_record({}, PJM, "PjM", output)["denials"] == 2
+
+
+async def test_run_role_prepends_the_denial_note_when_the_delivery_had_any(tmp_path):
+    cfg = Configuration(product_dir=tmp_path)
+    runner = ScriptedRunner(pjm=[RawResult(OK.structured_output, 0.03, denials=2)])
+    output, patch = await run_role(
+        {"id": "T-1", "title": "t", "description": "d"}, PJM, cfg, memory_ports(runner)
+    )
+    assert output is not None
+    note = rules.denial_note(PJM, 2)
+    assert patch["sections"]["PjM"] == f"{note}\n\n{output.text}"
+
+
+async def test_run_role_folds_a_failed_attempts_denials_into_the_delivering_runs_note(tmp_path):
+    # The run's total: the failed attempt's denials plus the delivering one's, not the
+    # delivering attempt's alone — attempt 1 can burn every denial and attempt 2 deliver
+    # clean, which must not read as a run with none.
+    cfg = Configuration(product_dir=tmp_path)
+    cut = AttemptFailed("run failed (max_turns)", 0.01, denials=6)
+    runner = ScriptedRunner(pjm=[cut, RawResult(OK.structured_output, 0.03, denials=0)])
+    output, patch = await run_role(
+        {"id": "T-1", "title": "t", "description": "d"}, PJM, cfg, memory_ports(runner)
+    )
+    assert output is not None
+    assert patch["sections"]["PjM"] == f"{rules.denial_note(PJM, 6)}\n\n{output.text}"
+
+
+async def test_run_role_adds_no_note_when_the_run_had_no_denials(tmp_path):
+    cfg = Configuration(product_dir=tmp_path)
+    ports = memory_ports(ScriptedRunner(pjm=[OK]))
+    output, patch = await run_role({"id": "T-1", "title": "t", "description": "d"}, PJM, cfg, ports)
+    assert output is not None
+    assert patch["sections"]["PjM"] == output.text
+
+
+def test_run_record_stamps_the_roles_own_turn_cap():
+    """`max_turns` comes from the `Role` that ran, not the output: the cap in force for
+    this run, so a reader can compute turns spent against it without a second lookup
+    into `roles.py` (and without it drifting if the role's cap changes later)."""
+    output = Output(text="ok", data={}, cost_usd=0.1, turns=1, session_id="s", model="m")
+    run = run_record({}, PJM, "PjM", output)
+    assert run["max_turns"] == PJM.max_turns == 2
 
 
 def test_run_record_carries_the_failed_attempts_cost_already_inside_cost_usd():
