@@ -53,10 +53,13 @@ async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
 
 
 def solution_interview(state: TaskState) -> Interview:
-    """Which solution interview this task gets. A feature has a PM behind it to consult;
-    a platform enhancement has none, so the same two Tech Leads run with the human as
-    the only door for a question that is really about the product (issue #46)."""
-    return INTERVIEW_SOLUTION if state.get("type") == "feature" else INTERVIEW_SOLUTION_PLATFORM
+    """Which solution interview this task gets. A feature and a bug have a PM behind
+    them to consult (issue #65); a platform enhancement has none, so the same two Tech
+    Leads run with the human as the only door for a question that is really about the
+    product (issue #46)."""
+    if state.get("type") == "platform_enhancement":
+        return INTERVIEW_SOLUTION_PLATFORM
+    return INTERVIEW_SOLUTION
 
 
 def _proposed(invariants: list[str]) -> str:

@@ -87,6 +87,7 @@ def render(
         "return_history": state.get("change_history", []),
         "escalated": state.get("escalated"),
         "questions_for_human": state.get("questions_for_human", []),
+        "discard_reason": state.get("discard_reason"),
         "branch": state.get("branch"),
         "pull_request": state.get("pull_request"),
         "subtasks": {sid: _recorded(sub) for sid, sub in state.get("subtasks", {}).items()},

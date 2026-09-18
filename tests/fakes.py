@@ -474,3 +474,36 @@ def verdict(kind, reason="r", definitions=None, glossary=None, cost=0.2) -> RawR
         },
         cost,
     )
+
+
+# The bug path (issue #65): the Product Analyst's diagnosis and PM's ruling on it.
+
+
+def diagnosed(ruling="bug", capability="dashboard", for_pm=(), cost=0.1) -> RawResult:
+    return RawResult(
+        {
+            "markdown": f"### Reproduction\n\nRan it.\n\n### Ruling\n\n{ruling}",
+            "ruling": ruling,
+            "capability": capability,
+            "questions_for_pm": list(for_pm),
+        },
+        cost,
+        3,
+        "pa",
+    )
+
+
+def ruled(
+    kind="approved", ruling="bug", reason="r", definitions=None, glossary=None, cost=0.2
+) -> RawResult:
+    return RawResult(
+        {
+            "markdown": f"### Verdict\n\n{kind}: {ruling}\n\n### For the next role\n\n{reason}",
+            "verdict": kind,
+            "ruling": ruling,
+            "reason": reason,
+            "definitions": definitions or [],
+            "glossary": glossary or [],
+        },
+        cost,
+    )

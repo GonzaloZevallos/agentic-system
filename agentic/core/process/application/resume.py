@@ -24,13 +24,14 @@ from agentic.shared.configuration import Configuration
 from ..domain import rules
 from ..domain.task import TaskState, apply
 from .deliver import READY
+from .discard import DISCARDED
 from .escalate import ESCALATED, NEEDS_HUMAN
 from .ports import Ports, Workspace
 from .run_role import task_cap
 
 # How the system's comment on a resume starts.
 RESUMED = "Resumed: "
-SYSTEM_COMMENTS = (ESCALATED, RESUMED, READY)
+SYSTEM_COMMENTS = (ESCALATED, RESUMED, READY, DISCARDED)
 # What the document's frontmatter carries that is not state: the version record.
 STATE_FIELDS = frozenset(get_type_hints(TaskState)) - {"subtask_id"}
 

@@ -116,9 +116,20 @@ posee. **UX no participa en bugs.**
 
 Los bugs no llevan métricas ni dashboard.
 
-**Implementado**: nada más allá de la clasificación. `classify` lo escala con `bug path
-not implemented yet`; el camino espera a que el producto tenga conocimiento de producto
-escrito contra el cual dictaminar (§11).
+**Implementado (#65)**: PjM, Product Analyst, PM y desde ahí el mismo camino técnico que
+feature. Product Analyst no entrevista: reproduce en el checkout de la tarea, leyendo el
+código y corriendo los chequeos que el producto declara, compara contra la definición
+vigente en `docs/product/` y dictamina: bug, comportamiento esperado o sin definición. Sin
+definición previa no hay consulta (§3) todavía: Product Analyst entrega el dictamen como
+"sin definición" con las preguntas para PM en su sección, PM decide al validarlo, y sólo una
+devolución de PM (reproducción que falta, definición mal leída) cuenta contra el par. Si PM
+decide que es bug, escribe ahí la definición que faltaba, para que Tech Lead tenga spec.
+Comportamiento esperado → la tarea termina **descartada**: el sistema comenta el motivo en
+el issue, borra el worktree y el humano cierra el issue, como hoy mergea el pull request
+(ADR-0011); no se escribe definición, porque una tarea descartada no entrega nada que la
+lleve. Bug → el plan, con PM consultado en la entrevista de solución como en feature,
+Developers, revisión y pull request. Sin flags, métricas ni dashboard. UI Designer y Design
+Lead (etapa 4) y QA (etapa 2) esperan a sus etapas (§11).
 
 ### Platform enhancement
 
@@ -260,7 +271,9 @@ Esto exige que Tech Lead informe a PjM el mapa de subtareas y Developers al crea
 | Platform enhancement | QA |
 
 El cierre es **aprobado** o **descartado**: un bug cuyo dictamen PM valida como
-"comportamiento esperado" lo cierra PjM descartado, sin estas aprobaciones (sección 2).
+"comportamiento esperado" lo cierra PjM descartado, sin estas aprobaciones (sección 2). Hoy
+el sistema lo comenta en el issue con el motivo y termina la corrida; cerrar el issue es
+del humano (#65).
 
 UX Lead, Design Lead y Tech Writer **no aprueban al cierre**. Esa regla existió y fue
 reemplazada: PM es el único que valida producto porque construyó la definición junto con
@@ -780,9 +793,14 @@ refutar.
 | 4 | UX, UI, Design Lead, Tech Writer | Cuando haya frontend |
 | 5 | SRE/Ops, Customer Insights | Cuando haya producción y usuarios |
 
-**Consecuencia asumida**: el camino de bug no se puede ejercitar hasta que el producto tenga
-conocimiento de producto escrito. Las primeras tareas del sistema son features o platform
-enhancements (#46); el sistema como producto propio entra siempre por el segundo (ADR-0017).
+**Consecuencia asumida**: los tres caminos existen (#46, #65), pero el de bug dictamina
+contra el conocimiento de producto escrito, y el v0 no documentó todo lo que hace. Lo que
+sigue faltando es la definición previa: un bug sobre una capacidad sin definición no se
+frena, Product Analyst lo dice y PM decide; si decide que es bug, escribe ahí la definición
+que faltaba. Si decide que es comportamiento esperado, la definición sigue sin escribirse
+(una tarea descartada no entrega nada que la lleve) y el siguiente reporte del mismo caso
+vuelve a llegar sin definición: escribirla ahí es deuda de la etapa 2. El sistema como
+producto propio entra siempre por platform enhancement (§8, ADR-0017).
 
 **Segunda consecuencia asumida**: en la etapa 1 no hay QA, así que Tech Lead arranca sin el
 plan de tests funcionales y Developer escribe los tests desde la definición y las costuras

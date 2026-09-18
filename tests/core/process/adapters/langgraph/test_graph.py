@@ -35,11 +35,13 @@ from tests.fakes import (
     classified,
     defined,
     delivered,
+    diagnosed,
     finding,
     memory_ports,
     planned,
     questions,
     reviewed,
+    ruled,
     verdict,
 )
 
@@ -343,13 +345,118 @@ async def test_low_confidence_escalates_before_defining(config):
     assert len(script.calls) == 1
 
 
-async def test_a_bug_escalates_after_classification(config):
-    script = ScriptedRunner(pjm=[classified(type_="bug")])
+def bug(**queues) -> ScriptedRunner:
+    """A runner with the bug path scripted unless overridden: PjM classifies a bug, the
+    Product Analyst reproduces and rules it one, PM approves, then the rest."""
+    defaults = dict(
+        pjm=[classified(type_="bug")], product_analyst_bug=[diagnosed()], pm_bug=[ruled()]
+    )
+    return ScriptedRunner(**{**defaults, **queues})
+
+
+async def test_a_bug_is_diagnosed_validated_and_built_like_a_feature(config, tmp_path):
+    """The bug path (README.md, 2; issue #65): the diagnosis in place of the definition
+    stage, no interview and no flags, then the same technical stage as a feature, PM
+    consultant included, up to the pull request."""
+    fakes = Fakes()
+    script = bug(**technical())
+    final = await run_graph(script, config, fakes=fakes)
+
+    assert final["status"] == "ready_for_review" and final["type"] == "bug"
+    assert script.slugs == [
+        "pjm",
+        "product_analyst_bug",
+        "pm_bug",
+        "tech_lead_ephemeral",
+        "tech_lead",
+        "developer",
+        "tech_lead_review",
+    ]
+    assert list(final["sections"]) == [
+        PJM.name,
+        PRODUCT_ANALYST.name,
+        PM.name,
+        SOLUTION,
+        "Tech Lead",
+        FINDINGS,
+        "Developer: api",
+        "Tech Lead: review api",
+    ]
+    assert "flags" not in final  # nobody proposed any: a bug changes no scope
+    assert final["pull_request"].endswith("/pull/7")
+    # PM ruled against a written definition, so nothing was consolidated: the only
+    # commit before the Developer's is the solution interview's.
+    assert [m for _, m in fakes.workspace.commits] == ["GH-1: solution interview"]
+    assert not (tmp_path / "docs/product").exists()
+    # The Product Analyst reproduces in the task's checkout, with the product's checks.
+    diagnosis = script.calls[1]
+    assert diagnosis["cwd"] == MemoryWorkspace.ROOT / "GH-1"
+    assert "## PjM\n\nClear." in diagnosis["prompt"]
+    assert "Bash(pytest:*)" in diagnosis["role"].allowed
+    # PM reads the diagnosis whole; the Tech Leads read PM's ruling, as on a feature.
+    assert "## Product Analyst\n\n### Reproduction\n\nRan it." in script.calls[2]["prompt"]
+    assert "## PM\n\n### Verdict\n\napproved: bug" in script.calls[3]["prompt"]
+    assert fakes.tracker.comments[-1][1].startswith("Ready for review")
+    doc = FilesystemTaskDocuments(tmp_path).load("GH-1")
+    assert doc["type"] == "bug" and doc["status"] == "ready_for_review"
+
+
+async def test_a_bug_whose_behaviour_is_expected_is_discarded(config, tmp_path):
+    """PM ruled the product right: no plan, no pull request, no label. The issue is
+    told why, and the human closes it (README.md, 3, "Cierre")."""
+    fakes = Fakes()
+    script = bug(pm_bug=[ruled("approved", "expected_behaviour", "weekly by definition")])
+    final = await run_graph(script, config, fakes=fakes)
+
+    assert final["status"] == "discarded" and final["type"] == "bug"
+    assert len(script.calls) == 3
+    assert "pull_request" not in final and "escalated" not in final
+    assert fakes.tracker.pull_requests == [] and fakes.workspace.pushed == []
+    assert fakes.tracker.labels == [] and fakes.workspace.cleaned == ["GH-1"]
+    assert len(fakes.tracker.comments) == 1
+    text = fakes.tracker.comments[0][1]
+    assert text.startswith("Discarded: weekly by definition")
+    assert "Task document: `.agentic/tasks/GH-1.md`" in text
+    assert final["discard_reason"] == "weekly by definition"
+    assert final["current_role"] == PJM.name
+    doc = FilesystemTaskDocuments(tmp_path).load("GH-1")
+    assert doc["status"] == "discarded" and doc["discard_reason"] == "weekly by definition"
+    assert not (tmp_path / "docs/product").exists()
+
+
+async def test_a_returned_diagnosis_goes_back_to_the_product_analyst_then_approves(config):
+    script = bug(
+        product_analyst_bug=[
+            diagnosed("undefined", "", for_pm=["Is weekly the default?"]),
+            diagnosed(),
+        ],
+        pm_bug=[ruled("returned", reason="not reproduced"), ruled()],
+        **technical(),
+    )
     final = await run_graph(script, config)
-    assert final["type"] == "bug"
-    assert final["status"] == WAITING_ON_HUMAN
-    assert final["escalated"] == "bug path not implemented yet"
-    assert len(script.calls) == 1
+
+    assert final["status"] == "ready_for_review"
+    assert final["changes_requested"] == {PAIR_PM_PA.key: 1}
+    assert script.slugs[:5] == [
+        "pjm",
+        "product_analyst_bug",
+        "pm_bug",
+        "product_analyst_bug",
+        "pm_bug",
+    ]
+    second = script.calls[3]["prompt"]
+    assert "## Product Analyst\n\n### Reproduction" in second  # its own previous section
+    assert "## PM\n\n### Verdict\n\nreturned: bug" in second and "not reproduced" in second
+    assert "You have 1 left" in script.calls[4]["system_prompt"]
+    assert f"{PRODUCT_ANALYST.name} (v1)" in final["sections"]
+    assert f"{PM.name} (v1)" in final["sections"]
+    assert [(r["section"], r["version"]) for r in final["runs"][:5]] == [
+        ("PjM", 1),
+        ("Product Analyst", 1),
+        ("PM", 1),
+        ("Product Analyst", 2),
+        ("PM", 2),
+    ]
 
 
 async def test_a_platform_enhancement_goes_from_pjm_straight_to_the_plan(config, tmp_path):
@@ -647,11 +754,13 @@ def test_exported_graph_uses_the_default_ports():
     assert set(composition.graph.nodes) == {
         "classify",
         "define",
+        "diagnose",
         "validate",
         "plan",
         "pipeline",
         "integrate",
         "deliver",
+        "discard",
         "escalate",
         "pause",
     }

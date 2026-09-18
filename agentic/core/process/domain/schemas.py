@@ -84,6 +84,62 @@ class Verdict(RoleOutput):
     )
 
 
+class Diagnosis(RoleOutput):
+    """The Product Analyst's ruling on a bug (README.md, 2 and 4; issue #65): what it
+    saw when it reproduced, against which definition, and what it makes of it.
+
+    No `flags`: a bug changes no scope, it moves the code to the definition it already
+    has. `undefined` is not a verdict but a hand-off: the product never wrote down what
+    this capability does, so PM decides, and `questions_for_pm` is what PM must settle
+    for the ruling to exist. A schema of its own and not `Definition` with the fields
+    blanked: what PM validates on a bug is a ruling, not a definition."""
+
+    ruling: Literal["bug", "expected_behaviour", "undefined"] = Field(
+        description="`bug`: the product does not do what its definition says. "
+        "`expected_behaviour`: it does, and the request asks for something else. "
+        "`undefined`: no definition covers this case, so PM decides"
+    )
+    capability: str = Field(
+        description="The file in docs/product/ the ruling was made against, as a slug "
+        "(`check-ins`); an empty string when no definition covers the case"
+    )
+    questions_for_pm: list[str] = Field(
+        description="On `undefined`, what PM has to decide for the ruling to exist, "
+        "written for someone who has not read the reproduction. Empty on `bug` and on "
+        "`expected_behaviour`"
+    )
+
+
+class Ruling(RoleOutput):
+    """PM's word on a bug (issue #65): the verdict on the Product Analyst's diagnosis
+    and the final ruling, which is PM's even when the Product Analyst had one.
+
+    Two fields and not one: `verdict` is what the pair counts (a `returned` uses up a
+    return, as on a feature), `ruling` is what routes the task (`bug` goes to the plan,
+    `expected_behaviour` discards it). When the Product Analyst said `undefined`, PM
+    decides here. `definitions` is optional, unlike a feature's: a bug against a written
+    definition changes nothing, and only a bug the product never defined leaves PM
+    writing the definition the Tech Lead will need as spec. Never on
+    `expected_behaviour`: a discarded task delivers nothing, so a definition written
+    there would go nowhere."""
+
+    verdict: Literal["approved", "returned"]
+    ruling: Literal["bug", "expected_behaviour"] = Field(
+        description="The final word: `bug` when the product must move to the definition, "
+        "`expected_behaviour` when the product already does what it should"
+    )
+    reason: str = Field(description="One line. On `returned`, what the Product Analyst must redo")
+    definitions: list[CapabilityFile] = Field(
+        description="On `approved` and `bug`, the definition this bug now fixes, or the "
+        "one that was missing, each complete (not a diff) with its `## Jobs`. Empty when "
+        "the written definition already governs the case, on `expected_behaviour` and on "
+        "`returned`"
+    )
+    glossary: list[GlossaryTerm] = Field(
+        description="Terms a ruling introduces or changes. Empty if none"
+    )
+
+
 class InterviewTurn(RoleOutput):
     """One round of the interviewer (ADR-0014): the questions with a recommendation
     each, or the closing summary once the frontier is empty."""

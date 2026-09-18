@@ -1,6 +1,9 @@
-"""Feature path (README.md, 2): PjM -> Product Analyst (interviewing PM) -> PM ->
-Tech Lead (interviewed by the ephemeral one) -> Developers, one per subtask, in
-parallel, each followed straight away by its review -> integration -> delivery.
+"""The paths of README §2. A feature: PjM -> Product Analyst (interviewing PM) -> PM
+-> Tech Lead (interviewed by the ephemeral one) -> Developers, one per subtask, in
+parallel, each followed straight away by its review -> integration -> delivery. A
+platform enhancement skips the definition stage (issue #46). A bug replaces it with
+the diagnosis: Product Analyst reproduces and rules, PM validates, and a ruling of
+expected behaviour ends the task in `discard` instead of the plan (issue #65).
 Returns loop PM->Product Analyst and Tech Lead->Developer; every escalation goes
 through `escalate`, which tells the human, and then `pause`, which waits for the
 human's answer.
@@ -47,6 +50,8 @@ from ...application.classify import classify
 from ...application.define import define
 from ...application.deliver import deliver
 from ...application.develop import develop
+from ...application.diagnose import diagnose
+from ...application.discard import discard
 from ...application.escalate import escalate
 from ...application.integrate import integrate
 from ...application.limits import RunLimits
@@ -212,21 +217,26 @@ def build_graph(ports_for: PortsFor, telemetry: Telemetry = NoTelemetry()) -> St
     graph = StateGraph(TaskState, input_schema=TaskInput)
     graph.add_node("classify", _node(classify, PJM, shared, telemetry))
     graph.add_node("define", _node(define, PRODUCT_ANALYST, shared, telemetry))
+    graph.add_node("diagnose", _node(diagnose, PRODUCT_ANALYST, shared, telemetry))
     graph.add_node("validate", _node(validate_definition, PM, shared, telemetry))
     graph.add_node("plan", _node(plan, TECH_LEAD, shared, telemetry))
     graph.add_node(PIPELINE, _branch_node(shared, telemetry))
     graph.add_node(INTEGRATE, _system_node(integrate, shared))
     graph.add_node("deliver", _system_node(deliver, shared))
+    graph.add_node("discard", _system_node(discard, shared))
     graph.add_node(ESCALATE, _system_node(escalate, shared))
     graph.add_node(PAUSE, pause)
 
     graph.add_edge(START, "classify")
     graph.add_conditional_edges(
-        "classify", _route(rules.after_classify), ["define", "plan", ESCALATE]
+        "classify", _route(rules.after_classify), ["define", "plan", "diagnose", ESCALATE]
     )
     graph.add_conditional_edges("define", _route(rules.after_define), ["validate", ESCALATE])
+    graph.add_conditional_edges("diagnose", _route(rules.after_diagnose), ["validate", ESCALATE])
     graph.add_conditional_edges(
-        "validate", _route(rules.after_validate), ["define", "plan", ESCALATE]
+        "validate",
+        _route(rules.after_validate),
+        ["define", "diagnose", "plan", "discard", ESCALATE],
     )
     graph.add_conditional_edges("plan", _route(rules.after_plan), [INTEGRATE, ESCALATE])
     # Every branch of the wave comes back here, once, however many were sent.
@@ -235,10 +245,22 @@ def build_graph(ports_for: PortsFor, telemetry: Telemetry = NoTelemetry()) -> St
         INTEGRATE, _fanout(rules.after_integrate), [PIPELINE, "deliver", ESCALATE, END]
     )
     graph.add_conditional_edges("deliver", _route(rules.after_deliver), [END, ESCALATE])
+    graph.add_conditional_edges("discard", _route(rules.after_discard), [END, ESCALATE])
     graph.add_edge(ESCALATE, PAUSE)
     graph.add_conditional_edges(
         PAUSE,
         _route(rules.resume_target),
-        ["classify", "define", "validate", "plan", INTEGRATE, "deliver", ESCALATE, END],
+        [
+            "classify",
+            "define",
+            "diagnose",
+            "validate",
+            "plan",
+            INTEGRATE,
+            "deliver",
+            "discard",
+            ESCALATE,
+            END,
+        ],
     )
     return graph
