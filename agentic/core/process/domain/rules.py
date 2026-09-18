@@ -8,6 +8,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from . import presubmit
 from .document import HUMAN, demote
@@ -28,6 +29,7 @@ from .task import (
     ChangeCategory,
     ChangesRequested,
     EscalationClass,
+    FailureReason,
     FindingCategory,
     FindingRecord,
     ReviewKind,
@@ -273,6 +275,149 @@ def limit_reached(pair: Pair, limit: int, reason: str) -> str:
     return f"{pair.key} hit {limit} returns: {reason}"
 
 
+# The motive of a failed attempt (issue #66; `docs/product/role-failures.md`): "the
+# motive of an attempt that failed, and of the escalation that follows two of them,
+# never has an empty or tautological diagnostic part". Two SDK shapes report a broken
+# attempt (`ResultError`, which structurally carries an exit code, and the error
+# `ResultMessage`, which structurally cannot), so `failure_motive` is fed a value
+# object instead of either one directly: the tiered rule becomes one function with
+# pure inputs and outputs, testable with no SDK and no CLI. `exception_motive` is the
+# sibling for the raise sites whose material is a caught exception, not an SDK report.
+# `motive`, last, is the choke point every `AttemptFailed` passes through
+# (`application/ports.py`): it is what makes the guarantee hold at every raise site by
+# construction, the ten today and any not yet written, instead of by each site's care.
+
+
+@dataclass(frozen=True)
+class ReportedFailure:
+    """What the harness reported about a broken attempt, in the shape `failure_motive`
+    composes from, whichever SDK object carried it. A value object (equality by value,
+    no identity): it exists only to let the tiered rule be tested without the SDK."""
+
+    subtype: str | None = None
+    errors: tuple[str, ...] = ()
+    result: str | None = None
+    api_error_status: int | None = None
+    terminal_reason: str | None = None
+    exit_code: int | None = None
+
+
+def failure_motive(report: ReportedFailure) -> str:
+    """The motive for a broken attempt, composed from everything the SDK reported, in
+    the order that names the cause first: the incident this task fixes (issue #66) is
+    exactly the order gone missing — `subtype="success"` and empty `errors`, with the
+    "API Error: ..." prose sitting unread in `result`.
+
+    Tier 1: `result`'s prose when it strips non-empty, else the stripped, non-empty
+    `errors` joined by `; ` (an entry equal to the prose is dropped, so nothing
+    repeats). Tier 2, when tier 1 has nothing: "the SDK reported no message", plus
+    whatever of `subtype` (never `success`, which names the loop finishing, not a
+    cause), `terminal_reason` and `api_error_status` is present. Tier 3, when tier 2
+    has nothing either: `exit_code` named in words when a `ResultError` carried one,
+    or a report that carries none said as such — the `ResultMessage` site structurally
+    has none, so a formatted `None` is a tautology this never reaches. `exit_code`
+    itself rides alongside tier 1 and tier 2's parenthesised metadata too, last, never
+    formatted when absent."""
+    cause = _cause(report)
+    core = _metadata_core(report)
+    exit_part = f"exit code {report.exit_code}" if report.exit_code is not None else None
+    metadata = ", ".join([*core, *([exit_part] if exit_part else [])])
+    parens = f" ({metadata})" if metadata else ""
+    if cause:
+        return f"{cause}{parens}"
+    if core:
+        return f"the SDK reported no message{parens}"
+    if exit_part:
+        return f"the SDK ended with exit code {report.exit_code} and reported no cause"
+    return "the SDK reported no cause and no exit code"
+
+
+def _cause(report: ReportedFailure) -> str:
+    """Tier 1: the prose, then whatever of `errors` does not just repeat it."""
+    result = (report.result or "").strip()
+    errors = [text for e in report.errors if (text := e.strip())]
+    if result:
+        return "; ".join([result, *(e for e in errors if e != result)])
+    return "; ".join(errors)
+
+
+def _metadata_core(report: ReportedFailure) -> list[str]:
+    """`subtype`, `terminal_reason` and `api_error_status`, present and stripped
+    non-empty, in the order the motive shows them. `exit_code` is not here: it decides
+    tier 3's wording on its own (`failure_motive`), and is appended to this same list,
+    last, whenever either tier renders a parenthetical at all."""
+    parts = []
+    subtype = (report.subtype or "").strip()
+    if subtype and subtype != "success":
+        parts.append(f"subtype={subtype}")
+    terminal = (report.terminal_reason or "").strip()
+    if terminal:
+        parts.append(f"terminal reason: {terminal}")
+    if report.api_error_status is not None:
+        parts.append(f"HTTP {report.api_error_status}")
+    return parts
+
+
+def exception_motive(exc: BaseException) -> str:
+    """The motive's material when the raise site caught an exception instead of an SDK
+    report: `str(exc)` when it strips non-empty, else the type name, so an exception
+    raised with no arguments (`str(exc) == ""`) still names something."""
+    text = str(exc)
+    return text if text.strip() else f"{type(exc).__name__}, with no message"
+
+
+MOTIVE_MAX_CHARS = 2000
+_MOTIVE_HEAD_CHARS = 1600
+_MOTIVE_TAIL_CHARS = 300
+# C0 controls other than `\n` (0x0a) and `\t` (0x09): a stray one in a CLI's stderr or
+# an API error's prose must not reach a Markdown comment or the document's frontmatter.
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f]")
+# Three or more backticks: long enough to open a Markdown fence. Breaking every run
+# with a zero-width space keeps the text readable while none of them can close or open
+# one in the issue comment this motive lands in.
+_CODE_FENCE = re.compile(r"`{3,}")
+
+
+def _break_fences(text: str) -> str:
+    return _CODE_FENCE.sub(lambda m: "\u200b".join(m.group()), text)
+
+
+def _elide(text: str) -> str:
+    """The choke point's cap: unchanged under `MOTIVE_MAX_CHARS`, otherwise the first
+    `_MOTIVE_HEAD_CHARS` (where the prose leads, `API Error: ...` included) and the
+    last `_MOTIVE_TAIL_CHARS` (where a CLI error often puts the actionable part,
+    `resets 11:20pm` included), joined by a marker that says what it removed instead
+    of silently splicing two halves together."""
+    if len(text) <= MOTIVE_MAX_CHARS:
+        return text
+    head, tail = text[:_MOTIVE_HEAD_CHARS], text[-_MOTIVE_TAIL_CHARS:]
+    elided = len(text) - _MOTIVE_HEAD_CHARS - _MOTIVE_TAIL_CHARS
+    return f"{head}\n…[{elided} characters elided]…\n{tail}"
+
+
+def motive(text: str, reason: FailureReason) -> str:
+    """The choke point every `AttemptFailed` passes through (`application/ports.py`):
+    the guarantee that a motive never has an empty or tautological diagnostic part
+    holds here, once, instead of at every raise site's own care.
+
+    In order: collapse `\\r\\n` to `\\n`; drop the C0 controls a stray one in stderr or
+    an API error's prose could carry, keeping `\\n` and `\\t`; neutralise a run of
+    backticks long enough to open a Markdown fence in the issue comment; then, if what
+    is left strips to empty or ends at a colon (optionally trailing whitespace) — the
+    shape of the 2026-09-17 incident's `run failed (success): ` — append a named
+    placeholder after whatever prefix the site wrote, so the text still says which
+    raise site had nothing; and last, cap the length, since none of the above bounds
+    it and a CLI's stderr or a model's prose can run well past what a comment should
+    carry."""
+    normalized = _break_fences(_CONTROL_CHARS.sub("", text.replace("\r\n", "\n")))
+    stripped = normalized.strip()
+    if not stripped or stripped.endswith(":"):
+        prefix = normalized.rstrip()
+        joiner = " " if prefix else ""
+        normalized = f"{prefix}{joiner}no cause reported (reason: {reason})"
+    return _elide(normalized)
+
+
 _LIMIT_REACHED = re.compile(r"^(.+?) hit \d+ returns: ")
 
 
@@ -457,8 +602,22 @@ def cap_reached(role_name: str, spent_usd: float, cap_usd: float) -> str:
     return f"{role_name} stopped by the task cap: {spent_usd:.2f} of {cap_usd:.2f} USD spent"
 
 
-def stopped_by_cap(reason: str | None) -> bool:
-    return " stopped by the task cap: " in (reason or "")
+_CAP_PHRASE = " stopped by the task cap: "
+
+
+def stopped_by_cap(state: TaskState) -> bool:
+    """Whether `state`'s escalation is the task cap, the one `escalate.comment` breaks
+    spending down by phase and proposes a new budget for (`returns_pair`'s own
+    pattern): `escalation_class` decides it when the state carries one, the text
+    match only as the fallback for a document written before that field existed.
+
+    Gating on the class first, not the text alone, matters once a motive can carry up
+    to 2000 characters of CLI and model prose (`motive`): a quoted `cap_reached` phrase
+    inside a `failure`-class escalation's motive must not make the comment tell the
+    human to raise the cap on a run that died of something else entirely."""
+    if (cls := state.get("escalation_class")) is not None:
+        return cls == "cap"
+    return _CAP_PHRASE in (state.get("escalated") or "")
 
 
 def suggested_budget(state: TaskState, per_unit: float) -> int:
