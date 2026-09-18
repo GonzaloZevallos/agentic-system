@@ -558,6 +558,63 @@ def _run(role, slug, section, cost, model="m", session="s"):
     }
 
 
+def test_role_finish_emits_tokens_calls_turns_tool_calls_and_subagent_cost(metrics):
+    run = _run("PjM", "pjm", "PjM", 0.1)
+    run |= {
+        "tokens": {"input": 10, "output": 20, "cache_read": 30, "cache_write": 40},
+        "calls": 5,
+        "tool_calls": {"Read": 2, "Bash": 1},
+        "subagent_cost_usd": 0.02,
+    }
+    with telemetry.role_span("PjM", "pjm", "gym-saas") as run_span:
+        run_span.finish({"runs": [run], "sections": {"PjM": "t"}, "cost_usd": 0.1})
+    got = points(metrics)
+    # Same labels as `agentic.role.cost_usd`, minus `system.version`.
+    base = {
+        "product": "gym-saas",
+        "role": "PjM",
+        "model": "m",
+        "rework": False,
+        "role.slug": "pjm",
+        "phase": "definition",
+        "role.outcome": "delivered",
+    }
+    tokens = {t.attributes["kind"]: t.value for t in got["agentic.role.tokens"]}
+    assert tokens == {"input": 10, "output": 20, "cache_read": 30, "cache_write": 40}
+    for sample in got["agentic.role.tokens"]:
+        assert dict(sample.attributes) == {**base, "kind": sample.attributes["kind"]}
+
+    (calls,) = got["agentic.role.calls"]
+    assert calls.value == 5 and dict(calls.attributes) == base
+
+    (turns,) = got["agentic.role.turns"]
+    assert turns.value == 1 and dict(turns.attributes) == base  # `_run`'s own turns=1
+
+    tool_calls = {t.attributes["tool"]: t.value for t in got["agentic.role.tool_calls"]}
+    assert tool_calls == {"Read": 2, "Bash": 1}
+    for sample in got["agentic.role.tool_calls"]:
+        assert dict(sample.attributes) == {**base, "tool": sample.attributes["tool"]}
+
+    (subagent,) = got["agentic.role.subagent_cost_usd"]
+    assert subagent.value == pytest.approx(0.02) and dict(subagent.attributes) == base
+
+
+def test_a_run_record_without_the_new_fields_emits_only_turns(metrics):
+    """A run recorded before this task has `turns` (always required) but none of
+    `tokens`, `calls`, `tool_calls`, `subagent_cost_usd`: no sample for those, no
+    crash, `turns` still there."""
+    run = _run("PjM", "pjm", "PjM", 0.1)
+    with telemetry.role_span("PjM", "pjm", "gym-saas") as run_span:
+        run_span.finish({"runs": [run], "sections": {"PjM": "t"}, "cost_usd": 0.1})
+    got = points(metrics)
+    assert "agentic.role.tokens" not in got
+    assert "agentic.role.calls" not in got
+    assert "agentic.role.tool_calls" not in got
+    assert "agentic.role.subagent_cost_usd" not in got
+    (turns,) = got["agentic.role.turns"]
+    assert turns.value == 1
+
+
 def test_four_run_records_leave_four_cost_samples_and_four_child_spans(spans_and_metrics):
     """The vertical's acceptance: one interview-shaped patch, four run records across
     two roles, four `cost_usd` samples and four child spans under the role span."""

@@ -173,6 +173,11 @@ class Instruments:
     role_queue_wait: Gauge
     role_failures: Gauge
     role_failure_cost: Gauge
+    role_tokens: Gauge
+    role_calls: Gauge
+    role_turns: Gauge
+    role_tool_calls: Gauge
+    role_subagent_cost: Gauge
 
     @classmethod
     def create(cls, m: metrics.Meter) -> Instruments:
@@ -214,6 +219,29 @@ class Instruments:
                 description=(
                     "Cost of a patch's failed attempts by reason; not additive with "
                     "agentic.role.cost_usd, whose runs and residual already carry that money"
+                ),
+            ),
+            role_tokens=m.create_gauge(
+                "agentic.role.tokens",
+                unit="tokens",
+                description="Token usage of one run record, one sample per kind",
+            ),
+            role_calls=m.create_gauge(
+                "agentic.role.calls", description="Calls to the model in one run record"
+            ),
+            role_turns=m.create_gauge(
+                "agentic.role.turns", description="`num_turns` of one run record"
+            ),
+            role_tool_calls=m.create_gauge(
+                "agentic.role.tool_calls",
+                description="Tool-use blocks of one run record, one sample per tool",
+            ),
+            role_subagent_cost=m.create_gauge(
+                "agentic.role.subagent_cost_usd",
+                description=(
+                    "What of a run record's cost a sub-agent spent (ADR-0013); not "
+                    "additive with agentic.role.cost_usd, whose run already carries "
+                    "that money as part of its own total"
                 ),
             ),
         )
@@ -366,9 +394,19 @@ class RoleRun(Run):
         }
 
     def _emit_run(self, patch: TaskState, run: RoleRunRecord) -> None:
+        """`agentic.role.cost_usd`, `.run_duration`, `.queue_wait`, plus the tokens,
+        calls, turns, tool calls and sub-agent cost of this run record, one
+        record-and-flush. The token-family gauges drop `system.version` from the
+        labels (issue #24): a token panel groups by role and model, never by the
+        checkout that ran it. `tokens`, `calls`, `tool_calls` and `subagent_cost_usd`
+        are absent on a run recorded before this task; `turns` is not, so it is the
+        one of the five always emitted."""
         labels = self._run_labels(patch, run)
         duration = system_metrics.run_duration_s(run)
         queue_wait = run.get("queue_wait_s")
+        token_labels = {k: v for k, v in labels.items() if k != "system.version"}
+        tokens = run.get("tokens", {})
+        tool_calls = run.get("tool_calls", {})
 
         def record(i: Instruments) -> None:
             i.role_cost.set(run["cost_usd"], labels)
@@ -376,6 +414,15 @@ class RoleRun(Run):
                 i.role_run_duration.set(duration, labels)
             if queue_wait is not None:
                 i.role_queue_wait.set(queue_wait, labels)
+            for kind, count in tokens.items():
+                i.role_tokens.set(count, {**token_labels, "kind": kind})
+            if "calls" in run:
+                i.role_calls.set(run["calls"], token_labels)
+            i.role_turns.set(run["turns"], token_labels)
+            for tool, count in tool_calls.items():
+                i.role_tool_calls.set(count, {**token_labels, "tool": tool})
+            if "subagent_cost_usd" in run:
+                i.role_subagent_cost.set(run["subagent_cost_usd"], token_labels)
 
         self._emit(record)
 
