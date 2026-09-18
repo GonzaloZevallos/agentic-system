@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from ..domain.roles import Role
+from ..domain.rules import motive
 from ..domain.task import FailureReason, TaskInput, TaskState
 from .limits import RunLimits
 
@@ -58,7 +59,13 @@ class AttemptFailed(Exception):
     still there (ADR-0004, addendum).
 
     `reason`, from the closed set `FailureReason`, is the raise site's own call, never
-    guessed later by parsing `error`: it is what `agentic.role.failures` groups by."""
+    guessed later by parsing `error`: it is what `agentic.role.failures` groups by.
+
+    `error` passes through `rules.motive` before it becomes the exception's own message
+    (`str(exc)`, what `run_with_retry` records as the attempt's `Failure.error` and what
+    a second failure's `RoleFailure` carries verbatim): the choke point every raise site
+    inherits instead of building the guarantee itself (issue #66) — a motive here never
+    has an empty or tautological diagnostic part, whatever the site interpolated."""
 
     def __init__(
         self,
@@ -67,7 +74,7 @@ class AttemptFailed(Exception):
         session_id: str = "",
         reason: FailureReason = "other",
     ):
-        super().__init__(error)
+        super().__init__(motive(error, reason))
         self.cost_usd = cost_usd
         self.session_id = session_id
         self.reason = reason
