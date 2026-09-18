@@ -6,9 +6,11 @@ import pytest
 
 from agentic.core.process.application.ports import AttemptFailed, RawResult
 from agentic.core.process.application.run_role import (
+    Output,
     RoleFailure,
     TaskCapReached,
     context_for,
+    run_record,
     run_role,
     run_with_retry,
     task_cap,
@@ -205,7 +207,12 @@ async def test_run_role_builds_the_patch_and_the_history(tmp_path):
                 0.1,
                 3,
                 "s2",
-                cost_by_model={"claude-sonnet-5": 0.1},
+                # A sub-agent spent part of this: 0.02 of the 0.1 total is not the
+                # role's own model.
+                cost_by_model={"claude-sonnet-5": 0.08, "claude-haiku-5": 0.02},
+                usage={"input": 100, "output": 50, "cache_read": 10, "cache_write": 5},
+                calls=2,
+                tool_calls={"Read": 1},
             )
         ]
     )
@@ -245,8 +252,12 @@ async def test_run_role_builds_the_patch_and_the_history(tmp_path):
         "session_id": "s2",
         "model": "claude-sonnet-5",
         "cost_usd": 0.1,
-        "cost_by_model": {"claude-sonnet-5": 0.1},
+        "cost_by_model": {"claude-sonnet-5": 0.08, "claude-haiku-5": 0.02},
         "turns": 3,
+        "tokens": {"input": 100, "output": 50, "cache_read": 10, "cache_write": 5},
+        "calls": 2,
+        "tool_calls": {"Read": 1},
+        "subagent_cost_usd": pytest.approx(0.02),
     }
     # Timed inside the concurrency slot: started no later than ended, both ISO-8601 UTC.
     assert started_at <= ended_at
@@ -258,6 +269,26 @@ async def test_run_role_builds_the_patch_and_the_history(tmp_path):
     assert "- `touches_ui`: UI" in call["system_prompt"]
     assert call["json_schema"]["properties"]["flags"]["required"] == ["touches_ui", "touches_copy"]
     assert "## PM\n\nreturned" in call["prompt"] and "## Product Analyst\n\nv1" in call["prompt"]
+
+
+def test_run_record_carries_tokens_calls_and_tool_calls_from_the_output():
+    output = Output(
+        text="ok",
+        data={},
+        cost_usd=0.5,
+        turns=4,
+        session_id="s",
+        model="claude-sonnet-5",
+        usage={"input": 10, "output": 20, "cache_read": 30, "cache_write": 40},
+        calls=5,
+        tool_calls={"Bash": 3, "Read": 2},
+        subagent_cost_usd=0.07,
+    )
+    run = run_record({}, PJM, "PjM", output)
+    assert run["tokens"] == {"input": 10, "output": 20, "cache_read": 30, "cache_write": 40}
+    assert run["calls"] == 5
+    assert run["tool_calls"] == {"Bash": 3, "Read": 2}
+    assert run["subagent_cost_usd"] == 0.07
 
 
 async def test_run_role_turns_a_role_failure_into_an_escalation(tmp_path):

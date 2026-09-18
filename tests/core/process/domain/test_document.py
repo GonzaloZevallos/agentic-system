@@ -32,6 +32,10 @@ def test_render_then_parse_roundtrip():
                 "cost_usd": 0.2,
                 "cost_by_model": {"m": 0.15, "sub": 0.05000001},
                 "turns": 2,
+                "tokens": {"input": 10, "output": 20, "cache_read": 30, "cache_write": 40},
+                "calls": 3,
+                "tool_calls": {"Read": 2, "Bash": 1},
+                "subagent_cost_usd": 0.05000001,
             },
         ],
         "escalated": None,
@@ -51,6 +55,17 @@ def test_render_then_parse_roundtrip():
     assert data["failures"] == state["failures"]
     assert data["runs"][0] == state["runs"][0]
     assert data["runs"][1]["cost_by_model"] == {"m": 0.15, "sub": 0.05}  # rounded like costs
+    # Tokens, calls, tool calls and the sub-agent split survive the round trip too
+    # (issue #24): the forward direction, not only that an old document still parses.
+    assert data["runs"][1]["tokens"] == {
+        "input": 10,
+        "output": 20,
+        "cache_read": 30,
+        "cache_write": 40,
+    }
+    assert data["runs"][1]["calls"] == 3
+    assert data["runs"][1]["tool_calls"] == {"Read": 2, "Bash": 1}
+    assert data["runs"][1]["subagent_cost_usd"] == 0.05  # rounded like cost_by_model
     assert data["cost_usd"] == 0.1235
     assert data["prompts"] == {"pjm": "abcd1234"}
     assert data["description"] == "Users want CSV."
@@ -179,10 +194,10 @@ def test_the_channel_survives_the_document():
 
 
 def test_a_document_written_before_slug_and_timing_existed_still_parses():
-    """`RoleRun.slug/.started_at/.ended_at/.queue_wait_s` and `Failure.reason/.slug/
-    .section` are new keys inside entries `document.py` already rendered and parsed
-    whole: no rename, so a run or a failure recorded before this task carries on
-    without them, exactly as written."""
+    """`RoleRun.slug/.started_at/.ended_at/.queue_wait_s/.tokens/.calls/.tool_calls/
+    .subagent_cost_usd` and `Failure.reason/.slug/.section` are new keys inside entries
+    `document.py` already rendered and parsed whole: no rename, so a run or a failure
+    recorded before this task carries on without them, exactly as written."""
     old = (
         "---\n"
         "id: T-1\n"
@@ -207,5 +222,7 @@ def test_a_document_written_before_slug_and_timing_existed_still_parses():
         "turns": 1,
     }
     assert "slug" not in run and "started_at" not in run and "queue_wait_s" not in run
+    assert "tokens" not in run and "calls" not in run and "tool_calls" not in run
+    assert "subagent_cost_usd" not in run
     (failure,) = state["failures"]
     assert failure["error"] == "e" and "reason" not in failure and "slug" not in failure

@@ -122,10 +122,13 @@ def render(
 
 def _rounded_run(run: RoleRun) -> dict:
     """Money in the frontmatter to four decimals. A run recorded before the split by
-    model has no `cost_by_model`, and stays without one."""
+    model has no `cost_by_model`, and one recorded before this task has no
+    `subagent_cost_usd`; both stay without one."""
     rounded = dict(run, cost_usd=round(run["cost_usd"], 4))
     if "cost_by_model" in run:
         rounded["cost_by_model"] = {m: round(c, 4) for m, c in run["cost_by_model"].items()}
+    if "subagent_cost_usd" in run:
+        rounded["subagent_cost_usd"] = round(run["subagent_cost_usd"], 4)
     return rounded
 
 

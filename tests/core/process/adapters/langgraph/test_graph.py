@@ -585,6 +585,10 @@ async def test_role_failure_escalates_and_keeps_failures(config, tmp_path):
         "cost_usd": 0.01,
         "cost_by_model": {},
         "turns": 0,
+        "tokens": {},
+        "calls": 0,
+        "tool_calls": {},
+        "subagent_cost_usd": 0,
     }
     assert doc["status"] == WAITING_ON_HUMAN
 

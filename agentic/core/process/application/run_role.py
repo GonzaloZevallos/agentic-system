@@ -87,6 +87,18 @@ class Output:
     model: str = ""
     # The successful attempt's cost by model; a failed attempt only carries its total.
     cost_by_model: dict[str, float] = field(default_factory=dict)
+    # Token usage of the delivering call, by kind (`RawResult.usage`'s own docstring
+    # has the per-call-not-cumulative evidence). Empty on a failed attempt: only the
+    # delivery carries it.
+    usage: dict[str, int] = field(default_factory=dict)
+    # Calls to the model in this run (`RawResult.calls`'s own docstring: one per
+    # `AssistantMessage` seen before the delivery).
+    calls: int = 0
+    # `tool_use` blocks of this run, by tool name (`RawResult.tool_calls`).
+    tool_calls: dict[str, int] = field(default_factory=dict)
+    # What of `cost_by_model` a sub-agent spent: every model but this run's own
+    # (ADR-0013). Not additive with `cost_usd`.
+    subagent_cost_usd: float = 0.0
     # Failed attempts before this output. Empty on a clean run. Their cost is
     # already included in `cost_usd`: a paid attempt counts even when it failed.
     failures: list[Failure] = field(default_factory=list)
@@ -316,7 +328,17 @@ async def _attempt(
         session_id=result.session_id,
         model=model,
         cost_by_model=result.cost_by_model,
+        usage=result.usage,
+        calls=result.calls,
+        tool_calls=result.tool_calls,
+        subagent_cost_usd=_subagent_cost_usd(result.cost_by_model, model),
     )
+
+
+def _subagent_cost_usd(cost_by_model: dict[str, float], model: str) -> float:
+    """What of `cost_by_model` a sub-agent spent: every model but the role's own
+    (ADR-0013, addendum: every sub-agent runs in the subagent model, not the role's)."""
+    return sum(cost for spent_on, cost in cost_by_model.items() if spent_on != model)
 
 
 def task_cap(state: TaskState, cfg: Configuration) -> float:
@@ -355,6 +377,10 @@ def run_record(state: TaskState, role: Role, section: str, output: Output) -> Ro
         "started_at": output.started_at,
         "ended_at": output.ended_at,
         "queue_wait_s": output.queue_wait_s,
+        "tokens": output.usage,
+        "calls": output.calls,
+        "tool_calls": output.tool_calls,
+        "subagent_cost_usd": output.subagent_cost_usd,
     }
 
 

@@ -147,6 +147,21 @@ class RoleRun(TypedDict):
     # series and never folded into the duration above. Absent on a run recorded before
     # this field existed.
     queue_wait_s: NotRequired[float]
+    # Token usage of this run's delivering `ResultMessage`, by kind (`input`, `output`,
+    # `cache_read`, `cache_write`): `agentic.role.tokens` groups on this key. Absent on
+    # a run recorded before this field existed.
+    tokens: NotRequired[dict[str, int]]
+    # Calls to the model in this run: one per `AssistantMessage` the runner saw before
+    # the delivery (`ClaudeSdkRunner.run_once`'s own count). Absent on a run recorded
+    # before this field existed.
+    calls: NotRequired[int]
+    # `tool_use` blocks of this run, by tool name; a name outside the known set counts
+    # as `other`. Absent on a run recorded before this field existed.
+    tool_calls: NotRequired[dict[str, int]]
+    # What of `cost_by_model` a sub-agent spent: every model but this run's own
+    # (ADR-0013). Not additive with `cost_usd`, which already counts that dollar once.
+    # Absent on a run recorded before this field existed.
+    subagent_cost_usd: NotRequired[float]
 
 
 class ChangesRequested(TypedDict):
