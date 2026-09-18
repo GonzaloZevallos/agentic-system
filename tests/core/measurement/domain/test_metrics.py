@@ -162,3 +162,23 @@ def test_run_duration_s_is_ended_minus_started():
 def test_run_duration_s_is_none_for_a_run_recorded_before_the_fields_existed():
     assert metrics.run_duration_s({"role": "PjM"}) is None
     assert metrics.run_duration_s({"started_at": "2026-09-18T10:00:00.000+00:00"}) is None
+
+
+def test_invocation_returns_by_category_reads_only_the_deltas_own_history():
+    # No `changes_requested` counter to reconcile against: an invocation delta carries
+    # exactly the entries it added, so there is no `unknown` bucket to compute.
+    patch = {
+        "change_history": [
+            {"pair": "PM→Product Analyst", "category": "definition", "reason": "r"},
+            {"pair": "Tech Lead→Developer:a", "category": "spec-behaviour", "reason": "r"},
+            {"pair": "Tech Lead→Developer:a", "category": "spec-behaviour", "reason": "r"},
+        ]
+    }
+    assert metrics.invocation_returns_by_category(patch) == {
+        "definition": 1,
+        "spec-behaviour": 2,
+    }
+
+
+def test_invocation_returns_by_category_is_empty_without_a_return_this_invocation():
+    assert metrics.invocation_returns_by_category({}) == {}

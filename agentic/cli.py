@@ -16,7 +16,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from functools import partial
-from typing import cast
+from typing import Literal, cast
 
 import anyio
 from dotenv import load_dotenv
@@ -42,6 +42,7 @@ from .shared.configuration import ENV_PREFIX, Configuration, MissingProductDir
 from .shared.environment import without_own_toolchain
 
 Checkpointer = Callable[[Configuration], AbstractAsyncContextManager[BaseCheckpointSaver]]
+InvocationKind = Literal["run", "resume"]
 
 
 class CannotStart(Exception):
@@ -172,7 +173,7 @@ async def _run(
             await _refuse_a_started_task(app, config, task["id"], ports)
         # A thread keeps its channels: a new run over it would add to the old cost and runs.
         await saver.adelete_thread(task["id"])
-        final = await _invoke(app, task, config, task, ports)
+        final = await _invoke(app, task, config, task, ports, "run")
     _report(final, task["id"], ports)
 
 
@@ -241,13 +242,23 @@ async def _resume(
         crashed = r.source == "checkpoint" and not snapshot.interrupts
         command: Command | None = None if crashed else Command(resume={"decision": r.decision})
         resuming.announce(r, ports)
-        final = await _invoke(app, command, config, r.paused, ports)
+        final = await _invoke(app, command, config, r.paused, ports, "resume", r.decision)
     _report(final, task_id, ports)
 
 
 async def _invoke(
-    app, graph_input, config: RunnableConfig, task: TaskInput, ports: Ports
+    app,
+    graph_input,
+    config: RunnableConfig,
+    task: TaskInput,
+    ports: Ports,
+    kind: InvocationKind = "run",
+    decision: str | None = None,
 ) -> TaskState:
+    # The state as this invocation entered: `_run`'s fresh `TaskInput` (no prior cost),
+    # or `_resume`'s paused state. `finish_invocation` diffs it against the state the
+    # invocation leaves with, so a resume reports only what it spent (README.md, 14).
+    entering = cast(TaskState, task)
     try:
         with telemetry.task_span(task["id"], task["title"], product_name(ports)) as run:
             try:
@@ -255,9 +266,12 @@ async def _invoke(
             except Exception:
                 # The run broke outside any use case; the task span still closes with a
                 # status, so Grafana counts it (`crashed` is telemetry-only, never state).
-                run.finish({**task, "status": "crashed"})
+                crashed = cast(TaskState, {**task, "status": "crashed"})
+                run.finish(crashed)
+                run.finish_invocation(entering, crashed, kind, decision)
                 raise
             run.finish(final)
+            run.finish_invocation(entering, final, kind, decision)
     finally:
         telemetry.flush()
     return final

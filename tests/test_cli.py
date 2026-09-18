@@ -293,6 +293,98 @@ async def test_a_paused_task_resumes_through_the_cli_and_run_refuses_to_redo_it(
         await cli._resume("GH-1", raised, ports, yes=True, checkpointer=saver)
 
 
+class MetricPoints:
+    """Every data point `_invoke`'s two invocations exported, by metric name: a resume
+    emitting the task's whole accumulated cost again, instead of only what it spent
+    itself, is exactly the bug the request opens with (README.md, 14)."""
+
+    def __init__(self):
+        from opentelemetry.sdk.metrics.export import MetricReader
+
+        class _Reader(MetricReader):
+            def _receive_metrics(_self, metrics_data, timeout_millis=10_000, **kw):
+                for rm in metrics_data.resource_metrics:
+                    for sm in rm.scope_metrics:
+                        for metric in sm.metrics:
+                            self.points.setdefault(metric.name, []).extend(metric.data.data_points)
+
+            def shutdown(_self, timeout_millis=30_000, **kw):
+                pass
+
+        self.points: dict[str, list] = {}
+        self.reader = _Reader()
+
+
+@pytest.mark.anyio
+async def test_a_resume_emits_only_what_it_spent_never_the_tasks_whole_cost(
+    monkeypatch, tmp_path, capsys
+):
+    from agentic.core.measurement.adapters.otel import telemetry
+    from agentic.core.process.adapters.langgraph.graph import build_graph
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import (
+        MemoryWorkspace,
+        ScriptedRunner,
+        answers,
+        classified,
+        defined,
+        delivered,
+        memory_ports,
+        planned,
+        questions,
+        reviewed,
+        verdict,
+    )
+
+    script = ScriptedRunner(
+        pjm=[classified()],
+        product_analyst_interviewer=[questions(1), questions(done=True)],
+        pm_interviewee=[answers(1)],
+        product_analyst=[defined()],
+        pm=[verdict("approved")],
+        tech_lead_ephemeral=[questions(done=True)],
+        tech_lead=[planned()],
+        developer=[delivered()],
+        tech_lead_review=[reviewed("approved")],
+    )
+    ports = memory_ports(script)
+    ports.workspace.moved.add(MemoryWorkspace.ROOT / "GH-1")
+    monkeypatch.setattr(cli, "graph", build_graph(lambda cfg: ports))
+    monkeypatch.setenv("AGENTIC_PRODUCT_DIR", str(tmp_path))
+    monkeypatch.setenv("AGENTIC_TASK_MAX_BUDGET_USD", "0.7")
+    cfg = Configuration.from_sources({}, os.environ)
+    saver, task = Saver(), {"id": "GH-1", "title": "Export", "description": "CSV."}
+
+    points = MetricPoints()
+    telemetry.configure(meter_provider=telemetry.meter_provider_for(points.reader))
+    try:
+        with pytest.raises(SystemExit) as info:
+            await cli._run(task, cfg, ports, checkpointer=saver)
+        assert info.value.code == 1
+        monkeypatch.setenv("AGENTIC_TASK_BUDGET_USD", "50")
+        raised = Configuration.from_sources({}, os.environ)
+        await cli._resume("GH-1", raised, ports, yes=True, checkpointer=saver)
+        assert "status:    ready_for_review" in capsys.readouterr().out
+    finally:
+        telemetry.configure()
+
+    invocations = points.points["agentic.task.invocations"]
+    assert [p.attributes["invocation.kind"] for p in invocations] == ["run", "resume"]
+    assert invocations[0].attributes["task.status"] == "waiting_on_human"
+    assert invocations[1].attributes["task.status"] == "ready_for_review"
+
+    # One pause, by the task cap's class (`agentic.task.human_decisions` is covered at
+    # its own seam, `test_telemetry.py`, where a decision is easy to script directly).
+    (paused,) = points.points["agentic.task.paused"]
+    assert paused.attributes["escalation.class"] == "cap"
+
+    run_cost, resume_cost = (p.value for p in points.points["agentic.invocation.cost_usd"])
+    total_cost = points.points["agentic.task.cost_usd"][-1].value
+    # The resume's own delta, never the task's running total repeated a second time.
+    assert 0 < resume_cost < total_cost
+    assert run_cost + resume_cost == pytest.approx(total_cost)
+
+
 @pytest.mark.anyio
 async def test_run_refuses_a_task_whose_document_is_paused_unless_fresh(tmp_path):
     from agentic.shared.configuration import Configuration
