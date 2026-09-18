@@ -4,7 +4,12 @@ Pure functions, so the telemetry adapter stays thin and each definition is a uni
 Rework is a role run that repeats work already done in the task: a delivery with
 `version > 1` (it follows a return) or a failed attempt (paid, no delivery). Internal
 returns never reach the state, and parallel Developers will carry their own subtask
-version, so neither counts.
+version, so neither counts. Measured in money (`docs/product/rework.md`; ADR-0008,
+2026-09-18 second addendum): the whole `cost_usd` of a returned run, only the failed-
+attempt money of a first delivery, plus whatever of the task's `cost_usd` no run
+accounts for at all. Each dollar counts once, never twice: a failed attempt's cost
+already lives inside the delivering run's own `cost_usd` (`run_role.py`), so a
+`run_rework_usd` reader never adds it a second time on top.
 """
 
 from __future__ import annotations
@@ -12,10 +17,19 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime
 
+from agentic.core.process.domain import rules
 from agentic.core.process.domain.task import Failure, InterviewStats, RoleRun, TaskState
 
-# `rules.spent_by_phase`'s own floor: below it, a residual is rounding noise, not
-# money nothing accounted for.
+# Below this, a residual is floating-point noise (an interview's runs summed in a
+# different order), not money nothing accounted for: `has_residual_sample`'s own
+# emission gate (ADR-0008, 2026-09-18 second addendum). Not a rounding tolerance — that
+# job belongs to `RESIDUAL_FLOOR_USD` alone.
+RESIDUAL_EPSILON_USD = 1e-9
+# The rounding tolerance `rules.spent_by_phase` and the rework acceptance test compare
+# with: it stopped gating emission (ADR-0008, 2026-09-18 second addendum) because it is
+# a per-patch number and the promise it backs — the task's `rework_usd` equals the sum
+# of its role samples — is per task, so many small patches could each hide up to this
+# much and never clear the floor on their own.
 RESIDUAL_FLOOR_USD = 0.005
 
 
@@ -23,11 +37,27 @@ def is_rework(run: RoleRun) -> bool:
     return run["version"] > 1
 
 
+def run_rework_usd(run: RoleRun) -> float:
+    """What of this run's own `cost_usd` is rework (ADR-0008, 2026-09-18 second
+    addendum): the whole thing when the run is a return (`is_rework`), else only what
+    its own failed attempts cost (`RoleRun.failed_cost_usd`, already counted once inside
+    `cost_usd` by `run_with_retry`) — a `version == 1` run's delivering call is not
+    rework. `0.0` for a run recorded before this task, which under-reports that run's
+    failure money on purpose rather than guess it back."""
+    return run["cost_usd"] if is_rework(run) else run.get("failed_cost_usd", 0.0)
+
+
 def rework_cost_usd(state: TaskState) -> float:
-    """Dollars spent on rework: repeated deliveries plus every failed attempt."""
-    runs = sum(r["cost_usd"] for r in state.get("runs", []) if is_rework(r))
-    failures = sum(f["cost_usd"] for f in state.get("failures", []))
-    return runs + failures
+    """Dollars spent on rework (`docs/product/rework.md`): the sum of `run_rework_usd`
+    over every run, plus whatever of `cost_usd` no run accounts for — a task's own
+    residual, which is rework by the same definition (`residual_rework`). One dollar
+    counted once: a returned run's failed attempts never add on top of its own
+    `cost_usd`, since `run_rework_usd` already picked the whole run over the
+    `failed_cost_usd` fact for it."""
+    runs = state.get("runs", [])
+    rework = sum(run_rework_usd(r) for r in runs)
+    unaccounted = max(state.get("cost_usd", 0.0) - sum(r["cost_usd"] for r in runs), 0.0)
+    return rework + unaccounted
 
 
 def changes_requested_total(state: TaskState) -> int:
@@ -108,16 +138,36 @@ def residual_cost_usd(patch: TaskState) -> float:
 
 def has_residual_sample(patch: TaskState) -> bool:
     """Whether this patch needs a residual sample: its unaccounted cost clears the
-    rounding floor, or it has no run at all to represent it — an empty patch (a node
-    that raised outside its use case's own failure handling) still leaves one
-    zero-cost sample, so a role's `cost_usd` panel never silently misses a run."""
-    return residual_cost_usd(patch) >= RESIDUAL_FLOOR_USD or not patch.get("runs")
+    floating-point-noise epsilon, or it has no run at all to represent it — an empty
+    patch (a node that raised outside its use case's own failure handling) still leaves
+    one zero-cost sample, so a role's `cost_usd` panel never silently misses a run. Gated
+    on `RESIDUAL_EPSILON_USD`, not `RESIDUAL_FLOOR_USD` (ADR-0008, 2026-09-18 second
+    addendum): the floor is a per-task rounding tolerance, and gating emission on it here
+    would let many small patches each hide up to that much money with none of them
+    clearing it alone."""
+    return residual_cost_usd(patch) >= RESIDUAL_EPSILON_USD or not patch.get("runs")
 
 
 def residual_rework(patch: TaskState) -> bool:
-    """The residual is rework whenever the patch paid for a failed attempt: paid,
-    undelivered work is rework by definition (`rework_cost_usd`)."""
-    return bool(patch.get("failures"))
+    """Every residual is rework (ADR-0008, 2026-09-18 second addendum): a dollar no run
+    record accounts for is a dollar that produced no delivery, which is the glossary's
+    own definition of rework, whether or not this patch also carries a failed attempt of
+    its own."""
+    return True
+
+
+def residual_phase(patch: TaskState) -> str:
+    """The residual's own `phase` label, in cascade, never absent: the phase of the run
+    this patch delivered (`target_run`), else the phase of the section its first failed
+    attempt was writing, else the literal `"unknown"` (ADR-0008, 2026-09-18 second
+    addendum) — an omitted label and one with a value are different series, and nobody
+    sums them back together after the fact."""
+    if (run := target_run(patch)) is not None:
+        return rules.phase_of(run.get("section", run["role"]))
+    failures = patch.get("failures", [])
+    if failures and (section := failures[0].get("section")):
+        return rules.phase_of(section)
+    return "unknown"
 
 
 def failures_by_reason(failures: list[Failure]) -> dict[str, int]:

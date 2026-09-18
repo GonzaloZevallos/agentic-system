@@ -385,7 +385,11 @@ def test_task_finish_emits_the_system_metrics(metrics):
     final = {
         "type": "feature",
         "status": "definition_ready",
-        "cost_usd": 0.5,
+        # Matches the two runs below exactly: no unaccounted residual, so this fixture
+        # keeps testing what a returned run alone contributes to rework (ADR-0008,
+        # 2026-09-18 second addendum treats unaccounted money as rework too, its own
+        # separate case).
+        "cost_usd": 0.25,
         "changes_requested": {"PM→Product Analyst": 1, "Tech Lead→Developer:api": 2},
         "change_history": [
             {"pair": "PM→Product Analyst", "category": "definition", "reason": "r"},
@@ -424,7 +428,7 @@ def test_task_finish_emits_the_system_metrics(metrics):
         "prompts.fingerprint": telemetry.system_metrics.prompts_fingerprint(final),
     }
     (cost,) = got["agentic.task.cost_usd"]
-    assert cost.value == 0.5 and dict(cost.attributes) == labels
+    assert cost.value == 0.25 and dict(cost.attributes) == labels
     (rework,) = got["agentic.task.rework_usd"]
     assert rework.value == 0.15
     (finished,) = got["agentic.task.finished"]

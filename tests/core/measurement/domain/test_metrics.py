@@ -16,16 +16,40 @@ def run(role, version, cost):
     }
 
 
-def test_rework_is_repeated_deliveries_plus_failed_attempts():
+def test_run_rework_usd_is_the_whole_cost_of_a_returned_run():
+    assert metrics.run_rework_usd(run("Product Analyst", 2, 0.1)) == pytest.approx(0.1)
+
+
+def test_run_rework_usd_is_only_the_failed_attempts_cost_of_a_first_delivery():
+    first = run("PM", 1, 0.2)
+    first["failed_cost_usd"] = 0.05
+    assert metrics.run_rework_usd(first) == pytest.approx(0.05)
+
+
+def test_run_rework_usd_reads_zero_for_a_run_recorded_before_the_field_existed():
+    assert metrics.run_rework_usd(run("PjM", 1, 0.01)) == 0.0
+
+
+def test_rework_is_repeated_deliveries_plus_failed_attempts_already_inside_cost_usd():
+    first = run("PM", 1, 0.25)
+    first["failed_cost_usd"] = 0.05  # already counted once inside its own cost_usd
     state = {
-        "runs": [run("PjM", 1, 0.01), run("PM", 1, 0.2), run("Product Analyst", 2, 0.1)],
-        "failures": [{"role": "PM", "attempt": 1, "error": "e", "cost_usd": 0.05}],
+        "runs": [run("PjM", 1, 0.01), first, run("Product Analyst", 2, 0.1)],
+        "cost_usd": 0.36,
     }
+    # 0.05 (PM's own failed attempt) + 0.1 (the returned Product Analyst run), no
+    # unaccounted money left over: 0.01 + 0.25 + 0.1 == 0.36.
     assert metrics.rework_cost_usd(state) == pytest.approx(0.15)
 
 
+def test_rework_cost_usd_counts_unaccounted_money_once():
+    # An escalation's own residual: `cost_usd` above what any run in the patch carries.
+    state = {"runs": [run("PjM", 1, 0.01)], "cost_usd": 0.09}
+    assert metrics.rework_cost_usd(state) == pytest.approx(0.08)
+
+
 def test_a_clean_task_has_no_rework():
-    assert metrics.rework_cost_usd({"runs": [run("PjM", 1, 0.01)]}) == 0
+    assert metrics.rework_cost_usd({"runs": [run("PjM", 1, 0.01)], "cost_usd": 0.01}) == 0
     assert metrics.rework_cost_usd({}) == 0
 
 
@@ -132,9 +156,38 @@ def test_has_residual_sample_covers_the_empty_patch():
     assert metrics.has_residual_sample({"cost_usd": 0.15, "runs": runs}) is True
 
 
-def test_residual_rework_follows_the_patchs_own_failures():
-    assert metrics.residual_rework({}) is False
+def test_has_residual_sample_gates_on_the_epsilon_not_the_rounding_floor():
+    runs = [dev_run("Developer: api", 1, 0.1)]
+    # Floating-point noise, well below the epsilon: no sample.
+    assert metrics.has_residual_sample({"cost_usd": 0.1 + 1e-12, "runs": runs}) is False
+    # Above the epsilon but below the old floor, which no longer gates emission (many
+    # small patches like this one could otherwise hide money nothing else accounts for).
+    assert metrics.has_residual_sample({"cost_usd": 0.1005, "runs": runs}) is True
+
+
+def test_residual_rework_is_unconditionally_true():
+    # Every residual is money that produced no delivery, by the glossary's own
+    # definition, whether or not this patch happens to carry a failed attempt.
+    assert metrics.residual_rework({}) is True
     assert metrics.residual_rework({"failures": [{"cost_usd": 0.01}]}) is True
+
+
+def test_residual_phase_is_the_delivering_runs_phase():
+    patch = {
+        "runs": [dev_run("Developer: api", 1, 0.1)],
+        "sections": {"Developer: api": "t"},
+    }
+    assert metrics.residual_phase(patch) == "development"
+
+
+def test_residual_phase_falls_back_to_the_first_failures_section():
+    patch = {"failures": [{"role": "PM", "section": "PM", "cost_usd": 0.01}]}
+    assert metrics.residual_phase(patch) == "definition"
+
+
+def test_residual_phase_is_unknown_without_a_target_run_or_a_failure_section():
+    assert metrics.residual_phase({}) == "unknown"
+    assert metrics.residual_phase({"failures": [{"role": "PM", "cost_usd": 0.01}]}) == "unknown"
 
 
 def test_failures_by_reason_counts_and_sums_cost():
