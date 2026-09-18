@@ -20,6 +20,11 @@ Context rule (README.md, 6): each role reads, in full, the sections it declares 
 `Role.reads`, after the engineering standards and the product knowledge if it reads
 them. Not the previous role's handoff: a verifier that only sees a summary returns
 over gaps that were never there.
+
+The one exception (ADR-0004, sixth addendum): a role resuming its own earlier session
+over a return reads a delta instead, because the session already holds what `Role.reads`
+would repeat; the rule still holds through the session's own memory. When there is no
+session to resume, the cold path restores the full reading, `cold_prompt` included.
 """
 
 from __future__ import annotations
@@ -108,6 +113,17 @@ class Output:
     started_at: str = ""
     ended_at: str = ""
     queue_wait_s: float = 0.0
+    # The session the winning attempt actually resumed, decided by `run_with_retry`
+    # (never re-derived from the caller's own `resume` argument, which lies on two
+    # paths: a retry that continues a *failed* attempt's session unasked, and a cold
+    # fallback that resumed nothing while the argument held a valid id). Empty when the
+    # winning attempt resumed no session.
+    resumed_from: str = ""
+    # Whether the winning attempt is this run's cold fallback (ADR-0004, sixth
+    # addendum): the caller asked to resume a session that never opened, so
+    # `run_with_retry` dropped it and ran this attempt cold instead of retrying the
+    # stale id.
+    cold_fallback: bool = False
 
 
 def context_for(
@@ -173,6 +189,7 @@ async def run_with_retry(
     presubmit: Presubmit | None = None,
     limits: RunLimits | None = None,
     section: str | None = None,
+    cold_prompt: str | None = None,
 ) -> Output:
     """`check` is the use case's own rule over the validated output (raise `ValueError`);
     breaking it is a role failure like any other, so the model gets the error back.
@@ -191,15 +208,37 @@ async def run_with_retry(
 
     `section` is what a successful attempt would write (`run_record`'s own default,
     the role's name, when the caller has none yet): a failed attempt stamps it on its
-    `Failure` too, so a reader can tell which delivery an attempt was working on."""
+    `Failure` too, so a reader can tell which delivery an attempt was working on.
+
+    `cold_prompt` is the caller's own full context, used at most once, when `resume`
+    turns out stale: the first attempt held a caller-supplied session and the harness
+    never opened one of its own (`AttemptFailed.session_id` empty). Retrying the same
+    id again would just repeat the failure, so that one retry drops it and runs cold
+    with `cold_prompt` instead (ADR-0004, sixth addendum). `None` (an interview's turn,
+    which owns its own resume/prompt pairing already) keeps today's retry, which tries
+    the caller's session again like any other. The decision is made here, once, and
+    every reader (`resumed_from`, the `cold_fallback` flag on the `RoleRun`/`Failure`)
+    reads it from this call, never re-derives it from `resume` on its own."""
     limits = limits or RunLimits()
     written_as = section or role.name
     failures: list[Failure] = []
+    cold_fallback = False  # this run already spent its one fallback
     for attempt in range(1, max(retries, 0) + 2):
         total = max(spent_usd + spent(failures), limits.spent_usd)
         if task_cap_usd is not None and total >= task_cap_usd:
             raise TaskCapReached(role, total, task_cap_usd, failures)
-        text, session = _retry_input(prompt, failures, resume)
+        fallback_now = not cold_fallback and _stale_session(resume, failures, cold_prompt)
+        if fallback_now:
+            # The one drop: no error appended, since the caller's session never even
+            # opened, so there is nothing this fresh cold start is fixing. From here on
+            # the run *is* a cold run: `prompt`/`resume` are replaced for good, so a
+            # further attempt (a second failure past the fallback) retries the cold
+            # session it just opened, never the id this run already gave up on.
+            text, session = cold_prompt, None
+            prompt, resume = cold_prompt, None
+            cold_fallback = True
+        else:
+            text, session = _retry_input(prompt, failures, resume)
         waited_from = time.monotonic()
         try:
             async with limits.slot():
@@ -231,6 +270,7 @@ async def run_with_retry(
                     "reason": exc.reason,
                     "slug": role.slug,
                     "section": written_as,
+                    "cold_fallback": fallback_now,
                 }
             )
             continue
@@ -240,8 +280,23 @@ async def run_with_retry(
         output.started_at = started_at
         output.ended_at = ended_at
         output.queue_wait_s = queue_wait_s
+        output.resumed_from = session or ""
+        output.cold_fallback = fallback_now
         return output
     raise RoleFailure(role, failures)
+
+
+def _stale_session(resume: str | None, failures: list[Failure], cold_prompt: str | None) -> bool:
+    """Whether the run's very first attempt held a caller-supplied session the harness
+    never opened: the one condition that spends the cold fallback (`run_with_retry`'s
+    own docstring). Gated on `cold_prompt`: a caller with none keeps today's retry,
+    which tries the same stale id again instead of dropping it."""
+    return (
+        cold_prompt is not None
+        and resume is not None
+        and len(failures) == 1
+        and not failures[0]["session_id"]
+    )
 
 
 def _now_iso() -> str:
@@ -389,6 +444,8 @@ def run_record(state: TaskState, role: Role, section: str, output: Output) -> Ro
         "calls": output.calls,
         "tool_calls": output.tool_calls,
         "subagent_cost_usd": output.subagent_cost_usd,
+        "resumed_from": output.resumed_from,
+        "cold_fallback": output.cold_fallback,
     }
 
 
@@ -404,6 +461,7 @@ async def run_role(
     cwd: Path | None = None,
     resume: str | None = None,
     prompt: str | None = None,
+    cold_prompt: str | None = None,
     presubmit: Presubmit | None = None,
     **placeholders: object,
 ) -> tuple[Output | None, TaskState]:
@@ -414,7 +472,12 @@ async def run_role(
     `section` is where the delivery goes (the role's name by default); `cwd` where the
     role runs (the product root by default); `resume` continues the role's earlier
     session; `prompt` replaces the context with a shorter message when the session
-    already holds it (an interview's later rounds); `presubmit` is asked when it delivers."""
+    already holds it (an interview's later rounds); `presubmit` is asked when it
+    delivers. `cold_prompt` is the full context for the one retry that drops `resume`
+    when it turns out stale (`run_with_retry`'s own doc): `run_role` never builds one on
+    its own, since only the caller knows what a message it did not build should contain
+    (ADR-0004, sixth addendum) — a caller that passes `resume` with no `cold_prompt`
+    keeps today's retry, which tries the same session again."""
     section = section or role.name
     vocabulary = ports.flags.load()
     loaded = load_prompt(role, cfg, ports, vocabulary, **placeholders)
@@ -440,6 +503,7 @@ async def run_role(
             presubmit=presubmit,
             limits=ports.limits,
             section=section,
+            cold_prompt=cold_prompt,
         )
     except Escalating as exc:
         return None, patch | escalation(exc)

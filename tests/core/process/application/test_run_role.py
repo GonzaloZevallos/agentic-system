@@ -25,7 +25,15 @@ pytestmark = pytest.mark.anyio
 OK = classified(cost=0.03)
 
 
-async def run_pjm(runner, retries=1, check=None, spent_usd=0.0, task_cap_usd=None):
+async def run_pjm(
+    runner,
+    retries=1,
+    check=None,
+    spent_usd=0.0,
+    task_cap_usd=None,
+    resume=None,
+    cold_prompt=None,
+):
     return await run_with_retry(
         PJM,
         "task",
@@ -38,6 +46,8 @@ async def run_pjm(runner, retries=1, check=None, spent_usd=0.0, task_cap_usd=Non
         check=check,
         spent_usd=spent_usd,
         task_cap_usd=task_cap_usd,
+        resume=resume,
+        cold_prompt=cold_prompt,
     )
 
 
@@ -55,6 +65,7 @@ async def test_retry_passes_the_error_and_sums_cost():
             "reason": "other",
             "slug": "pjm",
             "section": "PjM",
+            "cold_fallback": False,
         }
     ]
     # No session survived the failure: the retry starts over, the error appended.
@@ -75,6 +86,80 @@ async def test_retry_continues_the_session_a_failed_attempt_left():
     assert retry["resume"] == "sess-1"
     assert retry["prompt"].startswith("<PreviousAttemptFailed>\nrun failed (error_max_budget_usd)")
     assert "task" not in retry["prompt"]  # the session already has it
+
+
+async def test_a_stale_caller_session_falls_back_cold_once():
+    # `resume` is the caller's, but the harness never opened it: the retry must not try
+    # the same dead id again (that would just repeat the failure); it drops it and runs
+    # cold with the caller's own `cold_prompt` instead (ADR-0004, sixth addendum).
+    stale = AttemptFailed("session not found", 0.02, session_id="")
+    cold_delivery = RawResult(OK.structured_output, 0.03, session_id="cold-1")
+    runner = ScriptedRunner(pjm=[stale, cold_delivery])
+    out = await run_pjm(runner, resume="dead-id", cold_prompt="COLD CONTEXT")
+    first, retry = runner.calls
+    assert first["resume"] == "dead-id" and first["prompt"] == "task"
+    assert retry["resume"] is None and retry["prompt"] == "COLD CONTEXT"
+    # The decision is recorded once, read off the attempt that actually delivered.
+    assert out.cold_fallback is True
+    assert out.resumed_from == ""  # the cold attempt resumed nothing
+    assert out.session_id == "cold-1"  # the new session the cold attempt opened
+    assert out.failures[0]["cold_fallback"] is False  # the stale attempt is not the fallback
+
+
+async def test_a_resumed_attempt_that_delivers_records_what_it_resumed():
+    # No failure at all: `resumed_from` still names the session the delivery continued,
+    # the same fact `RoleRun` persists, taken from the call and not re-derived from it.
+    out = await run_pjm(ScriptedRunner(pjm=[OK]), resume="sess-live")
+    assert out.resumed_from == "sess-live" and out.cold_fallback is False
+
+
+async def test_no_cold_prompt_means_no_fallback_and_todays_retry_stands():
+    # A caller with no `cold_prompt` (an interview's turn) keeps today's behaviour: the
+    # stale id is tried again, exactly like any other attempt that left no session.
+    stale = AttemptFailed("session not found", 0.02, session_id="")
+    runner = ScriptedRunner(pjm=[stale, OK])
+    out = await run_pjm(runner, resume="dead-id")
+    retry = runner.calls[1]
+    assert retry["resume"] == "dead-id"  # tried again, not dropped
+    assert out.cold_fallback is False
+
+
+async def test_the_cold_fallback_is_spent_at_most_once_per_run():
+    # The cold attempt is the run's last (ROLE_RETRIES's default of one retry): if it
+    # fails too there is no third attempt to worry about, but the record must still show
+    # exactly one fallback, on the attempt that actually dropped the caller's session.
+    stale = AttemptFailed("session not found", 0.02, session_id="")
+    runner = ScriptedRunner(pjm=[stale, stale])
+    with pytest.raises(RoleFailure) as info:
+        await run_pjm(runner, resume="dead-id", cold_prompt="COLD CONTEXT")
+    calls = runner.calls
+    assert calls[1]["resume"] is None and calls[1]["prompt"] == "COLD CONTEXT"  # the one fallback
+    assert [f["cold_fallback"] for f in info.value.failures] == [False, True]
+
+
+async def test_a_further_failure_of_the_cold_attempt_continues_it_not_the_dropped_id():
+    # With a second retry available, a cold attempt that fails but does open its own
+    # session is a run that already went cold: it continues from there, never back to
+    # the id this run already gave up on.
+    stale = AttemptFailed("session not found", 0.02, session_id="")
+    cut_cold = AttemptFailed("cut", 0.01, session_id="cold-sess")
+    cold_delivery = RawResult(OK.structured_output, 0.02, session_id="cold-sess")
+    runner = ScriptedRunner(pjm=[stale, cut_cold, cold_delivery])
+    out = await run_pjm(runner, retries=2, resume="dead-id", cold_prompt="COLD CONTEXT")
+    third = runner.calls[2]
+    assert third["resume"] == "cold-sess"  # the cold session, not "dead-id"
+    assert "dead-id" not in third["prompt"]
+    assert out.resumed_from == "cold-sess" and out.cold_fallback is False
+
+
+async def test_an_attempt_failure_with_a_session_never_triggers_the_fallback():
+    # The caller's session did open (the harness left a `session_id`): this is an
+    # ordinary failure, not a stale session, so the normal retry continues it.
+    cut = AttemptFailed("cut", 0.02, session_id="live-1")
+    runner = ScriptedRunner(pjm=[cut, OK])
+    out = await run_pjm(runner, resume="live-1", cold_prompt="COLD CONTEXT")
+    assert runner.calls[1]["resume"] == "live-1"
+    assert out.cold_fallback is False
 
 
 async def test_an_invalid_delivery_also_keeps_its_session_for_the_retry():
@@ -269,6 +354,8 @@ async def test_run_role_builds_the_patch_and_the_history(tmp_path):
         "calls": 2,
         "tool_calls": {"Read": 1},
         "subagent_cost_usd": pytest.approx(0.02),
+        "resumed_from": "",
+        "cold_fallback": False,
     }
     # Timed inside the concurrency slot: started no later than ended, both ISO-8601 UTC.
     assert started_at <= ended_at
