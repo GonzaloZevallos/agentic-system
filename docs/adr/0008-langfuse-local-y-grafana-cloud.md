@@ -208,3 +208,75 @@ Prometheus no baja a label de serie sino a `target_info`, así que no se puede f
 panel por él; una **variable de entorno** o un flag de la CLI, que hace que el mismo producto
 cambie de nombre según cómo lo invoquen y se olvide en silencio; y un archivo nuevo
 `.agentic/product.yaml`, que es un segundo obligatorio para una línea.
+
+## Adenda (2026-09-17): el span de rol se llama `invoke_agent`, con las convenciones GenAI
+
+"La ejecución de un solo agente dentro de una corrida" no tiene nombre preciso en la
+industria: LangGraph dice *super-step*, el Claude Agent SDK y OpenAI dicen *turn* (un
+round-trip del loop, no un agente), CrewAI dice *iteration*, ADK *agent call*, SWE-agent
+*step*. El único vocabulario cerrado que existe es el de las **OpenTelemetry GenAI semantic
+conventions**: el span se llama `invoke_agent {gen_ai.agent.name}` y `gen_ai.operation.name`
+toma valores de una lista cerrada. Alinearse con él es interoperabilidad real, no un
+renombre cosmético: cualquier lector de trazas GenAI (Langfuse, Grafana, Phoenix) entiende
+la corrida de un rol sin configuración nuestra.
+
+Decisión: **solo el span de rol** adopta el semconv. El de tarea, los siete gauges de
+`Instruments` y todo label de métrica quedan byte a byte igual — la interoperabilidad es
+una propiedad de las trazas, que viven 30 días; la serie de 13 meses que este documento
+existe para dar sigue con sus nombres, que "se agregan, no se renombran".
+
+El span de rol pasa a llamarse `invoke_agent <Role.name>` y lleva `gen_ai.operation.name =
+invoke_agent`, `gen_ai.agent.name` (`Role.name`, verbatim) y `gen_ai.agent.id`
+(`Role.slug`, verbatim: seis roles responden "Tech Lead", y distinguirlos es lo único para
+lo que existe la clave). Lleva también `gen_ai.provider.name` y `gen_ai.system`, las dos
+grafías de "anthropic": los spans propios de Claude Code todavía usan `gen_ai.system`
+(`probe.py`), y un lector que conozca una grafía y no la otra vería padre e hijos como
+proveedores distintos. Ninguno de los dos es cierto para la tarea: no es una sola llamada,
+así que no lleva ningún atributo `gen_ai.*`.
+
+**La regla para lo que el semconv no nombra** (costo en dólares, versión de la entrega,
+fase, categorías de devolución): la clave que **ya** se escribe igual en el span y en un
+label de métrica conserva esa grafía; toda otra clave de aplicación toma el prefijo
+`agentic.`. `product`, `role` y `role.outcome` son la misma cadena en las dos señales hoy,
+así que se quedan sin prefijo — inventarles el prefijo sería fabricar una asimetría, no
+preservarla. `role.model` y `role.rework` no lo son (la métrica los llama `model` y
+`rework`), así que pasan a `agentic.role.model` y `agentic.role.rework`; junto con
+`agentic.role.cost_usd`, `.failed_attempts`, `.version`, `.turns`, `.session_id`,
+`.prompt_hash` y `.return_categories`. `return_categories` conserva la palabra por la misma
+razón que la adenda de arriba: nadie suma un atributo de span entre corridas, pero
+renombrar la palabra igual habría partido la historia de lectura del atributo en dos.
+
+Ningún atributo de nivel `chat` (tokens, modelo de request o de response, parámetros de
+muestreo) va en el span de rol: un rol gasta a través de varios modelos en la misma corrida
+(`RoleRun.finish` guarda el último de cada patch), y un solo modelo en un span agregado
+sería una afirmación falsa para un lector conforme al semconv. Tampoco va ninguna cifra en
+dólares bajo una clave `gen_ai.*`: sigue la misma razón que la adenda de arriba sobre
+`gen_ai.usage.cost` — Langfuse suma el costo de toda la traza y cada dólar contaría dos
+veces.
+
+`langfuse.observation.type = agent` se queda como está: es la clave del vendor, no la
+convención, y ninguna prueba de este repo puede ver si Langfuse prioriza esa clave o el
+`gen_ai.operation.name` nuevo cuando las dos están presentes — es la pregunta abierta que
+lleva la segunda sonda. El collector (`transform/claude_code_usage`) no se toca: sigue
+traduciendo los contadores de Claude Code a `gen_ai.usage.*` para que Langfuse precie, y
+tocarlo repetiría el costo 0.00625 en vez de 0.01125 que la adenda de arriba ya documentó.
+
+`opentelemetry.semconv` no se declara como dependencia — es un módulo privado, en estado
+Development, que llega transitivamente con `opentelemetry-sdk`. Los nombres de la
+convención son literales en `agentic/core/measurement/adapters/otel/semconv.py`, copiados a
+mano y fijados por un test unitario: la fuente de verdad es la convención, no el paquete.
+
+Consecuencias:
+
+- Las trazas de antes y de después de este commit no comparten claves de atributo del
+  span de rol: se paga a sabiendas treinta días de comparabilidad traza a traza.
+- `gen_ai.agent.name` sigue siendo ambiguo a propósito (seis roles responden "Tech Lead");
+  una herramienta externa que solo lea el nombre ve un agente donde hay varios.
+- Nada de esto toca el punto 4 del pedido original: la entrada "Corrida de rol" del
+  glosario de Proceso ya dice `_Campo_: invoke_agent`.
+
+Opciones descartadas: prefijar *todo* atributo no-semconv con `agentic.`, sin excepción —
+así descrito prohibiría `product`, `role` y `role.outcome`, que se quedan bare a propósito;
+que la cadena que identifica un rol sea una y la misma en cada sitio que la toca un diff —
+superado por pedir que la fuente sea siempre `Role.name` o `Role.slug`, que un revisor
+puede chequear mirando un solo call site en vez de comparar tres.
