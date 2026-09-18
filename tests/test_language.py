@@ -43,6 +43,7 @@ TYPES = {
 STATE_FIELDS = {
     "Devolución": "changes_requested",
     "Escalado": "escalated",
+    "Clase de escalado": "escalation_class",
     "Sección": "sections",
     "Flag": "flags",
     "Rama de tarea": "branch",

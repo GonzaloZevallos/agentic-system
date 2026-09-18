@@ -51,6 +51,7 @@ async def test_classify_escalates_on_low_confidence(cfg):
     patch = await classify(TASK, cfg, ports)
     assert patch["status"] == "waiting_on_human"
     assert "PjM could not classify" in patch["escalated"]
+    assert patch["escalation_class"] == "classification"
 
 
 async def test_classify_lets_a_bug_through(cfg):
@@ -219,6 +220,7 @@ async def test_validate_escalates_at_the_limit(cfg):
     patch = await validate_definition(state, cfg, ports)
     assert patch["status"] == "waiting_on_human"
     assert patch["escalated"] == f"{PAIR_PM_PA.key} hit 2 returns: still no metrics"
+    assert patch["escalation_class"] == "returns"
     assert "changes_requested" not in patch
     assert "You have 0 left" in ports.runner.calls[0]["system_prompt"]
 

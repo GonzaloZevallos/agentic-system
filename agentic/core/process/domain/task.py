@@ -74,6 +74,18 @@ ChangeCategory = FindingCategory | Literal["definition"]
 # model off, `limit` a per-attempt money cap (issue #66), `sdk` anything else the
 # harness raised, `other` the residual nothing else names.
 FailureReason = Literal["schema", "check", "max_turns", "limit", "sdk", "other"]
+# Why the task escalated, from the closed set a domain constructor writes together with
+# `escalated` (ADR-0008, 2026-09-18 addendum; `agentic.task.paused`), so a patch cannot
+# carry one without the other: `classification` PjM's own low-confidence call, `returns`
+# a pair (PM<->Product Analyst or Tech Lead<->Developer) at its return limit, `failure` a
+# role `run_with_retry` gave up on, `cap` the task's money cap reached before an attempt,
+# `questions` an interview's open questions for the human, `unmergeable` a subtask whose
+# dependency the system could not merge on its own, `setup` the product's setup step
+# failing on a checkout the system just made. `limit` (issue #66's per-attempt budget
+# cap) is not here: it stops one attempt, not the task, so it is a `FailureReason`.
+EscalationClass = Literal[
+    "classification", "returns", "failure", "cap", "questions", "unmergeable", "setup"
+]
 
 
 def add(current: float, new: float) -> float:
@@ -213,6 +225,9 @@ class TaskState(TaskInput, total=False):
     current_role: Annotated[str, last]
     flags: dict[str, bool]
     escalated: Annotated[str | None, last]
+    # The closed reason `escalated` is text for (`EscalationClass`); written only by
+    # `rules.escalation`, together with `escalated`, and cleared with it on resume.
+    escalation_class: Annotated[EscalationClass | None, last]
     # One Markdown section per role, keyed by role name, holding the latest delivery.
     # A delivery superseded by a return stays under "<role> (vN)": the document is
     # the raw record of the task, and PjM escalates with the history (ADR-0006).

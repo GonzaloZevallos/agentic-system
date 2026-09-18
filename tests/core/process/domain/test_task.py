@@ -36,6 +36,7 @@ def test_reducers_are_read_from_the_annotations():
         "status",
         "current_role",
         "escalated",
+        "escalation_class",
     }
     assert REDUCERS["cost_usd"] is add and REDUCERS["sections"] is merge
 

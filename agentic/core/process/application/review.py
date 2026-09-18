@@ -109,6 +109,8 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
     else:
         # Returned as well, without counting: the limit is spent. The human's answer
         # resets the pair and the resume sends the subtask back to its Developer.
-        patch["escalated"] = rules.limit_reached(pair, cfg.max_changes_requested_per_pair, reason)
+        patch |= rules.escalation(
+            "returns", rules.limit_reached(pair, cfg.max_changes_requested_per_pair, reason)
+        )
         patch["status"] = WAITING_ON_HUMAN
     return finish(state, patch, ports)

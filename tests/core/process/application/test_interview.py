@@ -103,6 +103,7 @@ async def test_questions_for_the_human_escalate_after_the_interview_ends(cfg):
     assert runner.slugs == [ASK, ANSWER, ASK, ANSWER, ASK]  # it ran to the end first
     assert patch["questions_for_human"] == ["Which currency?"]
     assert patch["status"] == "waiting_on_human" and "PM could not decide 1" in patch["escalated"]
+    assert patch["escalation_class"] == "questions"
     assert "### Closing" in patch["sections"]["Interview: Product Analyst→PM"]
 
 

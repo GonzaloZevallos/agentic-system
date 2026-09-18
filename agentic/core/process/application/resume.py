@@ -136,7 +136,7 @@ def prepare(
                 f"{task_id} waits on {len(paused['questions_for_human'])} question(s): "
                 "answer them in comments on the issue, then resume"
             )
-        if decision is None and (pair := rules.pair_at_limit(paused.get("escalated"))):
+        if decision is None and (pair := rules.returns_pair(paused)):
             # The counter starts over only on an answer (README.md, 3): with nothing new,
             # the pair would return for the same reason again.
             raise WaitingOnHuman(

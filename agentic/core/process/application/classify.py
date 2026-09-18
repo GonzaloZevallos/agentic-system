@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from agentic.shared.configuration import Configuration
 
+from ..domain import rules
 from ..domain.roles import PJM
 from ..domain.task import WAITING_ON_HUMAN, TaskState
 from .ports import Ports
@@ -19,6 +20,8 @@ async def classify(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSt
             # while a task waits on the human (README.md, 3). Where a confident type
             # goes is the routing's business, not this node's: the three paths of
             # README §2 exist (issues #46, #65).
-            patch["escalated"] = f"PjM could not classify with confidence: {output.data['reason']}"
+            patch |= rules.escalation(
+                "classification", f"PjM could not classify with confidence: {output.data['reason']}"
+            )
             patch["status"] = WAITING_ON_HUMAN
     return finish(state, patch, ports)

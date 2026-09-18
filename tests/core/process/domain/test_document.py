@@ -34,7 +34,8 @@ def test_render_then_parse_roundtrip():
                 "turns": 2,
             },
         ],
-        "escalated": None,
+        "escalated": "PjM stopped by the task cap: 50.00 of 50.00 USD spent",
+        "escalation_class": "cap",
         "cost_usd": 0.12345,
         "prompts": {"pjm": "abcd1234"},
         "sections": {
@@ -55,6 +56,8 @@ def test_render_then_parse_roundtrip():
     assert data["prompts"] == {"pjm": "abcd1234"}
     assert data["description"] == "Users want CSV."
     assert data["sections"] == state["sections"]
+    assert data["escalated"] == state["escalated"]
+    assert data["escalation_class"] == "cap"
 
 
 def test_superseded_sections_are_written_before_the_current_one():
@@ -209,3 +212,22 @@ def test_a_document_written_before_slug_and_timing_existed_still_parses():
     assert "slug" not in run and "started_at" not in run and "queue_wait_s" not in run
     (failure,) = state["failures"]
     assert failure["error"] == "e" and "reason" not in failure and "slug" not in failure
+
+
+def test_a_document_written_before_escalation_class_existed_still_parses():
+    """`escalation_class` is a new key inside the frontmatter `document.py` already
+    rendered and parsed: no rename, so a document paused before this task carries on
+    without it, and `rules.returns_pair`'s text fallback (ADR-0003, addendum) is what
+    a resume of it still reads."""
+    old = (
+        "---\n"
+        "id: T-1\n"
+        "title: t\n"
+        "escalated: 'PM→Product Analyst hit 2 returns: gap'\n"
+        "---\n"
+        "\n# t\n\n## Original request\n\nd\n"
+    )
+    state = document.parse(old)
+    assert state["escalated"] == "PM→Product Analyst hit 2 returns: gap"
+    assert "escalation_class" not in state
+    assert rules.returns_pair(state) == "PM→Product Analyst"
