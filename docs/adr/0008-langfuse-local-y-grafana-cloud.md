@@ -369,3 +369,86 @@ agregada con más labels — pierde la posibilidad de un `queue_wait` o un `run_
 corrida, que es justo el punto; mandar la duración por corrida bajo el nombre existente de
 `agentic.role.duration` — partiría en dos el significado de una serie de trece meses a
 mitad de camino, lo que la regla "se agrega, no se renombra" existe para evitar.
+
+## Adenda (2026-09-18, segunda): un dólar de retrabajo, una sola muestra, y la muestra de tarea es de la Corrida
+
+La adenda de arriba llevó el costo al grano de corrida y dejó dos cosas sin cerrar, que el
+issue #72 cobra. `metrics.rework_cost_usd` sumaba las corridas con `version > 1` más todo
+`failures`, y `run_role` ya mete el costo de esas fallas adentro del `cost_usd` de la corrida
+que entrega: la plata de una falla dentro de una corrida devuelta se contaba dos veces
+(`task.rework_usd=25.64` contra 12.34 en los spans de rol, corrida 4 de GH-12). Y el label
+`rework` del grano de rol marcaba sólo `version > 1`, así que la plata de falla de una
+corrida de primera entrega no aparecía en ninguna muestra marcada y la suma nunca podía
+cerrar. El comportamiento lo gobierna `docs/product/rework.md`; acá va lo que cambia de esta
+decisión.
+
+**La plata de falla de una corrida es un dato de la corrida, no una deducción.** `Failure`
+no tiene versión ni id de corrida, y en un estado acumulado dos corridas de la misma
+`section` (v1 y v2) no se pueden distinguir por su `section`: la unión existe sólo en el
+momento en que `run_with_retry` suma `spent(failures)` al `cost_usd` que devuelve. Ahí se
+graba, en `run_record`, como campo nuevo de `RoleRun`, `failed_cost_usd`. De ahí salen las
+dos vistas con una sola función: por corrida, todo el `cost_usd` si `version > 1` y
+`failed_cost_usd` si no; por estado o por patch, esa suma más lo que ninguna corrida
+contabiliza (`cost_usd − Σ runs`). `delta(before, after)` da la cifra de una invocación con
+la misma función y sin código nuevo. Descartado acumular un escalar `rework_usd` en el
+estado: sería una segunda fuente de verdad que `apply`, `delta`, el documento y
+`resume.from_document` tendrían que arrastrar, y no evita necesitar igual la cifra por
+corrida. Un documento escrito antes de esta tarea no tiene el campo y sus corridas
+`version == 1` leen `0.0`: sub-reportan su plata de falla, en las dos vistas por igual, y eso
+es preferible a inventar una atribución por orden de lista.
+
+**Sólo `agentic.role.cost_usd` se parte.** Una corrida `version == 1` con intentos fallidos
+deja dos muestras de esa serie, mismos labels salvo `rework`: el resto en `false` y
+`failed_cost_usd` en `true`. El bloque de tokens, llamadas, turnos, herramientas,
+`run_duration` y `queue_wait` se emite **una sola vez**, bajo el label set de la corrida:
+esos tokens son los de la llamada que entregó, y un panel de tokens no se mueve porque se
+movió plata. Una corrida sin intentos fallidos queda byte a byte como antes. Se conservan las
+dos sumas a la vez —el costo por rol y el retrabajo por rol— sin serie ni label nuevos, que
+es lo que ninguna otra forma daba: una muestra marcada agregada encima contaría esos dólares
+dos veces en el panel de costo, y `agentic.role.failure_cost_usd` sigue siendo no aditiva con
+`cost_usd` a propósito, porque contesta por qué falló y no qué fue retrabajo.
+
+**Toda residual es retrabajo, y el piso deja de filtrar la emisión.** Un dólar que ninguna
+corrida contabiliza es plata que no produjo entrega, que es la letra del glosario. Y el piso
+de medio centavo que esta misma adenda había puesto como filtro de emisión no se sostiene:
+es por patch, y la tolerancia que `docs/product/rework.md` promete es por tarea, así que
+veinte patches pueden esconder ~0.10 USD sin que ninguna quede por encima del piso. Se
+separan los dos trabajos que el número hacía: `RESIDUAL_EPSILON_USD = 1e-9` decide si una
+residual es ruido de punto flotante (la suma de las corridas de una entrevista en otro
+orden) y no se emite, y `RESIDUAL_FLOOR_USD = 0.005` se queda siendo lo que siempre fue, la
+tolerancia de redondeo con que `rules.spent_by_phase` y el test de aceptación comparan. La
+muestra en cero de una patch vacía no cambia. La residual deriva además su `phase` en
+cascada —la corrida que entregó, si no la `section` de la primera falla, si no `unknown`
+literal— y nunca omite la clave: un label ausente y un label con valor son series distintas
+y nadie las suma después. Por lo mismo, `_emit_failures` pasa a escribir `unknown` donde hoy
+omite `phase`, lo que deja dos series donde un lector esperaría una para las fallas emitidas
+antes de este commit.
+
+**La muestra de tarea sale cuando termina la Corrida, no en cada Invocación.** `TaskRun.finish`
+separa sus dos trabajos: los atributos del span se estampan siempre (una invocación pausada o
+caída sigue siendo legible en Langfuse) y los cinco gauges de tarea salen sólo si un predicado
+puro sobre `Status` dice que la Corrida terminó: `ready_for_review` y `discarded`. Una pausa
+no emite, y una caída tampoco —el checkpoint permite reanudarla y el sistema no puede saber si
+alguien lo hará—, así que una tarea pausada dos veces deja una muestra y no tres. Lo que una
+invocación gastó ella sola lo sigue diciendo `agentic.invocation.*`, que no se toca. El
+universo de las métricas de tarea pasa a ser **Corridas terminadas**.
+
+**El dashboard se edita en el mismo commit.** "Escaladas" y su gemelo por versión contaban
+`agentic_task_finished{task_status="waiting_on_human"}`, que desde acá no se emite nunca más:
+pasan a `agentic_task_paused`, que ya lleva `escalation_class` y cuenta la pausa cuando
+ocurre. Los filtros `task_status!~"waiting_on_human|crashed"` **se quedan**: las muestras ya
+emitidas con ese estado viven trece meses, y sacar el filtro las haría entrar en los promedios
+y en los conteos, que es este mismo doble conteo resucitado desde la historia.
+
+**Riesgos conocidos, escritos para no descubrirlos en un panel.** La plata que un nodo gasta y
+pierde al levantar una excepción antes de devolver patch queda fuera de las dos vistas y de
+`agentic.invocation.*`: sólo la conoce `RunLimits`, que vive una corrida y no se emite;
+recuperarla pide que los diecisiete nodos devuelvan patch antes de propagar y es otra tarea.
+La igualdad entre las dos vistas es un invariante por tarea que se verifica en el test de
+aceptación y en la regresión de punta a punta del grafo, nunca en un panel: ninguna serie de
+rol lleva id de tarea y ninguna lo va a llevar, porque la cardinalidad acotada es lo que esta
+adenda protege. En Grafana la resta se lee agregada sobre Corridas terminadas de una ventana
+cerrada, filtrando `product` y `system.version`, y sirve como detector de olor: una tarea
+pausada al cierre de la ventana aporta sus muestras de rol y ninguna de tarea, así que la
+resta puede dar negativa sin que nada esté mal. Lo que sí significa algo es una discrepancia
+positiva grande y persistente, del orden de los 13 dólares de GH-12.
