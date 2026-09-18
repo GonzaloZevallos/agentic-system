@@ -57,7 +57,7 @@ bloqueante y queda en `subtasks[id].return_category` y en `return_history`, el h
 de devoluciones del estado, junto con el par y el motivo. Las devoluciones de PM a Product
 Analyst entran con la categoría `definition`: su esquema no cambia en este paso. Medición
 emite `agentic.task.returns` con una muestra por categoría, label `return.category`, y el
-span del rol lleva `role.return_categories`.
+span del rol lleva `agentic.role.return_categories` (ADR-0008, adenda).
 
 **El costo.** El pase de revisión corre tests: más turnos y más segundos por pase, y un
 revisor con permiso de correr `pytest` puede correr la suite aunque el prompt le diga que

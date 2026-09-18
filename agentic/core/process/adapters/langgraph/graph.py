@@ -110,7 +110,7 @@ def _node(use_case: UseCase, role: Role, ports_of: PortsOf, telemetry: Telemetry
         # here, so the use case never sees telemetry (ADR-0007). Which product the run is
         # over is read per node and not cached: `langgraph dev` serves many tasks through
         # one graph and they need not share a product (issue #47).
-        with telemetry.role_span(role.name, product_name(ports)) as run:
+        with telemetry.role_span(role.name, role.slug, product_name(ports)) as run:
             try:
                 patch = await use_case(state, cfg, ports)
             except Exception:
