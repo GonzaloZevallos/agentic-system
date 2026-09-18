@@ -31,6 +31,11 @@ entregar antes de que falle, y qué llega al humano cuando esos fallos escalan l
   con otra forma (heredoc, intérprete, codificación) y sigue con lo que su rol sí puede
   hacer.
 
+- **Cuando** leo una corrida que salió caro o escaló, **quiero** ver en el documento que el
+  rol chocó con negaciones y cuántas, **para** explicar en qué se gastó sin abrir logs.
+  _Me salió bien si_: el documento distingue una corrida que peleó contra su jaula de una
+  que gastó leyendo.
+
 ## Comportamiento
 
 ### El motivo de un intento fallido nombra una causa
@@ -95,6 +100,17 @@ vuelve a releer lo que ya leyó. Pero la memoria no compra turnos; el segundo in
 con el mismo tope. De ahí que un tope corto no se arregle con el reintento: se agota dos
 veces y escala igual.
 
+**Un presupuesto agotado no se disfraza de entrega.** Un rol que se está quedando sin
+turnos no puede entregar un resultado cuyo contenido real sea "no me alcanzó": el Product
+Analyst de bug, en particular, no dictamina `sin definición` porque no llegó a leer lo que
+faltaba. Ese valor del dictamen afirma algo sobre **el producto** —la definición vigente no
+cubre el caso, y entonces PM decide y escribe la que faltaba—, y usarlo como salida de
+emergencia le encarga a PM una definición que quizá ya existía y borra el fallo de
+`agentic.role.failures{reason="max_turns"}`, que es la serie con la que se verifica este
+comportamiento. Lo que sí se le pide es lo contrario de una escapatoria: priorizar la
+lectura que decide su entrega y, si igual no llega, que el motivo del intento fallido nombre
+qué le faltaba leer, que es lo que le da al reintento y al humano una chance distinta.
+
 ### Una negación le dice al rol cuál es su regla
 
 Cuando el sistema le niega a un rol una herramienta o un comando, el motivo que el rol
@@ -117,6 +133,20 @@ Esto **sube la barrera del prompt, no la cierra**: la garantía de que el rol no
 sigue dando el permiso, no el texto (ADR-0011, adenda segunda). El texto existe para que el
 rol no gaste su presupuesto contra una pared.
 
+### Las negaciones quedan escritas en la sección de la corrida
+
+Una negación le llega al rol, y además queda visible para el humano: cuando una corrida de
+rol chocó con **al menos una** negación, el sistema escribe **una sola línea** en la sección
+de esa corrida, con cuántas fueron y la regla que se le nombró al rol. Nada cuando no hubo
+ninguna, y nunca una entrada por negación: una negación no es fallo de rol ni devolución, es
+un hecho sobre cómo se gastó la corrida.
+
+La escribe el sistema, no el rol, por lo mismo que la puerta de entrega escribe el resultado
+de los chequeos: el rol es parte interesada en no reportarlo. Es la misma forma que
+`changes-requested.md` ya pide para una reanudación rechazada —el hecho escrito en la sección
+para que una corrida caraentre se pueda explicar sin abrir logs— y es lo que hace legible
+desde el documento la métrica de turnos gastados después de una negación.
+
 ### Lo que esta definición no cambia
 
 Se dice explícito porque los pedidos que la originaron lo incluían y es comportamiento
@@ -131,6 +161,7 @@ nuevo, no un defecto de lo escrito:
 - **La continuación de sesión tras `max_turns` queda como está.** Ya falla con la sesión
   puesta y el reintento la reanuda; lo que esta definición cambia es el tamaño del
   presupuesto y la claridad de la negación.
+- **Una negación no cuenta para ningún límite** ni cambia el veredicto de la corrida.
 - **`ROLE_RETRIES`, el tope por intento y el tope de tarea no se tocan** (ADR-0004).
 
 ## Métricas
@@ -140,14 +171,20 @@ nuevo, no un defecto de lo escrito:
   2026-09-17 la deja por debajo.
 - **Fallos por turnos agotados**: `agentic.role.failures{reason="max_turns"}` por
   `role.slug`. Objetivo: cero sobre el set de evaluación, y en particular cero para el
-  Product Analyst de bug, que hoy aporta cuatro intentos entre #69 y #81.
+  Product Analyst de bug, que hoy aporta cuatro intentos entre #69 y #81. Un dictamen
+  entregado por falta de turnos, en vez de un fallo, bajaría esta serie sin arreglar nada:
+  por eso la definición lo prohíbe.
 - **Turnos usados contra el tope, por rol**: los turnos de una corrida que entregó, contra
   el tope de ese rol. Es la métrica con la que se calibra un tope: un rol que entrega sano
   rozando su tope está a una lectura de escalar, y uno que entrega en la mitad lo tiene de
   sobra. Objetivo: margen, no ajuste.
 - **Turnos gastados después de una negación**: turnos de una corrida posteriores a la
   primera negación de herramienta que reintentan la misma acción con otra forma. Objetivo:
-  cero. Hoy la corrida de #69 la deja en ocho.
+  cero. Hoy la corrida de #69 la deja en ocho. Se lee del documento, con la línea de
+  negaciones de la sección.
+- **Las negaciones no tienen métrica propia.** Una negación aislada a un rol que después
+  cambia de estrategia es el sistema funcionando; contarla por rol mediría un hecho
+  esperable. Lo que importa es lo que el rol hizo después, y eso es la serie de arriba.
 - `agentic.role.failures` y `agentic.role.failure_cost_usd`, con su label `reason`
   (ADR-0008, adenda 2026-09-18): no cambian de nombre ni de juego de valores. Lo que esta
   definición asegura es que el texto que acompaña a esa muestra sea legible.

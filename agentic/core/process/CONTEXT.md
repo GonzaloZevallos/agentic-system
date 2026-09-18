@@ -320,3 +320,7 @@ _Campo_: stage0 — del bootstrapping de rustc (rustc-dev-guide), que llama "the
 **Tope de turnos**:
 Máximo de turnos que un rol tiene para entregar en un intento. Se dimensiona por el trabajo que la entrega de ese rol exige, no por lo que le alcanza a otro rol que comparte el prompt base. Agotarlo sin resultado es un fallo de rol, y continuar la sesión en el reintento no lo repone.
 _Avoid_: presupuesto (eso es lo que se espera gastar), max_turns (el nombre en el código, no el concepto)
+
+**Negación**:
+El rechazo del sistema a una herramienta o un comando que el rol no tiene: le llega al rol con el motivo que nombra la regla de su rol, y queda escrita en la sección de esa corrida como una sola línea con cuántas fueron. No es fallo de rol ni devolución y no cuenta para ningún límite.
+_Avoid_: deny (el mecanismo, no el concepto), bloqueo, error de permisos
