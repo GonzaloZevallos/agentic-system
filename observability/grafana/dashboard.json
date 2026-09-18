@@ -160,7 +160,7 @@
         {
           "refId": "A",
           "expr": "sum by (product, system_version) (sum_over_time(agentic_task_cost_usd{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[1d])) / sum by (product, system_version) (count_over_time(agentic_task_cost_usd{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[1d]))",
-          "legendFormat": "{{product=~\"$product\", system_version}}"
+          "legendFormat": "{{product}} {{system_version}}"
         }
       ],
       "fieldConfig": {
@@ -197,7 +197,7 @@
         {
           "refId": "A",
           "expr": "sum by (product, system_version) (sum_over_time(agentic_task_rework_usd{product=~\"$product\", system_version=~\"$version\", task_type=~\"$type\"}[1d])) / sum by (product, system_version) (sum_over_time(agentic_task_cost_usd{product=~\"$product\", system_version=~\"$version\", task_type=~\"$type\"}[1d]))",
-          "legendFormat": "{{product=~\"$product\", system_version}}"
+          "legendFormat": "{{product}} {{system_version}}"
         }
       ],
       "fieldConfig": {
@@ -235,7 +235,7 @@
         {
           "refId": "A",
           "expr": "sum by (product, task_status) (count_over_time(agentic_task_finished{product=~\"$product\", system_version=~\"$version\", task_type=~\"$type\"}[1w]))",
-          "legendFormat": "{{product=~\"$product\", task_status}}",
+          "legendFormat": "{{task_status}} {{product}}",
           "interval": "1w"
         }
       ],
