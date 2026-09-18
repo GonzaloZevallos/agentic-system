@@ -102,7 +102,7 @@
       "id": 1,
       "type": "stat",
       "title": "Costo por tarea terminada",
-      "description": "Promedio en dólares de las tareas que llegaron a un fin sin escalar ni caerse, en el rango elegido. Un solo número para el filtro elegido; la comparación entre versiones está en la tabla de abajo.",
+      "description": "Promedio en dólares de las tareas que llegaron a un fin sin escalar ni caerse, en el rango elegido. Un solo número para el filtro elegido; la comparación entre versiones está en la tabla de abajo. El filtro `task_status!~\"waiting_on_human|crashed\"` sigue ahí a propósito, aunque desde el arreglo del retrabajo ninguna muestra nueva de `agentic_task_cost_usd` lleva esos estados: trece meses de muestras pausadas o caídas ya emitidas seguirían entrando en el promedio si se sacara (ADR-0008, Adenda 2026-09-18, segunda).",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -205,7 +205,7 @@
       "id": 3,
       "type": "stat",
       "title": "Tareas terminadas",
-      "description": "Tareas que llegaron a un fin sin escalar ni caerse, en el rango. Un solo número para el filtro elegido; la comparación entre versiones está en la tabla de abajo.",
+      "description": "Tareas que llegaron a un fin sin escalar ni caerse, en el rango. Un solo número para el filtro elegido; la comparación entre versiones está en la tabla de abajo. El filtro `task_status!~\"waiting_on_human|crashed\"` sigue ahí a propósito: protege el promedio de trece meses de muestras pausadas o caídas ya emitidas, aunque el arreglo del retrabajo ya no las genera de nuevo (ADR-0008, Adenda 2026-09-18, segunda).",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -250,7 +250,7 @@
       "id": 4,
       "type": "stat",
       "title": "Escaladas",
-      "description": "Tareas que terminaron en manos del humano, en el rango. Un solo número para el filtro elegido; la comparación entre versiones está en la tabla de abajo.",
+      "description": "Pausas por escalado, en el rango: una muestra por pausa (`agentic_task_paused`), no una por tarea, así que una tarea reanudada dos veces cuenta dos pausas. Ya no lee `task_status=\"waiting_on_human\"` de `agentic_task_finished`: desde el arreglo del retrabajo una tarea pausada no deja esa muestra (ADR-0008, Adenda 2026-09-18, segunda) — leerla seguiría dando cero. Sin filtro de `task_type`: la serie no lo lleva. Un solo número para el filtro elegido; la comparación entre versiones está en la tabla de abajo.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -264,7 +264,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(count_over_time(agentic_task_finished{product=~\"$product\", task_status=\"waiting_on_human\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
+          "expr": "sum(sum_over_time(agentic_task_paused{product=~\"$product\", system_version=~\"$version\"}[$__range]))",
           "legendFormat": "",
           "instant": true
         }
@@ -295,7 +295,7 @@
       "id": 5,
       "type": "table",
       "title": "KPIs por versión del sistema",
-      "description": "Una fila por SHA del sistema: costo promedio por tarea terminada, retrabajo sobre el costo, terminadas, escaladas e invocaciones por tarea terminada, en el rango. Escala a cualquier cantidad de versiones; los stats de arriba no.",
+      "description": "Una fila por SHA del sistema: costo promedio por tarea terminada, retrabajo sobre el costo, terminadas, escaladas (pausas por escalado, `agentic_task_paused`, no tareas: ADR-0008, Adenda 2026-09-18, segunda) e invocaciones por tarea terminada, en el rango. Escala a cualquier cantidad de versiones; los stats de arriba no. `task_status!~\"waiting_on_human|crashed\"` sigue en las columnas que leen `agentic_task_cost_usd`/`agentic_task_finished`, a propósito: protege el promedio de trece meses de muestras pausadas o caídas ya emitidas.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -329,7 +329,7 @@
           "refId": "D",
           "format": "table",
           "instant": true,
-          "expr": "sum by (system_version) (count_over_time(agentic_task_finished{product=~\"$product\", task_status=\"waiting_on_human\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))"
+          "expr": "sum by (system_version) (sum_over_time(agentic_task_paused{product=~\"$product\", system_version=~\"$version\"}[$__range]))"
         },
         {
           "refId": "E",
@@ -458,7 +458,7 @@
       "id": 10,
       "type": "timeseries",
       "title": "Costo por tarea terminada, por versión del sistema",
-      "description": "Promedio diario en dólares de las tareas que terminaron sin escalar. Una línea por SHA del sistema: si una versión nueva cuesta más con las mismas tareas, es el prompt.",
+      "description": "Promedio diario en dólares de las tareas que terminaron sin escalar. Una línea por SHA del sistema: si una versión nueva cuesta más con las mismas tareas, es el prompt. El filtro `task_status!~\"waiting_on_human|crashed\"` sigue ahí a propósito: protege el promedio de trece meses de muestras pausadas o caídas ya emitidas, aunque el arreglo del retrabajo ya no las genera de nuevo (ADR-0008, Adenda 2026-09-18, segunda).",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -690,7 +690,7 @@
       "id": 30,
       "type": "table",
       "title": "Costo por rol y modelo",
-      "description": "Dólares gastados en el rango, por rol, modelo y si fue retrabajo. Para decidir qué rol baja de modelo.",
+      "description": "Dólares gastados en el rango, por rol, modelo y si fue retrabajo. Para decidir qué rol baja de modelo. Una corrida `version == 1` con algún intento fallido ahora deja dos filas en vez de una — su plata entregada bajo `Retrabajo=false`, la de sus intentos fallidos bajo `Retrabajo=true` (ADR-0008, Adenda 2026-09-18, segunda) — pero la suma de ambas sigue siendo la misma plata que antes, sin duplicar nada.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
