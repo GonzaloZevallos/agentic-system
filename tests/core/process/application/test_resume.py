@@ -196,3 +196,22 @@ def test_a_task_with_nothing_left_to_run_is_not_resumed(cfg):
     delivered = paused(escalated=None, pull_request="https://github.com/o/r/pull/7")
     with pytest.raises(ValueError, match="nothing left to run"):
         resume.prepare("GH-12", delivered, "document", raised(), memory_ports())
+    # A discarded bug, seeded from its document, with the human's comment after the
+    # `Discarded:` one: its runs must not read as a definition ready to plan (issue #65).
+    discarded = {
+        "id": "GH-12",
+        "title": "Weekly report",
+        "type": "bug",
+        "status": "discarded",
+        "discard_reason": "weekly by definition",
+        "cost_usd": 1.0,
+        "runs": [
+            {"role": "PjM", "section": "PjM", "session_id": "p", "cost_usd": 0.1},
+            {"role": "Product Analyst", "section": "Product Analyst", "session_id": "a", **USD},
+            {"role": "PM", "section": "PM", "session_id": "m", **USD},
+        ],
+    }
+    ports = memory_ports()
+    ports.tracker.earlier = ["Discarded: weekly by definition", "ok, closing"]
+    with pytest.raises(ValueError, match=r"nothing left to run \(discarded\)"):
+        resume.prepare("GH-12", discarded, "document", raised(), ports)

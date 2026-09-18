@@ -29,6 +29,7 @@ TYPES = {
     "Job": knowledge.approval_check,  # the check that a capability names its jobs
     "Retrabajo": metrics.is_rework,
     "Hallazgo": schemas.Finding,
+    "Dictamen": schemas.Diagnosis,
     "Categoría de devolución": rules.change_category,
     "Tope de tarea": rules.task_cap,
     "Reanudación": rules.resumed,

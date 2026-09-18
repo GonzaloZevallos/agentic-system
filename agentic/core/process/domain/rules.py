@@ -453,33 +453,50 @@ def spent_by_phase(state: TaskState) -> dict[str, float]:
     return phases
 
 
-# Routing of the feature path (README.md, 2): PjM -> Product Analyst -> PM -> Tech Lead
-# -> Developers -> Tech Lead -> delivery. `None` is the end of the run; the graph
-# adapter maps names to its nodes and fans `pipeline` out per dispatched subtask.
+# Routing of the paths of README §2: PjM -> Product Analyst -> PM -> Tech Lead ->
+# Developers -> Tech Lead -> delivery on a feature; the same without the definition
+# stage on a platform enhancement; a diagnosis in place of the definition on a bug,
+# which PM may discard instead of sending to the plan. `None` is the end of the run;
+# the graph adapter maps names to its nodes and fans `pipeline` out per dispatched
+# subtask.
 #
 # Every wave of Developers goes through `integrate`, the system's node between waves
 # (ADR-0004, fifth addendum): the plan hands it the first wave, each wave hands it
 # back what it built, and a return is a wave like any other.
 
+# The first node of each path after PjM. It is also where PM's return goes: back to
+# the Product Analyst of the path, whichever it was.
+FIRST_NODE = {"feature": "define", "bug": "diagnose", "platform_enhancement": "plan"}
+
 
 def after_classify(state: TaskState) -> str | None:
     """The fork between the paths of README §2. A feature goes through the definition
-    stage; a platform enhancement has no product behaviour to define and starts at the
-    plan, the shortest of the three paths (issue #46). A bug never reaches here:
-    `classify` escalates it, and an escalation ends the run."""
+    stage; a bug through the diagnosis, the same pair without the interview (issue
+    #65); a platform enhancement has no product behaviour to define and starts at the
+    plan, the shortest of the three (issue #46)."""
     if state.get("escalated"):
         return None
-    return "define" if state.get("type") == "feature" else "plan"
+    return FIRST_NODE.get(state.get("type", ""), "plan")
 
 
 def after_define(state: TaskState) -> str | None:
     return None if state.get("escalated") else "validate"
 
 
+def after_diagnose(state: TaskState) -> str | None:
+    return None if state.get("escalated") else "validate"
+
+
 def after_validate(state: TaskState) -> str | None:
+    """PM's verdict routes the task: a return goes back to whoever wrote what PM
+    validated, an approval to the plan, unless PM ruled the behaviour expected, which
+    ends a bug discarded (README.md, 3; issue #65)."""
     if state.get("escalated"):
         return None
-    return {"returned": "define", "definition_ready": "plan"}.get(state.get("status", ""))
+    status = state.get("status", "")
+    if status == "returned":
+        return FIRST_NODE.get(state.get("type", ""), "define")
+    return {"definition_ready": "plan", "discarded": "discard"}.get(status)
 
 
 def after_plan(state: TaskState) -> str | None:
@@ -504,6 +521,10 @@ def after_deliver(state: TaskState) -> str | None:
     return None
 
 
+def after_discard(state: TaskState) -> str | None:
+    return None
+
+
 # Pause and resume (ADR-0003): an escalation pauses the task; the human's answer resumes
 # it where it stopped. The state says where that is, so the same rules serve a paused
 # checkpoint and a state seeded from the document.
@@ -514,6 +535,10 @@ def resumed_status(state: TaskState) -> Status:
     state holds, since the document keeps only `waiting_on_human` too."""
     if state.get("pull_request"):
         return "ready_for_review"
+    if state.get("status") == "discarded":
+        # Nothing overwrote it: a discard is an end, not a pause, and the runs it holds
+        # (a diagnosis, PM's ruling) would otherwise read as a definition ready to plan.
+        return "discarded"
     subtasks = state.get("subtasks", {})
     if subtasks:
         started = any(sub.get("status") != "pending" for sub in subtasks.values())
@@ -584,11 +609,10 @@ def resume_target(state: TaskState) -> str | None:
         return None
     status = state.get("status", "open")
     if status == "open":
-        # The same fork as `after_classify`, plus the road back to PjM: a bug escalated
-        # there, and a resume may carry the human's reclassification, which only PjM
-        # turns into a type (issue #46).
-        task_type = state.get("type")
-        if task_type == "feature":
-            return "define"
-        return "plan" if task_type == "platform_enhancement" else "classify"
-    return {"defined": "validate", "returned": "define", "definition_ready": "plan"}.get(status)
+        # The same fork as `after_classify`, plus the road back to PjM for a task that
+        # paused before it had a type: only PjM turns the human's answer into one.
+        return FIRST_NODE.get(state.get("type", ""), "classify")
+    if status == "returned":
+        return FIRST_NODE.get(state.get("type", ""), "define")
+    # `discarded` is an end like `pull_request`: nothing left to run.
+    return {"defined": "validate", "definition_ready": "plan"}.get(status)

@@ -29,6 +29,9 @@ Status = Literal[
     "developing",
     "ready_for_review",
     "waiting_on_human",
+    # A bug whose behaviour PM ruled expected (README.md, 3, "Cierre"; issue #65): the
+    # run ends without a pull request, and the human closes the issue.
+    "discarded",
 ]
 WAITING_ON_HUMAN: Status = "waiting_on_human"
 # The system's own subtask: the integrator joins the others on the task branch
@@ -213,6 +216,9 @@ class TaskState(TaskInput, total=False):
     pull_request: str | None
     # What an interviewee could not decide (ADR-0014); escalates with the task.
     questions_for_human: list[str]
+    # Why a bug was discarded, in PM's words (issue #65): `discard` writes it on the
+    # issue, and the frontmatter keeps it so the document says why the run ended.
+    discard_reason: str
     # Which subtask a branch of the fan-out is running: set by the fan-out, read by
     # `develop` and `review`, never persisted and never handed back to the parent.
     subtask_id: str

@@ -83,6 +83,11 @@ _Campo_: PRD — de producto humano. `spec` en el mundo agéntico viene pegado a
 Marca de alcance sobre una tarea, como "toca UI" o "toca textos", tomada del vocabulario de flags del producto. Los propone Product Analyst y los valida PM; el set validado reemplaza al propuesto.
 _Campo_: sin término de arte
 
+**Dictamen**:
+Lo que Product Analyst dice de un bug después de reproducirlo y compararlo con la definición vigente de la capacidad: bug, comportamiento esperado o sin definición. PM lo valida, y cuando no había definición decide y escribe la que faltaba. Es al camino de bug lo que la definición única es al de feature: lo que gobierna el resto de la tarea. En el código se llama `Diagnosis`, y la palabra de PM sobre él, `Ruling`.
+_Avoid_: diagnóstico (el nombre en el código, no el concepto), veredicto (eso es lo de PM sobre el dictamen), triage
+_Campo_: triage — de los trackers (Bugzilla, Mozilla): confirmar que se reproduce y asignar prioridad y dueño. Acá el dictamen es sólo la comparación contra la definición; prioridad y dueño los fija el camino
+
 **Pieza integrada**:
 El código de todas las subtareas unido en la rama de tarea y revisado por Tech Lead. Lo une el sistema, subtarea por subtarea apenas cada una se aprueba; el Developer integrador resuelve lo que esa unión no pudo hacer sola y el trabajo de integración que el plan declare.
 _Campo_: sin término de arte
@@ -219,8 +224,13 @@ _Campo_: ready for review — GitHub, el estado de un pull request que sale de d
 PjM da por terminada la tarea: aprobada, con las aprobaciones del tipo, o descartada, cuando PM dictamina que el comportamiento es el esperado.
 _Campo_: sin término de arte
 
+**Descartado**:
+El cierre de un bug cuyo dictamen PM validó como comportamiento esperado: el producto ya hace lo que debe y no hay nada que construir. El sistema comenta el motivo en el issue y termina la corrida sin pull request; cerrar el issue es del humano, como mergear el pull request. Es un final, no una pausa: no se reanuda.
+_Avoid_: rechazado, cerrado (el que cierra es el humano), wontfix (la etiqueta de triage de este repo, no el estado)
+_Campo_: won't fix, works as intended — resoluciones de los trackers (Bugzilla `WONTFIX` y `WORKSFORME`, Chromium `WontFix` y `WorkingAsIntended`). Acá es un estado de la tarea, no una resolución del issue
+
 **Escalado**:
-Lo que un rol, un par o el tope dejan dicho cuando la tarea no puede seguir sin el humano, con las preguntas si las hay. El sistema lo entrega al humano en el issue y pausa la tarea: queda esperando con su estado guardado, sin gastar, y se retoma desde el mismo punto. Son cinco las situaciones que lo provocan, y cuál fue decide qué hace falta para reanudar: PjM no puede clasificarla o su camino no existe, un par llegó a su límite, un rol falló dos veces, se alcanzó el tope de tarea, o quedaron preguntas para el humano. El motivo viaja como texto libre, no como dato cerrado.
+Lo que un rol, un par o el tope dejan dicho cuando la tarea no puede seguir sin el humano, con las preguntas si las hay. El sistema lo entrega al humano en el issue y pausa la tarea: queda esperando con su estado guardado, sin gastar, y se retoma desde el mismo punto. Son cinco las situaciones que lo provocan, y cuál fue decide qué hace falta para reanudar: PjM no puede clasificarla, un par llegó a su límite, un rol falló dos veces, se alcanzó el tope de tarea, o quedaron preguntas para el humano. El motivo viaja como texto libre, no como dato cerrado.
 _Avoid_: motivo de escalado, causa, tipo de escalado (el motivo es parte del escalado, no otro término), pausa, bloqueo, espera
 _Campo_: escalation — de soporte y operaciones, no del campo agéntico; ahí el mecanismo es interrupt (LangGraph): frena el grafo, expone un valor al cliente y se reanuda con `Command(resume=...)`
 

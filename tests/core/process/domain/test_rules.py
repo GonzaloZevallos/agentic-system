@@ -50,12 +50,22 @@ def test_routing_ends_on_escalation_and_loops_on_return():
 
 def test_a_platform_enhancement_skips_the_definition_stage():
     """The shortest of the three paths (README.md, 2; issue #46): no product behaviour
-    to define, so the plan is the first node after PjM. A bug is escalated by
-    `classify` itself, so the fork never sees one that is not already escalated."""
+    to define, so the plan is the first node after PjM."""
     assert rules.after_classify({"type": "platform_enhancement"}) == "plan"
-    assert (
-        rules.after_classify({"type": "bug", "escalated": "bug path not implemented yet"}) is None
-    )
+
+
+def test_a_bug_is_diagnosed_then_validated_and_may_end_discarded():
+    """The bug path (README.md, 2; issue #65): the diagnosis in place of the definition,
+    the same PM after it. PM's return goes back to whoever wrote what it validated; an
+    approval goes to the plan, unless PM ruled the behaviour expected, which discards."""
+    assert rules.after_classify({"type": "bug"}) == "diagnose"
+    assert rules.after_diagnose({}) == "validate"
+    assert rules.after_diagnose({"escalated": "x"}) is None
+    assert rules.after_validate({"status": "returned", "type": "bug"}) == "diagnose"
+    assert rules.after_validate({"status": "returned", "type": "feature"}) == "define"
+    assert rules.after_validate({"status": "definition_ready", "type": "bug"}) == "plan"
+    assert rules.after_validate({"status": "discarded"}) == "discard"
+    assert rules.after_discard({}) is None
 
 
 def test_the_verdict_and_the_category_come_from_the_blocking_findings():
@@ -193,6 +203,11 @@ def test_the_status_before_the_escalation_is_derived_from_the_definition_runs():
     assert rules.resumed_status({**approved, "changes_requested": {KEY: 1}}) == "returned"
     assert rules.resumed_status(subtasks("api")) == "planned"
     assert rules.resumed_status({"subtasks": {"api": {"status": "delivered"}}}) == "developing"
+    # A discard is an end: its runs (a diagnosis, PM's ruling) do not make it a
+    # definition ready to plan.
+    discarded = {**approved, "status": "discarded", "type": "bug"}
+    assert rules.resumed_status(discarded) == "discarded"
+    assert rules.resume_target({**discarded, **rules.resumed(discarded, None)}) is None
 
 
 def test_resuming_clears_the_escalation_resets_the_pair_and_keeps_the_decision():
@@ -232,14 +247,18 @@ def test_resuming_leaves_the_integration_to_the_fan_in():
 def test_the_resume_target_follows_the_state():
     assert rules.resume_target({"escalated": "x", "status": "defined"}) is None
     assert rules.resume_target({"status": "open"}) == "classify"
-    assert rules.resume_target({"status": "open", "type": "bug"}) == "classify"
     assert rules.resume_target({"status": "open", "type": "feature"}) == "define"
-    # Paused in the solution interview with no plan yet: back to the plan, not to a
+    # A bug paused in its diagnosis goes back to it (issue #65); a platform enhancement
+    # paused in the solution interview with no plan yet goes back to the plan, not to a
     # definition it never had (issue #46).
+    assert rules.resume_target({"status": "open", "type": "bug"}) == "diagnose"
     assert rules.resume_target({"status": "open", "type": "platform_enhancement"}) == "plan"
     assert rules.resume_target({"status": "defined"}) == "validate"
     assert rules.resume_target({"status": "returned"}) == "define"
+    assert rules.resume_target({"status": "returned", "type": "bug"}) == "diagnose"
     assert rules.resume_target({"status": "definition_ready"}) == "plan"
+    # Discarded is an end, like a pull request: nothing left to run.
+    assert rules.resume_target({"status": "discarded", "type": "bug"}) is None
     # With a plan every road goes through the fan-in, which decides the wave itself.
     both = {"api": {"status": "delivered"}, "domain": {"status": "pending"}}
     assert rules.resume_target({"subtasks": both}) == "integrate"

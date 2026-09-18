@@ -25,10 +25,12 @@ from .schemas import (
     Consultation,
     Definition,
     Delivery,
+    Diagnosis,
     InterviewTurn,
     PlatformAnswers,
     Review,
     RoleOutput,
+    Ruling,
     SolutionTurn,
     TechAnswers,
     TechPlan,
@@ -189,6 +191,27 @@ PM = Role(
     reads_knowledge=True,
 )
 
+# The bug path (README.md, 2; issue #65): the same two roles, without the interview.
+# The Product Analyst reproduces instead of interviewing: it reads the code and runs
+# the product's checks in the task's checkout, which is not executing (glossary:
+# Ejecutar), and rules against the written definition; PM validates the ruling, or
+# decides when there was no definition to rule against. Same `name` as the feature
+# roles: the section and the resume read the document by it, on either path.
+PRODUCT_ANALYST_BUG = replace(
+    PRODUCT_ANALYST,
+    slug="product_analyst_bug",
+    schema=Diagnosis,
+    reads=(ORIGINAL, "PjM", "Product Analyst", "PM"),
+    tools=READ_CODE,
+    # Plus the product's checks, per task: `diagnoser_for`.
+    allowed=READ_CODE_RULES,
+    # Reading and running take turns the definition never needed: the Tech Lead's,
+    # which reads the code the same way.
+    max_turns=12,
+)
+
+PM_BUG = replace(PM, slug="pm_bug", schema=Ruling, reads=(ORIGINAL, "Product Analyst", "PM"))
+
 # The technical stage: the ephemeral Tech Lead interviews Tech Lead, who then writes
 # the plan; Developers build; Tech Lead reviews each subtask and the integration.
 TECH_LEAD_EPHEMERAL = Role(
@@ -321,12 +344,20 @@ def reviewer_for(checks: Mapping[str, str]) -> Role:
     return replace(TECH_LEAD_REVIEWER, allowed=TECH_LEAD_REVIEWER.allowed + check_rules(checks))
 
 
+def diagnoser_for(checks: Mapping[str, str]) -> Role:
+    """The Product Analyst of a bug whose product declares `checks` (issue #65): it
+    reproduces by running them, the way the reviewer backs an objection."""
+    return replace(PRODUCT_ANALYST_BUG, allowed=PRODUCT_ANALYST_BUG.allowed + check_rules(checks))
+
+
 ROLES = (
     PJM,
     PRODUCT_ANALYST_INTERVIEWER,
     PM_INTERVIEWEE,
     PRODUCT_ANALYST,
     PM,
+    PRODUCT_ANALYST_BUG,
+    PM_BUG,
     TECH_LEAD_EPHEMERAL,
     TECH_LEAD_INTERVIEWEE,
     PM_CONSULTANT,
