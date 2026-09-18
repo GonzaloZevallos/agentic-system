@@ -243,11 +243,15 @@ async def test_two_subtasks_fan_out_loop_on_a_return_and_integrate(config):
     assert "Tech Lead: review domain (v1)" in final["sections"]
     rerun = script.calls[8 + 4]
     assert rerun["cwd"] == MemoryWorkspace.ROOT / "GH-1.domain"
-    assert (
-        "## Tech Lead: review domain\n\n### Verdict\n\n**returned** (`spec-behaviour`)"
-        in rerun["prompt"]
-    )
+    # The return goes back to the same Developer session, over a delta: not the whole
+    # context again (ADR-0004, sixth addendum).
+    assert rerun["resume"] == "dev"
+    assert "## Tech Lead: review domain" in rerun["prompt"]
+    assert "**Returned:** no test at the seam" in rerun["prompt"]
+    assert "### Verdict\n\n**returned** (`spec-behaviour`)" in rerun["prompt"]
     assert "## Developer: api" not in rerun["prompt"]  # not its subtask
+    assert "## PM" not in rerun["prompt"]  # its session already has it
+    assert "## Original request" not in rerun["prompt"]
     # The integration review reads the whole task branch from where it started.
     integration = script.calls[-1]
     assert integration["slug"] == "tech_lead_review"
@@ -589,6 +593,8 @@ async def test_role_failure_escalates_and_keeps_failures(config, tmp_path):
         "calls": 0,
         "tool_calls": {},
         "subagent_cost_usd": 0,
+        "resumed_from": "",
+        "cold_fallback": False,
     }
     assert doc["status"] == WAITING_ON_HUMAN
 
@@ -708,6 +714,7 @@ async def test_retried_failure_is_recorded_but_not_escalated(config):
             "reason": "other",
             "slug": "product_analyst",
             "section": "Product Analyst",
+            "cold_fallback": False,
         }
     ]
 

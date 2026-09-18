@@ -761,6 +761,37 @@ def test_a_run_record_without_the_new_fields_emits_only_turns(metrics):
     assert turns.value == 1
 
 
+def test_role_finish_emits_cold_fallback_when_the_run_record_carries_it(metrics):
+    """A run record whose `run_with_retry` dropped a stale caller session and started
+    cold (ADR-0004, sixth addendum) leaves one `agentic.role.cold_fallback` sample,
+    the usual role label set (`_run_labels`, same as `agentic.role.cost_usd`)."""
+    run = _run("Developer", "developer", "Developer: api", 0.1)
+    run["cold_fallback"] = True
+    with telemetry.role_span("Developer", "developer", "gym-saas") as run_span:
+        run_span.finish({"runs": [run], "sections": {"Developer: api": "t"}, "cost_usd": 0.1})
+    (sample,) = points(metrics)["agentic.role.cold_fallback"]
+    assert sample.value == 1
+    assert dict(sample.attributes) == {
+        "product": "gym-saas",
+        "role": "Developer",
+        "model": "m",
+        "rework": False,
+        "role.slug": "developer",
+        "phase": "development",
+        "role.outcome": "delivered",
+        "system.version": "abc1234",
+    }
+
+
+def test_role_finish_emits_no_cold_fallback_sample_when_the_run_did_not_fall_back(metrics):
+    """A run recorded before this field existed, or one that simply resumed cleanly,
+    reads `False` and leaves no sample at all."""
+    run = _run("PjM", "pjm", "PjM", 0.1)
+    with telemetry.role_span("PjM", "pjm", "gym-saas") as run_span:
+        run_span.finish({"runs": [run], "sections": {"PjM": "t"}, "cost_usd": 0.1})
+    assert "agentic.role.cold_fallback" not in points(metrics)
+
+
 def test_four_run_records_leave_four_cost_samples_and_four_child_spans(spans_and_metrics):
     """The vertical's acceptance: one interview-shaped patch, four run records across
     two roles, four `cost_usd` samples and four child spans under the role span."""
@@ -892,6 +923,65 @@ def test_failures_leave_one_sample_per_reason_with_the_count_and_the_cost(metric
         "phase": "definition",
         "reason": "schema",
     }
+
+
+def test_failures_emit_one_cold_fallback_sample_when_one_attempt_carries_it(metrics):
+    """The cold fallback that still failed leaves its trace on `Failure`, not on any
+    `RoleRun` (nothing delivered): `_emit_failures` is where that run's sample comes
+    from, the usual role label set for a failure (`common`, same as
+    `agentic.role.failures`), no `reason` split since only one fallback exists per run."""
+    patch = {
+        "failures": [
+            {
+                "role": "Developer",
+                "attempt": 1,
+                "error": "a",
+                "cost_usd": 0.01,
+                "session_id": "",
+                "reason": "sdk",
+                "slug": "developer",
+                "section": "Developer: api",
+                "cold_fallback": True,
+            },
+            {
+                "role": "Developer",
+                "attempt": 2,
+                "error": "b",
+                "cost_usd": 0.02,
+                "session_id": "",
+                "reason": "schema",
+                "slug": "developer",
+                "section": "Developer: api",
+            },
+        ],
+        "cost_usd": 0.03,
+        "escalated": "Developer failed 2 times: b",
+        "status": "waiting_on_human",
+    }
+    with telemetry.role_span("Developer", "developer", "gym-saas") as run:
+        run.finish(patch)
+    (sample,) = points(metrics)["agentic.role.cold_fallback"]
+    assert sample.value == 1
+    assert dict(sample.attributes) == {
+        "product": "gym-saas",
+        "role": "Developer",
+        "role.slug": "developer",
+        "phase": "development",
+    }
+
+
+def test_failures_emit_no_cold_fallback_sample_when_none_carry_it(metrics):
+    patch = {
+        "failures": [
+            {"role": "PjM", "attempt": 1, "error": "a", "cost_usd": 0.01, "session_id": ""}
+        ],
+        "cost_usd": 0.01,
+        "escalated": "PjM failed",
+        "status": "waiting_on_human",
+    }
+    with telemetry.role_span("PjM", "pjm", "gym-saas") as run:
+        run.finish(patch)
+    assert "agentic.role.cold_fallback" not in points(metrics)
 
 
 def test_a_failure_without_slug_or_section_emits_unknown_and_no_phase(metrics):

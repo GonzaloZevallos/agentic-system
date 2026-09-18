@@ -184,6 +184,7 @@ class Instruments:
     role_turns: Gauge
     role_tool_calls: Gauge
     role_subagent_cost: Gauge
+    role_cold_fallback: Gauge
     review_findings: Gauge
     presubmit_checks: Gauge
     presubmit_duration: Gauge
@@ -261,6 +262,14 @@ class Instruments:
                     "What of a run record's cost a sub-agent spent (ADR-0013); not "
                     "additive with agentic.role.cost_usd, whose run already carries "
                     "that money as part of its own total"
+                ),
+            ),
+            role_cold_fallback=m.create_gauge(
+                "agentic.role.cold_fallback",
+                description=(
+                    "One sample per role run where the system dropped a "
+                    "caller-supplied session and started cold (ADR-0004, sixth "
+                    "addendum); names the system's own decision, never a cause"
                 ),
             ),
             review_findings=m.create_gauge(
@@ -562,6 +571,8 @@ class RoleRun(Run):
                 i.role_tool_calls.set(count, {**token_labels, "tool": tool})
             if "subagent_cost_usd" in run:
                 i.role_subagent_cost.set(run["subagent_cost_usd"], token_labels)
+            if run.get("cold_fallback", False):
+                i.role_cold_fallback.set(1, labels)
 
         self._emit(record)
 
@@ -605,12 +616,15 @@ class RoleRun(Run):
             common["phase"] = phase_of(section)
         counts = system_metrics.failures_by_reason(failures)
         costs = system_metrics.failure_cost_by_reason(failures)
+        fell_back_cold = any(f.get("cold_fallback", False) for f in failures)
 
         def record(i: Instruments) -> None:
             for reason, count in counts.items():
                 i.role_failures.set(count, {**common, "reason": reason})
             for reason, total in costs.items():
                 i.role_failure_cost.set(total, {**common, "reason": reason})
+            if fell_back_cold:
+                i.role_cold_fallback.set(1, common)
 
         self._emit(record)
 

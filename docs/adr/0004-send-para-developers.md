@@ -212,3 +212,77 @@ Fuera de esta adenda: el canal entre revisiones (invariantes del plan, tabla de 
 integrador condicional), en #42, resuelto en la adenda de ADR-0015. La tabla se escribe
 desde este mismo nodo de fan-in, que es el único momento en que las ramas de una ola están
 mergeadas.
+
+## Adenda (2026-09-18, sexta): una devolución continúa la sesión del Developer, con delta y arranque en frío
+
+La adenda del 2026-09-14 dejó resuelto el intento **fallido**: el reintento continúa la
+sesión que el intento dejó. La devolución no estaba: `develop.py` llamaba a `run_role` sin
+`resume` en ningún caso, ni siquiera con la subtarea en `returned`, así que el Developer
+devuelto nacía de nuevo y rearmaba el contexto entero (~184k tokens cacheados por llamada;
+$23.59 de retrabajo de Developer en GH-12 sobre tres devoluciones). Esta adenda extiende la
+misma regla del intento fallido a la entrega devuelta. El comportamiento lo gobierna
+`docs/product/changes-requested.md`.
+
+**La sesión se reanuda y el mensaje nuevo es sólo el delta.** `resume` solo no alcanza:
+`run_role` arma el prompt con `context_for` salvo que el llamador pase `prompt`, así que
+reanudar sin acortar habría mandado el contexto dos veces. El delta lleva, incondicionalmente
+y en este orden, lo que existe en el estado: `## Human`, la tabla de hallazgos abierta como
+la dejó el fan-in, la sección de la revisión y el motivo de una línea. Nada más: ni el pedido
+original, ni PM, ni el plan, ni la sección anterior del propio Developer, que es justamente
+lo que la sesión ya tiene adentro. Son incondicionales porque razonar sobre lo que una sesión
+ya vio no es confiable —`interview.consult` tiene `consulted_once` por eso mismo— y porque
+son las únicas secciones que se mueven entre olas; re-mandar tres secciones chicas es barato
+al lado de un workaround redescubierto, que es la falla de la corrida 4.
+
+**El prompt en frío es del llamador, no de `run_role`.** Cuando la sesión registrada ya no
+se puede reanudar, el intento siguiente arranca en frío; pero el contexto que ese arranque
+necesita sólo lo conoce quien armó el mensaje. Sintetizarlo dentro de `run_role` rompía las
+otras dos llamadas que pasan `resume` y `prompt` juntos: en `interview.turn` la transcripción
+se escribe como sección recién al final, así que un `context_for` sintetizado en la ronda 3
+no tiene ni la ronda 1 ni la 2 y el entrevistado contesta una pregunta que nunca vio; en
+`consult` el prompt *son* las preguntas numeradas, que un contexto sintetizado descarta
+entero, y PM no respondería nada mientras el llamador escribe el resultado como
+`Clarifications`. Por eso `cold_prompt` lo pasa el llamador: `develop` manda contexto
+completo más el mismo delta (la forma de `_with_context`, que sube a `run_role.py` porque
+ahora la usan dos módulos), `consult` manda `_with_context` de su propio prompt, y
+`interview.turn` no manda ninguno: sin `cold_prompt` no hay fallback y su comportamiento
+queda idéntico al de hoy. Un arranque en frío cuesta a lo sumo un intento y nunca escala por
+sí mismo: la definición ya bendice la sesión nueva cuando no hay sesión, y que la ausencia se
+descubra al intentar en vez de al mirar el estado no la convierte en otra cosa.
+
+**La serie nombra la decisión del sistema, no una causa.** `AttemptFailed.reason` es la
+llamada del sitio que la levanta y nunca se adivina parseando el error, y el runner no puede
+distinguir una sesión vencida de una red caída o un CLI ausente: el proxy disponible —el
+llamador pasó `resume` y el intento no dejó sesión— se dispara con cualquier rotura del
+harness anterior a la sesión. Así que no se agrega ningún valor a `FailureReason`. Lo único
+que el sistema puede probar es que **soltó la sesión del llamador y arrancó en frío**, que es
+una decisión suya tomada en una línea conocida de `run_with_retry`, y eso es lo que cuenta
+`agentic.role.cold_fallback`, con el juego de labels de rol de siempre. Se decide una vez y
+tres lectores la leen: el campo de la corrida, la entrada de `Failure` y la línea del
+documento. `resumed_from` se decide en el mismo lugar y guarda la sesión que el intento
+ganador reanudó de verdad, vacía cuando no reanudó ninguna: derivarla del argumento de
+`run_role` mentía en dos caminos —el reintento que continúa la sesión de un intento fallido
+sin que el llamador pidiera nada, y el fallback que no reanudó nada con un id válido en el
+argumento— y el 100% de la definición se computa sobre ese campo. El fallback en un intento
+que igual falla queda en su `Failure` y lo emite `_emit_failures`; en uno que entrega, en su
+`RoleRun`. Exactamente un registro por fallback.
+
+**La regla de contexto tiene su primera excepción, y el frío es la garantía.** El docstring
+de `run_role` dice que cada rol lee enteras las secciones que declara en `Role.reads`. Desde
+acá, un Developer devuelto corre sobre el delta y `Role.reads` lo honra su memoria de sesión;
+cuando no hay memoria, el camino en frío lo vuelve a honrar entero. El docstring se corrige
+en el mismo diff: sin eso, el próximo revisor lee el delta como una violación de la regla que
+el módulo enuncia, y tendría razón.
+
+**Lo que el delta no promete.** El revisor corre los chequeos declarados en el mismo worktree
+del Developer (`review.py`, `cwd=checkout.path`), `develop` re-aplica el merge de las
+dependencias en la vuelta, y un worktree podado se recrea con el `setup` del producto
+corriendo de nuevo. La rama y los archivos son los que el Developer dejó; el alrededor no. El
+delta abre con el hecho —rama, head actual, y que el checkout pudo cambiar— y el prompt del
+rol devuelto dice además que su estado de shell no sobrevive: directorio actual, variables
+exportadas, un venv activado, nada de eso sigue vivo, y un comando que asume un `cd` anterior
+es el modo de fallo esperable de este arreglo. Como el prompt ya le dice que no repita el
+camino que la revisión objetó: la memoria sirve para no releer, no para insistir.
+
+Fuera de esta adenda: `ROLE_RETRIES`, el tope por intento, el límite del par y el ruteo de la
+devolución por el fan-in, que no se tocan.

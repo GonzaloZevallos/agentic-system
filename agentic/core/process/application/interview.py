@@ -29,7 +29,7 @@ from ..domain.document import HUMAN
 from ..domain.roles import Interview, Role
 from ..domain.task import WAITING_ON_HUMAN, TaskState, apply
 from .ports import Ports
-from .run_role import Output, context_for, preamble, run_role
+from .run_role import Output, context_for, preamble, run_role, with_context
 
 CLOSE = (
     "The rounds are over. Do not ask anything else: close the interview with `done` and "
@@ -156,12 +156,17 @@ async def interview(
         prompt = _consultation(
             before, consultant, spec.interviewee, ports, questions, round_, cwd, transcript
         )
+        cold_prompt = None
         if not resume:
-            prompt = _with_context(before, consultant, ports, cwd, prompt)
-        elif not consulted_once and (human := before.get("sections", {}).get(HUMAN)):
-            # A session from before the escalation never read the human's decisions;
-            # the consultation session keeps them from here on.
-            prompt = f"## {HUMAN}\n\n{human}\n\n{prompt}"
+            prompt = with_context(before, consultant, ports, cwd, prompt)
+        else:
+            # A session on record may turn out stale (`run_with_retry`'s fallback):
+            # the caller's own cold prompt is its own text, in full context.
+            cold_prompt = with_context(before, consultant, ports, cwd, prompt)
+            if not consulted_once and (human := before.get("sections", {}).get(HUMAN)):
+                # A session from before the escalation never read the human's decisions;
+                # the consultation session keeps them from here on.
+                prompt = f"## {HUMAN}\n\n{human}\n\n{prompt}"
         consulted_once = True
         output, turn_patch = await run_role(
             before,
@@ -173,6 +178,7 @@ async def interview(
             cwd=cwd,
             resume=resume,
             prompt=prompt,
+            cold_prompt=cold_prompt,
             round=round_,
             max_rounds=max_rounds,
             **placeholders,
@@ -323,9 +329,3 @@ def _consultation(
     the human."""
     listed = "\n".join(f"{n}. {q}" for n, q in enumerate(questions, 1))
     return transcript.before(f"## Questions from {asker.name} (round {round_})\n\n{listed}")
-
-
-def _with_context(state: TaskState, role: Role, ports: Ports, cwd: Path | None, text: str) -> str:
-    """`text` after the role's context, for a role with no session to resume."""
-    standards, knowledge = preamble(role, ports, cwd)
-    return context_for(state, role, knowledge, standards) + "\n\n" + text
