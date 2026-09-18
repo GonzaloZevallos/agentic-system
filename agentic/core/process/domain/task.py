@@ -18,7 +18,7 @@ several nodes over a copy of the state and has to hand the parent what it added.
 from __future__ import annotations
 
 import operator
-from typing import Annotated, Literal, TypedDict, get_args, get_origin, get_type_hints
+from typing import Annotated, Literal, NotRequired, TypedDict, get_args, get_origin, get_type_hints
 
 Status = Literal[
     "open",
@@ -67,6 +67,29 @@ FindingStatus = Literal["open", "fixed", "dismissed"]
 # A return's category: a review's takes its first blocking finding's; PM's returns of
 # the definition, whose reason stays free text, are all `definition`.
 ChangeCategory = FindingCategory | Literal["definition"]
+# Why an attempt failed, decided at the raise site, never by parsing the error's text
+# (README.md, 14; the Medición glossary's `agentic.role.failures`): `schema` is a
+# structured output missing or invalid against the role's own schema, `check` a use
+# case's own rule over otherwise-valid output, `max_turns` the harness cutting the
+# model off, `limit` a per-attempt money cap (issue #66), `sdk` anything else the
+# harness raised, `other` the residual nothing else names.
+FailureReason = Literal["schema", "check", "max_turns", "limit", "sdk", "other"]
+# Which review this is (ADR-0016; `rules.review_kind`): `first` until a return sends the
+# subtask back, `incremental` (ADR-0015) after that, `integration` for the fan-in's own
+# subtask always. What `agentic.review.findings` groups by alongside the finding itself.
+ReviewKind = Literal["first", "incremental", "integration"]
+# Why the task escalated, from the closed set a domain constructor writes together with
+# `escalated` (ADR-0008, 2026-09-18 addendum; `agentic.task.paused`), so a patch cannot
+# carry one without the other: `classification` PjM's own low-confidence call, `returns`
+# a pair (PM<->Product Analyst or Tech Lead<->Developer) at its return limit, `failure` a
+# role `run_with_retry` gave up on, `cap` the task's money cap reached before an attempt,
+# `questions` an interview's open questions for the human, `unmergeable` a subtask whose
+# dependency the system could not merge on its own, `setup` the product's setup step
+# failing on a checkout the system just made. `limit` (issue #66's per-attempt budget
+# cap) is not here: it stops one attempt, not the task, so it is a `FailureReason`.
+EscalationClass = Literal[
+    "classification", "returns", "failure", "cap", "questions", "unmergeable", "setup"
+]
 
 
 def add(current: float, new: float) -> float:
@@ -100,6 +123,16 @@ class Failure(TypedDict):
     # The session the attempt left, if the harness got as far as opening one: the
     # retry continues it, and `claude -r <id>` reopens it for the human.
     session_id: str
+    # Why the attempt failed, from the closed set (`FailureReason`); absent on a
+    # failure recorded before this field existed.
+    reason: NotRequired[FailureReason]
+    # `Role.slug`, so a failure of one of the six roles named "Tech Lead" says which;
+    # absent on a failure recorded before this field existed.
+    slug: NotRequired[str]
+    # What the attempt was writing when it failed, the same string `RoleRun.section`
+    # would have carried had it delivered; absent on a failure recorded before this
+    # field existed.
+    section: NotRequired[str]
 
 
 class RoleRun(TypedDict):
@@ -117,6 +150,52 @@ class RoleRun(TypedDict):
     # `turns` counts the role's alone, so this is what explains a dear two-turn run.
     cost_by_model: dict[str, float]
     turns: int
+    # `Role.slug`: `role` alone cannot tell the six roles named "Tech Lead" apart.
+    # Absent on a run recorded before this field existed; read with `.get(..., "unknown")`.
+    slug: NotRequired[str]
+    # When the attempt started and ended, ISO-8601 UTC with millisecond precision, the
+    # clock started only after the concurrency slot was acquired: the duration between
+    # them is work inside the slot, never the wait for one. Absent on a run recorded
+    # before this field existed.
+    started_at: NotRequired[str]
+    ended_at: NotRequired[str]
+    # Seconds this attempt waited for a concurrency slot before it started, its own
+    # series and never folded into the duration above. Absent on a run recorded before
+    # this field existed.
+    queue_wait_s: NotRequired[float]
+    # Token usage of this run's delivering `ResultMessage`, by kind (`input`, `output`,
+    # `cache_read`, `cache_write`): `agentic.role.tokens` groups on this key. Absent on
+    # a run recorded before this field existed.
+    tokens: NotRequired[dict[str, int]]
+    # Calls to the model in this run: one per `AssistantMessage` the runner saw before
+    # the delivery (`ClaudeSdkRunner.run_once`'s own count). Absent on a run recorded
+    # before this field existed.
+    calls: NotRequired[int]
+    # `tool_use` blocks of this run, by tool name; a name outside the known set counts
+    # as `other`. Absent on a run recorded before this field existed.
+    tool_calls: NotRequired[dict[str, int]]
+    # What of `cost_by_model` a sub-agent spent: every model but this run's own
+    # (ADR-0013). Not additive with `cost_usd`, which already counts that dollar once.
+    # Absent on a run recorded before this field existed.
+    subagent_cost_usd: NotRequired[float]
+
+
+class InterviewStats(TypedDict):
+    """Counts of one interview (ADR-0014), for measurement only: `interview()`'s own
+    patch key, read by `core.measurement` for `agentic.interview.*` and never rendered
+    into the document — the same treatment `subtask_id` gets, since a panel needs it
+    but a resumed task does not. `interview` is which stage ran it (`Interview.stage`);
+    `rounds` is the question-answer cycles that reached an interviewee's answer;
+    `questions_to_pm` counts the consultations that ran (Consulta, ADR-0014's addendum);
+    `questions_to_human` is the net count left for the human once the interview ended,
+    after any withdrawal; `invariants_proposed` is what the interviewer proposed, before
+    the plan adopts any of them."""
+
+    interview: Literal["definition", "solution"]
+    rounds: int
+    questions_to_pm: int
+    questions_to_human: int
+    invariants_proposed: int
 
 
 class ChangesRequested(TypedDict):
@@ -183,6 +262,9 @@ class TaskState(TaskInput, total=False):
     current_role: Annotated[str, last]
     flags: dict[str, bool]
     escalated: Annotated[str | None, last]
+    # The closed reason `escalated` is text for (`EscalationClass`); written only by
+    # `rules.escalation`, together with `escalated`, and cleared with it on resume.
+    escalation_class: Annotated[EscalationClass | None, last]
     # One Markdown section per role, keyed by role name, holding the latest delivery.
     # A delivery superseded by a return stays under "<role> (vN)": the document is
     # the raw record of the task, and PjM escalates with the history (ADR-0006).
@@ -222,6 +304,20 @@ class TaskState(TaskInput, total=False):
     # Which subtask a branch of the fan-out is running: set by the fan-out, read by
     # `develop` and `review`, never persisted and never handed back to the parent.
     subtask_id: str
+    # Which review this is (`rules.review_kind`): set by `review` on its own patch, read
+    # once by the adapter for `agentic.review.findings`'s `review.kind` label. Measurement
+    # only, like `subtask_id`: never rendered into the document, recomputed from
+    # `reviewed_head` whenever it is needed again after a resume.
+    review_kind: ReviewKind
+    # Every invocation of a Developer's presubmit that actually ran the checks, in
+    # order: one list of check results (`CheckResult`, `domain/presubmit.py`) per
+    # invocation. Set by `develop` on its own patch, read once by the adapter
+    # (`agentic.presubmit.checks`, `.duration`). Measurement only, like `subtask_id`:
+    # never rendered into the document.
+    presubmit_checks: list[list[dict[str, str | bool | float]]]
+    # Counts of the interview this patch ran, if any (`InterviewStats`): measurement
+    # only, like `subtask_id` above — never rendered into the document.
+    interview_stats: InterviewStats
 
 
 def _reducers() -> dict[str, object]:
@@ -246,6 +342,14 @@ def apply(state: TaskState, patch: TaskState) -> TaskState:
     return merged  # type: ignore[return-value]
 
 
+# Measurement-only keys a branch writes on its own patch and reads back inside the
+# same node (`RoleRun.finish`): never handed to the parent. Two branches of the same
+# wave both writing one of these in the same step would collide on the parent's single
+# channel (`InvalidUpdateError`) even when their values happen to agree, exactly like
+# `subtask_id` already could.
+_BRANCH_LOCAL = {"subtask_id", "review_kind", "presubmit_checks"}
+
+
 def delta(before: TaskState, after: TaskState) -> TaskState:
     """The patch that turns `before` into `after` through the reducers:
     `apply(before, delta(before, after))` is `after` again.
@@ -253,12 +357,14 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
     A pipeline of nodes runs over a copy of the state and ends holding the whole
     state, not what it added. Handing that back to the parent would fold it in a
     second time: `cost_usd` counted twice, every `runs`, `failures` and
-    `change_history` entry duplicated. `subtask_id` never travels back: it says which
-    branch ran, and the parent has as many answers as branches.
+    `change_history` entry duplicated. `_BRANCH_LOCAL` never travels back: `subtask_id`
+    says which branch ran, and `review_kind`/`presubmit_checks` are measurement-only
+    keys already read by the branch's own node; the parent has as many answers as
+    branches for any of them.
     """
     patch: dict = {}
     for key, value in after.items():
-        if key == "subtask_id":
+        if key in _BRANCH_LOCAL:
             continue
         if key not in before:
             patch[key] = value

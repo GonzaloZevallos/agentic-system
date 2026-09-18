@@ -89,6 +89,15 @@ async def test_the_cap_makes_the_interviewer_close_with_what_it_has(cfg):
     assert closing.startswith("**Q2**: accepted") and "The rounds are over" in closing
     section = patch["sections"]["Interview: Product Analyst→PM"]
     assert "### Round 2: answers" in section and section.endswith("### Closing\n\nDecided.")
+    # The cap-forced closing round is not itself a completed round (issue #28): the two
+    # that ran before it are.
+    assert patch["interview_stats"] == {
+        "interview": "definition",
+        "rounds": 2,
+        "questions_to_pm": 0,
+        "questions_to_human": 0,
+        "invariants_proposed": 0,
+    }
 
 
 async def test_questions_for_the_human_escalate_after_the_interview_ends(cfg):
@@ -103,6 +112,7 @@ async def test_questions_for_the_human_escalate_after_the_interview_ends(cfg):
     assert runner.slugs == [ASK, ANSWER, ASK, ANSWER, ASK]  # it ran to the end first
     assert patch["questions_for_human"] == ["Which currency?"]
     assert patch["status"] == "waiting_on_human" and "PM could not decide 1" in patch["escalated"]
+    assert patch["escalation_class"] == "questions"
     assert "### Closing" in patch["sections"]["Interview: Product Analyst→PM"]
 
 
@@ -211,6 +221,15 @@ async def test_a_side_that_fails_twice_escalates_with_the_transcript_so_far(cfg)
     assert len(patch["failures"]) == 2 and patch["cost_usd"] == pytest.approx(0.05 + 0.04)
     # The round that did run is on record.
     assert patch["sections"]["Interview: Product Analyst→PM"].startswith("### Round 1: questions")
+    # The interviewee never answered, so no round completed (issue #28): the stats key
+    # is still present, at zero, on every return path including this failure one.
+    assert patch["interview_stats"] == {
+        "interview": "definition",
+        "rounds": 0,
+        "questions_to_pm": 0,
+        "questions_to_human": 0,
+        "invariants_proposed": 0,
+    }
 
 
 async def test_define_interviews_then_writes_from_the_interviewers_session(cfg):
@@ -250,6 +269,57 @@ async def test_define_on_a_return_skips_the_interview(cfg):
     patch = await define(state, cfg, memory_ports(runner))
     assert runner.slugs == ["product_analyst"] and runner.calls[0]["resume"] is None
     assert patch["sections"]["Product Analyst (v1)"] == "v1"
+    # No interview ran: no counts for a panel to read (`agentic.interview.*`).
+    assert "interview_stats" not in patch
+
+
+async def test_interview_stats_count_rounds_and_questions_by_destination(cfg):
+    """Measurement-only key (like `subtask_id`): `interview()`'s own patch carries the
+    counts a panel needs (issue #28), never rendered into the document. Three rounds,
+    one consultation, two questions left for the human (net of nothing withdrawn)."""
+    runner = ScriptedRunner(
+        **{
+            TL_ASK: [
+                questions(1, invariants=["Every X does Y"]),
+                questions(2),
+                questions(3),
+                questions(done=True),
+            ],
+            TL_ANSWER: [
+                tech_answers(1, for_pm=["Stored end date or last day?"]),
+                tech_answers(2),
+                tech_answers(3),
+            ],
+            CONSULT: [consulted(1, for_human=["Which currency?", "Who pays the fee?"])],
+        }
+    )
+    transcript, patch = await interview(PLANNED, INTERVIEW_SOLUTION, cfg, memory_ports(runner))
+    assert transcript is None  # the two questions for the human still escalate
+    assert patch["interview_stats"] == {
+        "interview": "solution",
+        "rounds": 3,
+        "questions_to_pm": 1,
+        "questions_to_human": 2,
+        "invariants_proposed": 1,
+    }
+
+
+async def test_interview_stats_use_the_definition_label_and_count_nothing_proposed(cfg):
+    runner = ScriptedRunner(
+        **{
+            ASK: [questions(1, session="q1"), questions(done=True, session="q1")],
+            ANSWER: [answers(1, session="a1")],
+        }
+    )
+    transcript, patch = await interview(TASK, INTERVIEW_DEFINITION, cfg, memory_ports(runner))
+    assert transcript is not None
+    assert patch["interview_stats"] == {
+        "interview": "definition",
+        "rounds": 1,
+        "questions_to_pm": 0,
+        "questions_to_human": 0,
+        "invariants_proposed": 0,
+    }
 
 
 # The solution interview has a consultant (glossary: Consulta): the Tech Lead asks PM what
@@ -467,6 +537,15 @@ async def test_on_the_platform_path_the_tech_lead_asks_the_human_itself(cfg):
     assert "## With the human\n\n1. Should the old endpoint stay?" in runner.calls[2]["prompt"]
     section = patch["sections"]["Interview: Tech Lead efímero→Tech Lead"]
     assert "### Round 1: answers" in section and "PM answers" not in section
+    # The platform path has no consultant: `questions_to_pm` stays at zero even though
+    # the human got a question, and the stage label is still "solution".
+    assert patch["interview_stats"] == {
+        "interview": "solution",
+        "rounds": 1,
+        "questions_to_pm": 0,
+        "questions_to_human": 1,
+        "invariants_proposed": 0,
+    }
 
 
 async def test_on_the_platform_path_a_settled_question_is_withdrawn_by_the_tech_lead(cfg):

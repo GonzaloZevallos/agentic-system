@@ -86,6 +86,74 @@ async def test_raw_result_splits_the_cost_by_model(monkeypatch, tmp_path):
     assert (await run_once(ClaudeSdkRunner(), tmp_path)).cost_by_model == {}
 
 
+async def test_raw_result_carries_usage_calls_and_tool_calls(monkeypatch, tmp_path):
+    usage = {
+        "input_tokens": 10,
+        "output_tokens": 20,
+        "cache_read_input_tokens": 30,
+        "cache_creation_input_tokens": 40,
+    }
+    first = AssistantMessage(
+        content=[
+            ToolUseBlock(id="1", name="Read", input={}),
+            ToolUseBlock(id="2", name="Bash", input={}),
+        ],
+        model="m",
+    )
+    second = AssistantMessage(
+        content=[
+            ToolUseBlock(id="3", name="Read", input={}),
+            ToolUseBlock(id="4", name="mcp__weird__tool", input={}),
+            ToolUseBlock(id="5", name="StructuredOutput", input={"markdown": "ok"}),
+        ],
+        model="m",
+    )
+    fake_query(monkeypatch, [first, second, result(usage=usage)])
+    raw = await run_once(ClaudeSdkRunner(), tmp_path)
+    # Normalised to the closed `kind` set `agentic.role.tokens` groups by, off the SDK's
+    # own snake_case keys.
+    assert raw.usage == {"input": 10, "output": 20, "cache_read": 30, "cache_write": 40}
+    assert raw.calls == 2  # one per AssistantMessage seen before the delivery
+    assert raw.tool_calls == {"Read": 2, "Bash": 1, "other": 1, "StructuredOutput": 1}
+
+
+async def test_raw_result_usage_defaults_when_the_sdk_reports_none(monkeypatch, tmp_path):
+    fake_query(monkeypatch, [result(usage=None)])
+    raw = await run_once(ClaudeSdkRunner(), tmp_path)
+    assert raw.usage == {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
+    assert raw.calls == 0
+    assert raw.tool_calls == {}
+
+
+async def test_usage_of_a_resumed_session_from_an_earlier_node_is_not_adjusted(
+    monkeypatch, tmp_path
+):
+    # The probe (observability/README.md, 14) resumed a session across two separate
+    # `query()` calls and printed the second call's own `usage`: {"input_tokens": 2,
+    # "cache_creation_input_tokens": 63, "cache_read_input_tokens": 1862,
+    # "output_tokens": 4}, not the first call's added in. `run_once` has no session
+    # this runner opened itself to compare against here either way — `resume` may name
+    # a session an earlier node opened — so there is no baseline it could subtract even
+    # if the SDK's own figure needed one, which the probe found it does not.
+    usage = {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 63,
+        "cache_read_input_tokens": 1862,
+        "output_tokens": 4,
+    }
+    fake_query(monkeypatch, [result(usage=usage)])
+    raw = await ClaudeSdkRunner().run_once(
+        PJM,
+        "p",
+        system_prompt="s",
+        model="m",
+        json_schema={"type": "object"},
+        cwd=tmp_path,
+        resume="session-opened-by-an-earlier-node",
+    )
+    assert raw.usage == {"input": 2, "output": 4, "cache_read": 1862, "cache_write": 63}
+
+
 async def test_nested_schemas_are_inlined_for_the_sdk(monkeypatch, tmp_path):
     seen = fake_query(monkeypatch, [result()])
     schema = {
@@ -104,17 +172,20 @@ async def test_nested_schemas_are_inlined_for_the_sdk(monkeypatch, tmp_path):
 
 async def test_missing_result_and_error_results_are_attempt_failures(monkeypatch, tmp_path):
     fake_query(monkeypatch, [])
-    with pytest.raises(AttemptFailed, match="without a result"):
+    with pytest.raises(AttemptFailed, match="without a result") as info:
         await run_once(ClaudeSdkRunner(), tmp_path)
+    assert info.value.reason == "sdk"
 
     fake_query(monkeypatch, [result(subtype="error_max_turns", total_cost_usd=0.5)])
     with pytest.raises(AttemptFailed, match="max_turns \\(2\\) exhausted") as info:
         await run_once(ClaudeSdkRunner(), tmp_path)
     assert info.value.cost_usd == 0.5
+    assert info.value.reason == "max_turns"
 
     fake_query(monkeypatch, [result(is_error=True, subtype="error", errors=["boom"])])
-    with pytest.raises(AttemptFailed, match="boom"):
+    with pytest.raises(AttemptFailed, match="boom") as info:
         await run_once(ClaudeSdkRunner(), tmp_path)
+    assert info.value.reason == "sdk"
 
 
 async def test_a_failed_attempt_keeps_the_session_it_left_behind(monkeypatch, tmp_path):
@@ -125,6 +196,8 @@ async def test_a_failed_attempt_keeps_the_session_it_left_behind(monkeypatch, tm
     with pytest.raises(AttemptFailed, match="error_max_budget_usd") as info:
         await run_once(ClaudeSdkRunner(), tmp_path)
     assert (info.value.cost_usd, info.value.session_id) == (3.05, "sess-123")
+    # A per-attempt budget cap is `limit` (issue #66), not a generic `sdk` failure.
+    assert info.value.reason == "limit"
 
     fake_query(monkeypatch, [result(subtype="error_max_turns", total_cost_usd=0.5)])
     with pytest.raises(AttemptFailed) as info:
@@ -195,8 +268,24 @@ async def test_sdk_exceptions_are_attempt_failures(monkeypatch, tmp_path):
         yield  # pragma: no cover
 
     monkeypatch.setattr(module, "query", query)
-    with pytest.raises(AttemptFailed, match="SDK error: socket closed"):
+    with pytest.raises(AttemptFailed, match="SDK error: socket closed") as info:
         await run_once(ClaudeSdkRunner(), tmp_path)
+    assert info.value.reason == "sdk"
+
+
+async def test_a_result_error_with_a_budget_subtype_is_the_limit_reason(monkeypatch, tmp_path):
+    from claude_agent_sdk import ResultError
+
+    async def query(prompt, options):
+        yield result(is_error=True, subtype="error_max_budget_usd", total_cost_usd=1.0)
+        raise ResultError(
+            "run failed", data={"subtype": "error_max_budget_usd", "errors": ["over budget"]}
+        )
+
+    monkeypatch.setattr(module, "query", query)
+    with pytest.raises(AttemptFailed, match="error_max_budget_usd") as info:
+        await run_once(ClaudeSdkRunner(), tmp_path)
+    assert info.value.reason == "limit"
 
 
 async def test_verbose_streams_the_generation_through_the_printer(monkeypatch, tmp_path):

@@ -14,7 +14,17 @@ def test_render_then_parse_roundtrip():
         "current_role": "PM",
         "flags": {"touches_ui": False},
         "changes_requested": {"PM→Product Analyst": 1},
-        "failures": [{"role": "PM", "attempt": 1, "error": "x", "cost_usd": 0.01}],
+        "failures": [
+            {
+                "role": "PM",
+                "attempt": 1,
+                "error": "x",
+                "cost_usd": 0.01,
+                "reason": "schema",
+                "slug": "pm",
+                "section": "PM",
+            }
+        ],
         "runs": [
             {
                 "role": "PjM",
@@ -32,9 +42,18 @@ def test_render_then_parse_roundtrip():
                 "cost_usd": 0.2,
                 "cost_by_model": {"m": 0.15, "sub": 0.05000001},
                 "turns": 2,
+                "tokens": {"input": 10, "output": 20, "cache_read": 30, "cache_write": 40},
+                "calls": 3,
+                "tool_calls": {"Read": 2, "Bash": 1},
+                "subagent_cost_usd": 0.05000001,
+                "slug": "product_analyst",
+                "started_at": "2026-09-18T10:00:00.000Z",
+                "ended_at": "2026-09-18T10:00:05.000Z",
+                "queue_wait_s": 1.5,
             },
         ],
-        "escalated": None,
+        "escalated": "PjM stopped by the task cap: 50.00 of 50.00 USD spent",
+        "escalation_class": "cap",
         "cost_usd": 0.12345,
         "prompts": {"pjm": "abcd1234"},
         "sections": {
@@ -51,10 +70,54 @@ def test_render_then_parse_roundtrip():
     assert data["failures"] == state["failures"]
     assert data["runs"][0] == state["runs"][0]
     assert data["runs"][1]["cost_by_model"] == {"m": 0.15, "sub": 0.05}  # rounded like costs
+    # Tokens, calls, tool calls and the sub-agent split survive the round trip too
+    # (issue #24): the forward direction, not only that an old document still parses.
+    assert data["runs"][1]["tokens"] == {
+        "input": 10,
+        "output": 20,
+        "cache_read": 30,
+        "cache_write": 40,
+    }
+    assert data["runs"][1]["calls"] == 3
+    assert data["runs"][1]["tool_calls"] == {"Read": 2, "Bash": 1}
+    assert data["runs"][1]["subagent_cost_usd"] == 0.05  # rounded like cost_by_model
+    # The spine's own new per-run keys survive the round trip too (issue #24): the
+    # forward direction, not only that a document written before they existed parses.
+    assert data["runs"][1]["slug"] == "product_analyst"
+    assert data["runs"][1]["started_at"] == "2026-09-18T10:00:00.000Z"
+    assert data["runs"][1]["ended_at"] == "2026-09-18T10:00:05.000Z"
+    assert data["runs"][1]["queue_wait_s"] == 1.5
+    assert data["failures"][0]["reason"] == "schema"
+    assert data["failures"][0]["slug"] == "pm"
+    assert data["failures"][0]["section"] == "PM"
     assert data["cost_usd"] == 0.1235
     assert data["prompts"] == {"pjm": "abcd1234"}
     assert data["description"] == "Users want CSV."
     assert data["sections"] == state["sections"]
+    assert data["escalated"] == state["escalated"]
+    assert data["escalation_class"] == "cap"
+
+
+def test_interview_stats_never_reaches_the_document():
+    """Measurement-only, like `subtask_id`: `interview()`'s own patch key
+    (`InterviewStats`) never reaches the document, so a resumed task carries none of
+    it and a panel reading `agentic.interview.*` is the only place it shows."""
+    state = {
+        "id": "T-1",
+        "title": "Plan it",
+        "description": "x.",
+        "interview_stats": {
+            "interview": "solution",
+            "rounds": 2,
+            "questions_to_pm": 1,
+            "questions_to_human": 0,
+            "invariants_proposed": 1,
+        },
+    }
+    rendered = document.render(state)
+    assert "interview_stats" not in rendered
+    assert "questions_to_pm" not in rendered
+    assert "interview_stats" not in document.parse(rendered)
 
 
 def test_superseded_sections_are_written_before_the_current_one():
@@ -176,3 +239,57 @@ def test_the_channel_survives_the_document():
     for field in ("invariants", "integration_brief", "findings", "settled_findings"):
         assert field in resume.STATE_FIELDS, field
         assert back[field] == state[field], field
+
+
+def test_a_document_written_before_slug_and_timing_existed_still_parses():
+    """`RoleRun.slug/.started_at/.ended_at/.queue_wait_s/.tokens/.calls/.tool_calls/
+    .subagent_cost_usd` and `Failure.reason/.slug/.section` are new keys inside entries
+    `document.py` already rendered and parsed whole: no rename, so a run or a failure
+    recorded before this task carries on without them, exactly as written."""
+    old = (
+        "---\n"
+        "id: T-1\n"
+        "title: t\n"
+        "runs:\n"
+        "- {role: PjM, section: PjM, version: 1, session_id: '', model: m, cost_usd: 0.1,"
+        " turns: 1}\n"
+        "failures:\n"
+        "- {role: PM, attempt: 1, error: e, cost_usd: 0.05, session_id: ''}\n"
+        "---\n"
+        "\n# t\n\n## Original request\n\nd\n"
+    )
+    state = document.parse(old)
+    (run,) = state["runs"]
+    assert run == {
+        "role": "PjM",
+        "section": "PjM",
+        "version": 1,
+        "session_id": "",
+        "model": "m",
+        "cost_usd": 0.1,
+        "turns": 1,
+    }
+    assert "slug" not in run and "started_at" not in run and "queue_wait_s" not in run
+    assert "tokens" not in run and "calls" not in run and "tool_calls" not in run
+    assert "subagent_cost_usd" not in run
+    (failure,) = state["failures"]
+    assert failure["error"] == "e" and "reason" not in failure and "slug" not in failure
+
+
+def test_a_document_written_before_escalation_class_existed_still_parses():
+    """`escalation_class` is a new key inside the frontmatter `document.py` already
+    rendered and parsed: no rename, so a document paused before this task carries on
+    without it, and `rules.returns_pair`'s text fallback (ADR-0003, addendum) is what
+    a resume of it still reads."""
+    old = (
+        "---\n"
+        "id: T-1\n"
+        "title: t\n"
+        "escalated: 'PM→Product Analyst hit 2 returns: gap'\n"
+        "---\n"
+        "\n# t\n\n## Original request\n\nd\n"
+    )
+    state = document.parse(old)
+    assert state["escalated"] == "PM→Product Analyst hit 2 returns: gap"
+    assert "escalation_class" not in state
+    assert rules.returns_pair(state) == "PM→Product Analyst"

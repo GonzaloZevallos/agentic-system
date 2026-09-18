@@ -12,7 +12,7 @@ the clean tree are still checked after the run, as a role failure (`develop`).""
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 REFUSALS = 2
 TAIL_LINES = 30
@@ -33,6 +33,9 @@ class CheckResult(TypedDict):
     passed: bool
     # The command's output, whole; the presubmit and the document keep its last lines.
     output: str
+    # How long the command took, for `agentic.presubmit.duration`. Absent on a result
+    # built before this field existed (none are, today: nothing persists a `CheckResult`).
+    duration_s: NotRequired[float]
 
 
 def refusal(moved: bool, clean: bool, results: Sequence[CheckResult]) -> str | None:

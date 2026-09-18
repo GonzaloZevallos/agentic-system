@@ -7,6 +7,7 @@ from types import ModuleType
 from typing import get_args, get_type_hints
 
 from agentic.core.knowledge.domain import knowledge, stack
+from agentic.core.measurement.adapters.otel import telemetry
 from agentic.core.measurement.domain import metrics
 from agentic.core.process.domain import document, presubmit, roles, rules, schemas, task
 from agentic.shared import configuration
@@ -28,6 +29,7 @@ TYPES = {
     "Estándares de ingeniería": knowledge.assemble_standards,
     "Job": knowledge.approval_check,  # the check that a capability names its jobs
     "Retrabajo": metrics.is_rework,
+    "Muestra residual": metrics.residual_cost_usd,
     "Hallazgo": schemas.Finding,
     "Dictamen": schemas.Diagnosis,
     "Categoría de devolución": rules.change_category,
@@ -42,6 +44,7 @@ TYPES = {
 STATE_FIELDS = {
     "Devolución": "changes_requested",
     "Escalado": "escalated",
+    "Clase de escalado": "escalation_class",
     "Sección": "sections",
     "Flag": "flags",
     "Rama de tarea": "branch",
@@ -51,6 +54,11 @@ STATE_FIELDS = {
 
 # Glossary term -> the value of `RoleKind` that names it.
 ROLE_KINDS = {"Pensador": "actor", "Validador": "verifier"}
+
+# Glossary term -> a closed-set type that names it but lives in an adapter, not a
+# domain module (the concept crosses no port: `cli._invoke` is the only writer and
+# `core/measurement`'s adapter the only reader), so `context_of` cannot place it.
+ADAPTER_TERMS = {"Invocación": telemetry.InvocationKind}
 
 
 def module_of(obj) -> str:
@@ -92,3 +100,13 @@ def test_state_fields_exist_and_are_process_terms():
 def test_role_kinds_exist_and_are_process_terms():
     assert set(ROLE_KINDS.values()) == set(get_args(configuration.RoleKind))
     assert set(ROLE_KINDS) <= glossary_terms("process")
+
+
+def test_adapter_terms_are_defined_before_they_are_typed():
+    """§2: a new concept goes into the glossary before it goes into code. `Invocación`
+    names one `agentic run`/`resume` call (distinct from `Corrida`, the whole run over
+    a task); it has no domain type of its own — `TYPES` cannot place it — but the term
+    still has to exist in the process glossary before `InvocationKind` and the
+    `agentic.invocation.*`/`agentic.task.invocations` series it labels."""
+    for term in ADAPTER_TERMS:
+        assert term in glossary_terms("process"), term

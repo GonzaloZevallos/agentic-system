@@ -1095,9 +1095,10 @@ junto con los spans del sistema y sin los de Claude Code, a Grafana Cloud, con l
 del sistema y la huella de prompts como labels (ADR-0008, `observability/README.md`);
 `agentic.task.returns` deja una muestra por categoría de devolución (ADR-0016). Todo span y
 toda métrica llevan además el **producto** sobre el que corrió la tarea, con el nombre que el
-propio producto declara en su `.agentic/stack.yaml`: desde ADR-0017 hay dos y un panel que
-los suma no significa nada, así que el dashboard arranca con uno solo elegido y "All" los
-compara en vez de sumarlos (ADR-0008, adenda; #47). Por último, el `session_id` de cada
+propio producto declara en su `.agentic/stack.yaml`. Lo que se mide es el sistema, no el
+producto: el eje de todo panel es la versión del sistema y el producto queda como filtro y
+como covariable (la mezcla de tareas de cada versión), nunca como eje ni como suma
+(ADR-0008, adenda; #47, #24). Por último, el `session_id` de cada
 corrida queda en el documento de tarea: `claude -r <id>` en
 el repo del producto reabre la sesión del rol.
 
@@ -1106,6 +1107,27 @@ servidores, porque ningún rol declara una tool MCP y los conectores heredados d
 (claude.ai, `~/.claude.json`) sumaban ~233k tokens releídos en cada llamada, el 67% del
 costo de la corrida 4 (issue #18). `tests/llm/test_context_size.py` vigila el contexto por
 llamada de un rol mínimo; solo muerde en una cuenta con conectores.
+
+**Medición, dashboard v3 (issue #24).** Lo que `agentic.role.cost_usd` y
+`agentic.role.duration` agregaban por nodo ahora se ve por **corrida de rol**: una muestra
+por entrada de `runs` de la patch, con `role.slug` (los 17 valores de `Role.slug`, así que
+`tech_lead`, `tech_lead_review`, `tech_lead_interviewee` y `tech_lead_ephemeral` dejan de
+compartir `role="Tech Lead"`) y `phase` (`rules.phase_of`) como labels nuevos, más un
+`agentic.role.run_duration` medido dentro del cupo de concurrencia y un `agentic.role.
+queue_wait` aparte para la espera. Sobre la misma corrida: tokens por tipo, llamadas,
+turnos, herramientas usadas y lo gastado en sub-agentes (`agentic.role.tokens/.calls/
+.turns/.tool_calls/.subagent_cost_usd`), y el motivo de un intento fallido en vez de un
+conteo sin explicación (`agentic.role.failures{reason}`). Los hallazgos de una revisión y
+los chequeos de una entrega quedan como eventos propios (`agentic.review.findings`,
+`agentic.presubmit.checks/.duration`), igual que las rondas, preguntas e invariantes de una
+entrevista (`agentic.interview.*`). Cada invocación (`agentic run`/`agentic resume`) emite
+lo que ella gastó —no el acumulado de la tarea— como `agentic.invocation.*`, lo que corta la
+doble cuenta de una tarea reanudada; y el motivo de una escalada deja de ser texto para
+parsear: `escalation_class` viaja en el estado, escrito por un solo constructor de dominio
+junto con `escalated`, y `agentic.task.paused` lo lleva como label. El dashboard "Sistema
+agéntico" (v3) suma paneles por fase, por `role.slug`, tokens y $ por 1k tokens de salida,
+herramientas, hallazgos, entregas rojas, entrevistas, pausas por motivo y fallas por motivo;
+el detalle completo, métrica por métrica, vive en `observability/README.md`.
 
 ### Tooling
 

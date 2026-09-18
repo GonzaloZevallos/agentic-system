@@ -68,7 +68,7 @@ async def validate_definition(state: TaskState, cfg: Configuration, ports: Ports
     else:
         # The pair hit its limit: escalate, always (README.md, 3). PM knew this was
         # its last return, so the reason is written for the human.
-        patch["escalated"] = rules.limit_reached(PAIR_PM_PA, limit, data["reason"])
+        patch |= rules.escalation("returns", rules.limit_reached(PAIR_PM_PA, limit, data["reason"]))
         patch["status"] = WAITING_ON_HUMAN
     return finish(state, patch, ports)
 

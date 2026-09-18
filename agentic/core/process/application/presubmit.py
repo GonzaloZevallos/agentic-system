@@ -8,6 +8,7 @@ Developer's word."""
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from ..domain import presubmit
@@ -44,6 +45,11 @@ class CheckoutPresubmit:
         # What the last look saw: the head and the checks, None until a check ran.
         self.head: str | None = None
         self.results: list[CheckResult] | None = None
+        # Every invocation that actually ran the checks, in order: what
+        # `agentic.presubmit.checks` and `.duration` read, one set of samples per
+        # invocation with only the last one `final` (a Developer run may deliver,
+        # get refused, and try again more than once).
+        self.invocations: list[list[CheckResult]] = []
 
     @property
     def timeout_s(self) -> float:
@@ -57,6 +63,7 @@ class CheckoutPresubmit:
         # one fails the backstop anyway, and the record must hold what the head holds.
         if moved and clean:
             self.head, self.results = head, [self._run(n, c) for n, c in self.checks.items()]
+            self.invocations.append(self.results)
         reason = presubmit.refusal(moved, clean, self.results or [])
         if reason is None or self.refusals >= presubmit.REFUSALS:
             return None
@@ -70,6 +77,14 @@ class CheckoutPresubmit:
         return presubmit.checks_markdown(self.head, self.results)
 
     def _run(self, name: str, command: str) -> CheckResult:
+        started = time.monotonic()
         result = self.ports.commands.run(self.path, command, self.check_timeout_s)
+        duration_s = time.monotonic() - started
         output = presubmit.said(result.output, result.timed_out, self.check_timeout_s)
-        return {"name": name, "command": command, "passed": result.passed, "output": output}
+        return {
+            "name": name,
+            "command": command,
+            "passed": result.passed,
+            "output": output,
+            "duration_s": duration_s,
+        }

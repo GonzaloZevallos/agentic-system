@@ -61,7 +61,7 @@ from ...application.preflight import product_name
 from ...application.review import review
 from ...application.validate_definition import validate_definition
 from ...domain import rules
-from ...domain.roles import DEVELOPER, PJM, PM, PRODUCT_ANALYST, TECH_LEAD, Role
+from ...domain.roles import DEVELOPER, PJM, PM, PRODUCT_ANALYST, TECH_LEAD, TECH_LEAD_REVIEWER, Role
 from ...domain.task import TaskInput, TaskState, delta
 from ..telemetry import NoTelemetry, Telemetry
 
@@ -188,7 +188,11 @@ def _pipeline(ports_of: PortsOf, telemetry: Telemetry):
     stopped between the two resumes: a delivery is never built twice."""
     branch = StateGraph(TaskState)
     branch.add_node("develop", _node(develop, DEVELOPER, ports_of, telemetry))
-    branch.add_node("review", _node(review, TECH_LEAD, ports_of, telemetry))
+    # The node's own role names the role span: `reviewer_for` builds the actual role
+    # the use case runs (allowed commands per product), but its slug never changes, so
+    # the span and `agentic.role.*` can tell a review from a plan without reading the
+    # patch (the 58% of spend the request opens with, all labelled `tech_lead`).
+    branch.add_node("review", _node(review, TECH_LEAD_REVIEWER, ports_of, telemetry))
     branch.add_conditional_edges(START, rules.pipeline_entry, ["develop", "review"])
     branch.add_conditional_edges("develop", _in_branch(rules.after_develop), ["review", END])
     branch.add_edge("review", END)

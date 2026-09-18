@@ -46,6 +46,11 @@ class Transcript:
     # has such a field: the solution interview's invariants (issue #42). The author
     # decides on each one; this only carries them across.
     invariants: list[str] = field(default_factory=list)
+    # Question-answer cycles that reached an interviewee's answer, and consultations
+    # that ran (Consulta): what `agentic.interview.rounds` and `.questions{to=pm}` read
+    # (issue #28). Not the closing round, which asks nobody anything.
+    completed_rounds: int = 0
+    consultations: int = 0
 
     @property
     def text(self) -> str:
@@ -201,6 +206,7 @@ async def interview(
         if answers is None:
             return None, _record(state, spec, transcript, patch)
         transcript.rounds.append(f"### Round {round_}: answers\n\n{answers.text}")
+        transcript.completed_rounds += 1
         reply, consulted = answers.text, None
         if spec.consultant is None:
             transcript.withdraw(answers.data["withdrawn"])
@@ -210,6 +216,7 @@ async def interview(
         to_pm = answers.data["questions_for_pm"]
         if not to_pm:
             continue
+        transcript.consultations += 1
         answered, patch = await consult(spec.consultant, to_pm, round_)
         if answered is None:
             return None, _record(state, spec, transcript, patch)
@@ -234,9 +241,10 @@ async def interview(
 
     patch = _record(state, spec, transcript, patch)
     if transcript.questions_for_human:
-        patch["escalated"] = (
+        patch |= rules.escalation(
+            "questions",
             f"{decider.name} could not decide {len(transcript.questions_for_human)} "
-            "question(s) from the request and the product knowledge; see the questions"
+            "question(s) from the request and the product knowledge; see the questions",
         )
         patch["status"] = WAITING_ON_HUMAN
         return None, patch
@@ -259,11 +267,20 @@ def _record(
     state: TaskState, spec: Interview, transcript: Transcript, patch: TaskState
 ) -> TaskState:
     """The transcript so far as the interview's section, if any round ran, and the
-    questions already with the human, so a side failing later does not lose them."""
+    questions already with the human, so a side failing later does not lose them. The
+    counts a panel would show (issue #28), measurement-only (`InterviewStats`), on
+    every return path: an interview that ran at all leaves them, even at zero."""
     if transcript.rounds:
         patch = apply(patch, {"sections": rules.sections_for(state, spec.section, transcript.text)})
     if transcript.questions_for_human:
         patch["questions_for_human"] = transcript.questions_for_human
+    patch["interview_stats"] = {
+        "interview": spec.stage,
+        "rounds": transcript.completed_rounds,
+        "questions_to_pm": transcript.consultations,
+        "questions_to_human": len(transcript.questions_for_human),
+        "invariants_proposed": len(transcript.invariants),
+    }
     return patch
 
 

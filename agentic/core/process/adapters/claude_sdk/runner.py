@@ -50,6 +50,7 @@ from claude_agent_sdk import (
 
 from ...application.ports import AttemptFailed, Presubmit, RawResult
 from ...domain.roles import Role
+from ...domain.task import FailureReason
 from ..plugins import PLUGIN, PLUGIN_DIR
 from ..telemetry import NoTelemetry, Telemetry
 from .hooks import hooks_for
@@ -58,6 +59,12 @@ from .schema import inline_refs
 
 SKILL_TOOL = "Skill"
 AGENT_TOOL = "Agent"
+OTHER_TOOL = "other"
+# The closed set `agentic.role.tool_calls` groups by; anything else is `OTHER_TOOL`
+# (the module docstring's MCP tools included, since no role declares one).
+KNOWN_TOOLS = frozenset(
+    {"Bash", "Read", "Edit", "Write", "Grep", "Glob", AGENT_TOOL, SKILL_TOOL, "StructuredOutput"}
+)
 
 
 def options_for(
@@ -153,10 +160,16 @@ class ClaudeSdkRunner:
         exhausted = f"max_turns ({role.max_turns}) exhausted without a result"
         result: ResultMessage | None = None
         background = 0
+        calls = 0
+        tool_calls: dict[str, int] = {}
         try:
             async for message in query(prompt=prompt, options=options):
                 if observer is not None:
                     observer(message)
+                if isinstance(message, AssistantMessage):
+                    calls += 1
+                    for name in _tool_names(message):
+                        tool_calls[name] = tool_calls.get(name, 0) + 1
                 background += _background_agents(message)
                 if isinstance(message, ResultMessage):
                     result = message
@@ -167,15 +180,18 @@ class ClaudeSdkRunner:
             # that into ResultError after yielding the ResultMessage.
             cost, session = _left_behind(result)
             if exc.subtype == "error_max_turns":
-                raise AttemptFailed(exhausted, cost, session) from exc
+                raise AttemptFailed(exhausted, cost, session, reason="max_turns") from exc
             raise AttemptFailed(
-                f"run failed ({exc.subtype}): {'; '.join(exc.errors)}", cost, session
+                f"run failed ({exc.subtype}): {'; '.join(exc.errors)}",
+                cost,
+                session,
+                reason=_reason_for_subtype(exc.subtype),
             ) from exc
         except Exception as exc:  # the SDK raises its own hierarchy; all of it is a failure
-            raise AttemptFailed(f"SDK error: {exc}") from exc
+            raise AttemptFailed(f"SDK error: {exc}", reason="sdk") from exc
 
         if result is None:
-            raise AttemptFailed("run ended without a result message")
+            raise AttemptFailed("run ended without a result message", reason="sdk")
         if background and _delivered(result):
             # The prompt forbids it; when the model does it anyway, whatever those
             # sub-agents had to say never reached the verdict, and the reader of the
@@ -186,12 +202,13 @@ class ClaudeSdkRunner:
             )
         cost, session = _left_behind(result)
         if result.subtype == "error_max_turns":
-            raise AttemptFailed(exhausted, cost, session)
+            raise AttemptFailed(exhausted, cost, session, reason="max_turns")
         if result.is_error:
             raise AttemptFailed(
                 f"run ended in error: {'; '.join(result.errors or [result.subtype])}",
                 cost,
                 session,
+                reason=_reason_for_subtype(result.subtype or ""),
             )
         return RawResult(
             structured_output=result.structured_output,
@@ -199,12 +216,22 @@ class ClaudeSdkRunner:
             turns=result.num_turns,
             session_id=session,
             cost_by_model=_cost_by_model(result),
+            usage=_usage(result),
+            calls=calls,
+            tool_calls=tool_calls,
         )
 
     def _warn(self, text: str) -> None:
         stream = self.stream or sys.stderr
         stream.write(text)
         stream.flush()
+
+
+def _reason_for_subtype(subtype: str) -> FailureReason:
+    """`agentic.role.failures`'s reason for a harness failure that is not `max_turns`
+    (its own raise site already knows that one): `limit` for a per-attempt money cap
+    (issue #66), `sdk` for anything else the harness reports by a subtype."""
+    return "limit" if "budget" in subtype else "sdk"
 
 
 def _delivered(result: ResultMessage) -> bool:
@@ -224,6 +251,30 @@ def _background_agents(message: Message) -> int:
         and block.name == AGENT_TOOL
         and bool(block.input.get("run_in_background"))
     )
+
+
+def _tool_names(message: AssistantMessage) -> list[str]:
+    """The tool this message called, once per `ToolUseBlock`, normalised to
+    `KNOWN_TOOLS` (anything else, an MCP tool included, is `OTHER_TOOL`)."""
+    return [
+        block.name if block.name in KNOWN_TOOLS else OTHER_TOOL
+        for block in message.content
+        if isinstance(block, ToolUseBlock)
+    ]
+
+
+def _usage(result: ResultMessage | None) -> dict[str, int]:
+    """The delivering result's token usage, normalised to the closed `kind` set
+    `agentic.role.tokens` groups by. `RawResult.usage`'s own docstring has the
+    evidence for why this is a direct read, never a subtraction against an earlier
+    call. Zeroed when the SDK reports none."""
+    raw = (result.usage if result else None) or {}
+    return {
+        "input": raw.get("input_tokens", 0),
+        "output": raw.get("output_tokens", 0),
+        "cache_read": raw.get("cache_read_input_tokens", 0),
+        "cache_write": raw.get("cache_creation_input_tokens", 0),
+    }
 
 
 def _cost_by_model(result: ResultMessage) -> dict[str, float]:

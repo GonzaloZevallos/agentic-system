@@ -74,6 +74,10 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     )
     if output is not None and (record := delivery_presubmit.markdown()) is not None:
         patch["sections"] = {**patch["sections"], section: f"{record}\n\n{output.text}"}
+    if delivery_presubmit.invocations:
+        # Measurement only (like `subtask_id`): read once by the adapter for
+        # `agentic.presubmit.checks`/`.duration`, never persisted.
+        patch["presubmit_checks"] = delivery_presubmit.invocations
     patch["subtasks"] = {
         subtask_id: {
             **subtask,

@@ -10,8 +10,13 @@ version, so neither counts.
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime
 
-from agentic.core.process.domain.task import RoleRun, TaskState
+from agentic.core.process.domain.task import Failure, InterviewStats, RoleRun, TaskState
+
+# `rules.spent_by_phase`'s own floor: below it, a residual is rounding noise, not
+# money nothing accounted for.
+RESIDUAL_FLOOR_USD = 0.005
 
 
 def is_rework(run: RoleRun) -> bool:
@@ -48,6 +53,126 @@ def change_categories(patch: TaskState) -> list[str]:
     """The categories of the returns one role run made, in order: a review node may
     return several subtasks in one run."""
     return [entry["category"] for entry in patch.get("change_history", [])]
+
+
+def role_slug(run: RoleRun) -> str:
+    """`Role.slug`: `unknown` for a run recorded before this field existed, so a panel
+    grouping by it never drops the sample."""
+    return run.get("slug") or "unknown"
+
+
+def target_run(patch: TaskState) -> RoleRun | None:
+    """The run record a per-run `RoleRun.finish` patch's own verdict (`escalated`,
+    `status`) describes: the last run whose section this patch actually wrote. `None`
+    when no run in the patch matches — a pure escalation, or an empty patch — and the
+    verdict is then the residual's alone."""
+    sections = patch.get("sections", {})
+    for run in reversed(patch.get("runs", [])):
+        if run.get("section", run["role"]) in sections:
+            return run
+    return None
+
+
+def role_run_outcome(patch: TaskState, run: RoleRun) -> str:
+    """`delivered` for every run of the patch except the one `target_run` names, which
+    takes the patch's own verdict: `escalated` when the patch escalated, `returned`
+    when a verifier sent it back, `delivered` otherwise. Every other run in a multi-run
+    patch (an interview's earlier rounds) is `delivered` regardless of how the patch as
+    a whole ended — a role broke later, not that one."""
+    if run is not target_run(patch):
+        return "delivered"
+    if patch.get("escalated"):
+        return "escalated"
+    if patch.get("status") == "returned":
+        return "returned"
+    return "delivered"
+
+
+def residual_outcome(patch: TaskState) -> str:
+    """The outcome of the money no run record carries. `failed`: nothing in the patch
+    delivered, so a role broke outright. `escalated`: a run did deliver (`target_run`
+    found one, and carries its own outcome already), and the escalation this residual
+    represents is a separate fact of the same patch — open questions, a task cap hit
+    after a delivery already happened."""
+    return "escalated" if target_run(patch) is not None else "failed"
+
+
+def residual_cost_usd(patch: TaskState) -> float:
+    """What of the patch's `cost_usd` no run record accounts for: an escalation's own
+    failed attempts, or a node that raised with nothing recorded at all. Floored at
+    zero so a reader never sees a negative cost from rounding."""
+    total = patch.get("cost_usd", 0.0)
+    accounted = sum(run["cost_usd"] for run in patch.get("runs", []))
+    return max(total - accounted, 0.0)
+
+
+def has_residual_sample(patch: TaskState) -> bool:
+    """Whether this patch needs a residual sample: its unaccounted cost clears the
+    rounding floor, or it has no run at all to represent it — an empty patch (a node
+    that raised outside its use case's own failure handling) still leaves one
+    zero-cost sample, so a role's `cost_usd` panel never silently misses a run."""
+    return residual_cost_usd(patch) >= RESIDUAL_FLOOR_USD or not patch.get("runs")
+
+
+def residual_rework(patch: TaskState) -> bool:
+    """The residual is rework whenever the patch paid for a failed attempt: paid,
+    undelivered work is rework by definition (`rework_cost_usd`)."""
+    return bool(patch.get("failures"))
+
+
+def failures_by_reason(failures: list[Failure]) -> dict[str, int]:
+    """How many of a patch's failed attempts share each reason: `agentic.role.failures`
+    groups on this, one sample per reason with the count as its value. `other` covers a
+    failure recorded before `reason` existed too."""
+    counts: dict[str, int] = {}
+    for failure in failures:
+        reason = failure.get("reason", "other")
+        counts[reason] = counts.get(reason, 0) + 1
+    return counts
+
+
+def failure_cost_by_reason(failures: list[Failure]) -> dict[str, float]:
+    """What a patch's failed attempts cost, by reason: `agentic.role.failure_cost_usd`,
+    documented as not additive with `cost_usd` — the same dollar already counts once,
+    inside a run's own cost or inside the residual."""
+    totals: dict[str, float] = {}
+    for failure in failures:
+        reason = failure.get("reason", "other")
+        totals[reason] = totals.get(reason, 0.0) + failure["cost_usd"]
+    return totals
+
+
+def run_duration_s(run: RoleRun) -> float | None:
+    """Wall time of one run inside its concurrency slot: `ended_at` minus `started_at`,
+    both ISO-8601. `None` for a run recorded before either field existed, which tells
+    the adapter not to emit a sample for it."""
+    started, ended = run.get("started_at"), run.get("ended_at")
+    if not started or not ended:
+        return None
+    return (datetime.fromisoformat(ended) - datetime.fromisoformat(started)).total_seconds()
+
+
+def interview_questions(stats: InterviewStats) -> dict[str, int]:
+    """One interview's questions by destination (`agentic.interview.questions{to}`):
+    one to the interviewee per completed round, plus what went to the consultant
+    (`questions_to_pm`) and to the human (`questions_to_human`)."""
+    return {
+        "interviewee": stats["rounds"],
+        "pm": stats["questions_to_pm"],
+        "human": stats["questions_to_human"],
+    }
+
+
+def invocation_returns_by_category(patch: TaskState) -> dict[str, int]:
+    """Returns this one invocation (`run` or `resume`) recorded, by category: its own
+    slice of `change_history` (what `task.delta` computed between the state that
+    entered the invocation and the one it left with), with no `unknown`/`none`
+    placeholder — unlike `changes_by_category`, this reads exact entries, one
+    invocation's own, never a counter without the history to explain it."""
+    counts: dict[str, int] = {}
+    for entry in patch.get("change_history", []):
+        counts[entry["category"]] = counts.get(entry["category"], 0) + 1
+    return counts
 
 
 def prompts_fingerprint(state: TaskState) -> str:

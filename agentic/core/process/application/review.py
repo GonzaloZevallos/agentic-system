@@ -41,6 +41,7 @@ from .run_role import finish, run_role
 async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
     subtask_id = state["subtask_id"]
     subtask = state["subtasks"][subtask_id]
+    reviewed_before = bool(subtask.get("reviewed_head"))
     checks = declared_checks(state, ports)
     reviewer = reviewer_for(checks)
     try:
@@ -85,6 +86,9 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
             # A row closes only here, because a reviewer looked and said so. Silence is
             # not a verdict: an incremental pass is told not to re-read what it approved.
             "settled_findings": output.data["settled"],
+            # Measurement only (like `subtask_id`): read once by the adapter for
+            # `agentic.review.findings`'s `review.kind` label, never persisted.
+            "review_kind": rules.review_kind(subtask_id, reviewed_before),
         },
     )
     if category is None:
@@ -109,6 +113,8 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
     else:
         # Returned as well, without counting: the limit is spent. The human's answer
         # resets the pair and the resume sends the subtask back to its Developer.
-        patch["escalated"] = rules.limit_reached(pair, cfg.max_changes_requested_per_pair, reason)
+        patch |= rules.escalation(
+            "returns", rules.limit_reached(pair, cfg.max_changes_requested_per_pair, reason)
+        )
         patch["status"] = WAITING_ON_HUMAN
     return finish(state, patch, ports)

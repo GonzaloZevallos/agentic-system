@@ -24,8 +24,10 @@ over gaps that were never there.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 from agentic.shared.configuration import Configuration
@@ -33,7 +35,7 @@ from agentic.shared.configuration import Configuration
 from ..domain import document, rules, schemas
 from ..domain.document import HUMAN
 from ..domain.roles import ORIGINAL, Prompt, Role, describe_flags, render
-from ..domain.task import WAITING_ON_HUMAN, Failure, RoleRun, TaskState, apply
+from ..domain.task import WAITING_ON_HUMAN, EscalationClass, Failure, RoleRun, TaskState, apply
 from .limits import RunLimits
 from .ports import AttemptFailed, Ports, Presubmit, RoleRunner
 
@@ -85,9 +87,27 @@ class Output:
     model: str = ""
     # The successful attempt's cost by model; a failed attempt only carries its total.
     cost_by_model: dict[str, float] = field(default_factory=dict)
+    # Token usage of the delivering call, by kind (`RawResult.usage`'s own docstring
+    # has the per-call-not-cumulative evidence). Empty on a failed attempt: only the
+    # delivery carries it.
+    usage: dict[str, int] = field(default_factory=dict)
+    # Calls to the model in this run (`RawResult.calls`'s own docstring: one per
+    # `AssistantMessage` seen before the delivery).
+    calls: int = 0
+    # `tool_use` blocks of this run, by tool name (`RawResult.tool_calls`).
+    tool_calls: dict[str, int] = field(default_factory=dict)
+    # What of `cost_by_model` a sub-agent spent: every model but this run's own
+    # (ADR-0013). Not additive with `cost_usd`.
+    subagent_cost_usd: float = 0.0
     # Failed attempts before this output. Empty on a clean run. Their cost is
     # already included in `cost_usd`: a paid attempt counts even when it failed.
     failures: list[Failure] = field(default_factory=list)
+    # When the winning attempt started and ended, and how long it waited for a
+    # concurrency slot first: `run_with_retry` fills these in after the slot was
+    # acquired, so the interval they bound is only work, never the queue.
+    started_at: str = ""
+    ended_at: str = ""
+    queue_wait_s: float = 0.0
 
 
 def context_for(
@@ -152,6 +172,7 @@ async def run_with_retry(
     task_cap_usd: float | None = None,
     presubmit: Presubmit | None = None,
     limits: RunLimits | None = None,
+    section: str | None = None,
 ) -> Output:
     """`check` is the use case's own rule over the validated output (raise `ValueError`);
     breaking it is a role failure like any other, so the model gets the error back.
@@ -166,16 +187,24 @@ async def run_with_retry(
     sisters' spending too. It only refuses to start; a role already running is never
     cut off.
 
-    `presubmit` is handed to every attempt: the harness asks it when the model delivers."""
+    `presubmit` is handed to every attempt: the harness asks it when the model delivers.
+
+    `section` is what a successful attempt would write (`run_record`'s own default,
+    the role's name, when the caller has none yet): a failed attempt stamps it on its
+    `Failure` too, so a reader can tell which delivery an attempt was working on."""
     limits = limits or RunLimits()
+    written_as = section or role.name
     failures: list[Failure] = []
     for attempt in range(1, max(retries, 0) + 2):
         total = max(spent_usd + spent(failures), limits.spent_usd)
         if task_cap_usd is not None and total >= task_cap_usd:
             raise TaskCapReached(role, total, task_cap_usd, failures)
         text, session = _retry_input(prompt, failures, resume)
+        waited_from = time.monotonic()
         try:
             async with limits.slot():
+                queue_wait_s = time.monotonic() - waited_from
+                started_at = _now_iso()
                 output = await _attempt(
                     role,
                     text,
@@ -189,6 +218,7 @@ async def run_with_retry(
                     max_budget_usd=max_budget_usd,
                     presubmit=presubmit,
                 )
+                ended_at = _now_iso()
         except AttemptFailed as exc:
             limits.record(exc.cost_usd)
             failures.append(
@@ -198,14 +228,26 @@ async def run_with_retry(
                     "error": str(exc),
                     "cost_usd": exc.cost_usd,
                     "session_id": exc.session_id,
+                    "reason": exc.reason,
+                    "slug": role.slug,
+                    "section": written_as,
                 }
             )
             continue
         limits.record(output.cost_usd)
         output.failures = failures
         output.cost_usd += spent(failures)
+        output.started_at = started_at
+        output.ended_at = ended_at
+        output.queue_wait_s = queue_wait_s
         return output
     raise RoleFailure(role, failures)
+
+
+def _now_iso() -> str:
+    """ISO-8601 UTC, millisecond precision: the format `RoleRun.started_at` and
+    `.ended_at` share."""
+    return datetime.now(UTC).isoformat(timespec="milliseconds")
 
 
 def _retry_input(
@@ -257,16 +299,27 @@ async def _attempt(
     )
     cost, session = result.cost_usd, result.session_id
     if result.structured_output is None:
-        raise AttemptFailed("structured output missing; it is required", cost, session)
+        raise AttemptFailed(
+            "structured output missing; it is required", cost, session, reason="schema"
+        )
     try:
         data = schemas.validate(role.schema, result.structured_output, vocabulary)
-        if check is not None:
-            check(data)
     except ValueError as exc:
-        raise AttemptFailed(f"structured output invalid: {exc}", cost, session) from exc
+        raise AttemptFailed(
+            f"structured output invalid: {exc}", cost, session, reason="schema"
+        ) from exc
+    if check is not None:
+        try:
+            check(data)
+        except ValueError as exc:
+            raise AttemptFailed(
+                f"structured output invalid: {exc}", cost, session, reason="check"
+            ) from exc
     text = data.pop("markdown").strip()
     if not text:
-        raise AttemptFailed("`markdown` is empty; the Markdown section is required", cost, session)
+        raise AttemptFailed(
+            "`markdown` is empty; the Markdown section is required", cost, session, reason="schema"
+        )
     return Output(
         text=text,
         data=data,
@@ -275,7 +328,17 @@ async def _attempt(
         session_id=result.session_id,
         model=model,
         cost_by_model=result.cost_by_model,
+        usage=result.usage,
+        calls=result.calls,
+        tool_calls=result.tool_calls,
+        subagent_cost_usd=_subagent_cost_usd(result.cost_by_model, model),
     )
+
+
+def _subagent_cost_usd(cost_by_model: dict[str, float], model: str) -> float:
+    """What of `cost_by_model` a sub-agent spent: every model but the role's own
+    (ADR-0013, addendum: every sub-agent runs in the subagent model, not the role's)."""
+    return sum(cost for spent_on, cost in cost_by_model.items() if spent_on != model)
 
 
 def task_cap(state: TaskState, cfg: Configuration) -> float:
@@ -291,18 +354,21 @@ def task_cap(state: TaskState, cfg: Configuration) -> float:
 
 def escalation(exc: Escalating) -> TaskState:
     """The patch of a role that failed twice, or that the task cap stopped: the human
-    sees it (README.md, 3)."""
+    sees it (README.md, 3), with its escalation class (`rules.escalation`) — `cap` for
+    the task cap, `failure` for a role `run_with_retry` gave up on."""
+    cls: EscalationClass = "cap" if isinstance(exc, TaskCapReached) else "failure"
     return {
         "failures": exc.failures,
         "cost_usd": exc.cost_usd,
-        "escalated": str(exc),
         "status": WAITING_ON_HUMAN,
+        **rules.escalation(cls, str(exc)),
     }
 
 
 def run_record(state: TaskState, role: Role, section: str, output: Output) -> RoleRun:
     return {
         "role": role.name,
+        "slug": role.slug,
         "section": section,
         "version": rules.next_version(state, section),
         "session_id": output.session_id,
@@ -310,6 +376,13 @@ def run_record(state: TaskState, role: Role, section: str, output: Output) -> Ro
         "cost_usd": output.cost_usd,
         "cost_by_model": output.cost_by_model,
         "turns": output.turns,
+        "started_at": output.started_at,
+        "ended_at": output.ended_at,
+        "queue_wait_s": output.queue_wait_s,
+        "tokens": output.usage,
+        "calls": output.calls,
+        "tool_calls": output.tool_calls,
+        "subagent_cost_usd": output.subagent_cost_usd,
     }
 
 
@@ -360,6 +433,7 @@ async def run_role(
             task_cap_usd=task_cap(state, cfg),
             presubmit=presubmit,
             limits=ports.limits,
+            section=section,
         )
     except Escalating as exc:
         return None, patch | escalation(exc)

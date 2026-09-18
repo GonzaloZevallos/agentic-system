@@ -230,14 +230,24 @@ _Avoid_: rechazado, cerrado (el que cierra es el humano), wontfix (la etiqueta d
 _Campo_: won't fix, works as intended — resoluciones de los trackers (Bugzilla `WONTFIX` y `WORKSFORME`, Chromium `WontFix` y `WorkingAsIntended`). Acá es un estado de la tarea, no una resolución del issue
 
 **Escalado**:
-Lo que un rol, un par o el tope dejan dicho cuando la tarea no puede seguir sin el humano, con las preguntas si las hay. El sistema lo entrega al humano en el issue y pausa la tarea: queda esperando con su estado guardado, sin gastar, y se retoma desde el mismo punto. Son cinco las situaciones que lo provocan, y cuál fue decide qué hace falta para reanudar: PjM no puede clasificarla, un par llegó a su límite, un rol falló dos veces, se alcanzó el tope de tarea, o quedaron preguntas para el humano. El motivo viaja como texto libre, no como dato cerrado.
-_Avoid_: motivo de escalado, causa, tipo de escalado (el motivo es parte del escalado, no otro término), pausa, bloqueo, espera
+Lo que un rol, un par o el tope dejan dicho cuando la tarea no puede seguir sin el humano, con las preguntas si las hay. El sistema lo entrega al humano en el issue y pausa la tarea: queda esperando con su estado guardado, sin gastar, y se retoma desde el mismo punto. Son siete las situaciones que lo provocan (su clase de escalado): PjM no puede clasificarla, un par llegó a su límite, un rol falló dos veces, se alcanzó el tope de tarea, quedaron preguntas para el humano, una subtarea no pudo mergear su dependencia, o el setup del producto falló en un checkout. El motivo viaja como texto libre para el humano; cuál de las siete situaciones fue, además, como dato cerrado (Clase de escalado).
+_Avoid_: causa, pausa, bloqueo, espera
 _Campo_: escalation — de soporte y operaciones, no del campo agéntico; ahí el mecanismo es interrupt (LangGraph): frena el grafo, expone un valor al cliente y se reanuda con `Command(resume=...)`
+
+**Clase de escalado**:
+El motivo de un escalado como dato, de una lista cerrada: PjM no pudo clasificar la tarea, un par llegó a su límite de devoluciones, un rol falló dos veces, se alcanzó el tope de tarea, quedaron preguntas para el humano, una subtarea no pudo mergear su dependencia, o el setup del producto falló en un checkout (issue #24). La escribe un solo constructor de dominio junto con el escalado mismo (`rules.escalation`), así que una patch nunca pone uno sin el otro, y se limpia con él al reanudar. Distinta del motivo en texto, que sigue siendo lo que lee el humano; un documento de antes de esta tarea no la tiene. El tope por intento (issue #66) no es una de las siete: para la tarea es un fallo de rol, no un escalado.
+_Avoid_: motivo de escalado, tipo de escalado (para la clase)
+_Campo_: sin término de arte
 
 **Reanudación**:
 La tarea sigue desde donde se pausó. Hace falta una decisión del humano cuando hay preguntas abiertas o un par llegó a su límite, y con ella el contador de ese par vuelve a cero; un tope alcanzado o un fallo de rol se reanudan sin decisión. Nada se reanuda bajo un tope ya gastado. Si el estado guardado se perdió, se reconstruye desde el documento de tarea, cruzado con git.
 _Avoid_: reintento (eso es tras un fallo de rol), relanzar (eso es empezar de cero)
 _Campo_: resume — estándar (LangGraph, Temporal, el Claude Agent SDK)
+
+**Invocación**:
+Una llamada a `agentic run` o `agentic resume`: entra, corre lo que el grafo tenga para correr y termina (entregada, escalada, o caída). Distinta de la Corrida, que es toda la ejecución del sistema sobre una tarea de punta a punta: una tarea que se pausó y se reanudó dos veces tuvo una Corrida y tres Invocaciones, y cada una gastó y tardó solo lo suyo, nunca el acumulado de la tarea que sí lleva la Corrida. `langgraph dev` corre el grafo directo, sin pasar por una invocación de la CLI, así que no deja ninguna de sus muestras.
+_Avoid_: corrida, ejecución (eso es la Corrida completa), run (en inglés, para no perder la distinción con Corrida)
+_Campo_: `InvocationKind` (`run` | `resume`) en el código; sin término de arte compartido — los frameworks hablan de resume/invoke sin nombrar la llamada suelta
 
 **Fallo de rol**:
 El rol se rompe: su ejecución falla, se le acaban los turnos sin resultado, la salida estructurada falta o es inválida, el `markdown` está vacío. Se reintenta una vez con el error como entrada, continuando la conversación del intento fallido cuando la hay. Distinto de devolución; no cuenta para el límite.

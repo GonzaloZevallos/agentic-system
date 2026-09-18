@@ -33,6 +33,8 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Literal
 
 from opentelemetry import metrics, trace
 from opentelemetry.sdk.metrics import MeterProvider
@@ -46,11 +48,18 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
-from agentic.core.process.domain.task import TaskState
+from agentic.core.process.domain.rules import phase_of
+from agentic.core.process.domain.task import Failure, InterviewStats, TaskState, delta
+from agentic.core.process.domain.task import RoleRun as RoleRunRecord
 from agentic.shared.stage0 import CHECKOUT
 
 from ...domain import metrics as system_metrics
 from . import semconv
+
+# One `agentic run`/`resume` call (glossary: Invocación), distinct from a Corrida (the
+# whole execution over a task): `cli._invoke`'s only two shapes, and the closed set the
+# `invocation.kind` label and `agentic.task.invocations` carry.
+InvocationKind = Literal["run", "resume"]
 
 SERVICE_NAME = "agentic-system"
 # The checkout that executes this run, and whose sha the version names. With the system
@@ -166,6 +175,28 @@ class Instruments:
     task_returns: Gauge
     role_cost: Gauge
     role_duration: Gauge
+    role_run_duration: Gauge
+    role_queue_wait: Gauge
+    role_failures: Gauge
+    role_failure_cost: Gauge
+    role_tokens: Gauge
+    role_calls: Gauge
+    role_turns: Gauge
+    role_tool_calls: Gauge
+    role_subagent_cost: Gauge
+    review_findings: Gauge
+    presubmit_checks: Gauge
+    presubmit_duration: Gauge
+    interview_rounds: Gauge
+    interview_questions: Gauge
+    interview_invariants: Gauge
+    invocation_cost: Gauge
+    invocation_rework: Gauge
+    invocation_duration: Gauge
+    invocation_returns: Gauge
+    task_invocations: Gauge
+    task_paused: Gauge
+    task_human_decisions: Gauge
 
     @classmethod
     def create(cls, m: metrics.Meter) -> Instruments:
@@ -187,6 +218,110 @@ class Instruments:
             role_cost=m.create_gauge("agentic.role.cost_usd", description="Cost of one role run"),
             role_duration=m.create_gauge(
                 "agentic.role.duration", unit="s", description="Wall time of one role run"
+            ),
+            role_run_duration=m.create_gauge(
+                "agentic.role.run_duration",
+                unit="s",
+                description="Wall time of one run record inside its concurrency slot",
+            ),
+            role_queue_wait=m.create_gauge(
+                "agentic.role.queue_wait",
+                unit="s",
+                description="Seconds one run record waited for a concurrency slot",
+            ),
+            role_failures=m.create_gauge(
+                "agentic.role.failures",
+                description="Failed attempts of a patch, one sample per reason with the count",
+            ),
+            role_failure_cost=m.create_gauge(
+                "agentic.role.failure_cost_usd",
+                description=(
+                    "Cost of a patch's failed attempts by reason; not additive with "
+                    "agentic.role.cost_usd, whose runs and residual already carry that money"
+                ),
+            ),
+            role_tokens=m.create_gauge(
+                "agentic.role.tokens",
+                unit="tokens",
+                description="Token usage of one run record, one sample per kind",
+            ),
+            role_calls=m.create_gauge(
+                "agentic.role.calls", description="Calls to the model in one run record"
+            ),
+            role_turns=m.create_gauge(
+                "agentic.role.turns", description="`num_turns` of one run record"
+            ),
+            role_tool_calls=m.create_gauge(
+                "agentic.role.tool_calls",
+                description="Tool-use blocks of one run record, one sample per tool",
+            ),
+            role_subagent_cost=m.create_gauge(
+                "agentic.role.subagent_cost_usd",
+                description=(
+                    "What of a run record's cost a sub-agent spent (ADR-0013); not "
+                    "additive with agentic.role.cost_usd, whose run already carries "
+                    "that money as part of its own total"
+                ),
+            ),
+            review_findings=m.create_gauge(
+                "agentic.review.findings",
+                description=(
+                    "Findings of one review, one sample per (severity, category, status) "
+                    "with the count of findings that share it as the value"
+                ),
+            ),
+            presubmit_checks=m.create_gauge(
+                "agentic.presubmit.checks",
+                description=(
+                    "One sample per check of one presubmit invocation; a Developer run may "
+                    "be refused and try again, so only the last invocation is `final`"
+                ),
+            ),
+            presubmit_duration=m.create_gauge(
+                "agentic.presubmit.duration",
+                unit="s",
+                description="How long one check took to run, in one presubmit invocation",
+            ),
+            interview_rounds=m.create_gauge(
+                "agentic.interview.rounds",
+                description="Question-answer cycles one interview ran",
+            ),
+            interview_questions=m.create_gauge(
+                "agentic.interview.questions",
+                description="Questions of one interview, one sample per destination",
+            ),
+            interview_invariants=m.create_gauge(
+                "agentic.interview.invariants",
+                description="Invariants of one interview, one sample per state",
+            ),
+            invocation_cost=m.create_gauge(
+                "agentic.invocation.cost_usd",
+                description="What one invocation (run or resume) spent, never the task's total",
+            ),
+            invocation_rework=m.create_gauge(
+                "agentic.invocation.rework_usd",
+                description="Rework this invocation paid for, never the task's total",
+            ),
+            invocation_duration=m.create_gauge(
+                "agentic.invocation.duration",
+                unit="s",
+                description="Wall time of one invocation",
+            ),
+            invocation_returns=m.create_gauge(
+                "agentic.invocation.returns",
+                description="Returns this invocation recorded, one sample per category",
+            ),
+            task_invocations=m.create_gauge(
+                "agentic.task.invocations",
+                description="One per invocation (run or resume), by kind and the status it left",
+            ),
+            task_paused=m.create_gauge(
+                "agentic.task.paused",
+                description="One per pause, by the escalation's class",
+            ),
+            task_human_decisions=m.create_gauge(
+                "agentic.task.human_decisions",
+                description="One per decision the human gave on a resume",
             ),
         )
 
@@ -262,12 +397,79 @@ class TaskRun(Run):
 
         self._emit(record)
 
+    def finish_invocation(
+        self, before: TaskState, after: TaskState, kind: InvocationKind, decision: str | None
+    ) -> None:
+        """`agentic.invocation.*` and the per-invocation task samples, off the state the
+        invocation entered with and the one it left with — never the task's accumulated
+        figures, which `finish` above keeps emitting unchanged. `task.delta` is exactly
+        the tool for this: the patch that turns `before` into `after` through the same
+        reducers the graph itself applies, so a resume's own cost, rework and returns
+        are what it added, not the task's running total (the bug the request opens
+        with: every invocation repeating the accumulated cost and rework).
+
+        Emitted from `cli._invoke`, off the final state, never from a system node, from
+        `pause`, or from a role span (a fan-out branch cannot tell the human once; a
+        resumed `pause` re-runs from its start on every resume).
+
+        `task_paused` fires only for a pause this invocation itself caused: a resume
+        enters already carrying the prior pause's `escalated`/`escalation_class` (it is
+        the state as it paused, README.md/`resume.Resumption.paused`), and a crash that
+        never reaches a node folds `after` from that same `before` with only `status`
+        changed — without the comparison, every crashed resume of an already-paused task
+        would re-emit the pause its earlier invocation already counted (one invocation
+        pauses at most once)."""
+        patch = delta(before, after)
+        cost = max(patch.get("cost_usd", 0.0), 0.0)
+        rework = max(system_metrics.rework_cost_usd(patch), 0.0)
+        elapsed = self.elapsed
+        by_category = system_metrics.invocation_returns_by_category(patch)
+        status = after.get("status", "open")
+        labels = {
+            "product": self.product,
+            "invocation.kind": kind,
+            "system.version": system_version(),
+        }
+        new_pause = after.get("escalated") and (
+            before.get("escalated") != after.get("escalated")
+            or before.get("escalation_class") != after.get("escalation_class")
+        )
+
+        def record(i: Instruments) -> None:
+            i.invocation_cost.set(cost, labels)
+            i.invocation_rework.set(rework, labels)
+            i.invocation_duration.set(elapsed, labels)
+            for category, count in by_category.items():
+                i.invocation_returns.set(count, {**labels, "return.category": category})
+            i.task_invocations.set(1, {**labels, "task.status": status})
+            if new_pause:
+                i.task_paused.set(
+                    1, {**labels, "escalation.class": after.get("escalation_class") or "unknown"}
+                )
+            if decision:
+                i.task_human_decisions.set(1, labels)
+
+        self._emit(record)
+
 
 @dataclass
 class RoleRun(Run):
     role: str = ""
+    # `Role.slug` of the node this span represents. Unlike a stored run's own `slug`
+    # (which can be missing on a document from before that field existed, and reads
+    # `unknown`), this one names the role that is running right now, so it labels the
+    # residual sample, which has no run record of its own to read a slug off.
+    slug: str = ""
 
     def finish(self, patch: TaskState) -> None:
+        """Stamps the span (unchanged) and emits `agentic.role.duration` once per node,
+        byte-identical to before this task. Every other sample here is new: one
+        `agentic.role.cost_usd` (plus `.run_duration`, `.queue_wait`) and one child span
+        per run record in the patch, then the residual — the cost no run record
+        carries — and the patch's failures by reason. Each of those is its own
+        record-and-flush (`Run._emit`): two run records sharing every label but their
+        session would otherwise collapse into one sample on a gauge that only keeps the
+        last value set before an export."""
         runs = patch.get("runs", [])
         run = runs[-1] if runs else None
         failed_attempts = len(patch.get("failures", []))
@@ -288,20 +490,244 @@ class RoleRun(Run):
                 "agentic.role.turns": run["turns"],
                 "agentic.role.session_id": run["session_id"],
             }
-        for prompt_hash in patch.get("prompts", {}).values():
-            attributes["agentic.role.prompt_hash"] = prompt_hash
+        # A patch may run more than one role (an interview): the tuple of every prompt
+        # that ran, not the last one written, which used to overwrite the others.
+        if prompt_hashes := tuple(patch.get("prompts", {}).values()):
+            attributes["agentic.role.prompt_hash"] = prompt_hashes
         if categories := system_metrics.change_categories(patch):
             attributes["agentic.role.return_categories"] = categories
         self.span.set_attributes(attributes)
         elapsed = self.elapsed
-        model = run["model"] if run else ""
+
+        def record_duration(i: Instruments) -> None:
+            i.role_duration.set(
+                elapsed, {"product": self.product, "role": self.role, "role.outcome": outcome}
+            )
+
+        self._emit(record_duration)
+
+        for one_run in runs:
+            self._child_span(patch, one_run)
+            self._emit_run(patch, one_run)
+        if system_metrics.has_residual_sample(patch):
+            self._emit_residual(patch)
+        if failures := patch.get("failures", []):
+            self._emit_failures(failures)
+        if patch.get("findings"):
+            self._emit_findings(patch)
+        if patch.get("presubmit_checks"):
+            self._emit_presubmit(patch)
+        if stats := patch.get("interview_stats"):
+            self._emit_interview(stats, patch.get("invariants"))
+
+    def _run_labels(self, patch: TaskState, run: RoleRunRecord) -> dict[str, str | bool]:
+        return {
+            "product": self.product,
+            "role": run["role"],
+            "model": run["model"],
+            "rework": system_metrics.is_rework(run),
+            "role.slug": system_metrics.role_slug(run),
+            "phase": phase_of(run.get("section", run["role"])),
+            "role.outcome": system_metrics.role_run_outcome(patch, run),
+            "system.version": system_version(),
+        }
+
+    def _emit_run(self, patch: TaskState, run: RoleRunRecord) -> None:
+        """`agentic.role.cost_usd`, `.run_duration`, `.queue_wait`, plus the tokens,
+        calls, turns, tool calls and sub-agent cost of this run record, one
+        record-and-flush. The token-family gauges drop `system.version` from the
+        labels (issue #24): a token panel groups by role and model, never by the
+        checkout that ran it. `tokens`, `calls`, `tool_calls` and `subagent_cost_usd`
+        are absent on a run recorded before this task; `turns` is not, so it is the
+        one of the five always emitted."""
+        labels = self._run_labels(patch, run)
+        duration = system_metrics.run_duration_s(run)
+        queue_wait = run.get("queue_wait_s")
+        token_labels = {k: v for k, v in labels.items() if k != "system.version"}
+        tokens = run.get("tokens", {})
+        tool_calls = run.get("tool_calls", {})
 
         def record(i: Instruments) -> None:
-            common = {"product": self.product, "role": self.role}
-            i.role_duration.set(elapsed, {**common, "role.outcome": outcome})
-            i.role_cost.set(cost, {**common, "model": model, "rework": rework})
+            i.role_cost.set(run["cost_usd"], labels)
+            if duration is not None:
+                i.role_run_duration.set(duration, labels)
+            if queue_wait is not None:
+                i.role_queue_wait.set(queue_wait, labels)
+            for kind, count in tokens.items():
+                i.role_tokens.set(count, {**token_labels, "kind": kind})
+            if "calls" in run:
+                i.role_calls.set(run["calls"], token_labels)
+            i.role_turns.set(run["turns"], token_labels)
+            for tool, count in tool_calls.items():
+                i.role_tool_calls.set(count, {**token_labels, "tool": tool})
+            if "subagent_cost_usd" in run:
+                i.role_subagent_cost.set(run["subagent_cost_usd"], token_labels)
 
         self._emit(record)
+
+    def _emit_residual(self, patch: TaskState) -> None:
+        """The cost no run record carries: an escalation's failed attempts, or an
+        empty patch, at value zero so the panel never silently misses the node. No
+        `model`, since no run backs it; `phase` only when a run in the patch did
+        deliver (`target_run`) and this residual is a separate fact about the same
+        patch — there is no section to derive one from otherwise."""
+        labels: dict[str, str | bool] = {
+            "product": self.product,
+            "role": self.role,
+            "model": "",
+            "rework": system_metrics.residual_rework(patch),
+            "role.slug": self.slug or "unknown",
+            "role.outcome": system_metrics.residual_outcome(patch),
+            "system.version": system_version(),
+        }
+        if target := system_metrics.target_run(patch):
+            labels["phase"] = phase_of(target.get("section", target["role"]))
+        value = system_metrics.residual_cost_usd(patch)
+
+        def record(i: Instruments) -> None:
+            i.role_cost.set(value, labels)
+
+        self._emit(record)
+
+    def _emit_failures(self, failures: list[Failure]) -> None:
+        """`agentic.role.failures` and `.failure_cost_usd`, one sample per reason: every
+        reason is its own label set, so both fit in one record-and-flush. `role.slug`
+        and `phase` come from the failures themselves — the same role and roughly the
+        same section every attempt of one `run_with_retry` call shares — rather than
+        the node's own span, so a failure recorded with none (a document from before
+        this task) still reads `unknown` instead of borrowing the span's identity."""
+        common: dict[str, str] = {
+            "product": self.product,
+            "role": self.role,
+            "role.slug": failures[0].get("slug") or "unknown",
+        }
+        if section := failures[0].get("section"):
+            common["phase"] = phase_of(section)
+        counts = system_metrics.failures_by_reason(failures)
+        costs = system_metrics.failure_cost_by_reason(failures)
+
+        def record(i: Instruments) -> None:
+            for reason, count in counts.items():
+                i.role_failures.set(count, {**common, "reason": reason})
+            for reason, total in costs.items():
+                i.role_failure_cost.set(total, {**common, "reason": reason})
+
+        self._emit(record)
+
+    def _emit_findings(self, patch: TaskState) -> None:
+        """`agentic.review.findings`, one sample per (severity, category, status) of
+        this review's own findings, the count as value: several findings landing in the
+        same cell at the same review are one fact told once, not one `.set()` per
+        finding, which would overwrite itself before the flush. `review.kind` and
+        `system.version` are the review's own, shared by every cell it leaves."""
+        common = {
+            "product": self.product,
+            "review.kind": patch.get("review_kind", "unknown"),
+            "system.version": system_version(),
+        }
+        counts: dict[tuple[str, str, str], int] = {}
+        for item in patch["findings"]:
+            key = (item["severity"], item["category"], item["status"])
+            counts[key] = counts.get(key, 0) + 1
+
+        def record(i: Instruments) -> None:
+            for (severity, category, status), count in counts.items():
+                i.review_findings.set(
+                    count,
+                    {**common, "severity": severity, "category": category, "status": status},
+                )
+
+        self._emit(record)
+
+    def _emit_presubmit(self, patch: TaskState) -> None:
+        """`agentic.presubmit.checks` and `.duration`, one record-and-flush per
+        invocation of the Developer's presubmit that actually ran the checks: a
+        delivery refused once or twice tries again, and each try is its own fact, not a
+        count folded into the next one. Only the last invocation — the one that became
+        the delivery, or the last the backstop let through — is `final`. `role` and
+        `role.slug` are the node's own, like `_emit_failures`; `phase` comes from the
+        run the patch's own verdict describes (`target_run`), the same source the
+        residual sample reads, since a `CheckResult` carries no section of its own."""
+        invocations = patch.get("presubmit_checks", [])
+        last = len(invocations) - 1
+        common: dict[str, str] = {
+            "product": self.product,
+            "role": self.role,
+            "role.slug": self.slug or "unknown",
+        }
+        if target := system_metrics.target_run(patch):
+            common["phase"] = phase_of(target.get("section", target["role"]))
+        for index, results in enumerate(invocations):
+            final = index == last
+
+            def record(i: Instruments, results: list = results, final: bool = final) -> None:
+                for check in results:
+                    labels = {
+                        **common,
+                        "check": check["name"],
+                        "result": "green" if check["passed"] else "red",
+                        "final": final,
+                    }
+                    i.presubmit_checks.set(1, labels)
+                    i.presubmit_duration.set(check.get("duration_s", 0.0), labels)
+
+            self._emit(record)
+
+    def _emit_interview(self, stats: InterviewStats, adopted: list[str] | None) -> None:
+        """`agentic.interview.rounds`, `.questions{to}` and `.invariants{state}`, from
+        the patch's own counts (`InterviewStats`, measurement-only). `adopted` is
+        `None` unless the patch also carries the plan's own `invariants` — the solution
+        stage's Tech Lead run, in the same patch as the interview that proposed them."""
+        common = {"product": self.product, "interview": stats["interview"]}
+        questions = system_metrics.interview_questions(stats)
+
+        def record(i: Instruments) -> None:
+            i.interview_rounds.set(stats["rounds"], common)
+            for to, count in questions.items():
+                i.interview_questions.set(count, {**common, "to": to})
+            i.interview_invariants.set(
+                stats["invariants_proposed"], {**common, "state": "proposed"}
+            )
+            if adopted is not None:
+                i.interview_invariants.set(len(adopted), {**common, "state": "adopted"})
+
+        self._emit(record)
+
+    def _child_span(self, patch: TaskState, run: RoleRunRecord) -> None:
+        """One span per run record, under the role span, carrying that run's own agent,
+        model, session and prompt hash — the shape ADR-0008's semconv addendum defined
+        for a role run, applied per run instead of once for a patch that may hold
+        several (an interview's rounds, each a different role)."""
+        prompt_hash = patch.get("prompts", {}).get(run.get("slug", ""), "")
+        attributes: dict[str, str | float] = {
+            semconv.OPERATION_NAME: semconv.INVOKE_AGENT,
+            semconv.AGENT_NAME: run["role"],
+            semconv.AGENT_ID: system_metrics.role_slug(run),
+            semconv.PROVIDER_NAME: semconv.ANTHROPIC,
+            semconv.SYSTEM: semconv.ANTHROPIC,
+            "role": run["role"],
+            "product": self.product,
+            "agentic.role.model": run["model"],
+            "agentic.role.session_id": run["session_id"],
+            "agentic.role.cost_usd": run["cost_usd"],
+        }
+        if prompt_hash:
+            attributes["agentic.role.prompt_hash"] = prompt_hash
+        started = run.get("started_at")
+        span = tracer().start_span(
+            semconv.span_name(run["role"]),
+            context=trace.set_span_in_context(self.span),
+            attributes=attributes,
+            start_time=_epoch_ns(started) if started else None,
+        )
+        ended = run.get("ended_at")
+        span.end(end_time=_epoch_ns(ended) if ended else None)
+
+
+def _epoch_ns(iso: str) -> int:
+    """`RoleRun.started_at`/`.ended_at`, ISO-8601, as nanoseconds since the epoch: the
+    unit a span's own `start_time`/`end_time` take."""
+    return int(datetime.fromisoformat(iso).timestamp() * 1_000_000_000)
 
 
 def _flush_metrics() -> None:
@@ -362,7 +788,7 @@ def role_span(role_name: str, role_slug: str, product: str) -> Iterator[RoleRun]
             "langfuse.observation.type": "agent",
         },
     ) as span:
-        yield RoleRun(span, product=product, role=role_name)
+        yield RoleRun(span, product=product, role=role_name, slug=role_slug)
 
 
 def traceparent() -> str | None:
