@@ -13,7 +13,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from agentic import composition
 from agentic.composition import default_ports
-from agentic.core.measurement.adapters.otel import telemetry
+from agentic.core.measurement.adapters.otel import semconv, telemetry
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.adapters.langgraph.graph import build_graph, configuration_from
 from agentic.core.process.adapters.telemetry import NoTelemetry
@@ -571,8 +571,13 @@ async def test_role_failure_escalates_and_keeps_failures(config, tmp_path):
     assert PRODUCT_ANALYST.name not in final["sections"]
     doc = FilesystemTaskDocuments(tmp_path).load("GH-1")
     assert [f["error"] for f in doc["failures"]] == ["no structured output", "empty markdown"]
-    assert doc["runs"][0] == {
+    run = dict(doc["runs"][0])
+    for field in ("started_at", "ended_at", "queue_wait_s"):
+        assert field in run
+        del run[field]
+    assert run == {
         "role": "PjM",
+        "slug": "pjm",
         "section": "PjM",
         "version": 1,
         "session_id": "",
@@ -696,6 +701,9 @@ async def test_retried_failure_is_recorded_but_not_escalated(config):
             "error": "invalid",
             "cost_usd": 0.02,
             "session_id": "",
+            "reason": "other",
+            "slug": "product_analyst",
+            "section": "Product Analyst",
         }
     ]
 
@@ -716,7 +724,13 @@ async def test_each_node_opens_and_finishes_the_roles_span(config):
     finally:
         telemetry.configure()
     finished = exporter.get_finished_spans()
-    assert [s.name for s in finished] == [
+    task = finished[-1]
+    # Every run record now leaves its own child span too, under the role span it
+    # belongs to rather than the task: filtering for the task's direct children
+    # recovers exactly one span per node, whatever a node's own patch held.
+    task_id = task.get_span_context().span_id
+    role_spans = [s for s in finished[:-1] if s.parent and s.parent.span_id == task_id]
+    assert [s.name for s in role_spans] == [
         "invoke_agent PjM",
         "invoke_agent Product Analyst",
         "invoke_agent PM",
@@ -725,23 +739,34 @@ async def test_each_node_opens_and_finishes_the_roles_span(config):
         "invoke_agent Tech Lead",
         "invoke_agent Developer",
         "invoke_agent Tech Lead",
-        "GH-1",
     ]
-    task = finished[-1]
-    assert all(s.parent.span_id == task.get_span_context().span_id for s in finished[:-1])
+    # Every span but the task's own hangs off some role span, directly or (a run's
+    # child) one level further down.
+    role_ids = {s.get_span_context().span_id for s in role_spans}
+    assert all(s.parent.span_id == task_id or s.parent.span_id in role_ids for s in finished[:-1])
     # The role spans carry what each use case decided; the task span, the totals.
-    outcomes = [s.attributes["role.outcome"] for s in finished[:-1]]
+    outcomes = [s.attributes["role.outcome"] for s in role_spans]
     assert outcomes == ["delivered"] * 2 + ["returned"] + ["delivered"] * 5
     assert (
-        finished[3].attributes["agentic.role.version"] == 2
-        and finished[3].attributes["agentic.role.rework"]
+        role_spans[3].attributes["agentic.role.version"] == 2
+        and role_spans[3].attributes["agentic.role.rework"]
     )
-    assert finished[6].attributes["agentic.role.model"] == "claude-sonnet-5"
+    assert role_spans[6].attributes["agentic.role.model"] == "claude-sonnet-5"
     assert task.attributes["task.status"] == "ready_for_review"
     assert task.attributes["task.returns"] == 1
     # Every role span says which product the run was over, read from what the product
     # declares and not from the task span it hangs under (issue #47).
-    assert {s.attributes["product"] for s in finished[:-1]} == {"product"}
+    assert {s.attributes["product"] for s in role_spans} == {"product"}
+    # The plan and the review are both "Tech Lead", but not the same role: before the
+    # fix the review node passed the plan's own role, and every review's cost, tokens
+    # and duration landed under `role.slug=tech_lead` next to the plan's (the 58% of
+    # spend the request opens with). `gen_ai.agent.id` tells them apart now.
+    tech_lead_spans = [s for s in role_spans if s.name == "invoke_agent Tech Lead"]
+    plan_span, *review_spans = tech_lead_spans
+    assert plan_span.attributes[semconv.AGENT_ID] == "tech_lead"
+    assert review_spans and all(
+        s.attributes[semconv.AGENT_ID] == "tech_lead_review" for s in review_spans
+    )
 
 
 def test_configuration_comes_from_configurable_and_env(monkeypatch, tmp_path):
@@ -790,7 +815,11 @@ async def test_composition_wires_the_real_telemetry(config, tmp_path):
             composition.ClaudeSdkRunner, composition.GhTracker = real
     finally:
         telemetry.configure()
-    assert [s.name for s in exporter.get_finished_spans()] == ["invoke_agent PjM"]
+    # The role span, plus its one run record's own child span (both named for PjM).
+    assert [s.name for s in exporter.get_finished_spans()] == [
+        "invoke_agent PjM",
+        "invoke_agent PjM",
+    ]
 
 
 async def test_a_crash_in_a_node_still_finishes_the_roles_span(config):
