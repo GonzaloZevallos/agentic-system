@@ -30,13 +30,19 @@ el harness tenga, en este orden, y **nunca queda vacío ni tautológico**:
    acá: el `ResultError` venía con `subtype="success"` y `errors` vacío, pero con el texto
    "API Error: …" del límite de sesión en el resultado. Ese texto es la causa y tiene que
    llegar al motivo; descartarlo es el defecto.
-2. Cuando **todo** lo que el SDK reporta viene vacío, el motivo lleva lo que el proceso sí
-   dejó: las últimas líneas de stderr y el código de salida.
-3. Cuando no hay absolutamente nada, el motivo lo dice en palabras ("el SDK terminó con
-   código N sin mensaje"), que es información: le dice al humano dónde mirar.
+2. Cuando la prosa viene vacía, el motivo lleva igual **el código de salida y la razón de
+   terminación que el SDK reporta**: alcanzan para distinguir un corte externo de una
+   corrida rota.
+3. Cuando no hay absolutamente nada, el motivo lo dice en palabras ("el SDK terminó sin
+   mensaje"), que es información: le dice al humano dónde mirar.
 
 Un motivo cuya parte diagnóstica queda vacía después de los dos puntos es un defecto, no un
 caso aceptable. `run failed (success): ` es el ejemplo a no repetir.
+
+El stderr del CLI **no** es fuente de esta definición: el SDK fijado no lo entrega sin
+infraestructura que el producto no tiene, y los campos de arriba cubren el job. Si alguna
+vez un escalado real llega con todos ellos vacíos, ese hallazgo justifica capturarlo, y es
+una tarea aparte.
 
 ### La escalada arrastra el motivo, no solo el conteo
 
