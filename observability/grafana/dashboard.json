@@ -152,14 +152,14 @@
     {
       "id": 10,
       "type": "timeseries",
-      "title": "Costo por invocación, por versión del sistema",
-      "description": "Promedio diario de lo que gastó cada invocación (run o resume), no el acumulado de la tarea: una tarea reanudada ya no carga todo su gasto en la versión que la cerró (GH-12 gastó $106 en 8874fc0 y cerró en b8f2286; issue #24). Una línea por SHA del sistema.",
+      "title": "Costo por tarea terminada, por versión del sistema",
+      "description": "Promedio diario en dólares de las tareas que terminaron sin escalar. Una línea por SHA del sistema: si una versión nueva cuesta más con las mismas tareas, es el prompt.",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "x": 0, "y": 4, "w": 12, "h": 9 },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (product, system_version) (sum_over_time(agentic_invocation_cost_usd{product=~\"$product\", system_version=~\"$version\"}[1d])) / sum by (product, system_version) (count_over_time(agentic_invocation_cost_usd{product=~\"$product\", system_version=~\"$version\"}[1d]))",
+          "expr": "sum by (product, system_version) (sum_over_time(agentic_task_cost_usd{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[1d])) / sum by (product, system_version) (count_over_time(agentic_task_cost_usd{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[1d]))",
           "legendFormat": "{{product}} {{system_version}}"
         }
       ],
@@ -190,13 +190,13 @@
       "id": 11,
       "type": "timeseries",
       "title": "Retrabajo sobre el costo, por versión del sistema",
-      "description": "Qué parte de cada dólar de cada invocación se fue en repetir trabajo, por día y por SHA. La pregunta norte del dashboard, ahora sin la doble cuenta de una tarea reanudada.",
+      "description": "Qué parte de cada dólar se fue en repetir trabajo, por día y por SHA. La pregunta norte del dashboard.",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "x": 12, "y": 4, "w": 12, "h": 9 },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (product, system_version) (sum_over_time(agentic_invocation_rework_usd{product=~\"$product\", system_version=~\"$version\"}[1d])) / sum by (product, system_version) (sum_over_time(agentic_invocation_cost_usd{product=~\"$product\", system_version=~\"$version\"}[1d]))",
+          "expr": "sum by (product, system_version) (sum_over_time(agentic_task_rework_usd{product=~\"$product\", system_version=~\"$version\", task_type=~\"$type\"}[1d])) / sum by (product, system_version) (sum_over_time(agentic_task_cost_usd{product=~\"$product\", system_version=~\"$version\", task_type=~\"$type\"}[1d]))",
           "legendFormat": "{{product}} {{system_version}}"
         }
       ],
