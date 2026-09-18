@@ -86,6 +86,74 @@ async def test_raw_result_splits_the_cost_by_model(monkeypatch, tmp_path):
     assert (await run_once(ClaudeSdkRunner(), tmp_path)).cost_by_model == {}
 
 
+async def test_raw_result_carries_usage_calls_and_tool_calls(monkeypatch, tmp_path):
+    usage = {
+        "input_tokens": 10,
+        "output_tokens": 20,
+        "cache_read_input_tokens": 30,
+        "cache_creation_input_tokens": 40,
+    }
+    first = AssistantMessage(
+        content=[
+            ToolUseBlock(id="1", name="Read", input={}),
+            ToolUseBlock(id="2", name="Bash", input={}),
+        ],
+        model="m",
+    )
+    second = AssistantMessage(
+        content=[
+            ToolUseBlock(id="3", name="Read", input={}),
+            ToolUseBlock(id="4", name="mcp__weird__tool", input={}),
+            ToolUseBlock(id="5", name="StructuredOutput", input={"markdown": "ok"}),
+        ],
+        model="m",
+    )
+    fake_query(monkeypatch, [first, second, result(usage=usage)])
+    raw = await run_once(ClaudeSdkRunner(), tmp_path)
+    # Normalised to the closed `kind` set `agentic.role.tokens` groups by, off the SDK's
+    # own snake_case keys.
+    assert raw.usage == {"input": 10, "output": 20, "cache_read": 30, "cache_write": 40}
+    assert raw.calls == 2  # one per AssistantMessage seen before the delivery
+    assert raw.tool_calls == {"Read": 2, "Bash": 1, "other": 1, "StructuredOutput": 1}
+
+
+async def test_raw_result_usage_defaults_when_the_sdk_reports_none(monkeypatch, tmp_path):
+    fake_query(monkeypatch, [result(usage=None)])
+    raw = await run_once(ClaudeSdkRunner(), tmp_path)
+    assert raw.usage == {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
+    assert raw.calls == 0
+    assert raw.tool_calls == {}
+
+
+async def test_usage_of_a_resumed_session_from_an_earlier_node_is_not_adjusted(
+    monkeypatch, tmp_path
+):
+    # The probe (observability/README.md, 14) resumed a session across two separate
+    # `query()` calls and printed the second call's own `usage`: {"input_tokens": 2,
+    # "cache_creation_input_tokens": 63, "cache_read_input_tokens": 1862,
+    # "output_tokens": 4}, not the first call's added in. `run_once` has no session
+    # this runner opened itself to compare against here either way — `resume` may name
+    # a session an earlier node opened — so there is no baseline it could subtract even
+    # if the SDK's own figure needed one, which the probe found it does not.
+    usage = {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 63,
+        "cache_read_input_tokens": 1862,
+        "output_tokens": 4,
+    }
+    fake_query(monkeypatch, [result(usage=usage)])
+    raw = await ClaudeSdkRunner().run_once(
+        PJM,
+        "p",
+        system_prompt="s",
+        model="m",
+        json_schema={"type": "object"},
+        cwd=tmp_path,
+        resume="session-opened-by-an-earlier-node",
+    )
+    assert raw.usage == {"input": 2, "output": 4, "cache_read": 1862, "cache_write": 63}
+
+
 async def test_nested_schemas_are_inlined_for_the_sdk(monkeypatch, tmp_path):
     seen = fake_query(monkeypatch, [result()])
     schema = {

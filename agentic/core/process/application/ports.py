@@ -29,6 +29,26 @@ class RawResult:
     session_id: str = ""
     # `cost_usd` split by model: the parent's and its sub-agents' (ADR-0013, addendum).
     cost_by_model: dict[str, float] = field(default_factory=dict)
+    # Token usage of the delivering `ResultMessage`, normalised to the closed `kind`
+    # set `agentic.role.tokens` groups by (`input`, `output`, `cache_read`,
+    # `cache_write`) off the SDK's own `input_tokens`, `output_tokens`,
+    # `cache_read_input_tokens`, `cache_creation_input_tokens`. Scoped to this one
+    # `query()` call, never the Claude Code session's cumulative total across an
+    # earlier call it resumed: a probe that resumed a session across two separate
+    # `query()` calls showed the second call's `usage` carrying only what it itself
+    # spent, not the first call's added in (observability/README.md, 14), so a retry's
+    # or a cross-node resume's first round needs no baseline subtracted from it. Empty
+    # when the SDK reports none.
+    usage: dict[str, int] = field(default_factory=dict)
+    # Calls to the model in this run: one per `AssistantMessage` message the runner saw
+    # before the delivery — the SDK does not otherwise distinguish a "call" from a
+    # "turn" (`num_turns`, which counts turns, not calls, and the two differ on a run
+    # with sub-agents in the foreground).
+    calls: int = 0
+    # `tool_use` blocks of this run, by tool name, counted the same way; a name outside
+    # the known set (Bash, Read, Edit, Write, Grep, Glob, Agent, Skill,
+    # StructuredOutput) counts as `other`.
+    tool_calls: dict[str, int] = field(default_factory=dict)
 
 
 class AttemptFailed(Exception):

@@ -59,6 +59,12 @@ from .schema import inline_refs
 
 SKILL_TOOL = "Skill"
 AGENT_TOOL = "Agent"
+OTHER_TOOL = "other"
+# The closed set `agentic.role.tool_calls` groups by; anything else is `OTHER_TOOL`
+# (the module docstring's MCP tools included, since no role declares one).
+KNOWN_TOOLS = frozenset(
+    {"Bash", "Read", "Edit", "Write", "Grep", "Glob", AGENT_TOOL, SKILL_TOOL, "StructuredOutput"}
+)
 
 
 def options_for(
@@ -154,10 +160,16 @@ class ClaudeSdkRunner:
         exhausted = f"max_turns ({role.max_turns}) exhausted without a result"
         result: ResultMessage | None = None
         background = 0
+        calls = 0
+        tool_calls: dict[str, int] = {}
         try:
             async for message in query(prompt=prompt, options=options):
                 if observer is not None:
                     observer(message)
+                if isinstance(message, AssistantMessage):
+                    calls += 1
+                    for name in _tool_names(message):
+                        tool_calls[name] = tool_calls.get(name, 0) + 1
                 background += _background_agents(message)
                 if isinstance(message, ResultMessage):
                     result = message
@@ -204,6 +216,9 @@ class ClaudeSdkRunner:
             turns=result.num_turns,
             session_id=session,
             cost_by_model=_cost_by_model(result),
+            usage=_usage(result),
+            calls=calls,
+            tool_calls=tool_calls,
         )
 
     def _warn(self, text: str) -> None:
@@ -236,6 +251,30 @@ def _background_agents(message: Message) -> int:
         and block.name == AGENT_TOOL
         and bool(block.input.get("run_in_background"))
     )
+
+
+def _tool_names(message: AssistantMessage) -> list[str]:
+    """The tool this message called, once per `ToolUseBlock`, normalised to
+    `KNOWN_TOOLS` (anything else, an MCP tool included, is `OTHER_TOOL`)."""
+    return [
+        block.name if block.name in KNOWN_TOOLS else OTHER_TOOL
+        for block in message.content
+        if isinstance(block, ToolUseBlock)
+    ]
+
+
+def _usage(result: ResultMessage | None) -> dict[str, int]:
+    """The delivering result's token usage, normalised to the closed `kind` set
+    `agentic.role.tokens` groups by. `RawResult.usage`'s own docstring has the
+    evidence for why this is a direct read, never a subtraction against an earlier
+    call. Zeroed when the SDK reports none."""
+    raw = (result.usage if result else None) or {}
+    return {
+        "input": raw.get("input_tokens", 0),
+        "output": raw.get("output_tokens", 0),
+        "cache_read": raw.get("cache_read_input_tokens", 0),
+        "cache_write": raw.get("cache_creation_input_tokens", 0),
+    }
 
 
 def _cost_by_model(result: ResultMessage) -> dict[str, float]:
