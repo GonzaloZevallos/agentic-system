@@ -849,6 +849,10 @@ def test_a_tasks_rework_usd_equals_the_sum_of_its_rework_marked_role_samples(spa
 
     retried = _run("Product Analyst", "product_analyst", "Product Analyst", 0.05)
     retried["failed_cost_usd"] = 0.02
+    # On the very run the cost split touches, so tokens/calls prove the split is
+    # role_cost's alone: neither is split or duplicated alongside it.
+    retried["tokens"] = {"input": 10, "output": 5}
+    retried["calls"] = 3
     retry_patch = {
         "runs": [retried],
         "failures": [
@@ -913,6 +917,11 @@ def test_a_tasks_rework_usd_equals_the_sum_of_its_rework_marked_role_samples(spa
     assert len(got["agentic.role.turns"]) == 3
     assert len(got["agentic.role.run_duration"]) == 3
     assert len(got["agentic.role.queue_wait"]) == 3
+    # `retried` is the one run whose cost split in two; its tokens and calls stay
+    # exactly one sample (one per kind for tokens), never duplicated alongside it.
+    assert len(got["agentic.role.calls"]) == 1 and got["agentic.role.calls"][0].value == 3
+    tokens = {t.attributes["kind"]: t.value for t in got["agentic.role.tokens"]}
+    assert tokens == {"input": 10, "output": 5}
 
 
 @pytest.mark.parametrize(

@@ -147,7 +147,7 @@
       "id": 2,
       "type": "stat",
       "title": "Retrabajo",
-      "description": "Parte del costo total gastada en corridas de rol que repiten trabajo: entregas posteriores a una devolución e intentos fallidos. Cuenta todas las tareas, escaladas y caídas incluidas. Verde bajo 10 %, ámbar hasta 30 %. Un solo número para el filtro elegido; la comparación entre versiones está en la tabla de abajo.",
+      "description": "Parte del costo total gastada en corridas de rol que repiten trabajo: entregas posteriores a una devolución e intentos fallidos. Sólo sobre Corridas terminadas (entregadas o descartadas): una tarea pausada o caída no deja muestra de `agentic_task_rework_usd` ni de `agentic_task_cost_usd`, así que no entra en ninguno de los dos lados de la razón (ADR-0008, Adenda 2026-09-18, segunda). Verde bajo 10 %, ámbar hasta 30 %. Un solo número para el filtro elegido; la comparación entre versiones está en la tabla de abajo.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -512,7 +512,7 @@
       "id": 11,
       "type": "timeseries",
       "title": "Retrabajo sobre el costo, por versión del sistema",
-      "description": "Qué parte de cada dólar se fue en repetir trabajo, por día y por SHA. La pregunta norte del dashboard.",
+      "description": "Qué parte de cada dólar se fue en repetir trabajo, por día y por SHA. La pregunta norte del dashboard. Sólo sobre Corridas terminadas: una tarea pausada o caída no deja muestra de `agentic_task_rework_usd` ni de `agentic_task_cost_usd`, así que no entra en ninguno de los dos lados de la razón (ADR-0008, Adenda 2026-09-18, segunda).",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -690,7 +690,7 @@
       "id": 30,
       "type": "table",
       "title": "Costo por rol y modelo",
-      "description": "Dólares gastados en el rango, por rol, modelo y si fue retrabajo. Para decidir qué rol baja de modelo. Una corrida `version == 1` con algún intento fallido ahora deja dos filas en vez de una — su plata entregada bajo `Retrabajo=false`, la de sus intentos fallidos bajo `Retrabajo=true` (ADR-0008, Adenda 2026-09-18, segunda) — pero la suma de ambas sigue siendo la misma plata que antes, sin duplicar nada.",
+      "description": "Dólares gastados en el rango, por rol, modelo y si fue retrabajo. Para decidir qué rol baja de modelo. Una corrida `version == 1` con algún intento fallido ahora deja dos filas en vez de una — su plata entregada bajo `Retrabajo=false`, la de sus intentos fallidos bajo `Retrabajo=true` (ADR-0008, Adenda 2026-09-18, segunda) — pero la suma de ambas sigue siendo la misma plata que antes, sin duplicar nada. El residual (`model` vacío: ninguna corrida lo respalda) también cambió de fila: antes era `Retrabajo=false` cuando el patch tenía una entrega, ahora es siempre `Retrabajo=true` (`residual_rework`, misma adenda), porque esa plata nunca produjo una entrega sea o no haya una corrida al lado.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
