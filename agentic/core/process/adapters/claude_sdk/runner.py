@@ -50,6 +50,7 @@ from claude_agent_sdk import (
 
 from ...application.ports import AttemptFailed, Presubmit, RawResult
 from ...domain.roles import Role
+from ...domain.rules import ReportedFailure, exception_motive, failure_motive
 from ...domain.task import FailureReason
 from ..plugins import PLUGIN, PLUGIN_DIR
 from ..telemetry import NoTelemetry, Telemetry
@@ -182,13 +183,13 @@ class ClaudeSdkRunner:
             if exc.subtype == "error_max_turns":
                 raise AttemptFailed(exhausted, cost, session, reason="max_turns") from exc
             raise AttemptFailed(
-                f"run failed ({exc.subtype}): {'; '.join(exc.errors)}",
+                failure_motive(_reported_error(exc)),
                 cost,
                 session,
                 reason=_reason_for_subtype(exc.subtype),
             ) from exc
         except Exception as exc:  # the SDK raises its own hierarchy; all of it is a failure
-            raise AttemptFailed(f"SDK error: {exc}", reason="sdk") from exc
+            raise AttemptFailed(f"SDK error: {exception_motive(exc)}", reason="sdk") from exc
 
         if result is None:
             raise AttemptFailed("run ended without a result message", reason="sdk")
@@ -205,7 +206,7 @@ class ClaudeSdkRunner:
             raise AttemptFailed(exhausted, cost, session, reason="max_turns")
         if result.is_error:
             raise AttemptFailed(
-                f"run ended in error: {'; '.join(result.errors or [result.subtype])}",
+                failure_motive(_reported_result(result)),
                 cost,
                 session,
                 reason=_reason_for_subtype(result.subtype or ""),
@@ -232,6 +233,34 @@ def _reason_for_subtype(subtype: str) -> FailureReason:
     (its own raise site already knows that one): `limit` for a per-attempt money cap
     (issue #66), `sdk` for anything else the harness reports by a subtype."""
     return "limit" if "budget" in subtype else "sdk"
+
+
+def _reported_error(exc: ResultError) -> ReportedFailure:
+    """`exc`'s payload as `failure_motive` reads it: every field the CLI reported on
+    the failed result before exiting non-zero, `exit_code` included — the shape only
+    `ResultError` structurally carries (`ProcessError`'s own attribute)."""
+    return ReportedFailure(
+        subtype=exc.subtype,
+        errors=tuple(exc.errors),
+        result=exc.result,
+        api_error_status=exc.api_error_status,
+        terminal_reason=exc.terminal_reason,
+        exit_code=exc.exit_code,
+    )
+
+
+def _reported_result(result: ResultMessage) -> ReportedFailure:
+    """`result`'s payload as `failure_motive` reads it, for the error `ResultMessage`
+    site: the module docstring's `run failed (success): ` shape, reached without the
+    CLI ever raising `ResultError`. No `exit_code`: a `ResultMessage` structurally has
+    none, so `failure_motive` never formats one that is absent."""
+    return ReportedFailure(
+        subtype=result.subtype,
+        errors=tuple(result.errors or ()),
+        result=result.result,
+        api_error_status=result.api_error_status,
+        terminal_reason=result.terminal_reason,
+    )
 
 
 def _delivered(result: ResultMessage) -> bool:

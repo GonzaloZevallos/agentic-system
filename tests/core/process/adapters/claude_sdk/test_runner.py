@@ -273,6 +273,56 @@ async def test_sdk_exceptions_are_attempt_failures(monkeypatch, tmp_path):
     assert info.value.reason == "sdk"
 
 
+async def test_an_sdk_exception_with_no_message_names_its_type_instead_of_nothing(
+    monkeypatch, tmp_path
+):
+    async def query(prompt, options):
+        raise RuntimeError
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(module, "query", query)
+    with pytest.raises(AttemptFailed, match="SDK error: RuntimeError, with no message"):
+        await run_once(ClaudeSdkRunner(), tmp_path)
+
+
+LIMIT_PROSE = "API Error: You've hit your session limit · resets 11:20pm"
+
+
+async def test_a_result_error_with_success_and_no_errors_still_names_the_limit(
+    monkeypatch, tmp_path
+):
+    # The 2026-09-17 incident (issue #66): the CLI reports the limit in `result`, with
+    # `subtype="success"` and `errors=[]`; the old f-string produced `run failed
+    # (success): `.
+    from claude_agent_sdk import ResultError
+
+    async def query(prompt, options):
+        yield result(is_error=True, subtype="success", total_cost_usd=0.0)
+        raise ResultError(
+            "run failed", data={"subtype": "success", "errors": [], "result": LIMIT_PROSE}
+        )
+
+    monkeypatch.setattr(module, "query", query)
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(ClaudeSdkRunner(), tmp_path)
+    assert LIMIT_PROSE in str(info.value)
+    assert "success" not in str(info.value)
+
+
+async def test_the_same_payload_as_a_result_message_still_names_the_limit(monkeypatch, tmp_path):
+    # The `ResultMessage` shape the module docstring says the CLI may never actually
+    # produce (the error result is followed by a non-zero exit, `ResultError`'s path):
+    # the branch stays, and its motive is held to the same rule.
+    fake_query(
+        monkeypatch,
+        [result(is_error=True, subtype="success", errors=[], result=LIMIT_PROSE)],
+    )
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(ClaudeSdkRunner(), tmp_path)
+    assert LIMIT_PROSE in str(info.value)
+    assert "run ended in error: success" not in str(info.value)
+
+
 async def test_a_result_error_with_a_budget_subtype_is_the_limit_reason(monkeypatch, tmp_path):
     from claude_agent_sdk import ResultError
 
