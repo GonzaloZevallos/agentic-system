@@ -23,7 +23,9 @@ class RoleSpan(Protocol):
 
 
 class Telemetry(Protocol):
-    def role_span(self, role_name: str, product: str) -> AbstractContextManager[RoleSpan]: ...
+    def role_span(
+        self, role_name: str, role_slug: str, product: str
+    ) -> AbstractContextManager[RoleSpan]: ...
 
     def traceparent(self) -> str | None: ...
 
@@ -34,7 +36,9 @@ class _NoSpan:
 
 
 class NoTelemetry:
-    def role_span(self, role_name: str, product: str) -> AbstractContextManager[RoleSpan]:
+    def role_span(
+        self, role_name: str, role_slug: str, product: str
+    ) -> AbstractContextManager[RoleSpan]:
         return nullcontext(_NoSpan())
 
     def traceparent(self) -> str | None:
