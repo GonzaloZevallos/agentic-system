@@ -1,3 +1,5 @@
+from typing import get_args
+
 from agentic.core.process.domain import rules, task
 from agentic.core.process.domain.roles import FINDINGS, PAIR_PM_PA
 from agentic.core.process.domain.task import INTEGRATION
@@ -212,6 +214,12 @@ def test_spent_by_phase_sums_the_runs_by_section_and_keeps_what_they_miss():
         "review": 4.0,
     }
     assert rules.spent_by_phase({"runs": runs, "cost_usd": 12.5})["other"] == 1.0
+
+
+def test_run_ended_is_true_only_for_ready_for_review_and_discarded():
+    ended = {"ready_for_review", "discarded"}
+    for status in get_args(task.Status):
+        assert rules.run_ended(status) is (status in ended)
 
 
 # Pause and resume (ADR-0003, addendum).

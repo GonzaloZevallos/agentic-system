@@ -766,6 +766,18 @@ def after_discard(state: TaskState) -> str | None:
     return None
 
 
+def run_ended(status: Status) -> bool:
+    """Whether the Corrida (the whole task, ADR-0003) ended: delivered
+    (`ready_for_review`) or discarded (issue #65). Every other status, including a
+    pause on escalation, leaves the Corrida resumable — the checkpoint allows it and
+    the system cannot know whether anyone will — so `TaskRun.finish` (ADR-0008,
+    2026-09-18 second addendum) does not emit its task gauges for it: a task paused
+    twice would otherwise leave two samples of its accumulated total. `"crashed"` is
+    not a `Status`: the CLI fabricates it only for its own telemetry when a process
+    dies mid-run, so it cannot appear in this predicate's own type."""
+    return status in ("ready_for_review", "discarded")
+
+
 # Pause and resume (ADR-0003): an escalation pauses the task; the human's answer resumes
 # it where it stopped. The state says where that is, so the same rules serve a paused
 # checkpoint and a state seeded from the document.
