@@ -1,7 +1,7 @@
 # Fallos de rol y lo que el humano lee
 
-Qué queda escrito cuando un intento de un rol falla, y qué llega al humano cuando esos
-fallos escalan la tarea.
+Qué queda escrito cuando un intento de un rol falla, qué presupuesto tiene un rol para
+entregar antes de que falle, y qué llega al humano cuando esos fallos escalan la tarea.
 
 ## Jobs
 
@@ -16,6 +16,20 @@ fallos escalan la tarea.
   que ese error diga qué pasó, **para** que el segundo intento tenga una chance distinta
   del primero en vez de repetirlo a ciegas.
   _Me salió bien si_: el reintento nunca recibe un mensaje que no nombra ninguna causa.
+
+- **Cuando** un rol tiene que leer varios módulos y documentos de tarea antes de poder
+  entregar, **quiero** que su presupuesto de turnos le alcance para hacer ese trabajo,
+  **para** que la tarea termine con lo que el rol vino a producir y no con un escalado que
+  cobra el trabajo sin entregar nada.
+  _Me salió bien si_: una corrida sana de ese rol entrega sin agotar sus turnos, y un
+  escalado por turnos agotados es un hecho a corregir, no el final esperable de ese rol.
+
+- **Cuando** el sistema le niega a un rol una herramienta que su rol no incluye, **quiero**
+  que la negación le diga cuál es su regla, **para** que cambie de estrategia en vez de
+  gastar sus turnos buscando la sintaxis que la esquive.
+  _Me salió bien si_: después de la primera negación el rol no vuelve a intentar lo mismo
+  con otra forma (heredoc, intérprete, codificación) y sigue con lo que su rol sí puede
+  hacer.
 
 ## Comportamiento
 
@@ -51,10 +65,62 @@ Cuando los intentos se agotan y la tarea escala, el motivo que llega al issue ll
 solo, sin causa detrás, no cumple lo que la entrada **Escalado** del glosario promete: que
 el motivo es texto libre **para el humano**.
 
+### El presupuesto de turnos de un rol se dimensiona por su trabajo
+
+Cada rol corre con un tope de turnos, y agotarlo sin resultado es un fallo de rol. El tope
+se dimensiona por **el trabajo que la entrega de ese rol exige**, no por lo que le alcanza
+a otro rol que comparte el nombre o el prompt base.
+
+El caso que lo fija: el Product Analyst en modo bug tiene que **reproducir** antes de
+dictaminar, y reproduce leyendo el código, los documentos de tarea y los tests que ya
+existen, o corriendo los chequeos declarados del producto. Eso son varias lecturas en un
+repo de este tamaño. El Product Analyst de una feature, en cambio, contesta desde el pedido
+y el conocimiento que recibe en el prompt. Son dos presupuestos distintos: el de bug no
+puede ser el que hereda del de feature por ser un `replace(...)` de él, ni el que el Tech
+Lead necesita para revisar un diff.
+
+Lo medido, y lo que esta definición corrige: entre las corridas de #69 y #81, cuatro
+intentos del Product Analyst de bug agotaron `max_turns (12)` y ninguno llegó a un
+dictamen; el primero gastó $1.08 sin entregar nada. En #81 el rol leía productivamente y sin
+intentar escribir: el presupuesto era el límite, no la estrategia.
+
+**Turnos agotados sin resultado es una rotura, no el modo normal de terminar.** Un rol cuyo
+trabajo sano no cabe en su tope produce escalados que cobran el trabajo y no entregan nada,
+y eso es lo que el job de arriba niega. El número concreto y cómo se declara —heredado o
+propio de cada rol— es calibración de ingeniería contra esta definición.
+
+**Continuar la sesión no repone el presupuesto.** Un reintento tras `max_turns` continúa la
+sesión del intento que falló (ADR-0004, adenda 2026-09-14), y eso es correcto: el rol no
+vuelve a releer lo que ya leyó. Pero la memoria no compra turnos; el segundo intento arranca
+con el mismo tope. De ahí que un tope corto no se arregle con el reintento: se agota dos
+veces y escala igual.
+
+### Una negación le dice al rol cuál es su regla
+
+Cuando el sistema le niega a un rol una herramienta o un comando, el motivo que el rol
+recibe **nombra la regla de su rol**, no solamente la ruta, el prefijo o el comando que
+quedó afuera. Un rol que solo lee tiene que enterarse de que **escribir está fuera de su
+rol**, y de qué sí puede hacer en su lugar: reproducir leyendo (el código, los documentos de
+tarea, los tests existentes) o corriendo los chequeos declarados del producto.
+
+Vale para todo rol, ejecute o no. Hoy los motivos legibles se arman únicamente para los
+roles que ejecutan; un rol de solo lectura recibe la negación genérica del harness, sin
+motivo. Eso es el defecto.
+
+La consecuencia medida está en la corrida de #69: el Product Analyst de bug intentó escribir
+un test de reproducción, leyó la negación como un problema de sintaxis y reintentó con
+heredoc, con `python3` por stdin cinco veces y con `base64` en las dos direcciones, ocho
+turnos en variantes de lo mismo. Con el motivo puesto, la primera negación cierra el camino
+en vez de abrir la búsqueda de la forma que lo esquive.
+
+Esto **sube la barrera del prompt, no la cierra**: la garantía de que el rol no escribe la
+sigue dando el permiso, no el texto (ADR-0011, adenda segunda). El texto existe para que el
+rol no gaste su presupuesto contra una pared.
+
 ### Lo que esta definición no cambia
 
-Se dice explícito porque el pedido que la originó lo incluía y es comportamiento nuevo, no
-un defecto de lo escrito:
+Se dice explícito porque los pedidos que la originaron lo incluían y es comportamiento
+nuevo, no un defecto de lo escrito:
 
 - **No hay espera ni backoff entre intentos.** Un fallo se reintenta una vez, en el acto,
   como define **Fallo de rol**. Agregar una espera es una tarea aparte.
@@ -62,13 +128,26 @@ un defecto de lo escrito:
   valor nuevo de `role.outcome`, ni escalada de otro tipo: la tarea queda
   `waiting_on_human` y se reanuda con `agentic resume`, que es lo que corresponde. Lo único
   que cambia es que el humano pueda saber que era eso.
-- **`ROLE_RETRIES` y el tope por intento no se tocan** (ADR-0004).
+- **La continuación de sesión tras `max_turns` queda como está.** Ya falla con la sesión
+  puesta y el reintento la reanuda; lo que esta definición cambia es el tamaño del
+  presupuesto y la claridad de la negación.
+- **`ROLE_RETRIES`, el tope por intento y el tope de tarea no se tocan** (ADR-0004).
 
 ## Métricas
 
 - **Escalados con motivo diagnosticable**: proporción de escalados por fallo de rol cuyo
   motivo nombra una causa (no vacía, no solo el conteo). Objetivo: 100%. Hoy, el caso del
   2026-09-17 la deja por debajo.
+- **Fallos por turnos agotados**: `agentic.role.failures{reason="max_turns"}` por
+  `role.slug`. Objetivo: cero sobre el set de evaluación, y en particular cero para el
+  Product Analyst de bug, que hoy aporta cuatro intentos entre #69 y #81.
+- **Turnos usados contra el tope, por rol**: los turnos de una corrida que entregó, contra
+  el tope de ese rol. Es la métrica con la que se calibra un tope: un rol que entrega sano
+  rozando su tope está a una lectura de escalar, y uno que entrega en la mitad lo tiene de
+  sobra. Objetivo: margen, no ajuste.
+- **Turnos gastados después de una negación**: turnos de una corrida posteriores a la
+  primera negación de herramienta que reintentan la misma acción con otra forma. Objetivo:
+  cero. Hoy la corrida de #69 la deja en ocho.
 - `agentic.role.failures` y `agentic.role.failure_cost_usd`, con su label `reason`
   (ADR-0008, adenda 2026-09-18): no cambian de nombre ni de juego de valores. Lo que esta
   definición asegura es que el texto que acompaña a esa muestra sea legible.
