@@ -69,7 +69,13 @@ class Escalating(Exception):
 class RoleFailure(Escalating):
     def __init__(self, role: Role, failures: list[Failure]):
         last = failures[-1]["error"] if failures else "no attempts were made"
-        super().__init__(role, failures, f"{role.name} failed {len(failures)} times: {last}")
+        reason = f"{role.name} failed {len(failures)} times: {last}"
+        if count := sum(f.get("denials", 0) for f in failures):
+            # The run's total, over every failed attempt: none of them delivered, so
+            # there is no delivering attempt's own count to add (`_run_denials`'s own
+            # rule for the run that does deliver).
+            reason = f"{reason} {rules.denial_note(role, count)}"
+        super().__init__(role, failures, reason)
 
 
 class TaskCapReached(Escalating):
@@ -124,6 +130,10 @@ class Output:
     # `run_with_retry` dropped it and ran this attempt cold instead of retrying the
     # stale id.
     cold_fallback: bool = False
+    # Write attempts the SDK denied during the delivering attempt alone
+    # (`RawResult.denials`'s own docstring); the run's total also folds in every
+    # `failures` entry's own count (`_run_denials`).
+    denials: int = 0
 
 
 def context_for(
@@ -287,6 +297,7 @@ async def run_with_retry(
                     "slug": role.slug,
                     "section": written_as,
                     "cold_fallback": fallback_now,
+                    "denials": exc.denials,
                 }
             )
             continue
@@ -371,7 +382,11 @@ async def _attempt(
     cost, session = result.cost_usd, result.session_id
     if result.structured_output is None:
         raise AttemptFailed(
-            "structured output missing; it is required", cost, session, reason="schema"
+            "structured output missing; it is required",
+            cost,
+            session,
+            reason="schema",
+            denials=result.denials,
         )
     try:
         data = schemas.validate(role.schema, result.structured_output, vocabulary)
@@ -381,6 +396,7 @@ async def _attempt(
             cost,
             session,
             reason="schema",
+            denials=result.denials,
         ) from exc
     if check is not None:
         try:
@@ -391,11 +407,16 @@ async def _attempt(
                 cost,
                 session,
                 reason="check",
+                denials=result.denials,
             ) from exc
     text = data.pop("markdown").strip()
     if not text:
         raise AttemptFailed(
-            "`markdown` is empty; the Markdown section is required", cost, session, reason="schema"
+            "`markdown` is empty; the Markdown section is required",
+            cost,
+            session,
+            reason="schema",
+            denials=result.denials,
         )
     return Output(
         text=text,
@@ -409,6 +430,7 @@ async def _attempt(
         calls=result.calls,
         tool_calls=result.tool_calls,
         subagent_cost_usd=_subagent_cost_usd(result.cost_by_model, model),
+        denials=result.denials,
     )
 
 
@@ -463,7 +485,26 @@ def run_record(state: TaskState, role: Role, section: str, output: Output) -> Ro
         "subagent_cost_usd": output.subagent_cost_usd,
         "resumed_from": output.resumed_from,
         "cold_fallback": output.cold_fallback,
+        "denials": output.denials,
     }
+
+
+def _run_denials(output: Output) -> int:
+    """The run's total denials (glossary: Negación): the delivering attempt's plus
+    every recorded failure's, never the delivering attempt's alone. Attempt 1 can burn
+    every denial fighting the permission layer and attempt 2 still deliver clean; a
+    per-attempt figure would read that run as if nothing had happened."""
+    return output.denials + sum(f.get("denials", 0) for f in output.failures)
+
+
+def _section_text(role: Role, output: Output) -> str:
+    """What lands in the role's section: its own delivery, with the system's one-line
+    denial note in front when the run had at least one (glossary: Negación) — the same
+    seam `develop.cold_fallback_note` uses for a dropped session, so an expensive run
+    fighting the permission layer is legible without opening logs."""
+    if count := _run_denials(output):
+        return f"{rules.denial_note(role, count)}\n\n{output.text}"
+    return output.text
 
 
 async def run_role(
@@ -526,7 +567,7 @@ async def run_role(
         return None, patch | escalation(exc)
 
     patch |= {
-        "sections": rules.sections_for(state, section, output.text),
+        "sections": rules.sections_for(state, section, _section_text(role, output)),
         "failures": output.failures,
         "cost_usd": output.cost_usd,
         "runs": [run_record(state, role, section, output)],

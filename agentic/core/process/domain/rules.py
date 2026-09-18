@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 
 from . import presubmit
+from .denials import denial_for
 from .document import HUMAN, demote
 from .roles import (
     DEVELOPER,
@@ -539,6 +540,17 @@ def returned_developer_delta(state: TaskState, subtask_id: str, branch: str, hea
     lead = f"**Returned:** {reason}\n\n" if reason else ""
     parts.append(f"## {review}\n\n{lead}{sections.get(review, '')}")
     return "\n\n".join(parts)
+
+
+def denial_note(role: Role, count: int) -> str:
+    """The trace a denied write leaves on the run's section (glossary: Negación): one
+    line, system-written, only when the run had at least one denial — the same seam
+    `cold_fallback_note` uses for a dropped session, so a run spent fighting the
+    permission layer is legible without opening logs. `count` is the run's total, the
+    delivering attempt's plus every recorded failure's, never a per-attempt figure
+    (`run_role.run_role`'s own rule)."""
+    plural = "" if count == 1 else "s"
+    return f"_The system denied {count} write attempt{plural}: {denial_for(role)}_"
 
 
 def cold_fallback_note() -> str:
