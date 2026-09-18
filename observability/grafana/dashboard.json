@@ -264,7 +264,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version) (count_over_time(agentic_task_finished{product=~\"$product\", system_version=~\"$version\", task_status=\"waiting_on_human\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
+          "expr": "sum by (system_version) (count_over_time(agentic_task_finished{product=~\"$product\", task_status=\"waiting_on_human\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
           "legendFormat": "{{system_version}}",
           "instant": true
         }
@@ -310,7 +310,7 @@
         {
           "refId": "A",
           "expr": "sum by (system_version) (sum_over_time(agentic_task_cost_usd{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[1d])) / sum by (system_version) (count_over_time(agentic_task_cost_usd{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[1d]))",
-          "legendFormat": "{{system_version}} {{system_version}}"
+          "legendFormat": "{{system_version}}"
         }
       ],
       "fieldConfig": {
@@ -364,7 +364,7 @@
         {
           "refId": "A",
           "expr": "sum by (system_version) (sum_over_time(agentic_task_rework_usd{product=~\"$product\", system_version=~\"$version\", task_type=~\"$type\"}[1d])) / sum by (system_version) (sum_over_time(agentic_task_cost_usd{product=~\"$product\", system_version=~\"$version\", task_type=~\"$type\"}[1d]))",
-          "legendFormat": "{{system_version}} {{system_version}}"
+          "legendFormat": "{{system_version}}"
         }
       ],
       "fieldConfig": {
@@ -1511,32 +1511,54 @@
         "uid": "${DS_PROMETHEUS}"
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
         "x": 0,
-        "y": 0
+        "y": 97,
+        "w": 24,
+        "h": 8
       },
       "options": {
         "orientation": "horizontal",
         "stacking": "normal",
+        "groupWidth": 0.7,
+        "barWidth": 0.9,
+        "showValue": "auto",
+        "xTickLabelRotation": 0,
         "legend": {
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
         }
       },
       "targets": [
         {
           "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
           "expr": "sum by (system_version, product, task_type) (count_over_time(agentic_task_finished{product=~\"$product\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
           "legendFormat": "{{product}} {{task_type}}",
-          "instant": true,
-          "format": "table"
+          "instant": true
         }
-      ]
+      ],
+      "id": 55,
+      "description": "Tareas terminadas por producto y tipo, por versión. Control, no eje: si una versión tomó tareas más grandes o de otro producto, el costo por tarea no se compara de frente.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "min": 0,
+          "custom": {
+            "lineWidth": 0,
+            "fillOpacity": 80,
+            "gradientMode": "none"
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      }
     }
   ]
 }
