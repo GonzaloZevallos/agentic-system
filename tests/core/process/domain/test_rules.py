@@ -2,7 +2,17 @@ from typing import get_args
 
 from agentic.core.process.domain import rules, task
 from agentic.core.process.domain.denials import denial_for
-from agentic.core.process.domain.roles import FINDINGS, PAIR_PM_PA, PJM, PRODUCT_ANALYST_BUG
+from agentic.core.process.domain.roles import (
+    DEVELOPER,
+    FINDINGS,
+    INTERVIEW_DEFINITION,
+    INTERVIEW_SOLUTION,
+    INTERVIEW_SOLUTION_PLATFORM,
+    PAIR_PM_PA,
+    PJM,
+    PRODUCT_ANALYST_BUG,
+    TECH_LEAD_EPHEMERAL,
+)
 from agentic.core.process.domain.task import INTEGRATION
 
 PAIR = PAIR_PM_PA
@@ -673,3 +683,52 @@ def test_denial_note_uses_the_singular_for_one():
     note = rules.denial_note(PJM, 1)
     assert "1 write attempt:" in note
     assert "1 write attempts:" not in note
+
+
+def test_interview_participant_slugs_match_the_interview_specs():
+    # The hardcoded set must not drift from the specs it is meant to mirror
+    # (`domain/roles.py`'s `Interview` objects): every seat of every interview, by slug.
+    specs = (INTERVIEW_DEFINITION, INTERVIEW_SOLUTION, INTERVIEW_SOLUTION_PLATFORM)
+    seats = {
+        role.slug
+        for spec in specs
+        for role in (spec.interviewer, spec.interviewee, spec.consultant)
+        if role is not None
+    }
+    assert rules.INTERVIEW_PARTICIPANT_SLUGS == seats
+
+
+def test_turn_cut_message_orders_the_commit_before_the_delivery_for_an_executing_role():
+    message = rules.turn_cut_retry_message(DEVELOPER)
+    assert "turn cap ended your previous attempt" in message
+    commit_at = message.index("Commit what you have")
+    deliver_at = message.index("deliver anyway")
+    assert commit_at < deliver_at
+    assert "checks are red" in message
+    assert "name the gap in `summary`" in message
+    # Never a branch or a head: that fact belongs to `returned_developer_delta` alone.
+    assert "branch" not in message and "head" not in message
+
+
+def test_turn_cut_message_tells_an_interview_participant_to_close_the_turn():
+    message = rules.turn_cut_retry_message(TECH_LEAD_EPHEMERAL)
+    assert "Close this turn with what you have." in message
+    assert "Commit" not in message
+    assert "verdict" not in message
+
+
+def test_turn_cut_message_defaults_to_not_delivering_an_unreached_verdict():
+    # `product_analyst_bug` is the role this arm exists for
+    # (`docs/product/role-failures.md`): a spent budget must never read as a ruling.
+    message = rules.turn_cut_retry_message(PRODUCT_ANALYST_BUG)
+    assert "Do not deliver a verdict you have not reached." in message
+    assert "say in your own output what you could not read" in message
+    assert "Commit" not in message
+    assert "Close this turn" not in message
+
+
+def test_turn_cut_message_never_asserts_a_branch_or_a_head():
+    for role in (DEVELOPER, TECH_LEAD_EPHEMERAL, PRODUCT_ANALYST_BUG):
+        message = rules.turn_cut_retry_message(role)
+        assert "branch" not in message
+        assert "head" not in message
