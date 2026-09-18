@@ -50,6 +50,7 @@ from agentic.core.process.domain.task import TaskState
 from agentic.shared.stage0 import CHECKOUT
 
 from ...domain import metrics as system_metrics
+from . import semconv
 
 SERVICE_NAME = "agentic-system"
 # The checkout that executes this run, and whose sha the version names. With the system
@@ -273,24 +274,24 @@ class RoleRun(Run):
         cost = patch.get("cost_usd", 0.0)
         outcome = _outcome(patch, delivered=run is not None)
         rework = failed_attempts > 0 or (run is not None and system_metrics.is_rework(run))
-        attributes: dict[str, str | int | float | bool] = {
+        attributes: dict[str, str | int | float | bool | tuple[str, ...]] = {
             "product": self.product,
             "role.outcome": outcome,
-            "role.cost_usd": cost,
-            "role.failed_attempts": failed_attempts,
-            "role.rework": rework,
+            "agentic.role.cost_usd": cost,
+            "agentic.role.failed_attempts": failed_attempts,
+            "agentic.role.rework": rework,
         }
         if run is not None:
             attributes |= {
-                "role.version": run["version"],
-                "role.model": run["model"],
-                "role.turns": run["turns"],
-                "role.session_id": run["session_id"],
+                "agentic.role.version": run["version"],
+                "agentic.role.model": run["model"],
+                "agentic.role.turns": run["turns"],
+                "agentic.role.session_id": run["session_id"],
             }
         for prompt_hash in patch.get("prompts", {}).values():
-            attributes["role.prompt_hash"] = prompt_hash
+            attributes["agentic.role.prompt_hash"] = prompt_hash
         if categories := system_metrics.change_categories(patch):
-            attributes["role.return_categories"] = categories
+            attributes["agentic.role.return_categories"] = categories
         self.span.set_attributes(attributes)
         elapsed = self.elapsed
         model = run["model"] if run else ""
@@ -333,14 +334,29 @@ def task_span(task_id: str, title: str, product: str) -> Iterator[TaskRun]:
 
 
 @contextmanager
-def role_span(role_name: str, product: str) -> Iterator[RoleRun]:
-    """One role run. Langfuse lists it as an agent run; its cost there is the sum of the
-    Claude Code calls nested under it, priced by Langfuse from their tokens (ADR-0008,
-    addendum). `role.cost_usd` is the system's own figure and stays an attribute: sending
-    it as cost too would count every dollar twice."""
+def role_span(role_name: str, role_slug: str, product: str) -> Iterator[RoleRun]:
+    """One role run, named and typed for the OpenTelemetry GenAI semantic conventions
+    (ADR-0008, addendum): `invoke_agent <role_name>`, `gen_ai.operation.name` =
+    `invoke_agent`, the role identified by `gen_ai.agent.name` (`Role.name`) and
+    `gen_ai.agent.id` (`Role.slug`) verbatim, never re-derived (invariant 6). No
+    `chat`-level attribute rides on it: a role run spends across models, so a single
+    request or response model, or a token count, would be a false claim to a
+    conforming reader (`semconv.py`).
+
+    Langfuse also lists it as an agent run from `langfuse.observation.type`; its cost
+    there is the sum of the Claude Code calls nested under it, priced by Langfuse from
+    their tokens (ADR-0008, addendum). `agentic.role.cost_usd` is the system's own
+    figure and stays an attribute, never a `gen_ai.*` key: sending it as cost too would
+    count every dollar twice, and no dollar figure belongs under `gen_ai.*` regardless
+    (invariant 5)."""
     with tracer().start_as_current_span(
-        role_name,
+        semconv.span_name(role_name),
         attributes={
+            semconv.OPERATION_NAME: semconv.INVOKE_AGENT,
+            semconv.AGENT_NAME: role_name,
+            semconv.AGENT_ID: role_slug,
+            semconv.PROVIDER_NAME: semconv.ANTHROPIC,
+            semconv.SYSTEM: semconv.ANTHROPIC,
             "role": role_name,
             "product": product,
             "langfuse.observation.type": "agent",
