@@ -250,6 +250,57 @@ async def test_define_on_a_return_skips_the_interview(cfg):
     patch = await define(state, cfg, memory_ports(runner))
     assert runner.slugs == ["product_analyst"] and runner.calls[0]["resume"] is None
     assert patch["sections"]["Product Analyst (v1)"] == "v1"
+    # No interview ran: no counts for a panel to read (`agentic.interview.*`).
+    assert "interview_stats" not in patch
+
+
+async def test_interview_stats_count_rounds_and_questions_by_destination(cfg):
+    """Measurement-only key (like `subtask_id`): `interview()`'s own patch carries the
+    counts a panel needs (issue #28), never rendered into the document. Three rounds,
+    one consultation, two questions left for the human (net of nothing withdrawn)."""
+    runner = ScriptedRunner(
+        **{
+            TL_ASK: [
+                questions(1, invariants=["Every X does Y"]),
+                questions(2),
+                questions(3),
+                questions(done=True),
+            ],
+            TL_ANSWER: [
+                tech_answers(1, for_pm=["Stored end date or last day?"]),
+                tech_answers(2),
+                tech_answers(3),
+            ],
+            CONSULT: [consulted(1, for_human=["Which currency?", "Who pays the fee?"])],
+        }
+    )
+    transcript, patch = await interview(PLANNED, INTERVIEW_SOLUTION, cfg, memory_ports(runner))
+    assert transcript is None  # the two questions for the human still escalate
+    assert patch["interview_stats"] == {
+        "interview": "solution",
+        "rounds": 3,
+        "questions_to_pm": 1,
+        "questions_to_human": 2,
+        "invariants_proposed": 1,
+    }
+
+
+async def test_interview_stats_use_the_definition_label_and_count_nothing_proposed(cfg):
+    runner = ScriptedRunner(
+        **{
+            ASK: [questions(1, session="q1"), questions(done=True, session="q1")],
+            ANSWER: [answers(1, session="a1")],
+        }
+    )
+    transcript, patch = await interview(TASK, INTERVIEW_DEFINITION, cfg, memory_ports(runner))
+    assert transcript is not None
+    assert patch["interview_stats"] == {
+        "interview": "definition",
+        "rounds": 1,
+        "questions_to_pm": 0,
+        "questions_to_human": 0,
+        "invariants_proposed": 0,
+    }
 
 
 # The solution interview has a consultant (glossary: Consulta): the Tech Lead asks PM what

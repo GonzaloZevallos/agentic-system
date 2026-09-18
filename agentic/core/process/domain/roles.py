@@ -15,6 +15,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
+from typing import Literal
 
 from agentic.shared.configuration import RoleKind
 
@@ -403,6 +404,10 @@ class Interview:
     interviewer: Role
     interviewee: Role
     author: Role
+    # Which stage this interview belongs to (README.md, 4): the definition stage, run
+    # by Product Analyst, or the solution stage, run by Tech Lead. The closed label
+    # `interview()`'s own counts carry (`agentic.interview.*`; issue #28).
+    stage: Literal["definition", "solution"]
     # Who the interviewee consults, in the same run, about what the definition does not
     # settle (glossary: Consulta). Only the consultant may leave questions for the human.
     consultant: Role | None = None
@@ -423,12 +428,16 @@ class Interview:
 
 
 INTERVIEW_DEFINITION = Interview(
-    interviewer=PRODUCT_ANALYST_INTERVIEWER, interviewee=PM_INTERVIEWEE, author=PRODUCT_ANALYST
+    interviewer=PRODUCT_ANALYST_INTERVIEWER,
+    interviewee=PM_INTERVIEWEE,
+    author=PRODUCT_ANALYST,
+    stage="definition",
 )
 INTERVIEW_SOLUTION = Interview(
     interviewer=TECH_LEAD_EPHEMERAL,
     interviewee=TECH_LEAD_INTERVIEWEE,
     author=TECH_LEAD,
+    stage="solution",
     consultant=PM_CONSULTANT,
 )
 # No consultant: on the platform path the questions the Tech Lead cannot settle go to
@@ -438,4 +447,5 @@ INTERVIEW_SOLUTION_PLATFORM = Interview(
     interviewer=TECH_LEAD_EPHEMERAL_PLATFORM,
     interviewee=TECH_LEAD_INTERVIEWEE_PLATFORM,
     author=TECH_LEAD_PLATFORM,
+    stage="solution",
 )
