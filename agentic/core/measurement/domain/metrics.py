@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime
 
-from agentic.core.process.domain.task import Failure, RoleRun, TaskState
+from agentic.core.process.domain.task import Failure, InterviewStats, RoleRun, TaskState
 
 # `rules.spent_by_phase`'s own floor: below it, a residual is rounding noise, not
 # money nothing accounted for.
@@ -150,6 +150,17 @@ def run_duration_s(run: RoleRun) -> float | None:
     if not started or not ended:
         return None
     return (datetime.fromisoformat(ended) - datetime.fromisoformat(started)).total_seconds()
+
+
+def interview_questions(stats: InterviewStats) -> dict[str, int]:
+    """One interview's questions by destination (`agentic.interview.questions{to}`):
+    one to the interviewee per completed round, plus what went to the consultant
+    (`questions_to_pm`) and to the human (`questions_to_human`)."""
+    return {
+        "interviewee": stats["rounds"],
+        "pm": stats["questions_to_pm"],
+        "human": stats["questions_to_human"],
+    }
 
 
 def prompts_fingerprint(state: TaskState) -> str:

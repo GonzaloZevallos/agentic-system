@@ -84,6 +84,29 @@ una patch con varias (una entrevista) es `delivered`. `reason` ∈ {schema, chec
 limit, sdk, other}, decidido en el sitio donde se lanza `AttemptFailed`, nunca por parsear
 el mensaje de error.
 
+## Métricas de entrevista
+
+Una entrevista (glossary: Entrevista, ADR-0014) deja sus propios conteos, leídos de
+`interview_stats`, la clave de la patch que `interview()` arma solo para medición (igual
+que `subtask_id`: nunca se renderiza en el documento de tarea). Se emiten desde el nodo
+que corrió la entrevista (`define` para la de definición, `plan` para la de solución),
+junto con el resto de las muestras de `RoleRun.finish`; un nodo que no corrió ninguna
+(una definición que vuelve de una devolución, `test_define_on_a_return_skips_the_interview`)
+no deja ninguna de las tres.
+
+| Métrica | Labels | Valor | Unidad |
+|---|---|---|---|
+| `agentic.interview.rounds` | `product`, `interview` | Ciclos de pregunta-respuesta que completó la entrevista (no cuenta la ronda de cierre, que no le pregunta nada al entrevistado) | — |
+| `agentic.interview.questions` | `product`, `interview`, `to` | Preguntas de la entrevista por destino: una muestra por cada uno de {interviewee, pm, human} | — |
+| `agentic.interview.invariants` | `product`, `interview`, `state` | Invariantes propuestos por el entrevistador (`state=proposed`), y los que el plan adoptó de esa misma patch, cuando la patch trae su propia clave `invariants` (`state=adopted`, solo en la entrevista de solución) | — |
+
+`interview` ∈ {definition, solution} (`Interview.stage`, issue #28): la de definición la
+corre Product Analyst con PM, la de solución el Tech Lead efímero con Tech Lead. `to` ∈
+{interviewee, pm, human}: `pm` es la Consulta (issue #46 no la tiene, siempre 0 en el
+camino platform); `human` es el neto ya con las devoluciones restadas, el mismo conteo que
+`questions_for_human` al terminar la entrevista. `state` ∈ {proposed, adopted}: adoptado
+sale del plan, nunca de la entrevista misma.
+
 ## Costo en Langfuse
 
 Langfuse pricea cada llamada al modelo (`claude_code.llm_request`) a partir de sus tokens

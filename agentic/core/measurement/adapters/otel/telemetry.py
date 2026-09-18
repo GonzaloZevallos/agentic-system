@@ -48,7 +48,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from agentic.core.process.domain.rules import phase_of
-from agentic.core.process.domain.task import Failure, TaskState
+from agentic.core.process.domain.task import Failure, InterviewStats, TaskState
 from agentic.core.process.domain.task import RoleRun as RoleRunRecord
 from agentic.shared.stage0 import CHECKOUT
 
@@ -173,6 +173,9 @@ class Instruments:
     role_queue_wait: Gauge
     role_failures: Gauge
     role_failure_cost: Gauge
+    interview_rounds: Gauge
+    interview_questions: Gauge
+    interview_invariants: Gauge
 
     @classmethod
     def create(cls, m: metrics.Meter) -> Instruments:
@@ -215,6 +218,18 @@ class Instruments:
                     "Cost of a patch's failed attempts by reason; not additive with "
                     "agentic.role.cost_usd, whose runs and residual already carry that money"
                 ),
+            ),
+            interview_rounds=m.create_gauge(
+                "agentic.interview.rounds",
+                description="Question-answer cycles one interview ran",
+            ),
+            interview_questions=m.create_gauge(
+                "agentic.interview.questions",
+                description="Questions of one interview, one sample per destination",
+            ),
+            interview_invariants=m.create_gauge(
+                "agentic.interview.invariants",
+                description="Invariants of one interview, one sample per state",
             ),
         )
 
@@ -352,6 +367,8 @@ class RoleRun(Run):
             self._emit_residual(patch)
         if failures := patch.get("failures", []):
             self._emit_failures(failures)
+        if stats := patch.get("interview_stats"):
+            self._emit_interview(stats, patch.get("invariants"))
 
     def _run_labels(self, patch: TaskState, run: RoleRunRecord) -> dict[str, str | bool]:
         return {
@@ -425,6 +442,26 @@ class RoleRun(Run):
                 i.role_failures.set(count, {**common, "reason": reason})
             for reason, total in costs.items():
                 i.role_failure_cost.set(total, {**common, "reason": reason})
+
+        self._emit(record)
+
+    def _emit_interview(self, stats: InterviewStats, adopted: list[str] | None) -> None:
+        """`agentic.interview.rounds`, `.questions{to}` and `.invariants{state}`, from
+        the patch's own counts (`InterviewStats`, measurement-only). `adopted` is
+        `None` unless the patch also carries the plan's own `invariants` — the solution
+        stage's Tech Lead run, in the same patch as the interview that proposed them."""
+        common = {"product": self.product, "interview": stats["interview"]}
+        questions = system_metrics.interview_questions(stats)
+
+        def record(i: Instruments) -> None:
+            i.interview_rounds.set(stats["rounds"], common)
+            for to, count in questions.items():
+                i.interview_questions.set(count, {**common, "to": to})
+            i.interview_invariants.set(
+                stats["invariants_proposed"], {**common, "state": "proposed"}
+            )
+            if adopted is not None:
+                i.interview_invariants.set(len(adopted), {**common, "state": "adopted"})
 
         self._emit(record)
 
