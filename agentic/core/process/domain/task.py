@@ -195,6 +195,14 @@ class RoleRun(TypedDict):
     # it and ran cold instead. Absent on a run recorded before this field existed, which
     # reads as `False`.
     cold_fallback: NotRequired[bool]
+    # What this run's own failed attempts cost, already counted once inside `cost_usd`
+    # (`run_with_retry` adds `spent(failures)` there before it returns): a fact of the
+    # run, not a computed figure, recorded so `metrics.run_rework_usd` can tell a
+    # `version == 1` run's failure money from its delivering call's without a second join
+    # over `failures` (ADR-0008, 2026-09-18 second addendum). Absent on a run recorded
+    # before this task, which reads as `0.0` and under-reports that run's failure money
+    # equally wherever this figure is read.
+    failed_cost_usd: NotRequired[float]
 
 
 class InterviewStats(TypedDict):

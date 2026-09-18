@@ -462,6 +462,7 @@ def run_record(state: TaskState, role: Role, section: str, output: Output) -> Ro
         "subagent_cost_usd": output.subagent_cost_usd,
         "resumed_from": output.resumed_from,
         "cold_fallback": output.cold_fallback,
+        "failed_cost_usd": spent(output.failures),
     }
 
 

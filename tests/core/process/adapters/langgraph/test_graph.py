@@ -595,6 +595,7 @@ async def test_role_failure_escalates_and_keeps_failures(config, tmp_path):
         "subagent_cost_usd": 0,
         "resumed_from": "",
         "cold_fallback": False,
+        "failed_cost_usd": 0,
     }
     assert doc["status"] == WAITING_ON_HUMAN
 
