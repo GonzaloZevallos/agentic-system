@@ -28,6 +28,7 @@ TYPES = {
     "Estándares de ingeniería": knowledge.assemble_standards,
     "Job": knowledge.approval_check,  # the check that a capability names its jobs
     "Retrabajo": metrics.is_rework,
+    "Muestra residual": metrics.residual_cost_usd,
     "Hallazgo": schemas.Finding,
     "Dictamen": schemas.Diagnosis,
     "Categoría de devolución": rules.change_category,
