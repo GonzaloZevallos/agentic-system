@@ -133,6 +133,12 @@ class Failure(TypedDict):
     # would have carried had it delivered; absent on a failure recorded before this
     # field existed.
     section: NotRequired[str]
+    # Whether this attempt is the run's cold fallback: the caller passed a `resume` that
+    # never opened (the harness left no `session_id`), so `run_with_retry` dropped it and
+    # ran this attempt cold instead of retrying the stale id (ADR-0004, sixth addendum).
+    # Decided once per run, in `run_with_retry`, the only place that knows it; absent on
+    # a failure recorded before this field existed, which reads as `False`.
+    cold_fallback: NotRequired[bool]
 
 
 class RoleRun(TypedDict):
@@ -178,6 +184,17 @@ class RoleRun(TypedDict):
     # (ADR-0013). Not additive with `cost_usd`, which already counts that dollar once.
     # Absent on a run recorded before this field existed.
     subagent_cost_usd: NotRequired[float]
+    # The session this run actually resumed, taken from `run_with_retry`'s own decision,
+    # never re-derived from the caller's `resume` argument (which lies on two paths: a
+    # retry that continues a *failed* attempt's session unasked, and a cold fallback that
+    # resumed nothing while the argument held a valid id). Empty when no session was
+    # resumed. Absent on a run recorded before this field existed, which reads as `""`.
+    resumed_from: NotRequired[str]
+    # Whether the winning attempt is this run's cold fallback (ADR-0004, sixth addendum):
+    # the caller asked to resume a session that never opened, so `run_with_retry` dropped
+    # it and ran cold instead. Absent on a run recorded before this field existed, which
+    # reads as `False`.
+    cold_fallback: NotRequired[bool]
 
 
 class InterviewStats(TypedDict):
