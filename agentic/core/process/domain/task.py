@@ -74,6 +74,10 @@ ChangeCategory = FindingCategory | Literal["definition"]
 # model off, `limit` a per-attempt money cap (issue #66), `sdk` anything else the
 # harness raised, `other` the residual nothing else names.
 FailureReason = Literal["schema", "check", "max_turns", "limit", "sdk", "other"]
+# Which review this is (ADR-0016; `rules.review_kind`): `first` until a return sends the
+# subtask back, `incremental` (ADR-0015) after that, `integration` for the fan-in's own
+# subtask always. What `agentic.review.findings` groups by alongside the finding itself.
+ReviewKind = Literal["first", "incremental", "integration"]
 
 
 def add(current: float, new: float) -> float:
@@ -267,6 +271,17 @@ class TaskState(TaskInput, total=False):
     # Which subtask a branch of the fan-out is running: set by the fan-out, read by
     # `develop` and `review`, never persisted and never handed back to the parent.
     subtask_id: str
+    # Which review this is (`rules.review_kind`): set by `review` on its own patch, read
+    # once by the adapter for `agentic.review.findings`'s `review.kind` label. Measurement
+    # only, like `subtask_id`: never rendered into the document, recomputed from
+    # `reviewed_head` whenever it is needed again after a resume.
+    review_kind: ReviewKind
+    # Every invocation of a Developer's presubmit that actually ran the checks, in
+    # order: one list of check results (`CheckResult`, `domain/presubmit.py`) per
+    # invocation. Set by `develop` on its own patch, read once by the adapter
+    # (`agentic.presubmit.checks`, `.duration`). Measurement only, like `subtask_id`:
+    # never rendered into the document.
+    presubmit_checks: list[list[dict[str, str | bool | float]]]
 
 
 def _reducers() -> dict[str, object]:
@@ -291,6 +306,14 @@ def apply(state: TaskState, patch: TaskState) -> TaskState:
     return merged  # type: ignore[return-value]
 
 
+# Measurement-only keys a branch writes on its own patch and reads back inside the
+# same node (`RoleRun.finish`): never handed to the parent. Two branches of the same
+# wave both writing one of these in the same step would collide on the parent's single
+# channel (`InvalidUpdateError`) even when their values happen to agree, exactly like
+# `subtask_id` already could.
+_BRANCH_LOCAL = {"subtask_id", "review_kind", "presubmit_checks"}
+
+
 def delta(before: TaskState, after: TaskState) -> TaskState:
     """The patch that turns `before` into `after` through the reducers:
     `apply(before, delta(before, after))` is `after` again.
@@ -298,12 +321,14 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
     A pipeline of nodes runs over a copy of the state and ends holding the whole
     state, not what it added. Handing that back to the parent would fold it in a
     second time: `cost_usd` counted twice, every `runs`, `failures` and
-    `change_history` entry duplicated. `subtask_id` never travels back: it says which
-    branch ran, and the parent has as many answers as branches.
+    `change_history` entry duplicated. `_BRANCH_LOCAL` never travels back: `subtask_id`
+    says which branch ran, and `review_kind`/`presubmit_checks` are measurement-only
+    keys already read by the branch's own node; the parent has as many answers as
+    branches for any of them.
     """
     patch: dict = {}
     for key, value in after.items():
-        if key == "subtask_id":
+        if key in _BRANCH_LOCAL:
             continue
         if key not in before:
             patch[key] = value

@@ -178,6 +178,9 @@ class Instruments:
     role_turns: Gauge
     role_tool_calls: Gauge
     role_subagent_cost: Gauge
+    review_findings: Gauge
+    presubmit_checks: Gauge
+    presubmit_duration: Gauge
 
     @classmethod
     def create(cls, m: metrics.Meter) -> Instruments:
@@ -243,6 +246,25 @@ class Instruments:
                     "additive with agentic.role.cost_usd, whose run already carries "
                     "that money as part of its own total"
                 ),
+            ),
+            review_findings=m.create_gauge(
+                "agentic.review.findings",
+                description=(
+                    "Findings of one review, one sample per (severity, category, status) "
+                    "with the count of findings that share it as the value"
+                ),
+            ),
+            presubmit_checks=m.create_gauge(
+                "agentic.presubmit.checks",
+                description=(
+                    "One sample per check of one presubmit invocation; a Developer run may "
+                    "be refused and try again, so only the last invocation is `final`"
+                ),
+            ),
+            presubmit_duration=m.create_gauge(
+                "agentic.presubmit.duration",
+                unit="s",
+                description="How long one check took to run, in one presubmit invocation",
             ),
         )
 
@@ -380,6 +402,10 @@ class RoleRun(Run):
             self._emit_residual(patch)
         if failures := patch.get("failures", []):
             self._emit_failures(failures)
+        if patch.get("findings"):
+            self._emit_findings(patch)
+        if patch.get("presubmit_checks"):
+            self._emit_presubmit(patch)
 
     def _run_labels(self, patch: TaskState, run: RoleRunRecord) -> dict[str, str | bool]:
         return {
@@ -474,6 +500,65 @@ class RoleRun(Run):
                 i.role_failure_cost.set(total, {**common, "reason": reason})
 
         self._emit(record)
+
+    def _emit_findings(self, patch: TaskState) -> None:
+        """`agentic.review.findings`, one sample per (severity, category, status) of
+        this review's own findings, the count as value: several findings landing in the
+        same cell at the same review are one fact told once, not one `.set()` per
+        finding, which would overwrite itself before the flush. `review.kind` and
+        `system.version` are the review's own, shared by every cell it leaves."""
+        common = {
+            "product": self.product,
+            "review.kind": patch.get("review_kind", "unknown"),
+            "system.version": system_version(),
+        }
+        counts: dict[tuple[str, str, str], int] = {}
+        for item in patch["findings"]:
+            key = (item["severity"], item["category"], item["status"])
+            counts[key] = counts.get(key, 0) + 1
+
+        def record(i: Instruments) -> None:
+            for (severity, category, status), count in counts.items():
+                i.review_findings.set(
+                    count,
+                    {**common, "severity": severity, "category": category, "status": status},
+                )
+
+        self._emit(record)
+
+    def _emit_presubmit(self, patch: TaskState) -> None:
+        """`agentic.presubmit.checks` and `.duration`, one record-and-flush per
+        invocation of the Developer's presubmit that actually ran the checks: a
+        delivery refused once or twice tries again, and each try is its own fact, not a
+        count folded into the next one. Only the last invocation — the one that became
+        the delivery, or the last the backstop let through — is `final`. `role` and
+        `role.slug` are the node's own, like `_emit_failures`; `phase` comes from the
+        run the patch's own verdict describes (`target_run`), the same source the
+        residual sample reads, since a `CheckResult` carries no section of its own."""
+        invocations = patch.get("presubmit_checks", [])
+        last = len(invocations) - 1
+        common: dict[str, str] = {
+            "product": self.product,
+            "role": self.role,
+            "role.slug": self.slug or "unknown",
+        }
+        if target := system_metrics.target_run(patch):
+            common["phase"] = phase_of(target.get("section", target["role"]))
+        for index, results in enumerate(invocations):
+            final = index == last
+
+            def record(i: Instruments, results: list = results, final: bool = final) -> None:
+                for check in results:
+                    labels = {
+                        **common,
+                        "check": check["name"],
+                        "result": "green" if check["passed"] else "red",
+                        "final": final,
+                    }
+                    i.presubmit_checks.set(1, labels)
+                    i.presubmit_duration.set(check.get("duration_s", 0.0), labels)
+
+            self._emit(record)
 
     def _child_span(self, patch: TaskState, run: RoleRunRecord) -> None:
         """One span per run record, under the role span, carrying that run's own agent,

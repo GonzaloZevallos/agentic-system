@@ -29,6 +29,7 @@ from .task import (
     ChangesRequested,
     FindingCategory,
     FindingRecord,
+    ReviewKind,
     RoleRun,
     Status,
     Subtask,
@@ -53,6 +54,16 @@ def change_entry(pair: Pair, category: ChangeCategory, reason: str) -> ChangesRe
     """One entry of the return history: who returned, in which category, and the reason,
     so README §3's "same motive between the same roles" is computable."""
     return {"pair": pair.key, "category": category, "reason": reason}
+
+
+def review_kind(subtask_id: str, reviewed_before: bool) -> ReviewKind:
+    """Which review this is (ADR-0016), for `agentic.review.findings`'s `review.kind`
+    label: the fan-in's own subtask is always `integration`, whatever pass it is on
+    (its review always reads the whole branch); any other subtask is `first` until a
+    return sends it back, and every pass after that is `incremental` (ADR-0015)."""
+    if subtask_id == INTEGRATION:
+        return "integration"
+    return "incremental" if reviewed_before else "first"
 
 
 def change_category(findings: list[dict]) -> FindingCategory | None:

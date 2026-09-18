@@ -68,6 +68,16 @@ def test_a_bug_is_diagnosed_then_validated_and_may_end_discarded():
     assert rules.after_discard({}) is None
 
 
+def test_review_kind_is_first_incremental_or_integration():
+    # Which review this is (ADR-0016): the integration subtask's is always
+    # `integration`; any other is `first` until a return sends it back, then every
+    # pass after that is `incremental` (ADR-0015).
+    assert rules.review_kind("api", reviewed_before=False) == "first"
+    assert rules.review_kind("api", reviewed_before=True) == "incremental"
+    assert rules.review_kind(INTEGRATION, reviewed_before=False) == "integration"
+    assert rules.review_kind(INTEGRATION, reviewed_before=True) == "integration"
+
+
 def test_the_verdict_and_the_category_come_from_the_blocking_findings():
     # A review returns only on a blocking finding, and the return takes the category of
     # the first one; anything else approves, with remarks (ADR-0016).

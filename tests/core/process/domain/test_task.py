@@ -101,6 +101,21 @@ def test_delta_is_what_a_branch_added_and_apply_puts_it_back():
     assert apply(before, patch) == {k: v for k, v in after.items() if k != "subtask_id"}
 
 
+def test_delta_drops_the_measurement_only_keys_a_branch_wrote():
+    """`review_kind` and `presubmit_checks` are read once by the adapter inside the
+    branch's own node and never travel back: two branches of the same wave would
+    otherwise both write the parent's single channel in the same step, which LangGraph
+    refuses (`InvalidUpdateError`) even when the two values happen to agree."""
+    before = {"id": "T-1", "subtask_id": "api"}
+    after = {
+        **before,
+        "review_kind": "first",
+        "presubmit_checks": [[{"name": "tests", "passed": True}]],
+    }
+    patch = delta(before, after)
+    assert "review_kind" not in patch and "presubmit_checks" not in patch
+
+
 def test_delta_takes_a_field_the_branch_started_as_it_is():
     before = {"id": "T-1"}
     after = {
