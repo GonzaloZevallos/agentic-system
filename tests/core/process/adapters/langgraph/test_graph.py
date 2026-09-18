@@ -610,14 +610,14 @@ async def test_each_node_opens_and_finishes_the_roles_span(config):
         telemetry.configure()
     finished = exporter.get_finished_spans()
     assert [s.name for s in finished] == [
-        "PjM",
-        "Product Analyst",
-        "PM",
-        "Product Analyst",
-        "PM",
-        "Tech Lead",
-        "Developer",
-        "Tech Lead",
+        "invoke_agent PjM",
+        "invoke_agent Product Analyst",
+        "invoke_agent PM",
+        "invoke_agent Product Analyst",
+        "invoke_agent PM",
+        "invoke_agent Tech Lead",
+        "invoke_agent Developer",
+        "invoke_agent Tech Lead",
         "GH-1",
     ]
     task = finished[-1]
@@ -625,8 +625,11 @@ async def test_each_node_opens_and_finishes_the_roles_span(config):
     # The role spans carry what each use case decided; the task span, the totals.
     outcomes = [s.attributes["role.outcome"] for s in finished[:-1]]
     assert outcomes == ["delivered"] * 2 + ["returned"] + ["delivered"] * 5
-    assert finished[3].attributes["role.version"] == 2 and finished[3].attributes["role.rework"]
-    assert finished[6].attributes["role.model"] == "claude-sonnet-5"
+    assert (
+        finished[3].attributes["agentic.role.version"] == 2
+        and finished[3].attributes["agentic.role.rework"]
+    )
+    assert finished[6].attributes["agentic.role.model"] == "claude-sonnet-5"
     assert task.attributes["task.status"] == "ready_for_review"
     assert task.attributes["task.returns"] == 1
     # Every role span says which product the run was over, read from what the product
@@ -678,7 +681,7 @@ async def test_composition_wires_the_real_telemetry(config, tmp_path):
             composition.ClaudeSdkRunner, composition.GhTracker = real
     finally:
         telemetry.configure()
-    assert [s.name for s in exporter.get_finished_spans()] == ["PjM"]
+    assert [s.name for s in exporter.get_finished_spans()] == ["invoke_agent PjM"]
 
 
 async def test_a_crash_in_a_node_still_finishes_the_roles_span(config):
@@ -711,8 +714,10 @@ async def test_a_crash_in_a_node_still_finishes_the_roles_span(config):
     finally:
         telemetry.configure()
     pm = exporter.get_finished_spans()[-1]
-    assert pm.name == "PM"
-    assert pm.attributes["role.outcome"] == "failed" and pm.attributes["role.cost_usd"] == 0.0
+    assert pm.name == "invoke_agent PM"
+    assert (
+        pm.attributes["role.outcome"] == "failed" and pm.attributes["agentic.role.cost_usd"] == 0.0
+    )
     assert pm.status.status_code.name == "ERROR"  # the exception is on the span too
 
 
