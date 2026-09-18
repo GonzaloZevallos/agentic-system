@@ -296,6 +296,7 @@ async def test_review_escalates_when_the_pair_hits_its_limit(cfg):
     )
     assert patch["status"] == "waiting_on_human"
     assert patch["escalated"] == "Tech Lead→Developer:api hit 2 returns: still"
+    assert patch["escalation_class"] == "returns"
     assert "changes_requested" not in patch and "change_history" not in patch
     # Returned without counting, so the human's answer sends it back to its Developer.
     api = patch["subtasks"]["api"]

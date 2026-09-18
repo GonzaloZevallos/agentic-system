@@ -84,6 +84,13 @@ un panel de tokens agrupa por rol y modelo, nunca por el checkout que corrió (i
 | `agentic.review.findings` | `product`, `severity`, `category`, `status`, `review.kind`, `system.version` | Hallazgos de una revisión: una muestra por celda (severidad, categoría, estado) con el conteo de hallazgos de esa revisión que caen ahí como valor. Nada si la revisión no dejó hallazgos | — |
 | `agentic.presubmit.checks` | `product`, `role`, `role.slug`, `phase` (si la patch tiene una corrida con veredicto), `check`, `result`, `final` | Una muestra por chequeo de cada invocación de la puerta de entrega que llegó a correr los chequeos: 1 si el chequeo pasó (`result=green`) o falló (`result=red`). Una entrega puede ser rechazada y reintentar dentro del mismo turno; solo la última invocación es `final=true` | — |
 | `agentic.presubmit.duration` | ídem | Cuánto tardó ese chequeo, en esa invocación | s |
+| `agentic.invocation.cost_usd` | `product`, `invocation.kind`, `system.version` | Lo que **esa invocación** (`run` o `resume`) gastó ella sola, nunca el acumulado de la tarea | USD |
+| `agentic.invocation.rework_usd` | ídem | Retrabajo de esa invocación sola | USD |
+| `agentic.invocation.duration` | ídem | Tiempo de reloj de esa invocación | s |
+| `agentic.invocation.returns` | ídem + `return.category` | Devoluciones que esa invocación registró, una muestra por categoría (ninguna si no hubo) | — |
+| `agentic.task.invocations` | `product`, `invocation.kind`, `task.status`, `system.version` | 1, una muestra por invocación, con el estado en el que terminó (incluye `crashed`, que solo existe en telemetría) | — |
+| `agentic.task.paused` | `product`, `escalation.class`, `system.version` | 1, una muestra por pausa | — |
+| `agentic.task.human_decisions` | `product`, `invocation.kind`, `system.version` | 1, una muestra por decisión que el humano dio al reanudar | — |
 
 `role.slug` es el `Role.slug` de la corrida (17 valores; `unknown` en una corrida grabada
 antes de este campo). `phase` ∈ {definition, plan, development, review} (`rules.phase_of`,
@@ -174,6 +181,22 @@ corre Product Analyst con PM, la de solución el Tech Lead efímero con Tech Lea
 camino platform); `human` es el neto ya con las devoluciones restadas, el mismo conteo que
 `questions_for_human` al terminar la entrevista. `state` ∈ {proposed, adopted}: adoptado
 sale del plan, nunca de la entrevista misma.
+**Deltas por invocación y motivo de escalado (issue #24, subtarea `task-events`).**
+`invocation.kind` ∈ {run, resume}. `escalation.class` ∈ {classification, returns, failure,
+cap, questions, unmergeable, setup} — `TaskState.escalation_class`, escrito solo por
+`rules.escalation` junto con `escalated` en cada uno de los siete sitios que escalan la
+tarea, así que una patch nunca pone uno sin el otro; `unknown` en una pausa grabada antes
+de que el campo existiera (`rules.pair_at_limit` y `rules.stopped_by_cap` siguen parseando
+el texto para esos documentos). Las cuatro `agentic.invocation.*` y las tres
+`agentic.task.*` de arriba se emiten una sola vez, desde `cli._invoke`, al cerrar la
+invocación, contra el delta entre el estado con el que entró y el estado final
+(`task.delta`) — nunca desde un nodo del grafo, desde `pause` (que se re-ejecuta entero en
+cada resume) o desde un span de rol (una rama del fan-out no puede avisarle al humano una
+sola vez). Las cuatro series `agentic.task.cost_usd`/`.rework_usd`/`.duration`/`.returns`
+existentes siguen significando lo acumulado de la tarea, sin cambios; estas son la
+invocación sola. **`langgraph dev` no deja ninguna de estas siete muestras**: corre el
+grafo directamente, sin pasar por `cli._invoke`, así que solo las métricas de rol (las de
+arriba) se ven ahí.
 
 ## Costo en Langfuse
 

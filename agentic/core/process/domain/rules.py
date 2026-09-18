@@ -27,6 +27,7 @@ from .task import (
     WAITING_ON_HUMAN,
     ChangeCategory,
     ChangesRequested,
+    EscalationClass,
     FindingCategory,
     FindingRecord,
     ReviewKind,
@@ -214,6 +215,13 @@ def invariants_markdown(state: TaskState) -> str:
     return "\n".join(f"- {line}" for line in state.get("invariants", [])) or "- none"
 
 
+def escalation(cls: EscalationClass, reason: str) -> TaskState:
+    """The patch that escalates the task: `escalated`, the text for the human, and
+    `escalation_class`, the closed reason `agentic.task.paused` groups pauses by. The
+    only place either key is written, so a patch cannot carry one without the other."""
+    return {"escalated": reason, "escalation_class": cls}
+
+
 def unmergeable(subtask_id: str, dependency: str, conflict: str) -> TaskState:
     """The patch when a subtask's dependency cannot be brought into its branch: the
     Developer never starts, so nothing is paid, and the human untangles the two
@@ -223,13 +231,16 @@ def unmergeable(subtask_id: str, dependency: str, conflict: str) -> TaskState:
         # human reading "paused: <role>" must see whose subtask stopped, not whoever
         # wrote last.
         "current_role": DEVELOPER.name,
-        "escalated": (
-            f"subtask {subtask_id!r} cannot start on {dependency!r}: "
-            f"the merge does not apply. Merge the two branches by hand in the "
-            f"subtask's worktree, then resume; an answer alone changes nothing here."
-            f"\n\n{conflict}"
-        ),
         "status": WAITING_ON_HUMAN,
+        **escalation(
+            "unmergeable",
+            (
+                f"subtask {subtask_id!r} cannot start on {dependency!r}: "
+                f"the merge does not apply. Merge the two branches by hand in the "
+                f"subtask's worktree, then resume; an answer alone changes nothing here."
+                f"\n\n{conflict}"
+            ),
+        ),
     }
 
 
@@ -242,14 +253,17 @@ def setup_unprepared(role: Role, branch: str, step: str, command: str, output: s
         # No role ran, so nothing seeded `current_role`: the human must see who was
         # about to start, not whoever wrote last.
         "current_role": role.name,
-        "escalated": (
-            f"the product's setup step {step!r} failed on {branch!r}: the checkout has "
-            f"no environment to work in, so no role starts. Fix the step, or the "
-            f"product's `setup` in `.agentic/stack.yaml`, and resume; an answer alone "
-            f"changes nothing here."
-            f"\n\n```text\n$ {command}\n{presubmit.tail(output)}\n```"
-        ),
         "status": WAITING_ON_HUMAN,
+        **escalation(
+            "setup",
+            (
+                f"the product's setup step {step!r} failed on {branch!r}: the checkout "
+                f"has no environment to work in, so no role starts. Fix the step, or "
+                f"the product's `setup` in `.agentic/stack.yaml`, and resume; an answer "
+                f"alone changes nothing here."
+                f"\n\n```text\n$ {command}\n{presubmit.tail(output)}\n```"
+            ),
+        ),
     }
 
 
@@ -264,9 +278,25 @@ _LIMIT_REACHED = re.compile(r"^(.+?) hit \d+ returns: ")
 
 def pair_at_limit(reason: str | None) -> str | None:
     """The key of the pair whose limit an escalation reason reports, the one whose
-    counter the human's answer resets (README.md, 3); None for any other escalation."""
+    counter the human's answer resets (README.md, 3); None for any other escalation.
+
+    Parses the text; kept as the fallback `returns_pair` uses for a document written
+    before `escalation_class` existed (ADR-0003, addendum)."""
     match = _LIMIT_REACHED.match(reason or "")
     return match.group(1) if match else None
+
+
+def returns_pair(state: TaskState) -> str | None:
+    """Which pair's return counter a resume must reset: the pair a `returns`-class
+    escalation named. `escalation_class` only says *that* it is a pair at its limit, not
+    *which* pair (`returns` covers PM<->Product Analyst and Tech Lead<->Developer alike),
+    so the pair itself still comes from the text `rules.escalation` wrote it into
+    (`pair_at_limit`) — gated by the class when the state carries one, or by the text
+    alone for a document written before `escalation_class` existed."""
+    reason = state.get("escalated")
+    if (cls := state.get("escalation_class")) is not None and cls != "returns":
+        return None
+    return pair_at_limit(reason)
 
 
 def next_version(state: TaskState, section: str) -> int:
@@ -554,7 +584,7 @@ def resumed_status(state: TaskState) -> Status:
     if subtasks:
         started = any(sub.get("status") != "pending" for sub in subtasks.values())
         return "developing" if started else "planned"
-    if pair_at_limit(state.get("escalated")) == PAIR_PM_PA.key:
+    if returns_pair(state) == PAIR_PM_PA.key:
         return "returned"
     runs = state.get("runs", [])
     written = sum(1 for r in runs if _wrote_own_section(r, PRODUCT_ANALYST.name))
@@ -594,10 +624,11 @@ def resumed(state: TaskState, decision: str | None) -> TaskState:
     reason = state.get("escalated")
     patch: TaskState = {
         "escalated": None,
+        "escalation_class": None,
         "status": resumed_status(state),
         "questions_for_human": [],
     }
-    if pair := pair_at_limit(reason):
+    if pair := returns_pair(state):
         patch["changes_requested"] = {pair: 0}
     if decision and decision.strip():
         patch["sections"] = {HUMAN: human_section(state, reason, decision)}

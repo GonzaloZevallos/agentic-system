@@ -163,6 +163,18 @@ def interview_questions(stats: InterviewStats) -> dict[str, int]:
     }
 
 
+def invocation_returns_by_category(patch: TaskState) -> dict[str, int]:
+    """Returns this one invocation (`run` or `resume`) recorded, by category: its own
+    slice of `change_history` (what `task.delta` computed between the state that
+    entered the invocation and the one it left with), with no `unknown`/`none`
+    placeholder — unlike `changes_by_category`, this reads exact entries, one
+    invocation's own, never a counter without the history to explain it."""
+    counts: dict[str, int] = {}
+    for entry in patch.get("change_history", []):
+        counts[entry["category"]] = counts.get(entry["category"], 0) + 1
+    return counts
+
+
 def prompts_fingerprint(state: TaskState) -> str:
     """One short hash for the set of prompts the task ran, order-independent, so runs
     against the same prompts share a label. Empty when no prompt ran."""

@@ -300,6 +300,7 @@ async def test_run_role_turns_a_role_failure_into_an_escalation(tmp_path):
     assert output is None
     assert patch["status"] == "waiting_on_human"
     assert patch["escalated"] == "PjM failed 2 times: b"
+    assert patch["escalation_class"] == "failure"
     assert [f["error"] for f in patch["failures"]] == ["a", "b"]
     assert patch["cost_usd"] == pytest.approx(0.08)
     assert "sections" not in patch and "runs" not in patch
@@ -317,6 +318,7 @@ async def test_run_role_escalates_when_the_task_cap_is_reached(tmp_path):
     assert output is None and runner.calls == []
     assert patch["status"] == "waiting_on_human"
     assert patch["escalated"] == "PjM stopped by the task cap: 50.00 of 50.00 USD spent"
+    assert patch["escalation_class"] == "cap"
     assert patch["failures"] == [] and patch["cost_usd"] == 0.0
     assert "sections" not in patch and "runs" not in patch
 

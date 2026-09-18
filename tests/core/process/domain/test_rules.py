@@ -25,6 +25,28 @@ def test_limit_reached_names_the_pair_the_limit_and_the_reason():
     )
 
 
+def test_escalation_carries_the_reason_and_its_class_together():
+    # The only place either key is written, so a patch cannot set `escalated` without
+    # `escalation_class` (issue #24, task-events).
+    assert rules.escalation("cap", "PjM stopped by the task cap") == {
+        "escalated": "PjM stopped by the task cap",
+        "escalation_class": "cap",
+    }
+
+
+def test_returns_pair_reads_the_class_first_and_falls_back_to_the_text():
+    at_limit = f"{KEY} hit 2 returns: still no metrics"
+    # A document written before `escalation_class` existed: no class, so the text alone
+    # decides (ADR-0003, addendum).
+    assert rules.returns_pair({"escalated": at_limit}) == KEY
+    # The class confirms it.
+    assert rules.returns_pair({"escalated": at_limit, "escalation_class": "returns"}) == KEY
+    # A class that says this was not a pair at its limit gates the text out, even if it
+    # happens to match the pattern.
+    assert rules.returns_pair({"escalated": at_limit, "escalation_class": "cap"}) is None
+    assert rules.returns_pair({"escalated": "PjM failed twice"}) is None
+
+
 def test_next_version_counts_that_roles_runs_only():
     runs = [{"role": "PjM"}, {"role": "PM"}, {"role": "PM"}]
     assert rules.next_version({"runs": runs}, "PM") == 3
@@ -209,6 +231,8 @@ def test_the_status_before_the_escalation_is_derived_from_the_definition_runs():
     # The last return, at the limit, is not counted, but the reason says it happened.
     at_limit = {**approved, "escalated": rules.limit_reached(PAIR, 2, "gap")}
     assert rules.resumed_status(at_limit) == "returned"
+    # The same, with the class a fresh escalation now carries alongside the text.
+    assert rules.resumed_status({**at_limit, "escalation_class": "returns"}) == "returned"
     # A document from before the history has only the counter.
     assert rules.resumed_status({**approved, "changes_requested": {KEY: 1}}) == "returned"
     assert rules.resumed_status(subtasks("api")) == "planned"
@@ -224,11 +248,13 @@ def test_resuming_clears_the_escalation_resets_the_pair_and_keeps_the_decision()
     state = {
         "status": "waiting_on_human",
         "escalated": "Tech Lead→Developer:api hit 2 returns: still",
+        "escalation_class": "returns",
         "questions_for_human": ["Which currency?"],
         "subtasks": {"api": {"id": "api", "status": "returned"}},
     }
     patch = rules.resumed(state, "  Keep USD.\n\n## Why\n\nAudits.  ")
     assert patch["escalated"] is None and patch["status"] == "developing"
+    assert patch["escalation_class"] is None
     assert patch["questions_for_human"] == []
     assert patch["changes_requested"] == {"Tech Lead→Developer:api": 0}
     assert patch["sections"]["Human"] == (
@@ -310,6 +336,17 @@ def test_a_dependency_that_does_not_merge_escalates_before_the_developer_costs_a
     assert "CONFLICT (content): x.py" in patch["escalated"]
     # An answer alone fixes nothing here, so the escalation says what to do instead.
     assert "by hand" in patch["escalated"]
+    assert patch["escalation_class"] == "unmergeable"
+
+
+def test_a_setup_step_that_fails_escalates_with_its_own_class():
+    from agentic.core.process.domain.roles import DEVELOPER
+
+    patch = rules.setup_unprepared(DEVELOPER, "agentic/GH-1.api", "deps", "uv sync", "boom")
+    assert patch["status"] == "waiting_on_human" and patch["current_role"] == "Developer"
+    assert "setup step 'deps' failed on 'agentic/GH-1.api'" in patch["escalated"]
+    assert "uv sync" in patch["escalated"] and "boom" in patch["escalated"]
+    assert patch["escalation_class"] == "setup"
 
 
 # The findings table (issue #42).

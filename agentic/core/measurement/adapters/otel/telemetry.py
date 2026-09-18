@@ -48,7 +48,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from agentic.core.process.domain.rules import phase_of
-from agentic.core.process.domain.task import Failure, InterviewStats, TaskState
+from agentic.core.process.domain.task import Failure, InterviewStats, TaskState, delta
 from agentic.core.process.domain.task import RoleRun as RoleRunRecord
 from agentic.shared.stage0 import CHECKOUT
 
@@ -184,6 +184,13 @@ class Instruments:
     interview_rounds: Gauge
     interview_questions: Gauge
     interview_invariants: Gauge
+    invocation_cost: Gauge
+    invocation_rework: Gauge
+    invocation_duration: Gauge
+    invocation_returns: Gauge
+    task_invocations: Gauge
+    task_paused: Gauge
+    task_human_decisions: Gauge
 
     @classmethod
     def create(cls, m: metrics.Meter) -> Instruments:
@@ -281,6 +288,35 @@ class Instruments:
                 "agentic.interview.invariants",
                 description="Invariants of one interview, one sample per state",
             ),
+            invocation_cost=m.create_gauge(
+                "agentic.invocation.cost_usd",
+                description="What one invocation (run or resume) spent, never the task's total",
+            ),
+            invocation_rework=m.create_gauge(
+                "agentic.invocation.rework_usd",
+                description="Rework this invocation paid for, never the task's total",
+            ),
+            invocation_duration=m.create_gauge(
+                "agentic.invocation.duration",
+                unit="s",
+                description="Wall time of one invocation",
+            ),
+            invocation_returns=m.create_gauge(
+                "agentic.invocation.returns",
+                description="Returns this invocation recorded, one sample per category",
+            ),
+            task_invocations=m.create_gauge(
+                "agentic.task.invocations",
+                description="One per invocation (run or resume), by kind and the status it left",
+            ),
+            task_paused=m.create_gauge(
+                "agentic.task.paused",
+                description="One per pause, by the escalation's class",
+            ),
+            task_human_decisions=m.create_gauge(
+                "agentic.task.human_decisions",
+                description="One per decision the human gave on a resume",
+            ),
         )
 
 
@@ -352,6 +388,48 @@ class TaskRun(Run):
             i.task_finished.set(1, labels)
             for category, count in by_category.items():
                 i.task_returns.set(count, {**labels, "return.category": category})
+
+        self._emit(record)
+
+    def finish_invocation(
+        self, before: TaskState, after: TaskState, kind: str, decision: str | None
+    ) -> None:
+        """`agentic.invocation.*` and the per-invocation task samples, off the state the
+        invocation entered with and the one it left with — never the task's accumulated
+        figures, which `finish` above keeps emitting unchanged. `task.delta` is exactly
+        the tool for this: the patch that turns `before` into `after` through the same
+        reducers the graph itself applies, so a resume's own cost, rework and returns
+        are what it added, not the task's running total (the bug the request opens
+        with: every invocation repeating the accumulated cost and rework).
+
+        Emitted from `cli._invoke`, off the final state, never from a system node, from
+        `pause`, or from a role span (a fan-out branch cannot tell the human once; a
+        resumed `pause` re-runs from its start on every resume)."""
+        patch = delta(before, after)
+        cost = max(patch.get("cost_usd", 0.0), 0.0)
+        rework = max(system_metrics.rework_cost_usd(patch), 0.0)
+        elapsed = self.elapsed
+        by_category = system_metrics.invocation_returns_by_category(patch)
+        status = after.get("status", "open")
+        labels = {
+            "product": self.product,
+            "invocation.kind": kind,
+            "system.version": system_version(),
+        }
+
+        def record(i: Instruments) -> None:
+            i.invocation_cost.set(cost, labels)
+            i.invocation_rework.set(rework, labels)
+            i.invocation_duration.set(elapsed, labels)
+            for category, count in by_category.items():
+                i.invocation_returns.set(count, {**labels, "return.category": category})
+            i.task_invocations.set(1, {**labels, "task.status": status})
+            if after.get("escalated"):
+                i.task_paused.set(
+                    1, {**labels, "escalation.class": after.get("escalation_class") or "unknown"}
+                )
+            if decision:
+                i.task_human_decisions.set(1, labels)
 
         self._emit(record)
 

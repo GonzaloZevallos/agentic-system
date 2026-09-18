@@ -35,7 +35,7 @@ from agentic.shared.configuration import Configuration
 from ..domain import document, rules, schemas
 from ..domain.document import HUMAN
 from ..domain.roles import ORIGINAL, Prompt, Role, describe_flags, render
-from ..domain.task import WAITING_ON_HUMAN, Failure, RoleRun, TaskState, apply
+from ..domain.task import WAITING_ON_HUMAN, EscalationClass, Failure, RoleRun, TaskState, apply
 from .limits import RunLimits
 from .ports import AttemptFailed, Ports, Presubmit, RoleRunner
 
@@ -354,12 +354,14 @@ def task_cap(state: TaskState, cfg: Configuration) -> float:
 
 def escalation(exc: Escalating) -> TaskState:
     """The patch of a role that failed twice, or that the task cap stopped: the human
-    sees it (README.md, 3)."""
+    sees it (README.md, 3), with its escalation class (`rules.escalation`) — `cap` for
+    the task cap, `failure` for a role `run_with_retry` gave up on."""
+    cls: EscalationClass = "cap" if isinstance(exc, TaskCapReached) else "failure"
     return {
         "failures": exc.failures,
         "cost_usd": exc.cost_usd,
-        "escalated": str(exc),
         "status": WAITING_ON_HUMAN,
+        **rules.escalation(cls, str(exc)),
     }
 
 

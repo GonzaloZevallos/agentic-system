@@ -439,6 +439,117 @@ def test_task_finish_emits_the_system_metrics(metrics):
     assert len(metrics.batches) == 1
 
 
+def test_invocation_finish_emits_only_the_delta_this_invocation_spent(metrics):
+    """The bug the request opens with: every invocation repeating the task's
+    accumulated cost and rework. `finish_invocation` diffs the state the invocation
+    entered with against the one it left with, through `task.delta`, so a resume
+    reports only what it added."""
+    before = {
+        "id": "T-1",
+        "title": "t",
+        "description": "d",
+        "cost_usd": 100.0,
+        "runs": [
+            {
+                "role": "PjM",
+                "version": 1,
+                "session_id": "s1",
+                "model": "m",
+                "cost_usd": 0.1,
+                "turns": 1,
+            }
+        ],
+        "change_history": [{"pair": "PM→Product Analyst", "category": "definition", "reason": "r"}],
+    }
+    after = {
+        **before,
+        "cost_usd": 140.0,
+        "status": "waiting_on_human",
+        "runs": [
+            *before["runs"],
+            {
+                "role": "Developer",
+                "version": 2,
+                "session_id": "s2",
+                "model": "m",
+                "cost_usd": 40.0,
+                "turns": 3,
+            },
+        ],
+        "change_history": [
+            *before["change_history"],
+            {"pair": "Tech Lead→Developer:api", "category": "spec-behaviour", "reason": "r"},
+        ],
+    }
+    with telemetry.task_span("T-1", "t", "gym-saas") as run:
+        run.finish_invocation(before, after, "resume", "Use USD.")
+    got = points(metrics)
+    labels = {"product": "gym-saas", "invocation.kind": "resume", "system.version": "abc1234"}
+    (cost,) = got["agentic.invocation.cost_usd"]
+    assert cost.value == pytest.approx(40.0) and dict(cost.attributes) == labels
+    # The new run is a return's delivery (version 2): its whole cost is rework, and only
+    # this invocation's own, never the task's running total.
+    (rework,) = got["agentic.invocation.rework_usd"]
+    assert rework.value == pytest.approx(40.0)
+    (duration,) = got["agentic.invocation.duration"]
+    assert duration.value >= 0
+    (returns,) = got["agentic.invocation.returns"]
+    assert returns.value == 1
+    assert dict(returns.attributes) == {**labels, "return.category": "spec-behaviour"}
+    (invocations,) = got["agentic.task.invocations"]
+    assert invocations.value == 1
+    assert dict(invocations.attributes) == {**labels, "task.status": "waiting_on_human"}
+    (decisions,) = got["agentic.task.human_decisions"]
+    assert decisions.value == 1 and dict(decisions.attributes) == labels
+    # No escalation this invocation: nothing paused.
+    assert "agentic.task.paused" not in got
+    assert len(metrics.batches) == 1
+
+
+def test_invocation_finish_on_a_crash_reports_zero_not_negative(metrics):
+    """A crash hands `finish_invocation` the state it entered with, spread with only
+    `status` changed: nothing new was recorded, so every delta is zero, never negative
+    from a state the graph never actually reached."""
+    before = {"id": "T-1", "title": "t", "description": "d", "cost_usd": 12.5}
+    crashed = {**before, "status": "crashed"}
+    with telemetry.task_span("T-1", "t", "gym-saas") as run:
+        run.finish_invocation(before, crashed, "run", None)
+    got = points(metrics)
+    (cost,) = got["agentic.invocation.cost_usd"]
+    assert cost.value == 0.0
+    (rework,) = got["agentic.invocation.rework_usd"]
+    assert rework.value == 0.0
+    (invocations,) = got["agentic.task.invocations"]
+    assert invocations.attributes["task.status"] == "crashed"
+    assert "agentic.task.paused" not in got
+    assert "agentic.task.human_decisions" not in got
+
+
+def test_task_paused_emits_the_escalation_class_or_unknown(metrics):
+    before = {"id": "T-1", "title": "t", "description": "d"}
+    with telemetry.task_span("T-1", "t", "gym-saas") as run:
+        run.finish_invocation(
+            before, {**before, "escalated": "x", "escalation_class": "cap"}, "run", None
+        )
+    with telemetry.task_span("T-1", "t", "gym-saas") as run:
+        # A document from before `escalation_class` existed: still one sample, `unknown`.
+        run.finish_invocation(before, {**before, "escalated": "y"}, "run", None)
+    paused = points(metrics)["agentic.task.paused"]
+    assert [p.value for p in paused] == [1, 1]
+    assert [p.attributes["escalation.class"] for p in paused] == ["cap", "unknown"]
+
+
+def test_task_human_decisions_only_with_an_answer(metrics):
+    before = {"id": "T-1", "title": "t", "description": "d"}
+    with telemetry.task_span("T-1", "t", "gym-saas") as run:
+        run.finish_invocation(before, before, "run", None)
+    assert "agentic.task.human_decisions" not in points(metrics)
+    with telemetry.task_span("T-1", "t", "gym-saas") as run:
+        run.finish_invocation(before, before, "resume", "Use USD.")
+    (decision,) = points(metrics)["agentic.task.human_decisions"]
+    assert decision.value == 1 and decision.attributes["invocation.kind"] == "resume"
+
+
 def test_role_finish_emits_duration_and_cost_by_role(metrics):
     with telemetry.role_span("PjM", "pjm", "gym-saas") as run:
         run.finish(

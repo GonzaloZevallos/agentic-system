@@ -173,3 +173,23 @@ def test_interview_questions_by_destination():
         "invariants_proposed": 1,
     }
     assert metrics.interview_questions(stats) == {"interviewee": 3, "pm": 1, "human": 2}
+
+
+def test_invocation_returns_by_category_reads_only_the_deltas_own_history():
+    # No `changes_requested` counter to reconcile against: an invocation delta carries
+    # exactly the entries it added, so there is no `unknown` bucket to compute.
+    patch = {
+        "change_history": [
+            {"pair": "PM→Product Analyst", "category": "definition", "reason": "r"},
+            {"pair": "Tech Lead→Developer:a", "category": "spec-behaviour", "reason": "r"},
+            {"pair": "Tech Lead→Developer:a", "category": "spec-behaviour", "reason": "r"},
+        ]
+    }
+    assert metrics.invocation_returns_by_category(patch) == {
+        "definition": 1,
+        "spec-behaviour": 2,
+    }
+
+
+def test_invocation_returns_by_category_is_empty_without_a_return_this_invocation():
+    assert metrics.invocation_returns_by_category({}) == {}

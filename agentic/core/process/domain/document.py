@@ -86,6 +86,7 @@ def render(
         "returns": state.get("changes_requested", {}),
         "return_history": state.get("change_history", []),
         "escalated": state.get("escalated"),
+        "escalation_class": state.get("escalation_class"),
         "questions_for_human": state.get("questions_for_human", []),
         "discard_reason": state.get("discard_reason"),
         "branch": state.get("branch"),
