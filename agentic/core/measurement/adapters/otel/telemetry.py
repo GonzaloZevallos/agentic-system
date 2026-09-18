@@ -484,10 +484,19 @@ class RoleRun(Run):
         invocation of the Developer's presubmit that actually ran the checks: a
         delivery refused once or twice tries again, and each try is its own fact, not a
         count folded into the next one. Only the last invocation — the one that became
-        the delivery, or the last the backstop let through — is `final`."""
+        the delivery, or the last the backstop let through — is `final`. `role` and
+        `role.slug` are the node's own, like `_emit_failures`; `phase` comes from the
+        run the patch's own verdict describes (`target_run`), the same source the
+        residual sample reads, since a `CheckResult` carries no section of its own."""
         invocations = patch.get("presubmit_checks", [])
         last = len(invocations) - 1
-        common = {"product": self.product}
+        common: dict[str, str] = {
+            "product": self.product,
+            "role": self.role,
+            "role.slug": self.slug or "unknown",
+        }
+        if target := system_metrics.target_run(patch):
+            common["phase"] = phase_of(target.get("section", target["role"]))
         for index, results in enumerate(invocations):
             final = index == last
 

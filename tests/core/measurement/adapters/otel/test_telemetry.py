@@ -807,12 +807,39 @@ def test_presubmit_checks_leave_one_set_of_samples_per_invocation_only_the_last_
     assert all(c.value == 1 for c in checks)
     assert dict(final.attributes) == {
         "product": "gym-saas",
+        "role": "Developer",
+        "role.slug": "developer",
         "check": "tests",
         "result": "green",
         "final": True,
     }
     durations = points(metrics)["agentic.presubmit.duration"]
     assert sorted(d.value for d in durations) == [0.9, 1.0, 1.2]
+
+
+def test_presubmit_checks_carry_the_phase_of_the_run_that_wrote_the_section(metrics):
+    run_record = {
+        "role": "Developer",
+        "slug": "developer",
+        "section": "Developer: dev-1",
+        "cost_usd": 0.3,
+        "model": "claude",
+        "session_id": "s1",
+        "version": 1,
+        "turns": 1,
+    }
+    invocations = [[_check(passed=True)]]
+    with telemetry.role_span("Developer", "developer", "gym-saas") as run:
+        run.finish(
+            {
+                "presubmit_checks": invocations,
+                "cost_usd": 0.3,
+                "runs": [run_record],
+                "sections": {"Developer: dev-1": "..."},
+            }
+        )
+    (point,) = points(metrics)["agentic.presubmit.checks"]
+    assert point.attributes["phase"] == "development"
 
 
 def test_a_patch_with_no_presubmit_invocations_emits_no_presubmit_sample(metrics):

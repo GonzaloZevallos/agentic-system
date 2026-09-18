@@ -74,7 +74,7 @@ cerrada — nunca un id de tarea, un título, un id de sesión, una línea de co
 | `agentic.role.failures` | `product`, `role`, `role.slug`, `phase` (si la falla tiene sección), `reason` | Intentos fallidos de una patch, una muestra por motivo con el conteo como valor | — |
 | `agentic.role.failure_cost_usd` | ídem | Costo de los intentos fallidos de una patch, por motivo. **No es aditivo con `agentic.role.cost_usd`**: el mismo dólar ya cuenta una vez, dentro del costo de una corrida que reintentó o dentro de la muestra residual | USD |
 | `agentic.review.findings` | `product`, `severity`, `category`, `status`, `review.kind`, `system.version` | Hallazgos de una revisión: una muestra por celda (severidad, categoría, estado) con el conteo de hallazgos de esa revisión que caen ahí como valor. Nada si la revisión no dejó hallazgos | — |
-| `agentic.presubmit.checks` | `product`, `check`, `result`, `final` | Una muestra por chequeo de cada invocación de la puerta de entrega que llegó a correr los chequeos: 1 si el chequeo pasó (`result=green`) o falló (`result=red`). Una entrega puede ser rechazada y reintentar dentro del mismo turno; solo la última invocación es `final=true` | — |
+| `agentic.presubmit.checks` | `product`, `role`, `role.slug`, `phase` (si la patch tiene una corrida con veredicto), `check`, `result`, `final` | Una muestra por chequeo de cada invocación de la puerta de entrega que llegó a correr los chequeos: 1 si el chequeo pasó (`result=green`) o falló (`result=red`). Una entrega puede ser rechazada y reintentar dentro del mismo turno; solo la última invocación es `final=true` | — |
 | `agentic.presubmit.duration` | ídem | Cuánto tardó ese chequeo, en esa invocación | s |
 
 `role.slug` es el `Role.slug` de la corrida (17 valores; `unknown` en una corrida grabada
@@ -103,6 +103,11 @@ convirtió en la entrega, o la que el backstop dejó pasar igual, en rojo, agota
 rechazos. Las invocaciones de una corrida viajan en el patch de `develop` bajo
 `presubmit_checks`, otra clave de medición: nunca se persiste, y por eso una entrega
 rechazada dos veces dentro del mismo turno deja tres juegos de muestras y no uno.
+`role` y `role.slug` son los del nodo que corrió la puerta de entrega (Developer o
+Integrator), igual que en `agentic.role.failures`; `phase` sale de la corrida contra la
+que se escribió el veredicto de la patch (`target_run`, la misma fuente que la muestra
+residual), y falta cuando la patch no tiene una — por ejemplo un fallo antes de que el
+rol entregara nada.
 
 ## Costo en Langfuse
 
