@@ -18,7 +18,7 @@ several nodes over a copy of the state and has to hand the parent what it added.
 from __future__ import annotations
 
 import operator
-from typing import Annotated, Literal, TypedDict, get_args, get_origin, get_type_hints
+from typing import Annotated, Literal, NotRequired, TypedDict, get_args, get_origin, get_type_hints
 
 Status = Literal[
     "open",
@@ -67,6 +67,13 @@ FindingStatus = Literal["open", "fixed", "dismissed"]
 # A return's category: a review's takes its first blocking finding's; PM's returns of
 # the definition, whose reason stays free text, are all `definition`.
 ChangeCategory = FindingCategory | Literal["definition"]
+# Why an attempt failed, decided at the raise site, never by parsing the error's text
+# (README.md, 14; the Medición glossary's `agentic.role.failures`): `schema` is a
+# structured output missing or invalid against the role's own schema, `check` a use
+# case's own rule over otherwise-valid output, `max_turns` the harness cutting the
+# model off, `limit` a per-attempt money cap (issue #66), `sdk` anything else the
+# harness raised, `other` the residual nothing else names.
+FailureReason = Literal["schema", "check", "max_turns", "limit", "sdk", "other"]
 
 
 def add(current: float, new: float) -> float:
@@ -100,6 +107,16 @@ class Failure(TypedDict):
     # The session the attempt left, if the harness got as far as opening one: the
     # retry continues it, and `claude -r <id>` reopens it for the human.
     session_id: str
+    # Why the attempt failed, from the closed set (`FailureReason`); absent on a
+    # failure recorded before this field existed.
+    reason: NotRequired[FailureReason]
+    # `Role.slug`, so a failure of one of the six roles named "Tech Lead" says which;
+    # absent on a failure recorded before this field existed.
+    slug: NotRequired[str]
+    # What the attempt was writing when it failed, the same string `RoleRun.section`
+    # would have carried had it delivered; absent on a failure recorded before this
+    # field existed.
+    section: NotRequired[str]
 
 
 class RoleRun(TypedDict):
@@ -117,6 +134,19 @@ class RoleRun(TypedDict):
     # `turns` counts the role's alone, so this is what explains a dear two-turn run.
     cost_by_model: dict[str, float]
     turns: int
+    # `Role.slug`: `role` alone cannot tell the six roles named "Tech Lead" apart.
+    # Absent on a run recorded before this field existed; read with `.get(..., "unknown")`.
+    slug: NotRequired[str]
+    # When the attempt started and ended, ISO-8601 UTC with millisecond precision, the
+    # clock started only after the concurrency slot was acquired: the duration between
+    # them is work inside the slot, never the wait for one. Absent on a run recorded
+    # before this field existed.
+    started_at: NotRequired[str]
+    ended_at: NotRequired[str]
+    # Seconds this attempt waited for a concurrency slot before it started, its own
+    # series and never folded into the duration above. Absent on a run recorded before
+    # this field existed.
+    queue_wait_s: NotRequired[float]
 
 
 class ChangesRequested(TypedDict):

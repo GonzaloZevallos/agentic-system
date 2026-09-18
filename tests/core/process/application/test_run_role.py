@@ -50,6 +50,9 @@ async def test_retry_passes_the_error_and_sums_cost():
             "error": "structured output missing",
             "cost_usd": 0.05,
             "session_id": "",
+            "reason": "other",
+            "slug": "pjm",
+            "section": "PjM",
         }
     ]
     # No session survived the failure: the retry starts over, the error appended.
@@ -228,18 +231,26 @@ async def test_run_role_builds_the_patch_and_the_history(tmp_path):
     assert patch["current_role"] == "Product Analyst"
     assert set(patch["prompts"]) == {"product_analyst"}
     assert patch["sections"] == {"Product Analyst": "v2", "Product Analyst (v1)": "v1"}
-    assert patch["runs"] == [
-        {
-            "role": "Product Analyst",
-            "section": "Product Analyst",
-            "version": 2,
-            "session_id": "s2",
-            "model": "claude-sonnet-5",
-            "cost_usd": 0.1,
-            "cost_by_model": {"claude-sonnet-5": 0.1},
-            "turns": 3,
-        }
-    ]
+    (run,) = patch["runs"]
+    started_at, ended_at, queue_wait_s = (
+        run.pop("started_at"),
+        run.pop("ended_at"),
+        run.pop("queue_wait_s"),
+    )
+    assert run == {
+        "role": "Product Analyst",
+        "slug": "product_analyst",
+        "section": "Product Analyst",
+        "version": 2,
+        "session_id": "s2",
+        "model": "claude-sonnet-5",
+        "cost_usd": 0.1,
+        "cost_by_model": {"claude-sonnet-5": 0.1},
+        "turns": 3,
+    }
+    # Timed inside the concurrency slot: started no later than ended, both ISO-8601 UTC.
+    assert started_at <= ended_at
+    assert queue_wait_s >= 0.0
     assert patch["cost_usd"] == 0.1 and patch["failures"] == []
     assert ports.documents.saved == []  # saving is the use case's, once per role
     call = runner.calls[0]

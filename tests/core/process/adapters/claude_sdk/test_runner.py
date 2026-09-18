@@ -104,17 +104,20 @@ async def test_nested_schemas_are_inlined_for_the_sdk(monkeypatch, tmp_path):
 
 async def test_missing_result_and_error_results_are_attempt_failures(monkeypatch, tmp_path):
     fake_query(monkeypatch, [])
-    with pytest.raises(AttemptFailed, match="without a result"):
+    with pytest.raises(AttemptFailed, match="without a result") as info:
         await run_once(ClaudeSdkRunner(), tmp_path)
+    assert info.value.reason == "sdk"
 
     fake_query(monkeypatch, [result(subtype="error_max_turns", total_cost_usd=0.5)])
     with pytest.raises(AttemptFailed, match="max_turns \\(2\\) exhausted") as info:
         await run_once(ClaudeSdkRunner(), tmp_path)
     assert info.value.cost_usd == 0.5
+    assert info.value.reason == "max_turns"
 
     fake_query(monkeypatch, [result(is_error=True, subtype="error", errors=["boom"])])
-    with pytest.raises(AttemptFailed, match="boom"):
+    with pytest.raises(AttemptFailed, match="boom") as info:
         await run_once(ClaudeSdkRunner(), tmp_path)
+    assert info.value.reason == "sdk"
 
 
 async def test_a_failed_attempt_keeps_the_session_it_left_behind(monkeypatch, tmp_path):
@@ -125,6 +128,8 @@ async def test_a_failed_attempt_keeps_the_session_it_left_behind(monkeypatch, tm
     with pytest.raises(AttemptFailed, match="error_max_budget_usd") as info:
         await run_once(ClaudeSdkRunner(), tmp_path)
     assert (info.value.cost_usd, info.value.session_id) == (3.05, "sess-123")
+    # A per-attempt budget cap is `limit` (issue #66), not a generic `sdk` failure.
+    assert info.value.reason == "limit"
 
     fake_query(monkeypatch, [result(subtype="error_max_turns", total_cost_usd=0.5)])
     with pytest.raises(AttemptFailed) as info:
@@ -195,8 +200,24 @@ async def test_sdk_exceptions_are_attempt_failures(monkeypatch, tmp_path):
         yield  # pragma: no cover
 
     monkeypatch.setattr(module, "query", query)
-    with pytest.raises(AttemptFailed, match="SDK error: socket closed"):
+    with pytest.raises(AttemptFailed, match="SDK error: socket closed") as info:
         await run_once(ClaudeSdkRunner(), tmp_path)
+    assert info.value.reason == "sdk"
+
+
+async def test_a_result_error_with_a_budget_subtype_is_the_limit_reason(monkeypatch, tmp_path):
+    from claude_agent_sdk import ResultError
+
+    async def query(prompt, options):
+        yield result(is_error=True, subtype="error_max_budget_usd", total_cost_usd=1.0)
+        raise ResultError(
+            "run failed", data={"subtype": "error_max_budget_usd", "errors": ["over budget"]}
+        )
+
+    monkeypatch.setattr(module, "query", query)
+    with pytest.raises(AttemptFailed, match="error_max_budget_usd") as info:
+        await run_once(ClaudeSdkRunner(), tmp_path)
+    assert info.value.reason == "limit"
 
 
 async def test_verbose_streams_the_generation_through_the_printer(monkeypatch, tmp_path):

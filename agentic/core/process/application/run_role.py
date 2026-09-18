@@ -24,8 +24,10 @@ over gaps that were never there.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 from agentic.shared.configuration import Configuration
@@ -88,6 +90,12 @@ class Output:
     # Failed attempts before this output. Empty on a clean run. Their cost is
     # already included in `cost_usd`: a paid attempt counts even when it failed.
     failures: list[Failure] = field(default_factory=list)
+    # When the winning attempt started and ended, and how long it waited for a
+    # concurrency slot first: `run_with_retry` fills these in after the slot was
+    # acquired, so the interval they bound is only work, never the queue.
+    started_at: str = ""
+    ended_at: str = ""
+    queue_wait_s: float = 0.0
 
 
 def context_for(
@@ -152,6 +160,7 @@ async def run_with_retry(
     task_cap_usd: float | None = None,
     presubmit: Presubmit | None = None,
     limits: RunLimits | None = None,
+    section: str | None = None,
 ) -> Output:
     """`check` is the use case's own rule over the validated output (raise `ValueError`);
     breaking it is a role failure like any other, so the model gets the error back.
@@ -166,16 +175,24 @@ async def run_with_retry(
     sisters' spending too. It only refuses to start; a role already running is never
     cut off.
 
-    `presubmit` is handed to every attempt: the harness asks it when the model delivers."""
+    `presubmit` is handed to every attempt: the harness asks it when the model delivers.
+
+    `section` is what a successful attempt would write (`run_record`'s own default,
+    the role's name, when the caller has none yet): a failed attempt stamps it on its
+    `Failure` too, so a reader can tell which delivery an attempt was working on."""
     limits = limits or RunLimits()
+    written_as = section or role.name
     failures: list[Failure] = []
     for attempt in range(1, max(retries, 0) + 2):
         total = max(spent_usd + spent(failures), limits.spent_usd)
         if task_cap_usd is not None and total >= task_cap_usd:
             raise TaskCapReached(role, total, task_cap_usd, failures)
         text, session = _retry_input(prompt, failures, resume)
+        waited_from = time.monotonic()
         try:
             async with limits.slot():
+                queue_wait_s = time.monotonic() - waited_from
+                started_at = _now_iso()
                 output = await _attempt(
                     role,
                     text,
@@ -189,6 +206,7 @@ async def run_with_retry(
                     max_budget_usd=max_budget_usd,
                     presubmit=presubmit,
                 )
+                ended_at = _now_iso()
         except AttemptFailed as exc:
             limits.record(exc.cost_usd)
             failures.append(
@@ -198,14 +216,26 @@ async def run_with_retry(
                     "error": str(exc),
                     "cost_usd": exc.cost_usd,
                     "session_id": exc.session_id,
+                    "reason": exc.reason,
+                    "slug": role.slug,
+                    "section": written_as,
                 }
             )
             continue
         limits.record(output.cost_usd)
         output.failures = failures
         output.cost_usd += spent(failures)
+        output.started_at = started_at
+        output.ended_at = ended_at
+        output.queue_wait_s = queue_wait_s
         return output
     raise RoleFailure(role, failures)
+
+
+def _now_iso() -> str:
+    """ISO-8601 UTC, millisecond precision: the format `RoleRun.started_at` and
+    `.ended_at` share."""
+    return datetime.now(UTC).isoformat(timespec="milliseconds")
 
 
 def _retry_input(
@@ -257,16 +287,27 @@ async def _attempt(
     )
     cost, session = result.cost_usd, result.session_id
     if result.structured_output is None:
-        raise AttemptFailed("structured output missing; it is required", cost, session)
+        raise AttemptFailed(
+            "structured output missing; it is required", cost, session, reason="schema"
+        )
     try:
         data = schemas.validate(role.schema, result.structured_output, vocabulary)
-        if check is not None:
-            check(data)
     except ValueError as exc:
-        raise AttemptFailed(f"structured output invalid: {exc}", cost, session) from exc
+        raise AttemptFailed(
+            f"structured output invalid: {exc}", cost, session, reason="schema"
+        ) from exc
+    if check is not None:
+        try:
+            check(data)
+        except ValueError as exc:
+            raise AttemptFailed(
+                f"structured output invalid: {exc}", cost, session, reason="check"
+            ) from exc
     text = data.pop("markdown").strip()
     if not text:
-        raise AttemptFailed("`markdown` is empty; the Markdown section is required", cost, session)
+        raise AttemptFailed(
+            "`markdown` is empty; the Markdown section is required", cost, session, reason="schema"
+        )
     return Output(
         text=text,
         data=data,
@@ -303,6 +344,7 @@ def escalation(exc: Escalating) -> TaskState:
 def run_record(state: TaskState, role: Role, section: str, output: Output) -> RoleRun:
     return {
         "role": role.name,
+        "slug": role.slug,
         "section": section,
         "version": rules.next_version(state, section),
         "session_id": output.session_id,
@@ -310,6 +352,9 @@ def run_record(state: TaskState, role: Role, section: str, output: Output) -> Ro
         "cost_usd": output.cost_usd,
         "cost_by_model": output.cost_by_model,
         "turns": output.turns,
+        "started_at": output.started_at,
+        "ended_at": output.ended_at,
+        "queue_wait_s": output.queue_wait_s,
     }
 
 
@@ -360,6 +405,7 @@ async def run_role(
             task_cap_usd=task_cap(state, cfg),
             presubmit=presubmit,
             limits=ports.limits,
+            section=section,
         )
     except Escalating as exc:
         return None, patch | escalation(exc)

@@ -50,6 +50,7 @@ from claude_agent_sdk import (
 
 from ...application.ports import AttemptFailed, Presubmit, RawResult
 from ...domain.roles import Role
+from ...domain.task import FailureReason
 from ..plugins import PLUGIN, PLUGIN_DIR
 from ..telemetry import NoTelemetry, Telemetry
 from .hooks import hooks_for
@@ -167,15 +168,18 @@ class ClaudeSdkRunner:
             # that into ResultError after yielding the ResultMessage.
             cost, session = _left_behind(result)
             if exc.subtype == "error_max_turns":
-                raise AttemptFailed(exhausted, cost, session) from exc
+                raise AttemptFailed(exhausted, cost, session, reason="max_turns") from exc
             raise AttemptFailed(
-                f"run failed ({exc.subtype}): {'; '.join(exc.errors)}", cost, session
+                f"run failed ({exc.subtype}): {'; '.join(exc.errors)}",
+                cost,
+                session,
+                reason=_reason_for_subtype(exc.subtype),
             ) from exc
         except Exception as exc:  # the SDK raises its own hierarchy; all of it is a failure
-            raise AttemptFailed(f"SDK error: {exc}") from exc
+            raise AttemptFailed(f"SDK error: {exc}", reason="sdk") from exc
 
         if result is None:
-            raise AttemptFailed("run ended without a result message")
+            raise AttemptFailed("run ended without a result message", reason="sdk")
         if background and _delivered(result):
             # The prompt forbids it; when the model does it anyway, whatever those
             # sub-agents had to say never reached the verdict, and the reader of the
@@ -186,12 +190,13 @@ class ClaudeSdkRunner:
             )
         cost, session = _left_behind(result)
         if result.subtype == "error_max_turns":
-            raise AttemptFailed(exhausted, cost, session)
+            raise AttemptFailed(exhausted, cost, session, reason="max_turns")
         if result.is_error:
             raise AttemptFailed(
                 f"run ended in error: {'; '.join(result.errors or [result.subtype])}",
                 cost,
                 session,
+                reason=_reason_for_subtype(result.subtype or ""),
             )
         return RawResult(
             structured_output=result.structured_output,
@@ -205,6 +210,13 @@ class ClaudeSdkRunner:
         stream = self.stream or sys.stderr
         stream.write(text)
         stream.flush()
+
+
+def _reason_for_subtype(subtype: str) -> FailureReason:
+    """`agentic.role.failures`'s reason for a harness failure that is not `max_turns`
+    (its own raise site already knows that one): `limit` for a per-attempt money cap
+    (issue #66), `sdk` for anything else the harness reports by a subtype."""
+    return "limit" if "budget" in subtype else "sdk"
 
 
 def _delivered(result: ResultMessage) -> bool:

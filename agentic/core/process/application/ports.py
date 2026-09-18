@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from ..domain.roles import Role
-from ..domain.task import TaskInput, TaskState
+from ..domain.task import FailureReason, TaskInput, TaskState
 from .limits import RunLimits
 
 
@@ -35,12 +35,22 @@ class AttemptFailed(Exception):
     """The attempt broke in the harness: an exception, `max_turns` exhausted, the money
     cap hit, no result. The use case decides whether to retry (README.md, 3), and it
     resumes `session_id` when the attempt left one: what the model read and did is
-    still there (ADR-0004, addendum)."""
+    still there (ADR-0004, addendum).
 
-    def __init__(self, error: str, cost_usd: float = 0.0, session_id: str = ""):
+    `reason`, from the closed set `FailureReason`, is the raise site's own call, never
+    guessed later by parsing `error`: it is what `agentic.role.failures` groups by."""
+
+    def __init__(
+        self,
+        error: str,
+        cost_usd: float = 0.0,
+        session_id: str = "",
+        reason: FailureReason = "other",
+    ):
         super().__init__(error)
         self.cost_usd = cost_usd
         self.session_id = session_id
+        self.reason = reason
 
 
 class Presubmit(Protocol):

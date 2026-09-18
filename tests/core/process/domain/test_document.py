@@ -176,3 +176,36 @@ def test_the_channel_survives_the_document():
     for field in ("invariants", "integration_brief", "findings", "settled_findings"):
         assert field in resume.STATE_FIELDS, field
         assert back[field] == state[field], field
+
+
+def test_a_document_written_before_slug_and_timing_existed_still_parses():
+    """`RoleRun.slug/.started_at/.ended_at/.queue_wait_s` and `Failure.reason/.slug/
+    .section` are new keys inside entries `document.py` already rendered and parsed
+    whole: no rename, so a run or a failure recorded before this task carries on
+    without them, exactly as written."""
+    old = (
+        "---\n"
+        "id: T-1\n"
+        "title: t\n"
+        "runs:\n"
+        "- {role: PjM, section: PjM, version: 1, session_id: '', model: m, cost_usd: 0.1,"
+        " turns: 1}\n"
+        "failures:\n"
+        "- {role: PM, attempt: 1, error: e, cost_usd: 0.05, session_id: ''}\n"
+        "---\n"
+        "\n# t\n\n## Original request\n\nd\n"
+    )
+    state = document.parse(old)
+    (run,) = state["runs"]
+    assert run == {
+        "role": "PjM",
+        "section": "PjM",
+        "version": 1,
+        "session_id": "",
+        "model": "m",
+        "cost_usd": 0.1,
+        "turns": 1,
+    }
+    assert "slug" not in run and "started_at" not in run and "queue_wait_s" not in run
+    (failure,) = state["failures"]
+    assert failure["error"] == "e" and "reason" not in failure and "slug" not in failure
