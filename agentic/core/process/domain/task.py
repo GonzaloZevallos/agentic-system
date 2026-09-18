@@ -139,6 +139,11 @@ class Failure(TypedDict):
     # Decided once per run, in `run_with_retry`, the only place that knows it; absent on
     # a failure recorded before this field existed, which reads as `False`.
     cold_fallback: NotRequired[bool]
+    # Write attempts the SDK denied during this attempt, before it ended one way or
+    # another (glossary: Negación): read off `RawResult.denials`/`AttemptFailed.denials`,
+    # never guessed later. Absent on a failure recorded before this field existed, which
+    # reads as `0` (`rules.denial_note`'s callers always use `.get(..., 0)`).
+    denials: NotRequired[int]
 
 
 class RoleRun(TypedDict):
@@ -195,6 +200,12 @@ class RoleRun(TypedDict):
     # it and ran cold instead. Absent on a run recorded before this field existed, which
     # reads as `False`.
     cold_fallback: NotRequired[bool]
+    # Write attempts the SDK denied during the delivering attempt (glossary: Negación),
+    # off `RawResult.denials`. The run's total, for the document line and the escalation
+    # (`rules.denial_note`), also folds in every recorded `Failure.denials`: this field
+    # alone is only the delivering attempt's. Absent on a run recorded before this field
+    # existed, which reads as `0`.
+    denials: NotRequired[int]
 
 
 class InterviewStats(TypedDict):
