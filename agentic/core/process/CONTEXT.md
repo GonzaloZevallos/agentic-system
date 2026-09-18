@@ -250,7 +250,7 @@ _Avoid_: corrida, ejecución (eso es la Corrida completa), run (en inglés, para
 _Campo_: `InvocationKind` (`run` | `resume`) en el código; sin término de arte compartido — los frameworks hablan de resume/invoke sin nombrar la llamada suelta
 
 **Fallo de rol**:
-El rol se rompe: su ejecución falla, se le acaban los turnos sin resultado, la salida estructurada falta o es inválida, el `markdown` está vacío. Se reintenta una vez con el error como entrada, continuando la conversación del intento fallido cuando la hay. Distinto de devolución; no cuenta para el límite.
+El rol se rompe: su ejecución falla, se le acaban los turnos sin resultado, la salida estructurada falta o es inválida, el `markdown` está vacío. Se reintenta una vez con el error como entrada, continuando la conversación del intento fallido cuando la hay. El motivo que queda escrito nombra siempre una causa: cuando el harness no deja material, lleva lo que el proceso sí dejó (stderr, código de salida), nunca un texto vacío. Distinto de devolución; no cuenta para el límite.
 _Avoid_: error (demasiado amplio), reintento (es parte del fallo, no otro término)
 _Campo_: sin término de arte; el reintento sí lo tiene, `retry`, pero nombra la vuelta y no la rotura
 
