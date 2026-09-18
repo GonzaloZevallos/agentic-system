@@ -102,7 +102,7 @@
       "id": 1,
       "type": "stat",
       "title": "Costo por tarea terminada",
-      "description": "Promedio en dólares de las tareas que llegaron a un fin sin escalar ni caerse, en el rango elegido.",
+      "description": "Promedio en dólares de las tareas que llegaron a un fin sin escalar ni caerse, en el rango elegido. Un solo número para el filtro elegido; la comparación entre versiones está en la tabla de abajo.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -116,8 +116,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version) (sum_over_time(agentic_task_cost_usd{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[$__range])) / sum by (system_version) (count_over_time(agentic_task_cost_usd{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
-          "legendFormat": "{{system_version}}",
+          "expr": "sum(sum_over_time(agentic_task_cost_usd{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[$__range])) / sum(count_over_time(agentic_task_cost_usd{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
+          "legendFormat": "",
           "instant": true
         }
       ],
@@ -147,7 +147,7 @@
       "id": 2,
       "type": "stat",
       "title": "Retrabajo",
-      "description": "Parte del costo total gastada en corridas de rol que repiten trabajo: entregas posteriores a una devolución e intentos fallidos. Cuenta todas las tareas, escaladas y caídas incluidas. Verde bajo 10 %, ámbar hasta 30 %.",
+      "description": "Parte del costo total gastada en corridas de rol que repiten trabajo: entregas posteriores a una devolución e intentos fallidos. Cuenta todas las tareas, escaladas y caídas incluidas. Verde bajo 10 %, ámbar hasta 30 %. Un solo número para el filtro elegido; la comparación entre versiones está en la tabla de abajo.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -161,8 +161,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version) (sum_over_time(agentic_task_rework_usd{product=~\"$product\", system_version=~\"$version\", task_type=~\"$type\"}[$__range])) / sum by (system_version) (sum_over_time(agentic_task_cost_usd{product=~\"$product\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
-          "legendFormat": "{{system_version}}",
+          "expr": "sum(sum_over_time(agentic_task_rework_usd{product=~\"$product\", system_version=~\"$version\", task_type=~\"$type\"}[$__range])) / sum(sum_over_time(agentic_task_cost_usd{product=~\"$product\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
+          "legendFormat": "",
           "instant": true
         }
       ],
@@ -205,7 +205,7 @@
       "id": 3,
       "type": "stat",
       "title": "Tareas terminadas",
-      "description": "Tareas que llegaron a un fin sin escalar ni caerse, en el rango.",
+      "description": "Tareas que llegaron a un fin sin escalar ni caerse, en el rango. Un solo número para el filtro elegido; la comparación entre versiones está en la tabla de abajo.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -219,8 +219,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version) (count_over_time(agentic_task_finished{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
-          "legendFormat": "{{system_version}}",
+          "expr": "sum(count_over_time(agentic_task_finished{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
+          "legendFormat": "",
           "instant": true
         }
       ],
@@ -250,7 +250,7 @@
       "id": 4,
       "type": "stat",
       "title": "Escaladas",
-      "description": "Tareas que terminaron en manos del humano, en el rango.",
+      "description": "Tareas que terminaron en manos del humano, en el rango. Un solo número para el filtro elegido; la comparación entre versiones está en la tabla de abajo.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -264,8 +264,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version) (count_over_time(agentic_task_finished{product=~\"$product\", task_status=\"waiting_on_human\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
-          "legendFormat": "{{system_version}}",
+          "expr": "sum(count_over_time(agentic_task_finished{product=~\"$product\", task_status=\"waiting_on_human\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
+          "legendFormat": "",
           "instant": true
         }
       ],
@@ -292,6 +292,169 @@
       }
     },
     {
+      "id": 5,
+      "type": "table",
+      "title": "KPIs por versión del sistema",
+      "description": "Una fila por SHA del sistema: costo promedio por tarea terminada, retrabajo sobre el costo, terminadas, escaladas e invocaciones por tarea terminada, en el rango. Escala a cualquier cantidad de versiones; los stats de arriba no.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "instant": true,
+          "expr": "sum by (system_version) (sum_over_time(agentic_task_cost_usd{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[$__range])) / sum by (system_version) (count_over_time(agentic_task_cost_usd{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))"
+        },
+        {
+          "refId": "B",
+          "format": "table",
+          "instant": true,
+          "expr": "sum by (system_version) (sum_over_time(agentic_task_rework_usd{product=~\"$product\", system_version=~\"$version\", task_type=~\"$type\"}[$__range])) / sum by (system_version) (sum_over_time(agentic_task_cost_usd{product=~\"$product\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))"
+        },
+        {
+          "refId": "C",
+          "format": "table",
+          "instant": true,
+          "expr": "sum by (system_version) (count_over_time(agentic_task_finished{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))"
+        },
+        {
+          "refId": "D",
+          "format": "table",
+          "instant": true,
+          "expr": "sum by (system_version) (count_over_time(agentic_task_finished{product=~\"$product\", task_status=\"waiting_on_human\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))"
+        },
+        {
+          "refId": "E",
+          "format": "table",
+          "instant": true,
+          "expr": "sum by (system_version) (sum_over_time(agentic_task_invocations{product=~\"$product\", system_version=~\"$version\"}[$__range])) / sum by (system_version) (sum_over_time(agentic_task_finished{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "system_version": "Versión",
+              "Value #A": "USD por tarea",
+              "Value #B": "Retrabajo",
+              "Value #C": "Terminadas",
+              "Value #D": "Escaladas",
+              "Value #E": "Invocaciones por tarea"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "USD por tarea",
+                "desc": false
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "USD por tarea"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Retrabajo"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 0.1
+                    },
+                    {
+                      "color": "red",
+                      "value": 0.3
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Invocaciones por tarea"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
       "id": 10,
       "type": "timeseries",
       "title": "Costo por tarea terminada, por versión del sistema",
@@ -302,7 +465,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 4,
+        "y": 12,
         "w": 12,
         "h": 9
       },
@@ -356,7 +519,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 4,
+        "y": 12,
         "w": 12,
         "h": 9
       },
@@ -411,7 +574,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 13,
+        "y": 21,
         "w": 12,
         "h": 9
       },
@@ -484,7 +647,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 13,
+        "y": 21,
         "w": 12,
         "h": 9
       },
@@ -534,7 +697,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 22,
+        "y": 30,
         "w": 24,
         "h": 8
       },
@@ -613,7 +776,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 30,
+        "y": 38,
         "w": 12,
         "h": 9
       },
@@ -670,7 +833,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 30,
+        "y": 38,
         "w": 12,
         "h": 9
       },
@@ -727,7 +890,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 39,
+        "y": 47,
         "w": 12,
         "h": 9
       },
@@ -784,7 +947,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 39,
+        "y": 47,
         "w": 12,
         "h": 9
       },
@@ -841,7 +1004,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 48,
+        "y": 56,
         "w": 12,
         "h": 8
       },
@@ -915,7 +1078,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 48,
+        "y": 56,
         "w": 12,
         "h": 8
       },
@@ -993,7 +1156,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 56,
+        "y": 64,
         "w": 12,
         "h": 8
       },
@@ -1071,7 +1234,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 56,
+        "y": 64,
         "w": 12,
         "h": 8
       },
@@ -1128,7 +1291,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 64,
+        "y": 72,
         "w": 24,
         "h": 8
       },
@@ -1191,7 +1354,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 72,
+        "y": 80,
         "w": 12,
         "h": 8
       },
@@ -1248,7 +1411,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 72,
+        "y": 80,
         "w": 12,
         "h": 8
       },
@@ -1305,7 +1468,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 80,
+        "y": 88,
         "w": 12,
         "h": 8
       },
@@ -1355,7 +1518,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 80,
+        "y": 88,
         "w": 12,
         "h": 8
       },
@@ -1412,7 +1575,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 88,
+        "y": 96,
         "w": 12,
         "h": 9
       },
@@ -1469,7 +1632,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 88,
+        "y": 96,
         "w": 12,
         "h": 9
       },
@@ -1512,7 +1675,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 97,
+        "y": 105,
         "w": 24,
         "h": 8
       },
