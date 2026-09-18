@@ -26,6 +26,7 @@ from .schemas import (
     Definition,
     Delivery,
     InterviewTurn,
+    PlatformAnswers,
     Review,
     RoleOutput,
     SolutionTurn,
@@ -244,6 +245,26 @@ TECH_LEAD = Role(
     max_turns=12,
 )
 
+# The platform path (issue #46, ADR-0017): the same solution stage with no PM behind
+# it. Variants and not flags on the roles above, because what changes is structural:
+# there is no definition to govern behaviour, and a question that a PM would have
+# answered has only the human left. They read PjM, the one role upstream, so the grill
+# can see on what grounds the task was called a platform enhancement at all.
+TECH_LEAD_EPHEMERAL_PLATFORM = replace(
+    TECH_LEAD_EPHEMERAL, slug="tech_lead_ephemeral_platform", reads=(ORIGINAL, PJM.name)
+)
+
+TECH_LEAD_INTERVIEWEE_PLATFORM = replace(
+    TECH_LEAD_INTERVIEWEE,
+    slug="tech_lead_interviewee_platform",
+    reads=(ORIGINAL, PJM.name),
+    schema=PlatformAnswers,
+)
+
+TECH_LEAD_PLATFORM = replace(
+    TECH_LEAD, slug="tech_lead_platform", reads=(ORIGINAL, PJM.name, SOLUTION_INTERVIEW)
+)
+
 TECH_LEAD_REVIEWER = Role(
     name="Tech Lead",
     slug="tech_lead_review",
@@ -310,6 +331,9 @@ ROLES = (
     TECH_LEAD_INTERVIEWEE,
     PM_CONSULTANT,
     TECH_LEAD,
+    TECH_LEAD_EPHEMERAL_PLATFORM,
+    TECH_LEAD_INTERVIEWEE_PLATFORM,
+    TECH_LEAD_PLATFORM,
     TECH_LEAD_REVIEWER,
     DEVELOPER,
     DEVELOPER_INTEGRATOR,
@@ -375,4 +399,12 @@ INTERVIEW_SOLUTION = Interview(
     interviewee=TECH_LEAD_INTERVIEWEE,
     author=TECH_LEAD,
     consultant=PM_CONSULTANT,
+)
+# No consultant: on the platform path the questions the Tech Lead cannot settle go to
+# the human, which is what `interview` already does when there is nobody to consult
+# (issue #46). The section name is the same, so a document reads the same on both paths.
+INTERVIEW_SOLUTION_PLATFORM = Interview(
+    interviewer=TECH_LEAD_EPHEMERAL_PLATFORM,
+    interviewee=TECH_LEAD_INTERVIEWEE_PLATFORM,
+    author=TECH_LEAD_PLATFORM,
 )

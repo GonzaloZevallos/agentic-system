@@ -221,7 +221,9 @@ def build_graph(ports_for: PortsFor, telemetry: Telemetry = NoTelemetry()) -> St
     graph.add_node(PAUSE, pause)
 
     graph.add_edge(START, "classify")
-    graph.add_conditional_edges("classify", _route(rules.after_classify), ["define", ESCALATE])
+    graph.add_conditional_edges(
+        "classify", _route(rules.after_classify), ["define", "plan", ESCALATE]
+    )
     graph.add_conditional_edges("define", _route(rules.after_define), ["validate", ESCALATE])
     graph.add_conditional_edges(
         "validate", _route(rules.after_validate), ["define", "plan", ESCALATE]

@@ -125,12 +125,34 @@ class Answers(RoleOutput):
 
 
 class TechAnswers(RoleOutput):
-    """One round of the Tech Lead as interviewee: a decision per question, and what it
-    consults PM about (glossary: Consulta). It never asks the human directly."""
+    """One round of the Tech Lead as interviewee on the feature path: a decision per
+    question, and what it consults PM about (glossary: Consulta). It never asks the
+    human directly; there is a PM between them."""
 
     questions_for_pm: list[str] = Field(
         description="Behaviour the definition does not settle or contradicts the code, "
         "written for someone who has not read this interview"
+    )
+
+
+class PlatformAnswers(RoleOutput):
+    """One round of the Tech Lead as interviewee on the platform path, where there is no
+    definition and no PM to consult (issue #46): what only a person can decide goes
+    straight to the human.
+
+    A schema of its own and not a flag on `TechAnswers`: which door a question takes is
+    the path's decision, and a role that could pick would be picking who answers it."""
+
+    questions_for_human: list[str] = Field(
+        description="Product decisions this plan cannot be settled without, that neither "
+        "the request nor the product knowledge answers, written for a person who has not "
+        "read the task. A platform enhancement should need none: a question here is "
+        "usually a sign the task is really a feature and was classified wrong"
+    )
+    withdrawn: list[int] = Field(
+        default_factory=list,
+        description="Numbers, from `## With the human` as received this round, of the "
+        "questions this round's answers settle after all; empty if none",
     )
 
 

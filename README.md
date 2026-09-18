@@ -94,6 +94,10 @@ La etapa de definición es **estrictamente secuencial**. Se evaluó paralelizarl
 descartó: el riesgo de que UI diseñe sobre un flujo que UX Lead después cambia pesa más
 que la velocidad ganada.
 
+**Implementado (etapa 1)**: PjM, Product Analyst con su entrevista a PM, PM, Tech Lead con
+el efímero, Developers y la revisión de Tech Lead, hasta el pull request. Data Analyst,
+UX/UI, Tech Writer, QA y la validación final de PM esperan a sus etapas (§11).
+
 ### Bug
 
 ```
@@ -112,6 +116,10 @@ posee. **UX no participa en bugs.**
 
 Los bugs no llevan métricas ni dashboard.
 
+**Implementado**: nada más allá de la clasificación. `classify` lo escala con `bug path
+not implemented yet`; el camino espera a que el producto tenga conocimiento de producto
+escrito contra el cual dictaminar (§11).
+
 ### Platform enhancement
 
 ```
@@ -128,6 +136,16 @@ si el cambio es aceptable:
 - No aceptable → vuelve a Tech Lead. Cuenta como devolución del par QA→Tech Lead.
 
 Esa consulta no suma al par PjM→PM.
+
+**Implementado (#46)**: de PjM al plan sin pasar por la definición. El Tech Lead efímero
+entrevista a Tech Lead con el issue, el conocimiento de producto y el motivo de PjM como
+único insumo; como no hay PM a quien consultar, lo que sólo una persona puede decidir va al
+humano. Se espera que no haya nada: una pregunta de producto en este camino es señal de
+que la tarea era una feature mal clasificada. Developers y revisión, iguales que en
+feature. Mientras no hay QA cierra como el camino de feature, un pull request que el humano
+mergea o no (ADR-0011): que el comportamiento no cambió lo verifica hoy la revisión de
+Tech Lead contra el brief y el código previo, y la devolución QA→PjM→PM queda para cuando
+QA entre (etapa 2, §11). Ningún nodo de este camino exige flags, métricas ni dashboard.
 
 ---
 
@@ -763,7 +781,8 @@ refutar.
 | 5 | SRE/Ops, Customer Insights | Cuando haya producción y usuarios |
 
 **Consecuencia asumida**: el camino de bug no se puede ejercitar hasta que el producto tenga
-conocimiento de producto escrito. Las primeras tareas del sistema son todas features.
+conocimiento de producto escrito. Las primeras tareas del sistema son features o platform
+enhancements (#46); el sistema como producto propio entra siempre por el segundo (ADR-0017).
 
 **Segunda consecuencia asumida**: en la etapa 1 no hay QA, así que Tech Lead arranca sin el
 plan de tests funcionales y Developer escribe los tests desde la definición y las costuras
@@ -791,7 +810,7 @@ existe justamente para pagar ese costo solo donde compre calidad.
 | 5 | Señales y umbrales de SRE/Ops para decidir que algo es bug, más deduplicación | SRE/Ops, etapa 5 |
 | 6 | ~~Lista de secciones que lee cada rol~~ **resuelto**: `Role.reads`, la entrada del rol son esas secciones completas. Cada rol nuevo declara la suya al entrar | — |
 | 7 | UX Lead, Design Lead y Tech Writer en detalle | Etapa 4 |
-| 8 | Criterio de clasificación de PjM y qué hace si duda | PjM |
+| 8 | ~~Criterio de clasificación de PjM y qué hace si duda~~ **resuelto** (#46): el criterio es qué notaría un usuario del producto, no quién escribió el issue ni cuán técnico suena; vive en el prompt de PjM. Si encaja en dos tipos o en ninguno, `confidence: low` escala | — |
 | 9 | ~~Cuántos Tech Leads existen~~ **resuelto**: un rol, una instancia por tarea; el modo proactivo es el mismo rol. El efímero no es un rol de la lista, es el entrevistador de Tech Lead (ADR-0014) | — |
 | 10 | ~~Versionado de prompts~~ **resuelto**: `.md` por rol con overlay en el producto, hash por tarea (ADR-0005). Falta el versionado de **parámetros** de `Configuration` | Mejora del proceso de PjM |
 | 11 | Las cinco tareas del set de evaluación, todavía sin escribir | Medir cualquier cosa |

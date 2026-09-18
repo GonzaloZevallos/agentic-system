@@ -16,7 +16,7 @@ from __future__ import annotations
 from agentic.shared.configuration import Configuration
 
 from ..domain import schemas
-from ..domain.roles import INTERVIEW_SOLUTION, TECH_LEAD
+from ..domain.roles import INTERVIEW_SOLUTION, INTERVIEW_SOLUTION_PLATFORM, Interview
 from ..domain.task import Subtask, TaskState, apply
 from .checkouts import SetupFailed, task_checkout
 from .interview import interview
@@ -25,22 +25,23 @@ from .run_role import finish, run_role
 
 
 async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
+    spec = solution_interview(state)
     try:
         task = task_checkout(state, cfg, ports)
     except SetupFailed as unprepared:
-        return finish(state, unprepared.patch(TECH_LEAD), ports)
-    transcript, patch = await interview(state, INTERVIEW_SOLUTION, cfg, ports, cwd=task.path)
+        return finish(state, unprepared.patch(spec.author), ports)
+    transcript, patch = await interview(state, spec, cfg, ports, cwd=task.path)
     ports.workspace.commit_all(task.path, f"{state['id']}: solution interview")
     if transcript is None:
         return finish(state, patch, ports)
     output, written = await run_role(
         apply(state, patch),
-        TECH_LEAD,
+        spec.author,
         cfg,
         ports,
         check=schemas.plan_check,
         cwd=task.path,
-        resume=transcript.sessions.get(INTERVIEW_SOLUTION.author_side.slug),
+        resume=transcript.sessions.get(spec.author_side.slug),
         proposed_invariants=_proposed(transcript.invariants),
     )
     if output is not None:
@@ -49,6 +50,13 @@ async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
         written["integration_brief"] = output.data["integration"].strip()
         written["status"] = "planned"
     return finish(state, apply(patch, written), ports)
+
+
+def solution_interview(state: TaskState) -> Interview:
+    """Which solution interview this task gets. A feature has a PM behind it to consult;
+    a platform enhancement has none, so the same two Tech Leads run with the human as
+    the only door for a question that is really about the product (issue #46)."""
+    return INTERVIEW_SOLUTION if state.get("type") == "feature" else INTERVIEW_SOLUTION_PLATFORM
 
 
 def _proposed(invariants: list[str]) -> str:

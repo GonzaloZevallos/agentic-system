@@ -47,11 +47,20 @@ async def test_classify_escalates_on_low_confidence(cfg):
     assert "PjM could not classify" in patch["escalated"]
 
 
-async def test_classify_escalates_paths_not_built_yet(cfg):
+async def test_classify_escalates_the_bug_path_not_built_yet(cfg):
     ports = memory_ports(ScriptedRunner(pjm=[classified(type_="bug")]))
     patch = await classify(TASK, cfg, ports)
     assert patch["type"] == "bug"
     assert patch["escalated"] == "bug path not implemented yet"
+
+
+async def test_classify_lets_a_platform_enhancement_through(cfg):
+    """Of the three paths, the platform one is built (issue #46): nothing to escalate, and
+    where it goes next is the routing's call, not this node's."""
+    ports = memory_ports(ScriptedRunner(pjm=[classified(type_="platform_enhancement")]))
+    patch = await classify(TASK, cfg, ports)
+    assert patch["type"] == "platform_enhancement"
+    assert "escalated" not in patch and "status" not in patch
 
 
 async def test_define_reads_the_knowledge_and_proposes_flags(cfg):

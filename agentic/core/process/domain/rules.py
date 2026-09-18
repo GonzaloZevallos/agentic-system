@@ -463,7 +463,13 @@ def spent_by_phase(state: TaskState) -> dict[str, float]:
 
 
 def after_classify(state: TaskState) -> str | None:
-    return None if state.get("escalated") else "define"
+    """The fork between the paths of README §2. A feature goes through the definition
+    stage; a platform enhancement has no product behaviour to define and starts at the
+    plan, the shortest of the three paths (issue #46). A bug never reaches here:
+    `classify` escalates it, and an escalation ends the run."""
+    if state.get("escalated"):
+        return None
+    return "define" if state.get("type") == "feature" else "plan"
 
 
 def after_define(state: TaskState) -> str | None:
@@ -578,5 +584,11 @@ def resume_target(state: TaskState) -> str | None:
         return None
     status = state.get("status", "open")
     if status == "open":
-        return "define" if state.get("type") == "feature" else "classify"
+        # The same fork as `after_classify`, plus the road back to PjM: a bug escalated
+        # there, and a resume may carry the human's reclassification, which only PjM
+        # turns into a type (issue #46).
+        task_type = state.get("type")
+        if task_type == "feature":
+            return "define"
+        return "plan" if task_type == "platform_enhancement" else "classify"
     return {"defined": "validate", "returned": "define", "definition_ready": "plan"}.get(status)

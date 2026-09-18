@@ -343,13 +343,56 @@ async def test_low_confidence_escalates_before_defining(config):
     assert len(script.calls) == 1
 
 
-async def test_non_feature_escalates(config):
+async def test_a_bug_escalates_after_classification(config):
     script = ScriptedRunner(pjm=[classified(type_="bug")])
     final = await run_graph(script, config)
     assert final["type"] == "bug"
     assert final["status"] == WAITING_ON_HUMAN
     assert final["escalated"] == "bug path not implemented yet"
     assert len(script.calls) == 1
+
+
+async def test_a_platform_enhancement_goes_from_pjm_straight_to_the_plan(config, tmp_path):
+    """The platform path (README.md, 2; issue #46): no Product Analyst, no PM, no flags.
+    The same technical stage as a feature, run by the platform variants of the Tech
+    Lead, and the delivery with no definition to show."""
+    fakes = Fakes()
+    script = ScriptedRunner(
+        pjm=[classified(type_="platform_enhancement")],
+        tech_lead_ephemeral_platform=[questions(done=True)],
+        tech_lead_platform=[planned()],
+        developer=[delivered()],
+        tech_lead_review=[reviewed("approved")],
+    )
+    final = await run_graph(script, config, fakes=fakes)
+
+    assert final["status"] == "ready_for_review"
+    assert final["type"] == "platform_enhancement"
+    assert script.slugs == [
+        "pjm",
+        "tech_lead_ephemeral_platform",
+        "tech_lead_platform",
+        "developer",
+        "tech_lead_review",
+    ]
+    assert list(final["sections"]) == [
+        PJM.name,
+        SOLUTION,
+        "Tech Lead",
+        FINDINGS,
+        "Developer: api",
+        "Tech Lead: review api",
+    ]
+    assert "flags" not in final  # no Product Analyst ran, so no flags were ever proposed
+    assert final["pull_request"].endswith("/pull/7")
+    assert [m for _, m in fakes.workspace.commits] == ["GH-1: solution interview"]
+    # The Tech Leads read PjM's reason, and nothing claims a definition that is not there.
+    for call in script.calls[1:3]:
+        assert "## PjM\n\nClear." in call["prompt"]
+        assert "## PM" not in call["prompt"]
+    assert "platform enhancement" in script.calls[1]["system_prompt"]
+    doc = FilesystemTaskDocuments(tmp_path).load("GH-1")
+    assert doc["type"] == "platform_enhancement" and PM.name not in doc["sections"]
 
 
 async def test_return_loops_back_then_approves(config):

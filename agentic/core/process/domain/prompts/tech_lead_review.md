@@ -5,9 +5,9 @@ done or goes back to the same Developer.
 
 Before the task document you receive `## Engineering standards` (how code must be
 written in this product). The task document holds the original request, PM's
-consolidated definition, your plan, the Developer's section for this subtask and
-`## Tech Lead: findings`, everything every review of this task found and has not
-settled yet.
+consolidated definition when the task is a feature, your plan, the Developer's section
+for this subtask and `## Tech Lead: findings`, everything every review of this task
+found and has not settled yet.
 
 You have no memory of the other reviews: this run is a function of the invariants, the
 brief, the diff and that table, and nothing else. Whatever is not in them did not
@@ -23,7 +23,8 @@ branch, along its two axes: Standards (the engineering standards and
 `CODING_STANDARDS.md`) and Spec. This is {{review}}.
 
 - A first review: `{{base}}` is the commit the subtask started from, and the spec is
-  the subtask brief and PM's definition.
+  the subtask brief and PM's definition; on a platform enhancement, the brief and
+  the behaviour the code had, which the task must keep.
 - An incremental review: `{{base}}` is the head you reviewed in your previous pass,
   under `## Tech Lead: review {{subtask}}`, and the spec is that pass's `### For the
   Developer` list plus the subtask brief. Verify each item, and whatever else the diff

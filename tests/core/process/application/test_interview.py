@@ -6,7 +6,11 @@ import pytest
 from agentic.core.process.application.define import define
 from agentic.core.process.application.interview import interview
 from agentic.core.process.application.ports import AttemptFailed
-from agentic.core.process.domain.roles import INTERVIEW_DEFINITION, INTERVIEW_SOLUTION
+from agentic.core.process.domain.roles import (
+    INTERVIEW_DEFINITION,
+    INTERVIEW_SOLUTION,
+    INTERVIEW_SOLUTION_PLATFORM,
+)
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
     ScriptedRunner,
@@ -433,3 +437,50 @@ async def test_a_clarification_that_consolidates_a_file_without_jobs_is_a_role_f
     assert transcript is None and patch["status"] == "waiting_on_human"
     assert "PM failed" in patch["escalated"] and "## Jobs" in patch["failures"][0]["error"]
     assert ports.knowledge.definitions == {}
+
+
+# The platform path has no consultant (issue #46): the same two Tech Leads, and what the
+# Tech Lead cannot settle goes to the human itself, the door `interview` already had for
+# an interviewee with nobody to consult.
+
+TL_ASK_P, TL_ANSWER_P = "tech_lead_ephemeral_platform", "tech_lead_interviewee_platform"
+CLASSIFIED = {**TASK, "type": "platform_enhancement", "sections": {"PjM": "No behaviour change."}}
+
+
+async def test_on_the_platform_path_the_tech_lead_asks_the_human_itself(cfg):
+    runner = ScriptedRunner(
+        **{
+            TL_ASK_P: [questions(1, session="e1"), questions(done=True)],
+            TL_ANSWER_P: [answers(1, for_human=["Should the old endpoint stay?"])],
+        }
+    )
+    ports = memory_ports(runner)
+    transcript, patch = await interview(CLASSIFIED, INTERVIEW_SOLUTION_PLATFORM, cfg, ports)
+
+    assert transcript is None  # questions for the human: the interview ends in an escalation
+    assert runner.slugs == [TL_ASK_P, TL_ANSWER_P, TL_ASK_P]  # nobody consulted in between
+    assert patch["questions_for_human"] == ["Should the old endpoint stay?"]
+    assert patch["escalated"].startswith("Tech Lead could not decide 1 question(s)")
+    # PjM's reason is what they read upstream; no definition is claimed.
+    assert "## PjM\n\nNo behaviour change." in runner.calls[1]["prompt"]
+    assert "## PM" not in runner.calls[1]["prompt"]
+    assert "## With the human\n\n1. Should the old endpoint stay?" in runner.calls[2]["prompt"]
+    section = patch["sections"]["Interview: Tech Lead efímero→Tech Lead"]
+    assert "### Round 1: answers" in section and "PM answers" not in section
+
+
+async def test_on_the_platform_path_a_settled_question_is_withdrawn_by_the_tech_lead(cfg):
+    runner = ScriptedRunner(
+        **{
+            TL_ASK_P: [questions(1), questions(2), questions(done=True)],
+            TL_ANSWER_P: [
+                answers(1, for_human=["Keep the old endpoint?"]),
+                answers(2, withdrawn=[1]),
+            ],
+        }
+    )
+    transcript, patch = await interview(
+        CLASSIFIED, INTERVIEW_SOLUTION_PLATFORM, cfg, memory_ports(runner)
+    )
+    assert transcript is not None
+    assert "escalated" not in patch and "questions_for_human" not in patch
