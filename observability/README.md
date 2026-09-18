@@ -73,6 +73,9 @@ cerrada — nunca un id de tarea, un título, un id de sesión, una línea de co
 | `agentic.role.queue_wait` | ídem | Segundos que esa corrida esperó un cupo de concurrencia, antes de empezar a correr; nunca incluido en `run_duration` | s |
 | `agentic.role.failures` | `product`, `role`, `role.slug`, `phase` (si la falla tiene sección), `reason` | Intentos fallidos de una patch, una muestra por motivo con el conteo como valor | — |
 | `agentic.role.failure_cost_usd` | ídem | Costo de los intentos fallidos de una patch, por motivo. **No es aditivo con `agentic.role.cost_usd`**: el mismo dólar ya cuenta una vez, dentro del costo de una corrida que reintentó o dentro de la muestra residual | USD |
+| `agentic.review.findings` | `product`, `severity`, `category`, `status`, `review.kind`, `system.version` | Hallazgos de una revisión: una muestra por celda (severidad, categoría, estado) con el conteo de hallazgos de esa revisión que caen ahí como valor. Nada si la revisión no dejó hallazgos | — |
+| `agentic.presubmit.checks` | `product`, `check`, `result`, `final` | Una muestra por chequeo de cada invocación de la puerta de entrega que llegó a correr los chequeos: 1 si el chequeo pasó (`result=green`) o falló (`result=red`). Una entrega puede ser rechazada y reintentar dentro del mismo turno; solo la última invocación es `final=true` | — |
+| `agentic.presubmit.duration` | ídem | Cuánto tardó ese chequeo, en esa invocación | s |
 
 `role.slug` es el `Role.slug` de la corrida (17 valores; `unknown` en una corrida grabada
 antes de este campo). `phase` ∈ {definition, plan, development, review} (`rules.phase_of`,
@@ -83,6 +86,23 @@ corrida contra la que se escribió (la última cuya sección es una clave de
 una patch con varias (una entrevista) es `delivered`. `reason` ∈ {schema, check, max_turns,
 limit, sdk, other}, decidido en el sitio donde se lanza `AttemptFailed`, nunca por parsear
 el mensaje de error.
+
+`review.kind` ∈ {first, incremental, integration} (`rules.review_kind`): `integration`
+para la revisión de la pieza integrada, siempre, sea cual sea el pase; `first` para
+cualquier otra subtarea hasta que una devolución la manda de vuelta, `incremental`
+(ADR-0015) en todo pase después de esa. `category` es la lista cerrada de `FindingCategory`
+(ADR-0016) y `status` el que la tabla de hallazgos le dio (`open`, `dismissed`; `fixed` es
+derivado y no se emite, porque se sabe recién en un pase posterior). Ambas se escriben en
+el propio patch de `review` — una clave de medición, como `subtask_id`: nunca viaja al
+padre del fan-out ni se persiste en el documento.
+
+`check` es el nombre del chequeo tal como lo declara `.agentic/stack.yaml` del producto
+(`tests`, `lint`, `format` hoy; cerrado por el producto, no por el sistema). `final` marca
+la última invocación de la puerta de entrega de una corrida de Developer: la que se
+convirtió en la entrega, o la que el backstop dejó pasar igual, en rojo, agotados los
+rechazos. Las invocaciones de una corrida viajan en el patch de `develop` bajo
+`presubmit_checks`, otra clave de medición: nunca se persiste, y por eso una entrega
+rechazada dos veces dentro del mismo turno deja tres juegos de muestras y no uno.
 
 ## Costo en Langfuse
 
