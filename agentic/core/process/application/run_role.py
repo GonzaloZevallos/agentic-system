@@ -156,6 +156,22 @@ def preamble(role: Role, ports: Ports, root: Path | None = None) -> tuple[str, s
     return standards, knowledge
 
 
+def with_context(
+    state: TaskState,
+    role: Role,
+    ports: Ports,
+    cwd: Path | None,
+    text: str,
+    extra_sections: tuple[str, ...] = (),
+) -> str:
+    """`text` after the role's full reading, for a role with no session to resume (an
+    interview's first round, a consultant with none) and for the cold prompt a caller
+    hands `run_with_retry` when a resumed session turns out stale: the full context the
+    session would otherwise skip, plus whatever `text` adds on top of it."""
+    standards, knowledge = preamble(role, ports, cwd)
+    return context_for(state, role, knowledge, standards, extra_sections) + "\n\n" + text
+
+
 def load_prompt(
     role: Role, cfg: Configuration, ports: Ports, vocabulary: dict[str, str], **placeholders: object
 ) -> Prompt:

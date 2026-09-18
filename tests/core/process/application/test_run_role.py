@@ -14,6 +14,7 @@ from agentic.core.process.application.run_role import (
     run_role,
     run_with_retry,
     task_cap,
+    with_context,
 )
 from agentic.core.process.domain.document import HUMAN
 from agentic.core.process.domain.roles import DEVELOPER, PJM, PM, PRODUCT_ANALYST, ROLES
@@ -367,6 +368,24 @@ async def test_run_role_builds_the_patch_and_the_history(tmp_path):
     assert "- `touches_ui`: UI" in call["system_prompt"]
     assert call["json_schema"]["properties"]["flags"]["required"] == ["touches_ui", "touches_copy"]
     assert "## PM\n\nreturned" in call["prompt"] and "## Product Analyst\n\nv1" in call["prompt"]
+
+
+def test_with_context_prepends_the_full_reading_before_the_given_text():
+    # The shape every cold-start caller already needs (`interview`'s first round, a
+    # consultant with no session, and now a returned Developer's cold fallback):
+    # standards, the declared sections plus `extra_sections`, then whatever the
+    # caller's own text adds on top.
+    state = {
+        "title": "Export",
+        "description": "Users want CSV.",
+        "sections": {"Developer: api": "done"},
+    }
+    ports = memory_ports()
+    text = with_context(
+        state, DEVELOPER, ports, None, "## Delta\n\nnew", extra_sections=("Developer: api",)
+    )
+    assert text.startswith("## Engineering standards\n\nHex.\n\n## Original request")
+    assert text.endswith("## Developer: api\n\ndone\n\n## Delta\n\nnew")
 
 
 def test_run_record_carries_tokens_calls_and_tool_calls_from_the_output():

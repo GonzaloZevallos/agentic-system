@@ -21,7 +21,7 @@ from ..domain.task import INTEGRATION, TaskState
 from .checkouts import SetupFailed, subtask_checkout
 from .ports import Ports
 from .presubmit import CheckoutPresubmit, declared_checks
-from .run_role import context_for, finish, preamble, run_role
+from .run_role import finish, run_role, with_context
 
 
 async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
@@ -68,8 +68,7 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     prompt = cold_prompt = None
     if resume:
         prompt = rules.returned_developer_delta(state, subtask_id, checkout.branch, before)
-        standards, knowledge = preamble(role, ports, checkout.path)
-        cold_prompt = context_for(state, role, knowledge, standards, extra_sections)
+        cold_prompt = with_context(state, role, ports, checkout.path, prompt, extra_sections)
     output, patch = await run_role(
         state,
         role,

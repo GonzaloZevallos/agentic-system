@@ -222,6 +222,12 @@ async def test_a_returned_developer_with_a_stale_session_falls_back_cold_with_a_
     assert "## Original request" in retry["prompt"]
     assert "## PM" in retry["prompt"]
     assert "old work" in retry["prompt"]
+    # Plus the same delta the resumed session would have read, appended at the end
+    # (`with_context`): the branch head note, the reason and the review.
+    assert retry["prompt"].endswith(
+        "## Tech Lead: review api\n\n**Returned:** no test\n\n### Verdict\n\n**returned**: no test"
+    )
+    assert "Branch `agentic/GH-12.api` is at `head1`." in retry["prompt"]
     section = patch["sections"]["Developer: api"]
     assert section.startswith(
         "_The system asked to resume the previous session; the harness could not"
