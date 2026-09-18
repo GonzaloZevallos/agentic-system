@@ -280,3 +280,92 @@ así descrito prohibiría `product`, `role` y `role.outcome`, que se quedan bare
 que la cadena que identifica un rol sea una y la misma en cada sitio que la toca un diff —
 superado por pedir que la fuente sea siempre `Role.name` o `Role.slug`, que un revisor
 puede chequear mirando un solo call site en vez de comparar tres.
+
+## Adenda (2026-09-18): la corrida de rol es la muestra, no el nodo
+
+Del 13 al 18 de septiembre, lo medido no alcanzaba para saber dónde se va la plata ni si
+el trabajo es bueno. `tech_lead`, `tech_lead_review`, `tech_lead_interviewee`,
+`tech_lead_ephemeral` y sus variantes `*_platform` eran todos `role="Tech Lead"`: el 58%
+del gasto sin distinguir plan, entrevista y revisión. Sin tokens ni llamadas: solo Langfuse
+las tenía, y en `events_only` no expone métricas. Las escaladas eran un conteo sin motivo.
+Cada invocación (`agentic resume`) repetía el acumulado de la tarea, así que el retrabajo
+se contaba dos veces y todo el costo iba a la versión que terminaba, no a las que
+corrieron. Nada medía calidad: ni hallazgos por revisión, ni si una entrega llegó roja al
+presubmit, ni rondas o preguntas de una entrevista.
+
+Decisión, en cinco familias, todas eventos, todas etiquetas de cardinalidad acotada (un
+enum, un `Role.slug`, o la salida de una función `rules.*` cerrada; `system.version` y
+`prompts.fingerprint` siguen siendo las dos únicas sin acotar):
+
+1. **Labels nuevos en las métricas de rol que existen**: `role.slug`, `phase`
+   (`rules.phase_of`) y `role.outcome` también en `agentic.role.cost_usd` (antes solo en
+   `.duration`). Se agregan, no se renombran — el spine, `role-labels-spine`.
+2. **Tokens, llamadas, turnos y herramientas** por corrida de rol, desde
+   `ResultMessage.usage` y del conteo del runner sobre los mensajes que ya observa —
+   subtarea `tokens`.
+3. **Calidad**: hallazgos por revisión (`agentic.review.findings`), chequeos de presubmit
+   por entrega (`agentic.presubmit.checks`, `.duration`) y fallas de rol por motivo
+   (`agentic.role.failures`, `.failure_cost_usd`) — subtarea `quality`.
+4. **Entrevistas**: rondas, preguntas por destinatario, invariantes propuestos y
+   adoptados — subtarea `interviews`.
+5. **Tarea**: deltas por invocación (`agentic.invocation.*`, lo que una corrida de
+   `run`/`resume` gastó ella sola, nunca el acumulado) y el motivo de escalado como un
+   campo del estado, `escalation_class`, cerrado y escrito por un solo constructor de
+   dominio junto con `escalated` — subtarea `task-events`.
+
+**El problema que el spine resuelve primero: un span, muchas corridas de rol.**
+`RoleRun.finish` leía `runs[-1]`: las cuatro rondas efímeras del plan, las cuatro de la
+entrevistada y las consultas de PM colapsaban en una muestra con un modelo, una sesión y
+un hash de prompt. Ahora itera cada entrada de `runs` de la patch: una muestra de
+`agentic.role.cost_usd` y un span hijo por corrida, con su propio agente, modelo, sesión y
+hash de prompt — la forma que esta misma adenda ya fijó para un rol, aplicada por fin a
+algo que es una corrida sola. El span de rol sigue agregando (el modelo y la sesión de la
+última corrida, como siempre) y pasa a llevar la **tupla** de cada hash de prompt que
+corrió, no el último que pisó a los otros.
+
+**La regla residual: la plata que ninguna corrida contabiliza.** `run_record` graba
+`cost_usd = output.cost_usd`, que ya incluye los intentos fallidos, así que para un nodo
+sano las corridas suman el `cost_usd` de la patch. Dos caminos dejan plata sin corrida: la
+escalada de `run_role` y `graph._node` cerrando con `run.finish({})` en una excepción.
+Después de iterar las corridas, el adaptador deja una muestra residual por la diferencia
+sobre medio centavo (el mismo piso que `rules.spent_by_phase` ya usaba) y una muestra en
+cero para una patch vacía — sin esto la tarea enviaría la misma discrepancia que el issue
+#72 existe para arreglar, mientras lo posterga a propósito.
+
+**Un `record()` nunca pisa el mismo instrumento con los mismos labels.** Dos corridas que
+comparten cada label salvo la sesión ya no colapsan en una muestra: `Run._emit` pasa de
+una vez por nodo a una vez por corrida (y una más para la residual, y una más para las
+fallas por motivo). El volumen de flushes crece con el número de corridas por patch, no
+por nodo — antes, una entrevista de ocho rondas dejaba un flush; ahora deja nueve.
+
+**Nombres que se agregan, nunca se repiten.** `agentic.role.duration` queda exactamente
+como estaba — mismos labels, mismo grano de nodo, mismos bytes en el span de span-test —
+porque una duración por corrida pide su propia serie: `agentic.role.run_duration`, medida
+*dentro* del cupo de concurrencia, con la espera en `agentic.role.queue_wait`, su propia
+serie, para que un panel nunca reporte cola como trabajo. `agentic.role.cost_usd` gana
+labels solamente, lo que es aditivo y no cambia ninguna suma histórica.
+
+**`role.outcome` en un grano por corrida.** El mismo juego de valores en ambas series
+(`delivered`, `returned`, `escalated`, `failed`): el veredicto de la patch se aplica a la
+corrida contra la que se escribió — la última cuya sección es una clave de
+`patch["sections"]` — y toda otra corrida de una patch con varias es `delivered`; `failed`
+y `escalated` viven en la muestra residual, que es lo único sin corrida detrás. Una función
+pura en `core/measurement/domain/metrics.py`.
+
+**Consecuencias.**
+
+- Un documento escrito antes de esta adenda no tiene `slug`, `started_at`, `ended_at` ni
+  `queue_wait_s` en sus corridas, ni `reason`, `slug` ni `section` en sus fallas: cada
+  lectura usa `.get()` con su default documentado, y una corrida sin `slug` deja
+  `role.slug=unknown` en vez de perderse (el mismo trato que `product` e `id` tuvieron en
+  sus propias adendas).
+- El nodo de revisión pasaba `TECH_LEAD` (el rol del plan) a `role_span`: la revisión y el
+  plan compartían `role.slug=tech_lead`, la causa concreta del 58% sin distinguir que abre
+  esta adenda. Pasa `TECH_LEAD_REVIEWER` (`role.slug=tech_lead_review`); el rol que el
+  caso de uso corre no cambia, solo la etiqueta del span.
+
+Opciones descartadas: convertir los cinco pares corrida-por-corrida en una sola muestra
+agregada con más labels — pierde la posibilidad de un `queue_wait` o un `run_duration` por
+corrida, que es justo el punto; mandar la duración por corrida bajo el nombre existente de
+`agentic.role.duration` — partiría en dos el significado de una serie de trece meses a
+mitad de camino, lo que la regla "se agrega, no se renombra" existe para evitar.

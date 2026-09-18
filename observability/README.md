@@ -18,27 +18,32 @@ sistema ──────┘                      └──> Grafana Cloud     
 
 Solo lo que emite el sistema, identificado como `service.name: agentic-system`:
 
-- Un span por tarea y uno por rol. El span de rol sigue las convenciones semánticas GenAI
-  de OpenTelemetry (ADR-0008, adenda): se llama `invoke_agent <rol>`, con
-  `gen_ai.operation.name=invoke_agent`, `gen_ai.agent.name` (`Role.name`) y
-  `gen_ai.agent.id` (`Role.slug`). Lo que la convención no nombra queda bajo `agentic.`:
-  costo, retrabajo, versión de la entrega, modelo, turnos, `session_id`, hash del
-  prompt y categorías de devolución (`agentic.role.cost_usd`, `.rework`, `.version`,
-  `.model`, `.turns`, `.session_id`, `.prompt_hash`, `.return_categories`). `product`,
-  `role` y `role.outcome` quedan sin prefijo: ya son el mismo nombre en la métrica. El
-  collector borra `task.title` antes de mandarlo.
-- Las métricas del sistema (`agentic/core/measurement/CONTEXT.md`): `agentic.task.cost_usd`,
-  `agentic.task.rework_usd`, `agentic.task.duration`, `agentic.task.finished`,
-  `agentic.task.returns`, `agentic.role.cost_usd`, `agentic.role.duration`. Labels:
-  `product` en todas, `task.type`, `task.status`, `system.version`, `prompts.fingerprint`,
-  `role`, `role.outcome`, `model`, `rework`, y `return.category` en `agentic.task.returns`,
-  que deja una muestra por categoría de devolución (`none` con 0 si no hubo; ADR-0016). Son
-  eventos: una muestra por tarea terminada y por corrida de rol, exportada al cerrar
-  (ADR-0008, adenda), nada se acumula entre corridas.
-  Un span siempre cierra con sus atributos: si un
-  nodo lanza fuera del manejo de fallo del caso de uso, el rol queda `role.outcome=failed`
-  y la tarea `task.status=crashed`, un valor que solo existe en telemetría, nunca en el
-  estado.
+- Un span por tarea, uno por rol y, desde esta tarea, uno por **corrida de rol** (una
+  entrada de `runs` en el documento), hijo del span de rol. Los tres siguen las
+  convenciones semánticas GenAI de OpenTelemetry (ADR-0008, adenda): se llaman
+  `invoke_agent <rol>`, con `gen_ai.operation.name=invoke_agent`, `gen_ai.agent.name`
+  (`Role.name`) y `gen_ai.agent.id` (`Role.slug`). El span de rol es la agregación de la
+  patch entera (puede cubrir varias corridas, una entrevista por ejemplo) y sigue
+  llevando el modelo, la sesión y el hash de prompt de la *última* corrida, más
+  `agentic.role.prompt_hash` como la **tupla** de cada hash que corrió (ya no
+  last-writer-wins); el span de corrida lleva el modelo, la sesión, el costo y el hash
+  de prompt de **esa** corrida sola, con su propio `start_time`/`end_time`
+  (`RoleRun.started_at`/`.ended_at`). Lo que la convención no nombra queda bajo
+  `agentic.`: costo, retrabajo, versión de la entrega, modelo, turnos, `session_id`,
+  hash del prompt y categorías de devolución (`agentic.role.cost_usd`, `.rework`,
+  `.version`, `.model`, `.turns`, `.session_id`, `.prompt_hash`, `.return_categories`).
+  `product`, `role` y `role.outcome` quedan sin prefijo: ya son el mismo nombre en la
+  métrica. El collector borra `task.title` antes de mandarlo.
+- Las métricas del sistema (`agentic/core/measurement/CONTEXT.md`), listadas abajo. Son
+  eventos: una muestra por hecho (tarea terminada, corrida de rol, corrida individual,
+  fallo, muestra residual), exportada al cerrar (ADR-0008, adenda), nada se acumula
+  entre corridas. Un `record()` nunca setea el mismo instrumento dos veces con el mismo
+  juego de labels: donde varios hechos comparten labels el valor es su conteo
+  (`agentic.role.failures`), y donde el valor no es aditivo el hecho se registra y se
+  exporta solo (`Run._emit`, una vez por corrida en vez de una vez por nodo). Un span
+  siempre cierra con sus atributos: si un nodo lanza fuera del manejo de fallo del caso
+  de uso, el rol queda `role.outcome=failed` y la tarea `task.status=crashed`, un valor
+  que solo existe en telemetría, nunca en el estado.
 
 El `product` sale de lo que el producto declara en su `.agentic/stack.yaml`, no del nombre
 del directorio ni del remoto de git: desde ADR-0017 hay dos productos, y un panel que los
@@ -47,6 +52,37 @@ suma compara un SaaS de gimnasios con un sistema agéntico (ADR-0008, adenda; is
 Los spans nativos de Claude Code llevan prompts, respuestas y tool calls: se quedan en
 Langfuse. Si algún día hace falta verlos en Grafana, se cambia el filtro del collector, no
 el sistema.
+
+## Métricas
+
+Una fila por métrica. `system.version` y `prompts.fingerprint` son las dos únicas etiquetas
+de cardinalidad no acotada (el SHA del checkout y el hash del set de prompts); toda otra
+etiqueta es un enum, un `Role.slug` (17 valores) o la salida de una función `rules.*`
+cerrada — nunca un id de tarea, un título, un id de sesión, una línea de comando o una ruta.
+
+| Métrica | Labels | Valor | Unidad |
+|---|---|---|---|
+| `agentic.task.cost_usd` | `product`, `task.type`, `task.status`, `system.version`, `prompts.fingerprint` | Costo acumulado de la tarea | USD |
+| `agentic.task.rework_usd` | ídem | Costo del retrabajo de la tarea | USD |
+| `agentic.task.duration` | ídem | Tiempo de reloj de la tarea | s |
+| `agentic.task.finished` | ídem | 1, una muestra por tarea que llegó a un fin | — |
+| `agentic.task.returns` | ídem + `return.category` | Devoluciones de la tarea, una muestra por categoría (`none` en 0 si no hubo) | — |
+| `agentic.role.cost_usd` | `product`, `role`, `model`, `rework`, `role.slug`, `phase`, `role.outcome`, `system.version` | Costo de una corrida de rol: una muestra por entrada de `runs` de la patch, más una muestra **residual** por lo que ninguna corrida contabiliza (un intento fallido sin entrega, un nodo que lanzó sin patch), en 0 si la patch está vacía. La suma de las muestras de una patch es su `cost_usd` | USD |
+| `agentic.role.duration` | `product`, `role`, `role.outcome` | Tiempo de reloj del **nodo** (la patch entera, no la corrida) — sin cambios desde antes de esta tarea | s |
+| `agentic.role.run_duration` | ídem que `agentic.role.cost_usd` | Tiempo de reloj de **una corrida**, dentro del cupo de concurrencia (`ended_at` − `started_at`); ausente en una corrida grabada antes de este campo | s |
+| `agentic.role.queue_wait` | ídem | Segundos que esa corrida esperó un cupo de concurrencia, antes de empezar a correr; nunca incluido en `run_duration` | s |
+| `agentic.role.failures` | `product`, `role`, `role.slug`, `phase` (si la falla tiene sección), `reason` | Intentos fallidos de una patch, una muestra por motivo con el conteo como valor | — |
+| `agentic.role.failure_cost_usd` | ídem | Costo de los intentos fallidos de una patch, por motivo. **No es aditivo con `agentic.role.cost_usd`**: el mismo dólar ya cuenta una vez, dentro del costo de una corrida que reintentó o dentro de la muestra residual | USD |
+
+`role.slug` es el `Role.slug` de la corrida (17 valores; `unknown` en una corrida grabada
+antes de este campo). `phase` ∈ {definition, plan, development, review} (`rules.phase_of`,
+derivado de la sección que la corrida escribió). `role.outcome` ∈ {delivered, returned,
+escalated, failed}: el veredicto de la patch (`escalated`, `status`) se aplica solo a la
+corrida contra la que se escribió (la última cuya sección es una clave de
+`patch["sections"]`) y a la muestra residual cuando no hay ninguna; toda otra corrida de
+una patch con varias (una entrevista) es `delivered`. `reason` ∈ {schema, check, max_turns,
+limit, sdk, other}, decidido en el sitio donde se lanza `AttemptFailed`, nunca por parsear
+el mensaje de error.
 
 ## Costo en Langfuse
 

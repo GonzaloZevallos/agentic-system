@@ -24,3 +24,10 @@ _Campo_: data point — OpenTelemetry; sample en Prometheus
 **Set de evaluación**:
 Las cinco tareas fijas que se re-corren idénticas contra cada versión de prompts.
 _Campo_: eval set — `evalset` en Google ADK, dataset en LangSmith; el benchmark del campo es SWE-bench
+
+**Muestra residual**:
+La plata de una patch que ninguna Corrida de rol contabiliza: los intentos fallidos de una
+escalada, o un nodo que cerró sin patch. Una muestra más de `agentic.role.cost_usd`, en cero
+para una patch vacía, para que la suma de las muestras de una patch sea siempre su costo.
+_Campo_: sin término de arte — la industria mide el gasto por llamada, no el que una corrida
+paga sin dejar un registro de la corrida que lo pagó
