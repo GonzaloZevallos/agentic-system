@@ -1095,9 +1095,10 @@ junto con los spans del sistema y sin los de Claude Code, a Grafana Cloud, con l
 del sistema y la huella de prompts como labels (ADR-0008, `observability/README.md`);
 `agentic.task.returns` deja una muestra por categoría de devolución (ADR-0016). Todo span y
 toda métrica llevan además el **producto** sobre el que corrió la tarea, con el nombre que el
-propio producto declara en su `.agentic/stack.yaml`: desde ADR-0017 hay dos y un panel que
-los suma no significa nada, así que el dashboard arranca con uno solo elegido y "All" los
-compara en vez de sumarlos (ADR-0008, adenda; #47). Por último, el `session_id` de cada
+propio producto declara en su `.agentic/stack.yaml`. Lo que se mide es el sistema, no el
+producto: el eje de todo panel es la versión del sistema y el producto queda como filtro y
+como covariable (la mezcla de tareas de cada versión), nunca como eje ni como suma
+(ADR-0008, adenda; #47, #24). Por último, el `session_id` de cada
 corrida queda en el documento de tarea: `claude -r <id>` en
 el repo del producto reabre la sesión del rol.
 

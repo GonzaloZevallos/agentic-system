@@ -46,8 +46,12 @@ Solo lo que emite el sistema, identificado como `service.name: agentic-system`:
   que solo existe en telemetría, nunca en el estado.
 
 El `product` sale de lo que el producto declara en su `.agentic/stack.yaml`, no del nombre
-del directorio ni del remoto de git: desde ADR-0017 hay dos productos, y un panel que los
-suma compara un SaaS de gimnasios con un sistema agéntico (ADR-0008, adenda; issue #47).
+del directorio ni del remoto de git. Lo que se mide es el sistema, no el producto: el eje de
+cada panel es `system_version` y `product` es un filtro (default All) y una covariable, la
+que muestra sobre qué mezcla de tareas corrió cada versión, para que una versión que tomó
+tareas más grandes no parezca peor. Ningún panel agrupa por producto salvo el de mezcla
+(ADR-0008, adenda; issues #47 y #24). Las métricas que todavía no llevan `system.version`
+(tokens, llamadas, turnos, herramientas, fallas, presubmit, entrevistas) se leen por rol.
 
 Los spans nativos de Claude Code llevan prompts, respuestas y tool calls: se quedan en
 Langfuse. Si algún día hace falta verlos en Grafana, se cambia el filtro del collector, no
