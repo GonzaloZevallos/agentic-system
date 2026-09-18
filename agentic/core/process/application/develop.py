@@ -21,7 +21,7 @@ from ..domain.task import INTEGRATION, TaskState
 from .checkouts import SetupFailed, subtask_checkout
 from .ports import Ports
 from .presubmit import CheckoutPresubmit, declared_checks
-from .run_role import finish, run_role
+from .run_role import context_for, finish, preamble, run_role
 
 
 async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
@@ -57,6 +57,19 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             raise ValueError(reason)
 
     section = rules.developer_section(subtask_id)
+    extra_sections = (section, rules.review_section(subtask_id))
+    # A return goes back to the same Developer, over the session that wrote this
+    # section, with only what the return added as its new input (README.md, 3; ADR-0004,
+    # sixth addendum): the session already holds everything else. `role.name`, not
+    # `DEVELOPER.name`: the integrator shares the name but not the slug, and this keys
+    # its own session on its own section. No session on record (a fresh subtask, a
+    # reseeded document) keeps today's full context, resume and cold prompt both unset.
+    resume = rules.last_session(state, role.name, section)
+    prompt = cold_prompt = None
+    if resume:
+        prompt = rules.returned_developer_delta(state, subtask_id, checkout.branch, before)
+        standards, knowledge = preamble(role, ports, checkout.path)
+        cold_prompt = context_for(state, role, knowledge, standards, extra_sections)
     output, patch = await run_role(
         state,
         role,
@@ -64,16 +77,24 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         ports,
         check=committed,
         section=section,
-        extra_sections=(section, rules.review_section(subtask_id)),
+        extra_sections=extra_sections,
         cwd=checkout.path,
+        resume=resume,
+        prompt=prompt,
+        cold_prompt=cold_prompt,
         presubmit=delivery_presubmit,
         subtask=subtask_id,
         invariants=rules.invariants_markdown(state),
         branches=_branches(state),
         checks=presubmit.describe_checks(checks),
     )
-    if output is not None and (record := delivery_presubmit.markdown()) is not None:
-        patch["sections"] = {**patch["sections"], section: f"{record}\n\n{output.text}"}
+    if output is not None:
+        record = delivery_presubmit.markdown()
+        lead = [rules.cold_fallback_note()] if output.cold_fallback else []
+        if record is not None:
+            lead.append(record)
+        if lead:
+            patch["sections"] = {**patch["sections"], section: "\n\n".join([*lead, output.text])}
     if delivery_presubmit.invocations:
         # Measurement only (like `subtask_id`): read once by the adapter for
         # `agentic.presubmit.checks`/`.duration`, never persisted.

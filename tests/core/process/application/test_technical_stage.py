@@ -9,7 +9,7 @@ from agentic.core.process.application.develop import develop
 from agentic.core.process.application.escalate import escalate
 from agentic.core.process.application.integrate import integrate
 from agentic.core.process.application.plan import plan
-from agentic.core.process.application.ports import CommandResult, RawResult
+from agentic.core.process.application.ports import AttemptFailed, CommandResult, RawResult
 from agentic.core.process.application.review import review
 from agentic.core.process.application.validate_definition import validate_definition
 from agentic.core.process.domain import rules
@@ -121,6 +121,112 @@ async def test_develop_runs_the_developer_unattended_in_the_subtask_checkout(cfg
         "| passed |\n\n### Changes\n\nx.py"
     }
     assert patch["runs"][0]["section"] == "Developer: api" and patch["status"] == "developing"
+
+
+async def test_a_returned_developer_resumes_its_session_on_a_delta(cfg):
+    # README.md, 3; ADR-0004, sixth addendum: a return goes back to the same Developer,
+    # over its own earlier session, with only what the return added as the new message.
+    state = {
+        **TASK,
+        "subtasks": {
+            "api": sub(
+                "api", "returned", branch="agentic/GH-12.api", base="base1", reason="no test"
+            ),
+            "domain": sub("domain"),
+        },
+        "subtask_id": "api",
+        "sections": {
+            **TASK["sections"],
+            "Developer: api": "### Changes\n\nold work",
+            "Tech Lead: review api": "### Verdict\n\n**returned** (`spec-behaviour`): no test",
+            "Human": "### Decision 1\n\nUSD.",
+            FINDINGS: "| blocking | subtask | spec-behaviour | api | x.py:1 | wrong |",
+        },
+        "runs": [
+            {
+                "role": "Developer",
+                "section": "Developer: api",
+                "session_id": "dev-1",
+                "cost_usd": 0.1,
+                "version": 1,
+                "model": "m",
+                "cost_by_model": {},
+                "turns": 1,
+            }
+        ],
+    }
+    runner = ScriptedRunner(developer=[delivered()])
+    ports = memory_ports(runner)
+    checkout = ports.workspace.subtask_checkout("GH-12", "api")
+    ports.workspace.moved.add(checkout.path)
+    patch = await develop(state, cfg, ports)
+    call = runner.calls[0]
+    assert call["resume"] == "dev-1"
+    prompt = call["prompt"]
+    assert prompt.startswith("Branch `agentic/GH-12.api` is at `head1`.")
+    assert "## Human\n\n### Decision 1" in prompt
+    assert "## Tech Lead: findings\n\n| blocking" in prompt
+    assert "**Returned:** no test" in prompt
+    assert "## Tech Lead: review api" in prompt
+    # Never repeated: the session already has them.
+    assert "## Original request" not in prompt
+    assert "## PM" not in prompt
+    assert "old work" not in prompt
+    assert "## Engineering standards" not in prompt
+    assert patch["subtasks"]["api"]["status"] == "delivered"
+
+
+async def test_a_returned_developer_with_a_stale_session_falls_back_cold_with_a_trace(cfg):
+    # The session on record cannot be reopened (another machine, a pruned store): the
+    # system drops it, restarts cold with the full context, and leaves a trace on the
+    # delivered section so an expensive rework run can be explained without logs.
+    state = {
+        **TASK,
+        "subtasks": {
+            "api": sub(
+                "api", "returned", branch="agentic/GH-12.api", base="base1", reason="no test"
+            ),
+            "domain": sub("domain"),
+        },
+        "subtask_id": "api",
+        "sections": {
+            **TASK["sections"],
+            "Developer: api": "### Changes\n\nold work",
+            "Tech Lead: review api": "### Verdict\n\n**returned**: no test",
+        },
+        "runs": [
+            {
+                "role": "Developer",
+                "section": "Developer: api",
+                "session_id": "dead-id",
+                "cost_usd": 0.1,
+                "version": 1,
+                "model": "m",
+                "cost_by_model": {},
+                "turns": 1,
+            }
+        ],
+    }
+    stale = AttemptFailed("session not found", 0.02, session_id="")
+    runner = ScriptedRunner(developer=[stale, delivered()])
+    ports = memory_ports(runner)
+    checkout = ports.workspace.subtask_checkout("GH-12", "api")
+    ports.workspace.moved.add(checkout.path)
+    patch = await develop(state, cfg, ports)
+    first, retry = runner.calls
+    assert first["resume"] == "dead-id"
+    assert retry["resume"] is None
+    # The cold prompt is today's full context: the standards, the original request, PM's
+    # section, and the Developer's own previous section, all back in.
+    assert "## Engineering standards" in retry["prompt"]
+    assert "## Original request" in retry["prompt"]
+    assert "## PM" in retry["prompt"]
+    assert "old work" in retry["prompt"]
+    section = patch["sections"]["Developer: api"]
+    assert section.startswith(
+        "_The system asked to resume the previous session; the harness could not"
+    )
+    assert patch["subtasks"]["api"]["status"] == "delivered"
 
 
 async def test_a_dependent_subtask_starts_on_its_dependencies_code(cfg):
