@@ -199,6 +199,7 @@ async def test_a_review_runs_on_its_own_subtask_and_nobody_else(cfg):
     assert patch["subtasks"] == {
         "api": {**state["subtasks"]["api"], "status": "approved", "reviewed_head": "base"}
     }
+    assert patch["review_kind"] == "first"
     assert set(patch["sections"]) == {"Tech Lead: review api"}
     assert ports.documents.last["sections"]["Tech Lead: review api"].startswith(
         "### Verdict\n\n**approved**: fine"
@@ -259,6 +260,7 @@ async def test_a_review_after_a_return_starts_from_the_head_it_reviewed(cfg):
     first = runner.calls[0]["system_prompt"]
     assert "from the commit `base1`" in first and "This is a first review" in first
     assert patch["subtasks"]["api"]["reviewed_head"] == "head1"
+    assert patch["review_kind"] == "first"
 
     again = apply(state, patch)
     again["subtasks"]["api"]["status"] = "delivered"
@@ -268,6 +270,18 @@ async def test_a_review_after_a_return_starts_from_the_head_it_reviewed(cfg):
     assert "`base1`" not in second
     assert patch["subtasks"]["api"]["reviewed_head"] == "head2"
     assert patch["subtasks"]["api"]["status"] == "approved"
+    assert patch["review_kind"] == "incremental"
+
+
+async def test_review_kind_is_integration_for_the_fan_ins_own_subtask(cfg):
+    state = {
+        **TASK,
+        "subtasks": {INTEGRATION: sub(INTEGRATION, "delivered", branch="agentic/GH-12", base="b")},
+        "subtask_id": INTEGRATION,
+    }
+    runner = ScriptedRunner(tech_lead_review=[reviewed()])
+    patch = await review(state, cfg, memory_ports(runner))
+    assert patch["review_kind"] == "integration"
 
 
 async def test_review_escalates_when_the_pair_hits_its_limit(cfg):
@@ -435,6 +449,11 @@ async def test_the_presubmit_refuses_twice_then_lets_the_reviewer_see_the_red(cf
     assert len(runner.refused) == 2 and "(2 of 2)" in runner.refused[1]
     assert "| `tests` | `pytest` | **failed** |" in patch["sections"]["Developer: api"]
     assert patch["subtasks"]["api"]["status"] == "delivered"
+    # Three delivery attempts (two refused, one the backstop let through despite the
+    # red) leave three invocations, the measurement-only key the adapter reads for
+    # `agentic.presubmit.checks`: one set of check samples per invocation.
+    assert len(patch["presubmit_checks"]) == 3
+    assert all(check["passed"] is False for inv in patch["presubmit_checks"] for check in inv)
 
 
 async def test_the_presubmit_refuses_an_uncommitted_delivery_without_running_the_checks(cfg):
