@@ -488,6 +488,47 @@ def review_section(subtask_id: str) -> str:
     return f"{REVIEW_PREFIX}{subtask_id}"
 
 
+def returned_developer_delta(state: TaskState, subtask_id: str, branch: str, head: str) -> str:
+    """What a returned Developer reads instead of the full context (ADR-0004, sixth
+    addendum): what changed since its previous delivery. In order: the branch's current
+    head, so the model is told the checkout may not be exactly as it left it; `## Human`;
+    the open findings table as the fan-in last wrote it; and the review that returned
+    this subtask, led by its one-line reason. Unconditional, because reasoning about
+    what a resumed session already holds is not reliable, and because these are the only
+    sections that move between waves.
+
+    Never the original request, PM's section, the plan or the Developer's own previous
+    section: its session already holds them, which is the point of resuming it."""
+    sections = state.get("sections", {})
+    parts = [
+        f"Branch `{branch}` is at `{head}`. The checkout may have changed since your "
+        "previous delivery: a review ran its checks there, a dependency may have been "
+        "re-merged, or the worktree may have been recreated. Your commits and this "
+        "conversation are the same; the surroundings may not be."
+    ]
+    if human := sections.get(HUMAN):
+        parts.append(f"## {HUMAN}\n\n{human}")
+    if findings := sections.get(FINDINGS):
+        parts.append(f"## {FINDINGS}\n\n{findings}")
+    review = review_section(subtask_id)
+    reason = state.get("subtasks", {}).get(subtask_id, {}).get("reason", "").strip()
+    lead = f"**Returned:** {reason}\n\n" if reason else ""
+    parts.append(f"## {review}\n\n{lead}{sections.get(review, '')}")
+    return "\n\n".join(parts)
+
+
+def cold_fallback_note() -> str:
+    """The trace a dropped caller session leaves on the delivered path (ADR-0004, sixth
+    addendum): system-written, at the same seam as the presubmit record, never asked of
+    the model, so an expensive rework run can be explained without opening logs. The
+    escalated path needs none: `Failure.cold_fallback` already shows in the frontmatter
+    as the record is rendered."""
+    return (
+        "_The system asked to resume the previous session; the harness could not, and "
+        "this attempt started cold with the full context instead._"
+    )
+
+
 def task_branch(task_id: str) -> str:
     return f"agentic/{task_id}"
 
