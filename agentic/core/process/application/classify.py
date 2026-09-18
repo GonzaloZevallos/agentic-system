@@ -20,8 +20,11 @@ async def classify(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSt
             # while a task waits on the human (README.md, 3).
             patch["escalated"] = f"PjM could not classify with confidence: {output.data['reason']}"
             patch["status"] = WAITING_ON_HUMAN
-        elif task_type != "feature":
-            # The task left the inbox and the system cannot carry it yet: the human must see it.
+        elif task_type == "bug":
+            # Of the three paths of README §2, the bug path is still the one nobody
+            # built: the task left the inbox and the system cannot carry it, so the
+            # human must see it. A platform enhancement goes to the plan from here,
+            # which is the routing's business and not this node's (issue #46).
             patch["escalated"] = f"{task_type} path not implemented yet"
             patch["status"] = WAITING_ON_HUMAN
     return finish(state, patch, ports)

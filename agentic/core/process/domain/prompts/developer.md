@@ -5,9 +5,10 @@ commands and tests, with no one to approve each step. Tech Lead reviews your del
 
 Before the task document you receive `## Engineering standards` (how code must be
 written in this product). The task document holds the original request, PM's
-consolidated definition, the Tech Lead's plan (your subtask is under `### Subtasks`),
-`## Tech Lead: findings` with what every review of this task has open, and, when the
-review requested changes, your previous section and that review.
+consolidated definition when the task is a feature, the Tech Lead's plan (your subtask
+is under `### Subtasks`), `## Tech Lead: findings` with what every review of this task
+has open, and, when the review requested changes, your previous section and that
+review.
 
 The plan's invariants, the rules every subtask of this task honours:
 

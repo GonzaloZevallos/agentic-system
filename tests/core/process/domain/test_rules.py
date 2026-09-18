@@ -39,13 +39,23 @@ def test_sections_for_keeps_the_superseded_delivery_as_history():
 
 
 def test_routing_ends_on_escalation_and_loops_on_return():
-    assert rules.after_classify({}) == "define"
+    assert rules.after_classify({"type": "feature"}) == "define"
     assert rules.after_classify({"escalated": "x"}) is None
     assert rules.after_define({}) == "validate"
     assert rules.after_define({"escalated": "x"}) is None
     assert rules.after_validate({"status": "returned"}) == "define"
     assert rules.after_validate({"status": "definition_ready"}) == "plan"
     assert rules.after_validate({"status": "returned", "escalated": "x"}) is None
+
+
+def test_a_platform_enhancement_skips_the_definition_stage():
+    """The shortest of the three paths (README.md, 2; issue #46): no product behaviour
+    to define, so the plan is the first node after PjM. A bug is escalated by
+    `classify` itself, so the fork never sees one that is not already escalated."""
+    assert rules.after_classify({"type": "platform_enhancement"}) == "plan"
+    assert (
+        rules.after_classify({"type": "bug", "escalated": "bug path not implemented yet"}) is None
+    )
 
 
 def test_the_verdict_and_the_category_come_from_the_blocking_findings():
@@ -224,6 +234,9 @@ def test_the_resume_target_follows_the_state():
     assert rules.resume_target({"status": "open"}) == "classify"
     assert rules.resume_target({"status": "open", "type": "bug"}) == "classify"
     assert rules.resume_target({"status": "open", "type": "feature"}) == "define"
+    # Paused in the solution interview with no plan yet: back to the plan, not to a
+    # definition it never had (issue #46).
+    assert rules.resume_target({"status": "open", "type": "platform_enhancement"}) == "plan"
     assert rules.resume_target({"status": "defined"}) == "validate"
     assert rules.resume_target({"status": "returned"}) == "define"
     assert rules.resume_target({"status": "definition_ready"}) == "plan"

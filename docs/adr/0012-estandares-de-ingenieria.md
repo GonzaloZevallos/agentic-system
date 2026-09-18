@@ -46,3 +46,10 @@ tiene, la primera subtarea de Tech Lead es crearlo.
   el camino de platform enhancement escala en `classify`. Y mezclar refactor con feature
   contamina la medición.
 - **Solo revisión, sin test**: la revisión es un juicio; el test es un hecho.
+
+## Adenda (2026-09-17): el camino de platform enhancement existe
+
+Desde #46 `classify` ya no escala un platform enhancement: va al plan. La mitad de la
+segunda opción descartada ("por el sistema no se puede") caducó; la decisión se sostiene
+por la otra mitad, que mezclar refactor con feature contamina la medición. Migrar el v0
+por el sistema es ahora una tarea de plataforma como cualquier otra, medida aparte.
