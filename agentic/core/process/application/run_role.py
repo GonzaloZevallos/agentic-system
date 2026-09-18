@@ -453,6 +453,7 @@ def run_record(state: TaskState, role: Role, section: str, output: Output) -> Ro
         "cost_usd": output.cost_usd,
         "cost_by_model": output.cost_by_model,
         "turns": output.turns,
+        "max_turns": role.max_turns,
         "started_at": output.started_at,
         "ended_at": output.ended_at,
         "queue_wait_s": output.queue_wait_s,

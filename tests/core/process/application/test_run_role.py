@@ -351,6 +351,7 @@ async def test_run_role_builds_the_patch_and_the_history(tmp_path):
         "cost_usd": 0.1,
         "cost_by_model": {"claude-sonnet-5": 0.08, "claude-haiku-5": 0.02},
         "turns": 3,
+        "max_turns": PRODUCT_ANALYST.max_turns,
         "tokens": {"input": 100, "output": 50, "cache_read": 10, "cache_write": 5},
         "calls": 2,
         "tool_calls": {"Read": 1},
@@ -406,6 +407,15 @@ def test_run_record_carries_tokens_calls_and_tool_calls_from_the_output():
     assert run["calls"] == 5
     assert run["tool_calls"] == {"Bash": 3, "Read": 2}
     assert run["subagent_cost_usd"] == 0.07
+
+
+def test_run_record_stamps_the_roles_own_turn_cap():
+    """`max_turns` comes from the `Role` that ran, not the output: the cap in force for
+    this run, so a reader can compute turns spent against it without a second lookup
+    into `roles.py` (and without it drifting if the role's cap changes later)."""
+    output = Output(text="ok", data={}, cost_usd=0.1, turns=1, session_id="s", model="m")
+    run = run_record({}, PJM, "PjM", output)
+    assert run["max_turns"] == PJM.max_turns == 2
 
 
 async def test_run_role_turns_a_role_failure_into_an_escalation(tmp_path):
