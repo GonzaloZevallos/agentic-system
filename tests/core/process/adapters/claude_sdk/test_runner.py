@@ -4,11 +4,18 @@ import io
 from dataclasses import replace
 
 import pytest
-from claude_agent_sdk import AssistantMessage, ResultMessage, StreamEvent, ToolUseBlock
+from claude_agent_sdk import (
+    AssistantMessage,
+    ResultMessage,
+    StreamEvent,
+    ToolPermissionContext,
+    ToolUseBlock,
+)
 
 from agentic.core.process.adapters.claude_sdk import runner as module
 from agentic.core.process.adapters.claude_sdk.runner import ClaudeSdkRunner
 from agentic.core.process.application.ports import AttemptFailed
+from agentic.core.process.domain.denials import denial_for
 from agentic.core.process.domain.roles import PJM
 
 pytestmark = pytest.mark.anyio
@@ -459,6 +466,65 @@ async def test_a_role_that_executes_runs_inside_the_hooks_cage(monkeypatch, tmp_
     seen = fake_query(monkeypatch, [result()])
     await run_once(ClaudeSdkRunner(), tmp_path)
     assert seen[0][1].hooks is None
+
+
+async def test_a_non_executing_role_gets_a_can_use_tool_denial_callback(monkeypatch, tmp_path):
+    # A role that does not execute runs in `permission_mode="default"`: anything its
+    # `allowed` rules do not cover reaches the SDK's permission layer, which is where
+    # the role's own rule (`denial_for`) has to land instead of the SDK's generic text.
+    seen = fake_query(monkeypatch, [result()])
+    reader = replace(PJM, tools=("Read",), allowed=("Read",))
+    await ClaudeSdkRunner().run_once(
+        reader, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
+    )
+    assert seen[0][1].can_use_tool is not None
+
+
+async def test_an_executing_role_gets_no_can_use_tool_callback(monkeypatch, tmp_path):
+    # `bypassPermissions` already shadows `can_use_tool` entirely (the SDK's own
+    # warning); wiring one anyway would be dead code pretending to cage a role the
+    # hooks cage already covers (ADR-0011, addendum).
+    seen = fake_query(monkeypatch, [result()])
+    developer = replace(PJM, tools=("Bash",), executes=True)
+    await ClaudeSdkRunner().run_once(
+        developer, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
+    )
+    assert seen[0][1].can_use_tool is None
+
+
+async def test_the_denial_callback_names_the_role_rule_and_is_counted(monkeypatch, tmp_path):
+    reader = replace(PJM, tools=("Read", "Write"), allowed=("Read",))
+
+    async def query(prompt, options):
+        outcome = await options.can_use_tool(
+            "Write", {"file_path": "x"}, ToolPermissionContext(tool_use_id="t1")
+        )
+        assert outcome.behavior == "deny"
+        assert outcome.message == denial_for(reader)
+        yield result()
+
+    monkeypatch.setattr(module, "query", query)
+    raw = await ClaudeSdkRunner().run_once(
+        reader, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
+    )
+    assert raw.denials == 1
+
+
+async def test_a_denial_during_a_failed_attempt_still_reaches_attemptfailed(monkeypatch, tmp_path):
+    reader = replace(PJM, tools=("Read", "Write"), allowed=("Read",))
+
+    async def query(prompt, options):
+        await options.can_use_tool(
+            "Write", {"file_path": "x"}, ToolPermissionContext(tool_use_id="t1")
+        )
+        yield result(subtype="error_max_turns", total_cost_usd=0.1)
+
+    monkeypatch.setattr(module, "query", query)
+    with pytest.raises(AttemptFailed) as info:
+        await ClaudeSdkRunner().run_once(
+            reader, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
+        )
+    assert info.value.denials == 1
 
 
 async def test_the_presubmit_becomes_a_hook_on_the_delivery_call(monkeypatch, tmp_path):
