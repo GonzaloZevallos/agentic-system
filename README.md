@@ -644,7 +644,7 @@ Forma del repo del producto:
 | `.agentic/tasks/` | Documento único por tarea, registro crudo del trabajo | Los roles, sección por sección |
 | `.agentic/prompts/` | Overrides de prompts por rol, si los hay (ADR-0005) | PjM |
 | `.agentic/flags.yaml` | Vocabulario de flags del producto, pisa el default del sistema | Humano, después PM |
-| `.agentic/stack.yaml` | Stack del producto: `checks`, los comandos con que declara que su código está sano, y `setup`, opcional, lo que prepara un checkout recién creado. Obligatorio: sin él el sistema no arranca (ADR-0016, adendas; ADR-0011, adenda tercera) | Humano |
+| `.agentic/stack.yaml` | Lo que el producto declara de sí mismo: `product`, el nombre con que se etiqueta cada corrida suya (#47); `checks`, los comandos con que declara que su código está sano; y `setup`, opcional, lo que prepara un checkout recién creado. Obligatorio: sin él el sistema no arranca (ADR-0016, adendas; ADR-0011, adenda tercera) | Humano |
 | `.agentic/state.sqlite` | Checkpointer del grafo, fuera del control de versiones (ADR-0003) | El sistema |
 | `.agentic/worktrees/` | Un worktree por subtarea, fuera del control de versiones (ADR-0011) | El sistema |
 | rama `agentic/<tarea>` | La rama de tarea: entrevistas, ADRs, código integrado. Termina en un pull request (ADR-0011) | Los roles |
@@ -1056,8 +1056,12 @@ lo sepa. Las métricas del sistema (glosario de Medición: costo por tarea, retr
 duración, devoluciones, escalados) salen del mismo adaptador y el collector las manda,
 junto con los spans del sistema y sin los de Claude Code, a Grafana Cloud, con la versión
 del sistema y la huella de prompts como labels (ADR-0008, `observability/README.md`);
-`agentic.task.returns` deja una muestra por categoría de devolución (ADR-0016). Por
-último, el `session_id` de cada corrida queda en el documento de tarea: `claude -r <id>` en
+`agentic.task.returns` deja una muestra por categoría de devolución (ADR-0016). Todo span y
+toda métrica llevan además el **producto** sobre el que corrió la tarea, con el nombre que el
+propio producto declara en su `.agentic/stack.yaml`: desde ADR-0017 hay dos y un panel que
+los suma no significa nada, así que el dashboard arranca con uno solo elegido y "All" los
+compara en vez de sumarlos (ADR-0008, adenda; #47). Por último, el `session_id` de cada
+corrida queda en el documento de tarea: `claude -r <id>` en
 el repo del producto reabre la sesión del rol.
 
 Los roles no ven la configuración MCP del usuario: el runner pasa `strict_mcp_config` sin

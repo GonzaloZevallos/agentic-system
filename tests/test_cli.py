@@ -16,7 +16,10 @@ async def in_memory(cfg):
     yield InMemorySaver()
 
 
-def product(tmp_path, name, stack="checks:\n  tests: pytest\nsetup:\n  deps: uv sync\n"):
+STACK = "product: p\nchecks:\n  tests: pytest\nsetup:\n  deps: uv sync\n"
+
+
+def product(tmp_path, name, stack=STACK):
     """A product as the system needs one: a repo whose HEAD declares a stack (#36)."""
     root = tmp_path / name
     (root / ".agentic").mkdir(parents=True)
@@ -343,7 +346,7 @@ def test_a_stack_the_working_tree_fixed_but_no_commit_holds_does_not_run(
     """The commit decides, here as everywhere (ADR-0016, addendum): a file written and
     not committed is not a declaration."""
     root = product(tmp_path, "p", stack=None)
-    (root / ".agentic/stack.yaml").write_text("checks:\n  tests: pytest\n")
+    (root / ".agentic/stack.yaml").write_text("product: p\nchecks:\n  tests: pytest\n")
     monkeypatch.setattr("sys.argv", ["agentic", "run", "t", "d", "--product-dir", str(root)])
     with pytest.raises(SystemExit) as info:
         cli.main()
@@ -354,7 +357,7 @@ def test_a_stack_the_working_tree_fixed_but_no_commit_holds_does_not_run(
 def test_a_product_without_setup_is_warned_and_the_run_goes_on(monkeypatch, tmp_path, capsys):
     """A warning, not a refusal: a product with no dependencies prepares nothing, and
     one that does may still choose to live with a shared environment (issue #37)."""
-    root = product(tmp_path, "p", stack="checks:\n  tests: pytest\n")
+    root = product(tmp_path, "p", stack="product: p\nchecks:\n  tests: pytest\n")
     monkeypatch.setattr(cli, "unfixed_stage0", lambda ports: None)
     seen = capture_run(monkeypatch)
     monkeypatch.setattr("sys.argv", ["agentic", "run", "t", "d", "--product-dir", str(root)])
@@ -375,7 +378,7 @@ def test_a_resume_checks_the_stack_at_the_tasks_base_not_only_at_head(
         [*git, "rev-parse", "--short", "agentic/GH-9"], cwd=root, capture_output=True, text=True
     ).stdout.strip()
     subprocess.run([*git, "config", "branch.agentic/GH-9.agenticBase", base], cwd=root, check=True)
-    (root / ".agentic/stack.yaml").write_text("checks:\n  tests: pytest\n")
+    (root / ".agentic/stack.yaml").write_text("product: p\nchecks:\n  tests: pytest\n")
     subprocess.run([*git, "add", "-A"], cwd=root, check=True)
     subprocess.run([*git, "commit", "-q", "-m", "stack"], cwd=root, check=True)
 
@@ -386,3 +389,14 @@ def test_a_resume_checks_the_stack_at_the_tasks_base_not_only_at_head(
         cli.main()
     assert info.value.code == 2
     assert "declares no stack" in capsys.readouterr().err
+
+
+def test_a_product_that_declares_no_name_does_not_run(monkeypatch, tmp_path, capsys):
+    """Without it every span and every metric of the run lands unlabelled, and the two
+    products add up in every panel (issue #47)."""
+    root = product(tmp_path, "p", stack="checks:\n  tests: pytest\n")
+    monkeypatch.setattr("sys.argv", ["agentic", "run", "t", "d", "--product-dir", str(root)])
+    with pytest.raises(SystemExit) as info:
+        cli.main()
+    assert info.value.code == 2
+    assert "expected `product`" in capsys.readouterr().err

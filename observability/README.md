@@ -20,19 +20,23 @@ Solo lo que emite el sistema, identificado como `service.name: agentic-system`:
 
 - Un span por tarea y uno por rol, con metadatos: id de tarea, tipo, estado, costo,
   retrabajo, devoluciones, modelo, turnos, `session_id`, hash del prompt, versión del
-  sistema. El collector borra `task.title` antes de mandarlo.
+  sistema y sobre qué producto corrió. El collector borra `task.title` antes de mandarlo.
 - Las métricas del sistema (`agentic/core/measurement/CONTEXT.md`): `agentic.task.cost_usd`,
   `agentic.task.rework_usd`, `agentic.task.duration`, `agentic.task.finished`,
   `agentic.task.returns`, `agentic.role.cost_usd`, `agentic.role.duration`. Labels:
-  `task.type`, `task.status`, `system.version`, `prompts.fingerprint`, `role`,
-  `role.outcome`, `model`, `rework`, y `return.category` en `agentic.task.returns`, que deja
-  una muestra por categoría de devolución (`none` con 0 si no hubo; ADR-0016). El span de
+  `product` en todas, `task.type`, `task.status`, `system.version`, `prompts.fingerprint`,
+  `role`, `role.outcome`, `model`, `rework`, y `return.category` en `agentic.task.returns`,
+  que deja una muestra por categoría de devolución (`none` con 0 si no hubo; ADR-0016). El span de
   rol lleva `role.return_categories` cuando devolvió. Son eventos: una muestra por tarea terminada y por
   corrida de rol, exportada al cerrar (ADR-0008, adenda), nada se acumula entre corridas.
   Un span siempre cierra con sus atributos: si un
   nodo lanza fuera del manejo de fallo del caso de uso, el rol queda `role.outcome=failed`
   y la tarea `task.status=crashed`, un valor que solo existe en telemetría, nunca en el
   estado.
+
+El `product` sale de lo que el producto declara en su `.agentic/stack.yaml`, no del nombre
+del directorio ni del remoto de git: desde ADR-0017 hay dos productos, y un panel que los
+suma compara un SaaS de gimnasios con un sistema agéntico (ADR-0008, adenda; issue #47).
 
 Los spans nativos de Claude Code llevan prompts, respuestas y tool calls: se quedan en
 Langfuse. Si algún día hace falta verlos en Grafana, se cambia el filtro del collector, no

@@ -64,13 +64,13 @@ def points(reader: BatchReader) -> dict[str, list]:
 def test_no_provider_no_traceparent():
     telemetry.configure(tracer_provider=None)
     assert telemetry.traceparent() is None
-    with telemetry.task_span("T-1", "t"), telemetry.role_span("PjM"):
+    with telemetry.task_span("T-1", "t", "gym-saas"), telemetry.role_span("PjM", "gym-saas"):
         assert telemetry.traceparent() is None  # nothing configured: nothing to propagate
 
 
 def test_role_span_nests_under_the_task_and_propagates(spans):
-    with telemetry.task_span("GH-12", "Metrics") as task:
-        with telemetry.role_span("PjM") as role:
+    with telemetry.task_span("GH-12", "Metrics", "gym-saas") as task:
+        with telemetry.role_span("PjM", "gym-saas") as role:
             header = telemetry.traceparent()
     assert TRACEPARENT.match(header)
     trace_id, span_id = header.split("-")[1:3]
@@ -78,12 +78,18 @@ def test_role_span_nests_under_the_task_and_propagates(spans):
     assert int(span_id, 16) == role.span.get_span_context().span_id
     assert role.span.parent.span_id == task.span.get_span_context().span_id
     assert task.span.name == "GH-12" and role.span.attributes["role"] == "PjM"
+    # On both spans from the moment they open, so a run that crashes is still one
+    # product's crash and not the other's (issue #47).
+    assert task.span.attributes["product"] == role.span.attributes["product"] == "gym-saas"
 
 
 def test_role_span_is_an_agent_for_langfuse_and_the_task_is_not(spans):
     """Langfuse shows a role as an agent run; the task keeps its default type. Cost
     never travels in these spans: Langfuse prices Claude Code's own calls (ADR-0008)."""
-    with telemetry.task_span("GH-12", "Metrics"), telemetry.role_span("PjM"):
+    with (
+        telemetry.task_span("GH-12", "Metrics", "gym-saas"),
+        telemetry.role_span("PjM", "gym-saas"),
+    ):
         pass
     role, task = spans.get_finished_spans()
     assert role.attributes["langfuse.observation.type"] == "agent"
@@ -114,7 +120,7 @@ def test_role_finish_stamps_the_run_on_the_span(spans):
         "status": "returned",
         "prompts": {"pm": "deadbeef"},
     }
-    with telemetry.role_span("PM") as run:
+    with telemetry.role_span("PM", "gym-saas") as run:
         run.finish(patch)
     (span,) = spans.get_finished_spans()
     assert span.attributes["role.outcome"] == "returned"
@@ -130,9 +136,9 @@ def test_role_finish_stamps_the_categories_of_the_returns_it_made(spans):
         {"pair": "Tech Lead→Developer:a", "category": "process-suite-red", "reason": "r"},
         {"pair": "Tech Lead→Developer:b", "category": "spec-missing-test", "reason": "r"},
     ]
-    with telemetry.role_span("Tech Lead") as run:
+    with telemetry.role_span("Tech Lead", "gym-saas") as run:
         run.finish({"cost_usd": 0.2, "change_history": history})
-    with telemetry.role_span("Tech Lead") as run:
+    with telemetry.role_span("Tech Lead", "gym-saas") as run:
         run.finish({"cost_usd": 0.2})
     returned, approved = spans.get_finished_spans()
     assert returned.attributes["role.return_categories"] == (
@@ -149,7 +155,7 @@ def test_role_finish_on_a_broken_role(spans):
         "escalated": "PA failed",
         "status": "waiting_on_human",
     }
-    with telemetry.role_span("Product Analyst") as run:
+    with telemetry.role_span("Product Analyst", "gym-saas") as run:
         run.finish(patch)
     (span,) = spans.get_finished_spans()
     assert span.attributes["role.outcome"] == "failed"
@@ -188,10 +194,11 @@ def test_task_finish_emits_the_system_metrics(metrics):
         ],
         "prompts": {"pjm": "a", "pm": "b"},
     }
-    with telemetry.task_span("T-1", "t") as run:
+    with telemetry.task_span("T-1", "t", "gym-saas") as run:
         run.finish(final)
     got = points(metrics)
     labels = {
+        "product": "gym-saas",
         "task.type": "feature",
         "task.status": "definition_ready",
         "system.version": "abc1234",
@@ -214,7 +221,7 @@ def test_task_finish_emits_the_system_metrics(metrics):
 
 
 def test_role_finish_emits_duration_and_cost_by_role(metrics):
-    with telemetry.role_span("PjM") as run:
+    with telemetry.role_span("PjM", "gym-saas") as run:
         run.finish(
             {
                 "runs": [
@@ -233,9 +240,20 @@ def test_role_finish_emits_duration_and_cost_by_role(metrics):
     got = points(metrics)
     (cost,) = got["agentic.role.cost_usd"]
     assert cost.value == 0.01
-    assert dict(cost.attributes) == {"role": "PjM", "model": "m", "rework": False}
+    # The product is on the role's samples too: cost by role adds up across products
+    # otherwise, and a Developer of the gym is not a Developer of the system (issue #47).
+    assert dict(cost.attributes) == {
+        "product": "gym-saas",
+        "role": "PjM",
+        "model": "m",
+        "rework": False,
+    }
     (duration,) = got["agentic.role.duration"]
-    assert dict(duration.attributes) == {"role": "PjM", "role.outcome": "delivered"}
+    assert dict(duration.attributes) == {
+        "product": "gym-saas",
+        "role": "PjM",
+        "role.outcome": "delivered",
+    }
 
 
 def test_two_runs_with_the_same_labels_are_two_samples(metrics):
@@ -255,7 +273,7 @@ def test_two_runs_with_the_same_labels_are_two_samples(metrics):
         "cost_usd": 0.1,
     }
     for _ in range(2):
-        with telemetry.role_span("PM") as run:
+        with telemetry.role_span("PM", "gym-saas") as run:
             run.finish(patch)
     telemetry.flush()
     costs = points(metrics)["agentic.role.cost_usd"]
@@ -285,7 +303,7 @@ def test_parallel_runs_with_the_same_labels_are_two_samples(metrics):
     gate = threading.Barrier(2)
 
     def finish_one():
-        with telemetry.role_span("Developer") as run:
+        with telemetry.role_span("Developer", "gym-saas") as run:
             gate.wait()
             run.finish(patch)
 

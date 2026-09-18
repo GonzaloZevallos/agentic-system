@@ -140,9 +140,16 @@ class MemoryStack:
     """The product's declared stack, whatever the revision; `revisions` says which were
     asked, of either key."""
 
-    def __init__(self, checks: dict[str, str] | None = None, setup: dict[str, str] | None = None):
+    def __init__(
+        self,
+        checks: dict[str, str] | None = None,
+        setup: dict[str, str] | None = None,
+        product: str | None = "product",
+    ):
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
+        # None is a product that declares no name, which `preflight` refuses.
+        self.declared_product = product
         self.revisions: list[str] = []
 
     def checks(self, revision: str) -> dict[str, str]:
@@ -152,6 +159,11 @@ class MemoryStack:
     def setup(self, revision: str) -> dict[str, str]:
         self.revisions.append(revision)
         return self.declared_setup
+
+    def product(self, revision: str = "HEAD") -> str:
+        if self.declared_product is None:
+            raise ValueError("expected `product`, the name this product goes by")
+        return self.declared_product
 
 
 class MemoryCommands:

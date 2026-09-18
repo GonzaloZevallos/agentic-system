@@ -19,6 +19,7 @@ from agentic.core.process.adapters.langgraph.graph import build_graph, configura
 from agentic.core.process.adapters.telemetry import NoTelemetry
 from agentic.core.process.application import resume
 from agentic.core.process.application.ports import AttemptFailed
+from agentic.core.process.application.preflight import UNKNOWN_PRODUCT
 from agentic.core.process.domain.roles import FINDINGS, PAIR_PM_PA, PJM, PM, PRODUCT_ANALYST
 from agentic.core.process.domain.task import INTEGRATION, WAITING_ON_HUMAN
 from agentic.shared.configuration import Configuration
@@ -92,7 +93,7 @@ async def run_graph(script: ScriptedRunner, config, telemetry=NoTelemetry(), fak
     return await compiled(script, telemetry, fakes).ainvoke(TASK, config=config)
 
 
-def compiled(script: ScriptedRunner, telemetry=NoTelemetry(), fakes=None, saver=None):
+def compiled(script: ScriptedRunner, telemetry=NoTelemetry(), fakes=None, saver=None, stack=None):
     """The graph with the real ports over the temporary product, the scripted runner in
     place of the SDK, git and GitHub in memory, and a checkpointer, as the CLI compiles
     it. `default_ports` is what the exported graph uses."""
@@ -113,7 +114,7 @@ def compiled(script: ScriptedRunner, telemetry=NoTelemetry(), fakes=None, saver=
             tracker=fakes.tracker,
             knowledge=_Rooted(knowledge, cfg.product_dir),
             # The product is no repository and the checkouts are names: nothing to run.
-            stack=MemoryStack(),
+            stack=stack or MemoryStack(),
             commands=MemoryCommands(),
         )
 
@@ -560,7 +561,7 @@ async def test_each_node_opens_and_finishes_the_roles_span(config):
             pm=[verdict("returned", "gap"), verdict("approved")],
             **technical(),
         )
-        with telemetry.task_span("GH-1", "t") as run:
+        with telemetry.task_span("GH-1", "t", "gym-saas") as run:
             run.finish(await run_graph(script, config, telemetry))
     finally:
         telemetry.configure()
@@ -585,6 +586,9 @@ async def test_each_node_opens_and_finishes_the_roles_span(config):
     assert finished[6].attributes["role.model"] == "claude-sonnet-5"
     assert task.attributes["task.status"] == "ready_for_review"
     assert task.attributes["task.returns"] == 1
+    # Every role span says which product the run was over, read from what the product
+    # declares and not from the task span it hangs under (issue #47).
+    assert {s.attributes["product"] for s in finished[:-1]} == {"product"}
 
 
 def test_configuration_comes_from_configurable_and_env(monkeypatch, tmp_path):
@@ -875,3 +879,19 @@ async def test_what_one_review_found_reaches_the_next_wave_and_the_integration(c
     table = final["sections"][FINDINGS]
     assert table.count("\n") == 2  # a header, its rule, one row: `domain`'s was settled
     assert "counts subscriptions twice" in table and "no test at the seam" not in table
+
+
+async def test_a_node_whose_product_declares_no_name_still_runs(config):
+    """A label is not worth the task: past `preflight` the run is under way, and this is
+    the door `preflight` does not guard, `langgraph dev` (issue #47)."""
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    telemetry.configure(tracer_provider=provider)
+    try:
+        script = script_for(pjm=[classified(confidence="low")])
+        graph = compiled(script, telemetry, stack=MemoryStack(product=None))
+        await graph.ainvoke(TASK, config=config)
+    finally:
+        telemetry.configure()
+    assert exporter.get_finished_spans()[0].attributes["product"] == UNKNOWN_PRODUCT

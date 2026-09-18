@@ -2,11 +2,16 @@
 # approximation. The presubmit runs the checks on a Developer's delivery, and the
 # reviewer uses them to reproduce an objection (ADR-0016).
 #
+# `product` is the label every span and every metric of a run over this repo carries
+# (issue #47). This repo is the system and, since ADR-0017, also its second product; the
+# name is the repository's, which is what a panel compares against the gym's.
+#
 # `setup` runs once, when the system creates a checkout, and is what keeps a worktree
 # from reaching up to this checkout's `.venv` (ADR-0011, third addendum). The three
 # checks below are `uv run` in project mode, which already builds a per-worktree
 # environment; `uv sync --locked` makes that a guarantee of the system and not a
 # property of how the commands happen to be written.
+product: agentic-system
 setup:
   deps: uv sync --locked
 checks:

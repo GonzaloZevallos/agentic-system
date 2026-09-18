@@ -126,7 +126,8 @@ class FlagVocabulary(Protocol):
 
 class ProductStack(Protocol):
     """How the product declares its code is built and verified (`core.knowledge`), as of
-    one of its commits: the task's base, never the branch's."""
+    one of its commits: the task's base, never the branch's. Its name is the exception,
+    read at HEAD, because it says who the repository is and not what held at a commit."""
 
     def checks(self, revision: str) -> dict[str, str]:
         """Check name -> command, as the product's commit `revision` declares them."""
@@ -135,6 +136,11 @@ class ProductStack(Protocol):
     def setup(self, revision: str) -> dict[str, str]:
         """Setup step -> command, run once to prepare a fresh checkout. Empty when the
         product declares none, which is a product that prepares nothing."""
+        ...
+
+    def product(self, revision: str = "HEAD") -> str:
+        """The name the product goes by, the label every span and metric of a run over it
+        carries (issue #47)."""
         ...
 
 

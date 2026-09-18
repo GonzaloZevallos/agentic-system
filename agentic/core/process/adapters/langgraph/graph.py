@@ -52,6 +52,7 @@ from ...application.integrate import integrate
 from ...application.limits import RunLimits
 from ...application.plan import plan
 from ...application.ports import Ports
+from ...application.preflight import product_name
 from ...application.review import review
 from ...application.validate_definition import validate_definition
 from ...domain import rules
@@ -99,11 +100,14 @@ PortsOf = _PortsPerRun
 def _node(use_case: UseCase, role: Role, ports_of: PortsOf, telemetry: Telemetry):
     async def node(state: TaskState, config: RunnableConfig) -> TaskState:
         cfg = configuration_from(config)
+        ports = ports_of(cfg, config)
         # The patch is what the use case decided; the span and the metrics read it
-        # here, so the use case never sees telemetry (ADR-0007).
-        with telemetry.role_span(role.name) as run:
+        # here, so the use case never sees telemetry (ADR-0007). Which product the run is
+        # over is read per node and not cached: `langgraph dev` serves many tasks through
+        # one graph and they need not share a product (issue #47).
+        with telemetry.role_span(role.name, product_name(ports)) as run:
             try:
-                patch = await use_case(state, cfg, ports_of(cfg, config))
+                patch = await use_case(state, cfg, ports)
             except Exception:
                 # Nothing was delivered; the span still closes with an outcome so the
                 # role's metrics do not silently miss the run.

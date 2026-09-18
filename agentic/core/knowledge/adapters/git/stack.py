@@ -22,6 +22,13 @@ class GitStack:
         data, source = self._declaration(revision)
         return stack.setup(data, source)
 
+    def product(self, revision: str = "HEAD") -> str:
+        """The product's name, HEAD by default and not the task's base: the name says who
+        the repository is, and a task older than the key would otherwise resume with no
+        name at all (`domain/stack.py`)."""
+        data, source = self._declaration(revision)
+        return stack.product(data, source)
+
     def _declaration(self, revision: str) -> tuple[object, object]:
         """The file as `revision` holds it. Absent, the run stops: there is no default to
         fall back on, and a product that declares nothing is told what to write (#36)."""

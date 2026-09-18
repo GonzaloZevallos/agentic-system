@@ -8,9 +8,11 @@ import pytest
 from agentic.core.knowledge.domain import stack
 from agentic.core.process.application import preflight as module
 from agentic.core.process.application.preflight import (
+    UNKNOWN_PRODUCT,
     RunsOnItsOwnCheckout,
     no_setup,
     preflight,
+    product_name,
     unfixed_stage0,
 )
 from agentic.shared.configuration import Configuration
@@ -163,3 +165,26 @@ def test_the_remedy_fixes_the_stage0_it_names(stage0):
     ports = ports_where(**{str(stage0): "/sys/.git"})
     ports.workspace.uncommitted.add(stage0)
     assert f"scripts/stage0.sh <sha> {stage0}" in unfixed_stage0(ports)
+
+
+def test_a_product_that_declares_no_name_does_not_run(stage0):
+    """Every span and every metric of the run would land unlabelled, and unlabelled is
+    what makes two products add up in a panel (issue #47)."""
+    ports = replace(memory_ports(), stack=MemoryStack(product=None))
+    with pytest.raises(ValueError, match="expected `product`"):
+        preflight(Configuration(product_dir=PRODUCT), ports)
+
+
+def test_the_name_is_asked_at_head_so_a_task_older_than_the_key_still_resumes(stage0):
+    stack_port = MemoryStack()
+    preflight(Configuration(product_dir=PRODUCT), replace(memory_ports(), stack=stack_port))
+    assert "HEAD" in stack_port.revisions
+
+
+def test_the_label_falls_back_instead_of_killing_a_node_already_running():
+    """`preflight` is where a nameless product refuses. Past that point the run is under
+    way and a label is not worth the task: `langgraph dev` never sees the CLI."""
+    assert product_name(replace(memory_ports(), stack=MemoryStack(product=None))) == UNKNOWN_PRODUCT
+    assert (
+        product_name(replace(memory_ports(), stack=MemoryStack(product="gym-saas"))) == "gym-saas"
+    )

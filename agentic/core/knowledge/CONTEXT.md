@@ -49,8 +49,13 @@ tarea toca, no al que ya existía.
 _Avoid_: buenas prácticas, guía de estilo (el estilo lo impone el linter, no este archivo)
 _Campo_: coding standards — estándar
 
+**Nombre del producto**:
+Cómo se llama este producto, declarado por él en su stack. Es lo que etiqueta cada span y cada métrica de una corrida suya, así que dos productos nunca se suman en un panel. Se declara y no se deduce del checkout: el nombre del directorio cambia si alguien clona con otro nombre y el remoto cambia en un fork, mientras que un archivo versionado viaja con el repo. Es la única parte del stack que vale la del checkout y no la del commit base: dice quién es el repositorio, no qué regía en un commit.
+_Avoid_: slug, id de producto, service name (el `service.name` es del sistema, y es uno solo)
+_Campo_: sin término de arte; en observabilidad el vecino es una dimensión o un label
+
 **Stack del producto**:
-Con qué tecnología se construye y se verifica este producto, declarado por el producto en su repo. Son sus chequeos, los comandos con que declara que su código está sano (tests, linter, typechecker), que corre la puerta de entrega y que el revisor usa para reproducir una objeción; y su preparación del entorno. El sistema impone las prácticas, nunca la herramienta. Declararlo es obligatorio: un producto que no lo declara no corre, y el sistema no tiene default que una corrida pueda alcanzar.
+Con qué tecnología se construye y se verifica este producto, declarado por el producto en su repo. Son sus chequeos, los comandos con que declara que su código está sano (tests, linter, typechecker), que corre la puerta de entrega y que el revisor usa para reproducir una objeción; su preparación del entorno; y su nombre. El sistema impone las prácticas, nunca la herramienta. Declararlo es obligatorio: un producto que no lo declara no corre, y el sistema no tiene default que una corrida pueda alcanzar.
 _Avoid_: checks, stack (a secas, cuando se habla del sistema), CI, validaciones
 _Campo_: stack — estándar; sus comandos son los presubmit checks del producto
 
