@@ -37,8 +37,8 @@ class RawResult:
     # earlier call it resumed: a probe that resumed a session across two separate
     # `query()` calls showed the second call's `usage` carrying only what it itself
     # spent, not the first call's added in (observability/README.md, 14), so a retry's
-    # or a cross-node resume's first round needs no baseline subtracted from it. Empty
-    # when the SDK reports none.
+    # or a cross-node resume's first round needs no baseline subtracted from it. Zeroed
+    # (all four kinds present, at 0), never omitted, when the SDK reports none.
     usage: dict[str, int] = field(default_factory=dict)
     # Calls to the model in this run: one per `AssistantMessage` message the runner saw
     # before the delivery — the SDK does not otherwise distinguish a "call" from a

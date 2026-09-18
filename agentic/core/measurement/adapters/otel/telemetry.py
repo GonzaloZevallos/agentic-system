@@ -34,6 +34,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Literal
 
 from opentelemetry import metrics, trace
 from opentelemetry.sdk.metrics import MeterProvider
@@ -54,6 +55,11 @@ from agentic.shared.stage0 import CHECKOUT
 
 from ...domain import metrics as system_metrics
 from . import semconv
+
+# One `agentic run`/`resume` call (glossary: Invocación), distinct from a Corrida (the
+# whole execution over a task): `cli._invoke`'s only two shapes, and the closed set the
+# `invocation.kind` label and `agentic.task.invocations` carry.
+InvocationKind = Literal["run", "resume"]
 
 SERVICE_NAME = "agentic-system"
 # The checkout that executes this run, and whose sha the version names. With the system
@@ -392,7 +398,7 @@ class TaskRun(Run):
         self._emit(record)
 
     def finish_invocation(
-        self, before: TaskState, after: TaskState, kind: str, decision: str | None
+        self, before: TaskState, after: TaskState, kind: InvocationKind, decision: str | None
     ) -> None:
         """`agentic.invocation.*` and the per-invocation task samples, off the state the
         invocation entered with and the one it left with — never the task's accumulated
@@ -404,7 +410,15 @@ class TaskRun(Run):
 
         Emitted from `cli._invoke`, off the final state, never from a system node, from
         `pause`, or from a role span (a fan-out branch cannot tell the human once; a
-        resumed `pause` re-runs from its start on every resume)."""
+        resumed `pause` re-runs from its start on every resume).
+
+        `task_paused` fires only for a pause this invocation itself caused: a resume
+        enters already carrying the prior pause's `escalated`/`escalation_class` (it is
+        the state as it paused, README.md/`resume.Resumption.paused`), and a crash that
+        never reaches a node folds `after` from that same `before` with only `status`
+        changed — without the comparison, every crashed resume of an already-paused task
+        would re-emit the pause its earlier invocation already counted (one invocation
+        pauses at most once)."""
         patch = delta(before, after)
         cost = max(patch.get("cost_usd", 0.0), 0.0)
         rework = max(system_metrics.rework_cost_usd(patch), 0.0)
@@ -416,6 +430,10 @@ class TaskRun(Run):
             "invocation.kind": kind,
             "system.version": system_version(),
         }
+        new_pause = after.get("escalated") and (
+            before.get("escalated") != after.get("escalated")
+            or before.get("escalation_class") != after.get("escalation_class")
+        )
 
         def record(i: Instruments) -> None:
             i.invocation_cost.set(cost, labels)
@@ -424,7 +442,7 @@ class TaskRun(Run):
             for category, count in by_category.items():
                 i.invocation_returns.set(count, {**labels, "return.category": category})
             i.task_invocations.set(1, {**labels, "task.status": status})
-            if after.get("escalated"):
+            if new_pause:
                 i.task_paused.set(
                     1, {**labels, "escalation.class": after.get("escalation_class") or "unknown"}
                 )

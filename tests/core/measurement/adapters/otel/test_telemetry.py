@@ -539,6 +539,41 @@ def test_task_paused_emits_the_escalation_class_or_unknown(metrics):
     assert [p.attributes["escalation.class"] for p in paused] == ["cap", "unknown"]
 
 
+def test_a_crash_of_an_already_paused_resume_does_not_repeat_its_pause(metrics):
+    """A resume enters carrying the prior pause's `escalated`/`escalation_class` (it is
+    the state as it paused, `resume.Resumption.paused`); when it crashes before
+    reaching a node, `cli._invoke` folds that same state with only `status` changed
+    (the case above). `agentic.task.paused` must not fire again: the earlier invocation
+    that first escalated already counted this pause (one invocation pauses at most
+    once) — only a genuinely new or different escalation should."""
+    paused_before = {
+        "id": "T-1",
+        "title": "t",
+        "description": "d",
+        "escalated": "x",
+        "escalation_class": "cap",
+    }
+    crashed = {**paused_before, "status": "crashed"}
+    with telemetry.task_span("T-1", "t", "gym-saas") as run:
+        run.finish_invocation(paused_before, crashed, "resume", None)
+    assert "agentic.task.paused" not in points(metrics)
+
+
+def test_a_resume_that_escalates_again_with_a_new_class_does_pause(metrics):
+    paused_before = {
+        "id": "T-1",
+        "title": "t",
+        "description": "d",
+        "escalated": "x",
+        "escalation_class": "cap",
+    }
+    after = {**paused_before, "escalated": "y", "escalation_class": "questions"}
+    with telemetry.task_span("T-1", "t", "gym-saas") as run:
+        run.finish_invocation(paused_before, after, "resume", None)
+    (paused,) = points(metrics)["agentic.task.paused"]
+    assert paused.value == 1 and paused.attributes["escalation.class"] == "questions"
+
+
 def test_task_human_decisions_only_with_an_answer(metrics):
     before = {"id": "T-1", "title": "t", "description": "d"}
     with telemetry.task_span("T-1", "t", "gym-saas") as run:

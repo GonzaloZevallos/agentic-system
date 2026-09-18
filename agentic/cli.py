@@ -16,7 +16,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from functools import partial
-from typing import Literal, cast
+from typing import cast
 
 import anyio
 from dotenv import load_dotenv
@@ -27,6 +27,7 @@ from langgraph.types import Command
 from . import composition
 from .composition import default_ports, graph
 from .core.measurement.adapters.otel import telemetry
+from .core.measurement.adapters.otel.telemetry import InvocationKind
 from .core.process.adapters.langgraph.graph import ESCALATE
 from .core.process.application import resume as resuming
 from .core.process.application.ports import Ports
@@ -42,7 +43,6 @@ from .shared.configuration import ENV_PREFIX, Configuration, MissingProductDir
 from .shared.environment import without_own_toolchain
 
 Checkpointer = Callable[[Configuration], AbstractAsyncContextManager[BaseCheckpointSaver]]
-InvocationKind = Literal["run", "resume"]
 
 
 class CannotStart(Exception):

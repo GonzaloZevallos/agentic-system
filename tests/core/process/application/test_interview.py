@@ -89,6 +89,15 @@ async def test_the_cap_makes_the_interviewer_close_with_what_it_has(cfg):
     assert closing.startswith("**Q2**: accepted") and "The rounds are over" in closing
     section = patch["sections"]["Interview: Product Analyst→PM"]
     assert "### Round 2: answers" in section and section.endswith("### Closing\n\nDecided.")
+    # The cap-forced closing round is not itself a completed round (issue #28): the two
+    # that ran before it are.
+    assert patch["interview_stats"] == {
+        "interview": "definition",
+        "rounds": 2,
+        "questions_to_pm": 0,
+        "questions_to_human": 0,
+        "invariants_proposed": 0,
+    }
 
 
 async def test_questions_for_the_human_escalate_after_the_interview_ends(cfg):
@@ -212,6 +221,15 @@ async def test_a_side_that_fails_twice_escalates_with_the_transcript_so_far(cfg)
     assert len(patch["failures"]) == 2 and patch["cost_usd"] == pytest.approx(0.05 + 0.04)
     # The round that did run is on record.
     assert patch["sections"]["Interview: Product Analyst→PM"].startswith("### Round 1: questions")
+    # The interviewee never answered, so no round completed (issue #28): the stats key
+    # is still present, at zero, on every return path including this failure one.
+    assert patch["interview_stats"] == {
+        "interview": "definition",
+        "rounds": 0,
+        "questions_to_pm": 0,
+        "questions_to_human": 0,
+        "invariants_proposed": 0,
+    }
 
 
 async def test_define_interviews_then_writes_from_the_interviewers_session(cfg):
@@ -519,6 +537,15 @@ async def test_on_the_platform_path_the_tech_lead_asks_the_human_itself(cfg):
     assert "## With the human\n\n1. Should the old endpoint stay?" in runner.calls[2]["prompt"]
     section = patch["sections"]["Interview: Tech Lead efímero→Tech Lead"]
     assert "### Round 1: answers" in section and "PM answers" not in section
+    # The platform path has no consultant: `questions_to_pm` stays at zero even though
+    # the human got a question, and the stage label is still "solution".
+    assert patch["interview_stats"] == {
+        "interview": "solution",
+        "rounds": 1,
+        "questions_to_pm": 0,
+        "questions_to_human": 1,
+        "invariants_proposed": 0,
+    }
 
 
 async def test_on_the_platform_path_a_settled_question_is_withdrawn_by_the_tech_lead(cfg):

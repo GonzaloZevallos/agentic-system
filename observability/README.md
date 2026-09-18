@@ -77,7 +77,7 @@ cerrada — nunca un id de tarea, un título, un id de sesión, una línea de co
 | `agentic.role.calls` | ídem sin `kind` | Llamadas al modelo de esa corrida: una por `AssistantMessage` que el runner vio antes de la entrega — el SDK no distingue "llamada" de "turno" por sí solo, así que esta es la definición del sistema (`ClaudeSdkRunner.run_once`); ausente en una corrida grabada antes de este campo | — |
 | `agentic.role.turns` | ídem | `num_turns` de esa corrida, tal como lo reporta el SDK; a diferencia de las cuatro anteriores, siempre presente (el campo ya existía antes de esta tarea) | — |
 | `agentic.role.tool_calls` | ídem + `tool` | Bloques `tool_use` de esa corrida, una muestra por herramienta (Bash, Read, Edit, Write, Grep, Glob, Agent, Skill, StructuredOutput, `other` para cualquier otra incluidas las MCP); ausente en una corrida grabada antes de este campo | — |
-| `agentic.role.subagent_cost_usd` | ídem | Lo que un sub-agente gastó de `cost_by_model` de esa corrida, todo modelo que no sea el del rol (ADR-0013). **No es aditivo con `agentic.role.cost_usd`**: ese dólar ya cuenta una vez, dentro del total de la corrida; ausente en una corrida grabada antes de este campo | USD |
+| `agentic.role.subagent_cost_usd` | ídem que `agentic.role.turns` | Lo que un sub-agente gastó de `cost_by_model` de esa corrida, todo modelo que no sea el del rol (ADR-0013). **No es aditivo con `agentic.role.cost_usd`**: ese dólar ya cuenta una vez, dentro del total de la corrida; ausente en una corrida grabada antes de este campo | USD |
 
 Las cinco últimas comparten las labels de `agentic.role.cost_usd` **sin `system.version`**:
 un panel de tokens agrupa por rol y modelo, nunca por el checkout que corrió (issue #24).
@@ -89,7 +89,7 @@ un panel de tokens agrupa por rol y modelo, nunca por el checkout que corrió (i
 | `agentic.invocation.duration` | ídem | Tiempo de reloj de esa invocación | s |
 | `agentic.invocation.returns` | ídem + `return.category` | Devoluciones que esa invocación registró, una muestra por categoría (ninguna si no hubo) | — |
 | `agentic.task.invocations` | `product`, `invocation.kind`, `task.status`, `system.version` | 1, una muestra por invocación, con el estado en el que terminó (incluye `crashed`, que solo existe en telemetría) | — |
-| `agentic.task.paused` | `product`, `escalation.class`, `system.version` | 1, una muestra por pausa | — |
+| `agentic.task.paused` | `product`, `invocation.kind`, `escalation.class`, `system.version` | 1, una muestra por pausa; una invocación que se cae ya pausada (crash de un resume) no la repite: solo cuenta cuando esa invocación causó la pausa, comparando `escalated`/`escalation_class` contra el estado con el que entró | — |
 | `agentic.task.human_decisions` | `product`, `invocation.kind`, `system.version` | 1, una muestra por decisión que el humano dio al reanudar | — |
 
 `role.slug` es el `Role.slug` de la corrida (17 valores; `unknown` en una corrida grabada
@@ -148,7 +148,13 @@ el propio patch de `review` — una clave de medición, como `subtask_id`: nunca
 padre del fan-out ni se persiste en el documento.
 
 `check` es el nombre del chequeo tal como lo declara `.agentic/stack.yaml` del producto
-(`tests`, `lint`, `format` hoy; cerrado por el producto, no por el sistema). `final` marca
+(`tests`, `lint`, `format` hoy; cerrado por el producto, no por el sistema). No es un
+`enum` de este diff ni un `Role.slug`: es la clave de un mapa (`checks:`) que el
+`preflight` de cada producto valida una vez al arrancar, así que su conjunto es cerrado
+y chico (hoy 3 valores) pero vive en la configuración del producto, no en el código de
+esta tarea — la misma tensión que el panel de presubmit hereda. Sigue sin ser texto
+libre (ni id de tarea, ni sesión, ni ruta): un producto que agregara un chequeo lo hace
+declarándolo en su `stack.yaml`, no escribiéndolo en una corrida. `final` marca
 la última invocación de la puerta de entrega de una corrida de Developer: la que se
 convirtió en la entrega, o la que el backstop dejó pasar igual, en rojo, agotados los
 rechazos. Las invocaciones de una corrida viajan en el patch de `develop` bajo

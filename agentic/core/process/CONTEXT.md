@@ -244,6 +244,11 @@ La tarea sigue desde donde se pausó. Hace falta una decisión del humano cuando
 _Avoid_: reintento (eso es tras un fallo de rol), relanzar (eso es empezar de cero)
 _Campo_: resume — estándar (LangGraph, Temporal, el Claude Agent SDK)
 
+**Invocación**:
+Una llamada a `agentic run` o `agentic resume`: entra, corre lo que el grafo tenga para correr y termina (entregada, escalada, o caída). Distinta de la Corrida, que es toda la ejecución del sistema sobre una tarea de punta a punta: una tarea que se pausó y se reanudó dos veces tuvo una Corrida y tres Invocaciones, y cada una gastó y tardó solo lo suyo, nunca el acumulado de la tarea que sí lleva la Corrida. `langgraph dev` corre el grafo directo, sin pasar por una invocación de la CLI, así que no deja ninguna de sus muestras.
+_Avoid_: corrida, ejecución (eso es la Corrida completa), run (en inglés, para no perder la distinción con Corrida)
+_Campo_: `InvocationKind` (`run` | `resume`) en el código; sin término de arte compartido — los frameworks hablan de resume/invoke sin nombrar la llamada suelta
+
 **Fallo de rol**:
 El rol se rompe: su ejecución falla, se le acaban los turnos sin resultado, la salida estructurada falta o es inválida, el `markdown` está vacío. Se reintenta una vez con el error como entrada, continuando la conversación del intento fallido cuando la hay. Distinto de devolución; no cuenta para el límite.
 _Avoid_: error (demasiado amplio), reintento (es parte del fallo, no otro término)

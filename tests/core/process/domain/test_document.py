@@ -14,7 +14,17 @@ def test_render_then_parse_roundtrip():
         "current_role": "PM",
         "flags": {"touches_ui": False},
         "changes_requested": {"PM→Product Analyst": 1},
-        "failures": [{"role": "PM", "attempt": 1, "error": "x", "cost_usd": 0.01}],
+        "failures": [
+            {
+                "role": "PM",
+                "attempt": 1,
+                "error": "x",
+                "cost_usd": 0.01,
+                "reason": "schema",
+                "slug": "pm",
+                "section": "PM",
+            }
+        ],
         "runs": [
             {
                 "role": "PjM",
@@ -36,6 +46,10 @@ def test_render_then_parse_roundtrip():
                 "calls": 3,
                 "tool_calls": {"Read": 2, "Bash": 1},
                 "subagent_cost_usd": 0.05000001,
+                "slug": "product_analyst",
+                "started_at": "2026-09-18T10:00:00.000Z",
+                "ended_at": "2026-09-18T10:00:05.000Z",
+                "queue_wait_s": 1.5,
             },
         ],
         "escalated": "PjM stopped by the task cap: 50.00 of 50.00 USD spent",
@@ -67,6 +81,15 @@ def test_render_then_parse_roundtrip():
     assert data["runs"][1]["calls"] == 3
     assert data["runs"][1]["tool_calls"] == {"Read": 2, "Bash": 1}
     assert data["runs"][1]["subagent_cost_usd"] == 0.05  # rounded like cost_by_model
+    # The spine's own new per-run keys survive the round trip too (issue #24): the
+    # forward direction, not only that a document written before they existed parses.
+    assert data["runs"][1]["slug"] == "product_analyst"
+    assert data["runs"][1]["started_at"] == "2026-09-18T10:00:00.000Z"
+    assert data["runs"][1]["ended_at"] == "2026-09-18T10:00:05.000Z"
+    assert data["runs"][1]["queue_wait_s"] == 1.5
+    assert data["failures"][0]["reason"] == "schema"
+    assert data["failures"][0]["slug"] == "pm"
+    assert data["failures"][0]["section"] == "PM"
     assert data["cost_usd"] == 0.1235
     assert data["prompts"] == {"pjm": "abcd1234"}
     assert data["description"] == "Users want CSV."
