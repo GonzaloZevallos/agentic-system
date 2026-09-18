@@ -48,7 +48,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from agentic.core.process.domain.rules import phase_of
-from agentic.core.process.domain.task import Failure, TaskState
+from agentic.core.process.domain.task import Failure, InterviewStats, TaskState
 from agentic.core.process.domain.task import RoleRun as RoleRunRecord
 from agentic.shared.stage0 import CHECKOUT
 
@@ -181,6 +181,9 @@ class Instruments:
     review_findings: Gauge
     presubmit_checks: Gauge
     presubmit_duration: Gauge
+    interview_rounds: Gauge
+    interview_questions: Gauge
+    interview_invariants: Gauge
 
     @classmethod
     def create(cls, m: metrics.Meter) -> Instruments:
@@ -265,6 +268,18 @@ class Instruments:
                 "agentic.presubmit.duration",
                 unit="s",
                 description="How long one check took to run, in one presubmit invocation",
+            ),
+            interview_rounds=m.create_gauge(
+                "agentic.interview.rounds",
+                description="Question-answer cycles one interview ran",
+            ),
+            interview_questions=m.create_gauge(
+                "agentic.interview.questions",
+                description="Questions of one interview, one sample per destination",
+            ),
+            interview_invariants=m.create_gauge(
+                "agentic.interview.invariants",
+                description="Invariants of one interview, one sample per state",
             ),
         )
 
@@ -406,6 +421,8 @@ class RoleRun(Run):
             self._emit_findings(patch)
         if patch.get("presubmit_checks"):
             self._emit_presubmit(patch)
+        if stats := patch.get("interview_stats"):
+            self._emit_interview(stats, patch.get("invariants"))
 
     def _run_labels(self, patch: TaskState, run: RoleRunRecord) -> dict[str, str | bool]:
         return {
@@ -559,6 +576,26 @@ class RoleRun(Run):
                     i.presubmit_duration.set(check.get("duration_s", 0.0), labels)
 
             self._emit(record)
+
+    def _emit_interview(self, stats: InterviewStats, adopted: list[str] | None) -> None:
+        """`agentic.interview.rounds`, `.questions{to}` and `.invariants{state}`, from
+        the patch's own counts (`InterviewStats`, measurement-only). `adopted` is
+        `None` unless the patch also carries the plan's own `invariants` — the solution
+        stage's Tech Lead run, in the same patch as the interview that proposed them."""
+        common = {"product": self.product, "interview": stats["interview"]}
+        questions = system_metrics.interview_questions(stats)
+
+        def record(i: Instruments) -> None:
+            i.interview_rounds.set(stats["rounds"], common)
+            for to, count in questions.items():
+                i.interview_questions.set(count, {**common, "to": to})
+            i.interview_invariants.set(
+                stats["invariants_proposed"], {**common, "state": "proposed"}
+            )
+            if adopted is not None:
+                i.interview_invariants.set(len(adopted), {**common, "state": "adopted"})
+
+        self._emit(record)
 
     def _child_span(self, patch: TaskState, run: RoleRunRecord) -> None:
         """One span per run record, under the role span, carrying that run's own agent,

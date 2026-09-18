@@ -168,6 +168,24 @@ class RoleRun(TypedDict):
     subagent_cost_usd: NotRequired[float]
 
 
+class InterviewStats(TypedDict):
+    """Counts of one interview (ADR-0014), for measurement only: `interview()`'s own
+    patch key, read by `core.measurement` for `agentic.interview.*` and never rendered
+    into the document — the same treatment `subtask_id` gets, since a panel needs it
+    but a resumed task does not. `interview` is which stage ran it (`Interview.stage`);
+    `rounds` is the question-answer cycles that reached an interviewee's answer;
+    `questions_to_pm` counts the consultations that ran (Consulta, ADR-0014's addendum);
+    `questions_to_human` is the net count left for the human once the interview ended,
+    after any withdrawal; `invariants_proposed` is what the interviewer proposed, before
+    the plan adopts any of them."""
+
+    interview: Literal["definition", "solution"]
+    rounds: int
+    questions_to_pm: int
+    questions_to_human: int
+    invariants_proposed: int
+
+
 class ChangesRequested(TypedDict):
     """One return, as the history keeps it: the pair, its category and the verifier's
     one-line reason (README.md, 3: "the same motive between the same roles", computable)."""
@@ -282,6 +300,9 @@ class TaskState(TaskInput, total=False):
     # (`agentic.presubmit.checks`, `.duration`). Measurement only, like `subtask_id`:
     # never rendered into the document.
     presubmit_checks: list[list[dict[str, str | bool | float]]]
+    # Counts of the interview this patch ran, if any (`InterviewStats`): measurement
+    # only, like `subtask_id` above — never rendered into the document.
+    interview_stats: InterviewStats
 
 
 def _reducers() -> dict[str, object]:

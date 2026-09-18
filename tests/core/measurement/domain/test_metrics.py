@@ -162,3 +162,14 @@ def test_run_duration_s_is_ended_minus_started():
 def test_run_duration_s_is_none_for_a_run_recorded_before_the_fields_existed():
     assert metrics.run_duration_s({"role": "PjM"}) is None
     assert metrics.run_duration_s({"started_at": "2026-09-18T10:00:00.000+00:00"}) is None
+
+
+def test_interview_questions_by_destination():
+    stats = {
+        "interview": "solution",
+        "rounds": 3,
+        "questions_to_pm": 1,
+        "questions_to_human": 2,
+        "invariants_proposed": 1,
+    }
+    assert metrics.interview_questions(stats) == {"interviewee": 3, "pm": 1, "human": 2}

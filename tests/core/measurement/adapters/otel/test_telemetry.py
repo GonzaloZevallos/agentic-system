@@ -905,6 +905,65 @@ def test_a_patch_with_no_presubmit_invocations_emits_no_presubmit_sample(metrics
     assert points(metrics).get("agentic.presubmit.checks") is None
 
 
+def test_a_patchs_interview_stats_emit_rounds_questions_and_proposed_invariants(metrics):
+    patch = {
+        "cost_usd": 0.3,
+        "interview_stats": {
+            "interview": "solution",
+            "rounds": 3,
+            "questions_to_pm": 1,
+            "questions_to_human": 2,
+            "invariants_proposed": 1,
+        },
+    }
+    with telemetry.role_span("Tech Lead efímero", "tech_lead_ephemeral", "gym-saas") as run:
+        run.finish(patch)
+    got = points(metrics)
+    (rounds,) = got["agentic.interview.rounds"]
+    assert rounds.value == 3
+    assert dict(rounds.attributes) == {"product": "gym-saas", "interview": "solution"}
+    questions = {p.attributes["to"]: p.value for p in got["agentic.interview.questions"]}
+    assert questions == {"interviewee": 3, "pm": 1, "human": 2}
+    for point in got["agentic.interview.questions"]:
+        assert point.attributes["product"] == "gym-saas"
+        assert point.attributes["interview"] == "solution"
+    (proposed,) = got["agentic.interview.invariants"]
+    assert proposed.value == 1
+    assert dict(proposed.attributes) == {
+        "product": "gym-saas",
+        "interview": "solution",
+        "state": "proposed",
+    }
+
+
+def test_a_patchs_adopted_invariants_come_from_its_own_invariants_key(metrics):
+    patch = {
+        "cost_usd": 0.3,
+        "interview_stats": {
+            "interview": "solution",
+            "rounds": 1,
+            "questions_to_pm": 0,
+            "questions_to_human": 0,
+            "invariants_proposed": 2,
+        },
+        "invariants": ["Every X does Y"],
+    }
+    with telemetry.role_span("Tech Lead", "tech_lead", "gym-saas") as run:
+        run.finish(patch)
+    got = points(metrics)
+    invariants = {p.attributes["state"]: p.value for p in got["agentic.interview.invariants"]}
+    assert invariants == {"proposed": 2, "adopted": 1}
+
+
+def test_a_patch_without_an_interview_emits_no_interview_metrics(metrics):
+    with telemetry.role_span("Developer", "developer", "gym-saas") as run:
+        run.finish({"cost_usd": 0.1})
+    got = points(metrics)
+    assert "agentic.interview.rounds" not in got
+    assert "agentic.interview.questions" not in got
+    assert "agentic.interview.invariants" not in got
+
+
 def test_system_version_prefers_the_env_var(monkeypatch):
     monkeypatch.setenv("AGENTIC_SYSTEM_VERSION", "v-test")
     monkeypatch.setattr(telemetry, "_version", None)

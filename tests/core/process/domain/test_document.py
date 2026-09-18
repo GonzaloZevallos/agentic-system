@@ -72,6 +72,28 @@ def test_render_then_parse_roundtrip():
     assert data["sections"] == state["sections"]
 
 
+def test_interview_stats_never_reaches_the_document():
+    """Measurement-only, like `subtask_id`: `interview()`'s own patch key
+    (`InterviewStats`) never reaches the document, so a resumed task carries none of
+    it and a panel reading `agentic.interview.*` is the only place it shows."""
+    state = {
+        "id": "T-1",
+        "title": "Plan it",
+        "description": "x.",
+        "interview_stats": {
+            "interview": "solution",
+            "rounds": 2,
+            "questions_to_pm": 1,
+            "questions_to_human": 0,
+            "invariants_proposed": 1,
+        },
+    }
+    rendered = document.render(state)
+    assert "interview_stats" not in rendered
+    assert "questions_to_pm" not in rendered
+    assert "interview_stats" not in document.parse(rendered)
+
+
 def test_superseded_sections_are_written_before_the_current_one():
     state = {
         "id": "T-2",
