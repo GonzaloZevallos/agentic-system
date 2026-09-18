@@ -1,5 +1,6 @@
 from agentic.core.process.domain import rules, task
-from agentic.core.process.domain.roles import FINDINGS, PAIR_PM_PA
+from agentic.core.process.domain.denials import denial_for
+from agentic.core.process.domain.roles import FINDINGS, PAIR_PM_PA, PJM, PRODUCT_ANALYST_BUG
 from agentic.core.process.domain.task import INTEGRATION
 
 PAIR = PAIR_PM_PA
@@ -628,3 +629,15 @@ def test_stopped_by_cap_falls_back_to_the_text_when_the_state_carries_no_class()
     assert rules.stopped_by_cap({"escalated": reason})
     assert not rules.stopped_by_cap({"escalated": "PM hit 2 returns: x"})
     assert not rules.stopped_by_cap({})
+
+
+def test_denial_note_names_the_count_and_the_role_rule():
+    # Glossary: Negación — one line, system-written, with how many and the rule.
+    note = rules.denial_note(PRODUCT_ANALYST_BUG, 8)
+    assert note == f"_The system denied 8 write attempts: {denial_for(PRODUCT_ANALYST_BUG)}_"
+
+
+def test_denial_note_uses_the_singular_for_one():
+    note = rules.denial_note(PJM, 1)
+    assert "1 write attempt:" in note
+    assert "1 write attempts:" not in note
