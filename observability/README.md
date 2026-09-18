@@ -73,6 +73,14 @@ cerrada — nunca un id de tarea, un título, un id de sesión, una línea de co
 | `agentic.role.queue_wait` | ídem | Segundos que esa corrida esperó un cupo de concurrencia, antes de empezar a correr; nunca incluido en `run_duration` | s |
 | `agentic.role.failures` | `product`, `role`, `role.slug`, `phase` (si la falla tiene sección), `reason` | Intentos fallidos de una patch, una muestra por motivo con el conteo como valor | — |
 | `agentic.role.failure_cost_usd` | ídem | Costo de los intentos fallidos de una patch, por motivo. **No es aditivo con `agentic.role.cost_usd`**: el mismo dólar ya cuenta una vez, dentro del costo de una corrida que reintentó o dentro de la muestra residual | USD |
+| `agentic.role.tokens` | `product`, `role`, `model`, `rework`, `role.slug`, `phase`, `role.outcome` + `kind` | Tokens de **una corrida**, de `ResultMessage.usage`, una muestra por `kind` ∈ {input, output, cache_read, cache_write}; ausente en una corrida grabada antes de este campo o cuyo intento falló (un intento fallido no reporta tokens) | tokens |
+| `agentic.role.calls` | ídem sin `kind` | Llamadas al modelo de esa corrida: una por `AssistantMessage` que el runner vio antes de la entrega — el SDK no distingue "llamada" de "turno" por sí solo, así que esta es la definición del sistema (`ClaudeSdkRunner.run_once`); ausente en una corrida grabada antes de este campo | — |
+| `agentic.role.turns` | ídem | `num_turns` de esa corrida, tal como lo reporta el SDK; a diferencia de las cuatro anteriores, siempre presente (el campo ya existía antes de esta tarea) | — |
+| `agentic.role.tool_calls` | ídem + `tool` | Bloques `tool_use` de esa corrida, una muestra por herramienta (Bash, Read, Edit, Write, Grep, Glob, Agent, Skill, StructuredOutput, `other` para cualquier otra incluidas las MCP); ausente en una corrida grabada antes de este campo | — |
+| `agentic.role.subagent_cost_usd` | ídem | Lo que un sub-agente gastó de `cost_by_model` de esa corrida, todo modelo que no sea el del rol (ADR-0013). **No es aditivo con `agentic.role.cost_usd`**: ese dólar ya cuenta una vez, dentro del total de la corrida; ausente en una corrida grabada antes de este campo | USD |
+
+Las cinco últimas comparten las labels de `agentic.role.cost_usd` **sin `system.version`**:
+un panel de tokens agrupa por rol y modelo, nunca por el checkout que corrió (issue #24).
 
 `role.slug` es el `Role.slug` de la corrida (17 valores; `unknown` en una corrida grabada
 antes de este campo). `phase` ∈ {definition, plan, development, review} (`rules.phase_of`,
@@ -83,6 +91,43 @@ corrida contra la que se escribió (la última cuya sección es una clave de
 una patch con varias (una entrevista) es `delivered`. `reason` ∈ {schema, check, max_turns,
 limit, sdk, other}, decidido en el sitio donde se lanza `AttemptFailed`, nunca por parsear
 el mensaje de error.
+
+### `ResultMessage.usage` es por llamada, no acumulado de la sesión
+
+Pregunta abierta de esta tarea (issue #24): si `usage` trae los tokens de esa sola
+llamada a `query()` o el acumulado de toda la sesión de Claude Code, incluidas las
+llamadas anteriores que reanudó. La respuesta importa porque `run_with_retry` reanuda
+la sesión de un intento fallido en una llamada nueva, y una entrevista o una revisión
+incremental pueden reanudar una sesión que abrió un nodo anterior: si `usage` fuera
+acumulativo, sumar sus cifras tal cual contaría esos tokens más de una vez.
+
+La prueba (`tests/llm/test_token_usage.py`, `uv run pytest -m llm`) abre una sesión,
+lee su `usage`, la reanuda en una llamada `query()` nueva y lee el `usage` de esa
+segunda llamada. Salida real, corrida el 2026-09-18:
+
+```
+TURN 1 usage: {"input_tokens": 2, "cache_creation_input_tokens": 1862, "cache_read_input_tokens": 0, "output_tokens": 5, ...}
+TURN 1 total_cost_usd: 0.00845
+TURN 1 num_turns: 1
+TURN 2 usage: {"input_tokens": 2, "cache_creation_input_tokens": 63, "cache_read_input_tokens": 1862, "output_tokens": 4, ...}
+TURN 2 total_cost_usd: 0.0006684
+TURN 2 num_turns: 1
+```
+
+La segunda llamada no repite las cifras de la primera: `cache_read_input_tokens` de la
+vuelta 2 (1862) es exactamente lo que la vuelta 1 creó en caché (`cache_creation_input_
+tokens`: 1862), y el resto de la vuelta 2 es apenas el intercambio nuevo (2 tokens de
+entrada, 4 de salida) — no la suma de las dos vueltas. **`usage` es por llamada a
+`query()`, nunca acumulado de la sesión**: una llamada que reanuda una sesión, la haya
+abierto este mismo nodo o uno anterior, reporta solo lo que ella gastó, así que
+`agentic.role.tokens` lee `usage` tal cual, sin restar nada (`_usage`,
+`ClaudeSdkRunner.run_once`; el test por payload fabricado que codifica esta regla está
+en `tests/core/process/adapters/claude_sdk/test_runner.py`, incluido el caso sin línea
+de base de una sesión abierta en un nodo anterior). Queda documentado, no corregido: la
+primera vuelta de una sesión reanudada entre nodos paga de nuevo el `cache_creation`
+de reconstruir el contexto en un proceso nuevo, y esa vuelta sale más cara en tokens
+que una continuación dentro del mismo proceso — un costo real, ya reflejado en
+`cost_usd`, que el desglose por `kind` no distingue de una sesión abierta de cero.
 
 ## Costo en Langfuse
 
