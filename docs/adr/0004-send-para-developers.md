@@ -286,3 +286,77 @@ camino que la revisión objetó: la memoria sirve para no releer, no para insist
 
 Fuera de esta adenda: `ROLE_RETRIES`, el tope por intento, el límite del par y el ruteo de la
 devolución por el fan-in, que no se tocan.
+
+## Adenda (2026-09-18, séptima): el reintento tras `max_turns` dice qué pasó, no que arregle algo
+
+Un Developer que terminó su trabajo y agota `max_turns` (80, el tope más alto del sistema)
+pierde el intento entero (issue #85: $16.38 en tres corridas, GH-69 dos veces en la misma
+subtarea). El diagnóstico no es el reintento: la adenda del 2026-09-14 ya lo resuelve — un
+corte de `max_turns` deja `session_id` como cualquier otro fallo del harness, y
+`run_with_retry` reanuda esa sesión. La segunda corrida de GH-72 lo confirma: el intento 1 y
+el 2 de `Developer: rework-figures` comparten sesión. El defecto es la frase que
+`_retry_input` le manda a esa sesión reanudada: `"<PreviousAttemptFailed>...</PreviousAttemptFailed>\n\nRetry.
+Fix exactly what failed."` — una orden de **arreglar un fallo**, para un modelo cuyo trabajo
+no falló, solo se cortó. Esa frase es por qué el segundo intento vuelve a leer el worktree y
+anuncia "my prior work is still in the worktree (uncommitted)" antes de poder entregar: nadie
+le dijo que el corte no fue un error suyo.
+
+**La solución es una frase, no plomería nueva.** `rules.turn_cut_retry_message(role)`
+(`domain/rules.py`) compone el mensaje que el reintento recibe cuando
+`failures[-1]["reason"] == "max_turns"`, seleccionado en `_retry_input`
+(`application/run_role.py`); toda otra razón de fallo sigue recibiendo la frase de hoy, byte a
+byte (test en el mismo diff). El mensaje afirma solo lo que el runner puede afirmar
+honestamente: el tope de turnos terminó el intento, no algo que falló; la conversación y los
+commits ya hechos están intactos; el checkout alrededor pudo haberse movido. Nunca nombra una
+rama o un head — eso es de `returned_developer_delta`, que lee el estado que
+`turn_cut_retry_message` no tiene.
+
+**Tres brazos sobre el rol, el conservador por default:**
+
+1. **`role.executes`** (el Developer, en su propia subtarea o en la integración): commitear
+   antes de entregar, y que una entrega rechazada también cuesta turnos — con los chequeos en
+   rojo, commitear y entregar igual, la brecha nombrada en `summary`. Ninguna de las dos
+   órdenes puede volverse un loop: `develop.committed` levanta excepción sobre un árbol sucio
+   (commitear no es opcional) y los rechazos del presubmit están acotados en dos.
+2. **Un participante de entrevista enumerado** (`rules.INTERVIEW_PARTICIPANT_SLUGS`, el
+   conjunto de slugs que ocupan el asiento de interviewer, interviewee o consultant en
+   `INTERVIEW_DEFINITION`, `INTERVIEW_SOLUTION` e `INTERVIEW_SOLUTION_PLATFORM`): cerrar este
+   turno con lo que tiene, la misma instrucción que `interview.CLOSE` ya le da al interviewer
+   cuando se agotan las rondas — acá, para el turno que cortó el SDK, no la entrevista entera.
+3. **Todo lo demás, por default** — `product_analyst_bug` es el rol para el que existe este
+   brazo: no entregar un dictamen al que no se llegó; gastar lo que queda en la lectura que
+   decide la entrega; si aun así no alcanza, decir en la salida qué quedó sin leer. Deriva
+   literalmente de `docs/product/role-failures.md`: *"Un presupuesto agotado no se disfraza de
+   entrega [...] Lo que sí se le pide es lo contrario de una escapatoria: priorizar la lectura
+   que decide su entrega y, si igual no llega, que el motivo del intento fallido nombre qué le
+   faltaba leer"*. El brazo por default, no una lista de roles permitidos, para que un rol que
+   una tarea futura agregue no herede en silencio permiso para fabricar una entrega.
+
+**Lo que esta adenda no toca.** No enriquece `max_turns_motive` ni lo que el runner
+raspa para alimentarlo: los cinco cortes medidos leen desnudos (`max_turns (N) exhausted
+without a result`), y ningún mensaje puede pedirle a un modelo que escriba ahí — ese campo lo
+llena el sistema, nunca el rol. No agrega valor a `FailureReason`, no cambia
+`ROLE_RETRIES`, el tope por intento, el tope de tarea, ni el ruteo de una devolución por el
+fan-in. No edita `docs/product/role-failures.md`: no hay PM en este camino, y el texto arriba
+cita el párrafo del que deriva en vez de tocarlo.
+
+**La compuerta declarada para la subtarea B (`turn-notice`).** Antes de escribir ningún hook,
+un spike en `tests/llm/` tiene que establecer tres cosas contra el SDK fijado:
+
+1. Que **alguna señal del lado del hook** rastree el tope que el CLI de verdad hace cumplir
+   (no `num_turns`: una corrida quedó con `turns: 17` bajo `max_turns: 12`; no `calls`: cuenta
+   tráfico de sub-agentes, 168 llamadas contra 3 turnos en `tech_lead_review`).
+2. Que un evento de hilo principal se distinga de uno de sub-agente — qué hace `agent_id` en
+   el hilo principal.
+3. La **unidad**: correr un rol hasta un corte deliberado y comparar el conteo del lado del
+   hook en el corte contra `max_turns` y contra el `num_turns` reportado.
+
+**Si las tres se sostienen**, un aviso — solo para `DEVELOPER` y `DEVELOPER_INTEGRATOR` — al
+acercarse al tope, con un hook `PostToolUse` que cuenta, ignora todo evento con atribución de
+sub-agente y devuelve solo `additionalContext` (nunca una decisión de permiso, ADR-0011,
+cuarta adenda). **Si alguna falla**, la salida correcta es no escribir el hook: una frase en
+`developer.md` y `developer_integrator.md` que le encargue el presupuesto al propio rol (ya
+reciben `{{max_turns}}`), y nada más. Esos dos prompts son los únicos que esa subtarea puede
+tocar, y la ruptura de fingerprint que eso produce ya queda contada aquí, para no
+descubrirla en un panel: si B toca esos prompts, `prompts.fingerprint` cambia y la línea base
+y el set de evaluación de antes de este commit dejan de ser comparables.
