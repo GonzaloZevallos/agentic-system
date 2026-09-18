@@ -3,13 +3,15 @@
 import re
 
 import pytest
-from opentelemetry.sdk.metrics.export import MetricReader, MetricsData
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from agentic.core.measurement.adapters.otel import semconv, telemetry
+from agentic.core.measurement.domain import metrics as system_metrics
+from agentic.core.process.domain.task import apply
 from agentic.shared.stage0 import CHECKOUT
+from tests.conftest import BatchReader, points
 
 TRACEPARENT = re.compile(r"^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$")
 
@@ -24,20 +26,6 @@ def spans(monkeypatch):
     telemetry.configure(tracer_provider=provider)
     yield exporter
     telemetry.configure()
-
-
-class BatchReader(MetricReader):
-    """Keeps every export as its own batch: a `finish` flushes, so one event is one batch."""
-
-    def __init__(self):
-        super().__init__()
-        self.batches: list[MetricsData] = []
-
-    def _receive_metrics(self, metrics_data: MetricsData, timeout_millis: float = 10_000, **kw):
-        self.batches.append(metrics_data)
-
-    def shutdown(self, timeout_millis: float = 30_000, **kw):
-        pass
 
 
 @pytest.fixture
@@ -65,17 +53,6 @@ def spans_and_metrics(monkeypatch):
     )
     yield exporter, reader
     telemetry.configure()
-
-
-def points(reader: BatchReader) -> dict[str, list]:
-    """{metric name: [data points]} of everything exported so far."""
-    out: dict[str, list] = {}
-    for data in reader.batches:
-        for rm in data.resource_metrics:
-            for sm in rm.scope_metrics:
-                for metric in sm.metrics:
-                    out.setdefault(metric.name, []).extend(metric.data.data_points)
-    return out
 
 
 def test_no_provider_no_traceparent():
@@ -384,8 +361,16 @@ def test_every_role_span_attribute_key_is_gen_ai_agentic_or_an_exception(spans):
 def test_task_finish_emits_the_system_metrics(metrics):
     final = {
         "type": "feature",
-        "status": "definition_ready",
-        "cost_usd": 0.5,
+        # A Corrida-ended status (`rules.run_ended`): the gauges this test checks only
+        # fire once the task itself is over (ADR-0008, 2026-09-18 second addendum). The
+        # gate itself, and what a paused or crashed status leaves instead, is its own
+        # test below.
+        "status": "ready_for_review",
+        # Matches the two runs below exactly: no unaccounted residual, so this fixture
+        # keeps testing what a returned run alone contributes to rework (ADR-0008,
+        # 2026-09-18 second addendum treats unaccounted money as rework too, its own
+        # separate case).
+        "cost_usd": 0.25,
         "changes_requested": {"PM→Product Analyst": 1, "Tech Lead→Developer:api": 2},
         "change_history": [
             {"pair": "PM→Product Analyst", "category": "definition", "reason": "r"},
@@ -419,12 +404,12 @@ def test_task_finish_emits_the_system_metrics(metrics):
     labels = {
         "product": "gym-saas",
         "task.type": "feature",
-        "task.status": "definition_ready",
+        "task.status": "ready_for_review",
         "system.version": "abc1234",
         "prompts.fingerprint": telemetry.system_metrics.prompts_fingerprint(final),
     }
     (cost,) = got["agentic.task.cost_usd"]
-    assert cost.value == 0.5 and dict(cost.attributes) == labels
+    assert cost.value == 0.25 and dict(cost.attributes) == labels
     (rework,) = got["agentic.task.rework_usd"]
     assert rework.value == 0.15
     (finished,) = got["agentic.task.finished"]
@@ -437,6 +422,41 @@ def test_task_finish_emits_the_system_metrics(metrics):
     assert duration.value >= 0
     # The finish exported on its own: the sample left the process with the event.
     assert len(metrics.batches) == 1
+
+
+@pytest.mark.parametrize("status", ["waiting_on_human", "crashed"])
+def test_task_finish_leaves_no_gauge_for_a_corrida_that_can_still_resume(spans_and_metrics, status):
+    """The bug's second case: a pause or a crash does not end the Corrida — the
+    checkpoint allows a resume and the system cannot know if it will come — so
+    `finish` stamps the span (still readable in Langfuse) but leaves no task gauge.
+    Emitting here too is exactly what let a task paused twice count its rework twice
+    (ADR-0008, 2026-09-18 second addendum)."""
+    exporter, reader = spans_and_metrics
+    final = {"cost_usd": 0.1, "status": status}
+    with telemetry.task_span("T-1", "t", "gym-saas") as run:
+        run.finish(final)
+    assert points(reader) == {}
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes["task.status"] == status and span.attributes["task.cost_usd"] == 0.1
+
+
+@pytest.mark.parametrize("status", ["ready_for_review", "discarded"])
+def test_task_finish_emits_its_gauges_once_when_the_corrida_ended(spans_and_metrics, status):
+    """`rules.run_ended`'s two members: a delivery and a discard both close the
+    Corrida, so both leave exactly one sample of each task gauge."""
+    exporter, reader = spans_and_metrics
+    final = {"cost_usd": 0.1, "status": status}
+    with telemetry.task_span("T-1", "t", "gym-saas") as run:
+        run.finish(final)
+    got = points(reader)
+    for name in (
+        "agentic.task.cost_usd",
+        "agentic.task.rework_usd",
+        "agentic.task.duration",
+        "agentic.task.finished",
+        "agentic.task.returns",
+    ):
+        assert len(got[name]) == 1, name
 
 
 def test_invocation_finish_emits_only_the_delta_this_invocation_spent(metrics):
@@ -850,6 +870,95 @@ def test_four_run_records_leave_four_cost_samples_and_four_child_spans(spans_and
     assert all(s.parent.span_id == role_span.get_span_context().span_id for s in children)
 
 
+def test_a_tasks_rework_usd_equals_the_sum_of_its_rework_marked_role_samples(spans_and_metrics):
+    """The acceptance case `docs/product/rework.md` and PM's consolidated definition
+    ask for: a task with one return, one failed attempt retried successfully, and a
+    `run_role` escalation residual. The final state is built by folding, through
+    `task.apply`, the very same patches handed to `RoleRun.finish` — never a
+    hand-written total — so the two views cannot silently drift apart (ADR-0008,
+    2026-09-18 second addendum)."""
+    reader = spans_and_metrics[1]
+
+    plain = _run("PM", "pm", "PM", 0.1)
+    plain_patch = {"runs": [plain], "cost_usd": 0.1, "status": "defined"}
+
+    retried = _run("Product Analyst", "product_analyst", "Product Analyst", 0.05)
+    retried["failed_cost_usd"] = 0.02
+    # On the very run the cost split touches, so tokens/calls prove the split is
+    # role_cost's alone: neither is split or duplicated alongside it.
+    retried["tokens"] = {"input": 10, "output": 5}
+    retried["calls"] = 3
+    retry_patch = {
+        "runs": [retried],
+        "failures": [
+            {
+                "role": "Product Analyst",
+                "attempt": 1,
+                "error": "invalid",
+                "cost_usd": 0.02,
+                "session_id": "",
+                "reason": "schema",
+                "slug": "product_analyst",
+                "section": "Product Analyst",
+            }
+        ],
+        "cost_usd": 0.05,
+    }
+
+    returned = _run("Tech Lead", "tech_lead", "Tech Lead", 0.2)
+    returned["version"] = 2
+    return_patch = {"runs": [returned], "cost_usd": 0.2, "status": "returned"}
+
+    escalation_patch = {
+        "failures": [
+            {
+                "role": "Developer",
+                "attempt": 1,
+                "error": "broke",
+                "cost_usd": 0.08,
+                "session_id": "",
+                "reason": "max_turns",
+                "slug": "developer",
+                "section": "Developer: api",
+            }
+        ],
+        "cost_usd": 0.08,
+        "escalated": "Developer failed",
+        "status": "waiting_on_human",
+    }
+
+    calls = [
+        ("PM", "pm", plain_patch),
+        ("Product Analyst", "product_analyst", retry_patch),
+        ("Tech Lead", "tech_lead", return_patch),
+        ("Developer", "developer", escalation_patch),
+    ]
+    final: dict = {}
+    for role_name, role_slug, patch in calls:
+        with telemetry.role_span(role_name, role_slug, "gym-saas") as run:
+            run.finish(patch)
+        final = apply(final, patch)
+
+    got = points(reader)
+    role_costs = got["agentic.role.cost_usd"]
+    total = sum(c.value for c in role_costs)
+    assert total == pytest.approx(final["cost_usd"])
+    rework_total = sum(c.value for c in role_costs if c.attributes["rework"])
+    assert rework_total == pytest.approx(
+        system_metrics.rework_cost_usd(final), abs=system_metrics.RESIDUAL_FLOOR_USD
+    )
+    # Three runs delivered (the escalation carries none): exactly one sample per run
+    # for every other series `_emit_run` leaves, none of them split by the cost fix.
+    assert len(got["agentic.role.turns"]) == 3
+    assert len(got["agentic.role.run_duration"]) == 3
+    assert len(got["agentic.role.queue_wait"]) == 3
+    # `retried` is the one run whose cost split in two; its tokens and calls stay
+    # exactly one sample (one per kind for tokens), never duplicated alongside it.
+    assert len(got["agentic.role.calls"]) == 1 and got["agentic.role.calls"][0].value == 3
+    tokens = {t.attributes["kind"]: t.value for t in got["agentic.role.tokens"]}
+    assert tokens == {"input": 10, "output": 5}
+
+
 @pytest.mark.parametrize(
     "patch",
     [
@@ -893,6 +1002,20 @@ def test_an_empty_patch_leaves_exactly_one_zero_cost_sample(metrics):
     assert cost.value == 0.0
 
 
+def test_a_pure_escalation_residual_never_omits_phase_or_rework(metrics):
+    """`_emit_residual`'s never-omit rule (ADR-0008, 2026-09-18 second addendum): no
+    run delivered and no failure carries a section, so `residual_phase`'s cascade
+    bottoms out at `"unknown"` rather than dropping the label; `rework` is always
+    `True` — every residual is money that produced no delivery, by the glossary's own
+    definition (`residual_rework`)."""
+    patch = {"cost_usd": 0.08, "escalated": "PjM failed", "status": "waiting_on_human"}
+    with telemetry.role_span("PjM", "pjm", "gym-saas") as run:
+        run.finish(patch)
+    (cost,) = points(metrics)["agentic.role.cost_usd"]
+    assert cost.value == pytest.approx(0.08)
+    assert cost.attributes["phase"] == "unknown" and cost.attributes["rework"] is True
+
+
 def test_a_run_record_without_slug_emits_unknown(metrics):
     run = {
         "role": "PjM",
@@ -907,6 +1030,35 @@ def test_a_run_record_without_slug_emits_unknown(metrics):
         run_span.finish({"runs": [run], "cost_usd": 0.1})
     (cost,) = points(metrics)["agentic.role.cost_usd"]
     assert cost.attributes["role.slug"] == "unknown"
+
+
+def test_a_run_with_failed_attempt_money_leaves_two_cost_samples_marked_rework(metrics):
+    """`_emit_run`'s split (ADR-0008, 2026-09-18 second addendum): a `version == 1`
+    run whose own failed attempts cost something (`failed_cost_usd`, already inside
+    `cost_usd`) leaves its delivering money under the run's usual `rework` label
+    (`False`, since it is not itself a return), and a second sample of the same
+    instrument and labels but `rework="true"`, carrying just the failed money — so
+    `agentic.role.cost_usd` still sums to the run's own `cost_usd`, and only the
+    rework-marked share of it."""
+    run = _run("Product Analyst", "product_analyst", "Product Analyst", 0.05)
+    run["failed_cost_usd"] = 0.02
+    with telemetry.role_span("Product Analyst", "product_analyst", "gym-saas") as run_span:
+        run_span.finish({"runs": [run], "cost_usd": 0.05})
+    costs = points(metrics)["agentic.role.cost_usd"]
+    assert sorted(c.value for c in costs) == [pytest.approx(0.02), pytest.approx(0.03)]
+    failed, delivered = sorted(costs, key=lambda c: c.value)
+    assert failed.attributes["rework"] is True and delivered.attributes["rework"] is False
+    assert sum(c.value for c in costs) == pytest.approx(0.05)
+
+
+def test_a_run_with_no_failed_attempt_money_leaves_only_the_one_cost_sample(metrics):
+    """The common case, byte-identical to before this task: no `failed_cost_usd` (or
+    zero), no second sample."""
+    run = _run("PjM", "pjm", "PjM", 0.1)
+    with telemetry.role_span("PjM", "pjm", "gym-saas") as run_span:
+        run_span.finish({"runs": [run], "cost_usd": 0.1})
+    (cost,) = points(metrics)["agentic.role.cost_usd"]
+    assert cost.value == 0.1 and cost.attributes["rework"] is False
 
 
 def test_failures_leave_one_sample_per_reason_with_the_count_and_the_cost(metrics):
@@ -1019,7 +1171,10 @@ def test_failures_emit_no_cold_fallback_sample_when_none_carry_it(metrics):
     assert "agentic.role.cold_fallback" not in points(metrics)
 
 
-def test_a_failure_without_slug_or_section_emits_unknown_and_no_phase(metrics):
+def test_a_failure_without_slug_or_section_emits_unknown_for_both(metrics):
+    """Neither label is ever omitted (ADR-0008, 2026-09-18 second addendum): a
+    failure recorded with no `slug`/`section` (or a document from before either
+    existed) reads `unknown` on both, never drops the key."""
     patch = {
         "failures": [
             {"role": "PjM", "attempt": 1, "error": "a", "cost_usd": 0.01, "session_id": ""}
@@ -1032,7 +1187,7 @@ def test_a_failure_without_slug_or_section_emits_unknown_and_no_phase(metrics):
         run.finish(patch)
     (count,) = points(metrics)["agentic.role.failures"]
     assert count.attributes["role.slug"] == "unknown"
-    assert "phase" not in count.attributes
+    assert count.attributes["phase"] == "unknown"
 
 
 def test_role_duration_labels_are_untouched_by_the_new_per_run_labels(metrics):

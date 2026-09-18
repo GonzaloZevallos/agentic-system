@@ -48,7 +48,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
-from agentic.core.process.domain.rules import phase_of
+from agentic.core.process.domain.rules import phase_of, run_ended
 from agentic.core.process.domain.task import Failure, InterviewStats, TaskState, delta
 from agentic.core.process.domain.task import RoleRun as RoleRunRecord
 from agentic.shared.stage0 import CHECKOUT
@@ -377,6 +377,13 @@ class Run:
 @dataclass
 class TaskRun(Run):
     def finish(self, final: TaskState) -> None:
+        """Stamps the span always — a paused or crashed invocation stays readable in
+        Langfuse — but emits the five task gauges only when `rules.run_ended` says the
+        Corrida itself is over (ADR-0008, 2026-09-18 second addendum): a pause or a
+        crash leaves the task resumable, and emitting here too is the bug this task
+        closes — a task paused twice would leave two samples of its accumulated total.
+        `finish_invocation` is untouched: it already reports one invocation's own
+        delta, whatever status this one leaves the task in."""
         cost = final.get("cost_usd", 0.0)
         rework = system_metrics.rework_cost_usd(final)
         # The series keeps the old name on purpose: renaming it would cut every panel
@@ -385,10 +392,11 @@ class TaskRun(Run):
         # so they do not follow the domain's rename (ADR-0008, addendum; ADR-0018).
         requested = system_metrics.changes_requested_total(final)
         by_category = system_metrics.changes_by_category(final)
+        status = final.get("status", "open")
         labels = {
             "product": self.product,
             "task.type": final.get("type", "unknown"),
-            "task.status": final.get("status", "open"),
+            "task.status": status,
             "system.version": system_version(),
             "prompts.fingerprint": system_metrics.prompts_fingerprint(final),
         }
@@ -403,6 +411,8 @@ class TaskRun(Run):
                 "task.escalated": bool(final.get("escalated")),
             }
         )
+        if not run_ended(status):
+            return
         elapsed = self.elapsed
 
         def record(i: Instruments) -> None:
@@ -558,16 +568,26 @@ class RoleRun(Run):
         checkout that ran it. `tokens`, `calls`, `tool_calls`, `subagent_cost_usd` and
         `max_turns` are absent on a run recorded before the field existed; `turns` is
         not, so it is the one always emitted. `max_turns` shares `turns`'s own label
-        set (issue #81), so the two series line up in a panel without a join."""
+        set (issue #81), so the two series line up in a panel without a join.
+
+        `role_cost` here only ever carries this run's own delivering money (`cost_usd`
+        minus `failed_cost_usd`, the fact `run_record` already recorded): a second,
+        separate record-and-flush below carries the failed-attempt money alone, same
+        labels but `rework="true"` (ADR-0008, 2026-09-18 second addendum), only when
+        there is any — so the two samples still sum to `cost_usd`, and the one marked
+        `rework` sums to what `metrics.run_rework_usd` says this run's rework is worth,
+        whether or not the run is itself a return (`is_rework`)."""
         labels = self._run_labels(patch, run)
         duration = system_metrics.run_duration_s(run)
         queue_wait = run.get("queue_wait_s")
         token_labels = {k: v for k, v in labels.items() if k != "system.version"}
         tokens = run.get("tokens", {})
         tool_calls = run.get("tool_calls", {})
+        failed_cost = run.get("failed_cost_usd", 0.0)
+        delivered_cost = run["cost_usd"] - failed_cost
 
         def record(i: Instruments) -> None:
-            i.role_cost.set(run["cost_usd"], labels)
+            i.role_cost.set(delivered_cost, labels)
             if duration is not None:
                 i.role_run_duration.set(duration, labels)
             if queue_wait is not None:
@@ -588,23 +608,31 @@ class RoleRun(Run):
 
         self._emit(record)
 
+        if failed_cost > 0:
+            rework_labels = {**labels, "rework": True}
+
+            def record_failed(i: Instruments) -> None:
+                i.role_cost.set(failed_cost, rework_labels)
+
+            self._emit(record_failed)
+
     def _emit_residual(self, patch: TaskState) -> None:
         """The cost no run record carries: an escalation's failed attempts, or an
         empty patch, at value zero so the panel never silently misses the node. No
-        `model`, since no run backs it; `phase` only when a run in the patch did
-        deliver (`target_run`) and this residual is a separate fact about the same
-        patch — there is no section to derive one from otherwise."""
+        `model`, since no run backs it. `phase` is never absent (ADR-0008, 2026-09-18
+        second addendum): `residual_phase`'s own cascade — the run this patch
+        delivered, else its first failed attempt's section, else `"unknown"` — so an
+        omitted label and one with a value never read as the same series."""
         labels: dict[str, str | bool] = {
             "product": self.product,
             "role": self.role,
             "model": "",
             "rework": system_metrics.residual_rework(patch),
             "role.slug": self.slug or "unknown",
+            "phase": system_metrics.residual_phase(patch),
             "role.outcome": system_metrics.residual_outcome(patch),
             "system.version": system_version(),
         }
-        if target := system_metrics.target_run(patch):
-            labels["phase"] = phase_of(target.get("section", target["role"]))
         value = system_metrics.residual_cost_usd(patch)
 
         def record(i: Instruments) -> None:
@@ -618,14 +646,16 @@ class RoleRun(Run):
         and `phase` come from the failures themselves — the same role and roughly the
         same section every attempt of one `run_with_retry` call shares — rather than
         the node's own span, so a failure recorded with none (a document from before
-        this task) still reads `unknown` instead of borrowing the span's identity."""
+        this task) still reads `unknown` instead of borrowing the span's identity.
+        `phase` is never absent (ADR-0008, 2026-09-18 second addendum): `unknown` when
+        the failures carry no `section` to derive one from."""
+        section = failures[0].get("section")
         common: dict[str, str] = {
             "product": self.product,
             "role": self.role,
             "role.slug": failures[0].get("slug") or "unknown",
+            "phase": phase_of(section) if section else "unknown",
         }
-        if section := failures[0].get("section"):
-            common["phase"] = phase_of(section)
         counts = system_metrics.failures_by_reason(failures)
         costs = system_metrics.failure_cost_by_reason(failures)
         fell_back_cold = any(f.get("cold_fallback", False) for f in failures)

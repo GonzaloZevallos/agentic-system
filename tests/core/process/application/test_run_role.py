@@ -386,6 +386,7 @@ async def test_run_role_builds_the_patch_and_the_history(tmp_path):
         "subagent_cost_usd": pytest.approx(0.02),
         "resumed_from": "",
         "cold_fallback": False,
+        "failed_cost_usd": 0.0,
         "denials": 0,
     }
     # Timed inside the concurrency slot: started no later than ended, both ISO-8601 UTC.
@@ -484,6 +485,35 @@ def test_run_record_stamps_the_roles_own_turn_cap():
     output = Output(text="ok", data={}, cost_usd=0.1, turns=1, session_id="s", model="m")
     run = run_record({}, PJM, "PjM", output)
     assert run["max_turns"] == PJM.max_turns == 2
+
+
+def test_run_record_carries_the_failed_attempts_cost_already_inside_cost_usd():
+    output = Output(
+        text="ok",
+        data={},
+        cost_usd=0.08,
+        failures=[
+            {
+                "role": "PjM",
+                "attempt": 1,
+                "error": "e",
+                "cost_usd": 0.05,
+                "session_id": "",
+                "reason": "other",
+                "slug": "pjm",
+                "section": "PjM",
+                "cold_fallback": False,
+            }
+        ],
+    )
+    run = run_record({}, PJM, "PjM", output)
+    assert run["failed_cost_usd"] == pytest.approx(0.05)
+
+
+def test_run_record_failed_cost_usd_is_zero_without_a_failed_attempt():
+    output = Output(text="ok", data={}, cost_usd=0.03)
+    run = run_record({}, PJM, "PjM", output)
+    assert run["failed_cost_usd"] == 0.0
 
 
 async def test_run_role_turns_a_role_failure_into_an_escalation(tmp_path):

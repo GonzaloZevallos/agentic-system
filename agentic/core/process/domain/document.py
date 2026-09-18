@@ -130,6 +130,8 @@ def _rounded_run(run: RoleRun) -> dict:
         rounded["cost_by_model"] = {m: round(c, 4) for m, c in run["cost_by_model"].items()}
     if "subagent_cost_usd" in run:
         rounded["subagent_cost_usd"] = round(run["subagent_cost_usd"], 4)
+    if "failed_cost_usd" in run:
+        rounded["failed_cost_usd"] = round(run["failed_cost_usd"], 4)
     return rounded
 
 

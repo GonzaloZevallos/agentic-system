@@ -6,8 +6,8 @@ proceso registra; el proceso no la conoce.
 ## Language
 
 **Retrabajo**:
-Corrida de rol que repite trabajo ya hecho en la tarea, sea por devolución o por fallo de
-rol. Las devoluciones internas y los Developers en paralelo no son retrabajo.
+Corrida de rol que repite trabajo ya hecho en la tarea, sea por devolución o por fallo de rol. Medido en plata: todo el costo de una corrida posterior a una devolución, y de una corrida de primera entrega sólo el costo de sus intentos fallidos, más la plata de intentos fallidos que ninguna corrida contabiliza. Cada dólar cuenta una sola vez, y el valor de la tarea es la suma de los de sus corridas. Las devoluciones internas y los Developers en paralelo no son retrabajo.
+_Avoid_: reintento (el reintento es un hecho; el retrabajo es lo que cuesta)
 _Campo_: rework — de manufactura y de ingeniería de software clásica; DORA no lo mide, su vecino es change failure rate
 
 **Métrica del sistema**:

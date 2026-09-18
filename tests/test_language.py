@@ -28,7 +28,7 @@ TYPES = {
     "Conocimiento de producto": knowledge,
     "Estándares de ingeniería": knowledge.assemble_standards,
     "Job": knowledge.approval_check,  # the check that a capability names its jobs
-    "Retrabajo": metrics.is_rework,
+    "Retrabajo": metrics.rework_cost_usd,
     "Muestra residual": metrics.residual_cost_usd,
     "Hallazgo": schemas.Finding,
     "Dictamen": schemas.Diagnosis,

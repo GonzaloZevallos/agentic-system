@@ -48,6 +48,7 @@ def test_render_then_parse_roundtrip():
                 "calls": 3,
                 "tool_calls": {"Read": 2, "Bash": 1},
                 "subagent_cost_usd": 0.05000001,
+                "failed_cost_usd": 0.02000001,
                 "slug": "product_analyst",
                 "started_at": "2026-09-18T10:00:00.000Z",
                 "ended_at": "2026-09-18T10:00:05.000Z",
@@ -84,6 +85,7 @@ def test_render_then_parse_roundtrip():
     assert data["runs"][1]["calls"] == 3
     assert data["runs"][1]["tool_calls"] == {"Read": 2, "Bash": 1}
     assert data["runs"][1]["subagent_cost_usd"] == 0.05  # rounded like cost_by_model
+    assert data["runs"][1]["failed_cost_usd"] == 0.02  # rounded like the other money fields
     assert data["runs"][1]["max_turns"] == 4
     # The spine's own new per-run keys survive the round trip too (issue #24): the
     # forward direction, not only that a document written before they existed parses.
@@ -249,10 +251,10 @@ def test_the_channel_survives_the_document():
 
 def test_a_document_written_before_slug_and_timing_existed_still_parses():
     """`RoleRun.slug/.started_at/.ended_at/.queue_wait_s/.tokens/.calls/.tool_calls/
-    .subagent_cost_usd/.max_turns/.denials` and `Failure.reason/.slug/.section/.denials`
-    are new keys inside entries `document.py` already rendered and parsed whole: no
-    rename, so a run or a failure recorded before this task carries on without them,
-    exactly as written."""
+    .subagent_cost_usd/.max_turns/.denials/.failed_cost_usd` and
+    `Failure.reason/.slug/.section/.denials` are new keys inside entries `document.py`
+    already rendered and parsed whole: no rename, so a run or a failure recorded before
+    this task carries on without them, exactly as written."""
     old = (
         "---\n"
         "id: T-1\n"
@@ -278,6 +280,7 @@ def test_a_document_written_before_slug_and_timing_existed_still_parses():
     }
     assert "slug" not in run and "started_at" not in run and "queue_wait_s" not in run
     assert "tokens" not in run and "calls" not in run and "tool_calls" not in run
+    assert "subagent_cost_usd" not in run and "failed_cost_usd" not in run
     assert "subagent_cost_usd" not in run
     assert "max_turns" not in run and "denials" not in run
     (failure,) = state["failures"]
