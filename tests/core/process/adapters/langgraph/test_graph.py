@@ -589,6 +589,7 @@ async def test_role_failure_escalates_and_keeps_failures(config, tmp_path):
         "cost_usd": 0.01,
         "cost_by_model": {},
         "turns": 0,
+        "max_turns": 2,
         "tokens": {},
         "calls": 0,
         "tool_calls": {},
