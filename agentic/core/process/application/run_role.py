@@ -306,14 +306,20 @@ async def _attempt(
         data = schemas.validate(role.schema, result.structured_output, vocabulary)
     except ValueError as exc:
         raise AttemptFailed(
-            f"structured output invalid: {exc}", cost, session, reason="schema"
+            f"structured output invalid: {rules.exception_motive(exc)}",
+            cost,
+            session,
+            reason="schema",
         ) from exc
     if check is not None:
         try:
             check(data)
         except ValueError as exc:
             raise AttemptFailed(
-                f"structured output invalid: {exc}", cost, session, reason="check"
+                f"structured output invalid: {rules.exception_motive(exc)}",
+                cost,
+                session,
+                reason="check",
             ) from exc
     text = data.pop("markdown").strip()
     if not text:

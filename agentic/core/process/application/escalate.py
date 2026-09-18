@@ -46,7 +46,7 @@ def comment(state: TaskState, cfg: Configuration, ports: Ports) -> str:
     resume = ""
     if (number := ports.inbox.issue_of(state["id"])) is not None:
         resume = f"agentic resume --issue {number}"
-    if rules.stopped_by_cap(reason):
+    if rules.stopped_by_cap(state):
         lines.append("\nSpent by phase:\n")
         lines.extend(
             f"- {phase}: {usd:.2f} USD" for phase, usd in rules.spent_by_phase(state).items()

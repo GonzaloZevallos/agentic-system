@@ -93,6 +93,17 @@ async def test_second_failure_raises_role_failure_with_cost():
     assert str(info.value) == "PjM failed 2 times: b"
 
 
+async def test_role_failure_carries_the_last_attempts_motive_verbatim():
+    # `AttemptFailed`'s own choke point (`rules.motive`) already guarantees the motive
+    # names a cause; `RoleFailure` must not summarise or reshape it on top.
+    motive = "API Error: You've hit your session limit · resets 11:20pm (subtype=sdk)"
+    runner = ScriptedRunner(pjm=[AttemptFailed("a", 0.01), AttemptFailed(motive, 0.02)])
+    with pytest.raises(RoleFailure) as info:
+        await run_pjm(runner)
+    assert str(info.value) == f"PjM failed 2 times: {motive}"
+    assert info.value.failures[-1]["error"] == motive
+
+
 async def test_the_task_cap_stops_a_role_before_its_first_attempt():
     # The task already spent the cap: nothing else runs, and it is not a role failure.
     runner = ScriptedRunner(pjm=[OK])

@@ -191,7 +191,8 @@ def test_the_task_cap_is_the_base_until_the_plan_then_grows_with_its_units():
 def test_a_cap_escalation_is_recognised_and_proposes_one_more_unit():
     reason = rules.cap_reached("Developer", 106.27, 100)
     assert reason == "Developer stopped by the task cap: 106.27 of 100.00 USD spent"
-    assert rules.stopped_by_cap(reason) and not rules.stopped_by_cap("PM hit 2 returns: x")
+    assert rules.stopped_by_cap({"escalated": reason})
+    assert not rules.stopped_by_cap({"escalated": "PM hit 2 returns: x"})
     assert rules.suggested_budget({"cost_usd": 106.27}, 15) == 122
 
 
@@ -511,3 +512,119 @@ def test_a_returned_integration_stops_saying_there_was_nothing_to_do():
     now = rules.integration_work("Wire the two ends.", ["agentic/GH-1.api"])
     assert "Wire the two ends." in now["brief"] and "`agentic/GH-1.api`" in now["brief"]
     assert now["conflicts"] == ["agentic/GH-1.api"]
+
+
+# The motive of a failed attempt (issue #66, `docs/product/role-failures.md`): a report
+# never yields an empty diagnostic, and `success` never names a cause.
+
+LIMIT_PROSE = "API Error: You've hit your session limit · resets 11:20pm"
+
+
+def test_failure_motive_leads_with_the_result_prose_and_names_neither_success_nor_empty():
+    # The 2026-09-17 incident: `subtype="success"`, `errors=[]`, the limit in `result`.
+    report = rules.ReportedFailure(subtype="success", errors=(), result=LIMIT_PROSE)
+    motive = rules.failure_motive(report)
+    assert LIMIT_PROSE in motive
+    assert "success" not in motive
+    assert motive.strip() and not motive.rstrip().endswith(":")
+
+
+def test_failure_motive_falls_back_to_the_errors_when_there_is_no_result():
+    report = rules.ReportedFailure(subtype="error", errors=("boom", " also this "))
+    assert rules.failure_motive(report) == "boom; also this (subtype=error)"
+
+
+def test_failure_motive_drops_an_errors_entry_that_repeats_the_result_prose():
+    report = rules.ReportedFailure(result="API Error: boom", errors=("API Error: boom", "extra"))
+    assert rules.failure_motive(report) == "API Error: boom; extra"
+
+
+def test_failure_motive_a_whitespace_only_result_falls_back_to_errors():
+    report = rules.ReportedFailure(result="   ", errors=("real cause",))
+    assert rules.failure_motive(report) == "real cause"
+
+
+def test_failure_motive_appends_metadata_in_order():
+    report = rules.ReportedFailure(
+        subtype="error_during_execution",
+        result="broke",
+        terminal_reason="api_error",
+        api_error_status=529,
+        exit_code=1,
+    )
+    assert rules.failure_motive(report) == (
+        "broke (subtype=error_during_execution, terminal reason: api_error, HTTP 529, exit code 1)"
+    )
+
+
+def test_failure_motive_tier_two_names_the_metadata_when_there_is_no_cause():
+    report = rules.ReportedFailure(terminal_reason="api_error", api_error_status=529)
+    assert (
+        rules.failure_motive(report)
+        == "the SDK reported no message (terminal reason: api_error, HTTP 529)"
+    )
+
+
+def test_failure_motive_tier_three_names_the_exit_code_when_that_is_all_there_is():
+    with_code = rules.ReportedFailure(exit_code=1)
+    assert rules.failure_motive(with_code) == "the SDK ended with exit code 1 and reported no cause"
+    # The `ResultMessage` site structurally carries none: no formatted `None`.
+    without_code = rules.ReportedFailure()
+    assert rules.failure_motive(without_code) == "the SDK reported no cause and no exit code"
+
+
+def test_exception_motive_reads_the_message_or_names_the_type():
+    assert rules.exception_motive(ValueError("be humble")) == "be humble"
+    assert rules.exception_motive(RuntimeError()) == "RuntimeError, with no message"
+    assert rules.exception_motive(RuntimeError("  ")) == "RuntimeError, with no message"
+
+
+def test_motive_collapses_crlf_and_drops_control_characters_but_keeps_newline_and_tab():
+    raw = "line one\r\nline\x07 two\twith a tab"
+    assert rules.motive(raw, "other") == "line one\nline two\twith a tab"
+
+
+def test_motive_neutralises_a_triple_backtick_so_no_fence_stays_open():
+    raw = "before ```danger\ncode``` after"
+    result = rules.motive(raw, "other")
+    assert "```" not in result
+    assert "before" in result and "danger" in result and "after" in result
+
+
+def test_motive_backstops_an_empty_or_colon_ending_text_keeping_the_prefix():
+    assert rules.motive("", "sdk") == "no cause reported (reason: sdk)"
+    assert rules.motive("   ", "sdk") == "no cause reported (reason: sdk)"
+    assert rules.motive("run failed (success): ", "sdk") == (
+        "run failed (success): no cause reported (reason: sdk)"
+    )
+    assert rules.motive("run failed (success):", "sdk") == (
+        "run failed (success): no cause reported (reason: sdk)"
+    )
+    # A text that already names a cause is left alone.
+    assert rules.motive("boom (subtype=error)", "sdk") == "boom (subtype=error)"
+
+
+def test_motive_caps_a_long_text_at_2000_keeping_head_and_tail():
+    text = ("A" * 5000) + "B" * 5000
+    capped = rules.motive(text, "other")
+    assert len(capped) < len(text)
+    assert capped.startswith("A" * 1600)
+    assert capped.endswith("B" * 300)
+    assert "characters elided" in capped
+
+
+def test_stopped_by_cap_prefers_the_escalation_class_when_the_state_carries_one():
+    reason = rules.cap_reached("Developer", 106.27, 100)
+    assert rules.stopped_by_cap({"escalated": reason, "escalation_class": "cap"})
+
+
+def test_stopped_by_cap_is_false_when_the_class_says_something_else_even_if_the_text_matches():
+    reason = rules.cap_reached("Developer", 106.27, 100)
+    assert not rules.stopped_by_cap({"escalated": reason, "escalation_class": "returns"})
+
+
+def test_stopped_by_cap_falls_back_to_the_text_when_the_state_carries_no_class():
+    reason = rules.cap_reached("Developer", 106.27, 100)
+    assert rules.stopped_by_cap({"escalated": reason})
+    assert not rules.stopped_by_cap({"escalated": "PM hit 2 returns: x"})
+    assert not rules.stopped_by_cap({})
