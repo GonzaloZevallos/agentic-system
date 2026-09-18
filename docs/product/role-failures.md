@@ -24,11 +24,14 @@ fallos escalan la tarea.
 Cada intento fallido queda registrado con un motivo en texto. El motivo se arma con lo que
 el harness tenga, en este orden, y **nunca queda vacío ni tautológico**:
 
-1. El subtype y los errores que el SDK reporta, cuando los hay.
-2. Cuando el SDK no deja material útil —el caso real es un `ResultError` con
-   `subtype="success"` y `errors` vacío, que ocurre cuando el CLI emite un resultado que
-   parece bueno y después sale con código distinto de cero—, el motivo lleva **lo que el
-   proceso sí dejó**: las últimas líneas de stderr y el código de salida.
+1. **Todo lo que el SDK reporta**, no un subconjunto elegido por el código: el subtype y
+   los errores, y también la prosa del resultado y los campos que nombran la causa
+   (`api_error_status`, `terminal_reason`, `exit_code`). El caso real del 2026-09-17 cae
+   acá: el `ResultError` venía con `subtype="success"` y `errors` vacío, pero con el texto
+   "API Error: …" del límite de sesión en el resultado. Ese texto es la causa y tiene que
+   llegar al motivo; descartarlo es el defecto.
+2. Cuando **todo** lo que el SDK reporta viene vacío, el motivo lleva lo que el proceso sí
+   dejó: las últimas líneas de stderr y el código de salida.
 3. Cuando no hay absolutamente nada, el motivo lo dice en palabras ("el SDK terminó con
    código N sin mensaje"), que es información: le dice al humano dónde mirar.
 
