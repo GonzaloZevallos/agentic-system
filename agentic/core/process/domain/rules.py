@@ -8,9 +8,10 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from . import presubmit
+from .denials import denial_for
 from .document import HUMAN, demote
 from .roles import (
     DEVELOPER,
@@ -288,6 +289,12 @@ def limit_reached(pair: Pair, limit: int, reason: str) -> str:
 # construction, the ten today and any not yet written, instead of by each site's care.
 
 
+# The exact tier-3 "nothing at all" text `failure_motive` falls back to when `report`
+# carries neither a cause nor any metadata nor an exit code: `max_turns_motive`
+# compares against it, once, instead of re-deriving that emptiness itself.
+_NO_DETAIL_REPORTED = "the SDK reported no cause and no exit code"
+
+
 @dataclass(frozen=True)
 class ReportedFailure:
     """What the harness reported about a broken attempt, in the shape `failure_motive`
@@ -329,7 +336,25 @@ def failure_motive(report: ReportedFailure) -> str:
         return f"the SDK reported no message{parens}"
     if exit_part:
         return f"the SDK ended with exit code {report.exit_code} and reported no cause"
-    return "the SDK reported no cause and no exit code"
+    return _NO_DETAIL_REPORTED
+
+
+def max_turns_motive(max_turns: int, report: ReportedFailure) -> str:
+    """The motive for an attempt the harness cut for `error_max_turns`
+    (`docs/product/role-failures.md` §1; issues #69, #81): the cutoff, named first, so
+    a spent budget never reads as a ruling about the product (the invariant every
+    raise site of this kind honours). `report.subtype` is always `error_max_turns`
+    here — that is how a raise site knows to call this — so folding it into the detail
+    the way `failure_motive` folds every other `subtype` would repeat what the leading
+    sentence already says, the same tautology issue #66 fixed for a different field;
+    dropped, so only genuine SDK prose, a terminal reason, an HTTP status or an exit
+    code tells the human what the role was doing when its turns ran out. When there is
+    none of that either, the bare sentence stands alone (tier 3 of the definition):
+    `failure_motive`'s own "no cause" tier would only echo it back as new information
+    it is not."""
+    exhausted = f"max_turns ({max_turns}) exhausted without a result"
+    detail = failure_motive(replace(report, subtype=None))
+    return exhausted if detail == _NO_DETAIL_REPORTED else f"{exhausted}: {detail}"
 
 
 def _cause(report: ReportedFailure) -> str:
@@ -515,6 +540,17 @@ def returned_developer_delta(state: TaskState, subtask_id: str, branch: str, hea
     lead = f"**Returned:** {reason}\n\n" if reason else ""
     parts.append(f"## {review}\n\n{lead}{sections.get(review, '')}")
     return "\n\n".join(parts)
+
+
+def denial_note(role: Role, count: int) -> str:
+    """The trace a denied write leaves on the run's section (glossary: Negación): one
+    line, system-written, only when the run had at least one denial — the same seam
+    `cold_fallback_note` uses for a dropped session, so a run spent fighting the
+    permission layer is legible without opening logs. `count` is the run's total, the
+    delivering attempt's plus every recorded failure's, never a per-attempt figure
+    (`run_role.run_role`'s own rule)."""
+    plural = "" if count == 1 else "s"
+    return f"_The system denied {count} write attempt{plural}: {denial_for(role)}_"
 
 
 def cold_fallback_note() -> str:

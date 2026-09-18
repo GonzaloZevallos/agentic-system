@@ -139,6 +139,11 @@ class Failure(TypedDict):
     # Decided once per run, in `run_with_retry`, the only place that knows it; absent on
     # a failure recorded before this field existed, which reads as `False`.
     cold_fallback: NotRequired[bool]
+    # Write attempts the SDK denied during this attempt, before it ended one way or
+    # another (glossary: Negación): read off `RawResult.denials`/`AttemptFailed.denials`,
+    # never guessed later. Absent on a failure recorded before this field existed, which
+    # reads as `0` (`rules.denial_note`'s callers always use `.get(..., 0)`).
+    denials: NotRequired[int]
 
 
 class RoleRun(TypedDict):
@@ -156,6 +161,11 @@ class RoleRun(TypedDict):
     # `turns` counts the role's alone, so this is what explains a dear two-turn run.
     cost_by_model: dict[str, float]
     turns: int
+    # The role's own `max_turns` at the time it ran (not the output's, which knows
+    # nothing about the cap): what `agentic.role.max_turns` reads, so a calibration can
+    # compare `turns` against the budget it actually ran under. Absent on a run
+    # recorded before this field existed; read with `.get()`, no sample emitted then.
+    max_turns: NotRequired[int]
     # `Role.slug`: `role` alone cannot tell the six roles named "Tech Lead" apart.
     # Absent on a run recorded before this field existed; read with `.get(..., "unknown")`.
     slug: NotRequired[str]
@@ -195,6 +205,12 @@ class RoleRun(TypedDict):
     # it and ran cold instead. Absent on a run recorded before this field existed, which
     # reads as `False`.
     cold_fallback: NotRequired[bool]
+    # Write attempts the SDK denied during the delivering attempt (glossary: Negación),
+    # off `RawResult.denials`. The run's total, for the document line and the escalation
+    # (`rules.denial_note`), also folds in every recorded `Failure.denials`: this field
+    # alone is only the delivering attempt's. Absent on a run recorded before this field
+    # existed, which reads as `0`.
+    denials: NotRequired[int]
 
 
 class InterviewStats(TypedDict):

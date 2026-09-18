@@ -34,23 +34,27 @@ generator, which ends the process and whatever it still had running.
 from __future__ import annotations
 
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import IO, Any
 
 from claude_agent_sdk import (
     AssistantMessage,
+    CanUseTool,
     ClaudeAgentOptions,
     Message,
+    PermissionResultDeny,
     ResultError,
     ResultMessage,
+    ToolPermissionContext,
     ToolUseBlock,
     query,
 )
 
 from ...application.ports import AttemptFailed, Presubmit, RawResult
+from ...domain.denials import denial_for
 from ...domain.roles import Role
-from ...domain.rules import ReportedFailure, exception_motive, failure_motive
+from ...domain.rules import ReportedFailure, exception_motive, failure_motive, max_turns_motive
 from ...domain.task import FailureReason
 from ..plugins import PLUGIN, PLUGIN_DIR
 from ..telemetry import NoTelemetry, Telemetry
@@ -81,6 +85,7 @@ def options_for(
     partial: bool,
     env: Mapping[str, str],
     presubmit: Presubmit | None = None,
+    on_denied: Callable[[], None] | None = None,
 ) -> ClaudeAgentOptions:
     tools, allowed = list(role.tools), list(role.allowed)
     if role.skills and SKILL_TOOL not in tools:
@@ -112,7 +117,33 @@ def options_for(
         # Claude Code parents its own spans under the role's (SDK mode honours it).
         env={**env, **({"TRACEPARENT": traceparent} if traceparent else {})},
         hooks=hooks_for(role, cwd, presubmit) or None,
+        # A role that executes runs under `bypassPermissions`, which already shadows
+        # this callback for every call (the SDK's own warning); wiring one there would
+        # be dead code the hooks cage already replaces (ADR-0011, addendum). For a role
+        # that does not execute, this is the only seam a call outside `Role.allowed`
+        # reaches (`hooks_for` installs nothing for it): the callback never widens what
+        # `Role.allowed` permits, since the SDK only consults it for what an allow rule
+        # does not already cover.
+        can_use_tool=None if role.executes else _deny_writes(role, on_denied),
     )
+
+
+def _deny_writes(role: Role, on_denied: Callable[[], None] | None) -> CanUseTool:
+    """The `can_use_tool` callback for a role that does not execute (glossary:
+    Negación): always denies, with the sentence `denial_for` composes instead of the
+    SDK's generic reason, and counts the denial for `RawResult.denials`. Safe to always
+    deny because the SDK only asks this for a call `Role.allowed` does not already
+    cover (its own shadowing rule), so this never makes the role's permitted commands
+    narrower than its `Role.allowed`."""
+
+    async def deny(
+        tool_name: str, tool_input: dict[str, Any], context: ToolPermissionContext
+    ) -> PermissionResultDeny:
+        if on_denied is not None:
+            on_denied()
+        return PermissionResultDeny(message=denial_for(role))
+
+    return deny
 
 
 class ClaudeSdkRunner:
@@ -144,6 +175,12 @@ class ClaudeSdkRunner:
         presubmit: Presubmit | None = None,
     ) -> RawResult:
         observer = Printer(role.name, self.stream) if self.verbose else None
+        denials = 0
+
+        def _count_denial() -> None:
+            nonlocal denials
+            denials += 1
+
         options = options_for(
             role,
             system_prompt=system_prompt,
@@ -156,9 +193,9 @@ class ClaudeSdkRunner:
             partial=observer is not None,
             env=self.env,
             presubmit=presubmit,
+            on_denied=_count_denial,
         )
 
-        exhausted = f"max_turns ({role.max_turns}) exhausted without a result"
         result: ResultMessage | None = None
         background = 0
         calls = 0
@@ -181,18 +218,27 @@ class ClaudeSdkRunner:
             # that into ResultError after yielding the ResultMessage.
             cost, session = _left_behind(result)
             if exc.subtype == "error_max_turns":
-                raise AttemptFailed(exhausted, cost, session, reason="max_turns") from exc
+                raise AttemptFailed(
+                    max_turns_motive(role.max_turns, _reported_error(exc)),
+                    cost,
+                    session,
+                    reason="max_turns",
+                    denials=denials,
+                ) from exc
             raise AttemptFailed(
                 failure_motive(_reported_error(exc)),
                 cost,
                 session,
                 reason=_reason_for_subtype(exc.subtype),
+                denials=denials,
             ) from exc
         except Exception as exc:  # the SDK raises its own hierarchy; all of it is a failure
-            raise AttemptFailed(f"SDK error: {exception_motive(exc)}", reason="sdk") from exc
+            raise AttemptFailed(
+                f"SDK error: {exception_motive(exc)}", reason="sdk", denials=denials
+            ) from exc
 
         if result is None:
-            raise AttemptFailed("run ended without a result message", reason="sdk")
+            raise AttemptFailed("run ended without a result message", reason="sdk", denials=denials)
         if background and _delivered(result):
             # The prompt forbids it; when the model does it anyway, whatever those
             # sub-agents had to say never reached the verdict, and the reader of the
@@ -203,19 +249,27 @@ class ClaudeSdkRunner:
             )
         cost, session = _left_behind(result)
         if result.subtype == "error_max_turns":
-            raise AttemptFailed(exhausted, cost, session, reason="max_turns")
+            raise AttemptFailed(
+                max_turns_motive(role.max_turns, _reported_result(result)),
+                cost,
+                session,
+                reason="max_turns",
+                denials=denials,
+            )
         if result.is_error:
             raise AttemptFailed(
                 failure_motive(_reported_result(result)),
                 cost,
                 session,
                 reason=_reason_for_subtype(result.subtype or ""),
+                denials=denials,
             )
         return RawResult(
             structured_output=result.structured_output,
             cost_usd=cost,
             turns=result.num_turns,
             session_id=session,
+            denials=denials,
             cost_by_model=_cost_by_model(result),
             usage=_usage(result),
             calls=calls,

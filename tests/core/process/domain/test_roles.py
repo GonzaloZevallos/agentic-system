@@ -81,6 +81,39 @@ def test_the_definition_stage_roles_come_first():
         assert (PROMPTS_DIR / f"{role.slug}.md").exists()
 
 
+def test_product_analyst_bug_has_its_own_larger_turn_budget():
+    from agentic.core.process.domain.roles import PRODUCT_ANALYST, PRODUCT_ANALYST_BUG
+
+    # Reproducing a bug means reading several modules and task documents of a repo
+    # this size before ruling (issues #69, #81); the feature Product Analyst answers
+    # from the request alone, so its default is not enough. Declared on the bug role
+    # itself, not inherited from `PRODUCT_ANALYST`'s.
+    assert PRODUCT_ANALYST_BUG.max_turns == 30
+    assert PRODUCT_ANALYST_BUG.max_turns != PRODUCT_ANALYST.max_turns
+
+
+def test_the_bug_product_analysts_prompt_renders_its_own_turn_budget():
+    from agentic.core.process.domain.roles import PRODUCT_ANALYST_BUG
+
+    raw = (PROMPTS_DIR / f"{PRODUCT_ANALYST_BUG.slug}.md").read_text()
+    loaded = render(
+        raw,
+        PROMPTS_DIR / f"{PRODUCT_ANALYST_BUG.slug}.md",
+        checks="- `tests`: `pytest`",
+        max_turns=PRODUCT_ANALYST_BUG.max_turns,
+    )
+    assert "{{" not in loaded.text
+    # `load_prompt` already passes every role's own `max_turns` (`run_role.py`); the
+    # closing rule renders it instead of claiming a single turn (issues #69, #81).
+    assert str(PRODUCT_ANALYST_BUG.max_turns) in loaded.text
+    assert "Single turn: read, run, and deliver once" not in loaded.text
+    # The rule a denied write should give the role (its own, not the path rule a hook
+    # would name): the prompt states it directly, since this role runs with no hook
+    # installed (`hooks_for`, `role.executes`).
+    assert "writing is outside your role" in loaded.text.lower()
+    assert "not a syntax problem" in loaded.text.lower()
+
+
 def test_reads_include_own_section_for_returns():
     # On a return the actor must see what it wrote and what the verifier said.
     assert "Product Analyst" in PRODUCT_ANALYST.reads

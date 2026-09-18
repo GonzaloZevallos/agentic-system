@@ -1,5 +1,6 @@
 from agentic.core.process.domain import rules, task
-from agentic.core.process.domain.roles import FINDINGS, PAIR_PM_PA
+from agentic.core.process.domain.denials import denial_for
+from agentic.core.process.domain.roles import FINDINGS, PAIR_PM_PA, PJM, PRODUCT_ANALYST_BUG
 from agentic.core.process.domain.task import INTEGRATION
 
 PAIR = PAIR_PM_PA
@@ -573,6 +574,30 @@ def test_failure_motive_tier_three_names_the_exit_code_when_that_is_all_there_is
     assert rules.failure_motive(without_code) == "the SDK reported no cause and no exit code"
 
 
+def test_max_turns_motive_is_bare_when_the_sdk_reports_nothing_beyond_the_subtype():
+    # `subtype` is always `error_max_turns` here — that is how the runner knows to call
+    # this — so repeating it would be the same tautology issue #66 fixed for a
+    # different field (issues #69, #81): tier 3 of the definition, the fixed sentence
+    # standing alone, not "max_turns (N) exhausted...: the SDK reported no cause...".
+    report = rules.ReportedFailure(subtype="error_max_turns")
+    assert rules.max_turns_motive(30, report) == "max_turns (30) exhausted without a result"
+
+
+def test_max_turns_motive_carries_the_sdks_prose():
+    report = rules.ReportedFailure(subtype="error_max_turns", result="wrote a heredoc; denied")
+    assert rules.max_turns_motive(30, report) == (
+        "max_turns (30) exhausted without a result: wrote a heredoc; denied"
+    )
+
+
+def test_max_turns_motive_carries_metadata_when_there_is_no_prose():
+    report = rules.ReportedFailure(subtype="error_max_turns", terminal_reason="api_error")
+    assert rules.max_turns_motive(12, report) == (
+        "max_turns (12) exhausted without a result: "
+        "the SDK reported no message (terminal reason: api_error)"
+    )
+
+
 def test_exception_motive_reads_the_message_or_names_the_type():
     assert rules.exception_motive(ValueError("be humble")) == "be humble"
     assert rules.exception_motive(RuntimeError()) == "RuntimeError, with no message"
@@ -628,3 +653,15 @@ def test_stopped_by_cap_falls_back_to_the_text_when_the_state_carries_no_class()
     assert rules.stopped_by_cap({"escalated": reason})
     assert not rules.stopped_by_cap({"escalated": "PM hit 2 returns: x"})
     assert not rules.stopped_by_cap({})
+
+
+def test_denial_note_names_the_count_and_the_role_rule():
+    # Glossary: Negación — one line, system-written, with how many and the rule.
+    note = rules.denial_note(PRODUCT_ANALYST_BUG, 8)
+    assert note == f"_The system denied 8 write attempts: {denial_for(PRODUCT_ANALYST_BUG)}_"
+
+
+def test_denial_note_uses_the_singular_for_one():
+    note = rules.denial_note(PJM, 1)
+    assert "1 write attempt:" in note
+    assert "1 write attempts:" not in note

@@ -206,9 +206,14 @@ PRODUCT_ANALYST_BUG = replace(
     tools=READ_CODE,
     # Plus the product's checks, per task: `diagnoser_for`.
     allowed=READ_CODE_RULES,
-    # Reading and running take turns the definition never needed: the Tech Lead's,
-    # which reads the code the same way.
-    max_turns=12,
+    # Sized for the work reproducing a bug takes, not for the number that happened to
+    # be enough once (issues #69, #81): several modules, task documents and existing
+    # tests of a repo this size, read cold, before there is anything to rule on. Two
+    # runs exhausted 12 across four attempts with zero rulings, one of them reading
+    # productively the whole way; the Tech Lead's own 12 covers a diff, not a repo read
+    # from nothing, so it is not the comparison either. 30 is `TECH_LEAD_REVIEWER`'s 20
+    # (the other role that reads a whole repo, not a diff) plus margin.
+    max_turns=30,
 )
 
 PM_BUG = replace(PM, slug="pm_bug", schema=Ruling, reads=(ORIGINAL, "Product Analyst", "PM"))

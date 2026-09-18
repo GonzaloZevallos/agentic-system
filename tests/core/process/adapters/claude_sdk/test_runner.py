@@ -4,11 +4,18 @@ import io
 from dataclasses import replace
 
 import pytest
-from claude_agent_sdk import AssistantMessage, ResultMessage, StreamEvent, ToolUseBlock
+from claude_agent_sdk import (
+    AssistantMessage,
+    ResultMessage,
+    StreamEvent,
+    ToolPermissionContext,
+    ToolUseBlock,
+)
 
 from agentic.core.process.adapters.claude_sdk import runner as module
 from agentic.core.process.adapters.claude_sdk.runner import ClaudeSdkRunner
 from agentic.core.process.application.ports import AttemptFailed
+from agentic.core.process.domain.denials import denial_for
 from agentic.core.process.domain.roles import PJM
 
 pytestmark = pytest.mark.anyio
@@ -323,6 +330,65 @@ async def test_the_same_payload_as_a_result_message_still_names_the_limit(monkey
     assert "run ended in error: success" not in str(info.value)
 
 
+async def test_max_turns_motive_carries_what_the_sdk_reported(monkeypatch, tmp_path):
+    # Issues #69/#81: a role that spent its turns fighting a denial deserves more than
+    # "max_turns (N) exhausted"; the model's own prose (here, a stand-in for the CLI's
+    # report of what it was doing) travels with it, and `subtype` is not repeated since
+    # it is exactly how this branch is reached in the first place.
+    fake_query(
+        monkeypatch,
+        [
+            result(
+                subtype="error_max_turns",
+                total_cost_usd=0.5,
+                result="wrote a heredoc to /tmp/test_repro.py; denied",
+            )
+        ],
+    )
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(ClaudeSdkRunner(), tmp_path)
+    assert str(info.value) == (
+        "max_turns (2) exhausted without a result: wrote a heredoc to /tmp/test_repro.py; denied"
+    )
+    assert "subtype" not in str(info.value)
+    assert info.value.reason == "max_turns"
+
+
+async def test_max_turns_motive_is_bare_when_the_sdk_reports_nothing_else(monkeypatch, tmp_path):
+    # Tier 3 of the definition (`docs/product/role-failures.md`): nothing beyond the
+    # subtype that put us in this branch is not new information, so the fixed sentence
+    # stands alone rather than being followed by a tautological "no cause reported".
+    fake_query(monkeypatch, [result(subtype="error_max_turns", total_cost_usd=0.5)])
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(ClaudeSdkRunner(), tmp_path)
+    assert str(info.value) == "max_turns (2) exhausted without a result"
+
+
+async def test_max_turns_motive_via_result_error_carries_what_the_sdk_reported(
+    monkeypatch, tmp_path
+):
+    from claude_agent_sdk import ResultError
+
+    async def query(prompt, options):
+        yield result(is_error=True, subtype="error_max_turns", total_cost_usd=0.5)
+        raise ResultError(
+            "run failed",
+            data={
+                "subtype": "error_max_turns",
+                "errors": ["cat > /tmp/test_repro.py <<EOF: permission denied"],
+            },
+        )
+
+    monkeypatch.setattr(module, "query", query)
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(ClaudeSdkRunner(), tmp_path)
+    assert str(info.value) == (
+        "max_turns (2) exhausted without a result: "
+        "cat > /tmp/test_repro.py <<EOF: permission denied"
+    )
+    assert info.value.reason == "max_turns"
+
+
 async def test_a_result_error_with_a_budget_subtype_is_the_limit_reason(monkeypatch, tmp_path):
     from claude_agent_sdk import ResultError
 
@@ -459,6 +525,65 @@ async def test_a_role_that_executes_runs_inside_the_hooks_cage(monkeypatch, tmp_
     seen = fake_query(monkeypatch, [result()])
     await run_once(ClaudeSdkRunner(), tmp_path)
     assert seen[0][1].hooks is None
+
+
+async def test_a_non_executing_role_gets_a_can_use_tool_denial_callback(monkeypatch, tmp_path):
+    # A role that does not execute runs in `permission_mode="default"`: anything its
+    # `allowed` rules do not cover reaches the SDK's permission layer, which is where
+    # the role's own rule (`denial_for`) has to land instead of the SDK's generic text.
+    seen = fake_query(monkeypatch, [result()])
+    reader = replace(PJM, tools=("Read",), allowed=("Read",))
+    await ClaudeSdkRunner().run_once(
+        reader, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
+    )
+    assert seen[0][1].can_use_tool is not None
+
+
+async def test_an_executing_role_gets_no_can_use_tool_callback(monkeypatch, tmp_path):
+    # `bypassPermissions` already shadows `can_use_tool` entirely (the SDK's own
+    # warning); wiring one anyway would be dead code pretending to cage a role the
+    # hooks cage already covers (ADR-0011, addendum).
+    seen = fake_query(monkeypatch, [result()])
+    developer = replace(PJM, tools=("Bash",), executes=True)
+    await ClaudeSdkRunner().run_once(
+        developer, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
+    )
+    assert seen[0][1].can_use_tool is None
+
+
+async def test_the_denial_callback_names_the_role_rule_and_is_counted(monkeypatch, tmp_path):
+    reader = replace(PJM, tools=("Read", "Write"), allowed=("Read",))
+
+    async def query(prompt, options):
+        outcome = await options.can_use_tool(
+            "Write", {"file_path": "x"}, ToolPermissionContext(tool_use_id="t1")
+        )
+        assert outcome.behavior == "deny"
+        assert outcome.message == denial_for(reader)
+        yield result()
+
+    monkeypatch.setattr(module, "query", query)
+    raw = await ClaudeSdkRunner().run_once(
+        reader, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
+    )
+    assert raw.denials == 1
+
+
+async def test_a_denial_during_a_failed_attempt_still_reaches_attemptfailed(monkeypatch, tmp_path):
+    reader = replace(PJM, tools=("Read", "Write"), allowed=("Read",))
+
+    async def query(prompt, options):
+        await options.can_use_tool(
+            "Write", {"file_path": "x"}, ToolPermissionContext(tool_use_id="t1")
+        )
+        yield result(subtype="error_max_turns", total_cost_usd=0.1)
+
+    monkeypatch.setattr(module, "query", query)
+    with pytest.raises(AttemptFailed) as info:
+        await ClaudeSdkRunner().run_once(
+            reader, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
+        )
+    assert info.value.denials == 1
 
 
 async def test_the_presubmit_becomes_a_hook_on_the_delivery_call(monkeypatch, tmp_path):
