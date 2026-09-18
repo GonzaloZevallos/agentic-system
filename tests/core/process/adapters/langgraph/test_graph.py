@@ -23,6 +23,7 @@ from agentic.core.process.application.preflight import UNKNOWN_PRODUCT
 from agentic.core.process.domain.roles import FINDINGS, PAIR_PM_PA, PJM, PM, PRODUCT_ANALYST
 from agentic.core.process.domain.task import INTEGRATION, WAITING_ON_HUMAN
 from agentic.shared.configuration import Configuration
+from tests.conftest import BatchReader, points
 from tests.fakes import (
     REPORTS,
     MemoryCommands,
@@ -718,6 +719,45 @@ async def test_retried_failure_is_recorded_but_not_escalated(config):
             "cold_fallback": False,
         }
     ]
+
+
+async def test_a_tasks_rework_usd_equals_the_sum_of_its_role_samples_end_to_end(config):
+    """The acceptance case (`docs/product/rework.md`, PM's consolidated definition) on
+    the real path: a return and a failed attempt retried successfully, folded by the
+    graph's own reducers exactly as `agentic run` would, never a hand-written state.
+    `agentic.task.rework_usd` equals the sum of the `rework="true"`
+    `agentic.role.cost_usd` samples, and every `agentic.role.cost_usd` sample sums to
+    the state's own `cost_usd` (ADR-0008, 2026-09-18 second addendum). The `_node`
+    `except` path (`run.finish({})`) is not exercised here — that money is outside both
+    views on purpose (`test_a_crash_in_a_node_still_finishes_the_roles_span` covers the
+    zero-cost sample it leaves) — this test only proves the equality on the path that
+    actually delivers."""
+    exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
+    reader = BatchReader()
+    telemetry.configure(
+        tracer_provider=tracer_provider, meter_provider=telemetry.meter_provider_for(reader)
+    )
+    try:
+        script = script_for(
+            product_analyst=[AttemptFailed("invalid", 0.02), defined(1), defined(2)],
+            pm=[verdict("returned", "gap"), verdict("approved")],
+            **technical(),
+        )
+        with telemetry.task_span("GH-1", "t", "gym-saas") as run:
+            final = await run_graph(script, config, telemetry)
+            run.finish(final)
+    finally:
+        telemetry.configure()
+    got = points(reader)
+    role_costs = got["agentic.role.cost_usd"]
+    assert sum(c.value for c in role_costs) == pytest.approx(final["cost_usd"])
+    rework_total = sum(c.value for c in role_costs if c.attributes["rework"])
+    (task_rework,) = got["agentic.task.rework_usd"]
+    assert rework_total == pytest.approx(
+        task_rework.value, abs=telemetry.system_metrics.RESIDUAL_FLOOR_USD
+    )
 
 
 async def test_each_node_opens_and_finishes_the_roles_span(config):
