@@ -721,6 +721,106 @@ def test_role_duration_labels_are_untouched_by_the_new_per_run_labels(metrics):
     }
 
 
+def test_review_findings_group_by_severity_category_and_status_with_the_count(metrics):
+    """Two findings landing in the same cell (`important`/`spec-behaviour`/`open`) are
+    one sample of value 2: a `record()` never sets the same instrument twice with the
+    same labels (the review's own moment, not a count across reviews)."""
+    findings = [
+        {
+            "subtask": "api",
+            "version": 1,
+            "location": "a.py:1",
+            "claim": "x",
+            "severity": "important",
+            "scope": "subtask",
+            "category": "spec-behaviour",
+            "status": "open",
+        },
+        {
+            "subtask": "api",
+            "version": 1,
+            "location": "b.py:2",
+            "claim": "y",
+            "severity": "important",
+            "scope": "subtask",
+            "category": "spec-behaviour",
+            "status": "open",
+        },
+        {
+            "subtask": "api",
+            "version": 1,
+            "location": "c.py:3",
+            "claim": "z",
+            "severity": "blocking",
+            "scope": "subtask",
+            "category": "process-suite-red",
+            "status": "dismissed",
+        },
+    ]
+    with telemetry.role_span("Tech Lead", "tech_lead_review", "gym-saas") as run:
+        run.finish({"findings": findings, "review_kind": "first", "cost_usd": 0.2})
+    got = points(metrics)["agentic.review.findings"]
+    by_cell = {(p.attributes["severity"], p.attributes["category"]): p.value for p in got}
+    assert by_cell == {("important", "spec-behaviour"): 2, ("blocking", "process-suite-red"): 1}
+    (one,) = [p for p in got if p.attributes["category"] == "process-suite-red"]
+    assert dict(one.attributes) == {
+        "product": "gym-saas",
+        "review.kind": "first",
+        "system.version": "abc1234",
+        "severity": "blocking",
+        "category": "process-suite-red",
+        "status": "dismissed",
+    }
+
+
+def test_a_review_with_no_findings_emits_no_finding_sample(metrics):
+    with telemetry.role_span("Tech Lead", "tech_lead_review", "gym-saas") as run:
+        run.finish({"cost_usd": 0.2})
+    assert points(metrics).get("agentic.review.findings") is None
+
+
+def _check(name="tests", command="pytest", passed=True, duration_s=1.0):
+    return {
+        "name": name,
+        "command": command,
+        "passed": passed,
+        "output": "",
+        "duration_s": duration_s,
+    }
+
+
+def test_presubmit_checks_leave_one_set_of_samples_per_invocation_only_the_last_final(metrics):
+    invocations = [
+        [_check(passed=False, duration_s=1.0)],
+        [_check(passed=False, duration_s=1.2)],
+        [_check(passed=True, duration_s=0.9)],
+    ]
+    with telemetry.role_span("Developer", "developer", "gym-saas") as run:
+        run.finish({"presubmit_checks": invocations, "cost_usd": 0.3})
+    checks = points(metrics)["agentic.presubmit.checks"]
+    assert len(checks) == 3
+    finals = [c for c in checks if c.attributes["final"]]
+    (final,) = finals
+    assert final.attributes["result"] == "green"
+    non_final_results = sorted(c.attributes["result"] for c in checks if not c.attributes["final"])
+    assert non_final_results == ["red", "red"]
+    assert all(c.value == 1 for c in checks)
+    assert dict(final.attributes) == {
+        "product": "gym-saas",
+        "check": "tests",
+        "result": "green",
+        "final": True,
+    }
+    durations = points(metrics)["agentic.presubmit.duration"]
+    assert sorted(d.value for d in durations) == [0.9, 1.0, 1.2]
+
+
+def test_a_patch_with_no_presubmit_invocations_emits_no_presubmit_sample(metrics):
+    with telemetry.role_span("Developer", "developer", "gym-saas") as run:
+        run.finish({"cost_usd": 0.1})
+    assert points(metrics).get("agentic.presubmit.checks") is None
+
+
 def test_system_version_prefers_the_env_var(monkeypatch):
     monkeypatch.setenv("AGENTIC_SYSTEM_VERSION", "v-test")
     monkeypatch.setattr(telemetry, "_version", None)
