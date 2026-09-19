@@ -580,6 +580,16 @@ registrar, y cuando un rol falla se puede ver si le faltaba información.
 Cada rol igual cierra con un bloque **"Para el siguiente rol"**, que sigue siendo útil como
 handoff explícito, pero ya no es lo único que viaja.
 
+**Excepción: el Developer y el revisor de una subtarea no leen las ajenas.** Cada uno
+declara `Tech Lead` entera en su lista, pero lo que arma el prompt (`run_role.context_for`)
+recorta esa sección a su propia subtarea: bajo `### Subtasks` recibe su `brief` propio
+(`title`, `brief`, `seams`, `depends_on`, tomados de `state["subtasks"]`, nunca de un
+`#### <id>` de ese Markdown) y un índice de una línea con las demás, solo id y título. El
+resto de la sección —`### Solution`, `### Standards`, `### Invariants`, `### Integration`,
+`### For the next role`— llega igual, byte a byte. Sin subtarea propia (el integrador, o
+un id que el plan no tiene) recibe la sección entera, como hoy (issue #71). `Tech Lead:
+findings` nunca se recorta: cruza lo que a cada subtarea le importa de las demás.
+
 ### Esqueleto del documento
 
 **Frontmatter, mantenido por PjM**: id, tipo, estado, rol actual, flags, contadores por par,

@@ -38,6 +38,16 @@ given — a return's own diff, a retake's section, already written by the time i
 resumes — never from a turn still only in the caller's own local accumulator. That is
 why an interview's ordinary round passes none even once a side resumes its own session
 mid-run: the transcript is not yet a section for `with_context` to find.
+
+A second exception (issue #71, `plan-trim`): a reader with a plan subtask of its own —
+the Developer, the reviewer — does not read the `Tech Lead` section's `### Subtasks` in
+full either. `context_for` projects it to that reader's own brief, rendered from
+`state["subtasks"]` (never from matching a `#### <id>` heading), plus a one-line index
+of the sisters' ids and titles; every other part of the section, and every other role's
+reading, is untouched. The integrator gets the section whole, like a role with no
+subtask id at all: its job is the seams between subtasks, not one of them (ADR-0015).
+`plan_view.for_reader` is the pure function that decides this, so `with_context` and the
+cold prompt inherit it through the same seam instead of a second, silently divergent copy.
 """
 
 from __future__ import annotations
@@ -50,9 +60,9 @@ from pathlib import Path
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import document, rules, schemas, turn_notice
+from ..domain import document, plan_view, rules, schemas, turn_notice
 from ..domain.document import HUMAN
-from ..domain.roles import ORIGINAL, Prompt, Role, describe_flags, render
+from ..domain.roles import ORIGINAL, TECH_LEAD, Prompt, Role, describe_flags, render
 from ..domain.task import WAITING_ON_HUMAN, EscalationClass, Failure, RoleRun, TaskState, apply
 from .limits import RunLimits
 from .ports import AttemptFailed, Ports, Presubmit, RoleRunner
@@ -159,11 +169,20 @@ def context_for(
     product_knowledge: str = "",
     standards: str = "",
     extra_sections: tuple[str, ...] = (),
+    subtask_id: str | None = None,
 ) -> str:
     """The role's input: the standards and the product knowledge if the role reads
     them, then the sections it declares plus `extra_sections` (a subtask's own), in
     document order, that exist, and last the human's decisions, which every role reads:
-    they hold for the whole task and override what they contradict."""
+    they hold for the whole task and override what they contradict.
+
+    `subtask_id` is the reader's own plan subtask, when it has one (the Developer, the
+    reviewer): the second exception to "each role reads, in full" (this module's own
+    docstring; issue #71). Only the `Tech Lead` section is projected
+    (`plan_view.for_reader`), to the reader's own brief plus a sister index instead of
+    every subtask's; every other declared section, and every other reader, is
+    untouched. `None` (the default) keeps today's full reading, and so does an id the
+    projection cannot use (`plan_view.for_reader`'s own degrade rule)."""
     sections = state.get("sections", {})
     parts = [text for text in (standards, product_knowledge) if text]
     for name in (*role.reads, *extra_sections, HUMAN):
@@ -171,7 +190,10 @@ def context_for(
             request = document.demote(state["description"])
             parts.append(f"## {ORIGINAL}\n\n{state['title']}\n\n{request}")
         elif name in sections:
-            parts.append(f"## {name}\n\n{sections[name]}")
+            text = sections[name]
+            if name == TECH_LEAD.name:
+                text = plan_view.for_reader(text, subtask_id, state.get("subtasks", {}))
+            parts.append(f"## {name}\n\n{text}")
     return "\n\n".join(parts)
 
 
@@ -190,13 +212,20 @@ def with_context(
     cwd: Path | None,
     text: str,
     extra_sections: tuple[str, ...] = (),
+    subtask_id: str | None = None,
 ) -> str:
     """`text` after the role's full reading, for a role with no session to resume (an
     interview's first round, a consultant with none) and for the cold prompt a caller
     hands `run_with_retry` when a resumed session turns out stale: the full context the
-    session would otherwise skip, plus whatever `text` adds on top of it."""
+    session would otherwise skip, plus whatever `text` adds on top of it.
+
+    `subtask_id` reaches `context_for` unchanged, so the cold prompt trims the plan the
+    same way the ordinary prompt would (issue #71): the exception this function exists
+    for is the session, never the reading."""
     standards, knowledge = preamble(role, ports, cwd)
-    return context_for(state, role, knowledge, standards, extra_sections) + "\n\n" + text
+    return (
+        context_for(state, role, knowledge, standards, extra_sections, subtask_id) + "\n\n" + text
+    )
 
 
 def load_prompt(
@@ -597,7 +626,9 @@ async def run_role(
     patch: TaskState = {"current_role": role.name, "prompts": {role.slug: loaded.hash}}
     if prompt is None:
         standards, knowledge = preamble(role, ports, cwd)
-        prompt = context_for(state, role, knowledge, standards, extra_sections)
+        prompt = context_for(
+            state, role, knowledge, standards, extra_sections, state.get("subtask_id")
+        )
     try:
         output = await run_with_retry(
             role,
