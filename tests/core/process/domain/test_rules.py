@@ -1,6 +1,6 @@
 from typing import get_args
 
-from agentic.core.process.domain import rules, task
+from agentic.core.process.domain import document, rules, task
 from agentic.core.process.domain.denials import denial_for
 from agentic.core.process.domain.roles import (
     DEVELOPER,
@@ -332,6 +332,42 @@ def test_human_section_counts_decisions_with_a_line_anchored_match():
     previous = '### Decision 1\n\nEscalated: x\n\nSee also "### Decision " above.'
     text = rules.human_section({"sections": {"Human": previous}}, None, "Go")
     assert text.endswith("### Decision 2\n\nGo")
+
+
+def test_human_section_round_trips_through_the_document():
+    """Not just a raw-string assertion: a paired-questions decision goes through
+    `document.render` and back through `document.parse` and comes back whole, proving
+    against the real parser — not a substring check — that the questions block opens no
+    section of its own and that a quoted `### Decision ` inside one is not read as a
+    heading either."""
+    questions = [
+        "Which currency?\n## Follow-up",
+        'Was it: "### Decision " already answered?',
+    ]
+    text = rules.human_section({"questions_for_human": questions}, "x", "Keep USD.")
+
+    document_state = {
+        "id": "T-1",
+        "title": "Pick a currency",
+        "description": "Users want a default currency.",
+        "sections": {document.HUMAN: text},
+    }
+    raw = document.render(document_state)
+    parsed = document.parse(raw)
+
+    # No stray `##` section: the embedded heading line was demoted before it ever
+    # reached the parser, and the quoted "### Decision " never was one.
+    assert set(parsed["sections"]) == {document.HUMAN}
+    roundtripped = parsed["sections"][document.HUMAN]
+    assert roundtripped == text.strip()
+    assert "1. Which currency?" in roundtripped
+    assert "### Follow-up" in roundtripped
+    assert '"### Decision " already answered?' in roundtripped
+
+    # The round-tripped text still counts as exactly one decision: the quoted literal
+    # inside it is not mistaken for a second heading by `human_section` either.
+    again = rules.human_section({"sections": {document.HUMAN: roundtripped}}, None, "Next")
+    assert again.endswith("### Decision 2\n\nNext")
 
 
 def test_resuming_leaves_the_integration_to_the_fan_in():
