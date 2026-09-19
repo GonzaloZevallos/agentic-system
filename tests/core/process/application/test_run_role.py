@@ -605,7 +605,7 @@ async def test_run_role_prepends_the_denial_note_when_the_delivery_had_any(tmp_p
     cfg = Configuration(product_dir=tmp_path)
     runner = ScriptedRunner(pjm=[RawResult(OK.structured_output, 0.03, denials=2)])
     output, patch = await run_role(
-        {"id": "T-1", "title": "t", "description": "d"}, PJM, cfg, memory_ports(runner)
+        {"id": "T-1", "title": "t", "description": "d"}, PJM, cfg, memory_ports(runner), product="x"
     )
     assert output is not None
     note = rules.denial_note(PJM, 2)
@@ -620,7 +620,7 @@ async def test_run_role_folds_a_failed_attempts_denials_into_the_delivering_runs
     cut = AttemptFailed("run failed (max_turns)", 0.01, denials=6)
     runner = ScriptedRunner(pjm=[cut, RawResult(OK.structured_output, 0.03, denials=0)])
     output, patch = await run_role(
-        {"id": "T-1", "title": "t", "description": "d"}, PJM, cfg, memory_ports(runner)
+        {"id": "T-1", "title": "t", "description": "d"}, PJM, cfg, memory_ports(runner), product="x"
     )
     assert output is not None
     assert patch["sections"]["PjM"] == f"{rules.denial_note(PJM, 6)}\n\n{output.text}"
@@ -629,7 +629,9 @@ async def test_run_role_folds_a_failed_attempts_denials_into_the_delivering_runs
 async def test_run_role_adds_no_note_when_the_run_had_no_denials(tmp_path):
     cfg = Configuration(product_dir=tmp_path)
     ports = memory_ports(ScriptedRunner(pjm=[OK]))
-    output, patch = await run_role({"id": "T-1", "title": "t", "description": "d"}, PJM, cfg, ports)
+    output, patch = await run_role(
+        {"id": "T-1", "title": "t", "description": "d"}, PJM, cfg, ports, product="x"
+    )
     assert output is not None
     assert patch["sections"]["PjM"] == output.text
 
@@ -676,7 +678,7 @@ async def test_run_role_turns_a_role_failure_into_an_escalation(tmp_path):
     cfg = Configuration(product_dir=tmp_path)
     runner = ScriptedRunner(pjm=[AttemptFailed("a", 0.05), AttemptFailed("b", 0.03)])
     output, patch = await run_role(
-        {"id": "T-1", "title": "t", "description": "d"}, PJM, cfg, memory_ports(runner)
+        {"id": "T-1", "title": "t", "description": "d"}, PJM, cfg, memory_ports(runner), product="x"
     )
     assert output is None
     assert patch["status"] == "waiting_on_human"
@@ -695,6 +697,7 @@ async def test_run_role_escalates_when_the_task_cap_is_reached(tmp_path):
         PJM,
         cfg,
         memory_ports(runner),
+        product="x",
     )
     assert output is None and runner.calls == []
     assert patch["status"] == "waiting_on_human"
