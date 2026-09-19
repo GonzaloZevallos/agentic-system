@@ -70,6 +70,33 @@ async def test_classify_lets_a_platform_enhancement_through(cfg):
     assert "escalated" not in patch and "status" not in patch
 
 
+async def test_classify_passes_the_declared_product_name_to_the_prompt(cfg):
+    # ADR-0019: the name reaches the prompt as data, the same class of fact as
+    # `{{date}}`, so the model does not have to guess it from issue vocabulary.
+    ports = memory_ports(ScriptedRunner(pjm=[classified()]), stack=MemoryStack(product="gym-saas"))
+    await classify(TASK, cfg, ports)
+    assert "gym-saas" in ports.runner.calls[0]["system_prompt"]
+
+
+async def test_classify_falls_back_to_unknown_when_the_name_cannot_be_read(cfg):
+    # `preflight.product_name`, never a bare `ports.stack.product()`: a `ValueError`
+    # here must not kill the node mid-run (ADR-0019).
+    ports = memory_ports(ScriptedRunner(pjm=[classified()]), stack=MemoryStack(product=None))
+    patch = await classify(TASK, cfg, ports)
+    assert patch["type"] == "feature"
+    assert "unknown" in ports.runner.calls[0]["system_prompt"]
+
+
+async def test_classify_lets_a_documented_discrepancy_through_without_escalating(cfg):
+    # gym-saas #20's shape: the ticket offers both resolutions (fix the code, or the
+    # doc) and PjM still returns `bug` with high confidence; the fix was the prompt,
+    # not this routing (docs/product/classification.md).
+    ports = memory_ports(ScriptedRunner(pjm=[classified(type_="bug")]))
+    patch = await classify(TASK, cfg, ports)
+    assert patch["type"] == "bug"
+    assert "escalated" not in patch and "status" not in patch
+
+
 async def test_define_reads_the_knowledge_and_proposes_flags(cfg):
     runner = ScriptedRunner(
         product_analyst_interviewer=[questions(done=True)], product_analyst=[defined()]
