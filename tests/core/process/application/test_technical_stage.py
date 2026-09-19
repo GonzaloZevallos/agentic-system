@@ -13,7 +13,7 @@ from agentic.core.process.application.ports import AttemptFailed, CommandResult,
 from agentic.core.process.application.review import review
 from agentic.core.process.application.validate_definition import validate_definition
 from agentic.core.process.domain import rules
-from agentic.core.process.domain.roles import FINDINGS
+from agentic.core.process.domain.roles import FINDINGS, INTERVIEW_SOLUTION
 from agentic.core.process.domain.task import INTEGRATION, apply
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
@@ -704,6 +704,69 @@ async def test_the_plan_keeps_the_invariants_the_ephemeral_proposed_and_it_adopt
     assert "- fold duplicates\n- resolve relative imports" in runner.calls[-1]["system_prompt"]
     assert patch["invariants"] == ["Every subscription query folds duplicates."]
     assert patch["integration_brief"] == ""
+
+
+# A solution-interview retake seeds its ephemeral transcript from what the whole
+# interview already proposed (issue #42), never starting empty, and hands the Tech
+# Lead the full accumulated list, not only what this resumption's own rounds added.
+
+SOLUTION_SECTION = INTERVIEW_SOLUTION.section
+OLD_SOLUTION_TRANSCRIPT = (
+    "### Round 1: questions\n\n❓ **Q1**\n\n### Round 1: answers\n\n**Q1**: ok"
+)
+
+
+def _retaking_plan(proposed_invariants=None):
+    runs = []
+    for _ in range(3):
+        runs.append({"role": "Tech Lead efímero", "section": SOLUTION_SECTION, "session_id": "e4"})
+        runs.append({"role": "Tech Lead", "section": SOLUTION_SECTION, "session_id": "t3"})
+    runs.append({"role": "Tech Lead efímero", "section": SOLUTION_SECTION, "session_id": "e4"})
+    state = {
+        **TASK,
+        "branch": "agentic/GH-12",
+        "sections": {**TASK["sections"], SOLUTION_SECTION: OLD_SOLUTION_TRANSCRIPT},
+        "runs": runs,
+    }
+    if proposed_invariants is not None:
+        state["proposed_invariants"] = proposed_invariants
+    return state
+
+
+async def test_a_plan_retake_hands_the_tech_lead_the_full_accumulated_invariants(cfg):
+    runner = ScriptedRunner(
+        **{
+            ASK: [
+                questions(1, invariants=["New rule."], session="e4"),
+                questions(done=True, session="e4"),
+            ],
+            ANSWER: [tech_answers(1, session="t3")],
+        },
+        tech_lead=[planned(invariants=["Every subscription query folds duplicates."])],
+    )
+    state = _retaking_plan(proposed_invariants=["Existing rule."])
+    patch = await plan(state, cfg, memory_ports(runner))
+
+    assert "- Existing rule.\n- New rule." in runner.calls[-1]["system_prompt"]
+    # Carried forward, for a later retake of this same interview to seed from in turn.
+    assert patch["proposed_invariants"] == ["Existing rule.", "New rule."]
+
+
+async def test_a_plan_retake_without_the_key_names_the_migration_window(cfg):
+    # A document from before this task existed has no `proposed_invariants` to seed
+    # from, even though the section it retakes is already on record: the Tech Lead is
+    # told the earlier rounds' invariants are in that section, not silently dropped.
+    runner = ScriptedRunner(
+        **{ASK: [questions(done=True, session="e4")]},
+        tech_lead=[planned()],
+    )
+    state = _retaking_plan()
+    patch = await plan(state, cfg, memory_ports(runner))
+
+    prompt = runner.calls[-1]["system_prompt"]
+    assert "predates recording proposed invariants" in prompt
+    assert f"`{SOLUTION_SECTION}`" in prompt
+    assert patch["proposed_invariants"] == []
 
 
 async def test_the_invariants_reach_the_developer_and_the_reviewer(cfg):

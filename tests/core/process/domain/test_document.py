@@ -58,6 +58,7 @@ def test_render_then_parse_roundtrip():
         ],
         "escalated": "PjM stopped by the task cap: 50.00 of 50.00 USD spent",
         "escalation_class": "cap",
+        "proposed_invariants": ["Every subscription query folds duplicates."],
         "cost_usd": 0.12345,
         "prompts": {"pjm": "abcd1234"},
         "sections": {
@@ -104,6 +105,7 @@ def test_render_then_parse_roundtrip():
     assert data["sections"] == state["sections"]
     assert data["escalated"] == state["escalated"]
     assert data["escalation_class"] == "cap"
+    assert data["proposed_invariants"] == ["Every subscription query folds duplicates."]
 
 
 def test_interview_stats_never_reaches_the_document():
@@ -217,6 +219,15 @@ def test_a_document_written_before_the_rename_still_parses_into_the_state():
     assert "returns" not in state and "return_history" not in state
 
 
+def test_a_document_written_before_proposed_invariants_existed_still_parses():
+    """A document from before this task has no `proposed_invariants` line at all (issue
+    #42): `plan.py`'s migration branch reads that absence, not an empty list, so parsing
+    an old document must not manufacture the key."""
+    old = "---\nid: T-1\ntitle: t\n---\n\n# t\n\n## Original request\n\nd\n"
+    state = document.parse(old)
+    assert "proposed_invariants" not in state
+
+
 def test_the_channel_survives_the_document():
     """The document is the rescue path (`resume.from_document`): what is not in the
     frontmatter is lost when the checkpoint is, silently and with every test green."""
@@ -242,9 +253,16 @@ def test_the_channel_survives_the_document():
         "integration_brief": "Wire the two ends.",
         "findings": findings,
         "settled_findings": ["y.py:3"],
+        "proposed_invariants": ["Every subscription query folds duplicates."],
     }
     back = document.parse(document.render(state))
-    for field in ("invariants", "integration_brief", "findings", "settled_findings"):
+    for field in (
+        "invariants",
+        "integration_brief",
+        "findings",
+        "settled_findings",
+        "proposed_invariants",
+    ):
         assert field in resume.STATE_FIELDS, field
         assert back[field] == state[field], field
 

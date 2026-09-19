@@ -3,6 +3,7 @@
 import pytest
 
 from agentic.core.process.application import resume
+from agentic.core.process.domain import document
 from agentic.shared.configuration import Configuration
 from tests.fakes import memory_ports
 
@@ -75,6 +76,29 @@ def test_the_document_seeds_the_state_without_what_is_not_state():
     assert ports.workspace.pruned == 0  # reading is not resuming: a dry run touches nothing
     resume.announce(resume.prepare("GH-12", state, "document", raised(), ports), ports)
     assert ports.workspace.pruned == 1
+
+
+def test_from_document_reads_back_the_proposed_invariants():
+    # The rescue path itself, not a proxy: `document.render` writes the key,
+    # `document.parse` reads it back, and `resume.from_document`'s generic
+    # `STATE_FIELDS` filter carries it into the resumed state (issue #42).
+    ports = memory_ports()
+    git_as_recorded(ports)
+    state = paused(proposed_invariants=["Existing rule."])
+    ports.documents.save(document.parse(document.render(state)))
+    resumed = resume.from_document("GH-12", ports)
+    assert resumed["proposed_invariants"] == ["Existing rule."]
+
+
+def test_from_document_leaves_a_legacy_document_without_the_key():
+    # A document written before `proposed_invariants` existed (issue #42) has no line
+    # for it at all: the rescue path must not manufacture one, since `plan.py`'s
+    # migration branch reads the key's absence, never an empty list.
+    old = "---\nid: GH-1\ntitle: t\nstatus: open\n---\n\n# t\n\n## Original request\n\nd\n"
+    ports = memory_ports()
+    ports.documents.save(document.parse(old))
+    resumed = resume.from_document("GH-1", ports)
+    assert "proposed_invariants" not in resumed
 
 
 def test_the_document_is_refused_when_git_moved_since():

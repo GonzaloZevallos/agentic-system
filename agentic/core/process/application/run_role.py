@@ -27,10 +27,17 @@ Context rule (README.md, 6): each role reads, in full, the sections it declares 
 them. Not the previous role's handoff: a verifier that only sees a summary returns
 over gaps that were never there.
 
-The one exception (ADR-0004, sixth addendum): a role resuming its own earlier session
-over a return reads a delta instead, because the session already holds what `Role.reads`
-would repeat; the rule still holds through the session's own memory. When there is no
-session to resume, the cold path restores the full reading, `cold_prompt` included.
+The one exception (ADR-0004, sixth addendum): a role resuming its own earlier
+session — a Developer's return, one seat of a retaken interview (ADR-0014 addendum) —
+reads a delta instead, because the session already holds what `Role.reads` would
+repeat; the rule still holds through the session's own memory. When there is no
+session to resume, the cold path restores the full reading. `cold_prompt` does not
+follow automatically from resuming: the caller passes one only when `with_context` can
+actually rebuild that full reading from what is already committed to the state it is
+given — a return's own diff, a retake's section, already written by the time it
+resumes — never from a turn still only in the caller's own local accumulator. That is
+why an interview's ordinary round passes none even once a side resumes its own session
+mid-run: the transcript is not yet a section for `with_context` to find.
 """
 
 from __future__ import annotations
@@ -250,11 +257,17 @@ async def run_with_retry(
     turns out stale: the first attempt held a caller-supplied session and the harness
     never opened one of its own (`AttemptFailed.session_id` empty). Retrying the same
     id again would just repeat the failure, so that one retry drops it and runs cold
-    with `cold_prompt` instead (ADR-0004, sixth addendum). `None` (an interview's turn,
-    which owns its own resume/prompt pairing already) keeps today's retry, which tries
-    the caller's session again like any other. The decision is made here, once, and
-    every reader (`resumed_from`, the `cold_fallback` flag on the `RoleRun`/`Failure`)
-    reads it from this call, never re-derives it from `resume` on its own."""
+    with `cold_prompt` instead (ADR-0004, sixth addendum). Whether an interview's turn
+    (`interview.turn`/`.consult`) passes one turns on whether `with_context` could
+    rebuild the whole reading if it had to: an ordinary turn passes `None`, because the
+    transcript this round belongs to is still only a local accumulator, not yet a
+    section `with_context` could read back; a retaken interview's turn (ADR-0014
+    addendum) passes one, because `_record` wrote that section, on the state this call
+    was given, before the escalation this retake resumes from. `None` otherwise keeps
+    today's retry, which tries the caller's session again like any other. The decision
+    is made here, once, and every reader (`resumed_from`, the `cold_fallback` flag on
+    the `RoleRun`/`Failure`) reads it from this call, never re-derives it from `resume`
+    on its own."""
     limits = limits or RunLimits()
     written_as = section or role.name
     failures: list[Failure] = []

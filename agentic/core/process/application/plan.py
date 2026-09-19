@@ -42,7 +42,7 @@ async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
         check=schemas.plan_check,
         cwd=task.path,
         resume=transcript.sessions.get(spec.author_side.slug),
-        proposed_invariants=_proposed(transcript.invariants),
+        proposed_invariants=_proposed(state, spec, transcript.invariants),
     )
     if output is not None:
         written["subtasks"] = {s["id"]: _pending(s) for s in output.data["subtasks"]}
@@ -62,10 +62,29 @@ def solution_interview(state: TaskState) -> Interview:
     return INTERVIEW_SOLUTION
 
 
-def _proposed(invariants: list[str]) -> str:
+def _proposed(state: TaskState, spec: Interview, invariants: list[str]) -> str:
     """What the ephemeral proposed, for the plan's prompt. The Tech Lead decides on each
-    one; the empty case says so plainly instead of leaving a dangling heading."""
-    return "\n".join(f"- {line}" for line in invariants) or "- none"
+    one; the empty case says so plainly instead of leaving a dangling heading.
+
+    A migration window (issue #42): a document written before `proposed_invariants`
+    existed has no key for a retake to seed from, so a retake of an old interview
+    resumes with `invariants` holding only what this resumption's own rounds proposed
+    — the earlier rounds' invariants never left `state`, but they are still in the
+    transcript section `state` already carries (`interview_progress`'s seeding, on
+    `state` before this call): the note says so, instead of the Tech Lead reading a
+    short list as if it were the whole proposal."""
+    listed = "\n".join(f"- {line}" for line in invariants) or "- none"
+    migrating = "proposed_invariants" not in state and bool(
+        state.get("sections", {}).get(spec.section)
+    )
+    if migrating:
+        return (
+            "This task predates recording proposed invariants across a retake: earlier "
+            f"rounds' invariants are already in the `{spec.section}` section above, not "
+            "repeated here. Below is only what this resumption's own rounds proposed.\n\n"
+            f"{listed}"
+        )
+    return listed
 
 
 def _pending(item: dict) -> Subtask:

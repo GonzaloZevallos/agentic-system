@@ -1001,10 +1001,22 @@ async def test_a_subtask_at_its_limit_resumes_with_the_decision_and_the_pair_res
 
 
 async def test_questions_for_the_human_resume_the_interview_with_the_answer(config, tmp_path):
+    # A retake (ADR-0014 addendum), not a second run from scratch: the definition
+    # interview closed at round 2 with a question still open, and the resume gets it
+    # exactly `INTERVIEW_RETAKE_ROUNDS` (2) more, both seats resumed on the sessions the
+    # first run left, never the ordinary cap's worth again.
     fakes = Fakes()
     script = script_for(
-        product_analyst_interviewer=[questions(1), questions(done=True)] * 2,
-        pm_interviewee=[answers(1, for_human=["Which currency?"]), answers(1)],
+        product_analyst_interviewer=[
+            questions(1, session="q-old"),
+            questions(done=True, session="q-old"),
+            questions(2, session="q-new"),
+            questions(done=True, session="q-new"),
+        ],
+        pm_interviewee=[
+            answers(1, for_human=["Which currency?"], session="a-old"),
+            answers(2, session="a-new"),
+        ],
         **technical(),
     )
     app = compiled(script, fakes=fakes)
@@ -1013,8 +1025,25 @@ async def test_questions_for_the_human_resume_the_interview_with_the_answer(conf
 
     final = await app.ainvoke(Command(resume={"decision": "USD, always."}), config=config)
     assert final["status"] == "ready_for_review" and final["questions_for_human"] == []
-    interviewee = script.prompts("pm_interviewee")[1]
-    assert "## Human\n\n### Decision 1" in interviewee and "USD, always." in interviewee
+
+    pa_calls = [c for c in script.calls if c["slug"] == "product_analyst_interviewer"]
+    pm_calls = [c for c in script.calls if c["slug"] == "pm_interviewee"]
+    # Both seats resume on the sessions the first (paused) run left: the interviewer's
+    # own session across the whole thing, and the interviewee's from before the pause.
+    assert [c["resume"] for c in pa_calls] == [None, "q-old", "q-old", "q-new"]
+    assert [c["resume"] for c in pm_calls] == [None, "a-old"]
+
+    retake_ask, retake_answer = pa_calls[2]["prompt"], pm_calls[1]["prompt"]
+    # The interviewer reads the human's decision as its next message, not through
+    # context a resumed session never re-reads.
+    assert retake_ask.startswith("Branch `agentic/GH-1` is at `")
+    assert "## Human\n\n### Decision 1" in retake_ask and "USD, always." in retake_ask
+    # The interviewee gets it before the next round's questions, not instead of them.
+    assert "## Human\n\n### Decision 1" in retake_answer and "USD, always." in retake_answer
+    assert "## Questions (round 3)" in retake_answer
+
+    section = final["sections"]["Interview: Product Analyst→PM"]
+    assert "### Round 1: questions" in section and "### Round 3: questions" in section
     assert "USD, always." in FilesystemTaskDocuments(tmp_path).load("GH-1")["sections"]["Human"]
 
 

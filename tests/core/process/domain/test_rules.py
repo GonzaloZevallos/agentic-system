@@ -1,6 +1,6 @@
 from typing import get_args
 
-from agentic.core.process.domain import rules, task
+from agentic.core.process.domain import document, rules, task
 from agentic.core.process.domain.denials import denial_for
 from agentic.core.process.domain.roles import (
     DEVELOPER,
@@ -71,6 +71,75 @@ def test_sections_for_keeps_the_superseded_delivery_as_history():
     assert rules.sections_for({}, "PM", "new") == {"PM": "new"}
     state = {"sections": {"PM": "old"}, "runs": [{"role": "PM"}]}
     assert rules.sections_for(state, "PM", "new") == {"PM": "new", "PM (v1)": "old"}
+
+
+def test_interview_progress_on_a_fresh_interview_gives_the_whole_budget_and_no_sessions():
+    assert rules.interview_progress({}, INTERVIEW_DEFINITION, 4) == rules.InterviewProgress(
+        rounds_done=0, rounds_left=4, sessions={}
+    )
+
+
+def test_interview_progress_counts_the_interviewers_own_runs_including_the_closing_one():
+    # Four interviewer runs under the interview's section: three questions and the
+    # closing turn. The interviewee's own runs (answers) do not double the count.
+    section = INTERVIEW_DEFINITION.section
+    runs = [
+        {"role": "Product Analyst", "section": section, "session_id": f"q{i}"} for i in range(1, 5)
+    ] + [{"role": "PM", "section": section, "session_id": f"a{i}"} for i in range(1, 4)]
+    progress = rules.interview_progress({"runs": runs}, INTERVIEW_DEFINITION, 4)
+    assert progress.rounds_done == 4
+    # Exactly two more, the retake's own budget, even though the ordinary cap is spent.
+    assert progress.rounds_left == 2
+    assert progress.sessions == {"product_analyst_interviewer": "q4", "pm_interviewee": "a3"}
+
+
+def test_interview_progress_resumed_at_the_cap_gets_the_two_it_had_left():
+    # Cut at round 2 by a role failure or the task cap: the same formula still gives it
+    # exactly the rounds a fresh interview would have left, `INTERVIEW_RETAKE_ROUNDS` as
+    # the floor for one that closed already using up the ordinary budget.
+    section = INTERVIEW_DEFINITION.section
+    runs = [
+        {"role": "Product Analyst", "section": section, "session_id": "q1"},
+        {"role": "PM", "section": section, "session_id": "a1"},
+        {"role": "Product Analyst", "section": section, "session_id": "q2"},
+    ]
+    progress = rules.interview_progress({"runs": runs}, INTERVIEW_DEFINITION, 4)
+    assert progress.rounds_done == 2
+    assert progress.rounds_left == 2
+
+
+def test_interview_progress_seeds_invariants_from_the_state():
+    # `state["proposed_invariants"]` is what the whole interview accumulated so far
+    # (issue #42): a retake's ephemeral transcript starts from it, never empty.
+    state = {"proposed_invariants": ["Every X does Y."]}
+    progress = rules.interview_progress(state, INTERVIEW_SOLUTION, 4)
+    assert progress.invariants == ["Every X does Y."]
+    assert rules.interview_progress({}, INTERVIEW_SOLUTION, 4).invariants == []
+
+
+def test_interview_progress_ignores_runs_of_other_sections():
+    # The consultant's own runs (PM's section, not the interview's) never count as a
+    # round, and a seat with no run there is simply absent from `sessions`.
+    runs = [
+        {"role": "Product Analyst", "section": INTERVIEW_DEFINITION.section, "session_id": "q1"},
+        {"role": "PM", "section": "PM", "session_id": "pm-1"},
+    ]
+    progress = rules.interview_progress({"runs": runs}, INTERVIEW_DEFINITION, 4)
+    assert progress.rounds_done == 1
+    assert progress.sessions == {"product_analyst_interviewer": "q1"}
+
+
+def test_interview_retake_delta_names_the_branch_the_head_and_the_edit_rule():
+    delta = rules.interview_retake_delta({}, INTERVIEW_DEFINITION, "agentic/GH-1", "abc123")
+    assert "`agentic/GH-1`" in delta and "`abc123`" in delta
+    assert "edit" in delta.lower() and "never re-create" in delta
+    assert "## Human" not in delta  # nothing decided yet: no section to carry
+
+
+def test_interview_retake_delta_carries_the_human_section_unconditionally():
+    state = {"sections": {"Human": "### Decision 1\n\nUSD."}}
+    delta = rules.interview_retake_delta(state, INTERVIEW_DEFINITION, "agentic/GH-1", "abc123")
+    assert delta.endswith("## Human\n\n### Decision 1\n\nUSD.")
 
 
 def test_routing_ends_on_escalation_and_loops_on_return():
@@ -279,6 +348,7 @@ def test_resuming_clears_the_escalation_resets_the_pair_and_keeps_the_decision()
     assert patch["changes_requested"] == {"Tech Lead→Developer:api": 0}
     assert patch["sections"]["Human"] == (
         "### Decision 1\n\nEscalated: Tech Lead→Developer:api hit 2 returns: still\n\n"
+        "**Questions this answers:**\n\n1. Which currency?\n\n"
         "Keep USD.\n\n### Why\n\nAudits."
     )
     again = rules.human_section({"sections": {"Human": patch["sections"]["Human"]}}, "x", "Go")
@@ -289,6 +359,105 @@ def test_resuming_clears_the_escalation_resets_the_pair_and_keeps_the_decision()
         {"escalated": "PjM stopped by the task cap: 1 of 1"}, None
     )
     assert "sections" not in rules.resumed({}, "   ")
+
+
+def test_human_section_with_no_questions_is_byte_identical_to_today():
+    """The proof nothing observable changed for the ordinary case: a cap escalation and
+    a pair-limit escalation never carry `questions_for_human`, so their `## Human` text
+    must render exactly as it did before this subtask."""
+    state = {"sections": {"Human": "### Decision 1\n\nEscalated: x\n\nGo"}}
+    assert rules.human_section(state, "y", "  Do it.  ") == (
+        "### Decision 1\n\nEscalated: x\n\nGo\n\n### Decision 2\n\nEscalated: y\n\nDo it."
+    )
+    assert rules.human_section({}, None, "Do it.") == "### Decision 1\n\nDo it."
+    assert rules.human_section({"questions_for_human": []}, None, "Do it.") == (
+        "### Decision 1\n\nDo it."
+    )
+
+
+def test_human_section_pairs_each_question_with_the_decision():
+    state = {"questions_for_human": ["Which currency?", "Which cap?"]}
+    text = rules.human_section(state, "x", "Keep USD.")
+    assert text == (
+        "### Decision 1\n\nEscalated: x\n\n"
+        "**Questions this answers:**\n\n1. Which currency?\n2. Which cap?\n\n"
+        "Keep USD."
+    )
+
+
+def test_human_section_demotes_a_question_that_carries_a_heading():
+    """A question is system-authored text, rendered through the same `demote()` the
+    decision goes through: a `##` line embedded in one, at column 0, must not open a
+    section of its own."""
+    state = {"questions_for_human": ["Which currency?\n## Follow-up"]}
+    text = rules.human_section(state, None, "Go")
+    assert "\n### Follow-up" in text
+    assert "\n## Follow-up" not in text
+
+
+def test_human_section_demotes_a_question_that_opens_a_line_with_a_decision_heading():
+    """The one shape whose neutralisation actually depends on `demote()` reaching the
+    decision count: a question whose second line begins, at column 0, with the literal
+    `### Decision `. A quote mid-sentence (below) is already harmless to the
+    line-anchored regex without `demote()`'s help; this shape is not — undemoted, it
+    would read as a heading of its own and would inflate the next count."""
+    state = {"questions_for_human": ["Which cap?\n### Decision 9: already answered?"]}
+    text = rules.human_section(state, None, "Go")
+    assert "\n#### Decision 9: already answered?" in text
+    assert "\n### Decision 9: already answered?" not in text
+    again = rules.human_section({"sections": {"Human": text}}, None, "Next")
+    assert again.endswith("### Decision 2\n\nNext")
+
+
+def test_human_section_counts_decisions_with_a_line_anchored_match():
+    """A decision (or a question) that merely quotes the literal `### Decision ` inside
+    a sentence must not shift the numbering: only a heading at column 0 counts."""
+    previous = '### Decision 1\n\nEscalated: x\n\nSee also "### Decision " above.'
+    text = rules.human_section({"sections": {"Human": previous}}, None, "Go")
+    assert text.endswith("### Decision 2\n\nGo")
+
+
+def test_human_section_round_trips_through_the_document():
+    """Not just a raw-string assertion: a paired-questions decision goes through
+    `document.render` and back through `document.parse` and comes back whole, proving
+    against the real parser — not a substring check — that the questions block opens no
+    section of its own and that a quoted `### Decision ` inside one is not read as a
+    heading either."""
+    questions = [
+        "Which currency?\n## Follow-up",
+        'Was it: "### Decision " already answered?',
+    ]
+    text = rules.human_section({"questions_for_human": questions}, "x", "Keep USD.")
+
+    document_state = {
+        "id": "T-1",
+        "title": "Pick a currency",
+        "description": "Users want a default currency.",
+        "sections": {document.HUMAN: text},
+    }
+    raw = document.render(document_state)
+    parsed = document.parse(raw)
+
+    # No stray `##` section: the embedded heading line was demoted before it ever
+    # reached the parser, and the quoted "### Decision " never was one.
+    assert set(parsed["sections"]) == {document.HUMAN}
+    roundtripped = parsed["sections"][document.HUMAN]
+    assert roundtripped == text.strip()
+    assert "1. Which currency?" in roundtripped
+    assert "### Follow-up" in roundtripped
+    assert '"### Decision " already answered?' in roundtripped
+
+    # The round-tripped text still counts as exactly one decision: the quoted literal
+    # inside it is not mistaken for a second heading by `human_section` either.
+    again = rules.human_section({"sections": {document.HUMAN: roundtripped}}, None, "Next")
+    assert again.endswith("### Decision 2\n\nNext")
+
+
+def test_resuming_leaves_the_proposed_invariants_untouched():
+    # A resume is not a fresh interview: what the ephemeral proposed across the whole
+    # interview (issue #42) survives a resume exactly as it was, for the next retake to
+    # seed from; `resumed` never mentions the key, so `apply` keeps it as is.
+    assert "proposed_invariants" not in rules.resumed({"proposed_invariants": ["Do X."]}, None)
 
 
 def test_resuming_leaves_the_integration_to_the_fan_in():

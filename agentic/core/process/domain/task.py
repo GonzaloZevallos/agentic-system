@@ -353,6 +353,12 @@ class TaskState(TaskInput, total=False):
     pull_request: str | None
     # What an interviewee could not decide (ADR-0014); escalates with the task.
     questions_for_human: list[str]
+    # What the ephemeral interviewer proposed for the deliverable that follows
+    # (issue #42), across the whole interview so far: a retake seeds its transcript
+    # from this instead of starting empty. `last`, never an append reducer: the
+    # value written each time is already the accumulated list, and appending it to
+    # itself would duplicate it on every retake.
+    proposed_invariants: Annotated[list[str], last]
     # Why a bug was discarded, in PM's words (issue #65): `discard` writes it on the
     # issue, and the frontmatter keeps it so the document says why the run ended.
     discard_reason: str
