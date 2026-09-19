@@ -17,7 +17,7 @@ from agentic.core.process.application.run_role import (
     task_cap,
     with_context,
 )
-from agentic.core.process.domain import rules
+from agentic.core.process.domain import rules, turn_notice
 from agentic.core.process.domain.document import HUMAN
 from agentic.core.process.domain.roles import DEVELOPER, PJM, PM, PRODUCT_ANALYST, ROLES
 from agentic.core.process.domain.task import FailureReason
@@ -71,6 +71,7 @@ async def test_retry_passes_the_error_and_sums_cost():
             "section": "PjM",
             "cold_fallback": False,
             "denials": 0,
+            "turn_notice": False,
         }
     ]
     # No session survived the failure: the retry starts over, the error appended.
@@ -85,6 +86,13 @@ async def test_a_failed_attempts_denials_are_recorded_on_its_failure():
     runner = ScriptedRunner(pjm=[cut, OK])
     out = await run_pjm(runner)
     assert out.failures[0]["denials"] == 3
+
+
+async def test_a_failed_attempts_turn_notice_is_recorded_on_its_failure():
+    cut = AttemptFailed("run failed (max_turns)", 0.05, turn_notice=True)
+    runner = ScriptedRunner(pjm=[cut, OK])
+    out = await run_pjm(runner)
+    assert out.failures[0]["turn_notice"] is True
 
 
 async def test_retry_continues_the_session_a_failed_attempt_left():
@@ -450,6 +458,7 @@ async def test_run_role_builds_the_patch_and_the_history(tmp_path):
         "cold_fallback": False,
         "failed_cost_usd": 0.0,
         "denials": 0,
+        "turn_notice": False,
     }
     # Timed inside the concurrency slot: started no later than ended, both ISO-8601 UTC.
     assert started_at <= ended_at
@@ -505,6 +514,91 @@ def test_run_record_carries_tokens_calls_and_tool_calls_from_the_output():
 def test_run_record_carries_the_delivering_attempts_denials():
     output = Output(text="ok", data={}, denials=2)
     assert run_record({}, PJM, "PjM", output)["denials"] == 2
+
+
+def test_run_record_carries_the_delivering_attempts_turn_notice():
+    output = Output(text="ok", data={}, turn_notice=True)
+    assert run_record({}, PJM, "PjM", output)["turn_notice"] is True
+
+
+async def test_run_role_appends_the_turn_notice_note_when_the_delivery_had_one(tmp_path):
+    cfg = Configuration(product_dir=tmp_path)
+    delivery = delivered().structured_output
+    runner = ScriptedRunner(developer=[RawResult(delivery, 0.03, turn_notice=True)])
+    output, patch = await run_role(
+        {"id": "T-1", "title": "t", "description": "d"},
+        DEVELOPER,
+        cfg,
+        memory_ports(runner),
+        subtask="api",
+        invariants="",
+        branches="",
+        checks="",
+    )
+    assert output is not None
+    note = turn_notice.notice_note()
+    assert patch["sections"]["Developer"] == f"{note}\n\n{output.text}"
+
+
+async def test_run_role_folds_a_failed_attempts_turn_notice_into_the_delivering_runs_note(
+    tmp_path,
+):
+    # The run's total, the same fold `denials` gets: attempt 1 can cross the margin and
+    # get cut, attempt 2 can still deliver clean, and the run stays legible either way.
+    cfg = Configuration(product_dir=tmp_path)
+    cut = AttemptFailed("run failed (max_turns)", 0.01, reason="max_turns", turn_notice=True)
+    runner = ScriptedRunner(
+        developer=[cut, RawResult(delivered().structured_output, 0.03, turn_notice=False)]
+    )
+    output, patch = await run_role(
+        {"id": "T-1", "title": "t", "description": "d"},
+        DEVELOPER,
+        cfg,
+        memory_ports(runner),
+        subtask="api",
+        invariants="",
+        branches="",
+        checks="",
+    )
+    assert output is not None
+    assert patch["sections"]["Developer"] == f"{turn_notice.notice_note()}\n\n{output.text}"
+
+
+async def test_run_role_adds_no_turn_notice_note_when_the_run_had_none(tmp_path):
+    cfg = Configuration(product_dir=tmp_path)
+    runner = ScriptedRunner(developer=[RawResult(delivered().structured_output, 0.03)])
+    output, patch = await run_role(
+        {"id": "T-1", "title": "t", "description": "d"},
+        DEVELOPER,
+        cfg,
+        memory_ports(runner),
+        subtask="api",
+        invariants="",
+        branches="",
+        checks="",
+    )
+    assert output is not None
+    assert patch["sections"]["Developer"] == output.text
+
+
+async def test_run_role_orders_the_denial_note_before_the_turn_notice_note(tmp_path):
+    cfg = Configuration(product_dir=tmp_path)
+    runner = ScriptedRunner(
+        developer=[RawResult(delivered().structured_output, 0.03, denials=1, turn_notice=True)]
+    )
+    output, patch = await run_role(
+        {"id": "T-1", "title": "t", "description": "d"},
+        DEVELOPER,
+        cfg,
+        memory_ports(runner),
+        subtask="api",
+        invariants="",
+        branches="",
+        checks="",
+    )
+    assert output is not None
+    expected = f"{rules.denial_note(DEVELOPER, 1)}\n\n{turn_notice.notice_note()}\n\n{output.text}"
+    assert patch["sections"]["Developer"] == expected
 
 
 async def test_run_role_prepends_the_denial_note_when_the_delivery_had_any(tmp_path):

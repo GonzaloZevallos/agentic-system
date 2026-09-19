@@ -43,7 +43,7 @@ from pathlib import Path
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import document, rules, schemas
+from ..domain import document, rules, schemas, turn_notice
 from ..domain.document import HUMAN
 from ..domain.roles import ORIGINAL, Prompt, Role, describe_flags, render
 from ..domain.task import WAITING_ON_HUMAN, EscalationClass, Failure, RoleRun, TaskState, apply
@@ -140,6 +140,10 @@ class Output:
     # (`RawResult.denials`'s own docstring); the run's total also folds in every
     # `failures` entry's own count (`_run_denials`).
     denials: int = 0
+    # Whether the live turn-budget notice fired during the delivering attempt alone
+    # (`RawResult.turn_notice`'s own docstring); the run's total also folds in every
+    # `failures` entry's own flag (`_run_notice`).
+    turn_notice: bool = False
 
 
 def context_for(
@@ -304,6 +308,7 @@ async def run_with_retry(
                     "section": written_as,
                     "cold_fallback": fallback_now,
                     "denials": exc.denials,
+                    "turn_notice": exc.turn_notice,
                 }
             )
             continue
@@ -403,6 +408,7 @@ async def _attempt(
             session,
             reason="schema",
             denials=result.denials,
+            turn_notice=result.turn_notice,
         )
     try:
         data = schemas.validate(role.schema, result.structured_output, vocabulary)
@@ -413,6 +419,7 @@ async def _attempt(
             session,
             reason="schema",
             denials=result.denials,
+            turn_notice=result.turn_notice,
         ) from exc
     if check is not None:
         try:
@@ -424,6 +431,7 @@ async def _attempt(
                 session,
                 reason="check",
                 denials=result.denials,
+                turn_notice=result.turn_notice,
             ) from exc
     text = data.pop("markdown").strip()
     if not text:
@@ -433,6 +441,7 @@ async def _attempt(
             session,
             reason="schema",
             denials=result.denials,
+            turn_notice=result.turn_notice,
         )
     return Output(
         text=text,
@@ -447,6 +456,7 @@ async def _attempt(
         tool_calls=result.tool_calls,
         subagent_cost_usd=_subagent_cost_usd(result.cost_by_model, model),
         denials=result.denials,
+        turn_notice=result.turn_notice,
     )
 
 
@@ -503,6 +513,7 @@ def run_record(state: TaskState, role: Role, section: str, output: Output) -> Ro
         "cold_fallback": output.cold_fallback,
         "failed_cost_usd": spent(output.failures),
         "denials": output.denials,
+        "turn_notice": output.turn_notice,
     }
 
 
@@ -514,13 +525,27 @@ def _run_denials(output: Output) -> int:
     return output.denials + sum(f.get("denials", 0) for f in output.failures)
 
 
+def _run_notice(output: Output) -> bool:
+    """Whether the live turn-budget notice fired at any point in the run
+    (`domain/turn_notice.py`): the delivering attempt's own flag, or any recorded
+    failure's — the same fold `_run_denials` gives denials, so a run cut once despite
+    the notice and delivering clean on the next attempt still reads as warned."""
+    return output.turn_notice or any(f.get("turn_notice", False) for f in output.failures)
+
+
 def _section_text(role: Role, output: Output) -> str:
     """What lands in the role's section: its own delivery, with the system's one-line
-    denial note in front when the run had at least one (glossary: Negación) — the same
-    seam `develop.cold_fallback_note` uses for a dropped session, so an expensive run
-    fighting the permission layer is legible without opening logs."""
+    notes in front when the run had any (glossary: Negación; Sección) — the denial note
+    first, then the turn-notice note, the same seam `develop.cold_fallback_note` uses
+    for a dropped session, so an expensive or nearly-cut run is legible without opening
+    logs."""
+    notes = []
     if count := _run_denials(output):
-        return f"{rules.denial_note(role, count)}\n\n{output.text}"
+        notes.append(rules.denial_note(role, count))
+    if _run_notice(output):
+        notes.append(turn_notice.notice_note())
+    if notes:
+        return "\n\n".join([*notes, output.text])
     return output.text
 
 
