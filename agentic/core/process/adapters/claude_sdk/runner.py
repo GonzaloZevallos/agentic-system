@@ -86,6 +86,7 @@ def options_for(
     env: Mapping[str, str],
     presubmit: Presubmit | None = None,
     on_denied: Callable[[], None] | None = None,
+    on_notice: Callable[[], None] | None = None,
 ) -> ClaudeAgentOptions:
     tools, allowed = list(role.tools), list(role.allowed)
     if role.skills and SKILL_TOOL not in tools:
@@ -116,7 +117,7 @@ def options_for(
         include_partial_messages=partial,
         # Claude Code parents its own spans under the role's (SDK mode honours it).
         env={**env, **({"TRACEPARENT": traceparent} if traceparent else {})},
-        hooks=hooks_for(role, cwd, presubmit) or None,
+        hooks=hooks_for(role, cwd, presubmit, on_notice) or None,
         # A role that executes runs under `bypassPermissions`, which already shadows
         # this callback for every call (the SDK's own warning); wiring one there would
         # be dead code the hooks cage already replaces (ADR-0011, addendum). For a role
@@ -176,10 +177,15 @@ class ClaudeSdkRunner:
     ) -> RawResult:
         observer = Printer(role.name, self.stream) if self.verbose else None
         denials = 0
+        notice_fired = False
 
         def _count_denial() -> None:
             nonlocal denials
             denials += 1
+
+        def _mark_notice() -> None:
+            nonlocal notice_fired
+            notice_fired = True
 
         options = options_for(
             role,
@@ -194,6 +200,7 @@ class ClaudeSdkRunner:
             env=self.env,
             presubmit=presubmit,
             on_denied=_count_denial,
+            on_notice=_mark_notice,
         )
 
         result: ResultMessage | None = None
@@ -224,6 +231,7 @@ class ClaudeSdkRunner:
                     session,
                     reason="max_turns",
                     denials=denials,
+                    turn_notice=notice_fired,
                 ) from exc
             raise AttemptFailed(
                 failure_motive(_reported_error(exc)),
@@ -231,14 +239,23 @@ class ClaudeSdkRunner:
                 session,
                 reason=_reason_for_subtype(exc.subtype),
                 denials=denials,
+                turn_notice=notice_fired,
             ) from exc
         except Exception as exc:  # the SDK raises its own hierarchy; all of it is a failure
             raise AttemptFailed(
-                f"SDK error: {exception_motive(exc)}", reason="sdk", denials=denials
+                f"SDK error: {exception_motive(exc)}",
+                reason="sdk",
+                denials=denials,
+                turn_notice=notice_fired,
             ) from exc
 
         if result is None:
-            raise AttemptFailed("run ended without a result message", reason="sdk", denials=denials)
+            raise AttemptFailed(
+                "run ended without a result message",
+                reason="sdk",
+                denials=denials,
+                turn_notice=notice_fired,
+            )
         if background and _delivered(result):
             # The prompt forbids it; when the model does it anyway, whatever those
             # sub-agents had to say never reached the verdict, and the reader of the
@@ -255,6 +272,7 @@ class ClaudeSdkRunner:
                 session,
                 reason="max_turns",
                 denials=denials,
+                turn_notice=notice_fired,
             )
         if result.is_error:
             raise AttemptFailed(
@@ -263,6 +281,7 @@ class ClaudeSdkRunner:
                 session,
                 reason=_reason_for_subtype(result.subtype or ""),
                 denials=denials,
+                turn_notice=notice_fired,
             )
         return RawResult(
             structured_output=result.structured_output,
@@ -270,6 +289,7 @@ class ClaudeSdkRunner:
             turns=result.num_turns,
             session_id=session,
             denials=denials,
+            turn_notice=notice_fired,
             cost_by_model=_cost_by_model(result),
             usage=_usage(result),
             calls=calls,
