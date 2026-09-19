@@ -74,7 +74,9 @@ def _proposed(state: TaskState, spec: Interview, invariants: list[str]) -> str:
     `state` before this call): the note says so, instead of the Tech Lead reading a
     short list as if it were the whole proposal."""
     listed = "\n".join(f"- {line}" for line in invariants) or "- none"
-    migrating = "proposed_invariants" not in state and state.get("sections", {}).get(spec.section)
+    migrating = "proposed_invariants" not in state and bool(
+        state.get("sections", {}).get(spec.section)
+    )
     if migrating:
         return (
             "This task predates recording proposed invariants across a retake: earlier "
