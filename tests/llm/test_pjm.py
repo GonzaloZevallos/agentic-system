@@ -27,12 +27,27 @@ CASES = [
         "In-memory sessions are lost on every deploy. No behaviour change for users.",
         "platform_enhancement",
     ),
+    (
+        # gym-saas #20: the closing sentence is what made PjM escalate instead of
+        # classifying (docs/product/classification.md). It stays a bug even though it
+        # offers both resolutions.
+        "last_check_in_day is present as null instead of omitted",
+        "Defined: when a member has no check-in today, the payload omits "
+        "`last_check_in_day`.\n"
+        "Observed: the field is present with value `null`.\n"
+        "How to reproduce: call the endpoint for a member with no check-in today.\n"
+        "Either the key is omitted when there is no check-in, or the definition says "
+        "`null`.",
+        "bug",
+    ),
 ]
 
 
 @pytest.mark.parametrize("title,description,expected", CASES)
 async def test_pjm_classifies(title, description, expected, tmp_path):
-    prompt = render(*FilesystemPrompts(tmp_path).raw(PJM))
+    # `pjm.md` names `{{product}}` (ADR-0019); every case here is shaped like a request
+    # about a product with definitions and a PM, so a product name, not the system's.
+    prompt = render(*FilesystemPrompts(tmp_path).raw(PJM), product="gym-saas")
     output = await run_with_retry(
         PJM,
         f"Task: {title}\n\n{description}",
