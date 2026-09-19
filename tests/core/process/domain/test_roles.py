@@ -145,6 +145,37 @@ def test_the_reviewer_prompt_explains_every_return_category():
         assert f"- `{category}`:" in prompt, category
 
 
+def test_pjm_receives_the_declared_product_name():
+    # `classify.py` passes it as a placeholder, the same class of fact as `{{date}}`
+    # (docs/adr/0019): the model does not derive the product from issue vocabulary.
+    raw = (PROMPTS_DIR / "pjm.md").read_text()
+    assert "{{product}}" in raw
+
+
+def test_pjm_never_classifies_a_request_about_the_system_as_a_bug():
+    # ADR-0017: a task on the system itself is always platform_enhancement. The old
+    # clause that let a system run failing its own docs come back `bug` is gone
+    # (docs/product/classification.md, "Cuando el producto es el propio sistema").
+    raw = (PROMPTS_DIR / "pjm.md").read_text()
+    assert "never a `bug`" in raw
+
+
+def test_pjm_a_documented_discrepancy_offering_both_fixes_stays_high_confidence():
+    # gym-saas #20: the request cited a definition and an observed behaviour that did
+    # not match, and offering both resolutions (fix the code, or the doc) must not
+    # lower the confidence PjM reports (docs/product/classification.md).
+    raw = (PROMPTS_DIR / "pjm.md").read_text()
+    assert "never lowers your confidence" in raw
+
+
+def test_pjm_a_documented_discrepancy_offering_both_fixes_does_not_escalate():
+    # The `<Hard Limits>` line that fired for gym-saas #20 ("fits two types ... say
+    # `low`") now carves the case out explicitly, so it cannot compete with the rule
+    # above (Tech Lead's solution: the carve-out lives where the failure fired).
+    raw = (PROMPTS_DIR / "pjm.md").read_text()
+    assert "offering both does not make it `low`" in raw
+
+
 def test_in_the_integration_review_a_problem_between_subtasks_is_the_subtasks():
     # The integration branch holds every subtask: what crosses them is the integrator's
     # to fix there, so it can block. Told otherwise, the reviewer marks it `plan`.
