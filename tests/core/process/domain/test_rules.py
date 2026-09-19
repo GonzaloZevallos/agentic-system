@@ -673,6 +673,12 @@ def test_stopped_by_cap_falls_back_to_the_text_when_the_state_carries_no_class()
     assert not rules.stopped_by_cap({})
 
 
+def test_system_note_wraps_the_text_in_italics():
+    # The one helper every system-written line goes through (denial_note's,
+    # cold_fallback_note's, and turn_notice.notice_note's).
+    assert rules.system_note("x happened") == "_x happened_"
+
+
 def test_denial_note_names_the_count_and_the_role_rule():
     # Glossary: Negación — one line, system-written, with how many and the rule.
     note = rules.denial_note(PRODUCT_ANALYST_BUG, 8)

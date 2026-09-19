@@ -620,6 +620,15 @@ def turn_cut_retry_message(role: Role) -> str:
     return f"{_TURN_CAP_FACT} {action}"
 
 
+def system_note(text: str) -> str:
+    """One line the system writes into a role's section, never the model's own words
+    (glossary: Sección): every system-written line goes through this one function —
+    `denial_note`'s, `cold_fallback_note`'s, and `turn_notice.notice_note`'s — so the
+    invariant that the system's own remarks are composed by one helper is a fact about
+    this module, not three independent copies of the same wrapping."""
+    return f"_{text}_"
+
+
 def denial_note(role: Role, count: int) -> str:
     """The trace a denied write leaves on the run's section (glossary: Negación): one
     line, system-written, only when the run had at least one denial — the same seam
@@ -628,7 +637,7 @@ def denial_note(role: Role, count: int) -> str:
     delivering attempt's plus every recorded failure's, never a per-attempt figure
     (`run_role.run_role`'s own rule)."""
     plural = "" if count == 1 else "s"
-    return f"_The system denied {count} write attempt{plural}: {denial_for(role)}_"
+    return system_note(f"The system denied {count} write attempt{plural}: {denial_for(role)}")
 
 
 def cold_fallback_note() -> str:
@@ -637,9 +646,9 @@ def cold_fallback_note() -> str:
     the model, so an expensive rework run can be explained without opening logs. The
     escalated path needs none: `Failure.cold_fallback` already shows in the frontmatter
     as the record is rendered."""
-    return (
-        "_The system asked to resume the previous session; the harness could not, and "
-        "this attempt started cold with the full context instead._"
+    return system_note(
+        "The system asked to resume the previous session; the harness could not, and "
+        "this attempt started cold with the full context instead."
     )
 
 
