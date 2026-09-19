@@ -324,3 +324,7 @@ _Avoid_: presupuesto (eso es lo que se espera gastar), max_turns (el nombre en e
 **Negación**:
 El rechazo del sistema a una herramienta o un comando que el rol no tiene: le llega al rol con el motivo que nombra la regla de su rol, y queda escrita en la sección de esa corrida como una sola línea con cuántas fueron. No es fallo de rol ni devolución y no cuenta para ningún límite.
 _Avoid_: deny (el mecanismo, no el concepto), bloqueo, error de permisos
+
+**Clasificación**:
+La decisión de PjM sobre de qué tipo es una tarea —bug, feature o platform enhancement— y, con eso, qué camino recorre. Es una decisión de tipo y de ruteo: qué cede ante una discrepancia entre la definición y el comportamiento lo decide PM dentro del camino de bug, y no entra en la confianza con que PjM clasifica.
+_Avoid_: triage, dictamen (el dictamen es de Product Analyst sobre un bug ya clasificado)
