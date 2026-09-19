@@ -742,3 +742,53 @@ async def test_on_the_platform_path_a_settled_question_is_withdrawn_by_the_tech_
     )
     assert transcript is not None
     assert "escalated" not in patch and "questions_for_human" not in patch
+
+
+# What the ephemeral proposed across the whole interview survives the pause (issue #42):
+# a retake seeds its transcript from `state["proposed_invariants"]` instead of starting
+# empty, and only counts what its own rounds add on top of that.
+
+SOLUTION_SECTION = INTERVIEW_SOLUTION.section
+OLD_SOLUTION_TRANSCRIPT = (
+    "### Round 1: questions\n\n❓ **Q1**\n\n### Round 1: answers\n\n**Q1**: ok"
+)
+
+
+def _closed_solution(proposed_invariants=None):
+    runs = []
+    for _ in range(3):
+        runs.append({"role": "Tech Lead efímero", "section": SOLUTION_SECTION, "session_id": "e4"})
+        runs.append({"role": "Tech Lead", "section": SOLUTION_SECTION, "session_id": "t3"})
+    runs.append({"role": "Tech Lead efímero", "section": SOLUTION_SECTION, "session_id": "e4"})
+    state = {
+        **PLANNED,
+        "branch": "agentic/T-1",
+        "sections": {**PLANNED["sections"], SOLUTION_SECTION: OLD_SOLUTION_TRANSCRIPT},
+        "runs": [*PLANNED["runs"], *runs],
+    }
+    if proposed_invariants is not None:
+        state["proposed_invariants"] = proposed_invariants
+    return state
+
+
+async def test_a_retake_seeds_invariants_and_counts_only_the_new_ones(cfg):
+    runner = ScriptedRunner(
+        **{
+            TL_ASK: [
+                questions(1, invariants=["New rule."], session="e4"),
+                questions(done=True, session="e4"),
+            ],
+            TL_ANSWER: [tech_answers(1, session="t3")],
+        }
+    )
+    state = _closed_solution(proposed_invariants=["Existing rule."])
+    transcript, patch = await interview(state, INTERVIEW_SOLUTION, cfg, memory_ports(runner))
+
+    assert transcript is not None
+    # The whole accumulated list, seeded ones first, never started empty.
+    assert transcript.invariants == ["Existing rule.", "New rule."]
+    # `_record` carries the accumulated list forward, for a later retake to seed from.
+    assert patch["proposed_invariants"] == ["Existing rule.", "New rule."]
+    # Only this invocation's own round proposed anything new; the seeded one is not
+    # counted again.
+    assert patch["interview_stats"]["invariants_proposed"] == 1

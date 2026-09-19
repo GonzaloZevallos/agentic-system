@@ -88,6 +88,7 @@ def render(
         "escalated": state.get("escalated"),
         "escalation_class": state.get("escalation_class"),
         "questions_for_human": state.get("questions_for_human", []),
+        "proposed_invariants": state.get("proposed_invariants", []),
         "discard_reason": state.get("discard_reason"),
         "branch": state.get("branch"),
         "pull_request": state.get("pull_request"),
