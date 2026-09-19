@@ -68,7 +68,9 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     prompt = cold_prompt = None
     if resume:
         prompt = rules.returned_developer_delta(state, subtask_id, checkout.branch, before)
-        cold_prompt = with_context(state, role, ports, checkout.path, prompt, extra_sections)
+        cold_prompt = with_context(
+            state, role, ports, checkout.path, prompt, extra_sections, subtask_id
+        )
     output, patch = await run_role(
         state,
         role,

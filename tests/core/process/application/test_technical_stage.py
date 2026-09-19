@@ -123,6 +123,36 @@ async def test_develop_runs_the_developer_unattended_in_the_subtask_checkout(cfg
     assert patch["runs"][0]["section"] == "Developer: api" and patch["status"] == "developing"
 
 
+async def test_develop_reaches_its_own_brief_not_its_sisters_under_tech_lead(cfg):
+    # `plan-trim` (issue #71): `develop` passes `state["subtask_id"]` all the way to
+    # `context_for`, so the built prompt's `### Subtasks` block carries `api`'s own
+    # brief, rendered from `state["subtasks"]`, never `domain`'s.
+    state = {
+        **TASK,
+        "subtasks": {
+            "api": sub("api", brief="Build the read endpoint."),
+            "domain": sub("domain", brief="Model the domain."),
+        },
+        "subtask_id": "api",
+        "sections": {
+            **TASK["sections"],
+            "Tech Lead": (
+                "### Subtasks\n\n#### api\n\nstale heading text, never read back\n\n"
+                "#### domain\n\nstale heading text, never read back\n\n### Invariants\n\nnone."
+            ),
+        },
+    }
+    runner = ScriptedRunner(developer=[delivered()])
+    ports = memory_ports(runner)
+    checkout = ports.workspace.subtask_checkout("GH-12", "api")
+    ports.workspace.moved.add(checkout.path)
+    await develop(state, cfg, ports)
+    prompt = runner.calls[0]["prompt"]
+    assert "Build the read endpoint." in prompt
+    assert "Model the domain." not in prompt
+    assert "`domain`" in prompt  # the sister index still names it, title only
+
+
 async def test_a_returned_developer_resumes_its_session_on_a_delta(cfg):
     # README.md, 3; ADR-0004, sixth addendum: a return goes back to the same Developer,
     # over its own earlier session, with only what the return added as the new message.
@@ -383,6 +413,36 @@ async def test_a_review_after_a_return_starts_from_the_head_it_reviewed(cfg):
     assert patch["subtasks"]["api"]["reviewed_head"] == "head2"
     assert patch["subtasks"]["api"]["status"] == "approved"
     assert patch["review_kind"] == "incremental"
+
+
+async def test_review_reaches_its_own_brief_not_its_sisters_under_tech_lead(cfg):
+    # `plan-trim` (issue #71): the reviewer gets the same projection as the Developer.
+    state = {
+        **TASK,
+        "subtasks": {
+            "api": sub(
+                "api", "delivered", branch="agentic/GH-12.api", brief="Build the read endpoint."
+            ),
+            "domain": sub("domain", brief="Model the domain."),
+        },
+        "sections": {
+            **TASK["sections"],
+            "Developer: api": "x",
+            "Tech Lead": (
+                "### Subtasks\n\n#### api\n\nstale heading text, never read back\n\n"
+                "#### domain\n\nstale heading text, never read back\n\n### Invariants\n\nnone."
+            ),
+        },
+        "subtask_id": "api",
+    }
+    runner = ScriptedRunner(tech_lead_review=[reviewed()])
+    ports = memory_ports(runner)
+    ports.workspace.moved.add(MemoryWorkspace.ROOT / "GH-12.api")
+    await review(state, cfg, ports)
+    prompt = runner.calls[0]["prompt"]
+    assert "Build the read endpoint." in prompt
+    assert "Model the domain." not in prompt
+    assert "`domain`" in prompt  # the sister index still names it, title only
 
 
 async def test_review_kind_is_integration_for_the_fan_ins_own_subtask(cfg):

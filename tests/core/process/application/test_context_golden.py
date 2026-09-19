@@ -102,6 +102,69 @@ Merge in dependency order; no integrator needed for two subtasks.
 ### For the next role
 
 Read your own brief under `### Subtasks`; the others are for context only."""
+# The plan's structured record behind `TECH_LEAD_SECTION_TEXT`'s three briefs (issue
+# #71, `plan-trim`): ids deliberately unlike any of the three heading shapes above, so
+# the trim cannot pass by accidentally keying off one of them (invariant 3).
+PLAN_SUBTASKS = {
+    "api": {
+        "id": "api",
+        "title": "API",
+        "brief": "Build the read endpoint.",
+        "seams": ["adapters.http.routes.get_x"],
+        "depends_on": [],
+    },
+    "sql": {
+        "id": "sql",
+        "title": "SQL adapter",
+        "brief": "Persist behind the port the domain declares.",
+        "seams": ["adapters.sql.repository.ApiRepository"],
+        "depends_on": ["api"],
+    },
+    "wire": {
+        "id": "wire",
+        "title": "Wire the endpoint",
+        "brief": "Wire the endpoint to the adapter and cut over.",
+        "seams": ["application.use_cases.get_x"],
+        "depends_on": ["api", "sql"],
+    },
+}
+# `TECH_LEAD_SECTION_TEXT` as the Developer/reviewer of `api` reads it: the
+# `### Subtasks` block cut to its own brief, rendered from `PLAN_SUBTASKS["api"]`, plus
+# the sister index; every other heading byte-for-byte (`plan_view.for_reader`).
+TECH_LEAD_SECTION_TEXT_FOR_API = """### Solution
+
+Trim the plan section per reader, at `context_for`.
+
+### Standards
+
+Hexagonal architecture; the trim is a pure function.
+
+### Subtasks
+
+#### API
+
+Build the read endpoint.
+
+Seams: `adapters.http.routes.get_x`.
+
+Depends on: nothing.
+
+The other subtasks, for context only, not yours to build:
+
+- `sql` — SQL adapter
+- `wire` — Wire the endpoint
+
+### Invariants
+
+1. Every role but a Developer or a subtask reviewer keeps its byte-identical context.
+
+### Integration
+
+Merge in dependency order; no integrator needed for two subtasks.
+
+### For the next role
+
+Read your own brief under `### Subtasks`; the others are for context only."""
 FINDINGS_SECTION_TEXT = (
     "| subtask | v | location | claim | severity | status |\n"
     "| --- | --- | --- | --- | --- | --- |\n"
@@ -129,6 +192,7 @@ STANDARDS_TEXT = (
 STATE = {
     "title": TITLE,
     "description": DESCRIPTION,
+    "subtasks": PLAN_SUBTASKS,
     "sections": {
         "PjM": PJM_SECTION_TEXT,
         DEFINITION_INTERVIEW: DEFINITION_TRANSCRIPT_TEXT,
@@ -145,9 +209,9 @@ STATE = {
 PORTS = memory_ports(knowledge=MemoryKnowledge(text=KNOWLEDGE_TEXT, standards=STANDARDS_TEXT))
 
 
-def _context(role, extra_sections: tuple[str, ...] = ()) -> str:
+def _context(role, extra_sections: tuple[str, ...] = (), subtask_id: str | None = None) -> str:
     standards, knowledge = preamble(role, PORTS)
-    return context_for(STATE, role, knowledge, standards, extra_sections)
+    return context_for(STATE, role, knowledge, standards, extra_sections, subtask_id)
 
 
 def test_pjm_context_is_pinned():
@@ -261,7 +325,9 @@ def test_tech_lead_platform_context_is_pinned():
 
 
 def test_tech_lead_reviewer_context_is_pinned():
-    assert _context(TECH_LEAD_REVIEWER, EXTRA_SECTIONS) == (
+    # `plan-trim` (issue #71): the reviewer gets the same projection as the Developer,
+    # its own brief plus a sister index instead of every subtask's (`plan_view`).
+    assert _context(TECH_LEAD_REVIEWER, EXTRA_SECTIONS, subtask_id="api") == (
         "## Engineering standards\n\n"
         "Hexagonal architecture; tests at two seams; strict typing.\n\n"
         "## Original request\n\n"
@@ -270,7 +336,7 @@ def test_tech_lead_reviewer_context_is_pinned():
         "### Why it matters\n\nThe cache makes it cheap, not free.\n\n"
         "## PM\n\n"
         "### Verdict\n\napproved\n\n### For the next role\n\nCSV export only, no filters yet.\n\n"
-        f"## Tech Lead\n\n{TECH_LEAD_SECTION_TEXT}\n\n"
+        f"## Tech Lead\n\n{TECH_LEAD_SECTION_TEXT_FOR_API}\n\n"
         "## Tech Lead: findings\n\n"
         "| subtask | v | location | claim | severity | status |\n"
         "| --- | --- | --- | --- | --- | --- |\n"
@@ -289,7 +355,11 @@ def test_tech_lead_reviewer_context_is_pinned():
 
 
 def test_developer_context_is_pinned():
-    assert _context(DEVELOPER, EXTRA_SECTIONS) == (
+    # `plan-trim` (issue #71): this is the golden that moves. The Developer of `api`
+    # reads its own brief, not `sql`'s or `wire`'s, under the same `### Subtasks`
+    # heading; everything else in this section, and every other role's golden in this
+    # file, is untouched.
+    assert _context(DEVELOPER, EXTRA_SECTIONS, subtask_id="api") == (
         "## Engineering standards\n\n"
         "Hexagonal architecture; tests at two seams; strict typing.\n\n"
         "## Original request\n\n"
@@ -298,7 +368,7 @@ def test_developer_context_is_pinned():
         "### Why it matters\n\nThe cache makes it cheap, not free.\n\n"
         "## PM\n\n"
         "### Verdict\n\napproved\n\n### For the next role\n\nCSV export only, no filters yet.\n\n"
-        f"## Tech Lead\n\n{TECH_LEAD_SECTION_TEXT}\n\n"
+        f"## Tech Lead\n\n{TECH_LEAD_SECTION_TEXT_FOR_API}\n\n"
         "## Tech Lead: findings\n\n"
         "| subtask | v | location | claim | severity | status |\n"
         "| --- | --- | --- | --- | --- | --- |\n"
@@ -356,6 +426,31 @@ def test_with_context_developer_cold_prompt_carries_the_same_pinned_context():
     delta = "## Delta\n\nThe branch moved to `head3` since your last delivery."
     actual = with_context(STATE, DEVELOPER, PORTS, None, delta, extra_sections=EXTRA_SECTIONS)
     assert actual == f"{_context(DEVELOPER, EXTRA_SECTIONS)}\n\n{delta}"
+
+
+def test_with_context_cold_prompt_carries_the_same_trimmed_plan_as_the_ordinary_prompt():
+    # `plan-trim` (issue #71): the cold path (ADR-0004, sixth addendum) must not
+    # silently restore the sisters' briefs when `context_for`'s ordinary path trims
+    # them — `with_context` threads `subtask_id` to the same seam.
+    delta = "## Delta\n\nThe branch moved to `head3` since your last delivery."
+    actual = with_context(
+        STATE, DEVELOPER, PORTS, None, delta, extra_sections=EXTRA_SECTIONS, subtask_id="api"
+    )
+    assert actual == f"{_context(DEVELOPER, EXTRA_SECTIONS, subtask_id='api')}\n\n{delta}"
+    assert "Persist behind the port the domain declares." not in actual  # not `sql`'s brief
+
+
+def test_context_for_degrades_to_the_full_plan_for_the_integrator():
+    # Invariant 4: `integration` is the fan-in's own subtask, not one of the plan's, so
+    # it still reads every sister's brief, even though it *is* a key in `subtasks`
+    # once the fan-in has added it (`rules.integration_subtask`).
+    with_integration_entry = {**PLAN_SUBTASKS, "integration": {"id": "integration"}}
+    state = {**STATE, "subtasks": with_integration_entry}
+    standards, knowledge = preamble(DEVELOPER_INTEGRATOR, PORTS)
+    text = context_for(
+        state, DEVELOPER_INTEGRATOR, knowledge, standards, EXTRA_SECTIONS, "integration"
+    )
+    assert f"## Tech Lead\n\n{TECH_LEAD_SECTION_TEXT}\n\n" in text
 
 
 def test_every_role_reads_the_human_last_and_it_is_not_declared():
