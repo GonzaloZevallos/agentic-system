@@ -317,10 +317,36 @@ def test_developer_context_is_pinned():
 
 
 def test_developer_integrator_context_is_pinned():
-    # Same `reads` and the same `extra_sections` shape as `DEVELOPER` (both read the
-    # whole plan today); pinned on its own name so a future divergence between the two
-    # shows up here, not as a silent assumption.
-    assert _context(DEVELOPER_INTEGRATOR, EXTRA_SECTIONS) == _context(DEVELOPER, EXTRA_SECTIONS)
+    # Same `reads` and the same `extra_sections` shape as `DEVELOPER` today, so the
+    # bytes below happen to match `test_developer_context_is_pinned`'s — but pinned
+    # inline, on the integrator's own call, not by comparing it to another call of the
+    # function under test: `plan-trim` must not be able to trim this role and still
+    # pass by moving both sides of an equality together.
+    assert _context(DEVELOPER_INTEGRATOR, EXTRA_SECTIONS) == (
+        "## Engineering standards\n\n"
+        "Hexagonal architecture; tests at two seams; strict typing.\n\n"
+        "## Original request\n\n"
+        "Context diet per role\n\n"
+        "Developers read the whole plan today, sisters included (README §6).\n\n"
+        "### Why it matters\n\nThe cache makes it cheap, not free.\n\n"
+        "## PM\n\n"
+        "### Verdict\n\napproved\n\n### For the next role\n\nCSV export only, no filters yet.\n\n"
+        f"## Tech Lead\n\n{TECH_LEAD_SECTION_TEXT}\n\n"
+        "## Tech Lead: findings\n\n"
+        "| subtask | v | location | claim | severity | status |\n"
+        "| --- | --- | --- | --- | --- | --- |\n"
+        "| api | 1 | run_role.py:170 | needs a golden before the trim | important | open |\n\n"
+        "## Developer: api\n\n"
+        "### Changes\n\n- `run_role.py`: no change, characterisation only.\n\n"
+        "### Tests\n\nGolden strings pin today's context.\n\n"
+        "### Decisions and assumptions\n\nNone.\n\n"
+        "### For the Tech Lead\n\nNothing to flag.\n\n"
+        "## Tech Lead: review api\n\n"
+        "### Findings\n\nNone. The goldens match what `context_for` builds today.\n\n"
+        "## Human\n\n"
+        "### Decision — where the trim lives\n\n"
+        "Inside `context_for`, never in `develop.py` or `review.py`."
+    )
 
 
 def test_with_context_developer_cold_prompt_carries_the_same_pinned_context():
