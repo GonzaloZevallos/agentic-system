@@ -51,6 +51,8 @@ from claude_agent_sdk import (
     query,
 )
 
+from agentic.shared.environment import trace_id_of, with_resource_marker
+
 from ...application.ports import AttemptFailed, Presubmit, RawResult
 from ...domain.denials import denial_for
 from ...domain.roles import Role
@@ -115,8 +117,12 @@ def options_for(
         strict_mcp_config=True,
         # Deltas as they are generated; without an observer nobody would read them.
         include_partial_messages=partial,
-        # Claude Code parents its own spans under the role's (SDK mode honours it).
-        env={**env, **({"TRACEPARENT": traceparent} if traceparent else {})},
+        # `TRACEPARENT` alone already parents Claude Code's own spans, and any
+        # sub-agent it launches, under the chain it points to (ADR-0020's spike, run
+        # against the pinned SDK and CLI: identical parenting with or without the
+        # `OTEL_RESOURCE_ATTRIBUTES` marker below). The marker does not propagate
+        # anything; it identifies whose run those spans belong to (GH-70).
+        env=_child_env(env, role, traceparent),
         hooks=hooks_for(role, cwd, presubmit, on_notice) or None,
         # A role that executes runs under `bypassPermissions`, which already shadows
         # this callback for every call (the SDK's own warning); wiring one there would
@@ -127,6 +133,21 @@ def options_for(
         # does not already cover.
         can_use_tool=None if role.executes else _deny_writes(role, on_denied),
     )
+
+
+def _child_env(env: Mapping[str, str], role: Role, traceparent: str | None) -> dict[str, str]:
+    """`env` with `TRACEPARENT` set (as today) and, when `traceparent` carries a valid
+    trace id, `OTEL_RESOURCE_ATTRIBUTES` refreshed with this run's marker
+    (`with_resource_marker`, GH-70): every inherited key-value survives (invariant 8),
+    and nothing is added when there is no trace to mark against, so a role run under
+    `NoTelemetry` sees exactly the `env` it was given, as before this change."""
+    child = {**env, **({"TRACEPARENT": traceparent} if traceparent else {})}
+    trace_id = trace_id_of(traceparent)
+    if trace_id is not None:
+        child["OTEL_RESOURCE_ATTRIBUTES"] = with_resource_marker(
+            env.get("OTEL_RESOURCE_ATTRIBUTES"), role_slug=role.slug, trace_id=trace_id
+        )
+    return child
 
 
 def _deny_writes(role: Role, on_denied: Callable[[], None] | None) -> CanUseTool:
