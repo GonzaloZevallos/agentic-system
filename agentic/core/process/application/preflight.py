@@ -24,6 +24,9 @@ PLACEHOLDERS = {
     "invariants": "- none",
     "proposed_invariants": "- none",
     "checks": "- `tests`: `pytest`",
+    # `pjm.md` names it (ADR-0019); the real value `classify.py` passes at runtime is
+    # `product_name(ports)`, not this generic stand-in, which only has to render.
+    "product": "product",
 }
 
 

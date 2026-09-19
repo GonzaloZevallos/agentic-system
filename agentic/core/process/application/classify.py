@@ -8,11 +8,15 @@ from ..domain import rules
 from ..domain.roles import PJM
 from ..domain.task import WAITING_ON_HUMAN, TaskState
 from .ports import Ports
+from .preflight import product_name
 from .run_role import finish, run_role
 
 
 async def classify(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
-    output, patch = await run_role(state, PJM, cfg, ports)
+    # The declared name as data, like `{{date}}` (ADR-0019): `product_name` is the path
+    # that answers `unknown` when the stack cannot be read, never the bare port call
+    # whose `ValueError` would kill this node mid-run.
+    output, patch = await run_role(state, PJM, cfg, ports, product=product_name(ports))
     if output is not None:
         patch["type"] = output.data["type"]
         if output.data["confidence"] == "low":
