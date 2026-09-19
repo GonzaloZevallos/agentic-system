@@ -279,6 +279,7 @@ def test_resuming_clears_the_escalation_resets_the_pair_and_keeps_the_decision()
     assert patch["changes_requested"] == {"Tech Lead→Developer:api": 0}
     assert patch["sections"]["Human"] == (
         "### Decision 1\n\nEscalated: Tech Lead→Developer:api hit 2 returns: still\n\n"
+        "**Questions this answers:**\n\n1. Which currency?\n\n"
         "Keep USD.\n\n### Why\n\nAudits."
     )
     again = rules.human_section({"sections": {"Human": patch["sections"]["Human"]}}, "x", "Go")
@@ -289,6 +290,48 @@ def test_resuming_clears_the_escalation_resets_the_pair_and_keeps_the_decision()
         {"escalated": "PjM stopped by the task cap: 1 of 1"}, None
     )
     assert "sections" not in rules.resumed({}, "   ")
+
+
+def test_human_section_with_no_questions_is_byte_identical_to_today():
+    """The proof nothing observable changed for the ordinary case: a cap escalation and
+    a pair-limit escalation never carry `questions_for_human`, so their `## Human` text
+    must render exactly as it did before this subtask."""
+    state = {"sections": {"Human": "### Decision 1\n\nEscalated: x\n\nGo"}}
+    assert rules.human_section(state, "y", "  Do it.  ") == (
+        "### Decision 1\n\nEscalated: x\n\nGo\n\n### Decision 2\n\nEscalated: y\n\nDo it."
+    )
+    assert rules.human_section({}, None, "Do it.") == "### Decision 1\n\nDo it."
+    assert rules.human_section({"questions_for_human": []}, None, "Do it.") == (
+        "### Decision 1\n\nDo it."
+    )
+
+
+def test_human_section_pairs_each_question_with_the_decision():
+    state = {"questions_for_human": ["Which currency?", "Which cap?"]}
+    text = rules.human_section(state, "x", "Keep USD.")
+    assert text == (
+        "### Decision 1\n\nEscalated: x\n\n"
+        "**Questions this answers:**\n\n1. Which currency?\n2. Which cap?\n\n"
+        "Keep USD."
+    )
+
+
+def test_human_section_demotes_a_question_that_carries_a_heading():
+    """A question is system-authored text, rendered through the same `demote()` the
+    decision goes through: a `##` line embedded in one, at column 0, must not open a
+    section of its own."""
+    state = {"questions_for_human": ["Which currency?\n## Follow-up"]}
+    text = rules.human_section(state, None, "Go")
+    assert "\n### Follow-up" in text
+    assert "\n## Follow-up" not in text
+
+
+def test_human_section_counts_decisions_with_a_line_anchored_match():
+    """A decision (or a question) that merely quotes the literal `### Decision ` inside
+    a sentence must not shift the numbering: only a heading at column 0 counts."""
+    previous = '### Decision 1\n\nEscalated: x\n\nSee also "### Decision " above.'
+    text = rules.human_section({"sections": {"Human": previous}}, None, "Go")
+    assert text.endswith("### Decision 2\n\nGo")
 
 
 def test_resuming_leaves_the_integration_to_the_fan_in():
