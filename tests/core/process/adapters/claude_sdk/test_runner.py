@@ -16,7 +16,7 @@ from agentic.core.process.adapters.claude_sdk import runner as module
 from agentic.core.process.adapters.claude_sdk.runner import ClaudeSdkRunner
 from agentic.core.process.application.ports import AttemptFailed
 from agentic.core.process.domain.denials import denial_for
-from agentic.core.process.domain.roles import PJM
+from agentic.core.process.domain.roles import DEVELOPER, PJM
 
 pytestmark = pytest.mark.anyio
 
@@ -584,6 +584,64 @@ async def test_a_denial_during_a_failed_attempt_still_reaches_attemptfailed(monk
             reader, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
         )
     assert info.value.denials == 1
+
+
+async def test_a_fired_turn_notice_is_carried_on_the_raw_result(monkeypatch, tmp_path):
+    # `max_turns=40`, margin 39: the very first `PostToolUse` call already crosses it.
+    developer = replace(DEVELOPER, max_turns=40)
+
+    async def query(prompt, options):
+        (matcher,) = options.hooks["PostToolUse"]
+        (hook,) = matcher.hooks
+        await hook({"tool_name": "Bash"}, "t1", {"signal": None})
+        yield result()
+
+    monkeypatch.setattr(module, "query", query)
+    raw = await ClaudeSdkRunner().run_once(
+        developer, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
+    )
+    assert raw.turn_notice is True
+
+
+async def test_no_turn_notice_when_the_margin_is_never_crossed(monkeypatch, tmp_path):
+    developer = replace(DEVELOPER, max_turns=200)
+
+    async def query(prompt, options):
+        (matcher,) = options.hooks["PostToolUse"]
+        (hook,) = matcher.hooks
+        await hook({"tool_name": "Bash"}, "t1", {"signal": None})
+        yield result()
+
+    monkeypatch.setattr(module, "query", query)
+    raw = await ClaudeSdkRunner().run_once(
+        developer, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
+    )
+    assert raw.turn_notice is False
+
+
+async def test_a_fired_turn_notice_during_a_failed_attempt_still_reaches_attemptfailed(
+    monkeypatch, tmp_path
+):
+    developer = replace(DEVELOPER, max_turns=40)
+
+    async def query(prompt, options):
+        (matcher,) = options.hooks["PostToolUse"]
+        (hook,) = matcher.hooks
+        await hook({"tool_name": "Bash"}, "t1", {"signal": None})
+        yield result(subtype="error_max_turns", total_cost_usd=0.1)
+
+    monkeypatch.setattr(module, "query", query)
+    with pytest.raises(AttemptFailed) as info:
+        await ClaudeSdkRunner().run_once(
+            developer, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
+        )
+    assert info.value.turn_notice is True
+
+
+async def test_a_role_with_no_margin_never_gets_the_turn_notice_hook_wired(monkeypatch, tmp_path):
+    seen = fake_query(monkeypatch, [result()])
+    await run_once(ClaudeSdkRunner(), tmp_path)
+    assert "PostToolUse" not in (seen[0][1].hooks or {})
 
 
 async def test_the_presubmit_becomes_a_hook_on_the_delivery_call(monkeypatch, tmp_path):

@@ -54,6 +54,12 @@ class RawResult:
     # does not execute (glossary: Negación; `claude_sdk.runner._deny_writes`). `0` for a
     # role that executes, which never gets the callback wired at all.
     denials: int = 0
+    # Whether the live turn-budget notice (`domain/turn_notice.py`; ADR-0004, seventh
+    # addendum) fired during this run: the `PostToolUse` hook `hooks_for` wires for a
+    # role `turn_notice.margin_for` covers crossed its close-out margin. `False` for
+    # every other role, which never gets that hook wired at all (the same shape
+    # `denials` has for a role that executes).
+    turn_notice: bool = False
 
 
 class AttemptFailed(Exception):
@@ -78,6 +84,7 @@ class AttemptFailed(Exception):
         session_id: str = "",
         reason: FailureReason = "other",
         denials: int = 0,
+        turn_notice: bool = False,
     ):
         super().__init__(motive(error, reason))
         self.cost_usd = cost_usd
@@ -87,6 +94,10 @@ class AttemptFailed(Exception):
         # `0` when the raise site had none to report, which is every site but the
         # runner's own (`RawResult.denials`' own docstring).
         self.denials = denials
+        # Whether the live turn-budget notice fired before this attempt broke
+        # (`RawResult.turn_notice`'s own docstring); `False` at every raise site but
+        # the runner's own.
+        self.turn_notice = turn_notice
 
 
 class Presubmit(Protocol):

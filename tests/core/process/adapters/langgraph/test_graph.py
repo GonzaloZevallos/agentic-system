@@ -599,6 +599,7 @@ async def test_role_failure_escalates_and_keeps_failures(config, tmp_path):
         "cold_fallback": False,
         "failed_cost_usd": 0,
         "denials": 0,
+        "turn_notice": False,
     }
     assert doc["status"] == WAITING_ON_HUMAN
 
@@ -720,6 +721,7 @@ async def test_retried_failure_is_recorded_but_not_escalated(config):
             "section": "Product Analyst",
             "cold_fallback": False,
             "denials": 0,
+            "turn_notice": False,
         }
     ]
 

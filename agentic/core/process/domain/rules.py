@@ -542,6 +542,93 @@ def returned_developer_delta(state: TaskState, subtask_id: str, branch: str, hea
     return "\n\n".join(parts)
 
 
+# The retry message after a `max_turns` cut (ADR-0004, seventh addendum; issue #85).
+# `_retry_input` (`application/run_role.py`) hands the attempt after a `max_turns` cut
+# this message instead of its ordinary "Retry. Fix exactly what failed.": the cut
+# attempt did not fail at the work, so an order to fix it sends a model whose work was
+# fine back to re-read what it already read — the defect the request measured at
+# $16.38 lost over three runs, all of it spent re-discovering "the previous work is
+# intact, uncommitted".
+
+# Slugs of the roles an `Interview` (`domain/roles.py`) seats as its interviewer,
+# interviewee or consultant: `INTERVIEW_DEFINITION`, `INTERVIEW_SOLUTION` and
+# `INTERVIEW_SOLUTION_PLATFORM`'s own three or two seats, each one run as its own
+# resumed session, so a cut mid-turn is cut mid-answer, never mid-interview (that cap
+# is `cfg.interview_max_rounds`, a different counter `interview.py`'s own loop already
+# closes on, with the `CLOSE` text this arm echoes for the SDK's cut instead). Named
+# here, not derived by walking the three specs at import time, so the set reads on its
+# own; `test_rules.py` pins it against those same specs so the two cannot drift apart
+# unnoticed.
+INTERVIEW_PARTICIPANT_SLUGS = frozenset(
+    {
+        "product_analyst_interviewer",
+        "pm_interviewee",
+        "tech_lead_ephemeral",
+        "tech_lead_interviewee",
+        "pm_consultant",
+        "tech_lead_ephemeral_platform",
+        "tech_lead_interviewee_platform",
+    }
+)
+
+# What every arm of `turn_cut_retry_message` may honestly say, and nothing past it: the
+# turn cap ended the run, not the work; the session and its commits are intact; the
+# checkout around it may have moved. Never a branch or a head — `returned_developer_delta`
+# is the one function that names those, from state the runner does not have here.
+_TURN_CAP_FACT = (
+    "The turn cap ended your previous attempt; nothing about it failed. The "
+    "conversation and any commits you already made are intact. The checkout around it "
+    "may have moved since — a review may have run its checks there, or the worktree "
+    "may have been recreated."
+)
+
+
+def turn_cut_retry_message(role: Role) -> str:
+    """What the attempt after a `max_turns` cut reads in place of the ordinary retry
+    error (ADR-0004, seventh addendum). Three arms over `role`, the conservative one
+    the default:
+
+    - `role.executes` (a Developer, on its own subtask or the integration): commit
+      before delivering — a delivery with nothing committed still spends turns, and so
+      does one the presubmit refuses — so with the checks red, commit and deliver
+      anyway, the gap named in `summary`. Safe to say plainly: `develop.committed`
+      raises on a dirty tree, so the commit is not optional, and the presubmit's own
+      refusals are bounded at two, so "deliver anyway" cannot loop.
+    - An enumerated interview participant (`INTERVIEW_PARTICIPANT_SLUGS`): close this
+      turn with what it has — the same instruction the interview's own `CLOSE` gives
+      the interviewer when the rounds run out, now for the turn the SDK itself cut.
+    - Everyone else, by default — `product_analyst_bug` is the role this arm exists
+      for: do not deliver a verdict not yet reached; spend what is left on the reading
+      that decides the delivery; if that still is not enough, say in the output what
+      was left unread (`docs/product/role-failures.md`: "Un presupuesto agotado no se
+      disfraza de entrega")."""
+    if role.executes:
+        action = (
+            "Commit what you have before you deliver. A delivery with nothing "
+            "committed still spends turns, and so does a delivery the presubmit "
+            "refuses: if the checks are red, commit and deliver anyway, and name the "
+            "gap in `summary`."
+        )
+    elif role.slug in INTERVIEW_PARTICIPANT_SLUGS:
+        action = "Close this turn with what you have."
+    else:
+        action = (
+            "Do not deliver a verdict you have not reached. Spend what is left on the "
+            "reading that decides your delivery, and if it still is not enough, say in "
+            "your own output what you could not read."
+        )
+    return f"{_TURN_CAP_FACT} {action}"
+
+
+def system_note(text: str) -> str:
+    """One line the system writes into a role's section, never the model's own words
+    (glossary: Sección): every system-written line goes through this one function —
+    `denial_note`'s, `cold_fallback_note`'s, and `turn_notice.notice_note`'s — so the
+    invariant that the system's own remarks are composed by one helper is a fact about
+    this module, not three independent copies of the same wrapping."""
+    return f"_{text}_"
+
+
 def denial_note(role: Role, count: int) -> str:
     """The trace a denied write leaves on the run's section (glossary: Negación): one
     line, system-written, only when the run had at least one denial — the same seam
@@ -550,7 +637,7 @@ def denial_note(role: Role, count: int) -> str:
     delivering attempt's plus every recorded failure's, never a per-attempt figure
     (`run_role.run_role`'s own rule)."""
     plural = "" if count == 1 else "s"
-    return f"_The system denied {count} write attempt{plural}: {denial_for(role)}_"
+    return system_note(f"The system denied {count} write attempt{plural}: {denial_for(role)}")
 
 
 def cold_fallback_note() -> str:
@@ -559,9 +646,9 @@ def cold_fallback_note() -> str:
     the model, so an expensive rework run can be explained without opening logs. The
     escalated path needs none: `Failure.cold_fallback` already shows in the frontmatter
     as the record is rendered."""
-    return (
-        "_The system asked to resume the previous session; the harness could not, and "
-        "this attempt started cold with the full context instead._"
+    return system_note(
+        "The system asked to resume the previous session; the harness could not, and "
+        "this attempt started cold with the full context instead."
     )
 
 

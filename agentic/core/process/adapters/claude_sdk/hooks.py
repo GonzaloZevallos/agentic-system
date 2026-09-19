@@ -26,6 +26,16 @@ The presubmit is a `PreToolUse` deny on the structured-output tool, not a `Stop`
 block: with `output_format` the turn ends at that tool call, `Stop` fires after it and
 a block there is logged but ends the session anyway (spike of issue #22, SDK 0.2.152).
 A denied delivery call reaches the model as the reason, and it delivers again.
+
+The turn-budget notice (ADR-0004, seventh addendum; issue #85) is a `PostToolUse`
+matcher, wired only for a role `domain.turn_notice.margin_for` covers: it counts
+main-thread events (an event carrying `agent_id`, a sub-agent's own, is not this
+role's turn and is ignored — `.get()`, never a subscript, since the SDK's own type
+only ever promises the field on a sub-agent call) and, once the count crosses the
+role's margin, returns `additionalContext` once and never again this attempt. Never a
+`permissionDecision`: `PostToolUseHookSpecificOutput` structurally carries none
+(ADR-0011, fourth addendum), so this can only ever add context, never narrow what the
+role may run.
 """
 
 from __future__ import annotations
@@ -33,6 +43,7 @@ from __future__ import annotations
 import os
 import re
 import shlex
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +51,7 @@ import anyio
 from claude_agent_sdk import HookCallback, HookContext, HookInput, HookJSONOutput, HookMatcher
 
 from ...application.ports import Presubmit
+from ...domain import turn_notice
 from ...domain.roles import Role
 
 # The tool Claude Code gives the model to hand back the structured output.
@@ -119,8 +131,14 @@ def is_python(file_path: str) -> bool:
     return Path(file_path).suffix in _PYTHON
 
 
-def hooks_for(role: Role, cwd: Path, presubmit: Presubmit | None) -> dict[str, list[HookMatcher]]:
-    """The hooks of one run: the cage for a role that executes, the presubmit when given."""
+def hooks_for(
+    role: Role,
+    cwd: Path,
+    presubmit: Presubmit | None,
+    on_notice: Callable[[], None] | None = None,
+) -> dict[str, list[HookMatcher]]:
+    """The hooks of one run: the cage for a role that executes, the presubmit when
+    given, and the turn-budget notice for a role `turn_notice.margin_for` covers."""
     matchers: list[HookMatcher] = []
     if role.executes:
         matchers += [
@@ -136,7 +154,12 @@ def hooks_for(role: Role, cwd: Path, presubmit: Presubmit | None) -> dict[str, l
                 timeout=presubmit.timeout_s + GUARD_TIMEOUT_S,
             )
         )
-    return {"PreToolUse": matchers} if matchers else {}
+    hooks: dict[str, list[HookMatcher]] = {}
+    if matchers:
+        hooks["PreToolUse"] = matchers
+    if (notice_hook := _turn_notice(role, on_notice)) is not None:
+        hooks["PostToolUse"] = [HookMatcher(hooks=[notice_hook], timeout=GUARD_TIMEOUT_S)]
+    return hooks
 
 
 # -- the callbacks ---------------------------------------------------------------
@@ -171,6 +194,40 @@ def _edit(cwd: Path) -> HookCallback:
                 after = str(tool_input.get("new_string", ""))
             reason = silenced_denial(file_path, before, after)
         return _deny(reason) if reason else {}
+
+    return hook
+
+
+def _turn_notice(role: Role, on_notice: Callable[[], None] | None) -> HookCallback | None:
+    """The `PostToolUse` callback that fires the live turn-budget notice, or `None` for
+    a role `turn_notice.margin_for` does not cover. `count` is this attempt's own
+    closure state: a `PostToolUse` count of main-thread events, the enforced-cap-turn
+    unit the spike established. `fired` makes the notice a one-time thing per attempt:
+    once the margin is crossed, later calls go back to answering nothing."""
+    margin = turn_notice.margin_for(role)
+    if margin is None:
+        return None
+    count = 0
+    fired = False
+
+    async def hook(
+        data: HookInput, tool_use_id: str | None, context: HookContext
+    ) -> HookJSONOutput:
+        nonlocal count, fired
+        if data.get("agent_id") is not None:
+            return {}  # a sub-agent's own call: not this role's turn count
+        count += 1
+        if fired or not turn_notice.should_notice(role, count):
+            return {}
+        fired = True
+        if on_notice is not None:
+            on_notice()
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+                "additionalContext": turn_notice.notice_context(role.max_turns - count),
+            }
+        }
 
     return hook
 

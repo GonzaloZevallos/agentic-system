@@ -8,6 +8,12 @@ when there is none (ADR-0004, addendum). A second failure raises `RoleFailure`, 
 the use case turns into an escalation. The graph engine's own retry was rejected
 because it reruns the node without telling the model what went wrong.
 
+A `max_turns` cut is not an ordinary failure: the harness stopped the attempt on the
+turn cap alone, and the work up to that point may already be done. `_retry_input`
+gives that one reason its own message (`rules.turn_cut_retry_message`, ADR-0004,
+seventh addendum) instead of the "Retry. Fix exactly what failed." every other
+`FailureReason` still gets — a role whose work was fine must not be told to fix it.
+
 The task cap is checked here too, before every attempt, because every role passes
 through here: the routing between nodes would miss the rounds of an interview.
 Reached, `TaskCapReached` escalates the same way, but it is not a role failure: the
@@ -37,7 +43,7 @@ from pathlib import Path
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import document, rules, schemas
+from ..domain import document, rules, schemas, turn_notice
 from ..domain.document import HUMAN
 from ..domain.roles import ORIGINAL, Prompt, Role, describe_flags, render
 from ..domain.task import WAITING_ON_HUMAN, EscalationClass, Failure, RoleRun, TaskState, apply
@@ -134,6 +140,10 @@ class Output:
     # (`RawResult.denials`'s own docstring); the run's total also folds in every
     # `failures` entry's own count (`_run_denials`).
     denials: int = 0
+    # Whether the live turn-budget notice fired during the delivering attempt alone
+    # (`RawResult.turn_notice`'s own docstring); the run's total also folds in every
+    # `failures` entry's own flag (`_run_notice`).
+    turn_notice: bool = False
 
 
 def context_for(
@@ -264,7 +274,7 @@ async def run_with_retry(
             prompt, resume = cold_prompt, None
             cold_fallback = True
         else:
-            text, session = _retry_input(prompt, failures, resume)
+            text, session = _retry_input(role, prompt, failures, resume)
         waited_from = time.monotonic()
         try:
             async with limits.slot():
@@ -298,6 +308,7 @@ async def run_with_retry(
                     "section": written_as,
                     "cold_fallback": fallback_now,
                     "denials": exc.denials,
+                    "turn_notice": exc.turn_notice,
                 }
             )
             continue
@@ -333,7 +344,7 @@ def _now_iso() -> str:
 
 
 def _retry_input(
-    prompt: str, failures: list[Failure], resume: str | None
+    role: Role, prompt: str, failures: list[Failure], resume: str | None
 ) -> tuple[str, str | None]:
     """What the next attempt gets: (prompt, session to resume).
 
@@ -342,14 +353,24 @@ def _retry_input(
     what it read and did, and a Developer cut while delivering just delivers
     (ADR-0004, addendum). One that left none, because the harness broke before
     opening it, starts over: the caller's session if any, the error appended to the
-    prompt."""
+    prompt.
+
+    A cut for `reason == "max_turns"` swaps that error for
+    `rules.turn_cut_retry_message(role)` (ADR-0004, seventh addendum): the harness
+    stopped the attempt on the turn cap alone, so the next attempt is told that,
+    never ordered to "fix" work that did not fail. Every other reason keeps today's
+    message, byte for byte."""
     if not failures:
         return prompt, resume
-    error = (
-        f"<PreviousAttemptFailed>\n{failures[-1]['error']}\n</PreviousAttemptFailed>\n\n"
-        "Retry. Fix exactly what failed."
-    )
-    if left := failures[-1]["session_id"]:
+    last = failures[-1]
+    if last.get("reason") == "max_turns":
+        error = rules.turn_cut_retry_message(role)
+    else:
+        error = (
+            f"<PreviousAttemptFailed>\n{last['error']}\n</PreviousAttemptFailed>\n\n"
+            "Retry. Fix exactly what failed."
+        )
+    if left := last["session_id"]:
         return error, left
     return f"{prompt}\n\n{error}", resume
 
@@ -387,6 +408,7 @@ async def _attempt(
             session,
             reason="schema",
             denials=result.denials,
+            turn_notice=result.turn_notice,
         )
     try:
         data = schemas.validate(role.schema, result.structured_output, vocabulary)
@@ -397,6 +419,7 @@ async def _attempt(
             session,
             reason="schema",
             denials=result.denials,
+            turn_notice=result.turn_notice,
         ) from exc
     if check is not None:
         try:
@@ -408,6 +431,7 @@ async def _attempt(
                 session,
                 reason="check",
                 denials=result.denials,
+                turn_notice=result.turn_notice,
             ) from exc
     text = data.pop("markdown").strip()
     if not text:
@@ -417,6 +441,7 @@ async def _attempt(
             session,
             reason="schema",
             denials=result.denials,
+            turn_notice=result.turn_notice,
         )
     return Output(
         text=text,
@@ -431,6 +456,7 @@ async def _attempt(
         tool_calls=result.tool_calls,
         subagent_cost_usd=_subagent_cost_usd(result.cost_by_model, model),
         denials=result.denials,
+        turn_notice=result.turn_notice,
     )
 
 
@@ -487,6 +513,7 @@ def run_record(state: TaskState, role: Role, section: str, output: Output) -> Ro
         "cold_fallback": output.cold_fallback,
         "failed_cost_usd": spent(output.failures),
         "denials": output.denials,
+        "turn_notice": output.turn_notice,
     }
 
 
@@ -498,13 +525,27 @@ def _run_denials(output: Output) -> int:
     return output.denials + sum(f.get("denials", 0) for f in output.failures)
 
 
+def _run_notice(output: Output) -> bool:
+    """Whether the live turn-budget notice fired at any point in the run
+    (`domain/turn_notice.py`): the delivering attempt's own flag, or any recorded
+    failure's — the same fold `_run_denials` gives denials, so a run cut once despite
+    the notice and delivering clean on the next attempt still reads as warned."""
+    return output.turn_notice or any(f.get("turn_notice", False) for f in output.failures)
+
+
 def _section_text(role: Role, output: Output) -> str:
     """What lands in the role's section: its own delivery, with the system's one-line
-    denial note in front when the run had at least one (glossary: Negación) — the same
-    seam `develop.cold_fallback_note` uses for a dropped session, so an expensive run
-    fighting the permission layer is legible without opening logs."""
+    notes in front when the run had any (glossary: Negación; Sección) — the denial note
+    first, then the turn-notice note, the same seam `develop.cold_fallback_note` uses
+    for a dropped session, so an expensive or nearly-cut run is legible without opening
+    logs."""
+    notes = []
     if count := _run_denials(output):
-        return f"{rules.denial_note(role, count)}\n\n{output.text}"
+        notes.append(rules.denial_note(role, count))
+    if _run_notice(output):
+        notes.append(turn_notice.notice_note())
+    if notes:
+        return "\n\n".join([*notes, output.text])
     return output.text
 
 
