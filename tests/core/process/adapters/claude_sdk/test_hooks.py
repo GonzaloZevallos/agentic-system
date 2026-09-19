@@ -1,11 +1,17 @@
 """The hooks' decisions as pure functions, then wired as the SDK takes them. No model."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from agentic.core.process.adapters.claude_sdk import hooks
-from agentic.core.process.domain.roles import DEVELOPER, PJM, TECH_LEAD_REVIEWER
+from agentic.core.process.domain.roles import (
+    DEVELOPER,
+    DEVELOPER_INTEGRATOR,
+    PJM,
+    TECH_LEAD_REVIEWER,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -214,3 +220,47 @@ async def test_the_presubmit_answers_the_delivery_call():
     assert presubmit.calls == 2
     (hooked,) = [m for m in matchers["PreToolUse"] if m.matcher == hooks.DELIVERY_TOOL]
     assert hooked.timeout >= presubmit.timeout_s
+
+
+def test_only_developer_roles_get_the_turn_notice_hook():
+    # The conservative default (`domain/turn_notice.margin_for`'s own docstring): a
+    # role that executes but is not named in `TURN_NOTICE_MARGIN_TURNS` gets no hook,
+    # not even one that always stays quiet.
+    assert "PostToolUse" not in hooks.hooks_for(PJM, CWD, None)
+    assert "PostToolUse" not in hooks.hooks_for(TECH_LEAD_REVIEWER, CWD, None)
+    other_executor = replace(DEVELOPER, slug="other_executor")
+    assert "PostToolUse" not in hooks.hooks_for(other_executor, CWD, None)
+    assert "PostToolUse" in hooks.hooks_for(DEVELOPER, CWD, None)
+    assert "PostToolUse" in hooks.hooks_for(DEVELOPER_INTEGRATOR, CWD, None)
+
+
+async def test_the_turn_notice_hook_fires_once_past_the_margin():
+    # Margin 39 (`turn_notice.TURN_NOTICE_MARGIN_TURNS`): with `max_turns=40` the very
+    # first main-thread call already crosses it (40 - 1 == 39 remaining).
+    role = replace(DEVELOPER, max_turns=40)
+    fired = []
+    matchers = hooks.hooks_for(role, CWD, None, on_notice=lambda: fired.append(1))
+    payload = {"tool_name": "Bash", "tool_input": {}, "cwd": str(CWD)}
+    (output,) = await call(matchers, "PostToolUse", payload)
+    context = output["hookSpecificOutput"]["additionalContext"]
+    assert "39 turns left" in context
+    assert fired == [1]
+    # One notice per attempt: a later call, still past the margin, adds nothing more.
+    assert await call(matchers, "PostToolUse", payload) == [{}]
+    assert fired == [1]
+
+
+async def test_the_turn_notice_hook_ignores_sub_agent_traffic():
+    role = replace(DEVELOPER, max_turns=40)
+    matchers = hooks.hooks_for(role, CWD, None)
+    payload = {"tool_name": "Bash", "tool_input": {}, "cwd": str(CWD), "agent_id": "sub-1"}
+    # A sub-agent's own call never counts towards the enforced cap: no notice fires,
+    # even though the same call on the main thread would have crossed the margin.
+    assert await call(matchers, "PostToolUse", payload) == [{}]
+
+
+async def test_the_turn_notice_hook_is_quiet_before_the_margin():
+    role = replace(DEVELOPER, max_turns=100)  # margin only at hook_turns 61
+    matchers = hooks.hooks_for(role, CWD, None)
+    payload = {"tool_name": "Bash", "tool_input": {}, "cwd": str(CWD)}
+    assert await call(matchers, "PostToolUse", payload) == [{}]
