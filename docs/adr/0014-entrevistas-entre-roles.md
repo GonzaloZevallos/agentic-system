@@ -152,3 +152,79 @@ explícito, por número y con respuesta escrita: lo que no se nombra se queda.
 Descartado: que el entrevistador retire (el que pregunta decidiría); que el retiro sea por
 texto (una reformulación no coincidiría); un campo estructurado para los supuestos (la
 prosa de la respuesta ya llega al autor de la definición, que escribe desde su sesión).
+
+## Adenda 2026-09-18: una entrevista escalada se retoma, no se repite
+
+Con #21 (PR #30) una entrevista escalada volvía a correr entera cuando la tarea se
+reanudaba: sesiones nuevas de los dos lados, el tope de rondas otra vez desde cero. Dos
+costos: plata (la entrevista de solución de la corrida 4 de GH-12 costó $15.39) y
+decisiones que cambian, porque un muestreo nuevo puede decidir distinto de lo que el
+humano ya respondió (la corrida 2 de GH-12 aprobó la definición a la primera y la 3
+escaló, con el mismo pedido y el mismo conocimiento).
+
+Decisión: `interview()` descubre, de `state["runs"]` filtrado por la sección de la
+entrevista, cuántas rondas ya corrieron y en qué sesión quedó cada lado
+(`rules.interview_progress`); siembra la transcripción con la sección ya en el
+documento en vez de con una lista vacía, reanuda cada sesión, y corre hasta
+`INTERVIEW_RETAKE_ROUNDS` (2) rondas más, numeradas a partir de la última que corrió.
+El tope de 4 no se reinicia: una entrevista que cerró habiendo gastado las 4 recibe
+exactamente 2 más; una que un fallo de rol o el tope de tarea cortó antes recibe las que
+le quedaban, nunca menos de 2. La decisión del humano entra como ronda nueva: el
+entrevistador la recibe como su próximo mensaje (`rules.interview_retake_delta`, porque
+una sesión reanudada no vuelve a leer `context_for`), y el entrevistado la recibe antes
+de las preguntas siguientes. Aplica a las dos entrevistas (definición y solución); una
+que escaló por fallo de rol o por el tope de tarea también se retoma, sin ronda de
+decisión — `interview_retake_delta` no lleva entonces la sección `## Human`, porque no
+hay una que citar.
+
+**Por qué el `cold_prompt` de un retake no contradice la sexta adenda de ADR-0004.**
+Esa adenda reserva `cold_prompt` para cuando el llamador puede reconstruir toda la
+lectura que la sesión resumida se saltaría. Una ronda ordinaria de una entrevista no
+puede: su transcripción todavía vive solo en el `Transcript` local, no es una sección
+del documento hasta que la entrevista termina, así que pasa `cold_prompt=None` como
+siempre. Un retake sí puede: `_record` ya escribió la sección de la entrevista antes de
+que la tarea escalara, así que `with_context` la reconstruye completa si la sesión
+reanudada resulta obsoleta. La condición es estructural — si la sección ya está en
+`state["sections"]` cuando la sesión se reanuda — no "es una entrevista" en general, que
+es por qué una ronda ordinaria dentro de la misma corrida (ronda 2 en adelante) sigue sin
+`cold_prompt` aunque ya reanude su propia sesión.
+
+**Por qué el retake escribe la sección directo y no por `rules.sections_for`.** El texto
+de un retake ya empieza con la sección que reemplaza (la siembra de la transcripción); si
+`_record` pasara ese texto por `sections_for`, la sección anterior — ya incluida como
+prefijo del texto nuevo — quedaría duplicada además como `<sección> (vN)`, una copia
+verbatim que no aporta nada y que crece el diff que ve el humano en el PR.
+`rules.sections_for` sigue sirviendo igual a la reescritura de PM en una consulta, donde
+una aclaración sí reemplaza (agregando, `_clarified`) sobre un texto que no es un prefijo
+del nuevo.
+
+**Un resume significa que el humano respondió.** `## With the human` es la lista
+*abierta* (glosario: *Pregunta para el humano*, "se plantea una sola vez"; *Decisión del
+humano*, "no se vuelve a preguntar") y el índice que `withdrawn` usa; un retake la
+empieza vacía, nunca la llena con lo ya resuelto — eso es lo que carga `## Human`, en la
+sección de conversación que un decisor lee siempre, no en la lista que un decisor puede
+retirar.
+
+**Rework y su evidencia.** Las corridas de un retake son `version > 1` de la sección de
+la entrevista, así que `docs/product/rework.md` ya las cuenta como retrabajo por la
+definición vigente, sin caso especial: retomar no vuelve gratis lo que el retake sí
+gastó. Lo que este cambio ahorra no aparece ahí — aparece en tokens y llamadas por
+`role.slug`, comparando una entrevista retomada contra una repetida a mano en un mismo
+tipo de tarea, con `agentic.role.cold_fallback` como el factor de confusión a vigilar: un
+retake cuya sesión resultó obsoleta paga el `cold_prompt` completo y se parece, en
+tokens, a la repetición que este cambio evita.
+
+**Consecuencias aceptadas.** Un retake cuyo entrevistador cierra en su primera ronda
+nueva igual gasta un turno contado (una corrida de rol, con su costo). Cada reanudación
+de una entrevista escalada da dos rondas más sin techo propio sobre cuántas veces puede
+pasar: lo que lo acota es que cada ciclo necesita una escalada real y una decisión del
+humano (o un fallo de rol o el tope de tarea) para dispararse, y el tope de dinero de la
+tarea entera, que no se mueve por esto.
+
+Descartado: reiniciar el tope de 4 en cada retake (repite el costo que esta adenda
+existe para evitar); dejar que el entrevistador recompute la ronda contando
+`len(transcript.rounds)` o el texto de la sección (dos formas de que un módulo
+distinto del que ya la sabe la vuelva a calcular, y que se desincronicen); sembrar
+`## With the human` con las preguntas que el humano ya contestó (confundiría la lista
+abierta con la conversación cerrada, y un decisor podría "retirar" algo que ya no está
+en discusión).
