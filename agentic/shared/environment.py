@@ -14,8 +14,16 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from pathlib import Path
+from urllib.parse import quote
 
 from .configuration import ENV_PREFIX
+
+# `OTEL_RESOURCE_ATTRIBUTES` keys this module ever writes: our marker on a spawned
+# process (GH-70). Never `service.*` — that is how a Claude Code span would pass the
+# collector's `filter/system_only` and reach Grafana Cloud without touching the
+# collector (invariant 5).
+RESOURCE_ROLE_SLUG_KEY = "agentic.role.slug"
+RESOURCE_TRACE_ID_KEY = "agentic.trace_id"
 
 
 def without_own_toolchain(env: Mapping[str, str]) -> dict[str, str]:
@@ -57,3 +65,66 @@ def own_configuration_unset(env: Mapping[str, str]) -> dict[str, str]:
 def _is_uv(name: str) -> bool:
     # `UV_*` is uv's namespace; a product's `UVICORN_*` is not.
     return name == "UV" or name.startswith("UV_")
+
+
+def trace_id_of(traceparent: str | None) -> str | None:
+    """The 32-hex trace id inside a W3C `traceparent` header
+    (`00-<32 hex trace id>-<16 hex span id>-<flags>`), or None for a header that is
+    absent or does not match that shape, including the all-zero trace id or span id
+    the spec reserves as invalid."""
+    if not traceparent:
+        return None
+    fields = traceparent.split("-")
+    if len(fields) != 4:
+        return None
+    version, trace_id, span_id, flags = fields
+    if (len(version), len(trace_id), len(span_id), len(flags)) != (2, 32, 16, 2):
+        return None
+    if not all(_is_hex(field) for field in fields):
+        return None
+    if trace_id == "0" * 32 or span_id == "0" * 16:
+        return None
+    return trace_id
+
+
+def _is_hex(value: str) -> bool:
+    try:
+        int(value, 16)
+    except ValueError:
+        return False
+    return True
+
+
+def with_resource_marker(inherited: str | None, *, role_slug: str, trace_id: str) -> str:
+    """`OTEL_RESOURCE_ATTRIBUTES` for a spawned process: the inherited comma-separated
+    list, with `agentic.role.slug` and `agentic.trace_id` added (or refreshed, if the
+    inherited value already carries a stale one of ours — a role re-invoking itself,
+    say). Values are percent-encoded so a comma or `=` inside `role_slug` cannot
+    truncate or corrupt the list.
+
+    Every other inherited key-value survives untouched, including an entry this
+    function cannot parse (no `=`): we do not own someone else's entries, so a
+    malformed one is preserved as is, never 'repaired'. Never emits a `service.*` key
+    of its own (invariant 5)."""
+    marker_keys = {RESOURCE_ROLE_SLUG_KEY, RESOURCE_TRACE_ID_KEY}
+    kept = [raw for key, raw in _parse(inherited) if key not in marker_keys]
+    added = [
+        f"{RESOURCE_ROLE_SLUG_KEY}={quote(role_slug, safe='')}",
+        f"{RESOURCE_TRACE_ID_KEY}={quote(trace_id, safe='')}",
+    ]
+    return ",".join(kept + added)
+
+
+def _parse(inherited: str | None) -> list[tuple[str | None, str]]:
+    """Each entry of `inherited` as `(key, raw entry)`; `key` is None for an entry with
+    no `=`, so the caller can keep it verbatim instead of guessing at its shape."""
+    if not inherited:
+        return []
+    entries = []
+    for raw in inherited.split(","):
+        raw = raw.strip()
+        if not raw:
+            continue
+        key = raw.split("=", 1)[0].strip() if "=" in raw else None
+        entries.append((key, raw))
+    return entries
