@@ -47,15 +47,41 @@ $0.01. Los issues #18 y #19, de la misma forma y sin esa frase, se clasificaron 
 llegaron a pull request sin intervención. La frase que describe el trabajo de PM no puede ser
 lo que impide que PM lo haga.
 
+### El pedido no elige quién cede
+
+Lo anterior vale también cuando el pedido **ya eligió**. Un pedido que dice "la definición
+dice X, el producto hace Y, Y es lo que queremos, actualicen la definición" sigue siendo un
+`bug`: hay una discrepancia documentada, y quién cede lo decide PM después de que Product
+Analyst reproduzca, no quien escribe el pedido. Es el caso inverso al de gym-saas #20 —uno
+ofrece las dos salidas, el otro propone una— y se clasifica igual, porque lo que clasifica es
+la discrepancia, nunca la resolución propuesta.
+
+Ese camino no cuesta trabajo de más: si PM le da la razón al pedido, valida el dictamen,
+reescribe la definición y la tarea cierra sin construir nada. Clasificarlo feature sí
+costaría, porque mandaría a construir comportamiento que el producto ya tiene.
+
 ### Pedir comportamiento nuevo no es una discrepancia
 
 La distinción que sí decide el tipo es otra: si lo que el pedido quiere es que el producto
 haga algo que **ninguna definición dice** que haga, es una feature, aunque el pedido lo
-escriba con forma de queja. La señal es la definición citada: sin una definición contra la
-cual medir lo observado, no hay discrepancia, hay un pedido de comportamiento nuevo.
+escriba con forma de queja o pida "actualizar la definición". La señal es el comportamiento
+observado: sin un comportamiento observado que contradiga lo escrito, no hay discrepancia,
+hay un pedido de comportamiento nuevo.
 
 Un pedido que cita una definición *y además* pide comportamiento nuevo sí fija dos tipos de
 verdad, y ahí la confianza baja es correcta.
+
+### Cuando el producto es el propio sistema
+
+Una tarea sobre el sistema agéntico entra **siempre** como platform enhancement (ADR-0017),
+sin PM y sin flags. Para esos pedidos la regla de la discrepancia no decide nada: da igual si
+citan el README, un ADR, un glosario o el prompt de un rol, y da igual si exhiben una corrida
+que no hace lo que esa documentación dice. El tipo es platform enhancement y el camino es el
+de plataforma. Un pedido sobre el sistema nunca sale clasificado `bug`.
+
+La regla de la discrepancia gobierna, entonces, a un producto con definiciones vigentes y un
+PM que las mantenga, que es el único lugar donde "quién cede" es una decisión que alguien
+tiene que tomar.
 
 ### Qué queda para la confianza baja
 
@@ -83,8 +109,6 @@ clasificado.
 
 ### Lo que esta definición no cambia
 
-- **Una tarea sobre el propio sistema entra siempre como platform enhancement** (ADR-0017),
-  sin PM y sin flags. Esta definición es sobre cómo se decide el tipo, no sobre esa regla.
 - **El escalado por clasificación no desaparece**, ni cambia su clase de escalado, ni su
   ruteo, ni el tope de tarea ni el límite del par.
 - **El caso de uso de clasificación no gana reglas propias.** Lee el tipo y la confianza que
@@ -99,9 +123,13 @@ clasificado.
   comportamiento observado, sobre el total de pedidos con esa forma. Objetivo: cero. Hoy,
   gym-saas #20 la deja por encima.
 - **Consistencia entre pedidos de la misma forma**: dos pedidos con la misma estructura
-  (definición citada, comportamiento observado, pasos) se clasifican igual. Se verifica sobre
-  el set de evaluación y, cuando haya que diagnosticar, comparando documentos de tarea; #18 y
-  #19 contra #20 son la evidencia de que hoy no se cumple.
+  (definición citada, comportamiento observado, pasos) se clasifican igual, ofrezcan o no una
+  resolución. Se verifica sobre el set de evaluación y, cuando haya que diagnosticar,
+  comparando documentos de tarea; #18 y #19 contra #20 son la evidencia de que hoy no se
+  cumple.
+- **Pedidos sobre el sistema clasificados como platform enhancement**: proporción de tareas
+  cuyo producto es el sistema que salen con ese tipo. Objetivo: 100%, sin importar qué
+  documento cite el pedido.
 - **Bugs que llegan a dictamen sin intervención humana**: proporción de tareas clasificadas
   `bug` que alcanzan el dictamen de Product Analyst sin un escalado previo. Objetivo: 100%
   para los pedidos que citan definición y comportamiento.
