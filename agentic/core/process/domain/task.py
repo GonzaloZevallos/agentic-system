@@ -144,6 +144,13 @@ class Failure(TypedDict):
     # never guessed later. Absent on a failure recorded before this field existed, which
     # reads as `0` (`rules.denial_note`'s callers always use `.get(..., 0)`).
     denials: NotRequired[int]
+    # Whether the live turn-budget notice (`domain/turn_notice.py`; ADR-0004, seventh
+    # addendum) fired during this attempt, off `RawResult.turn_notice`/
+    # `AttemptFailed.turn_notice`. `False` for every role `turn_notice.margin_for` does
+    # not cover, which is every role but `DEVELOPER`/`DEVELOPER_INTEGRATOR`. Absent on a
+    # failure recorded before this field existed, which reads as `False`
+    # (`run_role._run_notice`'s own `.get(..., False)`).
+    turn_notice: NotRequired[bool]
 
 
 class RoleRun(TypedDict):
@@ -219,6 +226,13 @@ class RoleRun(TypedDict):
     # alone is only the delivering attempt's. Absent on a run recorded before this field
     # existed, which reads as `0`.
     denials: NotRequired[int]
+    # Whether the live turn-budget notice fired during the delivering attempt, off
+    # `RawResult.turn_notice` (`domain/turn_notice.py`; ADR-0004, seventh addendum). The
+    # run's total, for the section note (`turn_notice.notice_note`), also folds in
+    # every recorded `Failure.turn_notice`: this field alone is only the delivering
+    # attempt's, the same split `denials` already has. Absent on a run recorded before
+    # this field existed, which reads as `False`.
+    turn_notice: NotRequired[bool]
 
 
 class InterviewStats(TypedDict):
