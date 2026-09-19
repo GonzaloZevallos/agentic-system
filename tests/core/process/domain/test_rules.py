@@ -395,6 +395,20 @@ def test_human_section_demotes_a_question_that_carries_a_heading():
     assert "\n## Follow-up" not in text
 
 
+def test_human_section_demotes_a_question_that_opens_a_line_with_a_decision_heading():
+    """The one shape whose neutralisation actually depends on `demote()` reaching the
+    decision count: a question whose second line begins, at column 0, with the literal
+    `### Decision `. A quote mid-sentence (below) is already harmless to the
+    line-anchored regex without `demote()`'s help; this shape is not — undemoted, it
+    would read as a heading of its own and would inflate the next count."""
+    state = {"questions_for_human": ["Which cap?\n### Decision 9: already answered?"]}
+    text = rules.human_section(state, None, "Go")
+    assert "\n#### Decision 9: already answered?" in text
+    assert "\n### Decision 9: already answered?" not in text
+    again = rules.human_section({"sections": {"Human": text}}, None, "Next")
+    assert again.endswith("### Decision 2\n\nNext")
+
+
 def test_human_section_counts_decisions_with_a_line_anchored_match():
     """A decision (or a question) that merely quotes the literal `### Decision ` inside
     a sentence must not shift the numbering: only a heading at column 0 counts."""
