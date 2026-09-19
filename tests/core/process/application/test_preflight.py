@@ -8,6 +8,7 @@ import pytest
 from agentic.core.knowledge.domain import stack
 from agentic.core.process.application import preflight as module
 from agentic.core.process.application.preflight import (
+    PLACEHOLDERS,
     UNKNOWN_PRODUCT,
     RunsOnItsOwnCheckout,
     no_setup,
@@ -179,6 +180,13 @@ def test_the_name_is_asked_at_head_so_a_task_older_than_the_key_still_resumes(st
     stack_port = MemoryStack()
     preflight(Configuration(product_dir=PRODUCT), replace(memory_ports(), stack=stack_port))
     assert "HEAD" in stack_port.revisions
+
+
+def test_placeholders_cover_the_name_pjm_md_now_declares():
+    # `pjm.md` names `{{product}}` (docs/adr/0019); this gate renders every role's
+    # prompt before a peso is spent, and a placeholder outside this set fails it for
+    # every product, not just this one.
+    assert "product" in PLACEHOLDERS
 
 
 def test_the_label_falls_back_instead_of_killing_a_node_already_running():
