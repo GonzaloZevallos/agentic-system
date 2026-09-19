@@ -24,6 +24,17 @@ pytestmark = pytest.mark.anyio
 DELIVERY = {"markdown": "ok", "type": "feature", "confidence": "high", "reason": "r"}
 
 
+class _FakeTelemetry:
+    """A `Telemetry` whose `traceparent()` is fixed; `run_once` never calls
+    `role_span`, so this double needs no more than the one method it uses."""
+
+    def __init__(self, traceparent: str | None):
+        self._traceparent = traceparent
+
+    def traceparent(self) -> str | None:
+        return self._traceparent
+
+
 def result(**overrides) -> ResultMessage:
     fields = dict(
         subtype="success",
@@ -518,8 +529,10 @@ def test_options_for_marks_the_child_env_with_role_and_trace(tmp_path):
     # GH-70: the marker identifies whose run a spawned process's spans belong to.
     # `with_resource_marker`/`trace_id_of` are the pure functions `gate` shipped in
     # `agentic/shared/environment.py`; this is the wiring that reaches every role.
+    # `resource_attributes` stands for the real ambient `os.environ` value, kept
+    # apart from `env` (the runner's own git-identity overlay, which never carries
+    # it in production) so the two sources cannot be confused.
     traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
-    env = {"OTEL_RESOURCE_ATTRIBUTES": "deployment.environment=prod"}
     options = options_for(
         PJM,
         system_prompt="s",
@@ -530,7 +543,8 @@ def test_options_for_marks_the_child_env_with_role_and_trace(tmp_path):
         max_budget_usd=None,
         traceparent=traceparent,
         partial=False,
-        env=env,
+        env={"GIT_AUTHOR_NAME": "agentic-system"},
+        resource_attributes="deployment.environment=prod",
     )
     attrs = options.env["OTEL_RESOURCE_ATTRIBUTES"]
     assert "deployment.environment=prod" in attrs  # the inherited entry survives
@@ -538,6 +552,7 @@ def test_options_for_marks_the_child_env_with_role_and_trace(tmp_path):
     assert f"{RESOURCE_TRACE_ID_KEY}=4bf92f3577b34da6a3ce929d0e0e4736" in attrs
     assert "service." not in attrs  # never a service.* key (invariant 5)
     assert options.env["TRACEPARENT"] == traceparent  # unchanged (module docstring)
+    assert options.env["GIT_AUTHOR_NAME"] == "agentic-system"  # env's own entries survive too
 
 
 def test_options_for_adds_no_marker_without_a_traceparent(tmp_path):
@@ -554,9 +569,29 @@ def test_options_for_adds_no_marker_without_a_traceparent(tmp_path):
         traceparent=None,
         partial=False,
         env={},
+        resource_attributes="deployment.environment=prod",
     )
     assert "OTEL_RESOURCE_ATTRIBUTES" not in options.env
     assert "TRACEPARENT" not in options.env
+
+
+async def test_run_once_marks_against_the_real_ambient_resource_attributes(monkeypatch, tmp_path):
+    # Review finding (blocking): the composed marker must preserve the process's own
+    # ambient `OTEL_RESOURCE_ATTRIBUTES` (`os.environ`), not just whatever `env=` the
+    # runner was constructed with (the git identity, which never carries it in
+    # production, `agentic/composition.py`) -- invariant 8. This exercises the wiring
+    # through `ClaudeSdkRunner.run_once`, the seam that was actually wrong.
+    monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "deployment.environment=prod")
+    traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+    seen = fake_query(monkeypatch, [result()])
+    identity = {"GIT_AUTHOR_NAME": "agentic-system"}
+    await ClaudeSdkRunner(env=identity, telemetry=_FakeTelemetry(traceparent)).run_once(
+        PJM, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
+    )
+    attrs = seen[0][1].env["OTEL_RESOURCE_ATTRIBUTES"]
+    assert "deployment.environment=prod" in attrs  # the real ambient entry survives
+    assert f"{RESOURCE_ROLE_SLUG_KEY}={PJM.slug}" in attrs
+    assert f"{RESOURCE_TRACE_ID_KEY}=4bf92f3577b34da6a3ce929d0e0e4736" in attrs
 
 
 async def test_a_role_that_executes_runs_inside_the_hooks_cage(monkeypatch, tmp_path):
