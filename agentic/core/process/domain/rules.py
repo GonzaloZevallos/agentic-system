@@ -1012,13 +1012,22 @@ def _wrote_own_section(run: RoleRun, role_name: str) -> bool:
     return run["role"] == role_name and run.get("section", run["role"]) == role_name
 
 
+_DECISION_HEADING = re.compile(r"^### Decision ", re.M)
+
+
 def human_section(state: TaskState, reason: str | None, decision: str) -> str:
     """The `Human` section with one more decision: every answer stays, numbered, after
-    the escalation it answers."""
+    the escalation it answers, paired with the questions it answers when the escalation
+    carried any (`state["questions_for_human"]`, read before a resume clears it)."""
     previous = state.get("sections", {}).get(HUMAN, "")
-    number = previous.count("### Decision ") + 1
+    number = len(_DECISION_HEADING.findall(previous)) + 1
     escalation = f"Escalated: {reason}\n\n" if reason else ""
-    entry = f"### Decision {number}\n\n{escalation}{demote(decision.strip())}"
+    questions = state.get("questions_for_human") or []
+    answered = ""
+    if questions:
+        listed = "\n".join(f"{n}. {q}" for n, q in enumerate(questions, 1))
+        answered = demote(f"**Questions this answers:**\n\n{listed}") + "\n\n"
+    entry = f"### Decision {number}\n\n{escalation}{answered}{demote(decision.strip())}"
     return f"{previous}\n\n{entry}".strip()
 
 
