@@ -108,6 +108,15 @@ def test_interview_progress_resumed_at_the_cap_gets_the_two_it_had_left():
     assert progress.rounds_left == 2
 
 
+def test_interview_progress_seeds_invariants_from_the_state():
+    # `state["proposed_invariants"]` is what the whole interview accumulated so far
+    # (issue #42): a retake's ephemeral transcript starts from it, never empty.
+    state = {"proposed_invariants": ["Every X does Y."]}
+    progress = rules.interview_progress(state, INTERVIEW_SOLUTION, 4)
+    assert progress.invariants == ["Every X does Y."]
+    assert rules.interview_progress({}, INTERVIEW_SOLUTION, 4).invariants == []
+
+
 def test_interview_progress_ignores_runs_of_other_sections():
     # The consultant's own runs (PM's section, not the interview's) never count as a
     # round, and a seat with no run there is simply absent from `sessions`.
@@ -349,6 +358,13 @@ def test_resuming_clears_the_escalation_resets_the_pair_and_keeps_the_decision()
         {"escalated": "PjM stopped by the task cap: 1 of 1"}, None
     )
     assert "sections" not in rules.resumed({}, "   ")
+
+
+def test_resuming_leaves_the_proposed_invariants_untouched():
+    # A resume is not a fresh interview: what the ephemeral proposed across the whole
+    # interview (issue #42) survives a resume exactly as it was, for the next retake to
+    # seed from; `resumed` never mentions the key, so `apply` keeps it as is.
+    assert "proposed_invariants" not in rules.resumed({"proposed_invariants": ["Do X."]}, None)
 
 
 def test_resuming_leaves_the_integration_to_the_fan_in():

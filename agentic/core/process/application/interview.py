@@ -44,8 +44,13 @@ class Transcript:
     questions_for_human: list[str] = field(default_factory=list)
     # What the interviewer proposes for the deliverable that follows, when its schema
     # has such a field: the solution interview's invariants (issue #42). The author
-    # decides on each one; this only carries them across.
+    # decides on each one; this only carries them across. Seeded from
+    # `state["proposed_invariants"]` on a retake (`interview_progress`), never started
+    # empty; `seeded_invariants` is how many of those came in already proposed, so
+    # `interview_stats["invariants_proposed"]` counts only what this invocation's own
+    # rounds added.
     invariants: list[str] = field(default_factory=list)
+    seeded_invariants: int = 0
     # Question-answer cycles that reached an interviewee's answer, and consultations
     # that ran (Consulta): what `agentic.interview.rounds` and `.questions{to=pm}` read
     # (issue #28). Not the closing round, which asks nobody anything.
@@ -125,7 +130,11 @@ async def interview(
     about — rounds already run plus what a retake still has — never the ordinary cap
     alone, so a round a retake runs never reads as past the limit it was just given."""
     progress = rules.interview_progress(state, spec, cfg.interview_max_rounds)
-    transcript = Transcript(sessions=dict(progress.sessions))
+    transcript = Transcript(
+        sessions=dict(progress.sessions),
+        invariants=list(progress.invariants),
+        seeded_invariants=len(progress.invariants),
+    )
     if existing := state.get("sections", {}).get(spec.section):
         transcript.rounds = [existing]
     patch: TaskState = {}
@@ -324,17 +333,24 @@ def _record(
     superseding it there would duplicate that same text into a `(vN)` copy, a verbatim
     prefix of what the new write already holds and nothing a return actually needs. An
     ordinary interview's own first write behaves the same, harmlessly: there is nothing
-    to supersede yet."""
+    to supersede yet.
+
+    `proposed_invariants` leaves with whatever `transcript.invariants` holds — seeded
+    ones included — so a later retake of this same interview seeds from it in turn
+    (`rules.interview_progress`); `invariants_proposed` only counts what is new on top
+    of what came in already seeded, so `sum_over_time` over the gauge stays additive
+    across retakes instead of recounting the same proposal twice."""
     if transcript.rounds:
         patch = apply(patch, {"sections": {spec.section: transcript.text}})
     if transcript.questions_for_human:
         patch["questions_for_human"] = transcript.questions_for_human
+    patch["proposed_invariants"] = transcript.invariants
     patch["interview_stats"] = {
         "interview": spec.stage,
         "rounds": transcript.completed_rounds,
         "questions_to_pm": transcript.consultations,
         "questions_to_human": len(transcript.questions_for_human),
-        "invariants_proposed": len(transcript.invariants),
+        "invariants_proposed": len(transcript.invariants) - transcript.seeded_invariants,
     }
     return patch
 

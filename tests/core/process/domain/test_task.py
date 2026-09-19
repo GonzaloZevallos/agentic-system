@@ -37,6 +37,7 @@ def test_reducers_are_read_from_the_annotations():
         "current_role",
         "escalated",
         "escalation_class",
+        "proposed_invariants",
     }
     assert REDUCERS["cost_usd"] is add and REDUCERS["sections"] is merge
 

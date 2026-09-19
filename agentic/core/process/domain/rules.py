@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from . import presubmit
 from .denials import denial_for
@@ -521,11 +521,15 @@ class InterviewProgress:
     spent the ordinary cap or was cut short earlier. `sessions` is each seat — the
     interviewer, the interviewee — that has a session to resume, keyed by its slug; a
     seat that never delivered is simply absent, which is the cold path `interview.turn`
-    already knows how to take."""
+    already knows how to take. `invariants` is what `state["proposed_invariants"]`
+    already holds (issue #42): an interview whose interviewer proposes invariants seeds
+    its ephemeral transcript from it instead of starting empty; a fresh interview, or
+    one with no such field in its schema, simply gets none."""
 
     rounds_done: int
     rounds_left: int
     sessions: dict[str, str]
+    invariants: list[str] = field(default_factory=list)
 
 
 def interview_progress(state: TaskState, spec: Interview, max_rounds: int) -> InterviewProgress:
@@ -540,7 +544,8 @@ def interview_progress(state: TaskState, spec: Interview, max_rounds: int) -> In
         for role in (spec.interviewer, spec.interviewee)
         if (session := last_session(state, role.name, spec.section))
     }
-    return InterviewProgress(rounds_done, rounds_left, sessions)
+    invariants = list(state.get("proposed_invariants", []))
+    return InterviewProgress(rounds_done, rounds_left, sessions, invariants)
 
 
 def interview_retake_delta(state: TaskState, spec: Interview, branch: str, head: str) -> str:
