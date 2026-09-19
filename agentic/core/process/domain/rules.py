@@ -21,6 +21,7 @@ from .roles import (
     PRODUCT_ANALYST,
     SOLUTION_INTERVIEW,
     TECH_LEAD,
+    Interview,
     Pair,
     Role,
 )
@@ -497,6 +498,77 @@ def sections_for(state: TaskState, section: str, text: str) -> dict[str, str]:
     if previous is not None:
         sections[superseded(section, next_version(state, section) - 1)] = previous
     return sections
+
+
+# A retake (ADR-0014 addendum): an escalated interview resumes instead of repeating,
+# whether it closed at the cap with questions the human just answered, or was cut short
+# by a role failure or the task cap and carries no decision at all (README.md, 3).
+
+INTERVIEW_RETAKE_ROUNDS = 2
+
+
+@dataclass(frozen=True)
+class InterviewProgress:
+    """Where a retaken interview picks up, computed once from `state["runs"]` so every
+    reader of "how many rounds" — `interview()`'s own seeding, a test, a future panel —
+    agrees, never a local counter, `len(transcript.rounds)`, or the section's Markdown.
+
+    `rounds_done` is the interviewer's own runs of this interview's section, closing
+    turn included: every round has exactly one interviewer run, whether it asked or
+    closed, so counting those alone counts the rounds. `rounds_left` is the budget a
+    retake gets on top of it: the whole cap for an interview that never ran a round,
+    `INTERVIEW_RETAKE_ROUNDS` for one a retake resumes, whether that one closed having
+    spent the ordinary cap or was cut short earlier. `sessions` is each seat — the
+    interviewer, the interviewee — that has a session to resume, keyed by its slug; a
+    seat that never delivered is simply absent, which is the cold path `interview.turn`
+    already knows how to take."""
+
+    rounds_done: int
+    rounds_left: int
+    sessions: dict[str, str]
+
+
+def interview_progress(state: TaskState, spec: Interview, max_rounds: int) -> InterviewProgress:
+    """`InterviewProgress` for `spec` at this state, against `max_rounds` (the ordinary
+    cap, `cfg.interview_max_rounds`): zero rounds done and the whole budget for an
+    interview that never ran, whatever a retake already spent otherwise."""
+    runs = [r for r in state.get("runs", []) if r.get("section", r["role"]) == spec.section]
+    rounds_done = sum(1 for r in runs if r["role"] == spec.interviewer.name)
+    rounds_left = max(max_rounds - rounds_done, INTERVIEW_RETAKE_ROUNDS)
+    sessions = {
+        role.slug: session
+        for role in (spec.interviewer, spec.interviewee)
+        if (session := last_session(state, role.name, spec.section))
+    }
+    return InterviewProgress(rounds_done, rounds_left, sessions)
+
+
+def interview_retake_delta(state: TaskState, spec: Interview, branch: str, head: str) -> str:
+    """What a resumed seat of a retaken interview reads instead of the context its
+    session already holds (ADR-0004, sixth addendum; ADR-0014 addendum). Copies the
+    shape of `returned_developer_delta`, which already solved this for the Developer:
+    the branch and its head first, since the checkout may have moved since the
+    escalation paused the task; that the glossary entries and the ADRs this interview
+    already committed there are to be edited, never re-created under a new number; then
+    `## Human` unconditionally, so a decider whose resumed session never reads
+    `context_for` again still sees what the human settled and which questions it
+    answers (`human_section`'s own numbering).
+
+    Never the original request, the product knowledge, the standards, or the
+    interview's own transcript: the resumed session already holds them, which is the
+    point of resuming it. `None` of those three exist for a retake with no decision (a
+    role failure, the task cap): only the first paragraph then, unconditionally too."""
+    parts = [
+        f"Branch `{branch}` is at `{head}`. The checkout may have changed since your "
+        "previous round: a review may have run its checks there, or the worktree may "
+        "have been recreated. Your session and any commits it made are the same; the "
+        "surroundings may not be. The glossary entries and the ADRs this interview "
+        "already wrote there are committed on this branch: edit them, never re-create "
+        "them under a new number."
+    ]
+    if human := state.get("sections", {}).get(HUMAN):
+        parts.append(f"## {HUMAN}\n\n{human}")
+    return "\n\n".join(parts)
 
 
 # Subtasks (ADR-0011): each in its own branch, sections named after it.

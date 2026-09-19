@@ -29,7 +29,7 @@ from ..domain.document import HUMAN
 from ..domain.roles import Interview, Role
 from ..domain.task import WAITING_ON_HUMAN, TaskState, apply
 from .ports import Ports
-from .run_role import Output, context_for, preamble, run_role, with_context
+from .run_role import Output, run_role, with_context
 
 CLOSE = (
     "The rounds are over. Do not ask anything else: close the interview with `done` and "
@@ -115,23 +115,61 @@ async def interview(
 ) -> tuple[Transcript | None, TaskState]:
     """Run the interview in `cwd` and build the state patch: the transcript as one
     section, a run per turn, the cost. `None` with an escalation patch when a side
-    failed or when the interviewee left questions for the human."""
-    transcript = Transcript()
-    patch: TaskState = {}
-    max_rounds = cfg.interview_max_rounds
+    failed or when the interviewee left questions for the human.
 
-    async def turn(role: Role, prompt: str | None, round_: int) -> tuple[Output | None, TaskState]:
+    An escalated interview is retaken, not repeated (ADR-0014 addendum): `state["runs"]`
+    already says how many rounds ran and on which sessions (`rules.interview_progress`),
+    so a retake seeds the transcript from the section already on record, resumes each
+    seat's session, and runs only the rounds a retake still has, numbered on from where
+    the last one stopped. `max_rounds` past this point is the total the roles are told
+    about — rounds already run plus what a retake still has — never the ordinary cap
+    alone, so a round a retake runs never reads as past the limit it was just given."""
+    progress = rules.interview_progress(state, spec, cfg.interview_max_rounds)
+    transcript = Transcript(sessions=dict(progress.sessions))
+    if existing := state.get("sections", {}).get(spec.section):
+        transcript.rounds = [existing]
+    patch: TaskState = {}
+    max_rounds = progress.rounds_done + progress.rounds_left
+    start_round = progress.rounds_done + 1
+    retaking = progress.rounds_done > 0
+    retake_delta = (
+        rules.interview_retake_delta(
+            state, spec, state.get("branch", ""), ports.workspace.head(cwd or cfg.product_dir)
+        )
+        if retaking
+        else None
+    )
+
+    async def turn(role: Role, delta: str | None, round_: int) -> tuple[Output | None, TaskState]:
         # Each turn sees the runs before it, so the record numbers them in order; the
-        # transcript section itself is written once, at the end.
+        # transcript section itself is written once, at the end. Whether this seat gets
+        # the full context or the shorter `delta` its session already covers for is
+        # never `round_ == 1`: it is whether `transcript.sessions` holds a session for
+        # it, the same gate `consult` already used. A retake's session gets a
+        # `cold_prompt` alongside it (never an ordinary turn's, ADR-0004, sixth
+        # addendum): only a retake's `state["sections"]` already holds this interview's
+        # transcript for `with_context` to rebuild if the session turns out stale; an
+        # ordinary turn's transcript is still only in `transcript`, not yet a section.
+        current = apply(state, patch)
+        resume = transcript.sessions.get(role.slug)
+        cold_prompt = None
+        if not resume:
+            prompt = with_context(current, role, ports, cwd, delta) if delta is not None else None
+        elif retaking:
+            prompt = delta if delta is not None else ""
+            cold_prompt = with_context(current, role, ports, cwd, prompt)
+        else:
+            prompt = delta
         output, turn_patch = await run_role(
-            apply(state, patch),
+            current,
             role,
             cfg,
             ports,
             section=spec.section,
             cwd=cwd,
-            resume=transcript.sessions.get(role.slug),
+            resume=resume,
             prompt=prompt,
+            cold_prompt=cold_prompt,
             round=round_,
             max_rounds=max_rounds,
             **placeholders,
@@ -196,8 +234,10 @@ async def interview(
     reply: str | None = None  # what the interviewer reads next: answers, consultation
     consulted: str | None = None  # what the interviewee reads next, before the questions
     closed = False
-    for round_ in range(1, max_rounds + 1):
-        asked, patch = await turn(spec.interviewer, _interviewer_prompt(transcript, reply), round_)
+    for round_ in range(start_round, max_rounds + 1):
+        first_new_round = retaking and round_ == start_round
+        ask_delta = retake_delta if first_new_round else _interviewer_prompt(transcript, reply)
+        asked, patch = await turn(spec.interviewer, ask_delta, round_)
         if asked is None:
             return None, _record(state, spec, transcript, patch)
         transcript.propose(asked.data.get("invariants", []))
@@ -207,7 +247,9 @@ async def interview(
             break
         transcript.rounds.append(f"### Round {round_}: questions\n\n{asked.text}")
 
-        prompt = _questions(state, spec, ports, asked, round_, cwd, consulted, transcript)
+        prompt = _questions(asked, round_, consulted, transcript)
+        if first_new_round:
+            prompt = f"{retake_delta}\n\n{prompt}"
         answers, patch = await turn(spec.interviewee, prompt, round_)
         if answers is None:
             return None, _record(state, spec, transcript, patch)
@@ -275,9 +317,16 @@ def _record(
     """The transcript so far as the interview's section, if any round ran, and the
     questions already with the human, so a side failing later does not lose them. The
     counts a panel would show (issue #28), measurement-only (`InterviewStats`), on
-    every return path: an interview that ran at all leaves them, even at zero."""
+    every return path: an interview that ran at all leaves them, even at zero.
+
+    Written directly, never through `rules.sections_for`: a retake's `transcript.text`
+    already opens with the section it is replacing (`interview`'s own seeding), so
+    superseding it there would duplicate that same text into a `(vN)` copy, a verbatim
+    prefix of what the new write already holds and nothing a return actually needs. An
+    ordinary interview's own first write behaves the same, harmlessly: there is nothing
+    to supersede yet."""
     if transcript.rounds:
-        patch = apply(patch, {"sections": rules.sections_for(state, spec.section, transcript.text)})
+        patch = apply(patch, {"sections": {spec.section: transcript.text}})
     if transcript.questions_for_human:
         patch["questions_for_human"] = transcript.questions_for_human
     patch["interview_stats"] = {
@@ -290,29 +339,15 @@ def _record(
     return patch
 
 
-def _questions(
-    state: TaskState,
-    spec: Interview,
-    ports: Ports,
-    asked: Output,
-    round_: int,
-    cwd: Path | None,
-    consulted: str | None = None,
-    transcript: Transcript | None = None,
-) -> str:
-    """The interviewee's prompt: the first round carries its context before the
-    questions; the session holds it from then on, so later rounds are the questions,
-    after what the consultant answered to the previous round, if anything, and what is
-    already with the human, so it is not raised again."""
-    questions = f"## Questions (round {round_})\n\n{asked.text}"
-    if transcript is not None:
-        questions = transcript.before(questions)
-    if consulted:
-        questions = f"{consulted}\n\n{questions}"
-    if round_ > 1:
-        return questions
-    standards, knowledge = preamble(spec.interviewee, ports, cwd)
-    return context_for(state, spec.interviewee, knowledge, standards) + "\n\n" + questions
+def _questions(asked: Output, round_: int, consulted: str | None, transcript: Transcript) -> str:
+    """The interviewee's message: the questions, after what is already with the human
+    so it is not raised again, and after what the consultant answered to the previous
+    round, if anything. Whether this reaches the interviewee alone or wrapped in the
+    full context (an interview's first round, a retake's first round on a seat with no
+    session) is `turn`'s call, structural on whether its session already holds that
+    context, never on `round_`."""
+    questions = transcript.before(f"## Questions (round {round_})\n\n{asked.text}")
+    return f"{consulted}\n\n{questions}" if consulted else questions
 
 
 def _consultation(

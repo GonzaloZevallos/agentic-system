@@ -29,6 +29,35 @@ ASK, ANSWER = "product_analyst_interviewer", "pm_interviewee"
 
 
 @pytest.fixture
+def spy_run_role(monkeypatch):
+    """`run_role`'s `resume`/`prompt`/`cold_prompt` are `run_with_retry`'s own business
+    from here on: a stale-session fallback never reaches `ScriptedRunner`, so the only
+    seam that sees what `interview.turn`/`consult` actually built is the call to
+    `run_role` itself. Records every call, by the role's slug, and still runs it for
+    real."""
+    import agentic.core.process.application.interview as interview_module
+
+    recorded: list[dict] = []
+    real_run_role = interview_module.run_role
+
+    async def wrapper(state, role, cfg_, ports_, check=None, **kwargs):
+        recorded.append(
+            {
+                "slug": role.slug,
+                "resume": kwargs.get("resume"),
+                "prompt": kwargs.get("prompt"),
+                "cold_prompt": kwargs.get("cold_prompt"),
+                "round": kwargs.get("round"),
+                "max_rounds": kwargs.get("max_rounds"),
+            }
+        )
+        return await real_run_role(state, role, cfg_, ports_, check, **kwargs)
+
+    monkeypatch.setattr(interview_module, "run_role", wrapper)
+    return recorded
+
+
+@pytest.fixture
 def cfg(tmp_path):
     return Configuration(product_dir=tmp_path, interview_max_rounds=4)
 
@@ -73,6 +102,46 @@ async def test_rounds_alternate_and_each_side_resumes_its_own_session(cfg):
     assert all(r["section"] == "Interview: Product Analyst→PM" for r in patch["runs"])
     assert patch["cost_usd"] == pytest.approx(0.05 * 3 + 0.1 * 2)
     assert "escalated" not in patch
+
+
+async def test_the_argument_sequence_of_an_ordinary_interview_is_pinned(cfg, spy_run_role):
+    """A retake (ADR-0014 addendum) resumes a session with a `cold_prompt` alongside it,
+    because the interview's own section is already written by the time it happens. An
+    ordinary interview's section is not written until the interview ends, so none of its
+    turns may carry one, even once a side resumes its own session mid-run (round 2
+    onward): a `cold_prompt` there would fall back to a context missing the very rounds
+    that ran before it. This test locks the whole shape — `resume`, `prompt`,
+    `cold_prompt`, `round`, `max_rounds` — of every turn `run_role` sees on the ordinary
+    path; it must not move."""
+    recorded = spy_run_role
+    runner = ScriptedRunner(
+        **{
+            ASK: [
+                questions(1, session="q1"),
+                questions(2, session="q1"),
+                questions(done=True, session="q1"),
+            ],
+            ANSWER: [answers(1, session="a1"), answers(2, session="a1")],
+        }
+    )
+    transcript, _ = await interview(TASK, INTERVIEW_DEFINITION, cfg, memory_ports(runner))
+    assert transcript is not None
+    rounds = [
+        (r["slug"], r["resume"], r["cold_prompt"], r["round"], r["max_rounds"]) for r in recorded
+    ]
+    assert rounds == [
+        (ASK, None, None, 1, 4),
+        (ANSWER, None, None, 1, 4),
+        (ASK, "q1", None, 2, 4),
+        (ANSWER, "a1", None, 2, 4),
+        (ASK, "q1", None, 3, 4),
+    ]
+    assert recorded[1]["prompt"].endswith(
+        "## Questions (round 1)\n\n❓ **Q1** - **Scope**: which?\n\n➡️ a"
+    )
+    assert recorded[2]["prompt"] == "**Q1**: accepted"
+    assert recorded[3]["prompt"].startswith("## Questions (round 2)")
+    assert recorded[4]["prompt"] == "**Q2**: accepted"
 
 
 async def test_the_cap_makes_the_interviewer_close_with_what_it_has(cfg):
@@ -320,6 +389,116 @@ async def test_interview_stats_use_the_definition_label_and_count_nothing_propos
         "questions_to_human": 0,
         "invariants_proposed": 0,
     }
+
+
+# A retake (ADR-0014 addendum): an interview that escalated resumes on the sessions
+# `state["runs"]` already carries, appends to the section already on record, and gets
+# only `INTERVIEW_RETAKE_ROUNDS` more rounds, never the ordinary cap again.
+
+DEFINITION_SECTION = INTERVIEW_DEFINITION.section
+OLD_TRANSCRIPT = "### Round 1: questions\n\n❓ **Q1**\n\n### Round 1: answers\n\n**Q1**: accepted"
+
+
+def _closed_four_rounds(decision: str | None = "USD, always.") -> dict:
+    """A definition interview closed at the ordinary cap (4 rounds: 3 questioned, the
+    4th a closing with no interviewee turn), with the human's decision already recorded
+    when `decision` is given — the "questions" escalation shape — or without one, the
+    shape a role failure or the task cap leaves (point 4 of the request)."""
+    runs = []
+    for version in range(1, 4):
+        runs.append({"role": "Product Analyst", "section": DEFINITION_SECTION, "session_id": "q4"})
+        runs.append({"role": "PM", "section": DEFINITION_SECTION, "session_id": "a3"})
+    runs.append({"role": "Product Analyst", "section": DEFINITION_SECTION, "session_id": "q4"})
+    sections = {DEFINITION_SECTION: OLD_TRANSCRIPT}
+    if decision:
+        sections["Human"] = f"### Decision 1\n\n{decision}"
+    return {**TASK, "branch": "agentic/T-1", "sections": sections, "runs": runs}
+
+
+async def test_a_retake_resumes_the_sessions_the_first_interview_left(cfg, spy_run_role):
+    runner = ScriptedRunner(
+        **{
+            ASK: [questions(1, session="q4"), questions(done=True, session="q4")],
+            ANSWER: [answers(1, session="a3")],
+        }
+    )
+    transcript, patch = await interview(
+        _closed_four_rounds(), INTERVIEW_DEFINITION, cfg, memory_ports(runner)
+    )
+
+    assert transcript is not None
+    # Exactly two more rounds, resumed on the ids the first interview left.
+    assert [c["slug"] for c in spy_run_role] == [ASK, ANSWER, ASK]
+    assert [c["resume"] for c in spy_run_role] == ["q4", "a3", "q4"]
+    # Strictly increasing, continuing from the 4 already run, never above the total
+    # (rounds done plus the retake's own) rendered beside every one of them.
+    assert [c["round"] for c in spy_run_role] == [5, 5, 6]
+    assert [c["max_rounds"] for c in spy_run_role] == [6, 6, 6]
+    # The interviewer reads the human's decision as its next message, not through the
+    # context it never re-reads on a resumed session.
+    ask = spy_run_role[0]
+    assert ask["prompt"].startswith("Branch `agentic/T-1` is at `base`.")
+    assert ask["prompt"].endswith("## Human\n\n### Decision 1\n\nUSD, always.")
+    # A retake's session gets a `cold_prompt`: the section is already on record for
+    # `with_context` to rebuild if it turns out stale.
+    assert ask["cold_prompt"] is not None and ask["cold_prompt"].endswith(ask["prompt"])
+    # The interviewee gets it before the next questions, not instead of them.
+    answer = spy_run_role[1]
+    assert answer["prompt"].startswith(ask["prompt"])
+    assert "## Questions (round 5)" in answer["prompt"]
+    assert answer["cold_prompt"] is not None
+    # Every round of the retake, not only its first, still resumes with a `cold_prompt`.
+    close = spy_run_role[2]
+    assert close["cold_prompt"] is not None
+    # The section is appended to, never shorter than what it replaced, and never
+    # superseded into a `(vN)` copy (`_record` writes it directly).
+    section = patch["sections"][DEFINITION_SECTION]
+    assert section.startswith(OLD_TRANSCRIPT)
+    assert len(section) > len(OLD_TRANSCRIPT)
+    assert set(patch["sections"]) == {DEFINITION_SECTION}
+
+
+async def test_a_retake_without_a_decision_still_resumes(cfg):
+    # A role failure or the task cap also retakes (point 4): no `## Human` to carry, but
+    # the sessions and the appended section behave the same.
+    runner = ScriptedRunner(
+        **{
+            ASK: [questions(1, session="q4"), questions(done=True, session="q4")],
+            ANSWER: [answers(1, session="a3")],
+        }
+    )
+    transcript, patch = await interview(
+        _closed_four_rounds(decision=None), INTERVIEW_DEFINITION, cfg, memory_ports(runner)
+    )
+    assert transcript is not None
+    ask = runner.calls[0]
+    assert "## Human" not in ask["prompt"]
+    assert ask["prompt"].startswith("Branch `agentic/T-1` is at `base`.")
+
+
+async def test_a_retake_seat_with_no_recorded_session_gets_full_context_and_no_cold_prompt(
+    cfg, spy_run_role
+):
+    # The interviewee never delivered before the escalation (a role failure mid-answer):
+    # its seat has no session, so it takes the cold path like an ordinary first round,
+    # never a `cold_prompt` (there is no session that could turn out stale).
+    state = _closed_four_rounds()
+    state["runs"] = [r for r in state["runs"] if r["role"] != "PM"]
+    ports = memory_ports(
+        ScriptedRunner(
+            **{
+                ASK: [questions(1, session="q4"), questions(done=True, session="q4")],
+                ANSWER: [answers(1, session="a3")],
+            }
+        )
+    )
+    ports.knowledge.text = "## Product knowledge\n\nOld."
+    transcript, patch = await interview(state, INTERVIEW_DEFINITION, cfg, ports)
+    assert transcript is not None
+    answer = spy_run_role[1]
+    assert answer["resume"] is None
+    assert answer["cold_prompt"] is None
+    assert answer["prompt"].startswith("## Product knowledge")
 
 
 # The solution interview has a consultant (glossary: Consulta): the Tech Lead asks PM what

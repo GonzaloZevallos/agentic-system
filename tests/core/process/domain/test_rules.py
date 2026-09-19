@@ -73,6 +73,66 @@ def test_sections_for_keeps_the_superseded_delivery_as_history():
     assert rules.sections_for(state, "PM", "new") == {"PM": "new", "PM (v1)": "old"}
 
 
+def test_interview_progress_on_a_fresh_interview_gives_the_whole_budget_and_no_sessions():
+    assert rules.interview_progress({}, INTERVIEW_DEFINITION, 4) == rules.InterviewProgress(
+        rounds_done=0, rounds_left=4, sessions={}
+    )
+
+
+def test_interview_progress_counts_the_interviewers_own_runs_including_the_closing_one():
+    # Four interviewer runs under the interview's section: three questions and the
+    # closing turn. The interviewee's own runs (answers) do not double the count.
+    section = INTERVIEW_DEFINITION.section
+    runs = [
+        {"role": "Product Analyst", "section": section, "session_id": f"q{i}"} for i in range(1, 5)
+    ] + [{"role": "PM", "section": section, "session_id": f"a{i}"} for i in range(1, 4)]
+    progress = rules.interview_progress({"runs": runs}, INTERVIEW_DEFINITION, 4)
+    assert progress.rounds_done == 4
+    # Exactly two more, the retake's own budget, even though the ordinary cap is spent.
+    assert progress.rounds_left == 2
+    assert progress.sessions == {"product_analyst_interviewer": "q4", "pm_interviewee": "a3"}
+
+
+def test_interview_progress_resumed_at_the_cap_gets_the_two_it_had_left():
+    # Cut at round 2 by a role failure or the task cap: the same formula still gives it
+    # exactly the rounds a fresh interview would have left, `INTERVIEW_RETAKE_ROUNDS` as
+    # the floor for one that closed already using up the ordinary budget.
+    section = INTERVIEW_DEFINITION.section
+    runs = [
+        {"role": "Product Analyst", "section": section, "session_id": "q1"},
+        {"role": "PM", "section": section, "session_id": "a1"},
+        {"role": "Product Analyst", "section": section, "session_id": "q2"},
+    ]
+    progress = rules.interview_progress({"runs": runs}, INTERVIEW_DEFINITION, 4)
+    assert progress.rounds_done == 2
+    assert progress.rounds_left == 2
+
+
+def test_interview_progress_ignores_runs_of_other_sections():
+    # The consultant's own runs (PM's section, not the interview's) never count as a
+    # round, and a seat with no run there is simply absent from `sessions`.
+    runs = [
+        {"role": "Product Analyst", "section": INTERVIEW_DEFINITION.section, "session_id": "q1"},
+        {"role": "PM", "section": "PM", "session_id": "pm-1"},
+    ]
+    progress = rules.interview_progress({"runs": runs}, INTERVIEW_DEFINITION, 4)
+    assert progress.rounds_done == 1
+    assert progress.sessions == {"product_analyst_interviewer": "q1"}
+
+
+def test_interview_retake_delta_names_the_branch_the_head_and_the_edit_rule():
+    delta = rules.interview_retake_delta({}, INTERVIEW_DEFINITION, "agentic/GH-1", "abc123")
+    assert "`agentic/GH-1`" in delta and "`abc123`" in delta
+    assert "edit" in delta.lower() and "never re-create" in delta
+    assert "## Human" not in delta  # nothing decided yet: no section to carry
+
+
+def test_interview_retake_delta_carries_the_human_section_unconditionally():
+    state = {"sections": {"Human": "### Decision 1\n\nUSD."}}
+    delta = rules.interview_retake_delta(state, INTERVIEW_DEFINITION, "agentic/GH-1", "abc123")
+    assert delta.endswith("## Human\n\n### Decision 1\n\nUSD.")
+
+
 def test_routing_ends_on_escalation_and_loops_on_return():
     assert rules.after_classify({"type": "feature"}) == "define"
     assert rules.after_classify({"escalated": "x"}) is None
