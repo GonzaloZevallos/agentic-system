@@ -452,3 +452,86 @@ cerrada, filtrando `product` y `system.version`, y sirve como detector de olor: 
 pausada al cierre de la ventana aporta sus muestras de rol y ninguna de tarea, así que la
 resta puede dar negativa sin que nada esté mal. Lo que sí significa algo es una discrepancia
 positiva grande y persistente, del orden de los 13 dólares de GH-12.
+
+## Adenda (2026-09-21, novena): toda métrica dice sobre qué versión del sistema corrió
+
+Lo que se mide es el sistema, no el producto: el eje de todo panel es `system_version`. Siete
+familias no lo llevaban y por eso se leían por rol, sin poder compararse entre versiones:
+`agentic.role.tokens`, `.calls`, `.turns`, `.tool_calls`, `.subagent_cost_usd`, `.duration`,
+`.failures`, `.failure_cost_usd`, `agentic.presubmit.checks`, `.duration` y las tres
+`agentic.interview.*`. Esta adenda **revierte una frase de la adenda del 2026-09-18**, que las
+dejó sin el label a propósito ("un panel de tokens agrupa por rol y modelo, nunca por el
+checkout que lo corrió", issue #24): el panel que motivaba esa frase hoy agrupa por versión,
+porque la comparación de una versión con la siguiente es la única pregunta para la que el
+dashboard existe. Se agrega el label; no se renombra ni se borra ninguna serie.
+
+**El label se agrega en un solo lugar por juego.** `token_labels` —el único juego de labels de
+`telemetry.py` definido por sustracción— desaparece: cada gauge por corrida de `_emit_run` setea
+`labels` verbatim, así `agentic.role.max_turns` sigue graficable al lado de `agentic.role.turns`
+por construcción y no por un comentario (issue #81). `_emit_failures`, `_emit_presubmit` y
+`_emit_interview` suman `system.version` a su juego. Ningún sitio de emisión escribe la clave por
+su cuenta: la pone el helper.
+
+**`agentic.role.duration` no lo lleva, y su panel se mueve a otra serie.** La adenda del
+2026-09-18 la congeló *porque* la duración por corrida ganó su propia serie, y
+`agentic.role.run_duration` ya lleva `system.version` y `role`: darle el label al grano de nodo
+sería una cifra computada de dos maneras, que es lo que esta tarea existe para sacar. "Duración
+promedio por rol" pasa a leer `run_duration` **y** `queue_wait`, dos series, `sum by
+(system_version, role)`: `queue_wait` existe justamente para que un panel nunca reporte cola como
+trabajo, y sin él una versión con más contención se leería más rápida mientras el reloj de pared
+empeora. Sin apilar: la suma no es el reloj de un nodo, porque una patch puede tener varias
+corridas. Consecuencia: después de esta tarea ningún panel consulta `agentic.role.duration`. Sigue
+emitida y congelada, y el número de grano de nodo se lee en el documento de tarea y en el span de
+rol de Langfuse.
+
+**`_emit_presubmit` deja de omitir `phase`.** Escribía la clave sólo si la patch tenía una corrida
+con veredicto; la adenda segunda del 2026-09-18 ya había decidido lo contrario para la muestra
+residual y para `_emit_failures` ("un label ausente y un label con valor son series distintas y
+nadie las suma después") y este sitio quedó afuera. Pasa a escribir `unknown`. Es aplicar una regla
+escrita, no una decisión nueva.
+
+**`agentic.role.cold_fallback` queda con un solo juego de labels, y eso le quita tres.** Se emitía
+desde `_emit_run` con el juego completo por corrida y desde `_emit_failures` con uno corto: dos
+formas para una serie. Un helper arma uno solo —`product`, `role`, `role.slug`, `phase`,
+`system.version`— y los dos sitios lo llaman. La rama de corrida **pierde** `model`, `rework` y
+`role.outcome`, a propósito: el hecho que la serie registra es que el sistema soltó la sesión del
+llamador y arrancó en frío (ADR-0004, sexta adenda), que es una propiedad del rol y de la fase y no
+de un modelo; inventarlos del lado de las fallas habría sido la atribución fabricada que la adenda
+segunda del 2026-09-18 rechaza para el `phase` de la residual. Se dice acá porque es el único lugar
+donde esta tarea borra labels, y la regla general sigue siendo que se agregan. La serie gana además
+su fila en `observability/README.md`, que nunca tuvo.
+
+**El `$version` del dashboard deja de salir de las tareas terminadas.** Se armaba con
+`label_values(agentic_task_finished, system_version)`, y desde la adenda segunda del 2026-09-18 esa
+serie sólo existe para Corridas terminadas: una versión cuyas tareas pausaron todas no aparecía en
+el desplegable. Mientras las siete familias no filtraban por versión daba igual; con el filtro
+puesto, la versión cuyos roles fallan tanto que escalan todo —justo la que hay que mirar en
+`agentic.role.failures`— habría quedado innombrable. Pasa a `label_values(agentic_role_cost_usd,
+system_version)`: toda corrida de rol la emite, y la residual sale aun con la patch vacía. Una
+versión que corrió y no terminó nada aparece con los paneles de tarea vacíos, que es honesto.
+
+**Los cortes históricos, escritos para no descubrirlos en un panel.** Son tres, de la misma forma
+que el corte de `product` del 2026-09-17: las muestras de las siete familias emitidas antes de este
+commit no llevan `system.version`, así que un panel con una versión concreta elegida no las ve (con
+`All`, `.*` sí las alcanza); las de presubmit anteriores omiten `phase` y dan dos series donde un
+lector espera una; y las de `cold_fallback` anteriores llevan tres claves que las nuevas no. Nada se
+rellena: son eventos, y las muestras ya emitidas no se reescriben.
+
+**Cómo se verifica.** La tabla de `observability/README.md` pasa a ser contrato ejecutable: para
+cada familia que esta tarea toca, la unión de las claves de label de las muestras que un
+`RoleRun.finish` real emite tiene que ser **igual** a la fila de esa métrica —nunca un subconjunto—
+contra una patch máxima declarada en el plan, y una familia que no emite ninguna muestra es una
+falla con su nombre en el mensaje, nunca un skip. `agentic.role.cost_usd` y `agentic.role.duration`
+entran como controles: la primera tiene que seguir igual a su fila, la segunda igual a su fila de
+tres claves, así el mismo test que prueba que el label llegó prueba que la serie congelada no se
+movió. Del lado del dashboard, un assert nuevo exige que toda expresión que lee una de estas
+familias lleve `system_version` en su `by (...)` y `system_version=~"$version"` en su selector; el
+parser de labels de `tests/test_dashboard.py` suma `!=` y `!~` a su alternación, porque esta tarea
+mete el primer matcher negativo del dashboard (`model!=""`, que excluye la muestra residual, la
+única sin corrida y por lo tanto sin tokens detrás).
+
+Descartado: un ADR nuevo en vez de esta adenda —dejaría la frase revertida del 2026-09-18 como lo
+primero que encuentra quien pregunte por qué los tokens no llevan versión—; darle el label a
+`agentic.role.duration`; y ponerle a `$ / 1k tokens de salida` un nombre que esconda su caveat: la
+fila del README dice lo que es cierto, dólares de las corridas del rol con los intentos fallidos
+adentro sobre los tokens de salida de las corridas que reportaron alguno, con la residual excluida.

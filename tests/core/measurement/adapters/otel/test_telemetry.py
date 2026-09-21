@@ -12,6 +12,7 @@ from agentic.core.measurement.domain import metrics as system_metrics
 from agentic.core.process.domain.task import apply
 from agentic.shared.stage0 import CHECKOUT
 from tests.conftest import BatchReader, points
+from tests.readme_metrics import _documented, _prom_name
 
 TRACEPARENT = re.compile(r"^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$")
 
@@ -735,7 +736,9 @@ def test_role_finish_emits_tokens_calls_turns_tool_calls_and_subagent_cost(metri
     with telemetry.role_span("PjM", "pjm", "gym-saas") as run_span:
         run_span.finish({"runs": [run], "sections": {"PjM": "t"}, "cost_usd": 0.1})
     got = points(metrics)
-    # Same labels as `agentic.role.cost_usd`, minus `system.version`.
+    # Same labels as `agentic.role.cost_usd`, `system.version` included (ADR-0008,
+    # 2026-09-21 addendum): the tokens/calls/turns family joins that gauge by
+    # construction now, not by a comment.
     base = {
         "product": "gym-saas",
         "role": "PjM",
@@ -744,6 +747,7 @@ def test_role_finish_emits_tokens_calls_turns_tool_calls_and_subagent_cost(metri
         "role.slug": "pjm",
         "phase": "definition",
         "role.outcome": "delivered",
+        "system.version": "abc1234",
     }
     tokens = {t.attributes["kind"]: t.value for t in got["agentic.role.tokens"]}
     assert tokens == {"input": 10, "output": 20, "cache_read": 30, "cache_write": 40}
@@ -819,7 +823,9 @@ def test_a_run_record_without_max_turns_emits_no_max_turns_sample(metrics):
 def test_role_finish_emits_cold_fallback_when_the_run_record_carries_it(metrics):
     """A run record whose `run_with_retry` dropped a stale caller session and started
     cold (ADR-0004, sixth addendum) leaves one `agentic.role.cold_fallback` sample,
-    the usual role label set (`_run_labels`, same as `agentic.role.cost_usd`)."""
+    its own label set (`_cold_fallback_labels`): no `model`, `rework` or
+    `role.outcome` — the sample names the system's own decision, never a cause
+    (ADR-0008, 2026-09-21 addendum)."""
     run = _run("Developer", "developer", "Developer: api", 0.1)
     run["cold_fallback"] = True
     with telemetry.role_span("Developer", "developer", "gym-saas") as run_span:
@@ -829,11 +835,8 @@ def test_role_finish_emits_cold_fallback_when_the_run_record_carries_it(metrics)
     assert dict(sample.attributes) == {
         "product": "gym-saas",
         "role": "Developer",
-        "model": "m",
-        "rework": False,
         "role.slug": "developer",
         "phase": "development",
-        "role.outcome": "delivered",
         "system.version": "abc1234",
     }
 
@@ -1100,6 +1103,7 @@ def test_failures_leave_one_sample_per_reason_with_the_count_and_the_cost(metric
         "role.slug": "pjm",
         "phase": "definition",
         "reason": "schema",
+        "system.version": "abc1234",
     }
     (cost,) = got["agentic.role.failure_cost_usd"]
     assert cost.value == pytest.approx(0.03)
@@ -1109,14 +1113,15 @@ def test_failures_leave_one_sample_per_reason_with_the_count_and_the_cost(metric
         "role.slug": "pjm",
         "phase": "definition",
         "reason": "schema",
+        "system.version": "abc1234",
     }
 
 
 def test_failures_emit_one_cold_fallback_sample_when_one_attempt_carries_it(metrics):
     """The cold fallback that still failed leaves its trace on `Failure`, not on any
     `RoleRun` (nothing delivered): `_emit_failures` is where that run's sample comes
-    from, the usual role label set for a failure (`common`, same as
-    `agentic.role.failures`), no `reason` split since only one fallback exists per run."""
+    from, `_cold_fallback_labels`'s own set, no `reason` split since only one
+    fallback exists per run."""
     patch = {
         "failures": [
             {
@@ -1154,6 +1159,7 @@ def test_failures_emit_one_cold_fallback_sample_when_one_attempt_carries_it(metr
         "role": "Developer",
         "role.slug": "developer",
         "phase": "development",
+        "system.version": "abc1234",
     }
 
 
@@ -1292,6 +1298,8 @@ def test_presubmit_checks_leave_one_set_of_samples_per_invocation_only_the_last_
         "product": "gym-saas",
         "role": "Developer",
         "role.slug": "developer",
+        "phase": "unknown",
+        "system.version": "abc1234",
         "check": "tests",
         "result": "green",
         "final": True,
@@ -1347,17 +1355,23 @@ def test_a_patchs_interview_stats_emit_rounds_questions_and_proposed_invariants(
     got = points(metrics)
     (rounds,) = got["agentic.interview.rounds"]
     assert rounds.value == 3
-    assert dict(rounds.attributes) == {"product": "gym-saas", "interview": "solution"}
+    assert dict(rounds.attributes) == {
+        "product": "gym-saas",
+        "interview": "solution",
+        "system.version": "abc1234",
+    }
     questions = {p.attributes["to"]: p.value for p in got["agentic.interview.questions"]}
     assert questions == {"interviewee": 3, "pm": 1, "human": 2}
     for point in got["agentic.interview.questions"]:
         assert point.attributes["product"] == "gym-saas"
         assert point.attributes["interview"] == "solution"
+        assert point.attributes["system.version"] == "abc1234"
     (proposed,) = got["agentic.interview.invariants"]
     assert proposed.value == 1
     assert dict(proposed.attributes) == {
         "product": "gym-saas",
         "interview": "solution",
+        "system.version": "abc1234",
         "state": "proposed",
     }
 
@@ -1408,3 +1422,98 @@ def test_the_version_is_the_shas_of_the_checkout_that_executes():
     version has to name the one whose code is doing the work (ADR-0017)."""
     assert telemetry.REPO == CHECKOUT
     assert (CHECKOUT / "agentic" / "shared" / "stage0.py").exists()
+
+
+def _maximal_patch() -> dict:
+    """The one patch every family this task versions can be read off of: the sole
+    fixture `test_every_versioned_metric_emits_the_labels_its_readme_row_documents`
+    builds for that purpose (no other test in this task may build a second one). One
+    run record with every optional field, a failure that shares its slug and section,
+    two presubmit invocations each with a green and a red check, and an interview with
+    questions to both recipients and its own adopted invariants."""
+    run = _run("Developer", "developer", "Developer: api", 0.5)
+    run |= {
+        "version": 2,
+        "tokens": {"input": 10, "output": 20, "cache_read": 5, "cache_write": 3},
+        "calls": 6,
+        "max_turns": 20,
+        "tool_calls": {"Read": 2, "Bash": 1},
+        "subagent_cost_usd": 0.05,
+        "cold_fallback": True,
+        "failed_cost_usd": 0.1,
+    }
+    failure = {
+        "role": "Developer",
+        "attempt": 1,
+        "error": "e",
+        "cost_usd": 0.02,
+        "session_id": "",
+        "reason": "schema",
+        "slug": "developer",
+        "section": "Developer: api",
+        "cold_fallback": True,
+    }
+    return {
+        "runs": [run],
+        "failures": [failure],
+        "cost_usd": 0.62,
+        "sections": {"Developer: api": "text"},
+        "presubmit_checks": [
+            [_check("tests", passed=True), _check("lint", passed=False)],
+            [_check("tests", passed=True), _check("format", passed=False)],
+        ],
+        "interview_stats": {
+            "interview": "solution",
+            "rounds": 2,
+            "questions_to_pm": 1,
+            "questions_to_human": 1,
+            "invariants_proposed": 2,
+        },
+        "invariants": ["Every X does Y"],
+    }
+
+
+# One (dotted name, unit) per family this task adds `system.version` to, in the plan's
+# own order, plus the two controls: `agentic.role.cost_usd` (must still equal its row)
+# and `agentic.role.duration` (must still equal its untouched three-key row — the same
+# fact `test_role_duration_labels_are_untouched_by_the_new_per_run_labels` checks
+# byte-identically, this is its equality-with-the-README companion).
+VERSIONED_METRICS = [
+    ("agentic.role.tokens", "tokens"),
+    ("agentic.role.calls", ""),
+    ("agentic.role.turns", ""),
+    ("agentic.role.max_turns", ""),
+    ("agentic.role.tool_calls", ""),
+    ("agentic.role.subagent_cost_usd", ""),
+    ("agentic.role.cold_fallback", ""),
+    ("agentic.role.failures", ""),
+    ("agentic.role.failure_cost_usd", ""),
+    ("agentic.presubmit.checks", ""),
+    ("agentic.presubmit.duration", "s"),
+    ("agentic.interview.rounds", ""),
+    ("agentic.interview.questions", ""),
+    ("agentic.interview.invariants", ""),
+    ("agentic.role.cost_usd", ""),
+    ("agentic.role.duration", "s"),
+]
+
+
+def test_every_versioned_metric_emits_the_labels_its_readme_row_documents(metrics):
+    """Union of label keys across a metric's own samples in one patch, never a
+    per-sample check (`tokens` carries `kind`, `tool_calls` carries `tool`, presubmit
+    carries `check`/`result`/`final`, all beside the shared set) and never a subset:
+    the union must equal the row exactly. A family that emits no sample at all on the
+    maximal patch fails with its own name in the message — a deleted emit site must
+    fail this test, never pass it by emitting nothing to compare."""
+    with telemetry.role_span("Developer", "developer", "gym-saas") as run:
+        run.finish(_maximal_patch())
+    got = points(metrics)
+    documented = _documented()
+    for dotted, unit in VERSIONED_METRICS:
+        samples = got.get(dotted)
+        assert samples, f"{dotted} emitted no sample"
+        emitted_labels: set[str] = set()
+        for sample in samples:
+            emitted_labels |= {key.replace(".", "_") for key in sample.attributes}
+        row = documented[_prom_name(dotted, unit)]
+        assert emitted_labels == row, dotted

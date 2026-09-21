@@ -50,8 +50,10 @@ del directorio ni del remoto de git. Lo que se mide es el sistema, no el product
 cada panel es `system_version` y `product` es un filtro (default All) y una covariable, la
 que muestra sobre qué mezcla de tareas corrió cada versión, para que una versión que tomó
 tareas más grandes no parezca peor. Ningún panel agrupa por producto salvo el de mezcla
-(ADR-0008, adenda; issues #47 y #24). Las métricas que todavía no llevan `system.version`
-(tokens, llamadas, turnos, herramientas, fallas, presubmit, entrevistas) se leen por rol.
+(ADR-0008, adenda; issues #47 y #24). `agentic.role.duration` es la única que se lee por
+rol: congelada en el grano del **nodo** (issue #24 la dejó así a propósito, ADR-0008,
+2026-09-18), la respuesta por corrida está en `agentic.role.run_duration`, que sí lleva
+`system.version`.
 
 Los spans nativos de Claude Code llevan prompts, respuestas y tool calls: se quedan en
 Langfuse. Si algún día hace falta verlos en Grafana, se cambia el filtro del collector, no
@@ -75,19 +77,25 @@ cerrada — nunca un id de tarea, un título, un id de sesión, una línea de co
 | `agentic.role.duration` | `product`, `role`, `role.outcome` | Tiempo de reloj del **nodo** (la patch entera, no la corrida) — sin cambios desde antes de esta tarea | s |
 | `agentic.role.run_duration` | ídem que `agentic.role.cost_usd` | Tiempo de reloj de **una corrida**, dentro del cupo de concurrencia (`ended_at` − `started_at`); ausente en una corrida grabada antes de este campo | s |
 | `agentic.role.queue_wait` | ídem | Segundos que esa corrida esperó un cupo de concurrencia, antes de empezar a correr; nunca incluido en `run_duration` | s |
-| `agentic.role.failures` | `product`, `role`, `role.slug`, `phase` (si la falla tiene sección), `reason` | Intentos fallidos de una patch, una muestra por motivo con el conteo como valor | — |
+| `agentic.role.failures` | `product`, `role`, `role.slug`, `phase` (si la falla tiene sección), `reason`, `system.version` | Intentos fallidos de una patch, una muestra por motivo con el conteo como valor | — |
 | `agentic.role.failure_cost_usd` | ídem | Costo de los intentos fallidos de una patch, por motivo. **No es aditivo con `agentic.role.cost_usd`**: el mismo dólar ya cuenta una vez, dentro del costo de una corrida que reintentó o dentro de la muestra residual | USD |
-| `agentic.role.tokens` | `product`, `role`, `model`, `rework`, `role.slug`, `phase`, `role.outcome` + `kind` | Tokens de **una corrida**, de `ResultMessage.usage`, una muestra por `kind` ∈ {input, output, cache_read, cache_write}; ausente en una corrida grabada antes de este campo o cuyo intento falló (un intento fallido no reporta tokens) | tokens |
+| `agentic.role.tokens` | `product`, `role`, `model`, `rework`, `role.slug`, `phase`, `role.outcome`, `system.version` + `kind` | Tokens de **una corrida**, de `ResultMessage.usage`, una muestra por `kind` ∈ {input, output, cache_read, cache_write}; ausente en una corrida grabada antes de este campo o cuyo intento falló (un intento fallido no reporta tokens) | tokens |
 | `agentic.role.calls` | ídem sin `kind` | Llamadas al modelo de esa corrida: una por `AssistantMessage` que el runner vio antes de la entrega — el SDK no distingue "llamada" de "turno" por sí solo, así que esta es la definición del sistema (`ClaudeSdkRunner.run_once`); ausente en una corrida grabada antes de este campo | — |
 | `agentic.role.turns` | ídem | `num_turns` de esa corrida, tal como lo reporta el SDK; a diferencia de las cuatro anteriores, siempre presente (el campo ya existía antes de esta tarea) | — |
 | `agentic.role.max_turns` | ídem que `agentic.role.turns` | El tope de turnos del rol al momento de esa corrida (`Role.max_turns`), con las mismas labels que `agentic.role.turns` para que un panel los grafique lado a lado; ausente en una corrida grabada antes de este campo | — |
 | `agentic.role.tool_calls` | ídem + `tool` | Bloques `tool_use` de esa corrida, una muestra por herramienta (Bash, Read, Edit, Write, Grep, Glob, Agent, Skill, StructuredOutput, `other` para cualquier otra incluidas las MCP); ausente en una corrida grabada antes de este campo | — |
 | `agentic.role.subagent_cost_usd` | ídem que `agentic.role.turns` | Lo que un sub-agente gastó de `cost_by_model` de esa corrida, todo modelo que no sea el del rol (ADR-0013). **No es aditivo con `agentic.role.cost_usd`**: ese dólar ya cuenta una vez, dentro del total de la corrida; ausente en una corrida grabada antes de este campo | USD |
+| `agentic.role.cold_fallback` | `product`, `role`, `role.slug`, `phase`, `system.version` | 1, una muestra por corrida (o intento fallido) que arrancó en frío porque `run_with_retry` descartó la sesión que el llamador pasaba y no había ninguna que reanudar (ADR-0004, sexta adenda). Sin `model`, `rework` ni `role.outcome`: nombra la decisión del sistema sobre el rol y la fase, nunca una causa (ADR-0008, adenda 2026-09-21) | — |
 
-Las seis últimas comparten las labels de `agentic.role.cost_usd` **sin `system.version`**:
-un panel de tokens agrupa por rol y modelo, nunca por el checkout que corrió (issue #24).
+El panel `$ / 1k tokens de salida, por rol y modelo` divide el costo de las corridas de
+un rol (`agentic.role.cost_usd`, intentos fallidos incluidos: esa métrica no separa la
+muestra de retrabajo de la primaria de una corrida que es ella misma retrabajo) sobre
+los tokens de salida de las corridas que los reportaron (`agentic.role.tokens{kind="output"}`);
+la muestra residual (`model=""`) no tiene corrida propia y por lo tanto ningún token, y
+queda fuera del denominador por eso. No es "dólar por token entregado": ninguna etiqueta
+separa el dólar de un intento fallido del dólar de la corrida que sí entregó.
 | `agentic.review.findings` | `product`, `severity`, `category`, `status`, `review.kind`, `system.version` | Hallazgos de una revisión: una muestra por celda (severidad, categoría, estado) con el conteo de hallazgos de esa revisión que caen ahí como valor. Nada si la revisión no dejó hallazgos | — |
-| `agentic.presubmit.checks` | `product`, `role`, `role.slug`, `phase` (si la patch tiene una corrida con veredicto), `check`, `result`, `final` | Una muestra por chequeo de cada invocación de la puerta de entrega que llegó a correr los chequeos: 1 si el chequeo pasó (`result=green`) o falló (`result=red`). Una entrega puede ser rechazada y reintentar dentro del mismo turno; solo la última invocación es `final=true` | — |
+| `agentic.presubmit.checks` | `product`, `role`, `role.slug`, `phase`, `system.version`, `check`, `result`, `final` | Una muestra por chequeo de cada invocación de la puerta de entrega que llegó a correr los chequeos: 1 si el chequeo pasó (`result=green`) o falló (`result=red`). Una entrega puede ser rechazada y reintentar dentro del mismo turno; solo la última invocación es `final=true` | — |
 | `agentic.presubmit.duration` | ídem | Cuánto tardó ese chequeo, en esa invocación | s |
 | `agentic.invocation.cost_usd` | `product`, `invocation.kind`, `system.version` | Lo que **esa invocación** (`run` o `resume`) gastó ella sola, nunca el acumulado de la tarea | USD |
 | `agentic.invocation.rework_usd` | ídem | Retrabajo de esa invocación sola | USD |
@@ -168,8 +176,8 @@ rechazada dos veces dentro del mismo turno deja tres juegos de muestras y no uno
 `role` y `role.slug` son los del nodo que corrió la puerta de entrega (Developer o
 Integrator), igual que en `agentic.role.failures`; `phase` sale de la corrida contra la
 que se escribió el veredicto de la patch (`target_run`, la misma fuente que la muestra
-residual), y falta cuando la patch no tiene una — por ejemplo un fallo antes de que el
-rol entregara nada.
+residual), nunca ausente (ADR-0008, 2026-09-18 segunda adenda): `unknown` cuando la
+patch no tiene una — por ejemplo un fallo antes de que el rol entregara nada.
 ## Métricas de entrevista
 
 Una entrevista (glossary: Entrevista, ADR-0014) deja sus propios conteos, leídos de
@@ -182,9 +190,9 @@ no deja ninguna de las tres.
 
 | Métrica | Labels | Valor | Unidad |
 |---|---|---|---|
-| `agentic.interview.rounds` | `product`, `interview` | Ciclos de pregunta-respuesta que completó la entrevista (no cuenta la ronda de cierre, que no le pregunta nada al entrevistado) | — |
-| `agentic.interview.questions` | `product`, `interview`, `to` | Preguntas de la entrevista por destino: una muestra por cada uno de {interviewee, pm, human} | — |
-| `agentic.interview.invariants` | `product`, `interview`, `state` | Invariantes propuestos por el entrevistador (`state=proposed`), y los que el plan adoptó de esa misma patch, cuando la patch trae su propia clave `invariants` (`state=adopted`, solo en la entrevista de solución) | — |
+| `agentic.interview.rounds` | `product`, `interview`, `system.version` | Ciclos de pregunta-respuesta que completó la entrevista (no cuenta la ronda de cierre, que no le pregunta nada al entrevistado) | — |
+| `agentic.interview.questions` | ídem + `to` | Preguntas de la entrevista por destino: una muestra por cada uno de {interviewee, pm, human} | — |
+| `agentic.interview.invariants` | ídem que `agentic.interview.rounds` + `state` | Invariantes propuestos por el entrevistador (`state=proposed`), y los que el plan adoptó de esa misma patch, cuando la patch trae su propia clave `invariants` (`state=adopted`, solo en la entrevista de solución) | — |
 
 `interview` ∈ {definition, solution} (`Interview.stage`, issue #28): la de definición la
 corre Product Analyst con PM, la de solución el Tech Lead efímero con Tech Lead. `to` ∈

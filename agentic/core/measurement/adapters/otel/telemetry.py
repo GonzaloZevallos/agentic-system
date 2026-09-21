@@ -560,15 +560,35 @@ class RoleRun(Run):
             "system.version": system_version(),
         }
 
+    def _cold_fallback_labels(self, role_slug: str, phase: str) -> dict[str, str]:
+        """The single label set of `agentic.role.cold_fallback`: `product`, `role`,
+        `role.slug`, `phase`, `system.version` — no `model`, `rework` or
+        `role.outcome`. Both `_emit_run` and `_emit_failures` call this rather than
+        spelling the set themselves, so the series never drifts between the two paths
+        that can produce it. The run path deliberately loses `model`, `rework` and
+        `role.outcome`: the sample records that the system dropped the caller's
+        session and started cold (ADR-0004, sixth addendum), a fact about the role and
+        the phase, not about a model (ADR-0008, 2026-09-21 addendum)."""
+        return {
+            "product": self.product,
+            "role": self.role,
+            "role.slug": role_slug,
+            "phase": phase,
+            "system.version": system_version(),
+        }
+
     def _emit_run(self, patch: TaskState, run: RoleRunRecord) -> None:
         """`agentic.role.cost_usd`, `.run_duration`, `.queue_wait`, plus the tokens,
         calls, turns, max turns, tool calls and sub-agent cost of this run record, one
-        record-and-flush. The token-family gauges drop `system.version` from the
-        labels (issue #24): a token panel groups by role and model, never by the
-        checkout that ran it. `tokens`, `calls`, `tool_calls`, `subagent_cost_usd` and
-        `max_turns` are absent on a run recorded before the field existed; `turns` is
-        not, so it is the one always emitted. `max_turns` shares `turns`'s own label
-        set (issue #81), so the two series line up in a panel without a join.
+        record-and-flush. Every one of those gauges now carries `agentic.role.cost_usd`'s
+        own label set verbatim, `system.version` included (ADR-0008, 2026-09-21
+        addendum: a token panel used to group by role and model alone, never by the
+        checkout that ran it — that decision changes so tokens, calls and turns can be
+        compared across versions too). `tokens`, `calls`, `tool_calls`,
+        `subagent_cost_usd` and `max_turns` are absent on a run recorded before the
+        field existed; `turns` is not, so it is the one always emitted. `max_turns`
+        shares `turns`'s own label set (issue #81), so the two series line up in a
+        panel without a join.
 
         `role_cost` here only ever carries this run's own delivering money (`cost_usd`
         minus `failed_cost_usd`, the fact `run_record` already recorded): a second,
@@ -580,7 +600,6 @@ class RoleRun(Run):
         labels = self._run_labels(patch, run)
         duration = system_metrics.run_duration_s(run)
         queue_wait = run.get("queue_wait_s")
-        token_labels = {k: v for k, v in labels.items() if k != "system.version"}
         tokens = run.get("tokens", {})
         tool_calls = run.get("tool_calls", {})
         failed_cost = run.get("failed_cost_usd", 0.0)
@@ -593,18 +612,19 @@ class RoleRun(Run):
             if queue_wait is not None:
                 i.role_queue_wait.set(queue_wait, labels)
             for kind, count in tokens.items():
-                i.role_tokens.set(count, {**token_labels, "kind": kind})
+                i.role_tokens.set(count, {**labels, "kind": kind})
             if "calls" in run:
-                i.role_calls.set(run["calls"], token_labels)
-            i.role_turns.set(run["turns"], token_labels)
+                i.role_calls.set(run["calls"], labels)
+            i.role_turns.set(run["turns"], labels)
             if "max_turns" in run:
-                i.role_max_turns.set(run["max_turns"], token_labels)
+                i.role_max_turns.set(run["max_turns"], labels)
             for tool, count in tool_calls.items():
-                i.role_tool_calls.set(count, {**token_labels, "tool": tool})
+                i.role_tool_calls.set(count, {**labels, "tool": tool})
             if "subagent_cost_usd" in run:
-                i.role_subagent_cost.set(run["subagent_cost_usd"], token_labels)
+                i.role_subagent_cost.set(run["subagent_cost_usd"], labels)
             if run.get("cold_fallback", False):
-                i.role_cold_fallback.set(1, labels)
+                cold_labels = self._cold_fallback_labels(labels["role.slug"], labels["phase"])
+                i.role_cold_fallback.set(1, cold_labels)
 
         self._emit(record)
 
@@ -650,11 +670,14 @@ class RoleRun(Run):
         `phase` is never absent (ADR-0008, 2026-09-18 second addendum): `unknown` when
         the failures carry no `section` to derive one from."""
         section = failures[0].get("section")
+        role_slug = failures[0].get("slug") or "unknown"
+        phase = phase_of(section) if section else "unknown"
         common: dict[str, str] = {
             "product": self.product,
             "role": self.role,
-            "role.slug": failures[0].get("slug") or "unknown",
-            "phase": phase_of(section) if section else "unknown",
+            "role.slug": role_slug,
+            "phase": phase,
+            "system.version": system_version(),
         }
         counts = system_metrics.failures_by_reason(failures)
         costs = system_metrics.failure_cost_by_reason(failures)
@@ -666,7 +689,8 @@ class RoleRun(Run):
             for reason, total in costs.items():
                 i.role_failure_cost.set(total, {**common, "reason": reason})
             if fell_back_cold:
-                i.role_cold_fallback.set(1, common)
+                cold_labels = self._cold_fallback_labels(role_slug, phase)
+                i.role_cold_fallback.set(1, cold_labels)
 
         self._emit(record)
 
@@ -703,16 +727,20 @@ class RoleRun(Run):
         the delivery, or the last the backstop let through — is `final`. `role` and
         `role.slug` are the node's own, like `_emit_failures`; `phase` comes from the
         run the patch's own verdict describes (`target_run`), the same source the
-        residual sample reads, since a `CheckResult` carries no section of its own."""
+        residual sample reads, since a `CheckResult` carries no section of its own —
+        never absent (ADR-0008, 2026-09-18 second addendum): `"unknown"` when the
+        patch has no such run, for example a failure before the role delivered
+        anything."""
         invocations = patch.get("presubmit_checks", [])
         last = len(invocations) - 1
+        target = system_metrics.target_run(patch)
         common: dict[str, str] = {
             "product": self.product,
             "role": self.role,
             "role.slug": self.slug or "unknown",
+            "phase": phase_of(target.get("section", target["role"])) if target else "unknown",
+            "system.version": system_version(),
         }
-        if target := system_metrics.target_run(patch):
-            common["phase"] = phase_of(target.get("section", target["role"]))
         for index, results in enumerate(invocations):
             final = index == last
 
@@ -734,7 +762,11 @@ class RoleRun(Run):
         the patch's own counts (`InterviewStats`, measurement-only). `adopted` is
         `None` unless the patch also carries the plan's own `invariants` — the solution
         stage's Tech Lead run, in the same patch as the interview that proposed them."""
-        common = {"product": self.product, "interview": stats["interview"]}
+        common = {
+            "product": self.product,
+            "interview": stats["interview"],
+            "system.version": system_version(),
+        }
         questions = system_metrics.interview_questions(stats)
 
         def record(i: Instruments) -> None:
