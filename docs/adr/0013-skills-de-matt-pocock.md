@@ -92,3 +92,21 @@ Descartado revisar sin la skill, con `git diff` y ADR-0012 a mano: la revisión 
 encontró un agujero real (imports relativos que esquivaban el test de arquitectura) y los
 dos ejes separados son lo que hace comparable una revisión con otra. Descartado poner toda
 la revisión en Sonnet: el veredicto queda en el modelo validador (README §10).
+
+## Adenda (2026-09-21): `resolving-merge-conflicts` deja de ser solo del integrador
+
+Esta ADR decía "Developer: `tdd`, y `resolving-merge-conflicts` solo el integrador", porque
+hasta ahora el único lugar donde un Developer se topaba con un merge sin aplicar era el
+integrador, resolviendo lo que el fan-in no pudo (ADR-0004, quinta adenda). La adenda de esa
+misma ADR de hoy (gym #16) reparte ese trabajo también a la subtarea que depende de otra: su
+propio Developer, en su propio worktree, resuelve el conflicto antes de empezar su brief, y es
+exactamente la misma skill, sobre el mismo tipo de conflicto — un bloque que dos ramas
+borraron por separado.
+
+`DEVELOPER.skills` pasa a `("tdd", "resolving-merge-conflicts")`, igual que
+`DEVELOPER_INTEGRATOR` ya tenía. Ningún prompt se edita — ni `developer.md` ni
+`developer_integrator.md` — porque el hard limit de esa subtarea los deja fuera de su diff:
+el aviso de qué está en conflicto y cómo resolverlo (`rules.merge_notice`) viaja por el
+mensaje del turno, no por el prompt del sistema, así que `prompts.fingerprint` de `developer`
+no se mueve. El test que antes fijaba `DEVELOPER.skills == ("tdd",)`
+(`tests/core/process/domain/test_stage_one.py`) pasa a comprobar el conjunto con las dos.
