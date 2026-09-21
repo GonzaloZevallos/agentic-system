@@ -376,6 +376,25 @@ nunca editado) como su esquema, sin presubmit cableado, para que lo único que d
 la entrega es válida sea el `output_format` del CLI mismo — la comparación de (iv) es
 contra eso, no contra un mecanismo que esta subtarea inventó.
 
+**Lo que `schema-guard` construyó sobre esta compuerta.** Un `SchemaGuard` (port propio
+en `application/ports.py`, distinto de `Presubmit` y sin ensancharlo) cuya única
+implementación, `RoleSchemaGuard`, envuelve `schemas.validate` sobre `role.schema` y el
+vocabulario de la corrida: la validez sigue siendo enteramente de `schemas.validate`, el
+guard sólo traduce lo que esa llamada ya rechazó a las claves exactas que faltan, más la
+línea de contrato ("son claves del JSON, no etiquetas dentro de `markdown`"). Corre en
+el mismo `PreToolUse` sobre `StructuredOutput` que la Puerta de entrega, en un único
+`HookMatcher` con un único callback compuesto: el guard primero, la puerta después, con
+corto circuito en la primera negación — el orden queda escrito en el código
+(`hooks._delivery_gate`), no heredado de cómo el SDK combinaría dos matchers propios.
+Deniega como mucho una vez por corrida (`domain.schema_guard.REFUSALS`); agotada esa
+vez deja pasar la entrega inválida, que termina donde termina hoy: `AttemptFailed
+(reason="schema")` desde `_attempt`, con el reintento de `run_with_retry` que ya
+entrega. La instancia y su contador se construyen una vez por corrida de rol, en
+`run_with_retry` y fuera del loop de intentos, para que el tope sobreviva al reintento;
+se cablea sólo para los roles que ejecutan (Developer, el integrador) — la condición
+vive en `run_with_retry`, y para todo otro rol `hooks_for` y `options_for` reciben
+`None` y quedan byte a byte como antes de este commit.
+
 ### Opciones descartadas
 
 - **Asumir por lectura de código que el rechazo era nuestro** (que `schemas.validate`
