@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Callable
 from typing import IO
 
 from claude_agent_sdk import AssistantMessage, Message, ResultMessage, StreamEvent, ToolUseBlock
@@ -25,11 +26,21 @@ class Printer:
     content (signature only) unless the model exposes it, so its label waits for text.
     """
 
-    def __init__(self, role_name: str, stream: IO[str] | None = None):
+    def __init__(
+        self,
+        role_name: str,
+        stream: IO[str] | None = None,
+        deliveries: Callable[[], int] | None = None,
+    ):
         self.role = role_name
         self.stream = stream or sys.stderr
         self._open: str | None = None  # kind of the content block being streamed
         self._labelled = False
+        # The runner's own count of calls to the delivery tool this attempt
+        # (glossary: Emisión de entrega), read at `done:` time; never derived from the
+        # `StreamEvent`s here, which only exist with `--verbose` and would show a
+        # block the model started and abandoned along with the ones it finished.
+        self._deliveries = deliveries or (lambda: 0)
 
     def __call__(self, message: Message) -> None:
         if isinstance(message, StreamEvent):
@@ -44,6 +55,10 @@ class Printer:
             self._close()
             cost = message.total_cost_usd or 0.0
             self._write(f"[{self.role}] done: {message.num_turns} turns, ${cost:.4f}\n")
+            # Byte-for-byte unchanged for a single emission (or none seen at all): the
+            # line only earns its place once there was more than one to explain.
+            if (count := self._deliveries()) > 1:
+                self._write(f"[{self.role}] {count} delivery emissions this attempt\n")
 
     def _event(self, event: dict) -> None:
         kind = event.get("type")

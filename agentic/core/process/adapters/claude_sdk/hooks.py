@@ -27,6 +27,13 @@ block: with `output_format` the turn ends at that tool call, `Stop` fires after 
 a block there is logged but ends the session anyway (spike of issue #22, SDK 0.2.152).
 A denied delivery call reaches the model as the reason, and it delivers again.
 
+The schema guard (glossary: Guarda de esquema; ADR-0011, fifth addendum) answers the
+same tool call, ahead of the presubmit: one `PreToolUse` matcher on the structured-
+output tool, one callback, guard first and presubmit second, written in that order
+here rather than left to how the SDK would combine two matchers of its own. A guard
+denial short-circuits the callback, so the presubmit never runs the product's checks
+over an input that is not even shaped right.
+
 The turn-budget notice (ADR-0004, seventh addendum; issue #85) is a `PostToolUse`
 matcher, wired only for a role `domain.turn_notice.margin_for` covers: it counts
 main-thread events (an event carrying `agent_id`, a sub-agent's own, is not this
@@ -50,7 +57,7 @@ from typing import Any
 import anyio
 from claude_agent_sdk import HookCallback, HookContext, HookInput, HookJSONOutput, HookMatcher
 
-from ...application.ports import Presubmit
+from ...application.ports import Presubmit, SchemaGuard
 from ...domain import turn_notice
 from ...domain.roles import Role
 
@@ -136,22 +143,28 @@ def hooks_for(
     cwd: Path,
     presubmit: Presubmit | None,
     on_notice: Callable[[], None] | None = None,
+    on_presubmit_denied: Callable[[], None] | None = None,
+    guard: SchemaGuard | None = None,
 ) -> dict[str, list[HookMatcher]]:
-    """The hooks of one run: the cage for a role that executes, the presubmit when
-    given, and the turn-budget notice for a role `turn_notice.margin_for` covers."""
+    """The hooks of one run: the cage for a role that executes, the schema guard and
+    the presubmit sharing one matcher on the delivery tool when either is given, and
+    the turn-budget notice for a role `turn_notice.margin_for` covers."""
     matchers: list[HookMatcher] = []
     if role.executes:
         matchers += [
             HookMatcher(matcher="Bash", hooks=[_bash(cwd)], timeout=GUARD_TIMEOUT_S),
             HookMatcher(matcher="Edit|Write", hooks=[_edit(cwd)], timeout=GUARD_TIMEOUT_S),
         ]
-    if presubmit is not None:
+    if guard is not None or presubmit is not None:
         matchers.append(
             HookMatcher(
                 matcher=DELIVERY_TOOL,
-                hooks=[_presubmit(presubmit)],
-                # The presubmit runs the product's checks: its own budget, plus the answer.
-                timeout=presubmit.timeout_s + GUARD_TIMEOUT_S,
+                hooks=[_delivery_gate(guard, presubmit, on_presubmit_denied)],
+                # The presubmit runs the product's checks: its own budget, plus the
+                # answer. The guard is in-process and fast, so it adds nothing here:
+                # `GUARD_TIMEOUT_S` alone already covers its share (unchanged from
+                # before the guard existed, when this was the presubmit's own timeout).
+                timeout=GUARD_TIMEOUT_S + (presubmit.timeout_s if presubmit is not None else 0.0),
             )
         )
     hooks: dict[str, list[HookMatcher]] = {}
@@ -232,13 +245,34 @@ def _turn_notice(role: Role, on_notice: Callable[[], None] | None) -> HookCallba
     return hook
 
 
-def _presubmit(presubmit: Presubmit) -> HookCallback:
+def _delivery_gate(
+    guard: SchemaGuard | None,
+    presubmit: Presubmit | None,
+    on_presubmit_denied: Callable[[], None] | None = None,
+) -> HookCallback:
+    """The one `PreToolUse` callback on the delivery tool: the schema guard first, the
+    presubmit second, the order this module's docstring promises written here in code
+    rather than left to how the SDK would combine two matchers on its own. Either
+    absent skips its own step. `on_presubmit_denied` counts only the presubmit's own
+    refusals (glossary: Puerta de entrega), the same closure shape `_deny_writes` has
+    for `denials`: a presubmit refusal is the gate working, never the re-emission of an
+    invalid shape a schema rejection is, and the two travel as separate counts."""
+
     async def hook(
         data: HookInput, tool_use_id: str | None, context: HookContext
     ) -> HookJSONOutput:
-        # The checks are subprocesses: off the event loop that talks to the CLI.
-        reason = await anyio.to_thread.run_sync(presubmit)
-        return _deny(reason) if reason else {}
+        if guard is not None:
+            reason = guard(_tool_input(data))
+            if reason:
+                return _deny(reason)
+        if presubmit is not None:
+            # The checks are subprocesses: off the event loop that talks to the CLI.
+            reason = await anyio.to_thread.run_sync(presubmit)
+            if reason:
+                if on_presubmit_denied is not None:
+                    on_presubmit_denied()
+                return _deny(reason)
+        return {}
 
     return hook
 

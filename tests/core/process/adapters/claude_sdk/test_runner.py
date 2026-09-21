@@ -719,6 +719,151 @@ async def test_a_fired_turn_notice_during_a_failed_attempt_still_reaches_attempt
     assert info.value.turn_notice is True
 
 
+async def test_raw_result_carries_the_delivery_tool_emissions(monkeypatch, tmp_path):
+    # The runner's own `tool_calls` counter for `StructuredOutput`, exposed as a
+    # dedicated field (glossary: Emisión de entrega): #32's repeated invalid re-emits
+    # inside one attempt are what this counts.
+    calls = AssistantMessage(
+        content=[
+            ToolUseBlock(id="1", name="StructuredOutput", input={"markdown": "a"}),
+            ToolUseBlock(id="2", name="StructuredOutput", input={"markdown": "b"}),
+        ],
+        model="m",
+    )
+    fake_query(monkeypatch, [calls, result()])
+    raw = await run_once(ClaudeSdkRunner(), tmp_path)
+    assert raw.deliveries == 2
+
+
+async def test_raw_result_deliveries_default_when_the_tool_was_never_called(monkeypatch, tmp_path):
+    fake_query(monkeypatch, [result()])
+    raw = await run_once(ClaudeSdkRunner(), tmp_path)
+    assert raw.deliveries == 0
+
+
+@pytest.mark.parametrize(
+    "build_messages",
+    [
+        # is_error
+        lambda extra: [*extra, result(is_error=True, subtype="error", errors=["boom"])],
+        # error_max_turns, as a `ResultMessage.subtype`
+        lambda extra: [*extra, result(subtype="error_max_turns", total_cost_usd=0.5)],
+        # error_max_budget_usd
+        lambda extra: [
+            *extra,
+            result(is_error=True, subtype="error_max_budget_usd", total_cost_usd=3.05),
+        ],
+        # no result message at all
+        lambda extra: extra,
+    ],
+)
+async def test_attemptfailed_carries_deliveries_on_every_result_based_failure(
+    monkeypatch, tmp_path, build_messages
+):
+    extra = [
+        AssistantMessage(
+            content=[
+                ToolUseBlock(id="1", name="StructuredOutput", input={}),
+                ToolUseBlock(id="2", name="StructuredOutput", input={}),
+            ],
+            model="m",
+        )
+    ]
+    fake_query(monkeypatch, build_messages(extra))
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(ClaudeSdkRunner(), tmp_path)
+    assert info.value.deliveries == 2
+
+
+async def test_attemptfailed_carries_deliveries_via_result_error(monkeypatch, tmp_path):
+    from claude_agent_sdk import ResultError
+
+    extra = AssistantMessage(
+        content=[ToolUseBlock(id="1", name="StructuredOutput", input={})], model="m"
+    )
+
+    async def query(prompt, options):
+        yield extra
+        yield result(is_error=True, subtype="error_max_turns", total_cost_usd=0.5)
+        raise ResultError("run failed", data={"subtype": "error_max_turns", "errors": ["x"]})
+
+    monkeypatch.setattr(module, "query", query)
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(ClaudeSdkRunner(), tmp_path)
+    assert info.value.deliveries == 1
+
+
+async def test_attemptfailed_carries_deliveries_on_an_sdk_exception(monkeypatch, tmp_path):
+    extra = AssistantMessage(
+        content=[ToolUseBlock(id="1", name="StructuredOutput", input={})], model="m"
+    )
+
+    async def query(prompt, options):
+        yield extra
+        raise RuntimeError("socket closed")
+
+    monkeypatch.setattr(module, "query", query)
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(ClaudeSdkRunner(), tmp_path)
+    assert info.value.deliveries == 1
+
+
+async def test_a_presubmit_denial_is_counted_on_the_raw_result(monkeypatch, tmp_path):
+    class FakePresubmit:
+        timeout_s = 1.0
+
+        def __call__(self):
+            return "suite red"
+
+    async def query(prompt, options):
+        (matcher,) = options.hooks["PreToolUse"]
+        (hook,) = matcher.hooks
+        await hook({"tool_name": "StructuredOutput", "tool_input": {}}, "t1", {"signal": None})
+        yield result()
+
+    monkeypatch.setattr(module, "query", query)
+    raw = await ClaudeSdkRunner().run_once(
+        PJM,
+        "p",
+        system_prompt="s",
+        model="m",
+        json_schema={},
+        cwd=tmp_path,
+        presubmit=FakePresubmit(),
+    )
+    assert raw.presubmit_denials == 1
+    assert raw.denials == 0  # a different fact: the SDK's own permission layer
+
+
+async def test_a_presubmit_denial_during_a_failed_attempt_still_reaches_attemptfailed(
+    monkeypatch, tmp_path
+):
+    class FakePresubmit:
+        timeout_s = 1.0
+
+        def __call__(self):
+            return "suite red"
+
+    async def query(prompt, options):
+        (matcher,) = options.hooks["PreToolUse"]
+        (hook,) = matcher.hooks
+        await hook({"tool_name": "StructuredOutput", "tool_input": {}}, "t1", {"signal": None})
+        yield result(subtype="error_max_turns", total_cost_usd=0.1)
+
+    monkeypatch.setattr(module, "query", query)
+    with pytest.raises(AttemptFailed) as info:
+        await ClaudeSdkRunner().run_once(
+            PJM,
+            "p",
+            system_prompt="s",
+            model="m",
+            json_schema={},
+            cwd=tmp_path,
+            presubmit=FakePresubmit(),
+        )
+    assert info.value.presubmit_denials == 1
+
+
 async def test_a_role_with_no_margin_never_gets_the_turn_notice_hook_wired(monkeypatch, tmp_path):
     seen = fake_query(monkeypatch, [result()])
     await run_once(ClaudeSdkRunner(), tmp_path)
@@ -745,3 +890,53 @@ async def test_the_presubmit_becomes_a_hook_on_the_delivery_call(monkeypatch, tm
     )
     (matcher,) = seen[0][1].hooks["PreToolUse"]
     assert matcher.matcher == "StructuredOutput" and matcher.timeout > 300.0
+
+
+class FakeGuard:
+    def __init__(self, *reasons):
+        self.reasons = list(reasons)
+        self.refusals = 0
+
+    def __call__(self, tool_input):
+        return self.reasons.pop(0) if self.reasons else None
+
+
+async def test_the_guard_becomes_a_hook_on_the_delivery_call(monkeypatch, tmp_path):
+    seen = fake_query(monkeypatch, [result()])
+    await ClaudeSdkRunner().run_once(
+        PJM,
+        "p",
+        system_prompt="s",
+        model="m",
+        json_schema={},
+        cwd=tmp_path,
+        guard=FakeGuard(),
+    )
+    (matcher,) = seen[0][1].hooks["PreToolUse"]
+    assert matcher.matcher == "StructuredOutput"
+
+
+def test_options_for_wires_the_guard_ahead_of_the_presubmit(tmp_path):
+    class FakePresubmit:
+        timeout_s = 1.0
+
+        def __call__(self):
+            return "suite red"
+
+    options = options_for(
+        PJM,
+        system_prompt="s",
+        model="m",
+        json_schema={},
+        cwd=tmp_path,
+        resume=None,
+        max_budget_usd=None,
+        traceparent=None,
+        partial=False,
+        env={},
+        resource_attributes=None,
+        presubmit=FakePresubmit(),
+        guard=FakeGuard("missing `summary`"),
+    )
+    (matcher,) = options.hooks["PreToolUse"]
+    assert matcher.matcher == "StructuredOutput"

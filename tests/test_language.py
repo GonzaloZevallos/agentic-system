@@ -9,7 +9,15 @@ from typing import get_args, get_type_hints
 from agentic.core.knowledge.domain import knowledge, stack
 from agentic.core.measurement.adapters.otel import telemetry
 from agentic.core.measurement.domain import metrics
-from agentic.core.process.domain import document, presubmit, roles, rules, schemas, task
+from agentic.core.process.domain import (
+    document,
+    presubmit,
+    roles,
+    rules,
+    schema_guard,
+    schemas,
+    task,
+)
 from agentic.shared import configuration
 from tests.test_architecture import ALLOWED
 
@@ -37,6 +45,7 @@ TYPES = {
     "Reanudación": rules.resumed,
     "Decisión del humano": rules.human_section,
     "Puerta de entrega": presubmit,
+    "Guarda de esquema": schema_guard,
     "Stack del producto": stack,
 }
 

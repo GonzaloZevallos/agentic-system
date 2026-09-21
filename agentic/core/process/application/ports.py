@@ -60,6 +60,21 @@ class RawResult:
     # every other role, which never gets that hook wired at all (the same shape
     # `denials` has for a role that executes).
     turn_notice: bool = False
+    # `tool_calls[DELIVERY_TOOL]` (glossary: Emisión de entrega), exposed as its own
+    # field because an attempt that never delivers still needs the number: `tool_calls`
+    # itself is only returned on the happy path, while this travels through
+    # `AttemptFailed` too (`ClaudeSdkRunner.run_once`'s own local counter, read before
+    # every one of its six raise sites). `0` means this attempt saw no call to the
+    # delivery tool at all, never "unknown".
+    deliveries: int = 0
+    # Denials the presubmit itself issued during this run (glossary: Puerta de
+    # entrega), off the same closure shape `denials` has for `_deny_writes`
+    # (`hooks._presubmit`'s own `on_denied`). A different fact from `deliveries`: a
+    # presubmit denial is the gate working as designed, never a re-emission of an
+    # invalid shape, and a different fact from `denials`, which is the SDK's own
+    # permission layer denying a role that does not execute. `0` for every run whose
+    # presubmit never refused, which is every run with no presubmit wired at all.
+    presubmit_denials: int = 0
 
 
 class AttemptFailed(Exception):
@@ -85,6 +100,8 @@ class AttemptFailed(Exception):
         reason: FailureReason = "other",
         denials: int = 0,
         turn_notice: bool = False,
+        deliveries: int = 0,
+        presubmit_denials: int = 0,
     ):
         super().__init__(motive(error, reason))
         self.cost_usd = cost_usd
@@ -98,6 +115,14 @@ class AttemptFailed(Exception):
         # (`RawResult.turn_notice`'s own docstring); `False` at every raise site but
         # the runner's own.
         self.turn_notice = turn_notice
+        # Calls to the delivery tool this attempt saw before it broke
+        # (`RawResult.deliveries`' own docstring); `0` means none were seen, never
+        # "unknown" -- every one of the runner's six raise sites sets it from the same
+        # local counter, so no site defaults it by omission.
+        self.deliveries = deliveries
+        # Presubmit denials this attempt saw before it broke (`RawResult.presubmit_
+        # denials`'s own docstring); `0` at every raise site but the runner's own.
+        self.presubmit_denials = presubmit_denials
 
 
 class Presubmit(Protocol):
@@ -110,6 +135,25 @@ class Presubmit(Protocol):
     def __call__(self) -> str | None: ...
 
 
+class SchemaGuard(Protocol):
+    """Asked with the model's own `tool_input` before its structured-output call even
+    reaches the CLI's own rejection (glossary: Guarda de esquema; ADR-0011, fifth
+    addendum: a `PreToolUse` on that tool sees the exact same input the CLI's schema
+    check and, downstream, `schemas.validate` would). Denies with `schemas.validate`'s
+    own reason -- the only source of validity in the whole mechanism, never a second
+    opinion this decides on its own -- so the model reads the missing keys inside the
+    same turn instead of the CLI's generic message or nothing at all.
+
+    Not `Presubmit`: that door is commit, clean tree, product checks, and this one
+    never looks at any of it. `refusals` is the instance's own count, capped by the
+    implementation (`RoleSchemaGuard`, `domain.schema_guard.REFUSALS`) the same way
+    `CheckoutPresubmit.refusals` caps the Puerta de entrega's."""
+
+    refusals: int
+
+    def __call__(self, tool_input: dict[str, Any]) -> str | None: ...
+
+
 class RoleRunner(Protocol):
     """Runs one attempt of a role and hands back what the model produced, raw.
 
@@ -117,7 +161,9 @@ class RoleRunner(Protocol):
     read off the `Role` itself. `resume` continues an earlier session of the same
     role: an interview is one session per participant (ADR-0014). `max_budget_usd`
     caps the money of this one run; `None` is no cap. `presubmit`, when given, is asked
-    each time the model hands back its delivery, and refuses it with a reason."""
+    each time the model hands back its delivery, and refuses it with a reason. `guard`,
+    when given, is asked with that same call's own `tool_input` before the presubmit,
+    and may deny it first (`SchemaGuard`'s own docstring)."""
 
     async def run_once(
         self,
@@ -131,6 +177,7 @@ class RoleRunner(Protocol):
         resume: str | None = None,
         max_budget_usd: float | None = None,
         presubmit: Presubmit | None = None,
+        guard: SchemaGuard | None = None,
     ) -> RawResult: ...
 
 

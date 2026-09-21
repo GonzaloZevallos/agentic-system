@@ -222,6 +222,56 @@ async def test_the_presubmit_answers_the_delivery_call():
     assert hooked.timeout >= presubmit.timeout_s
 
 
+class FakeGuard:
+    def __init__(self, *reasons):
+        self.reasons = list(reasons)
+        self.refusals = 0
+        self.seen: list[dict] = []
+
+    def __call__(self, tool_input):
+        self.seen.append(tool_input)
+        return self.reasons.pop(0) if self.reasons else None
+
+
+async def test_the_guard_answers_the_delivery_call():
+    guard = FakeGuard("missing `summary`, `assumptions`")
+    matchers = hooks.hooks_for(DEVELOPER, CWD, None, guard=guard)
+    payload = {"tool_name": hooks.DELIVERY_TOOL, "tool_input": {"markdown": "x"}}
+    reasons = denied(await call(matchers, "PreToolUse", payload))
+    assert reasons == ["missing `summary`, `assumptions`"]
+    assert guard.seen == [{"markdown": "x"}]
+
+
+def test_the_guard_and_the_presubmit_share_one_matcher():
+    matchers = hooks.hooks_for(DEVELOPER, CWD, FakePresubmit(), guard=FakeGuard())["PreToolUse"]
+    delivery_matchers = [m for m in matchers if m.matcher == hooks.DELIVERY_TOOL]
+    assert len(delivery_matchers) == 1
+
+
+async def test_the_guard_runs_before_the_presubmit_and_short_circuits_it():
+    guard = FakeGuard("bad shape")
+    presubmit = FakePresubmit("suite red")
+    matchers = hooks.hooks_for(DEVELOPER, CWD, presubmit, guard=guard)
+    payload = {"tool_name": hooks.DELIVERY_TOOL, "tool_input": {"markdown": "x"}}
+    assert denied(await call(matchers, "PreToolUse", payload)) == ["bad shape"]
+    assert presubmit.calls == 0  # never reached: the guard's own denial already answered
+
+
+async def test_the_presubmit_still_answers_once_the_guard_lets_the_call_through():
+    guard = FakeGuard()  # nothing to deny
+    presubmit = FakePresubmit("suite red")
+    matchers = hooks.hooks_for(DEVELOPER, CWD, presubmit, guard=guard)
+    payload = {"tool_name": hooks.DELIVERY_TOOL, "tool_input": {"markdown": "x"}}
+    assert denied(await call(matchers, "PreToolUse", payload)) == ["suite red"]
+    assert presubmit.calls == 1
+
+
+def test_a_guard_with_no_presubmit_keeps_the_bare_guard_timeout():
+    matchers = hooks.hooks_for(DEVELOPER, CWD, None, guard=FakeGuard())["PreToolUse"]
+    (hooked,) = [m for m in matchers if m.matcher == hooks.DELIVERY_TOOL]
+    assert hooked.timeout == hooks.GUARD_TIMEOUT_S
+
+
 def test_only_developer_roles_get_the_turn_notice_hook():
     # The conservative default (`domain/turn_notice.margin_for`'s own docstring): a
     # role that executes but is not named in `TURN_NOTICE_MARGIN_TURNS` gets no hook,

@@ -151,6 +151,17 @@ class Failure(TypedDict):
     # failure recorded before this field existed, which reads as `False`
     # (`run_role._run_notice`'s own `.get(..., False)`).
     turn_notice: NotRequired[bool]
+    # Calls to the delivery tool this attempt saw before it failed (glossary: Emisión
+    # de entrega), off `RawResult.deliveries`/`AttemptFailed.deliveries`. Absent on a
+    # failure recorded before this field existed, which reads as `0`
+    # (`run_role._run_deliveries`'s own `.get(..., 0)`) -- never "unknown".
+    deliveries: NotRequired[int]
+    # Denials the presubmit itself issued during this attempt (glossary: Puerta de
+    # entrega), off `RawResult.presubmit_denials`/`AttemptFailed.presubmit_denials`; a
+    # different fact from `deliveries` above and from `denials`, never folded into
+    # either. Absent on a failure recorded before this field existed, which reads
+    # as `0`.
+    presubmit_denials: NotRequired[int]
 
 
 class RoleRun(TypedDict):
@@ -233,6 +244,19 @@ class RoleRun(TypedDict):
     # attempt's, the same split `denials` already has. Absent on a run recorded before
     # this field existed, which reads as `False`.
     turn_notice: NotRequired[bool]
+    # Calls to the delivery tool during the delivering attempt (glossary: Emisión de
+    # entrega), off `RawResult.deliveries`. The run's total, for the section note
+    # (`rules.deliveries_note`), also folds in every recorded `Failure.deliveries`:
+    # this field alone is only the delivering attempt's, the same split `denials`
+    # already has. Absent on a run recorded before this field existed, which reads
+    # as `0`.
+    deliveries: NotRequired[int]
+    # Denials the presubmit itself issued during the delivering attempt (glossary:
+    # Puerta de entrega), off `RawResult.presubmit_denials`. A different fact from
+    # `deliveries` above: the gate working as designed, never a re-emission of an
+    # invalid shape. Absent on a run recorded before this field existed, which reads
+    # as `0`.
+    presubmit_denials: NotRequired[int]
 
 
 class InterviewStats(TypedDict):
