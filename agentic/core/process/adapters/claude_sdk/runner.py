@@ -39,6 +39,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import IO, Any
 
+import anyio
 from claude_agent_sdk import (
     AssistantMessage,
     CanUseTool,
@@ -219,9 +220,13 @@ class ClaudeSdkRunner:
         # sites and the `Printer` (which only reads it, never derives its own count
         # from the `StreamEvent`s that only exist with `--verbose`) see the one number.
         tool_calls: dict[str, int] = {}
+        # The sink decides whether the stream is watched, not `verbose`: with a log file
+        # composed in, a role's tool lines, its `done:` line and the sub-agent warning
+        # always reach it. `verbose` alone still decides `include_partial_messages`
+        # below, the deltas `Printer` shows when it is watching (README.md, 14; #33).
         observer = (
             Printer(role.name, self.stream, lambda: tool_calls.get(DELIVERY_TOOL, 0))
-            if self.verbose
+            if self.stream is not None
             else None
         )
 
@@ -246,7 +251,7 @@ class ClaudeSdkRunner:
             resume=resume,
             max_budget_usd=max_budget_usd,
             traceparent=self.telemetry.traceparent(),
-            partial=observer is not None,
+            partial=self.verbose,
             env=self.env,
             # The real inherited value, not `self.env` (the git identity overlay
             # composition builds on top of it): the process this runner itself is in
@@ -263,12 +268,17 @@ class ClaudeSdkRunner:
         result: ResultMessage | None = None
         background = 0
         calls = 0
+        # The last main-thread `AssistantMessage.usage` seen: what a cancellation
+        # writes as its lower bound, never a sub-agent's (invariant 10).
+        main_usage: dict[str, Any] | None = None
         try:
             async for message in query(prompt=prompt, options=options):
                 if observer is not None:
                     observer(message)
                 if isinstance(message, AssistantMessage):
                     calls += 1
+                    if message.parent_tool_use_id is None:
+                        main_usage = message.usage
                     for name in _tool_names(message):
                         tool_calls[name] = tool_calls.get(name, 0) + 1
                 background += _background_agents(message)
@@ -276,6 +286,17 @@ class ClaudeSdkRunner:
                     result = message
                     if _delivered(message):
                         break  # the first delivery is the verdict (module docstring)
+        except anyio.get_cancelled_exc_class():
+            # Never an `AttemptFailed`: the process is being asked to die, and turning
+            # this into a retry would spend money while it happens (invariant 9). The
+            # figure is a read, never a sum, off the same normaliser `_usage` uses.
+            usage = _usage(main_usage)
+            self._warn(
+                f"[{role.name}] interrupted after {calls} turns, {usage['input']} input / "
+                f"{usage['output']} output tokens seen on the main thread, sub-agents "
+                "not counted, cost unknown\n"
+            )
+            raise
         except ResultError as exc:
             # The CLI reports the failed result, then exits non-zero; the SDK turns
             # that into ResultError after yielding the ResultMessage.
@@ -359,7 +380,7 @@ class ClaudeSdkRunner:
             denials=denials,
             turn_notice=notice_fired,
             cost_by_model=_cost_by_model(result),
-            usage=_usage(result),
+            usage=_usage(result.usage),
             calls=calls,
             tool_calls=tool_calls,
             deliveries=tool_calls.get(DELIVERY_TOOL, 0),
@@ -436,12 +457,15 @@ def _tool_names(message: AssistantMessage) -> list[str]:
     ]
 
 
-def _usage(result: ResultMessage | None) -> dict[str, int]:
-    """The delivering result's token usage, normalised to the closed `kind` set
-    `agentic.role.tokens` groups by. `RawResult.usage`'s own docstring has the
-    evidence for why this is a direct read, never a subtraction against an earlier
-    call. Zeroed when the SDK reports none."""
-    raw = (result.usage if result else None) or {}
+def _usage(usage: dict[str, Any] | None) -> dict[str, int]:
+    """A token usage payload, normalised to the closed `kind` set `agentic.role.tokens`
+    groups by. `RawResult.usage`'s own docstring has the evidence for why this is a
+    direct read, never a subtraction against an earlier call: fed a `ResultMessage`'s
+    `usage` for a delivered attempt, or an interrupted one's last main-thread
+    `AssistantMessage.usage` (invariant 10) -- the one normaliser either way, never a
+    second token-counting function. Zeroed when there is none to read.
+    """
+    raw = usage or {}
     return {
         "input": raw.get("input_tokens", 0),
         "output": raw.get("output_tokens", 0),

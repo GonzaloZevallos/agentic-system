@@ -3,6 +3,7 @@
 import io
 from dataclasses import replace
 
+import anyio
 import pytest
 from claude_agent_sdk import (
     AssistantMessage,
@@ -269,16 +270,79 @@ async def test_a_result_without_a_delivery_does_not_end_the_run(monkeypatch, tmp
     # Only a delivery ends the run early: a result without one leaves the stream to
     # the SDK, as before, and the last result is what counts. Without background
     # sub-agents there is nothing to warn about, verbose or not.
+    #
+    # Behaviour changed here (#33): a sink now decides whether the stream is observed,
+    # not `verbose` -- so `stream=buffer` with `verbose=False` (the default) still gets
+    # a `done:` line per result, where it used to get nothing.
     empty = result(structured_output=None, num_turns=1)
     fake_query(monkeypatch, [empty, result(num_turns=2)])
     buffer = io.StringIO()
     raw = await run_once(ClaudeSdkRunner(stream=buffer), tmp_path)
     assert raw.structured_output == DELIVERY and raw.turns == 2
-    assert buffer.getvalue() == ""
+    assert "[PjM] done: 1 turns" in buffer.getvalue()
+    assert "[PjM] done: 2 turns" in buffer.getvalue()
 
     fake_query(monkeypatch, [empty])
     raw = await run_once(ClaudeSdkRunner(stream=buffer), tmp_path)
     assert raw.structured_output is None  # the use case's failure, not the runner's
+
+
+async def test_a_sink_observes_the_stream_even_when_verbose_is_false(monkeypatch, tmp_path):
+    # The sink decides whether the stream is watched (module docstring, #33); `verbose`
+    # only decides `include_partial_messages`, the fine-grained deltas. A role's tool
+    # lines, its `done:` line and the sub-agent warning all reach the sink either way.
+    launched = AssistantMessage(
+        content=[
+            ToolUseBlock(id="a1", name="Agent", input={"prompt": "x", "run_in_background": True}),
+            ToolUseBlock(id="a2", name="Read", input={"path": "y"}),
+        ],
+        model="m",
+    )
+    seen = fake_query(
+        monkeypatch,
+        [launched, result(structured_output=DELIVERY, num_turns=3, total_cost_usd=0.1)],
+    )
+    buffer = io.StringIO()
+    raw = await run_once(ClaudeSdkRunner(stream=buffer, verbose=False), tmp_path)
+    assert raw.structured_output == DELIVERY
+    assert seen[0][1].include_partial_messages is False  # verbose alone gates deltas
+    written = buffer.getvalue()
+    assert '[PjM] tool Read {"path": "y"}' in written
+    assert "[PjM] done: 3 turns, $0.1000" in written
+    assert "delivered with 1 sub-agent(s) launched in the background" in written
+
+
+async def test_a_cancelled_stream_writes_the_token_line_once_and_reraises_unchanged(
+    monkeypatch, tmp_path
+):
+    # SIGTERM/SIGHUP cancel the invocation (the `signals` subtask); the cancellation
+    # must never become an `AttemptFailed`, a retry or a `Failure` entry (invariant 9).
+    # The token figure is a read off the last main-thread `AssistantMessage.usage`, fed
+    # through the same normaliser `_usage` uses -- never a sum, sub-agents never counted
+    # (invariant 10).
+    main_usage = {"input_tokens": 5, "output_tokens": 7}
+    main = AssistantMessage(content=[], model="m", parent_tool_use_id=None, usage=main_usage)
+    sub_agent = AssistantMessage(
+        content=[],
+        model="m",
+        parent_tool_use_id="sub-1",
+        usage={"input_tokens": 999, "output_tokens": 999},
+    )
+
+    async def query(prompt, options):
+        yield main
+        yield sub_agent
+        raise anyio.get_cancelled_exc_class()()
+
+    monkeypatch.setattr(module, "query", query)
+    buffer = io.StringIO()
+    with pytest.raises(anyio.get_cancelled_exc_class()):
+        await run_once(ClaudeSdkRunner(stream=buffer), tmp_path)
+    written = buffer.getvalue()
+    assert written.count("interrupted") == 1
+    assert "[PjM] interrupted after 2 turns, 5 input / 7 output tokens seen on the main " in written
+    assert "sub-agents not counted, cost unknown" in written
+    assert "999" not in written  # the sub-agent's usage never counted
 
 
 async def test_sdk_exceptions_are_attempt_failures(monkeypatch, tmp_path):
