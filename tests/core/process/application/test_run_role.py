@@ -72,6 +72,8 @@ async def test_retry_passes_the_error_and_sums_cost():
             "cold_fallback": False,
             "denials": 0,
             "turn_notice": False,
+            "deliveries": 0,
+            "presubmit_denials": 0,
         }
     ]
     # No session survived the failure: the retry starts over, the error appended.
@@ -459,6 +461,8 @@ async def test_run_role_builds_the_patch_and_the_history(tmp_path):
         "failed_cost_usd": 0.0,
         "denials": 0,
         "turn_notice": False,
+        "deliveries": 0,
+        "presubmit_denials": 0,
     }
     # Timed inside the concurrency slot: started no later than ended, both ISO-8601 UTC.
     assert started_at <= ended_at
@@ -519,6 +523,16 @@ def test_run_record_carries_the_delivering_attempts_denials():
 def test_run_record_carries_the_delivering_attempts_turn_notice():
     output = Output(text="ok", data={}, turn_notice=True)
     assert run_record({}, PJM, "PjM", output)["turn_notice"] is True
+
+
+def test_run_record_carries_the_delivering_attempts_deliveries():
+    output = Output(text="ok", data={}, deliveries=3)
+    assert run_record({}, PJM, "PjM", output)["deliveries"] == 3
+
+
+def test_run_record_carries_the_delivering_attempts_presubmit_denials():
+    output = Output(text="ok", data={}, presubmit_denials=1)
+    assert run_record({}, PJM, "PjM", output)["presubmit_denials"] == 1
 
 
 async def test_run_role_appends_the_turn_notice_note_when_the_delivery_had_one(tmp_path):

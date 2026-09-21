@@ -717,6 +717,21 @@ def denial_note(role: Role, count: int) -> str:
     return system_note(f"The system denied {count} write attempt{plural}: {denial_for(role)}")
 
 
+def deliveries_note(count: int) -> str:
+    """The trace repeated calls to the delivery tool leave on the run's section
+    (glossary: Emisión de entrega): one line, system-written, only when the run had
+    more than one -- the same seam `denial_note`/`cold_fallback_note`/
+    `turn_notice.notice_note` use, so a run that spent turns re-emitting an invalid
+    shape (issue #32) is legible without opening logs. `count` is the run's total, the
+    delivering attempt's plus every recorded failure's (`run_role._run_deliveries`'s
+    own fold, the same shape `denial_note`'s `count` has): attempt 1 can spend several
+    emissions on a shape the schema keeps rejecting and attempt 2 still deliver on its
+    first try."""
+    return system_note(
+        f"the delivery tool was called {count} times over this run before it delivered"
+    )
+
+
 def cold_fallback_note() -> str:
     """The trace a dropped caller session leaves on the delivered path (ADR-0004, sixth
     addendum): system-written, at the same seam as the presubmit record, never asked of

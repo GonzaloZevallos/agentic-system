@@ -61,7 +61,7 @@ from ...domain.rules import ReportedFailure, exception_motive, failure_motive, m
 from ...domain.task import FailureReason
 from ..plugins import PLUGIN, PLUGIN_DIR
 from ..telemetry import NoTelemetry, Telemetry
-from .hooks import hooks_for
+from .hooks import DELIVERY_TOOL, hooks_for
 from .printer import Printer
 from .schema import inline_refs
 
@@ -91,6 +91,7 @@ def options_for(
     presubmit: Presubmit | None = None,
     on_denied: Callable[[], None] | None = None,
     on_notice: Callable[[], None] | None = None,
+    on_presubmit_denied: Callable[[], None] | None = None,
 ) -> ClaudeAgentOptions:
     tools, allowed = list(role.tools), list(role.allowed)
     if role.skills and SKILL_TOOL not in tools:
@@ -128,7 +129,7 @@ def options_for(
         # runner's own git-identity overlay, which does not carry it in production) --
         # composing off `env` would overwrite whatever the real process inherited.
         env=_child_env(env, role, traceparent, resource_attributes),
-        hooks=hooks_for(role, cwd, presubmit, on_notice) or None,
+        hooks=hooks_for(role, cwd, presubmit, on_notice, on_presubmit_denied) or None,
         # A role that executes runs under `bypassPermissions`, which already shadows
         # this callback for every call (the SDK's own warning); wiring one there would
         # be dead code the hooks cage already replaces (ADR-0011, addendum). For a role
@@ -209,9 +210,18 @@ class ClaudeSdkRunner:
         max_budget_usd: float | None = None,
         presubmit: Presubmit | None = None,
     ) -> RawResult:
-        observer = Printer(role.name, self.stream) if self.verbose else None
         denials = 0
         notice_fired = False
+        presubmit_denials = 0
+        # Defined before the observer and the `async for` below, so both the six raise
+        # sites and the `Printer` (which only reads it, never derives its own count
+        # from the `StreamEvent`s that only exist with `--verbose`) see the one number.
+        tool_calls: dict[str, int] = {}
+        observer = (
+            Printer(role.name, self.stream, lambda: tool_calls.get(DELIVERY_TOOL, 0))
+            if self.verbose
+            else None
+        )
 
         def _count_denial() -> None:
             nonlocal denials
@@ -220,6 +230,10 @@ class ClaudeSdkRunner:
         def _mark_notice() -> None:
             nonlocal notice_fired
             notice_fired = True
+
+        def _count_presubmit_denial() -> None:
+            nonlocal presubmit_denials
+            presubmit_denials += 1
 
         options = options_for(
             role,
@@ -240,12 +254,12 @@ class ClaudeSdkRunner:
             presubmit=presubmit,
             on_denied=_count_denial,
             on_notice=_mark_notice,
+            on_presubmit_denied=_count_presubmit_denial,
         )
 
         result: ResultMessage | None = None
         background = 0
         calls = 0
-        tool_calls: dict[str, int] = {}
         try:
             async for message in query(prompt=prompt, options=options):
                 if observer is not None:
@@ -271,6 +285,8 @@ class ClaudeSdkRunner:
                     reason="max_turns",
                     denials=denials,
                     turn_notice=notice_fired,
+                    deliveries=tool_calls.get(DELIVERY_TOOL, 0),
+                    presubmit_denials=presubmit_denials,
                 ) from exc
             raise AttemptFailed(
                 failure_motive(_reported_error(exc)),
@@ -279,6 +295,8 @@ class ClaudeSdkRunner:
                 reason=_reason_for_subtype(exc.subtype),
                 denials=denials,
                 turn_notice=notice_fired,
+                deliveries=tool_calls.get(DELIVERY_TOOL, 0),
+                presubmit_denials=presubmit_denials,
             ) from exc
         except Exception as exc:  # the SDK raises its own hierarchy; all of it is a failure
             raise AttemptFailed(
@@ -286,6 +304,8 @@ class ClaudeSdkRunner:
                 reason="sdk",
                 denials=denials,
                 turn_notice=notice_fired,
+                deliveries=tool_calls.get(DELIVERY_TOOL, 0),
+                presubmit_denials=presubmit_denials,
             ) from exc
 
         if result is None:
@@ -294,6 +314,8 @@ class ClaudeSdkRunner:
                 reason="sdk",
                 denials=denials,
                 turn_notice=notice_fired,
+                deliveries=tool_calls.get(DELIVERY_TOOL, 0),
+                presubmit_denials=presubmit_denials,
             )
         if background and _delivered(result):
             # The prompt forbids it; when the model does it anyway, whatever those
@@ -312,6 +334,8 @@ class ClaudeSdkRunner:
                 reason="max_turns",
                 denials=denials,
                 turn_notice=notice_fired,
+                deliveries=tool_calls.get(DELIVERY_TOOL, 0),
+                presubmit_denials=presubmit_denials,
             )
         if result.is_error:
             raise AttemptFailed(
@@ -321,6 +345,8 @@ class ClaudeSdkRunner:
                 reason=_reason_for_subtype(result.subtype or ""),
                 denials=denials,
                 turn_notice=notice_fired,
+                deliveries=tool_calls.get(DELIVERY_TOOL, 0),
+                presubmit_denials=presubmit_denials,
             )
         return RawResult(
             structured_output=result.structured_output,
@@ -333,6 +359,8 @@ class ClaudeSdkRunner:
             usage=_usage(result),
             calls=calls,
             tool_calls=tool_calls,
+            deliveries=tool_calls.get(DELIVERY_TOOL, 0),
+            presubmit_denials=presubmit_denials,
         )
 
     def _warn(self, text: str) -> None:

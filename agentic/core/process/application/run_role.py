@@ -161,6 +161,14 @@ class Output:
     # (`RawResult.turn_notice`'s own docstring); the run's total also folds in every
     # `failures` entry's own flag (`_run_notice`).
     turn_notice: bool = False
+    # Calls to the delivery tool during the delivering attempt alone
+    # (`RawResult.deliveries`'s own docstring); the run's total also folds in every
+    # `failures` entry's own count (`_run_deliveries`).
+    deliveries: int = 0
+    # Presubmit denials during the delivering attempt alone
+    # (`RawResult.presubmit_denials`'s own docstring): a different fact from
+    # `deliveries` above, never folded into it.
+    presubmit_denials: int = 0
 
 
 def context_for(
@@ -351,6 +359,8 @@ async def run_with_retry(
                     "cold_fallback": fallback_now,
                     "denials": exc.denials,
                     "turn_notice": exc.turn_notice,
+                    "deliveries": exc.deliveries,
+                    "presubmit_denials": exc.presubmit_denials,
                 }
             )
             continue
@@ -451,6 +461,8 @@ async def _attempt(
             reason="schema",
             denials=result.denials,
             turn_notice=result.turn_notice,
+            deliveries=result.deliveries,
+            presubmit_denials=result.presubmit_denials,
         )
     try:
         data = schemas.validate(role.schema, result.structured_output, vocabulary)
@@ -462,6 +474,8 @@ async def _attempt(
             reason="schema",
             denials=result.denials,
             turn_notice=result.turn_notice,
+            deliveries=result.deliveries,
+            presubmit_denials=result.presubmit_denials,
         ) from exc
     if check is not None:
         try:
@@ -474,6 +488,8 @@ async def _attempt(
                 reason="check",
                 denials=result.denials,
                 turn_notice=result.turn_notice,
+                deliveries=result.deliveries,
+                presubmit_denials=result.presubmit_denials,
             ) from exc
     text = data.pop("markdown").strip()
     if not text:
@@ -484,6 +500,8 @@ async def _attempt(
             reason="schema",
             denials=result.denials,
             turn_notice=result.turn_notice,
+            deliveries=result.deliveries,
+            presubmit_denials=result.presubmit_denials,
         )
     return Output(
         text=text,
@@ -499,6 +517,8 @@ async def _attempt(
         subagent_cost_usd=_subagent_cost_usd(result.cost_by_model, model),
         denials=result.denials,
         turn_notice=result.turn_notice,
+        deliveries=result.deliveries,
+        presubmit_denials=result.presubmit_denials,
     )
 
 
@@ -556,6 +576,8 @@ def run_record(state: TaskState, role: Role, section: str, output: Output) -> Ro
         "failed_cost_usd": spent(output.failures),
         "denials": output.denials,
         "turn_notice": output.turn_notice,
+        "deliveries": output.deliveries,
+        "presubmit_denials": output.presubmit_denials,
     }
 
 
@@ -575,17 +597,28 @@ def _run_notice(output: Output) -> bool:
     return output.turn_notice or any(f.get("turn_notice", False) for f in output.failures)
 
 
+def _run_deliveries(output: Output) -> int:
+    """The run's total calls to the delivery tool (glossary: Emisión de entrega): the
+    delivering attempt's plus every recorded failure's, the same fold `_run_denials`
+    gives denials — a run that spent an early attempt re-emitting an invalid shape
+    (issue #32) still reads as such even once a later attempt delivers on its first
+    call."""
+    return output.deliveries + sum(f.get("deliveries", 0) for f in output.failures)
+
+
 def _section_text(role: Role, output: Output) -> str:
     """What lands in the role's section: its own delivery, with the system's one-line
     notes in front when the run had any (glossary: Negación; Sección) — the denial note
-    first, then the turn-notice note, the same seam `develop.cold_fallback_note` uses
-    for a dropped session, so an expensive or nearly-cut run is legible without opening
-    logs."""
+    first, then the turn-notice note, then the deliveries note (only past one), the
+    same seam `develop.cold_fallback_note` uses for a dropped session, so an expensive
+    or nearly-cut run is legible without opening logs."""
     notes = []
     if count := _run_denials(output):
         notes.append(rules.denial_note(role, count))
     if _run_notice(output):
         notes.append(turn_notice.notice_note())
+    if (count := _run_deliveries(output)) > 1:
+        notes.append(rules.deliveries_note(count))
     if notes:
         return "\n\n".join([*notes, output.text])
     return output.text

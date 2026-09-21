@@ -136,6 +136,7 @@ def hooks_for(
     cwd: Path,
     presubmit: Presubmit | None,
     on_notice: Callable[[], None] | None = None,
+    on_presubmit_denied: Callable[[], None] | None = None,
 ) -> dict[str, list[HookMatcher]]:
     """The hooks of one run: the cage for a role that executes, the presubmit when
     given, and the turn-budget notice for a role `turn_notice.margin_for` covers."""
@@ -149,7 +150,7 @@ def hooks_for(
         matchers.append(
             HookMatcher(
                 matcher=DELIVERY_TOOL,
-                hooks=[_presubmit(presubmit)],
+                hooks=[_presubmit(presubmit, on_presubmit_denied)],
                 # The presubmit runs the product's checks: its own budget, plus the answer.
                 timeout=presubmit.timeout_s + GUARD_TIMEOUT_S,
             )
@@ -232,13 +233,22 @@ def _turn_notice(role: Role, on_notice: Callable[[], None] | None) -> HookCallba
     return hook
 
 
-def _presubmit(presubmit: Presubmit) -> HookCallback:
+def _presubmit(presubmit: Presubmit, on_denied: Callable[[], None] | None = None) -> HookCallback:
+    """The `PreToolUse` callback the presubmit answers through. `on_denied` counts its
+    own refusals (glossary: Puerta de entrega), the same closure shape `_deny_writes`
+    has for `denials`: a presubmit refusal is the gate working, never the re-emission
+    of an invalid shape a schema rejection is, and the two travel as separate counts."""
+
     async def hook(
         data: HookInput, tool_use_id: str | None, context: HookContext
     ) -> HookJSONOutput:
         # The checks are subprocesses: off the event loop that talks to the CLI.
         reason = await anyio.to_thread.run_sync(presubmit)
-        return _deny(reason) if reason else {}
+        if not reason:
+            return {}
+        if on_denied is not None:
+            on_denied()
+        return _deny(reason)
 
     return hook
 

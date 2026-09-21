@@ -60,6 +60,21 @@ class RawResult:
     # every other role, which never gets that hook wired at all (the same shape
     # `denials` has for a role that executes).
     turn_notice: bool = False
+    # `tool_calls[DELIVERY_TOOL]` (glossary: Emisión de entrega), exposed as its own
+    # field because an attempt that never delivers still needs the number: `tool_calls`
+    # itself is only returned on the happy path, while this travels through
+    # `AttemptFailed` too (`ClaudeSdkRunner.run_once`'s own local counter, read before
+    # every one of its six raise sites). `0` means this attempt saw no call to the
+    # delivery tool at all, never "unknown".
+    deliveries: int = 0
+    # Denials the presubmit itself issued during this run (glossary: Puerta de
+    # entrega), off the same closure shape `denials` has for `_deny_writes`
+    # (`hooks._presubmit`'s own `on_denied`). A different fact from `deliveries`: a
+    # presubmit denial is the gate working as designed, never a re-emission of an
+    # invalid shape, and a different fact from `denials`, which is the SDK's own
+    # permission layer denying a role that does not execute. `0` for every run whose
+    # presubmit never refused, which is every run with no presubmit wired at all.
+    presubmit_denials: int = 0
 
 
 class AttemptFailed(Exception):
@@ -85,6 +100,8 @@ class AttemptFailed(Exception):
         reason: FailureReason = "other",
         denials: int = 0,
         turn_notice: bool = False,
+        deliveries: int = 0,
+        presubmit_denials: int = 0,
     ):
         super().__init__(motive(error, reason))
         self.cost_usd = cost_usd
@@ -98,6 +115,14 @@ class AttemptFailed(Exception):
         # (`RawResult.turn_notice`'s own docstring); `False` at every raise site but
         # the runner's own.
         self.turn_notice = turn_notice
+        # Calls to the delivery tool this attempt saw before it broke
+        # (`RawResult.deliveries`' own docstring); `0` means none were seen, never
+        # "unknown" -- every one of the runner's six raise sites sets it from the same
+        # local counter, so no site defaults it by omission.
+        self.deliveries = deliveries
+        # Presubmit denials this attempt saw before it broke (`RawResult.presubmit_
+        # denials`'s own docstring); `0` at every raise site but the runner's own.
+        self.presubmit_denials = presubmit_denials
 
 
 class Presubmit(Protocol):
