@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from agentic.core.process.adapters.git import GitWorkspace
+from agentic.core.process.domain import rules
 from agentic.shared.configuration import Configuration
 
 # The identity as the composition root hands it in.
@@ -221,6 +222,97 @@ def test_without_git_there_is_no_repository_and_no_crash(product, monkeypatch):
 def test_a_product_directory_that_is_not_there_is_no_repository(tmp_path):
     ws = GitWorkspace(tmp_path / "gone", IDENTITY)
     assert ws.repository_at(tmp_path / "also-gone") is None
+
+
+# -- dependency merges (issue: gym #16, adjacent block deletions) -------------------
+
+
+def test_two_branches_deleting_adjacent_blocks_of_one_file_conflict_and_the_developer_settles_it(
+    product,
+):
+    """The behavioural case from the request: two branches each delete their own block
+    of the same file, the blocks adjacent, so git cannot fold two deletions next to
+    each other on its own. `merge_keeping_conflicts` leaves the worktree conflicted
+    instead of aborting, names exactly the file, and a scripted resolution (the same
+    hunk a human deleted by hand in gym #16) is what `dependency_state` then reports
+    clean, with the dependency contained, nothing in progress, and no marker left."""
+    ws = GitWorkspace(product, IDENTITY)
+    base = ws.task_checkout("GH-16")
+    lines = [f"[[tool.mypy.overrides]]\nmodule = \"pkg.mod{n}\"\n\n" for n in range(3)]
+    (base.path / "pyproject.toml").write_text("".join(lines))
+    ws.commit_all(base.path, "base: three override blocks")
+
+    # Both subtasks branch off the same base: each deletes its own block, the two
+    # adjacent, exactly gym #16's own shape.
+    first = ws.subtask_checkout("GH-16", "column-expression-spelling")
+    (first.path / "pyproject.toml").write_text("".join([lines[0], lines[2]]))  # drops block 1
+    ws.commit_all(first.path, "drop mod1's override")
+
+    second = ws.subtask_checkout("GH-16", "routers-and-models")
+    (second.path / "pyproject.toml").write_text("".join([lines[0], lines[1]]))  # drops block 2
+    ws.commit_all(second.path, "drop mod2's override")
+
+    outcome = ws.merge_keeping_conflicts(second.path, first.branch)
+    assert outcome.reason is not None and outcome.conflicted_paths == ("pyproject.toml",)
+    # Left conflicted, not aborted: the file still carries the markers for a role to
+    # resolve, unlike `Workspace.merge`, which would have undone it by now.
+    assert rules.has_conflict_markers((second.path / "pyproject.toml").read_text())
+    assert not ws.is_clean(second.path)
+
+    mid = ws.dependency_state(second.path, first.branch, ["pyproject.toml"])
+    assert not mid.contained and mid.merge_in_progress and mid.marked_paths == ("pyproject.toml",)
+
+    # The human's own resolution in gym #16: the union of both deletions, nothing else.
+    (second.path / "pyproject.toml").write_text(lines[0])
+    git("add", "pyproject.toml", cwd=second.path)
+    git("commit", "--no-edit", "-q", cwd=second.path)
+
+    settled = ws.dependency_state(second.path, first.branch, ["pyproject.toml"])
+    assert settled.contained and not settled.merge_in_progress and settled.marked_paths == ()
+
+
+def test_a_marker_left_after_staging_and_committing_still_reads_as_conflicted(product):
+    """Its twin, where the Developer cannot settle it: `git add` and a commit clear
+    git's own conflict bookkeeping, but the file's content still carries the marker —
+    the request's own closing criterion, "staging or committing a marker-laden file
+    does not count as resolution" — so `dependency_state` still reports it, and the
+    verdict over it (`rules.dependency_delivered`) still reads `unmergeable`."""
+    ws = GitWorkspace(product, IDENTITY)
+    base = ws.task_checkout("GH-17")
+    (base.path / "x.py").write_text("a = 1\n")
+    ws.commit_all(base.path, "base")
+
+    left = ws.subtask_checkout("GH-17", "left")
+    (left.path / "x.py").write_text("a = 2\n")
+    ws.commit_all(left.path, "left changes x")
+
+    right = ws.subtask_checkout("GH-17", "right")
+    (right.path / "x.py").write_text("a = 3\n")
+    ws.commit_all(right.path, "right changes x too")
+
+    outcome = ws.merge_keeping_conflicts(right.path, left.branch)
+    assert outcome.conflicted_paths == ("x.py",)
+
+    # Stage and commit the file exactly as git left it, markers and all: this is the
+    # shape the closing criterion names, never a real resolution.
+    git("add", "x.py", cwd=right.path)
+    git("commit", "--no-edit", "-q", cwd=right.path)
+    assert ws.is_clean(right.path)  # git's own bookkeeping says nothing is unmerged
+
+    state = ws.dependency_state(right.path, left.branch, ["x.py"])
+    assert state.contained and not state.merge_in_progress  # git agrees it landed
+    assert state.marked_paths == ("x.py",)  # the file's own content still disagrees
+    assert not rules.dependency_delivered(state)
+
+
+def test_a_refused_merge_with_nothing_conflicted_leaves_no_marked_paths(product):
+    """An unknown branch: the merge never starts, so there is nothing for a Developer
+    to resolve and `dependency_after_attempt` reads `unmergeable` on it."""
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-18")
+    outcome = ws.merge_keeping_conflicts(task.path, "agentic/GH-18.ghost")
+    assert outcome.reason is not None
+    assert outcome.conflicted_paths == ()
 
 
 def test_an_untracked_file_leaves_the_tree_committed_but_not_clean(product):

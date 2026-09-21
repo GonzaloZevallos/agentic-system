@@ -9,6 +9,7 @@ import math
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
+from typing import Literal
 
 from . import presubmit
 from .denials import denial_for
@@ -30,10 +31,12 @@ from .task import (
     WAITING_ON_HUMAN,
     ChangeCategory,
     ChangesRequested,
+    DependencyState,
     EscalationClass,
     FailureReason,
     FindingCategory,
     FindingRecord,
+    MergeOutcome,
     ReviewKind,
     RoleRun,
     Status,
@@ -246,6 +249,124 @@ def unmergeable(subtask_id: str, dependency: str, conflict: str) -> TaskState:
             ),
         ),
     }
+
+
+# Leftover conflict markers at the start of a line, the only shape git itself ever
+# writes: a marker mid-line is prose about the format (docs, a shell one-liner), never
+# what a merge left behind. `re.M` so `^` matches the start of every line, not just the
+# start of the string.
+_CONFLICT_MARKER = re.compile(r"^(<<<<<<<|=======|>>>>>>>)", re.M)
+
+
+def has_conflict_markers(text: str) -> bool:
+    """Whether `text` still carries a leftover conflict marker (the request's own
+    closing criterion: staging or committing a marker-laden file is not a resolution,
+    whatever git's own conflict bookkeeping says once it is added or committed). Pure,
+    over the file's own content: `Workspace.dependency_state` is the only caller that
+    reads a path off disk to get that content in the first place."""
+    return bool(_CONFLICT_MARKER.search(text))
+
+
+def dependency_before(dep_state: DependencyState) -> Literal["skip", "hand_over", "attempt"]:
+    """What `develop()` does about one dependency before it ever calls
+    `Workspace.merge_keeping_conflicts`, decided from `DependencyState` alone, no git
+    call of its own: a merge already in progress (`merge_in_progress`) wins over
+    everything else, because running a merge on top of an unfinished one is not a
+    thing git allows and is exactly the state a human may have been resolving by hand
+    after `unmergeable`'s own instruction — so it is handed to the Developer as it
+    stands, never re-attempted. Failing that, a dependency already `contained` needs no
+    merge at all. Anything else is worth a genuine attempt."""
+    if dep_state.merge_in_progress:
+        return "hand_over"
+    if dep_state.contained:
+        return "skip"
+    return "attempt"
+
+
+def dependency_after_attempt(outcome: MergeOutcome) -> Literal["clean", "hand_over", "unmergeable"]:
+    """What `develop()` does with a fresh `MergeOutcome`, right after
+    `Workspace.merge_keeping_conflicts` returns: no reason at all is a clean merge,
+    nothing more to do; a reason with conflicted paths is a Developer's to resolve; a
+    reason with none — an unknown branch, a dirty tree, a git error — is nothing a
+    Developer turn could act on, so it escalates the same way today's `merge` already
+    does, immediately, the cost this task must not add for a dependency nobody could
+    ever have resolved."""
+    if outcome.reason is None:
+        return "clean"
+    if outcome.conflicted_paths:
+        return "hand_over"
+    return "unmergeable"
+
+
+def dependency_delivered(dep_state: DependencyState) -> bool:
+    """Whether a dependency verifiably landed, once the Developer's turn is over: the
+    branch is an ancestor of the delivered head, no merge is left in progress, and none
+    of the paths scanned for markers still holds one — ancestry alone is satisfiable by
+    a `git add` on a marker-laden file followed by a commit, exactly the shape the
+    request's own closing criterion names, so all three facts have to hold together."""
+    return dep_state.contained and not dep_state.merge_in_progress and not dep_state.marked_paths
+
+
+def dependency_unresolved_reason(dep_state: DependencyState) -> str:
+    """The material `unmergeable`'s own `conflict` argument carries when a Developer's
+    attempt did not settle a dependency: which of the three facts
+    `dependency_delivered` checks is still unsettled, named plainly, so the escalation
+    says more than a bare "no"."""
+    if dep_state.merge_in_progress:
+        return "a merge is still in progress in the worktree."
+    if dep_state.marked_paths:
+        listed = ", ".join(f"`{p}`" for p in dep_state.marked_paths)
+        return f"conflict markers are still in: {listed}."
+    return "the dependency is still not on the branch."
+
+
+def merge_notice(dependency: str, branch: str, conflicted_paths: Sequence[str]) -> str:
+    """The per-case text a Developer reads when its dependency does not apply clean
+    (gym #16's own two escalations, a hunk a human deleted in one turn): what carries
+    markers, how to take one side of a file without the strategy the cage denies
+    outright (`git checkout --theirs`, `hooks.SWITCH`), and what never to reach for
+    instead — `-s ours`, `-X ours` and `-X theirs` decide a whole file or a whole
+    merge by strategy, never the conflicting lines a hand resolution keeps both
+    intents over."""
+    listed = "\n".join(f"- `{p}`" for p in conflicted_paths) or "(none reported)"
+    return (
+        f"The dependency `{dependency}` (`{branch}`) does not apply clean on top of "
+        f"your branch. These paths carry conflict markers:\n\n{listed}\n\n"
+        "Resolve them, run the declared checks, and commit the merge before you start "
+        "your own brief. `git restore --ours <path>` or `git restore --theirs <path>` "
+        "is how you take one side of a file whole; `git checkout --theirs <path>` is "
+        "denied by the cage, so do not ask to widen it, use `git restore` instead. "
+        "Never `git merge -s ours`, `-X ours` or `-X theirs`: those decide a whole "
+        "side of the merge by strategy, and this one is resolved file by file, keeping "
+        "both intents, the way a human already did for this exact shape of conflict. "
+        "The conflicted paths and the diff against the dependency branch will be "
+        "written into your section for the review to check."
+    )
+
+
+def resumed_after_unmergeable(state: TaskState, subtask_id: str, branch: str, head: str) -> str:
+    """What a Developer with a session on record but no review section reads on this
+    run: the document shape only this task's path creates, because the previous run
+    escalated `unmergeable` before any review could happen, so
+    `returned_developer_delta` — gated on the subtask actually carrying `returned` —
+    is not what resumes it. Names why it is running, since a resumed session otherwise
+    has no idea; the branch and its current head, since the checkout may have moved;
+    which paths were conflicted when this session last ran; and that a human may
+    already have resolved the merge by hand in this worktree, reading `unmergeable`'s
+    own instruction — so if the dependency is in and the tree is clean, it proceeds
+    with its brief instead of hunting for work to redo."""
+    subtask = state.get("subtasks", {}).get(subtask_id, {})
+    paths = subtask.get("conflicted_paths", [])
+    listed = "\n".join(f"- `{p}`" for p in paths) if paths else "(none recorded)"
+    return (
+        f"This run resumes your session on branch `{branch}`, now at `{head}`. Your "
+        "previous attempt escalated because a dependency did not merge clean; the task "
+        "paused, and a human may already have resolved it by hand in this worktree "
+        "before resuming — that is exactly what the escalation asked for. These paths "
+        f"carried conflict markers when this session last ran:\n\n{listed}\n\n"
+        "If the dependency is already in and the tree is clean, proceed with your "
+        "brief; do not go looking for work to redo."
+    )
 
 
 def setup_unprepared(role: Role, branch: str, step: str, command: str, output: str) -> TaskState:
