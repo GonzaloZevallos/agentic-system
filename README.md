@@ -1025,6 +1025,17 @@ pisarlo borraría lo que los nodos de esta invocación ya escribieron) ni un com
 en el issue (`Resumed: ` gana una cláusula que nombra el rol interrumpido, en la próxima
 reanudación de una corrida que se cruzó con uno de estos, en vez de un prefijo nuevo). Un
 SIGKILL no se puede atrapar: el lock queda huérfano y `resume` lo toma avisándolo.
+`--detach` (en `run` y en `resume`, este último exigiendo `--yes` y rechazando
+`--dry-run` al parsear) reejecuta la misma invocación sin `--detach`, en `setsid`
+—nunca un fork, porque un hijo forkeado después de `setsid` sigue sin terminal para su
+propio `print` y porque `telemetry.configure` ya abrió hilos en background que un fork
+no llevaría—, con stdin cerrado y stdout/stderr redirigidos al log antes de correr
+ningún rol; el padre solo hace el trabajo de sólo lectura (preflight, la pila
+declarada, si el lock ya está vivo, y en `resume` el resumen y la confirmación),
+imprime el pid del hijo —el que toma el lock, nunca el padre— y la ruta del log, y sale.
+Sin TTY y sin `--detach` avisa una vez que el proceso muere con su sesión; no se
+desacopla solo, porque CI, los tests y `agentic eval` (#27) necesitan el código de
+salida.
 
 ### Fallo de rol
 

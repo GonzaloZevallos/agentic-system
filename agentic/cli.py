@@ -12,6 +12,8 @@ from __future__ import annotations
 import argparse
 import os
 import signal
+import socket
+import subprocess
 import sys
 import uuid
 from collections.abc import Awaitable, Callable, Iterator
@@ -46,6 +48,11 @@ from .shared.configuration import ENV_PREFIX, LOGS_DIR, Configuration, MissingPr
 from .shared.environment import without_own_toolchain
 
 Checkpointer = Callable[[Configuration], AbstractAsyncContextManager[BaseCheckpointSaver]]
+# Re-execs `argv` (already stripped of `--detach`) detached from this session and
+# returns the child's pid: the shape `checkpointer` already uses, injectable on
+# `_run`/`_resume` so a test asserts argv and redirection without spawning anything
+# (Tech Lead plan, subtask `--detach`).
+Spawner = Callable[[list[str], str], int]
 
 # What the lock claims, said whenever it refuses (Tech Lead plan, subtask `run-lock`):
 # it protects one CLI invocation from another, nothing a `langgraph dev` server runs.
@@ -110,6 +117,11 @@ def main() -> None:
         command.add_argument(
             "--verbose", action="store_true", help="stream each role's generation to stderr"
         )
+        command.add_argument(
+            "--detach",
+            action="store_true",
+            help="detach from this session (setsid), print the pid and the log path, and exit",
+        )
     args = parser.parse_args()
 
     if args.command == "run":
@@ -117,6 +129,13 @@ def main() -> None:
             run.error("give a title and a description, or --issue N")
         if args.issue is not None and args.title is not None:
             run.error("--issue replaces the title and description; give one or the other")
+    else:
+        # A detached child has no stdin: neither to confirm on nor to report a dry-run
+        # to, so both are rejected before anything is spent (Tech Lead plan, `--detach`).
+        if args.detach and args.dry_run:
+            resume.error("--detach and --dry-run are exclusive: --dry-run has no child to report")
+        if args.detach and not args.yes:
+            resume.error("--detach requires --yes: a detached child has no stdin to confirm on")
 
     # The env var outranks `configurable`, so an explicit flag has to go in as env.
     if args.product_dir:
@@ -135,13 +154,26 @@ def main() -> None:
         for warn in (unfixed_stage0, no_setup):
             if (warning := warn(ports)) is not None:
                 print(f"agentic: {warning}", file=sys.stderr)
+        if not args.detach and not sys.stdin.isatty():
+            print(
+                "agentic: no TTY and no --detach: this process dies if its session "
+                "closes (2026-09-15); pass --detach to survive it",
+                file=sys.stderr,
+            )
         if args.command == "resume":
             task_id = ports.inbox.task_id(args.issue)
             declared_stack_of(task_id, ports)
             log_file = _log_file_for(cfg, task_id)
             options = (args.from_document, args.dry_run, args.yes)
             work: Callable[[], Awaitable[None]] = partial(
-                _resume, task_id, cfg, ports, *options, log_file=log_file
+                _resume,
+                task_id,
+                cfg,
+                ports,
+                *options,
+                log_file=log_file,
+                detach=args.detach,
+                child_argv=_child_argv(),
             )
         else:
             if args.issue is not None:
@@ -158,7 +190,16 @@ def main() -> None:
             # with no branch answers HEAD here, already checked.
             declared_stack_of(task["id"], ports)
             log_file = _log_file_for(cfg, task["id"])
-            work = partial(_run, task, cfg, ports, args.fresh, log_file=log_file)
+            work = partial(
+                _run,
+                task,
+                cfg,
+                ports,
+                args.fresh,
+                log_file=log_file,
+                detach=args.detach,
+                child_argv=_child_argv(),
+            )
     except (MissingProductDir, ValueError, OSError) as exc:
         parser.exit(2, f"agentic: {exc}\n")
     try:
@@ -236,12 +277,83 @@ def _log_file_for(cfg: Configuration, task_id: str) -> str:
     <task>-<UTC timestamp>.log`, to the second, so two invocations of the same task
     never share a file (README.md, 14; issue #33). Printed once, and returned as a
     plain `str`: what travels through `configurable`, which the saver persists, is a
-    JSON-serialisable scalar, never a `Path` (invariant 12)."""
+    JSON-serialisable scalar, never a `Path` (invariant 12).
+
+    A `--detach` child reuses its parent's path instead of minting its own: `cfg.log_file`
+    is already set from `AGENTIC_LOG_FILE`, `Configuration`'s generic per-field env
+    override, which `_spawn_detached` puts in the child's environment. Without that, the
+    child's own `configurable["log_file"]` and the OS-redirected stdout/stderr the parent
+    already told the human about would name two different files."""
+    if cfg.log_file is not None:
+        return str(cfg.log_file)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     path = cfg.product_dir / LOGS_DIR / f"{task_id}-{stamp}.log"
     path.parent.mkdir(parents=True, exist_ok=True)
     print(f"agentic: log at {path}")
     return str(path)
+
+
+def _child_argv() -> list[str]:
+    """This invocation's own argv, `--detach` stripped so the child can never re-detach
+    (Tech Lead plan, subtask `--detach`). Launched through `sys.argv[0]`, the console
+    script `pyproject.toml` declares (`agentic = "agentic.cli:main"`), which is already
+    how this process itself was started -- there is no `agentic/__main__.py`, so
+    `[sys.executable, "-m", "agentic"]` is not an option."""
+    return [sys.argv[0], *(arg for arg in sys.argv[1:] if arg != "--detach")]
+
+
+def _spawn_detached(argv: list[str], log_path: str) -> int:
+    """The default `Spawner`: a new process image (`Popen`, never a fork -- forking
+    after `setsid` would still hold this terminal's fds, and forking after
+    `telemetry.configure` would carry its background export threads into a run that
+    then says nothing about them), detached from this session (`start_new_session`),
+    with stdin closed (a detached child cannot answer a prompt) and stdout/stderr onto
+    the log file before any role runs. `AGENTIC_LOG_FILE` carries this invocation's
+    already-computed, already-printed path into the child, so `_log_file_for` there
+    returns the same string instead of minting a second file."""
+    env = {**os.environ, ENV_PREFIX + "LOG_FILE": log_path}
+    with open(log_path, "ab", buffering=0) as log:
+        process = subprocess.Popen(
+            argv,
+            env=env,
+            start_new_session=True,
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=log,
+        )
+    return process.pid
+
+
+def _refuse_if_locked(lock: RunLock, task_id: str) -> None:
+    """The read-only half of `_acquire`'s check, for `--detach`'s parent: it must show a
+    refusal on the human's terminal without writing the lock itself (invariant: no
+    subtask writes a lock from a process that then forks or exits). The child re-checks
+    authoritatively, atomically, through the real `_acquire` right after it re-execs;
+    this only saves the human a `setsid` and a wasted log file when the answer was
+    already known."""
+    record = lock.read(task_id)
+    if record is None:
+        return
+    if record.host != socket.gethostname():
+        raise CannotStart(
+            f"{task_id} is locked by pid {record.pid} on {record.host} "
+            f"since {record.started_at}: {LOCK_SCOPE}"
+        )
+    if _alive(record.pid):
+        raise CannotStart(
+            f"{task_id} is already running: pid {record.pid} on {record.host} "
+            f"since {record.started_at} ({record.command}): {LOCK_SCOPE}"
+        )
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # owned by someone else, but the OS knows it is there
+    return True
 
 
 def _replace_environ(env: dict[str, str]) -> None:
@@ -294,6 +406,9 @@ async def _run(
     checkpointer: Checkpointer | None = None,
     run_lock: RunLock | None = None,
     log_file: str | None = None,
+    detach: bool = False,
+    child_argv: list[str] | None = None,
+    spawn: Spawner | None = None,
 ) -> None:
     lock = run_lock if run_lock is not None else _lock_for(cfg)
     config: RunnableConfig = {"configurable": _configurable(task["id"], log_file)}
@@ -301,11 +416,26 @@ async def _run(
         app = graph.compile(checkpointer=saver)
         if not fresh:
             await _refuse_a_started_task(app, config, task["id"], ports)
+        if detach:
+            _detach(lock, task["id"], child_argv or [], log_file or "", spawn)
+            return
         with _locked(lock, task["id"]):
             # A thread keeps its channels: a new run over it would add to the old cost.
             await saver.adelete_thread(task["id"])
             final = await _invoke(app, task, config, task, ports, "run")
     _report(final, task["id"], ports)
+
+
+def _detach(
+    lock: RunLock, task_id: str, child_argv: list[str], log_file: str, spawn: Spawner | None
+) -> None:
+    """The parent's own half of `--detach`: refuse on this terminal if the task is
+    already running (`_refuse_if_locked`, read-only), else re-exec and print the
+    child's pid -- the pid that holds the lock, since the parent never acquires it
+    (Tech Lead plan, subtask `--detach`)."""
+    _refuse_if_locked(lock, task_id)
+    pid = (spawn or _spawn_detached)(child_argv, log_file)
+    print(f"agentic: detached, pid {pid}, log at {log_file}")
 
 
 async def _refuse_a_started_task(app, config: RunnableConfig, task_id: str, ports: Ports) -> None:
@@ -339,6 +469,9 @@ async def _resume(
     checkpointer: Checkpointer | None = None,
     run_lock: RunLock | None = None,
     log_file: str | None = None,
+    detach: bool = False,
+    child_argv: list[str] | None = None,
+    spawn: Spawner | None = None,
 ) -> None:
     lock = run_lock if run_lock is not None else _lock_for(cfg)
     config: RunnableConfig = {"configurable": _configurable(task_id, log_file)}
@@ -368,6 +501,9 @@ async def _resume(
             return
         if not yes and input("\nResume? [y/N] ").strip().lower() not in ("y", "yes"):
             raise CannotStart("not resumed", code=1)
+        if detach:
+            _detach(lock, task_id, child_argv or [], log_file or "", spawn)
+            return
 
         with _locked(lock, task_id):
             if r.source == "document":

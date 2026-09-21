@@ -460,6 +460,9 @@ def test_a_stage0_fixed_to_a_sha_says_nothing(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(cli, "unfixed_stage0", lambda ports: None)
     capture_run(monkeypatch)
     monkeypatch.setattr("sys.argv", ["agentic", "run", "t", "d", "--product-dir", str(root)])
+    # A real terminal, so the no-TTY warning (subtask `--detach`) does not fire here
+    # either: this test is about stage0 alone, same as pytest's own stdin is not one.
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
     cli.main()
     assert capsys.readouterr().err == ""
 
@@ -916,3 +919,232 @@ async def test_an_uninterrupted_run_over_the_guard_comments_exactly_as_before(
     )
     await cli._signal_guarded(work)
     assert ports.tracker.comments == [("GH-1", "Resumed: diagnose, under a task cap of 30.00 USD.")]
+
+
+# --detach (subtask `--detach`): argparse refusals, seam `agentic.cli.main`.
+
+
+def test_detach_on_resume_requires_yes(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["agentic", "resume", "--issue", "1", "--detach"])
+    with pytest.raises(SystemExit) as info:
+        cli.main()
+    assert info.value.code == 2
+
+
+def test_detach_and_dry_run_are_exclusive(monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv", ["agentic", "resume", "--issue", "1", "--detach", "--yes", "--dry-run"]
+    )
+    with pytest.raises(SystemExit) as info:
+        cli.main()
+    assert info.value.code == 2
+
+
+def test_no_tty_and_no_detach_warns_once(monkeypatch, tmp_path, capsys):
+    root = product(tmp_path, "p")
+    capture_run(monkeypatch)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr("sys.argv", ["agentic", "run", "t", "d", "--product-dir", str(root)])
+    cli.main()
+    assert "dies if its session closes" in capsys.readouterr().err
+
+
+def test_detach_silences_the_no_tty_warning(monkeypatch, tmp_path, capsys):
+    root = product(tmp_path, "p")
+    capture_run(monkeypatch)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(
+        "sys.argv", ["agentic", "run", "t", "d", "--product-dir", str(root), "--detach"]
+    )
+    cli.main()
+    assert "dies if its session closes" not in capsys.readouterr().err
+
+
+def test_child_argv_strips_detach_but_keeps_everything_else(monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv", ["/venv/bin/agentic", "resume", "--issue", "1", "--detach", "--yes"]
+    )
+    assert cli._child_argv() == ["/venv/bin/agentic", "resume", "--issue", "1", "--yes"]
+
+
+def test_spawn_detached_redirects_stdout_and_stderr_onto_the_log_before_any_role_runs(
+    monkeypatch, tmp_path
+):
+    """Seam: the default `Spawner`. `start_new_session=True` and stdin closed, exactly
+    as the plan requires; a fake `Popen` proves nothing real is spawned by the test."""
+    log_path = tmp_path / "t.log"
+    calls = {}
+
+    class FakeProcess:
+        pid = 424242
+
+    def fake_popen(argv, **kwargs):
+        calls["argv"] = argv
+        calls["kwargs"] = kwargs
+        return FakeProcess()
+
+    monkeypatch.setattr(cli.subprocess, "Popen", fake_popen)
+    pid = cli._spawn_detached(["agentic", "resume", "--issue", "1", "--yes"], str(log_path))
+    assert pid == 424242
+    assert calls["argv"] == ["agentic", "resume", "--issue", "1", "--yes"]
+    assert calls["kwargs"]["start_new_session"] is True
+    assert calls["kwargs"]["stdin"] is cli.subprocess.DEVNULL
+    assert calls["kwargs"]["stdout"] is calls["kwargs"]["stderr"]
+    assert calls["kwargs"]["stdout"].name == str(log_path)
+    assert calls["kwargs"]["env"][cli.ENV_PREFIX + "LOG_FILE"] == str(log_path)
+    assert log_path.is_file()  # opened before the (faked) exec, never after
+
+
+class FakeSpawn:
+    """A `Spawner` double: no real process, just what argv and log path it was asked
+    to spawn with, and the pid to hand back as if it were the child's."""
+
+    def __init__(self, pid=54321):
+        self.pid = pid
+        self.calls: list[tuple[list[str], str]] = []
+
+    def __call__(self, argv, log_file):
+        self.calls.append((argv, log_file))
+        return self.pid
+
+
+@pytest.mark.anyio
+async def test_run_detach_spawns_the_child_and_returns_without_touching_the_graph(
+    monkeypatch, tmp_path, capsys
+):
+    """Seam: the injected spawner on `_run`. The parent never reaches `_locked` or
+    `ainvoke`: `Broken.ainvoke` would fail the test if it somehow did."""
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    class Broken(Delivers):
+        async def ainvoke(self, task, config):
+            raise AssertionError("the graph must never run in the parent under --detach")
+
+    monkeypatch.setattr(cli, "graph", Broken())
+    spawn = FakeSpawn()
+    lock = FakeLock()
+    task = {"id": "T-9", "title": "t", "description": "d"}
+    await cli._run(
+        task,
+        Configuration(product_dir=tmp_path),
+        memory_ports(),
+        checkpointer=in_memory,
+        run_lock=lock,
+        log_file="/tmp/x.log",
+        detach=True,
+        child_argv=["agentic", "run", "--issue", "1", "--detach"],
+        spawn=spawn,
+    )
+    assert spawn.calls == [(["agentic", "run", "--issue", "1", "--detach"], "/tmp/x.log")]
+    assert lock.acquired == []  # the parent never holds it -- the child does, after it re-execs
+    assert "54321" in capsys.readouterr().out
+
+
+@pytest.mark.anyio
+async def test_resume_detach_spawns_after_the_summary_and_returns_without_invoking(
+    monkeypatch, tmp_path, capsys
+):
+    """Seam: the injected spawner on `_resume`. The summary and (skipped, via --yes)
+    confirmation already ran; `announce` and `ainvoke`, which only the child should do,
+    must not have run in the parent."""
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    class Broken(Delivers):
+        async def ainvoke(self, task, config):
+            raise AssertionError("the graph must never run in the parent under --detach")
+
+    monkeypatch.setattr(cli, "graph", Broken())
+    ports = memory_ports()
+    ports.documents.save(
+        {
+            "id": "GH-1",
+            "title": "t",
+            "description": "d",
+            "type": "bug",
+            "status": "waiting_on_human",
+            "escalated": "Developer stopped by the task cap",
+            "cost_usd": 1.0,
+        }
+    )
+    ports.tracker.earlier = ["Escalated: Developer stopped by the task cap"]
+    spawn = FakeSpawn()
+    lock = FakeLock()
+    child_argv = ["agentic", "resume", "--issue", "1", "--yes", "--detach"]
+    await cli._resume(
+        "GH-1",
+        Configuration(product_dir=tmp_path),
+        ports,
+        from_document=True,
+        yes=True,
+        checkpointer=in_memory,
+        run_lock=lock,
+        log_file="/tmp/x.log",
+        detach=True,
+        child_argv=child_argv,
+        spawn=spawn,
+    )
+    assert spawn.calls == [(child_argv, "/tmp/x.log")]
+    assert lock.acquired == []
+    assert ports.tracker.comments == []  # the child announces; the parent never did
+    assert "54321" in capsys.readouterr().out
+
+
+@pytest.mark.anyio
+async def test_detach_refuses_when_the_lock_is_held_and_never_spawns(monkeypatch, tmp_path):
+    """The parent's read-only liveness check: a refusal on this terminal, no lock
+    write, and nothing spawned -- the same shape `_acquire` refuses with, but never
+    written from a process about to exit (invariant: no subtask writes a lock from a
+    process that then forks or exits)."""
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setattr(cli, "graph", Delivers())
+    lock = FakeLock(held=lock_record(pid=os.getpid(), host=cli.socket.gethostname()))
+    spawn = FakeSpawn()
+    task = {"id": "T-9", "title": "t", "description": "d"}
+    with pytest.raises(cli.CannotStart, match="T-9 is already running"):
+        await cli._run(
+            task,
+            Configuration(product_dir=tmp_path),
+            memory_ports(),
+            checkpointer=in_memory,
+            run_lock=lock,
+            log_file="/tmp/x.log",
+            detach=True,
+            child_argv=["agentic", "run", "--issue", "1", "--detach"],
+            spawn=spawn,
+        )
+    assert spawn.calls == []
+    assert lock.acquired == []
+
+
+@pytest.mark.anyio
+async def test_a_run_with_no_lock_injected_detaches_without_writing_the_products_lock(
+    monkeypatch, tmp_path
+):
+    """No `run_lock` injected (the production shape, `_lock_for` builds a real
+    `FilesystemRunLock`): the parent's liveness check reads it and finds nothing to
+    refuse, and, since it never acquires, leaves no lock file behind for the child to
+    trip over when it re-execs and acquires for real."""
+    from agentic.core.process.adapters.filesystem import FilesystemRunLock
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setattr(cli, "graph", Delivers())
+    cfg = Configuration(product_dir=tmp_path)
+    spawn = FakeSpawn()
+    task = {"id": "T-9", "title": "t", "description": "d"}
+    await cli._run(
+        task,
+        cfg,
+        memory_ports(),
+        checkpointer=in_memory,
+        log_file="/tmp/x.log",
+        detach=True,
+        child_argv=["agentic", "run", "--issue", "1", "--detach"],
+        spawn=spawn,
+    )
+    assert spawn.calls
+    assert FilesystemRunLock(cfg.agentic_dir / "runs").read("T-9") is None
