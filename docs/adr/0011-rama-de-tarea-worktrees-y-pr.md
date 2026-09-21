@@ -332,6 +332,19 @@ denegando primero con un motivo mejor, según decida esa subtarea. `PostToolUse`
 descartado como costura para ese guard: nunca ve la llamada que el schema del CLI
 rechazó, sólo la que quedó.
 
+**Consecuencia para la métrica que ya existe.** El extracto muestra a `StructuredOutput`
+llamado dos veces en el mismo turno cuando el CLI rechaza la primera (`[0]` inválida,
+`[3]` válida): eso ya es, hoy, una llamada más en `tool_calls["StructuredOutput"]` sobre
+`AssistantMessage` (`runner.py:255-256`), la fuente de `agentic.role.tool_calls
+{tool="StructuredOutput"}`. Cuando `schema-guard` entre y deniegue esa primera llamada
+por su cuenta en vez de dejar que el CLI la rechace, el modelo la reintenta igual, así
+que sigue sumando una llamada más a esa misma serie: **una denegación del guard produce
+una emisión de entrega más en `agentic.role.tool_calls{tool="StructuredOutput"}` de esa
+corrida.** Queda dicho acá para que una subida de esa serie después del commit de
+`schema-guard` se lea como "el guard denegó y el modelo reintentó", no como "el modelo
+empeoró": la serie no distingue de dónde vino el rechazo, del CLI o del guard, y no hay
+plan de que lo haga.
+
 ### Extracto del spike
 
 ```

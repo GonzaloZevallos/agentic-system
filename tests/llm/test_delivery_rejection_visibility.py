@@ -41,11 +41,12 @@ the hooks' own behaviour, unclouded by our own puerta de entrega.
 
 from __future__ import annotations
 
-from typing import Any
+from pathlib import Path
 
 import pytest
 from claude_agent_sdk import (
     AssistantMessage,
+    ClaudeAgentOptions,
     HookContext,
     HookInput,
     HookJSONOutput,
@@ -103,7 +104,7 @@ VALID_PROMPT = (
 )
 
 
-def _spike_options(tmp_path: Any) -> Any:
+def _spike_options(tmp_path: Path) -> ClaudeAgentOptions:
     return options_for(
         TOY_ROLE,
         system_prompt="You are a probe for a harness spike. Follow the user's "
@@ -120,7 +121,7 @@ def _spike_options(tmp_path: Any) -> Any:
     )
 
 
-def _wire_spike_hooks(options: Any, timeline: list[tuple[str, object]]) -> None:
+def _wire_spike_hooks(options: ClaudeAgentOptions, timeline: list[tuple[str, object]]) -> None:
     """Adds a `PreToolUse` and a `PostToolUse` matcher on `StructuredOutput` that only
     record, on top of whatever `options_for` already wired for `TOY_ROLE.executes`
     (its Bash/Edit cage, which this probe never triggers: it declares no tools)."""
@@ -155,6 +156,28 @@ def _wire_spike_hooks(options: Any, timeline: list[tuple[str, object]]) -> None:
             HookMatcher(matcher=STRUCTURED_OUTPUT, hooks=[post]),
         ],
     }
+
+
+def _same_delivery(tool_input: dict[str, object], structured_output: object) -> bool:
+    """Condition (iv)'s equality: `tool_input` and `structured_output`, key by key. A
+    field the model wrote as a newline-joined string on one side and as a list of the
+    same lines on the other does not count as a difference (`schemas.validate` accepts
+    both on purpose, per the brief); anything else must match exactly."""
+    if not isinstance(structured_output, dict):
+        return False
+    if set(tool_input) != set(structured_output):
+        return False
+    return all(_same_field(tool_input[key], structured_output[key]) for key in tool_input)
+
+
+def _same_field(mine: object, theirs: object) -> bool:
+    if mine == theirs:
+        return True
+    if isinstance(mine, str) and isinstance(theirs, list):
+        return [line.strip() for line in mine.splitlines() if line.strip()] == theirs
+    if isinstance(mine, list) and isinstance(theirs, str):
+        return mine == [line.strip() for line in theirs.splitlines() if line.strip()]
+    return False
 
 
 async def test_invalid_delivery_visibility(tmp_path):
@@ -230,6 +253,13 @@ async def test_invalid_delivery_visibility(tmp_path):
         order = "before" if pre_on_invalid[0] < rejections[0] else "after"
         print("condition (iii) PreToolUse ran", order, "the CLI's own rejection reached the stream")
 
+    assert rejections, "condition (i): the CLI's rejection never reached the stream"
+    assert not post_on_invalid, "condition (ii): PostToolUse fired on a call the CLI rejected"
+    assert pre_on_invalid, "condition (iii): PreToolUse never saw the invalid input"
+    assert pre_on_invalid[0] < rejections[0], (
+        "condition (iii): PreToolUse ran after the CLI's rejection reached the stream, not before"
+    )
+
 
 async def test_valid_delivery_pretooluse_input_matches_result(tmp_path):
     """Condition (iv): on a delivery the CLI accepts, is what `PreToolUse` saw the same
@@ -254,5 +284,9 @@ async def test_valid_delivery_pretooluse_input_matches_result(tmp_path):
     assert pre_inputs, (
         "no PreToolUse fired on the delivering call: condition (iv) has nothing to compare"
     )
-    same = pre_inputs[-1] == result.structured_output
+    same = _same_delivery(pre_inputs[-1], result.structured_output)
     print("condition (iv) tool_input == structured_output (deserialised, same object):", same)
+    assert same, (
+        "condition (iv): the PreToolUse tool_input and the ResultMessage's "
+        "structured_output of the same call differ"
+    )
