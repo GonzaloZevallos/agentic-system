@@ -220,15 +220,22 @@ class ClaudeSdkRunner:
         # sites and the `Printer` (which only reads it, never derives its own count
         # from the `StreamEvent`s that only exist with `--verbose`) see the one number.
         tool_calls: dict[str, int] = {}
+
         # The sink decides whether the stream is watched, not `verbose`: with a log file
-        # composed in, a role's tool lines, its `done:` line and the sub-agent warning
-        # always reach it. `verbose` alone still decides `include_partial_messages`
-        # below, the deltas `Printer` shows when it is watching (README.md, 14; #33).
-        observer = (
-            Printer(role.name, self.stream, lambda: tool_calls.get(DELIVERY_TOOL, 0))
-            if self.stream is not None
-            else None
+        # composed in, a role's tool lines and its `done:` line always reach it.
+        # `--verbose` is additive on top of that (PM's decision, README.md, 14): with a
+        # sink, the same lines also mirror to stderr; with none, stderr is the only
+        # destination, exactly as before this task. `include_partial_messages` below
+        # follows `verbose` alone, so the deltas either `Printer` shows only exist when
+        # it is set.
+        def _deliveries() -> int:
+            return tool_calls.get(DELIVERY_TOOL, 0)
+
+        observers = (
+            [Printer(role.name, self.stream, _deliveries)] if self.stream is not None else []
         )
+        if self.verbose:
+            observers.append(Printer(role.name, sys.stderr, _deliveries))
 
         def _count_denial() -> None:
             nonlocal denials
@@ -273,7 +280,7 @@ class ClaudeSdkRunner:
         main_usage: dict[str, Any] | None = None
         try:
             async for message in query(prompt=prompt, options=options):
-                if observer is not None:
+                for observer in observers:
                     observer(message)
                 if isinstance(message, AssistantMessage):
                     calls += 1

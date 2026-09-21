@@ -312,6 +312,40 @@ async def test_a_sink_observes_the_stream_even_when_verbose_is_false(monkeypatch
     assert "delivered with 1 sub-agent(s) launched in the background" in written
 
 
+async def test_verbose_also_mirrors_the_sink_on_stderr(monkeypatch, tmp_path, capsys):
+    # `--verbose` is additive on top of the sink (PM's decision, README.md, 14): a log
+    # file always gets a role's tool lines and its `done:` line; `--verbose` decides
+    # only whether the same lines also reach the terminal.
+    messages = [
+        AssistantMessage(
+            content=[ToolUseBlock(id="t", name="Read", input={"path": "x"})], model="m"
+        ),
+        result(num_turns=1, total_cost_usd=0.02),
+    ]
+    fake_query(monkeypatch, messages)
+    buffer = io.StringIO()
+    await run_once(ClaudeSdkRunner(verbose=True, stream=buffer), tmp_path)
+    written = buffer.getvalue()
+    assert '[PjM] tool Read {"path": "x"}' in written and "[PjM] done: 1 turns" in written
+    err = capsys.readouterr().err
+    assert '[PjM] tool Read {"path": "x"}' in err and "[PjM] done: 1 turns" in err
+
+
+async def test_verbose_without_a_sink_still_streams_to_stderr_alone(monkeypatch, tmp_path, capsys):
+    # No log file (the `langgraph dev` door, or `AGENTIC_VERBOSE` with no task under
+    # the CLI): `--verbose` keeps its old, only destination.
+    messages = [
+        AssistantMessage(
+            content=[ToolUseBlock(id="t", name="Read", input={"path": "x"})], model="m"
+        ),
+        result(num_turns=1, total_cost_usd=0.02),
+    ]
+    fake_query(monkeypatch, messages)
+    await run_once(ClaudeSdkRunner(verbose=True), tmp_path)
+    err = capsys.readouterr().err
+    assert '[PjM] tool Read {"path": "x"}' in err and "[PjM] done: 1 turns" in err
+
+
 async def test_a_cancelled_stream_writes_the_token_line_once_and_reraises_unchanged(
     monkeypatch, tmp_path
 ):
