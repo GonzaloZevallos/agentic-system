@@ -49,7 +49,7 @@ def _queried_by_metric(exprs: list[str]) -> dict[str, set[str]]:
     for expr in exprs:
         metrics_in_expr = set(BARE_METRIC.findall(expr))
         for metric, body in METRIC_WITH_SELECTOR.findall(expr):
-            selector_labels = set(re.findall(r'([a-z_][a-z0-9_]*)\s*(?:=~|=)\s*"', body))
+            selector_labels = set(re.findall(r'([a-z_][a-z0-9_]*)\s*(?:=~|=|!=|!~)\s*"', body))
             result.setdefault(metric, set()).update(selector_labels)
         for group in re.findall(r"\bby\s*\(([^)]*)\)", expr):
             by_labels = {tok.strip() for tok in group.split(",") if tok.strip()}
@@ -66,6 +66,14 @@ def test_no_panel_uses_increase():
     # The metrics are events (ADR-0008): every panel reads them with sum_over_time
     # or count_over_time, never increase(), which assumes a monotonic counter.
     assert "increase(" not in DASHBOARD.read_text(encoding="utf-8")
+
+
+def test_negative_matcher_is_recognised_as_a_queried_label():
+    # `model!=""` is the dashboard's first negative matcher (the `$ / 1k tokens de
+    # salida` panel excludes the residual sample): the label-key regex must see it,
+    # or both this and the subset assertion below would be blind to it.
+    expr = 'sum(agentic_role_cost_usd{product=~"$product", model!=""})'
+    assert "model" in _queried_by_metric([expr])["agentic_role_cost_usd"]
 
 
 def test_every_queried_metric_and_label_is_documented():
