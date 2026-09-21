@@ -1059,10 +1059,10 @@ async def test_a_task_seeded_from_its_document_resumes_like_a_checkpoint(config,
     await compiled(script, fakes=fakes).ainvoke(TASK, config=config)
 
     # The Developers the cap stopped had their branches created already.
-    fakes.workspace.branches.update(
+    fakes.workspace.existing_branches.update(
         {"agentic/GH-1": ("t1", "base0"), "agentic/GH-1.api": ("base1", "base1")}
     )
-    fakes.workspace.branches["agentic/GH-1.domain"] = ("base1", "base1")
+    fakes.workspace.existing_branches["agentic/GH-1.domain"] = ("base1", "base1")
     ports = replace(memory_ports(), documents=FilesystemTaskDocuments(tmp_path))
     ports = replace(ports, workspace=fakes.workspace)
     state = resume.from_document("GH-1", ports)

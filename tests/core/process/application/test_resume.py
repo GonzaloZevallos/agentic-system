@@ -48,7 +48,7 @@ def sub(id_, status, branch, base, **more):
 
 
 def git_as_recorded(ports):
-    ports.workspace.branches.update(
+    ports.workspace.existing_branches.update(
         {
             "agentic/GH-12": ("i2", "b0"),
             "agentic/GH-12.api": ("a2", "b1"),
@@ -103,7 +103,7 @@ def test_from_document_leaves_a_legacy_document_without_the_key():
 
 def test_the_document_is_refused_when_git_moved_since():
     ports = memory_ports()
-    ports.workspace.branches.update(
+    ports.workspace.existing_branches.update(
         {"agentic/GH-12.api": ("a3", "b1"), "agentic/GH-12.domain": ("d2", "b9")}
     )
     ports.documents.save(paused())
