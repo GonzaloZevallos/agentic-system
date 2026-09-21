@@ -58,6 +58,11 @@ class Resumption:
     # Where the task goes next: a node, or the nodes a crashed run left pending.
     target: str
     cap_usd: float
+    # Glossary: Corrida interrumpida. True when `pending` drove this resume: nodes
+    # with no interrupt waiting for them, which is a run that crashed rather than
+    # paused. Never derived from `RunLock`'s presence or absence (its own docstring):
+    # the checkpoint is the only source of this fact.
+    interrupted: bool = False
 
 
 def from_document(task_id: str, ports: Ports) -> TaskState:
@@ -158,7 +163,9 @@ def prepare(
             f"the task cap in force is {cap:.2f} USD and {spent:.2f} are already spent: "
             f"pass --task-budget above {spent:.2f}"
         )
-    return Resumption(task_id, source, paused, resumed, decision, target, cap)
+    return Resumption(
+        task_id, source, paused, resumed, decision, target, cap, interrupted=bool(pending)
+    )
 
 
 def summary(r: Resumption, cfg: Configuration, ports: Ports) -> str:
@@ -184,7 +191,9 @@ def summary(r: Resumption, cfg: Configuration, ports: Ports) -> str:
         f"resumes:   {r.target}{_subtasks(r)}",
     ]
     lines.extend(f"session:   {line}" for line in _sessions(r))
-    lines.extend(f"worktree:  {path}" for path in ports.workspace.worktrees(r.task_id))
+    for path in ports.workspace.worktrees(r.task_id):
+        dirty = r.interrupted and not ports.workspace.is_clean(path)
+        lines.append(f"worktree:  {path}" + ("  (uncommitted changes)" if dirty else ""))
     return "\n".join(lines)
 
 

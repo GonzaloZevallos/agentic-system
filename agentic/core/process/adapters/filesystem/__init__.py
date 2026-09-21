@@ -1,7 +1,8 @@
-"""The product directory as the store of what the process writes: task documents
-and prompt overlays (ADR-0002)."""
+"""The product directory as the store of what the process writes: task documents,
+prompt overlays (ADR-0002) and the run lock (Tech Lead plan, subtask `run-lock`)."""
 
 from .documents import FilesystemTaskDocuments
+from .lock import FilesystemRunLock
 from .prompts import FilesystemPrompts
 
-__all__ = ["FilesystemPrompts", "FilesystemTaskDocuments"]
+__all__ = ["FilesystemPrompts", "FilesystemRunLock", "FilesystemTaskDocuments"]

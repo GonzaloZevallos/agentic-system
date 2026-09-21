@@ -186,6 +186,37 @@ def test_a_run_that_crashed_resumes_its_pending_nodes_as_they_are(cfg):
     state = {**paused(cost_usd=1.0), "escalated": None, "status": "developing"}
     r = resume.prepare("GH-12", state, "checkpoint", cfg, memory_ports(), ("integrate",))
     assert r.resumed == state and r.target == "integrate" and r.decision is None
+    assert r.interrupted is True  # pending nodes with no interrupt: the run crashed
+
+
+def test_an_interrupted_resume_says_whether_its_worktree_has_uncommitted_changes(cfg):
+    # Interrupted (pending nodes, `RunLock` plan): the summary names what a killed
+    # role may have left uncommitted, never derived from the lock itself.
+    dirty = cfg.product_dir / ".agentic/worktrees/GH-12"
+    state = {**paused(cost_usd=1.0), "escalated": None, "status": "developing"}
+
+    ports = memory_ports()
+    ports.workspace.checkouts = [dirty]
+    ports.workspace.uncommitted.add(dirty)
+    r = resume.prepare("GH-12", state, "checkpoint", cfg, ports, ("integrate",))
+    text = resume.summary(r, cfg, ports)
+    assert f"worktree:  {dirty}  (uncommitted changes)" in text
+
+    clean_ports = memory_ports()
+    clean_ports.workspace.checkouts = [dirty]
+    r = resume.prepare("GH-12", state, "checkpoint", cfg, clean_ports, ("integrate",))
+    text = resume.summary(r, cfg, clean_ports)
+    assert text.splitlines()[-1] == f"worktree:  {dirty}"
+
+    # Not interrupted: a returned pair's worktree may be just as dirty, but the note
+    # is specific to a run that crashed, so a normal resume says nothing about it.
+    normal_ports = memory_ports()
+    normal_ports.workspace.checkouts = [dirty]
+    normal_ports.workspace.uncommitted.add(dirty)
+    r = resume.prepare("GH-12", paused(cost_usd=60.0), "document", cfg, normal_ports)
+    assert r.interrupted is False
+    text = resume.summary(r, cfg, normal_ports)
+    assert text.splitlines()[-1] == f"worktree:  {dirty}"
 
 
 def test_announcing_takes_the_task_out_of_the_queue(cfg):
