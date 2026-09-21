@@ -18,6 +18,10 @@ ENV_PREFIX = "AGENTIC_"
 # The graph's checkpointer, relative to the product root, outside version control
 # (README.md, 8; ADR-0003).
 STATE_FILE = Path(".agentic/state.sqlite")
+# Where every invocation's log lives, relative to the product root, outside version
+# control: one file per invocation under this, named `<task>-<UTC timestamp>.log`
+# (README.md, 14; issue #33).
+LOGS_DIR = Path(".agentic/logs")
 
 RoleKind = Literal["actor", "verifier"]
 
@@ -86,6 +90,11 @@ class Configuration(BaseModel):
     # Root of the product repo, the product context (README.md, 8). Required: the
     # system never writes inside its own repo (ADR-0002), so there is no sane default.
     product_dir: Path
+    # Where this invocation streams a role's generation (README.md, 14). `None` outside
+    # the CLI door -- `langgraph dev` never passes `configurable`, so no file is opened
+    # (issue #33). Coerced from the `str` the CLI puts in `configurable`, the same way
+    # `product_dir` is coerced from a plain string today.
+    log_file: Path | None = None
 
     @classmethod
     def from_sources(

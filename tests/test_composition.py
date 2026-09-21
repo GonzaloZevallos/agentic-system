@@ -61,3 +61,29 @@ def test_the_ports_of_a_product_of_its_own_are_built(tmp_path, monkeypatch):
     monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
     product = a_repository(tmp_path / "product")
     assert composition.default_ports(Configuration(product_dir=product)).documents.product_dir
+
+
+def test_with_no_log_path_the_runner_opens_no_file(tmp_path, monkeypatch):
+    # The `langgraph dev` door: `configurable` never carries `log_file`, so `cfg.log_file`
+    # is `None` and the runner is built exactly as before this task (issue #33).
+    monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
+    product = a_repository(tmp_path / "product")
+    ports = composition.default_ports(Configuration(product_dir=product))
+    assert ports.runner.stream is None
+    assert list((product / ".agentic").rglob("*.log")) == []
+
+
+def test_with_a_log_path_the_runner_gets_an_open_append_only_handle(tmp_path, monkeypatch):
+    monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
+    product = a_repository(tmp_path / "product")
+    log_file = product / ".agentic/logs/GH-1-20260921T000000Z.log"
+    log_file.parent.mkdir(parents=True)
+    ports = composition.default_ports(Configuration(product_dir=product, log_file=log_file))
+    try:
+        assert ports.runner.stream is not None
+        assert ports.runner.stream.mode == "a"
+        ports.runner.stream.write("hello\n")
+        ports.runner.stream.flush()
+        assert log_file.read_text() == "hello\n"
+    finally:
+        ports.runner.stream.close()
