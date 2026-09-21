@@ -4,6 +4,7 @@ import signal
 import subprocess
 from contextlib import asynccontextmanager
 from functools import partial
+from pathlib import Path
 from types import SimpleNamespace
 
 import anyio
@@ -299,6 +300,41 @@ async def test_a_paused_task_resumes_through_the_cli_and_run_refuses_to_redo_it(
         await cli._run(task, cfg, ports, checkpointer=saver)
     with pytest.raises(cli.CannotStart, match="is not paused"):
         await cli._resume("GH-1", raised, ports, yes=True, checkpointer=saver)
+
+
+@pytest.mark.anyio
+async def test_the_log_file_travels_in_configurable_to_every_node(monkeypatch, tmp_path):
+    """`_run` puts the string next to `thread_id` in the config it hands `ainvoke`
+    (invariant 12: a `str`, never a `Path`); each node reads it back off its own
+    `config["configurable"]` (`configuration_from`, `agentic/core/process/adapters/
+    langgraph/graph.py`) and `default_ports` opens the file from it. A real compiled
+    graph over a fake saver is the seam: `aget_state` itself does not echo custom
+    `configurable` keys back once a checkpoint exists (only `thread_id`,
+    `checkpoint_ns` and `checkpoint_id` are its own business), so the node itself,
+    not a state snapshot, is where this round trip is provable."""
+    from agentic.core.process.adapters.langgraph.graph import build_graph
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import ScriptedRunner, classified, memory_ports
+
+    seen: list[Configuration] = []
+
+    def ports_for(cfg: Configuration):
+        seen.append(cfg)
+        return memory_ports(ScriptedRunner(pjm=[classified()]))
+
+    graph = build_graph(ports_for)
+    monkeypatch.setattr(cli, "graph", graph)
+    monkeypatch.setenv("AGENTIC_PRODUCT_DIR", str(tmp_path))
+    cfg = Configuration.from_sources({}, os.environ)
+    saver, task = Saver(), {"id": "GH-1", "title": "Export", "description": "CSV."}
+    log_file = str(tmp_path / ".agentic/logs/GH-1-20260921T000000Z.log")
+
+    with pytest.raises(AssertionError, match="no scripted result"):
+        # Only `pjm` is scripted: the next node crashes, which is fine -- `pjm`'s own
+        # node already ran and recorded what `configurable` handed it.
+        await cli._run(task, cfg, memory_ports(), checkpointer=saver, log_file=log_file)
+
+    assert seen and seen[0].log_file == Path(log_file)
 
 
 class MetricPoints:

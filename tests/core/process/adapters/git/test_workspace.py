@@ -148,6 +148,8 @@ def test_the_checkpointer_file_stays_out_of_the_products_status(product, tmp_pat
     ws = GitWorkspace(product, IDENTITY)
     ws.exclude_system_files()
     ws.exclude_system_files()  # once each
+    exclude = (product / ".git/info/exclude").read_text()
+    assert ".agentic/logs/" in exclude  # every invocation's log, never the product's own gitignore
     (product / ".agentic").mkdir()
     (product / ".agentic/state.sqlite").write_text("x")
     (product / ".agentic/state.sqlite-journal").write_text("x")
