@@ -65,7 +65,8 @@ from ..domain.document import HUMAN
 from ..domain.roles import ORIGINAL, TECH_LEAD, Prompt, Role, describe_flags, render
 from ..domain.task import WAITING_ON_HUMAN, EscalationClass, Failure, RoleRun, TaskState, apply
 from .limits import RunLimits
-from .ports import AttemptFailed, Ports, Presubmit, RoleRunner
+from .ports import AttemptFailed, Ports, Presubmit, RoleRunner, SchemaGuard
+from .schema_guard import RoleSchemaGuard
 
 Check = Callable[[dict], None]
 
@@ -309,6 +310,13 @@ async def run_with_retry(
     written_as = section or role.name
     failures: list[Failure] = []
     cold_fallback = False  # this run already spent its one fallback
+    # Built once per role run, outside the attempt loop, so its one-denial cap
+    # (`RoleSchemaGuard`, `domain.schema_guard.REFUSALS`) survives the retry the same
+    # way `CheckoutPresubmit.refusals` does -- never rebuilt inside `_attempt`, which
+    # would reset it every attempt. Wired only for a role that executes (Developer, the
+    # integrator): every other role's `hooks_for`/`options_for` see `None`, byte for
+    # byte what they saw before this guard existed.
+    guard: SchemaGuard | None = RoleSchemaGuard(role.schema, vocabulary) if role.executes else None
     for attempt in range(1, max(retries, 0) + 2):
         total = max(spent_usd + spent(failures), limits.spent_usd)
         if task_cap_usd is not None and total >= task_cap_usd:
@@ -342,6 +350,7 @@ async def run_with_retry(
                     resume=session,
                     max_budget_usd=max_budget_usd,
                     presubmit=presubmit,
+                    guard=guard,
                 )
                 ended_at = _now_iso()
         except AttemptFailed as exc:
@@ -440,6 +449,7 @@ async def _attempt(
     resume: str | None,
     max_budget_usd: float | None,
     presubmit: Presubmit | None = None,
+    guard: SchemaGuard | None = None,
 ) -> Output:
     result = await runner.run_once(
         role,
@@ -451,6 +461,7 @@ async def _attempt(
         resume=resume,
         max_budget_usd=max_budget_usd,
         presubmit=presubmit,
+        guard=guard,
     )
     cost, session = result.cost_usd, result.session_id
     if result.structured_output is None:

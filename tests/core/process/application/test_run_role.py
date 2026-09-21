@@ -17,6 +17,7 @@ from agentic.core.process.application.run_role import (
     task_cap,
     with_context,
 )
+from agentic.core.process.application.schema_guard import RoleSchemaGuard
 from agentic.core.process.domain import rules, turn_notice
 from agentic.core.process.domain.document import HUMAN
 from agentic.core.process.domain.roles import DEVELOPER, PJM, PM, PRODUCT_ANALYST, ROLES
@@ -53,6 +54,46 @@ async def run_pjm(
         resume=resume,
         cold_prompt=cold_prompt,
     )
+
+
+async def run_developer(runner, retries=1):
+    return await run_with_retry(
+        DEVELOPER,
+        "task",
+        system_prompt="s",
+        model="m",
+        retries=retries,
+        vocabulary={},
+        cwd=Path("/p"),
+        runner=runner,
+    )
+
+
+async def test_run_with_retry_builds_a_schema_guard_for_a_role_that_executes():
+    # DEVELOPER executes (domain/roles.py); the guard is wired only for those roles
+    # (brief's own condition), visible here rather than in `hooks_for`/`options_for`,
+    # which take whatever they are given.
+    runner = ScriptedRunner(developer=[delivered()])
+    await run_developer(runner)
+    guard = runner.calls[0]["guard"]
+    assert isinstance(guard, RoleSchemaGuard)
+    assert guard.schema is DEVELOPER.schema
+
+
+async def test_run_with_retry_wires_no_guard_for_a_role_that_does_not_execute():
+    runner = ScriptedRunner(pjm=[OK])
+    await run_pjm(runner)
+    assert runner.calls[0]["guard"] is None
+
+
+async def test_the_same_guard_instance_and_cap_survive_the_retry():
+    # "built in run_with_retry, outside the attempt loop": the one-denial cap has to
+    # carry over from the first attempt to the retry, not reset with a fresh instance.
+    schema_failure = AttemptFailed("structured output invalid: x", 0.05, reason="schema")
+    runner = ScriptedRunner(developer=[schema_failure, delivered()])
+    await run_developer(runner)
+    first, second = runner.calls[0]["guard"], runner.calls[1]["guard"]
+    assert first is second
 
 
 async def test_retry_passes_the_error_and_sums_cost():
