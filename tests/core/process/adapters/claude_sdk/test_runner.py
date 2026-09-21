@@ -890,3 +890,53 @@ async def test_the_presubmit_becomes_a_hook_on_the_delivery_call(monkeypatch, tm
     )
     (matcher,) = seen[0][1].hooks["PreToolUse"]
     assert matcher.matcher == "StructuredOutput" and matcher.timeout > 300.0
+
+
+class FakeGuard:
+    def __init__(self, *reasons):
+        self.reasons = list(reasons)
+        self.refusals = 0
+
+    def __call__(self, tool_input):
+        return self.reasons.pop(0) if self.reasons else None
+
+
+async def test_the_guard_becomes_a_hook_on_the_delivery_call(monkeypatch, tmp_path):
+    seen = fake_query(monkeypatch, [result()])
+    await ClaudeSdkRunner().run_once(
+        PJM,
+        "p",
+        system_prompt="s",
+        model="m",
+        json_schema={},
+        cwd=tmp_path,
+        guard=FakeGuard(),
+    )
+    (matcher,) = seen[0][1].hooks["PreToolUse"]
+    assert matcher.matcher == "StructuredOutput"
+
+
+def test_options_for_wires_the_guard_ahead_of_the_presubmit(tmp_path):
+    class FakePresubmit:
+        timeout_s = 1.0
+
+        def __call__(self):
+            return "suite red"
+
+    options = options_for(
+        PJM,
+        system_prompt="s",
+        model="m",
+        json_schema={},
+        cwd=tmp_path,
+        resume=None,
+        max_budget_usd=None,
+        traceparent=None,
+        partial=False,
+        env={},
+        resource_attributes=None,
+        presubmit=FakePresubmit(),
+        guard=FakeGuard("missing `summary`"),
+    )
+    (matcher,) = options.hooks["PreToolUse"]
+    assert matcher.matcher == "StructuredOutput"

@@ -54,7 +54,7 @@ from claude_agent_sdk import (
 
 from agentic.shared.environment import trace_id_of, with_resource_marker
 
-from ...application.ports import AttemptFailed, Presubmit, RawResult
+from ...application.ports import AttemptFailed, Presubmit, RawResult, SchemaGuard
 from ...domain.denials import denial_for
 from ...domain.roles import Role
 from ...domain.rules import ReportedFailure, exception_motive, failure_motive, max_turns_motive
@@ -92,6 +92,7 @@ def options_for(
     on_denied: Callable[[], None] | None = None,
     on_notice: Callable[[], None] | None = None,
     on_presubmit_denied: Callable[[], None] | None = None,
+    guard: SchemaGuard | None = None,
 ) -> ClaudeAgentOptions:
     tools, allowed = list(role.tools), list(role.allowed)
     if role.skills and SKILL_TOOL not in tools:
@@ -129,7 +130,7 @@ def options_for(
         # runner's own git-identity overlay, which does not carry it in production) --
         # composing off `env` would overwrite whatever the real process inherited.
         env=_child_env(env, role, traceparent, resource_attributes),
-        hooks=hooks_for(role, cwd, presubmit, on_notice, on_presubmit_denied) or None,
+        hooks=hooks_for(role, cwd, presubmit, on_notice, on_presubmit_denied, guard) or None,
         # A role that executes runs under `bypassPermissions`, which already shadows
         # this callback for every call (the SDK's own warning); wiring one there would
         # be dead code the hooks cage already replaces (ADR-0011, addendum). For a role
@@ -209,6 +210,7 @@ class ClaudeSdkRunner:
         resume: str | None = None,
         max_budget_usd: float | None = None,
         presubmit: Presubmit | None = None,
+        guard: SchemaGuard | None = None,
     ) -> RawResult:
         denials = 0
         notice_fired = False
@@ -255,6 +257,7 @@ class ClaudeSdkRunner:
             on_denied=_count_denial,
             on_notice=_mark_notice,
             on_presubmit_denied=_count_presubmit_denial,
+            guard=guard,
         )
 
         result: ResultMessage | None = None
