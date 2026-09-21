@@ -57,7 +57,7 @@
           "type": "prometheus",
           "uid": "${DS_PROMETHEUS}"
         },
-        "query": "label_values(agentic_task_finished{product=~\"$product\"}, system_version)",
+        "query": "label_values(agentic_role_cost_usd{product=~\"$product\"}, system_version)",
         "refresh": 2,
         "includeAll": true,
         "multi": true,
@@ -660,8 +660,8 @@
     {
       "id": 21,
       "type": "bargauge",
-      "title": "Duración promedio por rol",
-      "description": "Segundos que tarda una corrida de rol, promedio en el rango. Delata qué rol frena la tarea.",
+      "title": "Duración de corrida y espera de cupo, por rol y versión",
+      "description": "Segundos que tarda una corrida (dentro del cupo de concurrencia) y segundos que esperó ese cupo, promedio en el rango, por rol y versión. Ya no lee `agentic_role_duration_seconds` (grano de nodo, congelada, ADR-0008 2026-09-18): una patch con varias corridas (una entrevista) deja varias muestras de `run_duration`, y una corrida grabada antes de `started_at`/`ended_at` no deja ninguna.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -675,8 +675,14 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (role) (sum_over_time(agentic_role_duration_seconds{product=~\"$product\"}[$__range])) / sum by (role) (count_over_time(agentic_role_duration_seconds{product=~\"$product\"}[$__range]))",
-          "legendFormat": "{{role}}",
+          "expr": "sum by (system_version, role) (sum_over_time(agentic_role_run_duration_seconds{product=~\"$product\", system_version=~\"$version\"}[$__range])) / sum by (system_version, role) (count_over_time(agentic_role_run_duration_seconds{product=~\"$product\", system_version=~\"$version\"}[$__range]))",
+          "legendFormat": "corrida {{role}} {{system_version}}",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (system_version, role) (sum_over_time(agentic_role_queue_wait_seconds{product=~\"$product\", system_version=~\"$version\"}[$__range])) / sum by (system_version, role) (count_over_time(agentic_role_queue_wait_seconds{product=~\"$product\", system_version=~\"$version\"}[$__range]))",
+          "legendFormat": "espera {{role}} {{system_version}}",
           "instant": true
         }
       ],
@@ -1032,7 +1038,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (role, model) (sum_over_time(agentic_role_tokens{product=~\"$product\"}[$__range])) / sum by (role, model) (sum_over_time(agentic_role_turns{product=~\"$product\"}[$__range]))",
+          "expr": "sum by (system_version, role, model) (sum_over_time(agentic_role_tokens{product=~\"$product\", system_version=~\"$version\"}[$__range])) / sum by (system_version, role, model) (sum_over_time(agentic_role_turns{product=~\"$product\", system_version=~\"$version\"}[$__range]))",
           "format": "table",
           "instant": true
         }
@@ -1106,7 +1112,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (role, model) (sum_over_time(agentic_role_tokens{product=~\"$product\", kind=\"cache_read\"}[$__range])) / sum by (role, model) (sum_over_time(agentic_role_tokens{product=~\"$product\"}[$__range]))",
+          "expr": "sum by (system_version, role, model) (sum_over_time(agentic_role_tokens{product=~\"$product\", system_version=~\"$version\", kind=\"cache_read\"}[$__range])) / sum by (system_version, role, model) (sum_over_time(agentic_role_tokens{product=~\"$product\", system_version=~\"$version\"}[$__range]))",
           "format": "table",
           "instant": true
         }
@@ -1184,7 +1190,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (role, model) (sum_over_time(agentic_role_cost_usd{product=~\"$product\"}[$__range])) / (sum by (role, model) (sum_over_time(agentic_role_tokens{product=~\"$product\", kind=\"output\"}[$__range])) / 1000)",
+          "expr": "sum by (system_version, role, model) (sum_over_time(agentic_role_cost_usd{product=~\"$product\", system_version=~\"$version\", model!=\"\"}[$__range])) / (sum by (system_version, role, model) (sum_over_time(agentic_role_tokens{product=~\"$product\", system_version=~\"$version\", kind=\"output\"}[$__range])) / 1000)",
           "format": "table",
           "instant": true
         }
@@ -1262,7 +1268,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (role, tool) (sum_over_time(agentic_role_tool_calls{product=~\"$product\"}[1w]))",
+          "expr": "sum by (system_version, role, tool) (sum_over_time(agentic_role_tool_calls{product=~\"$product\", system_version=~\"$version\"}[1w]))",
           "legendFormat": "{{tool}} {{role}}",
           "interval": "1w"
         }
@@ -1382,7 +1388,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (check) (sum_over_time(agentic_presubmit_checks{product=~\"$product\", result=\"red\", final=\"true\"}[1w]))",
+          "expr": "sum by (system_version, check) (sum_over_time(agentic_presubmit_checks{product=~\"$product\", system_version=~\"$version\", result=\"red\", final=\"true\"}[1w]))",
           "legendFormat": "{{check}}",
           "interval": "1w"
         }
@@ -1439,7 +1445,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (reason) (sum_over_time(agentic_role_failures{product=~\"$product\"}[1w]))",
+          "expr": "sum by (system_version, reason) (sum_over_time(agentic_role_failures{product=~\"$product\", system_version=~\"$version\"}[1w]))",
           "legendFormat": "{{reason}}",
           "interval": "1w"
         }
@@ -1496,7 +1502,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (interview) (sum_over_time(agentic_interview_rounds{product=~\"$product\"}[$__range])) / sum by (interview) (count_over_time(agentic_interview_rounds{product=~\"$product\"}[$__range]))",
+          "expr": "sum by (system_version, interview) (sum_over_time(agentic_interview_rounds{product=~\"$product\", system_version=~\"$version\"}[$__range])) / sum by (system_version, interview) (count_over_time(agentic_interview_rounds{product=~\"$product\", system_version=~\"$version\"}[$__range]))",
           "legendFormat": "{{interview}}",
           "instant": true
         }
@@ -1546,7 +1552,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (interview, to) (sum_over_time(agentic_interview_questions{product=~\"$product\"}[1w]))",
+          "expr": "sum by (system_version, interview, to) (sum_over_time(agentic_interview_questions{product=~\"$product\", system_version=~\"$version\"}[1w]))",
           "legendFormat": "{{to}} {{interview}}",
           "interval": "1w"
         }

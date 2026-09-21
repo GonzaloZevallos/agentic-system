@@ -76,6 +76,48 @@ def test_negative_matcher_is_recognised_as_a_queried_label():
     assert "model" in _queried_by_metric([expr])["agentic_role_cost_usd"]
 
 
+# The metric families this task adds `system.version` to (ADR-0008, 2026-09-21 addendum):
+# tokens, calls, turns, tool_calls and subagent_cost_usd of a role run, its failures,
+# presubmit checks and interview counts. `agentic_role_duration_seconds` (node grain) is
+# deliberately absent: it stays frozen and unversioned (ADR-0008, 2026-09-18), and the
+# panel that wants a version reads `agentic_role_run_duration_seconds`/`_queue_wait_seconds`
+# instead, which already carried `system.version` before this task.
+VERSIONED_FAMILIES = [
+    "agentic_role_tokens",
+    "agentic_role_calls",
+    "agentic_role_turns",
+    "agentic_role_max_turns",
+    "agentic_role_tool_calls",
+    "agentic_role_subagent_cost_usd",
+    "agentic_role_failures",
+    "agentic_role_failure_cost_usd",
+    "agentic_presubmit_checks",
+    "agentic_presubmit_duration_seconds",
+    "agentic_interview_rounds",
+    "agentic_interview_questions",
+    "agentic_interview_invariants",
+]
+
+
+def test_versioned_families_are_grouped_and_filtered_by_system_version():
+    exprs = _exprs()
+    queried = _queried_by_metric(exprs)
+    exprs_by_metric: dict[str, list[str]] = {}
+    for expr in exprs:
+        for metric in set(BARE_METRIC.findall(expr)):
+            exprs_by_metric.setdefault(metric, []).append(expr)
+
+    for metric in VERSIONED_FAMILIES:
+        for expr in exprs_by_metric.get(metric, []):
+            assert "system_version" in queried.get(metric, set()), (
+                f"{metric} is grouped without system_version in by(...): {expr!r}"
+            )
+            assert re.search(rf'{metric}\{{[^}}]*system_version=~"\$version"', expr), (
+                f'{metric} is queried without system_version=~"$version" in its '
+                f"selector: {expr!r}"
+            )
+
+
 def test_every_queried_metric_and_label_is_documented():
     documented = _documented()
     queried = _queried_by_metric(_exprs())
