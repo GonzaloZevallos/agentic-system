@@ -101,6 +101,11 @@ _Campo_: super-step — LangGraph, tomado de Pregel: los nodos que corren en par
 La rama del producto donde termina el código de una tarea, una por tarea. Cada subtarea trabaja en su propia rama, aislada de las otras, y el sistema las trae acá.
 _Campo_: branch — de git, no del campo agéntico
 
+**Archivado**:
+Lo que el sistema hace con lo que dejó la corrida anterior de una tarea cuando esa tarea se reinicia de cero: commitea en cada worktree lo que nadie commiteó, los saca, y renombra la rama de tarea y las de sus subtareas bajo `archive/run<N>-<commit del sistema>/`, la de tarea primero. No borra nada, y por eso una corrida vieja se puede leer después; el issue recibe una línea diciendo bajo qué prefijo quedó. `N` es el número de archivado de esa tarea, y que la rama de tarea se renombre antes que las de subtarea es lo que hace visible un archivado que se cortó a la mitad: un reintento lo termina en el mismo prefijo en vez de abrir otro.
+_Avoid_: borrado, limpieza (el archivado no borra), backup
+_Campo_: sin término de arte
+
 **Corrida**:
 Una ejecución del sistema sobre una tarea, desde que entra hasta el cierre o el escalado.
 _Avoid_: run, ejecución
