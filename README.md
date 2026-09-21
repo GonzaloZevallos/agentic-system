@@ -1013,7 +1013,12 @@ Antes de gastar muestra la tarea, dónde se frenó, el motivo, lo gastado por fa
 decisión entera, qué reanuda, las sesiones y los worktrees, y pide confirmación. `--from-document` es el rescate: siembra el estado desde el documento,
 cruzado con git, como si `escalate` acabara de correr. `agentic run` se niega a arrancar
 sobre una tarea con estado salvo `--fresh`. En la etapa 5 un poller con reloj propio llama a
-`resume`, que es el mismo mecanismo que necesitan los roles proactivos.
+`resume`, que es el mismo mecanismo que necesitan los roles proactivos. Antes de invocar el
+grafo, `run`, `resume` y `--fresh` toman `.agentic/runs/<tarea>.lock` (pid, host, hora y
+comando): un pid vivo en este host se niega, uno de otro host se niega por nombre sin
+probarlo, y uno muerto se toma, avisándolo; `--dry-run` no lo toma, solo lo muestra. Protege
+invocaciones de la CLI entre sí, no un `langgraph dev`, que mantiene todos los hilos en un
+solo proceso.
 
 ### Fallo de rol
 

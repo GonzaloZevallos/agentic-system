@@ -9,6 +9,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from agentic import cli
 from agentic.core.process.adapters.github import inbox
+from agentic.core.process.application.ports import LockHeld, LockRecord
 
 
 @asynccontextmanager
@@ -481,6 +482,223 @@ def test_a_resume_checks_the_stack_at_the_tasks_base_not_only_at_head(
         cli.main()
     assert info.value.code == 2
     assert "declares no stack" in capsys.readouterr().err
+
+
+class FakeLock:
+    """A `RunLock` double: no real process, no real file. `held` is what a live process
+    already wrote, if any; `taken_over` is what `acquire` hands back for a dead one."""
+
+    def __init__(self, held: LockRecord | None = None, taken_over: LockRecord | None = None):
+        self.held = held
+        self.taken_over = taken_over
+        self.acquired: list[tuple[str, str]] = []
+        self.released: list[str] = []
+
+    def read(self, task_id):
+        return self.held
+
+    def acquire(self, task_id, command):
+        self.acquired.append((task_id, command))
+        if self.held is not None:
+            raise LockHeld(self.held, f"{task_id} is already running: pid {self.held.pid}")
+        self.held = LockRecord(os.getpid(), "h", "2026-09-21T00:00:00Z", command)
+        return self.taken_over
+
+    def release(self, task_id):
+        self.released.append(task_id)
+        self.held = None
+
+
+def lock_record(
+    pid=4321, host="elsewhere", started_at="2026-09-15T00:00:00Z", command="agentic run"
+):
+    return LockRecord(pid, host, started_at, command)
+
+
+class Delivers:
+    """A graph double whose `ainvoke` returns normally, to exercise the lock around a
+    successful invocation without the full scripted graph."""
+
+    def __init__(self, final=None):
+        self.final = final or {"id": "T-9", "title": "t", "status": "ready_for_review"}
+
+    def compile(self, checkpointer):
+        return self
+
+    async def aget_state(self, config):
+        return SimpleNamespace(values={}, next=(), interrupts=())
+
+    async def aupdate_state(self, config, values, as_node=None):
+        pass
+
+    async def ainvoke(self, task, config):
+        return self.final
+
+
+@pytest.mark.anyio
+async def test_run_refuses_when_the_lock_is_held_and_touches_nothing(monkeypatch, tmp_path):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setattr(cli, "graph", Delivers())
+    lock = FakeLock(held=lock_record())
+    task = {"id": "T-9", "title": "t", "description": "d"}
+    with pytest.raises(cli.CannotStart, match="T-9 is already running"):
+        await cli._run(
+            task,
+            Configuration(product_dir=tmp_path),
+            memory_ports(),
+            checkpointer=in_memory,
+            run_lock=lock,
+        )
+    assert lock.released == []  # never acquired: nothing to release
+
+
+@pytest.mark.anyio
+async def test_a_run_acquires_the_lock_for_this_task_and_releases_it_even_if_the_graph_breaks(
+    monkeypatch, tmp_path
+):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    class Broken(Delivers):
+        async def ainvoke(self, task, config):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(cli, "graph", Broken())
+    lock = FakeLock()
+    task = {"id": "T-9", "title": "t", "description": "d"}
+    with pytest.raises(RuntimeError, match="boom"):
+        await cli._run(
+            task,
+            Configuration(product_dir=tmp_path),
+            memory_ports(),
+            checkpointer=in_memory,
+            run_lock=lock,
+        )
+    assert lock.acquired == [("T-9", " ".join(__import__("sys").argv))]
+    assert lock.released == ["T-9"]
+
+
+@pytest.mark.anyio
+async def test_a_run_with_no_lock_injected_uses_the_products_own_runs_dir(monkeypatch, tmp_path):
+    from agentic.core.process.adapters.filesystem import FilesystemRunLock
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setattr(cli, "graph", Delivers({"id": "T-9", "title": "t", "status": "open"}))
+    cfg = Configuration(product_dir=tmp_path)
+    task = {"id": "T-9", "title": "t", "description": "d"}
+    await cli._run(task, cfg, memory_ports(), checkpointer=in_memory)
+    assert FilesystemRunLock(cfg.agentic_dir / "runs").read("T-9") is None
+
+
+@pytest.mark.anyio
+async def test_resume_refuses_when_the_lock_is_held(monkeypatch, tmp_path):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setattr(cli, "graph", Delivers())
+    ports = memory_ports()
+    ports.documents.save(
+        {
+            "id": "GH-1",
+            "title": "t",
+            "description": "d",
+            "type": "bug",
+            "status": "waiting_on_human",
+            "escalated": "Developer stopped by the task cap",
+            "cost_usd": 1.0,
+        }
+    )
+    ports.tracker.earlier = ["Escalated: Developer stopped by the task cap"]
+    lock = FakeLock(held=lock_record())
+    with pytest.raises(cli.CannotStart, match="GH-1 is already running"):
+        await cli._resume(
+            "GH-1",
+            Configuration(product_dir=tmp_path),
+            ports,
+            from_document=True,
+            yes=True,
+            checkpointer=in_memory,
+            run_lock=lock,
+        )
+    assert ports.tracker.comments == []  # refused before announcing anything
+
+
+@pytest.mark.anyio
+async def test_a_dry_run_never_acquires_the_lock_and_prints_it_instead(
+    monkeypatch, tmp_path, capsys
+):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setattr(cli, "graph", Delivers())
+    ports = memory_ports()
+    ports.documents.save(
+        {
+            "id": "GH-1",
+            "title": "t",
+            "description": "d",
+            "type": "bug",
+            "status": "waiting_on_human",
+            "escalated": "Developer stopped by the task cap",
+            "cost_usd": 1.0,
+        }
+    )
+    ports.tracker.earlier = ["Escalated: Developer stopped by the task cap"]
+    held = lock_record(host="h2", started_at="2026-09-15T00:00:00Z")
+    lock = FakeLock(held=held)
+    await cli._resume(
+        "GH-1",
+        Configuration(product_dir=tmp_path),
+        ports,
+        from_document=True,
+        dry_run=True,
+        checkpointer=in_memory,
+        run_lock=lock,
+    )
+    assert lock.acquired == []
+    out = capsys.readouterr().out
+    assert str(held.pid) in out and held.host in out
+
+
+@pytest.mark.anyio
+async def test_a_resumed_run_acquires_and_releases_the_lock_and_a_takeover_is_printed(
+    monkeypatch, tmp_path, capsys
+):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setattr(cli, "graph", Delivers({"id": "GH-1", "title": "t", "status": "open"}))
+    ports = memory_ports()
+    ports.documents.save(
+        {
+            "id": "GH-1",
+            "title": "t",
+            "description": "d",
+            "type": "bug",
+            "status": "waiting_on_human",
+            "escalated": "Developer stopped by the task cap",
+            "cost_usd": 1.0,
+        }
+    )
+    ports.tracker.earlier = ["Escalated: Developer stopped by the task cap"]
+    dead = lock_record(pid=999_999_999, host="h", started_at="2026-09-01T00:00:00Z")
+    lock = FakeLock(taken_over=dead)
+    await cli._resume(
+        "GH-1",
+        Configuration(product_dir=tmp_path),
+        ports,
+        from_document=True,
+        yes=True,
+        checkpointer=in_memory,
+        run_lock=lock,
+    )
+    assert lock.acquired[0][0] == "GH-1" and lock.released == ["GH-1"]
+    out = capsys.readouterr().out
+    assert "999999999" in out
+    assert ports.tracker.comments  # announced normally: the lock did not stop it
 
 
 def test_a_product_that_declares_no_name_does_not_run(monkeypatch, tmp_path, capsys):

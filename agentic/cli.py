@@ -13,8 +13,8 @@ import argparse
 import os
 import sys
 import uuid
-from collections.abc import Awaitable, Callable
-from contextlib import AbstractAsyncContextManager
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import AbstractAsyncContextManager, contextmanager
 from functools import partial
 from typing import cast
 
@@ -28,9 +28,10 @@ from . import composition
 from .composition import default_ports, graph
 from .core.measurement.adapters.otel import telemetry
 from .core.measurement.adapters.otel.telemetry import InvocationKind
+from .core.process.adapters.filesystem import FilesystemRunLock
 from .core.process.adapters.langgraph.graph import ESCALATE
 from .core.process.application import resume as resuming
-from .core.process.application.ports import Ports
+from .core.process.application.ports import LockHeld, LockRecord, Ports, RunLock
 from .core.process.application.preflight import (
     declared_stack_of,
     no_setup,
@@ -43,6 +44,13 @@ from .shared.configuration import ENV_PREFIX, Configuration, MissingProductDir
 from .shared.environment import without_own_toolchain
 
 Checkpointer = Callable[[Configuration], AbstractAsyncContextManager[BaseCheckpointSaver]]
+
+# What the lock claims, said whenever it refuses (Tech Lead plan, subtask `run-lock`):
+# it protects one CLI invocation from another, nothing a `langgraph dev` server runs.
+LOCK_SCOPE = (
+    "the lock protects `agentic run`/`agentic resume` invocations from each other; "
+    "a `langgraph dev` server holds every thread in one process and is not covered by it"
+)
 
 
 class CannotStart(Exception):
@@ -159,21 +167,60 @@ def _replace_environ(env: dict[str, str]) -> None:
     os.environ.update(env)
 
 
+def _lock_for(cfg: Configuration) -> RunLock:
+    return FilesystemRunLock(cfg.agentic_dir / "runs")
+
+
+def _acquire(lock: RunLock, task_id: str) -> LockRecord | None:
+    try:
+        return lock.acquire(task_id, " ".join(sys.argv))
+    except LockHeld as exc:
+        raise CannotStart(f"{exc}: {LOCK_SCOPE}") from exc
+
+
+def _print_lock(lock: RunLock, task_id: str) -> None:
+    """What `--dry-run` shows instead of acquiring: the worried human's own tool."""
+    if (record := lock.read(task_id)) is not None:
+        print(
+            f"lock:      pid {record.pid} on {record.host}, running since "
+            f"{record.started_at} ({record.command})"
+        )
+
+
+@contextmanager
+def _locked(lock: RunLock, task_id: str) -> Iterator[None]:
+    """Around the invocation only (Tech Lead plan): refuses before anything is spent,
+    releases whether the invocation delivers, escalates or raises."""
+    taken_over = _acquire(lock, task_id)
+    if taken_over is not None:
+        print(
+            f"agentic: took over the lock left by pid {taken_over.pid} on "
+            f"{taken_over.host} ({taken_over.started_at}), no longer running"
+        )
+    try:
+        yield
+    finally:
+        lock.release(task_id)
+
+
 async def _run(
     task: TaskInput,
     cfg: Configuration,
     ports: Ports,
     fresh: bool = False,
     checkpointer: Checkpointer | None = None,
+    run_lock: RunLock | None = None,
 ) -> None:
+    lock = run_lock if run_lock is not None else _lock_for(cfg)
     config: RunnableConfig = {"configurable": {"thread_id": task["id"]}}
     async with (checkpointer or composition.checkpointer)(cfg) as saver:
         app = graph.compile(checkpointer=saver)
         if not fresh:
             await _refuse_a_started_task(app, config, task["id"], ports)
-        # A thread keeps its channels: a new run over it would add to the old cost and runs.
-        await saver.adelete_thread(task["id"])
-        final = await _invoke(app, task, config, task, ports, "run")
+        with _locked(lock, task["id"]):
+            # A thread keeps its channels: a new run over it would add to the old cost.
+            await saver.adelete_thread(task["id"])
+            final = await _invoke(app, task, config, task, ports, "run")
     _report(final, task["id"], ports)
 
 
@@ -206,7 +253,9 @@ async def _resume(
     dry_run: bool = False,
     yes: bool = False,
     checkpointer: Checkpointer | None = None,
+    run_lock: RunLock | None = None,
 ) -> None:
+    lock = run_lock if run_lock is not None else _lock_for(cfg)
     config: RunnableConfig = {"configurable": {"thread_id": task_id}}
     async with (checkpointer or composition.checkpointer)(cfg) as saver:
         app = graph.compile(checkpointer=saver)
@@ -230,19 +279,22 @@ async def _resume(
 
         print(resuming.summary(r, cfg, ports))
         if dry_run:
+            _print_lock(lock, task_id)
             return
         if not yes and input("\nResume? [y/N] ").strip().lower() not in ("y", "yes"):
             raise CannotStart("not resumed", code=1)
 
-        if r.source == "document":
-            # Seeded as if `escalate` had just run: the task pauses once more, without
-            # telling the human again, and the answer below resumes it like a checkpoint.
-            await saver.adelete_thread(task_id)
-            await app.aupdate_state(config, r.paused, as_node=ESCALATE)
-        crashed = r.source == "checkpoint" and not snapshot.interrupts
-        command: Command | None = None if crashed else Command(resume={"decision": r.decision})
-        resuming.announce(r, ports)
-        final = await _invoke(app, command, config, r.paused, ports, "resume", r.decision)
+        with _locked(lock, task_id):
+            if r.source == "document":
+                # Seeded as if `escalate` had just run: the task pauses once more,
+                # without telling the human again, and the answer below resumes it
+                # like a checkpoint.
+                await saver.adelete_thread(task_id)
+                await app.aupdate_state(config, r.paused, as_node=ESCALATE)
+            crashed = r.source == "checkpoint" and not snapshot.interrupts
+            command: Command | None = None if crashed else Command(resume={"decision": r.decision})
+            resuming.announce(r, ports)
+            final = await _invoke(app, command, config, r.paused, ports, "resume", r.decision)
     _report(final, task_id, ports)
 
 
