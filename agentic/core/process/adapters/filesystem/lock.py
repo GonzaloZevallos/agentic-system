@@ -28,26 +28,40 @@ class FilesystemRunLock:
         existing = self.read(task_id)
         taken_over = None
         if existing is not None:
-            if existing.host != self._host():
-                raise LockHeld(
-                    existing,
-                    f"{task_id} is locked by pid {existing.pid} on {existing.host} "
-                    f"since {existing.started_at}",
-                )
-            if _alive(existing.pid):
-                raise LockHeld(
-                    existing,
-                    f"{task_id} is already running: pid {existing.pid} on {existing.host} "
-                    f"since {existing.started_at} ({existing.command})",
-                )
+            message = self._refusal_message(task_id, existing)
+            if message is not None:
+                raise LockHeld(existing, message)
             taken_over = existing
         self._write(task_id, pid=os.getpid(), host=self._host(), started_at=_now(), command=command)
         return taken_over
 
+    def refusal(self, task_id: str) -> str | None:
+        existing = self.read(task_id)
+        if existing is None:
+            return None
+        return self._refusal_message(task_id, existing)
+
+    def _refusal_message(self, task_id: str, existing: LockRecord) -> str | None:
+        """The one place `acquire` and `refusal` share: never probes a pid recorded
+        on another host, and produces the same two message shapes either way."""
+        if existing.host != self._host():
+            return (
+                f"{task_id} is locked by pid {existing.pid} on {existing.host} "
+                f"since {existing.started_at}"
+            )
+        if _alive(existing.pid):
+            return (
+                f"{task_id} is already running: pid {existing.pid} on {existing.host} "
+                f"since {existing.started_at} ({existing.command})"
+            )
+        return None
+
     def release(self, task_id: str) -> None:
-        path = self._path(task_id)
-        if path.is_file():
-            path.unlink()
+        existing = self.read(task_id)
+        if existing is None:
+            return
+        if existing.pid == os.getpid() and existing.host == self._host():
+            self._path(task_id).unlink()
 
     def _path(self, task_id: str) -> Path:
         return self.runs_dir / f"{task_id}.lock"

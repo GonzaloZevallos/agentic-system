@@ -446,8 +446,20 @@ class RunLock(Protocol):
         another host already holds it."""
         ...
 
+    def refusal(self, task_id: str) -> str | None:
+        """The message `acquire` would raise `LockHeld` with right now, without
+        writing anything and without probing anything `acquire` itself would not
+        probe (a pid on another host is still never probed). `None` when `acquire`
+        would succeed. The one place the liveness rule and its message live, so a
+        read-only caller -- `--detach`'s parent, refusing on the human's terminal
+        before it spawns -- cannot drift from what `acquire` actually enforces."""
+        ...
+
     def release(self, task_id: str) -> None:
-        """Release, if this process holds it. A no-op when there is none."""
+        """Release, if this process holds it (same pid, same host). A no-op when
+        there is none, or when the lock now belongs to someone else -- a takeover
+        that happened after this process's own claim was lost must never be undone
+        by this process releasing on its way out."""
         ...
 
 

@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import os
 import signal
-import socket
 import subprocess
 import sys
 import uuid
@@ -327,33 +326,15 @@ def _spawn_detached(argv: list[str], log_path: str) -> int:
 def _refuse_if_locked(lock: RunLock, task_id: str) -> None:
     """The read-only half of `_acquire`'s check, for `--detach`'s parent: it must show a
     refusal on the human's terminal without writing the lock itself (invariant: no
-    subtask writes a lock from a process that then forks or exits). The child re-checks
+    subtask writes a lock from a process that then forks or exits). Delegates the
+    liveness rule and both message shapes to `lock.refusal` -- the same one `acquire`
+    itself enforces -- so this copy cannot drift from it. The child re-checks
     authoritatively, atomically, through the real `_acquire` right after it re-execs;
     this only saves the human a `setsid` and a wasted log file when the answer was
     already known."""
-    record = lock.read(task_id)
-    if record is None:
-        return
-    if record.host != socket.gethostname():
-        raise CannotStart(
-            f"{task_id} is locked by pid {record.pid} on {record.host} "
-            f"since {record.started_at}: {LOCK_SCOPE}"
-        )
-    if _alive(record.pid):
-        raise CannotStart(
-            f"{task_id} is already running: pid {record.pid} on {record.host} "
-            f"since {record.started_at} ({record.command}): {LOCK_SCOPE}"
-        )
-
-
-def _alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True  # owned by someone else, but the OS knows it is there
-    return True
+    message = lock.refusal(task_id)
+    if message is not None:
+        raise CannotStart(f"{message}: {LOCK_SCOPE}")
 
 
 def _replace_environ(env: dict[str, str]) -> None:

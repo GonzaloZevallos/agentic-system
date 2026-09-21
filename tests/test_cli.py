@@ -1,6 +1,7 @@
 import json
 import os
 import signal
+import socket
 import subprocess
 from contextlib import asynccontextmanager
 from functools import partial
@@ -545,10 +546,16 @@ class FakeLock:
 
     def acquire(self, task_id, command):
         self.acquired.append((task_id, command))
-        if self.held is not None:
-            raise LockHeld(self.held, f"{task_id} is already running: pid {self.held.pid}")
+        message = self.refusal(task_id)
+        if message is not None:
+            raise LockHeld(self.held, message)
         self.held = LockRecord(os.getpid(), "h", "2026-09-21T00:00:00Z", command)
         return self.taken_over
+
+    def refusal(self, task_id):
+        if self.held is None:
+            return None
+        return f"{task_id} is already running: pid {self.held.pid}"
 
     def release(self, task_id):
         self.released.append(task_id)
@@ -1101,7 +1108,7 @@ async def test_detach_refuses_when_the_lock_is_held_and_never_spawns(monkeypatch
     from tests.fakes import memory_ports
 
     monkeypatch.setattr(cli, "graph", Delivers())
-    lock = FakeLock(held=lock_record(pid=os.getpid(), host=cli.socket.gethostname()))
+    lock = FakeLock(held=lock_record(pid=os.getpid(), host=socket.gethostname()))
     spawn = FakeSpawn()
     task = {"id": "T-9", "title": "t", "description": "d"}
     with pytest.raises(cli.CannotStart, match="T-9 is already running"):
