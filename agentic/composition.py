@@ -45,12 +45,18 @@ def default_ports(cfg: Configuration) -> Ports:
 
 
 def _ports(cfg: Configuration) -> Ports:
+    # Append mode, line buffered: up to `max_concurrent_roles` nodes hold their own
+    # handle on the same path, and whole lines are what makes that safe to interleave
+    # (README.md, 14). `None` with no `log_file` -- the `langgraph dev` door -- opens
+    # nothing, byte-for-byte the runner this composed before this task (issue #33).
+    stream = open(cfg.log_file, "a", buffering=1) if cfg.log_file is not None else None
     return Ports(
         # The roles get the configuration the run decided, never the one the human's
         # shell carries: the `AGENTIC_*` of this process are unset for them, which only
         # the composition root can do because only it sees the real environment.
         runner=ClaudeSdkRunner(
             verbose=cfg.verbose,
+            stream=stream,
             telemetry=telemetry,
             env={**cfg.role_env, **own_configuration_unset(os.environ)},
         ),

@@ -1,14 +1,20 @@
 import json
 import os
+import signal
+import socket
 import subprocess
 from contextlib import asynccontextmanager
+from functools import partial
+from pathlib import Path
 from types import SimpleNamespace
 
+import anyio
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agentic import cli
 from agentic.core.process.adapters.github import inbox
+from agentic.core.process.application.ports import LockHeld, LockRecord
 
 
 @asynccontextmanager
@@ -33,10 +39,14 @@ def product(tmp_path, name, stack=STACK):
 
 
 def capture_run(monkeypatch):
-    """Replace the graph run with a recorder of what the CLI would have run."""
+    """Replace the graph run with a recorder of what the CLI would have run. `main` now
+    calls `anyio.run(cli._signal_guarded, work)` (subtask `signals`), so this unwraps
+    one level to the same `work` partial every assertion here always read."""
     seen = {}
 
-    def fake_run(work):
+    def fake_run(func, *args):
+        assert func is cli._signal_guarded
+        (work,) = args
         task, cfg, ports, *options = work.args
         seen.update(fn=work.func, task=task, cfg=cfg, ports=ports, options=tuple(options))
 
@@ -293,6 +303,41 @@ async def test_a_paused_task_resumes_through_the_cli_and_run_refuses_to_redo_it(
         await cli._resume("GH-1", raised, ports, yes=True, checkpointer=saver)
 
 
+@pytest.mark.anyio
+async def test_the_log_file_travels_in_configurable_to_every_node(monkeypatch, tmp_path):
+    """`_run` puts the string next to `thread_id` in the config it hands `ainvoke`
+    (invariant 12: a `str`, never a `Path`); each node reads it back off its own
+    `config["configurable"]` (`configuration_from`, `agentic/core/process/adapters/
+    langgraph/graph.py`) and `default_ports` opens the file from it. A real compiled
+    graph over a fake saver is the seam: `aget_state` itself does not echo custom
+    `configurable` keys back once a checkpoint exists (only `thread_id`,
+    `checkpoint_ns` and `checkpoint_id` are its own business), so the node itself,
+    not a state snapshot, is where this round trip is provable."""
+    from agentic.core.process.adapters.langgraph.graph import build_graph
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import ScriptedRunner, classified, memory_ports
+
+    seen: list[Configuration] = []
+
+    def ports_for(cfg: Configuration):
+        seen.append(cfg)
+        return memory_ports(ScriptedRunner(pjm=[classified()]))
+
+    graph = build_graph(ports_for)
+    monkeypatch.setattr(cli, "graph", graph)
+    monkeypatch.setenv("AGENTIC_PRODUCT_DIR", str(tmp_path))
+    cfg = Configuration.from_sources({}, os.environ)
+    saver, task = Saver(), {"id": "GH-1", "title": "Export", "description": "CSV."}
+    log_file = str(tmp_path / ".agentic/logs/GH-1-20260921T000000Z.log")
+
+    with pytest.raises(AssertionError, match="no scripted result"):
+        # Only `pjm` is scripted: the next node crashes, which is fine -- `pjm`'s own
+        # node already ran and recorded what `configurable` handed it.
+        await cli._run(task, cfg, memory_ports(), checkpointer=saver, log_file=log_file)
+
+    assert seen and seen[0].log_file == Path(log_file)
+
+
 class MetricPoints:
     """Every data point `_invoke`'s two invocations exported, by metric name: a resume
     emitting the task's whole accumulated cost again, instead of only what it spent
@@ -416,6 +461,9 @@ def test_a_stage0_fixed_to_a_sha_says_nothing(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(cli, "unfixed_stage0", lambda ports: None)
     capture_run(monkeypatch)
     monkeypatch.setattr("sys.argv", ["agentic", "run", "t", "d", "--product-dir", str(root)])
+    # A real terminal, so the no-TTY warning (subtask `--detach`) does not fire here
+    # either: this test is about stage0 alone, same as pytest's own stdin is not one.
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
     cli.main()
     assert capsys.readouterr().err == ""
 
@@ -483,6 +531,229 @@ def test_a_resume_checks_the_stack_at_the_tasks_base_not_only_at_head(
     assert "declares no stack" in capsys.readouterr().err
 
 
+class FakeLock:
+    """A `RunLock` double: no real process, no real file. `held` is what a live process
+    already wrote, if any; `taken_over` is what `acquire` hands back for a dead one."""
+
+    def __init__(self, held: LockRecord | None = None, taken_over: LockRecord | None = None):
+        self.held = held
+        self.taken_over = taken_over
+        self.acquired: list[tuple[str, str]] = []
+        self.released: list[str] = []
+
+    def read(self, task_id):
+        return self.held
+
+    def acquire(self, task_id, command):
+        self.acquired.append((task_id, command))
+        message = self.refusal(task_id)
+        if message is not None:
+            raise LockHeld(self.held, message)
+        self.held = LockRecord(os.getpid(), "h", "2026-09-21T00:00:00Z", command)
+        return self.taken_over
+
+    def refusal(self, task_id):
+        if self.held is None:
+            return None
+        return f"{task_id} is already running: pid {self.held.pid}"
+
+    def release(self, task_id):
+        self.released.append(task_id)
+        self.held = None
+
+
+def lock_record(
+    pid=4321, host="elsewhere", started_at="2026-09-15T00:00:00Z", command="agentic run"
+):
+    return LockRecord(pid, host, started_at, command)
+
+
+class Delivers:
+    """A graph double whose `ainvoke` returns normally, to exercise the lock around a
+    successful invocation without the full scripted graph."""
+
+    def __init__(self, final=None):
+        self.final = final or {"id": "T-9", "title": "t", "status": "ready_for_review"}
+
+    def compile(self, checkpointer):
+        return self
+
+    async def aget_state(self, config):
+        return SimpleNamespace(values={}, next=(), interrupts=())
+
+    async def aupdate_state(self, config, values, as_node=None):
+        pass
+
+    async def ainvoke(self, task, config):
+        return self.final
+
+
+@pytest.mark.anyio
+async def test_run_refuses_when_the_lock_is_held_and_touches_nothing(monkeypatch, tmp_path):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setattr(cli, "graph", Delivers())
+    lock = FakeLock(held=lock_record())
+    task = {"id": "T-9", "title": "t", "description": "d"}
+    with pytest.raises(cli.CannotStart, match="T-9 is already running"):
+        await cli._run(
+            task,
+            Configuration(product_dir=tmp_path),
+            memory_ports(),
+            checkpointer=in_memory,
+            run_lock=lock,
+        )
+    assert lock.released == []  # never acquired: nothing to release
+
+
+@pytest.mark.anyio
+async def test_a_run_acquires_the_lock_for_this_task_and_releases_it_even_if_the_graph_breaks(
+    monkeypatch, tmp_path
+):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    class Broken(Delivers):
+        async def ainvoke(self, task, config):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(cli, "graph", Broken())
+    lock = FakeLock()
+    task = {"id": "T-9", "title": "t", "description": "d"}
+    with pytest.raises(RuntimeError, match="boom"):
+        await cli._run(
+            task,
+            Configuration(product_dir=tmp_path),
+            memory_ports(),
+            checkpointer=in_memory,
+            run_lock=lock,
+        )
+    assert lock.acquired == [("T-9", " ".join(__import__("sys").argv))]
+    assert lock.released == ["T-9"]
+
+
+@pytest.mark.anyio
+async def test_a_run_with_no_lock_injected_uses_the_products_own_runs_dir(monkeypatch, tmp_path):
+    from agentic.core.process.adapters.filesystem import FilesystemRunLock
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setattr(cli, "graph", Delivers({"id": "T-9", "title": "t", "status": "open"}))
+    cfg = Configuration(product_dir=tmp_path)
+    task = {"id": "T-9", "title": "t", "description": "d"}
+    await cli._run(task, cfg, memory_ports(), checkpointer=in_memory)
+    assert FilesystemRunLock(cfg.agentic_dir / "runs").read("T-9") is None
+
+
+@pytest.mark.anyio
+async def test_resume_refuses_when_the_lock_is_held(monkeypatch, tmp_path):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setattr(cli, "graph", Delivers())
+    ports = memory_ports()
+    ports.documents.save(
+        {
+            "id": "GH-1",
+            "title": "t",
+            "description": "d",
+            "type": "bug",
+            "status": "waiting_on_human",
+            "escalated": "Developer stopped by the task cap",
+            "cost_usd": 1.0,
+        }
+    )
+    ports.tracker.earlier = ["Escalated: Developer stopped by the task cap"]
+    lock = FakeLock(held=lock_record())
+    with pytest.raises(cli.CannotStart, match="GH-1 is already running"):
+        await cli._resume(
+            "GH-1",
+            Configuration(product_dir=tmp_path),
+            ports,
+            from_document=True,
+            yes=True,
+            checkpointer=in_memory,
+            run_lock=lock,
+        )
+    assert ports.tracker.comments == []  # refused before announcing anything
+
+
+@pytest.mark.anyio
+async def test_a_dry_run_never_acquires_the_lock_and_prints_it_instead(
+    monkeypatch, tmp_path, capsys
+):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setattr(cli, "graph", Delivers())
+    ports = memory_ports()
+    ports.documents.save(
+        {
+            "id": "GH-1",
+            "title": "t",
+            "description": "d",
+            "type": "bug",
+            "status": "waiting_on_human",
+            "escalated": "Developer stopped by the task cap",
+            "cost_usd": 1.0,
+        }
+    )
+    ports.tracker.earlier = ["Escalated: Developer stopped by the task cap"]
+    held = lock_record(host="h2", started_at="2026-09-15T00:00:00Z")
+    lock = FakeLock(held=held)
+    await cli._resume(
+        "GH-1",
+        Configuration(product_dir=tmp_path),
+        ports,
+        from_document=True,
+        dry_run=True,
+        checkpointer=in_memory,
+        run_lock=lock,
+    )
+    assert lock.acquired == []
+    out = capsys.readouterr().out
+    assert str(held.pid) in out and held.host in out
+
+
+@pytest.mark.anyio
+async def test_a_resumed_run_acquires_and_releases_the_lock_and_a_takeover_is_printed(
+    monkeypatch, tmp_path, capsys
+):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setattr(cli, "graph", Delivers({"id": "GH-1", "title": "t", "status": "open"}))
+    ports = memory_ports()
+    ports.documents.save(
+        {
+            "id": "GH-1",
+            "title": "t",
+            "description": "d",
+            "type": "bug",
+            "status": "waiting_on_human",
+            "escalated": "Developer stopped by the task cap",
+            "cost_usd": 1.0,
+        }
+    )
+    ports.tracker.earlier = ["Escalated: Developer stopped by the task cap"]
+    dead = lock_record(pid=999_999_999, host="h", started_at="2026-09-01T00:00:00Z")
+    lock = FakeLock(taken_over=dead)
+    await cli._resume(
+        "GH-1",
+        Configuration(product_dir=tmp_path),
+        ports,
+        from_document=True,
+        yes=True,
+        checkpointer=in_memory,
+        run_lock=lock,
+    )
+    assert lock.acquired[0][0] == "GH-1" and lock.released == ["GH-1"]
+    out = capsys.readouterr().out
+    assert "999999999" in out
+    assert ports.tracker.comments  # announced normally: the lock did not stop it
+
+
 def test_a_product_that_declares_no_name_does_not_run(monkeypatch, tmp_path, capsys):
     """Without it every span and every metric of the run lands unlabelled, and the two
     products add up in every panel (issue #47)."""
@@ -492,3 +763,395 @@ def test_a_product_that_declares_no_name_does_not_run(monkeypatch, tmp_path, cap
         cli.main()
     assert info.value.code == 2
     assert "expected `product`" in capsys.readouterr().err
+
+
+class NeverFires:
+    """A stand-in for `anyio.open_signal_receiver(...)`: never yields a signal, but
+    stays cancellable like the real one -- no OS signal, no real event loop handler."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        await anyio.sleep_forever()
+
+
+class FiresOnce:
+    """A stand-in for `anyio.open_signal_receiver(...)` that yields one signal as soon
+    as it is awaited, with no real OS signal and no real event loop handler involved."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        return signal.SIGTERM
+
+
+class Hangs:
+    """A graph double whose `ainvoke` never returns on its own: what a SIGTERM has to
+    cancel out of, mid-role, the way a real Claude Code stream would hang until killed."""
+
+    def compile(self, checkpointer):
+        return self
+
+    async def aget_state(self, config):
+        return SimpleNamespace(values={}, next=(), interrupts=())
+
+    async def ainvoke(self, task, config):
+        await anyio.sleep_forever()
+
+
+@pytest.mark.anyio
+async def test_a_refusal_from_work_is_not_wrapped_by_the_signal_guard(monkeypatch):
+    """`CannotStart` (or any other exception `work` raises) must reach `main`'s bare
+    `except CannotStart` unchanged: anyio wraps whatever escapes a task group in an
+    `ExceptionGroup`, even a lone exception, so `_signal_guarded` has to catch it inside
+    the group and re-raise it after -- verified here, not assumed."""
+    monkeypatch.setattr(cli.anyio, "open_signal_receiver", lambda *sigs: NeverFires())
+
+    async def work():
+        raise cli.CannotStart("nope", code=2)
+
+    with pytest.raises(cli.CannotStart, match="nope") as info:
+        await cli._signal_guarded(work)
+    assert info.value.code == 2
+
+
+@pytest.mark.anyio
+async def test_a_signal_cancels_the_invocation_releases_the_lock_and_exits_nonzero(
+    monkeypatch, tmp_path
+):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setattr(cli, "graph", Hangs())
+    monkeypatch.setattr(cli.anyio, "open_signal_receiver", lambda *sigs: FiresOnce())
+    lock = FakeLock()
+    task = {"id": "T-9", "title": "t", "description": "d"}
+    work = partial(
+        cli._run,
+        task,
+        Configuration(product_dir=tmp_path),
+        memory_ports(),
+        checkpointer=in_memory,
+        run_lock=lock,
+    )
+    with pytest.raises(SystemExit) as info:
+        await cli._signal_guarded(work)
+    assert info.value.code != 0
+    assert lock.released == ["T-9"]  # `_locked`'s own `finally`, surviving cancellation
+
+
+@pytest.mark.anyio
+async def test_a_signal_still_flushes_telemetry_and_closes_the_task_span(monkeypatch, tmp_path):
+    """`_invoke`'s `finally: telemetry.flush()` and `task_span`'s own context manager
+    exit are existing code, not new; this asserts they both survive a cancellation
+    instead of assuming it in prose (Tech Lead plan, subtask `signals`)."""
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from agentic.core.measurement.adapters.otel import telemetry
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setattr(cli, "graph", Hangs())
+    monkeypatch.setattr(cli.anyio, "open_signal_receiver", lambda *sigs: FiresOnce())
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    telemetry.configure(tracer_provider=provider)
+    flushes = []
+    original_flush = telemetry.flush
+    monkeypatch.setattr(telemetry, "flush", lambda: (flushes.append(1), original_flush())[0])
+    task = {"id": "T-9", "title": "t", "description": "d"}
+    work = partial(
+        cli._run, task, Configuration(product_dir=tmp_path), memory_ports(), checkpointer=in_memory
+    )
+    try:
+        with pytest.raises(SystemExit):
+            await cli._signal_guarded(work)
+    finally:
+        telemetry.configure()
+    assert flushes == [1]
+    (span,) = exporter.get_finished_spans()
+    assert span.name == "T-9"
+
+
+@pytest.mark.anyio
+async def test_an_uninterrupted_run_over_the_guard_comments_exactly_as_before(
+    monkeypatch, tmp_path
+):
+    """Wiring `_signal_guarded` around the invocation changes nothing for a run that
+    was never signalled: the issue comments are byte-for-byte what `_resume` alone
+    would have written."""
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setattr(cli, "graph", Delivers({"id": "GH-1", "title": "t", "status": "open"}))
+    monkeypatch.setattr(cli.anyio, "open_signal_receiver", lambda *sigs: NeverFires())
+    ports = memory_ports()
+    ports.documents.save(
+        {
+            "id": "GH-1",
+            "title": "t",
+            "description": "d",
+            "type": "bug",
+            "status": "waiting_on_human",
+            "escalated": "Developer stopped by the task cap",
+            "cost_usd": 1.0,
+        }
+    )
+    ports.tracker.earlier = ["Escalated: Developer stopped by the task cap"]
+    work = partial(
+        cli._resume,
+        "GH-1",
+        Configuration(product_dir=tmp_path),
+        ports,
+        from_document=True,
+        yes=True,
+        checkpointer=in_memory,
+    )
+    await cli._signal_guarded(work)
+    assert ports.tracker.comments == [("GH-1", "Resumed: diagnose, under a task cap of 30.00 USD.")]
+
+
+# --detach (subtask `--detach`): argparse refusals, seam `agentic.cli.main`.
+
+
+def test_detach_on_resume_requires_yes(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["agentic", "resume", "--issue", "1", "--detach"])
+    with pytest.raises(SystemExit) as info:
+        cli.main()
+    assert info.value.code == 2
+
+
+def test_detach_and_dry_run_are_exclusive(monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv", ["agentic", "resume", "--issue", "1", "--detach", "--yes", "--dry-run"]
+    )
+    with pytest.raises(SystemExit) as info:
+        cli.main()
+    assert info.value.code == 2
+
+
+def test_no_tty_and_no_detach_warns_once(monkeypatch, tmp_path, capsys):
+    root = product(tmp_path, "p")
+    capture_run(monkeypatch)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr("sys.argv", ["agentic", "run", "t", "d", "--product-dir", str(root)])
+    cli.main()
+    assert "dies if its session closes" in capsys.readouterr().err
+
+
+def test_detach_silences_the_no_tty_warning(monkeypatch, tmp_path, capsys):
+    root = product(tmp_path, "p")
+    capture_run(monkeypatch)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(
+        "sys.argv", ["agentic", "run", "t", "d", "--product-dir", str(root), "--detach"]
+    )
+    cli.main()
+    assert "dies if its session closes" not in capsys.readouterr().err
+
+
+def test_child_argv_strips_detach_but_keeps_everything_else(monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv", ["/venv/bin/agentic", "resume", "--issue", "1", "--detach", "--yes"]
+    )
+    assert cli._child_argv() == ["/venv/bin/agentic", "resume", "--issue", "1", "--yes"]
+
+
+def test_spawn_detached_redirects_stdout_and_stderr_onto_the_log_before_any_role_runs(
+    monkeypatch, tmp_path
+):
+    """Seam: the default `Spawner`. `start_new_session=True` and stdin closed, exactly
+    as the plan requires; a fake `Popen` proves nothing real is spawned by the test."""
+    log_path = tmp_path / "t.log"
+    calls = {}
+
+    class FakeProcess:
+        pid = 424242
+
+    def fake_popen(argv, **kwargs):
+        calls["argv"] = argv
+        calls["kwargs"] = kwargs
+        return FakeProcess()
+
+    monkeypatch.setattr(cli.subprocess, "Popen", fake_popen)
+    pid = cli._spawn_detached(["agentic", "resume", "--issue", "1", "--yes"], str(log_path))
+    assert pid == 424242
+    assert calls["argv"] == ["agentic", "resume", "--issue", "1", "--yes"]
+    assert calls["kwargs"]["start_new_session"] is True
+    assert calls["kwargs"]["stdin"] is cli.subprocess.DEVNULL
+    assert calls["kwargs"]["stdout"] is calls["kwargs"]["stderr"]
+    assert calls["kwargs"]["stdout"].name == str(log_path)
+    assert calls["kwargs"]["env"][cli.ENV_PREFIX + "LOG_FILE"] == str(log_path)
+    assert log_path.is_file()  # opened before the (faked) exec, never after
+
+
+class FakeSpawn:
+    """A `Spawner` double: no real process, just what argv and log path it was asked
+    to spawn with, and the pid to hand back as if it were the child's."""
+
+    def __init__(self, pid=54321):
+        self.pid = pid
+        self.calls: list[tuple[list[str], str]] = []
+
+    def __call__(self, argv, log_file):
+        self.calls.append((argv, log_file))
+        return self.pid
+
+
+@pytest.mark.anyio
+async def test_run_detach_spawns_the_child_and_returns_without_touching_the_graph(
+    monkeypatch, tmp_path, capsys
+):
+    """Seam: the injected spawner on `_run`. The parent never reaches `_locked` or
+    `ainvoke`: `Broken.ainvoke` would fail the test if it somehow did."""
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    class Broken(Delivers):
+        async def ainvoke(self, task, config):
+            raise AssertionError("the graph must never run in the parent under --detach")
+
+    monkeypatch.setattr(cli, "graph", Broken())
+    spawn = FakeSpawn()
+    lock = FakeLock()
+    task = {"id": "T-9", "title": "t", "description": "d"}
+    await cli._run(
+        task,
+        Configuration(product_dir=tmp_path),
+        memory_ports(),
+        checkpointer=in_memory,
+        run_lock=lock,
+        log_file="/tmp/x.log",
+        detach=True,
+        child_argv=["agentic", "run", "--issue", "1", "--detach"],
+        spawn=spawn,
+    )
+    assert spawn.calls == [(["agentic", "run", "--issue", "1", "--detach"], "/tmp/x.log")]
+    assert lock.acquired == []  # the parent never holds it -- the child does, after it re-execs
+    assert "54321" in capsys.readouterr().out
+
+
+@pytest.mark.anyio
+async def test_resume_detach_spawns_after_the_summary_and_returns_without_invoking(
+    monkeypatch, tmp_path, capsys
+):
+    """Seam: the injected spawner on `_resume`. The summary and (skipped, via --yes)
+    confirmation already ran; `announce` and `ainvoke`, which only the child should do,
+    must not have run in the parent."""
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    class Broken(Delivers):
+        async def ainvoke(self, task, config):
+            raise AssertionError("the graph must never run in the parent under --detach")
+
+    monkeypatch.setattr(cli, "graph", Broken())
+    ports = memory_ports()
+    ports.documents.save(
+        {
+            "id": "GH-1",
+            "title": "t",
+            "description": "d",
+            "type": "bug",
+            "status": "waiting_on_human",
+            "escalated": "Developer stopped by the task cap",
+            "cost_usd": 1.0,
+        }
+    )
+    ports.tracker.earlier = ["Escalated: Developer stopped by the task cap"]
+    spawn = FakeSpawn()
+    lock = FakeLock()
+    child_argv = ["agentic", "resume", "--issue", "1", "--yes", "--detach"]
+    await cli._resume(
+        "GH-1",
+        Configuration(product_dir=tmp_path),
+        ports,
+        from_document=True,
+        yes=True,
+        checkpointer=in_memory,
+        run_lock=lock,
+        log_file="/tmp/x.log",
+        detach=True,
+        child_argv=child_argv,
+        spawn=spawn,
+    )
+    assert spawn.calls == [(child_argv, "/tmp/x.log")]
+    assert lock.acquired == []
+    assert ports.tracker.comments == []  # the child announces; the parent never did
+    assert "54321" in capsys.readouterr().out
+
+
+@pytest.mark.anyio
+async def test_detach_refuses_when_the_lock_is_held_and_never_spawns(monkeypatch, tmp_path):
+    """The parent's read-only liveness check: a refusal on this terminal, no lock
+    write, and nothing spawned -- the same shape `_acquire` refuses with, but never
+    written from a process about to exit (invariant: no subtask writes a lock from a
+    process that then forks or exits)."""
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setattr(cli, "graph", Delivers())
+    lock = FakeLock(held=lock_record(pid=os.getpid(), host=socket.gethostname()))
+    spawn = FakeSpawn()
+    task = {"id": "T-9", "title": "t", "description": "d"}
+    with pytest.raises(cli.CannotStart, match="T-9 is already running"):
+        await cli._run(
+            task,
+            Configuration(product_dir=tmp_path),
+            memory_ports(),
+            checkpointer=in_memory,
+            run_lock=lock,
+            log_file="/tmp/x.log",
+            detach=True,
+            child_argv=["agentic", "run", "--issue", "1", "--detach"],
+            spawn=spawn,
+        )
+    assert spawn.calls == []
+    assert lock.acquired == []
+
+
+@pytest.mark.anyio
+async def test_a_run_with_no_lock_injected_detaches_without_writing_the_products_lock(
+    monkeypatch, tmp_path
+):
+    """No `run_lock` injected (the production shape, `_lock_for` builds a real
+    `FilesystemRunLock`): the parent's liveness check reads it and finds nothing to
+    refuse, and, since it never acquires, leaves no lock file behind for the child to
+    trip over when it re-execs and acquires for real."""
+    from agentic.core.process.adapters.filesystem import FilesystemRunLock
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setattr(cli, "graph", Delivers())
+    cfg = Configuration(product_dir=tmp_path)
+    spawn = FakeSpawn()
+    task = {"id": "T-9", "title": "t", "description": "d"}
+    await cli._run(
+        task,
+        cfg,
+        memory_ports(),
+        checkpointer=in_memory,
+        log_file="/tmp/x.log",
+        detach=True,
+        child_argv=["agentic", "run", "--issue", "1", "--detach"],
+        spawn=spawn,
+    )
+    assert spawn.calls
+    assert FilesystemRunLock(cfg.agentic_dir / "runs").read("T-9") is None

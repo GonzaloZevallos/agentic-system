@@ -246,9 +246,14 @@ _Avoid_: motivo de escalado, tipo de escalado (para la clase)
 _Campo_: sin término de arte
 
 **Reanudación**:
-La tarea sigue desde donde se pausó. Hace falta una decisión del humano cuando hay preguntas abiertas o un par llegó a su límite, y con ella el contador de ese par vuelve a cero; un tope alcanzado o un fallo de rol se reanudan sin decisión. Nada se reanuda bajo un tope ya gastado. Si el estado guardado se perdió, se reconstruye desde el documento de tarea, cruzado con git.
+La tarea sigue desde donde se pausó. Hace falta una decisión del humano cuando hay preguntas abiertas o un par llegó a su límite, y con ella el contador de ese par vuelve a cero; un tope alcanzado o un fallo de rol se reanudan sin decisión, y una corrida interrumpida también. Nada se reanuda bajo un tope ya gastado. Si el estado guardado se perdió, se reconstruye desde el documento de tarea, cruzado con git.
 _Avoid_: reintento (eso es tras un fallo de rol), relanzar (eso es empezar de cero)
 _Campo_: resume — estándar (LangGraph, Temporal, el Claude Agent SDK)
+
+**Corrida interrumpida**:
+Una corrida que terminó sin cierre ni escalado porque su proceso murió. No espera a nadie: se reanuda sin decisión del humano, desde el último estado guardado. Lo que el rol en curso hizo y no entregó puede estar en su checkout sin commitear, y su costo en dólares no se conoce: el sistema registra los tokens que vio y lo dice, en vez de callarlo.
+_Avoid_: cortada, abortada, crash (el estado de telemetría, no el concepto)
+_Campo_: sin término de arte
 
 **Invocación**:
 Una llamada a `agentic run` o `agentic resume`: entra, corre lo que el grafo tenga para correr y termina (entregada, escalada, o caída). Distinta de la Corrida, que es toda la ejecución del sistema sobre una tarea de punta a punta: una tarea que se pausó y se reanudó dos veces tuvo una Corrida y tres Invocaciones, y cada una gastó y tardó solo lo suyo, nunca el acumulado de la tarea que sí lleva la Corrida. `langgraph dev` corre el grafo directo, sin pasar por una invocación de la CLI, así que no deja ninguna de sus muestras.

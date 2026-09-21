@@ -404,6 +404,66 @@ class Tracker(Protocol):
 
 
 @dataclass(frozen=True)
+class LockRecord:
+    """What `.agentic/runs/<task>.lock` holds: who is running this task's thread right
+    now (Tech Lead plan, subtask `run-lock`), so a second invocation over the same
+    task can tell before it spends anything."""
+
+    pid: int
+    host: str
+    started_at: str
+    command: str
+
+
+class LockHeld(Exception):
+    """`RunLock.acquire` found a process already holding the task's thread: `record` is
+    what it wrote, and `str(exc)` names the fact alone (pid, host, since when) -- the
+    lock's own scope, why a `langgraph dev` server is not covered, is the caller's to
+    say, not this port's."""
+
+    def __init__(self, record: LockRecord, message: str):
+        super().__init__(message)
+        self.record = record
+
+
+class RunLock(Protocol):
+    """Is a process holding this task's thread right now. One claim, not a general
+    lock: a live pid on this host refuses, a pid recorded on another host refuses by
+    name and is **never** probed -- a recycled pid elsewhere is a coin flip -- and a
+    dead pid's lock is taken over. Scoped to CLI invocations: a node the graph runs
+    through `langgraph dev` never asks it (`default_ports` fires once per node and
+    never sees a `thread_id`)."""
+
+    def read(self, task_id: str) -> LockRecord | None:
+        """The lock's contents, without taking or releasing it: what `--dry-run` and a
+        refusal report."""
+        ...
+
+    def acquire(self, task_id: str, command: str) -> LockRecord | None:
+        """Take the lock for this process (`os.getpid()`, this host). Returns the
+        record of a dead lock taken over, for the caller to print, or `None` when the
+        lock was free. Raises `LockHeld` when a live pid on this host or any pid on
+        another host already holds it."""
+        ...
+
+    def refusal(self, task_id: str) -> str | None:
+        """The message `acquire` would raise `LockHeld` with right now, without
+        writing anything and without probing anything `acquire` itself would not
+        probe (a pid on another host is still never probed). `None` when `acquire`
+        would succeed. The one place the liveness rule and its message live, so a
+        read-only caller -- `--detach`'s parent, refusing on the human's terminal
+        before it spawns -- cannot drift from what `acquire` actually enforces."""
+        ...
+
+    def release(self, task_id: str) -> None:
+        """Release, if this process holds it (same pid, same host). A no-op when
+        there is none, or when the lock now belongs to someone else -- a takeover
+        that happened after this process's own claim was lost must never be undone
+        by this process releasing on its way out."""
+        ...
+
+
+@dataclass(frozen=True)
 class Ports:
     runner: RoleRunner
     documents: TaskDocuments

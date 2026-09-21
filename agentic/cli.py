@@ -11,10 +11,13 @@ from __future__ import annotations
 
 import argparse
 import os
+import signal
+import subprocess
 import sys
 import uuid
-from collections.abc import Awaitable, Callable
-from contextlib import AbstractAsyncContextManager
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import AbstractAsyncContextManager, contextmanager
+from datetime import UTC, datetime
 from functools import partial
 from typing import cast
 
@@ -28,9 +31,10 @@ from . import composition
 from .composition import default_ports, graph
 from .core.measurement.adapters.otel import telemetry
 from .core.measurement.adapters.otel.telemetry import InvocationKind
+from .core.process.adapters.filesystem import FilesystemRunLock
 from .core.process.adapters.langgraph.graph import ESCALATE
 from .core.process.application import resume as resuming
-from .core.process.application.ports import Ports
+from .core.process.application.ports import LockHeld, LockRecord, Ports, RunLock
 from .core.process.application.preflight import (
     declared_stack_of,
     no_setup,
@@ -39,10 +43,22 @@ from .core.process.application.preflight import (
     unfixed_stage0,
 )
 from .core.process.domain.task import TaskInput, TaskState
-from .shared.configuration import ENV_PREFIX, Configuration, MissingProductDir
+from .shared.configuration import ENV_PREFIX, LOGS_DIR, Configuration, MissingProductDir
 from .shared.environment import without_own_toolchain
 
 Checkpointer = Callable[[Configuration], AbstractAsyncContextManager[BaseCheckpointSaver]]
+# Re-execs `argv` (already stripped of `--detach`) detached from this session and
+# returns the child's pid: the shape `checkpointer` already uses, injectable on
+# `_run`/`_resume` so a test asserts argv and redirection without spawning anything
+# (Tech Lead plan, subtask `--detach`).
+Spawner = Callable[[list[str], str], int]
+
+# What the lock claims, said whenever it refuses (Tech Lead plan, subtask `run-lock`):
+# it protects one CLI invocation from another, nothing a `langgraph dev` server runs.
+LOCK_SCOPE = (
+    "the lock protects `agentic run`/`agentic resume` invocations from each other; "
+    "a `langgraph dev` server holds every thread in one process and is not covered by it"
+)
 
 
 class CannotStart(Exception):
@@ -100,6 +116,11 @@ def main() -> None:
         command.add_argument(
             "--verbose", action="store_true", help="stream each role's generation to stderr"
         )
+        command.add_argument(
+            "--detach",
+            action="store_true",
+            help="detach from this session (setsid), print the pid and the log path, and exit",
+        )
     args = parser.parse_args()
 
     if args.command == "run":
@@ -107,6 +128,13 @@ def main() -> None:
             run.error("give a title and a description, or --issue N")
         if args.issue is not None and args.title is not None:
             run.error("--issue replaces the title and description; give one or the other")
+    else:
+        # A detached child has no stdin: neither to confirm on nor to report a dry-run
+        # to, so both are rejected before anything is spent (Tech Lead plan, `--detach`).
+        if args.detach and args.dry_run:
+            resume.error("--detach and --dry-run are exclusive: --dry-run has no child to report")
+        if args.detach and not args.yes:
+            resume.error("--detach requires --yes: a detached child has no stdin to confirm on")
 
     # The env var outranks `configurable`, so an explicit flag has to go in as env.
     if args.product_dir:
@@ -125,11 +153,27 @@ def main() -> None:
         for warn in (unfixed_stage0, no_setup):
             if (warning := warn(ports)) is not None:
                 print(f"agentic: {warning}", file=sys.stderr)
+        if not args.detach and not sys.stdin.isatty():
+            print(
+                "agentic: no TTY and no --detach: this process dies if its session "
+                "closes (2026-09-15); pass --detach to survive it",
+                file=sys.stderr,
+            )
         if args.command == "resume":
             task_id = ports.inbox.task_id(args.issue)
             declared_stack_of(task_id, ports)
+            log_file = _log_file_for(cfg, task_id)
             options = (args.from_document, args.dry_run, args.yes)
-            work: Callable[[], Awaitable[None]] = partial(_resume, task_id, cfg, ports, *options)
+            work: Callable[[], Awaitable[None]] = partial(
+                _resume,
+                task_id,
+                cfg,
+                ports,
+                *options,
+                log_file=log_file,
+                detach=args.detach,
+                child_argv=_child_argv(),
+            )
         else:
             if args.issue is not None:
                 task = ports.inbox.task(args.issue)
@@ -144,13 +188,153 @@ def main() -> None:
             # through and it would die inside a node, where nothing escalates. A task
             # with no branch answers HEAD here, already checked.
             declared_stack_of(task["id"], ports)
-            work = partial(_run, task, cfg, ports, args.fresh)
+            log_file = _log_file_for(cfg, task["id"])
+            work = partial(
+                _run,
+                task,
+                cfg,
+                ports,
+                args.fresh,
+                log_file=log_file,
+                detach=args.detach,
+                child_argv=_child_argv(),
+            )
     except (MissingProductDir, ValueError, OSError) as exc:
         parser.exit(2, f"agentic: {exc}\n")
     try:
-        anyio.run(work)
+        anyio.run(_signal_guarded, work)
     except CannotStart as exc:
         parser.exit(exc.code, f"agentic: {exc}\n")
+
+
+async def _signal_guarded(work: Callable[[], Awaitable[None]]) -> None:
+    """Wraps `work` (`_run`/`_resume`, built in `main`) in a task group a SIGTERM or a
+    SIGHUP cancels (Tech Lead plan, subtask `signals`). This is the one place that
+    restructures the `anyio.run(work)` call; every other subtask takes its shape as it
+    finds it.
+
+    Cancelling the scope is the only new mechanism: everything the invocation already
+    does in a `finally` -- `_locked`'s lock release, `_invoke`'s telemetry flush,
+    `task_span`'s own context manager exit -- runs exactly as it would on any other
+    exception, since anyio delivers a cancellation as one at the current await point.
+    Nothing is written here to the task document: the only `TaskState` this scope holds
+    is the invocation's own `entering` snapshot (`_invoke`'s docstring), and writing it
+    would erase every section this invocation's nodes already wrote, racing the fan-in
+    (ADR-0004, fifth addendum). No issue comment is added either: `resume.SYSTEM_COMMENTS`
+    is untouched, since an unregistered prefix would read back as a human decision on the
+    next resume (`resume.human_decision`).
+
+    `work`'s own exception -- `CannotStart`, an escalated run's `sys.exit`, anything --
+    is caught inside the group and re-raised after it closes, never let escape the
+    `async with tg:` block itself: anyio wraps whatever crosses it in an
+    `ExceptionGroup`, even a lone exception, which would break `main`'s bare
+    `except CannotStart` and change the exit code the invariants say must not move."""
+    caught: list[BaseException] = []
+    interrupted = False
+
+    async def watch_signals() -> None:
+        nonlocal interrupted
+        with anyio.open_signal_receiver(signal.SIGTERM, signal.SIGHUP) as signals:
+            async for _ in signals:
+                interrupted = True
+                tg.cancel_scope.cancel()
+                return
+
+    async def run_work() -> None:
+        try:
+            await work()
+        except anyio.get_cancelled_exc_class():
+            raise
+        except BaseException as exc:
+            caught.append(exc)
+        finally:
+            tg.cancel_scope.cancel()
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(watch_signals)
+        tg.start_soon(run_work)
+
+    if caught:
+        raise caught[0]
+    if interrupted:
+        # The three actions the plan asks for: telemetry flushed and the lock released,
+        # both already done by `work`'s own `finally` blocks as the cancellation
+        # unwound it; this is the third, a non-zero exit for whoever sent the signal.
+        raise SystemExit(1)
+
+
+def _configurable(task_id: str, log_file: str | None) -> dict[str, str]:
+    configurable = {"thread_id": task_id}
+    if log_file is not None:
+        configurable["log_file"] = log_file
+    return configurable
+
+
+def _log_file_for(cfg: Configuration, task_id: str) -> str:
+    """Where this invocation logs, computed once the task id is known (not at line
+    119, where `cfg` is built and no task exists yet): `<product>/.agentic/logs/
+    <task>-<UTC timestamp>.log`, to the second, so two invocations of the same task
+    never share a file (README.md, 14; issue #33). Printed once, and returned as a
+    plain `str`: what travels through `configurable`, which the saver persists, is a
+    JSON-serialisable scalar, never a `Path` (invariant 12).
+
+    A `--detach` child reuses its parent's path instead of minting its own: `cfg.log_file`
+    is already set from `AGENTIC_LOG_FILE`, `Configuration`'s generic per-field env
+    override, which `_spawn_detached` puts in the child's environment. Without that, the
+    child's own `configurable["log_file"]` and the OS-redirected stdout/stderr the parent
+    already told the human about would name two different files."""
+    if cfg.log_file is not None:
+        return str(cfg.log_file)
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    path = cfg.product_dir / LOGS_DIR / f"{task_id}-{stamp}.log"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    print(f"agentic: log at {path}")
+    return str(path)
+
+
+def _child_argv() -> list[str]:
+    """This invocation's own argv, `--detach` stripped so the child can never re-detach
+    (Tech Lead plan, subtask `--detach`). Launched through `sys.argv[0]`, the console
+    script `pyproject.toml` declares (`agentic = "agentic.cli:main"`), which is already
+    how this process itself was started -- there is no `agentic/__main__.py`, so
+    `[sys.executable, "-m", "agentic"]` is not an option."""
+    return [sys.argv[0], *(arg for arg in sys.argv[1:] if arg != "--detach")]
+
+
+def _spawn_detached(argv: list[str], log_path: str) -> int:
+    """The default `Spawner`: a new process image (`Popen`, never a fork -- forking
+    after `setsid` would still hold this terminal's fds, and forking after
+    `telemetry.configure` would carry its background export threads into a run that
+    then says nothing about them), detached from this session (`start_new_session`),
+    with stdin closed (a detached child cannot answer a prompt) and stdout/stderr onto
+    the log file before any role runs. `AGENTIC_LOG_FILE` carries this invocation's
+    already-computed, already-printed path into the child, so `_log_file_for` there
+    returns the same string instead of minting a second file."""
+    env = {**os.environ, ENV_PREFIX + "LOG_FILE": log_path}
+    with open(log_path, "ab", buffering=0) as log:
+        process = subprocess.Popen(
+            argv,
+            env=env,
+            start_new_session=True,
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=log,
+        )
+    return process.pid
+
+
+def _refuse_if_locked(lock: RunLock, task_id: str) -> None:
+    """The read-only half of `_acquire`'s check, for `--detach`'s parent: it must show a
+    refusal on the human's terminal without writing the lock itself (invariant: no
+    subtask writes a lock from a process that then forks or exits). Delegates the
+    liveness rule and both message shapes to `lock.refusal` -- the same one `acquire`
+    itself enforces -- so this copy cannot drift from it. The child re-checks
+    authoritatively, atomically, through the real `_acquire` right after it re-execs;
+    this only saves the human a `setsid` and a wasted log file when the answer was
+    already known."""
+    message = lock.refusal(task_id)
+    if message is not None:
+        raise CannotStart(f"{message}: {LOCK_SCOPE}")
 
 
 def _replace_environ(env: dict[str, str]) -> None:
@@ -159,22 +343,80 @@ def _replace_environ(env: dict[str, str]) -> None:
     os.environ.update(env)
 
 
+def _lock_for(cfg: Configuration) -> RunLock:
+    return FilesystemRunLock(cfg.agentic_dir / "runs")
+
+
+def _acquire(lock: RunLock, task_id: str) -> LockRecord | None:
+    try:
+        return lock.acquire(task_id, " ".join(sys.argv))
+    except LockHeld as exc:
+        raise CannotStart(f"{exc}: {LOCK_SCOPE}") from exc
+
+
+def _print_lock(lock: RunLock, task_id: str) -> None:
+    """What `--dry-run` shows instead of acquiring: the worried human's own tool."""
+    if (record := lock.read(task_id)) is not None:
+        print(
+            f"lock:      pid {record.pid} on {record.host}, running since "
+            f"{record.started_at} ({record.command})"
+        )
+
+
+@contextmanager
+def _locked(lock: RunLock, task_id: str) -> Iterator[None]:
+    """Around the invocation only (Tech Lead plan): refuses before anything is spent,
+    releases whether the invocation delivers, escalates or raises."""
+    taken_over = _acquire(lock, task_id)
+    if taken_over is not None:
+        print(
+            f"agentic: took over the lock left by pid {taken_over.pid} on "
+            f"{taken_over.host} ({taken_over.started_at}), no longer running"
+        )
+    try:
+        yield
+    finally:
+        lock.release(task_id)
+
+
 async def _run(
     task: TaskInput,
     cfg: Configuration,
     ports: Ports,
     fresh: bool = False,
     checkpointer: Checkpointer | None = None,
+    run_lock: RunLock | None = None,
+    log_file: str | None = None,
+    detach: bool = False,
+    child_argv: list[str] | None = None,
+    spawn: Spawner | None = None,
 ) -> None:
-    config: RunnableConfig = {"configurable": {"thread_id": task["id"]}}
+    lock = run_lock if run_lock is not None else _lock_for(cfg)
+    config: RunnableConfig = {"configurable": _configurable(task["id"], log_file)}
     async with (checkpointer or composition.checkpointer)(cfg) as saver:
         app = graph.compile(checkpointer=saver)
         if not fresh:
             await _refuse_a_started_task(app, config, task["id"], ports)
-        # A thread keeps its channels: a new run over it would add to the old cost and runs.
-        await saver.adelete_thread(task["id"])
-        final = await _invoke(app, task, config, task, ports, "run")
+        if detach:
+            _detach(lock, task["id"], child_argv or [], log_file or "", spawn)
+            return
+        with _locked(lock, task["id"]):
+            # A thread keeps its channels: a new run over it would add to the old cost.
+            await saver.adelete_thread(task["id"])
+            final = await _invoke(app, task, config, task, ports, "run")
     _report(final, task["id"], ports)
+
+
+def _detach(
+    lock: RunLock, task_id: str, child_argv: list[str], log_file: str, spawn: Spawner | None
+) -> None:
+    """The parent's own half of `--detach`: refuse on this terminal if the task is
+    already running (`_refuse_if_locked`, read-only), else re-exec and print the
+    child's pid -- the pid that holds the lock, since the parent never acquires it
+    (Tech Lead plan, subtask `--detach`)."""
+    _refuse_if_locked(lock, task_id)
+    pid = (spawn or _spawn_detached)(child_argv, log_file)
+    print(f"agentic: detached, pid {pid}, log at {log_file}")
 
 
 async def _refuse_a_started_task(app, config: RunnableConfig, task_id: str, ports: Ports) -> None:
@@ -206,8 +448,14 @@ async def _resume(
     dry_run: bool = False,
     yes: bool = False,
     checkpointer: Checkpointer | None = None,
+    run_lock: RunLock | None = None,
+    log_file: str | None = None,
+    detach: bool = False,
+    child_argv: list[str] | None = None,
+    spawn: Spawner | None = None,
 ) -> None:
-    config: RunnableConfig = {"configurable": {"thread_id": task_id}}
+    lock = run_lock if run_lock is not None else _lock_for(cfg)
+    config: RunnableConfig = {"configurable": _configurable(task_id, log_file)}
     async with (checkpointer or composition.checkpointer)(cfg) as saver:
         app = graph.compile(checkpointer=saver)
         snapshot = await app.aget_state(config)
@@ -230,19 +478,25 @@ async def _resume(
 
         print(resuming.summary(r, cfg, ports))
         if dry_run:
+            _print_lock(lock, task_id)
             return
         if not yes and input("\nResume? [y/N] ").strip().lower() not in ("y", "yes"):
             raise CannotStart("not resumed", code=1)
+        if detach:
+            _detach(lock, task_id, child_argv or [], log_file or "", spawn)
+            return
 
-        if r.source == "document":
-            # Seeded as if `escalate` had just run: the task pauses once more, without
-            # telling the human again, and the answer below resumes it like a checkpoint.
-            await saver.adelete_thread(task_id)
-            await app.aupdate_state(config, r.paused, as_node=ESCALATE)
-        crashed = r.source == "checkpoint" and not snapshot.interrupts
-        command: Command | None = None if crashed else Command(resume={"decision": r.decision})
-        resuming.announce(r, ports)
-        final = await _invoke(app, command, config, r.paused, ports, "resume", r.decision)
+        with _locked(lock, task_id):
+            if r.source == "document":
+                # Seeded as if `escalate` had just run: the task pauses once more,
+                # without telling the human again, and the answer below resumes it
+                # like a checkpoint.
+                await saver.adelete_thread(task_id)
+                await app.aupdate_state(config, r.paused, as_node=ESCALATE)
+            crashed = r.source == "checkpoint" and not snapshot.interrupts
+            command: Command | None = None if crashed else Command(resume={"decision": r.decision})
+            resuming.announce(r, ports)
+            final = await _invoke(app, command, config, r.paused, ports, "resume", r.decision)
     _report(final, task_id, ports)
 
 

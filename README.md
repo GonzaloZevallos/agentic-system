@@ -1013,7 +1013,29 @@ Antes de gastar muestra la tarea, dónde se frenó, el motivo, lo gastado por fa
 decisión entera, qué reanuda, las sesiones y los worktrees, y pide confirmación. `--from-document` es el rescate: siembra el estado desde el documento,
 cruzado con git, como si `escalate` acabara de correr. `agentic run` se niega a arrancar
 sobre una tarea con estado salvo `--fresh`. En la etapa 5 un poller con reloj propio llama a
-`resume`, que es el mismo mecanismo que necesitan los roles proactivos.
+`resume`, que es el mismo mecanismo que necesitan los roles proactivos. Antes de invocar el
+grafo, `run`, `resume` y `--fresh` toman `.agentic/runs/<tarea>.lock` (pid, host, hora y
+comando): un pid vivo en este host se niega, uno de otro host se niega por nombre sin
+probarlo, y uno muerto se toma, avisándolo; `--dry-run` no lo toma, solo lo muestra. Protege
+invocaciones de la CLI entre sí, no un `langgraph dev`, que mantiene todos los hilos en un
+solo proceso. Un SIGTERM o un SIGHUP cancelan la invocación en curso: se vacía la
+telemetría, se libera el lock y el proceso sale con código distinto de cero, sin escribir
+en el documento (el único `TaskState` que la CLI tiene en ese momento es el de entrada, y
+pisarlo borraría lo que los nodos de esta invocación ya escribieron) ni un comentario nuevo
+en el issue (`Resumed: ` gana una cláusula que nombra el rol interrumpido, en la próxima
+reanudación de una corrida que se cruzó con uno de estos, en vez de un prefijo nuevo). Un
+SIGKILL no se puede atrapar: el lock queda huérfano y `resume` lo toma avisándolo.
+`--detach` (en `run` y en `resume`, este último exigiendo `--yes` y rechazando
+`--dry-run` al parsear) reejecuta la misma invocación sin `--detach`, en `setsid`
+—nunca un fork, porque un hijo forkeado después de `setsid` sigue sin terminal para su
+propio `print` y porque `telemetry.configure` ya abrió hilos en background que un fork
+no llevaría—, con stdin cerrado y stdout/stderr redirigidos al log antes de correr
+ningún rol; el padre solo hace el trabajo de sólo lectura (preflight, la pila
+declarada, si el lock ya está vivo, y en `resume` el resumen y la confirmación),
+imprime el pid del hijo —el que toma el lock, nunca el padre— y la ruta del log, y sale.
+Sin TTY y sin `--detach` avisa una vez que el proceso muere con su sesión; no se
+desacopla solo, porque CI, los tests y `agentic eval` (#27) necesitan el código de
+salida.
 
 ### Fallo de rol
 
@@ -1091,9 +1113,12 @@ queda como `PM (vN)`) y lo que cambia el conocimiento se destila otra vez.
 
 ### Observabilidad
 
-Cuatro capas, de más inmediata a más durable. `agentic run --verbose` vuelca a stderr el
-stream del SDK (texto, thinking si el rol lo tiene, tool calls) con prefijo de rol: es la
-única forma de ver generar. Claude Code exporta OpenTelemetry nativo; un collector en
+Cuatro capas, de más inmediata a más durable. `agentic run` y `agentic resume` escriben
+siempre su log en `<producto>/.agentic/logs/<tarea>-<hora UTC>.log` (tool calls, la línea
+`done:` de cada rol y el aviso de sub-agentes en background), fuera del `.gitignore` del
+producto; `--verbose` es aditivo: además de sumar al log los deltas de generación (texto,
+thinking) según van llegando, refleja las mismas líneas por stderr con prefijo de rol, la
+única forma de verlas en vivo. Claude Code exporta OpenTelemetry nativo; un collector en
 `observability/collector/` lo reenvía a un Langfuse local, porque el exportador de Claude
 Code no puede mandar un header `Authorization: Basic` entero. El grafo abre un span por
 tarea y uno por rol y pasa `TRACEPARENT` al subproceso, así una tarea es un trace con los
