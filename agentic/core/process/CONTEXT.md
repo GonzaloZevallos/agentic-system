@@ -325,6 +325,11 @@ _Avoid_: presupuesto (eso es lo que se espera gastar), max_turns (el nombre en e
 El rechazo del sistema a una herramienta o un comando que el rol no tiene: le llega al rol con el motivo que nombra la regla de su rol, y queda escrita en la sección de esa corrida como una sola línea con cuántas fueron. No es fallo de rol ni devolución y no cuenta para ningún límite.
 _Avoid_: deny (el mecanismo, no el concepto), bloqueo, error de permisos
 
+**Emisión de entrega**:
+Cada llamada del rol a la herramienta de entrega estructurada dentro de un intento, la valide o no lo que la recibe después. El sistema cuenta cuántas hubo por intento y, si el intento entregó, por corrida entera; queda escrita en la sección de esa corrida como una sola línea, sólo cuando fueron más de una. Distinta de Negación: una negación es el sistema rechazando una herramienta que el rol no tiene, y una emisión de entrega es el rol llamando a la que sí tiene, una o más veces.
+_Avoid_: reintento (eso es después de un fallo de rol completo), llamada (demasiado amplio)
+_Campo_: sin término de arte
+
 **Clasificación**:
 La decisión de PjM sobre de qué tipo es una tarea —bug, feature o platform enhancement— y, con eso, qué camino recorre. Es una decisión de tipo y de ruteo: qué cede ante una discrepancia entre la definición y el comportamiento lo decide PM dentro del camino de bug, y no entra en la confianza con que PjM clasifica.
 _Avoid_: triage, dictamen (el dictamen es de Product Analyst sobre un bug ya clasificado)

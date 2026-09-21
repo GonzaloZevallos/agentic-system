@@ -650,6 +650,75 @@ async def test_run_role_adds_no_note_when_the_run_had_no_denials(tmp_path):
     assert patch["sections"]["PjM"] == output.text
 
 
+async def test_run_role_adds_no_deliveries_note_with_a_single_emission(tmp_path):
+    # Byte-for-byte today's section: the line only earns its place past one.
+    cfg = Configuration(product_dir=tmp_path)
+    runner = ScriptedRunner(pjm=[RawResult(OK.structured_output, 0.03, deliveries=1)])
+    output, patch = await run_role(
+        {"id": "T-1", "title": "t", "description": "d"}, PJM, cfg, memory_ports(runner), product="x"
+    )
+    assert output is not None
+    assert patch["sections"]["PjM"] == output.text
+
+
+async def test_run_role_adds_the_deliveries_note_when_there_were_several(tmp_path):
+    cfg = Configuration(product_dir=tmp_path)
+    runner = ScriptedRunner(pjm=[RawResult(OK.structured_output, 0.03, deliveries=3)])
+    output, patch = await run_role(
+        {"id": "T-1", "title": "t", "description": "d"}, PJM, cfg, memory_ports(runner), product="x"
+    )
+    assert output is not None
+    note = rules.deliveries_note(3)
+    assert patch["sections"]["PjM"] == f"{note}\n\n{output.text}"
+
+
+async def test_run_role_folds_a_failed_attempts_deliveries_into_the_delivering_runs_note(
+    tmp_path,
+):
+    # The run's total, the same fold `denials` gets: attempt 1 can spend several
+    # emissions on an invalid shape (issue #32) and attempt 2 still deliver on its
+    # first try, and the run must not read as though it had only one.
+    cfg = Configuration(product_dir=tmp_path)
+    cut = AttemptFailed("structured output invalid", 0.01, reason="schema", deliveries=2)
+    runner = ScriptedRunner(pjm=[cut, RawResult(OK.structured_output, 0.03, deliveries=1)])
+    output, patch = await run_role(
+        {"id": "T-1", "title": "t", "description": "d"}, PJM, cfg, memory_ports(runner), product="x"
+    )
+    assert output is not None
+    assert patch["sections"]["PjM"] == f"{rules.deliveries_note(3)}\n\n{output.text}"
+
+
+async def test_run_role_orders_the_deliveries_note_after_denial_and_turn_notice(tmp_path):
+    cfg = Configuration(product_dir=tmp_path)
+    runner = ScriptedRunner(
+        developer=[
+            RawResult(
+                delivered().structured_output,
+                0.03,
+                denials=1,
+                turn_notice=True,
+                deliveries=3,
+            )
+        ]
+    )
+    output, patch = await run_role(
+        {"id": "T-1", "title": "t", "description": "d"},
+        DEVELOPER,
+        cfg,
+        memory_ports(runner),
+        subtask="api",
+        invariants="",
+        branches="",
+        checks="",
+    )
+    assert output is not None
+    expected = (
+        f"{rules.denial_note(DEVELOPER, 1)}\n\n{turn_notice.notice_note()}\n\n"
+        f"{rules.deliveries_note(3)}\n\n{output.text}"
+    )
+    assert patch["sections"]["Developer"] == expected
+
+
 def test_run_record_stamps_the_roles_own_turn_cap():
     """`max_turns` comes from the `Role` that ran, not the output: the cap in force for
     this run, so a reader can compute turns spent against it without a second lookup
