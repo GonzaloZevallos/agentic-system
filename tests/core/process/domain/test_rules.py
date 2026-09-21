@@ -988,3 +988,72 @@ def test_turn_cut_message_never_asserts_a_branch_or_a_head():
         message = rules.turn_cut_retry_message(role)
         assert "branch" not in message
         assert "head" not in message
+
+
+# Archiving (ADR-0011, sixth addendum): `--fresh` archives a previous run instead of
+# building on top of it. `archive_prefix` and `archive_ref` are the naming rule;
+# `branches_of_task` is the segment-exact predicate every caller of a `Workspace`
+# prefix verb must go through; `next_archive_run` is the three-case rule for `N`.
+
+
+def test_archive_prefix_names_the_run_and_the_system_commit():
+    assert rules.archive_prefix(4, "75de807") == "archive/run4-75de807"
+
+
+def test_archive_prefix_falls_back_to_the_literal_unknown():
+    # A document that could not be read or parsed decides nothing about `N`: it only
+    # ever changes this literal (ADR-0011, sixth addendum).
+    assert rules.archive_prefix(1, "unknown") == "archive/run1-unknown"
+
+
+def test_archive_ref_keeps_the_whole_branch_name():
+    assert rules.archive_ref("agentic/GH-12", 4, "75de807") == "archive/run4-75de807/agentic/GH-12"
+    assert (
+        rules.archive_ref("agentic/GH-12.api", 4, "75de807")
+        == "archive/run4-75de807/agentic/GH-12.api"
+    )
+
+
+def test_branches_of_task_compares_whole_segments_never_startswith():
+    # gym-saas is at GH-88: `agentic/GH-1` and `agentic/GH-12` coexist today, and an
+    # unfiltered prefix verb would let `--fresh` on GH-1 rename GH-12's live branch.
+    names = ["agentic/GH-1", "agentic/GH-1.api", "agentic/GH-12", "agentic/GH-12.domain"]
+    assert rules.branches_of_task(names, "GH-1") == ["agentic/GH-1", "agentic/GH-1.api"]
+    assert rules.branches_of_task(names, "GH-12") == ["agentic/GH-12", "agentic/GH-12.domain"]
+
+
+def test_branches_of_task_ignores_an_unrelated_branch():
+    assert rules.branches_of_task(["main", "feature/x"], "GH-1") == []
+
+
+def test_next_archive_run_is_one_past_the_highest_archived_when_the_task_branch_is_live():
+    # The hand-made gym-saas GH-12 refs, without the `agentic/` prefix: the fourth run
+    # of GH-12 would be `run4`, exactly as the ADR's own worked example says.
+    refs = ["archive/run2-04abd2c/GH-12", "archive/run3-75de807/GH-12"]
+    assert rules.next_archive_run(refs, ["agentic/GH-12"], "GH-12") == 4
+
+
+def test_next_archive_run_recognises_the_prefixed_spelling_too():
+    refs = ["archive/run1-abc1234/agentic/GH-12", "archive/run2-def5678/agentic/GH-12.api"]
+    assert rules.next_archive_run(refs, ["agentic/GH-12"], "GH-12") == 3
+
+
+def test_next_archive_run_reuses_n_when_only_a_subtask_branch_is_still_live():
+    # An archive cut short after the task branch was renamed but before its subtask
+    # branch was: `agentic/<task>` absent, `agentic/<task>.<sub>` still live.
+    refs = ["archive/run4-abc1234/agentic/GH-12"]
+    live = ["agentic/GH-12.api"]
+    assert rules.next_archive_run(refs, live, "GH-12") == 4
+
+
+def test_next_archive_run_is_none_when_neither_branch_is_live_nor_archived():
+    assert rules.next_archive_run([], [], "GH-12") is None
+    assert rules.next_archive_run(["archive/run1-x/GH-1"], [], "GH-12") is None
+
+
+def test_next_archive_run_does_not_confuse_gh_1_with_gh_12():
+    # Both the archived refs and the live branches must be filtered by whole segment,
+    # not by `startswith`, the same predicate `branches_of_task` enforces elsewhere.
+    refs = ["archive/run1-abc1234/GH-12"]
+    live = ["agentic/GH-12"]
+    assert rules.next_archive_run(refs, live, "GH-1") is None
