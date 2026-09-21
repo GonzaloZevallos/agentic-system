@@ -135,6 +135,25 @@ class Presubmit(Protocol):
     def __call__(self) -> str | None: ...
 
 
+class SchemaGuard(Protocol):
+    """Asked with the model's own `tool_input` before its structured-output call even
+    reaches the CLI's own rejection (glossary: Guarda de esquema; ADR-0011, fifth
+    addendum: a `PreToolUse` on that tool sees the exact same input the CLI's schema
+    check and, downstream, `schemas.validate` would). Denies with `schemas.validate`'s
+    own reason -- the only source of validity in the whole mechanism, never a second
+    opinion this decides on its own -- so the model reads the missing keys inside the
+    same turn instead of the CLI's generic message or nothing at all.
+
+    Not `Presubmit`: that door is commit, clean tree, product checks, and this one
+    never looks at any of it. `refusals` is the instance's own count, capped by the
+    implementation (`RoleSchemaGuard`, `domain.schema_guard.REFUSALS`) the same way
+    `CheckoutPresubmit.refusals` caps the Puerta de entrega's."""
+
+    refusals: int
+
+    def __call__(self, tool_input: dict[str, Any]) -> str | None: ...
+
+
 class RoleRunner(Protocol):
     """Runs one attempt of a role and hands back what the model produced, raw.
 
@@ -142,7 +161,9 @@ class RoleRunner(Protocol):
     read off the `Role` itself. `resume` continues an earlier session of the same
     role: an interview is one session per participant (ADR-0014). `max_budget_usd`
     caps the money of this one run; `None` is no cap. `presubmit`, when given, is asked
-    each time the model hands back its delivery, and refuses it with a reason."""
+    each time the model hands back its delivery, and refuses it with a reason. `guard`,
+    when given, is asked with that same call's own `tool_input` before the presubmit,
+    and may deny it first (`SchemaGuard`'s own docstring)."""
 
     async def run_once(
         self,
@@ -156,6 +177,7 @@ class RoleRunner(Protocol):
         resume: str | None = None,
         max_budget_usd: float | None = None,
         presubmit: Presubmit | None = None,
+        guard: SchemaGuard | None = None,
     ) -> RawResult: ...
 
 
