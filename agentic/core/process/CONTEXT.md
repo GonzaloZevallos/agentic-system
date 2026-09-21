@@ -150,6 +150,12 @@ En el código se llama `Presubmit`, el port, y `CheckoutPresubmit`, la implement
 _Avoid_: gate, validación, hook (el mecanismo, no el concepto)
 _Campo_: presubmit check — Software Engineering at Google, cap. 20: "an analysis that blocks committing a pending code change". required status check en GitHub, gated commit en Azure DevOps, admission control (validating, no mutating) en Kubernetes
 
+**Guarda de esquema**:
+Lo que el sistema mira antes de que la llamada de un rol que ejecuta a la herramienta de entrega estructurada llegue al CLI: si `schemas.validate` la rechazaría, deniega dentro del mismo turno con las claves exactas que le faltan, para que el modelo no vuelva a emitir la misma forma inválida a ciegas (issue #88). Deniega como mucho una vez por corrida; agotada esa vez deja pasar la entrega inválida, que sigue el camino de siempre: fallo de rol de esquema, reintentado. No decide nada por su cuenta — la validez sigue siendo de `schemas.validate` — y no es la Puerta de entrega: esa mira el commit, el árbol y los chequeos del producto, y esta guarda no mira nada de eso.
+En el código se llama `SchemaGuard`, el port, y `RoleSchemaGuard`, la implementación que lo envuelve; corre antes que la Puerta de entrega, en el mismo `PreToolUse` sobre la herramienta de entrega.
+_Avoid_: validación (el mecanismo lo es; el concepto es el rechazo con reintento adentro del turno), presubmit (esa puerta es otra)
+_Campo_: sin término de arte
+
 **Puerta de arranque**:
 Lo que el sistema mira antes de gastar un peso, cuando una corrida arranca: que el producto no esté en el repositorio desde el que corre el sistema, que el vocabulario de flags cargue y que el prompt de cada rol renderice. Cualquiera de las tres que falle corta ahí con el motivo, y cortar no cuesta nada. Un aviso no es un rechazo: un stage0 con cambios sin commitear se dice y la corrida sigue, porque la deja incomparable pero no equivocada.
 En el código se llama `preflight`, y el rechazo por el repositorio propio lo pregunta también el composition root: el grafo se puede invocar sin pasar por la CLI.
