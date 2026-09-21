@@ -272,3 +272,103 @@ Consecuencias:
 - Cuántas negaciones tuvo una corrida queda escrito en el documento, en una línea que
   escribe el sistema cuando hubo al menos una. No lleva métrica propia: PM lo dejó como
   supuesto en esta tarea.
+
+## Adenda (2026-09-21, quinta): la compuerta para el guard de schema pasa, y con qué forma
+
+Issue #88 (reemisión 3-13 veces por turno de una entrega estructurada inválida, #32):
+la corrida real mostró el Developer llamando a la herramienta de salida estructurada
+varias veces seguidas dentro de un mismo turno, con `[Developer] delivery:` 13 veces
+contra 7 `[Developer] done`. La lectura de código antes de correr nada decía algo
+importante: `ClaudeSdkRunner.run_once` sólo mira `AssistantMessage`, `StreamEvent` y
+`ResultMessage`, y `schemas.validate` (el dominio) corre una sola vez, sobre el
+`ResultMessage` final. Si eso fuera todo, en #32 `schemas.validate` habría corrido cero
+veces, no trece: los reintentos pasaron *adentro del CLI*, contra su propio
+`output_format`, antes de que nuestro código viera nada. La pregunta que esta subtarea
+(`gate`) tenía que cerrar antes de que la subtarea `schema-guard` pudiera existir: ¿un
+hook puede ver esos reintentos, y lo que ve es el mismo objeto que la validación de
+verdad usaría?
+
+**La compuerta pasa, con las cuatro condiciones así:**
+
+(i) **Sí.** El rechazo del CLI llega al stream como `UserMessage` con un
+`ToolResultBlock(is_error=True)`, cuyo `content` es un string con el mensaje de
+validación del propio esquema JSON del CLI: `"Output does not match required schema:
+root: must have required property 'summary', root: must have required property
+'assumptions'"`. Nombra las claves exactas que faltan — lo mismo que el pedido original
+quiere que el modelo reciba en el primer rechazo.
+
+(ii) **No.** Un `PostToolUse` sobre `StructuredOutput` no se disparó sobre la llamada
+rechazada; sólo se disparó una vez, sobre la llamada válida que vino después, con
+`tool_response: 'Structured output provided successfully'`. El CLI no llega a
+considerar "ejecutada" la llamada que su propio esquema rechaza, así que `PostToolUse`
+no es la costura para contar ni para interceptar un rechazo de schema.
+
+(iii) **Sí, y corre antes.** Un `PreToolUse` sobre `StructuredOutput` vio el
+`tool_input` inválido completo (`{'markdown': '...</markdown>\n<summary>one line
+</summary>\n<assumptions>none</assumptions>\n'}`) y lo vio *antes* de que el rechazo del
+CLI llegara al stream: en el orden real de la corrida, el evento de `PreToolUse` quedó
+en la posición `[1]`, el `ToolResultBlock(is_error=True)` en la `[2]`. `PreToolUse`
+corre sobre la intención de la llamada, no sobre su resultado, así que un guard ahí
+puede agregar su propio motivo (las claves que faltan) *antes* de que el modelo reciba
+el genérico del CLI, o en su lugar.
+
+(iv) **Sí, la que gobierna.** Sobre la llamada válida, el `tool_input` que vio el
+`PreToolUse` (`{'markdown': '### Changes\nNothing, this is a probe.', 'summary':
+'Probe call, no actual changes made.', 'assumptions': ''}`) es exactamente el mismo
+diccionario, clave por clave y valor por valor, que `structured_output` del
+`ResultMessage` de esa misma llamada. Sin diferencia de forma en `assumptions` que
+discutir: como el rol de juguete usa `Delivery` (el esquema real de Developer),
+`schemas.json_schema` ya convierte ese campo `list[str]` en un `string` para el modelo
+(`schemas.line_lists`), así que el CLI pide y entrega el mismo string en las dos
+costuras. La nota del plan sobre esa forma no tuvo que aplicarse: no hubo con qué
+tropezar.
+
+**Conclusión para `schema-guard`:** el canal existe, y con la forma que el plan pedía
+verificar antes de construir nada. Un `PreToolUse` sobre `StructuredOutput` es la
+costura correcta: ve el intento antes de que el CLI lo rechace, ve exactamente el mismo
+objeto que una validación downstream usaría, y puede agregar el motivo con las claves
+faltantes al mismo turno en el que el modelo ya recibe el genérico del CLI —o antes,
+denegando primero con un motivo mejor, según decida esa subtarea. `PostToolUse` queda
+descartado como costura para ese guard: nunca ve la llamada que el schema del CLI
+rechazó, sólo la que quedó.
+
+### Extracto del spike
+
+```
+$ uv run pytest -m llm tests/llm/test_delivery_rejection_visibility.py -q -s
+TIMELINE (in call order):
+  [0] AssistantMessage.ToolUseBlock: {'markdown': '### Changes\nsomething.\n</markdown>\n<summary>one line</summary>\n<assumptions>none</assumptions>\n'}
+  [1] PreToolUse: {'markdown': '### Changes\nsomething.\n</markdown>\n<summary>one line</summary>\n<assumptions>none</assumptions>\n'}
+  [2] UserMessage.ToolResultBlock: {'is_error': True, 'content': "Output does not match required schema: root: must have required property 'summary', root: must have required property 'assumptions'"}
+  [3] AssistantMessage.ToolUseBlock: {'markdown': '### Changes\nsomething.', 'summary': 'one line', 'assumptions': 'none'}
+  [4] PreToolUse: {'markdown': '### Changes\nsomething.', 'summary': 'one line', 'assumptions': 'none'}
+  [5] PostToolUse: {'tool_input': {'markdown': '### Changes\nsomething.', 'summary': 'one line', 'assumptions': 'none'}, 'tool_response': 'Structured output provided successfully'}
+  [6] UserMessage.ToolResultBlock: {'is_error': None, 'content': 'Structured output provided successfully'}
+  [7] ResultMessage: {'is_error': False, 'subtype': 'success', 'structured_output': {'markdown': '### Changes\nsomething.', 'summary': 'one line', 'assumptions': 'none'}}
+condition (i) CLI rejection reached the stream: True at [2]
+condition (ii) PostToolUse fired on the invalid call: False at []
+condition (iii) PreToolUse saw the invalid input: True at [1]
+condition (iii) PreToolUse ran before the CLI's own rejection reached the stream
+.PreToolUse tool_input(s) seen: [{'markdown': '### Changes\nNothing, this is a probe.', 'summary': 'Probe call, no actual changes made.', 'assumptions': ''}]
+ResultMessage.structured_output: {'markdown': '### Changes\nNothing, this is a probe.', 'summary': 'Probe call, no actual changes made.', 'assumptions': ''}
+ResultMessage.is_error: False
+condition (iv) tool_input == structured_output (deserialised, same object): True
+.
+2 passed in 8.09s
+```
+
+El rol de juguete (`tests/llm/test_delivery_rejection_visibility.py`, `TOY_ROLE`) no
+entra al dominio: se construye en el propio archivo del spike, con `Delivery` (leído,
+nunca editado) como su esquema, sin presubmit cableado, para que lo único que decida si
+la entrega es válida sea el `output_format` del CLI mismo — la comparación de (iv) es
+contra eso, no contra un mecanismo que esta subtarea inventó.
+
+### Opciones descartadas
+
+- **Asumir por lectura de código que el rechazo era nuestro** (que `schemas.validate`
+  corrió trece veces en #32): la traza de `run_once` ya decía que eso era imposible antes
+  de correr el spike; la corrida sólo lo confirma con evidencia en vez de con inferencia
+  (ADR-0016).
+- **Un hook `Stop` para el guard**, por la misma razón que la segunda adenda ya descartó
+  para la puerta de entrega: con `output_format` el turno termina en la llamada a
+  `StructuredOutput`, y un `Stop` corre después de que la sesión ya decidió terminar.
