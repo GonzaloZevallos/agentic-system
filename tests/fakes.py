@@ -9,7 +9,7 @@ from agentic.core.knowledge.domain import knowledge
 from agentic.core.process.application.ports import Checkout, CommandResult, Ports, RawResult
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.roles import PROMPTS_DIR, Role
-from agentic.core.process.domain.task import TaskInput, TaskState
+from agentic.core.process.domain.task import DependencyState, MergeOutcome, TaskInput, TaskState
 
 VOCAB = {"touches_ui": "UI", "touches_copy": "copy"}
 
@@ -214,6 +214,21 @@ class MemoryWorkspace:
         self.merges: list[tuple[Path, str]] = []
         # Branches whose merge does not apply, as a real conflict would.
         self.conflicts: set[str] = set()
+        # `merge_keeping_conflicts` calls, and the paths a scripted conflict leaves
+        # (`x.py` when a branch is in `conflicts` but not given here). A branch in
+        # `refused_branches` conflicts with nothing to resolve: a refusal with no
+        # conflicted path at all, the `unmergeable`-immediately case.
+        self.kept_merges: list[tuple[Path, str]] = []
+        self.conflict_paths: dict[str, tuple[str, ...]] = {}
+        self.refused_branches: set[str] = set()
+        # `dependency_state` calls, and the states scripted per branch, one queue each:
+        # successive calls pop the next scripted state, the last one repeating once the
+        # queue is down to it (a branch's pre-run call and its post-delivery scan often
+        # need to answer differently). A branch with none reads as not yet landed and
+        # nothing in progress, so the fake's default is "attempt the merge", the same
+        # thing every dependency does today.
+        self.dependency_state_calls: list[tuple[Path, str, tuple[str, ...]]] = []
+        self.dependency_states: dict[str, list[DependencyState]] = {}
         self.pushed: list[str] = []
         self.cleaned: list[str] = []
         self._looks: dict[Path, int] = {}
@@ -266,6 +281,22 @@ class MemoryWorkspace:
     def merge(self, path: Path, branch: str) -> str | None:
         self.merges.append((path, branch))
         return f"CONFLICT in {branch}" if branch in self.conflicts else None
+
+    def merge_keeping_conflicts(self, path: Path, branch: str) -> MergeOutcome:
+        self.kept_merges.append((path, branch))
+        if branch in self.refused_branches:
+            return MergeOutcome(reason=f"refused: {branch}")
+        if branch in self.conflicts:
+            paths = self.conflict_paths.get(branch, ("x.py",))
+            return MergeOutcome(reason=f"CONFLICT in {branch}", conflicted_paths=paths)
+        return MergeOutcome(reason=None)
+
+    def dependency_state(self, path: Path, branch: str, paths) -> DependencyState:
+        self.dependency_state_calls.append((path, branch, tuple(paths)))
+        queue = self.dependency_states.get(branch)
+        if not queue:
+            return DependencyState(False, False, ())
+        return queue.pop(0) if len(queue) > 1 else queue[0]
 
     def commit_all(self, path: Path, message: str) -> str | None:
         self.commits.append((path, message))

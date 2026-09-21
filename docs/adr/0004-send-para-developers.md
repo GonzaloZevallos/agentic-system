@@ -360,3 +360,36 @@ reciben `{{max_turns}}`), y nada más. Esos dos prompts son los únicos que esa 
 tocar, y la ruptura de fingerprint que eso produce ya queda contada aquí, para no
 descubrirla en un panel: si B toca esos prompts, `prompts.fingerprint` cambia y la línea base
 y el set de evaluación de antes de este commit dejan de ser comparables.
+
+## Adenda (2026-09-21): se revierte "una dependencia que no se puede mergear sí frena la subtarea antes de pagarla"
+
+La quinta adenda decidió que un conflicto de dependencia escalara al humano antes de que
+ningún Developer corriera: "desenredar dos ramas es decisión del humano". En gym-saas #16
+(tipado estricto, cadena `column-expression-spelling` → `routers-and-models` →
+`persisted-id-adoption`) esa regla pausó la tarea dos veces con el mismo motivo — cada
+subtarea borra su propio bloque `[[tool.mypy.overrides]]` de `pyproject.toml`, y como los
+bloques son vecinos, git no sabe fusionar dos borrados adyacentes — y la resolución humana
+fue, las dos veces, borrar el hunk entero (la unión de los dos borrados) en un turno, sin
+ambigüedad ninguna. Costo medido: ~20 minutos por escalado con alguien mirando, horas sin
+nadie; 2 de los 7 fallos de esa tarea.
+
+**Se revierte esa frase.** El Developer de la subtarea, que ya tiene el worktree, las
+herramientas y los checks declarados, recibe un turno para resolver el conflicto antes de
+escalar: el mismo tipo de trabajo que el humano ya hizo dos veces a mano. `Workspace.merge`
+y `integrate._merge_approved` no cambian — el conflicto que aborta sigue siendo el del fan-in,
+sobre el estado compartido de una ola, donde una rama a medio mergear dejaría la siguiente
+iteración fallando por una razón ajena — sino que `develop.py` gana un camino aparte,
+`Workspace.merge_keeping_conflicts`, que nunca aborta, y `Workspace.dependency_state`, que
+lee los hechos (contenido, en progreso, marcadores) sin más verbos de git de los que el
+veredicto necesita. El sistema decide que la dependencia entró — ancestro, sin merge en
+curso, sin marcador en los archivos que el propio merge reportó — nunca la palabra del
+modelo; el caso que seguía sin nada para resolver (rama inexistente, árbol sucio, error de
+git) sigue escalando `unmergeable`, con el mismo mensaje y la misma clase, byte a byte —
+el test de `tests/core/process/domain/test_rules.py` no se toca.
+
+**Techo de costo, para que la reversión no cambie el problema por otro.** Un intento de
+Developer (80 turnos, el tope más alto del sistema; 10 USD, el tope por intento) por cada
+arista de dependencia en conflicto, contra una pausa de horas sin nadie mirando. Si ese
+intento tampoco resuelve — marcadores que quedan, o la dependencia que sigue sin estar — la
+escalación de siempre se paga una vez, no en bucle: el veredicto posterior a la entrega
+(`rules.dependency_delivered`) es lo único que decide seguir escalando.

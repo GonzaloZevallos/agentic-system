@@ -528,6 +528,87 @@ def test_a_dependency_that_does_not_merge_escalates_before_the_developer_costs_a
     assert patch["escalation_class"] == "unmergeable"
 
 
+def test_conflict_markers_are_found_only_at_the_start_of_a_line():
+    assert rules.has_conflict_markers("<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> dep\n")
+    assert rules.has_conflict_markers("before\n=======\nafter\n")
+    assert not rules.has_conflict_markers("no markers here\njust text\n")
+    # A marker inside a line, not at its start, is prose (a comment about the format,
+    # a shell one-liner), never the leftover git wrote.
+    assert not rules.has_conflict_markers("the docs show `<<<<<<< HEAD` as an example\n")
+
+
+def test_dependency_before_decides_from_the_state_alone_with_no_git():
+    contained = task.DependencyState(contained=True, merge_in_progress=False, marked_paths=())
+    assert rules.dependency_before(contained) == "skip"
+    # A merge in progress wins even when the branch also reads as contained: nothing
+    # here calls `merge_keeping_conflicts` on top of an unfinished merge, whatever else
+    # is true (this is the resume case: a human's partial fix, or this run's own
+    # earlier attempt left the checkout mid-merge).
+    resumed = task.DependencyState(contained=True, merge_in_progress=True, marked_paths=("x.py",))
+    assert rules.dependency_before(resumed) == "hand_over"
+    fresh = task.DependencyState(contained=False, merge_in_progress=False, marked_paths=())
+    assert rules.dependency_before(fresh) == "attempt"
+
+
+def test_dependency_after_attempt_tells_clean_from_conflicted_from_unmergeable():
+    clean = task.MergeOutcome(reason=None)
+    assert rules.dependency_after_attempt(clean) == "clean"
+    conflicted = task.MergeOutcome(reason="CONFLICT (content): x.py", conflicted_paths=("x.py",))
+    assert rules.dependency_after_attempt(conflicted) == "hand_over"
+    # Refused with nothing for a Developer to resolve (unknown branch, dirty tree, a
+    # git error): no conflicted paths at all, so paying an attempt would discover
+    # nothing new.
+    refused = task.MergeOutcome(reason="fatal: not something we can merge")
+    assert rules.dependency_after_attempt(refused) == "unmergeable"
+
+
+def test_dependency_delivered_needs_ancestry_no_merge_and_no_leftover_markers():
+    clean = task.DependencyState(contained=True, merge_in_progress=False, marked_paths=())
+    assert rules.dependency_delivered(clean)
+    not_landed = task.DependencyState(contained=False, merge_in_progress=False, marked_paths=())
+    assert not rules.dependency_delivered(not_landed)
+    mid_merge = task.DependencyState(contained=True, merge_in_progress=True, marked_paths=())
+    assert not rules.dependency_delivered(mid_merge)
+    # Ancestry holds (a `git add` past the marker, then a commit) but the marker is
+    # still in the file's own content: not a resolution, whatever git's index says.
+    staged_marker = task.DependencyState(
+        contained=True, merge_in_progress=False, marked_paths=("x.py",)
+    )
+    assert not rules.dependency_delivered(staged_marker)
+
+
+def test_dependency_unresolved_reason_names_which_fact_is_still_unsettled():
+    mid_merge = task.DependencyState(contained=False, merge_in_progress=True, marked_paths=())
+    assert "in progress" in rules.dependency_unresolved_reason(mid_merge)
+    marked = task.DependencyState(contained=True, merge_in_progress=False, marked_paths=("x.py",))
+    reason = rules.dependency_unresolved_reason(marked)
+    assert "x.py" in reason and "marker" in reason
+    missing = task.DependencyState(contained=False, merge_in_progress=False, marked_paths=())
+    assert "not" in rules.dependency_unresolved_reason(missing)
+
+
+def test_merge_notice_names_the_paths_and_forbids_whole_side_strategies():
+    notice = rules.merge_notice("domain", "agentic/GH-1.domain", ["pyproject.toml", "x.py"])
+    assert "agentic/GH-1.domain" in notice and "domain" in notice
+    assert "`pyproject.toml`" in notice and "`x.py`" in notice
+    assert "git restore --ours" in notice and "git restore --theirs" in notice
+    assert "git checkout --theirs" in notice  # named as denied, never told to widen it
+    assert "-s ours" in notice and "-X ours" in notice and "-X theirs" in notice
+    assert "checks" in notice and "commit" in notice
+    assert "section" in notice  # the conflicted paths and the diff land there
+
+
+def test_resumed_after_unmergeable_says_why_and_what_may_already_be_done():
+    state = {
+        "subtasks": {"api": {"conflicted_paths": ["pyproject.toml"]}},
+    }
+    text = rules.resumed_after_unmergeable(state, "api", "agentic/GH-1.api", "abc123")
+    assert "agentic/GH-1.api" in text and "abc123" in text
+    assert "pyproject.toml" in text
+    assert "human" in text
+    assert "do not go looking for work to redo" in text.lower() or "redo" in text
+
+
 def test_a_setup_step_that_fails_escalates_with_its_own_class():
     from agentic.core.process.domain.roles import DEVELOPER
 

@@ -121,6 +121,30 @@ async def test_develop_runs_the_developer_unattended_in_the_subtask_checkout(cfg
         "| passed |\n\n### Changes\n\nx.py"
     }
     assert patch["runs"][0]["section"] == "Developer: api" and patch["status"] == "developing"
+    # A Developer run with no `depends_on` produces the same patch keys and the same
+    # subtask keys as before this task: this task adds nothing to either shape unless
+    # a dependency was actually merged.
+    assert set(patch) == {
+        "current_role",
+        "prompts",
+        "sections",
+        "failures",
+        "cost_usd",
+        "runs",
+        "subtasks",
+        "presubmit_checks",
+        "status",
+    }
+    assert set(patch["subtasks"]["api"]) == {
+        "id",
+        "title",
+        "brief",
+        "seams",
+        "depends_on",
+        "status",
+        "branch",
+        "base",
+    }
 
 
 async def test_develop_reaches_its_own_brief_not_its_sisters_under_tech_lead(cfg):
@@ -206,6 +230,58 @@ async def test_a_returned_developer_resumes_its_session_on_a_delta(cfg):
     assert patch["subtasks"]["api"]["status"] == "delivered"
 
 
+async def test_a_developer_session_with_no_review_reads_why_it_resumes_not_a_delta(cfg):
+    # A shape only this task's path creates: a session on record (the Developer ran
+    # and delivered) but no review ever happened, because the previous run's
+    # post-delivery scan escalated `unmergeable` first. `returned_developer_delta`
+    # cannot serve this (it reads a review section that does not exist), so the gate
+    # is the subtask's own status, `returned`, never merely "a session exists".
+    state = {
+        **TASK,
+        "subtasks": {
+            "domain": sub("domain", "approved", branch="agentic/GH-12.domain"),
+            "api": sub(
+                "api",
+                "pending",  # left as it was: the previous run never verified
+                depends_on=["domain"],
+                branch="agentic/GH-12.api",
+                base="base1",
+                conflicted_paths=["pyproject.toml"],
+            ),
+        },
+        "subtask_id": "api",
+        "sections": {**TASK["sections"], "Developer: api": "### Changes\n\nresolved the hunk"},
+        "runs": [
+            {
+                "role": "Developer",
+                "section": "Developer: api",
+                "session_id": "dev-1",
+                "cost_usd": 0.1,
+                "version": 1,
+                "model": "m",
+                "cost_by_model": {},
+                "turns": 1,
+            }
+        ],
+    }
+    runner = ScriptedRunner(developer=[delivered()])
+    ports = memory_ports(runner)
+    api = ports.workspace.subtask_checkout("GH-12", "api")
+    ports.workspace.moved.add(api.path)
+    from agentic.core.process.domain.task import DependencyState
+
+    ports.workspace.dependency_states["agentic/GH-12.domain"] = [DependencyState(True, False, ())]
+    patch = await develop(state, cfg, ports)
+    call = runner.calls[0]
+    assert call["resume"] == "dev-1"
+    prompt = call["prompt"]
+    assert prompt.startswith("This run resumes your session on branch `agentic/GH-12.api`")
+    assert "pyproject.toml" in prompt and "human" in prompt
+    # Never the returned-Developer delta: no review ever ran this subtask.
+    assert "**Returned:**" not in prompt
+    assert patch["subtasks"]["api"]["status"] == "delivered"
+
+
 async def test_a_returned_developer_with_a_stale_session_falls_back_cold_with_a_trace(cfg):
     # The session on record cannot be reopened (another machine, a pruned store): the
     # system drops it, restarts cold with the full context, and leaves a trace on the
@@ -277,8 +353,136 @@ async def test_a_dependent_subtask_starts_on_its_dependencies_code(cfg):
     ports = memory_ports(ScriptedRunner(developer=[delivered()]))
     api = ports.workspace.subtask_checkout("GH-12", "api")
     ports.workspace.moved.add(api.path)
+    patch = await develop(state, cfg, ports)
+    assert ports.workspace.kept_merges == [(api.path, "agentic/GH-12.domain")]
+    # No conflict at all: the same shape as before this task, no dependency notice, no
+    # `conflicted_paths` key on a subtask that never carried one.
+    assert patch["subtasks"]["api"]["status"] == "delivered"
+    assert "conflicted_paths" not in patch["subtasks"]["api"]
+
+
+async def test_a_conflicting_dependency_hands_the_worktree_to_the_developer(cfg):
+    # gym #16's own shape: the dependency does not merge clean, and instead of
+    # escalating on the spot the Developer gets one turn to resolve it, told which
+    # paths carry markers and how.
+    state = {
+        **TASK,
+        "subtasks": {
+            "domain": sub("domain", "approved", branch="agentic/GH-12.domain"),
+            "api": sub("api", depends_on=["domain"]),
+        },
+        "subtask_id": "api",
+    }
+    runner = ScriptedRunner(developer=[delivered()])
+    ports = memory_ports(runner)
+    ports.workspace.conflicts.add("agentic/GH-12.domain")
+    ports.workspace.conflict_paths["agentic/GH-12.domain"] = ("pyproject.toml",)
+    api = ports.workspace.subtask_checkout("GH-12", "api")
+    ports.workspace.moved.add(api.path)
+    # Pre-run: not yet landed, so the merge is attempted; post-delivery (after the
+    # Developer resolved it in the same turn): landed clean, no marker left.
+    from agentic.core.process.domain.task import DependencyState
+
+    ports.workspace.dependency_states["agentic/GH-12.domain"] = [
+        DependencyState(False, False, ()),
+        DependencyState(True, False, ()),
+    ]
+    patch = await develop(state, cfg, ports)
+    prompt = runner.calls[0]["prompt"]
+    assert "does not apply clean" in prompt and "`pyproject.toml`" in prompt
+    assert "git restore --ours" in prompt
+    assert patch["subtasks"]["api"]["status"] == "delivered"
+    assert patch["subtasks"]["api"]["conflicted_paths"] == []
+    assert "### Dependency merge" in patch["sections"]["Developer: api"]
+
+
+async def test_a_dependency_the_developer_could_not_settle_escalates_unmergeable(cfg):
+    state = {
+        **TASK,
+        "subtasks": {
+            "domain": sub("domain", "approved", branch="agentic/GH-12.domain"),
+            "api": sub("api", depends_on=["domain"]),
+        },
+        "subtask_id": "api",
+    }
+    runner = ScriptedRunner(developer=[delivered()])
+    ports = memory_ports(runner)
+    ports.workspace.conflicts.add("agentic/GH-12.domain")
+    ports.workspace.conflict_paths["agentic/GH-12.domain"] = ("pyproject.toml",)
+    # The marker is still there after the Developer's delivery: not a resolution.
+    from agentic.core.process.domain.task import DependencyState
+
+    api = ports.workspace.subtask_checkout("GH-12", "api")
+    ports.workspace.moved.add(api.path)
+    ports.workspace.dependency_states["agentic/GH-12.domain"] = [
+        DependencyState(False, False, ()),
+        DependencyState(True, False, ("pyproject.toml",)),
+    ]
+    patch = await develop(state, cfg, ports)
+    assert patch["status"] == "waiting_on_human"
+    assert patch["escalation_class"] == "unmergeable"
+    assert "marker" in patch["escalated"] and "pyproject.toml" in patch["escalated"]
+    # The Developer's own patch is not dropped: its run and cost survive the escalation.
+    assert patch["runs"][0]["section"] == "Developer: api"
+    assert patch["cost_usd"] > 0
+    # Neither the subtask nor the task moved to delivered/developing.
+    assert patch["subtasks"]["api"]["status"] == "pending"
+    assert "status" not in patch or patch["status"] == "waiting_on_human"
+
+
+async def test_an_unmergeable_dependency_with_nothing_to_resolve_still_escalates_at_once(cfg):
+    # Case 4: refused with no conflicted paths (unknown branch, dirty tree, a git
+    # error) — nothing a Developer turn could act on, so it never runs.
+    state = {
+        **TASK,
+        "subtasks": {
+            "domain": sub("domain", "approved", branch="agentic/GH-12.domain"),
+            "api": sub("api", depends_on=["domain"]),
+        },
+        "subtask_id": "api",
+    }
+    ports = memory_ports(ScriptedRunner())
+    ports.workspace.refused_branches.add("agentic/GH-12.domain")
+    ports.workspace.subtask_checkout("GH-12", "api")
+    patch = await develop(state, cfg, ports)
+    assert patch["escalation_class"] == "unmergeable"
+    assert "subtask 'api' cannot start on 'domain'" in patch["escalated"]
+    # No role ran, so no subtask patch either, the same shape as before this task: the
+    # human resolves the branches, not a state this run half-wrote.
+    assert "subtasks" not in patch
+
+
+async def test_a_merge_already_in_progress_is_handed_over_without_a_new_attempt(cfg):
+    # A resume: a previous run's own attempt, or a human's partial fix, left the
+    # worktree mid-merge. `merge_keeping_conflicts` must never run on top of it.
+    from agentic.core.process.domain.task import DependencyState
+
+    state = {
+        **TASK,
+        "subtasks": {
+            "domain": sub("domain", "approved", branch="agentic/GH-12.domain"),
+            "api": sub(
+                "api",
+                depends_on=["domain"],
+                branch="agentic/GH-12.api",
+                base="base1",
+                conflicted_paths=["pyproject.toml"],
+            ),
+        },
+        "subtask_id": "api",
+    }
+    runner = ScriptedRunner(developer=[delivered()])
+    ports = memory_ports(runner)
+    api = ports.workspace.subtask_checkout("GH-12", "api")
+    ports.workspace.moved.add(api.path)
+    ports.workspace.dependency_states["agentic/GH-12.domain"] = [
+        DependencyState(False, True, ("pyproject.toml",)),
+        DependencyState(True, False, ()),
+    ]
     await develop(state, cfg, ports)
-    assert ports.workspace.merges == [(api.path, "agentic/GH-12.domain")]
+    assert ports.workspace.kept_merges == []  # never re-attempted
+    prompt = runner.calls[0]["prompt"]
+    assert "does not apply clean" in prompt and "`pyproject.toml`" in prompt
 
 
 async def test_a_single_subtask_builds_on_the_task_branch(cfg):

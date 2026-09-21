@@ -18,6 +18,7 @@ several nodes over a copy of the state and has to hand the parent what it added.
 from __future__ import annotations
 
 import operator
+from dataclasses import dataclass
 from typing import Annotated, Literal, NotRequired, TypedDict, get_args, get_origin, get_type_hints
 
 Status = Literal[
@@ -90,6 +91,41 @@ ReviewKind = Literal["first", "incremental", "integration"]
 EscalationClass = Literal[
     "classification", "returns", "failure", "cap", "questions", "unmergeable", "setup"
 ]
+
+
+@dataclass(frozen=True)
+class MergeOutcome:
+    """What `Workspace.merge_keeping_conflicts` reports (the dependency-merge path in
+    `develop.py`, never `Workspace.merge`'s own abort-on-conflict caller): a value
+    object, not a git verb, so the pure verdict in `domain/rules.py` decides from it
+    with no checkout of its own. `reason` is `None` for a merge that committed clean;
+    otherwise it is why, the same text `Workspace.merge` already returns for a
+    conflict or a refusal. `conflicted_paths` is the paths `git diff --name-only
+    --diff-filter=U` named right after the attempt, empty when the merge never even
+    started (an unknown branch, a dirty tree, a git error) — that emptiness alongside
+    a non-`None` reason is what tells the verdict there is nothing for a Developer to
+    resolve."""
+
+    reason: str | None
+    conflicted_paths: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class DependencyState:
+    """The facts a dependency merge leaves in a checkout, read off git in one call
+    (`Workspace.dependency_state`): whether `contained` (the dependency branch is
+    already an ancestor of HEAD), whether a merge is `merge_in_progress` (`MERGE_HEAD`
+    still there, from this run's own attempt or a human's partial fix in the
+    worktree), which of the paths asked about (`marked_paths`, a subset of what the
+    caller passed) still hold a conflict marker in their actual content — not git's
+    own conflict bookkeeping, which a `git add` past a marker already clears — and
+    `evidence`, the diff against the dependency branch for those paths, written into
+    the Developer's section for the review to check."""
+
+    contained: bool
+    merge_in_progress: bool
+    marked_paths: tuple[str, ...]
+    evidence: str = ""
 
 
 def add(current: float, new: float) -> float:
@@ -333,6 +369,15 @@ class Subtask(TypedDict, total=False):
     # Branches the fan-in could not bring into the task branch on its own. Only the
     # integration subtask carries it: what the integrator has left to resolve.
     conflicts: list[str]
+    # Paths a dependency merge left conflicted, this subtask's own (never the
+    # integration's `conflicts` above, a different key with a different meaning: this
+    # one is what `develop()`'s marker scan reads back, that one is what the fan-in
+    # still has to merge by hand). Written by the run that merged a dependency or found
+    # one already in progress; scanned only on such a run; cleared by the delivery that
+    # verifies the dependency landed clean. Absent on a subtask this task's path never
+    # touched, and on every document written before this task existed — every read is
+    # `.get("conflicted_paths", [])`.
+    conflicted_paths: list[str]
 
 
 class TaskState(TaskInput, total=False):

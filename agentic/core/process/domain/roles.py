@@ -317,7 +317,11 @@ DEVELOPER = Role(
     reads_standards=True,
     tools=EXECUTE,
     denied=GIT_DENIED,
-    skills=("tdd",),
+    # `resolving-merge-conflicts` was the integrator's alone (ADR-0013); this task's
+    # own reversal (ADR-0013, addendum) gives it to a subtask's own Developer too, for
+    # the dependency-merge path in `develop.py` (gym #16). No prompt file is edited, so
+    # `prompts.fingerprint` for `developer` does not move.
+    skills=("tdd", "resolving-merge-conflicts"),
     executes=True,
     effort="high",
     max_turns=80,

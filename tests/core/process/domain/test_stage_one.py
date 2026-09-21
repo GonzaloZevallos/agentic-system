@@ -47,7 +47,10 @@ def test_no_role_is_given_a_skill_the_model_cannot_invoke():
 def test_only_developer_executes_and_tech_lead_only_reads():
     assert DEVELOPER.executes and DEVELOPER_INTEGRATOR.executes
     assert {"Edit", "Write", "Bash"} <= set(DEVELOPER.tools)
-    assert DEVELOPER.skills == ("tdd",)
+    # `resolving-merge-conflicts` was the integrator's alone (ADR-0013); the
+    # dependency-merge path gives it to a subtask's own Developer too (ADR-0013,
+    # addendum).
+    assert set(DEVELOPER.skills) == {"tdd", "resolving-merge-conflicts"}
     assert "resolving-merge-conflicts" in DEVELOPER_INTEGRATOR.skills
     for role in (TECH_LEAD, TECH_LEAD_REVIEWER):
         assert not role.executes

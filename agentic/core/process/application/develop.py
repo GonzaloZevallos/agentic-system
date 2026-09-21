@@ -35,16 +35,39 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     # A dependency gates the order and provides the code: its approved branch is
     # brought in before the Developer starts. The integration skips this: the fan-in
     # already brought every approved branch into the task branch, and what it could not
-    # merge is exactly the integrator's job. A dependency the system cannot merge stops
-    # the subtask before it is paid for:
-    # building on code that is not there is work thrown away, and untangling two
-    # branches is the human's call, not this Developer's.
+    # merge is exactly the integrator's job. A dependency that does not merge clean no
+    # longer stops the subtask on the spot (gym #16's own two escalations, an adjacent
+    # hunk a human deleted in one turn): the checkout is left conflicted instead of
+    # undone (`merge_keeping_conflicts`, never `Workspace.merge`'s own abort), and the
+    # Developer that already owns the worktree gets one turn to resolve it before its
+    # own brief. Only a merge with nothing for anyone to resolve — an unknown branch, a
+    # dirty tree, a git error — still escalates immediately, `rules.unmergeable`'s own
+    # message, byte for byte.
+    handled_deps: list[tuple[str, str]] = []
+    notices: list[str] = []
+    conflicted_paths: list[str] = list(subtask.get("conflicted_paths", []))
     if subtask_id != INTEGRATION:
         for dep in subtask.get("depends_on", []):
             branch = state["subtasks"][dep]["branch"]
-            if conflict := ports.workspace.merge(checkout.path, branch):
-                patch = rules.unmergeable(subtask_id, dep, conflict)
-                return finish(state, patch, ports)
+            dep_state = ports.workspace.dependency_state(checkout.path, branch, conflicted_paths)
+            step = rules.dependency_before(dep_state)
+            if step == "skip":
+                continue
+            if step == "attempt":
+                outcome = ports.workspace.merge_keeping_conflicts(checkout.path, branch)
+                after = rules.dependency_after_attempt(outcome)
+                if after == "clean":
+                    continue
+                if after == "unmergeable":
+                    patch = rules.unmergeable(subtask_id, dep, outcome.reason or "")
+                    return finish(state, patch, ports)
+                paths = list(outcome.conflicted_paths)
+            else:  # "hand_over": a merge already in progress, from a resume
+                paths = list(dep_state.marked_paths)
+            handled_deps.append((dep, branch))
+            conflicted_paths = [*conflicted_paths, *(p for p in paths if p not in conflicted_paths)]
+            notices.append(rules.merge_notice(dep, branch, paths))
+    notice_text = "\n\n".join(notices)
     before = ports.workspace.head(checkout.path)
     checks = declared_checks(state, ports)
     delivery_presubmit = CheckoutPresubmit(
@@ -64,12 +87,26 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     # `DEVELOPER.name`: the integrator shares the name but not the slug, and this keys
     # its own session on its own section. No session on record (a fresh subtask, a
     # reseeded document) keeps today's full context, resume and cold prompt both unset.
+    #
+    # A session can exist with no review ever having run it now (this task's own new
+    # shape): a dependency merge escalated `unmergeable` before the Developer's delivery
+    # could be reviewed. `returned_developer_delta` reads a review section that is not
+    # there, so the gate is the subtask's own status, not merely a session on record.
     resume = rules.last_session(state, role.name, section)
     prompt = cold_prompt = None
     if resume:
-        prompt = rules.returned_developer_delta(state, subtask_id, checkout.branch, before)
+        if subtask.get("status") == "returned":
+            prompt = rules.returned_developer_delta(state, subtask_id, checkout.branch, before)
+        else:
+            prompt = rules.resumed_after_unmergeable(state, subtask_id, checkout.branch, before)
+        if notice_text:
+            prompt = f"{prompt}\n\n{notice_text}"
         cold_prompt = with_context(
             state, role, ports, checkout.path, prompt, extra_sections, subtask_id
+        )
+    elif notice_text:
+        prompt = with_context(
+            state, role, ports, checkout.path, notice_text, extra_sections, subtask_id
         )
     output, patch = await run_role(
         state,
@@ -100,15 +137,52 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         # Measurement only (like `subtask_id`): read once by the adapter for
         # `agentic.presubmit.checks`/`.duration`, never persisted.
         patch["presubmit_checks"] = delivery_presubmit.invocations
-    patch["subtasks"] = {
-        subtask_id: {
-            **subtask,
-            "branch": checkout.branch,
-            "base": checkout.base,
-            "status": "delivered" if output is not None else subtask.get("status", "pending"),
+
+    # The system decides the dependency landed, never the model's own word for it
+    # (README.md's own rule for this task): a marker scan runs only on a delivery whose
+    # run merged a dependency or found one already in progress, over the paths the
+    # merge itself reported, checking their actual content — never git's own conflict
+    # bookkeeping, which a `git add` past a marker already clears. A verified delivery
+    # stands and `conflicted_paths` is cleared; anything else composes `unmergeable`
+    # onto the patch a delivering Developer already produced, its `runs` and
+    # `cost_usd` intact, with the subtask's status left at what it was and the task
+    # never moved to `developing`.
+    verified = output is not None
+    if verified and handled_deps:
+        evidence = []
+        for dep, branch in handled_deps:
+            after_state = ports.workspace.dependency_state(checkout.path, branch, conflicted_paths)
+            if after_state.evidence:
+                evidence.append(f"Dependency `{dep}` (`{branch}`):\n\n{after_state.evidence}")
+            if not rules.dependency_delivered(after_state):
+                verified = False
+                reason = rules.dependency_unresolved_reason(after_state)
+                patch = {**patch, **rules.unmergeable(subtask_id, dep, reason)}
+                break
+        else:
+            conflicted_paths = []
+        record = "\n\n".join(
+            [
+                "### Dependency merge",
+                f"Conflicted paths: {', '.join(conflicted_paths) or '(none left)'}",
+                *evidence,
+            ]
+        )
+        patch["sections"] = {
+            **patch["sections"],
+            section: f"{patch['sections'][section]}\n\n{record}",
         }
+
+    subtask_patch: dict = {
+        **subtask,
+        "branch": checkout.branch,
+        "base": checkout.base,
+        "status": "delivered" if verified else subtask.get("status", "pending"),
     }
-    if output is not None:
+    if handled_deps or subtask.get("conflicted_paths"):
+        subtask_patch["conflicted_paths"] = conflicted_paths
+    patch["subtasks"] = {subtask_id: subtask_patch}
+    if verified:
         patch["status"] = "developing"
     return finish(state, patch, ports)
 

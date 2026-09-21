@@ -8,14 +8,14 @@ second product arrived and it is this repo (README.md, 8; ADR-0017).
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
 from ..domain.roles import Role
 from ..domain.rules import motive
-from ..domain.task import FailureReason, TaskInput, TaskState
+from ..domain.task import DependencyState, FailureReason, MergeOutcome, TaskInput, TaskState
 from .limits import RunLimits
 
 
@@ -330,6 +330,22 @@ class Workspace(Protocol):
         None; a conflict leaves the checkout as it was, for a role to resolve on its
         own. It is a fact about the code, not a failure of the system, so the use case
         decides what to do with it."""
+        ...
+
+    def merge_keeping_conflicts(self, path: Path, branch: str) -> MergeOutcome:
+        """Like `merge`, but a conflict is left in the checkout instead of undone: the
+        dependency-merge path in `develop.py` is the only caller, and it hands the
+        worktree to a Developer to resolve, never to a use case that assumes a clean
+        tree back. `merge`'s own abort-on-conflict is untouched; this is a separately
+        named operation (ADR-0004)."""
+        ...
+
+    def dependency_state(self, path: Path, branch: str, paths: Sequence[str]) -> DependencyState:
+        """The facts a dependency merge leaves behind, for the pure verdict in
+        `domain/rules.py` to decide from with no git call of its own: whether `branch`
+        already landed in the checkout, whether a merge is still in progress, which of
+        `paths` still hold a conflict marker in their own content, and the diff
+        against `branch` over those paths as evidence for the review."""
         ...
 
     def commit_all(self, path: Path, message: str) -> str | None:

@@ -20,13 +20,14 @@ from __future__ import annotations
 
 import os
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from agentic.shared.configuration import STATE_FILE
 
 from ...application.ports import Checkout
 from ...domain import rules
+from ...domain.task import DependencyState, MergeOutcome
 
 WORKTREES = Path(".agentic/worktrees")
 # The glob covers SQLite's journal next to the file.
@@ -116,6 +117,43 @@ class GitWorkspace:
             return None
         self._run("merge", "--abort", cwd=path)
         return (result.stdout + result.stderr).strip() or f"`git merge {branch}` failed"
+
+    def merge_keeping_conflicts(self, path: Path, branch: str) -> MergeOutcome:
+        """Like `merge`, but never `merge --abort`: the checkout is left exactly as git
+        left it, conflicted or refused, for the dependency-merge path in `develop.py`
+        to hand a Developer (`Workspace.merge`'s own docstring, and this task's own
+        addendum to ADR-0004, has the why the two stay separate)."""
+        result = self._run("merge", "--no-edit", "-q", branch, cwd=path)
+        if result.returncode == 0:
+            return MergeOutcome(reason=None)
+        conflicted = tuple(
+            line
+            for line in self._git("diff", "--name-only", "--diff-filter=U", cwd=path).splitlines()
+            if line
+        )
+        reason = (result.stdout + result.stderr).strip() or f"`git merge {branch}` failed"
+        return MergeOutcome(reason=reason, conflicted_paths=conflicted)
+
+    def dependency_state(self, path: Path, branch: str, paths: Sequence[str]) -> DependencyState:
+        ancestor = self._run("merge-base", "--is-ancestor", branch, "HEAD", cwd=path)
+        merge_head = self._run("rev-parse", "--verify", "-q", "MERGE_HEAD", cwd=path)
+        contained = ancestor.returncode == 0
+        in_progress = merge_head.returncode == 0
+        marked = tuple(p for p in paths if self._has_markers(path, p))
+        evidence = ""
+        if paths:
+            evidence = self._run("diff", branch, "HEAD", "--", *paths, cwd=path).stdout
+        return DependencyState(contained, in_progress, marked, evidence)
+
+    def _has_markers(self, root: Path, relative: str) -> bool:
+        target = root / relative
+        if not target.is_file():
+            return False
+        try:
+            text = target.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return False
+        return rules.has_conflict_markers(text)
 
     def commit_all(self, path: Path, message: str) -> str | None:
         self._git("add", "-A", cwd=path)

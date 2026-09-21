@@ -295,7 +295,7 @@
       "id": 5,
       "type": "table",
       "title": "KPIs por versión del sistema",
-      "description": "Una fila por SHA del sistema: costo promedio por tarea terminada, retrabajo sobre el costo, terminadas, escaladas (pausas por escalado, `agentic_task_paused`, no tareas: ADR-0008, Adenda 2026-09-18, segunda) e invocaciones por tarea terminada, en el rango. Escala a cualquier cantidad de versiones; los stats de arriba no. `task_status!~\"waiting_on_human|crashed\"` sigue en las columnas que leen `agentic_task_cost_usd`/`agentic_task_finished`, a propósito: protege el promedio de trece meses de muestras pausadas o caídas ya emitidas.",
+      "description": "Una fila por SHA del sistema: costo promedio por tarea terminada, retrabajo sobre el costo, terminadas, escaladas (pausas por escalado, `agentic_task_paused`, no tareas: ADR-0008, Adenda 2026-09-18, segunda), invocaciones por tarea terminada e inmergeables (pausas con `escalation_class=\"unmergeable\"`, subconjunto de la columna de escaladas — GH-91: dos de siete escalaciones de gym-saas #16 eran de esta clase, y el Developer que ahora las intenta resolver antes de escalar debería bajarla) en el rango. Escala a cualquier cantidad de versiones; los stats de arriba no. `task_status!~\"waiting_on_human|crashed\"` sigue en las columnas que leen `agentic_task_cost_usd`/`agentic_task_finished`, a propósito: protege el promedio de trece meses de muestras pausadas o caídas ya emitidas.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -336,6 +336,12 @@
           "format": "table",
           "instant": true,
           "expr": "sum by (system_version) (sum_over_time(agentic_task_invocations{product=~\"$product\", system_version=~\"$version\"}[$__range])) / sum by (system_version) (sum_over_time(agentic_task_finished{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))"
+        },
+        {
+          "refId": "F",
+          "format": "table",
+          "instant": true,
+          "expr": "sum by (system_version) (sum_over_time(agentic_task_paused{product=~\"$product\", system_version=~\"$version\", escalation_class=\"unmergeable\"}[$__range]))"
         }
       ],
       "transformations": [
@@ -355,7 +361,8 @@
               "Value #B": "Retrabajo",
               "Value #C": "Terminadas",
               "Value #D": "Escaladas",
-              "Value #E": "Invocaciones por tarea"
+              "Value #E": "Invocaciones por tarea",
+              "Value #F": "Inmergeables"
             }
           }
         },
