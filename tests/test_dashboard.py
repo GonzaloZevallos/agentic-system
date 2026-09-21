@@ -113,8 +113,7 @@ def test_versioned_families_are_grouped_and_filtered_by_system_version():
                 f"{metric} is grouped without system_version in by(...): {expr!r}"
             )
             assert re.search(rf'{metric}\{{[^}}]*system_version=~"\$version"', expr), (
-                f'{metric} is queried without system_version=~"$version" in its '
-                f"selector: {expr!r}"
+                f'{metric} is queried without system_version=~"$version" in its selector: {expr!r}'
             )
 
 
