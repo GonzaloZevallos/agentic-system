@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import get_args
 
+import anyio
 import pytest
 
 from agentic.core.process.application.ports import AttemptFailed, RawResult
@@ -122,6 +123,39 @@ async def test_retry_passes_the_error_and_sums_cost():
     assert runner.calls[1]["prompt"].startswith("task\n\n<PreviousAttemptFailed>\n")
     assert runner.calls[1]["resume"] is None
     assert runner.calls[1]["model"] == "m" and runner.calls[1]["cwd"] == Path("/p")
+
+
+async def test_a_cancelled_attempt_starts_no_second_attempt_and_writes_no_failure():
+    # Subtask `signals`, assertion only (`run_role.py` itself is untouched): a
+    # cancellation is not `AttemptFailed`, so `run_with_retry`'s own `except
+    # AttemptFailed: continue` never sees it and no `Failure` is appended -- the
+    # cancellation just propagates out, the way `RoleFailure`/`TaskCapReached` never
+    # do. Verified against a runner that actually hangs mid-attempt, not assumed.
+    class HangingRunner:
+        def __init__(self):
+            self.calls = 0
+            self.entered = anyio.Event()
+
+        async def run_once(self, role, prompt, **kwargs):
+            self.calls += 1
+            self.entered.set()
+            await anyio.sleep_forever()
+
+    runner = HangingRunner()
+    finished = False
+
+    async def go():
+        nonlocal finished
+        await run_pjm(runner, retries=2)
+        finished = True  # never reached: the attempt is cancelled first
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(go)
+        await runner.entered.wait()
+        tg.cancel_scope.cancel()
+
+    assert runner.calls == 1  # no retry started after the cancellation
+    assert finished is False  # `run_with_retry` never returned an `Output`
 
 
 async def test_a_failed_attempts_denials_are_recorded_on_its_failure():

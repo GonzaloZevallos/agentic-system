@@ -219,6 +219,20 @@ def test_an_interrupted_resume_says_whether_its_worktree_has_uncommitted_changes
     assert text.splitlines()[-1] == f"worktree:  {dirty}"
 
 
+def test_announcing_an_interrupted_resume_names_the_crashed_role(cfg):
+    # `announce`'s existing `Resumed: ` gains one clause on the crashed branch alone
+    # (subtask `signals`): no new comment prefix, `SYSTEM_COMMENTS` untouched, the
+    # human learns which role a killed process was in the middle of.
+    state = {**paused(cost_usd=1.0), "escalated": None, "status": "developing"}
+    ports = memory_ports()
+    r = resume.prepare("GH-12", state, "checkpoint", cfg, ports, ("integrate",))
+    resume.announce(r, ports)
+    expected = (
+        f"Resumed: integrate, interrupted at Developer, under a task cap of {r.cap_usd:.2f} USD."
+    )
+    assert ports.tracker.comments == [("GH-12", expected)]
+
+
 def test_announcing_takes_the_task_out_of_the_queue(cfg):
     ports = memory_ports()
     raised = Configuration(product_dir=cfg.product_dir, task_budget_usd=125)

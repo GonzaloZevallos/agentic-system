@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import signal
 import sys
 import uuid
 from collections.abc import Awaitable, Callable, Iterator
@@ -156,9 +157,65 @@ def main() -> None:
     except (MissingProductDir, ValueError, OSError) as exc:
         parser.exit(2, f"agentic: {exc}\n")
     try:
-        anyio.run(work)
+        anyio.run(_signal_guarded, work)
     except CannotStart as exc:
         parser.exit(exc.code, f"agentic: {exc}\n")
+
+
+async def _signal_guarded(work: Callable[[], Awaitable[None]]) -> None:
+    """Wraps `work` (`_run`/`_resume`, built in `main`) in a task group a SIGTERM or a
+    SIGHUP cancels (Tech Lead plan, subtask `signals`). This is the one place that
+    restructures the `anyio.run(work)` call; every other subtask takes its shape as it
+    finds it.
+
+    Cancelling the scope is the only new mechanism: everything the invocation already
+    does in a `finally` -- `_locked`'s lock release, `_invoke`'s telemetry flush,
+    `task_span`'s own context manager exit -- runs exactly as it would on any other
+    exception, since anyio delivers a cancellation as one at the current await point.
+    Nothing is written here to the task document: the only `TaskState` this scope holds
+    is the invocation's own `entering` snapshot (`_invoke`'s docstring), and writing it
+    would erase every section this invocation's nodes already wrote, racing the fan-in
+    (ADR-0004, fifth addendum). No issue comment is added either: `resume.SYSTEM_COMMENTS`
+    is untouched, since an unregistered prefix would read back as a human decision on the
+    next resume (`resume.human_decision`).
+
+    `work`'s own exception -- `CannotStart`, an escalated run's `sys.exit`, anything --
+    is caught inside the group and re-raised after it closes, never let escape the
+    `async with tg:` block itself: anyio wraps whatever crosses it in an
+    `ExceptionGroup`, even a lone exception, which would break `main`'s bare
+    `except CannotStart` and change the exit code the invariants say must not move."""
+    caught: list[BaseException] = []
+    interrupted = False
+
+    async def watch_signals() -> None:
+        nonlocal interrupted
+        with anyio.open_signal_receiver(signal.SIGTERM, signal.SIGHUP) as signals:
+            async for _ in signals:
+                interrupted = True
+                tg.cancel_scope.cancel()
+                return
+
+    async def run_work() -> None:
+        try:
+            await work()
+        except anyio.get_cancelled_exc_class():
+            raise
+        except BaseException as exc:
+            caught.append(exc)
+        finally:
+            tg.cancel_scope.cancel()
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(watch_signals)
+        tg.start_soon(run_work)
+
+    if caught:
+        raise caught[0]
+    if interrupted:
+        # The three actions the plan asks for: telemetry flushed and the lock released,
+        # both already done by `work`'s own `finally` blocks as the cancellation
+        # unwound it; this is the third, a non-zero exit for whoever sent the signal.
+        raise SystemExit(1)
 
 
 def _replace_environ(env: dict[str, str]) -> None:

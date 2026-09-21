@@ -1,9 +1,12 @@
 import json
 import os
+import signal
 import subprocess
 from contextlib import asynccontextmanager
+from functools import partial
 from types import SimpleNamespace
 
+import anyio
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -34,10 +37,14 @@ def product(tmp_path, name, stack=STACK):
 
 
 def capture_run(monkeypatch):
-    """Replace the graph run with a recorder of what the CLI would have run."""
+    """Replace the graph run with a recorder of what the CLI would have run. `main` now
+    calls `anyio.run(cli._signal_guarded, work)` (subtask `signals`), so this unwraps
+    one level to the same `work` partial every assertion here always read."""
     seen = {}
 
-    def fake_run(work):
+    def fake_run(func, *args):
+        assert func is cli._signal_guarded
+        (work,) = args
         task, cfg, ports, *options = work.args
         seen.update(fn=work.func, task=task, cfg=cfg, ports=ports, options=tuple(options))
 
@@ -710,3 +717,166 @@ def test_a_product_that_declares_no_name_does_not_run(monkeypatch, tmp_path, cap
         cli.main()
     assert info.value.code == 2
     assert "expected `product`" in capsys.readouterr().err
+
+
+class NeverFires:
+    """A stand-in for `anyio.open_signal_receiver(...)`: never yields a signal, but
+    stays cancellable like the real one -- no OS signal, no real event loop handler."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        await anyio.sleep_forever()
+
+
+class FiresOnce:
+    """A stand-in for `anyio.open_signal_receiver(...)` that yields one signal as soon
+    as it is awaited, with no real OS signal and no real event loop handler involved."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        return signal.SIGTERM
+
+
+class Hangs:
+    """A graph double whose `ainvoke` never returns on its own: what a SIGTERM has to
+    cancel out of, mid-role, the way a real Claude Code stream would hang until killed."""
+
+    def compile(self, checkpointer):
+        return self
+
+    async def aget_state(self, config):
+        return SimpleNamespace(values={}, next=(), interrupts=())
+
+    async def ainvoke(self, task, config):
+        await anyio.sleep_forever()
+
+
+@pytest.mark.anyio
+async def test_a_refusal_from_work_is_not_wrapped_by_the_signal_guard(monkeypatch):
+    """`CannotStart` (or any other exception `work` raises) must reach `main`'s bare
+    `except CannotStart` unchanged: anyio wraps whatever escapes a task group in an
+    `ExceptionGroup`, even a lone exception, so `_signal_guarded` has to catch it inside
+    the group and re-raise it after -- verified here, not assumed."""
+    monkeypatch.setattr(cli.anyio, "open_signal_receiver", lambda *sigs: NeverFires())
+
+    async def work():
+        raise cli.CannotStart("nope", code=2)
+
+    with pytest.raises(cli.CannotStart, match="nope") as info:
+        await cli._signal_guarded(work)
+    assert info.value.code == 2
+
+
+@pytest.mark.anyio
+async def test_a_signal_cancels_the_invocation_releases_the_lock_and_exits_nonzero(
+    monkeypatch, tmp_path
+):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setattr(cli, "graph", Hangs())
+    monkeypatch.setattr(cli.anyio, "open_signal_receiver", lambda *sigs: FiresOnce())
+    lock = FakeLock()
+    task = {"id": "T-9", "title": "t", "description": "d"}
+    work = partial(
+        cli._run,
+        task,
+        Configuration(product_dir=tmp_path),
+        memory_ports(),
+        checkpointer=in_memory,
+        run_lock=lock,
+    )
+    with pytest.raises(SystemExit) as info:
+        await cli._signal_guarded(work)
+    assert info.value.code != 0
+    assert lock.released == ["T-9"]  # `_locked`'s own `finally`, surviving cancellation
+
+
+@pytest.mark.anyio
+async def test_a_signal_still_flushes_telemetry_and_closes_the_task_span(monkeypatch, tmp_path):
+    """`_invoke`'s `finally: telemetry.flush()` and `task_span`'s own context manager
+    exit are existing code, not new; this asserts they both survive a cancellation
+    instead of assuming it in prose (Tech Lead plan, subtask `signals`)."""
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from agentic.core.measurement.adapters.otel import telemetry
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setattr(cli, "graph", Hangs())
+    monkeypatch.setattr(cli.anyio, "open_signal_receiver", lambda *sigs: FiresOnce())
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    telemetry.configure(tracer_provider=provider)
+    flushes = []
+    original_flush = telemetry.flush
+    monkeypatch.setattr(telemetry, "flush", lambda: (flushes.append(1), original_flush())[0])
+    task = {"id": "T-9", "title": "t", "description": "d"}
+    work = partial(
+        cli._run, task, Configuration(product_dir=tmp_path), memory_ports(), checkpointer=in_memory
+    )
+    try:
+        with pytest.raises(SystemExit):
+            await cli._signal_guarded(work)
+    finally:
+        telemetry.configure()
+    assert flushes == [1]
+    (span,) = exporter.get_finished_spans()
+    assert span.name == "T-9"
+
+
+@pytest.mark.anyio
+async def test_an_uninterrupted_run_over_the_guard_comments_exactly_as_before(
+    monkeypatch, tmp_path
+):
+    """Wiring `_signal_guarded` around the invocation changes nothing for a run that
+    was never signalled: the issue comments are byte-for-byte what `_resume` alone
+    would have written."""
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setattr(cli, "graph", Delivers({"id": "GH-1", "title": "t", "status": "open"}))
+    monkeypatch.setattr(cli.anyio, "open_signal_receiver", lambda *sigs: NeverFires())
+    ports = memory_ports()
+    ports.documents.save(
+        {
+            "id": "GH-1",
+            "title": "t",
+            "description": "d",
+            "type": "bug",
+            "status": "waiting_on_human",
+            "escalated": "Developer stopped by the task cap",
+            "cost_usd": 1.0,
+        }
+    )
+    ports.tracker.earlier = ["Escalated: Developer stopped by the task cap"]
+    work = partial(
+        cli._resume,
+        "GH-1",
+        Configuration(product_dir=tmp_path),
+        ports,
+        from_document=True,
+        yes=True,
+        checkpointer=in_memory,
+    )
+    await cli._signal_guarded(work)
+    assert ports.tracker.comments == [("GH-1", "Resumed: diagnose, under a task cap of 30.00 USD.")]

@@ -200,14 +200,22 @@ def summary(r: Resumption, cfg: Configuration, ports: Ports) -> str:
 def announce(r: Resumption, ports: Ports) -> None:
     """Take the task out of the queue and say on the issue that it resumed. A task seeded
     from its document first forgets the worktrees the human removed by hand, so asking
-    for those checkouts again recreates them; a dry run never gets here."""
+    for those checkouts again recreates them; a dry run never gets here.
+
+    `r.interrupted` (glossary: Corrida interrumpida) adds one clause naming the role the
+    previous invocation was interrupted at, so "el issue quedó mintiendo" (the request's
+    own words) gets an answer without a new comment prefix: `RESUMED` is the only one
+    this ever wrote, `SYSTEM_COMMENTS` stays as it is, and a resume that was not
+    interrupted emits the exact same bytes as before (subtask `signals`)."""
     if r.source == "document":
         ports.workspace.prune()
     ports.tracker.unlabel(r.task_id, NEEDS_HUMAN)
     answered = " with your decision" if r.decision else ""
+    role = r.paused.get("current_role") or "before any role"
+    interrupted = f", interrupted at {role}" if r.interrupted else ""
     ports.tracker.comment(
         r.task_id,
-        f"{RESUMED}{r.target}{answered}, under a task cap of {r.cap_usd:.2f} USD.",
+        f"{RESUMED}{r.target}{answered}{interrupted}, under a task cap of {r.cap_usd:.2f} USD.",
     )
 
 

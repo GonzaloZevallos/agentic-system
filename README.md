@@ -1018,7 +1018,13 @@ grafo, `run`, `resume` y `--fresh` toman `.agentic/runs/<tarea>.lock` (pid, host
 comando): un pid vivo en este host se niega, uno de otro host se niega por nombre sin
 probarlo, y uno muerto se toma, avisándolo; `--dry-run` no lo toma, solo lo muestra. Protege
 invocaciones de la CLI entre sí, no un `langgraph dev`, que mantiene todos los hilos en un
-solo proceso.
+solo proceso. Un SIGTERM o un SIGHUP cancelan la invocación en curso: se vacía la
+telemetría, se libera el lock y el proceso sale con código distinto de cero, sin escribir
+en el documento (el único `TaskState` que la CLI tiene en ese momento es el de entrada, y
+pisarlo borraría lo que los nodos de esta invocación ya escribieron) ni un comentario nuevo
+en el issue (`Resumed: ` gana una cláusula que nombra el rol interrumpido, en la próxima
+reanudación de una corrida que se cruzó con uno de estos, en vez de un prefijo nuevo). Un
+SIGKILL no se puede atrapar: el lock queda huérfano y `resume` lo toma avisándolo.
 
 ### Fallo de rol
 
