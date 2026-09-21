@@ -15,6 +15,7 @@ import sys
 import uuid
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
+from datetime import UTC, datetime
 from functools import partial
 from typing import cast
 
@@ -39,7 +40,7 @@ from .core.process.application.preflight import (
     unfixed_stage0,
 )
 from .core.process.domain.task import TaskInput, TaskState
-from .shared.configuration import ENV_PREFIX, Configuration, MissingProductDir
+from .shared.configuration import ENV_PREFIX, LOGS_DIR, Configuration, MissingProductDir
 from .shared.environment import without_own_toolchain
 
 Checkpointer = Callable[[Configuration], AbstractAsyncContextManager[BaseCheckpointSaver]]
@@ -128,8 +129,11 @@ def main() -> None:
         if args.command == "resume":
             task_id = ports.inbox.task_id(args.issue)
             declared_stack_of(task_id, ports)
+            log_file = _log_file_for(cfg, task_id)
             options = (args.from_document, args.dry_run, args.yes)
-            work: Callable[[], Awaitable[None]] = partial(_resume, task_id, cfg, ports, *options)
+            work: Callable[[], Awaitable[None]] = partial(
+                _resume, task_id, cfg, ports, *options, log_file=log_file
+            )
         else:
             if args.issue is not None:
                 task = ports.inbox.task(args.issue)
@@ -144,13 +148,35 @@ def main() -> None:
             # through and it would die inside a node, where nothing escalates. A task
             # with no branch answers HEAD here, already checked.
             declared_stack_of(task["id"], ports)
-            work = partial(_run, task, cfg, ports, args.fresh)
+            log_file = _log_file_for(cfg, task["id"])
+            work = partial(_run, task, cfg, ports, args.fresh, log_file=log_file)
     except (MissingProductDir, ValueError, OSError) as exc:
         parser.exit(2, f"agentic: {exc}\n")
     try:
         anyio.run(work)
     except CannotStart as exc:
         parser.exit(exc.code, f"agentic: {exc}\n")
+
+
+def _configurable(task_id: str, log_file: str | None) -> dict[str, str]:
+    configurable = {"thread_id": task_id}
+    if log_file is not None:
+        configurable["log_file"] = log_file
+    return configurable
+
+
+def _log_file_for(cfg: Configuration, task_id: str) -> str:
+    """Where this invocation logs, computed once the task id is known (not at line
+    119, where `cfg` is built and no task exists yet): `<product>/.agentic/logs/
+    <task>-<UTC timestamp>.log`, to the second, so two invocations of the same task
+    never share a file (README.md, 14; issue #33). Printed once, and returned as a
+    plain `str`: what travels through `configurable`, which the saver persists, is a
+    JSON-serialisable scalar, never a `Path` (invariant 12)."""
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    path = cfg.product_dir / LOGS_DIR / f"{task_id}-{stamp}.log"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    print(f"agentic: log at {path}")
+    return str(path)
 
 
 def _replace_environ(env: dict[str, str]) -> None:
@@ -165,8 +191,9 @@ async def _run(
     ports: Ports,
     fresh: bool = False,
     checkpointer: Checkpointer | None = None,
+    log_file: str | None = None,
 ) -> None:
-    config: RunnableConfig = {"configurable": {"thread_id": task["id"]}}
+    config: RunnableConfig = {"configurable": _configurable(task["id"], log_file)}
     async with (checkpointer or composition.checkpointer)(cfg) as saver:
         app = graph.compile(checkpointer=saver)
         if not fresh:
@@ -206,8 +233,9 @@ async def _resume(
     dry_run: bool = False,
     yes: bool = False,
     checkpointer: Checkpointer | None = None,
+    log_file: str | None = None,
 ) -> None:
-    config: RunnableConfig = {"configurable": {"thread_id": task_id}}
+    config: RunnableConfig = {"configurable": _configurable(task_id, log_file)}
     async with (checkpointer or composition.checkpointer)(cfg) as saver:
         app = graph.compile(checkpointer=saver)
         snapshot = await app.aget_state(config)

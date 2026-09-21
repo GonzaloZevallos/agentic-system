@@ -1091,9 +1091,11 @@ queda como `PM (vN)`) y lo que cambia el conocimiento se destila otra vez.
 
 ### Observabilidad
 
-Cuatro capas, de más inmediata a más durable. `agentic run --verbose` vuelca a stderr el
-stream del SDK (texto, thinking si el rol lo tiene, tool calls) con prefijo de rol: es la
-única forma de ver generar. Claude Code exporta OpenTelemetry nativo; un collector en
+Cuatro capas, de más inmediata a más durable. `agentic run` y `agentic resume` escriben
+siempre su log en `<producto>/.agentic/logs/<tarea>-<hora UTC>.log` (tool calls, la línea
+`done:` de cada rol y el aviso de sub-agentes en background), fuera del `.gitignore` del
+producto; `--verbose` pasa a controlar sólo si ese mismo log suma además los deltas de
+generación (texto, thinking) según van llegando, con prefijo de rol. Claude Code exporta OpenTelemetry nativo; un collector en
 `observability/collector/` lo reenvía a un Langfuse local, porque el exportador de Claude
 Code no puede mandar un header `Authorization: Basic` entero. El grafo abre un span por
 tarea y uno por rol y pasa `TRACEPARENT` al subproceso, así una tarea es un trace con los
