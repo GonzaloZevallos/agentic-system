@@ -136,3 +136,20 @@ def test_every_queried_metric_and_label_is_documented():
         f"dashboard.json queries label keys the metric's own README row does not "
         f"document: {mismatches}"
     )
+
+
+def test_unmergeable_pauses_are_broken_out_by_version():
+    # gym-saas #16 (GH-91): two of seven escalations were `unmergeable` pauses a
+    # Developer turn would have settled by hand. `escalation_class` already ships on
+    # `agentic_task_paused` and "Pausas por motivo de escalado" already stacks every
+    # class together, but that buries the one class this task's fix targets inside six
+    # others. A panel must isolate escalation_class="unmergeable" on its own, grouped
+    # and filtered by system_version like every other versioned panel (ADR-0008, ninth
+    # addendum), so the count is visible per version — and visibly drops there.
+    exprs = [e for e in _exprs() if 'escalation_class="unmergeable"' in e]
+    assert exprs, 'no panel isolates escalation_class="unmergeable" on its own'
+    for expr in exprs:
+        assert "agentic_task_paused" in expr
+        assert re.search(r'agentic_task_paused\{[^}]*product=~"\$product"', expr), expr
+        assert re.search(r'agentic_task_paused\{[^}]*system_version=~"\$version"', expr), expr
+        assert re.search(r"by\s*\(\s*system_version\s*\)", expr), expr
