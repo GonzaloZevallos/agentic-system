@@ -33,6 +33,7 @@ generator, which ends the process and whatever it still had running.
 
 from __future__ import annotations
 
+import os
 import sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -50,6 +51,8 @@ from claude_agent_sdk import (
     ToolUseBlock,
     query,
 )
+
+from agentic.shared.environment import trace_id_of, with_resource_marker
 
 from ...application.ports import AttemptFailed, Presubmit, RawResult
 from ...domain.denials import denial_for
@@ -84,6 +87,7 @@ def options_for(
     traceparent: str | None,
     partial: bool,
     env: Mapping[str, str],
+    resource_attributes: str | None,
     presubmit: Presubmit | None = None,
     on_denied: Callable[[], None] | None = None,
     on_notice: Callable[[], None] | None = None,
@@ -115,8 +119,15 @@ def options_for(
         strict_mcp_config=True,
         # Deltas as they are generated; without an observer nobody would read them.
         include_partial_messages=partial,
-        # Claude Code parents its own spans under the role's (SDK mode honours it).
-        env={**env, **({"TRACEPARENT": traceparent} if traceparent else {})},
+        # `TRACEPARENT` alone already parents Claude Code's own spans, and any
+        # sub-agent it launches, under the chain it points to (ADR-0020's spike, run
+        # against the pinned SDK and CLI: identical parenting with or without the
+        # `OTEL_RESOURCE_ATTRIBUTES` marker below). The marker does not propagate
+        # anything; it identifies whose run those spans belong to (GH-70).
+        # `resource_attributes` is the ambient `os.environ` value, never `env` (the
+        # runner's own git-identity overlay, which does not carry it in production) --
+        # composing off `env` would overwrite whatever the real process inherited.
+        env=_child_env(env, role, traceparent, resource_attributes),
         hooks=hooks_for(role, cwd, presubmit, on_notice) or None,
         # A role that executes runs under `bypassPermissions`, which already shadows
         # this callback for every call (the SDK's own warning); wiring one there would
@@ -127,6 +138,29 @@ def options_for(
         # does not already cover.
         can_use_tool=None if role.executes else _deny_writes(role, on_denied),
     )
+
+
+def _child_env(
+    env: Mapping[str, str],
+    role: Role,
+    traceparent: str | None,
+    resource_attributes: str | None,
+) -> dict[str, str]:
+    """`env` with `TRACEPARENT` set (as today) and, when `traceparent` carries a valid
+    trace id, `OTEL_RESOURCE_ATTRIBUTES` refreshed with this run's marker
+    (`with_resource_marker`, GH-70), composed off `resource_attributes` -- the caller's
+    own ambient `os.environ` value, never `env` (the runner's `git identity` overlay,
+    which does not carry it in production; composing off `env` would silently drop
+    whatever the real process inherited, invariant 8). Nothing is added when there is
+    no trace to mark against, so a role run under `NoTelemetry` sees exactly the `env`
+    it was given, as before this change."""
+    child = {**env, **({"TRACEPARENT": traceparent} if traceparent else {})}
+    trace_id = trace_id_of(traceparent)
+    if trace_id is not None:
+        child["OTEL_RESOURCE_ATTRIBUTES"] = with_resource_marker(
+            resource_attributes, role_slug=role.slug, trace_id=trace_id
+        )
+    return child
 
 
 def _deny_writes(role: Role, on_denied: Callable[[], None] | None) -> CanUseTool:
@@ -198,6 +232,11 @@ class ClaudeSdkRunner:
             traceparent=self.telemetry.traceparent(),
             partial=observer is not None,
             env=self.env,
+            # The real inherited value, not `self.env` (the git identity overlay
+            # composition builds on top of it): the process this runner itself is in
+            # is the one thing that actually has the ambient `OTEL_RESOURCE_ATTRIBUTES`
+            # a spawned role's telemetry should be marked against (invariant 8).
+            resource_attributes=os.environ.get("OTEL_RESOURCE_ATTRIBUTES"),
             presubmit=presubmit,
             on_denied=_count_denial,
             on_notice=_mark_notice,

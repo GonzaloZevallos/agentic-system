@@ -4,7 +4,11 @@ from pathlib import Path
 
 from agentic.shared.configuration import Configuration
 from agentic.shared.environment import (
+    RESOURCE_ROLE_SLUG_KEY,
+    RESOURCE_TRACE_ID_KEY,
     own_configuration_unset,
+    trace_id_of,
+    with_resource_marker,
     without_own_configuration,
     without_own_toolchain,
 )
@@ -72,3 +76,108 @@ def test_an_empty_variable_is_unset_for_the_configuration_that_reads_it():
     )
     assert cfg.product_dir == Path("/p")
     assert cfg.verbose is False
+
+
+# --- trace_id_of: the trace id out of a W3C `traceparent` header --------------------
+
+VALID_TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
+VALID_SPAN_ID = "00f067aa0ba902b7"
+
+
+def test_trace_id_of_a_well_formed_header():
+    header = f"00-{VALID_TRACE_ID}-{VALID_SPAN_ID}-01"
+    assert trace_id_of(header) == VALID_TRACE_ID
+
+
+def test_trace_id_of_none_is_none():
+    assert trace_id_of(None) is None
+
+
+def test_trace_id_of_an_empty_header_is_none():
+    assert trace_id_of("") is None
+
+
+def test_trace_id_of_the_wrong_number_of_fields_is_none():
+    assert trace_id_of(f"00-{VALID_TRACE_ID}-{VALID_SPAN_ID}") is None
+
+
+def test_trace_id_of_non_hex_is_none():
+    header = f"00-{'z' * 32}-{VALID_SPAN_ID}-01"
+    assert trace_id_of(header) is None
+
+
+def test_trace_id_of_the_wrong_length_is_none():
+    header = f"00-{VALID_TRACE_ID[:-2]}-{VALID_SPAN_ID}-01"
+    assert trace_id_of(header) is None
+
+
+def test_trace_id_of_all_zero_ids_is_none():
+    """The W3C spec reserves an all-zero trace id or span id as invalid."""
+    assert trace_id_of(f"00-{'0' * 32}-{VALID_SPAN_ID}-01") is None
+    assert trace_id_of(f"00-{VALID_TRACE_ID}-{'0' * 16}-01") is None
+
+
+# --- with_resource_marker: OTEL_RESOURCE_ATTRIBUTES merged, never overwritten -------
+
+
+def test_inherited_absent_carries_only_our_keys():
+    result = with_resource_marker(None, role_slug="tech_lead", trace_id=VALID_TRACE_ID)
+    assert result == f"{RESOURCE_ROLE_SLUG_KEY}=tech_lead,{RESOURCE_TRACE_ID_KEY}={VALID_TRACE_ID}"
+
+
+def test_inherited_present_with_unrelated_keys_is_preserved():
+    result = with_resource_marker(
+        "service.namespace=gym-saas,deployment.environment=dev",
+        role_slug="tech_lead",
+        trace_id=VALID_TRACE_ID,
+    )
+    assert result == (
+        "service.namespace=gym-saas,deployment.environment=dev,"
+        f"{RESOURCE_ROLE_SLUG_KEY}=tech_lead,{RESOURCE_TRACE_ID_KEY}={VALID_TRACE_ID}"
+    )
+
+
+def test_inherited_already_carrying_one_of_our_keys_is_refreshed_not_duplicated():
+    stale = f"{RESOURCE_ROLE_SLUG_KEY}=stale_role,unrelated.key=kept"
+    result = with_resource_marker(stale, role_slug="tech_lead", trace_id=VALID_TRACE_ID)
+    assert result == (
+        f"unrelated.key=kept,{RESOURCE_ROLE_SLUG_KEY}=tech_lead,"
+        f"{RESOURCE_TRACE_ID_KEY}={VALID_TRACE_ID}"
+    )
+    assert "stale_role" not in result
+
+
+def test_inherited_malformed_is_preserved_as_is_not_repaired():
+    """An entry with no `=` is not ours to fix: kept verbatim alongside our marker."""
+    malformed = "not-a-key-value-pair,also;broken"
+    result = with_resource_marker(malformed, role_slug="tech_lead", trace_id=VALID_TRACE_ID)
+    assert result == (
+        "not-a-key-value-pair,also;broken,"
+        f"{RESOURCE_ROLE_SLUG_KEY}=tech_lead,{RESOURCE_TRACE_ID_KEY}={VALID_TRACE_ID}"
+    )
+
+
+def test_a_value_that_would_truncate_the_list_is_percent_encoded():
+    result = with_resource_marker(None, role_slug="tech_lead,review", trace_id=VALID_TRACE_ID)
+    assert result == (
+        f"{RESOURCE_ROLE_SLUG_KEY}=tech_lead%2Creview,{RESOURCE_TRACE_ID_KEY}={VALID_TRACE_ID}"
+    )
+    # the encoded comma does not add a third entry: the list still has exactly two
+    assert result.count(",") == 1
+
+
+def test_never_emits_a_service_key_of_its_own():
+    result = with_resource_marker(
+        "service.name=claude-code", role_slug="tech_lead", trace_id=VALID_TRACE_ID
+    )
+    assert result.split(",")[0] == "service.name=claude-code"  # kept, not ours to drop
+    assert "service.name=" not in result.replace("service.name=claude-code", "", 1)
+
+
+def test_merge_is_not_a_wholesale_overwrite():
+    """The table above fails as a whole if the merge is replaced by a wholesale
+    overwrite: an unrelated inherited key must always survive."""
+    result = with_resource_marker(
+        "deployment.environment=dev", role_slug="tech_lead", trace_id=VALID_TRACE_ID
+    )
+    assert "deployment.environment=dev" in result.split(",")
