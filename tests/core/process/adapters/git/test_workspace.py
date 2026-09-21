@@ -265,7 +265,9 @@ def test_two_branches_deleting_adjacent_blocks_of_one_file_conflict_and_the_deve
     # The human's own resolution in gym #16: the union of both deletions, nothing else.
     (second.path / "pyproject.toml").write_text(lines[0])
     git("add", "pyproject.toml", cwd=second.path)
-    git("commit", "--no-edit", "-q", cwd=second.path)
+    # A plain git call, not the adapter's own commit: needs its own identity, the same
+    # way the fixture's first commit already does.
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "--no-edit", "-q", cwd=second.path)
 
     settled = ws.dependency_state(second.path, first.branch, ["pyproject.toml"])
     assert settled.contained and not settled.merge_in_progress and settled.marked_paths == ()
@@ -296,7 +298,7 @@ def test_a_marker_left_after_staging_and_committing_still_reads_as_conflicted(pr
     # Stage and commit the file exactly as git left it, markers and all: this is the
     # shape the closing criterion names, never a real resolution.
     git("add", "x.py", cwd=right.path)
-    git("commit", "--no-edit", "-q", cwd=right.path)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "--no-edit", "-q", cwd=right.path)
     assert ws.is_clean(right.path)  # git's own bookkeeping says nothing is unmerged
 
     state = ws.dependency_state(right.path, left.branch, ["x.py"])
