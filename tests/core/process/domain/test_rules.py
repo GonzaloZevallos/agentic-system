@@ -571,7 +571,9 @@ def test_dependency_delivered_needs_ancestry_no_merge_and_no_leftover_markers():
     assert not rules.dependency_delivered(mid_merge)
     # Ancestry holds (a `git add` past the marker, then a commit) but the marker is
     # still in the file's own content: not a resolution, whatever git's index says.
-    staged_marker = task.DependencyState(contained=True, merge_in_progress=False, marked_paths=("x.py",))
+    staged_marker = task.DependencyState(
+        contained=True, merge_in_progress=False, marked_paths=("x.py",)
+    )
     assert not rules.dependency_delivered(staged_marker)
 
 

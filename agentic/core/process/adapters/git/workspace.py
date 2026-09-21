@@ -135,8 +135,10 @@ class GitWorkspace:
         return MergeOutcome(reason=reason, conflicted_paths=conflicted)
 
     def dependency_state(self, path: Path, branch: str, paths: Sequence[str]) -> DependencyState:
-        contained = self._run("merge-base", "--is-ancestor", branch, "HEAD", cwd=path).returncode == 0
-        in_progress = self._run("rev-parse", "--verify", "-q", "MERGE_HEAD", cwd=path).returncode == 0
+        ancestor = self._run("merge-base", "--is-ancestor", branch, "HEAD", cwd=path)
+        merge_head = self._run("rev-parse", "--verify", "-q", "MERGE_HEAD", cwd=path)
+        contained = ancestor.returncode == 0
+        in_progress = merge_head.returncode == 0
         marked = tuple(p for p in paths if self._has_markers(path, p))
         evidence = ""
         if paths:

@@ -238,7 +238,7 @@ def test_two_branches_deleting_adjacent_blocks_of_one_file_conflict_and_the_deve
     clean, with the dependency contained, nothing in progress, and no marker left."""
     ws = GitWorkspace(product, IDENTITY)
     base = ws.task_checkout("GH-16")
-    lines = [f"[[tool.mypy.overrides]]\nmodule = \"pkg.mod{n}\"\n\n" for n in range(3)]
+    lines = [f'[[tool.mypy.overrides]]\nmodule = "pkg.mod{n}"\n\n' for n in range(3)]
     (base.path / "pyproject.toml").write_text("".join(lines))
     ws.commit_all(base.path, "base: three override blocks")
 
