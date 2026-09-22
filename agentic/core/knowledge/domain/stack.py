@@ -9,12 +9,17 @@ is the one at the task's base commit, never the branch's: a task that edits it d
 change the bar it is measured against, and the change applies from the next task, after
 the merge.
 
-Three keys today. **`product`**: the name the product goes by, which every span and every
-metric of a run carries as a label (issue #47). **`checks`**: the commands with which the
-product says its code is sound. **`setup`**: the commands that prepare a fresh checkout to
-run them, optional, because a product with no dependencies prepares nothing. Loading is
-the `ProductStack` port's job; running the setup when a checkout is born and the checks
-when a Developer delivers is `core.process`'s.
+**`product`**: the name the product goes by, which every span and every metric of a run
+carries as a label (issue #47). **`checks`**: the commands with which the product says its
+code is sound. **`setup`**: the commands that prepare a fresh checkout to run them,
+optional, because a product with no dependencies prepares nothing. **`witness`**: optional,
+the command with which the product says where the code its checks just measured lives.
+**`forbidden`**: optional (issue #38), the suppressions -- a comment syntax, a linter
+directive, whatever the product's own tools spell -- an Edit or a Write may not add: a
+pattern, the extensions it applies to and the reason a denial carries verbatim. The system
+itself knows none of this; every spelling lives here, in the product's own file. Loading is
+the `ProductStack` port's job; running the setup when a checkout is born, the checks when a
+Developer delivers, and the suppression cage while it writes, is `core.process`'s.
 
 The name is the one part that is not read at the task's base. It says *who* the repository
 is, not what held at a commit: read at the base, a task older than the key would resume
@@ -30,13 +35,15 @@ import re
 from pathlib import Path
 from typing import Any
 
+from agentic.core.process.domain.suppressions import Forbidden
+
 # What a product copies to start, shown by the error when it declared nothing. It is a
 # template and no longer a default: no run ever falls back to it (issue #36).
 TEMPLATE = Path(__file__).resolve().parent / "stack.yaml"
 OVERLAY = Path(".agentic/stack.yaml")
 # Every key the file may declare. An unknown one is a typo, not an extension: a product
 # that misspells `checks` would otherwise run with half a stack and never know.
-KEYS = ("product", "setup", "checks", "witness")
+KEYS = ("product", "setup", "checks", "witness", "forbidden")
 # The name is a label value in Prometheus and a variable in the dashboard: a slug keeps
 # one product from arriving under two spellings and keeps the panels' regexes honest.
 SLUG = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
@@ -103,6 +110,51 @@ def witness(data: object, source: object) -> str | None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{source}: expected a command for `witness`, a non-empty string")
     return value.strip()
+
+
+def forbidden(data: object, source: object) -> tuple[Forbidden, ...]:
+    """The suppressions this product forbids a Developer's Edit or Write from adding,
+    declared under `forbidden`: a rule per entry, in file order -- the order the
+    process domain's pure predicate (`process.domain.suppressions.denial`) tries them
+    in, first match wins, so the reason a Developer reads is deterministic.
+
+    Absent is a product that forbids none, legitimate like `setup`'s absence: a Go
+    product, or one that genuinely forbids nothing, is not a half-written file.
+    Present and empty, or any entry missing a piece, is: every failure below is a
+    `ValueError` raised here, at load, so a broken declaration never reaches a hook at
+    run time to fail open or fail closed on it."""
+    declared = _declared(data, source)
+    if "forbidden" not in declared:
+        return ()
+    found = declared["forbidden"]
+    if not isinstance(found, list) or not found:
+        raise ValueError(f"{source}: expected `forbidden`, a non-empty list of rules")
+    return tuple(_forbidden_rule(entry, source, index) for index, entry in enumerate(found))
+
+
+def _forbidden_rule(entry: object, source: object, index: int) -> Forbidden:
+    where = f"`forbidden[{index}]`"
+    if not isinstance(entry, dict):
+        raise ValueError(f"{source}: expected a mapping for {where}")
+    pattern = entry.get("pattern")
+    if not isinstance(pattern, str) or not pattern.strip():
+        raise ValueError(f"{source}: expected a non-empty `pattern` for {where}")
+    try:
+        compiled = re.compile(pattern)
+    except re.error as exc:
+        raise ValueError(f"{source}: {where}'s `pattern` does not compile: {exc}") from exc
+    extensions = entry.get("extensions")
+    if not isinstance(extensions, list) or not extensions:
+        raise ValueError(f"{source}: expected a non-empty `extensions` list for {where}")
+    cleaned = []
+    for ext in extensions:
+        if not isinstance(ext, str) or not ext.strip():
+            raise ValueError(f"{source}: expected non-empty extension strings for {where}")
+        cleaned.append(ext.strip())
+    reason = entry.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError(f"{source}: expected a non-empty `reason` for {where}")
+    return Forbidden(pattern=compiled, extensions=frozenset(cleaned), reason=reason.strip())
 
 
 def _declared(data: object, source: object) -> dict[str, Any]:

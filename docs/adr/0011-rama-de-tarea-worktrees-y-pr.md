@@ -525,3 +525,56 @@ mueve.
   borró a mano con sus ramas de subtarea vivas: en ese caso reusaría un `N` y saltearía el paso
   del documento. Se acepta: no hay forma de distinguirlos sin guardar estado que sobreviva al
   thread que `--fresh` borra.
+
+## Adenda (2026-09-22, séptima): la jaula de supresiones la declara el producto
+
+La cuarta adenda dejó dicho que los constantes de la jaula del rol que ejecuta (`CONFIG`,
+`PUSH`, `WORKTREE`, `SILENCED`…) son forma vieja y que unificarlos es su propio platform
+enhancement. `SILENCED` deja de ser uno de ellos: no se unifica, se va del sistema entero
+(issue #38). `_SILENCED` (el regex de `# type: ignore`/`# noqa`) y `_PYTHON` (`.py`, `.pyi`)
+eran el único lugar del sistema que sabía que el producto estaba en Python; en TypeScript, Go
+o Kotlin un `@ts-ignore`, un `eslint-disable` o un `//nolint` pasaban sin que la jaula del
+estándar 6 los viera. Lo que cubre `Edit|Write` hoy: los caminos dentro de `.git/` o fuera del
+checkout, como siempre, y una ocurrencia nueva de una supresión que el producto declaró bajo
+`forbidden` en `.agentic/stack.yaml` — ninguna. Un producto que no declara `forbidden` tiene
+la jaula instalada y sin nada que negar, la misma rama de no-op que `presubmit`/`guard`
+ausentes ya tienen; nunca falla cerrado ni abierto sobre una declaración rota, porque una
+declaración rota nunca pasa de `stack.forbidden`, que la rechaza con `ValueError` al cargar
+(`core.knowledge.domain.stack`).
+
+**Dos mecánicas, decididas en esta adenda y no antes.** `forbidden` es una lista en el orden
+del archivo, y `core.process.domain.suppressions.denial` prueba sus reglas en ese orden: la
+primera cuyo `pattern` aplica a la extensión del archivo y cuyas ocurrencias en `after`
+superan a las de `before` gana, y ninguna otra se mira. Con eso el motivo que un Developer lee
+es determinístico incluso si dos reglas del producto se solapan, en vez de depender de cuál
+haya corrido última. Y la negación es el prefijo del sistema (`_DENIED`, "Denied by the
+system: ") seguido del `reason` del producto **verbatim, sin una palabra más del sistema**:
+`SILENCED` hoy dice "narrow it with `cast`", instrucción que el sistema ya no tiene autoridad
+para dar en un producto cuyo lenguaje no conoce.
+
+**El `pattern` de este repo se preserva byte a byte; el `reason` diverge, y es a propósito.**
+`.agentic/stack.yaml` declara `forbidden` con el mismo regex y la misma lista de extensiones
+que `_SILENCED`/`_PYTHON` tenían: la jaula sobre este producto queda demostrablemente sin
+cambios por la mudanza, y relajarla ensancharía lo que un Developer puede escribir acá, que
+no es lo que esta tarea es. El `reason`, en cambio, no se copia: la última frase de `SILENCED`
+le decía al Developer que angostara con `cast`, y ADR-0021 prohíbe `cast` en este repo sin
+excepción; copiado tal cual le entregaría al Developer un círculo cerrado justo cuando trata
+de dejar mypy en verde. La forma que ADR-0021 sí sanciona (`# type: ignore[<código>]`) sigue
+cayendo bajo el mismo `pattern` preservado — angostar el regex para dejarla pasar es una
+decisión sobre el dial de ADR-0021, no de esta tarea. El texto nuevo nombra el estado real
+(esto agrega una supresión de tipo o de lint) y apunta a arreglar el tipo o sacar la unidad de
+`[tool.mypy] files` y decirlo en el pull request. Quien lea el diff y vea `pattern` igual y
+`reason` distinto no debe restaurar la copia: son dos decisiones separadas, cada una con su
+motivo propio, no un descuido.
+
+### Riesgos conocidos
+
+- **La declaración de este repo no rige en esta tarea.** El stack se lee en la base
+  (`core.knowledge.domain.stack`, ADR-0024), así que la declaración nueva de `forbidden` entra
+  en vigor recién en la tarea siguiente al merge. Los tres Developers de esta misma tarea
+  corren con la jaula de `Edit|Write` instalada y vacía mientras `checks.types: uv run mypy`
+  ya está declarado en la base y corre en cada entrega: la presión de mypy no encuentra jaula
+  que la acompañe. Se cierra de las dos formas que funcionan sobre un solo diff: queda escrito
+  acá, y un invariante del plan hace de "ningún `# type: ignore` o `# noqa` nuevo en
+  `agentic/` o `tests/`" un grep sobre el diff en vez del juicio de un revisor sobre el
+  estándar 6.

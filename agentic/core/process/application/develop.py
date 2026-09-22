@@ -78,6 +78,11 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         cfg.check_timeout_s,
         witness=ports.stack.witness(task_base(state, ports)),
     )
+    # The product's own declared suppression cage (issue #38), at the task's base like
+    # every other key here, never the branch's own: keyword-only through `run_role`, so
+    # every other caller of it is untouched. `None`/empty is the explicit no-op, wired
+    # exactly where `presubmit` already travels.
+    forbidden = ports.stack.forbidden(task_base(state, ports))
 
     def committed(_: dict) -> None:
         moved = ports.workspace.head(checkout.path) != before
@@ -126,6 +131,7 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         prompt=prompt,
         cold_prompt=cold_prompt,
         presubmit=delivery_presubmit,
+        forbidden=forbidden,
         subtask=subtask_id,
         invariants=rules.invariants_markdown(state),
         branches=_branches(state),

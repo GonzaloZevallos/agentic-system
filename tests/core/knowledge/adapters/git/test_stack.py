@@ -71,6 +71,22 @@ def test_a_broken_file_at_the_base_is_an_error(product):
         GitStack(product).checks(base)
 
 
+def test_forbidden_is_read_from_the_base_commit(product):
+    declared = (
+        "checks:\n  tests: pytest\nforbidden:\n"
+        "  - pattern: 'SUPPRESS'\n    extensions: ['.src']\n    reason: 'do not'\n"
+    )
+    base = commit_stack(product, declared)
+    (rule,) = GitStack(product).forbidden(base)
+    assert rule.reason == "do not"
+    assert rule.extensions == frozenset({".src"})
+
+
+def test_a_product_that_declares_no_forbidden_rule_forbids_nothing(product):
+    base = commit_stack(product, "checks:\n  tests: pytest\n")
+    assert GitStack(product).forbidden(base) == ()
+
+
 def test_the_name_is_read_at_head_and_not_at_the_tasks_base(product):
     """The name says who the repository is, not what held at a commit: a task older than
     the key would otherwise resume with no name at all (issue #47)."""

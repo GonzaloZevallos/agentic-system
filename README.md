@@ -906,6 +906,7 @@ Se anotan para no reintroducirlas por error.
 | El paso de PM al conocimiento se llama `distill()` en el código | `consolidate()`: en inglés `distill` se lee como knowledge distillation, comprimir un modelo grande en uno chico. El castellano "Destilado" se queda (ADR-0018) |
 | La copia del sistema que ejecuta una corrida se llama "runtime" | `stage0`, del bootstrapping de compiladores, con `stage1` y `stage2` gratis; "runtime" ya es el harness de cada rol (ADR-0018) |
 | Todo lo que ni el pedido ni el conocimiento resuelven va al humano, y una pregunta registrada no se retira | Va solo lo que deja la definición indecidible; el resto es un supuesto en la respuesta. El dueño de la decisión retira por número lo que una ronda posterior resuelve (ADR-0014, adenda tercera) |
+| Este repo lee el default de estándares del sistema porque describe bien lo que el repo ya hace (ADR-0017) | ADR-0012's addendum replaces the ADR-0017 bullet that had this repo reading the system default because it described what the repo already does; from here the default is practices and this repo materialises them in its own `CODING_STANDARDS.md` |
 
 ---
 
@@ -964,6 +965,22 @@ presupuestos numéricos explícitos y criterios de parada escritos. El validador
 prompt las **devoluciones restantes de su par**: un validador que sabe que es su última
 devolución cierra el motivo para el humano en vez de pedir otro ajuste. El corte sigue siendo
 de PjM, en código, nunca del modelo. Overlay y versionado: ADR-0005.
+
+**El sistema no sabe nada de Python (issue #38).** Los prompts de rol dejan de dar por
+sentado un stack: `developer.md` ya no afirma que el sistema rechaza un `# type: ignore` o
+un `# noqa`, algo falso fuera de Python — se lo dice `forbidden`, lo que el producto
+declara en `.agentic/stack.yaml`, con el motivo que el propio producto redacta;
+`tech_lead_review.md` pierde los ejemplos de sintaxis de Python de la categoría
+`standard-typing-silenced`, reemplazados por una descripción agnóstica de la misma
+categoría, sin agregar ningún ejemplo nuevo; y el resto de los prompts pierde los nombres
+de herramienta y de archivo que se le habían colado (`conftest.py`, `pyproject.toml`, un
+`python3 -` de ejemplo). Qué herramienta cumple cada práctica lo dice el
+`CODING_STANDARDS.md` del producto (ADR-0012, adenda), nunca un prompt del sistema.
+`tests/core/process/application/test_prompts_stack_flavour.py` guarda la propiedad —
+ningún prompt de rol nombra un token de stack — nunca los bytes exactos de un prompt.
+Este es el único diff de la tarea que toca `agentic/core/process/domain/prompts/`, así
+que es el que mueve `prompts.fingerprint`: la huella de antes de este commit deja de ser
+comparable para cualquier serie segmentada por huella de prompts.
 
 ### Salida estructurada
 

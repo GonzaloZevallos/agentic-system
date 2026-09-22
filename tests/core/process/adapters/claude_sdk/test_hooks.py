@@ -1,5 +1,6 @@
 """The hooks' decisions as pure functions, then wired as the SDK takes them. No model."""
 
+import re
 from dataclasses import replace
 from pathlib import Path
 
@@ -12,10 +13,17 @@ from agentic.core.process.domain.roles import (
     PJM,
     TECH_LEAD_REVIEWER,
 )
+from agentic.core.process.domain.suppressions import Forbidden
 
 pytestmark = pytest.mark.anyio
 
 CWD = Path("/repo/.agentic/worktrees/GH-12.api")
+
+# A product-declared rule, generic on purpose: the system knows no language of its own
+# (issue #38), so the hooks' own tests must not either.
+SUPPRESS = Forbidden(
+    pattern=re.compile(r"SUPPRESS\b"), extensions=frozenset({".src"}), reason="do not suppress"
+)
 
 
 @pytest.mark.parametrize(
@@ -117,32 +125,27 @@ def test_path_denial_allows_the_checkout(file_path):
     assert hooks.path_denial(file_path, CWD) is None
 
 
-@pytest.mark.parametrize(
-    ("before", "after"),
-    [
-        ("x = f()\n", "x = f()  # type: ignore\n"),
-        ("x = f()\n", "x = f()  # type: ignore[arg-type]\n"),
-        ("import os\n", "import os  # noqa: F401\n"),
-        ("", "import os  #noqa\n"),
-    ],
-)
-def test_silenced_denial_refuses_a_new_suppression(before, after):
-    reason = hooks.silenced_denial("app/x.py", before, after)
-    assert reason and "cast" in reason
+def test_forbidden_denial_refuses_a_new_occurrence_of_a_declared_rule():
+    reason = hooks.forbidden_denial("app/x.src", "keep\n", "keep  SUPPRESS\n", [SUPPRESS])
+    assert reason and "do not suppress" in reason and reason.startswith("Denied by the system")
 
 
 @pytest.mark.parametrize(
     ("file_path", "before", "after"),
     [
-        ("app/x.py", "x = f()\n", "x: int = f()\n"),
+        ("app/x.src", "keep\n", "keep\n"),
         # One that was already there is not the task's: the standards apply to new code.
-        ("app/x.py", "a = f()  # type: ignore\n", "a = f()  # type: ignore\nb = 1\n"),
-        # Only Python silences the Python checkers.
-        ("docs/standards.md", "", "Never write `# type: ignore`.\n"),
+        ("app/x.src", "a  SUPPRESS\n", "a  SUPPRESS\nb\n"),
+        # No rule applies to this extension: nothing to deny.
+        ("docs/standards.md", "", "SUPPRESS\n"),
     ],
 )
-def test_silenced_denial_allows_the_rest(file_path, before, after):
-    assert hooks.silenced_denial(file_path, before, after) is None
+def test_forbidden_denial_allows_the_rest(file_path, before, after):
+    assert hooks.forbidden_denial(file_path, before, after, [SUPPRESS]) is None
+
+
+def test_forbidden_denial_with_no_declared_rules_denies_nothing():
+    assert hooks.forbidden_denial("app/x.src", "", "SUPPRESS\n", []) is None
 
 
 async def call(matchers, event, payload):
@@ -180,23 +183,38 @@ async def test_the_bash_hook_denies_with_the_reason():
     assert denied(await call(matchers, "PreToolUse", ok)) == []
 
 
-async def test_the_edit_hook_checks_the_path_and_the_new_text(tmp_path):
-    matchers = hooks.hooks_for(DEVELOPER, tmp_path, None)
-    (tmp_path / "x.py").write_text("a = 1  # type: ignore\n")
+async def test_the_edit_hook_checks_the_path_and_a_declared_suppression(tmp_path):
+    matchers = hooks.hooks_for(DEVELOPER, tmp_path, None, forbidden=[SUPPRESS])
+    (tmp_path / "x.src").write_text("a  SUPPRESS\n")
 
     async def edit(tool, **tool_input):
         payload = {"tool_name": tool, "tool_input": tool_input, "cwd": str(tmp_path)}
         return denied(await call(matchers, "PreToolUse", payload))
 
-    assert await edit("Edit", file_path="x.py", old_string="a = 1", new_string="a = 2  # noqa")
-    assert not await edit("Edit", file_path="x.py", old_string="# type: ignore", new_string="")
+    assert await edit("Edit", file_path="x.src", old_string="a", new_string="b  SUPPRESS")
+    assert not await edit("Edit", file_path="x.src", old_string="SUPPRESS", new_string="")
     # A Write replaces the whole file: what it had already is not new.
-    assert not await edit("Write", file_path="x.py", content="a = 1  # type: ignore\nb = 2\n")
-    assert await edit("Write", file_path="y.py", content="b = f()  # type: ignore\n")
-    assert await edit("Write", file_path=str(tmp_path.parent / "z.py"), content="")
-    # A binary file on disk is not Python: nothing to read, nothing to deny.
-    (tmp_path / "logo.png").write_bytes(b"\x89PNG\xff\xfe")
-    assert not await edit("Write", file_path="logo.png", content="x")
+    assert not await edit("Write", file_path="x.src", content="a  SUPPRESS\nb\n")
+    assert await edit("Write", file_path="y.src", content="b  SUPPRESS\n")
+    assert await edit("Write", file_path=str(tmp_path.parent / "z.src"), content="")
+    # No rule covers this extension: nothing to read against, nothing to deny.
+    assert not await edit("Write", file_path="logo.png", content="SUPPRESS")
+    # The path cage still answers even with a declared rule that matches nothing here.
+    assert await edit("Edit", file_path="../outside.src", old_string="", new_string="")
+
+
+async def test_the_edit_hook_with_no_forbidden_declared_denies_no_suppression(tmp_path):
+    """`forbidden` absent (the default) is the explicit no-op: the cage still installs
+    for the path rule, but denies no suppression (issue #38)."""
+    matchers = hooks.hooks_for(DEVELOPER, tmp_path, None)
+    (tmp_path / "x.src").write_text("a  SUPPRESS\n")
+
+    async def edit(tool, **tool_input):
+        payload = {"tool_name": tool, "tool_input": tool_input, "cwd": str(tmp_path)}
+        return denied(await call(matchers, "PreToolUse", payload))
+
+    assert not await edit("Edit", file_path="x.src", old_string="a", new_string="b  SUPPRESS")
+    assert await edit("Edit", file_path="../outside.src", old_string="", new_string="")
 
 
 class FakePresubmit:

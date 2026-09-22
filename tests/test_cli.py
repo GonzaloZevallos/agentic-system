@@ -463,6 +463,9 @@ def test_a_dirty_stage0_is_said_out_loud_and_the_run_goes_on(monkeypatch, tmp_pa
 def test_a_stage0_fixed_to_a_sha_says_nothing(monkeypatch, tmp_path, capsys):
     root = product(tmp_path, "p")
     monkeypatch.setattr(cli, "unfixed_stage0", lambda ports: None)
+    # `STACK` declares no `forbidden` either (issue #38): stubbed the same way, so this
+    # test stays about stage0 alone, not the separate warning `no_forbidden` owns.
+    monkeypatch.setattr(cli, "no_forbidden", lambda ports, revision: None)
     capture_run(monkeypatch)
     monkeypatch.setattr("sys.argv", ["agentic", "run", "t", "d", "--product-dir", str(root)])
     # A real terminal, so the no-TTY warning (subtask `--detach`) does not fire here

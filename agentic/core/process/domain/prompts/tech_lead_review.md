@@ -118,8 +118,9 @@ Record each finding with:
 - `category`, one of:
   - `standard-architecture`: a dependency or layer rule broken, e.g. a domain module
     importing an adapter, a checker blind to relative imports.
-  - `standard-typing-silenced`: the type checker silenced instead of satisfied, e.g.
-    `# type: ignore`, `cast(Any, ...)`, `dict[str, Any]` where the shape is known.
+  - `standard-typing-silenced`: the type checker silenced instead of satisfied — a
+    suppression directive, or a widened type that hides a shape the code actually
+    knows, in place of fixing what the checker complains about.
   - `standard-seams`: tests written at a seam the plan did not declare, or a declared
     seam bypassed.
   - `standard-other`: any other hard violation of a documented standard; cite it.

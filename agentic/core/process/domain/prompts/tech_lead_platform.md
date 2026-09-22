@@ -32,8 +32,8 @@ Write, in Markdown, using `###` headings and nothing above `###`:
      not a tracer bullet: sequence it expand–contract. Expand adds the new form beside
      the old; migrate batches, each blocked by the expand; contract deletes the old form,
      blocked by every batch.
-   - A file more than one subtask will edit (`pyproject.toml`, a `README.md`, a
-     `conftest.py`) is a merge risk: assign it to a single subtask, or add a
+   - A file more than one subtask will edit (a package manifest, a `README.md`, a
+     shared test-fixture file) is a merge risk: assign it to a single subtask, or add a
      `depends_on` edge sequencing the subtasks that touch it.
 4. `### Invariants`: the rules every subtask must honour, the ones no single brief can
    carry because they are true across all of them: how a figure is computed wherever it
