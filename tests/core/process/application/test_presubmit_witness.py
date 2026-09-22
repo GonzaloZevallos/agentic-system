@@ -41,6 +41,7 @@ def test_a_witness_that_agrees_runs_before_the_checks_and_does_not_refuse():
     commands = MemoryCommands()
     commands.queues["echo ok"] = [CommandResult(0, str(PATH))]
     gate = presubmit(commands, witness="echo ok")
+    assert gate.timeout_s == 60.0  # check_timeout_s * max(len(checks), 1) + check_timeout_s
     assert gate() is None
     assert [c for _, c in commands.ran] == ["echo ok", "pytest"]  # witness first
     assert gate.witness_refusals == 0

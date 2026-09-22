@@ -64,6 +64,14 @@ def test_a_witness_that_prints_the_parent_checkout_disagrees():
     assert reason is not None and "/work/checkouts" in reason
 
 
+def test_a_witness_that_escapes_via_dot_dot_disagrees():
+    """A path that only textually starts with the checkout but escapes it once its
+    `..` segments collapse must not read as one that is still inside it: pure,
+    no-filesystem normalisation, never a lexical prefix match."""
+    reason = presubmit.witness_refusal("w", f"{CHECKOUT}/../sibling\n", 0, False, CHECKOUT)
+    assert reason is not None and "sibling" in reason
+
+
 def test_a_witness_that_prints_a_relative_path_disagrees():
     reason = presubmit.witness_refusal("w", "checkouts/GH-41.api\n", 0, False, CHECKOUT)
     assert reason is not None

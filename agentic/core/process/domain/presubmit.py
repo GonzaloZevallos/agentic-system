@@ -11,6 +11,7 @@ the clean tree are still checked after the run, as a role failure (`develop`).""
 
 from __future__ import annotations
 
+import posixpath
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import NotRequired, TypedDict
@@ -103,16 +104,20 @@ def witness_refusal(
     the RAW `output`, stripped, which must be an absolute path that falls under
     `checkout` -- the last line and not any line, because `ShellCommands` merges
     stderr into stdout on purpose and a witness printing one path in and one out would
-    otherwise pass. `checkout` arrives already resolved: the two `.resolve()` calls
-    this needs belong to `CheckoutPresubmit`, the layer with a filesystem; this is pure
-    text and `is_relative_to` algebra."""
+    otherwise pass. `checkout` arrives already resolved: the `.resolve()` this needs
+    for a checkout reached through a symlink belongs to `CheckoutPresubmit`, the layer
+    with a filesystem. What stays here is pure text algebra: `posixpath.normpath`
+    collapses `.`/`.` segments lexically (no filesystem, no existence check), so a
+    path that only textually starts with the checkout but escapes it once normalised
+    (`<checkout>/../sibling`) never reads as one still inside it -- `is_relative_to`
+    alone, being a plain prefix comparison of path parts, would otherwise accept it."""
     if timed_out:
         return WITNESS_TIMED_OUT.format(command=command)
     if exit_code != 0:
         return WITNESS_FAILED.format(command=command, exit_code=exit_code)
     printed = _last_nonempty_line(output)
-    candidate = Path(printed) if printed else None
-    if candidate is not None and candidate.is_absolute() and candidate.is_relative_to(checkout):
+    candidate = Path(posixpath.normpath(printed)) if printed and printed.startswith("/") else None
+    if candidate is not None and candidate.is_relative_to(checkout):
         return None
     return WITNESS_OUTSIDE.format(
         command=command, printed=printed or "(nothing)", checkout=checkout

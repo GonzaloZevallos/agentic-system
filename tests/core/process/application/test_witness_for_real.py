@@ -57,7 +57,7 @@ def real(product):
     return cfg, ports
 
 
-def _gate(real, product, witness: str) -> CheckoutPresubmit:
+def _gate(real, product, witness: str, path: Path | None = None) -> CheckoutPresubmit:
     cfg, ports = real
     checkout = subtask_checkout(STATE, "api", cfg, ports)
     before = ports.workspace.head(checkout.path)
@@ -65,7 +65,7 @@ def _gate(real, product, witness: str) -> CheckoutPresubmit:
     git("add", "-A", cwd=checkout.path)
     git("commit", "-q", "-m", "deliver", cwd=checkout.path)
     return CheckoutPresubmit(
-        ports, checkout.path, before, {"noop": "true"}, cfg.check_timeout_s, witness=witness
+        ports, path or checkout.path, before, {"noop": "true"}, cfg.check_timeout_s, witness=witness
     )
 
 
@@ -83,4 +83,29 @@ def test_its_twin_that_prints_inside_the_checkout_does_not_refuse(real, product)
     """Its twin, printing the checkout `pwd` itself runs in: same mechanism, same
     checkout, the other verdict."""
     gate = _gate(real, product, witness="pwd")
+    assert gate() is None
+
+
+def test_a_checkout_reached_through_a_symlink_whose_witness_prints_the_resolved_form_agrees(
+    real, product, tmp_path
+):
+    """`CheckoutPresubmit` is handed the checkout through a symlink, never the real
+    directory `GitWorkspace` made -- exactly what `self.path.resolve()` exists for
+    (ADR-0024). The witness prints the already-resolved, symlink-free form, as a
+    well-behaved witness must (this repo's own does the same): the gate must still
+    agree, not wrongly refuse a checkout it only reached indirectly."""
+    cfg, ports = real
+    checkout = subtask_checkout(STATE, "api", cfg, ports)
+    before = ports.workspace.head(checkout.path)
+    (checkout.path / "code.py").write_text("x = 1\n")
+    git("add", "-A", cwd=checkout.path)
+    git("commit", "-q", "-m", "deliver", cwd=checkout.path)
+
+    link = tmp_path / "via-symlink"
+    link.symlink_to(checkout.path)
+    resolved = checkout.path.resolve()
+
+    gate = CheckoutPresubmit(
+        ports, link, before, {"noop": "true"}, cfg.check_timeout_s, witness=f"echo {resolved}"
+    )
     assert gate() is None
