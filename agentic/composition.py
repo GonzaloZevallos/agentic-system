@@ -60,7 +60,7 @@ def _ports(cfg: Configuration) -> Ports:
             telemetry=telemetry,
             env={**cfg.role_env, **own_configuration_unset(os.environ)},
         ),
-        documents=FilesystemTaskDocuments(cfg.product_dir),
+        documents=FilesystemTaskDocuments(cfg.product_dir, system_version=telemetry.system_version),
         knowledge=FilesystemKnowledge(cfg.product_dir),
         prompts=FilesystemPrompts(cfg.product_dir),
         flags=FilesystemFlags(cfg.product_dir),

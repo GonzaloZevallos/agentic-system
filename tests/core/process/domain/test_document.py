@@ -181,6 +181,26 @@ def test_relative_path():
     assert str(document.relative_path("GH-12")) == ".agentic/tasks/GH-12.md"
 
 
+def test_render_writes_system_version_only_when_given_one():
+    state = {"id": "T-1", "title": "t", "description": "d", "sections": {}}
+    without = document.render(state)
+    assert "system_version" not in without
+    assert "system_version" not in document.parse(without)
+
+    with_one = document.render(state, system_version="abc123+dirty")
+    assert "system_version: abc123+dirty" in with_one
+    assert document.parse(with_one)["system_version"] == "abc123+dirty"
+
+
+def test_render_writes_no_system_version_for_an_empty_string_either():
+    """The invariant is stated against every writer, not only the producer that never
+    returns one (`telemetry.system_version`'s own fallback, `unknown`): an empty string
+    is treated the same as no value at all."""
+    state = {"id": "T-1", "title": "t", "description": "d", "sections": {}}
+    rendered = document.render(state, system_version="")
+    assert "system_version" not in rendered
+
+
 def test_the_frontmatter_keeps_the_names_the_metrics_keep():
     """A written document is data (issue #53): its keys do not follow the domain's
     rename, or a task paused before it would resume with an empty count."""
@@ -304,6 +324,121 @@ def test_a_document_written_before_slug_and_timing_existed_still_parses():
     (failure,) = state["failures"]
     assert failure["error"] == "e" and "reason" not in failure and "slug" not in failure
     assert "denials" not in failure
+
+
+def test_record_closure_replaces_an_existing_scalar_key_leaving_everything_else_untouched():
+    raw = document.render(
+        {
+            "id": "T-1",
+            "title": "t",
+            "description": "d",
+            "status": "ready_for_review",
+            "sections": {"Developer": "Built it."},
+        },
+        "abc123",
+    )
+    closed = document.record_closure(raw, {"closed_at": "2026-09-21T10:00:00Z"})
+    # Only one line was inserted, right before the closing `---`: the rest is
+    # byte-identical, body included.
+    before = raw.splitlines()
+    after = closed.splitlines()
+    closing = before.index("---", 1)
+    assert after == [*before[:closing], "closed_at: '2026-09-21T10:00:00Z'", *before[closing:]]
+    assert document.parse(closed) == {**document.parse(raw), "closed_at": "2026-09-21T10:00:00Z"}
+
+
+def test_record_closure_replaces_the_key_in_place_when_it_already_exists():
+    raw = document.render({"id": "T-1", "title": "t", "description": "d", "sections": {}})
+    once = document.record_closure(raw, {"closed_at": "2026-09-21T10:00:00Z"})
+    twice = document.record_closure(once, {"closed_at": "2026-09-21T11:00:00Z"})
+    assert twice.count("closed_at:") == 1
+    assert "2026-09-21T11:00:00Z" in twice
+    assert document.parse(twice)["closed_at"] == "2026-09-21T11:00:00Z"
+
+
+def test_record_closure_raises_when_there_is_no_frontmatter():
+    with pytest.raises(ValueError, match="missing frontmatter"):
+        document.record_closure("# no frontmatter\n", {"closed_at": "x"})
+
+
+def test_record_closure_raises_when_the_existing_key_is_not_a_single_scalar_line():
+    raw = (
+        "---\n"
+        "id: T-1\n"
+        "title: t\n"
+        "returns:\n"
+        "  PM→Product Analyst: 1\n"
+        "---\n"
+        "\n# t\n\n## Original request\n\nd\n"
+    )
+    with pytest.raises(ValueError, match="returns"):
+        document.record_closure(raw, {"returns": "x"})
+
+
+def test_record_closure_raises_when_the_existing_key_is_an_indentless_block_sequence():
+    """`runs` and `failures` render as a block sequence with no indent (`yaml.safe_dump`'s
+    own default, pinned by `test_a_document_written_before_slug_and_timing_existed_
+    still_parses`): a `- ` item at column 0 must be caught as a continuation too, or
+    the first line would be overwritten and the rest left orphaned."""
+    raw = (
+        "---\n"
+        "id: T-1\n"
+        "title: t\n"
+        "runs:\n"
+        "- {role: PjM, section: PjM, version: 1, session_id: '', model: m, cost_usd: 0.1,"
+        " turns: 1}\n"
+        "---\n"
+        "\n# t\n\n## Original request\n\nd\n"
+    )
+    with pytest.raises(ValueError, match="runs"):
+        document.record_closure(raw, {"runs": "x"})
+
+
+def test_a_document_written_after_this_task_seeds_the_same_state_as_one_written_before_it():
+    """The closure's four keys and `system_version` are new frontmatter, never new
+    `TaskState` fields, so `resume.from_document`'s allow-list filter (`STATE_FIELDS`)
+    drops every one of them: a document carrying them seeds the identical state as one
+    that does not, inert by construction rather than by a filter this task edits."""
+    state = {
+        "id": "T-1",
+        "title": "t",
+        "description": "d",
+        "status": "ready_for_review",
+        "sections": {"Developer": "Built it."},
+    }
+    before = document.render(state)
+    closed = document.record_closure(
+        document.render(state, system_version="abc123+dirty"),
+        {
+            "closed_at": "2026-09-21T10:00:00Z",
+            "delivery_outcome": "merged",
+            "human_commits": "0",
+            "human_lines_changed": "0",
+        },
+    )
+    new_keys = (
+        "system_version",
+        "closed_at",
+        "delivery_outcome",
+        "human_commits",
+        "human_lines_changed",
+    )
+    for key in new_keys:
+        assert key not in resume.STATE_FIELDS
+        assert key in document.parse(closed)  # present in the raw document...
+
+    def seeded(raw: str) -> dict:
+        return {k: v for k, v in document.parse(raw).items() if k in resume.STATE_FIELDS}
+
+    assert seeded(before) == seeded(closed)  # ...but filtered out of what resume seeds
+
+
+def test_record_closure_quotes_values_that_yaml_would_otherwise_retype():
+    raw = document.render({"id": "T-1", "title": "t", "description": "d", "sections": {}})
+    closed = document.record_closure(raw, {"human_commits": "3", "delivery_outcome": "merged"})
+    data = document.parse(closed)
+    assert data["human_commits"] == "3"  # a digit string stays a string, not an int
+    assert data["delivery_outcome"] == "merged"
 
 
 def test_a_document_written_before_escalation_class_existed_still_parses():

@@ -19,6 +19,39 @@ def test_system_commit_is_a_short_hash_or_none():
     assert commit is None or (len(commit) >= 7 and commit.isalnum())
 
 
+def test_record_closure_writes_the_values_and_leaves_the_rest_of_the_document_untouched(tmp_path):
+    documents = FilesystemTaskDocuments(tmp_path)
+    state = {"id": "T-1", "title": "t", "description": "d", "sections": {"Developer": "Built."}}
+    path = documents.save(state)
+    before = path.read_text(encoding="utf-8")
+
+    written = documents.record_closure("T-1", {"closed_at": "2026-09-21T10:00:00Z"})
+
+    assert written == path
+    after = path.read_text(encoding="utf-8")
+    assert after != before
+    loaded = documents.load("T-1")
+    assert loaded["closed_at"] == "2026-09-21T10:00:00Z"
+    # Nothing `save` itself would have rewritten changed: not a `save` round-trip.
+    assert loaded["id"] == "T-1" and loaded["sections"] == {"Developer": "Built."}
+
+
+def test_save_writes_system_version_when_a_producer_is_given(tmp_path):
+    documents = FilesystemTaskDocuments(tmp_path, system_version=lambda: "abc123+dirty")
+    state = {"id": "T-1", "title": "t", "description": "d", "sections": {}}
+    documents.save(state)
+    assert documents.load("T-1")["system_version"] == "abc123+dirty"
+
+
+def test_save_without_a_producer_writes_no_system_version_key(tmp_path):
+    """A bare-constructed adapter -- the graph regression's own -- produces today's
+    document plus nothing."""
+    documents = FilesystemTaskDocuments(tmp_path)
+    state = {"id": "T-1", "title": "t", "description": "d", "sections": {}}
+    documents.save(state)
+    assert "system_version" not in documents.load("T-1")
+
+
 def test_write_into_copies_the_document_without_touching_where_save_keeps_it(tmp_path):
     """ADR-0011, sixth addendum: archiving commits the document on the archived task
     branch's worktree, never wherever `save` itself writes it."""
