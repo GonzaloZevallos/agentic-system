@@ -1517,3 +1517,100 @@ def test_every_versioned_metric_emits_the_labels_its_readme_row_documents(metric
             emitted_labels |= {key.replace(".", "_") for key in sample.attributes}
         row = documented[_prom_name(dotted, unit)]
         assert emitted_labels == row, dotted
+
+
+# `agentic.delivery.*`: `close`'s own emitter, not a `Run` (there is no span and no
+# Corrida to hang one on -- `record_delivery` above).
+DELIVERY_METRICS = [
+    ("agentic.delivery.outcome", ""),
+    ("agentic.delivery.human_commits", ""),
+    ("agentic.delivery.human_lines_changed", ""),
+    ("agentic.delivery.time_to_merge", "s"),
+]
+
+
+def test_record_delivery_emits_one_sample_per_family_with_the_readme_labels(metrics):
+    """One record-and-flush of the four `agentic.delivery.*` gauges, each carrying
+    exactly the label keys its own README row documents (never a subset, never an
+    extra) -- the same cross-check `test_every_versioned_metric_...` runs for the
+    role-run families, against the emitter `close` calls directly rather than through
+    a `Run`."""
+    flushed = telemetry.record_delivery(
+        product="gym-saas",
+        task_type="bug",
+        prompts_fingerprint="abc12345",
+        outcome="merged_with_changes",
+        human_commits=2,
+        human_lines_changed=17,
+        time_to_merge_seconds=345.0,
+    )
+    assert flushed is True
+    got = points(metrics)
+    documented = _documented()
+    for dotted, unit in DELIVERY_METRICS:
+        samples = got.get(dotted)
+        assert samples, f"{dotted} emitted no sample"
+        emitted_labels: set[str] = set()
+        for sample in samples:
+            emitted_labels |= {key.replace(".", "_") for key in sample.attributes}
+        row = documented[_prom_name(dotted, unit)]
+        assert emitted_labels == row, dotted
+
+
+def test_record_delivery_outcome_value_and_lines_changed_value():
+    """The outcome gauge is always 1 (a fact, not a count); `human_lines_changed` and
+    `human_commits` carry the caller's own figures verbatim."""
+    reader = BatchReader()
+    telemetry.configure(meter_provider=telemetry.meter_provider_for(reader))
+    try:
+        telemetry.record_delivery(
+            product="gym-saas",
+            task_type="feature",
+            prompts_fingerprint="",
+            outcome="merged",
+            human_commits=0,
+            human_lines_changed=0,
+            time_to_merge_seconds=None,
+        )
+    finally:
+        telemetry.configure()
+    got = points(reader)
+    (outcome_point,) = got["agentic.delivery.outcome"]
+    assert outcome_point.value == 1
+    assert outcome_point.attributes["outcome"] == "merged"
+    (commits_point,) = got["agentic.delivery.human_commits"]
+    assert commits_point.value == 0
+    (lines_point,) = got["agentic.delivery.human_lines_changed"]
+    assert lines_point.value == 0
+    # No pull request that never merged has a time to merge: nothing to measure.
+    assert "agentic.delivery.time_to_merge" not in got
+
+
+def test_record_delivery_returns_false_with_no_meter_provider():
+    """`configure()` leaves no meter provider silently unset without
+    `OTEL_EXPORTER_OTLP_ENDPOINT`; `record_delivery` reports that as `False`, same as
+    `force_flush()` would, so `close` can tell a real flush from a silent no-op."""
+    telemetry.configure()
+    flushed = telemetry.record_delivery(
+        product="gym-saas",
+        task_type="bug",
+        prompts_fingerprint="",
+        outcome="closed",
+        human_commits=0,
+        human_lines_changed=0,
+        time_to_merge_seconds=None,
+    )
+    assert flushed is False
+
+
+def test_record_delivery_labels_come_from_one_helper():
+    """No emission site spells the label keys by hand: `_delivery_labels` is the one
+    helper every `agentic.delivery.*` sample's shared label set comes from, the shape
+    `RoleRun._cold_fallback_labels` already uses for its own family."""
+    labels = telemetry._delivery_labels("gym-saas", "bug", "abc12345")
+    assert labels == {
+        "product": "gym-saas",
+        "system.version": telemetry.system_version(),
+        "prompts.fingerprint": "abc12345",
+        "task.type": "bug",
+    }
