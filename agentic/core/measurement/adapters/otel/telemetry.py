@@ -48,6 +48,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
+from agentic.core.process.domain.presubmit import CheckResult
 from agentic.core.process.domain.rules import phase_of, run_ended
 from agentic.core.process.domain.task import Failure, InterviewStats, TaskState, delta
 from agentic.core.process.domain.task import RoleRun as RoleRunRecord
@@ -588,7 +589,7 @@ class RoleRun(Run):
         cost = patch.get("cost_usd", 0.0)
         outcome = _outcome(patch, delivered=run is not None)
         rework = failed_attempts > 0 or (run is not None and system_metrics.is_rework(run))
-        attributes: dict[str, str | int | float | bool | tuple[str, ...]] = {
+        attributes: dict[str, str | int | float | bool | tuple[str, ...] | list[str]] = {
             "product": self.product,
             "role.outcome": outcome,
             "agentic.role.cost_usd": cost,
@@ -682,6 +683,8 @@ class RoleRun(Run):
         `rework` sums to what `metrics.run_rework_usd` says this run's rework is worth,
         whether or not the run is itself a return (`is_rework`)."""
         labels = self._run_labels(patch, run)
+        role_slug = system_metrics.role_slug(run)
+        phase = phase_of(run.get("section", run["role"]))
         duration = system_metrics.run_duration_s(run)
         queue_wait = run.get("queue_wait_s")
         tokens = run.get("tokens", {})
@@ -707,7 +710,7 @@ class RoleRun(Run):
             if "subagent_cost_usd" in run:
                 i.role_subagent_cost.set(run["subagent_cost_usd"], labels)
             if run.get("cold_fallback", False):
-                cold_labels = self._cold_fallback_labels(labels["role.slug"], labels["phase"])
+                cold_labels = self._cold_fallback_labels(role_slug, phase)
                 i.role_cold_fallback.set(1, cold_labels)
 
         self._emit(record)
@@ -828,7 +831,11 @@ class RoleRun(Run):
         for index, results in enumerate(invocations):
             final = index == last
 
-            def record(i: Instruments, results: list = results, final: bool = final) -> None:
+            def record(
+                i: Instruments,
+                results: list[CheckResult] = results,
+                final: bool = final,
+            ) -> None:
                 for check in results:
                     labels = {
                         **common,

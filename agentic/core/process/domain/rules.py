@@ -9,7 +9,7 @@ import math
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
-from typing import Literal
+from typing import Any, Literal
 
 from . import presubmit
 from .denials import denial_for
@@ -33,6 +33,7 @@ from .task import (
     ChangesRequested,
     DependencyState,
     EscalationClass,
+    EscalationPatch,
     FailureReason,
     FindingCategory,
     FindingRecord,
@@ -74,14 +75,16 @@ def review_kind(subtask_id: str, reviewed_before: bool) -> ReviewKind:
     return "incremental" if reviewed_before else "first"
 
 
-def change_category(findings: list[dict]) -> FindingCategory | None:
+def change_category(findings: list[dict[str, Any]]) -> FindingCategory | None:
     """The verdict of a review, derived (ADR-0016): the category of the return, the
     first blocking finding's since the reviewer lists them most severe first, or None
     when nothing blocks and the review approves."""
     return next((f["category"] for f in findings if f["severity"] == "blocking"), None)
 
 
-def lower_unbacked_blocks(findings: list[dict]) -> tuple[list[dict], list[str]]:
+def lower_unbacked_blocks(
+    findings: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
     """The findings as the verdict counts them, and a line for each block the system
     lowered (ADR-0016). A block needs evidence, or it is an `observation`; and something
     this subtask's Developer can fix, or it is `important`. Lowering instead of failing
@@ -119,7 +122,9 @@ def review_markdown(
 # cannot see each other; the fold happens here, when a prompt or the document is built.
 
 
-def finding_records(subtask_id: str, version: int, findings: list[dict]) -> list[FindingRecord]:
+def finding_records(
+    subtask_id: str, version: int, findings: list[dict[str, Any]]
+) -> list[FindingRecord]:
     """This review's findings as the table keeps them, already lowered by the system.
 
     A finding nobody can check is `dismissed` on the spot: an `observation` with no
@@ -222,14 +227,17 @@ def invariants_markdown(state: TaskState) -> str:
     return "\n".join(f"- {line}" for line in state.get("invariants", [])) or "- none"
 
 
-def escalation(cls: EscalationClass, reason: str) -> TaskState:
+def escalation(cls: EscalationClass, reason: str) -> EscalationPatch:
     """The patch that escalates the task: `escalated`, the text for the human, and
     `escalation_class`, the closed reason `agentic.task.paused` groups pauses by. The
-    only place either key is written, so a patch cannot carry one without the other."""
+    only place either key is written, so a patch cannot carry one without the other.
+
+    Returns a plain patch, not a full `TaskState`: every caller folds it into a bigger
+    literal with `**`, the same shape `apply` folds any patch into the whole state."""
     return {"escalated": reason, "escalation_class": cls}
 
 
-def unmergeable(subtask_id: str, dependency: str, conflict: str) -> TaskState:
+def unmergeable(subtask_id: str, dependency: str, conflict: str) -> dict[str, Any]:
     """The patch when a subtask's dependency cannot be brought into its branch: the
     Developer never starts, so nothing is paid, and the human untangles the two
     branches. Not a role failure and not a return: no role did anything wrong."""
@@ -369,7 +377,9 @@ def resumed_after_unmergeable(state: TaskState, subtask_id: str, branch: str, he
     )
 
 
-def setup_unprepared(role: Role, branch: str, step: str, command: str, output: str) -> TaskState:
+def setup_unprepared(
+    role: Role, branch: str, step: str, command: str, output: str
+) -> dict[str, Any]:
     """The patch when the product's setup does not prepare a checkout the system just
     made. Not a role failure and not a return: no role has run, and an environment that
     will not build is not something a model fixes (issue #37). The step, the command and
@@ -1254,14 +1264,15 @@ def human_section(state: TaskState, reason: str | None, decision: str) -> str:
     return f"{previous}\n\n{entry}".strip()
 
 
-def resumed(state: TaskState, decision: str | None) -> TaskState:
+def resumed(state: TaskState, decision: str | None) -> dict[str, Any]:
     """The patch that resumes a paused task: no escalation, the status it had, the pair
     that hit its limit back at zero, and the human's decision as a section the roles read.
 
     Nothing about the integration: a resumed task goes through the fan-in, which adds it
-    from the merges it just did, and only that one knows what conflicted."""
+    from the merges it just did, and only that one knows what conflicted. Returns a
+    plain patch, not a full `TaskState` (see `escalation`)."""
     reason = state.get("escalated")
-    patch: TaskState = {
+    patch: dict[str, Any] = {
         "escalated": None,
         "escalation_class": None,
         "status": resumed_status(state),

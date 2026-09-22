@@ -316,7 +316,7 @@ class Review(RoleOutput):
     )
 
 
-def plan_check(data: dict) -> None:
+def plan_check(data: dict[str, Any]) -> None:
     """A plan's subtasks are slugs, each with seams, depending only on subtasks that
     exist; `integration` is the system's own."""
     subtasks = data.get("subtasks", [])

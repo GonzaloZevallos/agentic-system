@@ -1,0 +1,87 @@
+version: 2
+
+# ADR-0022 decides this shape: what pins the harness and the graph engine gets its own
+# pull request, everything else is one weekly grouped one. `tests/test_dependabot.py`
+# is the contract this file must keep.
+updates:
+  # The bulk of the `uv` lock: ruff, pytest, pydantic, pyyaml, anyio, python-dotenv,
+  # the two OpenTelemetry packages, langgraph-cli. One weekly pull request.
+  # claude-agent-sdk, langgraph and langgraph-checkpoint-sqlite are excluded from this
+  # group's patterns and also `ignore`d entirely for this entry, so this entry never
+  # opens a PR for them — they arrive through the separate entry below instead.
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    ignore:
+      - dependency-name: "claude-agent-sdk"
+      - dependency-name: "langgraph"
+      - dependency-name: "langgraph-checkpoint-sqlite"
+    groups:
+      dependencies:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "claude-agent-sdk"
+          - "langgraph"
+          - "langgraph-checkpoint-sqlite"
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
+
+  # claude-agent-sdk, langgraph and langgraph-checkpoint-sqlite: each its own pull
+  # request, never grouped (ADR-0022). The first two are the harness and the graph
+  # engine (Send, reducers, interrupt); the third is the AsyncSqliteSaver checkpointer
+  # (ADR-0003), whose reads a bump could move under every resumption. Everything that
+  # pins their behaviour lives in tests/llm/, which CI does not run, so a grouped PR
+  # with a green tick that never exercised the harness would be less visible than
+  # today. The commit-message prefix and the "harness-manual-gate" label below name
+  # the gate that CI's green tick does not cover — only the human, who holds the
+  # subscription, can run it:
+  #
+  #   uv run pytest -m llm tests/llm/test_delivery_rejection_visibility.py \
+  #     tests/llm/test_trace_propagation.py
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    allow:
+      - dependency-name: "claude-agent-sdk"
+      - dependency-name: "langgraph"
+      - dependency-name: "langgraph-checkpoint-sqlite"
+    commit-message:
+      prefix: "deps(harness)"
+    labels:
+      - "dependencies"
+      - "harness-manual-gate"
+
+  # actions/checkout and astral-sh/setup-uv are majors floating on @v4/@v5 that already
+  # absorb patches in silence; grouping them still makes a major bump a visible PR,
+  # which is what the original request wants. The `setup-uv` version pin itself is the
+  # `types` subtask's, in .github/workflows/ci.yml (ADR-0022): Dependabot only ever
+  # bumps the `uses:` ref here, never an input, so this group cannot move that pin.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
+
+# `gitsubmodule` is deliberately not declared. ADR-0013 fixes the skills plugin at
+# 1.2.3 and says a bump is a deliberate human commit: the version lives in the task
+# document's frontmatter next to the prompt hashes, a bump changes role behaviour, and
+# nothing in CI can see that. An automatic PR here would be exactly the failure this
+# ADR exists to avoid, arriving from the other direction (ADR-0022).
+#
+# Fallback, declared and not built (standards §4): if GitHub rejects
+# `package-ecosystem: uv`, the repository's own Dependabot page reports it, and the
+# follow-up is a scheduled workflow that runs `uv lock --upgrade` and opens a pull
+# request. No such workflow exists yet — building it now would be speculative code for
+# a failure nobody has observed.

@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 from agentic.core.process.domain.schemas import SLUG
 
@@ -95,7 +96,7 @@ def context_path(context: str, found: dict[str, str]) -> str:
     raise ValueError(f"context {context!r} is not in {CONTEXT_MAP}; it names: {', '.join(found)}")
 
 
-def check_contexts(terms: list[dict], found: dict[str, str]) -> None:
+def check_contexts(terms: list[dict[str, Any]], found: dict[str, str]) -> None:
     """Every term of a mapped product says which context it belongs to, and the context
     exists. A term belongs to a context, not to a file: a task that changes behaviour
     across modules leaves terms in each of their glossaries (issue #45)."""
@@ -195,7 +196,7 @@ def _append_to_language(text: str, block: str) -> str:
     return text[:start] + section + "\n\n" + block + "\n" + ("\n" if following else "") + text[end:]
 
 
-def consolidation(verdict: dict) -> tuple[dict[str, str], dict[str, dict[str, str]]]:
+def consolidation(verdict: dict[str, Any]) -> tuple[dict[str, str], dict[str, dict[str, str]]]:
     """What an approved verdict leaves in the knowledge: capability files by slug and
     glossary terms by name, as the `ProductKnowledge` port takes them."""
     definitions = {d["capability"]: d["content"] for d in verdict["definitions"]}
@@ -215,12 +216,12 @@ JOBS_HEADING = "## Jobs"
 
 def approval_check(
     task_type: str, contexts: dict[str, str] | None = None
-) -> Callable[[dict], None]:
+) -> Callable[[dict[str, Any]], None]:
     """The check a PM output must pass before it counts: an approved feature ships
     its definitions, every capability is a valid file name, and every definition
     opens with the jobs it serves."""
 
-    def check(data: dict) -> None:
+    def check(data: dict[str, Any]) -> None:
         if data["verdict"] != "approved":
             return
         definitions = data.get("definitions", [])
@@ -235,19 +236,21 @@ def approval_check(
     return check
 
 
-def clarification_check(contexts: dict[str, str] | None = None) -> Callable[[dict], None]:
+def clarification_check(
+    contexts: dict[str, str] | None = None,
+) -> Callable[[dict[str, Any]], None]:
     """The check a PM consultation must pass: whatever it consolidates is a valid file that
     opens with its jobs, and every term says its context. Consolidating nothing is fine:
     the answers may change no text."""
 
-    def check(data: dict) -> None:
+    def check(data: dict[str, Any]) -> None:
         check_definitions(data.get("definitions", []))
         check_contexts(data.get("glossary", []), contexts or {})
 
     return check
 
 
-def check_definitions(definitions: list[dict]) -> None:
+def check_definitions(definitions: list[dict[str, Any]]) -> None:
     for item in definitions:
         check_slug(item["capability"])
         if JOBS_HEADING not in item["content"]:

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from ...domain import knowledge
 
@@ -39,13 +40,13 @@ class FilesystemKnowledge:
         found |= {path: _read(root / path) for path in contexts.values()}
         return {path: text for path, text in found.items() if text is not None}
 
-    def approval_check(self, task_type: str) -> Callable[[dict], None]:
+    def approval_check(self, task_type: str) -> Callable[[dict[str, Any]], None]:
         # The contexts go into the check, not into the write: `run_role` turns a
         # `ValueError` here into a failed attempt and retries with the reason as
         # input, while a raise at write time would kill the run after PM was paid.
         return knowledge.approval_check(task_type, self.contexts())
 
-    def clarification_check(self) -> Callable[[dict], None]:
+    def clarification_check(self) -> Callable[[dict[str, Any]], None]:
         return knowledge.clarification_check(self.contexts())
 
     def read(self, root: Path | None = None) -> str:
@@ -63,7 +64,7 @@ class FilesystemKnowledge:
             text = knowledge.DEFAULT_STANDARDS.read_text(encoding="utf-8")
         return knowledge.assemble_standards(text)
 
-    def consolidate(self, verdict: dict, root: Path | None = None) -> list[Path]:
+    def consolidate(self, verdict: dict[str, Any], root: Path | None = None) -> list[Path]:
         """What an approved verdict leaves: the capability files, then the glossary.
         All or nothing."""
         definitions, terms = knowledge.consolidation(verdict)
@@ -138,8 +139,9 @@ def _write_all(writes: dict[Path, str]) -> None:
             written.append(path)
     except OSError:
         for path in written:
-            if before[path] is None:
+            content = before[path]
+            if content is None:
                 path.unlink(missing_ok=True)
             else:
-                path.write_text(before[path], encoding="utf-8")
+                path.write_text(content, encoding="utf-8")
         raise

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -52,11 +53,11 @@ RECORDED_AS = {"changes_requested": "returns", "change_history": "return_history
 SUBTASK_RECORDED_AS = {"change_category": "return_category"}
 
 
-def _recorded(subtask: dict) -> dict:
+def _recorded(subtask: dict[str, Any]) -> dict[str, Any]:
     return {SUBTASK_RECORDED_AS.get(k, k): v for k, v in subtask.items()}
 
 
-def from_frontmatter(data: dict) -> dict:
+def from_frontmatter(data: dict[str, Any]) -> dict[str, Any]:
     """The inverse of what `render` writes: the frontmatter under the state's names."""
     inverse = {key: field for field, key in RECORDED_AS.items()}
     state = {inverse.get(k, k): v for k, v in data.items()}
@@ -70,7 +71,7 @@ def from_frontmatter(data: dict) -> dict:
 
 
 def render(
-    state: dict,
+    state: dict[str, Any],
     system_commit: str | None = None,
     plugins: dict[str, str] | None = None,
     system_version: str | None = None,
@@ -130,7 +131,7 @@ def render(
     return "\n".join(parts)
 
 
-def _rounded_run(run: RoleRun) -> dict:
+def _rounded_run(run: RoleRun) -> dict[str, Any]:
     """Money in the frontmatter to four decimals. A run recorded before the split by
     model has no `cost_by_model`, and one recorded before this task has no
     `subagent_cost_usd`; both stay without one."""
@@ -202,14 +203,14 @@ def _is_continuation(line: str) -> bool:
 
 
 def _scalar_line(key: str, value: str) -> str:
-    dumped = yaml.safe_dump({key: value}, default_flow_style=False, sort_keys=False)
+    dumped: str = yaml.safe_dump({key: value}, default_flow_style=False, sort_keys=False)
     line, _, rest = dumped.partition("\n")
     if rest.strip():
         raise ValueError(f"record_closure: {key!r} value is not a single scalar line")
     return line
 
 
-def parse(raw: str, source: object = "document") -> dict:
+def parse(raw: str, source: object = "document") -> dict[str, Any]:
     """Inverse of `render`: frontmatter fields plus `description` and `sections`."""
     match = _FRONTMATTER.match(raw)
     if not match:
