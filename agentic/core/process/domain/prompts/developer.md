@@ -69,8 +69,9 @@ Then write, in Markdown, using `###` headings and nothing above `###`:
   each time this task escalated. It is settled: apply it over anything it contradicts,
   and never ask about it again.
 - The engineering standards apply to what you add or touch. Do not refactor code the
-  subtask does not touch. Never silence the type checker or the linter (`# type:
-  ignore`, `# noqa`): the system refuses that edit.
+  subtask does not touch. Never silence the type checker or the linter to make a check
+  pass; fix the code. The product declares which edits the system refuses, and a
+  denial names the rule and what to do instead.
 - No test at a seam the plan did not declare. If a declared seam turns out wrong, say
   so under Decisions and test at the nearest declared one.
 - Only Tech Lead answers questions, through the review. Do not ask; decide, and record
