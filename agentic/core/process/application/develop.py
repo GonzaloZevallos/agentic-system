@@ -18,7 +18,7 @@ from agentic.shared.configuration import Configuration
 from ..domain import presubmit, rules
 from ..domain.roles import DEVELOPER, DEVELOPER_INTEGRATOR
 from ..domain.task import INTEGRATION, TaskState
-from .checkouts import SetupFailed, subtask_checkout
+from .checkouts import SetupFailed, subtask_checkout, task_base
 from .ports import Ports
 from .presubmit import CheckoutPresubmit, declared_checks
 from .run_role import finish, run_role, with_context
@@ -71,7 +71,12 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     before = ports.workspace.head(checkout.path)
     checks = declared_checks(state, ports)
     delivery_presubmit = CheckoutPresubmit(
-        ports, checkout.path, before, checks, cfg.check_timeout_s
+        ports,
+        checkout.path,
+        before,
+        checks,
+        cfg.check_timeout_s,
+        witness=ports.stack.witness(task_base(state, ports)),
     )
 
     def committed(_: dict) -> None:
