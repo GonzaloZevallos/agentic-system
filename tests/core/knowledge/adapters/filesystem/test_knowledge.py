@@ -37,6 +37,42 @@ def test_read_takes_the_adrs_from_the_given_root(tmp_path):
     assert "docs/adr/0003-new.md" in text and "# New" in text
 
 
+BRIEF = (
+    "## Problem and who has it\n\nGym owners cannot tell who is about to churn.\n\n"
+    "## Jobs\n\n- When a member skips, I want a flag, so I can call them.\n\n"
+    "## Constraints\n\n- Scale: up to 200k members.\n\n"
+    "## Out of scope\n\nPayment processing.\n"
+)
+
+
+def test_read_is_unchanged_without_a_brief_on_disk(tmp_path):
+    (tmp_path / "CONTEXT.md").write_text(GLOSSARY)
+    text = FilesystemKnowledge(tmp_path).read()
+    assert "BRIEF.md" not in text
+    assert text.startswith("## Product knowledge\n\n`CONTEXT.md`:")
+
+
+def test_read_puts_the_brief_first_when_one_is_on_disk(tmp_path):
+    # ADR-0025: `read()` (the line every `reads_knowledge` role's `preamble` calls)
+    # threads `self.brief(root)` into `assemble`. A `BRIEF.md` on disk must arrive as
+    # its own fenced block, first, before the glossary -- and adding it must move
+    # nothing else.
+    (tmp_path / "CONTEXT.md").write_text(GLOSSARY)
+    without_brief = FilesystemKnowledge(tmp_path).read()
+
+    (tmp_path / "BRIEF.md").write_text(BRIEF)
+    with_brief = FilesystemKnowledge(tmp_path).read()
+
+    brief_block = "`BRIEF.md`:\n\n````markdown\n" + BRIEF.strip() + "\n````\n\n"
+    assert with_brief.startswith("## Product knowledge\n\n" + brief_block + "`CONTEXT.md`")
+    # Exactly one block added and nothing else moved: cut the Brief's own fenced block
+    # back out and what remains is byte for byte what `read()` returned before
+    # `BRIEF.md` existed on disk.
+    assert with_brief == without_brief.replace(
+        "## Product knowledge\n\n", "## Product knowledge\n\n" + brief_block
+    )
+
+
 def test_standards_default_to_the_systems_until_the_product_writes_its_own(tmp_path):
     text = FilesystemKnowledge(tmp_path).standards()
     assert text.startswith("## Engineering standards\n\n`CODING_STANDARDS.md`:\n\n````markdown\n")

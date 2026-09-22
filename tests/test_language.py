@@ -48,6 +48,7 @@ TYPES = {
     "Testigo del checkout": presubmit.witness_refusal,
     "Guarda de esquema": schema_guard,
     "Stack del producto": stack,
+    "Brief": knowledge.brief_refusal,
 }
 
 # Glossary term -> the field of the task state that holds it.

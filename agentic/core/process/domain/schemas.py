@@ -42,7 +42,7 @@ class Classification(RoleOutput):
     reason: str = Field(description="One line")
 
 
-class Definition(RoleOutput):
+class PRD(RoleOutput):
     flags: dict[str, bool] = Field(description="Every flag of the vocabulary, marked yes/no")
 
 
@@ -91,7 +91,7 @@ class Diagnosis(RoleOutput):
     No `flags`: a bug changes no scope, it moves the code to the definition it already
     has. `undefined` is not a verdict but a hand-off: the product never wrote down what
     this capability does, so PM decides, and `questions_for_pm` is what PM must settle
-    for the ruling to exist. A schema of its own and not `Definition` with the fields
+    for the ruling to exist. A schema of its own and not `PRD` with the fields
     blanked: what PM validates on a bug is a ruling, not a definition."""
 
     ruling: Literal["bug", "expected_behaviour", "undefined"] = Field(

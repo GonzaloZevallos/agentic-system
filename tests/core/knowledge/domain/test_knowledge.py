@@ -258,3 +258,121 @@ def test_a_product_with_one_glossary_needs_no_context():
             "glossary": [{"term": "Ola", "definition": "d", "avoid": ""}],
         }
     )
+
+
+# The Brief (ADR-0025): a root-level, human-owned artefact, mechanically checked before
+# a single role is paid. `BRIEF_HEADINGS` is its own tuple, deliberately not sharing
+# `JOBS_HEADING` even though `## Jobs` coincides with it.
+
+VALID_BRIEF = """# Brief
+
+## Problem and who has it
+
+Gym owners cannot tell if a member is about to churn.
+
+## Jobs
+
+- When a member skips two weeks, I want a flag, so I can call them.
+
+## Constraints
+
+- Scale: up to 200k members.
+- Regulatory: none.
+
+## Out of scope
+
+Payment processing.
+"""
+
+
+def test_assemble_puts_the_brief_first_before_the_glossaries():
+    text = knowledge.assemble({"CONTEXT.md": GLOSSARY}, {}, {}, brief=VALID_BRIEF)
+    assert text.startswith("## Product knowledge\n\n`BRIEF.md`:\n\n````markdown\n# Brief")
+    assert text.index("BRIEF.md") < text.index("CONTEXT.md")
+
+
+def test_assemble_without_a_brief_is_unchanged():
+    assert knowledge.assemble({"CONTEXT.md": GLOSSARY}, {}, {}) == knowledge.assemble(
+        {"CONTEXT.md": GLOSSARY}, {}, {}, brief=None
+    )
+    assert "BRIEF.md" not in knowledge.assemble({"CONTEXT.md": GLOSSARY}, {}, {})
+
+
+def test_assemble_is_still_empty_with_nothing_at_all_brief_included():
+    assert knowledge.assemble({}, {}, {}, brief=None) == ""
+
+
+def test_brief_refusal_accepts_a_valid_brief():
+    assert knowledge.brief_refusal(VALID_BRIEF) is None
+
+
+def test_brief_refusal_accepts_the_headings_in_any_order_and_with_extra_sections():
+    reordered = """## Out of scope
+
+Payment processing.
+
+## Extra
+
+Ignored.
+
+## Jobs
+
+- When ..., I want ..., so I can ...
+
+## Constraints
+
+- Scale: small.
+
+## Problem and who has it
+
+A problem.
+"""
+    assert knowledge.brief_refusal(reordered) is None
+
+
+def test_brief_refusal_rejects_a_missing_heading():
+    missing = VALID_BRIEF.replace("## Out of scope\n\nPayment processing.\n", "")
+    reason = knowledge.brief_refusal(missing)
+    assert reason is not None
+    assert "Out of scope" in reason and "BRIEF.md" in reason
+    assert knowledge.DEFAULT_BRIEF_TEMPLATE.read_text(encoding="utf-8") in reason
+
+
+def test_brief_refusal_rejects_a_present_but_empty_heading():
+    # Line-based, not substring containment: a heading with only whitespace before the
+    # next `##` is the present-and-empty case the request itself rejects.
+    empty = VALID_BRIEF.replace(
+        "## Out of scope\n\nPayment processing.\n", "## Out of scope\n\n   \n"
+    )
+    reason = knowledge.brief_refusal(empty)
+    assert reason is not None and "Out of scope" in reason
+
+
+def test_brief_refusal_ignores_a_level_three_heading_with_the_same_title():
+    demoted = VALID_BRIEF.replace("## Out of scope", "### Out of scope")
+    reason = knowledge.brief_refusal(demoted)
+    assert reason is not None and "Out of scope" in reason
+
+
+def test_brief_refusal_matches_case_insensitively_and_strips_one_trailing_colon():
+    shouted = VALID_BRIEF.replace("## Out of scope", "## OUT OF SCOPE:")
+    assert knowledge.brief_refusal(shouted) is None
+
+
+def test_brief_refusal_rejects_over_the_word_cap():
+    long_job = "- " + " ".join(f"word{i}" for i in range(600))
+    over_cap = VALID_BRIEF.replace(
+        "- When a member skips two weeks, I want a flag, so I can call them.", long_job
+    )
+    reason = knowledge.brief_refusal(over_cap)
+    assert reason is not None
+    assert "words (cap 500)" in reason and "BRIEF.md" in reason
+
+
+def test_brief_refusal_strips_fenced_blocks_before_counting_words():
+    fenced_code = "```\n" + " ".join(f"word{i}" for i in range(600)) + "\n```\n"
+    padded = VALID_BRIEF.replace(
+        "Gym owners cannot tell if a member is about to churn.",
+        "Gym owners cannot tell if a member is about to churn.\n\n" + fenced_code,
+    )
+    assert knowledge.brief_refusal(padded) is None

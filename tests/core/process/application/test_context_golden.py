@@ -1,5 +1,5 @@
 """Characterisation of the context seam: one golden string per role, byte for byte,
-over a fixture task document with every section a task can hold (the definition and
+over a fixture task document with every section a task can hold (the PRD and
 solution interview transcripts, a multi-subtask plan, the findings table, one
 subtask's delivery and review, and the human's decisions).
 
@@ -14,12 +14,12 @@ from __future__ import annotations
 from agentic.core.process.application.run_role import context_for, preamble, with_context
 from agentic.core.process.domain.document import HUMAN
 from agentic.core.process.domain.roles import (
-    DEFINITION_INTERVIEW,
     DEVELOPER,
     DEVELOPER_INTEGRATOR,
     FINDINGS,
     PJM,
     PM,
+    PRD_INTERVIEW,
     PRODUCT_ANALYST,
     SOLUTION_INTERVIEW,
     TECH_LEAD,
@@ -45,7 +45,7 @@ DESCRIPTION = (
 )
 
 PJM_SECTION_TEXT = "Clear signal: a feature, PM decides next."
-DEFINITION_TRANSCRIPT_TEXT = (
+PRD_TRANSCRIPT_TEXT = (
     "**Product Analyst**: What triggers the export?\n\n**PM**: A button on the audit list."
 )
 PM_SECTION_TEXT = (
@@ -195,7 +195,7 @@ STATE = {
     "subtasks": PLAN_SUBTASKS,
     "sections": {
         "PjM": PJM_SECTION_TEXT,
-        DEFINITION_INTERVIEW: DEFINITION_TRANSCRIPT_TEXT,
+        PRD_INTERVIEW: PRD_TRANSCRIPT_TEXT,
         "PM": PM_SECTION_TEXT,
         SOLUTION_INTERVIEW: SOLUTION_TRANSCRIPT_TEXT,
         "Tech Lead": TECH_LEAD_SECTION_TEXT,

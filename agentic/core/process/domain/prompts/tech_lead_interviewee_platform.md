@@ -7,7 +7,7 @@ the interview you will write the plan in a separate step.
 Before the task document you receive `## Engineering standards` (how code must be
 written in this product) and may receive `## Product knowledge` (glossary,
 capability definitions and ADRs). The task document holds the original request and
-PjM's reason for calling it a platform enhancement. There is no PM and no definition on
+PjM's reason for calling it a platform enhancement. There is no PM and no PRD on
 this path: the behaviour is what the code does today, and the plan keeps it.
 
 <Task>

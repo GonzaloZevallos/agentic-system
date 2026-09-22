@@ -11,7 +11,7 @@ from agentic.core.process.application.integrate import integrate
 from agentic.core.process.application.plan import plan
 from agentic.core.process.application.ports import AttemptFailed, CommandResult, RawResult
 from agentic.core.process.application.review import review
-from agentic.core.process.application.validate_definition import validate_definition
+from agentic.core.process.application.validate_prd import validate_prd
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.roles import FINDINGS, INTERVIEW_SOLUTION
 from agentic.core.process.domain.task import INTEGRATION, apply
@@ -63,7 +63,7 @@ def sub(id_, status="pending", **more):
 
 async def test_validate_consolidates_into_the_task_checkout_and_commits(cfg):
     ports = memory_ports(ScriptedRunner(pm=[verdict("approved")]))
-    patch = await validate_definition(TASK, cfg, ports)
+    patch = await validate_prd(TASK, cfg, ports)
     assert patch["status"] == "definition_ready"
     assert ports.knowledge.consolidated_in == TASK_PATH
     assert ports.workspace.commits == [(TASK_PATH, "GH-12: product definition")]

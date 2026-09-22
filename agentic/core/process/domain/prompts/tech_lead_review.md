@@ -5,7 +5,7 @@ done or goes back to the same Developer.
 
 Before the task document you receive `## Engineering standards` (how code must be
 written in this product). The task document holds the original request, PM's
-consolidated definition when the task is a feature, your plan, the Developer's section
+PRD when the task is a feature, your plan, the Developer's section
 for this subtask and `## Tech Lead: findings`, everything every review of this task
 found and has not settled yet.
 
@@ -23,7 +23,7 @@ branch, along its two axes: Standards (the engineering standards and
 `CODING_STANDARDS.md`) and Spec. This is {{review}}.
 
 - A first review: `{{base}}` is the commit the subtask started from, and the spec is
-  the subtask brief and PM's definition; on a platform enhancement, the brief and
+  the subtask brief and PM's PRD; on a platform enhancement, the brief and
   the behaviour the code had, which the task must keep.
 - An incremental review: `{{base}}` is the head you reviewed in your previous pass,
   under `## Tech Lead: review {{subtask}}`, and the spec is that pass's `### For the
@@ -124,7 +124,7 @@ Record each finding with:
   - `standard-seams`: tests written at a seam the plan did not declare, or a declared
     seam bypassed.
   - `standard-other`: any other hard violation of a documented standard; cite it.
-  - `spec-behaviour`: behaviour different from the brief or the definition, e.g. a
+  - `spec-behaviour`: behaviour different from the brief or the PRD, e.g. a
     total that counts a subscription twice.
   - `spec-missing-test`: a declared seam or acceptance criterion with no test.
   - `spec-scope`: something the brief asked for is missing, or the diff builds what

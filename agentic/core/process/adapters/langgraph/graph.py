@@ -59,7 +59,7 @@ from ...application.plan import plan
 from ...application.ports import Ports
 from ...application.preflight import product_name
 from ...application.review import review
-from ...application.validate_definition import validate_definition
+from ...application.validate_prd import validate_prd
 from ...domain import rules
 from ...domain.roles import DEVELOPER, PJM, PM, PRODUCT_ANALYST, TECH_LEAD, TECH_LEAD_REVIEWER, Role
 from ...domain.task import TaskInput, TaskState, delta
@@ -222,7 +222,7 @@ def build_graph(ports_for: PortsFor, telemetry: Telemetry = NoTelemetry()) -> St
     graph.add_node("classify", _node(classify, PJM, shared, telemetry))
     graph.add_node("define", _node(define, PRODUCT_ANALYST, shared, telemetry))
     graph.add_node("diagnose", _node(diagnose, PRODUCT_ANALYST, shared, telemetry))
-    graph.add_node("validate", _node(validate_definition, PM, shared, telemetry))
+    graph.add_node("validate", _node(validate_prd, PM, shared, telemetry))
     graph.add_node("plan", _node(plan, TECH_LEAD, shared, telemetry))
     graph.add_node(PIPELINE, _branch_node(shared, telemetry))
     graph.add_node(INTEGRATE, _system_node(integrate, shared))

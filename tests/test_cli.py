@@ -462,6 +462,12 @@ def test_a_dirty_stage0_is_said_out_loud_and_the_run_goes_on(monkeypatch, tmp_pa
 
 def test_a_stage0_fixed_to_a_sha_says_nothing(monkeypatch, tmp_path, capsys):
     root = product(tmp_path, "p")
+    # The product declares no Brief either (ADR-0025): written here so this test stays
+    # about stage0 alone, not the separate warning `no_brief` owns.
+    (root / "BRIEF.md").write_text(
+        "## Problem and who has it\n\nx.\n\n## Jobs\n\nx.\n\n## Constraints\n\nx.\n\n"
+        "## Out of scope\n\nx.\n"
+    )
     monkeypatch.setattr(cli, "unfixed_stage0", lambda ports: None)
     # `STACK` declares no `forbidden` either (issue #38): stubbed the same way, so this
     # test stays about stage0 alone, not the separate warning `no_forbidden` owns.
@@ -536,6 +542,96 @@ def test_a_resume_checks_the_stack_at_the_tasks_base_not_only_at_head(
         cli.main()
     assert info.value.code == 2
     assert "declares no stack" in capsys.readouterr().err
+
+
+VALID_BRIEF = (
+    "# Brief\n\n"
+    "## Problem and who has it\n\nGym owners cannot tell who is about to churn.\n\n"
+    "## Jobs\n\n- When a member skips, I want a flag, so I can call them.\n\n"
+    "## Constraints\n\n- Scale: up to 200k members.\n\n"
+    "## Out of scope\n\nPayment processing.\n"
+)
+MALFORMED_BRIEF = "# Brief\n\n## Problem and who has it\n\nOnly one section.\n"
+
+
+def test_a_product_without_a_brief_is_warned_on_run_and_the_run_goes_on(
+    monkeypatch, tmp_path, capsys
+):
+    """ADR-0025: absent is a fact, never a refusal -- gym-saas keeps running until its
+    human writes one."""
+    root = product(tmp_path, "p")
+    monkeypatch.setattr(cli, "unfixed_stage0", lambda ports: None)
+    seen = capture_run(monkeypatch)
+    monkeypatch.setattr("sys.argv", ["agentic", "run", "t", "d", "--product-dir", str(root)])
+    cli.main()
+    error = capsys.readouterr().err
+    assert "the product has no BRIEF.md" in error
+    assert "## Problem and who has it" in error  # the template, printed verbatim
+    assert seen["task"]["title"] == "t"
+
+
+def test_a_product_without_a_brief_is_warned_on_resume_too(monkeypatch, tmp_path, capsys):
+    root = product(tmp_path, "p")
+    monkeypatch.setattr(cli, "unfixed_stage0", lambda ports: None)
+    seen = capture_run(monkeypatch)
+    monkeypatch.setattr(
+        "sys.argv", ["agentic", "resume", "--issue", "9", "--yes", "--product-dir", str(root)]
+    )
+    cli.main()
+    assert "the product has no BRIEF.md" in capsys.readouterr().err
+    assert seen["fn"] is cli._resume
+
+
+def test_a_valid_brief_says_nothing(monkeypatch, tmp_path, capsys):
+    root = product(tmp_path, "p")
+    (root / "BRIEF.md").write_text(VALID_BRIEF)
+    monkeypatch.setattr(cli, "unfixed_stage0", lambda ports: None)
+    monkeypatch.setattr(cli, "no_forbidden", lambda ports, revision: None)
+    capture_run(monkeypatch)
+    monkeypatch.setattr("sys.argv", ["agentic", "run", "t", "d", "--product-dir", str(root)])
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    cli.main()
+    assert capsys.readouterr().err == ""
+
+
+def test_a_malformed_brief_refuses_a_run(monkeypatch, tmp_path, capsys):
+    root = product(tmp_path, "p")
+    (root / "BRIEF.md").write_text(MALFORMED_BRIEF)
+    monkeypatch.setattr(cli, "unfixed_stage0", lambda ports: None)
+    monkeypatch.setattr("sys.argv", ["agentic", "run", "t", "d", "--product-dir", str(root)])
+    with pytest.raises(SystemExit) as info:
+        cli.main()
+    assert info.value.code == 2
+    error = capsys.readouterr().err
+    assert "BRIEF.md is missing or empty" in error and "## Jobs" in error
+
+
+def test_a_malformed_brief_is_printed_on_resume_and_it_proceeds(monkeypatch, tmp_path, capsys):
+    root = product(tmp_path, "p")
+    (root / "BRIEF.md").write_text(MALFORMED_BRIEF)
+    monkeypatch.setattr(cli, "unfixed_stage0", lambda ports: None)
+    seen = capture_run(monkeypatch)
+    monkeypatch.setattr(
+        "sys.argv", ["agentic", "resume", "--issue", "9", "--yes", "--product-dir", str(root)]
+    )
+    cli.main()
+    assert "BRIEF.md is missing or empty" in capsys.readouterr().err
+    assert seen["fn"] is cli._resume  # a warning, not a refusal: the resume proceeds
+
+
+def test_an_over_cap_brief_refuses_a_run_by_word_count(monkeypatch, tmp_path, capsys):
+    over_cap = VALID_BRIEF.replace(
+        "Gym owners cannot tell who is about to churn.",
+        " ".join(f"word{i}" for i in range(600)),
+    )
+    root = product(tmp_path, "p")
+    (root / "BRIEF.md").write_text(over_cap)
+    monkeypatch.setattr(cli, "unfixed_stage0", lambda ports: None)
+    monkeypatch.setattr("sys.argv", ["agentic", "run", "t", "d", "--product-dir", str(root)])
+    with pytest.raises(SystemExit) as info:
+        cli.main()
+    assert info.value.code == 2
+    assert "words (cap 500)" in capsys.readouterr().err
 
 
 class FakeLock:

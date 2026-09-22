@@ -59,6 +59,12 @@ Con qué tecnología se construye y se verifica este producto, declarado por el 
 _Avoid_: checks, stack (a secas, cuando se habla del sistema), CI, validaciones
 _Campo_: stack — estándar; sus comandos son los presubmit checks del producto
 
+**Brief**:
+Lo que el humano escribe una vez por producto, antes de la primera tarea: el problema, los
+jobs y las restricciones. No es un PRD: no describe comportamiento.
+_Avoid_: visión, PRD
+_Campo_: sin término de arte
+
 **Preparación del entorno**:
 Los comandos con que un producto deja listo un checkout recién creado para que se pueda trabajar y correr sus chequeos en él: crear su entorno virtual, instalar dependencias, compilar lo que haga falta. Los declara el producto en su stack y los corre el sistema una sola vez, cuando el checkout nace, antes de que entre ningún rol. Es opcional: un producto sin dependencias no prepara nada, y el sistema avisa al arrancar que entonces no puede prometer aislamiento entre subtareas.
 _Avoid_: bootstrap, instalación, build (el build es del producto y puede ser un chequeo)

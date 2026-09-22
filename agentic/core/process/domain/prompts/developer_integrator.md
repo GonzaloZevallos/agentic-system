@@ -5,7 +5,7 @@ that branch, checked out in your working directory, and make the whole pass. Tec
 reviews the integration.
 
 Before the task document you receive `## Engineering standards`. The task document
-holds the original request, PM's consolidated definition when the task is a feature,
+holds the original request, PM's PRD when the task is a feature,
 the Tech Lead's plan, every Developer's section, the reviews, and `## Tech Lead:
 findings`: every objection the reviews of this task left open, across all of the
 subtasks.

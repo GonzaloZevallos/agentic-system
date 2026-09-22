@@ -3,18 +3,18 @@ status: accepted
 date: 2026-09-13
 ---
 
-# La definición y la solución técnica salen de una entrevista entre dos roles, no de un tiro
+# El PRD y la solución técnica salen de una entrevista entre dos roles, no de un tiro
 
 El humano decide diseño con `grill-with-docs`: rondas de preguntas con recomendación, cada
 respuesta abre la siguiente ronda, y el glosario y los ADRs se escriben sobre la marcha.
 Quiere esa entrevista en el sistema aunque la responda un agente. Hoy Product Analyst
-escribe la definición en un tiro y PM la valida en otro; el pingpong del Tech Lead estaba
+escribe el PRD en un tiro y PM lo valida en otro; el pingpong del Tech Lead estaba
 descrito (README §4) pero sin forma.
 
 **Product Analyst entrevista a PM.** El entrevistador pregunta y recomienda (Sonnet); el
 entrevistado decide (Opus), con el conocimiento de producto como fuente: es la asimetría
 de §10 puesta a trabajar. El issue es el plan a afinar. Después Product Analyst escribe
-la definición desde su sesión de la entrevista (sin `to-spec`: ADR-0013) y PM valida el
+el PRD desde su sesión de la entrevista (sin `to-spec`: ADR-0013) y PM valida el
 texto: chequea fidelidad a lo que decidió, no ratifica desde cero. El loop de
 devoluciones PM→Product Analyst sigue igual sobre ese texto.
 
@@ -46,14 +46,14 @@ fallos. El entrevistador tiene escritura solo sobre `CONTEXT.md` y `docs/`, en l
 tarea que ADR-0011 crea al arrancar. Todo termina en el PR: un término o ADR que no
 sobrevive la revisión humana no se mergea. El destilado de PM a `docs/product/`
 (ADR-0006) sigue igual en forma, pero escribe en ese mismo checkout y se commitea ahí:
-la definición viaja en el PR con el código que la implementa.
+el PRD viaja en el PR con el código que la implementa.
 
 ## Opciones descartadas
 
 - **Product Analyst se entrevista solo**: sin segundo agente no hay fuente nueva; es el
   tiro único con más pasos.
 - **PM entrevista a Product Analyst**: las decisiones son del entrevistado, y el dueño
-  de la definición es PM.
+  del PRD es PM.
 - **Sin tope de rondas, solo tope de costo**: una entrevista sin tope no termina, y el
   costo no dice cuándo se dejó de aprender.
 - **El entrevistador solo propone términos y el sistema los escribe al aprobar**: obliga
@@ -72,7 +72,7 @@ humano. El efímero incluso escribió "escalate it to the PM".
 Decisión: la **consulta** (glosario del proceso). El Tech Lead entrevistado devuelve
 `questions_for_pm`; al cerrar la ronda, PM las responde retomando su sesión de validación,
 su respuesta entra en la transcripción y el efímero la ve en la ronda siguiente. Las
-respuestas aclaran la definición: el sistema entrega de nuevo la sección de PM con las
+respuestas aclaran el PRD: el sistema entrega de nuevo la sección de PM con las
 respuestas agregadas como subsección `Clarifications` (agrega, no reescribe: PM no
 reproduce su sección entera), la anterior queda como historia, y lo que cambia el
 conocimiento escrito se destila otra vez (ADR-0006) en el checkout de la tarea, que la
@@ -83,7 +83,7 @@ fijó el requisito.
 
 Umbral del Tech Lead: la representación es suya (forma del JSON, nombres, empates); el
 significado de un término es del glosario y se aplica tal cual; consulta solo cuando un
-comportamiento observable no está definido o la definición contradice el código o los
+comportamiento observable no está definido o el PRD contradice el código o los
 datos. Sin la regla, la consulta se vuelve el nuevo escalado.
 
 Fuera por ahora: el Developer no consulta; lo que encuentra al implementar va en su
@@ -101,7 +101,7 @@ devolución Tech Lead→PM (contaría contra el límite de 2 y devolvería la ta
 Las siete preguntas de GH-12 eran tres porque el sistema acumulaba por ronda lo que el
 entrevistado devolvía en `questions_for_human`, y nadie responde al humano durante la
 corrida: el entrevistado volvía a listar en la ronda N+1 lo que dejó abierto en la N, a
-veces reformulado. La consulta lo quitó de la entrevista de solución; en la de definición
+veces reformulado. La consulta lo quitó de la entrevista de solución; en la del PRD
 (Product Analyst→PM) seguía, y en la consulta podía volver por el otro lado: el Tech Lead
 re-consultando lo que PM ya mandó al humano.
 
@@ -120,10 +120,10 @@ Descartado: que el entrevistado devuelva cada ronda la lista vigente completa y 
 la reemplace en vez de extender. Permitiría retirar una pregunta resuelta después, pero
 una pregunta olvidada al re-listar se perdería en silencio, que es peor que un duplicado.
 
-## Adenda 2026-09-15: solo lo que deja la definición indecidible, y se retira lo que se resuelve
+## Adenda 2026-09-15: solo lo que deja el PRD indecidible, y se retira lo que se resuelve
 
-La tercera corrida de GH-12 escaló desde la entrevista de definición con dos preguntas
-que no tenían que llegar al humano. Una no cambiaba la definición: PM lo escribió en la
+La tercera corrida de GH-12 escaló desde la entrevista del PRD con dos preguntas
+que no tenían que llegar al humano. Una no cambiaba el PRD: PM lo escribió en la
 misma respuesta ("it is a question for the human only insofar as it affects rollout
 messaging") y la registró igual, porque el prompt mandaba al humano todo lo que ni el
 pedido ni el conocimiento resolvían. La otra la respondió la ronda siguiente: el Product
@@ -132,9 +132,9 @@ camino de vuelta, y la lista no vacía escala al cerrar. La corrida anterior, co
 pedido y el mismo conocimiento, se aprobó a la primera: la diferencia era muestreo.
 
 Decisión, en dos partes. **El umbral**: una pregunta va al humano solo si una respuesta
-distinta produciría una definición distinta y nada en el pedido ni en el conocimiento
-elige una. Lo que no cambia la definición PM lo decide y lo deja escrito en su respuesta
-como supuesto (glosario); el Product Analyst lo lleva a la definición desde su sesión.
+distinta produciría un PRD distinto y nada en el pedido ni en el conocimiento
+elige una. Lo que no cambia el PRD PM lo decide y lo deja escrito en su respuesta
+como supuesto (glosario); el Product Analyst lo lleva al PRD desde su sesión.
 **El retiro**: el dueño de la decisión (PM entrevistado, PM consultado) devuelve en
 `withdrawn` los números, de la lista `## With the human` que recibió en esa ronda, de las
 preguntas que esa ronda resolvió, con la respuesta en su prosa. El caso de uso las saca de
@@ -151,7 +151,7 @@ explícito, por número y con respuesta escrita: lo que no se nombra se queda.
 
 Descartado: que el entrevistador retire (el que pregunta decidiría); que el retiro sea por
 texto (una reformulación no coincidiría); un campo estructurado para los supuestos (la
-prosa de la respuesta ya llega al autor de la definición, que escribe desde su sesión).
+prosa de la respuesta ya llega al autor del PRD, que escribe desde su sesión).
 
 ## Adenda 2026-09-18: una entrevista escalada se retoma, no se repite
 
@@ -159,7 +159,7 @@ Con #21 (PR #30) una entrevista escalada volvía a correr entera cuando la tarea
 reanudaba: sesiones nuevas de los dos lados, el tope de rondas otra vez desde cero. Dos
 costos: plata (la entrevista de solución de la corrida 4 de GH-12 costó $15.39) y
 decisiones que cambian, porque un muestreo nuevo puede decidir distinto de lo que el
-humano ya respondió (la corrida 2 de GH-12 aprobó la definición a la primera y la 3
+humano ya respondió (la corrida 2 de GH-12 aprobó el PRD a la primera y la 3
 escaló, con el mismo pedido y el mismo conocimiento).
 
 Decisión: `interview()` descubre, de `state["runs"]` filtrado por la sección de la
@@ -172,7 +172,7 @@ exactamente 2 más; una que un fallo de rol o el tope de tarea cortó antes reci
 le quedaban, nunca menos de 2. La decisión del humano entra como ronda nueva: el
 entrevistador la recibe como su próximo mensaje (`rules.interview_retake_delta`, porque
 una sesión reanudada no vuelve a leer `context_for`), y el entrevistado la recibe antes
-de las preguntas siguientes. Aplica a las dos entrevistas (definición y solución); una
+de las preguntas siguientes. Aplica a las dos entrevistas (PRD y solución); una
 que escaló por fallo de rol o por el tope de tarea también se retoma, sin ronda de
 decisión — `interview_retake_delta` no lleva entonces la sección `## Human`, porque no
 hay una que citar.

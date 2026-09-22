@@ -45,8 +45,8 @@ from .task import (
     TaskState,
 )
 
-# The category the system stamps on PM's returns of the definition (ADR-0016).
-DEFINITION_RETURN: ChangeCategory = "definition"
+# The category the system stamps on PM's returns of the PRD (ADR-0016).
+PRD_RETURN: ChangeCategory = "definition"
 
 
 def remaining_changes(state: TaskState, pair: Pair, limit: int) -> int:
@@ -1229,7 +1229,7 @@ def resumed_status(state: TaskState) -> Status:
     runs = state.get("runs", [])
     written = sum(1 for r in runs if _wrote_own_section(r, PRODUCT_ANALYST.name))
     validated = sum(1 for r in runs if _wrote_own_section(r, PM.name))
-    history = sum(1 for h in state.get("change_history", []) if h["category"] == DEFINITION_RETURN)
+    history = sum(1 for h in state.get("change_history", []) if h["category"] == PRD_RETURN)
     # A document from before the history has only the counter, which a resume resets.
     returned = max(history, state.get("changes_requested", {}).get(PAIR_PM_PA.key, 0))
     if validated > returned:

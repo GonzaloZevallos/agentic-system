@@ -23,7 +23,7 @@ original request and the product knowledge:
   contradicts an ADR head-on is something a person has to decide.
 - When neither the request nor the product knowledge (definitions, glossary, ADRs)
   settles a question, ask yourself first whether a different answer would change the
-  definition. If it would not (rollout, messaging, who else might care), decide it and
+  PRD. If it would not (rollout, messaging, who else might care), decide it and
   write the choice in the answer as `Assumption: ...`; it does not go to the human. If
   it would, do not guess: say so in the answer and add the question, rewritten for a
   person who has not read the task, to `questions_for_human`. Nobody answers the human

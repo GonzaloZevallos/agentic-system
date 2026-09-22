@@ -73,14 +73,14 @@ PjM clasifica toda tarea entrante como **bug**, **feature** o **platform enhance
 
 ```
 PjM clasifica
-  → Product Analyst: competidores, definición, métricas + dashboard, flags
-  → PM valida definición y flags
+  → Product Analyst: competidores, PRD, métricas + dashboard, flags
+  → PM valida PRD y flags
   → Data Analyst valida métricas
   → [si toca UI]    UX Designer define flujos    → UX Lead valida
   → [si toca UI]    UI Designer diseña sobre el flujo validado → Design Lead valida
   → [si toca textos] Tech Writer escribe sobre flujo y diseño validados
-  → PM consolida la definición única
-  → QA Funcional (1ª pasada): observa la definición, casos borde, casos de prueba
+  → PM consolida el PRD
+  → QA Funcional (1ª pasada): observa el PRD, casos borde, casos de prueba
   → Tech Lead: análisis, pingpong, ajuste del plan de tests, subtareas
   → Developers en paralelo, cada uno con su revisión de Tech Lead pegada atrás
   → entre olas, el sistema: integración incremental y la ola siguiente
@@ -111,7 +111,7 @@ PjM clasifica
 ```
 
 Un bug de flujo (por ejemplo, un paso del que no se puede volver atrás) es **funcional**,
-no de UX: lo valida PM solo, porque las decisiones de UX ya viven en la definición que PM
+no de UX: lo valida PM solo, porque las decisiones de UX ya viven en el PRD que PM
 posee. **UX no participa en bugs.**
 
 Los bugs no llevan métricas ni dashboard.
@@ -148,7 +148,7 @@ si el cambio es aceptable:
 
 Esa consulta no suma al par PjM→PM.
 
-**Implementado (#46)**: de PjM al plan sin pasar por la definición. El Tech Lead efímero
+**Implementado (#46)**: de PjM al plan sin pasar por el PRD. El Tech Lead efímero
 entrevista a Tech Lead con el issue, el conocimiento de producto y el motivo de PjM como
 único insumo; como no hay PM a quien consultar, lo que sólo una persona puede decidir va al
 humano. Se espera que no haya nada: una pregunta de producto en este camino es señal de
@@ -276,7 +276,7 @@ el sistema lo comenta en el issue con el motivo y termina la corrida; cerrar el 
 del humano (#65).
 
 UX Lead, Design Lead y Tech Writer **no aprueban al cierre**. Esa regla existió y fue
-reemplazada: PM es el único que valida producto porque construyó la definición junto con
+reemplazada: PM es el único que valida producto porque construyó el PRD junto con
 ellos. PM puede consultar a los leads, pero la aprobación es suya. Si el
 Developer se desvía del diseño o de los textos, es PM quien lo detecta y lo devuelve.
 
@@ -322,9 +322,9 @@ Dispara cuando detecta un patrón negativo.
 
 ### PM — Product Manager
 
-- Valida la definición y los flags que redacta Product Analyst.
+- Valida el PRD y los flags que redacta Product Analyst.
 - Delega en orden a UX Lead, Design Lead y Tech Writer según los flags.
-- Consolida la definición única. Es su dueño: comportamiento, flujo, diseño y textos.
+- Consolida el PRD. Es su dueño: comportamiento, flujo, diseño y textos.
 - **Destila al aprobar**: devuelve en su salida estructurada el archivo completo de cada
   capacidad que la tarea tocó (`docs/product/<capacidad>.md`) y los términos nuevos o
   corregidos del glosario del producto (`CONTEXT.md`). Los escribe el grafo; PM no tiene
@@ -368,7 +368,7 @@ Dispara cuando detecta un patrón negativo.
 **Reclasificación**: si la tarea no es lo que PjM clasificó, lo sugiere a PM, PM se lo pide
 a PjM, y PjM reclasifica.
 
-**Salida**: definición + flags → PM.
+**Salida**: PRD + flags → PM.
 
 ### Data Analyst
 
@@ -403,7 +403,7 @@ a PjM, y PjM reclasifica.
 
 Uno por tarea. **Nunca codea, siempre delega.**
 
-**Entradas**: definición única de PM, plan de tests funcionales de QA Lead, ADRs del proyecto.
+**Entradas**: PRD de PM, plan de tests funcionales de QA Lead, ADRs del proyecto.
 
 **Análisis**
 
@@ -494,7 +494,7 @@ terminar: faltar es fallo de rol y se reintenta con el error como entrada.
 
 **1ª pasada, antes de desarrollar.** Solo QA Funcional, coordinado por QA Lead.
 
-- Revisa claridad y completitud de la definición.
+- Revisa claridad y completitud del PRD.
 - Busca casos borde.
 - Escribe los casos de prueba funcionales.
 - QA Lead consolida y entrega a PjM → Tech Lead.
@@ -509,8 +509,8 @@ terminar: faltar es fallo de rol y se reintenta con el error como entrada.
   otros rechacen, y enruta cada hallazgo: comportamiento → PM, técnico → Developer de la
   subtarea.
 
-Consecuencia asumida: seguridad y performance se evalúan solo sobre código, nunca sobre la
-definición. Es un trade-off para arrancar. Si PjM ve muchos rechazos de seguridad tardíos,
+Consecuencia asumida: seguridad y performance se evalúan solo sobre código, nunca sobre el
+PRD. Es un trade-off para arrancar. Si PjM ve muchos rechazos de seguridad tardíos,
 es señal de adelantarlos.
 
 ### SRE / Ops
@@ -571,8 +571,8 @@ lo leen y escriben bien y es auditable a mano. Frontmatter YAML para lo que PjM 
 mecánicamente.
 
 **Contexto por rol.** Cada rol declara en su definición la **lista fija de secciones** del
-documento que lee. No recibe solo lo del rol previo: Tech Lead lee la definición
-consolidada de PM y los casos de QA, no el resumen del resumen.
+documento que lee. No recibe solo lo del rol previo: Tech Lead lee el PRD de PM y los
+casos de QA, no el resumen del resumen.
 
 La lista es declarativa y no la decide el modelo en tiempo de ejecución. Así PjM la puede
 registrar, y cuando un rol falla se puede ver si le faltaba información.
@@ -602,12 +602,12 @@ modelo con los subagentes, turnos) y fallos con su texto.
 | Sección | Contenido |
 |---|---|
 | Product Analyst | Competidores, definición de comportamiento, métricas y dashboard, flags propuestos. En bug: reproducción, comparación, dictamen |
-| PM | Validación, ajustes, decisiones ante consultas, definición consolidada |
+| PM | Validación, ajustes, decisiones ante consultas, PRD |
 | Data Analyst | Validación de métricas |
 | UX Designer / UX Lead | Flujos y validación |
 | UI Designer / Design Lead | Visual y validación |
 | Tech Writer | Textos |
-| QA Lead / Funcional (1ª) | Observaciones a la definición, casos borde, casos de prueba |
+| QA Lead / Funcional (1ª) | Observaciones al PRD, casos borde, casos de prueba |
 | Tech Lead | Solución técnica, resultado del pingpong, plan de tests ajustado, QAs convocados, subtareas |
 | Developer (una por subtarea) | Resumen, decisiones y supuestos, tests |
 | Tech Lead (revisión) | Hallazgos por subtarea y de la integración |
@@ -881,8 +881,8 @@ Se anotan para no reintroducirlas por error.
 | El par es un validador y su pensador | Quien devuelve y quien recibe; QA→PM y QA→Tech Lead cuentan para el límite (ADR-0009) |
 | El cierre requiere siempre las aprobaciones del tipo | Aprobado o descartado: el bug de "comportamiento esperado" cierra descartado, sin aprobación (ADR-0009) |
 | Un solo `domain/` hasta que duela, y un solo `CONTEXT.md` | Tres módulos bajo `agentic/core/` (`process`, `knowledge`, `measurement`), cada uno hexagonal y con su glosario; `process` no importa a los otros (ADR-0010) |
-| Product Analyst escribe la definición en un tiro y PM la valida en otro | Product Analyst entrevista a PM con `grilling`; lo que PM no puede decidir va al humano como pregunta (ADR-0014) |
-| La definición arranca por el comportamiento | Arranca por el job to be done: primera ronda de la entrevista, primera sección de la definición, primera sección de cada capacidad en `docs/product/`; PM devuelve lo que no sirve al job |
+| Product Analyst escribe el PRD en un tiro y PM lo valida en otro | Product Analyst entrevista a PM con `grilling`; lo que PM no puede decidir va al humano como pregunta (ADR-0014) |
+| El PRD arranca por el comportamiento | Arranca por el job to be done: primera ronda de la entrevista, primera sección del PRD, primera sección de cada capacidad en `docs/product/`; PM devuelve lo que no sirve al job |
 | El pingpong del Tech Lead no tiene forma fija | Es una entrevista del efímero a Tech Lead, con tope de cuatro rondas, y de ahí salen los ADRs y las subtareas (ADR-0014) |
 | Los roles no tienen skills; solo prompt y esquema | Skills de Matt Pocock fijadas como submódulo; solo las invocables por un agente, dos obligatorias: `tdd` y `code-review` (ADR-0013) |
 | La corrida termina cuando el último rol entrega | Termina en un pull request del producto, lista para revisión; el issue recibe el link (ADR-0011) |
@@ -905,7 +905,7 @@ Se anotan para no reintroducirlas por error.
 | El camino como dato se llama `Route` | Se llama `Workflow`, el término que usan Microsoft Agent Framework, OpenAI, Google ADK, Temporal y CrewAI Flows; `Graph` chocaría con el `StateGraph` de LangGraph, que es el adaptador (ADR-0009, adenda) |
 | El paso de PM al conocimiento se llama `distill()` en el código | `consolidate()`: en inglés `distill` se lee como knowledge distillation, comprimir un modelo grande en uno chico. El castellano "Destilado" se queda (ADR-0018) |
 | La copia del sistema que ejecuta una corrida se llama "runtime" | `stage0`, del bootstrapping de compiladores, con `stage1` y `stage2` gratis; "runtime" ya es el harness de cada rol (ADR-0018) |
-| Todo lo que ni el pedido ni el conocimiento resuelven va al humano, y una pregunta registrada no se retira | Va solo lo que deja la definición indecidible; el resto es un supuesto en la respuesta. El dueño de la decisión retira por número lo que una ronda posterior resuelve (ADR-0014, adenda tercera) |
+| Todo lo que ni el pedido ni el conocimiento resuelven va al humano, y una pregunta registrada no se retira | Va solo lo que deja el PRD indecidible; el resto es un supuesto en la respuesta. El dueño de la decisión retira por número lo que una ronda posterior resuelve (ADR-0014, adenda tercera) |
 | Este repo lee el default de estándares del sistema porque describe bien lo que el repo ya hace (ADR-0017) | ADR-0012's addendum replaces the ADR-0017 bullet that had this repo reading the system default because it described what the repo already does; from here the default is practices and this repo materialises them in its own `CODING_STANDARDS.md` |
 
 ---
