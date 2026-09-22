@@ -8,7 +8,7 @@ from agentic.core.process.application.define import define
 from agentic.core.process.application.diagnose import diagnose
 from agentic.core.process.application.discard import discard, discard_reason
 from agentic.core.process.application.ports import AttemptFailed
-from agentic.core.process.application.validate_definition import validate_definition
+from agentic.core.process.application.validate_prd import validate_prd
 from agentic.core.process.domain.roles import PAIR_PM_PA
 from agentic.core.process.domain.task import apply
 from agentic.shared.configuration import Configuration
@@ -140,7 +140,7 @@ async def test_validate_approves_a_bug_and_consolidates_what_pm_wrote(cfg):
     written = [{"capability": "reports", "content": REPORTS}]
     ports = memory_ports(ScriptedRunner(pm_bug=[ruled("approved", "bug", definitions=written)]))
     state = {**BUG, "sections": {"Product Analyst": "### Ruling\n\nundefined"}}
-    patch = await validate_definition(state, cfg, ports)
+    patch = await validate_prd(state, cfg, ports)
     assert patch["status"] == "definition_ready"
     assert "flags" not in patch
     assert ports.knowledge.definitions == {"reports": REPORTS}
@@ -153,7 +153,7 @@ async def test_validate_approves_a_bug_and_consolidates_what_pm_wrote(cfg):
 
 async def test_validate_approves_a_bug_against_a_written_definition_without_writing(cfg):
     ports = memory_ports(ScriptedRunner(pm_bug=[ruled("approved", "bug")]))
-    patch = await validate_definition(BUG, cfg, ports)
+    patch = await validate_prd(BUG, cfg, ports)
     assert patch["status"] == "definition_ready"
     assert ports.knowledge.definitions == {} and ports.workspace.commits == []
 
@@ -164,7 +164,7 @@ async def test_validate_discards_a_bug_whose_behaviour_is_expected(cfg):
     written = [{"capability": "reports", "content": REPORTS}]
     ruling = ruled("approved", "expected_behaviour", "weekly by definition", definitions=written)
     ports = memory_ports(ScriptedRunner(pm_bug=[ruling]))
-    patch = await validate_definition(BUG, cfg, ports)
+    patch = await validate_prd(BUG, cfg, ports)
     assert patch["status"] == "discarded"
     assert patch["discard_reason"] == "weekly by definition"
     assert ports.knowledge.definitions == {} and ports.workspace.commits == []
@@ -173,7 +173,7 @@ async def test_validate_discards_a_bug_whose_behaviour_is_expected(cfg):
 
 async def test_validate_returns_a_diagnosis_against_the_same_pair(cfg):
     ports = memory_ports(ScriptedRunner(pm_bug=[ruled("returned", reason="not reproduced")]))
-    patch = await validate_definition(BUG, cfg, ports)
+    patch = await validate_prd(BUG, cfg, ports)
     assert patch["status"] == "returned"
     assert patch["changes_requested"] == {PAIR_PM_PA.key: 1}
     assert patch["change_history"] == [
@@ -212,7 +212,7 @@ async def test_validate_approval_consolidates_into_the_knowledge(cfg):
         )
     )
     state = {**TASK, "type": "feature", "sections": {"Product Analyst": "v1"}}
-    patch = await validate_definition(state, cfg, ports)
+    patch = await validate_prd(state, cfg, ports)
     assert patch["status"] == "definition_ready"
     assert patch["flags"] == {"touches_ui": True, "touches_copy": False}  # PM replaces PA's set
     assert ports.knowledge.definitions == {"reports": REPORTS}
@@ -226,7 +226,7 @@ async def test_validate_approval_consolidates_into_the_knowledge(cfg):
 async def test_validate_return_counts_against_the_pair_and_writes_nothing(cfg):
     ports = memory_ports(ScriptedRunner(pm=[verdict("returned", "gap")]))
     state = {**TASK, "type": "feature", "sections": {"Product Analyst": "v1"}}
-    patch = await validate_definition(state, cfg, ports)
+    patch = await validate_prd(state, cfg, ports)
     assert patch["status"] == "returned"
     assert patch["changes_requested"] == {PAIR_PM_PA.key: 1}
     assert patch["change_history"] == [
@@ -236,7 +236,7 @@ async def test_validate_return_counts_against_the_pair_and_writes_nothing(cfg):
 
     again = apply(state, patch)
     ports = memory_ports(ScriptedRunner(pm=[verdict("returned", "still")]))
-    patch = await validate_definition(again, cfg, ports)
+    patch = await validate_prd(again, cfg, ports)
     assert patch["changes_requested"] == {PAIR_PM_PA.key: 2}
     assert "You have 1 left" in ports.runner.calls[0]["system_prompt"]
 
@@ -244,7 +244,7 @@ async def test_validate_return_counts_against_the_pair_and_writes_nothing(cfg):
 async def test_validate_escalates_at_the_limit(cfg):
     ports = memory_ports(ScriptedRunner(pm=[verdict("returned", "still no metrics")]))
     state = {**TASK, "type": "feature", "changes_requested": {PAIR_PM_PA.key: 2}}
-    patch = await validate_definition(state, cfg, ports)
+    patch = await validate_prd(state, cfg, ports)
     assert patch["status"] == "waiting_on_human"
     assert patch["escalated"] == f"{PAIR_PM_PA.key} hit 2 returns: still no metrics"
     assert patch["escalation_class"] == "returns"
@@ -256,7 +256,7 @@ async def test_approving_a_feature_without_definitions_is_a_role_failure(cfg):
     empty = verdict("approved", definitions=[])
     ports = memory_ports(ScriptedRunner(pm=[empty, empty]))
     state = {**TASK, "type": "feature"}
-    patch = await validate_definition(state, cfg, ports)
+    patch = await validate_prd(state, cfg, ports)
     assert patch["status"] == "waiting_on_human"
     assert "without `definitions`" in patch["escalated"]
     assert "without `definitions`" in ports.runner.calls[1]["prompt"]

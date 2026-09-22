@@ -21,10 +21,10 @@ from agentic.shared.configuration import RoleKind
 
 from .document import ORIGINAL  # pseudo-section every role may declare: the task as it entered
 from .schemas import (
+    PRD,
     Answers,
     Classification,
     Consultation,
-    Definition,
     Delivery,
     Diagnosis,
     InterviewTurn,
@@ -167,7 +167,7 @@ PM_INTERVIEWEE = Role(
 )
 
 # Section names of the interviews (ADR-0014); the `Interview` values below own them.
-DEFINITION_INTERVIEW = "Interview: Product Analyst→PM"
+PRD_INTERVIEW = "Interview: Product Analyst→PM"
 SOLUTION_INTERVIEW = "Interview: Tech Lead efímero→Tech Lead"
 # The findings table (issue #42): every review's findings in one section, written by
 # the system at the fan-in, where the branches' work is merged. Not a role's delivery,
@@ -178,8 +178,8 @@ PRODUCT_ANALYST = Role(
     name="Product Analyst",
     slug="product_analyst",
     kind="actor",
-    schema=Definition,
-    reads=(ORIGINAL, "PjM", DEFINITION_INTERVIEW, "Product Analyst", "PM"),
+    schema=PRD,
+    reads=(ORIGINAL, "PjM", PRD_INTERVIEW, "Product Analyst", "PM"),
     reads_knowledge=True,
 )
 
@@ -188,7 +188,7 @@ PM = Role(
     slug="pm",
     kind="verifier",
     schema=Verdict,
-    reads=(ORIGINAL, DEFINITION_INTERVIEW, "Product Analyst", "PM"),
+    reads=(ORIGINAL, PRD_INTERVIEW, "Product Analyst", "PM"),
     reads_knowledge=True,
 )
 
@@ -256,7 +256,7 @@ PM_CONSULTANT = Role(
     slug="pm_consultant",
     kind="verifier",
     schema=Consultation,
-    reads=(ORIGINAL, DEFINITION_INTERVIEW, "Product Analyst", "PM"),
+    reads=(ORIGINAL, PRD_INTERVIEW, "Product Analyst", "PM"),
     reads_knowledge=True,
 )
 

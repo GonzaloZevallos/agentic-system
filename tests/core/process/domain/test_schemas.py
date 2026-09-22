@@ -2,9 +2,9 @@ import pytest
 
 from agentic.core.process.domain import schemas
 from agentic.core.process.domain.schemas import (
+    PRD,
     Answers,
     Classification,
-    Definition,
     TechAnswers,
     TechPlan,
     Verdict,
@@ -14,7 +14,7 @@ VOCAB = {"touches_ui": "UI", "touches_copy": "copy"}
 
 
 def test_json_schema_closes_flags_over_vocabulary():
-    out = schemas.json_schema(Definition, VOCAB)
+    out = schemas.json_schema(PRD, VOCAB)
     flags = out["properties"]["flags"]
     assert set(flags["properties"]) == set(VOCAB)
     assert flags["required"] == list(VOCAB)
@@ -23,9 +23,38 @@ def test_json_schema_closes_flags_over_vocabulary():
     assert "flags" not in schemas.json_schema(Classification, VOCAB)["properties"]
 
 
+def test_prd_json_schema_is_pinned():
+    # `json_schema` rewrites only `flags` and the line-list fields (schemas.py), so
+    # Pydantic's own `title` -- the class name -- passes through unchanged into the
+    # `output_format` the CLI enforces. `prompts.fingerprint` cannot see it, so a
+    # rename of the class is the one thing that must be pinned by a test instead
+    # (ADR-0026): this is that pin, title included.
+    assert schemas.json_schema(PRD, VOCAB) == {
+        "properties": {
+            "markdown": {
+                "description": "The role's Markdown section, free text, `###` headings",
+                "title": "Markdown",
+                "type": "string",
+            },
+            "flags": {
+                "type": "object",
+                "properties": {
+                    "touches_ui": {"type": "boolean", "description": "UI"},
+                    "touches_copy": {"type": "boolean", "description": "copy"},
+                },
+                "required": ["touches_ui", "touches_copy"],
+                "additionalProperties": False,
+            },
+        },
+        "required": ["markdown", "flags"],
+        "title": "PRD",
+        "type": "object",
+    }
+
+
 def test_validate_accepts_exact_vocabulary():
     data = schemas.validate(
-        Definition, {"markdown": "x", "flags": {"touches_ui": True, "touches_copy": False}}, VOCAB
+        PRD, {"markdown": "x", "flags": {"touches_ui": True, "touches_copy": False}}, VOCAB
     )
     assert data["flags"] == {"touches_ui": True, "touches_copy": False}
 
@@ -34,7 +63,7 @@ def test_validate_rejects_invented_or_missing_flags():
     match = "unknown: \\['ui_change'\\], missing: \\['touches_copy'\\]"
     with pytest.raises(ValueError, match=match):
         schemas.validate(
-            Definition, {"markdown": "x", "flags": {"touches_ui": True, "ui_change": True}}, VOCAB
+            PRD, {"markdown": "x", "flags": {"touches_ui": True, "ui_change": True}}, VOCAB
         )
 
 

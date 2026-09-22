@@ -22,7 +22,7 @@ _Avoid_: Lead, orquestador
 _Campo_: de la organización de software humana; el patrón agéntico es supervisor (LangGraph) u orchestrator (Microsoft Agent Framework)
 
 **PM** (Product Manager):
-Dueño de la definición única y del conocimiento de producto, que destila al aprobar.
+Dueño del PRD y del conocimiento de producto, que destila al aprobar.
 _Campo_: de la organización de software humana
 
 **Pensador**:
@@ -71,20 +71,20 @@ _Avoid_: flujo, pipeline
 _Campo_: workflow — estándar (Microsoft Agent Framework, OpenAI, Google ADK, Temporal, CrewAI Flows); graph, con node y edge, en LangGraph
 
 **Etapa de definición**:
-Tramo del camino de feature entre Product Analyst y la definición única. Estrictamente secuencial.
+Tramo del camino de feature entre Product Analyst y el PRD. Estrictamente secuencial.
 _Campo_: sin término de arte
 
-**Definición única**:
+**PRD**:
 El texto de PM que gobierna el resto de la tarea: comportamiento, flujo, diseño y textos.
-_Avoid_: spec, requerimientos
-_Campo_: PRD — de producto humano. `spec` en el mundo agéntico viene pegado a un flujo de archivos (GitHub Spec Kit: `/specify` → `/plan` → `/tasks`) que no es el nuestro
+_Avoid_: spec, requerimientos, definición única (el nombre anterior del mismo término)
+_Campo_: de producto humano. `spec` en el mundo agéntico viene pegado a un flujo de archivos (GitHub Spec Kit: `/specify` → `/plan` → `/tasks`) que no es el nuestro
 
 **Flag**:
 Marca de alcance sobre una tarea, como "toca UI" o "toca textos", tomada del vocabulario de flags del producto. Los propone Product Analyst y los valida PM; el set validado reemplaza al propuesto.
 _Campo_: sin término de arte
 
 **Dictamen**:
-Lo que Product Analyst dice de un bug después de reproducirlo y compararlo con la definición vigente de la capacidad: bug, comportamiento esperado o sin definición. PM lo valida, y cuando no había definición decide y escribe la que faltaba. Es al camino de bug lo que la definición única es al de feature: lo que gobierna el resto de la tarea. En el código se llama `Diagnosis`, y la palabra de PM sobre él, `Ruling`.
+Lo que Product Analyst dice de un bug después de reproducirlo y compararlo con la definición vigente de la capacidad: bug, comportamiento esperado o sin definición. PM lo valida, y cuando no había definición decide y escribe la que faltaba. Es al camino de bug lo que el PRD es al de feature: lo que gobierna el resto de la tarea. En el código se llama `Diagnosis`, y la palabra de PM sobre él, `Ruling`.
 _Avoid_: diagnóstico (el nombre en el código, no el concepto), veredicto (eso es lo de PM sobre el dictamen), triage
 _Campo_: triage — de los trackers (Bugzilla, Mozilla): confirmar que se reproduce y asignar prioridad y dueño. Acá el dictamen es sólo la comparación contra la definición; prioridad y dueño los fija el camino
 
@@ -308,7 +308,7 @@ Los issues con la etiqueta `needs-human`.
 _Campo_: sin término de arte
 
 **Pull request de tarea**:
-El pull request del producto que abre el sistema desde la rama de tarea, con la definición única y el plan de Tech Lead en el cuerpo. Es la entrega al humano; el issue recibe el link al pull request y al documento de tarea. Nada más se escribe en el issue: los roles se hablan por el documento.
+El pull request del producto que abre el sistema desde la rama de tarea, con el PRD y el plan de Tech Lead en el cuerpo. Es la entrega al humano; el issue recibe el link al pull request y al documento de tarea. Nada más se escribe en el issue: los roles se hablan por el documento.
 _Campo_: pull request — GitHub; merge request en GitLab
 
 **Override de prompt**:
