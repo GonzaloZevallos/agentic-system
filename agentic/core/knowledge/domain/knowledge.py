@@ -37,6 +37,33 @@ STANDARDS = "CODING_STANDARDS.md"
 DEFAULT_STANDARDS = Path(__file__).resolve().parent / STANDARDS
 STANDARDS_HEADING = "## Engineering standards"
 
+# The Brief (ADR-0025): what the human writes once per product, before the first task
+# -- the problem, the jobs and the constraints. A root-level artefact, next to
+# `CONTEXT.md` and `CODING_STANDARDS.md`, never under `PRODUCT_SUBDIR`: there it would
+# be read as a capability, `write_definitions` would replace it whole on the first PM
+# approval naming the slug `brief`, and its `## Jobs` heading would satisfy
+# `JOBS_HEADING` in `check_definitions`. The system ships no default text a run falls
+# back to -- an absent Brief is a fact `cli.py` prints, never this module's problem.
+BRIEF = "BRIEF.md"
+# Its own tuple, deliberately not built from `JOBS_HEADING` below: the `## Jobs`
+# coincidence is intentional (job stories are the shared format) but the two contracts
+# must stay uncoupled, so a future PE moving one never silently moves the other.
+BRIEF_HEADINGS = (
+    "## Problem and who has it",
+    "## Jobs",
+    "## Constraints",
+    "## Out of scope",
+)
+# One page. A constant, not a guess: `preflight` spends nothing before this is checked,
+# and every `reads_knowledge` role pays this cost on every call (ADR-0025).
+BRIEF_MAX_WORDS = 500
+# What a human copies into `BRIEF.md` and commits: a shipped, valid example, the same
+# `TEMPLATE`/`not_declared` pattern `stack.py` already uses (ADR-0016, second addendum).
+DEFAULT_BRIEF_TEMPLATE = Path(__file__).resolve().parent / "brief.md"
+
+_BRIEF_HEADING_LINE = re.compile(r"^##[ \t]+(?P<title>.*?)[ \t]*$", re.M)
+_FENCED_BLOCK = re.compile(r"^```.*?^```[ \t]*$", re.M | re.S)
+
 _SLUG = SLUG  # one slug rule for the whole system: capabilities, subtasks
 _H2 = re.compile(r"^## ", re.M)
 _TERM = re.compile(r"^\*\*(.+?)\*\*[^\n]*:$", re.M)
@@ -119,17 +146,24 @@ def check_slug(capability: str) -> None:
         )
 
 
-def assemble(glossaries: dict[str, str], capabilities: dict[str, str], adrs: dict[str, str]) -> str:
-    """Everything a product role reads before the task document: the glossaries in the
-    order given, then each capability file by name, then each ADR by name, both sorted.
-    The ADRs go last and whole, superseded ones included: their status is in the file,
-    and a replaced decision still explains the shape the code has. Empty if nothing
-    exists.
+def assemble(
+    glossaries: dict[str, str],
+    capabilities: dict[str, str],
+    adrs: dict[str, str],
+    brief: str | None = None,
+) -> str:
+    """Everything a product role reads before the task document: the Brief first when
+    one exists (ADR-0025), then the glossaries in the order given, then each capability
+    file by name, then each ADR by name, both sorted. The ADRs go last and whole,
+    superseded ones included: their status is in the file, and a replaced decision
+    still explains the shape the code has. Empty if nothing exists -- the Brief is one
+    more part, never a reason for `## Product knowledge` to appear alone.
 
     `glossaries` is path -> text: one entry for a product with a single `CONTEXT.md`,
     and for a mapped product the map first (its relationships say which context may
     know which, and live nowhere else) and then every `CONTEXT.md` it links."""
-    parts = [_fenced(path, text) for path, text in glossaries.items()]
+    parts = [_fenced(BRIEF, brief)] if brief else []
+    parts += [_fenced(path, text) for path, text in glossaries.items()]
     parts += _fenced_all(PRODUCT_SUBDIR, capabilities) + _fenced_all(ADR_SUBDIR, adrs)
     if not parts:
         return ""
@@ -258,3 +292,63 @@ def check_definitions(definitions: list[dict[str, Any]]) -> None:
                 f"definition of {item['capability']!r} has no `{JOBS_HEADING}` section: "
                 "open the file with the job stories the capability serves"
             )
+
+
+def _brief_sections(text: str) -> dict[str, str]:
+    """Top-level `## ` headings, never `###` (the regex only matches right after a
+    heading's own `##` at the start of a line, with a `#` third character failing the
+    following `[ \\t]+`). Keyed by title with trailing whitespace and at most one
+    trailing `:` stripped, case-folded; valued by everything up to the next `##` or the
+    end of the file."""
+    matches = list(_BRIEF_HEADING_LINE.finditer(text))
+    found: dict[str, str] = {}
+    for i, m in enumerate(matches):
+        title = m.group("title").rstrip()
+        if title.endswith(":"):
+            title = title[:-1].rstrip()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        found[title.casefold()] = text[m.end() : end]
+    return found
+
+
+def _brief_heading_key(heading: str) -> str:
+    title = heading.removeprefix("## ").rstrip()
+    if title.endswith(":"):
+        title = title[:-1].rstrip()
+    return title.casefold()
+
+
+def _has_content(section: str) -> bool:
+    """At least one non-whitespace line: line-based, not substring containment, which
+    would pass a heading followed only by blank or whitespace-only lines."""
+    return any(line.strip() for line in section.split("\n"))
+
+
+def _brief_word_count(text: str) -> int:
+    """`len(text.split())` over the text with fenced code blocks stripped first, so a
+    pasted snippet does not count against the cap it is quoting."""
+    return len(_FENCED_BLOCK.sub("", text).split())
+
+
+def brief_refusal(text: str) -> str | None:
+    """Why `BRIEF.md` cannot be used, or None when its shape is valid (ADR-0025): the
+    four headings present as top-level `##` lines, each followed by at least one
+    non-whitespace line, and the whole file under `BRIEF_MAX_WORDS`. A pure function
+    over text -- no filesystem, no port -- so `cli.py` is free to join it with whatever
+    read `ProductKnowledge.brief` returns."""
+    sections = _brief_sections(text)
+    missing = [
+        heading
+        for heading in BRIEF_HEADINGS
+        if not _has_content(sections.get(_brief_heading_key(heading), ""))
+    ]
+    template = DEFAULT_BRIEF_TEMPLATE.read_text(encoding="utf-8")
+    if missing:
+        return (
+            f"{BRIEF} is missing or empty: {', '.join(missing)}. All four sections are "
+            f"mandatory, each with at least one line of content:\n\n{template}"
+        )
+    words = _brief_word_count(text)
+    if words > BRIEF_MAX_WORDS:
+        return f"{BRIEF}: {words} words (cap {BRIEF_MAX_WORDS}). Trim it to one page:\n\n{template}"
+    return None
