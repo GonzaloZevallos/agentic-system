@@ -53,7 +53,11 @@ markers = ["llm: calls a real model through the Claude Agent SDK"]
 # The command (`checks.types` in .agentic/stack.yaml, the CI step) carries no paths:
 # the checked scope lives here, widened one unit at a time (ADR-0021).
 python_version = "3.13"
-files = ["agentic/shared", "agentic/core/measurement/domain"]
+files = [
+    "agentic/shared",
+    "agentic/core/measurement/domain",
+    "agentic/core/knowledge/domain",
+]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
 check_untyped_defs = true
