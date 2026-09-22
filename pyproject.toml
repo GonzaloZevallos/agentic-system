@@ -59,6 +59,7 @@ files = [
     "agentic/core/knowledge/domain",
     "agentic/core/process/domain",
     "agentic/core/knowledge/adapters",
+    "agentic/core/measurement/adapters",
 ]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true

@@ -30,6 +30,8 @@ from typing import (
     get_type_hints,
 )
 
+from .presubmit import CheckResult
+
 Status = Literal[
     "open",
     "defined",
@@ -493,7 +495,7 @@ class TaskState(TaskInput, total=False):
     # invocation. Set by `develop` on its own patch, read once by the adapter
     # (`agentic.presubmit.checks`, `.duration`). Measurement only, like `subtask_id`:
     # never rendered into the document.
-    presubmit_checks: list[list[dict[str, str | bool | float]]]
+    presubmit_checks: list[list[CheckResult]]
     # Counts of the interview this patch ran, if any (`InterviewStats`): measurement
     # only, like `subtask_id` above — never rendered into the document.
     interview_stats: InterviewStats
