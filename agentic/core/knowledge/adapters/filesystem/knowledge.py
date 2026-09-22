@@ -55,7 +55,14 @@ class FilesystemKnowledge:
             self._glossaries(root),
             _read_dir(root / knowledge.PRODUCT_SUBDIR),
             _read_dir(root / knowledge.ADR_SUBDIR),
+            brief=self.brief(root),
         )
+
+    def brief(self, root: Path | None = None) -> str | None:
+        """The product's `BRIEF.md`, or None when it has not written one yet
+        (ADR-0025). No system default: unlike `standards`, absent is a fact `cli.py`
+        prints, never a fallback text a run reads instead."""
+        return _read((root or self.product_dir) / knowledge.BRIEF)
 
     def standards(self, root: Path | None = None) -> str:
         """The product's `CODING_STANDARDS.md`, or the system's default (ADR-0012)."""

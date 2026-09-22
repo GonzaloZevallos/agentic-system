@@ -107,9 +107,15 @@ class MemoryKnowledge:
     """Keeps what a consolidation would write. The checks are the real ones: the
     process tests care that a bad approval fails, not how the file is named."""
 
-    def __init__(self, text: str = "", standards: str = "## Engineering standards\n\nHex."):
+    def __init__(
+        self,
+        text: str = "",
+        standards: str = "## Engineering standards\n\nHex.",
+        brief: str | None = None,
+    ):
         self.text = text
         self.standards_text = standards
+        self.brief_text = brief
         self.definitions: dict[str, str] = {}
         self.terms: dict[str, dict[str, str]] = {}
 
@@ -119,6 +125,9 @@ class MemoryKnowledge:
 
     def standards(self, root: Path | None = None) -> str:
         return self.standards_text
+
+    def brief(self, root: Path | None = None) -> str | None:
+        return self.brief_text
 
     def approval_check(self, task_type: str) -> Callable[[dict], None]:
         return knowledge.approval_check(task_type)

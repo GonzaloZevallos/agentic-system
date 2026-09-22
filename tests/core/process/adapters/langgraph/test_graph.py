@@ -137,6 +137,9 @@ class _Rooted:
     def standards(self, root=None):
         return self.inner.standards(self.root)
 
+    def brief(self, root=None):
+        return self.inner.brief(self.root)
+
     def approval_check(self, task_type):
         return self.inner.approval_check(task_type)
 
