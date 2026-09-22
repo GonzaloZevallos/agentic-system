@@ -15,16 +15,31 @@ already lives inside the delivering run's own `cost_usd` (`run_role.py`), so a
 from __future__ import annotations
 
 import hashlib
+import re
 from datetime import datetime
+from typing import Literal
 
 from agentic.core.process.domain import rules
-from agentic.core.process.domain.task import Failure, InterviewStats, RoleRun, TaskState
+from agentic.core.process.domain.task import (
+    Failure,
+    InterviewStats,
+    PullRequest,
+    PullRequestCommit,
+    RoleRun,
+    TaskState,
+)
 
 # Below this, a residual is floating-point noise (an interview's runs summed in a
 # different order), not money nothing accounted for: `has_residual_sample`'s own
 # emission gate (ADR-0008, 2026-09-18 second addendum). Not a rounding tolerance — that
 # job belongs to `RESIDUAL_FLOOR_USD` alone.
 RESIDUAL_EPSILON_USD = 1e-9
+# A pull request's merge commit, matched by headline since `gh` exposes no parents to
+# exclude it any other way (`GhTracker.pull_request`'s own docstring). Covers the three
+# headlines git writes for the merges a branch's own history can carry: a local
+# `git merge`, a fetch of a remote-tracking branch merged the same way, and GitHub's own
+# "Merge pull request #N from ..." for a dependency subtask merged through a PR.
+MERGE_COMMIT_HEADLINE = re.compile(r"^Merge (branch|remote-tracking branch|pull request)")
 # The rounding tolerance `rules.spent_by_phase` and the rework acceptance test compare
 # with: it stopped gating emission (ADR-0008, 2026-09-18 second addendum) because it is
 # a per-patch number and the promise it backs — the task's `rework_usd` equals the sum
@@ -223,6 +238,61 @@ def invocation_returns_by_category(patch: TaskState) -> dict[str, int]:
     for entry in patch.get("change_history", []):
         counts[entry["category"]] = counts.get(entry["category"], 0) + 1
     return counts
+
+
+DeliveryOutcome = Literal["merged", "merged_with_changes", "closed"]
+
+
+def _is_human_commit(commit: PullRequestCommit, system_author_email: str) -> bool:
+    """Whether this is the human's own work, not the system's, for
+    `human_commits`/`human_lines_changed`/`delivery_outcome`: the system's git author
+    email (`Configuration.GIT_AUTHOR_EMAIL`) is never among the commit's authors, and
+    it is not a merge commit — `gh` exposes no parents to exclude those any other way,
+    so the headline is what `MERGE_COMMIT_HEADLINE` matches against instead. A GitHub
+    login is never consulted: a human's own account would satisfy it just the same as
+    the system's commits, which is exactly what this discriminates against."""
+    if system_author_email in commit.author_emails:
+        return False
+    return not MERGE_COMMIT_HEADLINE.match(commit.message_headline)
+
+
+def delivery_outcome(pull_request: PullRequest, system_author_email: str) -> DeliveryOutcome:
+    """The human's verdict on the delivery: `merged_with_changes` when the pull request
+    merged with at least one human commit on it, `merged` when it merged with none, and
+    `closed` when it never merged at all."""
+    if pull_request.merged_at is None:
+        return "closed"
+    if human_commits(pull_request, system_author_email) > 0:
+        return "merged_with_changes"
+    return "merged"
+
+
+def human_commits(pull_request: PullRequest, system_author_email: str) -> int:
+    """How many of the pull request's commits are the human's own: not the system's git
+    author email, and not a merge commit."""
+    return sum(
+        1 for commit in pull_request.commits if _is_human_commit(commit, system_author_email)
+    )
+
+
+def human_lines_changed(pull_request: PullRequest, system_author_email: str) -> int:
+    """`additions + deletions` of exactly the commits `human_commits` counts: `0` for a
+    pull request the human merged as the system delivered it."""
+    return sum(
+        commit.additions + commit.deletions
+        for commit in pull_request.commits
+        if _is_human_commit(commit, system_author_email)
+    )
+
+
+def time_to_merge_seconds(pull_request: PullRequest) -> float | None:
+    """Seconds from the pull request's own `created_at` to its `merged_at`; `None` for
+    one that never merged, since there is nothing to measure."""
+    if pull_request.merged_at is None:
+        return None
+    created = datetime.fromisoformat(pull_request.created_at)
+    merged = datetime.fromisoformat(pull_request.merged_at)
+    return (merged - created).total_seconds()
 
 
 def prompts_fingerprint(state: TaskState) -> str:

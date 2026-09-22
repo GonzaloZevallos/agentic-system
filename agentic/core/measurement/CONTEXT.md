@@ -31,3 +31,25 @@ escalada, o un nodo que cerró sin patch. Una muestra más de `agentic.role.cost
 para una patch vacía, para que la suma de las muestras de una patch sea siempre su costo.
 _Campo_: sin término de arte — la industria mide el gasto por llamada, no el que una corrida
 paga sin dejar un registro de la corrida que lo pagó
+
+**Resultado de entrega**:
+El veredicto del humano sobre el pull request de una tarea, leído por `agentic close` y no
+por ningún revisor del sistema: si fusionó, si lo corrigió antes de fusionar, o si lo cerró
+sin fusionar. Es la métrica de calidad que falta después de `ready_for_review`, donde hoy se
+corta toda medición.
+_Campo_: outcome — el vecino más cercano es change failure rate (DORA), que mide si un deploy
+rompió algo, no si el humano corrigió el trabajo antes de aceptarlo
+
+**Fusionado** (`merged`):
+El pull request se fusionó sin ningún commit humano posterior al último commit del sistema:
+el humano aceptó la entrega tal cual.
+_Campo_: merged — GitHub, para el estado de un pull request fusionado
+
+**Fusionado con cambios** (`merged_with_changes`):
+El pull request se fusionó, pero con al menos un commit humano, que no sea de fusión,
+posterior al último commit del sistema: el humano corrigió antes de aceptar.
+_Campo_: sin término de arte — GitHub no distingue este caso de una fusión limpia
+
+**Cerrado** (`closed`):
+El pull request se cerró sin fusionarse: el humano descartó la entrega.
+_Campo_: closed — GitHub, para un pull request que se cierra sin fusionar
