@@ -7,6 +7,7 @@ from pathlib import Path
 
 import yaml
 
+from ....process.domain.suppressions import Forbidden
 from ...domain import stack
 
 
@@ -25,6 +26,10 @@ class GitStack:
     def witness(self, revision: str) -> str | None:
         data, source = self._declaration(revision)
         return stack.witness(data, source)
+
+    def forbidden(self, revision: str) -> tuple[Forbidden, ...]:
+        data, source = self._declaration(revision)
+        return stack.forbidden(data, source)
 
     def product(self, revision: str = "HEAD") -> str:
         """The product's name, HEAD by default and not the task's base: the name says who

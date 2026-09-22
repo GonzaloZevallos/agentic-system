@@ -45,6 +45,7 @@ from .core.process.application.escalate import NEEDS_HUMAN
 from .core.process.application.ports import LockHeld, LockRecord, Ports, RunLock
 from .core.process.application.preflight import (
     declared_stack_of,
+    no_forbidden,
     no_setup,
     preflight,
     product_name,
@@ -183,6 +184,14 @@ def main() -> None:
             for warn in (unfixed_stage0, no_setup):
                 if (warning := warn(ports)) is not None:
                     print(f"agentic: {warning}", file=sys.stderr)
+            if args.command == "run":
+                # Against HEAD: the revision a fresh task's stack is read at
+                # (`declared_stack`'s own default). `resume` asks the same fact below,
+                # against the base `declared_stack_of` actually validated, the revision
+                # that run is governed by -- never both, and never joined into the loop
+                # above, whose two warnings share one revision this one does not.
+                if (warning := no_forbidden(ports, "HEAD")) is not None:
+                    print(f"agentic: {warning}", file=sys.stderr)
             if not getattr(args, "detach", False) and not sys.stdin.isatty():
                 print(
                     "agentic: no TTY and no --detach: this process dies if its session "
@@ -191,7 +200,9 @@ def main() -> None:
                 )
         if args.command == "resume":
             task_id = ports.inbox.task_id(args.issue)
-            declared_stack_of(task_id, ports)
+            base = declared_stack_of(task_id, ports)
+            if (warning := no_forbidden(ports, base)) is not None:
+                print(f"agentic: {warning}", file=sys.stderr)
             log_file = _log_file_for(cfg, task_id)
             options = (args.from_document, args.dry_run, args.yes)
             work: Callable[[], Awaitable[None]] = partial(

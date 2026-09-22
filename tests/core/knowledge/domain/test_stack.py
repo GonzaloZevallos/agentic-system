@@ -2,6 +2,7 @@ import pytest
 import yaml
 
 from agentic.core.knowledge.domain import stack
+from agentic.core.process.domain.suppressions import Forbidden
 
 
 def test_checks_keep_each_command_by_name_in_order():
@@ -105,3 +106,69 @@ def test_a_product_that_declares_no_stack_is_told_what_to_write():
     assert isinstance(error, ValueError)
     # The template travels in the message: the human has nothing else to copy from.
     assert "checks:" in str(error) and str(stack.OVERLAY) in str(error)
+
+
+def test_a_product_that_declares_no_forbidden_rules_forbids_nothing():
+    # Absent, like `setup`: a product that genuinely forbids nothing is legitimate.
+    declared = {"checks": {"tests": "pytest"}}
+    assert stack.forbidden(declared, "x") == ()
+
+
+def test_forbidden_builds_a_record_per_rule_in_file_order():
+    declared = {
+        "checks": {"tests": "pytest"},
+        "forbidden": [
+            {"pattern": r"SUPPRESS\b", "extensions": [".src"], "reason": "first"},
+            {"pattern": r"SKIP\b", "extensions": [".src", ".alt"], "reason": "second"},
+        ],
+    }
+    rules = stack.forbidden(declared, "x")
+    assert [r.reason for r in rules] == ["first", "second"]
+    assert isinstance(rules[0], Forbidden)
+    assert rules[0].pattern.search("a SUPPRESS b")
+    assert rules[1].extensions == frozenset({".src", ".alt"})
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        {"checks": {"tests": "pytest"}, "forbidden": None},
+        {"checks": {"tests": "pytest"}, "forbidden": {}},
+        {"checks": {"tests": "pytest"}, "forbidden": []},
+        {
+            "checks": {"tests": "pytest"},
+            "forbidden": [{"pattern": "x", "extensions": [], "reason": "x"}],
+        },
+        {
+            "checks": {"tests": "pytest"},
+            "forbidden": [{"pattern": "x", "extensions": [""], "reason": "x"}],
+        },
+        {
+            "checks": {"tests": "pytest"},
+            "forbidden": [{"pattern": "x", "extensions": [".src"], "reason": ""}],
+        },
+        {
+            "checks": {"tests": "pytest"},
+            "forbidden": [{"pattern": "", "extensions": [".src"], "reason": "x"}],
+        },
+        {"checks": {"tests": "pytest"}, "forbidden": [{"extensions": [".src"], "reason": "x"}]},
+        {"checks": {"tests": "pytest"}, "forbidden": ["not a mapping"]},
+    ],
+)
+def test_a_broken_forbidden_declaration_raises_at_load(declared):
+    with pytest.raises(ValueError, match="stack.yaml: expected"):
+        stack.forbidden(declared, "stack.yaml")
+
+
+def test_a_pattern_that_does_not_compile_raises_at_load():
+    declared = {
+        "checks": {"tests": "pytest"},
+        "forbidden": [{"pattern": "(", "extensions": [".src"], "reason": "x"}],
+    }
+    with pytest.raises(ValueError, match="does not compile"):
+        stack.forbidden(declared, "stack.yaml")
+
+
+def test_the_template_declares_no_forbidden_rule_either():
+    data = yaml.safe_load(stack.TEMPLATE.read_text())
+    assert stack.forbidden(data, stack.TEMPLATE) == ()

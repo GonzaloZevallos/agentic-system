@@ -9,6 +9,7 @@ from agentic.core.knowledge.domain import knowledge
 from agentic.core.process.application.ports import Checkout, CommandResult, Ports, RawResult
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.roles import PROMPTS_DIR, Role
+from agentic.core.process.domain.suppressions import Forbidden
 from agentic.core.process.domain.task import DependencyState, MergeOutcome, TaskInput, TaskState
 
 VOCAB = {"touches_ui": "UI", "touches_copy": "copy"}
@@ -164,6 +165,7 @@ class MemoryStack:
         setup: dict[str, str] | None = None,
         product: str | None = "product",
         witness: str | None = None,
+        forbidden: list[Forbidden] | None = None,
     ):
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -172,6 +174,10 @@ class MemoryStack:
         # None is a product that declares no checkout witness (glossary: Testigo del
         # checkout), which is every product but this repo's own future tasks.
         self.declared_witness = witness
+        # Empty is a product that forbids no suppression (issue #38), which is every
+        # product but this repo's own future tasks -- the same legitimate absence
+        # `witness` has.
+        self.declared_forbidden = [] if forbidden is None else forbidden
         self.revisions: list[str] = []
 
     def checks(self, revision: str) -> dict[str, str]:
@@ -187,6 +193,10 @@ class MemoryStack:
         # list to prove exactly `checks` and `setup` are asked (issue #22, 7), and a
         # witness read must not silently grow that count out from under them.
         return self.declared_witness
+
+    def forbidden(self, revision: str) -> list[Forbidden]:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_forbidden
 
     def product(self, revision: str = "HEAD") -> str:
         if self.declared_product is None:

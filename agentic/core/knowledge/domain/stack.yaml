@@ -24,3 +24,14 @@ checks:
 # that measured the code.
 #
 # witness: uv run python -c "import pathlib; print(pathlib.Path('.').resolve())"
+#
+# `forbidden`: optional. Suppressions the product's Edit/Write hook denies a Developer
+# from adding: a pattern, the extensions it applies to, and the reason the denial
+# carries verbatim. One that was already in the file is not the task's. For a Python
+# product:
+#
+# forbidden:
+#   - pattern: '#\s*(type:\s*ignore|noqa)\b'
+#     extensions: [.py, .pyi]
+#     reason: >-
+#       narrow the type instead of silencing the checker; see CODING_STANDARDS.md
