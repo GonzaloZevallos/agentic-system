@@ -762,8 +762,25 @@ del día.
 **Nota aparte.** Cada tarea deja anotado qué le faltó. No puntúa, pero dice qué prompt tocar
 sin ensuciar el número.
 
-**Línea de base.** Cada vez que se cambia un prompt o un parámetro, se re-corre el set
-entero. Requiere versionado de prompts, que ya era condición para poder revertir.
+**Línea de base.** El set entero se re-corre solo en hitos: un rol nuevo, un cambio de
+estructura de revisión, un cambio de modelo por rol. Un cambio de prompt o de parámetro
+corre solo la tarea de humo que la declaración del set nombra (`agentic eval run`,
+sección 14) — el puntaje binario de cinco tareas no distingue un ajuste de prompt de
+una tarea más fácil, pero sí distingue un rol o una estructura, y correr las cinco a
+cada ajuste de prompt es lo que el costo hace inviable con suscripción. Una tarea de
+humo que escala a mitad de corrida es **sin puntaje**, no un peor puntaje: comparar
+contra la línea de base exige la misma profundidad de corrida en las dos, y una
+escalada corta menos que la corrida completa que dejó el puntaje anterior.
+
+**El loop humano.** `agentic eval run --budget <USD> --yes` corre el set (o, en una
+tarea de humo, la única del set que la declaración marca) desde cero, una tarea a la
+vez; el humano mergea cada pull request o no; `agentic close --issue N` por cada tarea
+del set registra el veredicto -- se niega con `"no metrics endpoint configured;
+nothing recorded"` si no hay endpoint de métricas (`cli.py`, `_close`), la línea que
+alguien lee seis semanas después cuando la línea de base son cinco nulos; `agentic eval
+score --out <archivo>.jsonl` escribe una línea por tarea,
+leída entera del documento de esa tarea, y se niega si el archivo de salida ya existe.
+Requiere versionado de prompts, que ya era condición para poder revertir.
 
 ---
 
@@ -841,12 +858,13 @@ existe justamente para pagar ese costo solo donde compre calidad.
 | 8 | ~~Criterio de clasificación de PjM y qué hace si duda~~ **resuelto** (#46): el criterio es qué notaría un usuario del producto, no quién escribió el issue ni cuán técnico suena; vive en el prompt de PjM. Si encaja en dos tipos o en ninguno, `confidence: low` escala | — |
 | 9 | ~~Cuántos Tech Leads existen~~ **resuelto**: un rol, una instancia por tarea; el modo proactivo es el mismo rol. El efímero no es un rol de la lista, es el entrevistador de Tech Lead (ADR-0014) | — |
 | 10 | ~~Versionado de prompts~~ **resuelto**: `.md` por rol con overlay en el producto, hash por tarea (ADR-0005). Falta el versionado de **parámetros** de `Configuration` | Mejora del proceso de PjM |
-| 11 | Las cinco tareas del set de evaluación, todavía sin escribir | Medir cualquier cosa |
+| 11 | Las cinco tareas del set de evaluación, todavía sin escribir. El humano las escribe como issues en gym-saas (GH-12 más cuatro de las que se postergaron armando el v0) y las declara en `.agentic/eval-set.yaml` del producto; el runner que las corre ya existe (`agentic eval run`/`agentic eval score`, sección 14) y no las necesita para funcionar, solo para tener algo que correr | Medir cualquier cosa |
 | 12 | ~~El v0 del gimnasio~~ **resuelto**: existe, escrito a mano y plano. Los estándares de ingeniería aplican al código nuevo y al que cada tarea toca (ADR-0012) | — |
 | 13 | ~~Campos de `Configuration` y esquemas~~ **resuelto**: `agentic/shared/configuration.py` y `agentic/core/process/domain/schemas.py`, uno por rol implementado. Los roles que faltan agregan su esquema al entrar | — |
-| 14 | Script que corre el set de cinco tareas y escribe el JSONL de resultados (sección 14). Sin costo: eso ya lo da Grafana | Medir |
+| 14 | ~~Script que corre el set de cinco tareas y escribe el JSONL de resultados. Sin costo: eso ya lo da Grafana~~ **resuelto**, con la premisa del costo corregida en el mismo diff: `agentic eval run` / `agentic eval score` (sección 14). Grafana no puede dar el costo por tarea porque ningún span ni ninguna métrica lleva id de tarea y ninguno lo hará (ADR-0008, segunda adenda; cardinalidad cerrada) — el costo sale de `cost_usd` en el documento de la tarea, que ya lo tenía | — |
 | 15 | Versionado de **parámetros** de `Configuration` como label de las métricas; hoy solo van el SHA del sistema y la huella de prompts | Comparar corridas que cambian solo un parámetro |
 | 16 | El camino como dato (`Workflow`, solo la ida, con la tabla de devoluciones aparte) y `Status` en cinco valores más `outcome`, ya modelados en ADR-0009. Hoy el ruteo es una función por nodo en `rules.py` | Etapa 2: se implementa al entrar QA Lead, el segundo par |
+| 17 | Verificación real de que la mejora del sistema no depende del producto: el mismo set de prompts rindiendo sobre un segundo producto, no solo gym-saas (adenda del pedido de GH-27, punto 6) | Hito posterior a la etapa 2; hasta entonces el set de cinco es de gym-saas porque es el único producto |
 
 **Resueltos desde la versión anterior**: el stack y el runtime de agentes (LangGraph para el
 flujo entre roles, Claude Agent SDK como harness de cada rol, autenticado con suscripción),
@@ -907,6 +925,8 @@ Se anotan para no reintroducirlas por error.
 | La copia del sistema que ejecuta una corrida se llama "runtime" | `stage0`, del bootstrapping de compiladores, con `stage1` y `stage2` gratis; "runtime" ya es el harness de cada rol (ADR-0018) |
 | Todo lo que ni el pedido ni el conocimiento resuelven va al humano, y una pregunta registrada no se retira | Va solo lo que deja el PRD indecidible; el resto es un supuesto en la respuesta. El dueño de la decisión retira por número lo que una ronda posterior resuelve (ADR-0014, adenda tercera) |
 | Este repo lee el default de estándares del sistema porque describe bien lo que el repo ya hace (ADR-0017) | ADR-0012's addendum replaces the ADR-0017 bullet that had this repo reading the system default because it described what the repo already does; from here the default is practices and this repo materialises them in its own `CODING_STANDARDS.md` |
+| El set entero se re-corre cada vez que se cambia un prompt o un parámetro | Solo en hitos (rol nuevo, cambio de estructura de revisión, cambio de modelo por rol); un cambio de prompt o de parámetro corre solo la tarea de humo que la declaración del set nombra, y una que escala a mitad de corrida queda sin puntaje, no con uno peor (sección 9; GH-27) |
+| El costo por tarea del set de evaluación sale de Grafana | Grafana no puede: ningún span ni ninguna métrica lleva id de tarea y ninguno lo hará (ADR-0008, segunda adenda). Sale de `cost_usd`, ya en el documento de cada tarea; `agentic eval score` lo lee de ahí, nunca de una métrica (sección 12, pendiente 14; GH-27) |
 
 ---
 
@@ -1226,13 +1246,25 @@ variables, y un `AGENTIC_PRODUCT_DIR` heredado habla de la corrida de afuera.
 ### Evaluación
 
 Langfuse y Grafana no puntúan. El puntaje sigue siendo el de la sección 9: binario, humano.
-Un script corre el set de cinco tareas y escribe un JSONL versionado en este repo con lo que
-ninguna métrica puede dar: hash de prompts, `Configuration` completa, resultado binario y
-nota. El costo ya está en Grafana bajo la misma huella de prompts. Además, evals de nodo
-intermedio como tests de pytest ("PjM clasifica estas descripciones así", "PM devuelve esta
-definición incompleta"), marcados `llm` y **excluidos de CI**: el SDK se autentica con la
-suscripción, que GitHub Actions no tiene. CI corre solo tests puros: parser del documento,
-reducers, configuración, ruteo con salidas grabadas.
+El set de tareas vive en `.agentic/eval-set.yaml` del producto (como `stack.yaml`,
+`flags.yaml` y `BRIEF.md`): los números de issue y cuál de ellos es la tarea de humo, nada
+más. `agentic eval run --budget <USD> --yes` corre cada tarea del set (o, con `--dry-run`,
+solo la muestra sin gastar nada) desde cero -- un `agentic run --fresh --issue N` por
+tarea, esperado antes de lanzar el siguiente, nunca en paralelo -- y se niega antes de
+lanzar el primero si la declaración no es válida, si el nombre del producto no se puede
+leer, si el pull request o el lock de alguna tarea del set siguen abiertos, o si el propio
+lock de `eval` está tomado. `agentic eval score --out <archivo>.jsonl` escribe una línea
+JSON por tarea, leída entera del documento de esa tarea -- nunca de una métrica ni de
+`gh` -- y se niega si `<archivo>.jsonl` ya existe, para que ninguna corrida pueda pisar una
+línea de base. Cada línea lleva lo que ninguna métrica puede dar porque ningún span lleva
+id de tarea (ADR-0008, segunda adenda): hash de prompts, el mapa `prompts` completo,
+`system_version`, el resultado binario y la nota (siempre `null`: la carga el humano a
+mano). El costo por tarea sale de `cost_usd`, ya en el documento; Grafana nunca lo tuvo por
+tarea y nunca lo tendrá. Además, evals de nodo intermedio como tests de pytest ("PjM
+clasifica estas descripciones así", "PM devuelve esta definición incompleta"), marcados
+`llm` y **excluidos de CI**: el SDK se autentica con la suscripción, que GitHub Actions no
+tiene. CI corre solo tests puros: parser del documento, reducers, configuración, ruteo con
+salidas grabadas.
 
 ### Descartado de ODR
 
