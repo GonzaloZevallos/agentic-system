@@ -31,6 +31,12 @@ the `tdd` loop if a fix needs code. Commit on the current branch.
 Nothing conflicting does not mean nothing to do: the pieces are in the same branch for
 the first time, and what they do together is yours to make work.
 
+When you add or edit an enforcement artefact — a test or assertion that fails when
+another file's code is wrong, a function that returns or raises on a list of
+violations, or a guard, a checker or a validator invoked from a check the product
+declares — one of your tests at a declared seam exercises it on an input it must
+reject, not only on the input it should accept.
+
 The product's checks:
 
 {{checks}}

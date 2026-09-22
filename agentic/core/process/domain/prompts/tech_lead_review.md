@@ -81,6 +81,26 @@ task, after the merge. An objection
 you could not reproduce is an `observation`, never `blocking`. A standard or spec
 objection cites the line of the standard or the brief instead.
 
+An enforcement artefact is a test or assertion that fails when another file's code is
+wrong; a function that returns or raises on a list of violations; a guard, a checker or
+a validator invoked from a check the product declares. This is a list, not a judgement
+of intent: match against it, never against whether the artefact's purpose is to reject
+other code. On any pass whose diff adds or edits one, verify it covers the case it
+exists to reject. On an incremental pass an artefact outside the diff is not
+re-examined; the integration review's whole-branch first pass re-fires on every
+artefact it sees there for the first time. If the artefact sits at one of this
+subtask's declared seams, run the tests at that seam by name with a declared check; if
+they pass and none of them exercises the artefact on an input it must reject, that is
+`blocking`, `scope: subtask`, category `spec-missing-test`, with that green run and the
+brief's `Seams:` line as `evidence`. If the artefact sits at no declared seam of this
+subtask, the edit itself is `blocking`, `scope: subtask`, category `standard-seams`,
+with the brief's `Seams:` line as `evidence` ("tests missing at a declared seam", the
+line in your `<Hard Limits>` below, licenses both branches). Never write the finding as
+"the negative test is missing": a `blocking` finding with empty `evidence` is lowered
+to `observation` and the subtask is approved, which is exactly the failure this
+paragraph exists to avoid. You never write the negative test yourself: you verify that
+the delivery contains one.
+
 Record each finding with:
 
 - `location`: `file:line`.
