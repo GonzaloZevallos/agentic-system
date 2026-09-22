@@ -1,5 +1,6 @@
 """The `gh` writer with the CLI replaced by a recorder."""
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -7,6 +8,7 @@ import pytest
 
 from agentic.core.process.adapters.github import GhTracker
 from agentic.core.process.adapters.github.tracker import issue_number
+from agentic.core.process.domain.task import PullRequest, PullRequestCommit
 
 
 class Recorder:
@@ -61,6 +63,96 @@ def test_a_task_without_an_issue_writes_nothing_to_the_issue():
 def test_gh_failures_are_value_errors():
     with pytest.raises(ValueError, match="gh pr create failed: no auth"):
         GhTracker(Path("/p"), Recorder(fail=True)).open_pull_request("T-1", "b", "t", "x")
+
+
+def _graphql_pull_request(state, merged_at, created_at, commits):
+    return json.dumps(
+        {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "state": state,
+                        "mergedAt": merged_at,
+                        "createdAt": created_at,
+                        "commits": {
+                            "nodes": [
+                                {
+                                    "commit": {
+                                        "messageHeadline": headline,
+                                        "additions": additions,
+                                        "deletions": deletions,
+                                        "authors": {"nodes": [{"email": email}]},
+                                    }
+                                }
+                                for email, headline, additions, deletions in commits
+                            ]
+                        },
+                    }
+                }
+            }
+        }
+    )
+
+
+def test_pull_request_never_calls_gh_bare_and_pins_the_reference_in_argv():
+    run = Recorder(
+        stdout=_graphql_pull_request(
+            "MERGED",
+            "2026-09-21T00:29:02Z",
+            "2026-09-20T23:00:00Z",
+            [("dev@example.com", "fix: x", 3, 1)],
+        )
+    )
+    tracker = GhTracker(Path("/p"), run)
+    pr = tracker.pull_request("https://github.com/o/r/pull/7")
+    assert pr == PullRequest(
+        state="MERGED",
+        created_at="2026-09-20T23:00:00Z",
+        merged_at="2026-09-21T00:29:02Z",
+        commits=(
+            PullRequestCommit(
+                author_emails=("dev@example.com",),
+                message_headline="fix: x",
+                additions=3,
+                deletions=1,
+            ),
+        ),
+    )
+    assert len(run.calls) == 1
+    [call] = run.calls
+    assert call[:2] == ["gh", "api"]
+    assert "number=7" in call
+
+
+def test_pull_request_maps_a_closed_unmerged_and_an_open_pull_request():
+    tracker = GhTracker(
+        Path("/p"),
+        Recorder(stdout=_graphql_pull_request("CLOSED", None, "2026-09-20T23:00:00Z", [])),
+    )
+    closed = tracker.pull_request("https://github.com/o/r/pull/8")
+    assert closed == PullRequest(
+        state="CLOSED", created_at="2026-09-20T23:00:00Z", merged_at=None, commits=()
+    )
+
+    tracker = GhTracker(
+        Path("/p"),
+        Recorder(stdout=_graphql_pull_request("OPEN", None, "2026-09-20T23:00:00Z", [])),
+    )
+    open_pr = tracker.pull_request("https://github.com/o/r/pull/9")
+    assert open_pr == PullRequest(
+        state="OPEN", created_at="2026-09-20T23:00:00Z", merged_at=None, commits=()
+    )
+
+
+def test_pull_request_unknown_reference_raises_a_value_error():
+    run = Recorder(fail=True)
+    with pytest.raises(ValueError, match="gh api graphql failed: no auth"):
+        GhTracker(Path("/p"), run).pull_request("https://github.com/o/r/pull/404")
+
+
+def test_pull_request_unparseable_url_raises_a_value_error():
+    with pytest.raises(ValueError, match="not a pull request URL"):
+        GhTracker(Path("/p"), Recorder()).pull_request("not a url")
 
 
 def test_a_resume_unlabels_and_reads_the_comments():
