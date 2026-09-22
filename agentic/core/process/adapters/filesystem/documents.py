@@ -30,6 +30,15 @@ class FilesystemTaskDocuments:
             return None
         return document.parse(path.read_text(encoding="utf-8"), path)
 
+    def write_into(self, task_id: str, root: Path) -> Path | None:
+        source = self.path_for(task_id)
+        if not source.is_file():
+            return None
+        destination = root / document.relative_path(task_id)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+        return destination
+
 
 def system_commit() -> str | None:
     """Short commit of this repo, for the prompt version record (ADR-0005). Best effort."""
