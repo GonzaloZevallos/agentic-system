@@ -35,6 +35,8 @@ them corrupts the baseline.
 from __future__ import annotations
 
 import hashlib
+import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NotRequired, TypedDict
@@ -122,12 +124,21 @@ def parse_eval_set(data: object, source: object) -> EvalSet:
     return EvalSet(issues=tuple(data["issues"]), smoke=data["smoke"])
 
 
-def baseline_id(system_version: str, declaration_text: str) -> str:
+def baseline_id(system_version: str, declaration_text: str, experiment: Mapping[str, str]) -> str:
     """Identity of one baseline run of the set (module docstring): `system_version` plus
     a content hash of the declaration's own text. Deliberately not
     `metrics.prompts_fingerprint` -- see the module docstring for why that would corrupt
-    the comparison."""
-    digest = hashlib.sha256(declaration_text.encode()).hexdigest()[:8]
+    the comparison.
+
+    `experiment` is the task document's own `experiment` key (`TaskState.experiment`,
+    `shared.configuration.experiment_snapshot`): empty on the default path, so this
+    returns exactly what it did before the two arms existed, byte for byte. Mixed into
+    the digest only when it carries a value, so the two arms of one declaration land on
+    different baselines instead of colliding on one (issue #28)."""
+    digest_input = declaration_text
+    if experiment:
+        digest_input += "\n" + json.dumps(dict(experiment), sort_keys=True)
+    digest = hashlib.sha256(digest_input.encode()).hexdigest()[:8]
     return f"{system_version}+{digest}"
 
 
@@ -172,6 +183,10 @@ class EvaluationRecord(TypedDict):
     task: str
     status: str
     escalation_class: NotRequired[str]
+    # The review-mode/ephemeral-arm switches this task ran under (issue #28), off the
+    # document's own `experiment` key: absent when the run was on the default path,
+    # handled the way `escalation_class` above already is.
+    experiment: NotRequired[dict[str, str]]
     delivery_outcome: str | None
     score: bool | None
     score_pending_reason: str | None
@@ -214,4 +229,6 @@ def evaluation_record(product: str, issue: int, document: TaskDocument) -> Evalu
     }
     if escalation_class := document.get("escalation_class"):
         record["escalation_class"] = escalation_class
+    if experiment := document.get("experiment"):
+        record["experiment"] = experiment
     return record

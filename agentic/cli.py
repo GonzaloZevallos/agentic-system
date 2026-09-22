@@ -955,10 +955,11 @@ async def _eval_score(
     Each line also carries `declaration_source` (which of the product's own
     `.agentic/eval-set.yaml` or `--set` produced this run) and `baseline_id`
     (`evaluation.baseline_id`: that task's own `system_version` plus a content hash of
-    the declaration's text) -- both identity, not a figure `evaluation_record` itself
-    would have to read a second source for, so they are added onto its own dict rather
-    than duplicated inside `core.measurement.domain.evaluation`, whose field list the
-    plan already enumerates in full."""
+    the declaration's text, mixing in the document's own `experiment` snapshot when the
+    task ran an arm, issue #28) -- both identity, not a figure `evaluation_record`
+    itself would have to read a second source for, so they are added onto its own dict
+    rather than duplicated inside `core.measurement.domain.evaluation`, whose field
+    list the plan already enumerates in full."""
     destination = Path(out_path)
     if destination.exists():
         raise CannotStart(f"{destination}: already exists; write a new file, merge with git")
@@ -981,7 +982,9 @@ async def _eval_score(
         line: dict[str, object] = {
             **record,
             "declaration_source": source,
-            "baseline_id": evaluation.baseline_id(version, declaration_text),
+            "baseline_id": evaluation.baseline_id(
+                version, declaration_text, document.get("experiment", {})
+            ),
         }
         lines.append(json.dumps(line, sort_keys=True))
         fingerprints.setdefault(record["prompts_fingerprint"], []).append(task_id)
