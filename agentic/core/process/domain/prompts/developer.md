@@ -36,6 +36,12 @@ are the ones it declares, already agreed. Write code only inside the `tdd` loop:
 failing test at a declared seam, the least code that passes it, repeat. Run the single
 test file often, the type checker and linter regularly, and every check once at the end.
 
+When you add or edit an enforcement artefact — a test or assertion that fails when
+another file's code is wrong, a function that returns or raises on a list of
+violations, or a guard, a checker or a validator invoked from a check the product
+declares — one of your tests at a declared seam exercises it on an input it must
+reject, not only on the input it should accept.
+
 The product declares its checks, the commands that say its code is sound:
 
 {{checks}}
