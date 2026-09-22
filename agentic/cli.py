@@ -33,6 +33,7 @@ from langgraph.types import Command
 
 from . import composition
 from .composition import default_ports, graph
+from .core.knowledge.domain import knowledge
 from .core.measurement.adapters.otel import telemetry
 from .core.measurement.adapters.otel.telemetry import InvocationKind
 from .core.measurement.domain import metrics as delivery_metrics
@@ -76,6 +77,30 @@ LOCK_SCOPE = (
 # one that delivered, so it names the *delivering* run's version, never
 # `telemetry.system_version()`, which would name its own.
 UNKNOWN_SYSTEM_VERSION = "unknown"
+
+
+def no_brief(ports: Ports) -> str | None:
+    """Why this run reads no Brief, or None when one is on disk (ADR-0025). Never a
+    refusal, the same fact `no_setup` is: a product that has not written one yet still
+    runs, one warning line at a time, until its human writes one. The verdict on a
+    Brief that IS present belongs to `brief_refusal`, not here."""
+    if ports.knowledge.brief() is not None:
+        return None
+    return (
+        "the product has no BRIEF.md: PM and the Tech Lead decide with no north star "
+        "(ADR-0025). Write it at the product's root, and commit it:\n\n"
+        + knowledge.DEFAULT_BRIEF_TEMPLATE.read_text(encoding="utf-8")
+    )
+
+
+def brief_refusal(ports: Ports) -> str | None:
+    """Why the product's own `BRIEF.md` cannot be used, or None when it is absent (that
+    is `no_brief`'s fact) or valid. The one join of the pure verdict
+    (`core.knowledge.domain.knowledge.brief_refusal`) with the port that reads the
+    text (ADR-0025): raised on `run`, printed on `resume`, in `main`'s per-command
+    layer, next to `no_forbidden`'s own split."""
+    text = ports.knowledge.brief()
+    return None if text is None else knowledge.brief_refusal(text)
 
 
 class CannotStart(Exception):
@@ -181,7 +206,7 @@ def main() -> None:
             # `run` and `resume` still call it, byte-identically to before this task.
             preflight(cfg, ports)
             # Said and not enforced: the run is worth less, it is not wrong.
-            for warn in (unfixed_stage0, no_setup):
+            for warn in (unfixed_stage0, no_setup, no_brief):
                 if (warning := warn(ports)) is not None:
                     print(f"agentic: {warning}", file=sys.stderr)
             if args.command == "run":
@@ -192,6 +217,10 @@ def main() -> None:
                 # above, whose two warnings share one revision this one does not.
                 if (warning := no_forbidden(ports, "HEAD")) is not None:
                     print(f"agentic: {warning}", file=sys.stderr)
+                # A malformed or over-cap Brief refuses `run` outright (ADR-0025): an
+                # absent one is `no_brief`'s fact above, never this one's.
+                if (problem := brief_refusal(ports)) is not None:
+                    raise ValueError(problem)
             if not getattr(args, "detach", False) and not sys.stdin.isatty():
                 print(
                     "agentic: no TTY and no --detach: this process dies if its session "
@@ -203,6 +232,11 @@ def main() -> None:
             base = declared_stack_of(task_id, ports)
             if (warning := no_forbidden(ports, base)) is not None:
                 print(f"agentic: {warning}", file=sys.stderr)
+            # A malformed or over-cap Brief only prints on `resume` and the run
+            # proceeds: a human's edit to his own file must never strand every paused
+            # task at the boot gate with no task named (ADR-0003; ADR-0025).
+            if (problem := brief_refusal(ports)) is not None:
+                print(f"agentic: {problem}", file=sys.stderr)
             log_file = _log_file_for(cfg, task_id)
             options = (args.from_document, args.dry_run, args.yes)
             work: Callable[[], Awaitable[None]] = partial(
