@@ -834,21 +834,19 @@ def _read_eval_set(cfg: Configuration, set_path: str | None) -> tuple[evaluation
 def _refuse_open_pull_request(ports: Ports, task_id: str) -> None:
     """A set task whose pull request is still open would have its branch archived out
     from under that pull request by the `--fresh` each child runs with (ADR-0011, sixth
-    addendum). Read off the document alone when there is nothing to ask `gh` about --
-    no document, no `pull_request` value, or a `pull_request` already closed -- so a
-    task never before run, or one already closed, never refuses here."""
+    addendum). Read off the document alone, never `gh`: neither `eval` phase may call
+    it (Tech Lead plan invariant). `pull_request` present with no `closed_at` is the
+    document's own way of saying "not yet closed" -- `agentic close` is what would set
+    `closed_at`, and it is the one place allowed to ask `gh` whether a pull request is
+    still open. A task never before run, or one `agentic close` already recorded, never
+    refuses here."""
     document = ports.documents.load(task_id)
     reference = (document or {}).get("pull_request")
-    if not reference or (document or {}).get("closed_at"):
-        return
-    try:
-        pull_request = ports.tracker.pull_request(reference)
-    except (ValueError, OSError) as exc:
-        raise CannotStart(str(exc)) from exc
-    if pull_request is not None and pull_request.state == "OPEN":
+    if reference and not (document or {}).get("closed_at"):
         raise CannotStart(
-            f"{task_id}: its pull request is still open; --fresh would archive the "
-            "branch it points at"
+            f"{task_id}: has a pull request with no recorded closure (`pull_request` "
+            "set, no `closed_at`); --fresh would archive the branch it points at. Run "
+            f"`agentic close --issue N` first."
         )
 
 
@@ -952,11 +950,19 @@ async def _eval_score(
     subtask `eval-cli`). Refuses outright when `out_path` already exists, before the
     declaration is even read: a new file per invocation, merge and history left to
     git, so no run can eat a baseline. Blockable by nothing except the documents it
-    reads."""
+    reads.
+
+    Each line also carries `declaration_source` (which of the product's own
+    `.agentic/eval-set.yaml` or `--set` produced this run) and `baseline_id`
+    (`evaluation.baseline_id`: that task's own `system_version` plus a content hash of
+    the declaration's text) -- both identity, not a figure `evaluation_record` itself
+    would have to read a second source for, so they are added onto its own dict rather
+    than duplicated inside `core.measurement.domain.evaluation`, whose field list the
+    plan already enumerates in full."""
     destination = Path(out_path)
     if destination.exists():
         raise CannotStart(f"{destination}: already exists; write a new file, merge with git")
-    declaration, _text, source = _read_eval_set(cfg, set_path)
+    declaration, declaration_text, source = _read_eval_set(cfg, set_path)
     try:
         product = ports.stack.product()
     except (ValueError, OSError) as exc:
@@ -971,7 +977,13 @@ async def _eval_score(
             print(f"agentic: {task_id} (issue {issue}) has no document yet; skipped")
             continue
         record = evaluation.evaluation_record(product, issue, document)
-        lines.append(json.dumps(record, sort_keys=True))
+        version = document.get("system_version") or UNKNOWN_SYSTEM_VERSION
+        line: dict[str, object] = {
+            **record,
+            "declaration_source": source,
+            "baseline_id": evaluation.baseline_id(version, declaration_text),
+        }
+        lines.append(json.dumps(line, sort_keys=True))
         fingerprints.setdefault(record["prompts_fingerprint"], []).append(task_id)
         if record["score"] is None:
             pending.append(issue)

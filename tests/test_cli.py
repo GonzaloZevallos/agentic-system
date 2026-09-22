@@ -1817,7 +1817,10 @@ def test_eval_score_dispatch_builds_the_eval_score_work(monkeypatch, tmp_path):
     monkeypatch.setattr("sys.argv", argv)
     cli.main()
     assert seen["fn"] is cli._eval_score
-    assert seen["args"] == (root, out) or seen["args"][-1] == out
+    cfg, _ports, set_path, out_path = seen["args"]
+    assert cfg.product_dir == root
+    assert set_path is None
+    assert out_path == out
 
 
 @pytest.mark.anyio
@@ -1829,6 +1832,42 @@ async def test_eval_run_refuses_when_the_declaration_file_is_missing(tmp_path):
         await cli._eval_run(
             Configuration(product_dir=root), memory_ports(), None, 200.0, True, False
         )
+
+
+@pytest.mark.anyio
+async def test_eval_run_dry_run_prefers_the_set_override_over_the_products_own(tmp_path, capsys):
+    """`--set` overrides the product's own `.agentic/eval-set.yaml` for a spike, and
+    the printed line says which of the two it read (Tech Lead plan)."""
+    from agentic.shared.configuration import Configuration
+
+    root = eval_root(tmp_path, eval_set="issues:\n  - 1\nsmoke: 1\n")  # never read
+    override = tmp_path / "spike.yaml"
+    override.write_text("issues:\n  - 9\nsmoke: 9\n")
+    await cli._eval_run(
+        Configuration(product_dir=root), memory_ports(), str(override), 200.0, False, True
+    )
+    out = capsys.readouterr().out
+    assert str(override) in out
+    assert "GH-9 (issue 9)" in out
+    assert "GH-1" not in out
+
+
+@pytest.mark.anyio
+async def test_eval_score_uses_the_set_override_and_reports_it_as_the_source(tmp_path):
+    from agentic.shared.configuration import Configuration
+
+    root = eval_root(tmp_path, eval_set="issues:\n  - 1\nsmoke: 1\n")  # never read
+    override = tmp_path / "spike.yaml"
+    override.write_text("issues:\n  - 9\nsmoke: 9\n")
+    ports = memory_ports()
+    ports.documents.save({"id": "GH-9", "status": "open", "prompts": {"developer": "abc"}})
+    out = tmp_path / "out.jsonl"
+    await cli._eval_score(Configuration(product_dir=root), ports, str(override), str(out))
+    (line,) = out.read_text().splitlines()
+    record = json.loads(line)
+    assert record["issue"] == 9
+    assert record["declaration_source"] == str(override)
+    assert record["baseline_id"]
 
 
 @pytest.mark.anyio
@@ -1855,20 +1894,50 @@ async def test_eval_run_refuses_when_the_product_has_no_name(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_eval_run_refuses_when_a_set_tasks_pull_request_is_still_open(tmp_path):
+async def test_eval_run_refuses_when_a_set_tasks_pull_request_has_no_recorded_closure(tmp_path):
+    """Read off the document alone, never `gh`: `memory_ports()`'s own `MemoryTracker`
+    carries no `pull_request` method at all, so a call to it would raise `AttributeError`
+    -- a different exception than `CannotStart` -- and fail this test outright, proving
+    the refusal never reaches for `gh` (the plan's invariant: neither `eval` phase calls
+    it)."""
     from agentic.shared.configuration import Configuration
 
     root = eval_root(tmp_path)
     reference = "https://github.com/o/r/pull/7"
-    tracker = FakePullRequestTracker({reference: close_pull_request(state="OPEN", merged=False)})
-    ports = memory_ports(tracker=tracker)
+    ports = memory_ports()
     ports.documents.save({"id": "GH-1", "pull_request": reference})
     launch = FakeLaunch()
-    with pytest.raises(cli.CannotStart, match="still open"):
+    with pytest.raises(cli.CannotStart, match="no recorded closure"):
         await cli._eval_run(
             Configuration(product_dir=root), ports, None, 200.0, True, False, launch=launch
         )
     assert launch.calls == []
+
+
+@pytest.mark.anyio
+async def test_eval_run_does_not_refuse_a_set_tasks_already_closed_pull_request(tmp_path):
+    """The accept side of the same rule: `closed_at` recorded is `agentic close`'s own
+    word that the pull request is no longer open, so `--fresh` archiving its branch is
+    no longer a hazard and the task launches."""
+    from agentic.shared.configuration import Configuration
+
+    root = eval_root(tmp_path)
+    ports = memory_ports()
+    ports.documents.save(
+        {
+            "id": "GH-1",
+            "pull_request": "https://github.com/o/r/pull/7",
+            "closed_at": "2026-09-20T00:00:00.000Z",
+        }
+    )
+
+    def launch(argv, env_overlay):
+        issue = argv[-1]
+        ports.documents.save({"id": f"GH-{issue}", "status": "ready_for_review", "cost_usd": 40.0})
+
+    await cli._eval_run(
+        Configuration(product_dir=root), ports, None, 200.0, True, False, launch=launch
+    )
 
 
 @pytest.mark.anyio
@@ -1970,7 +2039,7 @@ async def test_eval_run_launches_each_task_in_order_waited(tmp_path):
     ports = memory_ports()
 
     def launch(argv, env_overlay):
-        launch.calls.append(argv)
+        launch.calls.append((argv, env_overlay))
         issue = argv[-1]
         ports.documents.save({"id": f"GH-{issue}", "status": "ready_for_review", "cost_usd": 40.0})
 
@@ -1978,10 +2047,31 @@ async def test_eval_run_launches_each_task_in_order_waited(tmp_path):
     await cli._eval_run(
         Configuration(product_dir=root), ports, None, 200.0, True, False, launch=launch
     )
-    assert launch.calls == [
+    assert [argv for argv, _ in launch.calls] == [
         [cli.sys.argv[0], "run", "--fresh", "--issue", "1"],
         [cli.sys.argv[0], "run", "--fresh", "--issue", "2"],
     ]
+
+
+@pytest.mark.anyio
+async def test_eval_run_hands_each_child_the_products_dir_and_never_a_log_file_key(tmp_path):
+    """`_eval_run` builds its overlay from `cfg.product_dir` alone (Tech Lead plan): the
+    `AGENTIC_LOG_FILE` drop is the default `_run_eval_child`'s own job on `os.environ`
+    (not exercised here, since no test in this diff patches `subprocess`), but the
+    overlay the loop hands to *any* launcher -- fake or real -- must never itself carry
+    that key, or the default would have nothing to drop it from."""
+    from agentic.shared.configuration import Configuration
+
+    root = eval_root(tmp_path, eval_set="issues:\n  - 1\nsmoke: 1\n")
+    ports = memory_ports()
+    launch = FakeLaunch()
+    await cli._eval_run(
+        Configuration(product_dir=root), ports, None, 200.0, True, False, launch=launch
+    )
+    (call,) = launch.calls
+    _argv, overlay = call
+    assert overlay == {cli.ENV_PREFIX + "PRODUCT_DIR": str(root)}
+    assert cli.ENV_PREFIX + "LOG_FILE" not in overlay
 
 
 @pytest.mark.anyio

@@ -775,9 +775,10 @@ escalada corta menos que la corrida completa que dejó el puntaje anterior.
 **El loop humano.** `agentic eval run --budget <USD> --yes` corre el set (o, en una
 tarea de humo, la única del set que la declaración marca) desde cero, una tarea a la
 vez; el humano mergea cada pull request o no; `agentic close --issue N` por cada tarea
-del set registra el veredicto (se niega sin un endpoint de métricas configurado,
-`cli.py`, la línea que alguien lee seis semanas después cuando la línea de base son
-cinco nulos); `agentic eval score --out <archivo>.jsonl` escribe una línea por tarea,
+del set registra el veredicto -- se niega con `"no metrics endpoint configured;
+nothing recorded"` si no hay endpoint de métricas (`cli.py`, `_close`), la línea que
+alguien lee seis semanas después cuando la línea de base son cinco nulos; `agentic eval
+score --out <archivo>.jsonl` escribe una línea por tarea,
 leída entera del documento de esa tarea, y se niega si el archivo de salida ya existe.
 Requiere versionado de prompts, que ya era condición para poder revertir.
 
@@ -857,7 +858,7 @@ existe justamente para pagar ese costo solo donde compre calidad.
 | 8 | ~~Criterio de clasificación de PjM y qué hace si duda~~ **resuelto** (#46): el criterio es qué notaría un usuario del producto, no quién escribió el issue ni cuán técnico suena; vive en el prompt de PjM. Si encaja en dos tipos o en ninguno, `confidence: low` escala | — |
 | 9 | ~~Cuántos Tech Leads existen~~ **resuelto**: un rol, una instancia por tarea; el modo proactivo es el mismo rol. El efímero no es un rol de la lista, es el entrevistador de Tech Lead (ADR-0014) | — |
 | 10 | ~~Versionado de prompts~~ **resuelto**: `.md` por rol con overlay en el producto, hash por tarea (ADR-0005). Falta el versionado de **parámetros** de `Configuration` | Mejora del proceso de PjM |
-| 11 | Las cinco tareas del set de evaluación, todavía sin escribir | Medir cualquier cosa |
+| 11 | Las cinco tareas del set de evaluación, todavía sin escribir. El humano las escribe como issues en gym-saas (GH-12 más cuatro de las que se postergaron armando el v0) y las declara en `.agentic/eval-set.yaml` del producto; el runner que las corre ya existe (`agentic eval run`/`agentic eval score`, sección 14) y no las necesita para funcionar, solo para tener algo que correr | Medir cualquier cosa |
 | 12 | ~~El v0 del gimnasio~~ **resuelto**: existe, escrito a mano y plano. Los estándares de ingeniería aplican al código nuevo y al que cada tarea toca (ADR-0012) | — |
 | 13 | ~~Campos de `Configuration` y esquemas~~ **resuelto**: `agentic/shared/configuration.py` y `agentic/core/process/domain/schemas.py`, uno por rol implementado. Los roles que faltan agregan su esquema al entrar | — |
 | 14 | ~~Script que corre el set de cinco tareas y escribe el JSONL de resultados. Sin costo: eso ya lo da Grafana~~ **resuelto**, con la premisa del costo corregida en el mismo diff: `agentic eval run` / `agentic eval score` (sección 14). Grafana no puede dar el costo por tarea porque ningún span ni ninguna métrica lleva id de tarea y ninguno lo hará (ADR-0008, segunda adenda; cardinalidad cerrada) — el costo sale de `cost_usd` en el documento de la tarea, que ya lo tenía | — |
