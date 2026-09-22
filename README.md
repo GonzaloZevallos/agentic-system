@@ -1012,7 +1012,24 @@ juntos, y sin decisión sale con 1 si hay preguntas pendientes o un par llegó a
 Antes de gastar muestra la tarea, dónde se frenó, el motivo, lo gastado por fase, el tope, la
 decisión entera, qué reanuda, las sesiones y los worktrees, y pide confirmación. `--from-document` es el rescate: siembra el estado desde el documento,
 cruzado con git, como si `escalate` acabara de correr. `agentic run` se niega a arrancar
-sobre una tarea con estado salvo `--fresh`. En la etapa 5 un poller con reloj propio llama a
+sobre una tarea con estado salvo `--fresh`, que ya no reusa las ramas donde estaban
+(ADR-0011, adenda sexta): antes de soltar el checkpoint, `_run` archiva lo que dejó la
+corrida anterior, primera sentencia dentro del lock. Si `agentic/<tarea>` sigue viva,
+commitea lo que ningún Developer llegó a commitear en cada worktree de la tarea
+(`Workspace.worktrees`), copia ahí el documento (`TaskDocuments.write_into`), saca los
+worktrees y renombra la rama de tarea y las de sus subtareas, la de tarea primero, bajo
+`archive/run<N>-<commit del sistema>/`; `N` es uno más que el mayor archivado de esa
+tarea, o el que ya tenía si la rama de tarea ya no está viva pero alguna de subtarea sí
+—el archivado se cortó a la mitad, y el reintento lo termina en el mismo prefijo en vez
+de abrir otro. Nada se borra, así que una corrida vieja se puede leer después. Un
+`GitError` en cualquier renombre sube como `CannotStart`: el thread sobrevive, y el
+reintento retoma donde se cortó porque cada renombre es un no-op si el destino ya
+existe y el origen no. `_run` imprime una línea antes de invocar el grafo, diga o no
+algo nuevo esta vez, y el issue recibe `Started over: previous run archived as
+archive/run<N>-<sha>/`, un comentario del sistema como `Escalated:` o `Resumed:`; si el
+documento decía que la tarea estaba pausada, o no se pudo leer, también se le quita
+`needs-human`. Una tarea sin ramas ni documento no toca git ni el tracker. En la etapa
+5 un poller con reloj propio llama a
 `resume`, que es el mismo mecanismo que necesitan los roles proactivos. Antes de invocar el
 grafo, `run`, `resume` y `--fresh` toman `.agentic/runs/<tarea>.lock` (pid, host, hora y
 comando): un pid vivo en este host se niega, uno de otro host se niega por nombre sin

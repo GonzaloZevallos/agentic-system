@@ -131,6 +131,20 @@ def test_the_decision_is_everything_the_human_said_after_the_system_last_spoke()
     assert resume.human_decision([]) is None
 
 
+def test_the_decision_skips_a_started_over_comment_too():
+    # `archive.STARTED_OVER` is registered here too (ADR-0011, sixth addendum): a
+    # `--fresh` archive must not read back as the human's own decision on the next
+    # resume. The comment sits between the escalation and the decision -- exactly
+    # where `--fresh` posts it, restarting a task nobody had answered yet -- and the
+    # decision after it is still read clean, with none of the archive's own words in it.
+    comments = [
+        "Escalated: x",
+        "Started over: previous run archived as archive/run4-abc/",
+        "Use USD.",
+    ]
+    assert resume.human_decision(comments) == "Use USD."
+
+
 def test_a_resume_under_the_formula_goes_on_to_the_returned_integration(cfg):
     ports = memory_ports()
     ports.tracker.earlier = ["Escalated: " + CAP]

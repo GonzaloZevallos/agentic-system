@@ -1155,3 +1155,127 @@ async def test_a_run_with_no_lock_injected_detaches_without_writing_the_products
     )
     assert spawn.calls
     assert FilesystemRunLock(cfg.agentic_dir / "runs").read("T-9") is None
+
+
+# `--fresh` archives a previous run before dropping the thread (ADR-0011, sixth
+# addendum, subtask `archive.py`, the `--fresh` call site and the resume prefix).
+
+
+@pytest.mark.anyio
+async def test_fresh_with_no_branches_and_no_document_makes_no_git_or_tracker_call(
+    monkeypatch, tmp_path, capsys
+):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setattr(cli, "graph", Delivers({"id": "T-9", "title": "t", "status": "open"}))
+    ports = memory_ports()
+    task = {"id": "T-9", "title": "t", "description": "d"}
+    await cli._run(
+        task, Configuration(product_dir=tmp_path), ports, fresh=True, checkpointer=in_memory
+    )
+    assert "archived" not in capsys.readouterr().out
+    assert ports.workspace.renamed == []
+    assert ports.workspace.commits == []
+    assert ports.workspace.cleaned == []
+    assert ports.workspace.pruned == 0
+    assert ports.workspace.ignored_checks == []
+    assert ports.documents.written_into == []
+    assert ports.tracker.comments == []
+    assert ports.tracker.labels == []
+    assert ports.tracker.unlabeled == []
+
+
+@pytest.mark.anyio
+async def test_fresh_archives_the_previous_run_and_prints_the_line_before_invoking(
+    monkeypatch, tmp_path, capsys
+):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setattr(cli, "graph", Delivers({"id": "GH-1", "title": "t", "status": "open"}))
+    ports = memory_ports()
+    task = {"id": "GH-1", "title": "t", "description": "d"}
+    ports.documents.save({"id": "GH-1", "system_commit": "abc1234", "escalated": "the task cap"})
+    ports.workspace.existing_branches["agentic/GH-1"] = ("h1", "b0")
+    await cli._run(
+        task, Configuration(product_dir=tmp_path), ports, fresh=True, checkpointer=in_memory
+    )
+    assert "agentic: archived previous run as archive/run1-abc1234" in capsys.readouterr().out
+    assert ports.workspace.renamed == [("agentic/GH-1", "archive/run1-abc1234/agentic/GH-1")]
+    assert ports.tracker.comments == [
+        ("GH-1", "Started over: previous run archived as archive/run1-abc1234/")
+    ]
+    # The document said the task was escalated: restarting it takes it out of the queue.
+    assert ports.tracker.unlabeled == [("GH-1", "needs-human")]
+
+
+@pytest.mark.anyio
+async def test_detach_fresh_makes_no_archive_call_in_the_parent(monkeypatch, tmp_path):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    class Broken(Delivers):
+        async def ainvoke(self, task, config):
+            raise AssertionError("the graph must never run in the parent under --detach")
+
+    monkeypatch.setattr(cli, "graph", Broken())
+    ports = memory_ports()
+    ports.workspace.existing_branches["agentic/T-9"] = ("h1", "b0")
+    spawn = FakeSpawn()
+    lock = FakeLock()
+    task = {"id": "T-9", "title": "t", "description": "d"}
+    await cli._run(
+        task,
+        Configuration(product_dir=tmp_path),
+        ports,
+        fresh=True,
+        checkpointer=in_memory,
+        run_lock=lock,
+        log_file="/tmp/x.log",
+        detach=True,
+        child_argv=["agentic", "run", "--issue", "1", "--fresh", "--detach"],
+        spawn=spawn,
+    )
+    assert spawn.calls
+    assert ports.workspace.renamed == []
+    assert ports.tracker.comments == []
+
+
+@pytest.mark.anyio
+async def test_run_without_fresh_still_refuses_with_the_same_text_and_never_archives(tmp_path):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    ports = memory_ports()
+    task = {"id": "GH-12", "title": "t", "description": "d"}
+    ports.documents.save({**task, "escalated": "Developer stopped by the task cap"})
+    ports.workspace.existing_branches["agentic/GH-12"] = ("h1", "b0")
+    with pytest.raises(cli.CannotStart) as info:
+        await cli._run(task, Configuration(product_dir=tmp_path), ports, checkpointer=Saver())
+    assert str(info.value) == (
+        "GH-12 is paused, per its document: Developer stopped by the task cap. "
+        "Resume it with `agentic resume --issue 12`, or start it over with --fresh."
+    )
+    assert info.value.code == 2
+    # `_refuse_a_started_task` runs before `_locked`: archiving never even asked.
+    assert ports.workspace.renamed == []
+
+
+@pytest.mark.anyio
+async def test_resume_from_document_still_reads_the_frontmatter_unchanged(tmp_path, capsys):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    ports = memory_ports()
+    task_id = "GH-1"
+    ports.documents.save({"id": task_id, "title": "t", "description": "d", "cost_usd": 0.2})
+    await cli._resume(
+        task_id,
+        Configuration(product_dir=tmp_path),
+        ports,
+        from_document=True,
+        dry_run=True,
+        checkpointer=in_memory,
+    )
+    assert "from:      document" in capsys.readouterr().out

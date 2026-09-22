@@ -32,8 +32,11 @@ from .composition import default_ports, graph
 from .core.measurement.adapters.otel import telemetry
 from .core.measurement.adapters.otel.telemetry import InvocationKind
 from .core.process.adapters.filesystem import FilesystemRunLock
+from .core.process.adapters.git.workspace import GitError
 from .core.process.adapters.langgraph.graph import ESCALATE
+from .core.process.application import archive
 from .core.process.application import resume as resuming
+from .core.process.application.escalate import NEEDS_HUMAN
 from .core.process.application.ports import LockHeld, LockRecord, Ports, RunLock
 from .core.process.application.preflight import (
     declared_stack_of,
@@ -91,8 +94,9 @@ def main() -> None:
     run.add_argument(
         "--fresh",
         action="store_true",
-        help="start over a task that is paused or ran before: its checkpoint is dropped, "
-        "its document rewritten, its branches reused as they are",
+        help="start over a task that is paused or ran before: its checkpoint is dropped and "
+        "its previous branches, if any, archived under archive/run<N>-<sha>/ before a fresh "
+        "run begins",
     )
     resume = sub.add_parser("resume", help="resume the task of issue N where it paused")
     resume.add_argument("--issue", type=int, metavar="N", required=True)
@@ -186,8 +190,12 @@ def main() -> None:
             # A task that already has a branch is measured against its own base, which
             # may predate the day this product declared a stack: HEAD alone would let it
             # through and it would die inside a node, where nothing escalates. A task
-            # with no branch answers HEAD here, already checked.
-            declared_stack_of(task["id"], ports)
+            # with no branch answers HEAD here, already checked. `--fresh` skips this
+            # entirely (ADR-0011, sixth addendum): the task's base is about to stop
+            # existing under `--fresh` (archiving renames the branch it comes from), and
+            # `preflight`'s own check at HEAD is what governs the checkout that follows.
+            if not args.fresh:
+                declared_stack_of(task["id"], ports)
             log_file = _log_file_for(cfg, task["id"])
             work = partial(
                 _run,
@@ -401,10 +409,46 @@ async def _run(
             _detach(lock, task["id"], child_argv or [], log_file or "", spawn)
             return
         with _locked(lock, task["id"]):
+            _archive_previous_run(task["id"], ports)
             # A thread keeps its channels: a new run over it would add to the old cost.
             await saver.adelete_thread(task["id"])
             final = await _invoke(app, task, config, task, ports, "run")
     _report(final, task["id"], ports)
+
+
+def _archive_previous_run(task_id: str, ports: Ports) -> None:
+    """Archives what a previous run of `task_id` left before its thread is dropped
+    (ADR-0011, sixth addendum): the first statement inside the lock, under the same
+    exclusion as the rest of the invocation. A `GitError` becomes `CannotStart` so the
+    thread survives -- archiving is idempotent by construction, so a later retry
+    finishes what a cut-short rename left half done.
+
+    The printed line and the issue's `needs-human` label are two separate facts:
+    whether anything was archived (`result.prefix`) says nothing about whether the
+    document the task paused on can even be read, and a document that cannot be read
+    should not keep a restarted task in the escalated queue either."""
+    try:
+        result = archive.archive_previous_run(task_id, ports)
+    except GitError as exc:
+        raise CannotStart(str(exc)) from exc
+    if result.prefix is not None:
+        verb = (
+            "archived previous run as" if result.written else "previous run was already archived as"
+        )
+        line = f"agentic: {verb} {result.prefix}"
+        if not result.document_kept:
+            line += " (archived without the document: the product ignores .agentic/tasks/)"
+        print(line)
+        ports.tracker.comment(
+            task_id, f"{archive.STARTED_OVER}previous run archived as {result.prefix}/"
+        )
+    try:
+        raw = ports.documents.load(task_id)
+        unreadable = False
+    except (ValueError, OSError):
+        raw, unreadable = None, True
+    if unreadable or (raw or {}).get("escalated"):
+        ports.tracker.unlabel(task_id, NEEDS_HUMAN)
 
 
 def _detach(
