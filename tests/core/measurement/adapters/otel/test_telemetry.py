@@ -1539,6 +1539,7 @@ def test_record_delivery_emits_one_sample_per_family_with_the_readme_labels(metr
         product="gym-saas",
         task_type="bug",
         prompts_fingerprint="abc12345",
+        system_version="deadbee",
         outcome="merged_with_changes",
         human_commits=2,
         human_lines_changed=17,
@@ -1567,6 +1568,7 @@ def test_record_delivery_outcome_value_and_lines_changed_value():
             product="gym-saas",
             task_type="feature",
             prompts_fingerprint="",
+            system_version="deadbee",
             outcome="merged",
             human_commits=0,
             human_lines_changed=0,
@@ -1595,6 +1597,7 @@ def test_record_delivery_returns_false_with_no_meter_provider():
         product="gym-saas",
         task_type="bug",
         prompts_fingerprint="",
+        system_version="deadbee",
         outcome="closed",
         human_commits=0,
         human_lines_changed=0,
@@ -1607,10 +1610,51 @@ def test_record_delivery_labels_come_from_one_helper():
     """No emission site spells the label keys by hand: `_delivery_labels` is the one
     helper every `agentic.delivery.*` sample's shared label set comes from, the shape
     `RoleRun._cold_fallback_labels` already uses for its own family."""
-    labels = telemetry._delivery_labels("gym-saas", "bug", "abc12345")
+    labels = telemetry._delivery_labels("gym-saas", "bug", "abc12345", "deadbee")
     assert labels == {
         "product": "gym-saas",
-        "system.version": telemetry.system_version(),
+        "system.version": "deadbee",
         "prompts.fingerprint": "abc12345",
         "task.type": "bug",
     }
+
+
+def test_record_delivery_labels_the_delivering_run_not_the_closing_checkout(metrics):
+    """`close` may run from a different checkout than the one that delivered the task:
+    the sample must name the *delivering* run's version, read off the task document,
+    never `telemetry.system_version()` (the checkout `close` happens to run from).
+    A version the running checkout provably does not have proves the label is the
+    caller's own, not computed here."""
+    foreign_version = f"not-this-checkout-{telemetry.system_version()}"
+    telemetry.record_delivery(
+        product="gym-saas",
+        task_type="bug",
+        prompts_fingerprint="",
+        system_version=foreign_version,
+        outcome="merged",
+        human_commits=0,
+        human_lines_changed=0,
+        time_to_merge_seconds=None,
+    )
+    (point,) = points(metrics)["agentic.delivery.outcome"]
+    assert point.attributes["system.version"] == foreign_version
+
+
+def test_record_delivery_reaches_the_unknown_literal_verbatim(metrics):
+    """A task document written before this task, or one whose `system_version`
+    producer handed back nothing, has no key at all; `close` is where that gets
+    normalised to the single literal `"unknown"` (this function takes whatever string
+    it is given as-is) -- proving the literal actually reaches a sample, which is what
+    the README's own caveat claims happens."""
+    telemetry.record_delivery(
+        product="gym-saas",
+        task_type="bug",
+        prompts_fingerprint="",
+        system_version="unknown",
+        outcome="closed",
+        human_commits=0,
+        human_lines_changed=0,
+        time_to_merge_seconds=None,
+    )
+    (point,) = points(metrics)["agentic.delivery.outcome"]
+    assert point.attributes["system.version"] == "unknown"

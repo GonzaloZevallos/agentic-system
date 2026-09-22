@@ -380,15 +380,20 @@ def instruments() -> Instruments:
     return _instruments
 
 
-def _delivery_labels(product: str, task_type: str, prompts_fingerprint: str) -> dict[str, str]:
+def _delivery_labels(
+    product: str, task_type: str, prompts_fingerprint: str, system_version: str
+) -> dict[str, str]:
     """The one label set every `agentic.delivery.*` sample carries: `product`,
     `system.version`, `prompts.fingerprint`, `task.type`. `agentic.delivery.outcome`
     adds its own `outcome` on top of this, in `record_delivery` below; no emission
     site spells this set by hand, the way `RoleRun._cold_fallback_labels` is the one
-    helper its own family reads from."""
+    helper its own family reads from. `system_version` is the caller's own: unlike
+    every other family here, a delivery sample names the *delivering* run's version
+    (the task document's own `system_version`, ADR-0008), never the checkout `close`
+    happens to run from -- the two are typically different checkouts entirely."""
     return {
         "product": product,
-        "system.version": system_version(),
+        "system.version": system_version,
         "prompts.fingerprint": prompts_fingerprint,
         "task.type": task_type,
     }
@@ -399,6 +404,7 @@ def record_delivery(
     product: str,
     task_type: str,
     prompts_fingerprint: str,
+    system_version: str,
     outcome: system_metrics.DeliveryOutcome,
     human_commits: int,
     human_lines_changed: int,
@@ -412,10 +418,15 @@ def record_delivery(
     know whether this one actually sent the sample rather than assume it did.
     `time_to_merge` is omitted when the pull request never merged (`None`): there is
     nothing to measure, the same reason `metrics.time_to_merge_seconds` returns
-    `None` for it."""
+    `None` for it. `system_version` is the delivering run's own, read from the task
+    document, not `telemetry.system_version()` -- `close` may run from a different
+    checkout than the one that delivered, and the sample must still name the run it
+    judges; `close` is also where the single `"unknown"` literal for an absent, empty
+    or null document value belongs, this function takes whatever string it is given
+    verbatim."""
     with _EMIT_LOCK:
         i = instruments()
-        labels = _delivery_labels(product, task_type, prompts_fingerprint)
+        labels = _delivery_labels(product, task_type, prompts_fingerprint, system_version)
         i.delivery_outcome.set(1, {**labels, "outcome": outcome})
         i.delivery_human_commits.set(human_commits, labels)
         i.delivery_human_lines_changed.set(human_lines_changed, labels)
