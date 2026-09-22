@@ -53,7 +53,7 @@ cold prompt inherit it through the same seam instead of a second, silently diver
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -63,6 +63,7 @@ from agentic.shared.configuration import Configuration
 from ..domain import document, plan_view, rules, schemas, turn_notice
 from ..domain.document import HUMAN
 from ..domain.roles import ORIGINAL, TECH_LEAD, Prompt, Role, describe_flags, render
+from ..domain.suppressions import Forbidden
 from ..domain.task import WAITING_ON_HUMAN, EscalationClass, Failure, RoleRun, TaskState, apply
 from .limits import RunLimits
 from .ports import AttemptFailed, Ports, Presubmit, RoleRunner, SchemaGuard
@@ -268,6 +269,7 @@ async def run_with_retry(
     spent_usd: float = 0.0,
     task_cap_usd: float | None = None,
     presubmit: Presubmit | None = None,
+    forbidden: Sequence[Forbidden] | None = None,
     limits: RunLimits | None = None,
     section: str | None = None,
     cold_prompt: str | None = None,
@@ -286,6 +288,9 @@ async def run_with_retry(
     cut off.
 
     `presubmit` is handed to every attempt: the harness asks it when the model delivers.
+    `forbidden` is handed to every attempt too: the product's own declared suppression
+    cage (issue #38), `None` by default, byte for byte what every caller but a
+    Developer's own already passes.
 
     `section` is what a successful attempt would write (`run_record`'s own default,
     the role's name, when the caller has none yet): a failed attempt stamps it on its
@@ -351,6 +356,7 @@ async def run_with_retry(
                     max_budget_usd=max_budget_usd,
                     presubmit=presubmit,
                     guard=guard,
+                    forbidden=forbidden,
                 )
                 ended_at = _now_iso()
         except AttemptFailed as exc:
@@ -450,6 +456,7 @@ async def _attempt(
     max_budget_usd: float | None,
     presubmit: Presubmit | None = None,
     guard: SchemaGuard | None = None,
+    forbidden: Sequence[Forbidden] | None = None,
 ) -> Output:
     result = await runner.run_once(
         role,
@@ -462,6 +469,7 @@ async def _attempt(
         max_budget_usd=max_budget_usd,
         presubmit=presubmit,
         guard=guard,
+        forbidden=forbidden,
     )
     cost, session = result.cost_usd, result.session_id
     if result.structured_output is None:
@@ -649,6 +657,7 @@ async def run_role(
     prompt: str | None = None,
     cold_prompt: str | None = None,
     presubmit: Presubmit | None = None,
+    forbidden: Sequence[Forbidden] | None = None,
     **placeholders: object,
 ) -> tuple[Output | None, TaskState]:
     """Run a role and build the state patch. On `RoleFailure`, or when the task cap
@@ -659,11 +668,14 @@ async def run_role(
     role runs (the product root by default); `resume` continues the role's earlier
     session; `prompt` replaces the context with a shorter message when the session
     already holds it (an interview's later rounds); `presubmit` is asked when it
-    delivers. `cold_prompt` is the full context for the one retry that drops `resume`
-    when it turns out stale (`run_with_retry`'s own doc): `run_role` never builds one on
-    its own, since only the caller knows what a message it did not build should contain
-    (ADR-0004, sixth addendum) — a caller that passes `resume` with no `cold_prompt`
-    keeps today's retry, which tries the same session again."""
+    delivers. `forbidden` is the product's own declared suppression cage (issue #38),
+    threaded through exactly where `presubmit` already travels: `None` by default, and
+    only `develop.py`'s Developer call passes one. `cold_prompt` is the full context for
+    the one retry that drops `resume` when it turns out stale (`run_with_retry`'s own
+    doc): `run_role` never builds one on its own, since only the caller knows what a
+    message it did not build should contain (ADR-0004, sixth addendum) — a caller that
+    passes `resume` with no `cold_prompt` keeps today's retry, which tries the same
+    session again."""
     section = section or role.name
     vocabulary = ports.flags.load()
     loaded = load_prompt(role, cfg, ports, vocabulary, **placeholders)
@@ -689,6 +701,7 @@ async def run_role(
             spent_usd=state.get("cost_usd", 0.0),
             task_cap_usd=task_cap(state, cfg),
             presubmit=presubmit,
+            forbidden=forbidden,
             limits=ports.limits,
             section=section,
             cold_prompt=cold_prompt,
