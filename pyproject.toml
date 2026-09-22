@@ -57,6 +57,7 @@ files = [
     "agentic/shared",
     "agentic/core/measurement/domain",
     "agentic/core/knowledge/domain",
+    "agentic/core/process/domain",
 ]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
@@ -67,3 +68,8 @@ warn_return_any = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+# `yaml` (PyYAML) ships no stubs; named per package, never a bare `*` (ADR-0021).
+module = "yaml"
+ignore_missing_imports = true
