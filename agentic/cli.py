@@ -14,6 +14,7 @@ the checkpointer and invokes the graph. What a resume does is decided in
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import signal
 import subprocess
@@ -23,9 +24,11 @@ from collections.abc import Awaitable, Callable, Iterator
 from contextlib import AbstractAsyncContextManager, contextmanager
 from datetime import UTC, datetime
 from functools import partial
+from pathlib import Path
 from typing import cast
 
 import anyio
+import yaml
 from dotenv import load_dotenv
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -36,6 +39,7 @@ from .composition import default_ports, graph
 from .core.knowledge.domain import knowledge
 from .core.measurement.adapters.otel import telemetry
 from .core.measurement.adapters.otel.telemetry import InvocationKind
+from .core.measurement.domain import evaluation
 from .core.measurement.domain import metrics as delivery_metrics
 from .core.process.adapters.filesystem import FilesystemRunLock
 from .core.process.adapters.git.workspace import GitError
@@ -62,13 +66,23 @@ Checkpointer = Callable[[Configuration], AbstractAsyncContextManager[BaseCheckpo
 # `_run`/`_resume` so a test asserts argv and redirection without spawning anything
 # (Tech Lead plan, subtask `--detach`).
 Spawner = Callable[[list[str], str], int]
+# `eval run` launches one `agentic run --fresh --issue N` per set task, waited before
+# the next one starts: `RunLimits` is per Corrida keyed by `thread_id` (ADR-0004, fifth
+# addendum), so five in parallel would put twenty roles in flight and the 429s that
+# follow would read as prompt regressions (Tech Lead plan, subtask `eval-cli`).
+# `Spawner`'s own shape beside it -- one alias, one default implementation, `None` on
+# the call site meaning the default -- takes the child's argv and an environment
+# overlay and hands back nothing: the outcome is read from the task's own document
+# afterwards, never from this call, so an exit status here would be a second source of
+# truth the way `_report`'s `sys.exit(1)` already is not one.
+EvalLauncher = Callable[[list[str], dict[str, str]], None]
 
 # What the lock claims, said whenever it refuses (Tech Lead plan, subtask `run-lock`):
 # it protects one CLI invocation from another, nothing a `langgraph dev` server runs.
 LOCK_SCOPE = (
-    "the lock protects `agentic run`/`agentic resume`/`agentic close` invocations from "
-    "each other; a `langgraph dev` server holds every thread in one process and is not "
-    "covered by it"
+    "the lock protects `agentic run`/`agentic resume`/`agentic close`/`agentic eval run` "
+    "invocations from each other; a `langgraph dev` server holds every thread in one "
+    "process and is not covered by it"
 )
 
 # The one string that spells an unknown `system_version` wherever `close` emits one:
@@ -101,6 +115,19 @@ def brief_refusal(ports: Ports) -> str | None:
     layer, next to `no_forbidden`'s own split."""
     text = ports.knowledge.brief()
     return None if text is None else knowledge.brief_refusal(text)
+
+
+def _warn_no_tty(detach: bool) -> None:
+    """The fact `run`/`resume`/`eval run` share: a process with no TTY and no
+    `--detach` dies the moment its session closes (2026-09-15). Factored out so `eval
+    run` prints the identical line without joining the `preflight` gate `eval` skips
+    entirely (Tech Lead plan, subtask `eval-cli`)."""
+    if not detach and not sys.stdin.isatty():
+        print(
+            "agentic: no TTY and no --detach: this process dies if its session "
+            "closes (2026-09-15); pass --detach to survive it",
+            file=sys.stderr,
+        )
 
 
 class CannotStart(Exception):
@@ -159,6 +186,49 @@ def main() -> None:
     )
     close.add_argument("--issue", type=int, metavar="N", required=True)
     close.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
+    eval_parser = sub.add_parser(
+        "eval", help="drive or score README.md 9's fixed five-task evaluation set"
+    )
+    eval_sub = eval_parser.add_subparsers(dest="eval_command", required=True)
+    eval_run = eval_sub.add_parser(
+        "run", help="run every task of the evaluation set from scratch, one at a time"
+    )
+    eval_run.add_argument(
+        "--budget",
+        type=float,
+        metavar="USD",
+        required=True,
+        help="stop launching further tasks once the observed spend would exceed this",
+    )
+    eval_run.add_argument(
+        "--yes",
+        action="store_true",
+        help="confirm the estimated spend; required to launch anything",
+    )
+    eval_run.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="show the set, the resolved issues and the estimate, spending nothing",
+    )
+    eval_run.add_argument(
+        "--detach",
+        action="store_true",
+        help="detach this eval driver (setsid), print the pid and the log path, and exit",
+    )
+    eval_run.add_argument(
+        "--set", metavar="PATH", help="override the product's own .agentic/eval-set.yaml"
+    )
+    eval_run.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
+    eval_score = eval_sub.add_parser(
+        "score", help="write one JSONL line per evaluation-set task, read off its own document"
+    )
+    eval_score.add_argument(
+        "--out", metavar="PATH", required=True, help="destination JSONL; refuses if it exists"
+    )
+    eval_score.add_argument(
+        "--set", metavar="PATH", help="override the product's own .agentic/eval-set.yaml"
+    )
+    eval_score.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
     for command in (run, resume):
         command.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
         command.add_argument(
@@ -183,9 +253,17 @@ def main() -> None:
             resume.error("--detach and --dry-run are exclusive: --dry-run has no child to report")
         if args.detach and not args.yes:
             resume.error("--detach requires --yes: a detached child has no stdin to confirm on")
+    elif args.command == "eval" and args.eval_command == "run":
+        # The same fact `resume --detach` already checks, for the same reason: a
+        # detached driver has no stdin, neither to confirm the estimate on nor to
+        # report a dry-run to.
+        if args.detach and args.dry_run:
+            eval_run.error("--detach and --dry-run are exclusive: --dry-run has no child to report")
+        if args.detach and not args.yes:
+            eval_run.error("--detach requires --yes: a detached child has no stdin to confirm on")
     # close has neither flag to check: it never joined the `for command in (run, resume)`
     # loop above, so `--detach`/`--dry-run` are unrecognized arguments there, a parse
-    # error argparse raises on its own.
+    # error argparse raises on its own. `eval score` is the same shape.
 
     # The env var outranks `configurable`, so an explicit flag has to go in as env.
     if args.product_dir:
@@ -199,11 +277,16 @@ def main() -> None:
         if not cfg.agentic_dir.is_dir():
             raise ValueError(f"{cfg.product_dir} is not a product repo: no .agentic/ directory")
         ports = default_ports(cfg)
-        if args.command != "close":
+        if args.command not in ("close", "eval"):
             # `close` runs no role and spends nothing, so the gate that renders every
             # role's prompt and checks the product's stack before a run spends money
             # does not apply to it (Tech Lead plan, subtask `close-command`): only
             # `run` and `resume` still call it, byte-identically to before this task.
+            # `eval` is the same fact one step further: `eval score` runs no role and
+            # spends nothing either, and `eval run` runs no role itself -- each child
+            # runs the full `preflight` for its own task at its own base, the only
+            # process where its failure can still escalate (ADR-0011, third addendum;
+            # Tech Lead plan, subtask `eval-cli`).
             preflight(cfg, ports)
             # Said and not enforced: the run is worth less, it is not wrong.
             for warn in (unfixed_stage0, no_setup, no_brief):
@@ -221,12 +304,11 @@ def main() -> None:
                 # absent one is `no_brief`'s fact above, never this one's.
                 if (problem := brief_refusal(ports)) is not None:
                     raise ValueError(problem)
-            if not getattr(args, "detach", False) and not sys.stdin.isatty():
-                print(
-                    "agentic: no TTY and no --detach: this process dies if its session "
-                    "closes (2026-09-15); pass --detach to survive it",
-                    file=sys.stderr,
-                )
+            _warn_no_tty(getattr(args, "detach", False))
+        elif args.command == "eval" and args.eval_command == "run":
+            # `eval run` spends real money and detaches the same way `run`/`resume`
+            # do; `eval score` never spends anything and skips this warning entirely.
+            _warn_no_tty(args.detach)
         if args.command == "resume":
             task_id = ports.inbox.task_id(args.issue)
             base = declared_stack_of(task_id, ports)
@@ -252,6 +334,23 @@ def main() -> None:
         elif args.command == "close":
             task_id = ports.inbox.task_id(args.issue)
             work = partial(_close, task_id, cfg, ports)
+        elif args.command == "eval":
+            if args.eval_command == "run":
+                log_file = _log_file_for(cfg, "eval")
+                work = partial(
+                    _eval_run,
+                    cfg,
+                    ports,
+                    args.set,
+                    args.budget,
+                    args.yes,
+                    args.dry_run,
+                    log_file=log_file,
+                    detach=args.detach,
+                    child_argv=_child_argv(),
+                )
+            else:
+                work = partial(_eval_score, cfg, ports, args.set, args.out)
         else:
             if args.issue is not None:
                 task = ports.inbox.task(args.issue)
@@ -702,6 +801,192 @@ def _now_iso() -> str:
     the frontmatter already use (`run_role._now_iso`, not importable across layers from
     a driving adapter, so this is its own copy of the same one-liner)."""
     return datetime.now(UTC).isoformat(timespec="milliseconds")
+
+
+def _read_eval_set(cfg: Configuration, set_path: str | None) -> tuple[evaluation.EvalSet, str, str]:
+    """The declaration as a value, its own text (`evaluation.baseline_id`'s own input)
+    and where it came from: `--set` overrides the product's own `.agentic/eval-set.yaml`
+    (`evaluation.DECLARATION_PATH`) for a spike, and the caller reports which of the two
+    it read (Tech Lead plan, subtask `eval-cli`). No port: `cli.py` is the composition
+    root and already reads `.agentic/` directly, the same precedent `flags.py`'s adapter
+    has for `.agentic/flags.yaml` -- a second caller would earn this its own port, not a
+    first one with no other module to share it with."""
+    if set_path is not None:
+        path, source = Path(set_path), set_path
+    else:
+        path = cfg.product_dir / evaluation.DECLARATION_PATH
+        source = str(evaluation.DECLARATION_PATH)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise CannotStart(f"{source}: {exc}") from exc
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise CannotStart(f"{source}: {exc}") from exc
+    try:
+        declaration = evaluation.parse_eval_set(data, source)
+    except ValueError as exc:
+        raise CannotStart(str(exc)) from exc
+    return declaration, text, source
+
+
+def _refuse_open_pull_request(ports: Ports, task_id: str) -> None:
+    """A set task whose pull request is still open would have its branch archived out
+    from under that pull request by the `--fresh` each child runs with (ADR-0011, sixth
+    addendum). Read off the document alone when there is nothing to ask `gh` about --
+    no document, no `pull_request` value, or a `pull_request` already closed -- so a
+    task never before run, or one already closed, never refuses here."""
+    document = ports.documents.load(task_id)
+    reference = (document or {}).get("pull_request")
+    if not reference or (document or {}).get("closed_at"):
+        return
+    try:
+        pull_request = ports.tracker.pull_request(reference)
+    except (ValueError, OSError) as exc:
+        raise CannotStart(str(exc)) from exc
+    if pull_request is not None and pull_request.state == "OPEN":
+        raise CannotStart(
+            f"{task_id}: its pull request is still open; --fresh would archive the "
+            "branch it points at"
+        )
+
+
+def _run_eval_child(argv: list[str], env_overlay: dict[str, str]) -> None:
+    """The default `EvalLauncher`: a waited `subprocess.run`, never `start_new_session`
+    and never `_spawn_detached`, so `eval run`'s sequencing -- one child at a time,
+    `RunLimits` being per Corrida (ADR-0004, fifth addendum) -- is a property of the
+    code and not of a comment. `AGENTIC_LOG_FILE` is dropped from every child's
+    environment: `_spawn_detached` sets it on a detached eval driver's own process, and
+    `Configuration` treats it as a per-field override, so without the drop every child
+    would log into the eval driver's own log file instead of minting its own."""
+    env = {**os.environ, **env_overlay}
+    env.pop(ENV_PREFIX + "LOG_FILE", None)
+    subprocess.run(argv, env=env, check=False)
+
+
+async def _eval_run(
+    cfg: Configuration,
+    ports: Ports,
+    set_path: str | None,
+    budget: float,
+    yes: bool,
+    dry_run: bool,
+    run_lock: RunLock | None = None,
+    log_file: str | None = None,
+    detach: bool = False,
+    child_argv: list[str] | None = None,
+    spawn: Spawner | None = None,
+    launch: EvalLauncher | None = None,
+) -> None:
+    """`agentic eval run`: drives README.md 9's fixed set, one `agentic run --fresh
+    --issue N` per task, waited before the next starts (Tech Lead plan, subtask
+    `eval-cli`). Every refusal below fires before the first child is launched: the
+    declaration, the product's own name, a set task's still-open pull request, a set
+    task's own run lock, and the eval lock itself -- keyed on the fixed string `"eval"`,
+    one driver per product repo. `--dry-run` never acquires anything, the same shape
+    `resume --dry-run` already has: it reports and returns."""
+    lock = run_lock if run_lock is not None else _lock_for(cfg)
+    declaration, _text, source = _read_eval_set(cfg, set_path)
+    estimate = len(declaration.issues) * evaluation.PER_TASK_ESTIMATE_USD
+    print(
+        f"agentic: {source}: {len(declaration.issues)} task(s), estimated "
+        f"${estimate:.2f} at ${evaluation.PER_TASK_ESTIMATE_USD:.2f}/task "
+        f"(smoke: issue {declaration.smoke})"
+    )
+    if dry_run:
+        for issue in declaration.issues:
+            task_id = ports.inbox.task_id(issue)
+            document = ports.documents.load(task_id)
+            status = document.get("status", "open") if document else "no document yet"
+            print(f"  {task_id} (issue {issue}): {status}")
+            _print_lock(lock, task_id)
+        return
+    if not yes:
+        raise CannotStart(
+            f"estimated spend ${estimate:.2f} for {len(declaration.issues)} task(s): "
+            "pass --yes to proceed"
+        )
+    if detach:
+        _detach(lock, "eval", child_argv or [], log_file or "", spawn)
+        return
+    try:
+        ports.stack.product()
+    except (ValueError, OSError) as exc:
+        raise CannotStart(str(exc)) from exc
+    for issue in declaration.issues:
+        task_id = ports.inbox.task_id(issue)
+        _refuse_open_pull_request(ports, task_id)
+        _refuse_if_locked(lock, task_id)
+    with _locked(lock, "eval"):
+        spent = 0.0
+        for issue in declaration.issues:
+            task_id = ports.inbox.task_id(issue)
+            if spent + evaluation.PER_TASK_ESTIMATE_USD > budget:
+                print(
+                    f"agentic: ${budget:.2f} budget would be exceeded before {task_id} "
+                    f"(issue {issue}); stopping with {spent:.2f} spent"
+                )
+                break
+            before = ports.documents.load(task_id)
+            argv = [sys.argv[0], "run", "--fresh", "--issue", str(issue)]
+            overlay = {ENV_PREFIX + "PRODUCT_DIR": str(cfg.product_dir)}
+            (launch or _run_eval_child)(argv, overlay)
+            after = ports.documents.load(task_id)
+            # A task whose document did not move charges the full estimate: a child
+            # that dies before writing anything cannot loop for free (Tech Lead plan).
+            moved = after is not None and after != before
+            cost = float(after.get("cost_usd", 0.0)) if moved else evaluation.PER_TASK_ESTIMATE_USD
+            spent += cost
+            print(
+                f"agentic: {task_id} (issue {issue}) done, ${cost:.2f} (${spent:.2f} spent so far)"
+            )
+
+
+async def _eval_score(
+    cfg: Configuration, ports: Ports, set_path: str | None, out_path: str
+) -> None:
+    """`agentic eval score`: one JSONL line per evaluation-set task, each entirely
+    `evaluation.evaluation_record`'s own read of that task's document -- no `gh`, no
+    Grafana, no metric emission, no write other than `out_path` (Tech Lead plan,
+    subtask `eval-cli`). Refuses outright when `out_path` already exists, before the
+    declaration is even read: a new file per invocation, merge and history left to
+    git, so no run can eat a baseline. Blockable by nothing except the documents it
+    reads."""
+    destination = Path(out_path)
+    if destination.exists():
+        raise CannotStart(f"{destination}: already exists; write a new file, merge with git")
+    declaration, _text, source = _read_eval_set(cfg, set_path)
+    try:
+        product = ports.stack.product()
+    except (ValueError, OSError) as exc:
+        raise CannotStart(str(exc)) from exc
+    lines: list[str] = []
+    fingerprints: dict[str, list[str]] = {}
+    pending: list[int] = []
+    for issue in declaration.issues:
+        task_id = ports.inbox.task_id(issue)
+        document = ports.documents.load(task_id)
+        if document is None:
+            print(f"agentic: {task_id} (issue {issue}) has no document yet; skipped")
+            continue
+        record = evaluation.evaluation_record(product, issue, document)
+        lines.append(json.dumps(record, sort_keys=True))
+        fingerprints.setdefault(record["prompts_fingerprint"], []).append(task_id)
+        if record["score"] is None:
+            pending.append(issue)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    print(f"agentic: {source}: wrote {len(lines)} line(s) to {destination}")
+    if len(fingerprints) > 1:
+        print(
+            "agentic: prompts fingerprint diverges across "
+            f"{len(fingerprints)} groups (a task that stopped early ran fewer prompts):"
+        )
+        for fingerprint, task_ids in fingerprints.items():
+            print(f"  {fingerprint}: {', '.join(sorted(task_ids))}")
+    for issue in pending:
+        print(f"agentic close --issue {issue}")
 
 
 async def _invoke(
