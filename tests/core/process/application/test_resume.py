@@ -48,7 +48,7 @@ def sub(id_, status, branch, base, **more):
 
 
 def git_as_recorded(ports):
-    ports.workspace.branches.update(
+    ports.workspace.existing_branches.update(
         {
             "agentic/GH-12": ("i2", "b0"),
             "agentic/GH-12.api": ("a2", "b1"),
@@ -103,7 +103,7 @@ def test_from_document_leaves_a_legacy_document_without_the_key():
 
 def test_the_document_is_refused_when_git_moved_since():
     ports = memory_ports()
-    ports.workspace.branches.update(
+    ports.workspace.existing_branches.update(
         {"agentic/GH-12.api": ("a3", "b1"), "agentic/GH-12.domain": ("d2", "b9")}
     )
     ports.documents.save(paused())
@@ -129,6 +129,20 @@ def test_the_decision_is_everything_the_human_said_after_the_system_last_spoke()
     assert resume.human_decision(["Escalated: x", "Keep it\r\nsimple."]) == "Keep it\nsimple."
     assert resume.human_decision(["Discussed before any run."]) is None
     assert resume.human_decision([]) is None
+
+
+def test_the_decision_skips_a_started_over_comment_too():
+    # `archive.STARTED_OVER` is registered here too (ADR-0011, sixth addendum): a
+    # `--fresh` archive must not read back as the human's own decision on the next
+    # resume. The comment sits between the escalation and the decision -- exactly
+    # where `--fresh` posts it, restarting a task nobody had answered yet -- and the
+    # decision after it is still read clean, with none of the archive's own words in it.
+    comments = [
+        "Escalated: x",
+        "Started over: previous run archived as archive/run4-abc/",
+        "Use USD.",
+    ]
+    assert resume.human_decision(comments) == "Use USD."
 
 
 def test_a_resume_under_the_formula_goes_on_to_the_returned_integration(cfg):

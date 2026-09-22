@@ -193,6 +193,13 @@ class TaskDocuments(Protocol):
         beyond the state (plugins, system commit) comes along. None when there is none."""
         ...
 
+    def write_into(self, task_id: str, root: Path) -> Path | None:
+        """Write the task's document into the checkout at `root`, without touching
+        wherever `save` itself keeps it (ADR-0011, sixth addendum: archiving commits
+        the document on the archived task branch, never the product's main checkout).
+        The path it wrote, or None when the task has no document to write."""
+        ...
+
 
 class ProductKnowledge(Protocol):
     """The consolidated knowledge of the product (ADR-0006), stored with the human docs.
@@ -378,6 +385,28 @@ class Workspace(Protocol):
     def prune(self) -> None:
         """Forget checkouts whose directory is gone, so asking for them again recreates
         them: a resume after the human removed a worktree."""
+        ...
+
+    def branches(self, prefix: str) -> list[str]:
+        """Every branch name starting with `prefix`, verbatim (ADR-0011, sixth
+        addendum): a dumb string verb with no notion of task or subtask. A repo at
+        GH-88 answers `agentic/GH-1` *and* `agentic/GH-12` for the prefix
+        `"agentic/GH-1"`, so a caller that means one task's own branches goes through
+        `rules.branches_of_task`, never this verb's answer unfiltered."""
+        ...
+
+    def rename_branch(self, old: str, new: str) -> None:
+        """`git branch -m old new`, carrying `branch.<b>.agenticBase` with it: the
+        archiving verb (ADR-0011, sixth addendum). A no-op when `new` already exists
+        and `old` does not -- the idempotent case a retried archive relies on."""
+        ...
+
+    def is_ignored(self, root: Path, relative: str) -> bool:
+        """Whether the product's own `.gitignore` under `root` ignores `relative`
+        (ADR-0011, sixth addendum): archiving commits the task document with
+        `commit_all`'s own `git add -A`, so this is how it tells the caller the
+        document did not land, without assuming every product versions
+        `.agentic/tasks/` the way this repo and gym-saas both happen to."""
         ...
 
 

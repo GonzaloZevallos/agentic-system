@@ -790,7 +790,7 @@ def developing(ports, subtasks=("api", "domain")):
     state = {**TASK, "subtasks": {sid: sub(sid) for sid in subtasks}, "subtask_id": "api"}
     checkout = ports.workspace.subtask_checkout("GH-12", "api")
     ports.workspace.moved.add(checkout.path)
-    ports.workspace.branches["agentic/GH-12"] = ("head", "base0")
+    ports.workspace.existing_branches["agentic/GH-12"] = ("head", "base0")
     return state, checkout
 
 

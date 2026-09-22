@@ -404,3 +404,124 @@ vive en `run_with_retry`, y para todo otro rol `hooks_for` y `options_for` recib
 - **Un hook `Stop` para el guard**, por la misma razón que la segunda adenda ya descartó
   para la puerta de entrega: con `output_format` el turno termina en la llamada a
   `StructuredOutput`, y un `Stop` corre después de que la sesión ya decidió terminar.
+
+## Adenda (2026-09-21, sexta): `--fresh` archiva la corrida anterior en vez de construir encima
+
+`agentic run --fresh` (ADR-0003, adenda) borra el thread de la tarea y deja sus ramas y sus
+worktrees donde estaban. `GitWorkspace.task_checkout` es idempotente por diseño, así que la
+corrida siguiente encuentra `agentic/<tarea>` viva y construye sobre los commits de otro
+plan: exactamente lo que la negativa de `run` sobre una tarea con estado existe para
+evitar, con el agravante de que `--fresh` la saltea. Para las corridas 3 y 4 de GH-12 el
+archivado se hizo a mano, con un script corrido con `!` (`archive/run2-04abd2c/GH-12*`,
+`archive/run3-75de807/GH-12`), y el relanzamiento de GH-12 de cero depende de esto.
+
+**`--fresh` archiva antes de borrar el thread.** Un caso de uso nuevo,
+`application/archive.py`, con reglas puras de nombre y de número en `domain/rules.py` y dos
+verbos tontos más en el port `Workspace` (`branches(prefix)`, `rename_branch`), uno en
+`TaskDocuments` (`write_into`) y uno para el chequeo del `.gitignore` del producto. El orden
+es el del daño, de menor a mayor: commitear cada worktree de la tarea → sacarlos →
+renombrar la rama de tarea → renombrar las de subtarea → borrar el thread → tocar el issue.
+
+**Corre dentro del lock y una sola vez.** Primera sentencia dentro de
+`with _locked(lock, task_id)` de `cli._run` y antes de `adelete_thread`, así que está bajo
+la misma exclusión mutua que la invocación. El padre de un `--detach` no archiva nada:
+retorna antes del `with` y sigue tocando sólo el archivo de lock y `Popen`; archiva el hijo
+cuando vuelve a entrar sin `--detach`. Y con `--fresh` el stack **no** se lee en la base de
+la tarea: `main()` omite `declared_stack_of`, porque `checkouts.task_base` resuelve por
+`base_of(task_branch)` y esa rama está por dejar de existir; la verificación en HEAD que
+`preflight` ya hizo es la que rige, que es la base de la que nace el checkout siguiente.
+
+**La rama de tarea viva, sola, decide si hay algo que archivar.** `_checkout` crea la rama
+cuando falta, le escribe `agenticBase` y le agrega un worktree: preguntar por el documento
+antes que por la rama haría que el archivado **fabricara** `agentic/<tarea>` para archivarla.
+Una tarea que escaló en `classify` tiene documento y cero ramas — la rama nace al arrancar
+la etapa de definición, no antes— y ahí no hay nada que archivar: el documento lo pisa la
+corrida fresca y su historia ya está en git. El paso del issue se parte en dos condiciones
+distintas: `unlabel(NEEDS_HUMAN)` corre si el documento dice que la tarea estaba pausada
+—reiniciarla la saca de la cola de escalados—, y el comentario `Started over: …` corre sólo
+si algo se archivó, porque un comentario sin prefijo que nombrar es ruido.
+
+**Se commitean todos los worktrees, no sólo el de tarea.** `Workspace.cleanup` remueve con
+`--force`, que se lleva el árbol sucio sin decir nada, y el caso para el que existe `--fresh`
+es una corrida cortada a mitad del desarrollo: ahí cada worktree de subtarea tiene lo que su
+Developer no llegó a commitear, que es la única parte del historial que git todavía no
+tiene. `commit_all` devuelve `None` sobre un árbol limpio, así que un worktree limpio no
+deja commit vacío. El documento de tarea se copia al worktree de tarea con `write_into` y se
+commitea ahí, con el mismo verbo que ya usan `plan` y `define`: nada de plumbing sobre un
+índice temporal para commitear en una rama que nadie tiene checkouteada. Descartado dejar los
+worktrees puestos: `--fresh` existe para que la corrida siguiente arranque limpia, y un
+worktree viejo apunta a una rama renombrada.
+
+**El renombre de la rama de tarea va primero, y eso es lo que hace decidible un reintento.**
+`subtask_checkout` pide `task_checkout` antes que nada, así que ninguna corrida puede producir
+`agentic/<tarea>` ausente con `agentic/<tarea>.<sub>` viva: ese estado sólo lo deja un
+archivado que se cortó. La regla, pura sobre `(refs, ramas vivas, task_id)`:
+
+- rama de tarea viva ⇒ archivado nuevo, `N = max(existentes) + 1`;
+- rama de tarea ausente y alguna de subtarea viva ⇒ archivado sin terminar: se reusa el `N`
+  más alto que esa tarea ya tiene y se saltean el documento y los worktrees, que ya están
+  hechos y cuya recreación acuñaría la rama;
+- ninguna de las dos ⇒ no hay nada que archivar.
+
+`system_commit` no decide nada: sale del frontmatter, es parte del nombre y nada más, y
+`unknown` repetido entre corridas es inofensivo. Descartada la regla que lo usaba como
+discriminador de reintento: no es único.
+
+**Ningún id de tarea se compara por prefijo.** `branches(prefix)` es un verbo sobre cadenas
+y `branches("agentic/GH-1")` devuelve también `agentic/GH-12`; este repo va por GH-88, así
+que el par existe hoy. Sin filtrar, un `--fresh` sobre GH-1 renombraría la rama de una tarea
+ajena y viva —el lock es por tarea y no protege nada ahí— y leería un archivado sin terminar
+donde no lo hay. Todo filtrado por id pasa por `rules.branches_of_task(names, task_id)`, que
+compara segmentos completos: después del id viene fin de cadena o el punto que
+`subtask_branch` define.
+
+**El documento no puede impedir el archivado, y el archivado no puede mentir sobre él.**
+`documents.load` pasa por `document.parse`, que levanta `ValueError` sin frontmatter; un
+documento ilegible deja `system_commit = "unknown"` y el archivado sigue, porque `--fresh` es
+el comando al que se recurre cuando la tarea quedó fea y negarse por el archivo que describe
+esa fealdad devuelve al humano al script con `!`. Del otro lado, `commit_all` es `git add -A`
+y respeta el `.gitignore` del producto: que `.agentic/tasks/` esté versionado es cierto acá
+(ADR-0017) y en gym-saas, pero no es una garantía del sistema. Se verifica que el documento
+quedó adentro y, cuando el producto lo ignora, se archiva igual y se dice, en la línea que la
+CLI imprime y en el comentario del issue.
+
+**Todo queda escrito, porque no hay dónde confirmar.** `archive_previous_run` devuelve
+`prefix`, `written` y `document_kept`, no una cadena o `None`: "lo archivé ahora" y "ya estaba
+archivado" tienen cosas distintas que decir y sólo `prefix is None` significa que no había
+nada. `_run` imprime una línea antes de `_invoke` en los dos casos y el comentario en el issue
+se postea en los dos; un comentario duplicado es barato y un archivado mudo no se puede
+rastrear. No hay confirmación interactiva: `--detach` no tiene TTY.
+
+**El prefijo del comentario se registra como comentario del sistema.** `resume.human_decision`
+toma como texto del humano todo comentario que no arranque con uno de `SYSTEM_COMMENTS`, y ese
+texto termina en la sección `## Human` que todo rol lee sin declararla (ADR-0003). Un
+`Started over: …` sin registrar haría que el sistema se cite a sí mismo como decisión del
+humano en la reanudación siguiente. `STARTED_OVER` vive en `application/archive.py`, junto al
+código que lo postea —la forma que `escalate.ESCALATED`, `deliver.READY` y `discard.DISCARDED`
+ya tienen— y `resume.SYSTEM_COMMENTS` lo importa en el mismo diff. La flecha va en un solo
+sentido: `archive.py` no importa `resume.py`, lee el frontmatter crudo y toma `NEEDS_HUMAN` de
+`escalate`.
+
+**Un fallo de git corta y no borra el thread.** Cualquier `GitError` —un worktree que no se
+puede remover, un renombre con las dos puntas presentes— sube como `CannotStart`, la salida
+que la CLI ya tiene: no se intenta ningún renombre después, el thread queda, y el archivado es
+idempotente por construcción (destino presente y origen ausente es no-op), así que el reintento
+lo termina. Un worktree que no se puede sacar significa que otra cosa está usando esta tarea, y
+eso es del humano. El sistema nunca renombra una rama todavía checkouteada en un worktree.
+
+**Lo que esta adenda no cambia.** `--fresh` sin ramas sigue igual, `run` sin `--fresh` sigue
+negándose con el mismo texto, `resume` no cambia de comportamiento, el documento se renderiza y
+se parsea igual, y ningún prompt de `domain/prompts/` se toca: `prompts.fingerprint` no se
+mueve.
+
+### Riesgos conocidos
+
+- Un worktree de subtarea con un merge de dependencia en conflicto (ADR-0004, novena adenda)
+  se commitea con sus marcadores adentro: es lo que la corrida dejó, y es lo que se archiva,
+  pero quien lea esa rama después no distingue un merge resuelto de uno archivado en conflicto.
+- El archivado no deja métrica. Una corrida reiniciada es invisible en Grafana salvo por lo que
+  gastó la corrida nueva.
+- La regla de tres casos no distingue un archivado sin terminar de una rama de tarea que alguien
+  borró a mano con sus ramas de subtarea vivas: en ese caso reusaría un `N` y saltearía el paso
+  del documento. Se acepta: no hay forma de distinguirlos sin guardar estado que sobreviva al
+  thread que `--fresh` borra.

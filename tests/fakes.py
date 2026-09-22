@@ -67,6 +67,7 @@ def _subtask_of(cwd) -> str:
 class MemoryDocuments:
     def __init__(self):
         self.saved: list[TaskState] = []
+        self.written_into: list[tuple[str, Path]] = []
 
     def save(self, state: TaskState) -> Path:
         self.saved.append(state)
@@ -78,6 +79,12 @@ class MemoryDocuments:
     def load(self, task_id: str) -> dict | None:
         mine = [s for s in self.saved if s["id"] == task_id]
         return dict(mine[-1]) if mine else None
+
+    def write_into(self, task_id: str, root: Path) -> Path | None:
+        self.written_into.append((task_id, root))
+        if self.load(task_id) is None:
+            return None
+        return root / ".agentic" / "tasks" / f"{task_id}.md"
 
     @property
     def last(self) -> TaskState:
@@ -198,9 +205,9 @@ class MemoryWorkspace:
     """Branches and worktrees as names. A Developer's commit is simulated by adding
     its checkout path to `moved` before the run: `head` then differs from the base.
     A path in `dirty` has untracked files and one in `uncommitted` has changes to
-    tracked ones; only the second makes a version `+dirty`. `branches` maps an existing
-    branch to
-    (head, base) for the checks of a resume; `checkouts` are the worktrees on disk."""
+    tracked ones; only the second makes a version `+dirty`. `existing_branches` maps an
+    existing branch to (head, base) for the checks of a resume and for `branches`,
+    `rename_branch`; `checkouts` are the worktrees on disk."""
 
     ROOT = Path("/memory/worktrees")
 
@@ -232,7 +239,13 @@ class MemoryWorkspace:
         self.pushed: list[str] = []
         self.cleaned: list[str] = []
         self._looks: dict[Path, int] = {}
-        self.branches: dict[str, tuple[str, str]] = {}
+        self.existing_branches: dict[str, tuple[str, str]] = {}
+        # `rename_branch` calls, oldest first.
+        self.renamed: list[tuple[str, str]] = []
+        # Paths (as `is_ignored`'s own `relative` argument) a test declares ignored by
+        # the product's `.gitignore`; empty is a product that ignores nothing.
+        self.ignored: set[str] = set()
+        self.ignored_checks: list[tuple[Path, str]] = []
         self.checkouts: list[Path] = []
         # The worktrees this fake has made, as a real one has them on disk.
         self.on_disk: set[Path] = set()
@@ -309,16 +322,28 @@ class MemoryWorkspace:
         self.cleaned.append(task_id)
 
     def branch_head(self, branch: str) -> str | None:
-        return self.branches[branch][0] if branch in self.branches else None
+        return self.existing_branches[branch][0] if branch in self.existing_branches else None
 
     def base_of(self, branch: str) -> str | None:
-        return self.branches[branch][1] if branch in self.branches else None
+        return self.existing_branches[branch][1] if branch in self.existing_branches else None
 
     def worktrees(self, task_id: str) -> list[Path]:
         return list(self.checkouts)
 
     def prune(self) -> None:
         self.pruned += 1
+
+    def branches(self, prefix: str) -> list[str]:
+        return [name for name in self.existing_branches if name.startswith(prefix)]
+
+    def rename_branch(self, old: str, new: str) -> None:
+        self.renamed.append((old, new))
+        if old in self.existing_branches:
+            self.existing_branches[new] = self.existing_branches.pop(old)
+
+    def is_ignored(self, root: Path, relative: str) -> bool:
+        self.ignored_checks.append((root, relative))
+        return relative in self.ignored
 
 
 class MemoryTracker:

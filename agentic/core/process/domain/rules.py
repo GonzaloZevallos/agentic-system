@@ -874,6 +874,88 @@ def subtask_branch(task_id: str, subtask_id: str) -> str:
     return f"{task_branch(task_id)}.{subtask_id}"
 
 
+# Archivado (ADR-0011, sixth addendum): what `--fresh` does with a previous run's
+# branches instead of building the next one on top of them. Naming and numbering are
+# pure, so they are unit-tested with no git call; the adapter only lists, renames,
+# commits and asks about the product's own ignore rules.
+
+
+def archive_prefix(n: int, system_commit: str) -> str:
+    """The prefix every branch of one archived run is renamed under: `run<N>`, the
+    archive's own ordinal for this task, and the system's commit at archive time (or
+    the literal `unknown`, when the document could not be read or parsed -- that
+    literal decides nothing here, it is only ever a name)."""
+    return f"archive/run{n}-{system_commit}"
+
+
+def archive_ref(branch: str, n: int, system_commit: str) -> str:
+    """The archived name for `branch`: the prefix, then the whole branch name kept
+    intact (`agentic/<task>` or `agentic/<task>.<subtask>`), never shortened -- that is
+    what lets `next_archive_run` tell a task branch from a subtask branch apart once
+    both live under the same prefix."""
+    return f"{archive_prefix(n, system_commit)}/{branch}"
+
+
+def branches_of_task(names: Sequence[str], task_id: str) -> list[str]:
+    """`names` (whatever a `Workspace` prefix verb answered) narrowed to this task's
+    own: the task branch itself, or a subtask branch of it, and nothing a shared prefix
+    only looks like. Compares whole segments -- after the id comes end of string or the
+    dot `subtask_branch` defines -- never `startswith`: `branches("agentic/GH-1")` also
+    answers `agentic/GH-12` in a repo that is at GH-88, and this is the one predicate
+    every such caller goes through instead of filtering the prefix verb's answer by
+    hand."""
+    base = task_branch(task_id)
+    dotted = f"{base}."
+    return [name for name in names if name == base or name.startswith(dotted)]
+
+
+# Both spellings `next_archive_run` reads off an archived ref: the one this task writes
+# (`archive_ref`, `agentic/<task>` kept whole) and the one gym-saas GH-12's runs 2 and 3
+# were archived under by hand, with a script run with `!` -- `archive/run2-04abd2c/GH-12`,
+# `archive/run3-75de807/GH-12`, gym-saas refs, not this repo's (agentic-system has nothing
+# under `archive/` yet). Both are `archive/run<N>-<sha>/`, then optionally `agentic/`,
+# then the task id and, for a subtask branch, `.<subtask>`.
+_ARCHIVED_REF = re.compile(r"^archive/run(\d+)-[^/]*/(?:agentic/)?(.+)$")
+
+
+def _archived_runs(refs: Sequence[str], task_id: str) -> list[int]:
+    """The `N` of every archived ref, of either spelling, that belongs to `task_id`:
+    the same whole-segment comparison `branches_of_task` makes, so `GH-1` never reads
+    `GH-12`'s archive as its own."""
+    runs = []
+    for ref in refs:
+        match = _ARCHIVED_REF.match(ref)
+        if not match:
+            continue
+        n, rest = match.groups()
+        if rest == task_id or rest.startswith(f"{task_id}."):
+            runs.append(int(n))
+    return runs
+
+
+def next_archive_run(refs: Sequence[str], live: Sequence[str], task_id: str) -> int | None:
+    """The `N` this archive uses, from three cases of observable state alone -- no git
+    call of its own, `refs` and `live` are whatever the adapter already listed:
+
+    - the task branch is live: a fresh archive, one past the highest `N` this task has
+      archived before (0 when it has none);
+    - the task branch is absent but some subtask branch of this task is still live: an
+      archive that renamed the task branch and was cut before it reached every subtask
+      branch, so the retry reuses the highest `N` this task already has instead of
+      opening a new one;
+    - neither: nothing of this task is live, so there is nothing to archive.
+
+    Renaming the task branch first is what makes the second case legible at all: it is
+    the one state only an unfinished archive leaves behind."""
+    live_of_task = branches_of_task(live, task_id)
+    archived = _archived_runs(refs, task_id)
+    if task_branch(task_id) in live_of_task:
+        return max(archived, default=0) + 1
+    if live_of_task:
+        return max(archived) if archived else 1
+    return None
+
+
 def ready_subtasks(state: TaskState) -> list[str]:
     """Subtasks to build now: pending or returned, with every dependency approved."""
     subtasks = state.get("subtasks", {})

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from agentic.core.process.adapters.git import GitWorkspace
+from agentic.core.process.adapters.git.workspace import GitError
 from agentic.core.process.domain import rules
 from agentic.shared.configuration import Configuration
 
@@ -327,3 +328,80 @@ def test_an_untracked_file_leaves_the_tree_committed_but_not_clean(product):
     assert ws.is_committed(product)  # what `system_version` asks: no `+dirty`
     (product / "README.md").write_text("edited\n")
     assert not ws.is_committed(product)
+
+
+# -- archiving (ADR-0011, sixth addendum) --------------------------------------------
+
+
+def test_branches_is_a_dumb_prefix_verb_with_no_task_semantics(product):
+    """`branches("agentic/GH-1")` also answers `agentic/GH-12`: the adapter owes no
+    task semantics, `rules.branches_of_task` is what narrows it."""
+    ws = GitWorkspace(product, IDENTITY)
+    ws.task_checkout("GH-1")
+    ws.task_checkout("GH-12")
+    ws.subtask_checkout("GH-12", "api")
+    assert set(ws.branches("agentic/GH-1")) == {
+        "agentic/GH-1",
+        "agentic/GH-12",
+        "agentic/GH-12.api",
+    }
+    assert ws.branches("agentic/GH-99") == []
+
+
+def test_renaming_a_task_and_its_subtask_branches_archives_them_with_their_heads_intact(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    (task.path / "x").write_text("x\n")
+    task_head = ws.commit_all(task.path, "GH-12: x")
+    api = ws.subtask_checkout("GH-12", "api")
+    (api.path / "api.py").write_text("x\n")
+    api_head = ws.commit_all(api.path, "api")
+
+    # Archiving order (ADR-0011, sixth addendum): the worktrees go before the rename,
+    # since git cannot rename a branch a worktree still has checked out.
+    ws.cleanup("GH-12")
+    ws.rename_branch("agentic/GH-12", "archive/run1-abc/agentic/GH-12")
+    ws.rename_branch("agentic/GH-12.api", "archive/run1-abc/agentic/GH-12.api")
+
+    assert ws.branch_head("agentic/GH-12") is None
+    assert ws.branch_head("archive/run1-abc/agentic/GH-12") == task_head
+    assert ws.branch_head("archive/run1-abc/agentic/GH-12.api") == api_head
+
+    # A fresh run advances the product's HEAD before the next `task_checkout` (the
+    # very case `--fresh` archives for): the reborn branch starts there, with its own
+    # `agenticBase` -- never the one the archived branch kept.
+    (product / "README.md").write_text("v1\n")
+    git("add", "-A", cwd=product)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "v1", cwd=product)
+    reborn = ws.task_checkout("GH-12")
+    assert reborn.branch == "agentic/GH-12"
+    assert reborn.base != task.base
+    assert reborn.base == git("rev-parse", "--short", "HEAD", cwd=product)
+
+
+def test_renaming_a_branch_is_idempotent_when_the_destination_already_exists(product):
+    """Destination present, source absent: a retried archive's own no-op, since a
+    previous, interrupted archive may already have renamed this branch."""
+    ws = GitWorkspace(product, IDENTITY)
+    ws.task_checkout("GH-12")
+    ws.rename_branch("agentic/GH-12", "archive/run1-abc/agentic/GH-12")
+    assert ws.branch_head("agentic/GH-12") is None
+    ws.rename_branch("agentic/GH-12", "archive/run1-abc/agentic/GH-12")  # no error, no-op
+    assert ws.branch_head("archive/run1-abc/agentic/GH-12") is not None
+
+
+def test_renaming_a_branch_onto_a_live_destination_raises(product):
+    ws = GitWorkspace(product, IDENTITY)
+    ws.task_checkout("GH-12")
+    ws.task_checkout("GH-13")
+    with pytest.raises(GitError):
+        ws.rename_branch("agentic/GH-12", "agentic/GH-13")
+
+
+def test_is_ignored_answers_the_products_own_gitignore(product):
+    ws = GitWorkspace(product, IDENTITY)
+    (product / ".gitignore").write_text("*.secret\n")
+    git("add", "-A", cwd=product)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "gitignore", cwd=product)
+    assert ws.is_ignored(product, "x.secret") is True
+    assert ws.is_ignored(product, "README.md") is False

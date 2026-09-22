@@ -74,7 +74,7 @@ def test_a_product_that_declares_no_setup_prepares_nothing(cfg):
 
 def test_the_setup_is_read_at_the_tasks_base_never_at_the_branchs_own(cfg):
     ports = ports_with()
-    ports.workspace.branches["agentic/GH-12"] = ("head", "base0")
+    ports.workspace.existing_branches["agentic/GH-12"] = ("head", "base0")
     task_checkout(TASK, cfg, ports)
     assert ports.stack.revisions == ["base0"]
 
