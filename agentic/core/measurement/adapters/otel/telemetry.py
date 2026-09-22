@@ -199,6 +199,10 @@ class Instruments:
     task_invocations: Gauge
     task_paused: Gauge
     task_human_decisions: Gauge
+    delivery_outcome: Gauge
+    delivery_human_commits: Gauge
+    delivery_human_lines_changed: Gauge
+    delivery_time_to_merge: Gauge
 
     @classmethod
     def create(cls, m: metrics.Meter) -> Instruments:
@@ -341,6 +345,31 @@ class Instruments:
                 "agentic.task.human_decisions",
                 description="One per decision the human gave on a resume",
             ),
+            delivery_outcome=m.create_gauge(
+                "agentic.delivery.outcome",
+                description=(
+                    "1, the human's verdict on the task's pull request, read by "
+                    "`agentic close` (merged, merged_with_changes, closed)"
+                ),
+            ),
+            delivery_human_commits=m.create_gauge(
+                "agentic.delivery.human_commits",
+                description=(
+                    "Commits on the pull request that are the human's own, not the system's"
+                ),
+            ),
+            delivery_human_lines_changed=m.create_gauge(
+                "agentic.delivery.human_lines_changed",
+                description=(
+                    "additions + deletions of the pull request's human commits; 0 when "
+                    "the human merged the delivery as it stood"
+                ),
+            ),
+            delivery_time_to_merge=m.create_gauge(
+                "agentic.delivery.time_to_merge",
+                unit="s",
+                description="Seconds from the pull request's own createdAt to its mergedAt",
+            ),
         )
 
 
@@ -349,6 +378,61 @@ def instruments() -> Instruments:
     if _instruments is None:
         _instruments = Instruments.create(meter())
     return _instruments
+
+
+def _delivery_labels(
+    product: str, task_type: str, prompts_fingerprint: str, system_version: str
+) -> dict[str, str]:
+    """The one label set every `agentic.delivery.*` sample carries: `product`,
+    `system.version`, `prompts.fingerprint`, `task.type`. `agentic.delivery.outcome`
+    adds its own `outcome` on top of this, in `record_delivery` below; no emission
+    site spells this set by hand, the way `RoleRun._cold_fallback_labels` is the one
+    helper its own family reads from. `system_version` is the caller's own: unlike
+    every other family here, a delivery sample names the *delivering* run's version
+    (the task document's own `system_version`, ADR-0008), never the checkout `close`
+    happens to run from -- the two are typically different checkouts entirely."""
+    return {
+        "product": product,
+        "system.version": system_version,
+        "prompts.fingerprint": prompts_fingerprint,
+        "task.type": task_type,
+    }
+
+
+def record_delivery(
+    *,
+    product: str,
+    task_type: str,
+    prompts_fingerprint: str,
+    system_version: str,
+    outcome: system_metrics.DeliveryOutcome,
+    human_commits: int,
+    human_lines_changed: int,
+    time_to_merge_seconds: float | None,
+) -> bool:
+    """`agentic.delivery.*`, the human's verdict on a task's pull request. Its own
+    function, not a `Run`: `close` runs no role and opens no span, so there is nothing
+    to hang one on. Same `_EMIT_LOCK` as every other emitter -- one record, one flush
+    -- but its own return, unlike every `Run._emit` caller which discards it: `close`
+    orders writing the closure's frontmatter keys after a *true* flush, so it needs to
+    know whether this one actually sent the sample rather than assume it did.
+    `time_to_merge` is omitted when the pull request never merged (`None`): there is
+    nothing to measure, the same reason `metrics.time_to_merge_seconds` returns
+    `None` for it. `system_version` is the delivering run's own, read from the task
+    document, not `telemetry.system_version()` -- `close` may run from a different
+    checkout than the one that delivered, and the sample must still name the run it
+    judges; `close` is also where the single `"unknown"` literal for an absent, empty
+    or null document value belongs, this function takes whatever string it is given
+    verbatim."""
+    with _EMIT_LOCK:
+        i = instruments()
+        labels = _delivery_labels(product, task_type, prompts_fingerprint, system_version)
+        i.delivery_outcome.set(1, {**labels, "outcome": outcome})
+        i.delivery_human_commits.set(human_commits, labels)
+        i.delivery_human_lines_changed.set(human_lines_changed, labels)
+        if time_to_merge_seconds is not None:
+            i.delivery_time_to_merge.set(time_to_merge_seconds, labels)
+        return _flush_metrics()
 
 
 @dataclass
@@ -818,10 +902,17 @@ def _epoch_ns(iso: str) -> int:
     return int(datetime.fromisoformat(iso).timestamp() * 1_000_000_000)
 
 
-def _flush_metrics() -> None:
-    """Export what was set since the last export; `Run._emit` calls it per event."""
-    if _meter_provider is not None:
-        _meter_provider.force_flush()
+def _flush_metrics() -> bool:
+    """Export what was set since the last export, and report what `force_flush()`
+    itself returned: `Run._emit` calls this per event and keeps discarding the
+    return, byte for byte, but `record_delivery` returns it to its own caller.
+    `False` with no meter provider -- `configure()` leaves it silently unset without
+    `OTEL_EXPORTER_OTLP_ENDPOINT`, which is not the same fact as a flush that ran and
+    failed, but both are "no export happened" to a caller deciding whether to trust
+    the sample landed."""
+    if _meter_provider is None:
+        return False
+    return bool(_meter_provider.force_flush())
 
 
 def _outcome(patch: TaskState, *, delivered: bool) -> str:

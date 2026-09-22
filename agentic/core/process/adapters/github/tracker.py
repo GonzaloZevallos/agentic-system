@@ -13,14 +13,52 @@ import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
+from ...domain.task import PullRequest, PullRequestCommit
+
 _ISSUE = re.compile(r"^GH-(\d+)$")
+_PULL_REQUEST_URL = re.compile(r"/pull/(\d+)$")
 
 Run = Callable[..., subprocess.CompletedProcess[str]]
+
+# `gh pr view --json commits` carries no `additions`/`deletions` per commit (the gate
+# spike this subtask ran, see its section); this GraphQL query is the declared
+# fallback, behind the same `pull_request` verb, so no consumer learns which ran.
+# `{owner}`/`{repo}` are `gh`'s own magic fields, resolved from `cwd`, which is why
+# `_gh` always runs with `cwd=product_dir` -- never the human's own checkout branch.
+_PULL_REQUEST_QUERY = """
+query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      state
+      createdAt
+      mergedAt
+      commits(first: 250) {
+        nodes {
+          commit {
+            messageHeadline
+            additions
+            deletions
+            authors(first: 10) { nodes { email } }
+          }
+        }
+      }
+    }
+  }
+}
+"""
 
 
 def issue_number(task_id: str) -> int | None:
     match = _ISSUE.match(task_id)
     return int(match.group(1)) if match else None
+
+
+def pull_request_number(url: str) -> int:
+    """The number `gh` needs, off the URL `deliver` stored in the document."""
+    match = _PULL_REQUEST_URL.search(url)
+    if not match:
+        raise ValueError(f"not a pull request URL: {url}")
+    return int(match.group(1))
 
 
 class GhTracker:
@@ -51,6 +89,37 @@ class GhTracker:
             return []
         comments = json.loads(self._gh("issue", "view", str(number), "--json", "comments"))
         return [c.get("body") or "" for c in comments.get("comments", [])]
+
+    def pull_request(self, reference: str) -> PullRequest | None:
+        number = pull_request_number(reference)
+        raw = self._gh(
+            "api",
+            "graphql",
+            "-f",
+            f"query={_PULL_REQUEST_QUERY}",
+            "-F",
+            "owner={owner}",
+            "-F",
+            "repo={repo}",
+            "-F",
+            f"number={number}",
+        )
+        pull_request = json.loads(raw)["data"]["repository"]["pullRequest"]
+        commits = tuple(
+            PullRequestCommit(
+                author_emails=tuple(a["email"] for a in node["commit"]["authors"]["nodes"]),
+                message_headline=node["commit"]["messageHeadline"],
+                additions=node["commit"]["additions"],
+                deletions=node["commit"]["deletions"],
+            )
+            for node in pull_request["commits"]["nodes"]
+        )
+        return PullRequest(
+            state=pull_request["state"],
+            created_at=pull_request["createdAt"],
+            merged_at=pull_request["mergedAt"],
+            commits=commits,
+        )
 
     def _gh(self, *args: str) -> str:
         try:

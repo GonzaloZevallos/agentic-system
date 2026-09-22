@@ -1,6 +1,14 @@
 import pytest
 
-from agentic.core.process.domain.task import REDUCERS, add, apply, delta, merge
+from agentic.core.process.domain.task import (
+    REDUCERS,
+    PullRequest,
+    PullRequestCommit,
+    add,
+    apply,
+    delta,
+    merge,
+)
 
 
 def test_merge_overrides_per_key_and_keeps_the_rest():
@@ -116,6 +124,24 @@ def test_delta_drops_the_measurement_only_keys_a_branch_wrote():
     }
     patch = delta(before, after)
     assert "review_kind" not in patch and "presubmit_checks" not in patch
+
+
+def test_pull_request_is_a_frozen_value_object_equal_by_value():
+    commit = PullRequestCommit(
+        author_emails=("dev@example.com",),
+        message_headline="fix: x",
+        additions=3,
+        deletions=1,
+    )
+    one = PullRequest(
+        state="MERGED", created_at="2026-09-01T00:00:00Z", merged_at=None, commits=(commit,)
+    )
+    other = PullRequest(
+        state="MERGED", created_at="2026-09-01T00:00:00Z", merged_at=None, commits=(commit,)
+    )
+    assert one == other
+    with pytest.raises(AttributeError):
+        setattr(one, "state", "CLOSED")
 
 
 def test_delta_takes_a_field_the_branch_started_as_it_is():

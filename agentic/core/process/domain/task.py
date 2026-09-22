@@ -128,6 +128,38 @@ class DependencyState:
     evidence: str = ""
 
 
+@dataclass(frozen=True)
+class PullRequestCommit:
+    """One commit on a pull request's branch, as `gh` hands it back: `author_emails`
+    is what `metrics.human_lines_changed` and friends match against
+    `Configuration.GIT_AUTHOR_EMAIL` to tell a human's own commit from the system's
+    (never a GitHub login, which a human's own account would satisfy just the same);
+    `message_headline` is what a merge-commit constant matches against, since `gh`
+    exposes no parents to exclude them any other way; `additions`/`deletions` are
+    this commit's own line counts."""
+
+    author_emails: tuple[str, ...]
+    message_headline: str
+    additions: int
+    deletions: int
+
+
+@dataclass(frozen=True)
+class PullRequest:
+    """The facts of a task's own pull request, as `Tracker.pull_request` hands them
+    back over the `gh` CLI: a value object over a port boundary, so the port can hand
+    facts to `measurement/domain/metrics.py`'s pure rules without either side
+    learning the other's technology. The only type describing a pull request's
+    facts -- nobody declares a second, and every consumer imports this one.
+    `merged_at` is `None` for a pull request that never merged (open or closed
+    unmerged); `commits` is every commit on the branch, oldest first."""
+
+    state: Literal["OPEN", "MERGED", "CLOSED"]
+    created_at: str
+    merged_at: str | None
+    commits: tuple[PullRequestCommit, ...]
+
+
 def add(current: float, new: float) -> float:
     return current + new
 

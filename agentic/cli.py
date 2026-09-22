@@ -1,6 +1,10 @@
 """CLI. `agentic run "title" "description"` runs one task through the feature path;
 `agentic run --issue N` takes both from GitHub issue N of the product repo, via `gh`.
 `agentic resume --issue N` resumes that task where an escalation paused it (ADR-0003).
+`agentic close --issue N` reads the human's verdict on that task's pull request off
+`gh`, emits it and records the closure in the task document -- no role runs and no
+graph is invoked, since there is nothing left to spend (Tech Lead plan, subtask
+`close-command`).
 
 A driving adapter: it parses arguments, builds the configuration and the ports, opens
 the checkpointer and invokes the graph. What a resume does is decided in
@@ -31,6 +35,7 @@ from . import composition
 from .composition import default_ports, graph
 from .core.measurement.adapters.otel import telemetry
 from .core.measurement.adapters.otel.telemetry import InvocationKind
+from .core.measurement.domain import metrics as delivery_metrics
 from .core.process.adapters.filesystem import FilesystemRunLock
 from .core.process.adapters.git.workspace import GitError
 from .core.process.adapters.langgraph.graph import ESCALATE
@@ -45,7 +50,7 @@ from .core.process.application.preflight import (
     product_name,
     unfixed_stage0,
 )
-from .core.process.domain.task import TaskInput, TaskState
+from .core.process.domain.task import PullRequest, TaskInput, TaskState
 from .shared.configuration import ENV_PREFIX, LOGS_DIR, Configuration, MissingProductDir
 from .shared.environment import without_own_toolchain
 
@@ -59,9 +64,17 @@ Spawner = Callable[[list[str], str], int]
 # What the lock claims, said whenever it refuses (Tech Lead plan, subtask `run-lock`):
 # it protects one CLI invocation from another, nothing a `langgraph dev` server runs.
 LOCK_SCOPE = (
-    "the lock protects `agentic run`/`agentic resume` invocations from each other; "
-    "a `langgraph dev` server holds every thread in one process and is not covered by it"
+    "the lock protects `agentic run`/`agentic resume`/`agentic close` invocations from "
+    "each other; a `langgraph dev` server holds every thread in one process and is not "
+    "covered by it"
 )
+
+# The one string that spells an unknown `system_version` wherever `close` emits one:
+# absent, empty and null alike, all read back as this single literal (Tech Lead plan,
+# subtask `close-command`) -- `close` runs from a possibly different checkout than the
+# one that delivered, so it names the *delivering* run's version, never
+# `telemetry.system_version()`, which would name its own.
+UNKNOWN_SYSTEM_VERSION = "unknown"
 
 
 class CannotStart(Exception):
@@ -115,6 +128,11 @@ def main() -> None:
         "--dry-run", action="store_true", help="show what would resume and stop, spending nothing"
     )
     resume.add_argument("--yes", action="store_true", help="do not ask for confirmation")
+    close = sub.add_parser(
+        "close", help="record the human's verdict on a task's pull request and close it"
+    )
+    close.add_argument("--issue", type=int, metavar="N", required=True)
+    close.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
     for command in (run, resume):
         command.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
         command.add_argument(
@@ -132,18 +150,21 @@ def main() -> None:
             run.error("give a title and a description, or --issue N")
         if args.issue is not None and args.title is not None:
             run.error("--issue replaces the title and description; give one or the other")
-    else:
+    elif args.command == "resume":
         # A detached child has no stdin: neither to confirm on nor to report a dry-run
         # to, so both are rejected before anything is spent (Tech Lead plan, `--detach`).
         if args.detach and args.dry_run:
             resume.error("--detach and --dry-run are exclusive: --dry-run has no child to report")
         if args.detach and not args.yes:
             resume.error("--detach requires --yes: a detached child has no stdin to confirm on")
+    # close has neither flag to check: it never joined the `for command in (run, resume)`
+    # loop above, so `--detach`/`--dry-run` are unrecognized arguments there, a parse
+    # error argparse raises on its own.
 
     # The env var outranks `configurable`, so an explicit flag has to go in as env.
     if args.product_dir:
         os.environ[ENV_PREFIX + "PRODUCT_DIR"] = args.product_dir
-    if args.verbose:
+    if getattr(args, "verbose", False):
         os.environ[ENV_PREFIX + "VERBOSE"] = "1"
     if getattr(args, "task_budget", None) is not None:
         os.environ[ENV_PREFIX + "TASK_BUDGET_USD"] = str(args.task_budget)
@@ -152,17 +173,22 @@ def main() -> None:
         if not cfg.agentic_dir.is_dir():
             raise ValueError(f"{cfg.product_dir} is not a product repo: no .agentic/ directory")
         ports = default_ports(cfg)
-        preflight(cfg, ports)
-        # Said and not enforced: the run is worth less, it is not wrong.
-        for warn in (unfixed_stage0, no_setup):
-            if (warning := warn(ports)) is not None:
-                print(f"agentic: {warning}", file=sys.stderr)
-        if not args.detach and not sys.stdin.isatty():
-            print(
-                "agentic: no TTY and no --detach: this process dies if its session "
-                "closes (2026-09-15); pass --detach to survive it",
-                file=sys.stderr,
-            )
+        if args.command != "close":
+            # `close` runs no role and spends nothing, so the gate that renders every
+            # role's prompt and checks the product's stack before a run spends money
+            # does not apply to it (Tech Lead plan, subtask `close-command`): only
+            # `run` and `resume` still call it, byte-identically to before this task.
+            preflight(cfg, ports)
+            # Said and not enforced: the run is worth less, it is not wrong.
+            for warn in (unfixed_stage0, no_setup):
+                if (warning := warn(ports)) is not None:
+                    print(f"agentic: {warning}", file=sys.stderr)
+            if not getattr(args, "detach", False) and not sys.stdin.isatty():
+                print(
+                    "agentic: no TTY and no --detach: this process dies if its session "
+                    "closes (2026-09-15); pass --detach to survive it",
+                    file=sys.stderr,
+                )
         if args.command == "resume":
             task_id = ports.inbox.task_id(args.issue)
             declared_stack_of(task_id, ports)
@@ -178,6 +204,9 @@ def main() -> None:
                 detach=args.detach,
                 child_argv=_child_argv(),
             )
+        elif args.command == "close":
+            task_id = ports.inbox.task_id(args.issue)
+            work = partial(_close, task_id, cfg, ports)
         else:
             if args.issue is not None:
                 task = ports.inbox.task(args.issue)
@@ -542,6 +571,92 @@ async def _resume(
             resuming.announce(r, ports)
             final = await _invoke(app, command, config, r.paused, ports, "resume", r.decision)
     _report(final, task_id, ports)
+
+
+async def _close(task_id: str, cfg: Configuration, ports: Ports) -> None:
+    """`agentic close --issue N`: the human's verdict on a task's pull request, read
+    through `gh` and recorded once. Runs no role and opens no span (`preflight` never
+    runs here either); the one thing it still needs from the product is its name
+    (`ports.stack.product()`), since every sample this emits carries it.
+
+    The same `FilesystemRunLock` as `run`/`resume`, through `_locked`, covers the whole
+    of read -> emit -> write, so a second `close` (or a `run`/`resume`) over this task
+    cannot race it. Every refusal below goes through `CannotStart` -- non-zero, nothing
+    emitted, no document byte written -- and each is independently reachable: a missing
+    document or `pull_request` value and an already-recorded closure are read off the
+    document alone, before `gh` is ever asked anything; a pull request still open is
+    read off `gh`; a false flush (`record_delivery`'s own docstring: `None` with no
+    meter provider configured is indistinguishable, to a caller, from one that ran and
+    failed) is the last refusal, and the same re-runnable state as any of the others --
+    `record_closure` only runs after a *true* flush, so a retry finds the same document
+    it started with."""
+    try:
+        product = ports.stack.product()
+    except (ValueError, OSError) as exc:
+        raise CannotStart(str(exc)) from exc
+    lock = _lock_for(cfg)
+    with _locked(lock, task_id):
+        raw = ports.documents.load(task_id)
+        if raw is None:
+            raise CannotStart(f"{task_id} has no document to close")
+        reference = raw.get("pull_request")
+        if not reference:
+            raise CannotStart(f"{task_id} has no pull request to close")
+        if raw.get("closed_at"):
+            raise CannotStart(f"{task_id} already closed on {raw['closed_at']}")
+        try:
+            pull_request: PullRequest | None = ports.tracker.pull_request(reference)
+        except (ValueError, OSError) as exc:
+            raise CannotStart(str(exc)) from exc
+        if pull_request is None:
+            raise CannotStart(f"{task_id}: could not read its pull request ({reference})")
+        if pull_request.state == "OPEN":
+            raise CannotStart(f"{task_id}: the pull request is still open; nothing to close")
+
+        author = cfg.git_author_email
+        outcome = delivery_metrics.delivery_outcome(pull_request, author)
+        human_commits = delivery_metrics.human_commits(pull_request, author)
+        human_lines_changed = delivery_metrics.human_lines_changed(pull_request, author)
+        time_to_merge = delivery_metrics.time_to_merge_seconds(pull_request)
+        version = raw.get("system_version") or UNKNOWN_SYSTEM_VERSION
+        task_type = raw.get("type") or "unknown"
+        fingerprint = delivery_metrics.prompts_fingerprint(cast(TaskState, raw))
+
+        flushed = telemetry.record_delivery(
+            product=product,
+            task_type=task_type,
+            prompts_fingerprint=fingerprint,
+            system_version=version,
+            outcome=outcome,
+            human_commits=human_commits,
+            human_lines_changed=human_lines_changed,
+            time_to_merge_seconds=time_to_merge,
+        )
+        if not flushed:
+            raise CannotStart(f"{task_id}: no metrics endpoint configured; nothing recorded")
+
+        path = ports.documents.record_closure(
+            task_id,
+            {
+                "closed_at": _now_iso(),
+                "delivery_outcome": outcome,
+                "human_commits": str(human_commits),
+                "human_lines_changed": str(human_lines_changed),
+            },
+        )
+    print(f"outcome:             {outcome}")
+    print(f"human_commits:       {human_commits}")
+    print(f"human_lines_changed: {human_lines_changed}")
+    print(f"time_to_merge:       {time_to_merge}")
+    print(f"doc:                 {path}")
+    print("agentic: document written, not committed")
+
+
+def _now_iso() -> str:
+    """ISO-8601 UTC, millisecond precision -- the same shape `closed_at`'s neighbours in
+    the frontmatter already use (`run_role._now_iso`, not importable across layers from
+    a driving adapter, so this is its own copy of the same one-liner)."""
+    return datetime.now(UTC).isoformat(timespec="milliseconds")
 
 
 async def _invoke(

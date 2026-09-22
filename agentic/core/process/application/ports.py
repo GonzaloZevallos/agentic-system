@@ -15,7 +15,14 @@ from typing import Any, Protocol
 
 from ..domain.roles import Role
 from ..domain.rules import motive
-from ..domain.task import DependencyState, FailureReason, MergeOutcome, TaskInput, TaskState
+from ..domain.task import (
+    DependencyState,
+    FailureReason,
+    MergeOutcome,
+    PullRequest,
+    TaskInput,
+    TaskState,
+)
 from .limits import RunLimits
 
 
@@ -198,6 +205,14 @@ class TaskDocuments(Protocol):
         wherever `save` itself keeps it (ADR-0011, sixth addendum: archiving commits
         the document on the archived task branch, never the product's main checkout).
         The path it wrote, or None when the task has no document to write."""
+        ...
+
+    def record_closure(self, task_id: str, values: dict[str, str]) -> Path:
+        """Line-level edit of the closure's own top-level frontmatter keys
+        (`document.record_closure`'s own docstring) into the document already on disk.
+        Never goes through `save`, which re-renders `system_commit` from today's sha
+        and `plugins` from today's submodule and would falsify the provenance of a
+        finished Corrida (ADR-0001). Does not commit anything."""
         ...
 
 
@@ -429,6 +444,14 @@ class Tracker(Protocol):
     def issue_comments(self, task_id: str) -> list[str]:
         """The bodies of the issue's comments, oldest first, whoever wrote them; none
         when the task has no issue."""
+        ...
+
+    def pull_request(self, reference: str) -> PullRequest | None:
+        """The facts of a task's own pull request: `reference` is the URL `deliver`
+        stored in the document, always explicit -- never the bare form, which would
+        resolve whatever branch `product_dir` has checked out, and a task restarted
+        with `--fresh` has two pull requests with only the document knowing which is
+        this run's."""
         ...
 
 

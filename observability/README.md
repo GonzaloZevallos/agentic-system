@@ -217,6 +217,38 @@ invocación sola. **`langgraph dev` no deja ninguna de estas siete muestras**: c
 grafo directamente, sin pasar por `cli._invoke`, así que solo las métricas de rol (las de
 arriba) se ven ahí.
 
+## Métricas de entrega
+
+El veredicto del humano sobre el pull request de una tarea (glossary: Resultado de
+entrega, `agentic/core/measurement/CONTEXT.md`), leído y emitido por `agentic close
+--issue N`, nunca por un nodo del grafo ni por ningún revisor del sistema: no hay
+span ni Corrida de la que colgarlo, así que `record_delivery` es su propia función,
+no un `Run`, con el mismo `_EMIT_LOCK` que cualquier otro emisor pero un solo
+record-and-flush para las cuatro. `close` lee el `pull_request` que el propio
+documento de la tarea nombra con `gh`, nunca la rama que tenga `product_dir` en ese
+momento.
+
+| Métrica | Labels | Valor | Unidad |
+|---|---|---|---|
+| `agentic.delivery.outcome` | `product`, `system.version`, `prompts.fingerprint`, `task.type`, `outcome` | 1, una muestra con `outcome` ∈ {merged, merged_with_changes, closed} | — |
+| `agentic.delivery.human_commits` | `product`, `system.version`, `prompts.fingerprint`, `task.type` | Commits del pull request que son del humano, no del sistema (por email de autor de git, nunca por login) | — |
+| `agentic.delivery.human_lines_changed` | ídem | `additions` + `deletions` de esos commits humanos; 0 si el humano fusionó la entrega tal cual | — |
+| `agentic.delivery.time_to_merge` | ídem | Segundos desde que se abrió el pull request (`createdAt`) hasta que se fusionó (`mergedAt`); ausente si nunca se fusionó, porque no hay nada que medir | s |
+
+El timestamp de la muestra es el del **cierre**, nunca el de la entrega: una versión
+que salió ayer muestra cero entregas mientras su `agentic.role.cost_usd` ya está
+lleno, y una ventana cerrada cuenta los merges de esta semana contra versiones de
+hace tres semanas — el humano decide cuándo fusiona, no el sistema. Un squash merge
+con edición por la UI de GitHub no deja ningún commit propio en la rama y lee
+`merged`: la serie subreporta `merged_with_changes` por construcción, no por un
+error de conteo. Un click de "Update branch" cuyo `messageHeadline` escapa a
+`MERGE_COMMIT_HEADLINE` infla `human_lines_changed` con todo lo que `main` sumó
+desde la base, no con lo que el humano escribió a mano. Un documento escrito antes
+de esta tarea no tiene `system_version` en su frontmatter; `close` normaliza eso —
+ausente, vacío o nulo — al único literal `unknown`, que la variable `$version` del
+dashboard no ofrece nunca (sale de `agentic_role_cost_usd`, que si existe ya trae una
+versión real), así que esas muestras solo se ven bajo `All`.
+
 ## Costo en Langfuse
 
 Langfuse pricea cada llamada al modelo (`claude_code.llm_request`) a partir de sus tokens

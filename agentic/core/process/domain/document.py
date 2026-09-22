@@ -70,11 +70,18 @@ def from_frontmatter(data: dict) -> dict:
 
 
 def render(
-    state: dict, system_commit: str | None = None, plugins: dict[str, str] | None = None
+    state: dict,
+    system_commit: str | None = None,
+    plugins: dict[str, str] | None = None,
+    system_version: str | None = None,
 ) -> str:
     """The document text. `system_commit` is the system's commit, for the prompt
     version record (ADR-0005), and `plugins` the skills plugin version (ADR-0013); the
-    port that knows the disk supplies both."""
+    port that knows the disk supplies both. `system_version` is the joinable version
+    label (`telemetry.system_version`, the one place that computes it): written as its
+    own top-level key only when a producer handed one in, never as an empty string or a
+    null -- a document written before this task, or by a bare-constructed adapter, gets
+    today's document plus nothing."""
     frontmatter = {
         "id": state["id"],
         "title": state["title"],
@@ -103,6 +110,7 @@ def render(
         "prompts": state.get("prompts", {}),
         "plugins": plugins or {},
         "system_commit": system_commit,
+        **({"system_version": system_version} if system_version else {}),
         "runs": [_rounded_run(r) for r in state.get("runs", [])],
         "failures": [
             dict(f, cost_usd=round(f.get("cost_usd", 0.0), 4)) for f in state.get("failures", [])
@@ -153,6 +161,52 @@ def ordered(sections: dict[str, str]) -> dict[str, str]:
         for _, old in sorted(orphans):
             result[old] = sections[old]
     return result
+
+
+def record_closure(raw: str, values: dict[str, str]) -> str:
+    """Line-level surgery on the frontmatter block: replace the line of a top-level
+    scalar key `values` owns, append when it is absent, everything else -- the body
+    included -- byte-for-byte. A `safe_load`/`safe_dump` round-trip of the whole
+    document is rejected on purpose: it reformats floats, quoting and block style of
+    keys nobody asked it to touch, which is what would happen to a finished Corrida's
+    `runs` and `failures` on every close.
+
+    Raises `ValueError` when the frontmatter block cannot be found, or when a key
+    `values` must replace is not written as a single scalar line (a block value, which
+    this surgery cannot safely overwrite in place)."""
+    match = _FRONTMATTER.match(raw)
+    if not match:
+        raise ValueError("record_closure: missing frontmatter")
+    lines = match.group(1).split("\n")
+    pending = dict(values)
+    for i, line in enumerate(lines):
+        for key in list(pending):
+            if not line.startswith(f"{key}:"):
+                continue
+            if i + 1 < len(lines) and _is_continuation(lines[i + 1]):
+                raise ValueError(f"record_closure: {key!r} is not a single scalar line")
+            lines[i] = _scalar_line(key, pending.pop(key))
+            break
+    lines.extend(_scalar_line(key, value) for key, value in pending.items())
+    block = "\n".join(lines)
+    return raw[: match.start(1)] + block + raw[match.end(1) :]
+
+
+def _is_continuation(line: str) -> bool:
+    """Whether `line` continues the block value of the key on the line before it: an
+    indented mapping or sequence entry, or a `- ` item at the same column as its own
+    key -- the indentless block-sequence shape `yaml.safe_dump` gives `runs` and
+    `failures` (no top-level frontmatter key starts with `-`, so this reads unambiguously
+    as a continuation, never as the next key)."""
+    return line[:1] in (" ", "\t") or line.startswith("-")
+
+
+def _scalar_line(key: str, value: str) -> str:
+    dumped = yaml.safe_dump({key: value}, default_flow_style=False, sort_keys=False)
+    line, _, rest = dumped.partition("\n")
+    if rest.strip():
+        raise ValueError(f"record_closure: {key!r} value is not a single scalar line")
+    return line
 
 
 def parse(raw: str, source: object = "document") -> dict:

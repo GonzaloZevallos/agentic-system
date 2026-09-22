@@ -1756,6 +1756,115 @@
         },
         "overrides": []
       }
+    },
+    {
+      "id": 56,
+      "type": "barchart",
+      "title": "Entregas por resultado",
+      "description": "Veredicto del humano sobre el pull request de cada tarea (`agentic.delivery.outcome`, `agentic close --issue N`), apilado por `outcome`. La muestra queda fechada al CIERRE, nunca a la entrega: una versión que salió ayer puede mostrar cero entregas mientras su costo ya está lleno, y una ventana cerrada cuenta los merges de esta semana contra versiones de hace tres. Un squash merge con edición por la UI no deja commit propio en la rama y lee `merged`: la serie subreporta `merged_with_changes` por construcción. Documentos anteriores a esta tarea llevan `system_version=\"unknown\"`, que `$version` no ofrece: solo se ven bajo All.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 113,
+        "w": 12,
+        "h": 8
+      },
+      "options": {
+        "orientation": "horizontal",
+        "stacking": "normal",
+        "groupWidth": 0.7,
+        "barWidth": 0.9,
+        "showValue": "auto",
+        "xTickLabelRotation": 0,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (system_version, outcome) (sum_over_time(agentic_delivery_outcome{product=~\"$product\", system_version=~\"$version\"}[$__range]))",
+          "legendFormat": "{{outcome}} {{system_version}}",
+          "instant": true
+        }
+      ],
+      "timeFrom": "90d",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "min": 0,
+          "custom": {
+            "lineWidth": 0,
+            "fillOpacity": 80,
+            "gradientMode": "none"
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 57,
+      "type": "bargauge",
+      "title": "Líneas humanas por versión del sistema",
+      "description": "`agentic.delivery.human_lines_changed` sumado por versión: cuánto corrigió el humano antes de fusionar, no si la entrega funcionó. En 0 cuando el humano fusionó tal cual. Un click de \"Update branch\" cuyo `messageHeadline` escapa a `MERGE_COMMIT_HEADLINE` infla esta cifra con todo lo que `main` sumó desde la base, no con lo que el humano escribió a mano. Misma muestra fechada al cierre que el panel de al lado, con el mismo desfase y la misma `system_version=\"unknown\"` para documentos anteriores a esta tarea, visible solo bajo All.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 113,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (system_version) (sum_over_time(agentic_delivery_human_lines_changed{product=~\"$product\", system_version=~\"$version\"}[$__range]))",
+          "legendFormat": "{{system_version}}",
+          "instant": true
+        }
+      ],
+      "timeFrom": "90d",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "min": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "orange"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "namePlacement": "auto",
+        "sizing": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        }
+      }
     }
   ]
 }

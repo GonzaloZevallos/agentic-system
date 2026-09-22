@@ -68,6 +68,9 @@ class MemoryDocuments:
     def __init__(self):
         self.saved: list[TaskState] = []
         self.written_into: list[tuple[str, Path]] = []
+        # task_id -> the closure values recorded for it, folded over successive calls
+        # the way the filesystem adapter's line-level replace-or-append does.
+        self.closures: dict[str, dict[str, str]] = {}
 
     def save(self, state: TaskState) -> Path:
         self.saved.append(state)
@@ -78,7 +81,15 @@ class MemoryDocuments:
 
     def load(self, task_id: str) -> dict | None:
         mine = [s for s in self.saved if s["id"] == task_id]
-        return dict(mine[-1]) if mine else None
+        if not mine:
+            return None
+        return {**mine[-1], **self.closures.get(task_id, {})}
+
+    def record_closure(self, task_id: str, values: dict[str, str]) -> Path:
+        if self.load(task_id) is None:
+            raise FileNotFoundError(task_id)
+        self.closures[task_id] = {**self.closures.get(task_id, {}), **values}
+        return self.path_for(task_id)
 
     def write_into(self, task_id: str, root: Path) -> Path | None:
         self.written_into.append((task_id, root))
