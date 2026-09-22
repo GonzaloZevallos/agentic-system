@@ -24,3 +24,9 @@ checks:
 # that measured the code.
 #
 # witness: uv run python -c "import pathlib; print(pathlib.Path('.').resolve())"
+#
+# `forbidden`: optional. A list of rules the Edit/Write hook denies a Developer from
+# adding: each names a `pattern`, the `extensions` it applies to, and the `reason` a
+# denial carries verbatim. One that was already in the file is not the task's. What a
+# suppression looks like in this product's own tools is this key's to spell, never the
+# system's -- see this repo's own `.agentic/stack.yaml` for a worked declaration.

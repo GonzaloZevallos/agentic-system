@@ -12,8 +12,11 @@ What the cage covers, for a role that executes:
   (`--no-verify`, `-n`, `-c core.hooksPath`), and switching branches (`git switch`,
   `git checkout` without `--`). Found anywhere in the command: after `;`, `&&`, `|`, a
   newline, inside `$(...)`, `sh -c '...'` or `bash -lc '...'`, or behind `VAR=value`.
-- Edit and Write: paths inside `.git/` or outside the checkout, and a new
-  `# type: ignore` or `# noqa` in a Python file (engineering standards, 6).
+- Edit and Write: paths inside `.git/` or outside the checkout, and a new occurrence of
+  a suppression the product declares under `forbidden` in `.agentic/stack.yaml`
+  (`core.knowledge.domain.stack`, `core.process.domain.suppressions`; issue #38,
+  engineering standards 6). The system spells none of its own: what a silencing
+  comment looks like, in whatever language the product is in, is the product's to say.
 
 What it does not cover, and does not try to: a shell that moves first
 (`cd ..; echo > file`), files written by Bash (`sed -i`, `cat >`), a command built at
@@ -50,7 +53,7 @@ from __future__ import annotations
 import os
 import re
 import shlex
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -58,8 +61,9 @@ import anyio
 from claude_agent_sdk import HookCallback, HookContext, HookInput, HookJSONOutput, HookMatcher
 
 from ...application.ports import Presubmit, SchemaGuard
-from ...domain import turn_notice
+from ...domain import suppressions, turn_notice
 from ...domain.roles import Role
+from ...domain.suppressions import Forbidden
 
 # The tool Claude Code gives the model to hand back the structured output.
 DELIVERY_TOOL = "StructuredOutput"
@@ -81,8 +85,6 @@ _CONFIG_READS = {"--get", "--get-all", "--get-regexp", "--list", "-l"}
 # not `-n`. `-S` takes one only glued.
 _COMMIT_VALUED = set("mFcCt")
 _COMMIT_GLUED = set("S")
-_SILENCED = re.compile(r"#\s*(type:\s*ignore|noqa)\b")
-_PYTHON = {".py", ".pyi"}
 
 CONFIG = (
     "`git config` changes the product's git: your commits are already signed as the "
@@ -99,12 +101,6 @@ SWITCH = (
 )
 GIT_PATH = "a path inside `.git/`: the repository's internals are not yours to edit."
 OUTSIDE_PATH = "a path outside your working directory: edit only your checkout."
-SILENCED = (
-    "this adds `# type: ignore` or `# noqa`. The engineering standards say the type "
-    "checker and the linter pass without being silenced: fix the code. When a type "
-    "genuinely cannot be expressed, narrow it with `cast` to the exact type and a comment "
-    "that says why."
-)
 
 
 def git_denial(command: str, cwd: Path, relative_to: Path | None = None) -> str | None:
@@ -124,18 +120,15 @@ def path_denial(file_path: str, cwd: Path, relative_to: Path | None = None) -> s
     return None
 
 
-def silenced_denial(file_path: str, before: str, after: str) -> str | None:
-    """Why replacing `before` with `after` may not happen, or None: it adds a
-    suppression. One that was already there is not the task's."""
-    if not is_python(file_path):
-        return None
-    if len(_SILENCED.findall(after)) > len(_SILENCED.findall(before)):
-        return _DENIED + SILENCED
-    return None
-
-
-def is_python(file_path: str) -> bool:
-    return Path(file_path).suffix in _PYTHON
+def forbidden_denial(
+    file_path: str, before: str, after: str, forbidden: Sequence[Forbidden]
+) -> str | None:
+    """Why replacing `before` with `after` in `file_path` may not happen, or None: it
+    adds an occurrence of a suppression the product declared under `forbidden`
+    (`process.domain.suppressions.denial`, issue #38). The system authors nothing past
+    its own prefix; `reason` is the product's, verbatim."""
+    reason = suppressions.denial(file_path, before, after, forbidden)
+    return _DENIED + reason if reason else None
 
 
 def hooks_for(
@@ -145,15 +138,24 @@ def hooks_for(
     on_notice: Callable[[], None] | None = None,
     on_presubmit_denied: Callable[[], None] | None = None,
     guard: SchemaGuard | None = None,
+    forbidden: Sequence[Forbidden] | None = None,
 ) -> dict[str, list[HookMatcher]]:
     """The hooks of one run: the cage for a role that executes, the schema guard and
     the presubmit sharing one matcher on the delivery tool when either is given, and
-    the turn-budget notice for a role `turn_notice.margin_for` covers."""
+    the turn-budget notice for a role `turn_notice.margin_for` covers.
+
+    `forbidden` is the product's own declared suppressions (issue #38): `None` or
+    empty is the explicit no-op -- the Edit/Write matcher is installed either way (the
+    path cage still applies), and denies no suppression when there is none declared.
+    It never fails closed or open on a broken declaration, because a broken one never
+    reaches here (`stack.forbidden` raises at load, in `preflight`)."""
     matchers: list[HookMatcher] = []
     if role.executes:
         matchers += [
             HookMatcher(matcher="Bash", hooks=[_bash(cwd)], timeout=GUARD_TIMEOUT_S),
-            HookMatcher(matcher="Edit|Write", hooks=[_edit(cwd)], timeout=GUARD_TIMEOUT_S),
+            HookMatcher(
+                matcher="Edit|Write", hooks=[_edit(cwd, forbidden or ())], timeout=GUARD_TIMEOUT_S
+            ),
         ]
     if guard is not None or presubmit is not None:
         matchers.append(
@@ -189,7 +191,7 @@ def _bash(cwd: Path) -> HookCallback:
     return hook
 
 
-def _edit(cwd: Path) -> HookCallback:
+def _edit(cwd: Path, forbidden: Sequence[Forbidden]) -> HookCallback:
     async def hook(
         data: HookInput, tool_use_id: str | None, context: HookContext
     ) -> HookJSONOutput:
@@ -197,7 +199,7 @@ def _edit(cwd: Path) -> HookCallback:
         file_path = str(tool_input.get("file_path", ""))
         here = _where(data, cwd)
         reason = path_denial(file_path, cwd, here)
-        if reason is None and is_python(file_path):
+        if reason is None and forbidden:
             if "content" in tool_input:  # Write: the whole file replaces what was there
                 target = Path(_normal(file_path, here))
                 before = target.read_text(errors="replace") if target.is_file() else ""
@@ -205,7 +207,7 @@ def _edit(cwd: Path) -> HookCallback:
             else:
                 before = str(tool_input.get("old_string", ""))
                 after = str(tool_input.get("new_string", ""))
-            reason = silenced_denial(file_path, before, after)
+            reason = forbidden_denial(file_path, before, after, forbidden)
         return _deny(reason) if reason else {}
 
     return hook

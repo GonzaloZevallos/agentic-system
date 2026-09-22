@@ -16,6 +16,15 @@
 # `without_own_toolchain` strips `VIRTUAL_ENV`, every `UV_*` and that venv's `bin/` off
 # `PATH`, so a bare `python -c "import agentic"` would raise `ModuleNotFoundError` in a
 # fresh worktree -- an environment problem, not a checkout one.
+#
+# `forbidden`: the cage that used to be `adapters/claude_sdk/hooks.py`'s own `_SILENCED`
+# and `_PYTHON` constants (issue #38, ADR-0011 addendum), moved here byte for byte in
+# `pattern` and `extensions` -- the bar over this product is provably unchanged by the
+# move. `reason` is written fresh: the old constant's own text told a Developer to
+# narrow with `cast`, which this repo's ADR-0021 forbids outright, and the very form
+# ADR-0021 does sanction still matches this same pattern. This declaration is read at
+# a task's base, never at HEAD (`core.knowledge.domain.stack`), so it does not govern
+# the task that introduces it -- only the one after it merges.
 product: agentic-system
 setup:
   deps: uv sync --locked
@@ -25,3 +34,10 @@ checks:
   format: uv run ruff format --check .
   types: uv run mypy
 witness: uv run python -c "import agentic, pathlib; print(pathlib.Path(agentic.__file__).resolve().parent)"
+forbidden:
+  - pattern: '#\s*(type:\s*ignore|noqa)\b'
+    extensions: [.py, .pyi]
+    reason: >-
+      this adds a type-checker or linter suppression. ADR-0021 is this repo's dial:
+      fix the type, or take the unit out of `[tool.mypy] files` in `pyproject.toml`
+      and say so in the pull request.

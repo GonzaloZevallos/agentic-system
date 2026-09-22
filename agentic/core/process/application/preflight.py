@@ -23,7 +23,7 @@ PLACEHOLDERS = {
     "branches": "- none",
     "invariants": "- none",
     "proposed_invariants": "- none",
-    "checks": "- `tests`: `pytest`",
+    "checks": "- `tests`: `<the product's own command>`",
     # `pjm.md` names it (ADR-0019); the real value `classify.py` passes at runtime is
     # `product_name(ports)`, not this generic stand-in, which only has to render.
     "product": "product",
@@ -58,23 +58,29 @@ def declared_stack(ports: Ports, revision: str = "HEAD") -> dict[str, str]:
     """The product's setup as `revision` declares it, having read the whole file.
 
     HEAD by default, the commit a task starting now would be measured against; there is
-    no task yet at preflight. `checks` and `witness` are both loaded here for
-    validation only, so a broken one fails here and not when a worktree is born or a
-    Developer delivers halfway through the run (issues #36, #37; ADR-0024) -- the
+    no task yet at preflight. `checks`, `witness` and `forbidden` are all loaded here
+    for validation only, so a broken one fails here and not when a worktree is born or a
+    Developer delivers halfway through the run (issues #36, #37, #38; ADR-0024) -- the
     return expression stays `setup`'s alone, so `no_setup`'s warning does not move."""
     ports.stack.checks(revision)
     ports.stack.witness(revision)
+    ports.stack.forbidden(revision)
     return ports.stack.setup(revision)
 
 
-def declared_stack_of(task_id: str, ports: Ports) -> None:
-    """The stack at the base of a task already under way, for a resume.
+def declared_stack_of(task_id: str, ports: Ports) -> str:
+    """The stack at the base of a task already under way, for a resume, and that base
+    itself.
 
     HEAD is not enough here: a task whose branch started before the product declared a
     stack passes the check at HEAD and then dies inside a node, where nothing turns an
     infrastructure error into an escalation. Cheap and worth it: the base is the commit
-    that run will actually be measured against (ADR-0016, addendum)."""
-    declared_stack(ports, task_base({"id": task_id}, ports))
+    that run will actually be measured against (ADR-0016, addendum). Returning the base
+    lets a caller print `no_forbidden` against the exact revision this task is
+    governed by, instead of asking `task_base` a second time (issue #38)."""
+    base = task_base({"id": task_id}, ports)
+    declared_stack(ports, base)
+    return base
 
 
 def product_name(ports: Ports) -> str:
@@ -110,6 +116,24 @@ def no_setup(ports: Ports) -> str | None:
         "the product declares no `setup` in .agentic/stack.yaml: every checkout shares "
         "the product's environment, so what a Developer tests is not necessarily its "
         "own branch (issue #37). Declare the commands that prepare a fresh checkout."
+    )
+
+
+def no_forbidden(ports: Ports, revision: str) -> str | None:
+    """Why this run's Edit/Write cage denies nothing, or None when it forbids at least
+    one suppression (issue #38). Never a refusal, the same fact `no_setup` is: a Go
+    product, or one that genuinely forbids nothing, has declared nothing wrong. Does
+    not join the `cli.py` warning loop next to `unfixed_stage0`/`no_setup`: those ask
+    against a single revision every invocation shares, while this is asked against
+    `"HEAD"` on `run` and the base `declared_stack_of` returns on `resume` -- the
+    revision the run will actually be measured against, never the same for both."""
+    if ports.stack.forbidden(revision):
+        return None
+    return (
+        # The file is named and not imported, `no_setup`'s own reason (ADR-0010).
+        "the product declares no `forbidden` in .agentic/stack.yaml: the Edit/Write "
+        "cage denies no suppression this run (issue #38). Declare the patterns this "
+        "product's own tools spell, or accept that none is forbidden."
     )
 
 

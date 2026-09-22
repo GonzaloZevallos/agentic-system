@@ -1,5 +1,6 @@
 """The refusal that costs nothing: a run whose product is the checkout running it."""
 
+import re
 from dataclasses import replace
 from pathlib import Path
 
@@ -11,11 +12,14 @@ from agentic.core.process.application.preflight import (
     PLACEHOLDERS,
     UNKNOWN_PRODUCT,
     RunsOnItsOwnCheckout,
+    declared_stack_of,
+    no_forbidden,
     no_setup,
     preflight,
     product_name,
     unfixed_stage0,
 )
+from agentic.core.process.domain.suppressions import Forbidden
 from agentic.shared.configuration import Configuration
 from tests.fakes import MemoryStack, memory_ports
 
@@ -127,6 +131,40 @@ def test_a_product_without_setup_cannot_be_promised_an_environment_of_its_own(st
     warning = no_setup(replace(ports, stack=MemoryStack(setup={})))
     assert warning is not None and "declares no `setup`" in warning
     assert ".agentic/stack.yaml" in warning
+
+
+# -- the product's declared suppression cage -----------------------------------------
+
+
+class BrokenForbiddenStack(MemoryStack):
+    """A stack whose `forbidden` is half-written, the same shape `UndeclaredStack`
+    gives `checks`: `declared_stack` must surface it at load, never at a hook."""
+
+    def forbidden(self, revision: str) -> list[Forbidden]:
+        raise ValueError("stack.yaml: expected a non-empty `reason`")
+
+
+def test_declared_stack_validates_forbidden_at_load_too(stage0):
+    """A broken `forbidden` must fail here, not inside an Edit/Write hook mid-task."""
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    with pytest.raises(ValueError, match="expected a non-empty `reason`"):
+        preflight(Configuration(product_dir=PRODUCT), replace(ports, stack=BrokenForbiddenStack()))
+
+
+def test_a_product_that_declares_no_forbidden_rule_is_told_so():
+    warning = no_forbidden(replace(memory_ports(), stack=MemoryStack(forbidden=[])), "HEAD")
+    assert warning is not None and "forbidden" in warning
+
+
+def test_a_product_that_declares_a_forbidden_rule_says_nothing():
+    rule = Forbidden(re.compile("x"), frozenset({".src"}), "no")
+    ports = replace(memory_ports(), stack=MemoryStack(forbidden=[rule]))
+    assert no_forbidden(ports, "HEAD") is None
+
+
+def test_declared_stack_of_returns_the_base_it_already_validated():
+    ports = replace(memory_ports(), stack=MemoryStack())
+    assert declared_stack_of("T-1", ports) == "HEAD"  # no branch on record: falls back
 
 
 # -- stage0 that is not fixed to anything --------------------------------------------

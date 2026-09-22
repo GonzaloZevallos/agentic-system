@@ -15,6 +15,7 @@ from typing import Any, Protocol
 
 from ..domain.roles import Role
 from ..domain.rules import motive
+from ..domain.suppressions import Forbidden
 from ..domain.task import (
     DependencyState,
     FailureReason,
@@ -170,7 +171,11 @@ class RoleRunner(Protocol):
     caps the money of this one run; `None` is no cap. `presubmit`, when given, is asked
     each time the model hands back its delivery, and refuses it with a reason. `guard`,
     when given, is asked with that same call's own `tool_input` before the presubmit,
-    and may deny it first (`SchemaGuard`'s own docstring)."""
+    and may deny it first (`SchemaGuard`'s own docstring). `forbidden`, when given, is
+    the product's own declared suppressions (issue #38): an Edit or a Write that adds
+    one of them is denied with that rule's own `reason`, never the system's words.
+    `None` or empty is the explicit no-op -- the cage is installed and denies nothing,
+    the same shape `presubmit`/`guard` absent already have."""
 
     async def run_once(
         self,
@@ -185,6 +190,7 @@ class RoleRunner(Protocol):
         max_budget_usd: float | None = None,
         presubmit: Presubmit | None = None,
         guard: SchemaGuard | None = None,
+        forbidden: Sequence[Forbidden] | None = None,
     ) -> RawResult: ...
 
 
@@ -269,6 +275,14 @@ class ProductStack(Protocol):
         measured lives (`core.knowledge`, glossary: Testigo del checkout), run by the
         presubmit before them. Optional: `None` when the product declares none, which
         is the presubmit of today, byte for byte unchanged."""
+        ...
+
+    def forbidden(self, revision: str) -> Sequence[Forbidden]:
+        """The suppressions this product forbids a Developer's Edit or Write from
+        adding (`core.knowledge`, issue #38), in file order: first declared rule wins.
+        Empty when the product declares none, which is legitimate -- a Go product, or
+        one that genuinely forbids nothing -- and not an error, the same shape
+        `setup`'s absence already has."""
         ...
 
     def product(self, revision: str = "HEAD") -> str:
