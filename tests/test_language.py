@@ -45,6 +45,7 @@ TYPES = {
     "Reanudación": rules.resumed,
     "Decisión del humano": rules.human_section,
     "Puerta de entrega": presubmit,
+    "Testigo del checkout": presubmit.witness_refusal,
     "Guarda de esquema": schema_guard,
     "Stack del producto": stack,
 }
