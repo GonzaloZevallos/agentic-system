@@ -19,7 +19,18 @@ from __future__ import annotations
 
 import operator
 from dataclasses import dataclass
-from typing import Annotated, Literal, NotRequired, TypedDict, get_args, get_origin, get_type_hints
+from typing import (
+    Annotated,
+    Any,
+    Literal,
+    NotRequired,
+    TypedDict,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
+
+from .presubmit import CheckResult
 
 Status = Literal[
     "open",
@@ -354,6 +365,14 @@ class ChangesRequested(TypedDict):
     reason: str
 
 
+class EscalationPatch(TypedDict):
+    """The two keys `rules.escalation` always writes together, spread into a bigger
+    patch literal by its callers (`rules.unmergeable` and the setup-failure patch)."""
+
+    escalated: str | None
+    escalation_class: EscalationClass | None
+
+
 class FindingRecord(TypedDict):
     """One finding as the table keeps it (issue #42): what the reviewer wrote, plus
     which subtask's review raised it and in which pass. Append-only and never rewritten:
@@ -476,7 +495,7 @@ class TaskState(TaskInput, total=False):
     # invocation. Set by `develop` on its own patch, read once by the adapter
     # (`agentic.presubmit.checks`, `.duration`). Measurement only, like `subtask_id`:
     # never rendered into the document.
-    presubmit_checks: list[list[dict[str, str | bool | float]]]
+    presubmit_checks: list[list[CheckResult]]
     # Counts of the interview this patch ran, if any (`InterviewStats`): measurement
     # only, like `subtask_id` above — never rendered into the document.
     interview_stats: InterviewStats
@@ -494,8 +513,8 @@ REDUCERS = _reducers()
 
 def apply(state: TaskState, patch: TaskState) -> TaskState:
     """`state` with `patch` folded in, reducer by reducer; plain fields are overridden."""
-    merged: dict = dict(state)
-    for key, value in patch.items():
+    merged: dict[str, Any] = dict(state)
+    for key, value in dict(patch).items():
         reducer = REDUCERS.get(key)
         if reducer is None or key not in merged:
             merged[key] = value
@@ -524,14 +543,16 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
     keys already read by the branch's own node; the parent has as many answers as
     branches for any of them.
     """
-    patch: dict = {}
-    for key, value in after.items():
+    patch: dict[str, Any] = {}
+    before_map: dict[str, Any] = dict(before)
+    after_map: dict[str, Any] = dict(after)
+    for key, value in after_map.items():
         if key in _BRANCH_LOCAL:
             continue
-        if key not in before:
+        if key not in before_map:
             patch[key] = value
             continue
-        old, reducer = before[key], REDUCERS.get(key)
+        old, reducer = before_map[key], REDUCERS.get(key)
         if reducer is add:
             if value != old:
                 patch[key] = value - old

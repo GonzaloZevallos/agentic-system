@@ -21,6 +21,7 @@ agentic = "agentic.cli:main"
 [dependency-groups]
 dev = [
     "langgraph-cli[inmem]>=0.4.31",
+    "mypy>=1.13",
     "pytest>=8.0",
     "ruff>=0.6",
 ]
@@ -47,3 +48,30 @@ testpaths = ["tests"]
 # Run them on purpose: `uv run pytest -m llm`.
 addopts = "-m 'not llm'"
 markers = ["llm: calls a real model through the Claude Agent SDK"]
+
+[tool.mypy]
+# The command (`checks.types` in .agentic/stack.yaml, the CI step) carries no paths:
+# the checked scope lives here, widened one unit at a time (ADR-0021).
+python_version = "3.13"
+files = [
+    "agentic/shared",
+    "agentic/core/measurement/domain",
+    "agentic/core/knowledge/domain",
+    "agentic/core/process/domain",
+    "agentic/core/knowledge/adapters",
+    "agentic/core/measurement/adapters",
+]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_any_generics = true
+no_implicit_optional = true
+warn_return_any = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+# `yaml` (PyYAML) ships no stubs; named per package, never a bare `*` (ADR-0021).
+module = "yaml"
+ignore_missing_imports = true

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 # What a product copies to start, shown by the error when it declared nothing. It is a
 # template and no longer a default: no run ever falls back to it (issue #36).
@@ -86,14 +87,14 @@ def setup(data: object, source: object) -> dict[str, str]:
     return _commands(declared, source, "setup") if "setup" in declared else {}
 
 
-def _declared(data: object, source: object) -> dict:
+def _declared(data: object, source: object) -> dict[str, Any]:
     declared = _mapping(data, source)
     if unknown := [key for key in declared if key not in KEYS]:
         raise ValueError(f"{source}: unknown key(s) {', '.join(sorted(unknown))}; expected {KEYS}")
     return declared
 
 
-def _commands(declared: dict, source: object, key: str) -> dict[str, str]:
+def _commands(declared: dict[str, Any], source: object, key: str) -> dict[str, str]:
     found = _mapping(declared.get(key), source, key)
     for name, command in found.items():
         if not isinstance(command, str) or not command.strip():
@@ -101,7 +102,7 @@ def _commands(declared: dict, source: object, key: str) -> dict[str, str]:
     return {str(name): command.strip() for name, command in found.items()}
 
 
-def _mapping(data: object, source: object, key: str | None = None) -> dict:
+def _mapping(data: object, source: object, key: str | None = None) -> dict[str, Any]:
     if not isinstance(data, dict) or not data:
         what = f"`{key}`, a non-empty mapping" if key else "a non-empty mapping"
         raise ValueError(f"{source}: expected {what}")
