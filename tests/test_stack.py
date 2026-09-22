@@ -26,6 +26,7 @@ REPO = Path(__file__).resolve().parent.parent
 STACK_YAML = REPO / ".agentic" / "stack.yaml"
 CI_YML = REPO / ".github" / "workflows" / "ci.yml"
 PYPROJECT = REPO / "pyproject.toml"
+STANDARDS = REPO / "CODING_STANDARDS.md"
 
 
 def _declared_commands() -> list[str]:
@@ -110,3 +111,39 @@ def test_the_declared_witness_runs_at_the_repo_root_and_resolves_under_it():
     lines = [line.strip() for line in result.output.splitlines() if line.strip()]
     printed = Path(lines[-1])
     assert printed.is_absolute() and printed.is_relative_to(REPO), result.output
+
+
+def _mypy_option_names() -> list[str]:
+    """Every `[tool.mypy]` key except `files` itself: the registry `CODING_STANDARDS.md`
+    is allowed to point at, never one of its options (ADR-0012, adenda `standards`)."""
+    data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+    return [key for key in data["tool"]["mypy"] if key != "files"]
+
+
+def _standards_violations(text: str) -> list[str]:
+    """Every forbidden spelling this repo's own `CODING_STANDARDS.md` must not carry: a
+    path under `agentic/`, or the name of a `[tool.mypy]` option other than the
+    registry key `files` (ADR-0021's dial, not its contents)."""
+    found = ["agentic/"] if "agentic/" in text else []
+    found += [option for option in _mypy_option_names() if option in text]
+    return found
+
+
+def test_this_repos_standards_name_its_type_checker_and_its_test_runner():
+    """A materialisation that names no tool is an empty file passing for a full one
+    (ADR-0012, adenda `standards`, subtask `standards`)."""
+    text = STANDARDS.read_text(encoding="utf-8")
+    assert "mypy" in text
+    assert "pytest" in text
+
+
+def test_this_repos_standards_name_no_path_under_agentic_and_no_mypy_option():
+    text = STANDARDS.read_text(encoding="utf-8")
+    assert _standards_violations(text) == []
+
+
+def test_the_standards_violation_check_actually_rejects_a_forbidden_spelling():
+    """Proves the guard above is not vacuous: a path under `agentic/` and a bare
+    `[tool.mypy]` option both trip it, not only their absence in today's file."""
+    bad = "See `agentic/core/knowledge/domain` and set `disallow_untyped_defs = true`."
+    assert _standards_violations(bad) == ["agentic/", "disallow_untyped_defs"]
