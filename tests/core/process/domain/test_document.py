@@ -375,6 +375,64 @@ def test_record_closure_raises_when_the_existing_key_is_not_a_single_scalar_line
         document.record_closure(raw, {"returns": "x"})
 
 
+def test_record_closure_raises_when_the_existing_key_is_an_indentless_block_sequence():
+    """`runs` and `failures` render as a block sequence with no indent (`yaml.safe_dump`'s
+    own default, pinned by `test_a_document_written_before_slug_and_timing_existed_
+    still_parses`): a `- ` item at column 0 must be caught as a continuation too, or
+    the first line would be overwritten and the rest left orphaned."""
+    raw = (
+        "---\n"
+        "id: T-1\n"
+        "title: t\n"
+        "runs:\n"
+        "- {role: PjM, section: PjM, version: 1, session_id: '', model: m, cost_usd: 0.1,"
+        " turns: 1}\n"
+        "---\n"
+        "\n# t\n\n## Original request\n\nd\n"
+    )
+    with pytest.raises(ValueError, match="runs"):
+        document.record_closure(raw, {"runs": "x"})
+
+
+def test_a_document_written_after_this_task_seeds_the_same_state_as_one_written_before_it():
+    """The closure's four keys and `system_version` are new frontmatter, never new
+    `TaskState` fields, so `resume.from_document`'s allow-list filter (`STATE_FIELDS`)
+    drops every one of them: a document carrying them seeds the identical state as one
+    that does not, inert by construction rather than by a filter this task edits."""
+    state = {
+        "id": "T-1",
+        "title": "t",
+        "description": "d",
+        "status": "ready_for_review",
+        "sections": {"Developer": "Built it."},
+    }
+    before = document.render(state)
+    closed = document.record_closure(
+        document.render(state, system_version="abc123+dirty"),
+        {
+            "closed_at": "2026-09-21T10:00:00Z",
+            "delivery_outcome": "merged",
+            "human_commits": "0",
+            "human_lines_changed": "0",
+        },
+    )
+    new_keys = (
+        "system_version",
+        "closed_at",
+        "delivery_outcome",
+        "human_commits",
+        "human_lines_changed",
+    )
+    for key in new_keys:
+        assert key not in resume.STATE_FIELDS
+        assert key in document.parse(closed)  # present in the raw document...
+
+    def seeded(raw: str) -> dict:
+        return {k: v for k, v in document.parse(raw).items() if k in resume.STATE_FIELDS}
+
+    assert seeded(before) == seeded(closed)  # ...but filtered out of what resume seeds
+
+
 def test_record_closure_quotes_values_that_yaml_would_otherwise_retype():
     raw = document.render({"id": "T-1", "title": "t", "description": "d", "sections": {}})
     closed = document.record_closure(raw, {"human_commits": "3", "delivery_outcome": "merged"})

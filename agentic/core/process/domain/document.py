@@ -193,7 +193,12 @@ def record_closure(raw: str, values: dict[str, str]) -> str:
 
 
 def _is_continuation(line: str) -> bool:
-    return line[:1] in (" ", "\t")
+    """Whether `line` continues the block value of the key on the line before it: an
+    indented mapping or sequence entry, or a `- ` item at the same column as its own
+    key -- the indentless block-sequence shape `yaml.safe_dump` gives `runs` and
+    `failures` (no top-level frontmatter key starts with `-`, so this reads unambiguously
+    as a continuation, never as the next key)."""
+    return line[:1] in (" ", "\t") or line.startswith("-")
 
 
 def _scalar_line(key: str, value: str) -> str:
