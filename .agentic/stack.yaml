@@ -18,3 +18,4 @@ checks:
   tests: uv run pytest -m "not llm"
   lint: uv run ruff check .
   format: uv run ruff format --check .
+  types: uv run mypy
