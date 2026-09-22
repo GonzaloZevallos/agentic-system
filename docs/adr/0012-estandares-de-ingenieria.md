@@ -98,6 +98,12 @@ describiéndolo por default, así que este repo pasa a tener su propio
 `CODING_STANDARDS.md` de raíz, que nombra mypy, pytest y ruff y apunta al registro
 (`[tool.mypy] files`, ADR-0021) en vez de restatearlo.
 
+**Línea de README §13, verbatim, para quien escriba `README.md`** (esta subtarea no lo
+abre; la subtarea `prompts` sí, ADR-0012 §13 "Decisiones que fueron reemplazadas"):
+*ADR-0012's addendum replaces the ADR-0017 bullet that had this repo reading the system
+default because it described what the repo already does; from here the default is
+practices and this repo materialises them in its own `CODING_STANDARDS.md`.*
+
 **Este archivo no es parte de `prompts.fingerprint`.** Los prompts de
 `agentic/core/process/domain/prompts/` no se tocan; lo que seis roles con
 `reads_standards=True` leen sobre este repo cambia igual, y sólo `system.version`
