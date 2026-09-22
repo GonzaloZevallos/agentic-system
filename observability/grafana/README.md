@@ -40,6 +40,14 @@ de unidad: `agentic.task.cost_usd` es `agentic_task_cost_usd`, `agentic.task.dur
 `role`, `role_outcome`, `model`, `rework`. Las series anteriores a #47 no llevan `product`
 y ningún panel las ve: se agregan labels, no se reescribe la historia (ADR-0008).
 
+Los paneles de "Entregas por resultado" y "Líneas humanas por versión del sistema"
+(`agentic.delivery.*`, emitidas por `agentic close --issue N`) leen `system_version`
+del documento de la tarea, no de la corrida que está mirando el dashboard: un
+documento escrito antes de esta tarea no tiene esa clave, y `close` lo normaliza al
+único literal `"unknown"`. La variable `$version` sale de `label_values(agentic_role_
+cost_usd, system_version)`, que nunca ofrece `"unknown"` porque esa métrica siempre
+trae una versión real — esas muestras solo aparecen eligiendo `All`.
+
 ## Cómo viajan las métricas
 
 Son eventos, no tasas (ADR-0008, adenda): cada tarea terminada y cada corrida de rol deja

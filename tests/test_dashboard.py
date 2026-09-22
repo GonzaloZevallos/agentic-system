@@ -138,6 +138,27 @@ def test_every_queried_metric_and_label_is_documented():
     )
 
 
+def test_delivery_panels_are_grouped_and_filtered_by_system_version():
+    """ADR-0008, 2026-09-21 addendum: every expression reading `agentic.delivery.*`
+    carries `system_version` in its `by (...)` and `system_version=~"$version"` in
+    its selector, the same rule `test_versioned_families_are_grouped_and_filtered_by_
+    system_version` checks for the role-run families -- a panel querying deliveries
+    with none would be the one way this task's own new families could dodge the join
+    key every other panel on this dashboard already carries."""
+    exprs = [e for e in _exprs() if "agentic_delivery_" in e]
+    assert exprs, "no panel reads an agentic.delivery.* family"
+    for expr in exprs:
+        for metric in set(BARE_METRIC.findall(expr)):
+            if not metric.startswith("agentic_delivery_"):
+                continue
+            assert re.search(rf'{metric}\{{[^}}]*system_version=~"\$version"', expr), (
+                f'{metric} is queried without system_version=~"$version" in its selector: {expr!r}'
+            )
+        assert re.search(r"by\s*\([^)]*\bsystem_version\b[^)]*\)", expr), (
+            f"delivery expression is grouped without system_version in by(...): {expr!r}"
+        )
+
+
 def test_unmergeable_pauses_are_broken_out_by_version():
     # gym-saas #16 (GH-91): two of seven escalations were `unmergeable` pauses a
     # Developer turn would have settled by hand. `escalation_class` already ships on

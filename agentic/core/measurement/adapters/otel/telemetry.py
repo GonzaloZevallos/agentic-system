@@ -354,7 +354,9 @@ class Instruments:
             ),
             delivery_human_commits=m.create_gauge(
                 "agentic.delivery.human_commits",
-                description="Commits on the pull request that are the human's own, not the system's",
+                description=(
+                    "Commits on the pull request that are the human's own, not the system's"
+                ),
             ),
             delivery_human_lines_changed=m.create_gauge(
                 "agentic.delivery.human_lines_changed",
