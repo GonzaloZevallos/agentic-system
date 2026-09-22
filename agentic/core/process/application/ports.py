@@ -200,6 +200,14 @@ class TaskDocuments(Protocol):
         The path it wrote, or None when the task has no document to write."""
         ...
 
+    def record_closure(self, task_id: str, values: dict[str, str]) -> Path:
+        """Line-level edit of the closure's own top-level frontmatter keys
+        (`document.record_closure`'s own docstring) into the document already on disk.
+        Never goes through `save`, which re-renders `system_commit` from today's sha
+        and `plugins` from today's submodule and would falsify the provenance of a
+        finished Corrida (ADR-0001). Does not commit anything."""
+        ...
+
 
 class ProductKnowledge(Protocol):
     """The consolidated knowledge of the product (ADR-0006), stored with the human docs.
