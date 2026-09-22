@@ -202,6 +202,19 @@ class GitWorkspace:
     def prune(self) -> None:
         self._git("worktree", "prune")
 
+    def branches(self, prefix: str) -> list[str]:
+        result = self._run("branch", "--list", f"{prefix}*", "--format=%(refname:short)")
+        return [line for line in result.stdout.splitlines() if line]
+
+    def rename_branch(self, old: str, new: str) -> None:
+        if not self._branch_exists(old) and self._branch_exists(new):
+            return  # the idempotent case: a previous, interrupted archive did this already
+        self._git("branch", "-m", old, new)
+
+    def is_ignored(self, root: Path, relative: str) -> bool:
+        result = self._run("check-ignore", "-q", relative, cwd=root)
+        return result.returncode == 0
+
     def exclude_system_files(self) -> None:
         """Keep what the system writes in the product out of its `git status`. Outside a
         repository there is nothing to exclude from."""
