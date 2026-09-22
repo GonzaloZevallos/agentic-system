@@ -3,7 +3,7 @@
 import pytest
 
 from agentic.core.process.application import resume
-from agentic.core.process.domain import document
+from agentic.core.process.domain import document, rules
 from agentic.shared.configuration import Configuration
 from tests.fakes import memory_ports
 
@@ -99,6 +99,22 @@ def test_from_document_leaves_a_legacy_document_without_the_key():
     ports.documents.save(document.parse(old))
     resumed = resume.from_document("GH-1", ports)
     assert "proposed_invariants" not in resumed
+
+
+def test_a_document_written_before_the_prd_rename_still_resumes():
+    # `definition_ready` is frozen byte for byte (ADR-0026): a document written while
+    # PM's deliverable was still called `Definition` carries this exact status, and
+    # `resume_target` must send it where it always did -- the rename touched no
+    # branch, no default and no runtime condition, only the identifiers around it.
+    old = (
+        "---\nid: GH-2\ntitle: t\nstatus: definition_ready\ntype: feature\n---\n\n"
+        "# t\n\n## Original request\n\nd\n"
+    )
+    ports = memory_ports()
+    ports.documents.save(document.parse(old))
+    resumed = resume.from_document("GH-2", ports)
+    assert resumed["status"] == "definition_ready"
+    assert rules.resume_target(resumed) == "plan"
 
 
 def test_the_document_is_refused_when_git_moved_since():

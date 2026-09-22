@@ -14,12 +14,12 @@ from __future__ import annotations
 from agentic.core.process.application.run_role import context_for, preamble, with_context
 from agentic.core.process.domain.document import HUMAN
 from agentic.core.process.domain.roles import (
-    PRD_INTERVIEW,
     DEVELOPER,
     DEVELOPER_INTEGRATOR,
     FINDINGS,
     PJM,
     PM,
+    PRD_INTERVIEW,
     PRODUCT_ANALYST,
     SOLUTION_INTERVIEW,
     TECH_LEAD,
