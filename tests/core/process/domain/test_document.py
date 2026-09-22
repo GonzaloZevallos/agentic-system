@@ -306,6 +306,63 @@ def test_a_document_written_before_slug_and_timing_existed_still_parses():
     assert "denials" not in failure
 
 
+def test_record_closure_replaces_an_existing_scalar_key_leaving_everything_else_untouched():
+    raw = document.render(
+        {
+            "id": "T-1",
+            "title": "t",
+            "description": "d",
+            "status": "ready_for_review",
+            "sections": {"Developer": "Built it."},
+        },
+        "abc123",
+    )
+    closed = document.record_closure(raw, {"closed_at": "2026-09-21T10:00:00Z"})
+    # Only one line was inserted, right before the closing `---`: the rest is
+    # byte-identical, body included.
+    before = raw.splitlines()
+    after = closed.splitlines()
+    closing = before.index("---", 1)
+    assert after == [*before[:closing], "closed_at: '2026-09-21T10:00:00Z'", *before[closing:]]
+    assert document.parse(closed) == {**document.parse(raw), "closed_at": "2026-09-21T10:00:00Z"}
+
+
+def test_record_closure_replaces_the_key_in_place_when_it_already_exists():
+    raw = document.render({"id": "T-1", "title": "t", "description": "d", "sections": {}})
+    once = document.record_closure(raw, {"closed_at": "2026-09-21T10:00:00Z"})
+    twice = document.record_closure(once, {"closed_at": "2026-09-21T11:00:00Z"})
+    assert twice.count("closed_at:") == 1
+    assert "2026-09-21T11:00:00Z" in twice
+    assert document.parse(twice)["closed_at"] == "2026-09-21T11:00:00Z"
+
+
+def test_record_closure_raises_when_there_is_no_frontmatter():
+    with pytest.raises(ValueError, match="missing frontmatter"):
+        document.record_closure("# no frontmatter\n", {"closed_at": "x"})
+
+
+def test_record_closure_raises_when_the_existing_key_is_not_a_single_scalar_line():
+    raw = (
+        "---\n"
+        "id: T-1\n"
+        "title: t\n"
+        "returns:\n"
+        "  PM→Product Analyst: 1\n"
+        "---\n"
+        "\n# t\n\n## Original request\n\nd\n"
+    )
+    with pytest.raises(ValueError, match="returns"):
+        document.record_closure(raw, {"returns": "x"})
+
+
+def test_record_closure_quotes_values_that_yaml_would_otherwise_retype():
+    raw = document.render({"id": "T-1", "title": "t", "description": "d", "sections": {}})
+    closed = document.record_closure(raw, {"human_commits": "3", "delivery_outcome": "merged"})
+    data = document.parse(closed)
+    assert data["human_commits"] == "3"  # a digit string stays a string, not an int
+    assert data["delivery_outcome"] == "merged"
+
+
 def test_a_document_written_before_escalation_class_existed_still_parses():
     """`escalation_class` is a new key inside the frontmatter `document.py` already
     rendered and parsed: no rename, so a document paused before this task carries on
