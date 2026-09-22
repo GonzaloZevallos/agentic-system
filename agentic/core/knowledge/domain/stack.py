@@ -36,7 +36,7 @@ TEMPLATE = Path(__file__).resolve().parent / "stack.yaml"
 OVERLAY = Path(".agentic/stack.yaml")
 # Every key the file may declare. An unknown one is a typo, not an extension: a product
 # that misspells `checks` would otherwise run with half a stack and never know.
-KEYS = ("product", "setup", "checks")
+KEYS = ("product", "setup", "checks", "witness")
 # The name is a label value in Prometheus and a variable in the dashboard: a slug keeps
 # one product from arriving under two spellings and keeps the panels' regexes honest.
 SLUG = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
@@ -85,6 +85,24 @@ def setup(data: object, source: object) -> dict[str, str]:
     but empty is a half-written file, and that does fail."""
     declared = _declared(data, source)
     return _commands(declared, source, "setup") if "setup" in declared else {}
+
+
+def witness(data: object, source: object) -> str | None:
+    """The command with which the product says where the code its checks just measured
+    lives (process glossary: Testigo del checkout), run by the presubmit in the
+    Developer's checkout before them. Optional: a key absent is a product that declares
+    none, and `None` -- never `""`, which this never returns -- is that answer's only
+    spelling. A scalar, not a mapping like `checks` and `setup`: one testigo, one
+    verdict, no name to declare, so it does not go through `_commands`, which is shaped
+    for mappings. Declared but blank or not a string is the same half-written-file
+    error `setup` raises for an empty step."""
+    declared = _declared(data, source)
+    if "witness" not in declared:
+        return None
+    value = declared["witness"]
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{source}: expected a command for `witness`, a non-empty string")
+    return value.strip()
 
 
 def _declared(data: object, source: object) -> dict[str, Any]:

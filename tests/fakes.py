@@ -163,11 +163,15 @@ class MemoryStack:
         checks: dict[str, str] | None = None,
         setup: dict[str, str] | None = None,
         product: str | None = "product",
+        witness: str | None = None,
     ):
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
         # None is a product that declares no name, which `preflight` refuses.
         self.declared_product = product
+        # None is a product that declares no checkout witness (glossary: Testigo del
+        # checkout), which is every product but this repo's own future tasks.
+        self.declared_witness = witness
         self.revisions: list[str] = []
 
     def checks(self, revision: str) -> dict[str, str]:
@@ -177,6 +181,12 @@ class MemoryStack:
     def setup(self, revision: str) -> dict[str, str]:
         self.revisions.append(revision)
         return self.declared_setup
+
+    def witness(self, revision: str) -> str | None:
+        # Not tracked in `revisions`, the same as `product`: existing tests count that
+        # list to prove exactly `checks` and `setup` are asked (issue #22, 7), and a
+        # witness read must not silently grow that count out from under them.
+        return self.declared_witness
 
     def product(self, revision: str = "HEAD") -> str:
         if self.declared_product is None:

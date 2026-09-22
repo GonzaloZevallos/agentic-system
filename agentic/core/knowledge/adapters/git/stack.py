@@ -22,6 +22,10 @@ class GitStack:
         data, source = self._declaration(revision)
         return stack.setup(data, source)
 
+    def witness(self, revision: str) -> str | None:
+        data, source = self._declaration(revision)
+        return stack.witness(data, source)
+
     def product(self, revision: str = "HEAD") -> str:
         """The product's name, HEAD by default and not the task's base: the name says who
         the repository is, and a task older than the key would otherwise resume with no

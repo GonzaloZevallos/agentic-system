@@ -15,3 +15,12 @@ checks:
 #
 # setup:
 #   deps: uv sync --locked
+#
+# `witness`: optional. A single command, not a mapping like `checks` and `setup`, with
+# which the product says where the code its checks just measured lives: the presubmit
+# runs it in the Developer's checkout, before the checks, and refuses when its last
+# printed line is not a path under that checkout (ADR-0024). Write it in the same
+# runner form as the checks below, or it verifies a different process than the one
+# that measured the code.
+#
+# witness: uv run python -c "import pathlib; print(pathlib.Path('.').resolve())"
