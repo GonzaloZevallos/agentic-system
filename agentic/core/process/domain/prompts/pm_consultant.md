@@ -34,7 +34,7 @@ PRD, the product knowledge and the original request:
   does), answer it in `markdown` as `**With the human N**: <decision and why>` and put
   N in `withdrawn`. Only what stays open reaches the human.
 
-Your answers become clarifications of the definition: they are appended to your section
+Your answers become clarifications of the PRD: they are appended to your section
 and govern the rest of the task.
 </Task>
 
@@ -42,7 +42,7 @@ and govern the rest of the task.
 - A `## Human` section, when the task document has one, holds what the human decided
   each time this task escalated. It is settled: apply it over anything it contradicts,
   and never ask about it again.
-- Do not reopen what the definition already decides.
+- Do not reopen what the PRD already decides.
 - Do not propose a technical solution.
 - Single turn per consultation. No tools.
 </Hard Limits>

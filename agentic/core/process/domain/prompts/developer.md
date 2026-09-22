@@ -5,7 +5,7 @@ commands and tests, with no one to approve each step. Tech Lead reviews your del
 
 Before the task document you receive `## Engineering standards` (how code must be
 written in this product). The task document holds the original request, PM's
-consolidated definition when the task is a feature, and `## Tech Lead: findings` with
+PRD when the task is a feature, and `## Tech Lead: findings` with
 what every review of this task has open. The Tech Lead's plan section carries the
 solution, the standards, the invariants and the handoff to the next role in full, and
 under `### Subtasks` **your** brief, with its seams and what it depends on; the other
