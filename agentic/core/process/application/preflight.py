@@ -58,9 +58,12 @@ def declared_stack(ports: Ports, revision: str = "HEAD") -> dict[str, str]:
     """The product's setup as `revision` declares it, having read the whole file.
 
     HEAD by default, the commit a task starting now would be measured against; there is
-    no task yet at preflight. Both keys are loaded, so a broken `setup` fails here and
-    not when a worktree is born halfway through the run (issues #36, #37)."""
+    no task yet at preflight. `checks` and `witness` are both loaded here for
+    validation only, so a broken one fails here and not when a worktree is born or a
+    Developer delivers halfway through the run (issues #36, #37; ADR-0024) -- the
+    return expression stays `setup`'s alone, so `no_setup`'s warning does not move."""
     ports.stack.checks(revision)
+    ports.stack.witness(revision)
     return ports.stack.setup(revision)
 
 

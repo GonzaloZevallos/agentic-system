@@ -20,6 +20,7 @@ from pathlib import Path
 import yaml
 
 from agentic.core.knowledge.domain import stack
+from agentic.core.process.adapters.shell.commands import ShellCommands
 
 REPO = Path(__file__).resolve().parent.parent
 STACK_YAML = REPO / ".agentic" / "stack.yaml"
@@ -89,3 +90,23 @@ def test_mypy_files_excludes_the_pinned_plugins_submodule():
         assert not entry.startswith("agentic/plugins"), (
             f"[tool.mypy] files: {entry!r} is inside the pinned plugins submodule (ADR-0013)"
         )
+
+
+def test_the_declared_witness_runs_at_the_repo_root_and_resolves_under_it():
+    """The witness's own contract, separate from the checks/setup <-> ci.yml one above
+    (ADR-0024): this repo's declared `witness`, read off `.agentic/stack.yaml` through
+    the domain exactly as `GitStack` would, must actually run through the same project
+    runner as the checks and print a path that resolves under the repo it just
+    measured. `witness` is deliberately not among `_declared_commands()` above and has
+    no `run:` step in `ci.yml`: it is not a check, CI delivers nothing and has no
+    checkout to verify against."""
+    data = yaml.safe_load(STACK_YAML.read_text(encoding="utf-8"))
+    command = stack.witness(data, STACK_YAML)
+    assert command is not None
+
+    result = ShellCommands().run(REPO, command, timeout_s=120.0)
+    assert result.passed, result.output
+
+    lines = [line.strip() for line in result.output.splitlines() if line.strip()]
+    printed = Path(lines[-1])
+    assert printed.is_absolute() and printed.is_relative_to(REPO), result.output

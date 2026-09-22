@@ -264,6 +264,13 @@ class ProductStack(Protocol):
         product declares none, which is a product that prepares nothing."""
         ...
 
+    def witness(self, revision: str) -> str | None:
+        """The command with which the product says where the code its checks just
+        measured lives (`core.knowledge`, glossary: Testigo del checkout), run by the
+        presubmit before them. Optional: `None` when the product declares none, which
+        is the presubmit of today, byte for byte unchanged."""
+        ...
+
     def product(self, revision: str = "HEAD") -> str:
         """The name the product goes by, the label every span and metric of a run over it
         carries (issue #47)."""

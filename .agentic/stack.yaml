@@ -11,6 +11,11 @@
 # checks below are `uv run` in project mode, which already builds a per-worktree
 # environment; `uv sync --locked` makes that a guarantee of the system and not a
 # property of how the commands happen to be written.
+# `witness`: this repo's own contract, proved by `tests/test_stack.py` (ADR-0024). It
+# has to go through the same `uv run` project mode as the checks below:
+# `without_own_toolchain` strips `VIRTUAL_ENV`, every `UV_*` and that venv's `bin/` off
+# `PATH`, so a bare `python -c "import agentic"` would raise `ModuleNotFoundError` in a
+# fresh worktree -- an environment problem, not a checkout one.
 product: agentic-system
 setup:
   deps: uv sync --locked
@@ -19,3 +24,4 @@ checks:
   lint: uv run ruff check .
   format: uv run ruff format --check .
   types: uv run mypy
+witness: uv run python -c "import agentic, pathlib; print(pathlib.Path(agentic.__file__).resolve().parent)"
