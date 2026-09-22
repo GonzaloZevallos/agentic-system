@@ -4,6 +4,7 @@ import signal
 import socket
 import subprocess
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,8 +14,11 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agentic import cli
+from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.adapters.github import inbox
 from agentic.core.process.application.ports import LockHeld, LockRecord
+from agentic.core.process.domain.task import PullRequest, PullRequestCommit
+from tests.fakes import MemoryStack, MemoryTracker, memory_ports
 
 
 @asynccontextmanager
@@ -1279,3 +1283,314 @@ async def test_resume_from_document_still_reads_the_frontmatter_unchanged(tmp_pa
         checkpointer=in_memory,
     )
     assert "from:      document" in capsys.readouterr().out
+
+
+# `agentic close --issue N` (Tech Lead plan, subtask `close-command`). Its declared
+# seam is `agentic.cli.main` itself: argv in, exit code, stdout, samples and document
+# bytes out -- not `cli._close` directly, unlike `_run`/`_resume` above.
+
+
+def close_root(tmp_path: Path) -> Path:
+    """A product directory good enough for `close`: no git repo needed, since `close`
+    never calls `preflight` and touches no git command of its own -- just the
+    `.agentic/` directory `main` itself checks for before building any ports."""
+    root = tmp_path / "p"
+    (root / ".agentic").mkdir(parents=True)
+    return root
+
+
+def close_task(**overrides):
+    task = {
+        "id": "GH-9",
+        "title": "t",
+        "description": "d",
+        "type": "bug",
+        "status": "ready_for_review",
+        "pull_request": "https://github.com/o/r/pull/7",
+        "cost_usd": 1.0,
+        "prompts": {"developer": "abc"},
+    }
+    task.update(overrides)
+    return task
+
+
+def close_pull_request(*, state="MERGED", merged=True, human_commit=False):
+    commits = [
+        PullRequestCommit(
+            author_emails=("agentic-system@users.noreply.github.com",),
+            message_headline="feat: x",
+            additions=10,
+            deletions=2,
+        )
+    ]
+    if human_commit:
+        commits.append(
+            PullRequestCommit(
+                author_emails=("human@x.com",),
+                message_headline="fix typo",
+                additions=3,
+                deletions=1,
+            )
+        )
+    return PullRequest(
+        state=state,
+        created_at="2026-09-01T00:00:00+00:00",
+        merged_at="2026-09-01T01:00:00+00:00" if merged else None,
+        commits=tuple(commits),
+    )
+
+
+class FakePullRequestTracker(MemoryTracker):
+    """`MemoryTracker`'s own shape, with `pull_request` answered from a canned map (or
+    raised) instead of `NotImplementedError` -- the one verb `close` needs that
+    `MemoryTracker` does not otherwise carry."""
+
+    def __init__(self, prs: dict[str, PullRequest | None] | None = None, raises=None):
+        super().__init__()
+        self.prs = prs or {}
+        self.raises = raises
+        self.pull_request_refs: list[str] = []
+
+    def pull_request(self, reference: str) -> PullRequest | None:
+        self.pull_request_refs.append(reference)
+        if self.raises is not None:
+            raise self.raises
+        return self.prs.get(reference)
+
+
+def close_ports(root: Path, tracker: MemoryTracker, product: str | None = "p"):
+    """A real `FilesystemTaskDocuments` over `root` (so a refusal's claim of a
+    byte-identical document file is provable on disk), everything else an in-memory
+    fake `close` never touches."""
+    return replace(
+        memory_ports(),
+        documents=FilesystemTaskDocuments(root),
+        tracker=tracker,
+        stack=MemoryStack(product=product),
+    )
+
+
+def test_close_dispatch_builds_the_close_work(monkeypatch, tmp_path):
+    root = product(tmp_path, "p")
+    seen = capture_run(monkeypatch)
+    argv = ["agentic", "close", "--issue", "9", "--product-dir", str(root)]
+    monkeypatch.setattr("sys.argv", argv)
+    cli.main()
+    assert seen["fn"] is cli._close
+    assert seen["task"] == "GH-9"
+
+
+def test_close_does_not_run_preflight(monkeypatch, tmp_path, capsys):
+    """Unlike `run`/`resume`, a product that declares no stack does not stop `close`:
+    it runs no role and spends nothing, so it never calls `preflight`."""
+    root = product(tmp_path, "p", stack=None)
+    seen = capture_run(monkeypatch)
+    argv = ["agentic", "close", "--issue", "9", "--product-dir", str(root)]
+    monkeypatch.setattr("sys.argv", argv)
+    cli.main()
+    assert seen["fn"] is cli._close
+    assert capsys.readouterr().err == ""
+
+
+def test_close_detach_is_a_parse_error(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["agentic", "close", "--issue", "9", "--detach"])
+    with pytest.raises(SystemExit) as info:
+        cli.main()
+    assert info.value.code == 2
+
+
+def test_close_dry_run_is_a_parse_error(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["agentic", "close", "--issue", "9", "--dry-run"])
+    with pytest.raises(SystemExit) as info:
+        cli.main()
+    assert info.value.code == 2
+
+
+def _closed_run(monkeypatch, root: Path, ports, *, issue: int = 9):
+    """Runs `agentic close --issue <issue>` for real, through `main`, with `ports`
+    substituted for the ones `default_ports` would have built -- the lever every test
+    below uses to keep `gh` and git out of it while still exercising the CLI seam."""
+    monkeypatch.setattr(cli, "default_ports", lambda cfg: ports)
+    argv = ["agentic", "close", "--issue", str(issue), "--product-dir", str(root)]
+    monkeypatch.setattr("sys.argv", argv)
+
+
+def test_close_refuses_with_no_document(monkeypatch, tmp_path, capsys):
+    from agentic.core.measurement.adapters.otel import telemetry
+
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    points = MetricPoints()
+    telemetry.configure(meter_provider=telemetry.meter_provider_for(points.reader))
+    try:
+        _closed_run(monkeypatch, root, ports)
+        with pytest.raises(SystemExit) as info:
+            cli.main()
+    finally:
+        telemetry.configure()
+    assert info.value.code == 2
+    assert "GH-9 has no document" in capsys.readouterr().err
+    assert points.points == {}
+    assert not ports.documents.path_for("GH-9").exists()
+
+
+def test_close_refuses_with_no_pull_request_value(monkeypatch, tmp_path, capsys):
+    from agentic.core.measurement.adapters.otel import telemetry
+
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    ports.documents.save(close_task(pull_request=None))
+    before = ports.documents.path_for("GH-9").read_bytes()
+    points = MetricPoints()
+    telemetry.configure(meter_provider=telemetry.meter_provider_for(points.reader))
+    try:
+        _closed_run(monkeypatch, root, ports)
+        with pytest.raises(SystemExit) as info:
+            cli.main()
+    finally:
+        telemetry.configure()
+    assert info.value.code == 2
+    assert "GH-9 has no pull request" in capsys.readouterr().err
+    assert points.points == {}
+    assert ports.documents.path_for("GH-9").read_bytes() == before
+
+
+def test_close_refuses_when_already_closed(monkeypatch, tmp_path, capsys):
+    from agentic.core.measurement.adapters.otel import telemetry
+
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    ports.documents.save(close_task())
+    ports.documents.record_closure(
+        "GH-9",
+        {
+            "closed_at": "2026-09-20T00:00:00.000Z",
+            "delivery_outcome": "merged",
+            "human_commits": "0",
+            "human_lines_changed": "0",
+        },
+    )
+    before = ports.documents.path_for("GH-9").read_bytes()
+    points = MetricPoints()
+    telemetry.configure(meter_provider=telemetry.meter_provider_for(points.reader))
+    try:
+        _closed_run(monkeypatch, root, ports)
+        with pytest.raises(SystemExit) as info:
+            cli.main()
+    finally:
+        telemetry.configure()
+    assert info.value.code == 2
+    assert "already closed on 2026-09-20T00:00:00.000Z" in capsys.readouterr().err
+    assert points.points == {}
+    assert ports.documents.path_for("GH-9").read_bytes() == before
+    assert ports.tracker.pull_request_refs == []  # refused before `gh` was ever asked
+
+
+def test_close_refuses_when_the_pull_request_is_still_open(monkeypatch, tmp_path, capsys):
+    from agentic.core.measurement.adapters.otel import telemetry
+
+    root = close_root(tmp_path)
+    reference = "https://github.com/o/r/pull/7"
+    tracker = FakePullRequestTracker({reference: close_pull_request(state="OPEN", merged=False)})
+    ports = close_ports(root, tracker)
+    ports.documents.save(close_task(pull_request=reference))
+    before = ports.documents.path_for("GH-9").read_bytes()
+    points = MetricPoints()
+    telemetry.configure(meter_provider=telemetry.meter_provider_for(points.reader))
+    try:
+        _closed_run(monkeypatch, root, ports)
+        with pytest.raises(SystemExit) as info:
+            cli.main()
+    finally:
+        telemetry.configure()
+    assert info.value.code == 2
+    error = capsys.readouterr().err
+    assert "still open" in error and "nothing to close" in error
+    assert points.points == {}
+    assert ports.documents.path_for("GH-9").read_bytes() == before
+
+
+def test_close_refuses_with_no_metrics_endpoint(monkeypatch, tmp_path, capsys):
+    from agentic.core.measurement.adapters.otel import telemetry
+
+    root = close_root(tmp_path)
+    reference = "https://github.com/o/r/pull/7"
+    tracker = FakePullRequestTracker({reference: close_pull_request()})
+    ports = close_ports(root, tracker)
+    ports.documents.save(close_task(pull_request=reference))
+    before = ports.documents.path_for("GH-9").read_bytes()
+    telemetry.configure()  # no OTEL_EXPORTER_OTLP_ENDPOINT: `configure()` builds nothing
+    try:
+        _closed_run(monkeypatch, root, ports)
+        with pytest.raises(SystemExit) as info:
+            cli.main()
+    finally:
+        telemetry.configure()
+    assert info.value.code == 2
+    assert "no metrics endpoint configured; nothing recorded" in capsys.readouterr().err
+    assert ports.documents.path_for("GH-9").read_bytes() == before
+
+
+def test_close_refuses_when_the_product_has_no_name(monkeypatch, tmp_path, capsys):
+    from agentic.core.measurement.adapters.otel import telemetry
+
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker(), product=None)
+    points = MetricPoints()
+    telemetry.configure(meter_provider=telemetry.meter_provider_for(points.reader))
+    try:
+        _closed_run(monkeypatch, root, ports)
+        with pytest.raises(SystemExit) as info:
+            cli.main()
+    finally:
+        telemetry.configure()
+    assert info.value.code == 2
+    assert "expected `product`" in capsys.readouterr().err
+    assert points.points == {}
+
+
+def test_close_happy_path_emits_one_sample_per_family_and_writes_the_four_keys(
+    monkeypatch, tmp_path, capsys
+):
+    from agentic.core.measurement.adapters.otel import telemetry
+
+    root = close_root(tmp_path)
+    reference = "https://github.com/o/r/pull/7"
+    tracker = FakePullRequestTracker({reference: close_pull_request(human_commit=True)})
+    ports = close_ports(root, tracker)
+    FilesystemTaskDocuments(root, system_version=lambda: "v123").save(
+        close_task(pull_request=reference)
+    )
+    points = MetricPoints()
+    telemetry.configure(meter_provider=telemetry.meter_provider_for(points.reader))
+    try:
+        _closed_run(monkeypatch, root, ports)
+        cli.main()
+    finally:
+        telemetry.configure()
+
+    out = capsys.readouterr().out
+    assert "outcome:             merged_with_changes" in out
+    assert "human_commits:       1" in out
+    assert "human_lines_changed: 4" in out
+    assert "doc:" in out and "not committed" in out
+
+    for name in (
+        "agentic.delivery.outcome",
+        "agentic.delivery.human_commits",
+        "agentic.delivery.human_lines_changed",
+        "agentic.delivery.time_to_merge",
+    ):
+        (point,) = points.points[name]
+        assert point.attributes["product"] == "p"
+        assert point.attributes["task.type"] == "bug"
+        assert point.attributes["system.version"] == "v123"
+    outcome_point = points.points["agentic.delivery.outcome"][0]
+    assert outcome_point.attributes["outcome"] == "merged_with_changes"
+
+    doc = ports.documents.load("GH-9")
+    assert doc["delivery_outcome"] == "merged_with_changes"
+    assert doc["human_commits"] == "1"
+    assert doc["human_lines_changed"] == "4"
+    assert doc["closed_at"]
+    assert doc["status"] == "ready_for_review"  # no new `Status` value is added
