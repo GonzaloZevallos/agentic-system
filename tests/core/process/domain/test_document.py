@@ -181,6 +181,26 @@ def test_relative_path():
     assert str(document.relative_path("GH-12")) == ".agentic/tasks/GH-12.md"
 
 
+def test_render_writes_system_version_only_when_given_one():
+    state = {"id": "T-1", "title": "t", "description": "d", "sections": {}}
+    without = document.render(state)
+    assert "system_version" not in without
+    assert "system_version" not in document.parse(without)
+
+    with_one = document.render(state, system_version="abc123+dirty")
+    assert "system_version: abc123+dirty" in with_one
+    assert document.parse(with_one)["system_version"] == "abc123+dirty"
+
+
+def test_render_writes_no_system_version_for_an_empty_string_either():
+    """The invariant is stated against every writer, not only the producer that never
+    returns one (`telemetry.system_version`'s own fallback, `unknown`): an empty string
+    is treated the same as no value at all."""
+    state = {"id": "T-1", "title": "t", "description": "d", "sections": {}}
+    rendered = document.render(state, system_version="")
+    assert "system_version" not in rendered
+
+
 def test_the_frontmatter_keeps_the_names_the_metrics_keep():
     """A written document is data (issue #53): its keys do not follow the domain's
     rename, or a task paused before it would resume with an empty count."""
