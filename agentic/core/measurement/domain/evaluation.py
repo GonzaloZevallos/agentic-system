@@ -81,6 +81,14 @@ class TaskDocument(TaskState, total=False):
     system_version: str
     human_commits: str
     human_lines_changed: str
+    # `record_closure`'s fourth key (Tech Lead plan, subtask `close-all`): seconds from
+    # the pull request's `created_at` to its `merged_at`, written only when it merged
+    # (`metrics.time_to_merge_seconds` returns `None` otherwise, and the key is omitted
+    # entirely rather than written empty). `str`, not `int`: `record_closure` writes
+    # every closure key through `_scalar_line`, which yaml-dumps whatever it is given,
+    # and `document.parse` hands every frontmatter scalar back as a string -- this
+    # types what occurs at runtime, never a type that never does. Absent on every
+    # document written before this commit, and never backfilled onto one already closed.
     time_to_merge_seconds: str
     system_commit: str
     system_baseline: str

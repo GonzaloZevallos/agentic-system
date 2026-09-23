@@ -80,6 +80,9 @@ class MemoryDocuments:
     def path_for(self, task_id: str) -> Path:
         return Path(f"/memory/.agentic/tasks/{task_id}.md")
 
+    def ids(self) -> list[str]:
+        return sorted({state["id"] for state in self.saved})
+
     def load(self, task_id: str) -> dict | None:
         mine = [s for s in self.saved if s["id"] == task_id]
         if not mine:
