@@ -21,6 +21,36 @@ El valor que una corrida de tarea o de rol deja en cada métrica del sistema al 
 Una corrida, una muestra; nada se acumula entre corridas.
 _Campo_: data point — OpenTelemetry; sample en Prometheus
 
+**Versión del sistema**:
+El SHA corto del repo del sistema con el que corrió una tarea, más `+dirty` si el checkout
+tenía cambios. Identifica la corrida; no sirve para comparar, porque casi cada tarea corre
+sobre uno distinto.
+_Avoid_: versión (a secas, se confunde con la del producto), release
+_Campo_: `service.version` — OpenTelemetry resource
+
+**Línea de base**:
+Un hito del sistema declarado por el humano con un tag de git en master; el eje de toda
+comparación. Cada muestra lleva la línea de base bajo la que corrió, y una versión del
+sistema pertenece a exactamente una. Dos líneas de base se comparan por el scorecard.
+_Avoid_: versión, cohorte, época, hito (se usa en prosa, no como término)
+_Campo_: baseline — de la evaluación de modelos; `baseline_id` del set de evaluación es más fino
+(incluye la declaración y el brazo) y no lo reemplaza
+
+**Scorecard**:
+Las cuatro métricas del sistema, en orden, que dicen si una línea de base es mejor que otra:
+autonomía (entregas fusionadas limpias sobre tareas terminadas), fallos propios por tarea (sin
+los de límite de cuenta), costo por entrega y retrabajo. Mejora si la primera no baja y la
+segunda baja; las otras dos desempatan. Es una consulta sobre las muestras, no una muestra.
+_Avoid_: KPI, north star, índice
+_Campo_: scorecard — Kaplan y Norton; la lectura como orden lexicográfico es propia
+
+**Brazo**:
+La configuración de experimento bajo la que corrió una tarea: el valor de cada interruptor
+declarado (`review_mode`, `skip_ephemeral`, `reviewer_model`), o `default` cuando ninguno se
+movió. Toda muestra que lleva versión del sistema lleva también su brazo.
+_Avoid_: experimento (es el conjunto de brazos que se comparan), variante, configuración
+_Campo_: arm — de los ensayos controlados y del A/B testing
+
 **Set de evaluación**:
 Las cinco tareas fijas que se re-corren idénticas contra cada versión de prompts.
 _Campo_: eval set — `evalset` en Google ADK, dataset en LangSmith; el benchmark del campo es SWE-bench
