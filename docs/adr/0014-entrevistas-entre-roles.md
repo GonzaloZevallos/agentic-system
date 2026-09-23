@@ -228,3 +228,38 @@ distinto del que ya la sabe la vuelva a calcular, y que se desincronicen); sembr
 `## With the human` con las preguntas que el humano ya contestó (confundiría la lista
 abierta con la conversación cerrada, y un decisor podría "retirar" algo que ya no está
 en discusión).
+
+## Adenda 2026-09-22: el brazo efímero (issue #28), vacía de resultados
+
+Mecanismo, no medición: esta adenda registra el brazo antes de correrlo, con el
+número que ya tiene la interviene — ninguna adenda nueva de ADR nace de este cambio
+(regla del plan). `AGENTIC_SKIP_EPHEMERAL=1` hace que `plan()` no corra ninguna
+entrevista de solución: sin entrevistador, sin entrevistado, sin consulta, sin
+transcripción. El Tech Lead corre en frío, sin `resume`, con la sección
+`Interview: Tech Lead efímero→Tech Lead` ausente del documento, y escribe él mismo los
+`invariants` que hoy la entrevista le propone.
+
+El brazo se nombra entero, porque las tres pérdidas no se pueden separar con este
+experimento (una variable por vez) y se atribuyen juntas: **sin entrevista efímera**,
+y por lo tanto **sin ADR de producto** (los que la entrevista deja en `docs/` mientras
+entrevista, ADR-0011), **sin término de glosario** que esa sesión hubiera fijado, y
+**sin la consulta a PM** que la adenda del 2026-09-14 creó para el fallo medido de
+GH-12 — el canal `questions_for_pm` que evita que un hueco de producto le llegue al
+humano sin que PM tuvo la oportunidad de cerrarlo. Las tres corren sobre las rutas que
+gym-saas efectivamente ejerce, y lo que se decide con el resultado es si un rol se
+borra, no si una frase de un prompt se ajusta: por eso importa no fingir que se puede
+aislar cuál de las tres pesó.
+
+**El resguardo, para cuando el brazo corra.** `agentic.task.returns` con
+`return.category="spec-behaviour"` y con `return.category="plan-calibration"`, más las
+escalaciones cuyo `escalation_class` es una pregunta para el humano, no deben subir en
+el brazo sin efímero frente al brazo con él. Si suben, el efímero se estaba pagando
+solo a través del canal de consulta que esta adenda quita — no a través de su propio
+grilling — y la regla de decisión de la sección "Efímero con y sin" del issue #28
+(baja de devoluciones o de costo total, a igual puntaje) no alcanza para quedarse con
+el corte.
+
+Esta adenda no trae números: los aporta la corrida del experimento, después del
+merge, sobre el set de cinco (issue #27). Si el efímero se corta, README §13 registra
+"pingpong con efímero" como reemplazado y esta misma adenda se completa con el
+resultado — no una nueva.

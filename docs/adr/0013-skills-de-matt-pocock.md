@@ -110,3 +110,25 @@ el aviso de qué está en conflicto y cómo resolverlo (`rules.merge_notice`) vi
 mensaje del turno, no por el prompt del sistema, así que `prompts.fingerprint` de `developer`
 no se mueve. El test que antes fijaba `DEVELOPER.skills == ("tdd",)`
 (`tests/core/process/domain/test_stage_one.py`) pasa a comprobar el conjunto con las dos.
+
+## Adenda (2026-09-22): `code-review` se suspende para el brazo liviano mientras corre el experimento
+
+El issue #28 abre el experimento de modo de revisión (README §9, punto 1): un segundo
+revisor, `TECH_LEAD_REVIEWER_LIGHT` (`replace(TECH_LEAD_REVIEWER, ...)`, `roles.py`), que
+lee el diff con `git diff`/`git log`/`git show` y las mismas reglas de chequeos que el
+revisor completo, sin la skill. La obligación de esta ADR — "Tech Lead revisa cada
+subtarea y la integración con `code-review`" — sigue en pie para `tech_lead_review`, que
+esta subtarea no edita (`TECH_LEAD_REVIEWER` es `replace(...)`-only, byte idéntico). Para
+`tech_lead_review_light` queda **suspendida mientras el experimento corre**: es la variable
+que el brazo B aísla, y una skill que corre dos subagentes por pase es exactamente el costo
+que la ADR-0016 (adenda 2026-09-14) mide y que el brazo B quiere abaratar.
+
+La integración conserva `code-review` en todo modo (`reviewer_for` devuelve el revisor
+completo siempre que la subtarea es `task.INTEGRATION`), así que ningún arm corre sin al
+menos un pase con la skill sobre la rama entera.
+
+Este addendum no cierra la pregunta: si el brazo B gana la regla de decisión de README §9,
+la obligación de `code-review` se **acota a la integración**, nunca se borra — la subtarea
+de subtarea la sigue necesitando la línea de base A, que queda como opción. La corrida, el
+resultado y esa decisión son un acto posterior al merge (issue #28, "For the next role",
+supuesto i); este addendum va vacío de resultados.

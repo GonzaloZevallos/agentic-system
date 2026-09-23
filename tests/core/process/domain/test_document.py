@@ -108,6 +108,27 @@ def test_render_then_parse_roundtrip():
     assert data["proposed_invariants"] == ["Every subscription query folds duplicates."]
 
 
+def test_render_omits_experiment_when_the_snapshot_is_empty():
+    # Omit-at-default (Tech Lead plan): a document with the switches at their default
+    # is byte-identical to one written before this task.
+    with_key = document.render({"id": "T-1", "title": "t", "description": "d", "experiment": {}})
+    without_key = document.render({"id": "T-1", "title": "t", "description": "d"})
+    assert "experiment" not in with_key
+    assert with_key == without_key
+
+
+def test_render_writes_the_experiment_snapshot_when_non_empty():
+    snapshot = {
+        "review_mode": "light",
+        "skip_ephemeral": "False",
+        "reviewer_model": "claude-sonnet-5",
+    }
+    state = {"id": "T-1", "title": "t", "description": "d", "experiment": snapshot}
+    rendered = document.render(state)
+    assert "\nexperiment:" in rendered
+    assert document.parse(rendered)["experiment"] == snapshot
+
+
 def test_interview_stats_never_reaches_the_document():
     """Measurement-only, like `subtask_id`: `interview()`'s own patch key
     (`InterviewStats`) never reaches the document, so a resumed task carries none of

@@ -27,7 +27,7 @@ verdict, and what it lowered, at the head of the review's section."""
 
 from __future__ import annotations
 
-from agentic.shared.configuration import Configuration
+from agentic.shared.configuration import Configuration, experiment_snapshot
 
 from ..domain import presubmit, rules
 from ..domain.roles import TECH_LEAD, pair_for, reviewer_for
@@ -43,7 +43,7 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
     subtask = state["subtasks"][subtask_id]
     reviewed_before = bool(subtask.get("reviewed_head"))
     checks = declared_checks(state, ports)
-    reviewer = reviewer_for(checks)
+    reviewer = reviewer_for(checks, subtask_id, mode=cfg.review_mode)
     try:
         checkout = subtask_checkout(state, subtask_id, cfg, ports)
     except SetupFailed as unprepared:
@@ -89,6 +89,12 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
             # Measurement only (like `subtask_id`): read once by the adapter for
             # `agentic.review.findings`'s `review.kind` label, never persisted.
             "review_kind": rules.review_kind(subtask_id, reviewed_before),
+            # `{}` on the default path, so a document written before issue #28 stays
+            # byte-identical (`experiment_snapshot`'s own omit-at-default rule); the
+            # resolved model travels, not only the two switches, so an operator who ran
+            # the light arm on Opus by mistake can be caught reading this key after the
+            # run.
+            "experiment": experiment_snapshot(cfg, cfg.model_for(reviewer.slug, reviewer.kind)),
         },
     )
     if category is None:

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from agentic.shared.configuration import Configuration, MissingProductDir
+from agentic.shared.configuration import Configuration, MissingProductDir, experiment_snapshot
 
 PRODUCT = {"product_dir": "/tmp/p"}
 
@@ -117,3 +117,55 @@ def test_git_identity_is_the_environment_every_git_honours():
     )
     assert custom.git_identity["GIT_COMMITTER_NAME"] == "bot"
     assert custom.git_identity["GIT_AUTHOR_EMAIL"] == "b@x"
+
+
+def test_review_mode_and_skip_ephemeral_default_to_todays_path():
+    # Both defaults reproduce today's path (issue #28): no other module reads either
+    # field in this subtask, only that the switch itself is off by default.
+    cfg = Configuration.from_sources(PRODUCT, {})
+    assert cfg.review_mode == "full"
+    assert cfg.skip_ephemeral is False
+
+
+def test_review_mode_and_skip_ephemeral_read_from_env():
+    env = {"AGENTIC_REVIEW_MODE": "light", "AGENTIC_SKIP_EPHEMERAL": "1"}
+    cfg = Configuration.from_sources(PRODUCT, env)
+    assert cfg.review_mode == "light"
+    assert cfg.skip_ephemeral is True
+
+
+def test_review_mode_rejects_a_value_outside_the_closed_set():
+    # The Literal is the guard: an operator's typo must fail loudly, not run some
+    # silent third arm nobody built.
+    with pytest.raises(ValueError):
+        Configuration.from_sources(PRODUCT, {"AGENTIC_REVIEW_MODE": "medium"})
+
+
+def test_experiment_snapshot_is_empty_on_the_default_path():
+    # Omit-at-default (Tech Lead plan): with both switches at their default, the
+    # helper the other two arms call returns nothing to write.
+    cfg = Configuration.from_sources(PRODUCT, {})
+    assert experiment_snapshot(cfg, "claude-opus-5") == {}
+
+
+def test_experiment_snapshot_carries_all_three_keys_verbatim_and_in_order():
+    cfg = Configuration.from_sources(PRODUCT, {"AGENTIC_REVIEW_MODE": "light"})
+    snapshot = experiment_snapshot(cfg, "claude-sonnet-5")
+    assert list(snapshot) == ["review_mode", "skip_ephemeral", "reviewer_model"]
+    assert snapshot == {
+        "review_mode": "light",
+        "skip_ephemeral": "False",
+        "reviewer_model": "claude-sonnet-5",
+    }
+
+
+def test_experiment_snapshot_is_non_empty_when_only_skip_ephemeral_moves():
+    # `reviewer_model` travels even though only the other switch moved: the resolved
+    # model is recorded, not only the two switch keys (Tech Lead plan invariant).
+    cfg = Configuration.from_sources(PRODUCT, {"AGENTIC_SKIP_EPHEMERAL": "1"})
+    snapshot = experiment_snapshot(cfg, "claude-opus-5")
+    assert snapshot == {
+        "review_mode": "full",
+        "skip_ephemeral": "True",
+        "reviewer_model": "claude-opus-5",
+    }

@@ -109,6 +109,11 @@ def render(
         "settled_findings": state.get("settled_findings", []),
         "cost_usd": round(state.get("cost_usd", 0.0), 4),
         "prompts": state.get("prompts", {}),
+        # The review-mode/ephemeral-arm switches this run ran under
+        # (`shared.configuration.experiment_snapshot`), omitted entirely when empty --
+        # the switches are at their default -- so a default-path document stays
+        # byte-identical to one written before this task (issue #28).
+        **({"experiment": experiment} if (experiment := state.get("experiment")) else {}),
         "plugins": plugins or {},
         "system_commit": system_commit,
         **({"system_version": system_version} if system_version else {}),

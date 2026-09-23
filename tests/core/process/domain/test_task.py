@@ -7,6 +7,7 @@ from agentic.core.process.domain.task import (
     add,
     apply,
     delta,
+    last,
     merge,
 )
 
@@ -46,8 +47,10 @@ def test_reducers_are_read_from_the_annotations():
         "escalated",
         "escalation_class",
         "proposed_invariants",
+        "experiment",
     }
     assert REDUCERS["cost_usd"] is add and REDUCERS["sections"] is merge
+    assert REDUCERS["experiment"] is last
 
 
 def test_apply_uses_the_reducers_and_overrides_the_rest():
@@ -157,3 +160,30 @@ def test_delta_takes_a_field_the_branch_started_as_it_is():
         "failures": [{"role": "PjM"}],
         "changes_requested": {"p": 1},
     }
+
+
+def test_experiment_uses_last_and_two_branch_patches_fold_without_colliding():
+    """`review.py` writes `experiment` from N sister branches in one superstep
+    (ADR-0004, fifth addendum); `last`'s own docstring says a key without a reducer
+    makes the graph refuse two writes in one step. Every branch of a wave writes the
+    identical snapshot, so folding two of them in sequence must not collide and must
+    leave the snapshot exactly as written."""
+    snapshot = {"review_mode": "light", "skip_ephemeral": "False", "reviewer_model": "m"}
+    state = {"id": "T-1"}
+    once = apply(state, {"experiment": snapshot})
+    twice = apply(once, {"experiment": snapshot})
+    assert twice["experiment"] == snapshot
+
+
+def test_a_cold_plan_patch_never_introduces_the_solution_interview_section():
+    """The ephemeral-arm skip path (issue #28) runs no interview, so it writes no
+    interview section: the `sections` merge reducer folds in only the Tech Lead's own
+    delivery, and a state that never held the interview key stays without it -- never
+    assumed, asserted here at the reducer `plan.py`'s cold path actually calls."""
+    from agentic.core.process.domain.roles import SOLUTION_INTERVIEW
+
+    state = {"id": "T-1", "sections": {"PM": "def"}}
+    patch = {"sections": {"Tech Lead": "plan text"}}
+    merged = apply(state, patch)
+    assert SOLUTION_INTERVIEW not in merged["sections"]
+    assert merged["sections"] == {"PM": "def", "Tech Lead": "plan text"}

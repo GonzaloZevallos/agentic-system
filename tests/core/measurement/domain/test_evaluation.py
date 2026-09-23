@@ -1,5 +1,7 @@
 """The evaluation set and record: `agentic.core.measurement.domain.evaluation`."""
 
+import hashlib
+
 import pytest
 
 from agentic.core.measurement.domain import evaluation
@@ -100,16 +102,32 @@ def test_parse_eval_set_raises_with_the_refusal_message():
 
 
 def test_baseline_id_changes_with_the_declaration_text():
-    a = evaluation.baseline_id("1.2.3", "issues: [1]\nsmoke: 1\n")
-    b = evaluation.baseline_id("1.2.3", "issues: [1, 2]\nsmoke: 1\n")
+    a = evaluation.baseline_id("1.2.3", "issues: [1]\nsmoke: 1\n", {})
+    b = evaluation.baseline_id("1.2.3", "issues: [1, 2]\nsmoke: 1\n", {})
     assert a != b
     assert a.startswith("1.2.3+")
 
 
 def test_baseline_id_is_stable_for_the_same_inputs():
-    first = evaluation.baseline_id("1.2.3", "issues: [1]\nsmoke: 1\n")
-    second = evaluation.baseline_id("1.2.3", "issues: [1]\nsmoke: 1\n")
+    first = evaluation.baseline_id("1.2.3", "issues: [1]\nsmoke: 1\n", {})
+    second = evaluation.baseline_id("1.2.3", "issues: [1]\nsmoke: 1\n", {})
     assert first == second
+
+
+def test_baseline_id_with_an_empty_experiment_matches_todays_two_argument_value():
+    # `baseline_id` mixed only `system_version` and the declaration text before this
+    # task (issue #28); an empty snapshot must reproduce that exact value byte for
+    # byte, so a default-path baseline never moves.
+    text = "issues: [1]\nsmoke: 1\n"
+    digest = hashlib.sha256(text.encode()).hexdigest()[:8]
+    assert evaluation.baseline_id("1.2.3", text, {}) == f"1.2.3+{digest}"
+
+
+def test_baseline_id_mixes_in_a_non_empty_experiment_snapshot():
+    text = "issues: [1]\nsmoke: 1\n"
+    empty = evaluation.baseline_id("1.2.3", text, {})
+    light = evaluation.baseline_id("1.2.3", text, {"review_mode": "light"})
+    assert empty != light
 
 
 # --- score ---
@@ -205,6 +223,18 @@ def test_evaluation_record_carries_escalation_class_only_when_present():
     document = doc(escalation_class="failure")
     record = evaluation.evaluation_record("gym-saas", 10, document)
     assert record["escalation_class"] == "failure"
+
+
+def test_evaluation_record_carries_the_experiment_snapshot_only_when_present():
+    snapshot = {
+        "review_mode": "light",
+        "skip_ephemeral": "False",
+        "reviewer_model": "claude-sonnet-5",
+    }
+    with_experiment = evaluation.evaluation_record("gym-saas", 10, doc(experiment=snapshot))
+    assert with_experiment["experiment"] == snapshot
+    without_experiment = evaluation.evaluation_record("gym-saas", 10, doc())
+    assert "experiment" not in without_experiment
 
 
 def test_evaluation_record_score_pending_when_the_task_is_not_yet_closed():

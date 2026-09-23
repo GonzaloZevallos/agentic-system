@@ -90,6 +90,35 @@ def test_from_document_reads_back_the_proposed_invariants():
     assert resumed["proposed_invariants"] == ["Existing rule."]
 
 
+def test_from_document_reads_back_the_experiment_snapshot():
+    # Same rescue path as `proposed_invariants` above: `document.render` writes
+    # `experiment` only when non-empty, `document.parse` reads it back, and
+    # `resume.from_document`'s generic `STATE_FIELDS` filter carries it into the
+    # resumed state (issue #28).
+    ports = memory_ports()
+    git_as_recorded(ports)
+    snapshot = {
+        "review_mode": "light",
+        "skip_ephemeral": "False",
+        "reviewer_model": "claude-sonnet-5",
+    }
+    state = paused(experiment=snapshot)
+    ports.documents.save(document.parse(document.render(state)))
+    resumed = resume.from_document("GH-12", ports)
+    assert resumed["experiment"] == snapshot
+
+
+def test_from_document_leaves_a_default_experiment_without_the_key():
+    # An empty snapshot is omitted by `document.render`; the rescue path must not
+    # manufacture one either.
+    ports = memory_ports()
+    git_as_recorded(ports)
+    state = paused(experiment={})
+    ports.documents.save(document.parse(document.render(state)))
+    resumed = resume.from_document("GH-12", ports)
+    assert "experiment" not in resumed
+
+
 def test_from_document_leaves_a_legacy_document_without_the_key():
     # A document written before `proposed_invariants` existed (issue #42) has no line
     # for it at all: the rescue path must not manufacture one, since `plan.py`'s

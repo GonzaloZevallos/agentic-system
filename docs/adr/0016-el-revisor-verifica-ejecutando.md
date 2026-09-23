@@ -132,3 +132,41 @@ vale sigue siendo la del base.
 **El default deja de ser alcanzable por una corrida.** El archivo del paquete queda, pero
 sólo como plantilla que el mensaje de error imprime, así lo que el humano copia es
 exactamente un archivo válido y no un string que se desincroniza.
+
+## Adenda (2026-09-22): el experimento de modo de revisión, protocolo y regla de decisión
+
+El issue #28 (README §9, punto 1) prueba una segunda hipótesis de revisión: por subtarea en
+Sonnet, sin `code-review`, con entrada acotada a los invariantes del plan, el brief, el
+diff, el resultado de la puerta de entrega (adenda de arriba) y la tabla de hallazgos, que
+solo reporta `blocking` con evidencia ejecutada — `TECH_LEAD_REVIEWER_LIGHT` y su prompt
+`tech_lead_review_light.md`. `Configuration.review_mode` (`full` por default) y
+`reviewer_for(checks, subtask_id, mode=...)` (`roles.py`) eligen el rol; la integración
+recibe siempre el revisor completo con `code-review`, en cualquier modo, porque sin ese paso
+caro el brazo B no prueba nada. Esta adenda registra el protocolo y la regla; la corrida es
+un acto posterior al merge y el addendum queda vacío de resultados.
+
+**Protocolo.** Los dos brazos corren sobre una sola base fijada, en **un clon**, en
+secuencia: `--fresh` archiva el brazo anterior bajo `archive/run<N>-<sha>/` (ADR-0011,
+séptima adenda). Nada se mergea durante el experimento; los pull requests del brazo A se
+cierran sin mergear y se corre `agentic close` sobre cada uno, porque `_eval_run` llama
+`_refuse_open_pull_request` por cada issue del set y `_close` rechaza sobre un pull request
+`OPEN` — sin ese paso el brazo B no puede arrancar. `AGENTIC_REVIEW_MODE=light agentic eval
+run` alcanza a cada hijo sin tocar `eval run`: `_run_eval_child` ya hace
+`{**os.environ, **overlay}`.
+
+**Regla de decisión.** El extremo es el **costo pareado por issue**; el puntaje binario de
+§9 es una compuerta, no el extremo: una diferencia de una tarea sobre n=5 no decide nada
+(ADR-0014, adenda 2026-09-15, corridas 2 y 3 de GH-12 divergiendo sobre la misma entrada).
+`k=3` corridas de humo por brazo. B gana si iguala el puntaje binario con menos costo, o lo
+mejora; si gana, pasa a default y esta adenda se actualiza con el resultado, y A queda como
+opción (nunca se borra — ver adenda de ADR-0013 de hoy).
+
+**Lo que el brazo B no puede medir.** El revisor liviano de subtarea no recibe `ORIGINAL` ni
+la sección de PM (`TECH_LEAD_REVIEWER_LIGHT.reads == ("Tech Lead", FINDINGS)`): no tiene el
+PRD delante, así que no puede fundar un hallazgo `spec-*` contra la definición del producto.
+Una columna `spec-*` limpia en el brazo B **no es un resultado de calidad** — es la ausencia
+de la entrada que haría posible encontrar algo ahí. El guardia de esta lectura es que
+`agentic.review.findings{category=~"spec-.*"}` en `review.kind="integration"` **no debe
+subir** en el brazo B respecto del brazo A: si sube, lo que la subtarea liviana no vio llegó
+sin filtrar hasta la integración, y eso sí cuenta contra B aunque su propio puntaje binario
+empate.

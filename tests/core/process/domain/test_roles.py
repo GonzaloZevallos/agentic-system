@@ -46,6 +46,61 @@ def test_the_reviewer_runs_tests_but_writes_nothing():
     assert not any("pytest" in rule for rule in TECH_LEAD.allowed)
 
 
+def test_the_light_reviewer_is_a_read_only_verifier_with_a_narrower_reach():
+    # ADR-0013 addendum: a Validador too, `kind` unchanged, so the model it runs on
+    # still goes through `Configuration.model_overrides`/`model_for`, never a `kind`
+    # change. No `code-review`, no `Agent`; it reads neither the original request nor
+    # PM's PRD (ADR-0016 addendum), so it never grounds a `spec-*` finding there.
+    from agentic.core.process.domain.roles import (
+        FINDINGS,
+        READ_CODE,
+        READ_CODE_RULES,
+        TECH_LEAD_REVIEWER,
+        TECH_LEAD_REVIEWER_LIGHT,
+    )
+
+    assert TECH_LEAD_REVIEWER_LIGHT.kind == "verifier"
+    assert TECH_LEAD_REVIEWER_LIGHT.slug == "tech_lead_review_light"
+    assert TECH_LEAD_REVIEWER_LIGHT.skills == ()
+    assert TECH_LEAD_REVIEWER_LIGHT.tools == READ_CODE
+    assert TECH_LEAD_REVIEWER_LIGHT.allowed == READ_CODE_RULES
+    assert "Agent" not in TECH_LEAD_REVIEWER_LIGHT.tools
+    assert TECH_LEAD_REVIEWER_LIGHT.reads == ("Tech Lead", FINDINGS)
+    assert not TECH_LEAD_REVIEWER_LIGHT.executes
+    # `TECH_LEAD_REVIEWER` itself is untouched: `replace(...)` only.
+    assert TECH_LEAD_REVIEWER.skills == ("code-review",)
+    assert TECH_LEAD_REVIEWER.tools == READ_CODE + ("Agent",)
+
+
+def test_reviewer_for_at_default_returns_exactly_what_it_returns_today():
+    from agentic.core.process.domain.roles import TECH_LEAD_REVIEWER, reviewer_for
+
+    reviewer = reviewer_for({"tests": "pytest"})
+    assert reviewer.slug == TECH_LEAD_REVIEWER.slug
+    assert reviewer.skills == TECH_LEAD_REVIEWER.skills
+
+
+def test_reviewer_for_under_light_gives_the_light_role_only_to_a_real_subtask():
+    # The integration always gets the full reviewer, in every mode (the plan's own
+    # invariant): without this, arm B has no expensive pass anywhere and tests a
+    # hypothesis nobody proposed. A real subtask under `light` gets the light one.
+    from agentic.core.process.domain.roles import (
+        TECH_LEAD_REVIEWER,
+        TECH_LEAD_REVIEWER_LIGHT,
+        reviewer_for,
+    )
+    from agentic.core.process.domain.task import INTEGRATION
+
+    checks = {"tests": "pytest"}
+    integration = reviewer_for(checks, INTEGRATION, mode="light")
+    assert integration.slug == TECH_LEAD_REVIEWER.slug
+    assert "code-review" in integration.skills
+
+    subtask = reviewer_for(checks, "api", mode="light")
+    assert subtask.slug == TECH_LEAD_REVIEWER_LIGHT.slug
+    assert subtask.skills == ()
+
+
 def test_describe_flags_is_one_bullet_per_flag():
     assert describe_flags({"touches_ui": "UI", "b": "B"}) == "- `touches_ui`: UI\n- `b`: B"
 

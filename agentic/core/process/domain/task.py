@@ -479,6 +479,14 @@ class TaskState(TaskInput, total=False):
     # value written each time is already the accumulated list, and appending it to
     # itself would duplicate it on every retake.
     proposed_invariants: Annotated[list[str], last]
+    # The review-mode and ephemeral-arm switches this run ran under (issue #28),
+    # `shared.configuration.experiment_snapshot`'s own shape: `{}` on the default path,
+    # omitted from the document then (`document.render`). `last`, not optional: `review.py`
+    # writes it from N sister branches in one superstep (ADR-0004, fifth addendum) and
+    # `last`'s own docstring above (task.py:180) says a key with no reducer makes the
+    # graph refuse two writes in the same step. `last` is right here because every
+    # branch of a wave writes the identical snapshot.
+    experiment: Annotated[dict[str, str], last]
     # Why a bug was discarded, in PM's words (issue #65): `discard` writes it on the
     # issue, and the frontmatter keeps it so the document says why the run ended.
     discard_reason: str

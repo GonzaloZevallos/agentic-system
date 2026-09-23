@@ -95,6 +95,16 @@ class Configuration(BaseModel):
     # (issue #33). Coerced from the `str` the CLI puts in `configurable`, the same way
     # `product_dir` is coerced from a plain string today.
     log_file: Path | None = None
+    # The review-arm switch (issue #28): `full` is today's path. The review-arm
+    # subtask is what picks a role and a model off it; this subtask only declares
+    # the field and reads it back into `experiment_snapshot` below for the record.
+    # Both new fields reproduce today's path at their default; no module but the two
+    # arms and `experiment_snapshot` reads either one.
+    review_mode: Literal["full", "light"] = "full"
+    # The ephemeral-arm switch (issue #28): whether the solution stage's interview is
+    # skipped. `False` is today's path; the ephemeral-arm subtask is the only other
+    # reader.
+    skip_ephemeral: bool = False
 
     @classmethod
     def from_sources(
@@ -154,6 +164,35 @@ class Configuration(BaseModel):
             "CLAUDE_CODE_SUBAGENT_MODEL": self.subagent_model,
             "CLAUDE_CODE_SUBAGENT_MODEL_FORCE": "1",
         }
+
+
+# The three keys `experiment_snapshot` writes, in the order every writer uses
+# (`document.render`'s frontmatter, `evaluation.baseline_id`'s digest): the two
+# switches above, plus the model resolved for whichever reviewer actually ran.
+EXPERIMENT_KEYS = ("review_mode", "skip_ephemeral", "reviewer_model")
+
+
+def experiment_snapshot(cfg: Configuration, reviewer_model: str) -> dict[str, str]:
+    """The `experiment` state/frontmatter value (`TaskState.experiment`,
+    `document.render`): `{}` when both switches above are at their default, so a
+    document produced on the default path stays byte-identical to one written before
+    this task (the plan's omit-at-default pattern). Otherwise all three
+    `EXPERIMENT_KEYS`, verbatim and in that order -- `reviewer_model` travels even
+    when it happens to equal the default model, so an operator who sets
+    `AGENTIC_REVIEW_MODE=light` without a matching `model_overrides` entry can be
+    caught reading this key after the run, never prevented (out of this subtask's
+    scope; said in the pull request body)."""
+    defaults = Configuration.model_fields
+    if (
+        cfg.review_mode == defaults["review_mode"].default
+        and cfg.skip_ephemeral == defaults["skip_ephemeral"].default
+    ):
+        return {}
+    return {
+        "review_mode": cfg.review_mode,
+        "skip_ephemeral": str(cfg.skip_ephemeral),
+        "reviewer_model": reviewer_model,
+    }
 
 
 def _from_env(raw: str, annotation: Any) -> Any:
