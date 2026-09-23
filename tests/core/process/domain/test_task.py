@@ -173,3 +173,17 @@ def test_experiment_uses_last_and_two_branch_patches_fold_without_colliding():
     once = apply(state, {"experiment": snapshot})
     twice = apply(once, {"experiment": snapshot})
     assert twice["experiment"] == snapshot
+
+
+def test_a_cold_plan_patch_never_introduces_the_solution_interview_section():
+    """The ephemeral-arm skip path (issue #28) runs no interview, so it writes no
+    interview section: the `sections` merge reducer folds in only the Tech Lead's own
+    delivery, and a state that never held the interview key stays without it -- never
+    assumed, asserted here at the reducer `plan.py`'s cold path actually calls."""
+    from agentic.core.process.domain.roles import SOLUTION_INTERVIEW
+
+    state = {"id": "T-1", "sections": {"PM": "def"}}
+    patch = {"sections": {"Tech Lead": "plan text"}}
+    merged = apply(state, patch)
+    assert SOLUTION_INTERVIEW not in merged["sections"]
+    assert merged["sections"] == {"PM": "def", "Tech Lead": "plan text"}

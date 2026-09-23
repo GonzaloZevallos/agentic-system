@@ -13,15 +13,32 @@ measurable (issue #28)."""
 
 from __future__ import annotations
 
-from agentic.shared.configuration import Configuration
+from pathlib import Path
+
+from agentic.shared.configuration import Configuration, experiment_snapshot
 
 from ..domain import schemas
-from ..domain.roles import INTERVIEW_SOLUTION, INTERVIEW_SOLUTION_PLATFORM, Interview
+from ..domain.roles import (
+    INTERVIEW_SOLUTION,
+    INTERVIEW_SOLUTION_PLATFORM,
+    TECH_LEAD_REVIEWER,
+    Interview,
+)
 from ..domain.task import Subtask, TaskState, apply
 from .checkouts import SetupFailed, task_checkout
 from .interview import interview
 from .ports import Ports
-from .run_role import finish, run_role
+from .run_role import Output, finish, run_role
+
+# The ephemeral-arm skip path's own value for the existing `{{proposed_invariants}}`
+# placeholder (issue #28): no prompt file is edited -- doing so would move
+# `prompts.fingerprint` for both arms and every future task (ADR-0005, ADR-0008) -- so
+# what changes is this value, never the text around it.
+_SKIPPED_PROPOSAL = (
+    "No ephemeral interview ran this time (issue #28, ephemeral-arm): there is nothing "
+    "proposed to adopt or reject. Write the invariants yourself, from the definition "
+    "and the product knowledge alone."
+)
 
 
 async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
@@ -30,6 +47,8 @@ async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
         task = task_checkout(state, cfg, ports)
     except SetupFailed as unprepared:
         return finish(state, unprepared.patch(spec.author), ports)
+    if cfg.skip_ephemeral:
+        return await _plan_cold(state, spec, cfg, ports, task.path)
     transcript, patch = await interview(state, spec, cfg, ports, cwd=task.path)
     ports.workspace.commit_all(task.path, f"{state['id']}: solution interview")
     if transcript is None:
@@ -44,12 +63,48 @@ async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
         resume=transcript.sessions.get(spec.author_side.slug),
         proposed_invariants=_proposed(state, spec, transcript.invariants),
     )
+    return finish(state, apply(patch, _delivered(cfg, output, written)), ports)
+
+
+async def _plan_cold(
+    state: TaskState, spec: Interview, cfg: Configuration, ports: Ports, cwd: Path
+) -> TaskState:
+    """The ephemeral-arm skip path (issue #28): no interviewer, no interviewee, no
+    consultation, no transcript -- the Tech Lead's own cold call is the whole solution
+    stage, with no `resume` and the interview's section absent from `state["sections"]`
+    (`run_role.context_for` already tolerates a `reads` entry the state lacks; a test at
+    that seam proves it, since this brief asks it never be assumed).
+
+    `commit_all` still runs, on the checkout `task_checkout` just prepared: the tree is
+    clean, so it returns `None` and no branch is needed, the same call the interview
+    path makes right before its own Tech Lead call -- kept here for the same reason,
+    not special-cased away."""
+    ports.workspace.commit_all(cwd, f"{state['id']}: solution interview")
+    output, written = await run_role(
+        state,
+        spec.author,
+        cfg,
+        ports,
+        check=schemas.plan_check,
+        cwd=cwd,
+        proposed_invariants=_SKIPPED_PROPOSAL,
+    )
+    return finish(state, _delivered(cfg, output, written), ports)
+
+
+def _delivered(cfg: Configuration, output: Output | None, written: TaskState) -> TaskState:
+    """What a successful plan call adds to its own patch, on either path: the subtasks,
+    the invariants, the integration brief, the status, and the experiment snapshot
+    (issue #28) -- `{}` when both switches are at their default, which
+    `document.render` then omits, so the default path's document does not move."""
     if output is not None:
         written["subtasks"] = {s["id"]: _pending(s) for s in output.data["subtasks"]}
         written["invariants"] = output.data["invariants"]
         written["integration_brief"] = output.data["integration"].strip()
         written["status"] = "planned"
-    return finish(state, apply(patch, written), ports)
+        reviewer_model = cfg.model_for(TECH_LEAD_REVIEWER.slug, TECH_LEAD_REVIEWER.kind)
+        written["experiment"] = experiment_snapshot(cfg, reviewer_model)
+    return written
 
 
 def solution_interview(state: TaskState) -> Interview:
