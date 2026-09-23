@@ -208,6 +208,9 @@ def test_evaluation_record_reads_every_figure_from_the_document():
     assert record["score"] is True
     assert record["score_pending_reason"] is None
     assert record["cost_usd"] == 12.5
+    # The single run costs $1.0 of the document's $12.5 total: the rest is residual,
+    # rework by `metrics.rework_cost_usd`'s own definition.
+    assert record["rework_usd"] == pytest.approx(11.5)
     assert record["role_seconds"] == pytest.approx(10.0)
     assert record["runs_without_timing"] == 0
     assert record["prompts"] == {"developer": "abc123"}

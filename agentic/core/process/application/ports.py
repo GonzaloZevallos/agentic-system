@@ -211,6 +211,14 @@ class TaskDocuments(Protocol):
 
     def path_for(self, task_id: str) -> Path: ...
 
+    def ids(self) -> list[str]:
+        """Every task id with a document on disk, sorted -- so two sweeps over one
+        corpus print the same order (Tech Lead plan, subtask `close-all`). `close
+        --all` reads this instead of globbing `.agentic/tasks/` itself: the adapter
+        already owns `document.relative_path`, and a glob in the composition root
+        would put the document layout in two modules."""
+        ...
+
     def load(self, task_id: str) -> dict | None:
         """The document as its frontmatter and sections say, raw: what the system records
         beyond the state (plugins, system commit) comes along. None when there is none."""

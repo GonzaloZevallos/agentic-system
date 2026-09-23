@@ -22,10 +22,11 @@ import sys
 import uuid
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import AbstractAsyncContextManager, contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 import anyio
 import yaml
@@ -39,7 +40,7 @@ from .composition import default_ports, graph
 from .core.knowledge.domain import knowledge
 from .core.measurement.adapters.otel import telemetry
 from .core.measurement.adapters.otel.telemetry import InvocationKind
-from .core.measurement.domain import evaluation
+from .core.measurement.domain import evaluation, scorecard
 from .core.measurement.domain import metrics as delivery_metrics
 from .core.process.adapters.filesystem import FilesystemRunLock
 from .core.process.adapters.git.workspace import GitError
@@ -56,6 +57,7 @@ from .core.process.application.preflight import (
     product_name,
     unfixed_stage0,
 )
+from .core.process.domain import document as task_document
 from .core.process.domain.task import PullRequest, TaskInput, TaskState
 from .shared.configuration import ENV_PREFIX, LOGS_DIR, Configuration, MissingProductDir
 from .shared.environment import without_own_toolchain
@@ -184,7 +186,13 @@ def main() -> None:
     close = sub.add_parser(
         "close", help="record the human's verdict on a task's pull request and close it"
     )
-    close.add_argument("--issue", type=int, metavar="N", required=True)
+    close.add_argument("--issue", type=int, metavar="N")
+    close.add_argument(
+        "--all",
+        action="store_true",
+        help="close every task document with a pull request and no recorded closure "
+        "(Tech Lead plan, subtask `close-all`)",
+    )
     close.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
     eval_parser = sub.add_parser(
         "eval", help="drive or score README.md 9's fixed five-task evaluation set"
@@ -229,6 +237,21 @@ def main() -> None:
         "--set", metavar="PATH", help="override the product's own .agentic/eval-set.yaml"
     )
     eval_score.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
+    eval_compare = eval_sub.add_parser(
+        "compare",
+        help="ADR-0028's scorecard for two baselines, from task documents and local git alone",
+    )
+    eval_compare.add_argument("frm", metavar="from", help="the baseline compared from")
+    eval_compare.add_argument("to", metavar="to", help="the baseline compared against `from`")
+    eval_compare.add_argument(
+        "--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)"
+    )
+    eval_compare.add_argument(
+        "--system-repo",
+        metavar="PATH",
+        help="the system checkout to resolve a document's own system_commit against "
+        "(defaults to the pinned stage0 checkout)",
+    )
     for command in (run, resume):
         command.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
         command.add_argument(
@@ -253,6 +276,11 @@ def main() -> None:
             resume.error("--detach and --dry-run are exclusive: --dry-run has no child to report")
         if args.detach and not args.yes:
             resume.error("--detach requires --yes: a detached child has no stdin to confirm on")
+    elif args.command == "close":
+        if args.issue is None and not args.all:
+            close.error("give --issue N or --all")
+        if args.issue is not None and args.all:
+            close.error("--issue and --all are exclusive")
     elif args.command == "eval" and args.eval_command == "run":
         # The same fact `resume --detach` already checks, for the same reason: a
         # detached driver has no stdin, neither to confirm the estimate on nor to
@@ -332,8 +360,11 @@ def main() -> None:
                 child_argv=_child_argv(),
             )
         elif args.command == "close":
-            task_id = ports.inbox.task_id(args.issue)
-            work = partial(_close, task_id, cfg, ports)
+            if args.all:
+                work = partial(_close_all, cfg, ports)
+            else:
+                task_id = ports.inbox.task_id(args.issue)
+                work = partial(_close, task_id, cfg, ports)
         elif args.command == "eval":
             if args.eval_command == "run":
                 log_file = _log_file_for(cfg, "eval")
@@ -349,8 +380,10 @@ def main() -> None:
                     detach=args.detach,
                     child_argv=_child_argv(),
                 )
-            else:
+            elif args.eval_command == "score":
                 work = partial(_eval_score, cfg, ports, args.set, args.out)
+            else:
+                work = partial(_eval_compare, cfg, ports, args.frm, args.to, args.system_repo)
         else:
             if args.issue is not None:
                 task = ports.inbox.task(args.issue)
@@ -717,91 +750,248 @@ async def _resume(
     _report(final, task_id, ports)
 
 
+CloseStatus = Literal[
+    "closed",
+    "still_open",
+    "already_closed",
+    "no_pull_request",
+    "no_document",
+    "tracker_error",
+    "flush_failed",
+]
+
+
+@dataclass(frozen=True)
+class _ClosureOutcome:
+    """What `_close_document` hands back instead of raising: a status from the closed
+    set `CloseStatus` plus the message either caller prints (`--issue`'s wrapper turns
+    every non-`"closed"` status into `CannotStart(message)`, byte-for-byte what `_close`
+    used to raise inline; `--all`'s sweep prints one line per task and keeps going). The
+    four figures and the path are set only when `status == "closed"` (Tech Lead plan,
+    subtask `close-all`)."""
+
+    status: CloseStatus
+    message: str
+    outcome: delivery_metrics.DeliveryOutcome | None = None
+    human_commits: int | None = None
+    human_lines_changed: int | None = None
+    time_to_merge: float | None = None
+    path: Path | None = None
+
+
+def _close_document(
+    task_id: str, cfg: Configuration, ports: Ports, product: str
+) -> _ClosureOutcome:
+    """The closure of one task: read -> ask `gh` -> emit -> write, the body `_close`
+    used to run inline and `_close_all`'s sweep now shares (Tech Lead plan, subtask
+    `close-all`) -- one definition, so `--issue` and `--all` cannot drift on what
+    "closed" means. Runs under the caller's own lock (`_close`'s and `_close_all`'s per-
+    task `_locked`, never taken here): a second `close` over the same task cannot race
+    this read -> emit -> write.
+
+    Every refusal is independently reachable, in this order: a missing document, a
+    missing `pull_request` value or an already-recorded closure, read off the document
+    alone, before `gh` is ever asked anything; a pull request `gh` cannot be read or is
+    still open; and a false flush (`record_delivery`'s own docstring: `None` with no
+    meter provider configured is indistinguishable, to a caller, from one that ran and
+    failed) last of all -- `record_closure` only runs after a *true* flush, so a retry
+    finds the same document it started with."""
+    raw = ports.documents.load(task_id)
+    if raw is None:
+        return _ClosureOutcome("no_document", f"{task_id} has no document to close")
+    reference = raw.get("pull_request")
+    if not reference:
+        return _ClosureOutcome("no_pull_request", f"{task_id} has no pull request to close")
+    if raw.get("closed_at"):
+        return _ClosureOutcome("already_closed", f"{task_id} already closed on {raw['closed_at']}")
+    try:
+        pull_request: PullRequest | None = ports.tracker.pull_request(reference)
+    except (ValueError, OSError) as exc:
+        return _ClosureOutcome("tracker_error", str(exc))
+    if pull_request is None:
+        return _ClosureOutcome(
+            "tracker_error", f"{task_id}: could not read its pull request ({reference})"
+        )
+    if pull_request.state == "OPEN":
+        return _ClosureOutcome(
+            "still_open", f"{task_id}: the pull request is still open; nothing to close"
+        )
+
+    author = cfg.git_author_email
+    outcome = delivery_metrics.delivery_outcome(pull_request, author)
+    human_commits = delivery_metrics.human_commits(pull_request, author)
+    human_lines_changed = delivery_metrics.human_lines_changed(pull_request, author)
+    time_to_merge = delivery_metrics.time_to_merge_seconds(pull_request)
+    version = raw.get("system_version") or UNKNOWN_SYSTEM_VERSION
+    # The document's own baseline and arm, never `telemetry.system_baseline()` of the
+    # checkout `close` happens to run from: a delivery sample names the run it judges
+    # (ADR-0030, `_delivery_labels`'s own docstring), the same rule `system_version`
+    # already follows two lines up.
+    baseline = raw.get("system_baseline") or UNKNOWN_SYSTEM_VERSION
+    arm = delivery_metrics.arm_label(cast(dict, raw.get("experiment") or {}))
+    task_type = raw.get("type") or "unknown"
+    fingerprint = delivery_metrics.prompts_fingerprint(cast(TaskState, raw))
+
+    flushed = telemetry.record_delivery(
+        product=product,
+        task_type=task_type,
+        prompts_fingerprint=fingerprint,
+        system_version=version,
+        system_baseline=baseline,
+        arm=arm,
+        outcome=outcome,
+        human_commits=human_commits,
+        human_lines_changed=human_lines_changed,
+        time_to_merge_seconds=time_to_merge,
+    )
+    if not flushed:
+        return _ClosureOutcome(
+            "flush_failed", f"{task_id}: no metrics endpoint configured; nothing recorded"
+        )
+
+    values = {
+        "closed_at": _now_iso(),
+        "delivery_outcome": outcome,
+        "human_commits": str(human_commits),
+        "human_lines_changed": str(human_lines_changed),
+    }
+    # Written only when the pull request merged: `time_to_merge` is `None` for one that
+    # never did, and the key is omitted entirely rather than written empty, the same
+    # rule `record_delivery` already follows for its own `time_to_merge_seconds` field
+    # (Tech Lead plan, subtask `close-all`). Rounded to a whole second and quoted as a
+    # string: `record_closure` writes every value through `_scalar_line`, which
+    # yaml-dumps whatever it is given, and `document.parse` hands every frontmatter
+    # scalar back as a string -- `evaluation.TaskDocument` types it `str` to match.
+    if time_to_merge is not None:
+        values["time_to_merge_seconds"] = str(int(time_to_merge))
+    path = ports.documents.record_closure(task_id, values)
+    return _ClosureOutcome(
+        "closed",
+        "",
+        outcome=outcome,
+        human_commits=human_commits,
+        human_lines_changed=human_lines_changed,
+        time_to_merge=time_to_merge,
+        path=path,
+    )
+
+
 async def _close(task_id: str, cfg: Configuration, ports: Ports) -> None:
     """`agentic close --issue N`: the human's verdict on a task's pull request, read
     through `gh` and recorded once. Runs no role and opens no span (`preflight` never
     runs here either); the one thing it still needs from the product is its name
     (`ports.stack.product()`), since every sample this emits carries it.
 
-    The same `FilesystemRunLock` as `run`/`resume`, through `_locked`, covers the whole
-    of read -> emit -> write, so a second `close` (or a `run`/`resume`) over this task
-    cannot race it. Every refusal below goes through `CannotStart` -- non-zero, nothing
-    emitted, no document byte written -- and each is independently reachable: a missing
-    document or `pull_request` value and an already-recorded closure are read off the
-    document alone, before `gh` is ever asked anything; a pull request still open is
-    read off `gh`; a false flush (`record_delivery`'s own docstring: `None` with no
-    meter provider configured is indistinguishable, to a caller, from one that ran and
-    failed) is the last refusal, and the same re-runnable state as any of the others --
-    `record_closure` only runs after a *true* flush, so a retry finds the same document
-    it started with."""
+    A thin wrapper over `_close_document` (Tech Lead plan, subtask `close-all`): the
+    same `FilesystemRunLock` as `run`/`resume`, through `_locked`, covers the whole of
+    read -> emit -> write, and every non-`"closed"` status becomes `CannotStart` with
+    that status's own message, byte-for-byte what this function raised inline before
+    the body moved -- the existing assertions in `tests/test_cli.py` that pin them are
+    the proof."""
     try:
         product = ports.stack.product()
     except (ValueError, OSError) as exc:
         raise CannotStart(str(exc)) from exc
     lock = _lock_for(cfg)
     with _locked(lock, task_id):
-        raw = ports.documents.load(task_id)
-        if raw is None:
-            raise CannotStart(f"{task_id} has no document to close")
+        result = _close_document(task_id, cfg, ports, product)
+    if result.status != "closed":
+        raise CannotStart(result.message)
+    print(f"outcome:             {result.outcome}")
+    print(f"human_commits:       {result.human_commits}")
+    print(f"human_lines_changed: {result.human_lines_changed}")
+    print(f"time_to_merge:       {result.time_to_merge}")
+    print(f"doc:                 {result.path}")
+    print("agentic: document written, not committed")
+
+
+async def _close_all(cfg: Configuration, ports: Ports) -> None:
+    """`agentic close --all [--product-dir PATH]`: sweeps every task document with a
+    `pull_request` and no `closed_at` -- exactly `_refuse_open_pull_request`'s own
+    reading of "not yet closed", so the two commands agree -- and closes each one
+    through the same `_close_document` `--issue` uses (Tech Lead plan, subtask
+    `close-all`). Idempotent: a document `_close_document` already closed is never
+    selected, so rerunning it finds nothing left to do.
+
+    The capability predicate (`telemetry.metrics_configured`) is asked once before the
+    sweep, not per task, so thirty `gh` calls are not spent to discover a global fact
+    that never changes mid-sweep. Each task still takes its own lock, one at a time, the
+    way `_close` already does -- never the `"eval"` lock, which would block an
+    evaluation run for the duration of this sweep.
+
+    Exactly one `record_delivery` call per closed task, flushed inside `_EMIT_LOCK` as
+    it always is: nothing is batched here. The delivery labels carry no task id
+    (ADR-0008's closed cardinality), so two closures of the same baseline are the same
+    series, and only the flush between them keeps both samples -- a "flush once at the
+    end" sweep would collapse every closure into the last one's sample. A false flush
+    therefore stops the sweep on the first occurrence: a failed flush is a sample the
+    next `set` would overwrite, so continuing would destroy what the previous task
+    recorded, and every task after it prints as not attempted, never as a claim about a
+    pull request state this sweep stopped asking `gh` about. Non-zero exit only when
+    not one document in the corpus could be read at all; a corpus with nothing left to
+    close, or a sweep that stopped partway, both exit zero with what happened printed.
+
+    One line per document, the five kinds the plan names: `closed`, `still open`
+    (`gh` says so), `already closed` (nothing to do -- a previous `close --issue N` or
+    sweep got there first), `no pull request` (nothing to do -- the task has none yet)
+    and `locked, skipped` (another process holds this task right now). The last two
+    read off the document alone, the same fact `_refuse_open_pull_request` already
+    reads, so no `gh` call is spent on a document this sweep would not select anyway."""
+    try:
+        product = ports.stack.product()
+    except (ValueError, OSError) as exc:
+        raise CannotStart(str(exc)) from exc
+    if not telemetry.metrics_configured():
+        raise CannotStart("no metrics endpoint configured; nothing recorded")
+    lock = _lock_for(cfg)
+    task_ids = ports.documents.ids()
+    readable = 0
+    closed: list[str] = []
+    remaining: list[str] = []
+    stopped = False
+    for task_id in task_ids:
+        try:
+            raw = ports.documents.load(task_id)
+        except (ValueError, OSError) as exc:
+            print(f"agentic: {task_id}: could not be read: {exc}")
+            continue
+        readable += 1
+        raw = raw or {}
+        number = ports.inbox.issue_of(task_id)
+        label = f"{task_id} (issue {number})" if number is not None else task_id
         reference = raw.get("pull_request")
         if not reference:
-            raise CannotStart(f"{task_id} has no pull request to close")
+            print(f"agentic: {label}: no pull request")
+            continue
         if raw.get("closed_at"):
-            raise CannotStart(f"{task_id} already closed on {raw['closed_at']}")
-        try:
-            pull_request: PullRequest | None = ports.tracker.pull_request(reference)
-        except (ValueError, OSError) as exc:
-            raise CannotStart(str(exc)) from exc
-        if pull_request is None:
-            raise CannotStart(f"{task_id}: could not read its pull request ({reference})")
-        if pull_request.state == "OPEN":
-            raise CannotStart(f"{task_id}: the pull request is still open; nothing to close")
-
-        author = cfg.git_author_email
-        outcome = delivery_metrics.delivery_outcome(pull_request, author)
-        human_commits = delivery_metrics.human_commits(pull_request, author)
-        human_lines_changed = delivery_metrics.human_lines_changed(pull_request, author)
-        time_to_merge = delivery_metrics.time_to_merge_seconds(pull_request)
-        version = raw.get("system_version") or UNKNOWN_SYSTEM_VERSION
-        # The document's own baseline and arm, never `telemetry.system_baseline()` of the
-        # checkout `close` happens to run from: a delivery sample names the run it judges
-        # (ADR-0030, `_delivery_labels`'s own docstring), the same rule `system_version`
-        # already follows two lines up.
-        baseline = raw.get("system_baseline") or UNKNOWN_SYSTEM_VERSION
-        arm = delivery_metrics.arm_label(cast(dict, raw.get("experiment") or {}))
-        task_type = raw.get("type") or "unknown"
-        fingerprint = delivery_metrics.prompts_fingerprint(cast(TaskState, raw))
-
-        flushed = telemetry.record_delivery(
-            product=product,
-            task_type=task_type,
-            prompts_fingerprint=fingerprint,
-            system_version=version,
-            system_baseline=baseline,
-            arm=arm,
-            outcome=outcome,
-            human_commits=human_commits,
-            human_lines_changed=human_lines_changed,
-            time_to_merge_seconds=time_to_merge,
-        )
-        if not flushed:
-            raise CannotStart(f"{task_id}: no metrics endpoint configured; nothing recorded")
-
-        path = ports.documents.record_closure(
-            task_id,
-            {
-                "closed_at": _now_iso(),
-                "delivery_outcome": outcome,
-                "human_commits": str(human_commits),
-                "human_lines_changed": str(human_lines_changed),
-            },
-        )
-    print(f"outcome:             {outcome}")
-    print(f"human_commits:       {human_commits}")
-    print(f"human_lines_changed: {human_lines_changed}")
-    print(f"time_to_merge:       {time_to_merge}")
-    print(f"doc:                 {path}")
-    print("agentic: document written, not committed")
+            print(f"agentic: {label}: already closed")
+            continue
+        if stopped:
+            print(f"agentic: {label}: not attempted (sweep stopped on an earlier flush)")
+            remaining.append(label)
+            continue
+        refusal = lock.refusal(task_id)
+        if refusal is not None:
+            print(f"agentic: {label}: locked, skipped ({refusal})")
+            remaining.append(label)
+            continue
+        with _locked(lock, task_id):
+            result = _close_document(task_id, cfg, ports, product)
+        if result.status == "closed":
+            print(f"agentic: {label}: closed ({result.outcome})")
+            closed.append(label)
+        elif result.status == "still_open":
+            print(f"agentic: {label}: still open")
+            remaining.append(label)
+        else:
+            print(f"agentic: {label}: {result.message}")
+            remaining.append(label)
+            if result.status == "flush_failed":
+                stopped = True
+    if task_ids and readable == 0:
+        raise CannotStart("no document could be read")
+    print(f"agentic: closed {len(closed)}: {', '.join(closed) or '(none)'}")
+    print(f"agentic: remaining {len(remaining)}: {', '.join(remaining) or '(none)'}")
 
 
 def _now_iso() -> str:
@@ -1010,6 +1200,126 @@ async def _eval_score(
             print(f"  {fingerprint}: {', '.join(sorted(task_ids))}")
     for issue in pending:
         print(f"agentic close --issue {issue}")
+
+
+def _bucket_documents(
+    product_dir: Path, repo: Path
+) -> tuple[dict[str, list[tuple[str, scorecard.TaskFigures]]], int]:
+    """Every task document under `.agentic/tasks/`: this function owns only the glob
+    and the parse (Tech Lead review, subtask `scorecard`), handing what it read to
+    `scorecard.bucket_by_baseline` for the actual grouping -- a pure function, testable
+    at a declared seam (`tests/core/measurement/domain/test_scorecard.py`) without a
+    filesystem or git. No port: `cli.py` is the composition root and already reads
+    `.agentic/` directly, `_read_eval_set`'s own precedent for `.agentic/eval-set.yaml`.
+
+    `document.parse` rejects a document three ways -- malformed frontmatter YAML
+    (`yaml.YAMLError`, from its own unguarded `yaml.safe_load`), a missing frontmatter
+    block, or a file this process cannot read (`ValueError`/`OSError`) -- all three
+    caught here into the single `None` sentinel `bucket_by_baseline` counts and
+    excludes, never raised out of a read-only comparison."""
+    tasks_dir = product_dir / task_document.TASKS_SUBDIR
+    paths = sorted(tasks_dir.glob("*.md")) if tasks_dir.is_dir() else []
+    parsed: list[scorecard.ParsedDocument] = []
+    for path in paths:
+        try:
+            raw = task_document.parse(path.read_text(encoding="utf-8"), path)
+        except (ValueError, OSError, yaml.YAMLError):
+            parsed.append(None)
+            continue
+        parsed.append((raw.get("id", path.stem), cast(scorecard.ScorecardDocument, raw)))
+    return scorecard.bucket_by_baseline(parsed, lambda sha: telemetry.resolve_baseline(sha, repo))
+
+
+def _fmt_figure(figure: scorecard.Figure) -> str:
+    return "n/a" if figure.value is None else f"{figure.value:.4f}"
+
+
+def _print_scorecard(product: str, baseline: str, sc: scorecard.Scorecard) -> None:
+    """Every figure names the product it was computed over, the denominator it was
+    computed over, and the number of documents excluded from that denominator (Tech
+    Lead plan, standard 7): no printed figure sums documents from more than one product
+    directory, since `sc` is already this one invocation's own bucket of this one
+    product's own documents."""
+    print(f"-- {product} / {baseline} --")
+    print(
+        f"autonomy:          {_fmt_figure(sc.autonomy)} "
+        f"({sc.autonomy.denominator} judged, {sc.autonomy.excluded} excluded)"
+    )
+    print(
+        f"own failures/task: {_fmt_figure(sc.own_failures_per_task)} "
+        f"({sc.own_failures_per_task.denominator} terminated, "
+        f"{sc.own_failures_per_task.excluded} excluded)"
+    )
+    print(
+        "  caveat: `sdk` counts as ours on both sides; a run before ADR-0029 recorded "
+        "its 429s as `sdk` and is never reclassified -- a delta here is a quality delta "
+        "only if both sides show the post-ADR-0029 vocabulary"
+    )
+    print(f"  by reason: {sc.failures_by_reason}")
+    print(
+        f"cost/delivery:     {_fmt_figure(sc.cost_per_delivery)} "
+        f"({sc.cost_per_delivery.denominator} judged, {sc.cost_per_delivery.excluded} excluded)"
+    )
+    print(
+        f"rework/task:       {_fmt_figure(sc.rework_per_task)} "
+        f"({sc.rework_per_task.denominator} terminated, {sc.rework_per_task.excluded} excluded)"
+    )
+    print(f"  time to merge known for {sc.time_to_merge_known} of {sc.judged} judged deliveries")
+
+
+async def _eval_compare(
+    cfg: Configuration, ports: Ports, frm: str, to: str, system_repo: str | None
+) -> None:
+    """`agentic eval compare <from> <to>`: ADR-0028's scorecard for two baselines, from
+    task documents and local git alone (Tech Lead plan, subtask `scorecard`) -- no
+    lock, no `gh`, no network. One product directory per invocation, the one `main()`
+    already resolved into `cfg`/`ports`: a second product is another invocation, never
+    a second `Configuration`/`Ports` built here."""
+    try:
+        product = ports.stack.product()
+    except (ValueError, OSError) as exc:
+        raise CannotStart(str(exc)) from exc
+    repo = Path(system_repo) if system_repo else telemetry.REPO
+    buckets, unreadable = _bucket_documents(cfg.product_dir, repo)
+    available = sorted(buckets)
+    for name in (frm, to):
+        if name not in buckets:
+            counts = ", ".join(f"{b} ({len(buckets[b])})" for b in available)
+            raise CannotStart(f"{name}: unknown baseline; available: {counts or 'none'}")
+    if unreadable:
+        print(f"agentic: {unreadable} document(s) could not be read; excluded from every bucket")
+    if unknown := buckets.get("unknown"):
+        print(
+            f"agentic: {len(unknown)} document(s) whose `system_commit` this repository "
+            "cannot resolve; re-pin stage0 or pass --system-repo"
+        )
+
+    frm_sc = scorecard.build([figures for _, figures in buckets[frm]])
+    to_sc = scorecard.build([figures for _, figures in buckets[to]])
+    _print_scorecard(product, frm, frm_sc)
+    _print_scorecard(product, to, to_sc)
+    v = scorecard.verdict(frm_sc, frm, to_sc, to)
+    print(f"verdict: {v.outcome} ({v.reason})")
+
+    # The eval-set declaration is read on a warning path (ADR-0025's `no_brief`/
+    # `brief_refusal` asymmetry): absent or malformed says so plainly and the
+    # comparison already printed above stands, never a `CannotStart` that would die
+    # before a figure is printed (this repo declares no `.agentic/eval-set.yaml`).
+    try:
+        declaration, _text, _source = _read_eval_set(cfg, None)
+    except CannotStart as exc:
+        print(f"agentic: eval set: {exc}")
+        return
+    for name, tasks in ((frm, buckets[frm]), (to, buckets[to])):
+        present = {task_id for task_id, _ in tasks}
+        missing = [
+            issue for issue in declaration.issues if ports.inbox.task_id(issue) not in present
+        ]
+        if missing:
+            print(
+                f"agentic: {name}: missing {len(missing)} of {len(declaration.issues)} "
+                f"eval-set issue(s): {', '.join(str(i) for i in missing)}"
+            )
 
 
 async def _invoke(

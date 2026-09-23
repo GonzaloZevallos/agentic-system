@@ -33,6 +33,12 @@ class FilesystemTaskDocuments:
     def path_for(self, task_id: str) -> Path:
         return self.product_dir / document.relative_path(task_id)
 
+    def ids(self) -> list[str]:
+        tasks_dir = self.product_dir / document.TASKS_SUBDIR
+        if not tasks_dir.is_dir():
+            return []
+        return sorted(path.stem for path in tasks_dir.glob("*.md"))
+
     def save(self, state: TaskState) -> Path:
         path = self.path_for(state["id"])
         path.parent.mkdir(parents=True, exist_ok=True)
