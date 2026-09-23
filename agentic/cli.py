@@ -39,7 +39,7 @@ from .composition import default_ports, graph
 from .core.knowledge.domain import knowledge
 from .core.measurement.adapters.otel import telemetry
 from .core.measurement.adapters.otel.telemetry import InvocationKind
-from .core.measurement.domain import evaluation
+from .core.measurement.domain import evaluation, scorecard
 from .core.measurement.domain import metrics as delivery_metrics
 from .core.process.adapters.filesystem import FilesystemRunLock
 from .core.process.adapters.git.workspace import GitError
@@ -56,6 +56,7 @@ from .core.process.application.preflight import (
     product_name,
     unfixed_stage0,
 )
+from .core.process.domain import document as task_document
 from .core.process.domain.task import PullRequest, TaskInput, TaskState
 from .shared.configuration import ENV_PREFIX, LOGS_DIR, Configuration, MissingProductDir
 from .shared.environment import without_own_toolchain
@@ -229,6 +230,21 @@ def main() -> None:
         "--set", metavar="PATH", help="override the product's own .agentic/eval-set.yaml"
     )
     eval_score.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
+    eval_compare = eval_sub.add_parser(
+        "compare",
+        help="ADR-0028's scorecard for two baselines, from task documents and local git alone",
+    )
+    eval_compare.add_argument("frm", metavar="from", help="the baseline compared from")
+    eval_compare.add_argument("to", metavar="to", help="the baseline compared against `from`")
+    eval_compare.add_argument(
+        "--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)"
+    )
+    eval_compare.add_argument(
+        "--system-repo",
+        metavar="PATH",
+        help="the system checkout to resolve a document's own system_commit against "
+        "(defaults to the pinned stage0 checkout)",
+    )
     for command in (run, resume):
         command.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
         command.add_argument(
@@ -349,8 +365,10 @@ def main() -> None:
                     detach=args.detach,
                     child_argv=_child_argv(),
                 )
-            else:
+            elif args.eval_command == "score":
                 work = partial(_eval_score, cfg, ports, args.set, args.out)
+            else:
+                work = partial(_eval_compare, cfg, ports, args.frm, args.to, args.system_repo)
         else:
             if args.issue is not None:
                 task = ports.inbox.task(args.issue)
@@ -1010,6 +1028,126 @@ async def _eval_score(
             print(f"  {fingerprint}: {', '.join(sorted(task_ids))}")
     for issue in pending:
         print(f"agentic close --issue {issue}")
+
+
+def _bucket_documents(
+    product_dir: Path, repo: Path
+) -> tuple[dict[str, list[tuple[str, scorecard.TaskFigures]]], int]:
+    """Every task document under `.agentic/tasks/`, grouped by baseline bucket (Tech
+    Lead plan, subtask `scorecard`): a document's own `system_baseline` wins outright
+    (a `bl-*` tag, or the literal `untagged`), else `telemetry.resolve_baseline` reads
+    its `system_commit`. No port: `cli.py` is the composition root and already reads
+    `.agentic/` directly, `_read_eval_set`'s own precedent for `.agentic/eval-set.yaml`.
+    A document `document.parse` itself rejects is counted in the returned int and left
+    out of every bucket, never raised out of a read-only comparison."""
+    buckets: dict[str, list[tuple[str, scorecard.TaskFigures]]] = {}
+    unreadable = 0
+    tasks_dir = product_dir / task_document.TASKS_SUBDIR
+    paths = sorted(tasks_dir.glob("*.md")) if tasks_dir.is_dir() else []
+    for path in paths:
+        try:
+            raw = task_document.parse(path.read_text(encoding="utf-8"), path)
+        except (ValueError, OSError):
+            unreadable += 1
+            continue
+        bucket = raw.get("system_baseline") or telemetry.resolve_baseline(
+            raw.get("system_commit"), repo
+        )
+        figures = scorecard.task_figures(cast(scorecard.ScorecardDocument, raw))
+        buckets.setdefault(bucket, []).append((raw.get("id", path.stem), figures))
+    return buckets, unreadable
+
+
+def _fmt_figure(figure: scorecard.Figure) -> str:
+    return "n/a" if figure.value is None else f"{figure.value:.4f}"
+
+
+def _print_scorecard(product: str, baseline: str, sc: scorecard.Scorecard) -> None:
+    """Every figure names the product it was computed over, the denominator it was
+    computed over, and the number of documents excluded from that denominator (Tech
+    Lead plan, standard 7): no printed figure sums documents from more than one product
+    directory, since `sc` is already this one invocation's own bucket of this one
+    product's own documents."""
+    print(f"-- {product} / {baseline} --")
+    print(
+        f"autonomy:          {_fmt_figure(sc.autonomy)} "
+        f"({sc.autonomy.denominator} judged, {sc.autonomy.excluded} excluded)"
+    )
+    print(
+        f"own failures/task: {_fmt_figure(sc.own_failures_per_task)} "
+        f"({sc.own_failures_per_task.denominator} terminated, "
+        f"{sc.own_failures_per_task.excluded} excluded)"
+    )
+    print(
+        "  caveat: `sdk` counts as ours on both sides; a run before ADR-0029 recorded "
+        "its 429s as `sdk` and is never reclassified -- a delta here is a quality delta "
+        "only if both sides show the post-ADR-0029 vocabulary"
+    )
+    print(f"  by reason: {sc.failures_by_reason}")
+    print(
+        f"cost/delivery:     {_fmt_figure(sc.cost_per_delivery)} "
+        f"({sc.cost_per_delivery.denominator} judged, {sc.cost_per_delivery.excluded} excluded)"
+    )
+    print(
+        f"rework/task:       {_fmt_figure(sc.rework_per_task)} "
+        f"({sc.rework_per_task.denominator} terminated, {sc.rework_per_task.excluded} excluded)"
+    )
+    print(f"  time to merge known for {sc.time_to_merge_known} of {sc.judged} judged deliveries")
+
+
+async def _eval_compare(
+    cfg: Configuration, ports: Ports, frm: str, to: str, system_repo: str | None
+) -> None:
+    """`agentic eval compare <from> <to>`: ADR-0028's scorecard for two baselines, from
+    task documents and local git alone (Tech Lead plan, subtask `scorecard`) -- no
+    lock, no `gh`, no network. One product directory per invocation, the one `main()`
+    already resolved into `cfg`/`ports`: a second product is another invocation, never
+    a second `Configuration`/`Ports` built here."""
+    try:
+        product = ports.stack.product()
+    except (ValueError, OSError) as exc:
+        raise CannotStart(str(exc)) from exc
+    repo = Path(system_repo) if system_repo else telemetry.REPO
+    buckets, unreadable = _bucket_documents(cfg.product_dir, repo)
+    available = sorted(buckets)
+    for name in (frm, to):
+        if name not in buckets:
+            counts = ", ".join(f"{b} ({len(buckets[b])})" for b in available)
+            raise CannotStart(f"{name}: unknown baseline; available: {counts or 'none'}")
+    if unreadable:
+        print(f"agentic: {unreadable} document(s) could not be read; excluded from every bucket")
+    if unknown := buckets.get("unknown"):
+        print(
+            f"agentic: {len(unknown)} document(s) whose `system_commit` this repository "
+            "cannot resolve; re-pin stage0 or pass --system-repo"
+        )
+
+    frm_sc = scorecard.build([figures for _, figures in buckets[frm]])
+    to_sc = scorecard.build([figures for _, figures in buckets[to]])
+    _print_scorecard(product, frm, frm_sc)
+    _print_scorecard(product, to, to_sc)
+    v = scorecard.verdict(frm_sc, frm, to_sc, to)
+    print(f"verdict: {v.outcome} ({v.reason})")
+
+    # The eval-set declaration is read on a warning path (ADR-0025's `no_brief`/
+    # `brief_refusal` asymmetry): absent or malformed says so plainly and the
+    # comparison already printed above stands, never a `CannotStart` that would die
+    # before a figure is printed (this repo declares no `.agentic/eval-set.yaml`).
+    try:
+        declaration, _text, _source = _read_eval_set(cfg, None)
+    except CannotStart as exc:
+        print(f"agentic: eval set: {exc}")
+        return
+    for name, tasks in ((frm, buckets[frm]), (to, buckets[to])):
+        present = {task_id for task_id, _ in tasks}
+        missing = [
+            issue for issue in declaration.issues if ports.inbox.task_id(issue) not in present
+        ]
+        if missing:
+            print(
+                f"agentic: {name}: missing {len(missing)} of {len(declaration.issues)} "
+                f"eval-set issue(s): {', '.join(str(i) for i in missing)}"
+            )
 
 
 async def _invoke(
