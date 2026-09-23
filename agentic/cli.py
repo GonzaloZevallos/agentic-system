@@ -908,9 +908,17 @@ async def _close_all(cfg: Configuration, ports: Ports) -> None:
     end" sweep would collapse every closure into the last one's sample. A false flush
     therefore stops the sweep on the first occurrence: a failed flush is a sample the
     next `set` would overwrite, so continuing would destroy what the previous task
-    recorded. Non-zero exit only when not one document in the corpus could be read at
-    all; a corpus with nothing left to close, or a sweep that stopped partway, both
-    exit zero with what happened printed."""
+    recorded, and every task after it prints as not attempted, never as a claim about a
+    pull request state this sweep stopped asking `gh` about. Non-zero exit only when
+    not one document in the corpus could be read at all; a corpus with nothing left to
+    close, or a sweep that stopped partway, both exit zero with what happened printed.
+
+    One line per document, the five kinds the plan names: `closed`, `still open`
+    (`gh` says so), `already closed` (nothing to do -- a previous `close --issue N` or
+    sweep got there first), `no pull request` (nothing to do -- the task has none yet)
+    and `locked, skipped` (another process holds this task right now). The last two
+    read off the document alone, the same fact `_refuse_open_pull_request` already
+    reads, so no `gh` call is spent on a document this sweep would not select anyway."""
     try:
         product = ports.stack.product()
     except (ValueError, OSError) as exc:
@@ -930,13 +938,18 @@ async def _close_all(cfg: Configuration, ports: Ports) -> None:
             print(f"agentic: {task_id}: could not be read: {exc}")
             continue
         readable += 1
-        reference = (raw or {}).get("pull_request")
-        if not reference or (raw or {}).get("closed_at"):
-            continue  # not selected: `_refuse_open_pull_request`'s own reading
+        raw = raw or {}
         number = ports.inbox.issue_of(task_id)
         label = f"{task_id} (issue {number})" if number is not None else task_id
+        reference = raw.get("pull_request")
+        if not reference:
+            print(f"agentic: {label}: no pull request")
+            continue
+        if raw.get("closed_at"):
+            print(f"agentic: {label}: already closed")
+            continue
         if stopped:
-            print(f"agentic: {label}: still open (sweep stopped on an earlier flush)")
+            print(f"agentic: {label}: not attempted (sweep stopped on an earlier flush)")
             remaining.append(label)
             continue
         refusal = lock.refusal(task_id)

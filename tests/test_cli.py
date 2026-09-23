@@ -1928,6 +1928,32 @@ def test_close_all_is_idempotent_over_an_already_closed_document(monkeypatch, tm
     finally:
         telemetry.configure()
     out = capsys.readouterr().out
+    assert "GH-9 (issue 9): already closed" in out  # one of the plan's five line kinds
+    assert "agentic: closed 0:" in out
+    assert "agentic: remaining 0:" in out
+
+
+def test_close_all_prints_a_line_for_a_document_with_no_pull_request_and_touches_nothing(
+    monkeypatch, tmp_path, capsys
+):
+    """A task that never opened a pull request is nothing for the sweep to do -- read
+    off the document alone, never `gh` (`_refuse_open_pull_request`'s own reading) --
+    but it still gets its own line, one of the plan's five kinds, and stays out of both
+    summary counts since it was never selected."""
+    from agentic.core.measurement.adapters.otel import telemetry
+
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    ports.documents.save(close_task(pull_request=None))
+    points = MetricPoints()
+    telemetry.configure(meter_provider=telemetry.meter_provider_for(points.reader))
+    try:
+        _all_run(monkeypatch, root, ports)
+        cli.main()
+    finally:
+        telemetry.configure()
+    out = capsys.readouterr().out
+    assert "GH-9 (issue 9): no pull request" in out
     assert "agentic: closed 0:" in out
     assert "agentic: remaining 0:" in out
 
@@ -1971,6 +1997,52 @@ def test_close_all_stops_the_sweep_on_the_first_false_flush_printing_both_lists(
     assert "agentic: closed 1: GH-1 (issue 1)" in out
     assert "agentic: remaining 1: GH-9 (issue 9)" in out
     assert calls["n"] == 2  # GH-1 flushed true, GH-9 flushed false, and the sweep stopped there
+
+
+def test_close_all_reports_a_task_after_the_stopped_one_as_not_attempted_not_still_open(
+    monkeypatch, tmp_path, capsys
+):
+    """The task selected *after* the one whose flush failed is never asked `gh` either
+    (Tech Lead plan, subtask `close-all`): it must not print `still open`, a claim
+    about a pull request state this sweep stopped reading -- only that it was not
+    attempted."""
+    from agentic.core.measurement.adapters.otel import telemetry
+
+    root = close_root(tmp_path)
+    ref1 = "https://github.com/o/r/pull/1"
+    ref5 = "https://github.com/o/r/pull/5"
+    ref9 = "https://github.com/o/r/pull/9"
+    tracker = FakePullRequestTracker(
+        {ref1: close_pull_request(), ref5: close_pull_request(), ref9: close_pull_request()}
+    )
+    ports = close_ports(root, tracker)
+    ports.documents.save(close_task(id="GH-1", pull_request=ref1))
+    ports.documents.save(close_task(id="GH-5", pull_request=ref5))
+    ports.documents.save(close_task(id="GH-9", pull_request=ref9))
+    points = MetricPoints()
+    telemetry.configure(meter_provider=telemetry.meter_provider_for(points.reader))
+    calls = {"n": 0}
+    real_record_delivery = telemetry.record_delivery
+
+    def flaky_record_delivery(**kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return real_record_delivery(**kwargs)
+        return False  # GH-5's flush fails; GH-9 must never even ask `gh` afterwards
+
+    monkeypatch.setattr(cli.telemetry, "record_delivery", flaky_record_delivery)
+    try:
+        _all_run(monkeypatch, root, ports)
+        cli.main()
+    finally:
+        telemetry.configure()
+    out = capsys.readouterr().out
+    assert "GH-9 (issue 9): not attempted (sweep stopped on an earlier flush)" in out
+    assert "GH-9 (issue 9): still open" not in out
+    assert ref9 not in tracker.pull_request_refs  # never asked `gh` about GH-9 at all
+    assert not ports.documents.load("GH-9").get("closed_at")
+    assert "agentic: closed 1: GH-1 (issue 1)" in out
+    assert "agentic: remaining 2: GH-5 (issue 5), GH-9 (issue 9)" in out
 
 
 # `agentic eval run` / `agentic eval score` (Tech Lead plan, subtask `eval-cli`):
