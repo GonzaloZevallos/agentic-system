@@ -37,12 +37,24 @@ here rather than left to how the SDK would combine two matchers of its own. A gu
 denial short-circuits the callback, so the presubmit never runs the product's checks
 over an input that is not even shaped right.
 
-The turn-budget notice (ADR-0004, seventh addendum; issue #85) is a `PostToolUse`
-matcher, wired only for a role `domain.turn_notice.margin_for` covers: it counts
-main-thread events (an event carrying `agent_id`, a sub-agent's own, is not this
-role's turn and is ignored — `.get()`, never a subscript, since the SDK's own type
-only ever promises the field on a sub-agent call) and, once the count crosses the
-role's margin, returns `additionalContext` once and never again this attempt. Never a
+The turn-budget notice (ADR-0004, seventh addendum, revised by its 2026-09-22
+addendum, issue #102) is a `PostToolUse` matcher, wired only for a role
+`domain.turn_notice.threshold_for` covers. It reads a count it never keeps itself:
+`TurnCount`, one mutable holder per attempt, constructed and incremented by
+`ClaudeSdkRunner.run_once`'s own stream loop (the runner's main-thread
+`AssistantMessage` tally, `domain/turn_notice.py`'s own counted quantity) and passed
+down the same parameter path `on_notice` already travels. The counter itself needs no
+`agent_id` filter any more to stay correct: it is already main-thread-only by
+construction (`message.parent_tool_use_id is None`). Firing still checks `agent_id`
+on the event, though, for a different reason than counting ever was — a sub-agent's
+own `PostToolUse` is not this role's turn, and injecting `additionalContext` there
+would land in a sub-agent's own conversation, not the one the close-out is meant to
+reach, and would count as a firing this module's own calibrating constant is not
+about. Once the count reaches the role's threshold, every later main-thread call
+returns `additionalContext` too, each one carrying its own firing index
+(`domain/turn_notice.notice_context`) — a re-firing close-out window, not the
+one-shot advisory it replaces, because that advisory fired in every recorded
+`max_turns` cut and changed nothing (ADR-0004's revising addendum). Never a
 `permissionDecision`: `PostToolUseHookSpecificOutput` structurally carries none
 (ADR-0011, fourth addendum), so this can only ever add context, never narrow what the
 role may run.
@@ -54,6 +66,7 @@ import os
 import re
 import shlex
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -103,6 +116,20 @@ GIT_PATH = "a path inside `.git/`: the repository's internals are not yours to e
 OUTSIDE_PATH = "a path outside your working directory: edit only your checkout."
 
 
+@dataclass
+class TurnCount:
+    """The runner's own tally of main-thread `AssistantMessage`s, the quantity
+    `domain/turn_notice.py`'s threshold is stated in: one instance per attempt,
+    constructed in `ClaudeSdkRunner.run_once` beside its `_mark_notice` closure and
+    incremented in exactly one place, inside its stream loop's existing `if
+    message.parent_tool_use_id is None:` branch. `_turn_notice` below only ever reads
+    `value`; it never increments it -- the count it needs and the count the harness
+    enforces against `max_turns` are the same read, not two tallies kept in step by
+    hand."""
+
+    value: int = 0
+
+
 def git_denial(command: str, cwd: Path, relative_to: Path | None = None) -> str | None:
     """Why the Bash `command` may not run, or None. `cwd` is the role's checkout;
     `relative_to` is where the shell stands, the checkout unless said otherwise."""
@@ -136,13 +163,17 @@ def hooks_for(
     cwd: Path,
     presubmit: Presubmit | None,
     on_notice: Callable[[], None] | None = None,
+    turns: TurnCount | None = None,
     on_presubmit_denied: Callable[[], None] | None = None,
     guard: SchemaGuard | None = None,
     forbidden: Sequence[Forbidden] | None = None,
 ) -> dict[str, list[HookMatcher]]:
     """The hooks of one run: the cage for a role that executes, the schema guard and
     the presubmit sharing one matcher on the delivery tool when either is given, and
-    the turn-budget notice for a role `turn_notice.margin_for` covers.
+    the turn-budget notice for a role `turn_notice.threshold_for` covers. `turns` is
+    the counter that notice reads (`TurnCount`'s own docstring); `None` reads as a
+    count that never reaches any threshold, which is every call this module's own
+    tests make that are not about the notice itself.
 
     `forbidden` is the product's own declared suppressions (issue #38): `None` or
     empty is the explicit no-op -- the Edit/Write matcher is installed either way (the
@@ -172,7 +203,7 @@ def hooks_for(
     hooks: dict[str, list[HookMatcher]] = {}
     if matchers:
         hooks["PreToolUse"] = matchers
-    if (notice_hook := _turn_notice(role, on_notice)) is not None:
+    if (notice_hook := _turn_notice(role, turns, on_notice)) is not None:
         hooks["PostToolUse"] = [HookMatcher(hooks=[notice_hook], timeout=GUARD_TIMEOUT_S)]
     return hooks
 
@@ -213,34 +244,46 @@ def _edit(cwd: Path, forbidden: Sequence[Forbidden]) -> HookCallback:
     return hook
 
 
-def _turn_notice(role: Role, on_notice: Callable[[], None] | None) -> HookCallback | None:
+def _turn_notice(
+    role: Role, turns: TurnCount | None, on_notice: Callable[[], None] | None
+) -> HookCallback | None:
     """The `PostToolUse` callback that fires the live turn-budget notice, or `None` for
-    a role `turn_notice.margin_for` does not cover. `count` is this attempt's own
-    closure state: a `PostToolUse` count of main-thread events, the enforced-cap-turn
-    unit the spike established. `fired` makes the notice a one-time thing per attempt:
-    once the margin is crossed, later calls go back to answering nothing."""
-    margin = turn_notice.margin_for(role)
-    if margin is None:
+    a role `turn_notice.threshold_for` does not cover. `turns` is read, never
+    incremented, here (`TurnCount`'s own docstring: the stream loop owns the write) --
+    that is the counter the threshold is evaluated against, main-thread-only by
+    construction. Firing itself stays gated to a main-thread event too
+    (`data.get("agent_id") is None`): the counter no longer needs the filter to stay
+    correct, but a sub-agent's own `PostToolUse` is not this role's turn, and its own
+    conversation is not where a close-out directive belongs, or where a firing this
+    constant is calibrated against should be counted from. `firings` is this
+    callback's own closure state, distinct from `turns.value`: how many times *this*
+    hook has fired this attempt, which is what `notice_context` reports as each
+    firing's own index. No latch: once `turns.value` reaches the threshold, every
+    later main-thread `PostToolUse` event fires again, each with its own index -- the
+    re-firing close-out window `domain/turn_notice.py`'s docstring argues for,
+    replacing the one-shot advisory that fired in every recorded cut and changed
+    nothing."""
+    threshold = turn_notice.threshold_for(role)
+    if threshold is None:
         return None
-    count = 0
-    fired = False
+    firings = 0
 
     async def hook(
         data: HookInput, tool_use_id: str | None, context: HookContext
     ) -> HookJSONOutput:
-        nonlocal count, fired
+        nonlocal firings
         if data.get("agent_id") is not None:
-            return {}  # a sub-agent's own call: not this role's turn count
-        count += 1
-        if fired or not turn_notice.should_notice(role, count):
+            return {}  # a sub-agent's own call: not this role's turn, not its context
+        count = turns.value if turns is not None else 0
+        if not turn_notice.should_notice(role, count):
             return {}
-        fired = True
+        firings += 1
         if on_notice is not None:
             on_notice()
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PostToolUse",
-                "additionalContext": turn_notice.notice_context(role.max_turns - count),
+                "additionalContext": turn_notice.notice_context(firings),
             }
         }
 

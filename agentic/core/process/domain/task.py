@@ -224,12 +224,18 @@ class Failure(TypedDict):
     # reads as `0` (`rules.denial_note`'s callers always use `.get(..., 0)`).
     denials: NotRequired[int]
     # Whether the live turn-budget notice (`domain/turn_notice.py`; ADR-0004, seventh
-    # addendum) fired during this attempt, off `RawResult.turn_notice`/
-    # `AttemptFailed.turn_notice`. `False` for every role `turn_notice.margin_for` does
-    # not cover, which is every role but `DEVELOPER`/`DEVELOPER_INTEGRATOR`. Absent on a
-    # failure recorded before this field existed, which reads as `False`
-    # (`run_role._run_notice`'s own `.get(..., False)`).
+    # addendum, revised by its 2026-09-22 addendum) fired during this attempt, off
+    # `RawResult.turn_notice`/`AttemptFailed.turn_notice`. `False` for every role
+    # `turn_notice.threshold_for` does not cover, which is every role but
+    # `DEVELOPER`/`DEVELOPER_INTEGRATOR`. Absent on a failure recorded before this field
+    # existed, which reads as `False`.
     turn_notice: NotRequired[bool]
+    # How many times the notice fired during this attempt, off `RawResult.
+    # turn_notice_firings`/`AttemptFailed.turn_notice_firings`: a fact beside
+    # `turn_notice`, never replacing it (ADR-0008: added, never renamed). Absent on a
+    # failure recorded before this field existed, which reads as `0`
+    # (`run_role._run_notice_firings`'s own `.get(..., 0)`).
+    turn_notice_firings: NotRequired[int]
     # Calls to the delivery tool this attempt saw before it failed (glossary: Emisión
     # de entrega), off `RawResult.deliveries`/`AttemptFailed.deliveries`. Absent on a
     # failure recorded before this field existed, which reads as `0`
@@ -317,12 +323,19 @@ class RoleRun(TypedDict):
     # existed, which reads as `0`.
     denials: NotRequired[int]
     # Whether the live turn-budget notice fired during the delivering attempt, off
-    # `RawResult.turn_notice` (`domain/turn_notice.py`; ADR-0004, seventh addendum). The
-    # run's total, for the section note (`turn_notice.notice_note`), also folds in
-    # every recorded `Failure.turn_notice`: this field alone is only the delivering
-    # attempt's, the same split `denials` already has. Absent on a run recorded before
-    # this field existed, which reads as `False`.
+    # `RawResult.turn_notice` (`domain/turn_notice.py`; ADR-0004, seventh addendum,
+    # revised by its 2026-09-22 addendum). The run's total, for the section note
+    # (`turn_notice.notice_note`), also folds in every recorded `Failure.turn_notice`:
+    # this field alone is only the delivering attempt's, the same split `denials`
+    # already has. Absent on a run recorded before this field existed, which reads as
+    # `False`.
     turn_notice: NotRequired[bool]
+    # How many times the notice fired during the delivering attempt, off `RawResult.
+    # turn_notice_firings`: a fact beside `turn_notice`, never replacing it (ADR-0008).
+    # The run's total, what `notice_note`'s own `firings` argument reads, also folds in
+    # every recorded `Failure.turn_notice_firings` (`run_role._run_notice_firings`).
+    # Absent on a run recorded before this field existed, which reads as `0`.
+    turn_notice_firings: NotRequired[int]
     # Calls to the delivery tool during the delivering attempt (glossary: Emisión de
     # entrega), off `RawResult.deliveries`. The run's total, for the section note
     # (`rules.deliveries_note`), also folds in every recorded `Failure.deliveries`:

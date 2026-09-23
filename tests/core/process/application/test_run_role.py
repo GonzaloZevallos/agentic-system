@@ -114,6 +114,7 @@ async def test_retry_passes_the_error_and_sums_cost():
             "cold_fallback": False,
             "denials": 0,
             "turn_notice": False,
+            "turn_notice_firings": 0,
             "deliveries": 0,
             "presubmit_denials": 0,
         }
@@ -536,6 +537,7 @@ async def test_run_role_builds_the_patch_and_the_history(tmp_path):
         "failed_cost_usd": 0.0,
         "denials": 0,
         "turn_notice": False,
+        "turn_notice_firings": 0,
         "deliveries": 0,
         "presubmit_denials": 0,
     }
@@ -613,7 +615,9 @@ def test_run_record_carries_the_delivering_attempts_presubmit_denials():
 async def test_run_role_appends_the_turn_notice_note_when_the_delivery_had_one(tmp_path):
     cfg = Configuration(product_dir=tmp_path)
     delivery = delivered().structured_output
-    runner = ScriptedRunner(developer=[RawResult(delivery, 0.03, turn_notice=True)])
+    runner = ScriptedRunner(
+        developer=[RawResult(delivery, 0.03, turn_notice=True, turn_notice_firings=1)]
+    )
     output, patch = await run_role(
         {"id": "T-1", "title": "t", "description": "d"},
         DEVELOPER,
@@ -625,17 +629,21 @@ async def test_run_role_appends_the_turn_notice_note_when_the_delivery_had_one(t
         checks="",
     )
     assert output is not None
-    note = turn_notice.notice_note()
+    note = turn_notice.notice_note(cut=False, firings=1)
     assert patch["sections"]["Developer"] == f"{note}\n\n{output.text}"
 
 
 async def test_run_role_folds_a_failed_attempts_turn_notice_into_the_delivering_runs_note(
     tmp_path,
 ):
-    # The run's total, the same fold `denials` gets: attempt 1 can cross the margin and
-    # get cut, attempt 2 can still deliver clean, and the run stays legible either way.
+    # The run's total, the same fold `denials` gets: attempt 1 can enter the window and
+    # get cut, attempt 2 can still deliver clean, and the run stays legible either way,
+    # marked as a run that was cut (`cut=True`) even though the delivering attempt's
+    # own flag is `False`.
     cfg = Configuration(product_dir=tmp_path)
-    cut = AttemptFailed("run failed (max_turns)", 0.01, reason="max_turns", turn_notice=True)
+    cut = AttemptFailed(
+        "run failed (max_turns)", 0.01, reason="max_turns", turn_notice=True, turn_notice_firings=2
+    )
     runner = ScriptedRunner(
         developer=[cut, RawResult(delivered().structured_output, 0.03, turn_notice=False)]
     )
@@ -650,7 +658,8 @@ async def test_run_role_folds_a_failed_attempts_turn_notice_into_the_delivering_
         checks="",
     )
     assert output is not None
-    assert patch["sections"]["Developer"] == f"{turn_notice.notice_note()}\n\n{output.text}"
+    note = turn_notice.notice_note(cut=True, firings=2)
+    assert patch["sections"]["Developer"] == f"{note}\n\n{output.text}"
 
 
 async def test_run_role_adds_no_turn_notice_note_when_the_run_had_none(tmp_path):
@@ -673,7 +682,15 @@ async def test_run_role_adds_no_turn_notice_note_when_the_run_had_none(tmp_path)
 async def test_run_role_orders_the_denial_note_before_the_turn_notice_note(tmp_path):
     cfg = Configuration(product_dir=tmp_path)
     runner = ScriptedRunner(
-        developer=[RawResult(delivered().structured_output, 0.03, denials=1, turn_notice=True)]
+        developer=[
+            RawResult(
+                delivered().structured_output,
+                0.03,
+                denials=1,
+                turn_notice=True,
+                turn_notice_firings=1,
+            )
+        ]
     )
     output, patch = await run_role(
         {"id": "T-1", "title": "t", "description": "d"},
@@ -686,7 +703,8 @@ async def test_run_role_orders_the_denial_note_before_the_turn_notice_note(tmp_p
         checks="",
     )
     assert output is not None
-    expected = f"{rules.denial_note(DEVELOPER, 1)}\n\n{turn_notice.notice_note()}\n\n{output.text}"
+    note = turn_notice.notice_note(cut=False, firings=1)
+    expected = f"{rules.denial_note(DEVELOPER, 1)}\n\n{note}\n\n{output.text}"
     assert patch["sections"]["Developer"] == expected
 
 
@@ -772,6 +790,7 @@ async def test_run_role_orders_the_deliveries_note_after_denial_and_turn_notice(
                 0.03,
                 denials=1,
                 turn_notice=True,
+                turn_notice_firings=1,
                 deliveries=3,
             )
         ]
@@ -787,8 +806,9 @@ async def test_run_role_orders_the_deliveries_note_after_denial_and_turn_notice(
         checks="",
     )
     assert output is not None
+    note = turn_notice.notice_note(cut=False, firings=1)
     expected = (
-        f"{rules.denial_note(DEVELOPER, 1)}\n\n{turn_notice.notice_note()}\n\n"
+        f"{rules.denial_note(DEVELOPER, 1)}\n\n{note}\n\n"
         f"{rules.deliveries_note(3)}\n\n{output.text}"
     )
     assert patch["sections"]["Developer"] == expected

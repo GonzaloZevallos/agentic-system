@@ -291,9 +291,9 @@ def test_a_guard_with_no_presubmit_keeps_the_bare_guard_timeout():
 
 
 def test_only_developer_roles_get_the_turn_notice_hook():
-    # The conservative default (`domain/turn_notice.margin_for`'s own docstring): a
-    # role that executes but is not named in `TURN_NOTICE_MARGIN_TURNS` gets no hook,
-    # not even one that always stays quiet.
+    # The conservative default (`domain/turn_notice.threshold_for`'s own docstring): a
+    # role that executes but is not named in `TURN_NOTICE_AT` gets no hook, not even
+    # one that always stays quiet.
     assert "PostToolUse" not in hooks.hooks_for(PJM, CWD, None)
     assert "PostToolUse" not in hooks.hooks_for(TECH_LEAD_REVIEWER, CWD, None)
     other_executor = replace(DEVELOPER, slug="other_executor")
@@ -302,33 +302,63 @@ def test_only_developer_roles_get_the_turn_notice_hook():
     assert "PostToolUse" in hooks.hooks_for(DEVELOPER_INTEGRATOR, CWD, None)
 
 
-async def test_the_turn_notice_hook_fires_once_past_the_margin():
-    # Margin 39 (`turn_notice.TURN_NOTICE_MARGIN_TURNS`): with `max_turns=40` the very
-    # first main-thread call already crosses it (40 - 1 == 39 remaining).
+async def test_the_turn_notice_hook_fires_at_the_threshold_and_carries_the_firing_index():
+    # Threshold 15 (`turn_notice.TURN_NOTICE_AT`): a `TurnCount` already at 15 (the
+    # stream loop's own write, never this hook's) fires on the very next event.
     role = replace(DEVELOPER, max_turns=40)
     fired = []
-    matchers = hooks.hooks_for(role, CWD, None, on_notice=lambda: fired.append(1))
+    turns = hooks.TurnCount(value=15)
+    matchers = hooks.hooks_for(role, CWD, None, on_notice=lambda: fired.append(1), turns=turns)
     payload = {"tool_name": "Bash", "tool_input": {}, "cwd": str(CWD)}
     (output,) = await call(matchers, "PostToolUse", payload)
     context = output["hookSpecificOutput"]["additionalContext"]
-    assert "39 turns left" in context
-    assert fired == [1]
-    # One notice per attempt: a later call, still past the margin, adds nothing more.
-    assert await call(matchers, "PostToolUse", payload) == [{}]
+    assert "#1" in context
     assert fired == [1]
 
 
-async def test_the_turn_notice_hook_ignores_sub_agent_traffic():
+async def test_the_turn_notice_hook_re_fires_on_every_later_event_with_a_rising_index():
+    # No latch: unlike the deleted one-shot advisory, a second event past the
+    # threshold fires again, with the next firing index -- the invariant that no two
+    # firings of the same attempt are the identical message.
     role = replace(DEVELOPER, max_turns=40)
-    matchers = hooks.hooks_for(role, CWD, None)
+    turns = hooks.TurnCount(value=20)
+    matchers = hooks.hooks_for(role, CWD, None, turns=turns)
+    payload = {"tool_name": "Bash", "tool_input": {}, "cwd": str(CWD)}
+    (first,) = await call(matchers, "PostToolUse", payload)
+    (second,) = await call(matchers, "PostToolUse", payload)
+    first_context = first["hookSpecificOutput"]["additionalContext"]
+    second_context = second["hookSpecificOutput"]["additionalContext"]
+    assert "#1" in first_context
+    assert "#2" in second_context
+    assert first_context != second_context
+
+
+async def test_the_turn_notice_hook_still_ignores_a_sub_agents_own_event():
+    # The counter itself no longer needs the `agent_id` filter to stay main-thread-only
+    # (`parent_tool_use_id is None` already guarantees that on the runner's side), but
+    # firing still checks it: a sub-agent's own `PostToolUse` is not this role's turn,
+    # and injecting `additionalContext` there would land in the sub-agent's own
+    # conversation, not the one the close-out is meant to reach -- even with the shared
+    # counter already past the threshold, this must stay quiet.
+    role = replace(DEVELOPER, max_turns=40)
+    turns = hooks.TurnCount(value=15)
+    matchers = hooks.hooks_for(role, CWD, None, turns=turns)
     payload = {"tool_name": "Bash", "tool_input": {}, "cwd": str(CWD), "agent_id": "sub-1"}
-    # A sub-agent's own call never counts towards the enforced cap: no notice fires,
-    # even though the same call on the main thread would have crossed the margin.
     assert await call(matchers, "PostToolUse", payload) == [{}]
 
 
-async def test_the_turn_notice_hook_is_quiet_before_the_margin():
-    role = replace(DEVELOPER, max_turns=100)  # margin only at hook_turns 61
+async def test_the_turn_notice_hook_is_quiet_before_the_threshold():
+    role = replace(DEVELOPER, max_turns=100)
+    turns = hooks.TurnCount(value=14)
+    matchers = hooks.hooks_for(role, CWD, None, turns=turns)
+    payload = {"tool_name": "Bash", "tool_input": {}, "cwd": str(CWD)}
+    assert await call(matchers, "PostToolUse", payload) == [{}]
+
+
+async def test_the_turn_notice_hook_with_no_counter_given_never_fires():
+    # `turns=None` (`hooks_for`'s own docstring): the conservative default for every
+    # other call this module's tests make that is not about the notice itself.
+    role = replace(DEVELOPER, max_turns=40)
     matchers = hooks.hooks_for(role, CWD, None)
     payload = {"tool_name": "Bash", "tool_input": {}, "cwd": str(CWD)}
     assert await call(matchers, "PostToolUse", payload) == [{}]
