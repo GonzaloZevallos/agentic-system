@@ -227,6 +227,17 @@ def test_placeholders_cover_the_name_pjm_md_now_declares():
     assert "product" in PLACEHOLDERS
 
 
+def test_preflight_renders_the_light_reviewers_prompt_too(stage0):
+    """The review-arm subtask (issue #28) adds `tech_lead_review_light` to `ROLES`;
+    `preflight` renders every role's prompt with `PLACEHOLDERS` alone, so a placeholder
+    the new prompt would need outside that set fails here, not mid-task."""
+    from agentic.core.process.domain.roles import ROLES
+
+    ports = ports_where(**{str(stage0): "/sys/.git", str(PRODUCT): "/repos/product/.git"})
+    preflight(Configuration(product_dir=PRODUCT), ports)  # no ValueError: every prompt renders
+    assert "tech_lead_review_light" in {role.slug for role in ROLES}
+
+
 def test_the_label_falls_back_instead_of_killing_a_node_already_running():
     """`preflight` is where a nameless product refuses. Past that point the run is under
     way and a label is not worth the task: `langgraph dev` never sees the CLI."""
