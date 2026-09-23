@@ -37,6 +37,7 @@ from .schemas import (
     TechPlan,
     Verdict,
 )
+from .task import INTEGRATION
 
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 _PLACEHOLDER = re.compile(r"\{\{(\w+)\}\}")
@@ -308,6 +309,23 @@ TECH_LEAD_REVIEWER = Role(
     max_turns=20,
 )
 
+# The light reviewer of the review-mode experiment (issue #28, ADR-0013 addendum): a
+# Validador too, `kind="verifier"` unchanged, so the model it runs on still goes
+# through `Configuration.model_overrides`/`model_for`, never a `kind` change. It reads
+# neither `ORIGINAL` nor `PM`: the arm's whole point is a narrower, cheaper pass, and a
+# reviewer with no PRD in front of it cannot ground a `spec-*` finding (ADR-0016,
+# addendum) -- `reviewer_for` never hands it the integration, where that would matter.
+# No `code-review`, no `Agent`: it runs the product's own checks to back an objection
+# (ADR-0016) the same way the full reviewer does, on a strict subset of its tools.
+TECH_LEAD_REVIEWER_LIGHT = replace(
+    TECH_LEAD_REVIEWER,
+    slug="tech_lead_review_light",
+    skills=(),
+    tools=READ_CODE,
+    allowed=READ_CODE_RULES,
+    reads=("Tech Lead", FINDINGS),
+)
+
 DEVELOPER = Role(
     name="Developer",
     slug="developer",
@@ -349,9 +367,26 @@ def check_rules(checks: Mapping[str, str]) -> tuple[str, ...]:
     return tuple(f"Bash({command}:*)" for command in checks.values())
 
 
-def reviewer_for(checks: Mapping[str, str]) -> Role:
-    """The reviewer of a task whose product declares `checks` (ADR-0016, addendum)."""
-    return replace(TECH_LEAD_REVIEWER, allowed=TECH_LEAD_REVIEWER.allowed + check_rules(checks))
+def reviewer_for(
+    checks: Mapping[str, str],
+    subtask_id: str = INTEGRATION,
+    mode: Literal["full", "light"] = "full",
+) -> Role:
+    """The reviewer of a task whose product declares `checks` (ADR-0016, addendum).
+
+    `mode` is the review-mode experiment's switch (issue #28, `cfg.review_mode`):
+    `full` is today's only value, and `subtask_id` defaults to `INTEGRATION`, so a
+    caller that passes neither keyword -- `reviewer_for(checks)` -- returns exactly
+    what it returns today, whatever `mode` a caller elsewhere might type. Under
+    `light`, every subtask but the integration gets `TECH_LEAD_REVIEWER_LIGHT`; the
+    integration always gets the full reviewer, in every mode, because its branch holds
+    every subtask and arm B needs one expensive pass to test the hypothesis at all."""
+    base = (
+        TECH_LEAD_REVIEWER
+        if mode == "full" or subtask_id == INTEGRATION
+        else TECH_LEAD_REVIEWER_LIGHT
+    )
+    return replace(base, allowed=base.allowed + check_rules(checks))
 
 
 def diagnoser_for(checks: Mapping[str, str]) -> Role:
@@ -376,6 +411,7 @@ ROLES = (
     TECH_LEAD_INTERVIEWEE_PLATFORM,
     TECH_LEAD_PLATFORM,
     TECH_LEAD_REVIEWER,
+    TECH_LEAD_REVIEWER_LIGHT,
     DEVELOPER,
     DEVELOPER_INTEGRATOR,
 )

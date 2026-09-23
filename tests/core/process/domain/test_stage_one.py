@@ -16,6 +16,7 @@ from agentic.core.process.domain.roles import (
     TECH_LEAD,
     TECH_LEAD_EPHEMERAL,
     TECH_LEAD_REVIEWER,
+    TECH_LEAD_REVIEWER_LIGHT,
     Interview,
     Pair,
     pair_for,
@@ -57,6 +58,8 @@ def test_only_developer_executes_and_tech_lead_only_reads():
         assert "Bash(git diff:*)" in role.allowed and "Bash(git log:*)" in role.allowed
         assert not {"Edit", "Write"} & set(role.tools)
     assert "code-review" in TECH_LEAD_REVIEWER.skills
+    # The review-arm's light reviewer (issue #28): a Validador too, no `code-review`.
+    assert TECH_LEAD_REVIEWER_LIGHT.skills == ()
     assert {"codebase-design", "domain-modeling"} <= set(TECH_LEAD.skills)
 
 
