@@ -989,6 +989,16 @@ def _epoch_ns(iso: str) -> int:
     return int(datetime.fromisoformat(iso).timestamp() * 1_000_000_000)
 
 
+def metrics_configured() -> bool:
+    """Whether a meter provider is configured right now (`configure`'s own global),
+    read-only and never a probe: `close --all` asks this once before its sweep so
+    thirty `gh` calls are not paid to discover the one global fact `_flush_metrics`
+    would otherwise answer thirty times over (Tech Lead plan, subtask `close-all`).
+    Emitting a sample here to find out would falsify a delivery, so this only reads
+    the global `configure` already set."""
+    return _meter_provider is not None
+
+
 def _flush_metrics() -> bool:
     """Export what was set since the last export, and report what `force_flush()`
     itself returned: `Run._emit` calls this per event and keeps discarding the
