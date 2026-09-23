@@ -45,3 +45,12 @@ free text, and a change that adds, removes or moves a signal says so in the plan
 A change that widens what an input may reach or do says in the plan what it now
 allows and to whom; a change whose cost scales with data size or traffic says so in
 the plan, with the shape of the cost.
+
+## 9. A pin is verified before it ships
+
+A version literal — an action's `with:` input, a tool version, a dependency — is
+introduced or moved only where a command under `checks` or `setup` verifies it
+before delivery (GH-74). Where none does, as in `.github/workflows/**`, the accepted
+shape of a pin is the one `unknown_pins` in `tests/test_stack.py` states and enforces
+offline; a pin outside that shape is not introduced or moved, it is named in the pull
+request body for the human (ADR-0022, ADR-0027).
