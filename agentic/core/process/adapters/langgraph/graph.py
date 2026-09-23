@@ -119,7 +119,9 @@ def _node(use_case: UseCase, role: Role, ports_of: PortsOf, telemetry: Telemetry
         # one graph and they need not share a product (issue #47). `arm` is read the same
         # way, off this node's own `cfg` (`Configuration`), never the patch or the state
         # (ADR-0030): a Developer of a non-default arm must read as that arm, not `default`.
-        with telemetry.role_span(role.name, role.slug, product_name(ports), arm=arm_for(cfg)) as run:
+        with telemetry.role_span(
+            role.name, role.slug, product_name(ports), arm=arm_for(cfg)
+        ) as run:
             try:
                 patch = await use_case(state, cfg, ports)
             except Exception:

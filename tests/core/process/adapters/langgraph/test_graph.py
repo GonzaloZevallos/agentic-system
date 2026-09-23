@@ -916,8 +916,10 @@ async def test_a_crash_in_a_node_still_finishes_the_roles_span(config):
             )
 
         with pytest.raises(OSError, match="read-only"):
-            await build_graph(ports_for, telemetry, arm_for=composition._arm_for).compile().ainvoke(
-                TASK, config=config
+            await (
+                build_graph(ports_for, telemetry, arm_for=composition._arm_for)
+                .compile()
+                .ainvoke(TASK, config=config)
             )
     finally:
         telemetry.configure()

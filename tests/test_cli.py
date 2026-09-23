@@ -1696,6 +1696,63 @@ def test_close_happy_path_emits_one_sample_per_family_and_writes_the_four_keys(
     assert doc["status"] == "ready_for_review"  # no new `Status` value is added
 
 
+def test_close_reads_system_baseline_and_arm_from_the_document_not_the_environment(
+    monkeypatch, tmp_path, capsys
+):
+    """ADR-0030: a delivery sample names the arm and the baseline the document
+    recorded -- the run that planned the task -- never `telemetry.system_baseline()`
+    of the checkout `close` happens to run from, and never the environment's own
+    `Configuration.review_mode`. A document whose `experiment` names one arm while
+    `AGENTIC_REVIEW_MODE` names another proves the sample follows the document."""
+    from agentic.core.measurement.adapters.otel import telemetry
+
+    root = close_root(tmp_path)
+    reference = "https://github.com/o/r/pull/7"
+    tracker = FakePullRequestTracker({reference: close_pull_request(human_commit=True)})
+    ports = close_ports(root, tracker)
+    FilesystemTaskDocuments(
+        root, system_version=lambda: "v123", system_baseline=lambda: "bl-2026-09-23"
+    ).save(
+        close_task(
+            pull_request=reference,
+            experiment={"review_mode": "light", "skip_ephemeral": "False"},
+        )
+    )
+    monkeypatch.setenv("AGENTIC_REVIEW_MODE", "full")
+    points = MetricPoints()
+    telemetry.configure(meter_provider=telemetry.meter_provider_for(points.reader))
+    try:
+        _closed_run(monkeypatch, root, ports)
+        cli.main()
+    finally:
+        telemetry.configure()
+    (point,) = points.points["agentic.delivery.outcome"]
+    assert point.attributes["system.baseline"] == "bl-2026-09-23"
+    assert point.attributes["arm"] == "review_mode=light,skip_ephemeral=False"
+
+
+def test_close_with_no_system_baseline_or_experiment_uses_unknown_and_default(
+    monkeypatch, tmp_path
+):
+    from agentic.core.measurement.adapters.otel import telemetry
+
+    root = close_root(tmp_path)
+    reference = "https://github.com/o/r/pull/7"
+    tracker = FakePullRequestTracker({reference: close_pull_request(human_commit=True)})
+    ports = close_ports(root, tracker)
+    FilesystemTaskDocuments(root).save(close_task(pull_request=reference))
+    points = MetricPoints()
+    telemetry.configure(meter_provider=telemetry.meter_provider_for(points.reader))
+    try:
+        _closed_run(monkeypatch, root, ports)
+        cli.main()
+    finally:
+        telemetry.configure()
+    (point,) = points.points["agentic.delivery.outcome"]
+    assert point.attributes["system.baseline"] == "unknown"
+    assert point.attributes["arm"] == "default"
+
+
 # `agentic eval run` / `agentic eval score` (Tech Lead plan, subtask `eval-cli`):
 # argparse refusals at `agentic.cli.main`, everything else at `_eval_run`/`_eval_score`
 # directly, injecting a fake `EvalLauncher` so no test here spawns a real `agentic run`

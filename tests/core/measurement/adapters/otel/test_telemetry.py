@@ -216,7 +216,9 @@ def test_role_finish_on_a_broken_role(spans):
         "escalated": "PA failed",
         "status": "waiting_on_human",
     }
-    with telemetry.role_span("Product Analyst", "product_analyst", "gym-saas", arm="default") as run:
+    with telemetry.role_span(
+        "Product Analyst", "product_analyst", "gym-saas", arm="default"
+    ) as run:
         run.finish(patch)
     (span,) = spans.get_finished_spans()
     assert span.attributes["role.outcome"] == "failed"
@@ -656,8 +658,8 @@ def test_role_finish_emits_duration_and_cost_by_role(metrics):
         "phase": "definition",
         "role.outcome": "delivered",
         "system.version": "abc1234",
-    "system.baseline": "bl-2026-09-23",
-    "arm": "default",
+        "system.baseline": "bl-2026-09-23",
+        "arm": "default",
     }
     # `agentic.role.duration` is untouched: node-grained, its own labels, byte-identical.
     (duration,) = got["agentic.role.duration"]
@@ -768,8 +770,8 @@ def test_role_finish_emits_tokens_calls_turns_tool_calls_and_subagent_cost(metri
         "phase": "definition",
         "role.outcome": "delivered",
         "system.version": "abc1234",
-    "system.baseline": "bl-2026-09-23",
-    "arm": "default",
+        "system.baseline": "bl-2026-09-23",
+        "arm": "default",
     }
     tokens = {t.attributes["kind"]: t.value for t in got["agentic.role.tokens"]}
     assert tokens == {"input": 10, "output": 20, "cache_read": 30, "cache_write": 40}
@@ -860,8 +862,8 @@ def test_role_finish_emits_cold_fallback_when_the_run_record_carries_it(metrics)
         "role.slug": "developer",
         "phase": "development",
         "system.version": "abc1234",
-    "system.baseline": "bl-2026-09-23",
-    "arm": "default",
+        "system.baseline": "bl-2026-09-23",
+        "arm": "default",
     }
 
 
@@ -1069,7 +1071,9 @@ def test_a_run_with_failed_attempt_money_leaves_two_cost_samples_marked_rework(m
     rework-marked share of it."""
     run = _run("Product Analyst", "product_analyst", "Product Analyst", 0.05)
     run["failed_cost_usd"] = 0.02
-    with telemetry.role_span("Product Analyst", "product_analyst", "gym-saas", arm="default") as run_span:
+    with telemetry.role_span(
+        "Product Analyst", "product_analyst", "gym-saas", arm="default"
+    ) as run_span:
         run_span.finish({"runs": [run], "cost_usd": 0.05})
     costs = points(metrics)["agentic.role.cost_usd"]
     assert sorted(c.value for c in costs) == [pytest.approx(0.02), pytest.approx(0.03)]
@@ -1128,8 +1132,8 @@ def test_failures_leave_one_sample_per_reason_with_the_count_and_the_cost(metric
         "phase": "definition",
         "reason": "schema",
         "system.version": "abc1234",
-    "system.baseline": "bl-2026-09-23",
-    "arm": "default",
+        "system.baseline": "bl-2026-09-23",
+        "arm": "default",
     }
     (cost,) = got["agentic.role.failure_cost_usd"]
     assert cost.value == pytest.approx(0.03)
@@ -1140,8 +1144,8 @@ def test_failures_leave_one_sample_per_reason_with_the_count_and_the_cost(metric
         "phase": "definition",
         "reason": "schema",
         "system.version": "abc1234",
-    "system.baseline": "bl-2026-09-23",
-    "arm": "default",
+        "system.baseline": "bl-2026-09-23",
+        "arm": "default",
     }
 
 
@@ -1188,8 +1192,8 @@ def test_failures_emit_one_cold_fallback_sample_when_one_attempt_carries_it(metr
         "role.slug": "developer",
         "phase": "development",
         "system.version": "abc1234",
-    "system.baseline": "bl-2026-09-23",
-    "arm": "default",
+        "system.baseline": "bl-2026-09-23",
+        "arm": "default",
     }
 
 
@@ -1384,7 +1388,9 @@ def test_a_patchs_interview_stats_emit_rounds_questions_and_proposed_invariants(
             "invariants_proposed": 1,
         },
     }
-    with telemetry.role_span("Tech Lead efímero", "tech_lead_ephemeral", "gym-saas", arm="default") as run:
+    with telemetry.role_span(
+        "Tech Lead efímero", "tech_lead_ephemeral", "gym-saas", arm="default"
+    ) as run:
         run.finish(patch)
     got = points(metrics)
     (rounds,) = got["agentic.interview.rounds"]
@@ -1393,8 +1399,8 @@ def test_a_patchs_interview_stats_emit_rounds_questions_and_proposed_invariants(
         "product": "gym-saas",
         "interview": "solution",
         "system.version": "abc1234",
-    "system.baseline": "bl-2026-09-23",
-    "arm": "default",
+        "system.baseline": "bl-2026-09-23",
+        "arm": "default",
     }
     questions = {p.attributes["to"]: p.value for p in got["agentic.interview.questions"]}
     assert questions == {"interviewee": 3, "pm": 1, "human": 2}
@@ -1665,9 +1671,7 @@ def test_every_task_and_invocation_metric_emits_the_labels_its_readme_row_docume
         "status": "ready_for_review",
         "cost_usd": 0.25,
         "changes_requested": {"PM→Product Analyst": 1},
-        "change_history": [
-            {"pair": "PM→Product Analyst", "category": "definition", "reason": "r"}
-        ],
+        "change_history": [{"pair": "PM→Product Analyst", "category": "definition", "reason": "r"}],
         "failures": [],
         "runs": [
             {
