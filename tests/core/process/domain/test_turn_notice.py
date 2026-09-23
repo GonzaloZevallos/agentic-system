@@ -1,39 +1,54 @@
+from dataclasses import replace
+
 from agentic.core.process.domain import turn_notice
-from agentic.core.process.domain.roles import (
-    DEVELOPER,
-    DEVELOPER_INTEGRATOR,
-    PJM,
-    TECH_LEAD_REVIEWER,
-)
+from agentic.core.process.domain.roles import DEVELOPER, DEVELOPER_INTEGRATOR, PJM, ROLES
 
 
-def test_margin_is_declared_for_the_two_roles_that_execute():
-    assert turn_notice.margin_for(DEVELOPER) == 39
-    assert turn_notice.margin_for(DEVELOPER_INTEGRATOR) == 39
+def test_threshold_is_declared_for_the_two_roles_that_execute():
+    assert turn_notice.threshold_for(DEVELOPER) == 15
+    assert turn_notice.threshold_for(DEVELOPER_INTEGRATOR) == 15
 
 
-def test_margin_is_none_for_a_role_the_notice_does_not_cover():
-    # The conservative default (ADR-0004, seventh addendum's own arm 3): a role added
-    # later inherits no live notice unless named here.
-    assert turn_notice.margin_for(PJM) is None
-    assert turn_notice.margin_for(TECH_LEAD_REVIEWER) is None
+def test_threshold_is_none_for_a_role_the_notice_does_not_cover():
+    # The conservative default (`threshold_for`'s own docstring): a role added later
+    # inherits no live notice unless named in `TURN_NOTICE_AT`.
+    assert turn_notice.threshold_for(PJM) is None
 
 
-def test_should_notice_at_the_margin_and_not_one_turn_before_it():
-    # `DEVELOPER.max_turns` is 80, margin 39: the gate opens at hook_turns 41
-    # (80 - 41 == 39 remaining) and not at 40 (80 - 40 == 40 remaining, still above).
-    assert not turn_notice.should_notice(DEVELOPER, 40)
-    assert turn_notice.should_notice(DEVELOPER, 41)
-    assert turn_notice.should_notice(DEVELOPER, 80)  # at or past the cap: still notices
+def test_every_threshold_is_below_the_max_turns_of_every_role_it_covers():
+    # The declared check the acceptance criteria names: a threshold that reaches or
+    # exceeds its role's own cap could never open a close-out window before the cut.
+    by_slug = {role.slug: role for role in ROLES}
+    for slug, threshold in turn_notice.TURN_NOTICE_AT.items():
+        assert threshold < by_slug[slug].max_turns
 
 
-def test_should_notice_is_false_for_a_role_with_no_margin():
-    assert not turn_notice.should_notice(PJM, 0)
+def test_the_declared_check_above_is_not_vacuous():
+    # Proof the check rejects a bad input, not only accepts the good one already in
+    # `TURN_NOTICE_AT`: a role whose cap sank to the threshold itself must fail it.
+    shrunk = replace(DEVELOPER, max_turns=turn_notice.TURN_NOTICE_AT[DEVELOPER.slug])
+    assert not (turn_notice.TURN_NOTICE_AT[DEVELOPER.slug] < shrunk.max_turns)
 
 
-def test_notice_context_names_the_remaining_turns_and_orders_commit_before_deliver():
-    text = turn_notice.notice_context(5)
-    assert "5 turns left" in text
+def test_should_notice_at_the_threshold_and_not_one_call_before_it():
+    assert not turn_notice.should_notice(DEVELOPER, 14)
+    assert turn_notice.should_notice(DEVELOPER, 15)
+
+
+def test_should_notice_stays_true_past_the_threshold_it_does_not_latch():
+    # A repeating close-out window, not a one-shot: every later count keeps qualifying,
+    # unlike the deleted one-shot advisory this revises.
+    assert turn_notice.should_notice(DEVELOPER, 16)
+    assert turn_notice.should_notice(DEVELOPER, 80)
+
+
+def test_should_notice_is_false_for_a_role_with_no_threshold():
+    assert not turn_notice.should_notice(PJM, 1000)
+
+
+def test_notice_context_carries_the_firing_index_and_orders_commit_before_deliver():
+    text = turn_notice.notice_context(3)
+    assert "#3" in text
     commit_at = text.index("Commit what you have")
     deliver_at = text.index("deliver")
     assert commit_at < deliver_at
@@ -41,15 +56,37 @@ def test_notice_context_names_the_remaining_turns_and_orders_commit_before_deliv
     assert "name the gap in `summary`" in text
 
 
-def test_notice_context_uses_the_singular_for_one_turn_left():
-    text = turn_notice.notice_context(1)
-    assert "1 turn left" in text
-    assert "1 turns left" not in text
+def test_notice_context_differs_between_firings_of_the_same_attempt():
+    # The invariant this seam has to prove: two firings of the same attempt are not
+    # the identical message re-sent.
+    first, second = turn_notice.notice_context(1), turn_notice.notice_context(2)
+    assert first != second
 
 
-def test_notice_note_is_one_system_written_line():
+def test_notice_context_names_no_turn_figure():
+    # This module's own docstring: no reading of the counter is offered as a turn
+    # count, since the counter and `role.max_turns`/`num_turns` are not interchangeable.
+    assert "turns left" not in turn_notice.notice_context(1)
+
+
+def test_notice_note_distinguishes_delivered_from_cut_and_carries_the_firing_count():
     from agentic.core.process.domain.rules import system_note
 
-    assert turn_notice.notice_note() == system_note(
-        "the system warned this attempt the turn cap was close; it kept going and delivered"
+    delivered = turn_notice.notice_note(cut=False, firings=2)
+    cut = turn_notice.notice_note(cut=True, firings=2)
+    assert delivered != cut
+    assert delivered == system_note(
+        "the system warned this attempt the turn cap was close (2 close-out notices "
+        "in total); it kept going and delivered"
     )
+    assert cut == system_note(
+        "the system warned this attempt the turn cap was close (2 close-out notices "
+        "in total); the harness cut an earlier attempt before it could deliver, and a "
+        "later attempt delivered"
+    )
+
+
+def test_notice_note_uses_the_singular_for_one_firing():
+    text = turn_notice.notice_note(cut=False, firings=1)
+    assert "1 close-out notice in total)" in text
+    assert "1 close-out notices" not in text
