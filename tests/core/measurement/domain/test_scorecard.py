@@ -1,6 +1,7 @@
 """The scorecard aggregate and the verdict: `agentic.core.measurement.domain.scorecard`."""
 
 import pytest
+import yaml
 
 from agentic.core.measurement.domain import scorecard
 
@@ -238,3 +239,51 @@ def test_verdict_ties_when_nothing_moves():
     same = scorecard.build([scorecard.task_figures(doc(closed_at="t", delivery_outcome="merged"))])
     result = scorecard.verdict(same, "a", same, "b")
     assert result.outcome == "ties"
+
+
+# --- bucket_by_baseline: every bucket, including `untagged` and `unreadable`, rejects ---
+
+
+def test_bucket_by_baseline_untagged_is_its_own_bucket_not_folded_into_pre_baseline_or_unknown():
+    # The rejecting input for this bucket: a document whose own `system_baseline` is
+    # the literal `untagged` (`telemetry.system_baseline`'s own fact -- git answered
+    # and no `bl-*` tag reaches this commit). An implementation that treats a falsy
+    # check loosely, or that consults `resolve` for it, is exactly what this test
+    # catches: `resolve` here raises if it is ever called.
+    def resolve(sha):
+        raise AssertionError("a document with its own system_baseline must not consult git")
+
+    parsed = [("GH-1", doc(system_baseline="untagged"))]
+    buckets, unreadable = scorecard.bucket_by_baseline(parsed, resolve)
+    assert set(buckets) == {"untagged"}
+    assert unreadable == 0
+
+
+def test_bucket_by_baseline_falls_back_to_resolve_with_no_system_baseline_of_its_own():
+    parsed = [("GH-1", doc(system_commit="abc1234"))]
+    buckets, unreadable = scorecard.bucket_by_baseline(parsed, resolve=lambda sha: "pre-baseline")
+    assert set(buckets) == {"pre-baseline"}
+    assert unreadable == 0
+
+
+def test_bucket_by_baseline_counts_and_excludes_an_unreadable_document():
+    # The rejecting input this bucket needs: a document `document.parse` itself could
+    # not read. Malformed frontmatter YAML, not merely a missing one -- `document.parse`
+    # raises `yaml.YAMLError` for it (from its own unguarded `yaml.safe_load`), a
+    # different exception than the plain `ValueError`/`OSError` an absent frontmatter
+    # block raises; `cli._bucket_documents` must catch all three into the `None`
+    # sentinel this test feeds `bucket_by_baseline` below, or a comparison ends on the
+    # first half-written document instead of counting it.
+    from agentic.core.process.domain import document as task_document
+
+    malformed = "---\nid: [unterminated\n---\n\n# t\n"
+    with pytest.raises(yaml.YAMLError):
+        task_document.parse(malformed, "GH-2.md")
+
+    parsed = [
+        ("GH-1", doc(closed_at="t", delivery_outcome="merged")),
+        None,  # `cli._bucket_documents`'s own sentinel for the document above
+    ]
+    buckets, unreadable = scorecard.bucket_by_baseline(parsed, resolve=lambda sha: "pre-baseline")
+    assert unreadable == 1
+    assert sum(len(tasks) for tasks in buckets.values()) == 1

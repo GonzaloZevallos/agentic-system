@@ -1,9 +1,11 @@
 """The scorecard (the Medición glossary, `core/measurement/CONTEXT.md`: *Scorecard*,
 *Línea de base*): ADR-0028's four figures over one baseline's own task documents, and
 the verdict that reads them in order. Pure domain -- no filesystem, no subprocess, no
-port: the caller resolves each document's own baseline bucket
-(`adapters.otel.telemetry`'s sha-to-baseline resolver) and hands this module the
-documents that share one, already grouped.
+port: `bucket_by_baseline` groups already-parsed documents by baseline bucket, taking
+the git-reading resolver (`adapters.otel.telemetry.resolve_baseline`) as an injected
+callable rather than calling it itself, so the grouping stays as testable as every
+other function here -- `cli._bucket_documents` owns only the glob and the parse
+(Tech Lead review, subtask `scorecard`).
 
 Not inside `evaluation.py`, which owns the *Set de evaluación* and its per-task line:
 the glossary says the scorecard is "una consulta sobre las muestras, no una muestra",
@@ -17,7 +19,7 @@ structurally identical to it on every key this module reads.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -111,6 +113,39 @@ def _own_failures(figures: TaskFigures) -> int:
         for reason, count in figures.failures_by_reason.items()
         if reason not in EXTERNAL_FAILURE_REASONS
     )
+
+
+ParsedDocument = tuple[str, ScorecardDocument] | None
+"""One task document as `cli._bucket_documents` already parsed it: `(task_id,
+document)` on success, `None` for one `document.parse` itself rejected -- malformed
+frontmatter (`yaml.YAMLError`), a missing frontmatter block or an unreadable file
+(`ValueError`/`OSError`) alike. The caller catches all three and hands this module the
+single sentinel; `bucket_by_baseline` never sees, and never needs to see, which one it
+was."""
+
+
+def bucket_by_baseline(
+    parsed: Sequence[ParsedDocument], resolve: Callable[[str | None], str]
+) -> tuple[dict[str, list[tuple[str, TaskFigures]]], int]:
+    """Groups already-parsed task documents by baseline bucket (Tech Lead plan/review,
+    subtask `scorecard`): a document's own `system_baseline` wins outright and
+    `resolve` is not consulted at all -- a `bl-*` tag, or the literal `untagged`, is
+    its own bucket, never folded into `pre-baseline` or `unknown`. A document with no
+    `system_baseline` of its own hands its `system_commit` to `resolve` (the caller's
+    own `telemetry.resolve_baseline`, injected so this stays pure and testable without
+    git): whatever bucket name `resolve` answers, `pre-baseline`/`unknown`/a resolved
+    tag alike. `None` in `parsed` -- a document `document.parse` itself rejected -- is
+    counted in the returned int and left out of every bucket, never raised here."""
+    buckets: dict[str, list[tuple[str, TaskFigures]]] = {}
+    unreadable = 0
+    for entry in parsed:
+        if entry is None:
+            unreadable += 1
+            continue
+        task_id, document = entry
+        bucket = document.get("system_baseline") or resolve(document.get("system_commit"))
+        buckets.setdefault(bucket, []).append((task_id, task_figures(document)))
+    return buckets, unreadable
 
 
 @dataclass(frozen=True)

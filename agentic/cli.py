@@ -1033,29 +1033,29 @@ async def _eval_score(
 def _bucket_documents(
     product_dir: Path, repo: Path
 ) -> tuple[dict[str, list[tuple[str, scorecard.TaskFigures]]], int]:
-    """Every task document under `.agentic/tasks/`, grouped by baseline bucket (Tech
-    Lead plan, subtask `scorecard`): a document's own `system_baseline` wins outright
-    (a `bl-*` tag, or the literal `untagged`), else `telemetry.resolve_baseline` reads
-    its `system_commit`. No port: `cli.py` is the composition root and already reads
+    """Every task document under `.agentic/tasks/`: this function owns only the glob
+    and the parse (Tech Lead review, subtask `scorecard`), handing what it read to
+    `scorecard.bucket_by_baseline` for the actual grouping -- a pure function, testable
+    at a declared seam (`tests/core/measurement/domain/test_scorecard.py`) without a
+    filesystem or git. No port: `cli.py` is the composition root and already reads
     `.agentic/` directly, `_read_eval_set`'s own precedent for `.agentic/eval-set.yaml`.
-    A document `document.parse` itself rejects is counted in the returned int and left
-    out of every bucket, never raised out of a read-only comparison."""
-    buckets: dict[str, list[tuple[str, scorecard.TaskFigures]]] = {}
-    unreadable = 0
+
+    `document.parse` rejects a document three ways -- malformed frontmatter YAML
+    (`yaml.YAMLError`, from its own unguarded `yaml.safe_load`), a missing frontmatter
+    block, or a file this process cannot read (`ValueError`/`OSError`) -- all three
+    caught here into the single `None` sentinel `bucket_by_baseline` counts and
+    excludes, never raised out of a read-only comparison."""
     tasks_dir = product_dir / task_document.TASKS_SUBDIR
     paths = sorted(tasks_dir.glob("*.md")) if tasks_dir.is_dir() else []
+    parsed: list[scorecard.ParsedDocument] = []
     for path in paths:
         try:
             raw = task_document.parse(path.read_text(encoding="utf-8"), path)
-        except (ValueError, OSError):
-            unreadable += 1
+        except (ValueError, OSError, yaml.YAMLError):
+            parsed.append(None)
             continue
-        bucket = raw.get("system_baseline") or telemetry.resolve_baseline(
-            raw.get("system_commit"), repo
-        )
-        figures = scorecard.task_figures(cast(scorecard.ScorecardDocument, raw))
-        buckets.setdefault(bucket, []).append((raw.get("id", path.stem), figures))
-    return buckets, unreadable
+        parsed.append((raw.get("id", path.stem), cast(scorecard.ScorecardDocument, raw)))
+    return scorecard.bucket_by_baseline(parsed, lambda sha: telemetry.resolve_baseline(sha, repo))
 
 
 def _fmt_figure(figure: scorecard.Figure) -> str:
