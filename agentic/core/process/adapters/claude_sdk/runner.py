@@ -63,7 +63,7 @@ from ...domain.suppressions import Forbidden
 from ...domain.task import FailureReason
 from ..plugins import PLUGIN, PLUGIN_DIR
 from ..telemetry import NoTelemetry, Telemetry
-from .hooks import DELIVERY_TOOL, hooks_for
+from .hooks import DELIVERY_TOOL, TurnCount, hooks_for
 from .printer import Printer
 from .schema import inline_refs
 
@@ -93,6 +93,7 @@ def options_for(
     presubmit: Presubmit | None = None,
     on_denied: Callable[[], None] | None = None,
     on_notice: Callable[[], None] | None = None,
+    turns: TurnCount | None = None,
     on_presubmit_denied: Callable[[], None] | None = None,
     guard: SchemaGuard | None = None,
     forbidden: Sequence[Forbidden] | None = None,
@@ -133,7 +134,9 @@ def options_for(
         # runner's own git-identity overlay, which does not carry it in production) --
         # composing off `env` would overwrite whatever the real process inherited.
         env=_child_env(env, role, traceparent, resource_attributes),
-        hooks=hooks_for(role, cwd, presubmit, on_notice, on_presubmit_denied, guard, forbidden)
+        hooks=hooks_for(
+            role, cwd, presubmit, on_notice, turns, on_presubmit_denied, guard, forbidden
+        )
         or None,
         # A role that executes runs under `bypassPermissions`, which already shadows
         # this callback for every call (the SDK's own warning); wiring one there would
@@ -218,7 +221,7 @@ class ClaudeSdkRunner:
         forbidden: Sequence[Forbidden] | None = None,
     ) -> RawResult:
         denials = 0
-        notice_fired = False
+        notice_firings = 0
         presubmit_denials = 0
         # Defined before the observer and the `async for` below, so both the six raise
         # sites and the `Printer` (which only reads it, never derives its own count
@@ -245,9 +248,15 @@ class ClaudeSdkRunner:
             nonlocal denials
             denials += 1
 
+        # The counter `_turn_notice` reads (`hooks.TurnCount`'s own docstring):
+        # constructed here, beside `_mark_notice`, and incremented in exactly one
+        # place below, inside the stream loop's existing `parent_tool_use_id is None`
+        # branch -- never by the hook, which only ever reads `.value`.
+        turns = TurnCount()
+
         def _mark_notice() -> None:
-            nonlocal notice_fired
-            notice_fired = True
+            nonlocal notice_firings
+            notice_firings += 1
 
         def _count_presubmit_denial() -> None:
             nonlocal presubmit_denials
@@ -272,6 +281,7 @@ class ClaudeSdkRunner:
             presubmit=presubmit,
             on_denied=_count_denial,
             on_notice=_mark_notice,
+            turns=turns,
             on_presubmit_denied=_count_presubmit_denial,
             guard=guard,
             forbidden=forbidden,
@@ -291,6 +301,11 @@ class ClaudeSdkRunner:
                     calls += 1
                     if message.parent_tool_use_id is None:
                         main_usage = message.usage
+                        # The quantity `domain/turn_notice.py`'s threshold is stated
+                        # in: a main-thread `AssistantMessage` count, >=1 per harness
+                        # turn by construction, unlike the `PostToolUse` tally it
+                        # replaces (`hooks.TurnCount`'s own docstring).
+                        turns.value += 1
                     for name in _tool_names(message):
                         tool_calls[name] = tool_calls.get(name, 0) + 1
                 background += _background_agents(message)
@@ -320,7 +335,8 @@ class ClaudeSdkRunner:
                     session,
                     reason="max_turns",
                     denials=denials,
-                    turn_notice=notice_fired,
+                    turn_notice=notice_firings > 0,
+                    turn_notice_firings=notice_firings,
                     deliveries=tool_calls.get(DELIVERY_TOOL, 0),
                     presubmit_denials=presubmit_denials,
                 ) from exc
@@ -330,7 +346,8 @@ class ClaudeSdkRunner:
                 session,
                 reason=_reason_for_subtype(exc.subtype),
                 denials=denials,
-                turn_notice=notice_fired,
+                turn_notice=notice_firings > 0,
+                turn_notice_firings=notice_firings,
                 deliveries=tool_calls.get(DELIVERY_TOOL, 0),
                 presubmit_denials=presubmit_denials,
             ) from exc
@@ -339,7 +356,8 @@ class ClaudeSdkRunner:
                 f"SDK error: {exception_motive(exc)}",
                 reason="sdk",
                 denials=denials,
-                turn_notice=notice_fired,
+                turn_notice=notice_firings > 0,
+                turn_notice_firings=notice_firings,
                 deliveries=tool_calls.get(DELIVERY_TOOL, 0),
                 presubmit_denials=presubmit_denials,
             ) from exc
@@ -349,7 +367,8 @@ class ClaudeSdkRunner:
                 "run ended without a result message",
                 reason="sdk",
                 denials=denials,
-                turn_notice=notice_fired,
+                turn_notice=notice_firings > 0,
+                turn_notice_firings=notice_firings,
                 deliveries=tool_calls.get(DELIVERY_TOOL, 0),
                 presubmit_denials=presubmit_denials,
             )
@@ -369,7 +388,8 @@ class ClaudeSdkRunner:
                 session,
                 reason="max_turns",
                 denials=denials,
-                turn_notice=notice_fired,
+                turn_notice=notice_firings > 0,
+                turn_notice_firings=notice_firings,
                 deliveries=tool_calls.get(DELIVERY_TOOL, 0),
                 presubmit_denials=presubmit_denials,
             )
@@ -380,7 +400,8 @@ class ClaudeSdkRunner:
                 session,
                 reason=_reason_for_subtype(result.subtype or ""),
                 denials=denials,
-                turn_notice=notice_fired,
+                turn_notice=notice_firings > 0,
+                turn_notice_firings=notice_firings,
                 deliveries=tool_calls.get(DELIVERY_TOOL, 0),
                 presubmit_denials=presubmit_denials,
             )
@@ -390,7 +411,8 @@ class ClaudeSdkRunner:
             turns=result.num_turns,
             session_id=session,
             denials=denials,
-            turn_notice=notice_fired,
+            turn_notice=notice_firings > 0,
+            turn_notice_firings=notice_firings,
             cost_by_model=_cost_by_model(result),
             usage=_usage(result.usage),
             calls=calls,

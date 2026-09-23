@@ -765,11 +765,22 @@ async def test_a_denial_during_a_failed_attempt_still_reaches_attemptfailed(monk
     assert info.value.denials == 1
 
 
+def _main_thread_calls(n: int) -> list[AssistantMessage]:
+    """`n` main-thread `AssistantMessage`s with no tool call: what the stream loop's
+    own `turns.value += 1` counts (`runner.py`'s `parent_tool_use_id is None` branch),
+    the seam the notice's threshold is read against -- never a `PostToolUse` tally the
+    hook keeps on its own any more."""
+    return [AssistantMessage(content=[], model="m") for _ in range(n)]
+
+
 async def test_a_fired_turn_notice_is_carried_on_the_raw_result(monkeypatch, tmp_path):
-    # `max_turns=40`, margin 39: the very first `PostToolUse` call already crosses it.
+    # Threshold 15 (`turn_notice.TURN_NOTICE_AT`): the 15th main-thread call brings
+    # `turns.value` to the threshold, so the next `PostToolUse` event fires.
     developer = replace(DEVELOPER, max_turns=40)
 
     async def query(prompt, options):
+        for message in _main_thread_calls(15):
+            yield message
         (matcher,) = options.hooks["PostToolUse"]
         (hook,) = matcher.hooks
         await hook({"tool_name": "Bash"}, "t1", {"signal": None})
@@ -780,12 +791,38 @@ async def test_a_fired_turn_notice_is_carried_on_the_raw_result(monkeypatch, tmp
         developer, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
     )
     assert raw.turn_notice is True
+    assert raw.turn_notice_firings == 1
 
 
-async def test_no_turn_notice_when_the_margin_is_never_crossed(monkeypatch, tmp_path):
+async def test_a_second_posttooluse_event_past_the_threshold_raises_the_firing_count(
+    monkeypatch, tmp_path
+):
+    # No latch (invariant: every firing differs from the last): a second event past
+    # the threshold fires again, and `RawResult.turn_notice_firings` counts both.
+    developer = replace(DEVELOPER, max_turns=40)
+
+    async def query(prompt, options):
+        for message in _main_thread_calls(15):
+            yield message
+        (matcher,) = options.hooks["PostToolUse"]
+        (hook,) = matcher.hooks
+        await hook({"tool_name": "Bash"}, "t1", {"signal": None})
+        await hook({"tool_name": "Bash"}, "t2", {"signal": None})
+        yield result()
+
+    monkeypatch.setattr(module, "query", query)
+    raw = await ClaudeSdkRunner().run_once(
+        developer, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
+    )
+    assert raw.turn_notice_firings == 2
+
+
+async def test_no_turn_notice_when_the_threshold_is_never_crossed(monkeypatch, tmp_path):
     developer = replace(DEVELOPER, max_turns=200)
 
     async def query(prompt, options):
+        for message in _main_thread_calls(14):  # one short of the threshold
+            yield message
         (matcher,) = options.hooks["PostToolUse"]
         (hook,) = matcher.hooks
         await hook({"tool_name": "Bash"}, "t1", {"signal": None})
@@ -796,6 +833,7 @@ async def test_no_turn_notice_when_the_margin_is_never_crossed(monkeypatch, tmp_
         developer, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
     )
     assert raw.turn_notice is False
+    assert raw.turn_notice_firings == 0
 
 
 async def test_a_fired_turn_notice_during_a_failed_attempt_still_reaches_attemptfailed(
@@ -804,6 +842,8 @@ async def test_a_fired_turn_notice_during_a_failed_attempt_still_reaches_attempt
     developer = replace(DEVELOPER, max_turns=40)
 
     async def query(prompt, options):
+        for message in _main_thread_calls(15):
+            yield message
         (matcher,) = options.hooks["PostToolUse"]
         (hook,) = matcher.hooks
         await hook({"tool_name": "Bash"}, "t1", {"signal": None})
@@ -815,6 +855,7 @@ async def test_a_fired_turn_notice_during_a_failed_attempt_still_reaches_attempt
             developer, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
         )
     assert info.value.turn_notice is True
+    assert info.value.turn_notice_firings == 1
 
 
 async def test_raw_result_carries_the_delivery_tool_emissions(monkeypatch, tmp_path):
