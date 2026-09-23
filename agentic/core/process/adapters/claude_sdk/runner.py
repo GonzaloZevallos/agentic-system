@@ -58,9 +58,14 @@ from agentic.shared.environment import trace_id_of, with_resource_marker
 from ...application.ports import AttemptFailed, Presubmit, RawResult, SchemaGuard
 from ...domain.denials import denial_for
 from ...domain.roles import Role
-from ...domain.rules import ReportedFailure, exception_motive, failure_motive, max_turns_motive
+from ...domain.rules import (
+    ReportedFailure,
+    exception_motive,
+    failure_motive,
+    failure_reason,
+    max_turns_motive,
+)
 from ...domain.suppressions import Forbidden
-from ...domain.task import FailureReason
 from ..plugins import PLUGIN, PLUGIN_DIR
 from ..telemetry import NoTelemetry, Telemetry
 from .hooks import DELIVERY_TOOL, TurnCount, hooks_for
@@ -344,7 +349,7 @@ class ClaudeSdkRunner:
                 failure_motive(_reported_error(exc)),
                 cost,
                 session,
-                reason=_reason_for_subtype(exc.subtype),
+                reason=failure_reason(_reported_error(exc)),
                 denials=denials,
                 turn_notice=notice_firings > 0,
                 turn_notice_firings=notice_firings,
@@ -398,7 +403,7 @@ class ClaudeSdkRunner:
                 failure_motive(_reported_result(result)),
                 cost,
                 session,
-                reason=_reason_for_subtype(result.subtype or ""),
+                reason=failure_reason(_reported_result(result)),
                 denials=denials,
                 turn_notice=notice_firings > 0,
                 turn_notice_firings=notice_firings,
@@ -425,13 +430,6 @@ class ClaudeSdkRunner:
         stream = self.stream or sys.stderr
         stream.write(text)
         stream.flush()
-
-
-def _reason_for_subtype(subtype: str) -> FailureReason:
-    """`agentic.role.failures`'s reason for a harness failure that is not `max_turns`
-    (its own raise site already knows that one): `limit` for a per-attempt money cap
-    (issue #66), `sdk` for anything else the harness reports by a subtype."""
-    return "limit" if "budget" in subtype else "sdk"
 
 
 def _reported_error(exc: ResultError) -> ReportedFailure:

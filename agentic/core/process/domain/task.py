@@ -83,9 +83,14 @@ ChangeCategory = FindingCategory | Literal["definition"]
 # (README.md, 14; the Medición glossary's `agentic.role.failures`): `schema` is a
 # structured output missing or invalid against the role's own schema, `check` a use
 # case's own rule over otherwise-valid output, `max_turns` the harness cutting the
-# model off, `limit` a per-attempt money cap (issue #66), `sdk` anything else the
-# harness raised, `other` the residual nothing else names.
-FailureReason = Literal["schema", "check", "max_turns", "limit", "sdk", "other"]
+# model off, `limit` a per-attempt money cap (issue #66), `account_limit` an HTTP 429
+# from the account's own quota — session, spend or rate — not our per-attempt cap,
+# `upstream` an HTTP 5xx from the provider's own server, `sdk` the harness breaking in
+# a way none of the named facts covers (narrowed by `account_limit` and `upstream`,
+# ADR-0029), `other` the residual nothing else names.
+FailureReason = Literal[
+    "schema", "check", "max_turns", "limit", "account_limit", "upstream", "sdk", "other"
+]
 # Which review this is (ADR-0016; `rules.review_kind`): `first` until a return sends the
 # subtask back, `incremental` (ADR-0015) after that, `integration` for the fan-in's own
 # subtask always. What `agentic.review.findings` groups by alongside the finding itself.
@@ -98,7 +103,10 @@ ReviewKind = Literal["first", "incremental", "integration"]
 # `questions` an interview's open questions for the human, `unmergeable` a subtask whose
 # dependency the system could not merge on its own, `setup` the product's setup step
 # failing on a checkout the system just made. `limit` (issue #66's per-attempt budget
-# cap) is not here: it stops one attempt, not the task, so it is a `FailureReason`.
+# cap) is not here: it stops one attempt, not the task, so it is a `FailureReason`. An
+# account limit (HTTP 429, `FailureReason`'s `account_limit`) lands here too, as
+# `failure`: it still pauses the task like any other role failure (ADR-0029); only the
+# reason series tells the two apart.
 EscalationClass = Literal[
     "classification", "returns", "failure", "cap", "questions", "unmergeable", "setup"
 ]

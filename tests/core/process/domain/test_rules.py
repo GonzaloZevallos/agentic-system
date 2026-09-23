@@ -858,6 +858,113 @@ def test_max_turns_motive_carries_the_sdks_prose():
     )
 
 
+# `failure_reason` (ADR-0029): pins the pair `(failure_reason(report), failure_motive(report))`
+# from one `ReportedFailure` per real payload, read verbatim from the task document's own
+# request and from ADR-0029 itself -- `.agentic/tasks/` is untracked in this checkout
+# (ADR-0020), so GH-31's and GH-73's log lines come from the original request quoted in this
+# task's document, and GH-32's from ADR-0029's own "El clasificador es una función pura del
+# dominio" section. `error_max_budget_usd` is the shape `test_runner.py:220` and `:514` raise.
+
+
+def test_failure_reason_gh31_session_limit_429_is_account_limit():
+    # `~/.agentic-runs/GH-31-20260921-172042.log`: "You've hit your session limit ·
+    # resets 7:30pm ... (terminal reason: api_error, HTTP 429, exit code 1)". The
+    # population `_metadata_core` reports no subtype for is `subtype="success"`
+    # (ADR-0029): omitted from the motive's metadata, never a `subtype` clause match.
+    report = rules.ReportedFailure(
+        subtype="success",
+        result="You've hit your session limit · resets 7:30pm",
+        terminal_reason="api_error",
+        api_error_status=429,
+        exit_code=1,
+    )
+    assert rules.failure_reason(report) == "account_limit"
+    assert rules.failure_motive(report) == (
+        "You've hit your session limit · resets 7:30pm "
+        "(terminal reason: api_error, HTTP 429, exit code 1)"
+    )
+
+
+def test_failure_reason_gh73_529_overloaded_is_upstream():
+    # `~/.agentic-runs/GH-73-resume-20260921-220410.log`: "API Error: 529 Overloaded
+    # ... (terminal reason: api_error, HTTP 529, exit code 1)".
+    report = rules.ReportedFailure(
+        subtype="success",
+        result="API Error: 529 Overloaded",
+        terminal_reason="api_error",
+        api_error_status=529,
+        exit_code=1,
+    )
+    assert rules.failure_reason(report) == "upstream"
+    assert rules.failure_motive(report) == (
+        "API Error: 529 Overloaded (terminal reason: api_error, HTTP 529, exit code 1)"
+    )
+
+
+def test_failure_reason_gh32_structured_output_exhaustion_is_schema():
+    # ADR-0029: "Failed to provide valid structured output after 5 attempts
+    # (subtype=error_max_structured_output_retries, terminal reason:
+    # structured_output_retry_exhausted, exit code 1)" -- a relabelling of what the
+    # glossary's Fallo de rol already names, not a new value (`reason` was `sdk`).
+    report = rules.ReportedFailure(
+        subtype="error_max_structured_output_retries",
+        result="Failed to provide valid structured output after 5 attempts",
+        terminal_reason="structured_output_retry_exhausted",
+        exit_code=1,
+    )
+    assert rules.failure_reason(report) == "schema"
+    assert rules.failure_motive(report) == (
+        "Failed to provide valid structured output after 5 attempts "
+        "(subtype=error_max_structured_output_retries, "
+        "terminal reason: structured_output_retry_exhausted, exit code 1)"
+    )
+
+
+def test_failure_reason_error_max_budget_usd_is_limit():
+    # `test_runner.py:220` and `:514`: the two byte-identical assertions this task must
+    # not touch. Pinned here too, off the same `ReportedFailure` shape.
+    report = rules.ReportedFailure(subtype="error_max_budget_usd", errors=("over budget",))
+    assert rules.failure_reason(report) == "limit"
+    assert rules.failure_motive(report) == "over budget (subtype=error_max_budget_usd)"
+
+
+def test_failure_reason_rejects_limit_worded_prose_with_no_status_as_sdk():
+    # The account_limit clause reads `api_error_status`, never prose: the same words
+    # with no status attached must not classify as a limit.
+    report = rules.ReportedFailure(subtype="success", result=LIMIT_PROSE)
+    assert rules.failure_reason(report) == "sdk"
+
+
+def test_failure_reason_rejects_499_as_sdk():
+    report = rules.ReportedFailure(api_error_status=499)
+    assert rules.failure_reason(report) == "sdk"
+
+
+def test_failure_reason_rejects_600_as_sdk():
+    report = rules.ReportedFailure(api_error_status=600)
+    assert rules.failure_reason(report) == "sdk"
+
+
+def test_failure_reason_null_subtype_with_429_is_account_limit():
+    # The latent break ADR-0029 names: `subtype=None` used to raise `TypeError` inside
+    # `except ResultError`. `report.subtype or ""` -- the `ResultMessage` site's own
+    # guard, verbatim -- makes this classify instead.
+    report = rules.ReportedFailure(subtype=None, api_error_status=429)
+    assert rules.failure_reason(report) == "account_limit"
+
+
+def test_failure_reason_null_subtype_with_nothing_is_sdk():
+    report = rules.ReportedFailure(subtype=None)
+    assert rules.failure_reason(report) == "sdk"
+
+
+def test_failure_reason_budget_subtype_wins_over_upstream_status():
+    # Pins the precedence instead of leaving it a docstring claim: a 529 report that
+    # also carries a budget subtype is still `limit`, first.
+    report = rules.ReportedFailure(subtype="error_max_budget_usd", api_error_status=529)
+    assert rules.failure_reason(report) == "limit"
+
+
 def test_max_turns_motive_carries_metadata_when_there_is_no_prose():
     report = rules.ReportedFailure(subtype="error_max_turns", terminal_reason="api_error")
     assert rules.max_turns_motive(12, report) == (

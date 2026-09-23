@@ -471,6 +471,41 @@ def failure_motive(report: ReportedFailure) -> str:
     return _NO_DETAIL_REPORTED
 
 
+def failure_reason(report: ReportedFailure) -> FailureReason:
+    """`agentic.role.failures`'s reason for a broken attempt (ADR-0029), fed the same
+    `ReportedFailure` `failure_motive` composes from — one value, one reading, so the
+    two can never disagree. Reads no prose (ADR-0004, sixth addendum) and no
+    `exit_code` (`_reported_result` structurally carries none). Precedence, since more
+    than one clause can hold at once:
+
+    1. A budget subtype (`"budget" in (report.subtype or "")`) -> `limit`: our own
+       per-attempt cap is a fact about our configuration, and it is definitive over
+       whatever else the report carries.
+    2. `api_error_status == 429` -> `account_limit`: an account's own quota (session,
+       spend or rate), never the sub-cause, which is prose and stays unread here.
+    3. `500 <= api_error_status < 600` -> `upstream`: the provider's own server, by
+       range rather than by an enumeration a new status code could silently miss.
+    4. `subtype == "error_max_structured_output_retries"` or
+       `terminal_reason == "structured_output_retry_exhausted"` -> `schema`: the CLI
+       exhausting its own structured-output retries, a relabelling of what the
+       glossary's Fallo de rol already names, not a new value.
+    5. Anything else -> `sdk`: the harness broke in a way none of the named facts
+       covers.
+    """
+    subtype = report.subtype or ""
+    if "budget" in subtype:
+        return "limit"
+    if report.api_error_status == 429:
+        return "account_limit"
+    if report.api_error_status is not None and 500 <= report.api_error_status < 600:
+        return "upstream"
+    if subtype == "error_max_structured_output_retries":
+        return "schema"
+    if report.terminal_reason == "structured_output_retry_exhausted":
+        return "schema"
+    return "sdk"
+
+
 def max_turns_motive(max_turns: int, report: ReportedFailure) -> str:
     """The motive for an attempt the harness cut for `error_max_turns`
     (`docs/product/role-failures.md` §1; issues #69, #81): the cutoff, named first, so
