@@ -8,7 +8,7 @@ from typing import get_args, get_type_hints
 
 from agentic.core.knowledge.domain import knowledge, stack
 from agentic.core.measurement.adapters.otel import telemetry
-from agentic.core.measurement.domain import metrics
+from agentic.core.measurement.domain import metrics, scorecard
 from agentic.core.process.domain import (
     document,
     presubmit,
@@ -38,6 +38,7 @@ TYPES = {
     "Job": knowledge.approval_check,  # the check that a capability names its jobs
     "Retrabajo": metrics.rework_cost_usd,
     "Muestra residual": metrics.residual_cost_usd,
+    "Scorecard": scorecard.Scorecard,
     "Hallazgo": schemas.Finding,
     "Dictamen": schemas.Diagnosis,
     "Categoría de devolución": rules.change_category,

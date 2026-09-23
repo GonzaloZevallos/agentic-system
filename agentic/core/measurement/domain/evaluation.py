@@ -44,6 +44,7 @@ from typing import NotRequired, TypedDict
 from agentic.core.process.domain.task import TaskState
 
 from .metrics import DeliveryOutcome, changes_requested_total, prompts_fingerprint, run_duration_s
+from .scorecard import task_figures
 
 # `.agentic/eval-set.yaml`, relative to the product root, like `stack.yaml`, `flags.yaml`
 # and `BRIEF.md`: the set travels with the product whose issues it names. The caller
@@ -63,15 +64,26 @@ PER_TASK_ESTIMATE_USD = 45.0
 
 class TaskDocument(TaskState, total=False):
     """The dict `ports.documents.load` (`document.parse`, ADR-0001) hands back for one
-    task: every key `TaskState` declares, plus the three `agentic close` records once a
-    pull request closes (`cli.py`'s own `record_closure` call) -- `closed_at`,
-    `delivery_outcome` and `system_version` -- which the graph's own reducer schema never
-    carries, because they are written once, after the graph stops running, under the run
-    lock, by `close` and not by any node."""
+    task: every key `TaskState` declares, plus what `agentic close` records once a pull
+    request closes (`cli.py`'s own `record_closure` call) -- which the graph's own
+    reducer schema never carries, because it is written once, after the graph stops
+    running, under the run lock, by `close` and not by any node. `human_commits`,
+    `human_lines_changed` and `time_to_merge_seconds` are `str`, not `int`: every
+    closure key goes through `TaskDocuments.record_closure`, which writes a single
+    scalar line (`document._scalar_line`, a `yaml.safe_dump` of a string) -- typing them
+    `str` matches what occurs on disk rather than a numeric type that never does.
+    `system_commit` and `system_baseline` are `document.render`'s own top-level keys
+    (ADR-0005, ADR-0030), not part of `TaskState`'s own reducer schema either, since
+    the graph never carries a fact about the checkout that is running it."""
 
     closed_at: str
     delivery_outcome: DeliveryOutcome
     system_version: str
+    human_commits: str
+    human_lines_changed: str
+    time_to_merge_seconds: str
+    system_commit: str
+    system_baseline: str
 
 
 @dataclass(frozen=True)
@@ -191,6 +203,10 @@ class EvaluationRecord(TypedDict):
     score: bool | None
     score_pending_reason: str | None
     cost_usd: float
+    # `metrics.rework_cost_usd`, read once by `scorecard.task_figures` and reused here
+    # rather than recomputed a second time (Tech Lead plan, subtask `scorecard`): a new
+    # field, since `evaluation_record` carried no rework figure before this task.
+    rework_usd: float
     role_seconds: float
     runs_without_timing: int
     prompts: dict[str, str]
@@ -205,26 +221,30 @@ def evaluation_record(product: str, issue: int, document: TaskDocument) -> Evalu
     """The evaluation record for one task, built entirely from `document` -- this task's
     own frontmatter, as `ports.documents.load` hands it back -- plus the product name the
     caller read from that same document or from `ports.stack.product()`. Reuses
-    `metrics.prompts_fingerprint` and `metrics.changes_requested_total` rather than
-    computing either a second time."""
+    `metrics.prompts_fingerprint` and `metrics.changes_requested_total`, and now
+    `scorecard.task_figures` for `cost_usd`, `rework_usd`, `status` and `failures`
+    (its per-reason breakdown summed), so each of those has one definition read from
+    two callers instead of two (module docstring, "Import direction")."""
+    figures = task_figures(document)
     seconds, without_timing = role_seconds(document)
     outcome = score(document, issue)
     record: EvaluationRecord = {
         "product": product,
         "issue": issue,
         "task": document["id"],
-        "status": document.get("status", "open"),
+        "status": figures.status,
         "delivery_outcome": document.get("delivery_outcome"),
         "score": outcome.value,
         "score_pending_reason": outcome.pending_reason,
-        "cost_usd": document.get("cost_usd", 0.0),
+        "cost_usd": figures.cost_usd,
+        "rework_usd": figures.rework_usd,
         "role_seconds": seconds,
         "runs_without_timing": without_timing,
         "prompts": document.get("prompts", {}),
         "prompts_fingerprint": prompts_fingerprint(document),
         "system_version": document.get("system_version"),
         "changes_requested": changes_requested_total(document),
-        "failures": len(document.get("failures", [])),
+        "failures": sum(figures.failures_by_reason.values()),
         "note": None,
     }
     if escalation_class := document.get("escalation_class"):
