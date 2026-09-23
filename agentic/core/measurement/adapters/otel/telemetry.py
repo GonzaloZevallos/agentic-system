@@ -34,6 +34,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Literal
 
 from opentelemetry import metrics, trace
@@ -142,6 +143,79 @@ def _git_baseline() -> str:
     except (OSError, subprocess.CalledProcessError):
         return "untagged"
     return out or "untagged"
+
+
+# Per-`(repo, sha)` cache for `resolve_baseline` below: ten documents sharing one
+# `system_commit` cost one pair of git calls, not ten (Tech Lead plan, subtask
+# `scorecard`). Module-level like `_version`/`_baseline` above, but keyed rather than
+# singular -- `eval compare` reads many distinct shas in one invocation, unlike a live
+# run's own single `system_version`.
+_BASELINE_OF_SHA: dict[tuple[str, str], str] = {}
+# `eval compare`'s own default timeout for `resolve_baseline`'s two git calls: long
+# enough for a cold `git describe` on a large history, short enough that one
+# unreachable checkout cannot stall a read-only comparison that spends nothing.
+BASELINE_RESOLUTION_TIMEOUT_S = 5.0
+
+
+def resolve_baseline(
+    system_commit: str | None, repo: Path = REPO, *, timeout: float = BASELINE_RESOLUTION_TIMEOUT_S
+) -> str:
+    """The bucket `eval compare` groups a task document into when the document carries
+    no `system_baseline` of its own (a document written before ADR-0030, or one whose
+    live run never resolved a tag) -- `pre-baseline`, a resolved `bl-*` tag, or
+    `unknown`. A document that already has its own `system_baseline` (a `bl-*` tag, or
+    the literal `untagged`) wins outright and never reaches this function: `eval
+    compare` (`cli.py`) is the only caller, and it calls this only for the documents
+    that need it (module docstring, `system_baseline`'s own neighbour).
+
+    Keys on `system_commit`, never on `system_version` (`+dirty`/`unknown`, not a git
+    object -- module docstring). `repo` defaults to `REPO`, the pinned stage0 checkout
+    `_git_version`/`_git_baseline` already read; a stage0 pinned before a task's own
+    sha, or before the `bl-*` tag that would resolve it, leaves most documents
+    `unknown` until re-pinned or `--system-repo` names another (Tech Lead plan's own
+    accepted risk). Memoised per `(repo, sha)`.
+
+    Order: `git rev-parse --verify <sha>^{commit}` first -- an absent or empty
+    `system_commit`, a sha that does not resolve, or an ambiguous abbreviation (a
+    non-zero exit either way) is `unknown` -- then `git describe --tags --abbrev=0
+    --match` `BASELINE_TAG_GLOB` against the resolved sha, `pre-baseline` when nothing
+    reachable. `TimeoutExpired`, `CalledProcessError` and `OSError` alike land in
+    `unknown` after the first call and `pre-baseline` after the second: a read-only
+    comparison that spends nothing must not raise out of one unreachable git (Tech
+    Lead plan invariant)."""
+    key = (str(repo), system_commit or "")
+    if key not in _BASELINE_OF_SHA:
+        _BASELINE_OF_SHA[key] = _resolve_baseline(system_commit, repo, timeout)
+    return _BASELINE_OF_SHA[key]
+
+
+def _resolve_baseline(system_commit: str | None, repo: Path, timeout: float) -> str:
+    if not system_commit:
+        return "unknown"
+    git = ["git", "-C", str(repo)]
+    try:
+        verified = subprocess.run(
+            [*git, "rev-parse", "--verify", f"{system_commit}^{{commit}}"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, subprocess.CalledProcessError, OSError):
+        return "unknown"
+    if verified.returncode != 0:
+        return "unknown"
+    sha = verified.stdout.strip()
+    try:
+        described = subprocess.run(
+            [*git, "describe", "--tags", "--abbrev=0", "--match", BASELINE_TAG_GLOB, sha],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, subprocess.CalledProcessError, OSError):
+        return "pre-baseline"
+    tag = described.stdout.strip()
+    return tag if described.returncode == 0 and tag else "pre-baseline"
 
 
 def meter_provider_for(reader: MetricReader) -> MeterProvider:
