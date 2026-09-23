@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Literal
 
@@ -28,6 +29,14 @@ from agentic.core.process.domain.task import (
     RoleRun,
     TaskState,
 )
+from agentic.shared.configuration import Configuration
+
+# The two `Configuration` switches `arm_label` joins, in the order every writer uses
+# (`experiment_snapshot`'s own order, minus `reviewer_model`: free text, not one of the
+# "three enums" the arm is the product of -- ADR-0030). A subsequence of
+# `EXPERIMENT_KEYS`, checked by `test_metrics.py`, so the two vocabularies cannot drift
+# apart on order.
+ARM_KEYS = ("review_mode", "skip_ephemeral")
 
 # Below this, a residual is floating-point noise (an interview's runs summed in a
 # different order), not money nothing accounted for: `has_residual_sample`'s own
@@ -293,6 +302,26 @@ def time_to_merge_seconds(pull_request: PullRequest) -> float | None:
     created = datetime.fromisoformat(pull_request.created_at)
     merged = datetime.fromisoformat(pull_request.merged_at)
     return (merged - created).total_seconds()
+
+
+def arm_label(experiment: Mapping[str, str]) -> str:
+    """The canonical form of an `experiment` snapshot (`shared.configuration.
+    experiment_snapshot`), the single point that turns it into the `arm` label
+    (ADR-0030): `default` when both `ARM_KEYS` switches equal their `Configuration`
+    field default, else `review_mode=<v>,skip_ephemeral=<v>` in `ARM_KEYS` order, one
+    key always beside the other so a reader never has to know which switch a bare
+    `review_mode=light` implies for the one not shown. A key missing from `experiment`
+    reads as that field's own default, resolved from `Configuration.model_fields`
+    here and nowhere else -- never from a `"full"`/`"False"` literal, so a default
+    that moves someday moves this function's answer with it, never falls out of step
+    with it. `reviewer_model` is not one of `ARM_KEYS`: it is free text, not an enum,
+    and stays out of the label (ADR-0030) so the label's cardinality stays the closed
+    product of `review_mode` x `skip_ephemeral`."""
+    defaults = Configuration.model_fields
+    resolved = {key: experiment.get(key, str(defaults[key].default)) for key in ARM_KEYS}
+    if all(resolved[key] == str(defaults[key].default) for key in ARM_KEYS):
+        return "default"
+    return ",".join(f"{key}={resolved[key]}" for key in ARM_KEYS)
 
 
 def prompts_fingerprint(state: TaskState) -> str:

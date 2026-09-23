@@ -68,6 +68,13 @@ from ..telemetry import NoTelemetry, Telemetry
 UseCase = Callable[[TaskState, Configuration, Ports], Awaitable[TaskState]]
 PortsFor = Callable[[Configuration], Ports]
 Rule = Callable[[TaskState], str | None]
+# The live arm string for a node's own `Configuration` (`metrics.arm_label`, ADR-0030):
+# injected rather than computed here, the same reason `ports_of` is. `core.process` may
+# import only `shared` (this module's own layer rule, `tests/test_architecture.py`), and
+# `metrics.arm_label` lives in `core.measurement`; the composition root, which sees both,
+# builds the one callable that closes over it and hands it down, so this module never
+# imports measurement and the arm string still has exactly one producer.
+ArmFor = Callable[[Configuration], str]
 
 ESCALATE = "escalate"
 PAUSE = "pause"
@@ -102,15 +109,17 @@ class _PortsPerRun:
 PortsOf = _PortsPerRun
 
 
-def _node(use_case: UseCase, role: Role, ports_of: PortsOf, telemetry: Telemetry):
+def _node(use_case: UseCase, role: Role, ports_of: PortsOf, telemetry: Telemetry, arm_for: ArmFor):
     async def node(state: TaskState, config: RunnableConfig) -> TaskState:
         cfg = configuration_from(config)
         ports = ports_of(cfg, config)
         # The patch is what the use case decided; the span and the metrics read it
         # here, so the use case never sees telemetry (ADR-0007). Which product the run is
         # over is read per node and not cached: `langgraph dev` serves many tasks through
-        # one graph and they need not share a product (issue #47).
-        with telemetry.role_span(role.name, role.slug, product_name(ports)) as run:
+        # one graph and they need not share a product (issue #47). `arm` is read the same
+        # way, off this node's own `cfg` (`Configuration`), never the patch or the state
+        # (ADR-0030): a Developer of a non-default arm must read as that arm, not `default`.
+        with telemetry.role_span(role.name, role.slug, product_name(ports), arm=arm_for(cfg)) as run:
             try:
                 patch = await use_case(state, cfg, ports)
             except Exception:
@@ -182,29 +191,29 @@ def _in_branch(rule: Rule) -> Callable[[TaskState], str]:
     return route
 
 
-def _pipeline(ports_of: PortsOf, telemetry: Telemetry):
+def _pipeline(ports_of: PortsOf, telemetry: Telemetry, arm_for: ArmFor):
     """`develop -> review` for one subtask, as a graph of its own. It enters at the
     review when the Developer already delivered, which is where a run the task cap
     stopped between the two resumes: a delivery is never built twice."""
     branch = StateGraph(TaskState)
-    branch.add_node("develop", _node(develop, DEVELOPER, ports_of, telemetry))
+    branch.add_node("develop", _node(develop, DEVELOPER, ports_of, telemetry, arm_for))
     # The node's own role names the role span: `reviewer_for` builds the actual role
     # the use case runs (allowed commands per product), but its slug never changes, so
     # the span and `agentic.role.*` can tell a review from a plan without reading the
     # patch (the 58% of spend the request opens with, all labelled `tech_lead`).
-    branch.add_node("review", _node(review, TECH_LEAD_REVIEWER, ports_of, telemetry))
+    branch.add_node("review", _node(review, TECH_LEAD_REVIEWER, ports_of, telemetry, arm_for))
     branch.add_conditional_edges(START, rules.pipeline_entry, ["develop", "review"])
     branch.add_conditional_edges("develop", _in_branch(rules.after_develop), ["review", END])
     branch.add_edge("review", END)
     return branch.compile()
 
 
-def _branch_node(ports_of: PortsOf, telemetry: Telemetry):
+def _branch_node(ports_of: PortsOf, telemetry: Telemetry, arm_for: ArmFor):
     """The pipeline as one node of the parent graph. It hands back what the branch
     added, not the state it ended holding: the parent folds a patch in with the same
     reducers, and the whole state would count `cost_usd` twice and duplicate every
     `runs`, `failures` and `change_history` entry (`task.delta`)."""
-    pipeline = _pipeline(ports_of, telemetry)
+    pipeline = _pipeline(ports_of, telemetry, arm_for)
 
     async def node(state: TaskState, config: RunnableConfig) -> TaskState:
         return delta(state, await pipeline.ainvoke(state, config))
@@ -212,19 +221,21 @@ def _branch_node(ports_of: PortsOf, telemetry: Telemetry):
     return node
 
 
-def build_graph(ports_for: PortsFor, telemetry: Telemetry = NoTelemetry()) -> StateGraph:
+def build_graph(
+    ports_for: PortsFor, telemetry: Telemetry = NoTelemetry(), *, arm_for: ArmFor
+) -> StateGraph:
     # One `RunLimits` per run: every branch of a fan-out shares it, and sharing is the
     # whole point (ADR-0004, fifth addendum). It is not state and not a port, so it
     # rides in `Ports` without the branches ever seeing each other.
     shared = _PortsPerRun(ports_for)
 
     graph = StateGraph(TaskState, input_schema=TaskInput)
-    graph.add_node("classify", _node(classify, PJM, shared, telemetry))
-    graph.add_node("define", _node(define, PRODUCT_ANALYST, shared, telemetry))
-    graph.add_node("diagnose", _node(diagnose, PRODUCT_ANALYST, shared, telemetry))
-    graph.add_node("validate", _node(validate_prd, PM, shared, telemetry))
-    graph.add_node("plan", _node(plan, TECH_LEAD, shared, telemetry))
-    graph.add_node(PIPELINE, _branch_node(shared, telemetry))
+    graph.add_node("classify", _node(classify, PJM, shared, telemetry, arm_for))
+    graph.add_node("define", _node(define, PRODUCT_ANALYST, shared, telemetry, arm_for))
+    graph.add_node("diagnose", _node(diagnose, PRODUCT_ANALYST, shared, telemetry, arm_for))
+    graph.add_node("validate", _node(validate_prd, PM, shared, telemetry, arm_for))
+    graph.add_node("plan", _node(plan, TECH_LEAD, shared, telemetry, arm_for))
+    graph.add_node(PIPELINE, _branch_node(shared, telemetry, arm_for))
     graph.add_node(INTEGRATE, _system_node(integrate, shared))
     graph.add_node("deliver", _system_node(deliver, shared))
     graph.add_node("discard", _system_node(discard, shared))

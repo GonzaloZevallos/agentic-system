@@ -1,9 +1,12 @@
 """The definitions of the Medición glossary, as functions over the state."""
 
+from typing import Literal, get_origin
+
 import pytest
 
 from agentic.core.measurement.domain import metrics
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
+from agentic.shared.configuration import EXPERIMENT_KEYS, Configuration
 
 SYSTEM_EMAIL = "agentic-system@users.noreply.github.com"
 HUMAN_EMAIL = "gonzalo@example.com"
@@ -360,3 +363,66 @@ def test_time_to_merge_seconds_is_created_at_to_merged_at():
 def test_time_to_merge_seconds_is_none_without_a_merge():
     pr = PullRequest(state="OPEN", created_at="2026-09-20T23:00:00Z", merged_at=None, commits=())
     assert metrics.time_to_merge_seconds(pr) is None
+
+
+# `arm_label` (ADR-0030): the degenerate and rejecting inputs enumerated (ADR-0023),
+# never only the input it should accept.
+
+
+def test_arm_label_of_an_empty_mapping_is_default():
+    assert metrics.arm_label({}) == "default"
+
+
+def test_arm_label_of_both_switches_explicitly_at_default_is_default():
+    assert metrics.arm_label({"review_mode": "full", "skip_ephemeral": "False"}) == "default"
+
+
+def test_arm_label_with_one_key_missing_resolves_it_to_the_default():
+    """A missing key means the default, resolved inside the function -- the other
+    switch's value is enough to leave `default` behind."""
+    assert metrics.arm_label({"review_mode": "light"}) == "review_mode=light,skip_ephemeral=False"
+
+
+def test_arm_label_keys_come_out_in_arm_keys_order_regardless_of_input_order():
+    forward = metrics.arm_label({"skip_ephemeral": "True", "review_mode": "light"})
+    assert forward == "review_mode=light,skip_ephemeral=True"
+
+
+def test_arm_label_with_one_switch_moved():
+    assert metrics.arm_label({"review_mode": "full", "skip_ephemeral": "True"}) == (
+        "review_mode=full,skip_ephemeral=True"
+    )
+
+
+def test_arm_label_with_both_switches_moved():
+    assert metrics.arm_label({"review_mode": "light", "skip_ephemeral": "True"}) == (
+        "review_mode=light,skip_ephemeral=True"
+    )
+
+
+def test_arm_label_never_names_reviewer_model():
+    """`reviewer_model` is free text, not one of the three enums -- it travels in
+    `experiment_snapshot`'s own dict, but `arm_label` must never fold it into the
+    label (the rejecting input: a mapping that carries it alongside the two switches,
+    at their default, still resolves to `default`)."""
+    label = metrics.arm_label(
+        {"review_mode": "full", "skip_ephemeral": "False", "reviewer_model": "claude-opus-5"}
+    )
+    assert label == "default"
+    assert "reviewer_model" not in label
+    assert "claude-opus-5" not in label
+
+
+def test_arm_keys_is_a_subsequence_of_experiment_keys():
+    positions = [EXPERIMENT_KEYS.index(key) for key in metrics.ARM_KEYS]
+    assert positions == sorted(positions)
+
+
+def test_every_arm_key_names_a_bool_or_literal_configuration_field():
+    for key in metrics.ARM_KEYS:
+        annotation = Configuration.model_fields[key].annotation
+        assert annotation is bool or get_origin(annotation) is Literal, key
+
+
+def test_arm_keys_never_names_reviewer_model():
+    assert "reviewer_model" not in metrics.ARM_KEYS

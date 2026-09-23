@@ -22,6 +22,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from .core.knowledge.adapters.filesystem import FilesystemFlags, FilesystemKnowledge
 from .core.knowledge.adapters.git import GitStack
 from .core.measurement.adapters.otel import telemetry
+from .core.measurement.domain.metrics import arm_label
 from .core.process.adapters.claude_sdk import ClaudeSdkRunner
 from .core.process.adapters.filesystem import FilesystemPrompts, FilesystemTaskDocuments
 from .core.process.adapters.git import GitWorkspace
@@ -60,7 +61,11 @@ def _ports(cfg: Configuration) -> Ports:
             telemetry=telemetry,
             env={**cfg.role_env, **own_configuration_unset(os.environ)},
         ),
-        documents=FilesystemTaskDocuments(cfg.product_dir, system_version=telemetry.system_version),
+        documents=FilesystemTaskDocuments(
+            cfg.product_dir,
+            system_version=telemetry.system_version,
+            system_baseline=telemetry.system_baseline,
+        ),
         knowledge=FilesystemKnowledge(cfg.product_dir),
         prompts=FilesystemPrompts(cfg.product_dir),
         flags=FilesystemFlags(cfg.product_dir),
@@ -82,4 +87,12 @@ async def checkpointer(cfg: Configuration) -> AsyncIterator[BaseCheckpointSaver]
         yield saver
 
 
-graph = build_graph(default_ports, telemetry)
+def _arm_for(cfg: Configuration) -> str:
+    """The live arm of a node's own `Configuration` (ADR-0030): the one place besides
+    `cli.py` that calls `metrics.arm_label`, so `core.process.adapters.langgraph.graph`
+    -- restricted to importing `shared` alone (`tests/test_architecture.py`) -- never
+    imports `core.measurement` to get it."""
+    return arm_label({"review_mode": cfg.review_mode, "skip_ephemeral": str(cfg.skip_ephemeral)})
+
+
+graph = build_graph(default_ports, telemetry, arm_for=_arm_for)

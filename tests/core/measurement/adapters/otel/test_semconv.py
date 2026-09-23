@@ -33,9 +33,18 @@ def test_exceptions_are_exactly_the_keys_kept_bare_by_the_parity_rule():
     # `product`, `role`, `role.outcome`: already spelled the same on the span and on a
     # metric label, so they keep that spelling instead of taking `agentic.` (parity
     # rule, ADR-0008). `langfuse.observation.type` is a vendor key, not ours to
-    # namespace either way.
+    # namespace either way. `system.baseline` and `arm` join for the same reason
+    # (ADR-0030): both spans already write them identically to every metric's own
+    # label dict.
     assert semconv.EXCEPTIONS == frozenset(
-        {"product", "role", "role.outcome", "langfuse.observation.type"}
+        {
+            "product",
+            "role",
+            "role.outcome",
+            "langfuse.observation.type",
+            "system.baseline",
+            "arm",
+        }
     )
 
 

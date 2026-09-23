@@ -26,7 +26,20 @@ ANTHROPIC = "anthropic"
 # span and on a metric label (the parity rule, ADR-0008 addendum), or, for
 # `langfuse.observation.type`, it is a vendor key that is not ours to namespace either
 # way. Every other application attribute on the role span takes `agentic.`.
-EXCEPTIONS = frozenset({"product", "role", "role.outcome", "langfuse.observation.type"})
+EXCEPTIONS = frozenset(
+    {
+        "product",
+        "role",
+        "role.outcome",
+        "langfuse.observation.type",
+        # Bare on `task_span`/`role_span` at open (ADR-0030): the 2026-09-17 rule keeps a
+        # key's bare spelling wherever the span already writes it identically to the
+        # metric, and both already do (every `Run` label dict below carries the same two
+        # keys, unprefixed).
+        "system.baseline",
+        "arm",
+    }
+)
 
 
 def span_name(role_name: str) -> str:

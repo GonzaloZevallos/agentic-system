@@ -65,27 +65,32 @@ Una fila por métrica. `system.version` y `prompts.fingerprint` son las dos úni
 de cardinalidad no acotada (el SHA del checkout y el hash del set de prompts); toda otra
 etiqueta es un enum, un `Role.slug` (17 valores) o la salida de una función `rules.*`
 cerrada — nunca un id de tarea, un título, un id de sesión, una línea de comando o una ruta.
+`system.baseline` (`bl-YYYY-MM-DD` que el humano declara, o `untagged`, ADR-0028) y `arm`
+(el producto cerrado de `review_mode` x `skip_ephemeral`, ADR-0030) acompañan a
+`system.version` en toda familia de abajo que ya lo lista, cardinalidad acotada las dos.
+`reviewer_model` no es una de las tres — es texto libre, no un enum — y por eso se queda en
+el frontmatter de la tarea, nunca en `arm` (ADR-0030).
 
 | Métrica | Labels | Valor | Unidad |
 |---|---|---|---|
-| `agentic.task.cost_usd` | `product`, `task.type`, `task.status`, `system.version`, `prompts.fingerprint` | Costo acumulado de la tarea | USD |
+| `agentic.task.cost_usd` | `product`, `task.type`, `task.status`, `system.version`, `system.baseline`, `arm`, `prompts.fingerprint` | Costo acumulado de la tarea | USD |
 | `agentic.task.rework_usd` | ídem | Costo del retrabajo de la tarea | USD |
 | `agentic.task.duration` | ídem | Tiempo de reloj de la tarea | s |
 | `agentic.task.finished` | ídem | 1, una muestra por tarea que llegó a un fin | — |
 | `agentic.task.returns` | ídem + `return.category` | Devoluciones de la tarea, una muestra por categoría (`none` en 0 si no hubo) | — |
-| `agentic.role.cost_usd` | `product`, `role`, `model`, `rework`, `role.slug`, `phase`, `role.outcome`, `system.version` | Costo de una corrida de rol: una muestra por entrada de `runs` de la patch, más una muestra **residual** por lo que ninguna corrida contabiliza (un intento fallido sin entrega, un nodo que lanzó sin patch), en 0 si la patch está vacía. La suma de las muestras de una patch es su `cost_usd` | USD |
+| `agentic.role.cost_usd` | `product`, `role`, `model`, `rework`, `role.slug`, `phase`, `role.outcome`, `system.version`, `system.baseline`, `arm` | Costo de una corrida de rol: una muestra por entrada de `runs` de la patch, más una muestra **residual** por lo que ninguna corrida contabiliza (un intento fallido sin entrega, un nodo que lanzó sin patch), en 0 si la patch está vacía. La suma de las muestras de una patch es su `cost_usd` | USD |
 | `agentic.role.duration` | `product`, `role`, `role.outcome` | Tiempo de reloj del **nodo** (la patch entera, no la corrida) — sin cambios desde antes de esta tarea | s |
 | `agentic.role.run_duration` | ídem que `agentic.role.cost_usd` | Tiempo de reloj de **una corrida**, dentro del cupo de concurrencia (`ended_at` − `started_at`); ausente en una corrida grabada antes de este campo | s |
 | `agentic.role.queue_wait` | ídem | Segundos que esa corrida esperó un cupo de concurrencia, antes de empezar a correr; nunca incluido en `run_duration` | s |
-| `agentic.role.failures` | `product`, `role`, `role.slug`, `phase` (si la falla tiene sección), `reason`, `system.version` | Intentos fallidos de una patch, una muestra por motivo con el conteo como valor | — |
+| `agentic.role.failures` | `product`, `role`, `role.slug`, `phase` (si la falla tiene sección), `reason`, `system.version`, `system.baseline`, `arm` | Intentos fallidos de una patch, una muestra por motivo con el conteo como valor | — |
 | `agentic.role.failure_cost_usd` | ídem | Costo de los intentos fallidos de una patch, por motivo. **No es aditivo con `agentic.role.cost_usd`**: el mismo dólar ya cuenta una vez, dentro del costo de una corrida que reintentó o dentro de la muestra residual | USD |
-| `agentic.role.tokens` | `product`, `role`, `model`, `rework`, `role.slug`, `phase`, `role.outcome`, `system.version` + `kind` | Tokens de **una corrida**, de `ResultMessage.usage`, una muestra por `kind` ∈ {input, output, cache_read, cache_write}; ausente en una corrida grabada antes de este campo o cuyo intento falló (un intento fallido no reporta tokens) | tokens |
+| `agentic.role.tokens` | `product`, `role`, `model`, `rework`, `role.slug`, `phase`, `role.outcome`, `system.version`, `system.baseline`, `arm` + `kind` | Tokens de **una corrida**, de `ResultMessage.usage`, una muestra por `kind` ∈ {input, output, cache_read, cache_write}; ausente en una corrida grabada antes de este campo o cuyo intento falló (un intento fallido no reporta tokens) | tokens |
 | `agentic.role.calls` | ídem sin `kind` | Llamadas al modelo de esa corrida: una por `AssistantMessage` que el runner vio antes de la entrega — el SDK no distingue "llamada" de "turno" por sí solo, así que esta es la definición del sistema (`ClaudeSdkRunner.run_once`); ausente en una corrida grabada antes de este campo | — |
 | `agentic.role.turns` | ídem | `num_turns` de esa corrida, tal como lo reporta el SDK; a diferencia de las cuatro anteriores, siempre presente (el campo ya existía antes de esta tarea) | — |
 | `agentic.role.max_turns` | ídem que `agentic.role.turns` | El tope de turnos del rol al momento de esa corrida (`Role.max_turns`), con las mismas labels que `agentic.role.turns` para que un panel los grafique lado a lado; ausente en una corrida grabada antes de este campo | — |
 | `agentic.role.tool_calls` | ídem + `tool` | Bloques `tool_use` de esa corrida, una muestra por herramienta (Bash, Read, Edit, Write, Grep, Glob, Agent, Skill, StructuredOutput, `other` para cualquier otra incluidas las MCP); ausente en una corrida grabada antes de este campo | — |
 | `agentic.role.subagent_cost_usd` | ídem que `agentic.role.turns` | Lo que un sub-agente gastó de `cost_by_model` de esa corrida, todo modelo que no sea el del rol (ADR-0013). **No es aditivo con `agentic.role.cost_usd`**: ese dólar ya cuenta una vez, dentro del total de la corrida; ausente en una corrida grabada antes de este campo | USD |
-| `agentic.role.cold_fallback` | `product`, `role`, `role.slug`, `phase`, `system.version` | 1, una muestra por corrida (o intento fallido) que arrancó en frío porque `run_with_retry` descartó la sesión que el llamador pasaba y no había ninguna que reanudar (ADR-0004, sexta adenda). Sin `model`, `rework` ni `role.outcome`: nombra la decisión del sistema sobre el rol y la fase, nunca una causa (ADR-0008, adenda 2026-09-21) | — |
+| `agentic.role.cold_fallback` | `product`, `role`, `role.slug`, `phase`, `system.version`, `system.baseline`, `arm` | 1, una muestra por corrida (o intento fallido) que arrancó en frío porque `run_with_retry` descartó la sesión que el llamador pasaba y no había ninguna que reanudar (ADR-0004, sexta adenda). Sin `model`, `rework` ni `role.outcome`: nombra la decisión del sistema sobre el rol y la fase, nunca una causa (ADR-0008, adenda 2026-09-21) | — |
 
 El panel `$ / 1k tokens de salida, por rol y modelo` divide el costo de las corridas de
 un rol (`agentic.role.cost_usd`, intentos fallidos incluidos: esa métrica no separa la
@@ -94,16 +99,16 @@ los tokens de salida de las corridas que los reportaron (`agentic.role.tokens{ki
 la muestra residual (`model=""`) no tiene corrida propia y por lo tanto ningún token, y
 queda fuera del denominador por eso. No es "dólar por token entregado": ninguna etiqueta
 separa el dólar de un intento fallido del dólar de la corrida que sí entregó.
-| `agentic.review.findings` | `product`, `severity`, `category`, `status`, `review.kind`, `system.version` | Hallazgos de una revisión: una muestra por celda (severidad, categoría, estado) con el conteo de hallazgos de esa revisión que caen ahí como valor. Nada si la revisión no dejó hallazgos | — |
-| `agentic.presubmit.checks` | `product`, `role`, `role.slug`, `phase`, `system.version`, `check`, `result`, `final` | Una muestra por chequeo de cada invocación de la puerta de entrega que llegó a correr los chequeos: 1 si el chequeo pasó (`result=green`) o falló (`result=red`). Una entrega puede ser rechazada y reintentar dentro del mismo turno; solo la última invocación es `final=true` | — |
+| `agentic.review.findings` | `product`, `severity`, `category`, `status`, `review.kind`, `system.version`, `system.baseline`, `arm` | Hallazgos de una revisión: una muestra por celda (severidad, categoría, estado) con el conteo de hallazgos de esa revisión que caen ahí como valor. Nada si la revisión no dejó hallazgos | — |
+| `agentic.presubmit.checks` | `product`, `role`, `role.slug`, `phase`, `system.version`, `system.baseline`, `arm`, `check`, `result`, `final` | Una muestra por chequeo de cada invocación de la puerta de entrega que llegó a correr los chequeos: 1 si el chequeo pasó (`result=green`) o falló (`result=red`). Una entrega puede ser rechazada y reintentar dentro del mismo turno; solo la última invocación es `final=true` | — |
 | `agentic.presubmit.duration` | ídem | Cuánto tardó ese chequeo, en esa invocación | s |
-| `agentic.invocation.cost_usd` | `product`, `invocation.kind`, `system.version` | Lo que **esa invocación** (`run` o `resume`) gastó ella sola, nunca el acumulado de la tarea | USD |
+| `agentic.invocation.cost_usd` | `product`, `invocation.kind`, `system.version`, `system.baseline`, `arm` | Lo que **esa invocación** (`run` o `resume`) gastó ella sola, nunca el acumulado de la tarea | USD |
 | `agentic.invocation.rework_usd` | ídem | Retrabajo de esa invocación sola | USD |
 | `agentic.invocation.duration` | ídem | Tiempo de reloj de esa invocación | s |
 | `agentic.invocation.returns` | ídem + `return.category` | Devoluciones que esa invocación registró, una muestra por categoría (ninguna si no hubo) | — |
-| `agentic.task.invocations` | `product`, `invocation.kind`, `task.status`, `system.version` | 1, una muestra por invocación, con el estado en el que terminó (incluye `crashed`, que solo existe en telemetría) | — |
-| `agentic.task.paused` | `product`, `invocation.kind`, `escalation.class`, `system.version` | 1, una muestra por pausa; una invocación que se cae ya pausada (crash de un resume) no la repite: solo cuenta cuando esa invocación causó la pausa, comparando `escalated`/`escalation_class` contra el estado con el que entró | — |
-| `agentic.task.human_decisions` | `product`, `invocation.kind`, `system.version` | 1, una muestra por decisión que el humano dio al reanudar | — |
+| `agentic.task.invocations` | `product`, `invocation.kind`, `task.status`, `system.version`, `system.baseline`, `arm` | 1, una muestra por invocación, con el estado en el que terminó (incluye `crashed`, que solo existe en telemetría) | — |
+| `agentic.task.paused` | `product`, `invocation.kind`, `escalation.class`, `system.version`, `system.baseline`, `arm` | 1, una muestra por pausa; una invocación que se cae ya pausada (crash de un resume) no la repite: solo cuenta cuando esa invocación causó la pausa, comparando `escalated`/`escalation_class` contra el estado con el que entró | — |
+| `agentic.task.human_decisions` | `product`, `invocation.kind`, `system.version`, `system.baseline`, `arm` | 1, una muestra por decisión que el humano dio al reanudar | — |
 
 `role.slug` es el `Role.slug` de la corrida (17 valores; `unknown` en una corrida grabada
 antes de este campo). `phase` ∈ {definition, plan, development, review} (`rules.phase_of`,
@@ -191,7 +196,7 @@ no deja ninguna de las tres.
 
 | Métrica | Labels | Valor | Unidad |
 |---|---|---|---|
-| `agentic.interview.rounds` | `product`, `interview`, `system.version` | Ciclos de pregunta-respuesta que completó la entrevista (no cuenta la ronda de cierre, que no le pregunta nada al entrevistado) | — |
+| `agentic.interview.rounds` | `product`, `interview`, `system.version`, `system.baseline`, `arm` | Ciclos de pregunta-respuesta que completó la entrevista (no cuenta la ronda de cierre, que no le pregunta nada al entrevistado) | — |
 | `agentic.interview.questions` | ídem + `to` | Preguntas de la entrevista por destino: una muestra por cada uno de {interviewee, pm, human} | — |
 | `agentic.interview.invariants` | ídem que `agentic.interview.rounds` + `state` | Invariantes propuestos por el entrevistador (`state=proposed`), y los que el plan adoptó de esa misma patch, cuando la patch trae su propia clave `invariants` (`state=adopted`, solo en la entrevista de solución) | — |
 
@@ -231,8 +236,8 @@ momento.
 
 | Métrica | Labels | Valor | Unidad |
 |---|---|---|---|
-| `agentic.delivery.outcome` | `product`, `system.version`, `prompts.fingerprint`, `task.type`, `outcome` | 1, una muestra con `outcome` ∈ {merged, merged_with_changes, closed} | — |
-| `agentic.delivery.human_commits` | `product`, `system.version`, `prompts.fingerprint`, `task.type` | Commits del pull request que son del humano, no del sistema (por email de autor de git, nunca por login) | — |
+| `agentic.delivery.outcome` | `product`, `system.version`, `system.baseline`, `arm`, `prompts.fingerprint`, `task.type`, `outcome` | 1, una muestra con `outcome` ∈ {merged, merged_with_changes, closed} | — |
+| `agentic.delivery.human_commits` | `product`, `system.version`, `system.baseline`, `arm`, `prompts.fingerprint`, `task.type` | Commits del pull request que son del humano, no del sistema (por email de autor de git, nunca por login) | — |
 | `agentic.delivery.human_lines_changed` | ídem | `additions` + `deletions` de esos commits humanos; 0 si el humano fusionó la entrega tal cual | — |
 | `agentic.delivery.time_to_merge` | ídem | Segundos desde que se abrió el pull request (`createdAt`) hasta que se fusionó (`mergedAt`); ausente si nunca se fusionó, porque no hay nada que medir | s |
 

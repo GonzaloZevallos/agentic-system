@@ -12,7 +12,12 @@ from .. import plugins
 
 
 class FilesystemTaskDocuments:
-    def __init__(self, product_dir: Path, system_version: Callable[[], str] | None = None):
+    def __init__(
+        self,
+        product_dir: Path,
+        system_version: Callable[[], str] | None = None,
+        system_baseline: Callable[[], str] | None = None,
+    ):
         self.product_dir = product_dir
         # The joinable version label's producer (`telemetry.system_version`, wired by
         # `composition.default_ports`): injected rather than computed here, which is
@@ -20,6 +25,10 @@ class FilesystemTaskDocuments:
         # adapter, the graph regression's own included -- writes today's document plus
         # nothing (`document.render`'s own docstring).
         self.system_version = system_version
+        # `telemetry.system_baseline`'s own producer, the same injection for the same
+        # reason (ADR-0030): `None` writes today's document plus nothing, same as an
+        # absent `system_version`.
+        self.system_baseline = system_baseline
 
     def path_for(self, task_id: str) -> Path:
         return self.product_dir / document.relative_path(task_id)
@@ -28,7 +37,14 @@ class FilesystemTaskDocuments:
         path = self.path_for(state["id"])
         path.parent.mkdir(parents=True, exist_ok=True)
         version = self.system_version() if self.system_version is not None else None
-        text = document.render(state, system_commit(), plugins.version(), version)
+        baseline = self.system_baseline() if self.system_baseline is not None else None
+        text = document.render(
+            state,
+            system_commit=system_commit(),
+            plugins=plugins.version(),
+            system_version=version,
+            system_baseline=baseline,
+        )
         path.write_text(text, encoding="utf-8")
         return path
 

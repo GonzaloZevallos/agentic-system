@@ -52,7 +52,14 @@ git -C "$dir" checkout --quiet --detach "$sha"
 # the script is likely inside the venv of the checkout they are editing.
 (cd "$dir" && env -u VIRTUAL_ENV uv sync --quiet --locked)
 
+# Information only, resolved fresh against this checkout (ADR-0030): `bl-*` is the only
+# shape ADR-0028 gives a baseline tag, so a spike tag or a `v0.1` never becomes one. The
+# printed run command below is deliberately NOT prefixed with it -- a copied command
+# outlives the next re-pin and would mislabel every run under it with no `+dirty` to
+# tell, the one thing this script must not do (ADR-0030).
+baseline="$(git -C "$dir" describe --tags --abbrev=0 --match 'bl-*' 2>/dev/null || echo untagged)"
+
 echo
-echo "stage0 at $dir, fixed to $(git -C "$dir" rev-parse --short HEAD)"
+echo "stage0 at $dir, fixed to $(git -C "$dir" rev-parse --short HEAD), baseline $baseline"
 echo "run a task with:"
 echo "    (cd $dir && uv run agentic run --issue N --product-dir $here)"

@@ -13,7 +13,7 @@ import anyio
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
-from agentic import cli
+from agentic import cli, composition
 from agentic.core.measurement.domain import evaluation
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.adapters.github import inbox
@@ -271,7 +271,7 @@ async def test_a_paused_task_resumes_through_the_cli_and_run_refuses_to_redo_it(
     )
     ports = memory_ports(script)
     ports.workspace.moved.add(MemoryWorkspace.ROOT / "GH-1")
-    monkeypatch.setattr(cli, "graph", build_graph(lambda cfg: ports))
+    monkeypatch.setattr(cli, "graph", build_graph(lambda cfg: ports, arm_for=composition._arm_for))
     monkeypatch.setenv("AGENTIC_PRODUCT_DIR", str(tmp_path))
     monkeypatch.setenv("AGENTIC_TASK_MAX_BUDGET_USD", "0.7")
     cfg = Configuration.from_sources({}, os.environ)
@@ -328,7 +328,7 @@ async def test_the_log_file_travels_in_configurable_to_every_node(monkeypatch, t
         seen.append(cfg)
         return memory_ports(ScriptedRunner(pjm=[classified()]))
 
-    graph = build_graph(ports_for)
+    graph = build_graph(ports_for, arm_for=composition._arm_for)
     monkeypatch.setattr(cli, "graph", graph)
     monkeypatch.setenv("AGENTIC_PRODUCT_DIR", str(tmp_path))
     cfg = Configuration.from_sources({}, os.environ)
@@ -399,7 +399,7 @@ async def test_a_resume_emits_only_what_it_spent_never_the_tasks_whole_cost(
     )
     ports = memory_ports(script)
     ports.workspace.moved.add(MemoryWorkspace.ROOT / "GH-1")
-    monkeypatch.setattr(cli, "graph", build_graph(lambda cfg: ports))
+    monkeypatch.setattr(cli, "graph", build_graph(lambda cfg: ports, arm_for=composition._arm_for))
     monkeypatch.setenv("AGENTIC_PRODUCT_DIR", str(tmp_path))
     monkeypatch.setenv("AGENTIC_TASK_MAX_BUDGET_USD", "0.7")
     cfg = Configuration.from_sources({}, os.environ)
