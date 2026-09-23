@@ -163,6 +163,10 @@ class Output:
     # (`RawResult.turn_notice`'s own docstring); the run's total also folds in every
     # `failures` entry's own flag (`_run_notice`).
     turn_notice: bool = False
+    # How many times the live notice fired during the delivering attempt alone
+    # (`RawResult.turn_notice_firings`'s own docstring); the run's total also folds in
+    # every `failures` entry's own count (`_run_notice_firings`).
+    turn_notice_firings: int = 0
     # Calls to the delivery tool during the delivering attempt alone
     # (`RawResult.deliveries`'s own docstring); the run's total also folds in every
     # `failures` entry's own count (`_run_deliveries`).
@@ -374,6 +378,7 @@ async def run_with_retry(
                     "cold_fallback": fallback_now,
                     "denials": exc.denials,
                     "turn_notice": exc.turn_notice,
+                    "turn_notice_firings": exc.turn_notice_firings,
                     "deliveries": exc.deliveries,
                     "presubmit_denials": exc.presubmit_denials,
                 }
@@ -480,6 +485,7 @@ async def _attempt(
             reason="schema",
             denials=result.denials,
             turn_notice=result.turn_notice,
+            turn_notice_firings=result.turn_notice_firings,
             deliveries=result.deliveries,
             presubmit_denials=result.presubmit_denials,
         )
@@ -493,6 +499,7 @@ async def _attempt(
             reason="schema",
             denials=result.denials,
             turn_notice=result.turn_notice,
+            turn_notice_firings=result.turn_notice_firings,
             deliveries=result.deliveries,
             presubmit_denials=result.presubmit_denials,
         ) from exc
@@ -507,6 +514,7 @@ async def _attempt(
                 reason="check",
                 denials=result.denials,
                 turn_notice=result.turn_notice,
+                turn_notice_firings=result.turn_notice_firings,
                 deliveries=result.deliveries,
                 presubmit_denials=result.presubmit_denials,
             ) from exc
@@ -519,6 +527,7 @@ async def _attempt(
             reason="schema",
             denials=result.denials,
             turn_notice=result.turn_notice,
+            turn_notice_firings=result.turn_notice_firings,
             deliveries=result.deliveries,
             presubmit_denials=result.presubmit_denials,
         )
@@ -536,6 +545,7 @@ async def _attempt(
         subagent_cost_usd=_subagent_cost_usd(result.cost_by_model, model),
         denials=result.denials,
         turn_notice=result.turn_notice,
+        turn_notice_firings=result.turn_notice_firings,
         deliveries=result.deliveries,
         presubmit_denials=result.presubmit_denials,
     )
@@ -595,6 +605,7 @@ def run_record(state: TaskState, role: Role, section: str, output: Output) -> Ro
         "failed_cost_usd": spent(output.failures),
         "denials": output.denials,
         "turn_notice": output.turn_notice,
+        "turn_notice_firings": output.turn_notice_firings,
         "deliveries": output.deliveries,
         "presubmit_denials": output.presubmit_denials,
     }
@@ -608,12 +619,26 @@ def _run_denials(output: Output) -> int:
     return output.denials + sum(f.get("denials", 0) for f in output.failures)
 
 
-def _run_notice(output: Output) -> bool:
-    """Whether the live turn-budget notice fired at any point in the run
-    (`domain/turn_notice.py`): the delivering attempt's own flag, or any recorded
+def _run_notice_firings(output: Output) -> int:
+    """How many times the live notice fired anywhere in the run
+    (`domain/turn_notice.py`): the delivering attempt's own count, plus every recorded
     failure's — the same fold `_run_denials` gives denials, so a run cut once despite
-    the notice and delivering clean on the next attempt still reads as warned."""
-    return output.turn_notice or any(f.get("turn_notice", False) for f in output.failures)
+    the notice and delivering clean on the next attempt still counts every firing, not
+    only the delivering attempt's own."""
+    return output.turn_notice_firings + sum(
+        f.get("turn_notice_firings", 0) for f in output.failures
+    )
+
+
+def _run_notice_cut(output: Output) -> bool:
+    """Whether any recorded failure of this run was the harness cutting the attempt on
+    the turn cap: what distinguishes `turn_notice.notice_note`'s two variants — a run
+    that entered the close-out window and delivered in the same attempt from one that
+    entered it, was cut, and only delivered on a later attempt. Independent of
+    `_run_notice_firings`: a role the notice does not cover can still be cut, though
+    `_section_text` never asks this question for one, since it gates on firings > 0
+    first."""
+    return any(f.get("reason") == "max_turns" for f in output.failures)
 
 
 def _run_deliveries(output: Output) -> int:
@@ -634,8 +659,8 @@ def _section_text(role: Role, output: Output) -> str:
     notes = []
     if count := _run_denials(output):
         notes.append(rules.denial_note(role, count))
-    if _run_notice(output):
-        notes.append(turn_notice.notice_note())
+    if firings := _run_notice_firings(output):
+        notes.append(turn_notice.notice_note(cut=_run_notice_cut(output), firings=firings))
     if (count := _run_deliveries(output)) > 1:
         notes.append(rules.deliveries_note(count))
     if notes:

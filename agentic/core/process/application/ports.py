@@ -68,6 +68,11 @@ class RawResult:
     # every other role, which never gets that hook wired at all (the same shape
     # `denials` has for a role that executes).
     turn_notice: bool = False
+    # How many times the notice fired during this run (`domain/turn_notice.py`; ADR-0004,
+    # seventh addendum, revised by its 2026-09-22 addendum): a fact beside `turn_notice`,
+    # never replacing it (ADR-0008: added, never renamed). `0` for every run `turn_notice`
+    # is `False` for, and for every run recorded before this field existed.
+    turn_notice_firings: int = 0
     # `tool_calls[DELIVERY_TOOL]` (glossary: Emisión de entrega), exposed as its own
     # field because an attempt that never delivers still needs the number: `tool_calls`
     # itself is only returned on the happy path, while this travels through
@@ -108,6 +113,7 @@ class AttemptFailed(Exception):
         reason: FailureReason = "other",
         denials: int = 0,
         turn_notice: bool = False,
+        turn_notice_firings: int = 0,
         deliveries: int = 0,
         presubmit_denials: int = 0,
     ):
@@ -123,6 +129,10 @@ class AttemptFailed(Exception):
         # (`RawResult.turn_notice`'s own docstring); `False` at every raise site but
         # the runner's own.
         self.turn_notice = turn_notice
+        # How many times the notice fired before this attempt broke (`RawResult.
+        # turn_notice_firings`'s own docstring); `0` at every raise site but the
+        # runner's own.
+        self.turn_notice_firings = turn_notice_firings
         # Calls to the delivery tool this attempt saw before it broke
         # (`RawResult.deliveries`' own docstring); `0` means none were seen, never
         # "unknown" -- every one of the runner's six raise sites sets it from the same
