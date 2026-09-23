@@ -112,8 +112,9 @@ escalated, failed}: el veredicto de la patch (`escalated`, `status`) se aplica s
 corrida contra la que se escribió (la última cuya sección es una clave de
 `patch["sections"]`) y a la muestra residual cuando no hay ninguna; toda otra corrida de
 una patch con varias (una entrevista) es `delivered`. `reason` ∈ {schema, check, max_turns,
-limit, sdk, other}, decidido en el sitio donde se lanza `AttemptFailed`, nunca por parsear
-el mensaje de error.
+limit, account_limit, upstream, sdk, other}, decidido en el sitio donde se lanza
+`AttemptFailed`, nunca por parsear el mensaje de error; `account_limit` y `upstream` salen de
+`sdk` para lo externo, sin renombrar nada (ADR-0029).
 
 ### `ResultMessage.usage` es por llamada, no acumulado de la sesión
 

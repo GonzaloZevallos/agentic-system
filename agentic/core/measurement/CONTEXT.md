@@ -39,8 +39,13 @@ _Campo_: baseline — de la evaluación de modelos; `baseline_id` del set de eva
 **Scorecard**:
 Las cuatro métricas del sistema, en orden, que dicen si una línea de base es mejor que otra:
 autonomía (entregas fusionadas limpias sobre tareas terminadas), fallos propios por tarea (sin
-los de límite de cuenta), costo por entrega y retrabajo. Mejora si la primera no baja y la
-segunda baja; las otras dos desempatan. Es una consulta sobre las muestras, no una muestra.
+los de límite de cuenta ni los de caída del proveedor), costo por entrega y retrabajo. Mejora si
+la primera no baja y la segunda baja; las otras dos desempatan. Es una consulta sobre las
+muestras, no una muestra. "Propios" se lee sobre el motivo del fallo: quedan afuera los dos
+motivos externos (`account_limit`, el límite de la cuenta del proveedor, y `upstream`, su caída)
+y quedan adentro los nuestros, el tope por intento (`limit`) incluido, que es una configuración
+nuestra y no de nadie más. Los fallos anteriores al commit que separó esos motivos llevan
+`sdk` y no se reescriben, así que esta cuenta no se compara de un lado al otro de ese commit.
 _Avoid_: KPI, north star, índice
 _Campo_: scorecard — Kaplan y Norton; la lectura como orden lexicográfico es propia
 
