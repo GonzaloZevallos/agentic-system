@@ -333,17 +333,18 @@ async def test_the_turn_notice_hook_re_fires_on_every_later_event_with_a_rising_
     assert first_context != second_context
 
 
-async def test_the_turn_notice_hook_ignores_agent_id_and_reads_the_shared_counter_instead():
-    # No filter on `agent_id` any more: whether this fires is entirely down to
-    # `turns.value`, which the runner's stream loop already keeps main-thread-only
-    # (`parent_tool_use_id is None`) -- so a payload carrying `agent_id` still fires
-    # once the shared counter is past the threshold.
+async def test_the_turn_notice_hook_still_ignores_a_sub_agents_own_event():
+    # The counter itself no longer needs the `agent_id` filter to stay main-thread-only
+    # (`parent_tool_use_id is None` already guarantees that on the runner's side), but
+    # firing still checks it: a sub-agent's own `PostToolUse` is not this role's turn,
+    # and injecting `additionalContext` there would land in the sub-agent's own
+    # conversation, not the one the close-out is meant to reach -- even with the shared
+    # counter already past the threshold, this must stay quiet.
     role = replace(DEVELOPER, max_turns=40)
     turns = hooks.TurnCount(value=15)
     matchers = hooks.hooks_for(role, CWD, None, turns=turns)
     payload = {"tool_name": "Bash", "tool_input": {}, "cwd": str(CWD), "agent_id": "sub-1"}
-    (output,) = await call(matchers, "PostToolUse", payload)
-    assert "additionalContext" in output["hookSpecificOutput"]
+    assert await call(matchers, "PostToolUse", payload) == [{}]
 
 
 async def test_the_turn_notice_hook_is_quiet_before_the_threshold():

@@ -43,14 +43,18 @@ addendum, issue #102) is a `PostToolUse` matcher, wired only for a role
 `TurnCount`, one mutable holder per attempt, constructed and incremented by
 `ClaudeSdkRunner.run_once`'s own stream loop (the runner's main-thread
 `AssistantMessage` tally, `domain/turn_notice.py`'s own counted quantity) and passed
-down the same parameter path `on_notice` already travels. No `agent_id` filter here
-any more: the counter it reads is already main-thread-only by construction
-(`message.parent_tool_use_id is None`), so a `PostToolUse` event that happens to carry
-one changes nothing about whether this fires. Once the count reaches the role's
-threshold it returns `additionalContext` on every later call too, each one carrying
-its own firing index (`domain/turn_notice.notice_context`) — a re-firing close-out
-window, not the one-shot advisory it replaces, because that advisory fired in every
-recorded `max_turns` cut and changed nothing (ADR-0004's revising addendum). Never a
+down the same parameter path `on_notice` already travels. The counter itself needs no
+`agent_id` filter any more to stay correct: it is already main-thread-only by
+construction (`message.parent_tool_use_id is None`). Firing still checks `agent_id`
+on the event, though, for a different reason than counting ever was — a sub-agent's
+own `PostToolUse` is not this role's turn, and injecting `additionalContext` there
+would land in a sub-agent's own conversation, not the one the close-out is meant to
+reach, and would count as a firing this module's own calibrating constant is not
+about. Once the count reaches the role's threshold, every later main-thread call
+returns `additionalContext` too, each one carrying its own firing index
+(`domain/turn_notice.notice_context`) — a re-firing close-out window, not the
+one-shot advisory it replaces, because that advisory fired in every recorded
+`max_turns` cut and changed nothing (ADR-0004's revising addendum). Never a
 `permissionDecision`: `PostToolUseHookSpecificOutput` structurally carries none
 (ADR-0011, fourth addendum), so this can only ever add context, never narrow what the
 role may run.
@@ -245,12 +249,18 @@ def _turn_notice(
 ) -> HookCallback | None:
     """The `PostToolUse` callback that fires the live turn-budget notice, or `None` for
     a role `turn_notice.threshold_for` does not cover. `turns` is read, never
-    incremented, here (`TurnCount`'s own docstring: the stream loop owns the write).
-    `firings` is this callback's own closure state, distinct from `turns.value`: how
-    many times *this* hook has fired this attempt, which is what `notice_context`
-    reports as each firing's own index. No latch: once `turns.value` reaches the
-    threshold, every later `PostToolUse` event fires again, each with its own index --
-    the re-firing close-out window `domain/turn_notice.py`'s docstring argues for,
+    incremented, here (`TurnCount`'s own docstring: the stream loop owns the write) --
+    that is the counter the threshold is evaluated against, main-thread-only by
+    construction. Firing itself stays gated to a main-thread event too
+    (`data.get("agent_id") is None`): the counter no longer needs the filter to stay
+    correct, but a sub-agent's own `PostToolUse` is not this role's turn, and its own
+    conversation is not where a close-out directive belongs, or where a firing this
+    constant is calibrated against should be counted from. `firings` is this
+    callback's own closure state, distinct from `turns.value`: how many times *this*
+    hook has fired this attempt, which is what `notice_context` reports as each
+    firing's own index. No latch: once `turns.value` reaches the threshold, every
+    later main-thread `PostToolUse` event fires again, each with its own index -- the
+    re-firing close-out window `domain/turn_notice.py`'s docstring argues for,
     replacing the one-shot advisory that fired in every recorded cut and changed
     nothing."""
     threshold = turn_notice.threshold_for(role)
@@ -262,6 +272,8 @@ def _turn_notice(
         data: HookInput, tool_use_id: str | None, context: HookContext
     ) -> HookJSONOutput:
         nonlocal firings
+        if data.get("agent_id") is not None:
+            return {}  # a sub-agent's own call: not this role's turn, not its context
         count = turns.value if turns is not None else 0
         if not turn_notice.should_notice(role, count):
             return {}

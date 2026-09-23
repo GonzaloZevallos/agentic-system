@@ -418,8 +418,12 @@ este conteo no puede quedar atrás del tope como el anterior podía. El cambio e
 adentro de esa rama que ya existe (`turns.value += 1`, `hooks.TurnCount`), y un holder mutable
 construido junto a `_mark_notice` que viaja por el mismo parámetro que `on_notice` ya recorre
 — `calls` y cada métrica que alimenta quedan byte a byte iguales. El filtro por `agent_id`
-desaparece con el conteo que protegía: `parent_tool_use_id` ya excluye el mensaje de un
-sub-agente en el conteo, así que el hook no necesita mirar la atribución de nuevo.
+que protegía el conteo desaparece con el conteo mismo: `parent_tool_use_id` ya excluye el
+mensaje de un sub-agente del lado del runner, así que el conteo no necesita mirar la
+atribución de nuevo. El hook sí sigue mirando `agent_id`, pero por otra razón: disparar
+sobre el evento de un sub-agente pondría la frase de cierre en la conversación de ese
+sub-agente, no en la del rol que tiene que leerla, y sumaría un disparo a la cuenta con la
+que se calibra la constante que no es ninguno de los suyos.
 
 **Lo que este cambio no alcanza a cubrir, dicho en vez de escondido.** Una cola sin ninguna
 llamada a herramienta de hilo principal — un turno final de solo texto — sigue sin recibir
