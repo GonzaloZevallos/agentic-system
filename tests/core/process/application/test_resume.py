@@ -146,6 +146,22 @@ def test_a_document_written_before_the_prd_rename_still_resumes():
     assert rules.resume_target(resumed) == "plan"
 
 
+def test_a_document_written_before_system_baseline_existed_still_resumes():
+    # No `system_baseline` line at all -- a document from before this task, carrying
+    # only `system_version` -- still resumes (ADR-0030): neither key was ever part of
+    # `TaskState`, so `STATE_FIELDS` already drops both, the same path a legacy
+    # document without `proposed_invariants` takes above.
+    old = (
+        "---\nid: GH-3\ntitle: t\nstatus: open\nsystem_version: abc1234\n---\n\n"
+        "# t\n\n## Original request\n\nd\n"
+    )
+    ports = memory_ports()
+    ports.documents.save(document.parse(old))
+    resumed = resume.from_document("GH-3", ports)
+    assert "system_baseline" not in resumed
+    assert "system_version" not in resumed
+
+
 def test_the_document_is_refused_when_git_moved_since():
     ports = memory_ports()
     ports.workspace.existing_branches.update(

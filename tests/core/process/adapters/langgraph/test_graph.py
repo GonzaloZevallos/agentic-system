@@ -121,7 +121,9 @@ def compiled(script: ScriptedRunner, telemetry=NoTelemetry(), fakes=None, saver=
             commands=MemoryCommands(),
         )
 
-    return build_graph(ports_for, telemetry).compile(checkpointer=saver or InMemorySaver())
+    return build_graph(ports_for, telemetry, arm_for=composition._arm_for).compile(
+        checkpointer=saver or InMemorySaver()
+    )
 
 
 class _Rooted:
@@ -759,7 +761,7 @@ async def test_a_tasks_rework_usd_equals_the_sum_of_its_role_samples_end_to_end(
             pm=[verdict("returned", "gap"), verdict("approved")],
             **technical(),
         )
-        with telemetry.task_span("GH-1", "t", "gym-saas") as run:
+        with telemetry.task_span("GH-1", "t", "gym-saas", arm="default") as run:
             final = await run_graph(script, config, telemetry)
             run.finish(final)
     finally:
@@ -785,7 +787,7 @@ async def test_each_node_opens_and_finishes_the_roles_span(config):
             pm=[verdict("returned", "gap"), verdict("approved")],
             **technical(),
         )
-        with telemetry.task_span("GH-1", "t", "gym-saas") as run:
+        with telemetry.task_span("GH-1", "t", "gym-saas", arm="default") as run:
             run.finish(await run_graph(script, config, telemetry))
     finally:
         telemetry.configure()
@@ -914,7 +916,11 @@ async def test_a_crash_in_a_node_still_finishes_the_roles_span(config):
             )
 
         with pytest.raises(OSError, match="read-only"):
-            await build_graph(ports_for, telemetry).compile().ainvoke(TASK, config=config)
+            await (
+                build_graph(ports_for, telemetry, arm_for=composition._arm_for)
+                .compile()
+                .ainvoke(TASK, config=config)
+            )
     finally:
         telemetry.configure()
     pm = exporter.get_finished_spans()[-1]

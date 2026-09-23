@@ -66,6 +66,10 @@ SERVICE_NAME = "agentic-system"
 # The checkout that executes this run, and whose sha the version names. With the system
 # as a product, the copy being edited is another one (`shared.stage0`; ADR-0017).
 REPO = CHECKOUT
+# The shape ADR-0028 gives a baseline tag (`bl-YYYY-MM-DD`), so `system_baseline`'s
+# `git describe --match` only ever resolves a tag the human declared as one, never the
+# first `v0.1` or spike tag someone pushes into the same repository (ADR-0030).
+BASELINE_TAG_GLOB = "bl-*"
 
 # The API still exports the synchronous gauge under a private name.
 Gauge = metrics._Gauge
@@ -76,6 +80,7 @@ _meter_provider: MeterProvider | None = None
 _configured = False
 _instruments: Instruments | None = None
 _version: str | None = None
+_baseline: str | None = None
 
 
 def resource() -> Resource:
@@ -109,6 +114,34 @@ def _git_version() -> str:
     except (OSError, subprocess.CalledProcessError):
         return "unknown"
     return f"{sha}+dirty" if dirty else sha
+
+
+def system_baseline() -> str:
+    """The human-declared baseline this checkout is compared against (ADR-0028): the
+    exact twin of `system_version()` above. `AGENTIC_SYSTEM_BASELINE` overrides it;
+    else `git describe --tags --abbrev=0 --match` `BASELINE_TAG_GLOB` against `REPO`,
+    the same repository `_git_version` reads; else the literal `untagged` -- git
+    answered and no `bl-*` tag reaches this commit, a real label value, distinct from
+    `unknown` (the document said nothing, `cli.UNKNOWN_SYSTEM_VERSION`'s own case).
+    Same module-level memoisation as `system_version`."""
+    global _baseline
+    if _baseline is None:
+        _baseline = os.environ.get("AGENTIC_SYSTEM_BASELINE") or _git_baseline()
+    return _baseline
+
+
+def _git_baseline() -> str:
+    try:
+        git = ["git", "-C", str(REPO)]
+        out = subprocess.run(
+            [*git, "describe", "--tags", "--abbrev=0", "--match", BASELINE_TAG_GLOB],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return "untagged"
+    return out or "untagged"
 
 
 def meter_provider_for(reader: MetricReader) -> MeterProvider:
@@ -382,19 +415,33 @@ def instruments() -> Instruments:
 
 
 def _delivery_labels(
-    product: str, task_type: str, prompts_fingerprint: str, system_version: str
+    product: str,
+    task_type: str,
+    prompts_fingerprint: str,
+    system_version: str,
+    *,
+    system_baseline: str,
+    arm: str,
 ) -> dict[str, str]:
     """The one label set every `agentic.delivery.*` sample carries: `product`,
-    `system.version`, `prompts.fingerprint`, `task.type`. `agentic.delivery.outcome`
-    adds its own `outcome` on top of this, in `record_delivery` below; no emission
-    site spells this set by hand, the way `RoleRun._cold_fallback_labels` is the one
-    helper its own family reads from. `system_version` is the caller's own: unlike
-    every other family here, a delivery sample names the *delivering* run's version
-    (the task document's own `system_version`, ADR-0008), never the checkout `close`
-    happens to run from -- the two are typically different checkouts entirely."""
+    `system.version`, `system.baseline`, `arm`, `prompts.fingerprint`, `task.type`.
+    `agentic.delivery.outcome` adds its own `outcome` on top of this, in
+    `record_delivery` below; no emission site spells this set by hand, the way
+    `RoleRun._cold_fallback_labels` is the one helper its own family reads from.
+    `system_version` is the caller's own: unlike every other family here, a delivery
+    sample names the *delivering* run's version (the task document's own
+    `system_version`, ADR-0008), never the checkout `close` happens to run from -- the
+    two are typically different checkouts entirely. `system_baseline` and `arm` follow
+    the same rule (ADR-0030): every sample an invocation emits names that invocation's
+    live arm (`Configuration`, read at the span's own open); a delivery sample names
+    the arm recorded in the document instead -- the arm that planned the task. For a
+    task resumed under another arm the two differ, exactly as their versions
+    already can."""
     return {
         "product": product,
         "system.version": system_version,
+        "system.baseline": system_baseline,
+        "arm": arm,
         "prompts.fingerprint": prompts_fingerprint,
         "task.type": task_type,
     }
@@ -406,6 +453,8 @@ def record_delivery(
     task_type: str,
     prompts_fingerprint: str,
     system_version: str,
+    system_baseline: str,
+    arm: str,
     outcome: system_metrics.DeliveryOutcome,
     human_commits: int,
     human_lines_changed: int,
@@ -424,10 +473,18 @@ def record_delivery(
     checkout than the one that delivered, and the sample must still name the run it
     judges; `close` is also where the single `"unknown"` literal for an absent, empty
     or null document value belongs, this function takes whatever string it is given
-    verbatim."""
+    verbatim. `system_baseline` and `arm` are the document's own too, for the same
+    reason (`_delivery_labels`'s own docstring)."""
     with _EMIT_LOCK:
         i = instruments()
-        labels = _delivery_labels(product, task_type, prompts_fingerprint, system_version)
+        labels = _delivery_labels(
+            product,
+            task_type,
+            prompts_fingerprint,
+            system_version,
+            system_baseline=system_baseline,
+            arm=arm,
+        )
         i.delivery_outcome.set(1, {**labels, "outcome": outcome})
         i.delivery_human_commits.set(human_commits, labels)
         i.delivery_human_lines_changed.set(human_lines_changed, labels)
@@ -444,6 +501,11 @@ class Run:
     # The product this run worked on. Not a default: a sample with no product is a sample
     # that adds up with the other product's, which is the bug (issue #47).
     product: str = ""
+    # The arm this run's own `Configuration` carried at the span's open
+    # (`metrics.arm_label`), ADR-0030 -- stamped on every sample this run emits, the
+    # same way `product` is: a field of the dataclass so every label helper below can
+    # read `self.arm`, never `metrics.arm_label` a second time over a patch or a state.
+    arm: str = ""
     started: float = field(default_factory=time.monotonic)
 
     @property
@@ -483,6 +545,8 @@ class TaskRun(Run):
             "task.type": final.get("type", "unknown"),
             "task.status": status,
             "system.version": system_version(),
+            "system.baseline": system_baseline(),
+            "arm": self.arm,
             "prompts.fingerprint": system_metrics.prompts_fingerprint(final),
         }
         self.span.set_attributes(
@@ -542,6 +606,8 @@ class TaskRun(Run):
             "product": self.product,
             "invocation.kind": kind,
             "system.version": system_version(),
+            "system.baseline": system_baseline(),
+            "arm": self.arm,
         }
         new_pause = after.get("escalated") and (
             before.get("escalated") != after.get("escalated")
@@ -643,6 +709,8 @@ class RoleRun(Run):
             "phase": phase_of(run.get("section", run["role"])),
             "role.outcome": system_metrics.role_run_outcome(patch, run),
             "system.version": system_version(),
+            "system.baseline": system_baseline(),
+            "arm": self.arm,
         }
 
     def _cold_fallback_labels(self, role_slug: str, phase: str) -> dict[str, str]:
@@ -660,6 +728,8 @@ class RoleRun(Run):
             "role.slug": role_slug,
             "phase": phase,
             "system.version": system_version(),
+            "system.baseline": system_baseline(),
+            "arm": self.arm,
         }
 
     def _emit_run(self, patch: TaskState, run: RoleRunRecord) -> None:
@@ -739,6 +809,8 @@ class RoleRun(Run):
             "phase": system_metrics.residual_phase(patch),
             "role.outcome": system_metrics.residual_outcome(patch),
             "system.version": system_version(),
+            "system.baseline": system_baseline(),
+            "arm": self.arm,
         }
         value = system_metrics.residual_cost_usd(patch)
 
@@ -765,6 +837,8 @@ class RoleRun(Run):
             "role.slug": role_slug,
             "phase": phase,
             "system.version": system_version(),
+            "system.baseline": system_baseline(),
+            "arm": self.arm,
         }
         counts = system_metrics.failures_by_reason(failures)
         costs = system_metrics.failure_cost_by_reason(failures)
@@ -791,6 +865,8 @@ class RoleRun(Run):
             "product": self.product,
             "review.kind": patch.get("review_kind", "unknown"),
             "system.version": system_version(),
+            "system.baseline": system_baseline(),
+            "arm": self.arm,
         }
         counts: dict[tuple[str, str, str], int] = {}
         for item in patch["findings"]:
@@ -827,6 +903,8 @@ class RoleRun(Run):
             "role.slug": self.slug or "unknown",
             "phase": phase_of(target.get("section", target["role"])) if target else "unknown",
             "system.version": system_version(),
+            "system.baseline": system_baseline(),
+            "arm": self.arm,
         }
         for index, results in enumerate(invocations):
             final = index == last
@@ -857,6 +935,8 @@ class RoleRun(Run):
             "product": self.product,
             "interview": stats["interview"],
             "system.version": system_version(),
+            "system.baseline": system_baseline(),
+            "arm": self.arm,
         }
         questions = system_metrics.interview_questions(stats)
 
@@ -935,18 +1015,30 @@ def _outcome(patch: TaskState, *, delivered: bool) -> str:
 
 
 @contextmanager
-def task_span(task_id: str, title: str, product: str) -> Iterator[TaskRun]:
+def task_span(task_id: str, title: str, product: str, *, arm: str) -> Iterator[TaskRun]:
     """The root of the task's trace; its name is what Langfuse lists. The title stays
-    local: the collector strips it before Grafana Cloud. `product` is on the span from
-    the start, so a crashed run is still attributable to one of the two."""
+    local: the collector strips it before Grafana Cloud. `product`, `system.baseline`
+    and `arm` are on the span from the start, so a crashed run is still attributable
+    to all three (ADR-0030) -- `system.baseline` and `arm` spelled bare, like
+    `product`, since ADR-0008's 2026-09-17 rule keeps a key's bare spelling wherever
+    span and metric already write it identically. `arm` is required and keyword-only:
+    a default would let a missed wiring mislabel a whole arm silently, exactly what
+    the label exists to prevent."""
     with tracer().start_as_current_span(
-        task_id, attributes={"task.id": task_id, "task.title": title, "product": product}
+        task_id,
+        attributes={
+            "task.id": task_id,
+            "task.title": title,
+            "product": product,
+            "system.baseline": system_baseline(),
+            "arm": arm,
+        },
     ) as span:
-        yield TaskRun(span, product=product)
+        yield TaskRun(span, product=product, arm=arm)
 
 
 @contextmanager
-def role_span(role_name: str, role_slug: str, product: str) -> Iterator[RoleRun]:
+def role_span(role_name: str, role_slug: str, product: str, *, arm: str) -> Iterator[RoleRun]:
     """One role run, named and typed for the OpenTelemetry GenAI semantic conventions
     (ADR-0008, addendum): `invoke_agent <role_name>`, `gen_ai.operation.name` =
     `invoke_agent`, the role identified by `gen_ai.agent.name` (`Role.name`) and
@@ -972,9 +1064,11 @@ def role_span(role_name: str, role_slug: str, product: str) -> Iterator[RoleRun]
             "role": role_name,
             "product": product,
             "langfuse.observation.type": "agent",
+            "system.baseline": system_baseline(),
+            "arm": arm,
         },
     ) as span:
-        yield RoleRun(span, product=product, role=role_name, slug=role_slug)
+        yield RoleRun(span, product=product, role=role_name, slug=role_slug, arm=arm)
 
 
 def traceparent() -> str | None:

@@ -222,6 +222,48 @@ def test_render_writes_no_system_version_for_an_empty_string_either():
     assert "system_version" not in rendered
 
 
+def test_render_writes_system_baseline_only_when_given_one():
+    state = {"id": "T-1", "title": "t", "description": "d", "sections": {}}
+    without = document.render(state)
+    assert "system_baseline" not in without
+    assert "system_baseline" not in document.parse(without)
+
+    with_one = document.render(state, system_baseline="bl-2026-09-23")
+    assert "system_baseline: bl-2026-09-23" in with_one
+    assert document.parse(with_one)["system_baseline"] == "bl-2026-09-23"
+
+
+def test_render_writes_no_system_baseline_for_an_empty_string_either():
+    state = {"id": "T-1", "title": "t", "description": "d", "sections": {}}
+    rendered = document.render(state, system_baseline="")
+    assert "system_baseline" not in rendered
+
+
+def test_system_version_and_system_baseline_round_trip_without_swapping():
+    """The two keys, at recognisably different shapes (a sha-shaped version, a
+    `bl-`-shaped baseline), round-trip to the same key each -- a swapped `render`
+    argument would write one under the other's key and this would catch it."""
+    state = {"id": "T-1", "title": "t", "description": "d", "sections": {}}
+    rendered = document.render(
+        state, system_version="abc1234+dirty", system_baseline="bl-2026-09-23"
+    )
+    parsed = document.parse(rendered)
+    assert parsed["system_version"] == "abc1234+dirty"
+    assert parsed["system_baseline"] == "bl-2026-09-23"
+
+
+def test_a_document_written_before_system_baseline_existed_parses_with_neither_key():
+    """A document from before this task has `system_version` but no `system_baseline`
+    at all -- not an empty string, absent -- and still parses (the resume seam is its
+    own test in `test_resume.py`)."""
+    state = {"id": "T-1", "title": "t", "description": "d", "sections": {}}
+    rendered = document.render(state, system_version="abc1234")
+    assert "system_baseline" not in rendered
+    parsed = document.parse(rendered)
+    assert parsed.get("system_baseline") is None
+    assert parsed["system_version"] == "abc1234"
+
+
 def test_the_frontmatter_keeps_the_names_the_metrics_keep():
     """A written document is data (issue #53): its keys do not follow the domain's
     rename, or a task paused before it would resume with an empty count."""

@@ -585,7 +585,7 @@ async def _run(
             _archive_previous_run(task["id"], ports)
             # A thread keeps its channels: a new run over it would add to the old cost.
             await saver.adelete_thread(task["id"])
-            final = await _invoke(app, task, config, task, ports, "run")
+            final = await _invoke(app, task, config, task, ports, cfg, "run")
     _report(final, task["id"], ports)
 
 
@@ -713,7 +713,7 @@ async def _resume(
             crashed = r.source == "checkpoint" and not snapshot.interrupts
             command: Command | None = None if crashed else Command(resume={"decision": r.decision})
             resuming.announce(r, ports)
-            final = await _invoke(app, command, config, r.paused, ports, "resume", r.decision)
+            final = await _invoke(app, command, config, r.paused, ports, cfg, "resume", r.decision)
     _report(final, task_id, ports)
 
 
@@ -763,6 +763,12 @@ async def _close(task_id: str, cfg: Configuration, ports: Ports) -> None:
         human_lines_changed = delivery_metrics.human_lines_changed(pull_request, author)
         time_to_merge = delivery_metrics.time_to_merge_seconds(pull_request)
         version = raw.get("system_version") or UNKNOWN_SYSTEM_VERSION
+        # The document's own baseline and arm, never `telemetry.system_baseline()` of the
+        # checkout `close` happens to run from: a delivery sample names the run it judges
+        # (ADR-0030, `_delivery_labels`'s own docstring), the same rule `system_version`
+        # already follows two lines up.
+        baseline = raw.get("system_baseline") or UNKNOWN_SYSTEM_VERSION
+        arm = delivery_metrics.arm_label(cast(dict, raw.get("experiment") or {}))
         task_type = raw.get("type") or "unknown"
         fingerprint = delivery_metrics.prompts_fingerprint(cast(TaskState, raw))
 
@@ -771,6 +777,8 @@ async def _close(task_id: str, cfg: Configuration, ports: Ports) -> None:
             task_type=task_type,
             prompts_fingerprint=fingerprint,
             system_version=version,
+            system_baseline=baseline,
+            arm=arm,
             outcome=outcome,
             human_commits=human_commits,
             human_lines_changed=human_lines_changed,
@@ -1010,6 +1018,7 @@ async def _invoke(
     config: RunnableConfig,
     task: TaskInput,
     ports: Ports,
+    cfg: Configuration,
     kind: InvocationKind = "run",
     decision: str | None = None,
 ) -> TaskState:
@@ -1017,8 +1026,14 @@ async def _invoke(
     # or `_resume`'s paused state. `finish_invocation` diffs it against the state the
     # invocation leaves with, so a resume reports only what it spent (README.md, 14).
     entering = cast(TaskState, task)
+    # The live arm of this invocation's own `Configuration` (ADR-0030): `cli.py` is the
+    # composition root, so it calls `metrics.arm_label` directly, the same function
+    # `composition._arm_for` closes over for the graph's own per-node role spans.
+    arm = delivery_metrics.arm_label(
+        {"review_mode": cfg.review_mode, "skip_ephemeral": str(cfg.skip_ephemeral)}
+    )
     try:
-        with telemetry.task_span(task["id"], task["title"], product_name(ports)) as run:
+        with telemetry.task_span(task["id"], task["title"], product_name(ports), arm=arm) as run:
             try:
                 final = await app.ainvoke(graph_input, config=config)
             except Exception:
