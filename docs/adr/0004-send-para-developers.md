@@ -393,3 +393,105 @@ arista de dependencia en conflicto, contra una pausa de horas sin nadie mirando.
 intento tampoco resuelve — marcadores que quedan, o la dependencia que sigue sin estar — la
 escalación de siempre se paga una vez, no en bucle: el veredicto posterior a la entrega
 (`rules.dependency_delivered`) es lo único que decide seguir escalando.
+
+## Adenda (2026-09-22): la compuerta declarada se revisa — el aviso disparaba y el intento moría igual (issue #102)
+
+La séptima adenda declaró el aviso, y salió: `c840a41` lo shippeó como el hook `PostToolUse`
+de hoy, un conteo del lado del hook y un margen de 39 contra `role.max_turns`, disparando una
+vez por intento. Lo que el 2026-09-21/22 dejó por escrito sobre este mismo repo es que el
+mecanismo estaba vivo y disparando en las diez corridas que agotaron el tope sin entregar:
+leído verbatim de `.agentic/tasks/`, todo fallo `slug: developer` con `reason: max_turns` trae
+`turn_notice: true` — GH-91 `Developer: dependency-merge` ($4.6204), GH-74 `Developer: types`
+($2.2653), GH-88 `Developer: deliveries-count` ($3.4996) y `Developer: schema-guard`
+($3.1735), el fallo que escaló en GH-38. Cero traen `false`. El defecto no es si el aviso
+existe: es cuándo y con qué fuerza dispara.
+
+**La cantidad que se cuenta cambia de asiento.** El conteo de hoy es el propio `PostToolUse`
+del hook: un turno puede traer varias llamadas a herramienta (inofensivo, el conteo corre
+adelante) o ninguna (fatal — una cola dentro de un sub-agente, a la que las skills `tdd` y
+`resolving-merge-conflicts` del propio Developer recurren, deja un solo `PostToolUse` de hilo
+principal por los turnos que sea que el sub-agente haya consumido, y el aviso nunca llega a
+su ventana). El runner ya distingue la cantidad correcta: el loop de `run_once` incrementa
+`calls` en cada `AssistantMessage` y prueba `parent_tool_use_id is None` una línea después. Un
+`AssistantMessage` de hilo principal es >=1 por turno del harness por construcción, así que
+este conteo no puede quedar atrás del tope como el anterior podía. El cambio es un incremento
+adentro de esa rama que ya existe (`turns.value += 1`, `hooks.TurnCount`), y un holder mutable
+construido junto a `_mark_notice` que viaja por el mismo parámetro que `on_notice` ya recorre
+— `calls` y cada métrica que alimenta quedan byte a byte iguales. El filtro por `agent_id`
+desaparece con el conteo que protegía: `parent_tool_use_id` ya excluye el mensaje de un
+sub-agente en el conteo, así que el hook no necesita mirar la atribución de nuevo.
+
+**Lo que este cambio no alcanza a cubrir, dicho en vez de escondido.** Una cola sin ninguna
+llamada a herramienta de hilo principal — un turno final de solo texto — sigue sin recibir
+nada: `additionalContext` en un `PostToolUse` es el único asiento que llega a un modelo
+corriendo, y comprar un segundo mecanismo está prohibido por el primer invariante del plan
+(GH-102). El conteo también puede quedar uno o dos mensajes desactualizado entre lo que el
+loop ya escribió y lo que el hook lee: el efecto es un disparo levemente tarde, benigno contra
+una ventana de este ancho.
+
+**Un solo aviso, directivo, que vuelve a disparar.** El aviso de hoy se borra entero: disparó
+en los diez cortes de `max_turns` de Developer con `max_turns: 80` y no cambió nada, y
+dejarlo al lado de una segunda frase mandaría dos mensajes que un modelo no distingue, el
+primero de los cuales ya demostró que sabe sobrevivir. Lo que queda es una sola ventana de
+cierre por rol cubierto, que vuelve a disparar en cada evento de hilo principal pasado el
+umbral — no un latch de una vez por intento — con una frase directiva en el mismo orden
+cerrar-entonces-entregar que `rules.turn_cut_retry_message` ya usa después de un corte
+(commitear lo que hay, entregar; solo si los checks no dan verde, entregar igual y nombrar la
+brecha en `summary`).
+
+**Umbral absoluto, nunca una resta contra `role.max_turns`.** `domain/turn_notice.py` no
+nombra `role.max_turns` en ningún lado: el predicado es `count >= TURN_NOTICE_AT[role.slug]`,
+una comparación absoluta sobre la cantidad contada, nunca una resta contra una cifra en otra
+unidad. La razón es un dato ya escrito en el plan de esta tarea: una corrida que **entregó**
+quedó registrada con `turns: 98` bajo `max_turns: 80` — ni `num_turns` ni este conteo son la
+misma cosa que el tope que el CLI hace cumplir, y la vieja resta `role.max_turns - count <=
+margin` mezclaba tres cantidades que no comparten unidad.
+
+**El valor, 15, es un punto de partida declarado, no una derivación.** Este conteo (el
+`AssistantMessage` de hilo principal) no existía antes de este commit, así que no hay ninguna
+cifra registrada en su propia unidad para citar; escribir una disfrazada de medición es
+exactamente la falla que esta revisión corrige — el 39 heredado era en sí mismo una cita, en
+otra unidad, de un solo peor caso (GH-72, `Developer: emission`, resumida). 15 queda por
+encima del cierre ordinario ya registrado (6-27 turnos de una corrida resumida y cortada, la
+evidencia propia de este issue) más el margen acotado de dos entregas rechazadas por el
+presubmit (ADR-0011, segunda adenda) — cómodamente por encima del techo de ese rango, así que
+un cierre ordinario entra en la ventana que abre. Su propia calibración hacia adelante es
+`turn_notice_firings`, el conteo que cada intento avisado deja escrito: un solo disparo en
+todo el set de evaluación dice que la ventana abre demasiado tarde para importar, y un conteo
+alto en una corrida que sí entrega dice que abre demasiado temprano.
+
+**Cada disparo es un hecho distinto del anterior.** `additionalContext` se agrega a la
+conversación, así que un disparo se paga en el contexto de cada llamada posterior — el costo
+es lineal en la ventana, no una frase pagada una sola vez. Una directiva repetida palabra por
+palabra treinta veces es la mejor evidencia que el propio modelo tiene de que no significa
+*ahora*: el mecanismo exacto por el que el aviso de una sola vez falló, ahora a mayor
+frecuencia si nada cambiara. Por eso cada disparo lleva su propio índice (`domain/turn_notice.
+notice_context`), la única cifra que cambia entre disparos del mismo intento sin volver a leer
+`role.max_turns` ni `num_turns`.
+
+**Lo que queda escrito, y cómo se lee.** `turn_notice` mantiene su nombre, su tipo y su
+significado verbatim: si el aviso disparó alguna vez en el intento, `True` — ni una palabra
+distinta de lo que ya significaba (ADR-0008: las claves se agregan, nunca se renombran).
+`turn_notice_firings: int` se agrega al lado, en `RawResult`, `AttemptFailed`, `Failure` y el
+frontmatter, con default `.get(..., 0)` documentado para todo documento escrito antes de este
+commit — el mismo tratamiento que `denials` y `deliveries` ya tienen. La nota que el sistema
+escribe en la sección (`turn_notice.notice_note`) ahora distingue dos casos: un intento que
+entró a la ventana y entregó en el mismo intento, de uno que entró, el harness lo cortó, y un
+intento posterior entregó — y ambas variantes dicen cuántas veces disparó en total.
+
+**El riesgo que se acepta, con su vigilancia nombrada.** Un Developer al que se le dice
+"entregá ahora" puede gastar sus dos rechazos del presubmit y entregar en rojo donde antes
+hubiera seguido puliendo. No se mitiga escondiéndolo: la ventana angosta y el orden de la
+frase (cerrar lo que hay, commitear, entregar; solo si no llega a verde, entregar y nombrar la
+brecha) son la mitigación, y lo que se vigila es la familia `process-*` de
+`agentic.review.findings` junto con el resultado del presubmit — ninguna serie nueva, ninguna
+movida.
+
+**Lo que esta adenda no cambia.** `.agentic/stack.yaml`, `ROLE_RETRIES`, el tope por intento,
+el tope de tarea y las clases de escalación quedan fuera: un corte por `max_turns` sigue
+siendo un fallo de rol, y su segunda ocurrencia sigue siendo una escalación, byte a byte.
+Ningún archivo bajo `domain/prompts/` se toca: `{{max_turns}}` renderiza el mismo valor de
+siempre, así que `prompts.fingerprint` no se mueve mientras el comportamiento en tiempo de
+ejecución sí cambia — la comparación segmentada por fingerprint de antes de este commit no
+va a mostrar este cambio, y esa es la razón por la que se dice acá en vez de descubrirse en
+un panel.
