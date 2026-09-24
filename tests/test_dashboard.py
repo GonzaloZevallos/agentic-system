@@ -687,7 +687,7 @@ def test_datasource_reference_count_is_at_least_leaf_panels_plus_variables():
     )
 
 
-# --- Four rejected entries, built in the test (ADR-0023), never on the real file.
+# --- Five rejected entries, built in the test (ADR-0023), never on the real file.
 def test_guard_rejects_a_literal_instance_uid_nested_in_a_collapsed_row():
     data = _minimal_valid_dashboard()
     data["panels"].append(
@@ -734,6 +734,29 @@ def test_guard_rejects_a_variable_current_value_naming_an_instance():
     )
     violations = _datasource_uid_violations(data)
     assert any("instance uid literal" in v for v in violations), violations
+
+
+def test_guard_rejects_a_variable_current_value_naming_a_baseline_tag():
+    # Exactly the v9 hotfix this issue attached: `baseline`'s `current` pinned to
+    # `bl-2026-09-23` instead of `""`. A baseline tag is data (ADR-0030: a human
+    # declares it, and it ages the moment the next one does), never a repo literal;
+    # `$__all` stays allowed (`arm`, `product`, `version` already carry it) because it
+    # is Grafana's own structural literal, not a series value.
+    data = _minimal_valid_dashboard()
+    data["templating"]["list"].append(
+        {
+            "name": "baseline",
+            "type": "query",
+            "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+            "current": {
+                "selected": True,
+                "text": "bl-2026-09-23",
+                "value": "bl-2026-09-23",
+            },
+        }
+    )
+    violations = _datasource_uid_violations(data)
+    assert any("baseline tag literal" in v for v in violations), violations
 
 
 def test_guard_rejects_inputs_key_present():

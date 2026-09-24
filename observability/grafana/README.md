@@ -42,9 +42,9 @@ uv run scripts/publish_dashboard.py
 
 Lee tres variables de entorno, nombradas acá sin valor (nunca en este repo, y no en
 `.env.example`: ese archivo es lo que el runtime bajo `agentic/` lee, y esto no lo lee):
-`GRAFANA_URL` (la instancia, `https://heartyfjord3250.grafana.net`), `GRAFANA_TOKEN`
-(un token de esa instancia con permiso de publicar dashboards) y `GRAFANA_DS_UID` (el
-uid del datasource Prometheus del stack). Antes de publicar comprueba `GET
+`GRAFANA_URL` (la instancia, la misma de arriba), `GRAFANA_TOKEN` (un token de esa
+instancia con permiso de publicar dashboards) y `GRAFANA_DS_UID` (el uid del datasource
+Prometheus del stack). Antes de publicar comprueba `GET
 /api/datasources/uid/$GRAFANA_DS_UID` — corta sin publicar nada si no es 200 — y de ahí
 saca el nombre visible del datasource; publica con `POST /api/dashboards/db`, cuerpo
 `{"dashboard": <json sin "id">, "overwrite": true}`; después vuelve a leer el dashboard
