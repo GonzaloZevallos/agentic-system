@@ -608,6 +608,7 @@ async def test_role_failure_escalates_and_keeps_failures(config, tmp_path):
         "turn_notice_firings": 0,
         "deliveries": 0,
         "presubmit_denials": 0,
+        "main_thread_turns": 0,
     }
     assert doc["status"] == WAITING_ON_HUMAN
 
@@ -733,6 +734,7 @@ async def test_retried_failure_is_recorded_but_not_escalated(config):
             "turn_notice_firings": 0,
             "deliveries": 0,
             "presubmit_denials": 0,
+            "main_thread_turns": 0,
         }
     ]
 

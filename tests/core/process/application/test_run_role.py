@@ -117,6 +117,7 @@ async def test_retry_passes_the_error_and_sums_cost():
             "turn_notice_firings": 0,
             "deliveries": 0,
             "presubmit_denials": 0,
+            "main_thread_turns": 0,
         }
     ]
     # No session survived the failure: the retry starts over, the error appended.
@@ -540,6 +541,7 @@ async def test_run_role_builds_the_patch_and_the_history(tmp_path):
         "turn_notice_firings": 0,
         "deliveries": 0,
         "presubmit_denials": 0,
+        "main_thread_turns": 0,
     }
     # Timed inside the concurrency slot: started no later than ended, both ISO-8601 UTC.
     assert started_at <= ended_at

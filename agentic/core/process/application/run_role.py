@@ -175,6 +175,12 @@ class Output:
     # (`RawResult.presubmit_denials`'s own docstring): a different fact from
     # `deliveries` above, never folded into it.
     presubmit_denials: int = 0
+    # `TurnCount.value` at the end of the delivering attempt (`RawResult.main_thread_
+    # turns`'s own docstring, ADR-0031, issue #117): `0` for a role the notice does not
+    # cover. No run-total fold like `turn_notice_firings` has: each attempt's own count
+    # is what a `max_turns` cut needs to refute or hold up the counted-quantity
+    # assumption, not a sum across retries.
+    main_thread_turns: int = 0
 
 
 def context_for(
@@ -381,6 +387,7 @@ async def run_with_retry(
                     "turn_notice_firings": exc.turn_notice_firings,
                     "deliveries": exc.deliveries,
                     "presubmit_denials": exc.presubmit_denials,
+                    "main_thread_turns": exc.main_thread_turns,
                 }
             )
             continue
@@ -488,6 +495,7 @@ async def _attempt(
             turn_notice_firings=result.turn_notice_firings,
             deliveries=result.deliveries,
             presubmit_denials=result.presubmit_denials,
+            main_thread_turns=result.main_thread_turns,
         )
     try:
         data = schemas.validate(role.schema, result.structured_output, vocabulary)
@@ -502,6 +510,7 @@ async def _attempt(
             turn_notice_firings=result.turn_notice_firings,
             deliveries=result.deliveries,
             presubmit_denials=result.presubmit_denials,
+            main_thread_turns=result.main_thread_turns,
         ) from exc
     if check is not None:
         try:
@@ -517,6 +526,7 @@ async def _attempt(
                 turn_notice_firings=result.turn_notice_firings,
                 deliveries=result.deliveries,
                 presubmit_denials=result.presubmit_denials,
+                main_thread_turns=result.main_thread_turns,
             ) from exc
     text = data.pop("markdown").strip()
     if not text:
@@ -530,6 +540,7 @@ async def _attempt(
             turn_notice_firings=result.turn_notice_firings,
             deliveries=result.deliveries,
             presubmit_denials=result.presubmit_denials,
+            main_thread_turns=result.main_thread_turns,
         )
     return Output(
         text=text,
@@ -548,6 +559,7 @@ async def _attempt(
         turn_notice_firings=result.turn_notice_firings,
         deliveries=result.deliveries,
         presubmit_denials=result.presubmit_denials,
+        main_thread_turns=result.main_thread_turns,
     )
 
 
@@ -608,6 +620,7 @@ def run_record(state: TaskState, role: Role, section: str, output: Output) -> Ro
         "turn_notice_firings": output.turn_notice_firings,
         "deliveries": output.deliveries,
         "presubmit_denials": output.presubmit_denials,
+        "main_thread_turns": output.main_thread_turns,
     }
 
 
