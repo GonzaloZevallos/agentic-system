@@ -277,16 +277,31 @@ nunca. El plan dice qué devuelve una lectura de conocimiento greenfield —capa
 vacías, glosario vacío, ADRs vacíos, el Brief, los estándares por default— para que
 `reads_knowledge=True` contra un repo de un archivo no se lea como peso muerto.
 
-**Una sola ola.** La cadena era ordenamiento de tipos y nada más: las tres subtareas no
-comparten ningún archivo, y el plan es el artefacto que fija un tipo antes de que nadie
-codee, que es para lo que existe el canal de invariantes (ADR-0015, adenda). El plan
-escribe el dataclass `Signals` campo por campo, la firma del caso de uso y
-`Tracker.open_issue(title, body) -> str` verbatim. Un desajuste aflora en la pasada de
-integración, que ve la rama entera, y cuesta un Developer en vez de dos barreras más y
-dos merges de dependencia (ADR-0004, quinta adenda: 693 s en serie contra 179 s en
-paralelo). El único archivo compartido a la vista, `tests/fakes.py`, es de B, que agrega
-`open_issue` y `open_stack_reviews` a los dobles; las pruebas de CLI de C los consumen y
-no editan ese archivo.
+**Una sola ola — corregido a dos.** La primera versión de este ADR sostenía una sola ola
+sobre el argumento de que la cadena era ordenamiento de tipos y nada más: las tres
+subtareas no comparten ningún archivo, y el plan es el artefacto que fija un tipo antes
+de que nadie codee, que es para lo que existe el canal de invariantes (ADR-0015, adenda).
+El plan escribe el dataclass `Signals` campo por campo, la firma del caso de uso y
+`Tracker.open_issue(title, body) -> str` verbatim. Eso sigue siendo cierto para
+`signals ∥ proposal`: `application/stack_review.py` toma el texto de la solicitud como
+un `str` llano y nunca importa el tipo `Signals`, así que un desajuste entre esas dos
+subtareas aflora recién en la pasada de integración, que ve la rama entera, y cuesta un
+Developer en vez de dos barreras más y dos merges de dependencia (ADR-0004, quinta
+adenda: 693 s en serie contra 179 s en paralelo). El único archivo compartido a la
+vista, `tests/fakes.py`, es de B, que agrega `open_issue` y `open_stack_reviews` a los
+dobles; las pruebas de CLI de C los consumen y no editan ese archivo.
+
+El argumento es **falso para `verb`**: `cli.py` importa los módulos de las otras dos
+subtareas **por nombre** —`application.stack_review.stack_review`,
+`domain.stack_review.{body, body_refusal, marker, open_proposal}`,
+`domain.stack_signals.{signals, fired, description}`—, y un import de un módulo que
+todavía no existe es una suite roja en el propio presubmit de esa subtarea, que es una
+dependencia de código y no de tipos: el canal de invariantes fija la forma de los datos
+que cruzan la frontera, nunca si el archivo del otro lado ya está en la rama para que
+`import` no reviente. La corrección: dos olas, `signals ∥ proposal` primero, después
+`verb`, que además declara la dependencia explícitamente en su propio encabezado
+("Depends on: `signals`, `proposal`"). `verb` edita este ADR en el mismo diff que la
+corrige, porque el propio invariante de esta tarea lo exige.
 
 ## Riesgos conocidos
 

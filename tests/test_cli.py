@@ -2562,7 +2562,9 @@ def _greenfield(tmp_path, name, *, git=True, brief="# Brief\n\nGym members book 
         gitcmd = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
         subprocess.run([*gitcmd, "init", "-q", "-b", "master", str(root)], check=True)
         subprocess.run([*gitcmd, "add", "-A"], cwd=root, check=True)
-        subprocess.run([*gitcmd, "commit", "-q", "-m", "brief"], cwd=root, check=True)
+        subprocess.run(
+            [*gitcmd, "commit", "-q", "-m", "brief", "--allow-empty"], cwd=root, check=True
+        )
     return root
 
 
@@ -2675,3 +2677,71 @@ async def test_stack_review_writes_its_document_under_stack_reviews_never_under_
     [(title, body)] = ports.tracker.opened_issues
     assert "needs-info" not in title
     assert "keep the stack" in body
+
+
+@pytest.mark.anyio
+async def test_stack_review_with_no_brief_opens_needs_info_and_runs_no_role(tmp_path):
+    """Spec item 1: sin `BRIEF.md` no decide -- `[needs-info]`, y ningún rol corre."""
+    from agentic.shared.configuration import Configuration
+
+    root = _greenfield(tmp_path, "g", brief=None)
+    ports = memory_ports()  # MemoryKnowledge()'s own brief_text defaults to None
+    ports.workspace.repositories[root] = root
+    cfg = Configuration(product_dir=root)
+
+    await cli._stack_review(cfg, ports, None, False)
+
+    assert ports.runner.calls == []  # no role ran
+    [(title, body)] = ports.tracker.opened_issues
+    assert title.startswith("[needs-info]")
+    assert "BRIEF.md" in body
+    assert not (root / ".agentic" / "stack-reviews").exists()
+
+
+@pytest.mark.anyio
+async def test_stack_review_prints_and_opens_nothing_when_no_signal_fired(tmp_path, capsys):
+    """A declared stack, a Brief no newer than it, and no `--reason`: no signal fires,
+    so the real run prints and opens nothing, and runs no role either."""
+    from agentic.shared.configuration import Configuration
+
+    root = tmp_path / "g"
+    root.mkdir()
+    (root / ".agentic").mkdir()
+    (root / ".agentic/stack.yaml").write_text(STACK)
+    (root / "BRIEF.md").write_text("# Brief\n\nfits.\n")
+    gitcmd = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*gitcmd, "init", "-q", "-b", "master", str(root)], check=True)
+    subprocess.run([*gitcmd, "add", "-A"], cwd=root, check=True)
+    subprocess.run([*gitcmd, "commit", "-q", "-m", "v0"], cwd=root, check=True)
+
+    ports = memory_ports(knowledge=MemoryKnowledge(brief="# Brief\n\nfits.\n"))
+    ports.workspace.repositories[root] = root
+    cfg = Configuration(product_dir=root)
+
+    await cli._stack_review(cfg, ports, None, False)
+
+    out = capsys.readouterr().out
+    assert "no signal fired" in out
+    assert ports.tracker.opened_issues == []
+    assert ports.runner.calls == []
+
+
+@pytest.mark.anyio
+async def test_stack_review_reason_is_a_trigger_reproduced_verbatim_in_the_issue_body(tmp_path):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import ScriptedRunner, questions, stack_proposal
+
+    root = _greenfield(tmp_path, "g")
+    ask, author = "tech_lead_ephemeral_stack", "tech_lead_stack"
+    runner = ScriptedRunner(
+        **{ask: [questions(done=True, session="e1")]},
+        **{author: [stack_proposal(session="t1")]},
+    )
+    ports = memory_ports(runner, knowledge=MemoryKnowledge(brief="# Brief\n\nfits."))
+    ports.workspace.repositories[root] = root
+    cfg = Configuration(product_dir=root)
+
+    await cli._stack_review(cfg, ports, "a vendor sunset forces this", False)
+
+    [(_, body)] = ports.tracker.opened_issues
+    assert "a vendor sunset forces this" in body
