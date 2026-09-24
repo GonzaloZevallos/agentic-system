@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
@@ -71,6 +72,18 @@ class GhTracker:
             body = f"Closes #{number}\n\n{body}"
         # Not a draft: the human merges it as it is (README.md, 9), or does not.
         return self._gh("pr", "create", "--head", branch, "--title", title, "--body", body)
+
+    def open_issue(self, title: str, body: str) -> str:
+        # `--body-file`, never `--body`: the one limit that can bite is GitHub's own,
+        # never argv's (ADR-0032). The temp file is this call's alone; nothing reads it
+        # back.
+        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as handle:
+            handle.write(body)
+            path = handle.name
+        try:
+            return self._gh("issue", "create", "--title", title, "--body-file", path)
+        finally:
+            Path(path).unlink(missing_ok=True)
 
     def comment(self, task_id: str, text: str) -> None:
         if (number := issue_number(task_id)) is not None:

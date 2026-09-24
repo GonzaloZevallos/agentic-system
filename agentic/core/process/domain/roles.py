@@ -33,6 +33,7 @@ from .schemas import (
     RoleOutput,
     Ruling,
     SolutionTurn,
+    StackProposal,
     TechAnswers,
     TechPlan,
     Verdict,
@@ -295,6 +296,43 @@ TECH_LEAD_PLATFORM = replace(
     TECH_LEAD, slug="tech_lead_platform", reads=(ORIGINAL, PJM.name, SOLUTION_INTERVIEW)
 )
 
+# The stack review path (ADR-0032, issue #40): the Tech Lead in proactive mode, over a
+# product, with no task behind it at all -- no PjM, no issue, no branch. `replace(...)`
+# of the platform variants, never an edit to them: the diff shows added tuples and zero
+# edited ones. The ephemeral gets `READ_CODE`/`READ_CODE_RULES`, narrower than the
+# platform variant's `WRITE_DOCS`: there is no task branch for its ADR draft to land on
+# (the draft is an issue body instead), so `grilling` degrades to not editing files.
+# `reads=(ORIGINAL,)` on the two interview seats and `(ORIGINAL, SOLUTION_INTERVIEW)` on
+# the author: there is no `PjM` section on this path, so the platform variants' own
+# `PJM.name` entry is dropped rather than inherited. No `{{brief}}`, no `{{stack}}`, no
+# signals placeholder: the Brief and the ADRs arrive through `## Product knowledge`
+# (ADR-0025), the standards through `standards()`, and the signals are the synthetic
+# state's own `ORIGINAL` (`application/stack_review.py`).
+TECH_LEAD_EPHEMERAL_STACK = replace(
+    TECH_LEAD_EPHEMERAL_PLATFORM,
+    slug="tech_lead_ephemeral_stack",
+    reads=(ORIGINAL,),
+    tools=READ_CODE,
+    allowed=READ_CODE_RULES,
+)
+
+TECH_LEAD_INTERVIEWEE_STACK = replace(
+    TECH_LEAD_INTERVIEWEE_PLATFORM,
+    slug="tech_lead_interviewee_stack",
+    reads=(ORIGINAL,),
+)
+
+# `max_turns=20`, not the plan's own 12: the author emits three whole artefacts in one
+# delivery (a stack diff, a complete `CODING_STANDARDS.md`, an ADR draft), which is
+# `TECH_LEAD_REVIEWER`'s own budget for reading a whole repo, not a diff.
+TECH_LEAD_STACK = replace(
+    TECH_LEAD_PLATFORM,
+    slug="tech_lead_stack",
+    schema=StackProposal,
+    reads=(ORIGINAL, SOLUTION_INTERVIEW),
+    max_turns=20,
+)
+
 TECH_LEAD_REVIEWER = Role(
     name="Tech Lead",
     slug="tech_lead_review",
@@ -410,6 +448,9 @@ ROLES = (
     TECH_LEAD_EPHEMERAL_PLATFORM,
     TECH_LEAD_INTERVIEWEE_PLATFORM,
     TECH_LEAD_PLATFORM,
+    TECH_LEAD_EPHEMERAL_STACK,
+    TECH_LEAD_INTERVIEWEE_STACK,
+    TECH_LEAD_STACK,
     TECH_LEAD_REVIEWER,
     TECH_LEAD_REVIEWER_LIGHT,
     DEVELOPER,
@@ -493,4 +534,22 @@ INTERVIEW_SOLUTION_PLATFORM = Interview(
     interviewee=TECH_LEAD_INTERVIEWEE_PLATFORM,
     author=TECH_LEAD_PLATFORM,
     stage="solution",
+)
+# The stack review path (ADR-0032): no consultant either, the same reason the platform
+# path has none -- there is no PM here, and no task for a question to pause.
+INTERVIEW_SOLUTION_STACK = Interview(
+    interviewer=TECH_LEAD_EPHEMERAL_STACK,
+    interviewee=TECH_LEAD_INTERVIEWEE_STACK,
+    author=TECH_LEAD_STACK,
+    stage="solution",
+)
+
+# Every `Interview` spec the system runs, named once so `INTERVIEW_PARTICIPANT_SLUGS`
+# and its own pin (`tests/core/process/domain/test_rules.py`) can walk this instead of
+# a second, hand-kept tuple that could drift from it (issue #40's own invariant).
+INTERVIEWS = (
+    INTERVIEW_DEFINITION,
+    INTERVIEW_SOLUTION,
+    INTERVIEW_SOLUTION_PLATFORM,
+    INTERVIEW_SOLUTION_STACK,
 )

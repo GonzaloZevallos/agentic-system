@@ -56,3 +56,46 @@ def test_missing_gh_is_explained(monkeypatch, tmp_path):
     monkeypatch.setattr(module.subprocess, "run", run)
     with pytest.raises(ValueError, match="gh is not installed"):
         GhInbox(tmp_path).task(1)
+
+
+class _Recorder:
+    def __init__(self, stdout="[]", fail=False, stderr=""):
+        self.calls = []
+        self.stdout = stdout
+        self.fail = fail
+        self.stderr = stderr
+
+    def __call__(self, args, **kwargs):
+        self.calls.append(args)
+        if self.fail:
+            raise subprocess.CalledProcessError(1, args, stderr=self.stderr)
+        return subprocess.CompletedProcess(args, 0, self.stdout, "")
+
+
+def test_open_issues_lists_open_issues_as_url_body_pairs_never_searching(tmp_path):
+    run = _Recorder(
+        stdout=json.dumps([{"url": "https://x/1", "body": "b1"}, {"url": "https://x/2"}])
+    )
+    inbox = GhInbox(tmp_path, run=run)
+    assert inbox.open_issues() == [("https://x/1", "b1"), ("https://x/2", "")]
+    [call] = run.calls
+    assert call[:3] == ["gh", "issue", "list"]
+    assert "--state" in call and "open" in call
+    assert "--json" in call and "url,body" in call
+    assert "--search" not in call
+
+
+def test_open_issues_failure_is_a_value_error(tmp_path):
+    run = _Recorder(fail=True, stderr="no auth")
+    with pytest.raises(ValueError, match="gh issue list failed: no auth"):
+        GhInbox(tmp_path, run=run).open_issues()
+
+
+def test_task_still_uses_the_bare_subprocess_call_when_run_is_injected(monkeypatch, tmp_path):
+    # `task()` keeps its own inline `subprocess.run` (ADR-0032: old form stays old
+    # form); an injected `run` must not silently reroute it.
+    calls = fake_gh(monkeypatch, stdout=json.dumps({"title": "T", "body": "d"}))
+    never_called = _Recorder()
+    task = GhInbox(tmp_path, run=never_called).task(1)
+    assert task == {"id": "GH-1", "title": "T", "description": "d"}
+    assert calls and never_called.calls == []

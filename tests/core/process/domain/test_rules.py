@@ -1,13 +1,12 @@
 from typing import get_args
 
-from agentic.core.process.domain import document, rules, task
+from agentic.core.process.domain import document, roles, rules, task
 from agentic.core.process.domain.denials import denial_for
 from agentic.core.process.domain.roles import (
     DEVELOPER,
     FINDINGS,
     INTERVIEW_DEFINITION,
     INTERVIEW_SOLUTION,
-    INTERVIEW_SOLUTION_PLATFORM,
     PAIR_PM_PA,
     PJM,
     PRODUCT_ANALYST_BUG,
@@ -1051,7 +1050,7 @@ def test_denial_note_uses_the_singular_for_one():
 def test_interview_participant_slugs_match_the_interview_specs():
     # The hardcoded set must not drift from the specs it is meant to mirror
     # (`domain/roles.py`'s `Interview` objects): every seat of every interview, by slug.
-    specs = (INTERVIEW_DEFINITION, INTERVIEW_SOLUTION, INTERVIEW_SOLUTION_PLATFORM)
+    specs = roles.INTERVIEWS
     seats = {
         role.slug
         for spec in specs
