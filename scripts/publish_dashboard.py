@@ -1,5 +1,5 @@
 """Publishes `observability/grafana/dashboard.json` to Grafana Cloud (ADR-0032,
-subtask `dashboard-publisher`, GH-123).
+subtask `dashboard-publisher`, GH-123; verification repaired by ADR-0033, GH-125).
 
 The file is a template of import (a `${DS_PROMETHEUS}` uid) and the body of the POST at
 once: a template variable named `DS_PROMETHEUS` resolves it, so `POST
@@ -12,9 +12,9 @@ instance itself.
 Two verifications, because a 200 from `POST /api/dashboards/db` is not proof the
 dashboard has data (that is exactly the defect this task fixes another way): before
 publishing, `GET /api/datasources/uid/$GRAFANA_DS_UID` must be 200, or nothing is
-published; after publishing, the stored dashboard must resolve every `datasource.uid`
-and `DS_PROMETHEUS`'s own `current.value`, or the script exits non-zero. No path exits
-0 without both.
+published; after publishing, the stored dashboard must satisfy `published_refusal`
+below -- its own docstring states the three clauses, not restated here (GH-125,
+ADR-0033) -- or the script exits non-zero. No path exits 0 without both.
 
 The decision is two pure functions, `body()` and `published_refusal()`, both fixed by
 `tests/test_dashboard.py` (the checked scope this task's tests run under); everything
@@ -90,33 +90,67 @@ def body(dashboard: dict, ds_uid: str, ds_name: str) -> dict:
 
 
 def published_refusal(stored: dict, ds_uid: str) -> str | None:
-    """`None` when the stored dashboard is safe to leave published; a reason otherwise.
-    Not an object-equality check -- Grafana adds `id`/`version` and normalises, so that
-    would always fail -- but exactly the property this task exists to guarantee: every
-    `datasource.uid` reached from `stored` equals `ds_uid`, and `DS_PROMETHEUS`'s own
-    `current.value` does too.
+    """`None` only when all three hold over `stored` -- no stronger property than this
+    (GH-125, ADR-0033):
+
+    1. every `datasource.uid` reached from `stored` (`datasource_uids`: panel-level,
+       target-level and templating-variable-level references alike) is the literal
+       `${DS_PROMETHEUS}`, and at least one such reference exists;
+    2. at least one variable named `DS_PROMETHEUS` exists in
+       `stored["templating"]["list"]`;
+    3. every variable named `DS_PROMETHEUS` has `current.value == ds_uid`.
+
+    `POST /api/dashboards/db` substitutes nothing (`body()`'s docstring above): the
+    stored dashboard is `dashboard.json` verbatim with only `DS_PROMETHEUS.current`
+    overwritten, so every `datasource.uid` our own correct path can produce stays the
+    literal `${DS_PROMETHEUS}`, never `ds_uid` itself. There is no branch here that
+    accepts `uid == ds_uid`: our path cannot produce it, and an accepting branch no
+    correct path can produce is dead code no test can exercise honestly (ADR-0023).
+    What clauses 1-3 together prove: the stored dashboard is the one we posted -- no
+    reference got pinned to an instance -- and the variable that resolves them all is
+    bound to the datasource uid this run verified exists. Not "every `datasource.uid`
+    resolves to `ds_uid`".
 
     Refuses, rather than returning `None`, when it found nothing to check at all: zero
-    datasource references, or no `DS_PROMETHEUS` variable in `stored["templating"]`
-    (ADR-0023) -- including when `stored` is the whole `{"dashboard": ..., "meta":
-    ...}` envelope instead of the dashboard itself, since `templating` then is not a
-    top-level key of `stored`. Callers pass `stored["dashboard"]` explicitly so that
-    mistake is a loud `KeyError` in the caller, not a silent `None` here."""
+    datasource references (clause 1's floor), or no `DS_PROMETHEUS` variable in
+    `stored["templating"]` (clause 2; ADR-0023) -- including when `stored` is the whole
+    `{"dashboard": ..., "meta": ...}` envelope instead of the dashboard itself, since
+    `templating` then is not a top-level key of `stored`. Callers pass
+    `stored["dashboard"]` explicitly so that mistake is a loud `KeyError` in the
+    caller, not a silent `None` here.
+
+    `type: "datasource"` and "exactly one variable" are deliberately not checked here:
+    they are ours, `body()` never touches them, and the file guard in
+    `tests/test_dashboard.py` already pins both on the file we send -- asserting them
+    again over the server's copy would buy no discrimination clauses 1 and 3 lack, and
+    a permanent-red mode if Grafana ever normalised a field. Clause 3 is universal over
+    every `DS_PROMETHEUS` variable rather than indexed at `[0]`, which is what lets
+    uniqueness stay out of this predicate without an arbitrary choice."""
     uids = datasource_uids(stored)
     if not uids:
         return "no datasource.uid reference found in the stored dashboard to verify"
-    wrong = sorted({uid for uid in uids if uid != ds_uid})
-    if wrong:
-        return f"stored dashboard has datasource.uid(s) != {ds_uid!r}: {wrong!r}"
+    distinct = set(uids)
+    if distinct != {"${DS_PROMETHEUS}"}:
+        wrong = sorted(distinct - {"${DS_PROMETHEUS}"})
+        return (
+            "stored dashboard has datasource.uid(s) other than the literal "
+            f"'${{DS_PROMETHEUS}}': {wrong!r}"
+        )
 
     variables = stored.get("templating", {}).get("list", [])
     ds_variables = [v for v in variables if v.get("name") == "DS_PROMETHEUS"]
     if not ds_variables:
         return "stored dashboard has no DS_PROMETHEUS template variable in templating.list"
 
-    current_value = ds_variables[0].get("current", {}).get("value")
-    if current_value != ds_uid:
-        return f"DS_PROMETHEUS current.value is {current_value!r}, expected {ds_uid!r}"
+    wrong_current = sorted(
+        {
+            v.get("current", {}).get("value")
+            for v in ds_variables
+            if v.get("current", {}).get("value") != ds_uid
+        }
+    )
+    if wrong_current:
+        return f"DS_PROMETHEUS current.value(s) != {ds_uid!r}: {wrong_current!r}"
     return None
 
 
@@ -144,7 +178,10 @@ def _request(url: str, token: str, data: bytes | None = None) -> tuple[int, dict
 def main() -> int:
     missing = [name for name in ENV_VARS if not os.environ.get(name)]
     if missing:
-        print(f"missing environment variable(s): {', '.join(missing)}", file=sys.stderr)
+        print(
+            f"not published: missing environment variable(s): {', '.join(missing)}",
+            file=sys.stderr,
+        )
         return 2
     grafana_url = os.environ["GRAFANA_URL"].rstrip("/")
     token = os.environ["GRAFANA_TOKEN"]
@@ -153,7 +190,7 @@ def main() -> int:
     ds_url = f"{grafana_url}/api/datasources/uid/{ds_uid}"
     status, datasource = _request(ds_url, token)
     if status != 200:
-        print(f"GET {ds_url} -> {status}, not publishing (uid {ds_uid!r})", file=sys.stderr)
+        print(f"not published: GET {ds_url} -> {status} (uid {ds_uid!r})", file=sys.stderr)
         return 1
     ds_name = datasource["name"]
 
@@ -163,13 +200,13 @@ def main() -> int:
     publish_url = f"{grafana_url}/api/dashboards/db"
     status, _ = _request(publish_url, token, json.dumps(payload).encode("utf-8"))
     if status != 200:
-        print(f"POST {publish_url} -> {status}, nothing verified", file=sys.stderr)
+        print(f"not published: POST {publish_url} -> {status}", file=sys.stderr)
         return 1
 
     verify_url = f"{grafana_url}/api/dashboards/uid/{DASHBOARD_UID}"
     status, stored = _request(verify_url, token)
     if status != 200:
-        print(f"GET {verify_url} -> {status} after publishing", file=sys.stderr)
+        print(f"published but not verified: GET {verify_url} -> {status}", file=sys.stderr)
         return 1
     refusal = published_refusal(stored["dashboard"], ds_uid)
     if refusal is not None:

@@ -48,8 +48,13 @@ Prometheus del stack). Antes de publicar comprueba `GET
 /api/datasources/uid/$GRAFANA_DS_UID` — corta sin publicar nada si no es 200 — y de ahí
 saca el nombre visible del datasource; publica con `POST /api/dashboards/db`, cuerpo
 `{"dashboard": <json sin "id">, "overwrite": true}`; después vuelve a leer el dashboard
-publicado y corta si queda alguna referencia a `${DS_PROMETHEUS}` sin resolver. Ninguna
-ruta del script termina en 0 sin las dos verificaciones.
+publicado y lo verifica contra `published_refusal` — su docstring en
+`scripts/publish_dashboard.py` es el criterio normativo, no repetido acá (GH-125,
+ADR-0033). Ninguna ruta del script termina en 0 sin las dos verificaciones, y cada
+mensaje de corte dice si el dashboard vivo cambió: `not published:` antes del POST
+(nada quedó escrito, reintentar corre sin riesgo); `published but not verified:`
+después (algo quedó escrito y puede no servir — inspeccionar lo vivo en Grafana y, si
+hace falta, restaurar la versión anterior desde su historial, no reintentar a ciegas).
 
 `editable: false` hace del archivo la fuente de verdad: el único loop es editar
 `dashboard.json` y correr el script, nunca editar el dashboard vivo; la exploración ad

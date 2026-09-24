@@ -766,6 +766,16 @@ def test_guard_rejects_inputs_key_present():
     assert any("__inputs is present" in v for v in violations), violations
 
 
+# --- Identity coupling (GH-125, ADR-0033): body() strips only `id`, so the POST
+# always writes to the file's own `uid`. If dashboard.json's uid and the script's
+# DASHBOARD_UID drifted apart, the POST would write a different dashboard while the
+# verification GET still read the still-valid previous version, all three
+# published_refusal clauses would pass, and the script would exit 0 having verified
+# something it did not publish.
+def test_dashboard_uid_matches_the_publish_scripts_dashboard_uid():
+    assert _load()["uid"] == PUBLISH_DASHBOARD.DASHBOARD_UID
+
+
 # --- `body(dashboard, ds_uid, ds_name)`: the whole returned object pinned, including
 # `current`'s three keys (never only the uid, or a text/value swap would pass silently).
 def test_body_pins_the_returned_object_and_strips_id():
@@ -822,8 +832,14 @@ def test_body_rejects_a_dashboard_without_the_ds_prometheus_variable():
     assert raised, "body() must reject a dashboard with no DS_PROMETHEUS variable"
 
 
-# --- `published_refusal(stored, ds_uid)`: a positive control plus the anti-vacuidad
-# floor and the four rejected entries the brief names, including the sobre mistake.
+# --- `published_refusal(stored, ds_uid)` (GH-125, ADR-0033): the issue's own evidence
+# is that `POST /api/dashboards/db` substitutes nothing, so every datasource.uid it
+# stores stays the literal ${DS_PROMETHEUS} -- never ds_uid itself. The old predicate
+# required uid == ds_uid, a branch no correct publish can ever produce, so a correct
+# publish never verified. Two positive controls, both derived from `body()` (never
+# hand-typed -- a hand-typed belief about Grafana's response is what shipped this
+# bug), and six rejected entries, each built in the test and each naming the clause it
+# breaks.
 STORED_DS_UID = "grafanacloud-heartyfjord3250-uid"
 
 
@@ -838,15 +854,30 @@ def _stored_with(current: dict, panel_uid: str) -> dict:
     }
 
 
-def test_published_refusal_accepts_a_correctly_resolved_dashboard():
-    stored = _stored_with(
-        {"selected": True, "text": "grafanacloud-heartyfjord3250-prom", "value": STORED_DS_UID},
-        STORED_DS_UID,
-    )
+# --- Positive controls: derived from body(), never hand-typed.
+def test_published_refusal_accepts_the_minimal_dashboard_composed_through_body():
+    published = PUBLISH_DASHBOARD.body(
+        _minimal_valid_dashboard(), STORED_DS_UID, "grafanacloud-heartyfjord3250-prom"
+    )["dashboard"]
+    stored = published | {"id": 205, "version": 11}
     assert PUBLISH_DASHBOARD.published_refusal(stored, STORED_DS_UID) is None
 
 
+def test_published_refusal_accepts_the_real_dashboard_composed_through_body():
+    # Composition over the shipped artefact: today body() is only ever called over
+    # hand-typed dicts and _load() never reaches the publisher in this suite, so this
+    # is the one assertion saying the dashboard we publish passes the check we publish
+    # it with -- re-proved by `checks.tests` on every delivery.
+    published = PUBLISH_DASHBOARD.body(_load(), STORED_DS_UID, "grafanacloud-heartyfjord3250-prom")[
+        "dashboard"
+    ]
+    stored = published | {"id": 205, "version": 11}
+    assert PUBLISH_DASHBOARD.published_refusal(stored, STORED_DS_UID) is None
+
+
+# --- Six rejected entries, each built in the test, each naming the clause it breaks.
 def test_published_refusal_rejects_when_no_datasource_reference_exists_to_verify():
+    # (v) clause 1's floor: zero datasource references to verify at all.
     stored = {
         "templating": {
             "list": [
@@ -862,29 +893,91 @@ def test_published_refusal_rejects_when_no_datasource_reference_exists_to_verify
     assert PUBLISH_DASHBOARD.published_refusal(stored, STORED_DS_UID) is not None
 
 
-def test_published_refusal_rejects_the_v8_state_with_ds_prometheus_left_literal():
+def test_published_refusal_rejects_the_real_v8_state_with_current_at_the_repo_sentinel():
+    # (i) clause 3: the real v8 defect (ADR-0032) -- every datasource.uid correctly
+    # stayed the literal ${DS_PROMETHEUS} (clauses 1 and 2 hold) but DS_PROMETHEUS's
+    # own current never got the real uid written to it. Renamed and re-pointed from
+    # "rejects_the_v8_state_with_ds_prometheus_left_literal", whose input was the
+    # shape Grafana returns on *every* successful publish, not the v8 incident: this
+    # is what that test should have been.
+    stored = _stored_with(dict(DS_SENTINEL), "${DS_PROMETHEUS}")
+    assert PUBLISH_DASHBOARD.published_refusal(stored, STORED_DS_UID) is not None
+
+
+def test_published_refusal_rejects_when_a_second_ds_prometheus_variable_names_another_instance():
+    # (ii) clause 3, universal: with a single variable "every" and "the first" behave
+    # identically. Two DS_PROMETHEUS variables, the first correctly resolved and the
+    # second naming another instance, is the one entry that fails under an index-0
+    # implementation (ds_variables[0] alone) and passes under the universal one --
+    # the entry that proves the change rather than just accompanying it.
+    stored = {
+        "templating": {
+            "list": [
+                {
+                    "name": "DS_PROMETHEUS",
+                    "type": "datasource",
+                    "current": {
+                        "selected": True,
+                        "text": "grafanacloud-heartyfjord3250-prom",
+                        "value": STORED_DS_UID,
+                    },
+                },
+                {
+                    "name": "DS_PROMETHEUS",
+                    "type": "datasource",
+                    "current": {
+                        "selected": True,
+                        "text": "other",
+                        "value": "grafanacloud-other-prom",
+                    },
+                },
+            ]
+        },
+        "panels": [
+            {
+                "type": "stat",
+                "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+                "targets": [],
+            }
+        ],
+    }
+    assert PUBLISH_DASHBOARD.published_refusal(stored, STORED_DS_UID) is not None
+
+
+def test_published_refusal_rejects_a_literal_instance_uid_nested_in_a_collapsed_row():
+    # (iii) clause 1, proving rejection and recursion at once -- the same shape the
+    # file guard's own analogous test proves for the pre-publish JSON.
     stored = _stored_with(
         {"selected": True, "text": "grafanacloud-heartyfjord3250-prom", "value": STORED_DS_UID},
         "${DS_PROMETHEUS}",
     )
-    assert PUBLISH_DASHBOARD.published_refusal(stored, STORED_DS_UID) is not None
-
-
-def test_published_refusal_rejects_another_instances_uid():
-    stored = _stored_with(
-        {"selected": True, "text": "other", "value": "grafanacloud-other-prom"},
-        "grafanacloud-other-prom",
+    stored["panels"].append(
+        {
+            "type": "row",
+            "title": "Colapsada",
+            "collapsed": True,
+            "panels": [
+                {
+                    "type": "stat",
+                    "datasource": {"type": "prometheus", "uid": "grafanacloud-prom"},
+                    "targets": [],
+                }
+            ],
+        }
     )
+    assert "grafanacloud-prom" in PUBLISH_DASHBOARD.datasource_uids(stored)
     assert PUBLISH_DASHBOARD.published_refusal(stored, STORED_DS_UID) is not None
 
 
 def test_published_refusal_rejects_the_variable_absent():
+    # (iv) clause 2: every datasource.uid reference is the correct literal, but no
+    # DS_PROMETHEUS variable exists in templating.list to resolve it.
     stored = {
         "templating": {"list": []},
         "panels": [
             {
                 "type": "stat",
-                "datasource": {"type": "prometheus", "uid": STORED_DS_UID},
+                "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
                 "targets": [],
             }
         ],
@@ -893,14 +986,15 @@ def test_published_refusal_rejects_the_variable_absent():
 
 
 def test_published_refusal_rejects_the_envelope_passed_instead_of_the_dashboard():
-    # The day-one integration mistake: `stored["templating"]` only exists inside
-    # `envelope["dashboard"]`, not at the envelope's own top level, so this is caught
-    # even though `datasource_uids` (a plain recursive walk) still finds the uids
-    # nested one level deeper. The transport passes `stored["dashboard"]` explicitly so
-    # this shape reaches it as a `KeyError`, never silently as `None` here.
+    # (vi) clause 2, the day-one integration mistake: `stored["templating"]` only
+    # exists inside `envelope["dashboard"]`, not at the envelope's own top level, so
+    # this is caught even though `datasource_uids` (a plain recursive walk) still
+    # finds the uids nested one level deeper and clause 1 is satisfied. The transport
+    # passes `stored["dashboard"]` explicitly so this shape reaches it as a
+    # `KeyError`, never silently as `None` here.
     envelope = {
         "dashboard": _stored_with(
-            {"selected": True, "text": "x", "value": STORED_DS_UID}, STORED_DS_UID
+            {"selected": True, "text": "x", "value": STORED_DS_UID}, "${DS_PROMETHEUS}"
         ),
         "meta": {"version": 9},
     }
