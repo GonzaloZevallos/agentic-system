@@ -33,6 +33,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
       state
       createdAt
       mergedAt
+      mergeCommit { oid }
       commits(first: 250) {
         nodes {
           commit {
@@ -131,6 +132,7 @@ class GhTracker:
             state=pull_request["state"],
             created_at=pull_request["createdAt"],
             merged_at=pull_request["mergedAt"],
+            merge_commit=(pull_request.get("mergeCommit") or {}).get("oid"),
             commits=commits,
         )
 

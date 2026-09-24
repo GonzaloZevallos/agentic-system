@@ -171,12 +171,15 @@ class PullRequest:
     learning the other's technology. The only type describing a pull request's
     facts -- nobody declares a second, and every consumer imports this one.
     `merged_at` is `None` for a pull request that never merged (open or closed
-    unmerged); `commits` is every commit on the branch, oldest first."""
+    unmerged); `commits` is every commit on the branch, oldest first;
+    `merge_commit` is the sha GitHub says the merge produced on the base branch, `None`
+    when it never merged (ADR-0038)."""
 
     state: Literal["OPEN", "MERGED", "CLOSED"]
     created_at: str
     merged_at: str | None
     commits: tuple[PullRequestCommit, ...]
+    merge_commit: str | None = None
 
 
 def add(current: float, new: float) -> float:
