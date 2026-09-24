@@ -30,6 +30,7 @@ The README table itself is read through `tests.readme_metrics`, shared with
 `test_telemetry.py`'s own cross-check of the same table against what the code emits.
 """
 
+import importlib.util
 import json
 import re
 from pathlib import Path
@@ -39,6 +40,8 @@ from tests.readme_metrics import _documented, _not_read
 
 REPO = Path(__file__).resolve().parent.parent
 DASHBOARD = REPO / "observability" / "grafana" / "dashboard.json"
+GRAFANA_README = REPO / "observability" / "grafana" / "README.md"
+PUBLISH_SCRIPT = REPO / "scripts" / "publish_dashboard.py"
 
 
 def _load() -> dict:
@@ -532,4 +535,398 @@ def test_readme_partition_of_documented_metrics_is_queried_or_not_read():
     assert not neither, (
         f"documented metric(s) neither queried by any panel nor listed as not "
         f"read: {sorted(neither)}"
+    )
+
+
+# --- ADR-0032, subtask `dashboard-publisher` (GH-123): the v8 publish defect was never
+# a data problem, it was `POST /api/dashboards/db` never substituting `${DS_PROMETHEUS}`
+# the way the UI importer does. `_exprs()` above only ever walked
+# `panels[].targets[].expr`, so it was structurally blind to a `datasource.uid`
+# anywhere: at panel level, at target level, and in `templating[]` -- the three shapes
+# this guard adds. `scripts/publish_dashboard.py` is loaded by path (it is not a
+# package, and none becomes one): `datasource_uids()` is the one recursive walk shared
+# by this guard and by `published_refusal()`, so the two can never drift into disagreeing
+# about what counts as a datasource reference -- the exact drift that let the v8 defect
+# ship with 19 green tests. Written in this module's existing style: helpers keep their
+# light type hints, `test_*` functions carry none (this file is outside
+# `[tool.mypy] files` by construction).
+
+
+def _load_publish_dashboard():
+    spec = importlib.util.spec_from_file_location("publish_dashboard", PUBLISH_SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+PUBLISH_DASHBOARD = _load_publish_dashboard()
+
+DS_SENTINEL = {"selected": False, "text": "", "value": ""}
+INSTANCE_UID_RE = re.compile(r"^grafanacloud-")
+BASELINE_VALUE_RE = re.compile(r"^bl-")
+
+
+def _current_values(variable: dict) -> list[object]:
+    current = variable.get("current", {})
+    out: list[object] = []
+    for field in ("value", "text"):
+        v = current.get(field)
+        if isinstance(v, list):
+            out.extend(v)
+        elif v is not None:
+            out.append(v)
+    return out
+
+
+def _minimal_valid_dashboard() -> dict:
+    """The smallest object `_datasource_uid_violations` accepts clean: used to build the
+    four rejected entries below by breaking exactly one rule at a time (ADR-0023) --
+    never the real 2700-line file, whose only job here is `test_dashboard_json_has_no_
+    datasource_uid_or_current_violations`."""
+    return {
+        "editable": False,
+        "templating": {
+            "list": [
+                {
+                    "name": "DS_PROMETHEUS",
+                    "type": "datasource",
+                    "query": "prometheus",
+                    "current": dict(DS_SENTINEL),
+                }
+            ]
+        },
+        "panels": [
+            {
+                "type": "stat",
+                "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+                "targets": [],
+            }
+        ],
+    }
+
+
+def _datasource_uid_violations(data: dict) -> list[str]:
+    """Everything the "one spelling" guard exists to reject, as a list (empty means
+    clean) rather than a bare boolean: a reviewer or a failing assertion can name which
+    rule broke instead of just that something did."""
+    violations: list[str] = []
+    if "__inputs" in data:
+        violations.append("__inputs is present: a re-export from the UI would revive it")
+    if data.get("editable") is not False:
+        violations.append(f"editable is {data.get('editable')!r}, expected False")
+
+    variables = data.get("templating", {}).get("list", [])
+    ds_variables = [v for v in variables if v.get("name") == "DS_PROMETHEUS"]
+    if len(ds_variables) != 1:
+        violations.append(
+            f"expected exactly one DS_PROMETHEUS template variable, found {len(ds_variables)}"
+        )
+    else:
+        variable = ds_variables[0]
+        if variable.get("type") != "datasource" or variable.get("query") != "prometheus":
+            violations.append(
+                f"DS_PROMETHEUS must be type=datasource query=prometheus, found "
+                f"type={variable.get('type')!r} query={variable.get('query')!r}"
+            )
+        if variable.get("current") != DS_SENTINEL:
+            violations.append(
+                f"DS_PROMETHEUS current must be the repo sentinel {DS_SENTINEL}, "
+                f"found {variable.get('current')!r}: the repo carries no instance state"
+            )
+
+    uids = PUBLISH_DASHBOARD.datasource_uids(data)
+    if not uids:
+        violations.append(
+            "test_dashboard_json_has_no_datasource_uid_or_current_violations: "
+            "datasource_uids found zero references to verify"
+        )
+    else:
+        bad = sorted({uid for uid in uids if uid != "${DS_PROMETHEUS}"})
+        if bad:
+            violations.append(f"datasource.uid literal(s) found, not ${{DS_PROMETHEUS}}: {bad}")
+
+    for variable in variables:
+        for value in _current_values(variable):
+            if not isinstance(value, str):
+                continue
+            if INSTANCE_UID_RE.match(value):
+                violations.append(
+                    f"${variable.get('name')} current carries an instance uid literal: {value!r}"
+                )
+            if BASELINE_VALUE_RE.match(value):
+                violations.append(
+                    f"${variable.get('name')} current carries a baseline tag literal: {value!r}"
+                )
+    return violations
+
+
+def test_dashboard_json_has_no_datasource_uid_or_current_violations():
+    data = _load()
+    violations = _datasource_uid_violations(data)
+    assert not violations, f"dashboard.json fails the one-spelling guard: {violations}"
+
+
+def test_datasource_reference_count_is_at_least_leaf_panels_plus_variables():
+    """Anti-vacuidad (ADR-0023): a walk that silently finds nothing must not pass as
+    clean. The floor is every leaf panel (`_panels`, already exhaustive per
+    `test_panel_walk_is_exhaustive`) plus every template variable that itself carries a
+    `datasource` field (every variable except `DS_PROMETHEUS`, which is the datasource
+    rather than a consumer of one)."""
+    data = _load()
+    leaf_panels = len(_panels(data))
+    variables_with_datasource = sum(1 for v in data["templating"]["list"] if "datasource" in v)
+    found = PUBLISH_DASHBOARD.datasource_uids(data)
+    assert found, (
+        "test_datasource_reference_count_is_at_least_leaf_panels_plus_variables: "
+        "datasource_uids found zero references on the real dashboard"
+    )
+    assert len(found) >= leaf_panels + variables_with_datasource, (
+        f"datasource_uids found {len(found)} references, fewer than {leaf_panels} leaf "
+        f"panels + {variables_with_datasource} datasource-carrying variables"
+    )
+
+
+# --- Five rejected entries, built in the test (ADR-0023), never on the real file.
+def test_guard_rejects_a_literal_instance_uid_nested_in_a_collapsed_row():
+    data = _minimal_valid_dashboard()
+    data["panels"].append(
+        {
+            "type": "row",
+            "title": "Colapsada",
+            "collapsed": True,
+            "panels": [
+                {
+                    "type": "stat",
+                    "datasource": {"type": "prometheus", "uid": "grafanacloud-prom"},
+                    "targets": [],
+                }
+            ],
+        }
+    )
+    # Proves the recursion and the rejection at once: a one-level walk would never see
+    # this uid at all, which is exactly how the v8 defect shipped past 19 green tests.
+    assert "grafanacloud-prom" in PUBLISH_DASHBOARD.datasource_uids(data)
+    violations = _datasource_uid_violations(data)
+    assert any("grafanacloud-prom" in v for v in violations), violations
+
+
+def test_guard_rejects_ds_prometheus_reference_with_the_variable_absent():
+    data = _minimal_valid_dashboard()
+    data["templating"]["list"] = []
+    violations = _datasource_uid_violations(data)
+    assert any("DS_PROMETHEUS template variable" in v for v in violations), violations
+
+
+def test_guard_rejects_a_variable_current_value_naming_an_instance():
+    data = _minimal_valid_dashboard()
+    data["templating"]["list"].append(
+        {
+            "name": "product",
+            "type": "query",
+            "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+            "current": {
+                "selected": True,
+                "text": "grafanacloud-prom",
+                "value": "grafanacloud-prom",
+            },
+        }
+    )
+    violations = _datasource_uid_violations(data)
+    assert any("instance uid literal" in v for v in violations), violations
+
+
+def test_guard_rejects_a_variable_current_value_naming_a_baseline_tag():
+    # Exactly the v9 hotfix this issue attached: `baseline`'s `current` pinned to
+    # `bl-2026-09-23` instead of `""`. A baseline tag is data (ADR-0030: a human
+    # declares it, and it ages the moment the next one does), never a repo literal;
+    # `$__all` stays allowed (`arm`, `product`, `version` already carry it) because it
+    # is Grafana's own structural literal, not a series value.
+    data = _minimal_valid_dashboard()
+    data["templating"]["list"].append(
+        {
+            "name": "baseline",
+            "type": "query",
+            "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+            "current": {
+                "selected": True,
+                "text": "bl-2026-09-23",
+                "value": "bl-2026-09-23",
+            },
+        }
+    )
+    violations = _datasource_uid_violations(data)
+    assert any("baseline tag literal" in v for v in violations), violations
+
+
+def test_guard_rejects_inputs_key_present():
+    data = _minimal_valid_dashboard()
+    data["__inputs"] = [{"name": "DS_PROMETHEUS"}]
+    violations = _datasource_uid_violations(data)
+    assert any("__inputs is present" in v for v in violations), violations
+
+
+# --- `body(dashboard, ds_uid, ds_name)`: the whole returned object pinned, including
+# `current`'s three keys (never only the uid, or a text/value swap would pass silently).
+def test_body_pins_the_returned_object_and_strips_id():
+    dashboard = {
+        "id": 42,
+        "uid": "agentic-system",
+        "editable": False,
+        "templating": {
+            "list": [
+                {
+                    "name": "DS_PROMETHEUS",
+                    "type": "datasource",
+                    "query": "prometheus",
+                    "current": dict(DS_SENTINEL),
+                }
+            ]
+        },
+        "panels": [],
+    }
+    result = PUBLISH_DASHBOARD.body(
+        dashboard, "grafanacloud-heartyfjord3250-uid", "grafanacloud-heartyfjord3250-prom"
+    )
+    assert result == {
+        "overwrite": True,
+        "dashboard": {
+            "uid": "agentic-system",
+            "editable": False,
+            "templating": {
+                "list": [
+                    {
+                        "name": "DS_PROMETHEUS",
+                        "type": "datasource",
+                        "query": "prometheus",
+                        "current": {
+                            "selected": True,
+                            "text": "grafanacloud-heartyfjord3250-prom",
+                            "value": "grafanacloud-heartyfjord3250-uid",
+                        },
+                    }
+                ]
+            },
+            "panels": [],
+        },
+    }
+
+
+def test_body_rejects_a_dashboard_without_the_ds_prometheus_variable():
+    dashboard = {"templating": {"list": []}, "panels": []}
+    raised = False
+    try:
+        PUBLISH_DASHBOARD.body(dashboard, "some-uid", "some-name")
+    except ValueError:
+        raised = True
+    assert raised, "body() must reject a dashboard with no DS_PROMETHEUS variable"
+
+
+# --- `published_refusal(stored, ds_uid)`: a positive control plus the anti-vacuidad
+# floor and the four rejected entries the brief names, including the sobre mistake.
+STORED_DS_UID = "grafanacloud-heartyfjord3250-uid"
+
+
+def _stored_with(current: dict, panel_uid: str) -> dict:
+    return {
+        "templating": {
+            "list": [{"name": "DS_PROMETHEUS", "type": "datasource", "current": current}]
+        },
+        "panels": [
+            {"type": "stat", "datasource": {"type": "prometheus", "uid": panel_uid}, "targets": []}
+        ],
+    }
+
+
+def test_published_refusal_accepts_a_correctly_resolved_dashboard():
+    stored = _stored_with(
+        {"selected": True, "text": "grafanacloud-heartyfjord3250-prom", "value": STORED_DS_UID},
+        STORED_DS_UID,
+    )
+    assert PUBLISH_DASHBOARD.published_refusal(stored, STORED_DS_UID) is None
+
+
+def test_published_refusal_rejects_when_no_datasource_reference_exists_to_verify():
+    stored = {
+        "templating": {
+            "list": [
+                {
+                    "name": "DS_PROMETHEUS",
+                    "type": "datasource",
+                    "current": {"selected": True, "text": "x", "value": STORED_DS_UID},
+                }
+            ]
+        },
+        "panels": [{"type": "stat", "targets": []}],
+    }
+    assert PUBLISH_DASHBOARD.published_refusal(stored, STORED_DS_UID) is not None
+
+
+def test_published_refusal_rejects_the_v8_state_with_ds_prometheus_left_literal():
+    stored = _stored_with(
+        {"selected": True, "text": "grafanacloud-heartyfjord3250-prom", "value": STORED_DS_UID},
+        "${DS_PROMETHEUS}",
+    )
+    assert PUBLISH_DASHBOARD.published_refusal(stored, STORED_DS_UID) is not None
+
+
+def test_published_refusal_rejects_another_instances_uid():
+    stored = _stored_with(
+        {"selected": True, "text": "other", "value": "grafanacloud-other-prom"},
+        "grafanacloud-other-prom",
+    )
+    assert PUBLISH_DASHBOARD.published_refusal(stored, STORED_DS_UID) is not None
+
+
+def test_published_refusal_rejects_the_variable_absent():
+    stored = {
+        "templating": {"list": []},
+        "panels": [
+            {
+                "type": "stat",
+                "datasource": {"type": "prometheus", "uid": STORED_DS_UID},
+                "targets": [],
+            }
+        ],
+    }
+    assert PUBLISH_DASHBOARD.published_refusal(stored, STORED_DS_UID) is not None
+
+
+def test_published_refusal_rejects_the_envelope_passed_instead_of_the_dashboard():
+    # The day-one integration mistake: `stored["templating"]` only exists inside
+    # `envelope["dashboard"]`, not at the envelope's own top level, so this is caught
+    # even though `datasource_uids` (a plain recursive walk) still finds the uids
+    # nested one level deeper. The transport passes `stored["dashboard"]` explicitly so
+    # this shape reaches it as a `KeyError`, never silently as `None` here.
+    envelope = {
+        "dashboard": _stored_with(
+            {"selected": True, "text": "x", "value": STORED_DS_UID}, STORED_DS_UID
+        ),
+        "meta": {"version": 9},
+    }
+    assert PUBLISH_DASHBOARD.published_refusal(envelope, STORED_DS_UID) is not None
+
+
+# --- README <-> script, both directions (precedent:
+# tests/test_stack.py::test_every_declared_check_and_setup_command_is_a_run_step_in_ci).
+def _dashboard_readme_section() -> str:
+    text = GRAFANA_README.read_text(encoding="utf-8")
+    start = text.index("## Dashboard")
+    rest = text[start:]
+    next_heading = rest.find("\n## ", 1)
+    return rest if next_heading == -1 else rest[:next_heading]
+
+
+def test_readme_documents_the_publish_script_usage_and_env_vars_both_ways():
+    section = _dashboard_readme_section()
+    assert PUBLISH_DASHBOARD.USAGE in section, (
+        f"README's Dashboard section does not contain the script's USAGE verbatim: "
+        f"{PUBLISH_DASHBOARD.USAGE!r}"
+    )
+    for name in PUBLISH_DASHBOARD.ENV_VARS:
+        assert name in section, f"README's Dashboard section does not name {name!r}"
+    readme_env_names = set(re.findall(r"\bGRAFANA_[A-Z_]+\b", section))
+    assert readme_env_names == set(PUBLISH_DASHBOARD.ENV_VARS), (
+        f"README's Dashboard section names {sorted(readme_env_names)}, script ENV_VARS "
+        f"are {sorted(PUBLISH_DASHBOARD.ENV_VARS)}"
     )

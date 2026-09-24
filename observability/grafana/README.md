@@ -28,10 +28,35 @@ El dashboard arranca con **un solo producto** seleccionado en la variable `Produ
 desde ADR-0017 hay dos y sumarlos no significa nada. Elegir "All" los compara, no los suma,
 porque todo panel abre por `product` (issue #47).
 
-`dashboard.json` es el dashboard "Sistema agéntico", exportado con el datasource como
-input. Importarlo desde **Dashboards → New → Import**, pegando el JSON y eligiendo el
-datasource Prometheus del stack (`grafanacloud-<stack>-prom`). Re-importar pisa el anterior:
-comparten `uid`.
+`dashboard.json` es el dashboard "Sistema agéntico" y, a la vez, el cuerpo del POST que
+lo publica: la variable de plantilla `DS_PROMETHEUS` (oculta, `hide: 2`) resuelve su
+propio `${DS_PROMETHEUS}` en todo panel y variable. Pegar este JSON en
+**Dashboards → New → Import** **no funciona**: el archivo ya no lleva `__inputs` (se
+retiró con ADR-0032) y la variable está oculta, así que el importador no pregunta nada
+y el dashboard queda publicado sin datasource — la v8 (GH-123). El único camino de
+publicación es el script:
+
+```bash
+uv run scripts/publish_dashboard.py
+```
+
+Lee tres variables de entorno, nombradas acá sin valor (nunca en este repo, y no en
+`.env.example`: ese archivo es lo que el runtime bajo `agentic/` lee, y esto no lo lee):
+`GRAFANA_URL` (la instancia, la misma de arriba), `GRAFANA_TOKEN` (un token de esa
+instancia con permiso de publicar dashboards) y `GRAFANA_DS_UID` (el uid del datasource
+Prometheus del stack). Antes de publicar comprueba `GET
+/api/datasources/uid/$GRAFANA_DS_UID` — corta sin publicar nada si no es 200 — y de ahí
+saca el nombre visible del datasource; publica con `POST /api/dashboards/db`, cuerpo
+`{"dashboard": <json sin "id">, "overwrite": true}`; después vuelve a leer el dashboard
+publicado y corta si queda alguna referencia a `${DS_PROMETHEUS}` sin resolver. Ninguna
+ruta del script termina en 0 sin las dos verificaciones.
+
+`editable: false` hace del archivo la fuente de verdad: el único loop es editar
+`dashboard.json` y correr el script, nunca editar el dashboard vivo; la exploración ad
+hoc va a **Explore**, no a los paneles. Elegir un producto sin línea de base (hoy
+`gym-saas`) deja vacía, a propósito, toda fila con eje de línea de base: ese producto no
+tiene ninguna serie con `system_baseline`; la lectura de la historia pre-baseline es
+`agentic eval compare`, no este dashboard.
 
 Los nombres en Prometheus son los de OpenTelemetry con puntos por guiones bajos y el sufijo
 de unidad: `agentic.task.cost_usd` es `agentic_task_cost_usd`, `agentic.task.duration` es
