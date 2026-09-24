@@ -394,6 +394,53 @@ def test_own_failures_matcher_excludes_exactly_the_external_reasons():
         )
 
 
+# --- Tying three of the Scorecard row's four panels to scorecard.build's own
+# populations (Tech Lead review, dashboard-rows): "Retrabajo" once divided rework
+# dollars by total cost dollars instead of by the count of terminated Corridas
+# (`scorecard.build`'s `rework_per_task`), and nothing at this seam caught the drift.
+# "Costo por tarea terminada" is the one deliberate exception (module docstring,
+# README): it is titled for what it measures, never for `scorecard.build`'s
+# `cost_per_delivery`, so it is not checked against that population here.
+def test_scorecard_figures_match_scorecard_build_populations():
+    data = _load()
+    panels_by_title = {
+        panel["title"]: panel for row_title, panel in _panels(data) if row_title == "Scorecard"
+    }
+
+    def level_expr(title_prefix: str) -> str:
+        title = next(t for t in panels_by_title if t.startswith(title_prefix))
+        return next(t["expr"] for t in panels_by_title[title]["targets"] if t["refId"] == "A")
+
+    autonomy = level_expr("Autonomía")
+    num, _, den = autonomy.partition(" / ")
+    assert "agentic_delivery_outcome" in num and 'outcome="merged"' in num, (
+        f'autonomy numerator must be agentic_delivery_outcome{{outcome="merged"}}: {num!r}'
+    )
+    assert "agentic_delivery_outcome" in den and 'outcome="merged"' not in den, (
+        f"autonomy denominator must be the unfiltered (judged) agentic_delivery_outcome: {den!r}"
+    )
+
+    failures = level_expr("Fallos propios por tarea")
+    num, _, den = failures.partition(" / ")
+    assert "agentic_role_failures" in num, (
+        f"own-failures numerator must read agentic_role_failures: {num!r}"
+    )
+    assert "agentic_task_finished" in den and 'task_status!~"waiting_on_human|crashed"' in den, (
+        f"own-failures denominator must be the count of terminated Corridas "
+        f"(agentic_task_finished, terminated-status filter): {den!r}"
+    )
+
+    rework = level_expr("Retrabajo")
+    num, _, den = rework.partition(" / ")
+    assert "agentic_task_rework_usd" in num, (
+        f"rework numerator must read agentic_task_rework_usd: {num!r}"
+    )
+    assert "agentic_task_finished" in den and 'task_status!~"waiting_on_human|crashed"' in den, (
+        f'"Retrabajo" must divide by the count of terminated Corridas '
+        f"(scorecard.build's rework_per_task), never by total cost: {rework!r}"
+    )
+
+
 # --- $baseline and $baseline_prev are single-select.
 def test_baseline_variables_are_single_select():
     data = _load()
@@ -422,10 +469,22 @@ def test_scorecard_experimentos_and_dividing_panels_have_a_description():
 
 
 # --- No literal range selector exceeds 32 days (Grafana Cloud's per-query ceiling,
-# ADR-0008's first addendum), and the dashboard default is no wider.
+# ADR-0008's first addendum), and the dashboard default is no wider. A panel-level
+# `timeFrom` override widens the effective window of every `[$__range]` target on that
+# panel just as much as a literal bracket would -- the Tech Lead review caught two
+# Diagnóstico panels at "90d" while this same file's README addition claims a blanket
+# 32-day ceiling, and a ceiling test that only reads bracket literals is blind to that
+# widening. So `timeFrom`/`timeShift` are read here too, not only `[...]` literals.
 RANGE_LITERAL = re.compile(r"\[(\d+)([smhdwy])\]")
 DAY_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800, "y": 31536000}
 MAX_RANGE_DAYS = 32
+
+
+def _relative_days(literal: str) -> float:
+    m = re.match(r"(?:now-)?(\d+)([smhdwy])$", literal)
+    assert m, f"not a relative time literal: {literal!r}"
+    value, unit = m.groups()
+    return int(value) * DAY_SECONDS[unit] / 86400
 
 
 def test_no_literal_range_selector_exceeds_32_days():
@@ -438,11 +497,16 @@ def test_no_literal_range_selector_exceeds_32_days():
                 f"{MAX_RANGE_DAYS}-day Grafana Cloud ceiling ($__range is not a literal "
                 "and is not checked here)"
             )
+    for _row, panel in _panels(data):
+        for key in ("timeFrom", "timeShift"):
+            if key in panel:
+                days = _relative_days(panel[key])
+                assert days <= MAX_RANGE_DAYS, (
+                    f"panel {panel.get('title')!r} sets {key}={panel[key]!r}, widening "
+                    f"every [$__range] target on it past the {MAX_RANGE_DAYS}-day ceiling"
+                )
     default_from = data["time"]["from"]
-    m = re.match(r"now-(\d+)([smhdwy])$", default_from)
-    assert m, f'dashboard default "from" is not a relative literal: {default_from!r}'
-    value, unit = m.groups()
-    days = int(value) * DAY_SECONDS[unit] / 86400
+    days = _relative_days(default_from)
     assert days <= MAX_RANGE_DAYS, (
         f'dashboard default "from" ({default_from}) exceeds {MAX_RANGE_DAYS} days'
     )

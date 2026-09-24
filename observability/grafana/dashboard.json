@@ -361,7 +361,7 @@
       "id": 203,
       "type": "stat",
       "title": "Retrabajo — $baseline vs $baseline_prev",
-      "description": "agentic_task_rework_usd sobre agentic_task_cost_usd, línea de base de la corrida: el denominador es el costo de Corridas terminadas. Target B es la diferencia contra $baseline_prev.",
+      "description": "agentic_task_rework_usd sobre el conteo de agentic_task_finished con task_status!~\"waiting_on_human|crashed\" (rework_per_task de scorecard.build: el promedio de dólares de retrabajo por Corrida terminada, nunca la parte del costo total que es retrabajo -- eso lo mide el panel de Diagnóstico \"Retrabajo\"), línea de base de la corrida: el denominador es la cantidad de Corridas terminadas. Target B es la diferencia contra $baseline_prev.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -375,35 +375,27 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(sum_over_time(agentic_task_rework_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range])) / sum(sum_over_time(agentic_task_cost_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range]))",
+          "expr": "sum(sum_over_time(agentic_task_rework_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range])) / sum(sum_over_time(agentic_task_finished{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", task_status!~\"waiting_on_human|crashed\"}[$__range]))",
           "legendFormat": "",
           "instant": true
         },
         {
           "refId": "B",
-          "expr": "(sum(sum_over_time(agentic_task_rework_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range])) / sum(sum_over_time(agentic_task_cost_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range]))) - (sum(sum_over_time(agentic_task_rework_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline_prev\"}[$__range])) / sum(sum_over_time(agentic_task_cost_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline_prev\"}[$__range])))",
+          "expr": "(sum(sum_over_time(agentic_task_rework_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range])) / sum(sum_over_time(agentic_task_finished{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", task_status!~\"waiting_on_human|crashed\"}[$__range]))) - (sum(sum_over_time(agentic_task_rework_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline_prev\"}[$__range])) / sum(sum_over_time(agentic_task_finished{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline_prev\", task_status!~\"waiting_on_human|crashed\"}[$__range])))",
           "legendFormat": "delta",
           "instant": true
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percentunit",
+          "unit": "currencyUSD",
           "decimals": 2,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "text",
                 "value": null
-              },
-              {
-                "color": "orange",
-                "value": 0.1
-              },
-              {
-                "color": "red",
-                "value": 0.3
               }
             ]
           }
@@ -643,7 +635,7 @@
       "id": 213,
       "type": "bargauge",
       "title": "Retrabajo por brazo — dentro de $baseline",
-      "description": "Igual que el panel de Scorecard, agrupado by (arm) dentro de $baseline: denominador el costo de Corridas terminadas de agentic_task_cost_usd, línea de base de la corrida, por brazo.",
+      "description": "Igual que el panel de Scorecard (rework_per_task de scorecard.build: dólares de retrabajo sobre la cantidad de Corridas terminadas, agentic_task_rework_usd sobre el conteo de agentic_task_finished con task_status!~\"waiting_on_human|crashed\"), agrupado by (arm) dentro de $baseline, línea de base de la corrida, por brazo.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -657,14 +649,14 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (arm) (sum_over_time(agentic_task_rework_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", arm=~\"$arm\"}[$__range])) / sum by (arm) (sum_over_time(agentic_task_cost_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", arm=~\"$arm\"}[$__range]))",
+          "expr": "sum by (arm) (sum_over_time(agentic_task_rework_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", arm=~\"$arm\"}[$__range])) / sum by (arm) (sum_over_time(agentic_task_finished{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", arm=~\"$arm\", task_status!~\"waiting_on_human|crashed\"}[$__range]))",
           "legendFormat": "{{arm}}",
           "instant": true
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percentunit",
+          "unit": "currencyUSD",
           "decimals": 2,
           "min": 0,
           "color": {
@@ -2343,7 +2335,7 @@
           "instant": true
         }
       ],
-      "timeFrom": "90d",
+      "timeFrom": "30d",
       "fieldConfig": {
         "defaults": {
           "unit": "none",
@@ -2384,7 +2376,7 @@
           "instant": true
         }
       ],
-      "timeFrom": "90d",
+      "timeFrom": "30d",
       "fieldConfig": {
         "defaults": {
           "unit": "none",
