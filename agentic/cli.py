@@ -799,7 +799,6 @@ CloseStatus = Literal[
     "no_pull_request",
     "no_document",
     "tracker_error",
-    "flush_failed",
 ]
 
 
@@ -821,23 +820,23 @@ class _ClosureOutcome:
     path: Path | None = None
 
 
-def _close_document(
-    task_id: str, cfg: Configuration, ports: Ports, product: str
-) -> _ClosureOutcome:
-    """The closure of one task: read -> ask `gh` -> emit -> write, the body `_close`
-    used to run inline and `_close_all`'s sweep now shares (Tech Lead plan, subtask
+def _close_document(task_id: str, cfg: Configuration, ports: Ports) -> _ClosureOutcome:
+    """The closure of one task: read -> ask `gh` -> write, the body `_close` used to
+    run inline and `_close_all`'s sweep now shares (Tech Lead plan, subtask
     `close-all`) -- one definition, so `--issue` and `--all` cannot drift on what
     "closed" means. Runs under the caller's own lock (`_close`'s and `_close_all`'s per-
     task `_locked`, never taken here): a second `close` over the same task cannot race
-    this read -> emit -> write.
+    this read -> write.
 
     Every refusal is independently reachable, in this order: a missing document, a
     missing `pull_request` value or an already-recorded closure, read off the document
-    alone, before `gh` is ever asked anything; a pull request `gh` cannot be read or is
-    still open; and a false flush (`record_delivery`'s own docstring: `None` with no
-    meter provider configured is indistinguishable, to a caller, from one that ran and
-    failed) last of all -- `record_closure` only runs after a *true* flush, so a retry
-    finds the same document it started with."""
+    alone, before `gh` is ever asked anything; and a pull request `gh` cannot be read
+    or is still open, last of all. No sample backs this verdict any more -- Tech Lead
+    plan, subtask `close-verdict`: the metric endpoint that used to gate the write, and
+    the ordering that made the write wait on a true flush, both had a sample as their
+    subject, and a predicate with no subject is dead weight. `record_closure` now runs
+    directly off the figures computed from the pull request, the same `gh` read a retry
+    would repeat."""
     raw = ports.documents.load(task_id)
     if raw is None:
         return _ClosureOutcome("no_document", f"{task_id} has no document to close")
@@ -864,32 +863,6 @@ def _close_document(
     human_commits = delivery_metrics.human_commits(pull_request, author)
     human_lines_changed = delivery_metrics.human_lines_changed(pull_request, author)
     time_to_merge = delivery_metrics.time_to_merge_seconds(pull_request)
-    version = raw.get("system_version") or UNKNOWN_SYSTEM_VERSION
-    # The document's own baseline and arm, never `telemetry.system_baseline()` of the
-    # checkout `close` happens to run from: a delivery sample names the run it judges
-    # (ADR-0030, `_delivery_labels`'s own docstring), the same rule `system_version`
-    # already follows two lines up.
-    baseline = raw.get("system_baseline") or UNKNOWN_SYSTEM_VERSION
-    arm = delivery_metrics.arm_label(cast(dict, raw.get("experiment") or {}))
-    task_type = raw.get("type") or "unknown"
-    fingerprint = delivery_metrics.prompts_fingerprint(cast(TaskState, raw))
-
-    flushed = telemetry.record_delivery(
-        product=product,
-        task_type=task_type,
-        prompts_fingerprint=fingerprint,
-        system_version=version,
-        system_baseline=baseline,
-        arm=arm,
-        outcome=outcome,
-        human_commits=human_commits,
-        human_lines_changed=human_lines_changed,
-        time_to_merge_seconds=time_to_merge,
-    )
-    if not flushed:
-        return _ClosureOutcome(
-            "flush_failed", f"{task_id}: no metrics endpoint configured; nothing recorded"
-        )
 
     values = {
         "closed_at": _now_iso(),
@@ -898,9 +871,8 @@ def _close_document(
         "human_lines_changed": str(human_lines_changed),
     }
     # Written only when the pull request merged: `time_to_merge` is `None` for one that
-    # never did, and the key is omitted entirely rather than written empty, the same
-    # rule `record_delivery` already follows for its own `time_to_merge_seconds` field
-    # (Tech Lead plan, subtask `close-all`). Rounded to a whole second and quoted as a
+    # never did, and the key is omitted entirely rather than written empty (Tech Lead
+    # plan, subtask `close-all`). Rounded to a whole second and quoted as a
     # string: `record_closure` writes every value through `_scalar_line`, which
     # yaml-dumps whatever it is given, and `document.parse` hands every frontmatter
     # scalar back as a string -- `evaluation.TaskDocument` types it `str` to match.
@@ -921,22 +893,24 @@ def _close_document(
 async def _close(task_id: str, cfg: Configuration, ports: Ports) -> None:
     """`agentic close --issue N`: the human's verdict on a task's pull request, read
     through `gh` and recorded once. Runs no role and opens no span (`preflight` never
-    runs here either); the one thing it still needs from the product is its name
-    (`ports.stack.product()`), since every sample this emits carries it.
+    runs here either); the refusal it still checks before touching a document is the
+    product's own name (`ports.stack.product()`) -- a call kept for its refusal alone
+    (Tech Lead plan, subtask `close-verdict`: no sample carries the product name any
+    more, so the value itself goes unused).
 
     A thin wrapper over `_close_document` (Tech Lead plan, subtask `close-all`): the
     same `FilesystemRunLock` as `run`/`resume`, through `_locked`, covers the whole of
-    read -> emit -> write, and every non-`"closed"` status becomes `CannotStart` with
+    read -> write, and every non-`"closed"` status becomes `CannotStart` with
     that status's own message, byte-for-byte what this function raised inline before
     the body moved -- the existing assertions in `tests/test_cli.py` that pin them are
     the proof."""
     try:
-        product = ports.stack.product()
+        ports.stack.product()
     except (ValueError, OSError) as exc:
         raise CannotStart(str(exc)) from exc
     lock = _lock_for(cfg)
     with _locked(lock, task_id):
-        result = _close_document(task_id, cfg, ports, product)
+        result = _close_document(task_id, cfg, ports)
     if result.status != "closed":
         raise CannotStart(result.message)
     print(f"outcome:             {result.outcome}")
@@ -955,31 +929,22 @@ async def _close_all(cfg: Configuration, ports: Ports) -> None:
     `close-all`). Idempotent: a document `_close_document` already closed is never
     selected, so rerunning it finds nothing left to do.
 
-    The capability predicate (`telemetry.metrics_configured`) is asked once before the
-    sweep, not per task. It is kept, not for the `gh` calls it saves (a side benefit --
-    `stopped` below already bounds the waste at one, once a flush actually fails), but
-    because a sweep must not exit zero having closed nothing: `_close_document` orders
-    the frontmatter write strictly after a *true* flush, so no verdict is ever written
-    without its own sample, and refusing before the sweep starts is how that promise
-    holds for the very first document too. What the guard asserts is that an endpoint
-    is declared, never that a sample was received -- `force_flush()` reports what the
-    SDK reports, never what the collector got, so no predicate in this process can
-    promise a sample landed (GH-119, Tech Lead plan, subtask
-    `close-all-endpoint-predicate`). Each task still takes its own lock, one at a time,
-    the way `_close` already does -- never the `"eval"` lock, which would block an
-    evaluation run for the duration of this sweep.
+    The sweep runs unconditionally (Tech Lead plan, subtask `close-verdict`): no sample
+    backs the verdict any more, so the capability predicate that used to refuse the
+    whole sweep before touching a document (`telemetry.metrics_configured`, GH-119) has
+    no subject left to guard, and a predicate that always returns true is a dead gate.
+    A machine with no `OTEL_EXPORTER_OTLP_ENDPOINT` can now close, which is strictly
+    more capable. Each task still takes its own lock, one at a time, the way `_close`
+    already does -- never the `"eval"` lock, which would block an evaluation run for the
+    duration of this sweep.
 
-    Exactly one `record_delivery` call per closed task, flushed inside `_EMIT_LOCK` as
-    it always is: nothing is batched here. The delivery labels carry no task id
-    (ADR-0008's closed cardinality), so two closures of the same baseline are the same
-    series, and only the flush between them keeps both samples -- a "flush once at the
-    end" sweep would collapse every closure into the last one's sample. A false flush
-    therefore stops the sweep on the first occurrence: a failed flush is a sample the
-    next `set` would overwrite, so continuing would destroy what the previous task
-    recorded, and every task after it prints as not attempted, never as a claim about a
-    pull request state this sweep stopped asking `gh` about. Non-zero exit only when
-    not one document in the corpus could be read at all; a corpus with nothing left to
-    close, or a sweep that stopped partway, both exit zero with what happened printed.
+    The stop-on-first-failure structure survives with its trigger changed from a false
+    flush to a `gh` failure: `_close_document`'s own `"tracker_error"` status, raised
+    when the pull request cannot be read at all. A task after the stopped one is never
+    even asked `gh` about, so it prints as not attempted, never as a claim about a pull
+    request state this sweep stopped reading. Non-zero exit only when not one document
+    in the corpus could be read at all; a corpus with nothing left to close, or a sweep
+    that stopped partway, both exit zero with what happened printed.
 
     One line per document, the five kinds the plan names: `closed`, `still open`
     (`gh` says so), `already closed` (nothing to do -- a previous `close --issue N` or
@@ -988,11 +953,9 @@ async def _close_all(cfg: Configuration, ports: Ports) -> None:
     read off the document alone, the same fact `_refuse_open_pull_request` already
     reads, so no `gh` call is spent on a document this sweep would not select anyway."""
     try:
-        product = ports.stack.product()
+        ports.stack.product()
     except (ValueError, OSError) as exc:
         raise CannotStart(str(exc)) from exc
-    if not telemetry.metrics_configured():
-        raise CannotStart("no metrics endpoint configured; nothing recorded")
     lock = _lock_for(cfg)
     task_ids = ports.documents.ids()
     readable = 0
@@ -1017,7 +980,7 @@ async def _close_all(cfg: Configuration, ports: Ports) -> None:
             print(f"agentic: {label}: already closed")
             continue
         if stopped:
-            print(f"agentic: {label}: not attempted (sweep stopped on an earlier flush)")
+            print(f"agentic: {label}: not attempted (sweep stopped on an earlier gh failure)")
             remaining.append(label)
             continue
         refusal = lock.refusal(task_id)
@@ -1026,7 +989,7 @@ async def _close_all(cfg: Configuration, ports: Ports) -> None:
             remaining.append(label)
             continue
         with _locked(lock, task_id):
-            result = _close_document(task_id, cfg, ports, product)
+            result = _close_document(task_id, cfg, ports)
         if result.status == "closed":
             print(f"agentic: {label}: closed ({result.outcome})")
             closed.append(label)
@@ -1036,7 +999,7 @@ async def _close_all(cfg: Configuration, ports: Ports) -> None:
         else:
             print(f"agentic: {label}: {result.message}")
             remaining.append(label)
-            if result.status == "flush_failed":
+            if result.status == "tracker_error":
                 stopped = True
     if task_ids and readable == 0:
         raise CannotStart("no document could be read")
@@ -1352,7 +1315,7 @@ async def _eval_score(
 ) -> None:
     """`agentic eval score`: one JSONL line per evaluation-set task, each entirely
     `evaluation.evaluation_record`'s own read of that task's document -- no `gh`, no
-    Grafana, no metric emission, no write other than `out_path` (Tech Lead plan,
+    Langfuse, no metric emission, no write other than `out_path` (Tech Lead plan,
     subtask `eval-cli`). Refuses outright when `out_path` already exists, before the
     declaration is even read: a new file per invocation, merge and history left to
     git, so no run can eat a baseline. Blockable by nothing except the documents it
@@ -1556,7 +1519,7 @@ async def _invoke(
                 final = await app.ainvoke(graph_input, config=config)
             except Exception:
                 # The run broke outside any use case; the task span still closes with a
-                # status, so Grafana counts it (`crashed` is telemetry-only, never state).
+                # status, so the trace carries it (`crashed` is telemetry-only, never state).
                 crashed = cast(TaskState, {**task, "status": "crashed"})
                 run.finish(crashed)
                 run.finish_invocation(entering, crashed, kind, decision)

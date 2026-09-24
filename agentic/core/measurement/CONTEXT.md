@@ -11,15 +11,21 @@ _Avoid_: reintento (el reintento es un hecho; el retrabajo es lo que cuesta)
 _Campo_: rework — de manufactura y de ingeniería de software clásica; DORA no lo mide, su vecino es change failure rate
 
 **Métrica del sistema**:
-Medida sobre las corridas: costo, duración, devoluciones, escalados. Es un evento, no una
-tasa: cada corrida deja una muestra con su valor. Distinta de la métrica de producto, que
-vive en cada capacidad.
+Un hecho medido sobre las corridas: costo, duración, devoluciones, escalados. Hasta
+ADR-0037 era un evento OTel exportado a un backend de métricas aparte (Grafana Cloud);
+ese backend se fue con Langfuse como único destino, y el mismo hecho hoy vive como
+atributo del span de tarea o de rol que ya existía, o se lee del documento de la tarea
+(`observability/README.md` dice, familia por familia, dónde quedó cada una). Distinta de
+la métrica de producto, que vive en cada capacidad.
 _Campo_: sin término de arte para la distinción que nos importa (medir el sistema, no el producto)
 
 **Muestra**:
-El valor que una corrida de tarea o de rol deja en cada métrica del sistema al terminar.
-Una corrida, una muestra; nada se acumula entre corridas.
-_Campo_: data point — OpenTelemetry; sample en Prometheus
+El valor que una corrida de tarea o de rol deja en cada métrica del sistema al terminar,
+hoy estampado en el span como atributo (o leído del documento de la tarea) en vez de
+exportado como evento a un backend de métricas aparte (ADR-0037). Una corrida, una
+muestra; nada se acumula entre corridas.
+_Campo_: data point — OpenTelemetry; sample en Prometheus (el nombre queda; el backend de
+series que lo motivó, no)
 
 **Versión del sistema**:
 El SHA corto del repo del sistema con el que corrió una tarea, más `+dirty` si el checkout
@@ -30,8 +36,10 @@ _Campo_: `service.version` — OpenTelemetry resource
 
 **Línea de base**:
 Un hito del sistema declarado por el humano con un tag de git en master; el eje de toda
-comparación. Cada muestra lleva la línea de base bajo la que corrió, y una versión del
-sistema pertenece a exactamente una. Dos líneas de base se comparan por el scorecard.
+comparación. Cada corrida lleva la línea de base bajo la que corrió, en el span y en el
+documento de la tarea, y una versión del sistema pertenece a exactamente una. Dos líneas
+de base se comparan por el scorecard, calculado sobre los documentos de tarea de cada una
+(`agentic eval compare`, ADR-0037).
 _Avoid_: versión, cohorte, época, hito (se usa en prosa, no como término)
 _Campo_: baseline — de la evaluación de modelos; `baseline_id` del set de evaluación es más fino
 (incluye la declaración y el brazo) y no lo reemplaza
@@ -40,8 +48,10 @@ _Campo_: baseline — de la evaluación de modelos; `baseline_id` del set de eva
 Las cuatro métricas del sistema, en orden, que dicen si una línea de base es mejor que otra:
 autonomía (entregas fusionadas limpias sobre tareas terminadas), fallos propios por tarea (sin
 los de límite de cuenta ni los de caída del proveedor), costo por entrega y retrabajo. Mejora si
-la primera no baja y la segunda baja; las otras dos desempatan. Es una consulta sobre las
-muestras, no una muestra. "Propios" se lee sobre el motivo del fallo: quedan afuera los dos
+la primera no baja y la segunda baja; las otras dos desempatan. Es una consulta sobre los
+documentos de tarea de una línea de base, no una muestra ni un backend de métricas: la misma
+lectura que hace `agentic eval compare` — el único lector; esta tarea no empuja ningún score
+a Langfuse (ADR-0037). "Propios" se lee sobre el motivo del fallo: quedan afuera los dos
 motivos externos (`account_limit`, el límite de la cuenta del proveedor, y `upstream`, su caída)
 y quedan adentro los nuestros, el tope por intento (`limit`) incluido, que es una configuración
 nuestra y no de nadie más. Los fallos anteriores al commit que separó esos motivos llevan

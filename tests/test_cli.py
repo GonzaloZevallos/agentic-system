@@ -343,32 +343,18 @@ async def test_the_log_file_travels_in_configurable_to_every_node(monkeypatch, t
     assert seen and seen[0].log_file == Path(log_file)
 
 
-class MetricPoints:
-    """Every data point `_invoke`'s two invocations exported, by metric name: a resume
-    emitting the task's whole accumulated cost again, instead of only what it spent
-    itself, is exactly the bug the request opens with (README.md, 14)."""
-
-    def __init__(self):
-        from opentelemetry.sdk.metrics.export import MetricReader
-
-        class _Reader(MetricReader):
-            def _receive_metrics(_self, metrics_data, timeout_millis=10_000, **kw):
-                for rm in metrics_data.resource_metrics:
-                    for sm in rm.scope_metrics:
-                        for metric in sm.metrics:
-                            self.points.setdefault(metric.name, []).extend(metric.data.data_points)
-
-            def shutdown(_self, timeout_millis=30_000, **kw):
-                pass
-
-        self.points: dict[str, list] = {}
-        self.reader = _Reader()
-
-
 @pytest.mark.anyio
 async def test_a_resume_emits_only_what_it_spent_never_the_tasks_whole_cost(
     monkeypatch, tmp_path, capsys
 ):
+    """`_invoke`'s two invocations each open their own task span (ADR-0037: no meter,
+    no sample -- the whole fact now lives on the two spans themselves): a resume
+    stamping the task's whole accumulated cost again, instead of only what it spent
+    itself, is exactly the bug the request opens with (README.md, 14)."""
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
     from agentic.core.measurement.adapters.otel import telemetry
     from agentic.core.process.adapters.langgraph.graph import build_graph
     from agentic.shared.configuration import Configuration
@@ -405,8 +391,10 @@ async def test_a_resume_emits_only_what_it_spent_never_the_tasks_whole_cost(
     cfg = Configuration.from_sources({}, os.environ)
     saver, task = Saver(), {"id": "GH-1", "title": "Export", "description": "CSV."}
 
-    points = MetricPoints()
-    telemetry.configure(meter_provider=telemetry.meter_provider_for(points.reader))
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    telemetry.configure(tracer_provider=provider)
     try:
         with pytest.raises(SystemExit) as info:
             await cli._run(task, cfg, ports, checkpointer=saver)
@@ -418,18 +406,21 @@ async def test_a_resume_emits_only_what_it_spent_never_the_tasks_whole_cost(
     finally:
         telemetry.configure()
 
-    invocations = points.points["agentic.task.invocations"]
-    assert [p.attributes["invocation.kind"] for p in invocations] == ["run", "resume"]
-    assert invocations[0].attributes["task.status"] == "waiting_on_human"
-    assert invocations[1].attributes["task.status"] == "ready_for_review"
+    task_spans = [s for s in exporter.get_finished_spans() if s.name == "GH-1"]
+    run_span, resume_span = task_spans
+    assert run_span.attributes["agentic.invocation.kind"] == "run"
+    assert run_span.attributes["task.status"] == "waiting_on_human"
+    assert resume_span.attributes["agentic.invocation.kind"] == "resume"
+    assert resume_span.attributes["task.status"] == "ready_for_review"
 
     # One pause, by the task cap's class (`agentic.task.human_decisions` is covered at
     # its own seam, `test_telemetry.py`, where a decision is easy to script directly).
-    (paused,) = points.points["agentic.task.paused"]
-    assert paused.attributes["escalation.class"] == "cap"
+    assert run_span.attributes["agentic.task.paused"] == "cap"
+    assert "agentic.task.paused" not in resume_span.attributes
 
-    run_cost, resume_cost = (p.value for p in points.points["agentic.invocation.cost_usd"])
-    total_cost = points.points["agentic.task.cost_usd"][-1].value
+    run_cost = run_span.attributes["agentic.invocation.cost_usd"]
+    resume_cost = resume_span.attributes["agentic.invocation.cost_usd"]
+    total_cost = resume_span.attributes["task.cost_usd"]
     # The resume's own delta, never the task's running total repeated a second time.
     assert 0 < resume_cost < total_cost
     assert run_cost + resume_cost == pytest.approx(total_cost)
@@ -1520,8 +1511,7 @@ def test_close_refuses_with_no_document(monkeypatch, tmp_path, capsys):
 
     root = close_root(tmp_path)
     ports = close_ports(root, FakePullRequestTracker())
-    points = MetricPoints()
-    telemetry.configure(meter_provider=telemetry.meter_provider_for(points.reader))
+    telemetry.configure()
     try:
         _closed_run(monkeypatch, root, ports)
         with pytest.raises(SystemExit) as info:
@@ -1530,7 +1520,6 @@ def test_close_refuses_with_no_document(monkeypatch, tmp_path, capsys):
         telemetry.configure()
     assert info.value.code == 2
     assert "GH-9 has no document" in capsys.readouterr().err
-    assert points.points == {}
     assert not ports.documents.path_for("GH-9").exists()
 
 
@@ -1541,8 +1530,7 @@ def test_close_refuses_with_no_pull_request_value(monkeypatch, tmp_path, capsys)
     ports = close_ports(root, FakePullRequestTracker())
     ports.documents.save(close_task(pull_request=None))
     before = ports.documents.path_for("GH-9").read_bytes()
-    points = MetricPoints()
-    telemetry.configure(meter_provider=telemetry.meter_provider_for(points.reader))
+    telemetry.configure()
     try:
         _closed_run(monkeypatch, root, ports)
         with pytest.raises(SystemExit) as info:
@@ -1551,7 +1539,6 @@ def test_close_refuses_with_no_pull_request_value(monkeypatch, tmp_path, capsys)
         telemetry.configure()
     assert info.value.code == 2
     assert "GH-9 has no pull request" in capsys.readouterr().err
-    assert points.points == {}
     assert ports.documents.path_for("GH-9").read_bytes() == before
 
 
@@ -1571,8 +1558,7 @@ def test_close_refuses_when_already_closed(monkeypatch, tmp_path, capsys):
         },
     )
     before = ports.documents.path_for("GH-9").read_bytes()
-    points = MetricPoints()
-    telemetry.configure(meter_provider=telemetry.meter_provider_for(points.reader))
+    telemetry.configure()
     try:
         _closed_run(monkeypatch, root, ports)
         with pytest.raises(SystemExit) as info:
@@ -1581,7 +1567,6 @@ def test_close_refuses_when_already_closed(monkeypatch, tmp_path, capsys):
         telemetry.configure()
     assert info.value.code == 2
     assert "already closed on 2026-09-20T00:00:00.000Z" in capsys.readouterr().err
-    assert points.points == {}
     assert ports.documents.path_for("GH-9").read_bytes() == before
     assert ports.tracker.pull_request_refs == []  # refused before `gh` was ever asked
 
@@ -1595,8 +1580,7 @@ def test_close_refuses_when_the_pull_request_is_still_open(monkeypatch, tmp_path
     ports = close_ports(root, tracker)
     ports.documents.save(close_task(pull_request=reference))
     before = ports.documents.path_for("GH-9").read_bytes()
-    points = MetricPoints()
-    telemetry.configure(meter_provider=telemetry.meter_provider_for(points.reader))
+    telemetry.configure()
     try:
         _closed_run(monkeypatch, root, ports)
         with pytest.raises(SystemExit) as info:
@@ -1606,11 +1590,16 @@ def test_close_refuses_when_the_pull_request_is_still_open(monkeypatch, tmp_path
     assert info.value.code == 2
     error = capsys.readouterr().err
     assert "still open" in error and "nothing to close" in error
-    assert points.points == {}
     assert ports.documents.path_for("GH-9").read_bytes() == before
 
 
-def test_close_refuses_with_no_metrics_endpoint(monkeypatch, tmp_path, capsys):
+def test_close_closes_with_no_metrics_endpoint_configured(monkeypatch, tmp_path, capsys):
+    """The endpoint gate (`telemetry.metrics_configured`) is gone: no sample backs the
+    verdict any more, so a predicate asking whether one could be sent has no subject
+    left to guard (Tech Lead plan, subtask `close-verdict`). A machine with no
+    `OTEL_EXPORTER_OTLP_ENDPOINT` now closes like any other -- this is the regression
+    evidence for the guard's removal, the counterpart of the accepting case this test
+    used to be the refusing one of."""
     from agentic.core.measurement.adapters.otel import telemetry
 
     root = close_root(tmp_path)
@@ -1618,17 +1607,14 @@ def test_close_refuses_with_no_metrics_endpoint(monkeypatch, tmp_path, capsys):
     tracker = FakePullRequestTracker({reference: close_pull_request()})
     ports = close_ports(root, tracker)
     ports.documents.save(close_task(pull_request=reference))
-    before = ports.documents.path_for("GH-9").read_bytes()
     telemetry.configure()  # no OTEL_EXPORTER_OTLP_ENDPOINT: `configure()` builds nothing
     try:
         _closed_run(monkeypatch, root, ports)
-        with pytest.raises(SystemExit) as info:
-            cli.main()
+        cli.main()
     finally:
         telemetry.configure()
-    assert info.value.code == 2
-    assert "no metrics endpoint configured; nothing recorded" in capsys.readouterr().err
-    assert ports.documents.path_for("GH-9").read_bytes() == before
+    assert "agentic: document written, not committed" in capsys.readouterr().out
+    assert ports.documents.load("GH-9")["closed_at"]
 
 
 def test_close_refuses_when_the_product_has_no_name(monkeypatch, tmp_path, capsys):
@@ -1636,8 +1622,7 @@ def test_close_refuses_when_the_product_has_no_name(monkeypatch, tmp_path, capsy
 
     root = close_root(tmp_path)
     ports = close_ports(root, FakePullRequestTracker(), product=None)
-    points = MetricPoints()
-    telemetry.configure(meter_provider=telemetry.meter_provider_for(points.reader))
+    telemetry.configure()
     try:
         _closed_run(monkeypatch, root, ports)
         with pytest.raises(SystemExit) as info:
@@ -1646,12 +1631,15 @@ def test_close_refuses_when_the_product_has_no_name(monkeypatch, tmp_path, capsy
         telemetry.configure()
     assert info.value.code == 2
     assert "expected `product`" in capsys.readouterr().err
-    assert points.points == {}
 
 
-def test_close_happy_path_emits_one_sample_per_family_and_writes_the_four_keys(
+def test_close_happy_path_writes_the_five_keys_with_no_sample_emitted(
     monkeypatch, tmp_path, capsys
 ):
+    """`close` writes its five frontmatter keys straight off the pull request, with no
+    `telemetry.record_delivery` call in between (Tech Lead plan, subtask
+    `close-verdict`, item 2): `points.points == {}` after a successful close is the
+    proof the closure path never touches telemetry at all any more."""
     from agentic.core.measurement.adapters.otel import telemetry
 
     root = close_root(tmp_path)
@@ -1661,8 +1649,7 @@ def test_close_happy_path_emits_one_sample_per_family_and_writes_the_four_keys(
     FilesystemTaskDocuments(root, system_version=lambda: "v123").save(
         close_task(pull_request=reference)
     )
-    points = MetricPoints()
-    telemetry.configure(meter_provider=telemetry.meter_provider_for(points.reader))
+    telemetry.configure()
     try:
         _closed_run(monkeypatch, root, ports)
         cli.main()
@@ -1675,82 +1662,12 @@ def test_close_happy_path_emits_one_sample_per_family_and_writes_the_four_keys(
     assert "human_lines_changed: 4" in out
     assert "doc:" in out and "not committed" in out
 
-    for name in (
-        "agentic.delivery.outcome",
-        "agentic.delivery.human_commits",
-        "agentic.delivery.human_lines_changed",
-        "agentic.delivery.time_to_merge",
-    ):
-        (point,) = points.points[name]
-        assert point.attributes["product"] == "p"
-        assert point.attributes["task.type"] == "bug"
-        assert point.attributes["system.version"] == "v123"
-    outcome_point = points.points["agentic.delivery.outcome"][0]
-    assert outcome_point.attributes["outcome"] == "merged_with_changes"
-
     doc = ports.documents.load("GH-9")
     assert doc["delivery_outcome"] == "merged_with_changes"
     assert doc["human_commits"] == "1"
     assert doc["human_lines_changed"] == "4"
     assert doc["closed_at"]
     assert doc["status"] == "ready_for_review"  # no new `Status` value is added
-
-
-def test_close_reads_system_baseline_and_arm_from_the_document_not_the_environment(
-    monkeypatch, tmp_path, capsys
-):
-    """ADR-0030: a delivery sample names the arm and the baseline the document
-    recorded -- the run that planned the task -- never `telemetry.system_baseline()`
-    of the checkout `close` happens to run from, and never the environment's own
-    `Configuration.review_mode`. A document whose `experiment` names one arm while
-    `AGENTIC_REVIEW_MODE` names another proves the sample follows the document."""
-    from agentic.core.measurement.adapters.otel import telemetry
-
-    root = close_root(tmp_path)
-    reference = "https://github.com/o/r/pull/7"
-    tracker = FakePullRequestTracker({reference: close_pull_request(human_commit=True)})
-    ports = close_ports(root, tracker)
-    FilesystemTaskDocuments(
-        root, system_version=lambda: "v123", system_baseline=lambda: "bl-2026-09-23"
-    ).save(
-        close_task(
-            pull_request=reference,
-            experiment={"review_mode": "light", "skip_ephemeral": "False"},
-        )
-    )
-    monkeypatch.setenv("AGENTIC_REVIEW_MODE", "full")
-    points = MetricPoints()
-    telemetry.configure(meter_provider=telemetry.meter_provider_for(points.reader))
-    try:
-        _closed_run(monkeypatch, root, ports)
-        cli.main()
-    finally:
-        telemetry.configure()
-    (point,) = points.points["agentic.delivery.outcome"]
-    assert point.attributes["system.baseline"] == "bl-2026-09-23"
-    assert point.attributes["arm"] == "review_mode=light,skip_ephemeral=False"
-
-
-def test_close_with_no_system_baseline_or_experiment_uses_unknown_and_default(
-    monkeypatch, tmp_path
-):
-    from agentic.core.measurement.adapters.otel import telemetry
-
-    root = close_root(tmp_path)
-    reference = "https://github.com/o/r/pull/7"
-    tracker = FakePullRequestTracker({reference: close_pull_request(human_commit=True)})
-    ports = close_ports(root, tracker)
-    FilesystemTaskDocuments(root).save(close_task(pull_request=reference))
-    points = MetricPoints()
-    telemetry.configure(meter_provider=telemetry.meter_provider_for(points.reader))
-    try:
-        _closed_run(monkeypatch, root, ports)
-        cli.main()
-    finally:
-        telemetry.configure()
-    (point,) = points.points["agentic.delivery.outcome"]
-    assert point.attributes["system.baseline"] == "unknown"
-    assert point.attributes["arm"] == "default"
 
 
 def test_close_persists_time_to_merge_seconds_when_the_pull_request_merged(monkeypatch, tmp_path):
@@ -1765,8 +1682,7 @@ def test_close_persists_time_to_merge_seconds_when_the_pull_request_merged(monke
     tracker = FakePullRequestTracker({reference: close_pull_request()})
     ports = close_ports(root, tracker)
     ports.documents.save(close_task(pull_request=reference))
-    points = MetricPoints()
-    telemetry.configure(meter_provider=telemetry.meter_provider_for(points.reader))
+    telemetry.configure()
     try:
         _closed_run(monkeypatch, root, ports)
         cli.main()
@@ -1789,8 +1705,7 @@ def test_close_omits_time_to_merge_seconds_when_the_pull_request_never_merged(
     tracker = FakePullRequestTracker({reference: close_pull_request(state="CLOSED", merged=False)})
     ports = close_ports(root, tracker)
     ports.documents.save(close_task(pull_request=reference))
-    points = MetricPoints()
-    telemetry.configure(meter_provider=telemetry.meter_provider_for(points.reader))
+    telemetry.configure()
     try:
         _closed_run(monkeypatch, root, ports)
         cli.main()
@@ -1825,13 +1740,14 @@ def test_close_all_is_a_parse_error_together_with_issue(monkeypatch):
     assert info.value.code == 2
 
 
-def test_close_all_refuses_with_no_metrics_endpoint_before_any_gh_call(
+def test_close_all_sweeps_unconditionally_with_no_metrics_endpoint_configured(
     monkeypatch, tmp_path, capsys
 ):
-    """The capability predicate (`telemetry.metrics_configured`) rejects before the
-    sweep touches a single document: the guard's own reject case (Tech Lead plan,
-    subtask `close-all`, item 4) -- thirty `gh` calls must not be spent to discover
-    a fact that never changes mid-sweep."""
+    """The capability predicate (`telemetry.metrics_configured`) is gone: no sample
+    backs the verdict any more, so the sweep no longer refuses before touching a
+    document -- it runs unconditionally (Tech Lead plan, subtask `close-verdict`,
+    item 1). The endpoint-gate test's accepting counterpart: a machine with no
+    `OTEL_EXPORTER_OTLP_ENDPOINT` now closes every selected document."""
     from agentic.core.measurement.adapters.otel import telemetry
 
     root = close_root(tmp_path)
@@ -1842,30 +1758,29 @@ def test_close_all_refuses_with_no_metrics_endpoint_before_any_gh_call(
     telemetry.configure()  # no OTEL_EXPORTER_OTLP_ENDPOINT: nothing configured
     try:
         _all_run(monkeypatch, root, ports)
-        with pytest.raises(SystemExit) as info:
-            cli.main()
+        cli.main()
     finally:
         telemetry.configure()
-    assert info.value.code == 2
-    assert "no metrics endpoint configured; nothing recorded" in capsys.readouterr().err
-    assert tracker.pull_request_refs == []
+    out = capsys.readouterr().out
+    assert "agentic: closed 1:" in out
+    assert ports.documents.load("GH-9")["closed_at"]
+    assert tracker.pull_request_refs == [reference]
 
 
 def test_close_all_does_not_raise_with_the_endpoint_declared_and_telemetry_untouched(
     monkeypatch, tmp_path, capsys
 ):
-    """GH-119: the guard's own accepting case for the declared-but-unconfigured input
-    -- the endpoint is set in the shell (`main`'s `load_dotenv()` already ran) and
-    nothing in this process has called `telemetry.configure()` yet, exactly the shell
-    the bug report describes. `monkeypatch` only: no `try`/`finally` and no call to
+    """GH-119: the accepting case for the declared-but-unconfigured input -- the
+    endpoint is set in the shell (`main`'s `load_dotenv()` already ran) and nothing in
+    this process has called `telemetry.configure()` yet, exactly the shell the bug
+    report describes. `monkeypatch` only: no `try`/`finally` and no call to
     `telemetry.configure()` anywhere in this test, because `configure()` with the
-    variable still set is the branch that builds a real `BatchSpanProcessor` and a
-    `PeriodicExportingMetricReader` over OTLP -- an exporter started inside `uv run
-    pytest -m "not llm"` would be invisible in a green suite (`tests/conftest.py`'s own
-    `isolated_env` deletes this variable autouse for exactly this reason). The document
-    has no `pull_request`, so the sweep declines it on the document alone
-    (`_refuse_open_pull_request`'s own reading): `record_delivery` is never reached, so
-    no exporter is ever asked to do anything, even if the guard under test regressed."""
+    variable still set is the branch that builds a real `BatchSpanProcessor` over OTLP
+    -- an exporter started inside `uv run pytest -m "not llm"` would be invisible in a
+    green suite (`tests/conftest.py`'s own `isolated_env` deletes this variable autouse
+    for exactly this reason). `close` no longer gates on any endpoint at all (ADR-0037:
+    no metrics sample left to back a verdict on), so this only proves the sweep still
+    does not raise with the variable declared and the tracer left unconfigured."""
     from agentic.core.measurement.adapters.otel import telemetry
 
     root = close_root(tmp_path)
@@ -1873,7 +1788,6 @@ def test_close_all_does_not_raise_with_the_endpoint_declared_and_telemetry_untou
     ports = close_ports(root, tracker)
     ports.documents.save(close_task(pull_request=None))
     monkeypatch.setattr(telemetry, "_configured", False)
-    monkeypatch.setattr(telemetry, "_meter_provider", None)
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
     _all_run(monkeypatch, root, ports)
     cli.main()  # would raise CannotStart / SystemExit(2) before the fix
@@ -1881,7 +1795,6 @@ def test_close_all_does_not_raise_with_the_endpoint_declared_and_telemetry_untou
     assert "GH-9 (issue 9): no pull request" in out
     assert tracker.pull_request_refs == []
     assert telemetry._configured is False
-    assert telemetry._meter_provider is None
 
 
 def test_close_all_closes_every_selected_document_in_sorted_id_order(monkeypatch, tmp_path, capsys):
@@ -1896,8 +1809,7 @@ def test_close_all_closes_every_selected_document_in_sorted_id_order(monkeypatch
     ports = close_ports(root, tracker)
     ports.documents.save(close_task(id="GH-9", pull_request=ref9))
     ports.documents.save(close_task(id="GH-1", pull_request=ref1))
-    points = MetricPoints()
-    telemetry.configure(meter_provider=telemetry.meter_provider_for(points.reader))
+    telemetry.configure()
     try:
         _all_run(monkeypatch, root, ports)
         cli.main()
@@ -1922,8 +1834,7 @@ def test_close_all_prints_a_line_for_a_document_that_stays_open_and_leaves_it_un
     ports = close_ports(root, tracker)
     ports.documents.save(close_task(pull_request=reference))
     before = ports.documents.path_for("GH-9").read_bytes()
-    points = MetricPoints()
-    telemetry.configure(meter_provider=telemetry.meter_provider_for(points.reader))
+    telemetry.configure()
     try:
         _all_run(monkeypatch, root, ports)
         cli.main()
@@ -1953,8 +1864,7 @@ def test_close_all_is_idempotent_over_an_already_closed_document(monkeypatch, tm
             "human_lines_changed": "0",
         },
     )
-    points = MetricPoints()
-    telemetry.configure(meter_provider=telemetry.meter_provider_for(points.reader))
+    telemetry.configure()
     try:
         _all_run(monkeypatch, root, ports)
         cli.main()
@@ -1978,8 +1888,7 @@ def test_close_all_prints_a_line_for_a_document_with_no_pull_request_and_touches
     root = close_root(tmp_path)
     ports = close_ports(root, FakePullRequestTracker())
     ports.documents.save(close_task(pull_request=None))
-    points = MetricPoints()
-    telemetry.configure(meter_provider=telemetry.meter_provider_for(points.reader))
+    telemetry.configure()
     try:
         _all_run(monkeypatch, root, ports)
         cli.main()
@@ -1991,86 +1900,72 @@ def test_close_all_prints_a_line_for_a_document_with_no_pull_request_and_touches
     assert "agentic: remaining 0:" in out
 
 
-def test_close_all_stops_the_sweep_on_the_first_false_flush_printing_both_lists(
+class _FlakyPullRequestTracker(FakePullRequestTracker):
+    """Answers `prs` normally until its `fails_at`-th call, then raises like a `gh pr
+    view` that just broke -- the sweep's stop-on-first-failure trigger after Tech Lead
+    plan subtask `close-verdict`: a `gh` failure (`_close_document`'s own
+    `"tracker_error"` status), not a false flush."""
+
+    def __init__(self, prs, fails_at: int):
+        super().__init__(prs)
+        self.fails_at = fails_at
+
+    def pull_request(self, reference: str) -> PullRequest | None:
+        self.pull_request_refs.append(reference)
+        if len(self.pull_request_refs) == self.fails_at:
+            raise ValueError("gh: pull request could not be read")
+        return self.prs.get(reference)
+
+
+def test_close_all_stops_the_sweep_on_the_first_gh_failure_printing_both_lists(
     monkeypatch, tmp_path, capsys
 ):
-    """A false flush on GH-1 must not let GH-9 emit a second sample into the same
-    series with no flush between them (Tech Lead plan, subtask `close-all`): the sweep
-    stops there, prints what closed before it and what remains, and exits zero --
-    every document was still readable, so this is not the "no document could be read
-    at all" case."""
-    from agentic.core.measurement.adapters.otel import telemetry
-
+    """A `gh` failure on GH-9 must stop the sweep there and print what closed before it
+    and what remains (Tech Lead plan, subtask `close-verdict`, item 3: the stop trigger
+    moves from a false flush to a `gh` failure) -- exits zero, since every document was
+    still readable, so this is not the "no document could be read at all" case. The
+    rejecting input for the changed stop-on-first-failure guard."""
     root = close_root(tmp_path)
     ref1, ref9 = "https://github.com/o/r/pull/1", "https://github.com/o/r/pull/9"
-    tracker = FakePullRequestTracker({ref1: close_pull_request(), ref9: close_pull_request()})
+    tracker = _FlakyPullRequestTracker(
+        {ref1: close_pull_request(), ref9: close_pull_request()}, fails_at=2
+    )
     ports = close_ports(root, tracker)
     ports.documents.save(close_task(id="GH-1", pull_request=ref1))
     ports.documents.save(close_task(id="GH-9", pull_request=ref9))
-    points = MetricPoints()
-    telemetry.configure(meter_provider=telemetry.meter_provider_for(points.reader))
-    calls = {"n": 0}
-    real_record_delivery = telemetry.record_delivery
-
-    def flaky_record_delivery(**kwargs):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return real_record_delivery(**kwargs)
-        return False  # a false flush, `_flush_metrics`'s own docstring
-
-    monkeypatch.setattr(cli.telemetry, "record_delivery", flaky_record_delivery)
-    try:
-        _all_run(monkeypatch, root, ports)
-        cli.main()  # exits zero: every document was readable
-    finally:
-        telemetry.configure()
+    _all_run(monkeypatch, root, ports)
+    cli.main()  # exits zero: every document was readable
     out = capsys.readouterr().out
-    assert ports.documents.load("GH-1")["closed_at"]  # closed before the flush failed
-    assert not ports.documents.load("GH-9").get("closed_at")  # never even asked `gh`
+    assert ports.documents.load("GH-1")["closed_at"]  # closed before GH-9's `gh` call failed
+    assert not ports.documents.load("GH-9").get("closed_at")
     assert "agentic: closed 1: GH-1 (issue 1)" in out
     assert "agentic: remaining 1: GH-9 (issue 9)" in out
-    assert calls["n"] == 2  # GH-1 flushed true, GH-9 flushed false, and the sweep stopped there
+    assert tracker.pull_request_refs == [ref1, ref9]
 
 
 def test_close_all_reports_a_task_after_the_stopped_one_as_not_attempted_not_still_open(
     monkeypatch, tmp_path, capsys
 ):
-    """The task selected *after* the one whose flush failed is never asked `gh` either
-    (Tech Lead plan, subtask `close-all`): it must not print `still open`, a claim
-    about a pull request state this sweep stopped reading -- only that it was not
-    attempted."""
-    from agentic.core.measurement.adapters.otel import telemetry
-
+    """The task selected *after* the one whose `gh` call failed is never asked `gh`
+    either (Tech Lead plan, subtask `close-verdict`): it must not print `still open`, a
+    claim about a pull request state this sweep stopped reading -- only that it was not
+    attempted, and the printed line no longer names a flush."""
     root = close_root(tmp_path)
     ref1 = "https://github.com/o/r/pull/1"
     ref5 = "https://github.com/o/r/pull/5"
     ref9 = "https://github.com/o/r/pull/9"
-    tracker = FakePullRequestTracker(
-        {ref1: close_pull_request(), ref5: close_pull_request(), ref9: close_pull_request()}
+    tracker = _FlakyPullRequestTracker(
+        {ref1: close_pull_request(), ref5: close_pull_request(), ref9: close_pull_request()},
+        fails_at=2,
     )
     ports = close_ports(root, tracker)
     ports.documents.save(close_task(id="GH-1", pull_request=ref1))
     ports.documents.save(close_task(id="GH-5", pull_request=ref5))
     ports.documents.save(close_task(id="GH-9", pull_request=ref9))
-    points = MetricPoints()
-    telemetry.configure(meter_provider=telemetry.meter_provider_for(points.reader))
-    calls = {"n": 0}
-    real_record_delivery = telemetry.record_delivery
-
-    def flaky_record_delivery(**kwargs):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return real_record_delivery(**kwargs)
-        return False  # GH-5's flush fails; GH-9 must never even ask `gh` afterwards
-
-    monkeypatch.setattr(cli.telemetry, "record_delivery", flaky_record_delivery)
-    try:
-        _all_run(monkeypatch, root, ports)
-        cli.main()
-    finally:
-        telemetry.configure()
+    _all_run(monkeypatch, root, ports)
+    cli.main()
     out = capsys.readouterr().out
-    assert "GH-9 (issue 9): not attempted (sweep stopped on an earlier flush)" in out
+    assert "GH-9 (issue 9): not attempted (sweep stopped on an earlier gh failure)" in out
     assert "GH-9 (issue 9): still open" not in out
     assert ref9 not in tracker.pull_request_refs  # never asked `gh` about GH-9 at all
     assert not ports.documents.load("GH-9").get("closed_at")

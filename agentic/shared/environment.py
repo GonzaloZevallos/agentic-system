@@ -19,9 +19,9 @@ from urllib.parse import quote
 from .configuration import ENV_PREFIX
 
 # `OTEL_RESOURCE_ATTRIBUTES` keys this module ever writes: our marker on a spawned
-# process (GH-70). Never `service.*` — that is how a Claude Code span would pass the
-# collector's `filter/system_only` and reach Grafana Cloud without touching the
-# collector (invariant 5).
+# process (GH-70). Never `service.*` — that key names the OTel resource's own service
+# identity; writing it here would misattribute the spawned process's identity instead
+# of merely tagging it (invariant 5).
 RESOURCE_ROLE_SLUG_KEY = "agentic.role.slug"
 RESOURCE_TRACE_ID_KEY = "agentic.trace_id"
 

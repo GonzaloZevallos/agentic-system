@@ -134,9 +134,10 @@ services:
       LANGFUSE_IN_APP_AGENT_MAX_ACTIVE_RUNS_PER_ORG: ${LANGFUSE_IN_APP_AGENT_MAX_ACTIVE_RUNS_PER_ORG:-}
 
   otel-collector:
-    # Receptor único para Claude Code y el sistema; reparte a Langfuse y a Grafana
-    # Cloud (../collector/otel-collector.yaml, ADR-0008). Vive en este compose porque
-    # necesita la red de Langfuse; la config es de todo observability/.
+    # Receptor único para Claude Code y el sistema; reparte todo a Langfuse
+    # (../collector/otel-collector.yaml, ADR-0037, que reemplaza la mitad Grafana de
+    # ADR-0008). Vive en este compose porque necesita la red de Langfuse; la config
+    # es de todo observability/.
     image: docker.io/otel/opentelemetry-collector-contrib:latest
     restart: always
     depends_on:
@@ -147,10 +148,6 @@ services:
       - ../collector/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
     environment:
       LANGFUSE_OTEL_BASIC: ${LANGFUSE_OTEL_BASIC:?set in .env}
-      # Los tres de Grafana Cloud: observability/grafana/README.md.
-      GRAFANA_OTLP_ENDPOINT: ${GRAFANA_OTLP_ENDPOINT:?set in .env}
-      GRAFANA_OTLP_INSTANCE_ID: ${GRAFANA_OTLP_INSTANCE_ID:?set in .env}
-      GRAFANA_OTLP_TOKEN: ${GRAFANA_OTLP_TOKEN:?set in .env}
     ports:
       - 127.0.0.1:4318:4318
 

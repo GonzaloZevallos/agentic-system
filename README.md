@@ -1195,17 +1195,21 @@ Code no puede mandar un header `Authorization: Basic` entero. El grafo abre un s
 tarea y uno por rol y pasa `TRACEPARENT` al subproceso, así una tarea es un trace con los
 roles anidados; al cerrar cada span el adaptador le estampa lo que el caso de uso decidió
 (costo, modelo, versión de la entrega, resultado) leyendo el patch, sin que la aplicación
-lo sepa. Las métricas del sistema (glosario de Medición: costo por tarea, retrabajo,
-duración, devoluciones, escalados) salen del mismo adaptador y el collector las manda,
-junto con los spans del sistema y sin los de Claude Code, a Grafana Cloud, con la versión
-del sistema y la huella de prompts como labels (ADR-0008, `observability/README.md`);
-`agentic.task.returns` deja una muestra por categoría de devolución (ADR-0016). Todo span y
-toda métrica llevan además el **producto** sobre el que corrió la tarea, con el nombre que el
-propio producto declara en su `.agentic/stack.yaml`. Lo que se mide es el sistema, no el
-producto: el eje de todo panel es la versión del sistema y el producto queda como filtro y
-como covariable (la mezcla de tareas de cada versión), nunca como eje ni como suma
-(ADR-0008, adenda; #47, #24). Por último, el `session_id` de cada
-corrida queda en el documento de tarea: `claude -r <id>` en
+lo sepa. **Langfuse es el único destino** (ADR-0037, que reemplaza la mitad Grafana Cloud
+de ADR-0008 y su adenda de cardinalidad): los hechos del sistema que antes salían como
+métricas a un backend aparte (glosario de Medición: costo por tarea, retrabajo, duración,
+devoluciones, escalados) hoy quedan en los mismos spans de tarea y de rol que ya existían,
+como atributos, o se leen del documento de la tarea — familia por familia en
+`observability/README.md`, la tabla que dice de cada una si quedó en un span y con qué
+clave, o quién la lee cuando no quedó en ninguno. La traza de tarea lleva el número de
+issue: la restricción de cardinalidad de ADR-0008 protegía a Prometheus, que no existe más
+de este lado; en Langfuse una traza por tarea es lo normal. `agentic.task.returns` deja un
+atributo por categoría de devolución (ADR-0016). Todo span lleva además el **producto**
+sobre el que corrió la tarea, con el nombre que el propio producto declara en su
+`.agentic/stack.yaml`. Lo que se mide es el sistema, no el producto: el eje de toda lectura
+es la versión del sistema y el producto queda como filtro y como covariable (la mezcla de
+tareas de cada versión), nunca como eje ni como suma (ADR-0008, adenda; #47, #24). Por
+último, el `session_id` de cada corrida queda en el documento de tarea: `claude -r <id>` en
 el repo del producto reabre la sesión del rol.
 
 Los roles no ven la configuración MCP del usuario: el runner pasa `strict_mcp_config` sin
@@ -1230,10 +1234,12 @@ entrevista (`agentic.interview.*`). Cada invocación (`agentic run`/`agentic res
 lo que ella gastó —no el acumulado de la tarea— como `agentic.invocation.*`, lo que corta la
 doble cuenta de una tarea reanudada; y el motivo de una escalada deja de ser texto para
 parsear: `escalation_class` viaja en el estado, escrito por un solo constructor de dominio
-junto con `escalated`, y `agentic.task.paused` lo lleva como label. El dashboard "Sistema
-agéntico" (v3) suma paneles por fase, por `role.slug`, tokens y $ por 1k tokens de salida,
-herramientas, hallazgos, entregas rojas, entrevistas, pausas por motivo y fallas por motivo;
-el detalle completo, métrica por métrica, vive en `observability/README.md`.
+junto con `escalated`, y `agentic.task.paused` lo lleva como atributo. El dashboard Grafana
+"Sistema agéntico" (v3) que sumaba paneles por fase, por `role.slug`, tokens y $ por 1k
+tokens de salida, herramientas, hallazgos, entregas rojas, entrevistas, pausas por motivo y
+fallas por motivo queda como historia (ADR-0037, commit que lo borró); lo que cada familia
+es hoy — un atributo de span, con qué clave, o el lector que la reemplaza cuando no quedó
+en ninguno — vive familia por familia en `observability/README.md`.
 
 ### Tooling
 
@@ -1262,7 +1268,7 @@ variables, y un `AGENTIC_PRODUCT_DIR` heredado habla de la corrida de afuera.
 
 ### Evaluación
 
-Langfuse y Grafana no puntúan. El puntaje sigue siendo el de la sección 9: binario, humano.
+Langfuse no puntúa. El puntaje sigue siendo el de la sección 9: binario, humano.
 El set de tareas vive en `.agentic/eval-set.yaml` del producto (como `stack.yaml`,
 `flags.yaml` y `BRIEF.md`): los números de issue y cuál de ellos es la tarea de humo, nada
 más. `agentic eval run --budget <USD> --yes` corre cada tarea del set (o, con `--dry-run`,
@@ -1273,11 +1279,13 @@ leer, si el pull request o el lock de alguna tarea del set siguen abiertos, o si
 lock de `eval` está tomado. `agentic eval score --out <archivo>.jsonl` escribe una línea
 JSON por tarea, leída entera del documento de esa tarea -- nunca de una métrica ni de
 `gh` -- y se niega si `<archivo>.jsonl` ya existe, para que ninguna corrida pueda pisar una
-línea de base. Cada línea lleva lo que ninguna métrica puede dar porque ningún span lleva
-id de tarea (ADR-0008, segunda adenda): hash de prompts, el mapa `prompts` completo,
-`system_version`, el resultado binario y la nota (siempre `null`: la carga el humano a
-mano). El costo por tarea sale de `cost_usd`, ya en el documento; Grafana nunca lo tuvo por
-tarea y nunca lo tendrá. Además, evals de nodo intermedio como tests de pytest ("PjM
+línea de base. Cada línea lleva lo que un span no puede dar por sí solo: hash de prompts, el
+mapa `prompts` completo, `system_version`, el resultado binario y la nota (siempre `null`:
+la carga el humano a mano). El costo por tarea sale de `cost_usd`, ya en el documento, la
+misma cifra que lee el scorecard (`observability/README.md`, ADR-0037); Langfuse no calcula
+ni recibe un scorecard propio, `agentic eval compare` es su único lector, y los dos caminos
+son una sola función de dominio, nunca dos cuentas que puedan desacordar. Además, evals de
+nodo intermedio como tests de pytest ("PjM
 clasifica estas descripciones así", "PM devuelve esta definición incompleta"), marcados
 `llm` y **excluidos de CI**: el SDK se autentica con la suscripción, que GitHub Actions no
 tiene. CI corre solo tests puros: parser del documento, reducers, configuración, ruteo con
