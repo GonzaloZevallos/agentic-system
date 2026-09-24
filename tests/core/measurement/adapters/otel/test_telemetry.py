@@ -159,6 +159,58 @@ def test_configure_without_endpoint_is_a_noop(monkeypatch):
     assert telemetry._tracer_provider is None and telemetry._meter_provider is None
 
 
+def test_endpoint_declared_true_when_the_variable_is_set(monkeypatch):
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
+    assert telemetry.endpoint_declared() is True
+
+
+def test_endpoint_declared_false_when_the_variable_is_absent(monkeypatch):
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+    assert telemetry.endpoint_declared() is False
+
+
+def test_metrics_configured_true_when_declared_but_never_configured(monkeypatch):
+    """GH-119: `close --all`'s own input -- the endpoint is declared in the shell but
+    nothing in this process has called `configure()` yet, exactly the gap between
+    `main`'s `load_dotenv()` and the sweep's guard. The predicate must answer from the
+    declaration alone, and it must not act on it: `_configured` and `_meter_provider`
+    are unchanged after it returns, which is what keeps this function from collapsing
+    into `if not _configured: configure()` -- that shortcut returns the same booleans
+    on every case here but would leave a real provider installed by the time the
+    caller's own first `meter()`/`tracer()` call happened."""
+    monkeypatch.setattr(telemetry, "_configured", False)
+    monkeypatch.setattr(telemetry, "_meter_provider", None)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
+    assert telemetry.metrics_configured() is True
+    assert telemetry._configured is False
+    assert telemetry._meter_provider is None
+
+
+def test_metrics_configured_true_when_configured_with_a_provider_installed(monkeypatch):
+    monkeypatch.setattr(telemetry, "_configured", True)
+    monkeypatch.setattr(telemetry, "_meter_provider", telemetry.meter_provider_for(BatchReader()))
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+    assert telemetry.metrics_configured() is True
+
+
+def test_metrics_configured_false_when_configured_with_no_provider(monkeypatch):
+    """The existing CLI refusal test's own input: `configure()` ran, found no endpoint,
+    and left `_meter_provider` unset -- the declaration is stale evidence once
+    `configure()` has already spoken, so the installed provider, not the variable,
+    is what this branch reads."""
+    monkeypatch.setattr(telemetry, "_configured", True)
+    monkeypatch.setattr(telemetry, "_meter_provider", None)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
+    assert telemetry.metrics_configured() is False
+
+
+def test_metrics_configured_false_when_undeclared_and_never_configured(monkeypatch):
+    monkeypatch.setattr(telemetry, "_configured", False)
+    monkeypatch.setattr(telemetry, "_meter_provider", None)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+    assert telemetry.metrics_configured() is False
+
+
 def test_role_finish_stamps_the_run_on_the_span(spans):
     patch = {
         "runs": [

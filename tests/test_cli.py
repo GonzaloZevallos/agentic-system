@@ -1851,6 +1851,39 @@ def test_close_all_refuses_with_no_metrics_endpoint_before_any_gh_call(
     assert tracker.pull_request_refs == []
 
 
+def test_close_all_does_not_raise_with_the_endpoint_declared_and_telemetry_untouched(
+    monkeypatch, tmp_path, capsys
+):
+    """GH-119: the guard's own accepting case for the declared-but-unconfigured input
+    -- the endpoint is set in the shell (`main`'s `load_dotenv()` already ran) and
+    nothing in this process has called `telemetry.configure()` yet, exactly the shell
+    the bug report describes. `monkeypatch` only: no `try`/`finally` and no call to
+    `telemetry.configure()` anywhere in this test, because `configure()` with the
+    variable still set is the branch that builds a real `BatchSpanProcessor` and a
+    `PeriodicExportingMetricReader` over OTLP -- an exporter started inside `uv run
+    pytest -m "not llm"` would be invisible in a green suite (`tests/conftest.py`'s own
+    `isolated_env` deletes this variable autouse for exactly this reason). The document
+    has no `pull_request`, so the sweep declines it on the document alone
+    (`_refuse_open_pull_request`'s own reading): `record_delivery` is never reached, so
+    no exporter is ever asked to do anything, even if the guard under test regressed."""
+    from agentic.core.measurement.adapters.otel import telemetry
+
+    root = close_root(tmp_path)
+    tracker = FakePullRequestTracker()
+    ports = close_ports(root, tracker)
+    ports.documents.save(close_task(pull_request=None))
+    monkeypatch.setattr(telemetry, "_configured", False)
+    monkeypatch.setattr(telemetry, "_meter_provider", None)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
+    _all_run(monkeypatch, root, ports)
+    cli.main()  # would raise CannotStart / SystemExit(2) before the fix
+    out = capsys.readouterr().out
+    assert "GH-9 (issue 9): no pull request" in out
+    assert tracker.pull_request_refs == []
+    assert telemetry._configured is False
+    assert telemetry._meter_provider is None
+
+
 def test_close_all_closes_every_selected_document_in_sorted_id_order(monkeypatch, tmp_path, capsys):
     """Two documents with a pull request and no `closed_at`, closed in `ids()`'s own
     sorted order -- proof `ids()` is sorted and the sweep is idempotent-per-task

@@ -914,9 +914,17 @@ async def _close_all(cfg: Configuration, ports: Ports) -> None:
     selected, so rerunning it finds nothing left to do.
 
     The capability predicate (`telemetry.metrics_configured`) is asked once before the
-    sweep, not per task, so thirty `gh` calls are not spent to discover a global fact
-    that never changes mid-sweep. Each task still takes its own lock, one at a time, the
-    way `_close` already does -- never the `"eval"` lock, which would block an
+    sweep, not per task. It is kept, not for the `gh` calls it saves (a side benefit --
+    `stopped` below already bounds the waste at one, once a flush actually fails), but
+    because a sweep must not exit zero having closed nothing: `_close_document` orders
+    the frontmatter write strictly after a *true* flush, so no verdict is ever written
+    without its own sample, and refusing before the sweep starts is how that promise
+    holds for the very first document too. What the guard asserts is that an endpoint
+    is declared, never that a sample was received -- `force_flush()` reports what the
+    SDK reports, never what the collector got, so no predicate in this process can
+    promise a sample landed (GH-119, Tech Lead plan, subtask
+    `close-all-endpoint-predicate`). Each task still takes its own lock, one at a time,
+    the way `_close` already does -- never the `"eval"` lock, which would block an
     evaluation run for the duration of this sweep.
 
     Exactly one `record_delivery` call per closed task, flushed inside `_EMIT_LOCK` as
