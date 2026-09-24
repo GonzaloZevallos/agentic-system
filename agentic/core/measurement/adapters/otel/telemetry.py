@@ -223,6 +223,20 @@ def meter_provider_for(reader: MetricReader) -> MeterProvider:
     return MeterProvider(metric_readers=[reader], resource=resource())
 
 
+def endpoint_declared() -> bool:
+    """Whether the collector's target is declared in this process --
+    `OTEL_EXPORTER_OTLP_ENDPOINT` read verbatim, `bool` of whatever string is there.
+    The only executable statement under `agentic/` that reads this variable (Tech Lead
+    plan, subtask `close-all-endpoint-predicate`): `configure()`'s own third conjunct
+    below calls this instead of its own `os.environ.get(...)`, and `metrics_configured()`
+    calls it for the one case it cannot answer from an installed provider -- so the
+    predicate and `configure()` read one declaration and cannot drift apart. The OTel
+    HTTP exporters read the same variable themselves to find their target; that is the
+    whole reason it exists and is outside this rule, same as the two docstrings and
+    `observability/README.md` that name it in prose."""
+    return bool(os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"))
+
+
 def configure(
     tracer_provider: TracerProvider | None = None, meter_provider: MeterProvider | None = None
 ) -> None:
@@ -231,11 +245,7 @@ def configure(
     global _tracer_provider, _meter_provider, _configured, _instruments
     _configured = True
     _instruments = None
-    if (
-        tracer_provider is None
-        and meter_provider is None
-        and os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
-    ):
+    if tracer_provider is None and meter_provider is None and endpoint_declared():
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
         tracer_provider = TracerProvider(resource=resource())
@@ -1064,13 +1074,24 @@ def _epoch_ns(iso: str) -> int:
 
 
 def metrics_configured() -> bool:
-    """Whether a meter provider is configured right now (`configure`'s own global),
-    read-only and never a probe: `close --all` asks this once before its sweep so
-    thirty `gh` calls are not paid to discover the one global fact `_flush_metrics`
-    would otherwise answer thirty times over (Tech Lead plan, subtask `close-all`).
-    Emitting a sample here to find out would falsify a delivery, so this only reads
-    the global `configure` already set."""
-    return _meter_provider is not None
+    """Whether a flush from this process would export a delivery sample -- `close
+    --all`'s own question, asked once before its sweep (Tech Lead plan, subtask
+    `close-all-endpoint-predicate`). Two kinds of evidence, never a probe: once
+    `configure()` has run (`_configured` true), the installed provider *is* the truth
+    -- a test that passed its own providers, and a real `configure()` that found no
+    endpoint, must both be believed, so this reads `_meter_provider is not None`
+    verbatim. Before `configure()` has run, that global says nothing yet; the only
+    evidence available is the declaration `configure()` will act on one call later, so
+    this reads `endpoint_declared()` instead -- the exact gap `close --all` hits when
+    `main`'s `load_dotenv()` has run but no `record_delivery`/`meter()`/`tracer()` call
+    has configured anything in this process yet (GH-119). Read-only either way: this
+    calls nothing that can install a provider and mutates no module global, so `True`
+    here is a promise about declaration, never about a sample having been received --
+    `force_flush()` is the only thing in this module that reports on an actual send,
+    and even it only reports what the SDK reports, never what the collector got."""
+    if _configured:
+        return _meter_provider is not None
+    return endpoint_declared()
 
 
 def _flush_metrics() -> bool:
