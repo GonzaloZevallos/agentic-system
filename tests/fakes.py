@@ -231,8 +231,11 @@ class MemoryCommands:
 
 
 class MemoryInbox:
-    def __init__(self, **issues: TaskInput):
+    def __init__(self, *, open_issues: list[tuple[str, str]] | None = None, **issues: TaskInput):
         self.issues = issues
+        # `(url, body)` pairs `open_issues()` hands back: a stack review's own read
+        # seam, never filtered here -- the caller matches the marker (ADR-0034).
+        self._open_issues = open_issues or []
 
     def task(self, number: int) -> TaskInput:
         return self.issues[str(number)]
@@ -242,6 +245,9 @@ class MemoryInbox:
 
     def issue_of(self, task_id: str) -> int | None:
         return int(task_id[3:]) if task_id.startswith("GH-") else None
+
+    def open_issues(self) -> list[tuple[str, str]]:
+        return self._open_issues
 
 
 class MemoryWorkspace:
@@ -398,9 +404,15 @@ class MemoryTracker:
         self.unlabeled: list[tuple[str, str]] = []
         # Bodies of the issue's comments before the run, oldest first.
         self.earlier: list[str] = []
+        # `(title, body)` of every issue `open_issue` opened, in order.
+        self.opened_issues: list[tuple[str, str]] = []
 
     def open_pull_request(self, task_id: str, branch: str, title: str, body: str) -> str:
         self.pull_requests.append((branch, title, body))
+        return self.url
+
+    def open_issue(self, title: str, body: str) -> str:
+        self.opened_issues.append((title, body))
         return self.url
 
     def comment(self, task_id: str, text: str) -> None:
@@ -572,6 +584,31 @@ def verdict(kind, reason="r", definitions=None, glossary=None, cost=0.2) -> RawR
             "glossary": glossary or [],
         },
         cost,
+    )
+
+
+# The stack review path (ADR-0034, issue #40): the author's own proposal.
+
+
+def stack_proposal(
+    verdict_text="keep the stack",
+    stack_diff="- a diff",
+    standards="## Engineering standards\n\nHex.",
+    adr_draft="an ADR draft",
+    cost=0.3,
+    session="stack",
+) -> RawResult:
+    return RawResult(
+        {
+            "markdown": "### Verdict\n\nDecided.",
+            "verdict": verdict_text,
+            "stack_diff": stack_diff,
+            "standards": standards,
+            "adr_draft": adr_draft,
+        },
+        cost,
+        2,
+        session,
     )
 
 

@@ -365,6 +365,15 @@ class Inbox(Protocol):
         """The issue a task came from; None for a task that did not come from one."""
         ...
 
+    def open_issues(self) -> list[tuple[str, str]]:
+        """Every open issue of the product repo, as `(url, body)` (ADR-0034): the read
+        side of the stack review's own suppression, over a bounded `gh issue list`.
+        Never filtered by a marker on the way in -- `domain.stack_review.open_proposal`
+        does that locally, as a plain substring, because GitHub's own `--search` index
+        is eventually consistent and does not treat the marker's punctuation as
+        literal."""
+        ...
+
 
 @dataclass(frozen=True)
 class Checkout:
@@ -496,6 +505,16 @@ class Tracker(Protocol):
     def open_pull_request(self, task_id: str, branch: str, title: str, body: str) -> str:
         """Returns the pull request's URL. Linking it to the task's issue, when there
         is one, is the adapter's: only it knows what a task id says about the tracker."""
+        ...
+
+    def open_issue(self, title: str, body: str) -> str:
+        """Open a new issue and return its URL (ADR-0034): the stack review's own way
+        of telling the human, with no task id to key off of. No `labels` parameter --
+        its one caller always passes none, since the absence of the `agentic` label
+        (README.md, 5) is what keeps a proposal from starting a run on its own, and
+        `gh issue create --label` exits non-zero on a label the product repo does not
+        have, which would throw away a paid interview for one word. Any state a reader
+        needs goes in `title` instead."""
         ...
 
     def comment(self, task_id: str, text: str) -> None: ...

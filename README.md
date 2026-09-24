@@ -449,6 +449,19 @@ Uno por tarea. **Nunca codea, siempre delega.**
 dependencias, y genera platform enhancements. Es el mismo rol para que comparta criterio
 técnico y ADRs con los Tech Leads por tarea.
 
+**Revisión de stack** (`agentic stack review`, ADR-0034): el mismo modo proactivo, con el
+efímero como adversario, decide si el stack del producto sigue siendo el correcto. Lee el
+Brief (`BRIEF.md`), el `.agentic/stack.yaml` vigente, los ADRs del producto y el repo. Sin
+Brief no decide: termina en un issue `needs-info` que lo pide, y no propone nada. Nunca
+cambia el stack directo: siempre entrega una **propuesta**, un issue de platform
+enhancement en el repo del producto, sin la etiqueta `agentic` (sección 5: ponerla es la
+aprobación humana), con el diff propuesto a `.agentic/stack.yaml`, el `CODING_STANDARDS.md`
+completo del producto y el borrador del ADR que explica la elección contra el Brief; si el
+veredicto es "el stack sigue bien", igual deja el ADR con fecha y las alternativas
+descartadas, para que quede registro de que se revisó. No corre sola: la dispara el verbo
+manual `agentic stack review --product-dir <dir>`, sin tarea, sin rol nuevo — la etapa 5
+(pendiente 4) es la que la va a agendar con un poller.
+
 ### Developer
 
 - Recibe una subtarea de Tech Lead.
@@ -534,14 +547,18 @@ Todo lo que genera una tarea la genera como **issue de GitHub con la etiqueta `a
 | Humano | — | — | cualquier tipo | — |
 | Producción | SRE / Ops | propio | bugs | No, entran solos |
 | Repositorio | Tech Lead proactivo | propio | platform enhancements | Sí |
+| Stack del producto | Tech Lead proactivo (`agentic stack review`) | manual, `--product-dir <dir>` | platform enhancement (propuesta de stack) | Sí |
 | Competidores | PM | propio | features | Sí |
 | Métricas | Data Analyst | propio | insumo para PM | — |
 | Feedback de usuarios | Customer Insights | propio | insumo para PM | — |
 
 Los roles proactivos que necesitan aprobación humana crean el issue **sin** la etiqueta
-`agentic`. Ponerla es la aprobación.
+`agentic`. Ponerla es la aprobación. La revisión de stack (ADR-0034) es la misma regla:
+propone, nunca cambia directo, y el issue que abre no lleva la etiqueta.
 
-Cada rol proactivo tiene su **propio reloj**, no hay un ciclo central que los despierte.
+Cada rol proactivo tiene su **propio reloj**, no hay un ciclo central que los despierte. La
+revisión de stack es la excepción hasta la etapa 5: no tiene reloj, la dispara a mano
+`agentic stack review` (sección 12, pendiente 4; sección 14).
 
 Cadena de producto proactiva: Data Analyst y Customer Insights dejan síntesis. PM, en su
 ciclo, las lee junto a su análisis de competidores y propone features. El humano aprueba, y
@@ -851,7 +868,7 @@ existe justamente para pagar ese costo solo donde compre calidad.
 | 1 | ~~Formato concreto de la definición de comportamiento~~ **resuelto**: job to be done (job story y criterios de éxito), competidores, comportamiento caso por caso, métricas derivadas de los criterios del job, flags, handoff. Vive en el prompt del Product Analyst | — |
 | 2 | ~~Fuente de verdad de producto~~ **resuelto**: conocimiento de producto en `docs/product/`, un archivo por capacidad, destilado por PM al aprobar (ADR-0006). Las definiciones del v0 las escribe el humano | — |
 | 3 | ~~ADRs~~ **resuelto**: `docs/adr/`, primero el humano, después Tech Lead, valida el efímero | — |
-| 4 | Frecuencia de cada reloj proactivo | Etapa 5 |
+| 4 | Frecuencia de cada reloj proactivo. Parcialmente resuelto para la revisión de stack (ADR-0034): sus señales de disparo y el verbo manual que las evalúa (`agentic stack review`, sección 14) ya existen; lo que sigue abierto es solo la **frecuencia** con la que la etapa 5 la agenda (y la de los demás relojes proactivos) | Etapa 5 |
 | 5 | Señales y umbrales de SRE/Ops para decidir que algo es bug, más deduplicación | SRE/Ops, etapa 5 |
 | 6 | ~~Lista de secciones que lee cada rol~~ **resuelto**: `Role.reads`, la entrada del rol son esas secciones completas. Cada rol nuevo declara la suya al entrar | — |
 | 7 | UX Lead, Design Lead y Tech Writer en detalle | Etapa 4 |
@@ -1265,6 +1282,29 @@ clasifica estas descripciones así", "PM devuelve esta definición incompleta"),
 `llm` y **excluidos de CI**: el SDK se autentica con la suscripción, que GitHub Actions no
 tiene. CI corre solo tests puros: parser del documento, reducers, configuración, ruteo con
 salidas grabadas.
+
+### Revisión de stack
+
+`agentic stack review [--reason TEXT] [--dry-run] [--product-dir <dir>]` (ADR-0034):
+Tech Lead en modo proactivo, con el efímero como adversario, sin tarea detrás. Compone su
+propia puerta en `cli.py` -- nunca un flag en `preflight`, que queda byte a byte igual --:
+siempre corre `refuse_its_own_checkout` y renderiza el prompt de cada rol; solo pide el
+stack y el nombre declarados cuando `.agentic/stack.yaml` ya existe, porque su ausencia es
+justo el caso que este verbo existe para atender. Dos negativas propias, antes de gastar
+nada: `--product-dir` que no es un repositorio git, o sin git instalado (un solo `None`
+nombra las dos mitades); y una propuesta que el propio camino dejó abierta, vía
+`Inbox.open_issues` más el emparejamiento local del marcador
+(`domain.stack_review.open_proposal`), que se niega con la URL de esa propuesta y el sha
+del ancla. Sin `BRIEF.md` no decide: abre un `[needs-info]` pidiéndolo y no corre ningún
+rol. Sin ninguna señal (el Brief cambió desde el último ADR de stack, diez o más tareas
+mergeadas desde esa revisión, o un `--reason` a mano) lo dice y no abre nada. `--dry-run`
+no toma lock, no corre ningún rol y no escribe ningún archivo: solo imprime qué señales se
+cumplen. Una revisión completa corre bajo el mismo lock por tarea (`stack-<YYYY-MM-DD>`,
+fuera de la forma `^GH-(\d+)$`, así que todo verbo de `Tracker` que resuelve por número es
+un no-op contra ella) y escribe su documento en `.agentic/stack-reviews/`, nunca en
+`.agentic/tasks/` -- un `subdir` propio de `FilesystemTaskDocuments`, así que `close
+--all`, `eval score` y `_bucket_documents`, que llegan al corpus solo por `documents.ids()`,
+no lo ven.
 
 ### Descartado de ODR
 

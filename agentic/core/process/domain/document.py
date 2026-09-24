@@ -40,9 +40,12 @@ def demote(text: str) -> str:
     return _HEADING.sub(r"#\1", text)
 
 
-def relative_path(task_id: str) -> Path:
-    """Where the document lives, relative to the product root."""
-    return TASKS_SUBDIR / f"{task_id}.md"
+def relative_path(task_id: str, *, subdir: Path = TASKS_SUBDIR) -> Path:
+    """Where the document lives, relative to the product root. `subdir` defaults to
+    `TASKS_SUBDIR`, so every existing call site stays byte-identical; the stack
+    review's own corpus (`.agentic/stack-reviews/`, ADR-0034) is the one caller that
+    passes another, through `FilesystemTaskDocuments(subdir=...)`."""
+    return subdir / f"{task_id}.md"
 
 
 # Frontmatter keys that do not follow the domain's names: a document already written
