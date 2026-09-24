@@ -366,7 +366,7 @@ class Inbox(Protocol):
         ...
 
     def open_issues(self) -> list[tuple[str, str]]:
-        """Every open issue of the product repo, as `(url, body)` (ADR-0032): the read
+        """Every open issue of the product repo, as `(url, body)` (ADR-0034): the read
         side of the stack review's own suppression, over a bounded `gh issue list`.
         Never filtered by a marker on the way in -- `domain.stack_review.open_proposal`
         does that locally, as a plain substring, because GitHub's own `--search` index
@@ -508,7 +508,7 @@ class Tracker(Protocol):
         ...
 
     def open_issue(self, title: str, body: str) -> str:
-        """Open a new issue and return its URL (ADR-0032): the stack review's own way
+        """Open a new issue and return its URL (ADR-0034): the stack review's own way
         of telling the human, with no task id to key off of. No `labels` parameter --
         its one caller always passes none, since the absence of the `agentic` label
         (README.md, 5) is what keeps a proposal from starting a run on its own, and

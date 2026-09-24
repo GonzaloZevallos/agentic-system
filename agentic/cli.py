@@ -71,7 +71,7 @@ from .core.process.domain.task import PullRequest, TaskInput, TaskState
 from .shared.configuration import ENV_PREFIX, LOGS_DIR, Configuration, MissingProductDir
 from .shared.environment import without_own_toolchain
 
-# The stack review's own corpus (ADR-0032): beside `.agentic/tasks/`, never inside it,
+# The stack review's own corpus (ADR-0034): beside `.agentic/tasks/`, never inside it,
 # so `close --all`, `eval score` and `_bucket_documents` -- which reach the task corpus
 # through `documents.ids()` -- stay blind to it (`document.relative_path`/
 # `FilesystemTaskDocuments`'s own `subdir` keyword).
@@ -267,7 +267,7 @@ def main() -> None:
         help="the system checkout to resolve a document's own system_commit against "
         "(defaults to the pinned stage0 checkout)",
     )
-    stack = sub.add_parser("stack", help="the product's own stack (ADR-0032)")
+    stack = sub.add_parser("stack", help="the product's own stack (ADR-0034)")
     stack_sub = stack.add_subparsers(dest="stack_command", required=True)
     stack_review = stack_sub.add_parser(
         "review",
@@ -341,7 +341,7 @@ def main() -> None:
         cfg = Configuration.from_sources({}, os.environ)
         # Every command but `stack review` still refuses byte for byte on a directory
         # with no `.agentic/` at all: a greenfield product has nothing else, and that
-        # is exactly the case this one verb exists to run over (ADR-0032, item 4).
+        # is exactly the case this one verb exists to run over (ADR-0034, item 4).
         if args.command != "stack" and not cfg.agentic_dir.is_dir():
             raise ValueError(f"{cfg.product_dir} is not a product repo: no .agentic/ directory")
         ports = default_ports(cfg)
@@ -1047,7 +1047,7 @@ async def _close_all(cfg: Configuration, ports: Ports) -> None:
 def _git_log_1(product_dir: Path, relative: str) -> tuple[str, str]:
     """The last commit to `relative`, as `git log -1` sees it: its sha and its
     committer date, ISO-8601 (`stack_signals.signals`'s own `anchor`/`anchor_date` and
-    `brief_date` arguments, ADR-0032). `("", "")` when the path was never committed --
+    `brief_date` arguments, ADR-0034). `("", "")` when the path was never committed --
     a greenfield product's own `.agentic/stack.yaml`, or a repo with no `BRIEF.md` yet
     -- which sorts before every other date, so every signal fires vacuously
     (`stack_signals.fired`'s own docstring)."""
@@ -1070,7 +1070,7 @@ def _task_deliveries(ports: Ports) -> list[tuple[str, str]]:
     `.agentic/tasks/` corpus `ports.documents` already is (never the stack review's own
     `.agentic/stack-reviews/`, which this command is about to write to): the plain
     values `stack_signals.signals`'s own `deliveries` argument takes -- the pure module
-    itself takes no port (ADR-0032)."""
+    itself takes no port (ADR-0034)."""
     deliveries: list[tuple[str, str]] = []
     for task_id in ports.documents.ids():
         raw = ports.documents.load(task_id) or {}
@@ -1079,7 +1079,7 @@ def _task_deliveries(ports: Ports) -> list[tuple[str, str]]:
 
 
 def _stack_review_id() -> str:
-    """`stack-<YYYY-MM-DD>` (ADR-0032): a same-day rerun overwrites its own document,
+    """`stack-<YYYY-MM-DD>` (ADR-0034): a same-day rerun overwrites its own document,
     and the shape is deliberately outside `^GH-(\\d+)$`, so every keyed `Tracker` verb
     -- `comment`, `label`, `pull_request` -- is a no-op against it. Never reused to open
     a pull request: `open_pull_request` is the one verb that does not guard on
@@ -1125,7 +1125,7 @@ async def _stack_review(
     cfg: Configuration, ports: Ports, reason: str | None, dry_run: bool
 ) -> None:
     """`agentic stack review [--reason TEXT] [--dry-run]`: the Tech Lead in proactive
-    mode over the product, with no task behind it at all (ADR-0032) -- no PjM, no issue
+    mode over the product, with no task behind it at all (ADR-0034) -- no PjM, no issue
     it came from, no branch. Composes its own gate here instead of a flag on
     `preflight` (`preflight.py` stays byte-identical): `refuse_its_own_checkout` and
     the free per-role prompt render always; `declared_stack`/`ports.stack.product()`
@@ -1194,7 +1194,7 @@ async def _stack_review(
         # No plan yet -- a stack review's synthetic `TaskState` never carries
         # `subtasks` -- so `rules.task_cap` (through `run_role`) is its base alone,
         # today's $30, never the plan's per-subtask share (ADR-0004, fourth addendum;
-        # ADR-0032).
+        # ADR-0034).
         result = await run_stack_review(review_id, description, signals.anchor, cfg, stack_ports)
     print(f"id:         {review_id}")
     print(f"needs_info: {result.needs_info}")

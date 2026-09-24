@@ -17,7 +17,7 @@ def test_save_then_load_in_the_product_repo(tmp_path):
 
 
 def test_a_custom_subdir_is_isolated_from_the_default_tasks_corpus(tmp_path):
-    """The stack review's own corpus (`.agentic/stack-reviews/`, ADR-0032) lives beside
+    """The stack review's own corpus (`.agentic/stack-reviews/`, ADR-0034) lives beside
     `.agentic/tasks/`, never inside it: a document saved under one `subdir` must not
     show up in `ids()` of a documents port scoped to the other, which is what keeps
     `close --all`, `eval score` and `_bucket_documents` blind to it."""

@@ -1,4 +1,4 @@
-"""Pure text algebra of a stack review's issue (ADR-0032): the marker, the assembled
+"""Pure text algebra of a stack review's issue (ADR-0034): the marker, the assembled
 body, its cap, and the open-proposal lookup -- no port, no filesystem."""
 
 from agentic.core.process.domain import stack_review as texts
@@ -46,6 +46,6 @@ def test_open_proposal_matches_the_marker_as_a_plain_substring():
 
 
 def test_open_proposal_never_needs_the_anchor_to_match_a_stale_one():
-    # A stale anchor still suppresses (ADR-0032): two open proposals is never wanted.
+    # A stale anchor still suppresses (ADR-0034): two open proposals is never wanted.
     issues = [("https://x/3", texts.marker("old-sha"))]
     assert texts.open_proposal(issues) == "https://x/3"

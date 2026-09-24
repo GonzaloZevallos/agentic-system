@@ -1,4 +1,4 @@
-"""Whether declared signals justify a stack review (ADR-0032). Pure: no port, no
+"""Whether declared signals justify a stack review (ADR-0034). Pure: no port, no
 `Path`, no `Ports` — every fact arrives as a plain value, the caller's own read."""
 
 from agentic.core.process.domain.stack_signals import (

@@ -296,7 +296,7 @@ TECH_LEAD_PLATFORM = replace(
     TECH_LEAD, slug="tech_lead_platform", reads=(ORIGINAL, PJM.name, SOLUTION_INTERVIEW)
 )
 
-# The stack review path (ADR-0032, issue #40): the Tech Lead in proactive mode, over a
+# The stack review path (ADR-0034, issue #40): the Tech Lead in proactive mode, over a
 # product, with no task behind it at all -- no PjM, no issue, no branch. `replace(...)`
 # of the platform variants, never an edit to them: the diff shows added tuples and zero
 # edited ones. The ephemeral gets `READ_CODE`/`READ_CODE_RULES`, narrower than the
@@ -535,7 +535,7 @@ INTERVIEW_SOLUTION_PLATFORM = Interview(
     author=TECH_LEAD_PLATFORM,
     stage="solution",
 )
-# The stack review path (ADR-0032): no consultant either, the same reason the platform
+# The stack review path (ADR-0034): no consultant either, the same reason the platform
 # path has none -- there is no PM here, and no task for a question to pause.
 INTERVIEW_SOLUTION_STACK = Interview(
     interviewer=TECH_LEAD_EPHEMERAL_STACK,

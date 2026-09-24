@@ -23,7 +23,7 @@ class FilesystemTaskDocuments:
         self.product_dir = product_dir
         # `.agentic/tasks/` by default, so every existing construction site is
         # byte-identical; the stack review's own corpus is the one caller that passes
-        # `.agentic/stack-reviews/` (ADR-0032). `close --all`, `eval score` and
+        # `.agentic/stack-reviews/` (ADR-0034). `close --all`, `eval score` and
         # `_bucket_documents` reach the corpus through `ids()`, never through this
         # field, so none of them can see a document under another `subdir`.
         self.subdir = subdir

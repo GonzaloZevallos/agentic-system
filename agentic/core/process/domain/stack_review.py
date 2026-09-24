@@ -1,4 +1,4 @@
-"""Pure text algebra for a stack review's issue (ADR-0032): the idempotence marker,
+"""Pure text algebra for a stack review's issue (ADR-0034): the idempotence marker,
 the assembled issue body and its cap, and the open-proposal lookup over issue bodies
 the adapter already fetched. No port, no filesystem: every fact this module needs is
 a plain value the application module or `cli.py` hands in.
@@ -12,7 +12,7 @@ from collections.abc import Sequence
 # this module wraps a proposal's pieces in.
 ISSUE_BODY_MAX_CHARS = 60_000
 
-# The idempotence marker (ADR-0032): an HTML comment, invisible once the issue
+# The idempotence marker (ADR-0034): an HTML comment, invisible once the issue
 # renders, matched as a plain substring so a poller that runs many times a year opens
 # one proposal, not one per run. `MARKER_PREFIX` alone is what `open_proposal` looks
 # for -- a stale anchor still suppresses, because two open proposals for one product is
@@ -62,7 +62,7 @@ def open_proposal(issues: Sequence[tuple[str, str]]) -> str | None:
     """The URL of an issue this path already opened and is still open, or `None`.
     `issues` is every open issue's `(url, body)` as the adapter already fetched it
     (`Inbox.open_issues`); the marker is matched as a plain substring over that text,
-    never through GitHub's own eventually consistent `--search` index (ADR-0032)."""
+    never through GitHub's own eventually consistent `--search` index (ADR-0034)."""
     for url, issue_body in issues:
         if MARKER_PREFIX in issue_body:
             return url

@@ -271,7 +271,7 @@ class TechPlan(RoleOutput):
 
 
 class StackProposal(RoleOutput):
-    """The stack review's own author output (ADR-0032): a verdict and three pieces a
+    """The stack review's own author output (ADR-0034): a verdict and three pieces a
     human acts on without reading the interview, each its own field so the schema
     guard can name the exact one a delivery omitted -- never one Markdown blob."""
 

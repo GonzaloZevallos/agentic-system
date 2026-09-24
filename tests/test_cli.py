@@ -2545,7 +2545,7 @@ async def test_eval_score_reports_fingerprint_divergence_as_a_fact_not_an_error(
     assert "diverges" in capsys.readouterr().out
 
 
-# `agentic stack review` (ADR-0032): the Tech Lead in proactive mode, with no task
+# `agentic stack review` (ADR-0034): the Tech Lead in proactive mode, with no task
 # behind it. Seam: `agentic/cli.py`, `agentic stack review` through `main()`, the same
 # seam the rest of this file already uses.
 
@@ -2553,7 +2553,7 @@ async def test_eval_score_reports_fingerprint_divergence_as_a_fact_not_an_error(
 def _greenfield(tmp_path, name, *, git=True, brief="# Brief\n\nGym members book classes.\n"):
     """A product with only `BRIEF.md`: no `.agentic/` at all, so every other command
     refuses it outright (`test_preflight_rejects_a_dir_without_agentic`) and only
-    `agentic stack review` may run over it (ADR-0032, item 4)."""
+    `agentic stack review` may run over it (ADR-0034, item 4)."""
     root = tmp_path / name
     root.mkdir(parents=True)
     if brief is not None:
@@ -2621,7 +2621,7 @@ async def test_stack_review_refuses_on_an_already_open_proposal_spending_nothing
     trip cannot fake `gh` for `open_issues` the way `fake_gh` fakes `task()` -- this
     calls `cli._stack_review` directly with `MemoryInbox`, the same seam
     `test_eval_run_dry_run_prefers_the_set_override...` already uses for a full round
-    trip over in-memory ports (ADR-0032)."""
+    trip over in-memory ports (ADR-0034)."""
     from agentic.shared.configuration import Configuration
     from tests.fakes import MemoryInbox
 

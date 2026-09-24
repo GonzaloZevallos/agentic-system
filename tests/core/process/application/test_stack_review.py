@@ -1,4 +1,4 @@
-"""The stack review's own use case (ADR-0032), against in-memory ports: the three
+"""The stack review's own use case (ADR-0034), against in-memory ports: the three
 exits — needs-info, a proposal, and a proposal whose standards piece overflows the
 issue cap — each over `ScriptedRunner`, with no task, no branch, no issue behind it."""
 
@@ -54,7 +54,7 @@ async def test_a_signal_produces_a_proposal_issue_with_the_three_pieces_and_no_l
     assert "a diff" in body  # stack_diff piece
     assert "Hex." in body  # standards piece
     assert "an ADR draft" in body
-    # The port has no way to carry a label at all (ADR-0032).
+    # The port has no way to carry a label at all (ADR-0034).
     assert not hasattr(ports.tracker, "labels") or ports.tracker.labels == []
 
 

@@ -1,5 +1,5 @@
 """Whether the declared signals justify a stack review, and the text the role reads
-as its request (ADR-0032, `docs/adr/0032-la-revision-de-stack-corre-roles-sin-tarea.md`).
+as its request (ADR-0034, `docs/adr/0034-la-revision-de-stack-corre-roles-sin-tarea.md`).
 
 Pure: no port, no `Path`, no `Ports`. ADR-0019's own argument is what this module is
 for — a guessed antecedent gets the step that decides everything else wrong — so every

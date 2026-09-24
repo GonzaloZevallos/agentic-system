@@ -1,4 +1,4 @@
-"""The stack review's own use case (ADR-0032): interview, then the author's proposal,
+"""The stack review's own use case (ADR-0034): interview, then the author's proposal,
 over `Ports`, with no task behind either -- no issue it came from, no branch, no
 document under `.agentic/tasks/`. It runs through `interview` and `run_role`, so the
 per-attempt cap, the single retry with the error as input, `run_with_retry`'s session
@@ -44,7 +44,7 @@ async def stack_review(
     review_id: str, description: str, anchor: str, cfg: Configuration, ports: Ports
 ) -> StackReview:
     """Run the interview then the author, in the checkout `cfg.product_dir` already is
-    -- no worktree, no branch (ADR-0032). `description` is both the synthetic state's
+    -- no worktree, no branch (ADR-0034). `description` is both the synthetic state's
     `ORIGINAL` section and the issue's own `## Signals` text: the signals that
     justified this review, computed once by the caller and never re-derived here.
     `anchor` is the commit `domain.stack_review.marker` records.

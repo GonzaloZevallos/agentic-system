@@ -75,7 +75,7 @@ class GhTracker:
 
     def open_issue(self, title: str, body: str) -> str:
         # `--body-file`, never `--body`: the one limit that can bite is GitHub's own,
-        # never argv's (ADR-0032). The temp file is this call's alone; nothing reads it
+        # never argv's (ADR-0034). The temp file is this call's alone; nothing reads it
         # back.
         with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as handle:
             handle.write(body)

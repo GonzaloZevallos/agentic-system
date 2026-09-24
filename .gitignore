@@ -11,7 +11,7 @@ __pycache__/
 # tarea, `.agentic/tasks/`, sí entra: es el registro crudo del trabajo.
 .agentic/state.sqlite
 .agentic/worktrees/
-# El documento de una revisión de stack (ADR-0032) no: nada lo vuelve a leer, una
+# El documento de una revisión de stack (ADR-0034) no: nada lo vuelve a leer, una
 # corrida del mismo día lo pisa, y su valor es diagnóstico, no evidencial -- al revés
 # de `.agentic/tasks/`, que ADR-0001 hace el registro crudo.
 .agentic/stack-reviews/

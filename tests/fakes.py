@@ -234,7 +234,7 @@ class MemoryInbox:
     def __init__(self, *, open_issues: list[tuple[str, str]] | None = None, **issues: TaskInput):
         self.issues = issues
         # `(url, body)` pairs `open_issues()` hands back: a stack review's own read
-        # seam, never filtered here -- the caller matches the marker (ADR-0032).
+        # seam, never filtered here -- the caller matches the marker (ADR-0034).
         self._open_issues = open_issues or []
 
     def task(self, number: int) -> TaskInput:
@@ -587,7 +587,7 @@ def verdict(kind, reason="r", definitions=None, glossary=None, cost=0.2) -> RawR
     )
 
 
-# The stack review path (ADR-0032, issue #40): the author's own proposal.
+# The stack review path (ADR-0034, issue #40): the author's own proposal.
 
 
 def stack_proposal(

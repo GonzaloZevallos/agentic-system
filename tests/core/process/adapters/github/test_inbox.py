@@ -92,7 +92,7 @@ def test_open_issues_failure_is_a_value_error(tmp_path):
 
 
 def test_task_still_uses_the_bare_subprocess_call_when_run_is_injected(monkeypatch, tmp_path):
-    # `task()` keeps its own inline `subprocess.run` (ADR-0032: old form stays old
+    # `task()` keeps its own inline `subprocess.run` (ADR-0034: old form stays old
     # form); an injected `run` must not silently reroute it.
     calls = fake_gh(monkeypatch, stdout=json.dumps({"title": "T", "body": "d"}))
     never_called = _Recorder()

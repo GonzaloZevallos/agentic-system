@@ -449,7 +449,7 @@ Uno por tarea. **Nunca codea, siempre delega.**
 dependencias, y genera platform enhancements. Es el mismo rol para que comparta criterio
 técnico y ADRs con los Tech Leads por tarea.
 
-**Revisión de stack** (`agentic stack review`, ADR-0032): el mismo modo proactivo, con el
+**Revisión de stack** (`agentic stack review`, ADR-0034): el mismo modo proactivo, con el
 efímero como adversario, decide si el stack del producto sigue siendo el correcto. Lee el
 Brief (`BRIEF.md`), el `.agentic/stack.yaml` vigente, los ADRs del producto y el repo. Sin
 Brief no decide: termina en un issue `needs-info` que lo pide, y no propone nada. Nunca
@@ -553,7 +553,7 @@ Todo lo que genera una tarea la genera como **issue de GitHub con la etiqueta `a
 | Feedback de usuarios | Customer Insights | propio | insumo para PM | — |
 
 Los roles proactivos que necesitan aprobación humana crean el issue **sin** la etiqueta
-`agentic`. Ponerla es la aprobación. La revisión de stack (ADR-0032) es la misma regla:
+`agentic`. Ponerla es la aprobación. La revisión de stack (ADR-0034) es la misma regla:
 propone, nunca cambia directo, y el issue que abre no lleva la etiqueta.
 
 Cada rol proactivo tiene su **propio reloj**, no hay un ciclo central que los despierte. La
@@ -868,7 +868,7 @@ existe justamente para pagar ese costo solo donde compre calidad.
 | 1 | ~~Formato concreto de la definición de comportamiento~~ **resuelto**: job to be done (job story y criterios de éxito), competidores, comportamiento caso por caso, métricas derivadas de los criterios del job, flags, handoff. Vive en el prompt del Product Analyst | — |
 | 2 | ~~Fuente de verdad de producto~~ **resuelto**: conocimiento de producto en `docs/product/`, un archivo por capacidad, destilado por PM al aprobar (ADR-0006). Las definiciones del v0 las escribe el humano | — |
 | 3 | ~~ADRs~~ **resuelto**: `docs/adr/`, primero el humano, después Tech Lead, valida el efímero | — |
-| 4 | Frecuencia de cada reloj proactivo. Parcialmente resuelto para la revisión de stack (ADR-0032): sus señales de disparo y el verbo manual que las evalúa (`agentic stack review`, sección 14) ya existen; lo que sigue abierto es solo la **frecuencia** con la que la etapa 5 la agenda (y la de los demás relojes proactivos) | Etapa 5 |
+| 4 | Frecuencia de cada reloj proactivo. Parcialmente resuelto para la revisión de stack (ADR-0034): sus señales de disparo y el verbo manual que las evalúa (`agentic stack review`, sección 14) ya existen; lo que sigue abierto es solo la **frecuencia** con la que la etapa 5 la agenda (y la de los demás relojes proactivos) | Etapa 5 |
 | 5 | Señales y umbrales de SRE/Ops para decidir que algo es bug, más deduplicación | SRE/Ops, etapa 5 |
 | 6 | ~~Lista de secciones que lee cada rol~~ **resuelto**: `Role.reads`, la entrada del rol son esas secciones completas. Cada rol nuevo declara la suya al entrar | — |
 | 7 | UX Lead, Design Lead y Tech Writer en detalle | Etapa 4 |
@@ -1285,7 +1285,7 @@ salidas grabadas.
 
 ### Revisión de stack
 
-`agentic stack review [--reason TEXT] [--dry-run] [--product-dir <dir>]` (ADR-0032):
+`agentic stack review [--reason TEXT] [--dry-run] [--product-dir <dir>]` (ADR-0034):
 Tech Lead en modo proactivo, con el efímero como adversario, sin tarea detrás. Compone su
 propia puerta en `cli.py` -- nunca un flag en `preflight`, que queda byte a byte igual --:
 siempre corre `refuse_its_own_checkout` y renderiza el prompt de cada rol; solo pide el

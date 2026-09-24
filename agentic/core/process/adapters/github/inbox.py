@@ -21,7 +21,7 @@ class GhInbox:
     def __init__(self, product_dir: Path, *, run: Run = subprocess.run):
         self.product_dir = product_dir
         # Only `open_issues` uses this seam; `task` below keeps its own inline call
-        # (ADR-0032: old form stays old form until another task unifies the two).
+        # (ADR-0034: old form stays old form until another task unifies the two).
         self._run = run
 
     def task(self, number: int) -> TaskInput:
@@ -56,7 +56,7 @@ class GhInbox:
         return issue_number(task_id)
 
     def open_issues(self) -> list[tuple[str, str]]:
-        """Every open issue's `(url, body)` (ADR-0032), never filtered by `--search`:
+        """Every open issue's `(url, body)` (ADR-0034), never filtered by `--search`:
         the eventually consistent index is the failure mode the local, pure marker
         match in `domain.stack_review.open_proposal` exists to avoid."""
         try:
