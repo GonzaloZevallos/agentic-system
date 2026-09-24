@@ -39,7 +39,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from claude_agent_sdk import ResultError, ResultMessage, query
+from claude_agent_sdk import ClaudeAgentOptions, ResultError, ResultMessage, query
 
 from agentic.core.process.adapters.claude_sdk.runner import (
     _reported_error,
@@ -48,7 +48,7 @@ from agentic.core.process.adapters.claude_sdk.runner import (
 )
 from agentic.core.process.domain import schemas
 from agentic.core.process.domain.roles import Role
-from agentic.core.process.domain.rules import failure_reason
+from agentic.core.process.domain.rules import ReportedFailure, failure_reason
 from agentic.shared.configuration import Configuration
 
 pytestmark = [pytest.mark.llm, pytest.mark.anyio]
@@ -77,7 +77,7 @@ PROMPT = (
 RETRY_BUDGET = 2
 
 
-def _spike_options(tmp_path: Path, model: str) -> object:
+def _spike_options(tmp_path: Path, model: str) -> ClaudeAgentOptions:
     return options_for(
         TOY_ROLE,
         system_prompt="You are a probe for a harness spike. Follow the user's "
@@ -105,6 +105,8 @@ async def _attempt(tmp_path: Path, model: str) -> tuple[ResultMessage | None, Ex
                     break
     except ResultError as exc:
         return None, exc
+    except Exception as exc:  # the SDK raises its own hierarchy; production catches all of it
+        return None, exc
     return result, None
 
 
@@ -129,9 +131,14 @@ async def test_verifier_model_is_accepted_and_billed(tmp_path):
             if isinstance(exc, ResultError)
             else _reported_result(result)
             if result is not None
-            else None
+            # Neither a ResultMessage nor a ResultError: the same shape production's
+            # own `if result is None:` branch reasons about (runner.py). An empty
+            # `ReportedFailure` carries no budget subtype, no 429, no 5xx and no
+            # structured-output-exhaustion marker, so `failure_reason` falls through
+            # its own precedence to `sdk` -- the classifier is exercised, not bypassed.
+            else ReportedFailure()
         )
-        reason = failure_reason(report) if report is not None else "sdk"
+        reason = failure_reason(report)
         print(f"attempt {attempt}: classified {reason!r}")
         if reason not in ("account_limit", "upstream", "schema") or attempt == RETRY_BUDGET:
             break

@@ -1215,17 +1215,15 @@ def test_options_for_tech_lead_reviewer_is_pinned(tmp_path):
         "load_timeout_ms": 60000,
         "task_budget": None,
     }
+    # The one exhaustiveness gate: `expected` (hand-written) against the SDK's own true
+    # field set, never against `actual` -- `_normalised_options` builds `actual`'s keys
+    # from that same `dataclasses.fields(ClaudeAgentOptions)` call, so comparing `actual`
+    # to it can never fail; it would only restate this line under a different name. A
+    # field `options_for` sets that this pin does not list is new; re-pin deliberately.
     all_fields = {f.name for f in dataclass_fields(ClaudeAgentOptions)}
     assert set(expected) == all_fields, (
         "this pin's own expected dict is missing or over-naming a "
         "dataclasses.fields(ClaudeAgentOptions) key -- fix the pin, not the assertion below"
-    )
-    missing = all_fields - set(actual)
-    extra = set(actual) - all_fields
-    assert not missing and not extra, (
-        f"options_for produced a ClaudeAgentOptions with a field this pin does not "
-        f"enumerate (missing from actual: {missing}, unexpected: {extra}) -- re-pin "
-        "deliberately, do not widen this assertion"
     )
     assert actual == expected, (
         "options_for's ClaudeAgentOptions for TECH_LEAD_REVIEWER changed shape -- "
