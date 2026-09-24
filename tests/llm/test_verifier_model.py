@@ -149,3 +149,51 @@ async def test_verifier_model_is_accepted_and_billed(tmp_path):
     print("ResultMessage.structured_output:", result.structured_output)
     assert not result.is_error, f"run failed, classified {reason!r}"
     assert result.total_cost_usd is not None and result.total_cost_usd > 0
+
+
+# The candidate #128/#130 wanted, as a literal declared HERE -- never
+# `Configuration.model_fields[...]` (that is the shipping default the test
+# above already resolves) and never the environment (`AGENTIC_VERIFIER_MODEL`
+# forbidden by name, module docstring): a literal is greppable in a diff, which
+# is the property the docstring's environment ban protects. Invariant: no
+# subtask resolves a model identifier from os.environ.
+CANDIDATE = "claude-opus-5-5"
+
+
+async def test_candidate_verifier_model_is_accepted_and_billed(tmp_path):
+    """The gate this task (GH-131, subtask `harness`) exists to run: does the
+    bumped SDK/CLI accept `claude-opus-5-5`, the candidate #128/#130 wanted, and
+    bill a call on it? Same retry and classification shape as the shipping-
+    default test above, duplicated rather than shared, so that test stays byte
+    for byte (this task's own invariant) and is proven green on the new SDK
+    independently of this one -- a red candidate here leaves a working harness
+    behind, never a broken default."""
+    model = CANDIDATE
+    print(f"candidate verifier_model: {model}")
+
+    result: ResultMessage | None = None
+    exc: Exception | None = None
+    reason: str | None = None
+    for attempt in range(1, RETRY_BUDGET + 1):
+        result, exc = await _attempt(tmp_path, model)
+        if result is not None and not result.is_error and result.total_cost_usd:
+            print(f"attempt {attempt}: green, cost {result.total_cost_usd}")
+            break
+        report = (
+            _reported_error(exc)
+            if isinstance(exc, ResultError)
+            else _reported_result(result)
+            if result is not None
+            else ReportedFailure()
+        )
+        reason = failure_reason(report)
+        print(f"attempt {attempt}: classified {reason!r}")
+        if reason not in ("account_limit", "upstream", "schema") or attempt == RETRY_BUDGET:
+            break
+
+    assert result is not None, f"no ResultMessage on any attempt (last classified: {reason!r})"
+    print("ResultMessage.is_error:", result.is_error)
+    print("ResultMessage.total_cost_usd:", result.total_cost_usd)
+    print("ResultMessage.structured_output:", result.structured_output)
+    assert not result.is_error, f"run failed, classified {reason!r}"
+    assert result.total_cost_usd is not None and result.total_cost_usd > 0
