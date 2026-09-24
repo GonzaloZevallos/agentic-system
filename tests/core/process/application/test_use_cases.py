@@ -146,7 +146,10 @@ async def test_validate_approves_a_bug_and_consolidates_what_pm_wrote(cfg):
     assert ports.knowledge.definitions == {"reports": REPORTS}
     assert ports.workspace.commits == [(MemoryWorkspace.ROOT / "T-1", "T-1: product definition")]
     call = ports.runner.calls[0]
-    assert call["slug"] == "pm_bug" and call["model"] == "claude-opus-5"
+    assert (
+        call["slug"] == "pm_bug"
+        and call["model"] == Configuration.model_fields["verifier_model"].default
+    )
     assert "## Product Analyst\n\n### Ruling\n\nundefined" in call["prompt"]
     assert "You have 2 left" in call["system_prompt"]
 
@@ -219,7 +222,7 @@ async def test_validate_approval_consolidates_into_the_knowledge(cfg):
     assert ports.knowledge.terms == {
         "Report": {"definition": "A CSV.", "avoid": "export", "context": ""}
     }
-    assert ports.runner.calls[0]["model"] == "claude-opus-5"
+    assert ports.runner.calls[0]["model"] == Configuration.model_fields["verifier_model"].default
     assert "You have 2 left" in ports.runner.calls[0]["system_prompt"]
 
 

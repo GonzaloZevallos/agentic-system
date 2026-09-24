@@ -340,11 +340,12 @@ async def test_models_follow_kind(config):
     script = script_for(**technical())
     await run_graph(script, config)
     models = {c["slug"]: c["model"] for c in script.calls}
+    verifier_model = Configuration.model_fields["verifier_model"].default
     assert models["pjm"] == models["product_analyst"] == "claude-sonnet-5"
     assert models["product_analyst_interviewer"] == models["developer"] == "claude-sonnet-5"
-    assert models["pm"] == models["pm_interviewee"] == "claude-opus-5"
-    assert models["tech_lead_ephemeral"] == models["tech_lead"] == "claude-opus-5"
-    assert models["tech_lead_review"] == "claude-opus-5"
+    assert models["pm"] == models["pm_interviewee"] == verifier_model
+    assert models["tech_lead_ephemeral"] == models["tech_lead"] == verifier_model
+    assert models["tech_lead_review"] == verifier_model
 
 
 async def test_low_confidence_escalates_before_defining(config):
