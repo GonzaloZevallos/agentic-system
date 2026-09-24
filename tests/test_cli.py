@@ -347,7 +347,7 @@ async def test_the_log_file_travels_in_configurable_to_every_node(monkeypatch, t
 async def test_a_resume_emits_only_what_it_spent_never_the_tasks_whole_cost(
     monkeypatch, tmp_path, capsys
 ):
-    """`_invoke`'s two invocations each open their own task span (ADR-0036: no meter,
+    """`_invoke`'s two invocations each open their own task span (ADR-0037: no meter,
     no sample -- the whole fact now lives on the two spans themselves): a resume
     stamping the task's whole accumulated cost again, instead of only what it spent
     itself, is exactly the bug the request opens with (README.md, 14)."""
@@ -1778,7 +1778,7 @@ def test_close_all_does_not_raise_with_the_endpoint_declared_and_telemetry_untou
     variable still set is the branch that builds a real `BatchSpanProcessor` over OTLP
     -- an exporter started inside `uv run pytest -m "not llm"` would be invisible in a
     green suite (`tests/conftest.py`'s own `isolated_env` deletes this variable autouse
-    for exactly this reason). `close` no longer gates on any endpoint at all (ADR-0036:
+    for exactly this reason). `close` no longer gates on any endpoint at all (ADR-0037:
     no metrics sample left to back a verdict on), so this only proves the sweep still
     does not raise with the variable declared and the tracer left unconfigured."""
     from agentic.core.measurement.adapters.otel import telemetry

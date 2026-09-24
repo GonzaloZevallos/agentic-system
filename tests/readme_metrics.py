@@ -1,4 +1,4 @@
-"""Reads `observability/README.md`'s metric table as data (ADR-0036): one row per
+"""Reads `observability/README.md`'s metric table as data (ADR-0037): one row per
 family that used to leave a Prometheus/Grafana Cloud sample, mapped to the span
 attribute key that carries the same fact now and the span it lives on ("rol", "tarea"
 or "invocación"), or to `—` when the fact has no span home at all -- in which case the
@@ -7,7 +7,7 @@ against the Langfuse API).
 
 The one consumer left is `tests/core/measurement/adapters/otel/test_telemetry.py`:
 `test_dashboard.py`'s own cross-check against `dashboard.json` died with the Grafana
-dashboard it read (ADR-0036, decision 1)."""
+dashboard it read (ADR-0037, decision 1)."""
 
 from __future__ import annotations
 
@@ -76,5 +76,5 @@ def _documented(grain: str) -> set[str]:
 
 def _lost() -> set[str]:
     """The old Prometheus names of every family this task's table marks as lost -- the
-    normative list ADR-0036 points at instead of restating (`observability/README.md`)."""
+    normative list ADR-0037 points at instead of restating (`observability/README.md`)."""
     return {f.old for f in _families() if f.grain == "—"}

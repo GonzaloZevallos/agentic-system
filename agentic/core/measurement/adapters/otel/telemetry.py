@@ -1,4 +1,4 @@
-"""Spans, one trace per task (ADR-0008; ADR-0036: Langfuse is the only destination).
+"""Spans, one trace per task (ADR-0008; ADR-0037: Langfuse is the only destination).
 
 `task_span` around the graph run and `role_span` around each role yield a `Run`;
 `finish(patch)` on it stamps the run's outcome, cost and model on the span. Every fact
@@ -215,7 +215,7 @@ def endpoint_declared() -> bool:
 
 def configure(tracer_provider: TracerProvider | None = None) -> None:
     """Install the tracer provider. Called once, lazily, from the endpoint env var;
-    tests pass their own provider instead. No meter provider exists any more (ADR-0036:
+    tests pass their own provider instead. No meter provider exists any more (ADR-0037:
     Langfuse ingests traces, observations and scores, never OTel metrics) -- the whole
     metric half (`Instruments`, `record_delivery`, `metrics_configured`) is gone with
     Grafana Cloud, the destination it existed for."""
@@ -562,6 +562,6 @@ def traceparent() -> str | None:
 
 def flush() -> None:
     """Send what is still buffered; call before the process exits. Traces only: there
-    is no metric exporter left to flush (ADR-0036)."""
+    is no metric exporter left to flush (ADR-0037)."""
     if _tracer_provider is not None:
         _tracer_provider.force_flush()

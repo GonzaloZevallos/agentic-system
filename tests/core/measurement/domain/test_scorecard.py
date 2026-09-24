@@ -19,7 +19,7 @@ def doc(**overrides):
 
 
 # --- rework: `docs/product/rework.md`'s own acceptance case, moved onto the documents
-# (ADR-0036: no telemetry backend left to derive it from a live reader's own samples;
+# (ADR-0037: no telemetry backend left to derive it from a live reader's own samples;
 # `task_figures.rework_usd` and `metrics.run_rework_usd` are the one implementation both
 # `agentic close` and `agentic eval compare` read, never a second one) ---
 

@@ -1,6 +1,6 @@
 # Observabilidad
 
-Un solo destino desde ADR-0036, un solo collector:
+Un solo destino desde ADR-0037, un solo collector:
 
 ```
 Claude Code ──┐
@@ -27,9 +27,9 @@ Solo lo que emite el sistema, identificado como `service.name: agentic-system`:
   la **tupla** de cada hash que corrió; el span de corrida lleva el modelo, la sesión, el
   costo y el hash de prompt de **esa** corrida sola, con su propio `start_time`/`end_time`
   (`RoleRun.started_at`/`.ended_at`). El span de tarea lleva el número de issue (`task.id`)
-  desde ADR-0036: la restricción de cardinalidad que lo prohibía era de Prometheus, y ese
+  desde ADR-0037: la restricción de cardinalidad que lo prohibía era de Prometheus, y ese
   backend ya no existe de este lado.
-- Los hechos que hasta ADR-0036 salían como métricas (`agentic/core/measurement/CONTEXT.md`),
+- Los hechos que hasta ADR-0037 salían como métricas (`agentic/core/measurement/CONTEXT.md`),
   listados abajo: cada uno o ya vivía como atributo del span de rol o de tarea, o pasa a
   vivir ahí ahora, casi siempre como un array de strings `"<dimensión>=<conteo>"` en vez
   de una muestra por dimensión (la forma que ADR-0008, adenda del 2026-09-17, ya usaba
@@ -46,11 +46,11 @@ del directorio ni del remoto de git: se mide el sistema, no el producto, y un sp
 texto libre, no un enum, y por eso se queda en el frontmatter de la tarea, nunca en `arm`
 (ADR-0030).
 
-## Métricas: qué pasó con cada familia (ADR-0036)
+## Métricas: qué pasó con cada familia (ADR-0037)
 
 Langfuse no ingiere métricas OTel — sólo trazas, observaciones y scores — así que esto no
 fue copiar la tabla anterior columna por columna. Cada fila de abajo es una de las
-familias que este sistema medía hasta ADR-0036: **Atributo** nombra la clave que lleva el
+familias que este sistema medía hasta ADR-0037: **Atributo** nombra la clave que lleva el
 mismo hecho ahora (bare o `agentic.<familia>.<nombre>`, nunca renombrado), **Grano** el
 span donde vive (`rol`, `tarea`, `invocación`), y — para las que no tienen span dueño —
 la última columna nombra a quién preguntarle en su lugar. `tests/readme_metrics.py` lee
@@ -59,7 +59,7 @@ contra lo que `telemetry.py` realmente marca, con la misma disciplina de un solo
 que ya tenía (ADR-0030): igualdad, nunca un subconjunto, y una familia que no queda
 marcada en ningún lado hace fallar el chequeo con su propio nombre.
 
-| Métrica (hasta ADR-0036) | Atributo ahora | Grano | Qué es / quién la lee |
+| Métrica (hasta ADR-0037) | Atributo ahora | Grano | Qué es / quién la lee |
 |---|---|---|---|
 | `agentic.task.cost_usd` | `task.cost_usd` | tarea | Costo acumulado de la tarea, bare desde antes de esta tarea, sin cambios |
 | `agentic.task.rework_usd` | `task.rework_usd` | tarea | Costo del retrabajo de la tarea (`metrics.rework_cost_usd`), sin cambios |
@@ -112,11 +112,11 @@ Las cuatro figuras — autonomía, fallos propios por tarea (excluye `account_li
 `core/measurement/domain/scorecard.py`, leyendo los documentos de tarea de una línea de
 base: el mismo camino que `agentic eval compare` recorre. Langfuse no deriva ningún
 scorecard propio, y esta tarea no le empuja ninguno: no hay dashboard de Langfuse que lo
-muestre (la compuerta de ADR-0036 dio `unreachable`/`unfavorable` en tres de sus cuatro
+muestre (la compuerta de ADR-0037 dio `unreachable`/`unfavorable` en tres de sus cuatro
 respuestas), así que el lector sigue siendo `agentic eval compare`, sobre los mismos
 documentos que este mismo módulo ya recorría.
 
-### Qué se pierde, dicho en ADR-0036
+### Qué se pierde, dicho en ADR-0037
 
 - **La lectura agregada de 13 meses** que sostenía Prometheus: `observability/langfuse/
   docker-compose.yml` corre con volúmenes Docker nombrados en una laptop, sin TTL
@@ -128,7 +128,7 @@ documentos que este mismo módulo ya recorría.
   sin panel agregado detrás.
 - **Todo lo demás que un panel de Grafana mostraba sin equivalente directo**: la fila de
   su propia familia, arriba, nombra a quién preguntarle ahora. Esta sección no repite esa
-  lista; ADR-0036 tampoco.
+  lista; ADR-0037 tampoco.
 
 ## Costo en Langfuse
 

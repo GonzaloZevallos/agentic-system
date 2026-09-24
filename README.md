@@ -1195,7 +1195,7 @@ Code no puede mandar un header `Authorization: Basic` entero. El grafo abre un s
 tarea y uno por rol y pasa `TRACEPARENT` al subproceso, así una tarea es un trace con los
 roles anidados; al cerrar cada span el adaptador le estampa lo que el caso de uso decidió
 (costo, modelo, versión de la entrega, resultado) leyendo el patch, sin que la aplicación
-lo sepa. **Langfuse es el único destino** (ADR-0036, que reemplaza la mitad Grafana Cloud
+lo sepa. **Langfuse es el único destino** (ADR-0037, que reemplaza la mitad Grafana Cloud
 de ADR-0008 y su adenda de cardinalidad): los hechos del sistema que antes salían como
 métricas a un backend aparte (glosario de Medición: costo por tarea, retrabajo, duración,
 devoluciones, escalados) hoy quedan en los mismos spans de tarea y de rol que ya existían,
@@ -1237,7 +1237,7 @@ parsear: `escalation_class` viaja en el estado, escrito por un solo constructor 
 junto con `escalated`, y `agentic.task.paused` lo lleva como atributo. El dashboard Grafana
 "Sistema agéntico" (v3) que sumaba paneles por fase, por `role.slug`, tokens y $ por 1k
 tokens de salida, herramientas, hallazgos, entregas rojas, entrevistas, pausas por motivo y
-fallas por motivo queda como historia (ADR-0036, commit que lo borró); lo que cada familia
+fallas por motivo queda como historia (ADR-0037, commit que lo borró); lo que cada familia
 es hoy — un atributo de span, con qué clave, o el lector que la reemplaza cuando no quedó
 en ninguno — vive familia por familia en `observability/README.md`.
 
@@ -1282,7 +1282,7 @@ JSON por tarea, leída entera del documento de esa tarea -- nunca de una métric
 línea de base. Cada línea lleva lo que un span no puede dar por sí solo: hash de prompts, el
 mapa `prompts` completo, `system_version`, el resultado binario y la nota (siempre `null`:
 la carga el humano a mano). El costo por tarea sale de `cost_usd`, ya en el documento, la
-misma cifra que lee el scorecard (`observability/README.md`, ADR-0036); Langfuse no calcula
+misma cifra que lee el scorecard (`observability/README.md`, ADR-0037); Langfuse no calcula
 ni recibe un scorecard propio, `agentic eval compare` es su único lector, y los dos caminos
 son una sola función de dominio, nunca dos cuentas que puedan desacordar. Además, evals de
 nodo intermedio como tests de pytest ("PjM

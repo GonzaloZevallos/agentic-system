@@ -1,4 +1,4 @@
-# Un receptor OTLP sin auth en localhost:4318, un solo destino (ADR-0036, que
+# Un receptor OTLP sin auth en localhost:4318, un solo destino (ADR-0037, que
 # reemplaza la mitad Grafana de ADR-0008): Langfuse local recibe todas las trazas,
 # las del sistema y las nativas de Claude Code, con prompts y respuestas. Existe
 # porque el exportador OTel de Claude Code no puede mandar un header con espacio
@@ -7,7 +7,7 @@
 #
 # Grafana Cloud, su exportador, su extensión de auth y los dos processors que solo
 # existían para alimentarla (`filter/system_only`, `attributes/drop_title`) salieron
-# de acá (ADR-0036): ninguno tenía efecto sobre la pipeline de Langfuse, así que
+# de acá (ADR-0037): ninguno tenía efecto sobre la pipeline de Langfuse, así que
 # `traces/langfuse` y `transform/claude_code_usage` quedan byte a byte como estaban.
 #
 # Necesita la imagen contrib por `transform` (OTTL); ya no por `filter` ni por

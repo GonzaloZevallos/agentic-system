@@ -1,4 +1,4 @@
-"""Spans and propagation (ADR-0036: Langfuse is the only destination, no meter
+"""Spans and propagation (ADR-0037: Langfuse is the only destination, no meter
 provider left to configure). No exporter: an in-memory provider stands in."""
 
 import os
@@ -57,7 +57,7 @@ def test_role_span_nests_under_the_task_and_propagates(spans):
 
 
 def test_task_span_carries_the_issue_number(spans):
-    """ADR-0036: the cardinality restriction that used to keep a task id off every span
+    """ADR-0037: the cardinality restriction that used to keep a task id off every span
     was Prometheus's own (a per-task series explodes a time-series backend); with no
     metrics backend left, one trace per task is the normal Langfuse read, so the task
     span's own name and `task.id` carry it, unlike the frozen bare label keys around it."""

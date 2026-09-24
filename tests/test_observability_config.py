@@ -67,7 +67,7 @@ def test_traces_langfuse_pipeline_is_unchanged_by_the_grafana_removal():
 
 def test_no_grafana_pipeline_or_component_survives():
     """`grafana` still names, in prose comments, the destination this diff removes
-    (ADR-0036 tells that story); no component, pipeline or environment variable named
+    (ADR-0037 tells that story); no component, pipeline or environment variable named
     after it survives in the config a collector actually loads."""
     config = yaml.safe_load(COLLECTOR_CONFIG.read_text(encoding="utf-8"))
     text = COLLECTOR_CONFIG.read_text(encoding="utf-8")

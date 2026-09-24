@@ -12,7 +12,7 @@ _Campo_: rework — de manufactura y de ingeniería de software clásica; DORA n
 
 **Métrica del sistema**:
 Un hecho medido sobre las corridas: costo, duración, devoluciones, escalados. Hasta
-ADR-0036 era un evento OTel exportado a un backend de métricas aparte (Grafana Cloud);
+ADR-0037 era un evento OTel exportado a un backend de métricas aparte (Grafana Cloud);
 ese backend se fue con Langfuse como único destino, y el mismo hecho hoy vive como
 atributo del span de tarea o de rol que ya existía, o se lee del documento de la tarea
 (`observability/README.md` dice, familia por familia, dónde quedó cada una). Distinta de
@@ -22,7 +22,7 @@ _Campo_: sin término de arte para la distinción que nos importa (medir el sist
 **Muestra**:
 El valor que una corrida de tarea o de rol deja en cada métrica del sistema al terminar,
 hoy estampado en el span como atributo (o leído del documento de la tarea) en vez de
-exportado como evento a un backend de métricas aparte (ADR-0036). Una corrida, una
+exportado como evento a un backend de métricas aparte (ADR-0037). Una corrida, una
 muestra; nada se acumula entre corridas.
 _Campo_: data point — OpenTelemetry; sample en Prometheus (el nombre queda; el backend de
 series que lo motivó, no)
@@ -39,7 +39,7 @@ Un hito del sistema declarado por el humano con un tag de git en master; el eje 
 comparación. Cada corrida lleva la línea de base bajo la que corrió, en el span y en el
 documento de la tarea, y una versión del sistema pertenece a exactamente una. Dos líneas
 de base se comparan por el scorecard, calculado sobre los documentos de tarea de cada una
-(`agentic eval compare`, ADR-0036).
+(`agentic eval compare`, ADR-0037).
 _Avoid_: versión, cohorte, época, hito (se usa en prosa, no como término)
 _Campo_: baseline — de la evaluación de modelos; `baseline_id` del set de evaluación es más fino
 (incluye la declaración y el brazo) y no lo reemplaza
@@ -51,7 +51,7 @@ los de límite de cuenta ni los de caída del proveedor), costo por entrega y re
 la primera no baja y la segunda baja; las otras dos desempatan. Es una consulta sobre los
 documentos de tarea de una línea de base, no una muestra ni un backend de métricas: la misma
 lectura que hace `agentic eval compare` — el único lector; esta tarea no empuja ningún score
-a Langfuse (ADR-0036). "Propios" se lee sobre el motivo del fallo: quedan afuera los dos
+a Langfuse (ADR-0037). "Propios" se lee sobre el motivo del fallo: quedan afuera los dos
 motivos externos (`account_limit`, el límite de la cuenta del proveedor, y `upstream`, su caída)
 y quedan adentro los nuestros, el tope por intento (`limit`) incluido, que es una configuración
 nuestra y no de nadie más. Los fallos anteriores al commit que separó esos motivos llevan
