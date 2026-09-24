@@ -1428,6 +1428,7 @@ def close_pull_request(*, state="MERGED", merged=True, human_commit=False):
         created_at="2026-09-01T00:00:00+00:00",
         merged_at="2026-09-01T01:00:00+00:00" if merged else None,
         commits=tuple(commits),
+        merge_commit="c0ffee" if merged else None,
     )
 
 
@@ -1553,6 +1554,7 @@ def test_close_refuses_when_already_closed(monkeypatch, tmp_path, capsys):
         {
             "closed_at": "2026-09-20T00:00:00.000Z",
             "delivery_outcome": "merged",
+            "merge_commit": "c0ffee",
             "human_commits": "0",
             "human_lines_changed": "0",
         },
@@ -1860,6 +1862,7 @@ def test_close_all_is_idempotent_over_an_already_closed_document(monkeypatch, tm
         {
             "closed_at": "2026-09-20T00:00:00.000Z",
             "delivery_outcome": "merged",
+            "merge_commit": "c0ffee",
             "human_commits": "0",
             "human_lines_changed": "0",
         },
@@ -2640,3 +2643,196 @@ async def test_stack_review_reason_is_a_trigger_reproduced_verbatim_in_the_issue
 
     [(_, body)] = ports.tracker.opened_issues
     assert "a vendor sunset forces this" in body
+
+
+# `merge_commit` (ADR-0038): written by `close`, backfilled onto an already-closed
+# merged document, never touching what that document already recorded.
+
+
+def _closed_without_merge_commit(ports, *, outcome="merged"):
+    ports.documents.save(close_task())
+    ports.documents.record_closure(
+        "GH-9",
+        {
+            "closed_at": "2026-09-20T00:00:00.000Z",
+            "delivery_outcome": outcome,
+            "human_commits": "2",
+            "human_lines_changed": "7",
+            "time_to_merge_seconds": "99",
+        },
+    )
+
+
+def test_close_writes_merge_commit_for_a_merged_pull_request_and_omits_it_otherwise(
+    monkeypatch, tmp_path
+):
+    root = close_root(tmp_path)
+    merged, unmerged = "https://github.com/o/r/pull/7", "https://github.com/o/r/pull/8"
+    tracker = FakePullRequestTracker(
+        {merged: close_pull_request(), unmerged: close_pull_request(state="CLOSED", merged=False)}
+    )
+    ports = close_ports(root, tracker)
+    ports.documents.save(close_task(pull_request=merged))
+    ports.documents.save(close_task(id="GH-10", pull_request=unmerged))
+    _closed_run(monkeypatch, root, ports, issue=9)
+    cli.main()
+    _closed_run(monkeypatch, root, ports, issue=10)
+    cli.main()
+    assert ports.documents.load("GH-9")["merge_commit"] == "c0ffee"
+    assert "merge_commit" not in ports.documents.load("GH-10")
+
+
+def test_close_issue_backfills_only_merge_commit_and_exits_zero(monkeypatch, tmp_path, capsys):
+    root = close_root(tmp_path)
+    tracker = FakePullRequestTracker({"https://github.com/o/r/pull/7": close_pull_request()})
+    ports = close_ports(root, tracker)
+    _closed_without_merge_commit(ports)
+    before = ports.documents.load("GH-9")
+    _closed_run(monkeypatch, root, ports)
+    cli.main()  # no SystemExit: exit 0
+    after = ports.documents.load("GH-9")
+    assert after["merge_commit"] == "c0ffee"
+    assert {k: v for k, v in after.items() if k != "merge_commit"} == before
+    assert "merge_commit backfilled" in capsys.readouterr().out
+    # Now it is complete: a second run reaches no `gh` call and refuses as already closed.
+    tracker.pull_request_refs.clear()
+    _closed_run(monkeypatch, root, ports)
+    with pytest.raises(SystemExit):
+        cli.main()
+    assert tracker.pull_request_refs == []
+
+
+def test_close_all_backfills_and_exits_zero(monkeypatch, tmp_path, capsys):
+    root = close_root(tmp_path)
+    tracker = FakePullRequestTracker({"https://github.com/o/r/pull/7": close_pull_request()})
+    ports = close_ports(root, tracker)
+    _closed_without_merge_commit(ports)
+    _all_run(monkeypatch, root, ports)
+    cli.main()  # no SystemExit: exit 0
+    out = capsys.readouterr().out
+    assert "GH-9 (issue 9): merge_commit backfilled" in out
+    assert "agentic: backfilled 1:" in out
+    assert ports.documents.load("GH-9")["merge_commit"] == "c0ffee"
+    assert ports.documents.load("GH-9")["human_commits"] == "2"
+
+
+def test_a_closed_document_that_needs_no_merge_commit_reaches_no_gh_call(
+    monkeypatch, tmp_path, capsys
+):
+    """The rejecting side of `needs_merge_commit`: a closed-unmerged document has no merge
+    commit to backfill, on either path."""
+    root = close_root(tmp_path)
+    tracker = FakePullRequestTracker({"https://github.com/o/r/pull/7": close_pull_request()})
+    ports = close_ports(root, tracker)
+    _closed_without_merge_commit(ports, outcome="closed")
+    before = ports.documents.path_for("GH-9").read_bytes()
+    _all_run(monkeypatch, root, ports)
+    cli.main()
+    assert "GH-9 (issue 9): already closed" in capsys.readouterr().out
+    _closed_run(monkeypatch, root, ports)
+    with pytest.raises(SystemExit):
+        cli.main()
+    assert tracker.pull_request_refs == []
+    assert ports.documents.path_for("GH-9").read_bytes() == before
+
+
+# `agentic stack review` orders by the main line's first-parent chain, never by date
+# (ADR-0038). The issue's table, in a real repo: a Brief written before the anchor and
+# merged after it.
+
+_GIT = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+
+
+def _git(root, *args, date=None):
+    env = {**os.environ, **({"GIT_COMMITTER_DATE": date, "GIT_AUTHOR_DATE": date} if date else {})}
+    out = subprocess.run(
+        [*_GIT, *args], cwd=root, check=True, capture_output=True, text=True, env=env
+    )
+    return out.stdout.strip()
+
+
+def _landing_repo(tmp_path, *, brief_first):
+    """`master` with a stack-less root commit, then two `--no-ff` merges: a `brief` branch
+    whose only commit is dated 18:26 and a `stack` branch whose only commit is dated 18:32.
+    The merge order is the argument; the dates are the same either way."""
+    root = tmp_path / "g"
+    root.mkdir()
+    _git(root, "init", "-q", "-b", "master")
+    (root / "README").write_text("x")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "root")
+    branches = {
+        "brief": ("BRIEF.md", "# Brief\n\nfits.\n", "2026-09-24T18:26:11+00:00"),
+        "stack": (".agentic/stack.yaml", STACK, "2026-09-24T18:32:51+00:00"),
+    }
+    for name, (path, text, date) in branches.items():
+        _git(root, "checkout", "-q", "-b", name, "master")
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_text(text)
+        _git(root, "add", "-A")
+        _git(root, "commit", "-q", "-m", name, date=date)
+    _git(root, "checkout", "-q", "master")
+    order = ["brief", "stack"] if brief_first else ["stack", "brief"]
+    for name in order:
+        _git(root, "merge", "-q", "--no-ff", "-m", f"merge {name}", name)
+    return root
+
+
+async def _dry_run(root, ports=None):
+    from agentic.shared.configuration import Configuration
+
+    ports = ports or memory_ports()
+    ports.workspace.repositories[root] = root
+    await cli._stack_review(Configuration(product_dir=root), ports, None, True)
+    return ports
+
+
+@pytest.mark.anyio
+async def test_a_brief_written_before_the_anchor_but_merged_after_it_fires(tmp_path, capsys):
+    root = _landing_repo(tmp_path, brief_first=False)
+    await _dry_run(root)
+    out = capsys.readouterr().out
+    assert "the Brief changed since the last stack decision" in out
+    # The recorded anchor is the landing merge, not the branch's own commit.
+    landing = _git(
+        root, "log", "--first-parent", "-1", "--format=%H", "HEAD", "--", ".agentic/stack.yaml"
+    )
+    assert f"anchor: {landing}" in out
+    assert _git(root, "log", "-1", "--format=%H", "stack") != landing
+
+
+@pytest.mark.anyio
+async def test_a_brief_merged_before_the_anchor_does_not_fire_even_if_dated_before_it(
+    tmp_path, capsys
+):
+    root = _landing_repo(tmp_path, brief_first=True)
+    await _dry_run(root)
+    out = capsys.readouterr().out
+    assert "Signals fired: none" in out
+    assert "no signal fired" in out
+
+
+@pytest.mark.anyio
+async def test_merged_since_counts_by_the_merge_commit_position_not_by_closed_at(tmp_path, capsys):
+    root = _landing_repo(tmp_path, brief_first=True)
+    chain = _git(root, "rev-list", "--first-parent", "--reverse", "HEAD").split("\n")
+    with_brief, with_stack = chain[1], chain[2]
+    # A third landing after the anchor.
+    (root / "later.txt").write_text("x")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "later")
+    later = _git(root, "rev-parse", "HEAD")
+    ports = memory_ports()
+    # `closed_at` is far in the past for all of them: the clock decides nothing.
+    for task_id, merge_commit in (
+        ("GH-1", with_brief),  # landed before the anchor
+        ("GH-2", with_stack),  # the anchor itself
+        ("GH-3", later),  # after it
+        ("GH-4", None),  # never backfilled
+    ):
+        doc = {"id": task_id, "closed_at": "2001-01-01T00:00:00Z", "delivery_outcome": "merged"}
+        if merge_commit:
+            doc["merge_commit"] = merge_commit
+        ports.documents.save(doc)
+    await _dry_run(root, ports)
+    assert "Merged since anchor: 1" in capsys.readouterr().out

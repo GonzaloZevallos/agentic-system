@@ -20,7 +20,7 @@ import signal
 import subprocess
 import sys
 import uuid
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import AbstractAsyncContextManager, contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -796,6 +796,7 @@ CloseStatus = Literal[
     "closed",
     "still_open",
     "already_closed",
+    "backfilled",
     "no_pull_request",
     "no_document",
     "tracker_error",
@@ -806,10 +807,10 @@ CloseStatus = Literal[
 class _ClosureOutcome:
     """What `_close_document` hands back instead of raising: a status from the closed
     set `CloseStatus` plus the message either caller prints (`--issue`'s wrapper turns
-    every non-`"closed"` status into `CannotStart(message)`, byte-for-byte what `_close`
-    used to raise inline; `--all`'s sweep prints one line per task and keeps going). The
-    four figures and the path are set only when `status == "closed"` (Tech Lead plan,
-    subtask `close-all`)."""
+    every status but `"closed"` and `"backfilled"` into `CannotStart(message)`, byte-for-
+    byte what `_close` used to raise inline; `--all`'s sweep prints one line per task and
+    keeps going). The four figures are set only when `status == "closed"`, the path when
+    a document was written (Tech Lead plan, subtask `close-all`)."""
 
     status: CloseStatus
     message: str
@@ -843,7 +844,8 @@ def _close_document(task_id: str, cfg: Configuration, ports: Ports) -> _ClosureO
     reference = raw.get("pull_request")
     if not reference:
         return _ClosureOutcome("no_pull_request", f"{task_id} has no pull request to close")
-    if raw.get("closed_at"):
+    closed = bool(raw.get("closed_at"))
+    if closed and not stack_signals.needs_merge_commit(raw):
         return _ClosureOutcome("already_closed", f"{task_id} already closed on {raw['closed_at']}")
     try:
         pull_request: PullRequest | None = ports.tracker.pull_request(reference)
@@ -853,6 +855,8 @@ def _close_document(task_id: str, cfg: Configuration, ports: Ports) -> _ClosureO
         return _ClosureOutcome(
             "tracker_error", f"{task_id}: could not read its pull request ({reference})"
         )
+    if closed:
+        return _backfill_merge_commit(task_id, raw, pull_request, ports)
     if pull_request.state == "OPEN":
         return _ClosureOutcome(
             "still_open", f"{task_id}: the pull request is still open; nothing to close"
@@ -878,6 +882,9 @@ def _close_document(task_id: str, cfg: Configuration, ports: Ports) -> _ClosureO
     # scalar back as a string -- `evaluation.TaskDocument` types it `str` to match.
     if time_to_merge is not None:
         values["time_to_merge_seconds"] = str(int(time_to_merge))
+    # Same rule: omitted, never empty, for a pull request that never merged (ADR-0038).
+    if pull_request.merge_commit:
+        values["merge_commit"] = pull_request.merge_commit
     path = ports.documents.record_closure(task_id, values)
     return _ClosureOutcome(
         "closed",
@@ -886,6 +893,27 @@ def _close_document(task_id: str, cfg: Configuration, ports: Ports) -> _ClosureO
         human_commits=human_commits,
         human_lines_changed=human_lines_changed,
         time_to_merge=time_to_merge,
+        path=path,
+    )
+
+
+def _backfill_merge_commit(
+    task_id: str, raw: Mapping[str, object], pull_request: PullRequest, ports: Ports
+) -> _ClosureOutcome:
+    """A document closed as merged before `merge_commit` existed gets that one key and
+    nothing else: `closed_at`, `delivery_outcome`, `human_commits`,
+    `human_lines_changed` and `time_to_merge_seconds` are never rewritten (ADR-0038).
+    When `gh` has no merge commit to give, nothing is written and the document reads as
+    already closed."""
+    if not pull_request.merge_commit:
+        return _ClosureOutcome(
+            "already_closed",
+            f"{task_id} already closed on {raw['closed_at']}; its pull request has no merge commit",
+        )
+    path = ports.documents.record_closure(task_id, {"merge_commit": pull_request.merge_commit})
+    return _ClosureOutcome(
+        "backfilled",
+        f"{task_id}: merge_commit backfilled ({pull_request.merge_commit})",
         path=path,
     )
 
@@ -911,6 +939,11 @@ async def _close(task_id: str, cfg: Configuration, ports: Ports) -> None:
     lock = _lock_for(cfg)
     with _locked(lock, task_id):
         result = _close_document(task_id, cfg, ports)
+    if result.status == "backfilled":
+        print(f"agentic: {result.message}")
+        print(f"doc:                 {result.path}")
+        print("agentic: document written, not committed")
+        return
     if result.status != "closed":
         raise CannotStart(result.message)
     print(f"outcome:             {result.outcome}")
@@ -960,6 +993,7 @@ async def _close_all(cfg: Configuration, ports: Ports) -> None:
     task_ids = ports.documents.ids()
     readable = 0
     closed: list[str] = []
+    backfilled: list[str] = []
     remaining: list[str] = []
     stopped = False
     for task_id in task_ids:
@@ -976,7 +1010,7 @@ async def _close_all(cfg: Configuration, ports: Ports) -> None:
         if not reference:
             print(f"agentic: {label}: no pull request")
             continue
-        if raw.get("closed_at"):
+        if raw.get("closed_at") and not stack_signals.needs_merge_commit(raw):
             print(f"agentic: {label}: already closed")
             continue
         if stopped:
@@ -993,6 +1027,9 @@ async def _close_all(cfg: Configuration, ports: Ports) -> None:
         if result.status == "closed":
             print(f"agentic: {label}: closed ({result.outcome})")
             closed.append(label)
+        elif result.status == "backfilled":
+            print(f"agentic: {label}: {result.message.partition(': ')[2]}")
+            backfilled.append(label)
         elif result.status == "still_open":
             print(f"agentic: {label}: still open")
             remaining.append(label)
@@ -1004,40 +1041,55 @@ async def _close_all(cfg: Configuration, ports: Ports) -> None:
     if task_ids and readable == 0:
         raise CannotStart("no document could be read")
     print(f"agentic: closed {len(closed)}: {', '.join(closed) or '(none)'}")
+    if backfilled:
+        print(f"agentic: backfilled {len(backfilled)}: {', '.join(backfilled)}")
     print(f"agentic: remaining {len(remaining)}: {', '.join(remaining) or '(none)'}")
 
 
-def _git_log_1(product_dir: Path, relative: str) -> tuple[str, str]:
-    """The last commit to `relative`, as `git log -1` sees it: its sha and its
-    committer date, ISO-8601 (`stack_signals.signals`'s own `anchor`/`anchor_date` and
-    `brief_date` arguments, ADR-0034). `("", "")` when the path was never committed --
-    a greenfield product's own `.agentic/stack.yaml`, or a repo with no `BRIEF.md` yet
-    -- which sorts before every other date, so every signal fires vacuously
-    (`stack_signals.fired`'s own docstring)."""
+def _landing_commit(product_dir: Path, relative: str) -> str:
+    """The commit that brought `relative` to the main line, ADR-0038: the last commit to
+    it on `HEAD`'s first-parent chain -- the landing merge in a repo that merges with
+    `--no-ff`, the commit itself in a squash or fast-forward one. `HEAD` is passed
+    explicitly and the walk is first-parent, never date order. `""` when the path was
+    never committed there (a greenfield product's `.agentic/stack.yaml`, or a repo with
+    no `BRIEF.md` yet)."""
     result = subprocess.run(
-        ["git", "log", "-1", "--format=%H%x1f%cI", "--", relative],
+        ["git", "log", "--first-parent", "-1", "--format=%H", "HEAD", "--", relative],
         cwd=product_dir,
         capture_output=True,
         text=True,
         check=False,
     )
-    line = result.stdout.strip()
-    if not line:
-        return "", ""
-    sha, _, date = line.partition("\x1f")
-    return sha, date
+    return result.stdout.strip()
 
 
-def _task_deliveries(ports: Ports) -> list[tuple[str, str]]:
-    """Every task document's own `(closed_at, delivery_outcome)`, off the product's own
-    `.agentic/tasks/` corpus `ports.documents` already is (never the stack review's own
-    `.agentic/stack-reviews/`, which this command is about to write to): the plain
-    values `stack_signals.signals`'s own `deliveries` argument takes -- the pure module
-    itself takes no port (ADR-0034)."""
-    deliveries: list[tuple[str, str]] = []
+def _main_line_positions(product_dir: Path) -> dict[str, int]:
+    """`sha -> 0-based position` over `HEAD`'s first-parent chain, oldest first: one
+    read per invocation, linear in the length of the main line (ADR-0038). Empty when
+    `HEAD` has no commit."""
+    result = subprocess.run(
+        ["git", "rev-list", "--first-parent", "--reverse", "HEAD"],
+        cwd=product_dir,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return {sha: position for position, sha in enumerate(result.stdout.split())}
+
+
+def _task_deliveries(ports: Ports, positions: Mapping[str, int]) -> list[tuple[int | None, str]]:
+    """Every task document's `(position of its merge commit on the main line,
+    delivery_outcome)`, off the product's own `.agentic/tasks/` corpus `ports.documents`
+    already is (never the stack review's own `.agentic/stack-reviews/`, which this
+    command is about to write to): the plain values `stack_signals.signals`'s own
+    `deliveries` argument takes -- the pure module itself takes no port (ADR-0034). A
+    document with no `merge_commit`, or one not on the main line, has no position and
+    is not counted: the undercount ADR-0038 names."""
+    deliveries: list[tuple[int | None, str]] = []
     for task_id in ports.documents.ids():
         raw = ports.documents.load(task_id) or {}
-        deliveries.append((str(raw.get("closed_at") or ""), str(raw.get("delivery_outcome") or "")))
+        position = positions.get(str(raw.get("merge_commit") or ""))
+        deliveries.append((position, str(raw.get("delivery_outcome") or "")))
     return deliveries
 
 
@@ -1116,13 +1168,14 @@ async def _stack_review(
     except knowledge_stack.NotDeclared:
         pass
 
-    anchor, anchor_date = _git_log_1(cfg.product_dir, str(knowledge_stack.OVERLAY))
-    _, brief_date = _git_log_1(cfg.product_dir, "BRIEF.md")
+    positions = _main_line_positions(cfg.product_dir)
+    anchor = _landing_commit(cfg.product_dir, str(knowledge_stack.OVERLAY))
+    brief = _landing_commit(cfg.product_dir, "BRIEF.md")
     signals = stack_signals.signals(
         anchor=anchor,
-        anchor_date=anchor_date,
-        brief_date=brief_date,
-        deliveries=_task_deliveries(ports),
+        anchor_pos=positions.get(anchor),
+        brief_pos=positions.get(brief),
+        deliveries=_task_deliveries(ports, positions),
         reason=reason or "",
     )
     if dry_run:
