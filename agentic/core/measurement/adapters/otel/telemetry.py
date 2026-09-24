@@ -41,8 +41,8 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from agentic.core.process.domain.presubmit import CheckResult
+from agentic.core.process.domain.task import FindingRecord, TaskState, delta
 from agentic.core.process.domain.task import RoleRun as RoleRunRecord
-from agentic.core.process.domain.task import TaskState, delta
 from agentic.shared.stage0 import CHECKOUT
 
 from ...domain import metrics as system_metrics
@@ -259,7 +259,7 @@ def _aggregate(runs: list[RoleRunRecord], key: Literal["tokens", "tool_calls"]) 
     return total
 
 
-def _findings_counts(findings: list[dict]) -> dict[str, int]:
+def _findings_counts(findings: list[FindingRecord]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for item in findings:
         cell = f"{item['severity']}/{item['category']}/{item['status']}"

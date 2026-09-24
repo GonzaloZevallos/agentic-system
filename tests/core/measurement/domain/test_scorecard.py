@@ -3,7 +3,7 @@
 import pytest
 import yaml
 
-from agentic.core.measurement.domain import scorecard
+from agentic.core.measurement.domain import metrics, scorecard
 
 
 def doc(**overrides):
@@ -16,6 +16,57 @@ def doc(**overrides):
     }
     base.update(overrides)
     return base
+
+
+# --- rework: `docs/product/rework.md`'s own acceptance case, moved onto the documents
+# (ADR-0036: no telemetry backend left to derive it from a live reader's own samples;
+# `task_figures.rework_usd` and `metrics.run_rework_usd` are the one implementation both
+# `agentic close` and `agentic eval compare` read, never a second one) ---
+
+
+def test_task_figures_rework_equals_the_sum_of_its_runs_own_rework_plus_the_residual():
+    """A synthetic document with one return (`version=2`, all of it rework), one
+    first-delivery run whose own retried attempt cost something already inside its
+    `cost_usd` (`failed_cost_usd`, only that slice is rework), and a residual --
+    `cost_usd` money no run accounts for at all, itself rework by `rework_cost_usd`'s
+    own definition. `task_figures(document).rework_usd` must equal the document-only
+    sum this test computes independently: `metrics.run_rework_usd` over every run in
+    `document["runs"]`, plus whatever of `cost_usd` those runs do not add up to."""
+    returned_run = {
+        "role": "Tech Lead",
+        "version": 2,
+        "session_id": "s1",
+        "model": "m",
+        "cost_usd": 0.2,
+        "turns": 2,
+    }
+    retried_run = {
+        "role": "Product Analyst",
+        "version": 1,
+        "session_id": "s2",
+        "model": "m",
+        "cost_usd": 0.05,
+        "turns": 1,
+        "failed_cost_usd": 0.02,
+    }
+    document = doc(
+        status="ready_for_review",
+        cost_usd=0.33,  # 0.2 + 0.05 delivered by runs, 0.08 an escalation residual
+        runs=[returned_run, retried_run],
+    )
+
+    figures = scorecard.task_figures(document)
+
+    runs_rework = sum(metrics.run_rework_usd(run) for run in document["runs"])
+    runs_cost = sum(run["cost_usd"] for run in document["runs"])
+    residual = max(document["cost_usd"] - runs_cost, 0.0)
+    expected = runs_rework + residual
+
+    assert figures.rework_usd == pytest.approx(expected)
+    # Named against the fixture's own numbers too, so a future change to
+    # `rework_cost_usd`'s formula that still happens to match `runs_rework + residual`
+    # by coincidence cannot pass this test silently.
+    assert expected == pytest.approx(0.2 + 0.02 + 0.08)
 
 
 # --- task_figures: read from the document alone, absent fields get a documented default ---
