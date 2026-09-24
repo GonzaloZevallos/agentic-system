@@ -254,10 +254,17 @@ mostrado quedan con su lector nombrado, en vez de con un panel:
   `core/measurement/domain/scorecard.py` que este ADR describe arriba — no hay una
   segunda cuenta que reconciliar.
 - **Experimentos** — el mismo corte de cifras segmentado por `arm` dentro de una línea de
-  base (ADR-0028, ADR-0030). Su lector es el mismo `agentic eval compare`, invocado entre
-  las dos líneas de base que se quieren comparar: el brazo ya viaja como etiqueta del
-  documento de tarea que ese comando recorre, así que no hace falta un segundo camino de
-  lectura para separar un brazo de otro.
+  base (ADR-0028, ADR-0030). Esta fila **no tiene reemplazo**: `agentic eval compare`
+  bucketiza sólo por línea de base (`scorecard.bucket_by_baseline`, que agrupa por
+  `system_baseline`/`system_commit` y nunca por `arm`) y su parser (`agentic eval
+  compare <from> <to>`) no toma un brazo como argumento, así que no hay comando que
+  separe un brazo de otro dentro de una línea de base — el corte por experimento del
+  panel de Grafana se pierde con esta tarea. Lo que queda es el `experiment` que cada
+  documento de tarea ya guarda en su frontmatter (ADR-0030, un dict por tarea, no
+  agregado) y la misma snapshot dentro de `baseline_id` en cada línea del JSONL que
+  `agentic eval score` escribe (issue #28): separar un brazo de otro es leer esos
+  documentos o ese JSONL a mano, o escribir un script de un solo uso sobre ellos, nunca
+  un comando existente.
 
 ## Consecuencias
 
