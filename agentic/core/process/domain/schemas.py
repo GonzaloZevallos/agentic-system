@@ -270,6 +270,30 @@ class TechPlan(RoleOutput):
     )
 
 
+class StackProposal(RoleOutput):
+    """The stack review's own author output (ADR-0032): a verdict and three pieces a
+    human acts on without reading the interview, each its own field so the schema
+    guard can name the exact one a delivery omitted -- never one Markdown blob."""
+
+    verdict: str = Field(
+        description="Keep the stack or change it, weighed against the Brief and the "
+        "product's own decision records"
+    )
+    stack_diff: str = Field(
+        description="The exact change to the product's stack declaration, as a diff "
+        "against what is on disk, or the whole proposed file when the product has "
+        "none yet"
+    )
+    standards: str = Field(
+        description="The complete engineering standards this stack implies, "
+        "materialised for every practice the system names, never a diff"
+    )
+    adr_draft: str = Field(
+        description="A decision record for the product's own history, explaining the "
+        "choice against the Brief, with the alternatives it beat"
+    )
+
+
 class Delivery(RoleOutput):
     summary: str = Field(description="What changed, in a few lines, for the reviewer")
     assumptions: list[str] = Field(description="Decisions taken where the brief was silent")

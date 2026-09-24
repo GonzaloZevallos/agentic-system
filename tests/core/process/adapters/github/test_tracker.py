@@ -52,6 +52,32 @@ def test_pull_request_comment_and_label_go_through_gh():
     ]
 
 
+def test_open_issue_uses_body_file_and_sends_no_label(tmp_path, monkeypatch):
+    written = {}
+
+    class RecordingRun(Recorder):
+        def __call__(self, args, cwd, capture_output, text, check):
+            self.calls.append(args)
+            if "--body-file" in args:
+                path = args[args.index("--body-file") + 1]
+                written["path"] = path
+                written["body"] = Path(path).read_text(encoding="utf-8")
+            return subprocess.CompletedProcess(args, 0, self.stdout, "")
+
+    run = RecordingRun()
+    url = GhTracker(Path("/p"), run).open_issue("[needs-info] Stack review", "the body")
+    assert url == "https://github.com/o/r/pull/7"
+    [call] = run.calls
+    assert call[:3] == ["gh", "issue", "create"]
+    assert "--title" in call and "[needs-info] Stack review" in call
+    assert "--body-file" in call
+    assert "--label" not in call
+    assert "--search" not in call
+    assert written["body"] == "the body"
+    # The temp file does not outlive the call.
+    assert not Path(written["path"]).exists()
+
+
 def test_a_task_without_an_issue_writes_nothing_to_the_issue():
     run = Recorder()
     tracker = GhTracker(Path("/p"), run)

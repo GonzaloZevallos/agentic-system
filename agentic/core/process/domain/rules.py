@@ -811,6 +811,8 @@ INTERVIEW_PARTICIPANT_SLUGS = frozenset(
         "pm_consultant",
         "tech_lead_ephemeral_platform",
         "tech_lead_interviewee_platform",
+        "tech_lead_ephemeral_stack",
+        "tech_lead_interviewee_stack",
     }
 )
 
