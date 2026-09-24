@@ -72,7 +72,24 @@ async def stack_review(
     if output is None:
         return StackReview(issue_url=None, document=document, needs_info=False)
 
-    data = output.data
+    issue_body = _capped_proposal_body(anchor, description, output.data, document)
+    url = ports.tracker.open_issue(f"Stack review {review_id}: proposal", issue_body)
+    return StackReview(issue_url=url, document=document, needs_info=False)
+
+
+def _capped_proposal_body(
+    anchor: str, description: str, data: dict[str, str], document: Path
+) -> str:
+    """The issue body for a proposal, measured against `texts.ISSUE_BODY_MAX_CHARS`
+    before it is ever handed to `open_issue` -- never `gh`'s own non-zero exit (the
+    plan's own invariant, checked again here after the first fallback, not only on the
+    role's raw output): the full three pieces when they fit; standards replaced by a
+    note pointing at the document when only that piece tips it over; and, when even
+    that still does not fit -- the diff or the ADR draft alone the size of the
+    overflow -- every piece dropped for a refusal that names the count, so nothing but
+    the verdict and that note ever reaches `gh`. The document (`_document_section`)
+    keeps every piece verbatim regardless: nothing paid is ever lost, only the issue's
+    own body shrinks."""
     full = texts.body(
         anchor,
         description,
@@ -81,17 +98,23 @@ async def stack_review(
         data["standards"],
         data["adr_draft"],
     )
-    issue_body = full
-    if (refusal := texts.body_refusal(full)) is not None:
-        note = (
-            f"The standards exceeded the issue cap ({refusal}); the full text is in "
-            f"the review document at `{document}`."
-        )
-        issue_body = texts.body(
-            anchor, description, data["verdict"], data["stack_diff"], note, data["adr_draft"]
-        )
-    url = ports.tracker.open_issue(f"Stack review {review_id}: proposal", issue_body)
-    return StackReview(issue_url=url, document=document, needs_info=False)
+    if (refusal := texts.body_refusal(full)) is None:
+        return full
+    note = (
+        f"The standards exceeded the issue cap ({refusal}); the full text is in "
+        f"the review document at `{document}`."
+    )
+    without_standards = texts.body(
+        anchor, description, data["verdict"], data["stack_diff"], note, data["adr_draft"]
+    )
+    if (refusal := texts.body_refusal(without_standards)) is None:
+        return without_standards
+    verdict = (
+        f"{data['verdict']}\n\nThe proposal exceeded the issue cap ({refusal}); the "
+        f"full stack diff, standards and ADR draft are in the review document at "
+        f"`{document}`."
+    )
+    return texts.body(anchor, description, verdict, "", "", "")
 
 
 def _document_section(text: str, data: dict[str, str]) -> str:

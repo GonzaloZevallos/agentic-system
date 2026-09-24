@@ -73,3 +73,24 @@ async def test_an_over_cap_proposal_keeps_the_full_text_in_the_document_and_caps
     # Nothing paid is lost: the document keeps every piece verbatim.
     saved = ports.documents.saved[-1]
     assert huge in saved["sections"]["Tech Lead"]
+
+
+async def test_an_over_cap_adr_draft_still_refuses_by_name_after_dropping_standards(cfg):
+    # Dropping only `standards` (the first fallback) is not enough when the overflow is
+    # in `adr_draft` instead: the reassembled body must be measured again, and refuse
+    # by name rather than reach `open_issue` over the cap (blocking finding, review 1).
+    huge = "a" * (texts.ISSUE_BODY_MAX_CHARS + 1)
+    runner = ScriptedRunner(
+        **{ASK: [questions(done=True, session="e1")]},
+        **{AUTHOR: [stack_proposal(adr_draft=huge, session="t1")]},
+    )
+    ports = memory_ports(runner)
+    result = await stack_review("stack-2026-09-24", "signals", ANCHOR, cfg, ports)
+    [(_, body)] = ports.tracker.opened_issues
+    assert len(body) <= texts.ISSUE_BODY_MAX_CHARS
+    assert huge not in body
+    assert str(texts.ISSUE_BODY_MAX_CHARS) in body
+    assert str(result.document) in body
+    # Nothing paid is lost: the document still keeps the full ADR draft.
+    saved = ports.documents.saved[-1]
+    assert huge in saved["sections"]["Tech Lead"]
