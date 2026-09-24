@@ -12,14 +12,19 @@ from agentic.core.process.domain.stack_signals import (
 ANCHOR_DATE = "2026-01-01T00:00:00Z"
 
 
-def _merged(n: int, after: str = ANCHOR_DATE) -> list[tuple[str, str]]:
+def _merged(n: int) -> list[tuple[str, str]]:
     return [("2026-06-01T00:00:00Z", "merged") for _ in range(n)]
 
 
 def test_fired_on_greenfield_with_no_anchor_at_all():
     # Vacuously true: a repo with no `.agentic/stack.yaml` yet has nothing to compare
     # the Brief or the deliveries against, so every signal is satisfied by default.
-    s = signals(anchor="", anchor_date="", brief_date="2026-01-01", deliveries=[], reason="")
+    # Isolated from the other branches: `anchor_date` equals `brief_date` (so
+    # `brief_changed` is false), there are no deliveries and no reason — only
+    # `anchor == ""` can be firing this.
+    s = signals(anchor="", anchor_date="", brief_date="", deliveries=[], reason="")
+    assert not s.brief_changed
+    assert s.merged_since == 0
     assert fired(s)
 
 
@@ -105,6 +110,20 @@ def test_merged_since_ignores_a_delivery_closed_before_the_anchor():
     assert not fired(s)
 
 
+def test_merged_since_ignores_a_delivery_closed_exactly_on_the_anchor_date():
+    # Strict `>`, not `>=`: the anchor's own instant is not "since" it.
+    deliveries = [(ANCHOR_DATE, "merged")] * MERGED_TASKS_THRESHOLD
+    s = signals(
+        anchor="abc123",
+        anchor_date=ANCHOR_DATE,
+        brief_date=ANCHOR_DATE,
+        deliveries=deliveries,
+        reason="",
+    )
+    assert s.merged_since == 0
+    assert not fired(s)
+
+
 def test_merged_since_counts_merged_with_changes_too():
     deliveries = [("2026-06-01T00:00:00Z", "merged_with_changes")] * MERGED_TASKS_THRESHOLD
     s = signals(
@@ -126,17 +145,6 @@ def test_fired_on_a_reason_alone():
         reason="the CI's Python pin broke the build",
     )
     assert fired(s)
-
-
-def test_not_fired_with_an_unchanged_brief_and_nothing_merged():
-    s = signals(
-        anchor="abc123",
-        anchor_date=ANCHOR_DATE,
-        brief_date=ANCHOR_DATE,
-        deliveries=[],
-        reason="",
-    )
-    assert not fired(s)
 
 
 def test_description_carries_the_reason_text_byte_for_byte():
