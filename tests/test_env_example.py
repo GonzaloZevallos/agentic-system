@@ -48,14 +48,6 @@ def test_env_example_has_no_undeclared_agentic_token():
     assert _undeclared(_tokens(text)) == set()
 
 
-def test_env_example_no_longer_documents_the_renamed_fields():
-    # The exact drift that prompted this file: three tokens that outlived the rename
-    # of their fields and kept documenting knobs Configuration.from_sources never read.
-    text = ENV_EXAMPLE.read_text(encoding="utf-8")
-    stale = {"AGENTIC_THINKER_MODEL", "AGENTIC_VALIDATOR_MODEL", "AGENTIC_MAX_RETURNS_PER_PAIR"}
-    assert stale & _tokens(text) == set()
-
-
 def test_undeclared_rejects_a_token_naming_no_field():
     # The enforcement artefact must fail on an input it should reject, not only accept
     # a correct file (ADR-0023): a token naming no Configuration field and absent from
