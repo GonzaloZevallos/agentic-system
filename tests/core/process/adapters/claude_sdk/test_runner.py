@@ -1197,6 +1197,14 @@ def test_options_for_tech_lead_reviewer_is_pinned(tmp_path):
         "include_partial_messages": False,
         "include_hook_events": False,
         "forward_subagent_text": False,
+        # New in claude-agent-sdk 0.2.159 (GH-131, subtask `harness`; bundled CLI
+        # rose from 2.1.259 to 2.1.281). Default `False`; `options_for` does not
+        # pass it, so it flows through unchanged. Inert for this harness: `False`
+        # is one of the four inert shapes the plan names (None, False, {}, or the
+        # value `options_for` already passes), and its only documented effect
+        # (verbatim vs. rewritten prompt text sent to the model) is off by
+        # default -- no role's prompt handling in this repo depends on it.
+        "verbatim_prompts": False,
         "fork_session": False,
         "resume_session_at": None,
         "resume_drops_turn": None,
