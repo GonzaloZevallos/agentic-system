@@ -17,8 +17,16 @@ class FilesystemTaskDocuments:
         product_dir: Path,
         system_version: Callable[[], str] | None = None,
         system_baseline: Callable[[], str] | None = None,
+        *,
+        subdir: Path = document.TASKS_SUBDIR,
     ):
         self.product_dir = product_dir
+        # `.agentic/tasks/` by default, so every existing construction site is
+        # byte-identical; the stack review's own corpus is the one caller that passes
+        # `.agentic/stack-reviews/` (ADR-0032). `close --all`, `eval score` and
+        # `_bucket_documents` reach the corpus through `ids()`, never through this
+        # field, so none of them can see a document under another `subdir`.
+        self.subdir = subdir
         # The joinable version label's producer (`telemetry.system_version`, wired by
         # `composition.default_ports`): injected rather than computed here, which is
         # what keeps one `git rev-parse` in the system. `None` -- a bare-constructed
@@ -31,10 +39,10 @@ class FilesystemTaskDocuments:
         self.system_baseline = system_baseline
 
     def path_for(self, task_id: str) -> Path:
-        return self.product_dir / document.relative_path(task_id)
+        return self.product_dir / document.relative_path(task_id, subdir=self.subdir)
 
     def ids(self) -> list[str]:
-        tasks_dir = self.product_dir / document.TASKS_SUBDIR
+        tasks_dir = self.product_dir / self.subdir
         if not tasks_dir.is_dir():
             return []
         return sorted(path.stem for path in tasks_dir.glob("*.md"))
@@ -74,7 +82,7 @@ class FilesystemTaskDocuments:
         source = self.path_for(task_id)
         if not source.is_file():
             return None
-        destination = root / document.relative_path(task_id)
+        destination = root / document.relative_path(task_id, subdir=self.subdir)
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
         return destination

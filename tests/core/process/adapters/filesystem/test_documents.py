@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.adapters.filesystem.documents import system_commit
 
@@ -12,6 +14,24 @@ def test_save_then_load_in_the_product_repo(tmp_path):
     # The system's own commit goes into the frontmatter (ADR-0005).
     assert loaded["system_commit"] == system_commit()
     assert documents.load("T-2") is None  # no document yet: nothing to resume from
+
+
+def test_a_custom_subdir_is_isolated_from_the_default_tasks_corpus(tmp_path):
+    """The stack review's own corpus (`.agentic/stack-reviews/`, ADR-0032) lives beside
+    `.agentic/tasks/`, never inside it: a document saved under one `subdir` must not
+    show up in `ids()` of a documents port scoped to the other, which is what keeps
+    `close --all`, `eval score` and `_bucket_documents` blind to it."""
+    tasks = FilesystemTaskDocuments(tmp_path)
+    reviews = FilesystemTaskDocuments(tmp_path, subdir=Path(".agentic/stack-reviews"))
+    tasks.save({"id": "T-1", "title": "t", "description": "d"})
+    reviews.save({"id": "stack-2026-09-24", "title": "s", "description": "d"})
+
+    assert tasks.ids() == ["T-1"]
+    assert reviews.ids() == ["stack-2026-09-24"]
+    expected = tmp_path / ".agentic/stack-reviews/stack-2026-09-24.md"
+    assert reviews.path_for("stack-2026-09-24") == expected
+    assert tasks.load("stack-2026-09-24") is None
+    assert reviews.load("T-1") is None
 
 
 def test_system_commit_is_a_short_hash_or_none():
