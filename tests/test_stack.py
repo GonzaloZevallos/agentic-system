@@ -495,3 +495,194 @@ def test_pin_guard_accepts_the_real_ci_workflow_against_the_locally_observed_uv(
         "which does not parse as `uv X.Y.Z (...)`"
     )
     assert unknown_pins(_all_ci_steps(), PIN_ORACLE, observed={command: result.output}) == []
+
+
+# ---------------------------------------------------------------------------
+# Floor/lock guard (GH-131, subtask `harness`, ADR-0027-class hole): `setup: deps:
+# uv sync --locked` runs once when a checkout is born, against the BASE
+# `pyproject.toml` (ADR-0011, third addendum), and none of the four declared
+# checks re-locks. So a floor moved above a stale `uv.lock` entry delivers green
+# here and goes red in CI, the same defect class `unknown_pins` closes for a
+# `.github/workflows/**` literal -- except this literal lives in `pyproject.toml`
+# and `uv.lock`, which `unknown_pins` does not scope. Verified offline: parsed
+# TOML in, a list of violation strings out, no subprocess.
+
+# The three dependencies ADR-0022 names as ungrouped in its Dependabot split: each
+# gets its own PR, never folded into the weekly grouped stream. Passed as a
+# parameter's default, never hidden inside the function, so a rejecting case can
+# name a narrower or different tuple without touching the real one.
+UNGROUPED_DEPENDENCIES: tuple[str, ...] = (
+    "claude-agent-sdk",
+    "langgraph",
+    "langgraph-checkpoint-sqlite",
+)
+
+_FLOOR_SPEC = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)>=([0-9]+(?:\.[0-9]+)*)$")
+
+FLOOR_MISSING = (
+    "{name!r} is in UNGROUPED_DEPENDENCIES but has no `name>=X.Y.Z` floor in "
+    "`[project] dependencies` of {pyproject} -- add one or drop it from the tuple."
+)
+FLOOR_NO_LOCK_ENTRY = (
+    "{name!r} floors `{name}>={floor}` in {pyproject}, but {lock} resolves no "
+    "version for it -- run `uv lock` (or `uv lock --upgrade-package {name}`) and "
+    "commit the result."
+)
+FLOOR_UNSATISFIED = (
+    "{name!r} floors `{name}>={floor}` in {pyproject}, but {lock} resolves "
+    "`{locked}`, which does not satisfy that floor -- the checkout's one-time "
+    "`uv sync --locked` (ADR-0011) will deliver green on this stale lock and go "
+    "red in CI. Run `uv lock` and commit the result."
+)
+FLOOR_NOT_EXACT = (
+    "`claude-agent-sdk` is pinned by its BUNDLED CLI (ADR-0035), not by its pip "
+    "version: {lock} resolves `{locked}`, which satisfies the `>={floor}` floor "
+    "in {pyproject} but is not equal to it. Move the floor to `{locked}` (or "
+    "re-lock to the floor's own version) so the two literals this task cares "
+    "about -- the floor a human reads and the wheel a Developer's `uv sync "
+    "--locked` actually installs -- name the same release. `langgraph` and "
+    "`langgraph-checkpoint-sqlite` are not held to this: their floors are open "
+    "ranges this repo does not pin to a specific bundled artefact."
+)
+
+
+def _dependency_floors(dependencies: list[str]) -> dict[str, str]:
+    """name -> floor version, parsed from each `[project] dependencies` entry of
+    the shape `name>=X.Y.Z` -- the only operator every floor in this file uses
+    today. An entry of a different shape (an extra, a different operator, no
+    version at all) is silently skipped: only the three named dependencies are
+    ever looked up by `floor_lock_disagreements` below, and a genuinely missing
+    floor for one of those three is `FLOOR_MISSING`, not a silent pass."""
+    floors: dict[str, str] = {}
+    for entry in dependencies:
+        match = _FLOOR_SPEC.match(entry.replace(" ", ""))
+        if match:
+            floors[match.group(1)] = match.group(2)
+    return floors
+
+
+def _locked_versions(lock: dict[str, Any]) -> dict[str, str]:
+    return {
+        package["name"]: package["version"]
+        for package in lock.get("package", [])
+        if "name" in package and "version" in package
+    }
+
+
+def _version_tuple(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in version.split("."))
+
+
+def floor_lock_disagreements(
+    dependencies: list[str],
+    lock_versions: dict[str, str],
+    names: tuple[str, ...] = UNGROUPED_DEPENDENCIES,
+    pyproject_label: str = "pyproject.toml",
+    lock_label: str = "uv.lock",
+) -> list[str]:
+    """PURE: no filesystem, no subprocess -- `dependencies` is `[project]
+    dependencies` already parsed by `tomllib`, `lock_versions` is `name ->
+    version` already parsed from `uv.lock`'s `[[package]]` array. One message per
+    offending dependency, over exactly `names` (ADR-0022's ungrouped three by
+    default).
+
+    Two rules, asymmetric on purpose (the asymmetry lives in the message, not
+    only here): every name in `names` must have its `uv.lock` version SATISFY
+    its `pyproject.toml` floor (`>=`, compared as a version tuple, never as a
+    string). `claude-agent-sdk` ADDITIONALLY must resolve to EXACTLY its floor.
+    `langgraph` floors at `>=1.0` and `langgraph-checkpoint-sqlite` at
+    `>=3.1.1`; neither is held to equality, because neither floor names a
+    specific bundled artefact the way `claude-agent-sdk`'s does (ADR-0035) --
+    holding all three to equality would go red on this repo's own lock the
+    moment `uv lock` picks a patch release above either open floor.
+    """
+    floors = _dependency_floors(dependencies)
+    violations: list[str] = []
+    for name in names:
+        floor = floors.get(name)
+        if floor is None:
+            violations.append(FLOOR_MISSING.format(name=name, pyproject=pyproject_label))
+            continue
+        locked = lock_versions.get(name)
+        if locked is None:
+            violations.append(
+                FLOOR_NO_LOCK_ENTRY.format(
+                    name=name, floor=floor, pyproject=pyproject_label, lock=lock_label
+                )
+            )
+            continue
+        if _version_tuple(locked) < _version_tuple(floor):
+            violations.append(
+                FLOOR_UNSATISFIED.format(
+                    name=name,
+                    floor=floor,
+                    locked=locked,
+                    pyproject=pyproject_label,
+                    lock=lock_label,
+                )
+            )
+            continue
+        if name == "claude-agent-sdk" and locked != floor:
+            violations.append(
+                FLOOR_NOT_EXACT.format(
+                    floor=floor, locked=locked, pyproject=pyproject_label, lock=lock_label
+                )
+            )
+    return violations
+
+
+def _pyproject_dependencies() -> list[str]:
+    data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+    deps: list[str] = data["project"]["dependencies"]
+    return deps
+
+
+def _uv_lock_versions() -> dict[str, str]:
+    lock = tomllib.loads((REPO / "uv.lock").read_text(encoding="utf-8"))
+    return _locked_versions(lock)
+
+
+def test_floor_lock_disagreements_accepts_todays_real_pyproject_and_lock():
+    assert floor_lock_disagreements(_pyproject_dependencies(), _uv_lock_versions()) == []
+
+
+def test_floor_lock_disagreements_rejects_a_lock_below_the_floor():
+    """The core of the ADR-0027-class hole this guard closes: a floor moved
+    above a stale `uv.lock` entry, exactly the shape a Developer produces by
+    editing `pyproject.toml` without re-running `uv lock`."""
+    deps = ["langgraph-checkpoint-sqlite>=3.1.1"]
+    locked = {"langgraph-checkpoint-sqlite": "3.0.0"}
+    violations = floor_lock_disagreements(deps, locked, names=("langgraph-checkpoint-sqlite",))
+    assert violations and "3.0.0" in violations[0] and "3.1.1" in violations[0]
+
+
+def test_floor_lock_disagreements_accepts_a_satisfied_open_floor_that_is_not_exact():
+    """`langgraph` and `langgraph-checkpoint-sqlite` are never held to equality:
+    a lock that satisfies but does not equal the floor is accepted for them,
+    unlike `claude-agent-sdk` below."""
+    deps = ["langgraph>=1.0"]
+    locked = {"langgraph": "1.2.11"}
+    assert floor_lock_disagreements(deps, locked, names=("langgraph",)) == []
+
+
+def test_floor_lock_disagreements_rejects_claude_agent_sdk_off_by_a_patch():
+    """`claude-agent-sdk` alone needs exact equality: this repo depends on the
+    CLI a specific wheel BUNDLES (ADR-0035), not on the range its floor merely
+    satisfies, so a lock that satisfies but does not equal the floor still
+    fails here -- the branch `test_floor_lock_disagreements_accepts_a_satisfied_
+    open_floor_that_is_not_exact` above proves is not taken for the other two."""
+    deps = ["claude-agent-sdk>=0.2.159"]
+    locked = {"claude-agent-sdk": "0.2.160"}
+    violations = floor_lock_disagreements(deps, locked, names=("claude-agent-sdk",))
+    assert violations and "0.2.160" in violations[0] and "0.2.159" in violations[0]
+
+
+def test_floor_lock_disagreements_rejects_a_dependency_with_no_floor_at_all():
+    violations = floor_lock_disagreements([], {}, names=("claude-agent-sdk",))
+    assert violations and "claude-agent-sdk" in violations[0]
+
+
+def test_floor_lock_disagreements_rejects_a_floor_with_no_matching_lock_entry():
+    deps = ["claude-agent-sdk>=0.2.159"]
+    violations = floor_lock_disagreements(deps, {}, names=("claude-agent-sdk",))
+    assert violations and "resolves no version" in violations[0]

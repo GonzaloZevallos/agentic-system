@@ -25,7 +25,7 @@ from pathlib import Path
 COLLECTOR = "http://localhost:4318/v1/traces"
 CLICKHOUSE = "http://localhost:8123/"
 ENV_FILE = Path(__file__).resolve().parents[1] / "langfuse" / ".env"
-MODEL = "claude-opus-5"
+MODEL = "claude-opus-5-5"
 TOKENS = {
     "input_tokens": 1000,
     "output_tokens": 100,

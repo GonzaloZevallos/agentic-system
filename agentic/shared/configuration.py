@@ -34,7 +34,7 @@ class Configuration(BaseModel):
     # Actors make most of the calls; verifiers need a model the actor did not
     # have, which is the cheapest asymmetry to build and measure (README.md, 10).
     actor_model: str = "claude-sonnet-5"
-    verifier_model: str = "claude-opus-5"
+    verifier_model: str = "claude-opus-5-5"
     # Per-role override, keyed by role slug. Wins over the kind mapping.
     model_overrides: dict[str, str] = Field(default_factory=dict)
     max_changes_requested_per_pair: int = Field(default=2, ge=0)
