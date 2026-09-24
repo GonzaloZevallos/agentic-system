@@ -236,6 +236,29 @@ ADR-0021 aplicado en avance): **la subtarea de paneles no construye ningún dash
 solamente el párrafo que registra esto, con esta transcripción como evidencia — "no construir
 nada" es un resultado de primera clase, no una escalada ni un fallo de rol.
 
+### La subtarea de paneles: ningún panel, ningún cliente de ingesta
+
+Con el veredicto de arriba, la subtarea de paneles y su publicador no construyen nada:
+ningún dashboard de Langfuse, ninguna definición versionada, ningún cliente de ingesta de
+scores. No hay credenciales `LANGFUSE_*` de ingesta en ningún módulo nuevo, no hay un
+segundo transporte, y no hay ensanche de superficie (CODING_STANDARDS.md §8) para
+justificar. "No construir nada" es el resultado completo de esa subtarea, no una entrega
+parcial a la espera de otra vuelta.
+
+Las dos filas del dashboard de Grafana que un score o una traza de Langfuse podrían haber
+mostrado quedan con su lector nombrado, en vez de con un panel:
+
+- **Scorecard** — las cuatro cifras de ADR-0028 (autonomía, fallos propios por tarea,
+  costo por entrega, retrabajo) por línea de base. Su lector es `agentic eval compare`,
+  que ya las calcula desde los documentos de tarea con la misma función de
+  `core/measurement/domain/scorecard.py` que este ADR describe arriba — no hay una
+  segunda cuenta que reconciliar.
+- **Experimentos** — el mismo corte de cifras segmentado por `arm` dentro de una línea de
+  base (ADR-0028, ADR-0030). Su lector es el mismo `agentic eval compare`, invocado entre
+  las dos líneas de base que se quieren comparar: el brazo ya viaja como etiqueta del
+  documento de tarea que ese comando recorre, así que no hace falta un segundo camino de
+  lectura para separar un brazo de otro.
+
 ## Consecuencias
 
 - El collector (`observability/collector/otel-collector.yaml`) pierde `exporters.otlphttp/
