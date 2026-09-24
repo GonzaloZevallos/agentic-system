@@ -46,14 +46,67 @@ Solo lo que emite el sistema, identificado como `service.name: agentic-system`:
   que solo existe en telemetría, nunca en el estado.
 
 El `product` sale de lo que el producto declara en su `.agentic/stack.yaml`, no del nombre
-del directorio ni del remoto de git. Lo que se mide es el sistema, no el producto: el eje de
-cada panel es `system_version` y `product` es un filtro (default All) y una covariable, la
-que muestra sobre qué mezcla de tareas corrió cada versión, para que una versión que tomó
-tareas más grandes no parezca peor. Ningún panel agrupa por producto salvo el de mezcla
-(ADR-0008, adenda; issues #47 y #24). `agentic.role.duration` es la única que se lee por
-rol: congelada en el grano del **nodo** (issue #24 la dejó así a propósito, ADR-0008,
-2026-09-18), la respuesta por corrida está en `agentic.role.run_duration`, que sí lleva
-`system.version`.
+del directorio ni del remoto de git. Lo que se mide es el sistema, no el producto: desde
+ADR-0028 el eje de comparación es `system_baseline` (Scorecard, Experimentos y Diagnóstico),
+nunca `system_version` de todo panel -- `system_version` sigue existiendo para trazar la
+corrida y es un filtro (`$version`), no el eje. `product` es un filtro (default All) y una
+covariable, la que muestra sobre qué mezcla de tareas corrió cada línea de base, para que una
+que tomó tareas más grandes no parezca peor. Ningún panel agrupa por producto salvo el de
+mezcla, en la fila Control (ADR-0008, adenda; issues #47 y #24). `agentic.role.duration` es
+la única que se lee por rol: congelada en el grano del **nodo** (issue #24 la dejó así a
+propósito, ADR-0008, 2026-09-18), la respuesta por corrida está en `agentic.role.run_duration`,
+que sí lleva `system.version`, `system.baseline` y `arm`.
+
+## Las cuatro filas del dashboard (ADR-0028)
+
+1. **Scorecard**, eje `system_baseline` (una sola, la que elige `$baseline`): las cuatro
+   figuras del glosario de Medición -- autonomía, fallos propios por tarea, costo por tarea
+   terminada, retrabajo -- cada una con dos targets PromQL: el nivel bajo `$baseline` y la
+   diferencia contra `$baseline_prev`, ambos lados `sum(...)` sin `by` para que resten sin
+   join. Un panel más con el n: Corridas terminadas y entregas juzgadas bajo `$baseline`.
+2. **Experimentos**: las mismas cuatro figuras agrupadas `by (arm)` dentro de `$baseline`.
+3. **Diagnóstico**, eje `system_baseline`, `$version` como filtro adicional: los paneles de
+   rol, fase, tokens, hallazgos, presubmit, entrevista y fallos, más minutos a merge, commits
+   humanos por entrega, costo de fallo por motivo y turnos sobre el tope.
+4. **Control**: la mezcla de tareas por producto y tipo (el único panel que agrupa por
+   producto, eje `system_version`, nunca `system_baseline`: su pregunta es si una versión
+   tomó tareas distintas, no cuál línea de base es mejor), versiones por línea de base y
+   brazos por línea de base.
+
+**Sin alerta hasta que una línea de base junte diez tareas terminadas** (ADR-0028, decisión
+4): con una a cuatro tareas por línea de base una alerta dispara por ruido puro.
+
+**Ningún literal de rango pasa los 32 días** (ADR-0008, primer addendum: el techo de
+Grafana Cloud por consulta) y el rango por defecto del dashboard (`now-30d`) tampoco. Un
+scorecard sólo es válido cuando la ventana elegida contiene las dos líneas de base de punta a
+punta -- el panel del n es el tell: si `$baseline_prev` muestra cero terminadas, la ventana no
+la alcanza.
+
+**Dos líneas de base resuelven distinto, y sólo coinciden salvo un caso.** Las familias
+`agentic.role.*`/`agentic.task.*` llevan la línea de base **de la corrida** (la que
+`telemetry.system_baseline()` resolvió al momento de esa invocación); `agentic.delivery.*`
+lleva la línea de base **del documento** (la que quedó escrita cuando `agentic close` juzgó
+el pull request). Coinciden siempre salvo una tarea reanudada a través de un tag `bl-*` nuevo
+o hacia otro brazo, donde la corrida ve una línea de base que el documento todavía no tiene.
+`agentic eval compare` es la lectura donde no pueden discrepar: lee el documento entero, nunca
+mezcla las dos fuentes a mitad de tarea.
+
+Las dos tablas de Control (versiones y brazos por línea de base) **no filtran por `$baseline`
+a propósito**: existen para mostrar `untagged` y todo lo demás a la vez, no la línea elegida.
+Tampoco dejan pasar la muestra sin la etiqueta en absoluto (`system_baseline!=""`): esas son
+anteriores a ADR-0030 y no deben aparecer como un segundo balde sin nombre junto a `untagged`,
+que sí es un valor real que `system_baseline()` emite.
+
+**Costo por entrega tiene una sola implementación, `agentic eval compare`, y PromQL no puede
+tenerla**: `agentic.delivery.*` no lleva costo y `agentic.task.cost_usd` no lleva un label
+`judged`; unir las dos por tarea pediría un id de tarea que ADR-0008 prohíbe en una etiqueta.
+El panel de Scorecard mide **costo por tarea terminada** en cambio, que sí es una sola familia
+dividida por sí misma.
+
+**El motivo de fallo que el Scorecard excluye es `account_limit` y `upstream`, nunca
+`reason!="limit"`**: ADR-0029 es el único enunciado normativo de esa exclusión
+(`scorecard.EXTERNAL_FAILURE_REASONS`); `limit` es nuestro (el tope por intento) y se queda
+adentro. No se restatea el razonamiento acá -- ADR-0029 lo lleva entero.
 
 Los spans nativos de Claude Code llevan prompts, respuestas y tool calls: se quedan en
 Langfuse. Si algún día hace falta verlos en Grafana, se cambia el filtro del collector, no
@@ -184,6 +237,36 @@ Integrator), igual que en `agentic.role.failures`; `phase` sale de la corrida co
 que se escribió el veredicto de la patch (`target_run`, la misma fuente que la muestra
 residual), nunca ausente (ADR-0008, 2026-09-18 segunda adenda): `unknown` cuando la
 patch no tiene una — por ejemplo un fallo antes de que el rol entregara nada.
+
+## Métricas emitidas y no leídas
+
+`tests/readme_metrics._not_read()` deriva el partido contra `_documented()`: ningún conteo
+se restatea a mano acá arriba. Cada línea dice por qué ningún panel la lee hoy.
+
+- `agentic.role.duration`: congelada en el grano del nodo (ADR-0008, 2026-09-18); su panel
+  lee `agentic.role.run_duration` + `agentic.role.queue_wait` a propósito, nunca esta.
+- `agentic.role.calls`: llamadas al modelo por corrida; sin panel propio, sub-eje de
+  `agentic.role.tokens`/`.turns` que sí tienen el suyo.
+- `agentic.role.subagent_cost_usd`: no es aditiva con `agentic.role.cost_usd` (ya cuenta ahí);
+  sin panel para no invitar a sumarla encima del costo total.
+- `agentic.role.cold_fallback`: señal de arranque en frío por rol y fase, todavía sin un
+  panel que la lea; ninguna decisión de este dashboard depende de ella aún.
+- `agentic.presubmit.duration`: cuánto tardó cada chequeo; el panel de presubmit hoy
+  sólo cuenta entregas rojas, no su duración.
+- `agentic.interview.invariants`: propuestos vs. adoptados por entrevista; sin panel porque
+  el scorecard y el diagnóstico de esta tarea no leen calidad de entrevista, sólo su volumen.
+- `agentic.task.duration`: tiempo de reloj de la tarea entera; el dashboard mide costo
+  y retrabajo, no duración de tarea.
+- `agentic.task.returns`: devoluciones por categoría; sin panel, cubierta indirectamente por
+  el retrabajo que esas devoluciones generan.
+- `agentic.task.human_decisions`: decisiones del humano al reanudar; sin panel propio.
+- `agentic.invocation.cost_usd`: detalle por invocación (`run`/`resume`) de una serie que el
+  dashboard ya lee acumulada por tarea (`agentic.task.cost_usd`); sin panel para no duplicar
+  la misma pregunta dos veces.
+- `agentic.invocation.rework_usd`: ídem, detalle por invocación de `agentic.task.rework_usd`.
+- `agentic.invocation.duration`: ídem, detalle por invocación de `agentic.task.duration`.
+- `agentic.invocation.returns`: ídem, detalle por invocación de `agentic.task.returns`.
+
 ## Métricas de entrevista
 
 Una entrevista (glossary: Entrevista, ADR-0014) deja sus propios conteos, leídos de
