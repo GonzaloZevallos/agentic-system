@@ -344,6 +344,7 @@ class ClaudeSdkRunner:
                     turn_notice_firings=notice_firings,
                     deliveries=tool_calls.get(DELIVERY_TOOL, 0),
                     presubmit_denials=presubmit_denials,
+                    main_thread_turns=turns.value,
                 ) from exc
             raise AttemptFailed(
                 failure_motive(_reported_error(exc)),
@@ -355,6 +356,7 @@ class ClaudeSdkRunner:
                 turn_notice_firings=notice_firings,
                 deliveries=tool_calls.get(DELIVERY_TOOL, 0),
                 presubmit_denials=presubmit_denials,
+                main_thread_turns=turns.value,
             ) from exc
         except Exception as exc:  # the SDK raises its own hierarchy; all of it is a failure
             raise AttemptFailed(
@@ -365,6 +367,7 @@ class ClaudeSdkRunner:
                 turn_notice_firings=notice_firings,
                 deliveries=tool_calls.get(DELIVERY_TOOL, 0),
                 presubmit_denials=presubmit_denials,
+                main_thread_turns=turns.value,
             ) from exc
 
         if result is None:
@@ -376,6 +379,7 @@ class ClaudeSdkRunner:
                 turn_notice_firings=notice_firings,
                 deliveries=tool_calls.get(DELIVERY_TOOL, 0),
                 presubmit_denials=presubmit_denials,
+                main_thread_turns=turns.value,
             )
         if background and _delivered(result):
             # The prompt forbids it; when the model does it anyway, whatever those
@@ -397,6 +401,7 @@ class ClaudeSdkRunner:
                 turn_notice_firings=notice_firings,
                 deliveries=tool_calls.get(DELIVERY_TOOL, 0),
                 presubmit_denials=presubmit_denials,
+                main_thread_turns=turns.value,
             )
         if result.is_error:
             raise AttemptFailed(
@@ -409,6 +414,7 @@ class ClaudeSdkRunner:
                 turn_notice_firings=notice_firings,
                 deliveries=tool_calls.get(DELIVERY_TOOL, 0),
                 presubmit_denials=presubmit_denials,
+                main_thread_turns=turns.value,
             )
         return RawResult(
             structured_output=result.structured_output,
@@ -424,6 +430,7 @@ class ClaudeSdkRunner:
             tool_calls=tool_calls,
             deliveries=tool_calls.get(DELIVERY_TOOL, 0),
             presubmit_denials=presubmit_denials,
+            main_thread_turns=turns.value,
         )
 
     def _warn(self, text: str) -> None:

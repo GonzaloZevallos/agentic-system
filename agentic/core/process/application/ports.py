@@ -88,6 +88,16 @@ class RawResult:
     # permission layer denying a role that does not execute. `0` for every run whose
     # presubmit never refused, which is every run with no presubmit wired at all.
     presubmit_denials: int = 0
+    # `TurnCount.value` at the end of the attempt (`domain/turn_notice.py`'s own counted
+    # quantity, ADR-0031, issue #117): the main-thread `AssistantMessage` count the
+    # notice's positions are stated in. `0` for a role the notice does not cover, since
+    # the runner never wires the counter for one. Written on every attempt, cut as well
+    # as delivering (`ClaudeSdkRunner.run_once`'s six raise sites read the same
+    # `turns.value` this field carries), because a cut is the population that can
+    # refute the assumption `domain/turn_notice.py`'s docstring states: an attempt cut
+    # by `max_turns` whose recorded `main_thread_turns` sits below that role's own
+    # `max_turns` refutes "count >= consumed turns".
+    main_thread_turns: int = 0
 
 
 class AttemptFailed(Exception):
@@ -116,6 +126,7 @@ class AttemptFailed(Exception):
         turn_notice_firings: int = 0,
         deliveries: int = 0,
         presubmit_denials: int = 0,
+        main_thread_turns: int = 0,
     ):
         super().__init__(motive(error, reason))
         self.cost_usd = cost_usd
@@ -141,6 +152,13 @@ class AttemptFailed(Exception):
         # Presubmit denials this attempt saw before it broke (`RawResult.presubmit_
         # denials`'s own docstring); `0` at every raise site but the runner's own.
         self.presubmit_denials = presubmit_denials
+        # `TurnCount.value` at the point this attempt broke (`RawResult.main_thread_
+        # turns`'s own docstring); `0` for a role the notice does not cover, and at
+        # every raise site but the runner's own. Set at every one of the runner's six
+        # raise sites, not only the successful return, because a cut is the population
+        # that can refute the counted-quantity assumption `domain/turn_notice.py`
+        # states.
+        self.main_thread_turns = main_thread_turns
 
 
 class Presubmit(Protocol):

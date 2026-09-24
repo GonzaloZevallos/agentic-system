@@ -774,12 +774,13 @@ def _main_thread_calls(n: int) -> list[AssistantMessage]:
 
 
 async def test_a_fired_turn_notice_is_carried_on_the_raw_result(monkeypatch, tmp_path):
-    # Threshold 15 (`turn_notice.TURN_NOTICE_AT`): the 15th main-thread call brings
-    # `turns.value` to the threshold, so the next `PostToolUse` event fires.
-    developer = replace(DEVELOPER, max_turns=40)
+    # First position 45 (`turn_notice.TURN_NOTICE_AT`): the 45th main-thread call
+    # brings `turns.value` to the position, so the next `PostToolUse` event fires --
+    # and carries `main_thread_turns`, the counter's own final value, alongside it.
+    developer = replace(DEVELOPER, max_turns=200)
 
     async def query(prompt, options):
-        for message in _main_thread_calls(15):
+        for message in _main_thread_calls(45):
             yield message
         (matcher,) = options.hooks["PostToolUse"]
         (hook,) = matcher.hooks
@@ -792,21 +793,24 @@ async def test_a_fired_turn_notice_is_carried_on_the_raw_result(monkeypatch, tmp
     )
     assert raw.turn_notice is True
     assert raw.turn_notice_firings == 1
+    assert raw.main_thread_turns == 45
 
 
-async def test_a_second_posttooluse_event_past_the_threshold_raises_the_firing_count(
+async def test_a_second_posttooluse_event_reaching_the_second_window_raises_the_firing_count(
     monkeypatch, tmp_path
 ):
-    # No latch (invariant: every firing differs from the last): a second event past
-    # the threshold fires again, and `RawResult.turn_notice_firings` counts both.
-    developer = replace(DEVELOPER, max_turns=40)
+    # The collapsing predicate's own point: a second event only fires again once it
+    # crosses a *new* position (65, not merely a later call still inside window 1).
+    developer = replace(DEVELOPER, max_turns=200)
 
     async def query(prompt, options):
-        for message in _main_thread_calls(15):
+        for message in _main_thread_calls(45):
             yield message
         (matcher,) = options.hooks["PostToolUse"]
         (hook,) = matcher.hooks
         await hook({"tool_name": "Bash"}, "t1", {"signal": None})
+        for message in _main_thread_calls(20):  # turns.value now 65
+            yield message
         await hook({"tool_name": "Bash"}, "t2", {"signal": None})
         yield result()
 
@@ -815,13 +819,14 @@ async def test_a_second_posttooluse_event_past_the_threshold_raises_the_firing_c
         developer, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
     )
     assert raw.turn_notice_firings == 2
+    assert raw.main_thread_turns == 65
 
 
 async def test_no_turn_notice_when_the_threshold_is_never_crossed(monkeypatch, tmp_path):
     developer = replace(DEVELOPER, max_turns=200)
 
     async def query(prompt, options):
-        for message in _main_thread_calls(14):  # one short of the threshold
+        for message in _main_thread_calls(44):  # one short of the first position
             yield message
         (matcher,) = options.hooks["PostToolUse"]
         (hook,) = matcher.hooks
@@ -834,15 +839,16 @@ async def test_no_turn_notice_when_the_threshold_is_never_crossed(monkeypatch, t
     )
     assert raw.turn_notice is False
     assert raw.turn_notice_firings == 0
+    assert raw.main_thread_turns == 44
 
 
 async def test_a_fired_turn_notice_during_a_failed_attempt_still_reaches_attemptfailed(
     monkeypatch, tmp_path
 ):
-    developer = replace(DEVELOPER, max_turns=40)
+    developer = replace(DEVELOPER, max_turns=200)
 
     async def query(prompt, options):
-        for message in _main_thread_calls(15):
+        for message in _main_thread_calls(45):
             yield message
         (matcher,) = options.hooks["PostToolUse"]
         (hook,) = matcher.hooks
@@ -856,6 +862,22 @@ async def test_a_fired_turn_notice_during_a_failed_attempt_still_reaches_attempt
         )
     assert info.value.turn_notice is True
     assert info.value.turn_notice_firings == 1
+    assert info.value.main_thread_turns == 45
+
+
+async def test_main_thread_turns_is_carried_on_every_other_raise_site_too(monkeypatch, tmp_path):
+    # Acceptance criteria: written at every raise site, not only the `max_turns` one.
+    # `run ended without a result message` is the site with no `ResultMessage` at all.
+    async def query(prompt, options):
+        for message in _main_thread_calls(7):
+            yield message
+
+    monkeypatch.setattr(module, "query", query)
+    with pytest.raises(AttemptFailed) as info:
+        await ClaudeSdkRunner().run_once(
+            PJM, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
+        )
+    assert info.value.main_thread_turns == 7
 
 
 async def test_raw_result_carries_the_delivery_tool_emissions(monkeypatch, tmp_path):

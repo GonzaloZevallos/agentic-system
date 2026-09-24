@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from agentic.core.process.adapters.claude_sdk import hooks
+from agentic.core.process.domain import turn_notice
 from agentic.core.process.domain.roles import (
     DEVELOPER,
     DEVELOPER_INTEGRATOR,
@@ -302,35 +303,64 @@ def test_only_developer_roles_get_the_turn_notice_hook():
     assert "PostToolUse" in hooks.hooks_for(DEVELOPER_INTEGRATOR, CWD, None)
 
 
-async def test_the_turn_notice_hook_fires_at_the_threshold_and_carries_the_firing_index():
-    # Threshold 15 (`turn_notice.TURN_NOTICE_AT`): a `TurnCount` already at 15 (the
-    # stream loop's own write, never this hook's) fires on the very next event.
-    role = replace(DEVELOPER, max_turns=40)
+async def test_the_turn_notice_hook_fires_at_the_first_window_and_names_it():
+    # First position 45 (`turn_notice.TURN_NOTICE_AT`): a `TurnCount` already at 45 (the
+    # stream loop's own write, never this hook's) fires on the very next event, with
+    # window 1's own text.
+    role = replace(DEVELOPER, max_turns=200)
     fired = []
-    turns = hooks.TurnCount(value=15)
+    turns = hooks.TurnCount(value=45)
     matchers = hooks.hooks_for(role, CWD, None, on_notice=lambda: fired.append(1), turns=turns)
     payload = {"tool_name": "Bash", "tool_input": {}, "cwd": str(CWD)}
     (output,) = await call(matchers, "PostToolUse", payload)
     context = output["hookSpecificOutput"]["additionalContext"]
-    assert "#1" in context
+    assert context == turn_notice.notice_context(1)
     assert fired == [1]
 
 
-async def test_the_turn_notice_hook_re_fires_on_every_later_event_with_a_rising_index():
-    # No latch: unlike the deleted one-shot advisory, a second event past the
-    # threshold fires again, with the next firing index -- the invariant that no two
-    # firings of the same attempt are the identical message.
-    role = replace(DEVELOPER, max_turns=40)
-    turns = hooks.TurnCount(value=20)
+async def test_the_turn_notice_hook_stays_quiet_on_a_second_event_still_inside_the_same_window():
+    # The collapsing predicate's own point: unlike the deleted always-refiring
+    # advisory, a second `PostToolUse` event whose count has not crossed a *new*
+    # position must not fire again -- this is the mechanism that drops the firing count
+    # from 109 to at most one per position.
+    role = replace(DEVELOPER, max_turns=200)
+    turns = hooks.TurnCount(value=45)
     matchers = hooks.hooks_for(role, CWD, None, turns=turns)
     payload = {"tool_name": "Bash", "tool_input": {}, "cwd": str(CWD)}
     (first,) = await call(matchers, "PostToolUse", payload)
+    turns.value = 50  # still inside window 1 (45..64), no new position crossed
     (second,) = await call(matchers, "PostToolUse", payload)
-    first_context = first["hookSpecificOutput"]["additionalContext"]
-    second_context = second["hookSpecificOutput"]["additionalContext"]
-    assert "#1" in first_context
-    assert "#2" in second_context
-    assert first_context != second_context
+    assert first["hookSpecificOutput"]["additionalContext"] == turn_notice.notice_context(1)
+    assert second == {}
+
+
+async def test_the_turn_notice_hook_fires_again_when_the_second_window_is_reached():
+    role = replace(DEVELOPER, max_turns=200)
+    turns = hooks.TurnCount(value=45)
+    matchers = hooks.hooks_for(role, CWD, None, turns=turns)
+    payload = {"tool_name": "Bash", "tool_input": {}, "cwd": str(CWD)}
+    (first,) = await call(matchers, "PostToolUse", payload)
+    turns.value = 65
+    (second,) = await call(matchers, "PostToolUse", payload)
+    assert first["hookSpecificOutput"]["additionalContext"] == turn_notice.notice_context(1)
+    assert second["hookSpecificOutput"]["additionalContext"] == turn_notice.notice_context(2)
+
+
+async def test_the_turn_notice_hook_emits_one_message_when_both_windows_cross_at_once():
+    # The invariant this seam has to prove: a count that jumps from before the first
+    # position straight past the second (a text-only turn or a sub-agent tail can do
+    # this between two consecutive main-thread tool results) still gets one message,
+    # not two spent back to back on the same pair of events.
+    role = replace(DEVELOPER, max_turns=200)
+    fired = []
+    turns = hooks.TurnCount(value=70)
+    matchers = hooks.hooks_for(role, CWD, None, on_notice=lambda: fired.append(1), turns=turns)
+    payload = {"tool_name": "Bash", "tool_input": {}, "cwd": str(CWD)}
+    (output,) = await call(matchers, "PostToolUse", payload)
+    assert output["hookSpecificOutput"]["additionalContext"] == turn_notice.notice_context(2)
+    assert fired == [1]  # one firing, not two, even though both positions were crossed
+    (second,) = await call(matchers, "PostToolUse", payload)
+    assert second == {}  # both windows already spent by the one call above
 
 
 async def test_the_turn_notice_hook_still_ignores_a_sub_agents_own_event():
@@ -339,17 +369,17 @@ async def test_the_turn_notice_hook_still_ignores_a_sub_agents_own_event():
     # firing still checks it: a sub-agent's own `PostToolUse` is not this role's turn,
     # and injecting `additionalContext` there would land in the sub-agent's own
     # conversation, not the one the close-out is meant to reach -- even with the shared
-    # counter already past the threshold, this must stay quiet.
-    role = replace(DEVELOPER, max_turns=40)
-    turns = hooks.TurnCount(value=15)
+    # counter already past the first window, this must stay quiet.
+    role = replace(DEVELOPER, max_turns=200)
+    turns = hooks.TurnCount(value=45)
     matchers = hooks.hooks_for(role, CWD, None, turns=turns)
     payload = {"tool_name": "Bash", "tool_input": {}, "cwd": str(CWD), "agent_id": "sub-1"}
     assert await call(matchers, "PostToolUse", payload) == [{}]
 
 
-async def test_the_turn_notice_hook_is_quiet_before_the_threshold():
-    role = replace(DEVELOPER, max_turns=100)
-    turns = hooks.TurnCount(value=14)
+async def test_the_turn_notice_hook_is_quiet_before_the_first_threshold():
+    role = replace(DEVELOPER, max_turns=200)
+    turns = hooks.TurnCount(value=44)
     matchers = hooks.hooks_for(role, CWD, None, turns=turns)
     payload = {"tool_name": "Bash", "tool_input": {}, "cwd": str(CWD)}
     assert await call(matchers, "PostToolUse", payload) == [{}]

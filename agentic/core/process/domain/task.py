@@ -255,6 +255,13 @@ class Failure(TypedDict):
     # either. Absent on a failure recorded before this field existed, which reads
     # as `0`.
     presubmit_denials: NotRequired[int]
+    # `TurnCount.value` at the point this attempt broke, off `RawResult.main_thread_
+    # turns`/`AttemptFailed.main_thread_turns` (`domain/turn_notice.py`; ADR-0031,
+    # issue #117). Written at every attempt, cut as well as delivering, because a cut
+    # is the population that can refute the counted-quantity assumption `domain/
+    # turn_notice.py`'s docstring states. Absent on a failure recorded before this
+    # field existed, which reads as `0`.
+    main_thread_turns: NotRequired[int]
 
 
 class RoleRun(TypedDict):
@@ -357,6 +364,16 @@ class RoleRun(TypedDict):
     # invalid shape. Absent on a run recorded before this field existed, which reads
     # as `0`.
     presubmit_denials: NotRequired[int]
+    # `TurnCount.value` at the end of the delivering attempt, off `RawResult.main_
+    # thread_turns` (`domain/turn_notice.py`; ADR-0031, issue #117): the main-thread
+    # `AssistantMessage` count the notice's positions are stated in, the first record
+    # of that quantity kept past the attempt itself. `0` for a role the notice does not
+    # cover. No run-total fold like `turn_notice_firings` has: this field, and its
+    # `Failure.main_thread_turns` counterpart on every recorded failure, are each one
+    # attempt's own count, since it is a single cut attempt's relation to its own
+    # `max_turns` that can refute the counted-quantity assumption, not a sum across
+    # retries. Absent on a run recorded before this field existed.
+    main_thread_turns: NotRequired[int]
 
 
 class InterviewStats(TypedDict):
