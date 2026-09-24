@@ -37,9 +37,9 @@ here rather than left to how the SDK would combine two matchers of its own. A gu
 denial short-circuits the callback, so the presubmit never runs the product's checks
 over an input that is not even shaped right.
 
-The turn-budget notice (ADR-0004, seventh addendum, revised by its 2026-09-22
-addendum, issue #102) is a `PostToolUse` matcher, wired only for a role
-`domain.turn_notice.threshold_for` covers. It reads a count it never keeps itself:
+The turn-budget notice (ADR-0004, seventh addendum, revised by its 2026-09-22 addendum
+and recalibrated by ADR-0031, issue #117) is a `PostToolUse` matcher, wired only for a
+role `domain.turn_notice.threshold_for` covers. It reads a count it never keeps itself:
 `TurnCount`, one mutable holder per attempt, constructed and incremented by
 `ClaudeSdkRunner.run_once`'s own stream loop (the runner's main-thread
 `AssistantMessage` tally, `domain/turn_notice.py`'s own counted quantity) and passed
@@ -50,14 +50,20 @@ on the event, though, for a different reason than counting ever was — a sub-ag
 own `PostToolUse` is not this role's turn, and injecting `additionalContext` there
 would land in a sub-agent's own conversation, not the one the close-out is meant to
 reach, and would count as a firing this module's own calibrating constant is not
-about. Once the count reaches the role's threshold, every later main-thread call
-returns `additionalContext` too, each one carrying its own firing index
-(`domain/turn_notice.notice_context`) — a re-firing close-out window, not the
-one-shot advisory it replaces, because that advisory fired in every recorded
-`max_turns` cut and changed nothing (ADR-0004's revising addendum). Never a
-`permissionDecision`: `PostToolUseHookSpecificOutput` structurally carries none
-(ADR-0011, fourth addendum), so this can only ever add context, never narrow what the
-role may run.
+about. Each call asks `domain.turn_notice.windows_crossed(role, count)` how many of
+the role's positions the count has crossed so far, and compares that against `fired`,
+its own closure state of how many it has already reported: only a rising value emits
+`additionalContext` (`domain/turn_notice.notice_context` of the newly-crossed
+position), and `fired` jumps straight to that value rather than by one — the
+collapsing predicate that keeps a count which jumped past both positions between two
+consecutive main-thread tool results (a text-only turn or a sub-agent tail advances
+the count with no `PostToolUse` event of its own) from spending both windows on the
+same pair of events. At most one message per event, and at most two per attempt: a
+close-out window that fires when it opens, not a re-firing advisory that fired on
+almost every main-thread tool result and changed nothing (issue #117's own evidence,
+GH-112). Never a `permissionDecision`: `PostToolUseHookSpecificOutput` structurally
+carries none (ADR-0011, fourth addendum), so this can only ever add context, never
+narrow what the role may run.
 """
 
 from __future__ import annotations
@@ -250,40 +256,42 @@ def _turn_notice(
     """The `PostToolUse` callback that fires the live turn-budget notice, or `None` for
     a role `turn_notice.threshold_for` does not cover. `turns` is read, never
     incremented, here (`TurnCount`'s own docstring: the stream loop owns the write) --
-    that is the counter the threshold is evaluated against, main-thread-only by
+    that is the counter `windows_crossed` is evaluated against, main-thread-only by
     construction. Firing itself stays gated to a main-thread event too
     (`data.get("agent_id") is None`): the counter no longer needs the filter to stay
     correct, but a sub-agent's own `PostToolUse` is not this role's turn, and its own
-    conversation is not where a close-out directive belongs, or where a firing this
-    constant is calibrated against should be counted from. `firings` is this
-    callback's own closure state, distinct from `turns.value`: how many times *this*
-    hook has fired this attempt, which is what `notice_context` reports as each
-    firing's own index. No latch: once `turns.value` reaches the threshold, every
-    later main-thread `PostToolUse` event fires again, each with its own index -- the
-    re-firing close-out window `domain/turn_notice.py`'s docstring argues for,
-    replacing the one-shot advisory that fired in every recorded cut and changed
-    nothing."""
-    threshold = turn_notice.threshold_for(role)
-    if threshold is None:
+    conversation is not where a close-out directive belongs.
+
+    `fired` is this callback's own closure state, distinct from `turns.value`: how many
+    of the role's windows have already been reported this attempt. Each call asks
+    `windows_crossed` how many are at or below the current count, and fires -- exactly
+    one `additionalContext`, `notice_context` of the newly-crossed position -- only when
+    that is strictly more than `fired`, then sets `fired` to it directly (never `fired +
+    1`): the collapsing predicate that keeps a count which jumped past both windows
+    between two consecutive main-thread tool results from spending both on the same
+    pair of events. No third mechanism recomputes this decision -- `windows_crossed`
+    alone decides how many windows a count has crossed."""
+    if turn_notice.threshold_for(role) is None:
         return None
-    firings = 0
+    fired = 0
 
     async def hook(
         data: HookInput, tool_use_id: str | None, context: HookContext
     ) -> HookJSONOutput:
-        nonlocal firings
+        nonlocal fired
         if data.get("agent_id") is not None:
             return {}  # a sub-agent's own call: not this role's turn, not its context
         count = turns.value if turns is not None else 0
-        if not turn_notice.should_notice(role, count):
+        crossed = turn_notice.windows_crossed(role, count)
+        if crossed <= fired:
             return {}
-        firings += 1
+        fired = crossed
         if on_notice is not None:
             on_notice()
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PostToolUse",
-                "additionalContext": turn_notice.notice_context(firings),
+                "additionalContext": turn_notice.notice_context(crossed),
             }
         }
 
