@@ -614,7 +614,11 @@ def floor_lock_disagreements(
         if _version_tuple(locked) < _version_tuple(floor):
             violations.append(
                 FLOOR_UNSATISFIED.format(
-                    name=name, floor=floor, locked=locked, pyproject=pyproject_label, lock=lock_label
+                    name=name,
+                    floor=floor,
+                    locked=locked,
+                    pyproject=pyproject_label,
+                    lock=lock_label,
                 )
             )
             continue
