@@ -71,3 +71,40 @@ def _documented() -> dict[str, set[str]]:
         by_prom[_prom_name(dotted, unit_col)] = labels
         previous = labels
     return by_prom
+
+
+# The heading and line shape of the "unread" list (ADR-0028, subtask `dashboard-rows`):
+# one `` - `agentic.x.y`: <motivo> `` per metric the dashboard's panels never query.
+NOT_READ_HEADING = "## Métricas emitidas y no leídas"
+NOT_READ_LINE = re.compile(r"^-\s*`(agentic\.[a-z_.]+)`:\s*(\S.*)$", re.M)
+
+
+def _not_read() -> set[str]:
+    """Prometheus metric names listed under `NOT_READ_HEADING`, one per line. Each
+    dotted name's own unit -- read from the metric table, the same source
+    `_documented()` reads -- resolves its Prometheus name through the same
+    `_prom_name()`, so this function can never disagree with `_documented()` about
+    what a given metric is called; a name this function returns that `_documented()`
+    does not also produce is a name `_prom_name()` alone would already have caught,
+    never a second, independently-typed spelling of the same metric."""
+    text = README.read_text(encoding="utf-8")
+    if NOT_READ_HEADING not in text:
+        raise AssertionError(f"{NOT_READ_HEADING!r} heading not found in {README}")
+    section = text.split(NOT_READ_HEADING, 1)[1]
+    section = re.split(r"\n##\s", section, maxsplit=1)[0]
+    lines = NOT_READ_LINE.findall(section)
+    if not lines:
+        raise AssertionError(f"no `- `agentic.x.y`: <motivo>` line under {NOT_READ_HEADING!r}")
+    units_by_dotted: dict[str, str] = {}
+    for dotted, _label_col, _value_col, unit_col in ROW.findall(text):
+        units_by_dotted[dotted] = unit_col
+    result: set[str] = set()
+    for dotted, motive in lines:
+        if not motive.strip():
+            raise AssertionError(f"empty motivo for {dotted!r} under {NOT_READ_HEADING!r}")
+        if dotted not in units_by_dotted:
+            raise AssertionError(
+                f"{dotted!r} under {NOT_READ_HEADING!r} is not a row of the metric table"
+            )
+        result.add(_prom_name(dotted, units_by_dotted[dotted]))
+    return result

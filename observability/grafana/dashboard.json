@@ -11,7 +11,7 @@
   ],
   "title": "Sistema agéntico",
   "uid": "agentic-system",
-  "description": "Métricas del sistema (glosario de Medición): qué cuesta una tarea terminada y cuánto de eso es retrabajo. Una muestra por tarea y por corrida de rol. Cada label system_version es un SHA del repo del sistema; prompts_fingerprint, el set de prompts que corrió.",
+  "description": "Métricas del sistema (glosario de Medición): qué cuesta una tarea terminada y cuánto de eso es retrabajo. Una muestra por tarea y por corrida de rol. Cada label system_version es un SHA del repo del sistema; prompts_fingerprint, el set de prompts que corrió. Desde ADR-0028, system_baseline (un hito bl-YYYY-MM-DD que el humano declara) es el eje de comparación de las filas Scorecard, Experimentos y Diagnóstico; system_version sigue existiendo para trazar la corrida y es un filtro, nunca el eje de todo panel.",
   "tags": [
     "agentic-system"
   ],
@@ -48,6 +48,61 @@
             "$__all"
           ]
         }
+      },
+      {
+        "name": "baseline",
+        "label": "Línea de base",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "label_values(agentic_role_cost_usd{product=~\"$product\", system_baseline!=\"untagged\"}, system_baseline)",
+        "refresh": 2,
+        "includeAll": false,
+        "multi": false,
+        "current": {
+          "selected": true,
+          "text": "",
+          "value": ""
+        }
+      },
+      {
+        "name": "baseline_prev",
+        "label": "Línea de base anterior",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "label_values(agentic_role_cost_usd{product=~\"$product\", system_baseline!=\"untagged\"}, system_baseline)",
+        "refresh": 2,
+        "includeAll": false,
+        "multi": false,
+        "current": {
+          "selected": true,
+          "text": "",
+          "value": ""
+        }
+      },
+      {
+        "name": "arm",
+        "label": "Brazo",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": "label_values(agentic_role_cost_usd{product=~\"$product\"}, arm)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": {
+          "selected": true,
+          "text": [],
+          "value": []
+        },
+        "allValue": ".*"
       },
       {
         "name": "version",
@@ -99,6 +154,546 @@
   },
   "panels": [
     {
+      "type": "row",
+      "title": "Scorecard",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 200,
+      "type": "stat",
+      "title": "Autonomía — $baseline vs $baseline_prev",
+      "description": "Entregas fusionadas limpias (outcome=\"merged\") sobre entregas juzgadas, mismo family agentic_delivery_outcome en numerador y denominador (así que el denominador es exactamente judged, como scorecard.build). Línea de base del documento: la muestra nombra la corrida que agentic close juzgó. Target B es la diferencia contra $baseline_prev, mismo cálculo de cada lado.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(sum_over_time(agentic_delivery_outcome{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", outcome=\"merged\"}[$__range])) / sum(sum_over_time(agentic_delivery_outcome{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range]))",
+          "legendFormat": "",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "expr": "(sum(sum_over_time(agentic_delivery_outcome{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", outcome=\"merged\"}[$__range])) / sum(sum_over_time(agentic_delivery_outcome{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range]))) - (sum(sum_over_time(agentic_delivery_outcome{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline_prev\", outcome=\"merged\"}[$__range])) / sum(sum_over_time(agentic_delivery_outcome{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline_prev\"}[$__range])))",
+          "legendFormat": "delta",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.5
+              },
+              {
+                "color": "green",
+                "value": 0.8
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 201,
+      "type": "stat",
+      "title": "Fallos propios por tarea — $baseline vs $baseline_prev",
+      "description": "agentic_role_failures excluyendo account_limit y upstream (ADR-0029; misma alternancia que scorecard.EXTERNAL_FAILURE_REASONS, nunca reason!=\"limit\") sobre agentic_task_finished con task_status!~\"waiting_on_human|crashed\": el denominador es Corridas terminadas. Línea de base de la corrida. Target B es la diferencia contra $baseline_prev.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 1,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(sum_over_time(agentic_role_failures{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", reason!~\"account_limit|upstream\"}[$__range])) / sum(sum_over_time(agentic_task_finished{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", task_status!~\"waiting_on_human|crashed\"}[$__range]))",
+          "legendFormat": "",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "expr": "(sum(sum_over_time(agentic_role_failures{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", reason!~\"account_limit|upstream\"}[$__range])) / sum(sum_over_time(agentic_task_finished{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", task_status!~\"waiting_on_human|crashed\"}[$__range]))) - (sum(sum_over_time(agentic_role_failures{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline_prev\", reason!~\"account_limit|upstream\"}[$__range])) / sum(sum_over_time(agentic_task_finished{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline_prev\", task_status!~\"waiting_on_human|crashed\"}[$__range])))",
+          "legendFormat": "delta",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.1
+              },
+              {
+                "color": "red",
+                "value": 0.3
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 202,
+      "type": "stat",
+      "title": "Costo por tarea terminada — $baseline vs $baseline_prev",
+      "description": "Promedio en dólares de agentic_task_cost_usd sobre tareas terminadas (task_status!~\"waiting_on_human|crashed\"), línea de base de la corrida. No es \"costo por entrega\": agentic.delivery.* no lleva costo y agentic.task.cost_usd no lleva un label judged, así que unir las dos por tarea pediría un id de tarea que ADR-0008 prohíbe; agentic eval compare es la única lectura de costo por entrega. Target B es la diferencia contra $baseline_prev.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 1,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(sum_over_time(agentic_task_cost_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", task_status!~\"waiting_on_human|crashed\"}[$__range])) / sum(count_over_time(agentic_task_cost_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", task_status!~\"waiting_on_human|crashed\"}[$__range]))",
+          "legendFormat": "",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "expr": "(sum(sum_over_time(agentic_task_cost_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", task_status!~\"waiting_on_human|crashed\"}[$__range])) / sum(count_over_time(agentic_task_cost_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", task_status!~\"waiting_on_human|crashed\"}[$__range]))) - (sum(sum_over_time(agentic_task_cost_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline_prev\", task_status!~\"waiting_on_human|crashed\"}[$__range])) / sum(count_over_time(agentic_task_cost_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline_prev\", task_status!~\"waiting_on_human|crashed\"}[$__range])))",
+          "legendFormat": "delta",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.1
+              },
+              {
+                "color": "red",
+                "value": 0.3
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 203,
+      "type": "stat",
+      "title": "Retrabajo — $baseline vs $baseline_prev",
+      "description": "agentic_task_rework_usd sobre el conteo de agentic_task_finished con task_status!~\"waiting_on_human|crashed\" (rework_per_task de scorecard.build: el promedio de dólares de retrabajo por Corrida terminada, nunca la parte del costo total que es retrabajo -- eso lo mide el panel de Diagnóstico \"Retrabajo\"), línea de base de la corrida: el denominador es la cantidad de Corridas terminadas. Target B es la diferencia contra $baseline_prev.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 1,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(sum_over_time(agentic_task_rework_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range])) / sum(sum_over_time(agentic_task_finished{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", task_status!~\"waiting_on_human|crashed\"}[$__range]))",
+          "legendFormat": "",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "expr": "(sum(sum_over_time(agentic_task_rework_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range])) / sum(sum_over_time(agentic_task_finished{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", task_status!~\"waiting_on_human|crashed\"}[$__range]))) - (sum(sum_over_time(agentic_task_rework_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline_prev\"}[$__range])) / sum(sum_over_time(agentic_task_finished{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline_prev\", task_status!~\"waiting_on_human|crashed\"}[$__range])))",
+          "legendFormat": "delta",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 204,
+      "type": "stat",
+      "title": "Tareas terminadas y entregas juzgadas — $baseline",
+      "description": "El n del scorecard, línea de base de la corrida para la primera serie (agentic_task_finished, task_status!~\"waiting_on_human|crashed\") y línea de base del documento para la segunda (agentic_delivery_outcome, denominador judged). Sin alerta hasta que una línea de base junte diez tareas terminadas (ADR-0028, decisión 4).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 24,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(count_over_time(agentic_task_finished{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", task_status!~\"waiting_on_human|crashed\"}[$__range]))",
+          "legendFormat": "terminadas",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "expr": "sum(sum_over_time(agentic_delivery_outcome{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range]))",
+          "legendFormat": "juzgadas",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      }
+    },
+    {
+      "type": "row",
+      "title": "Experimentos",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 210,
+      "type": "bargauge",
+      "title": "Autonomía por brazo — dentro de $baseline",
+      "description": "Igual que el panel de Scorecard, agrupado by (arm) dentro de $baseline (línea de base del documento): denominador judged de agentic_delivery_outcome, por brazo.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 10,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (arm) (sum_over_time(agentic_delivery_outcome{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", arm=~\"$arm\", outcome=\"merged\"}[$__range])) / sum by (arm) (sum_over_time(agentic_delivery_outcome{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", arm=~\"$arm\"}[$__range]))",
+          "legendFormat": "{{arm}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "min": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "namePlacement": "auto",
+        "sizing": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 211,
+      "type": "bargauge",
+      "title": "Fallos propios por tarea por brazo — dentro de $baseline",
+      "description": "Igual que el panel de Scorecard (reason!~\"account_limit|upstream\", ADR-0029), agrupado by (arm) dentro de $baseline: denominador Corridas terminadas de agentic_task_finished, línea de base de la corrida, por brazo.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 10,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (arm) (sum_over_time(agentic_role_failures{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", arm=~\"$arm\", reason!~\"account_limit|upstream\"}[$__range])) / sum by (arm) (sum_over_time(agentic_task_finished{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", arm=~\"$arm\", task_status!~\"waiting_on_human|crashed\"}[$__range]))",
+          "legendFormat": "{{arm}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "min": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "namePlacement": "auto",
+        "sizing": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 212,
+      "type": "bargauge",
+      "title": "Costo por tarea terminada por brazo — dentro de $baseline",
+      "description": "Igual que el panel de Scorecard, agrupado by (arm) dentro de $baseline: denominador tareas terminadas de agentic_task_cost_usd, línea de base de la corrida, por brazo.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 10,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (arm) (sum_over_time(agentic_task_cost_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", arm=~\"$arm\", task_status!~\"waiting_on_human|crashed\"}[$__range])) / sum by (arm) (count_over_time(agentic_task_cost_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", arm=~\"$arm\", task_status!~\"waiting_on_human|crashed\"}[$__range]))",
+          "legendFormat": "{{arm}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "min": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "namePlacement": "auto",
+        "sizing": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 213,
+      "type": "bargauge",
+      "title": "Retrabajo por brazo — dentro de $baseline",
+      "description": "Igual que el panel de Scorecard (rework_per_task de scorecard.build: dólares de retrabajo sobre la cantidad de Corridas terminadas, agentic_task_rework_usd sobre el conteo de agentic_task_finished con task_status!~\"waiting_on_human|crashed\"), agrupado by (arm) dentro de $baseline, línea de base de la corrida, por brazo.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 10,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (arm) (sum_over_time(agentic_task_rework_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", arm=~\"$arm\"}[$__range])) / sum by (arm) (sum_over_time(agentic_task_finished{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", arm=~\"$arm\", task_status!~\"waiting_on_human|crashed\"}[$__range]))",
+          "legendFormat": "{{arm}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "min": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "namePlacement": "auto",
+        "sizing": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Diagnóstico",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 14,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
       "id": 1,
       "type": "stat",
       "title": "Costo por tarea terminada",
@@ -109,14 +704,14 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 0,
+        "y": 15,
         "w": 6,
         "h": 4
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(sum_over_time(agentic_task_cost_usd{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[$__range])) / sum(count_over_time(agentic_task_cost_usd{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
+          "expr": "sum(sum_over_time(agentic_task_cost_usd{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", system_baseline=~\"$baseline\", task_type=~\"$type\"}[$__range])) / sum(count_over_time(agentic_task_cost_usd{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", system_baseline=~\"$baseline\", task_type=~\"$type\"}[$__range]))",
           "legendFormat": "",
           "instant": true
         }
@@ -154,14 +749,14 @@
       },
       "gridPos": {
         "x": 6,
-        "y": 0,
+        "y": 15,
         "w": 6,
         "h": 4
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(sum_over_time(agentic_task_rework_usd{product=~\"$product\", system_version=~\"$version\", task_type=~\"$type\"}[$__range])) / sum(sum_over_time(agentic_task_cost_usd{product=~\"$product\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
+          "expr": "sum(sum_over_time(agentic_task_rework_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", task_type=~\"$type\"}[$__range])) / sum(sum_over_time(agentic_task_cost_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", task_type=~\"$type\"}[$__range]))",
           "legendFormat": "",
           "instant": true
         }
@@ -212,14 +807,14 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 0,
+        "y": 15,
         "w": 6,
         "h": 4
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(count_over_time(agentic_task_finished{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))",
+          "expr": "sum(count_over_time(agentic_task_finished{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", system_baseline=~\"$baseline\", task_type=~\"$type\"}[$__range]))",
           "legendFormat": "",
           "instant": true
         }
@@ -257,14 +852,14 @@
       },
       "gridPos": {
         "x": 18,
-        "y": 0,
+        "y": 15,
         "w": 6,
         "h": 4
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(sum_over_time(agentic_task_paused{product=~\"$product\", system_version=~\"$version\"}[$__range]))",
+          "expr": "sum(sum_over_time(agentic_task_paused{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range]))",
           "legendFormat": "",
           "instant": true
         }
@@ -302,7 +897,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 4,
+        "y": 19,
         "w": 24,
         "h": 8
       },
@@ -311,37 +906,37 @@
           "refId": "A",
           "format": "table",
           "instant": true,
-          "expr": "sum by (system_version) (sum_over_time(agentic_task_cost_usd{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[$__range])) / sum by (system_version) (count_over_time(agentic_task_cost_usd{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))"
+          "expr": "sum by (system_baseline) (sum_over_time(agentic_task_cost_usd{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", system_baseline=~\"$baseline\", task_type=~\"$type\"}[$__range])) / sum by (system_baseline) (count_over_time(agentic_task_cost_usd{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", system_baseline=~\"$baseline\", task_type=~\"$type\"}[$__range]))"
         },
         {
           "refId": "B",
           "format": "table",
           "instant": true,
-          "expr": "sum by (system_version) (sum_over_time(agentic_task_rework_usd{product=~\"$product\", system_version=~\"$version\", task_type=~\"$type\"}[$__range])) / sum by (system_version) (sum_over_time(agentic_task_cost_usd{product=~\"$product\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))"
+          "expr": "sum by (system_baseline) (sum_over_time(agentic_task_rework_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", task_type=~\"$type\"}[$__range])) / sum by (system_baseline) (sum_over_time(agentic_task_cost_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", task_type=~\"$type\"}[$__range]))"
         },
         {
           "refId": "C",
           "format": "table",
           "instant": true,
-          "expr": "sum by (system_version) (count_over_time(agentic_task_finished{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))"
+          "expr": "sum by (system_baseline) (count_over_time(agentic_task_finished{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", system_baseline=~\"$baseline\", task_type=~\"$type\"}[$__range]))"
         },
         {
           "refId": "D",
           "format": "table",
           "instant": true,
-          "expr": "sum by (system_version) (sum_over_time(agentic_task_paused{product=~\"$product\", system_version=~\"$version\"}[$__range]))"
+          "expr": "sum by (system_baseline) (sum_over_time(agentic_task_paused{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range]))"
         },
         {
           "refId": "E",
           "format": "table",
           "instant": true,
-          "expr": "sum by (system_version) (sum_over_time(agentic_task_invocations{product=~\"$product\", system_version=~\"$version\"}[$__range])) / sum by (system_version) (sum_over_time(agentic_task_finished{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[$__range]))"
+          "expr": "sum by (system_baseline) (sum_over_time(agentic_task_invocations{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range])) / sum by (system_baseline) (sum_over_time(agentic_task_finished{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", system_baseline=~\"$baseline\", task_type=~\"$type\"}[$__range]))"
         },
         {
           "refId": "F",
           "format": "table",
           "instant": true,
-          "expr": "sum by (system_version) (sum_over_time(agentic_task_paused{product=~\"$product\", system_version=~\"$version\", escalation_class=\"unmergeable\"}[$__range]))"
+          "expr": "sum by (system_baseline) (sum_over_time(agentic_task_paused{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", escalation_class=\"unmergeable\"}[$__range]))"
         }
       ],
       "transformations": [
@@ -356,13 +951,13 @@
               "Time": true
             },
             "renameByName": {
-              "system_version": "Versión",
               "Value #A": "USD por tarea",
               "Value #B": "Retrabajo",
               "Value #C": "Terminadas",
               "Value #D": "Escaladas",
               "Value #E": "Invocaciones por tarea",
-              "Value #F": "Inmergeables"
+              "Value #F": "Inmergeables",
+              "system_baseline": "Versión"
             }
           }
         },
@@ -472,15 +1067,15 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 12,
+        "y": 27,
         "w": 12,
         "h": 9
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version) (sum_over_time(agentic_task_cost_usd{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[1d])) / sum by (system_version) (count_over_time(agentic_task_cost_usd{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", task_type=~\"$type\"}[1d]))",
-          "legendFormat": "{{system_version}}"
+          "expr": "sum by (system_baseline) (sum_over_time(agentic_task_cost_usd{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", system_baseline=~\"$baseline\", task_type=~\"$type\"}[1d])) / sum by (system_baseline) (count_over_time(agentic_task_cost_usd{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", system_baseline=~\"$baseline\", task_type=~\"$type\"}[1d]))",
+          "legendFormat": "{{system_baseline}}"
         }
       ],
       "fieldConfig": {
@@ -526,15 +1121,15 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 12,
+        "y": 27,
         "w": 12,
         "h": 9
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version) (sum_over_time(agentic_task_rework_usd{product=~\"$product\", system_version=~\"$version\", task_type=~\"$type\"}[1d])) / sum by (system_version) (sum_over_time(agentic_task_cost_usd{product=~\"$product\", system_version=~\"$version\", task_type=~\"$type\"}[1d]))",
-          "legendFormat": "{{system_version}}"
+          "expr": "sum by (system_baseline) (sum_over_time(agentic_task_rework_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", task_type=~\"$type\"}[1d])) / sum by (system_baseline) (sum_over_time(agentic_task_cost_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", task_type=~\"$type\"}[1d]))",
+          "legendFormat": "{{system_baseline}}"
         }
       ],
       "fieldConfig": {
@@ -581,21 +1176,21 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 21,
+        "y": 36,
         "w": 12,
         "h": 9
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version, task_status) (count_over_time(agentic_task_finished{product=~\"$product\", system_version=~\"$version\", task_type=~\"$type\"}[1w]))",
-          "legendFormat": "{{task_status}} {{system_version}}",
+          "expr": "sum by (system_baseline, task_status) (count_over_time(agentic_task_finished{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", task_type=~\"$type\"}[1w]))",
+          "legendFormat": "{{task_status}} {{system_baseline}}",
           "interval": "1w"
         },
         {
           "refId": "B",
-          "expr": "sum by (system_version) (sum_over_time(agentic_task_paused{product=~\"$product\", system_version=~\"$version\"}[1w]))",
-          "legendFormat": "escalada {{system_version}}",
+          "expr": "sum by (system_baseline) (sum_over_time(agentic_task_paused{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[1w]))",
+          "legendFormat": "escalada {{system_baseline}}",
           "interval": "1w"
         }
       ],
@@ -675,21 +1270,21 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 21,
+        "y": 36,
         "w": 12,
         "h": 9
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version, role) (sum_over_time(agentic_role_run_duration_seconds{product=~\"$product\", system_version=~\"$version\"}[$__range])) / sum by (system_version, role) (count_over_time(agentic_role_run_duration_seconds{product=~\"$product\", system_version=~\"$version\"}[$__range]))",
-          "legendFormat": "corrida {{role}} {{system_version}}",
+          "expr": "sum by (system_baseline, role) (sum_over_time(agentic_role_run_duration_seconds{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range])) / sum by (system_baseline, role) (count_over_time(agentic_role_run_duration_seconds{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range]))",
+          "legendFormat": "corrida {{role}} {{system_baseline}}",
           "instant": true
         },
         {
           "refId": "B",
-          "expr": "sum by (system_version, role) (sum_over_time(agentic_role_queue_wait_seconds{product=~\"$product\", system_version=~\"$version\"}[$__range])) / sum by (system_version, role) (count_over_time(agentic_role_queue_wait_seconds{product=~\"$product\", system_version=~\"$version\"}[$__range]))",
-          "legendFormat": "espera {{role}} {{system_version}}",
+          "expr": "sum by (system_baseline, role) (sum_over_time(agentic_role_queue_wait_seconds{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range])) / sum by (system_baseline, role) (count_over_time(agentic_role_queue_wait_seconds{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range]))",
+          "legendFormat": "espera {{role}} {{system_baseline}}",
           "instant": true
         }
       ],
@@ -731,14 +1326,14 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 30,
+        "y": 45,
         "w": 24,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version, role, model, rework) (sum_over_time(agentic_role_cost_usd{product=~\"$product\", system_version=~\"$version\"}[$__range]))",
+          "expr": "sum by (system_baseline, role, model, rework) (sum_over_time(agentic_role_cost_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range]))",
           "format": "table",
           "instant": true
         }
@@ -810,15 +1405,15 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 38,
+        "y": 53,
         "w": 12,
         "h": 9
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version, phase) (sum_over_time(agentic_role_cost_usd{product=~\"$product\", system_version=~\"$version\"}[1w]))",
-          "legendFormat": "{{phase}} {{system_version}}",
+          "expr": "sum by (system_baseline, phase) (sum_over_time(agentic_role_cost_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[1w]))",
+          "legendFormat": "{{phase}} {{system_baseline}}",
           "interval": "1w"
         }
       ],
@@ -867,15 +1462,15 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 38,
+        "y": 53,
         "w": 12,
         "h": 9
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version, role_slug) (sum_over_time(agentic_role_cost_usd{product=~\"$product\", system_version=~\"$version\"}[1w]))",
-          "legendFormat": "{{role_slug}} {{system_version}}",
+          "expr": "sum by (system_baseline, role_slug) (sum_over_time(agentic_role_cost_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[1w]))",
+          "legendFormat": "{{role_slug}} {{system_baseline}}",
           "interval": "1w"
         }
       ],
@@ -924,15 +1519,15 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 47,
+        "y": 62,
         "w": 12,
         "h": 9
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version, phase) (sum_over_time(agentic_role_run_duration_seconds{product=~\"$product\", system_version=~\"$version\"}[1w]))",
-          "legendFormat": "{{phase}} {{system_version}}",
+          "expr": "sum by (system_baseline, phase) (sum_over_time(agentic_role_run_duration_seconds{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[1w]))",
+          "legendFormat": "{{phase}} {{system_baseline}}",
           "interval": "1w"
         }
       ],
@@ -981,15 +1576,15 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 47,
+        "y": 62,
         "w": 12,
         "h": 9
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version, role_slug) (sum_over_time(agentic_role_run_duration_seconds{product=~\"$product\", system_version=~\"$version\"}[1w]))",
-          "legendFormat": "{{role_slug}} {{system_version}}",
+          "expr": "sum by (system_baseline, role_slug) (sum_over_time(agentic_role_run_duration_seconds{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[1w]))",
+          "legendFormat": "{{role_slug}} {{system_baseline}}",
           "interval": "1w"
         }
       ],
@@ -1038,14 +1633,14 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 56,
+        "y": 71,
         "w": 12,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version, role, model) (sum_over_time(agentic_role_tokens{product=~\"$product\", system_version=~\"$version\"}[$__range])) / sum by (system_version, role, model) (sum_over_time(agentic_role_turns{product=~\"$product\", system_version=~\"$version\"}[$__range]))",
+          "expr": "sum by (system_baseline, role, model) (sum_over_time(agentic_role_tokens{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range])) / sum by (system_baseline, role, model) (sum_over_time(agentic_role_turns{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range]))",
           "format": "table",
           "instant": true
         }
@@ -1112,14 +1707,14 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 56,
+        "y": 71,
         "w": 12,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version, role, model) (sum_over_time(agentic_role_tokens{product=~\"$product\", system_version=~\"$version\", kind=\"cache_read\"}[$__range])) / sum by (system_version, role, model) (sum_over_time(agentic_role_tokens{product=~\"$product\", system_version=~\"$version\"}[$__range]))",
+          "expr": "sum by (system_baseline, role, model) (sum_over_time(agentic_role_tokens{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", kind=\"cache_read\"}[$__range])) / sum by (system_baseline, role, model) (sum_over_time(agentic_role_tokens{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range]))",
           "format": "table",
           "instant": true
         }
@@ -1190,14 +1785,14 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 64,
+        "y": 79,
         "w": 12,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version, role, model) (sum_over_time(agentic_role_cost_usd{product=~\"$product\", system_version=~\"$version\", model!=\"\"}[$__range])) / (sum by (system_version, role, model) (sum_over_time(agentic_role_tokens{product=~\"$product\", system_version=~\"$version\", kind=\"output\"}[$__range])) / 1000)",
+          "expr": "sum by (system_baseline, role, model) (sum_over_time(agentic_role_cost_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", model!=\"\"}[$__range])) / (sum by (system_baseline, role, model) (sum_over_time(agentic_role_tokens{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", kind=\"output\"}[$__range])) / 1000)",
           "format": "table",
           "instant": true
         }
@@ -1268,14 +1863,14 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 64,
+        "y": 79,
         "w": 12,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version, role, tool) (sum_over_time(agentic_role_tool_calls{product=~\"$product\", system_version=~\"$version\"}[1w]))",
+          "expr": "sum by (system_baseline, role, tool) (sum_over_time(agentic_role_tool_calls{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[1w]))",
           "legendFormat": "{{tool}} {{role}}",
           "interval": "1w"
         }
@@ -1325,14 +1920,14 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 72,
+        "y": 87,
         "w": 24,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version, severity, category) (sum_over_time(agentic_review_findings{product=~\"$product\", system_version=~\"$version\"}[$__range]))",
+          "expr": "sum by (system_baseline, severity, category) (sum_over_time(agentic_review_findings{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range]))",
           "format": "table",
           "instant": true
         }
@@ -1349,7 +1944,7 @@
               "product": "Producto",
               "severity": "Severidad",
               "category": "Categoría",
-              "system_version": "Versión"
+              "system_baseline": "Versión"
             }
           }
         },
@@ -1388,14 +1983,14 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 80,
+        "y": 95,
         "w": 12,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version, check) (sum_over_time(agentic_presubmit_checks{product=~\"$product\", system_version=~\"$version\", result=\"red\", final=\"true\"}[1w]))",
+          "expr": "sum by (system_baseline, check) (sum_over_time(agentic_presubmit_checks{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\", result=\"red\", final=\"true\"}[1w]))",
           "legendFormat": "{{check}}",
           "interval": "1w"
         }
@@ -1445,14 +2040,14 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 80,
+        "y": 95,
         "w": 12,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version, reason) (sum_over_time(agentic_role_failures{product=~\"$product\", system_version=~\"$version\"}[1w]))",
+          "expr": "sum by (system_baseline, reason) (sum_over_time(agentic_role_failures{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[1w]))",
           "legendFormat": "{{reason}}",
           "interval": "1w"
         }
@@ -1502,14 +2097,14 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 88,
+        "y": 103,
         "w": 12,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version, interview) (sum_over_time(agentic_interview_rounds{product=~\"$product\", system_version=~\"$version\"}[$__range])) / sum by (system_version, interview) (count_over_time(agentic_interview_rounds{product=~\"$product\", system_version=~\"$version\"}[$__range]))",
+          "expr": "sum by (system_baseline, interview) (sum_over_time(agentic_interview_rounds{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range])) / sum by (system_baseline, interview) (count_over_time(agentic_interview_rounds{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range]))",
           "legendFormat": "{{interview}}",
           "instant": true
         }
@@ -1552,14 +2147,14 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 88,
+        "y": 103,
         "w": 12,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version, interview, to) (sum_over_time(agentic_interview_questions{product=~\"$product\", system_version=~\"$version\"}[1w]))",
+          "expr": "sum by (system_baseline, interview, to) (sum_over_time(agentic_interview_questions{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[1w]))",
           "legendFormat": "{{to}} {{interview}}",
           "interval": "1w"
         }
@@ -1609,15 +2204,15 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 96,
+        "y": 111,
         "w": 12,
         "h": 9
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version, escalation_class) (sum_over_time(agentic_task_paused{product=~\"$product\", system_version=~\"$version\"}[1w]))",
-          "legendFormat": "{{escalation_class}} {{system_version}}",
+          "expr": "sum by (system_baseline, escalation_class) (sum_over_time(agentic_task_paused{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[1w]))",
+          "legendFormat": "{{escalation_class}} {{system_baseline}}",
           "interval": "1w"
         }
       ],
@@ -1666,15 +2261,15 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 96,
+        "y": 111,
         "w": 12,
         "h": 9
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version) (sum_over_time(agentic_task_invocations{product=~\"$product\", system_version=~\"$version\"}[$__range])) / sum by (system_version) (sum_over_time(agentic_task_finished{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\"}[$__range]))",
-          "legendFormat": "{{system_version}}",
+          "expr": "sum by (system_baseline) (sum_over_time(agentic_task_invocations{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range])) / sum by (system_baseline) (sum_over_time(agentic_task_finished{product=~\"$product\", task_status!~\"waiting_on_human|crashed\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range]))",
+          "legendFormat": "{{system_baseline}}",
           "instant": true
         }
       ],
@@ -1701,6 +2296,312 @@
       }
     },
     {
+      "id": 56,
+      "type": "barchart",
+      "title": "Entregas por resultado",
+      "description": "Veredicto del humano sobre el pull request de cada tarea (`agentic.delivery.outcome`, `agentic close --issue N`), apilado por `outcome`. La muestra queda fechada al CIERRE, nunca a la entrega: una versión que salió ayer puede mostrar cero entregas mientras su costo ya está lleno, y una ventana cerrada cuenta los merges de esta semana contra versiones de hace tres. Un squash merge con edición por la UI no deja commit propio en la rama y lee `merged`: la serie subreporta `merged_with_changes` por construcción. Documentos anteriores a esta tarea llevan `system_version=\"unknown\"`, que `$version` no ofrece: solo se ven bajo All.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 128,
+        "w": 12,
+        "h": 8
+      },
+      "options": {
+        "orientation": "horizontal",
+        "stacking": "normal",
+        "groupWidth": 0.7,
+        "barWidth": 0.9,
+        "showValue": "auto",
+        "xTickLabelRotation": 0,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (system_baseline, outcome) (sum_over_time(agentic_delivery_outcome{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range]))",
+          "legendFormat": "{{outcome}} {{system_baseline}}",
+          "instant": true
+        }
+      ],
+      "timeFrom": "30d",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "min": 0,
+          "custom": {
+            "lineWidth": 0,
+            "fillOpacity": 80,
+            "gradientMode": "none"
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 57,
+      "type": "bargauge",
+      "title": "Líneas humanas por versión del sistema",
+      "description": "`agentic.delivery.human_lines_changed` sumado por versión: cuánto corrigió el humano antes de fusionar, no si la entrega funcionó. En 0 cuando el humano fusionó tal cual. Un click de \"Update branch\" cuyo `messageHeadline` escapa a `MERGE_COMMIT_HEADLINE` infla esta cifra con todo lo que `main` sumó desde la base, no con lo que el humano escribió a mano. Misma muestra fechada al cierre que el panel de al lado, con el mismo desfase y la misma `system_version=\"unknown\"` para documentos anteriores a esta tarea, visible solo bajo All.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 128,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (system_baseline) (sum_over_time(agentic_delivery_human_lines_changed{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range]))",
+          "legendFormat": "{{system_baseline}}",
+          "instant": true
+        }
+      ],
+      "timeFrom": "30d",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "min": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "orange"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "namePlacement": "auto",
+        "sizing": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 220,
+      "type": "bargauge",
+      "title": "Minutos a merge, por línea de base",
+      "description": "Promedio de agentic_delivery_time_to_merge_seconds sobre entregas fusionadas, línea de base del documento; denominador: entregas con time_to_merge conocido.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 136,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (system_baseline) (sum_over_time(agentic_delivery_time_to_merge_seconds{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range])) / sum by (system_baseline) (count_over_time(agentic_delivery_time_to_merge_seconds{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range])) / 60",
+          "legendFormat": "{{system_baseline}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "m",
+          "decimals": 1,
+          "min": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "namePlacement": "auto",
+        "sizing": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 221,
+      "type": "bargauge",
+      "title": "Commits humanos por entrega, por línea de base",
+      "description": "Promedio de agentic_delivery_human_commits sobre entregas juzgadas, línea de base del documento; denominador: entregas juzgadas con esa muestra.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 136,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (system_baseline) (sum_over_time(agentic_delivery_human_commits{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range])) / sum by (system_baseline) (count_over_time(agentic_delivery_human_commits{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range]))",
+          "legendFormat": "{{system_baseline}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "min": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "namePlacement": "auto",
+        "sizing": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 222,
+      "type": "table",
+      "title": "Costo de fallo por motivo, por línea de base",
+      "description": "agentic_role_failure_cost_usd por motivo, línea de base de la corrida. No es aditivo con agentic_role_cost_usd (README): el mismo dólar ya cuenta ahí una vez.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 144,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (system_baseline, reason) (sum_over_time(agentic_role_failure_cost_usd{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range]))",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "id": 223,
+      "type": "bargauge",
+      "title": "Turnos sobre tope, por rol y línea de base",
+      "description": "agentic_role_turns sobre agentic_role_max_turns, línea de base de la corrida; denominador: corridas de ese rol con max_turns registrado (ausente en una corrida anterior a ese campo).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 152,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (system_baseline, role) (sum_over_time(agentic_role_turns{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range])) / sum by (system_baseline, role) (sum_over_time(agentic_role_max_turns{product=~\"$product\", system_version=~\"$version\", system_baseline=~\"$baseline\"}[$__range]))",
+          "legendFormat": "{{role}} {{system_baseline}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "min": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "namePlacement": "auto",
+        "sizing": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Control",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 160,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
       "type": "barchart",
       "title": "Mezcla de tareas por producto y versión (control, no eje)",
       "datasource": {
@@ -1709,7 +2610,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 105,
+        "y": 161,
         "w": 24,
         "h": 8
       },
@@ -1758,112 +2659,73 @@
       }
     },
     {
-      "id": 56,
-      "type": "barchart",
-      "title": "Entregas por resultado",
-      "description": "Veredicto del humano sobre el pull request de cada tarea (`agentic.delivery.outcome`, `agentic close --issue N`), apilado por `outcome`. La muestra queda fechada al CIERRE, nunca a la entrega: una versión que salió ayer puede mostrar cero entregas mientras su costo ya está lleno, y una ventana cerrada cuenta los merges de esta semana contra versiones de hace tres. Un squash merge con edición por la UI no deja commit propio en la rama y lee `merged`: la serie subreporta `merged_with_changes` por construcción. Documentos anteriores a esta tarea llevan `system_version=\"unknown\"`, que `$version` no ofrece: solo se ven bajo All.",
+      "id": 230,
+      "type": "table",
+      "title": "Versiones por línea de base",
+      "description": "Cuántos system_version distintos corrieron bajo cada system_baseline (agentic_role_cost_usd), sin filtrar por $baseline: para ver untagged. system_baseline!=\"\" descarta las muestras anteriores a ADR-0030, que no llevan la etiqueta en absoluto y no deben aparecer como un segundo balde sin nombre.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
       "gridPos": {
         "x": 0,
-        "y": 113,
+        "y": 169,
         "w": 12,
         "h": 8
-      },
-      "options": {
-        "orientation": "horizontal",
-        "stacking": "normal",
-        "groupWidth": 0.7,
-        "barWidth": 0.9,
-        "showValue": "auto",
-        "xTickLabelRotation": 0,
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version, outcome) (sum_over_time(agentic_delivery_outcome{product=~\"$product\", system_version=~\"$version\"}[$__range]))",
-          "legendFormat": "{{outcome}} {{system_version}}",
+          "expr": "count by (system_baseline) (count by (system_baseline, system_version) (sum_over_time(agentic_role_cost_usd{product=~\"$product\", system_baseline!=\"\"}[$__range])))",
+          "format": "table",
           "instant": true
         }
       ],
-      "timeFrom": "90d",
       "fieldConfig": {
         "defaults": {
           "unit": "none",
-          "decimals": 0,
-          "min": 0,
-          "custom": {
-            "lineWidth": 0,
-            "fillOpacity": 80,
-            "gradientMode": "none"
-          },
-          "color": {
-            "mode": "palette-classic"
-          }
+          "decimals": 0
         },
         "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
       }
     },
     {
-      "id": 57,
-      "type": "bargauge",
-      "title": "Líneas humanas por versión del sistema",
-      "description": "`agentic.delivery.human_lines_changed` sumado por versión: cuánto corrigió el humano antes de fusionar, no si la entrega funcionó. En 0 cuando el humano fusionó tal cual. Un click de \"Update branch\" cuyo `messageHeadline` escapa a `MERGE_COMMIT_HEADLINE` infla esta cifra con todo lo que `main` sumó desde la base, no con lo que el humano escribió a mano. Misma muestra fechada al cierre que el panel de al lado, con el mismo desfase y la misma `system_version=\"unknown\"` para documentos anteriores a esta tarea, visible solo bajo All.",
+      "id": 231,
+      "type": "table",
+      "title": "Brazos por línea de base",
+      "description": "Cuántos arm distintos corrieron bajo cada system_baseline (agentic_role_cost_usd), sin filtrar por $baseline: para ver untagged. system_baseline!=\"\" descarta las muestras anteriores a ADR-0030 por la misma razón que el panel de versiones.",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
       "gridPos": {
         "x": 12,
-        "y": 113,
+        "y": 169,
         "w": 12,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (system_version) (sum_over_time(agentic_delivery_human_lines_changed{product=~\"$product\", system_version=~\"$version\"}[$__range]))",
-          "legendFormat": "{{system_version}}",
+          "expr": "count by (system_baseline) (count by (system_baseline, arm) (sum_over_time(agentic_role_cost_usd{product=~\"$product\", system_baseline!=\"\"}[$__range])))",
+          "format": "table",
           "instant": true
         }
       ],
-      "timeFrom": "90d",
       "fieldConfig": {
         "defaults": {
           "unit": "none",
-          "decimals": 0,
-          "min": 0,
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "orange"
-          }
+          "decimals": 0
         },
         "overrides": []
       },
       "options": {
-        "orientation": "horizontal",
-        "displayMode": "basic",
-        "showUnfilled": true,
-        "valueMode": "color",
-        "namePlacement": "auto",
-        "sizing": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "values": false
-        }
+        "showHeader": true,
+        "cellHeight": "sm"
       }
     }
   ]
