@@ -1,12 +1,16 @@
 """The SDK adapter with `query` replaced. No model involved."""
 
 import io
+import sys
+from dataclasses import fields as dataclass_fields
 from dataclasses import replace
+from pathlib import Path
 
 import anyio
 import pytest
 from claude_agent_sdk import (
     AssistantMessage,
+    ClaudeAgentOptions,
     ResultMessage,
     StreamEvent,
     ToolPermissionContext,
@@ -17,7 +21,7 @@ from agentic.core.process.adapters.claude_sdk import runner as module
 from agentic.core.process.adapters.claude_sdk.runner import ClaudeSdkRunner, options_for
 from agentic.core.process.application.ports import AttemptFailed
 from agentic.core.process.domain.denials import denial_for
-from agentic.core.process.domain.roles import DEVELOPER, PJM
+from agentic.core.process.domain.roles import DEVELOPER, PJM, TECH_LEAD_REVIEWER
 from agentic.shared.environment import RESOURCE_ROLE_SLUG_KEY, RESOURCE_TRACE_ID_KEY
 
 pytestmark = pytest.mark.anyio
@@ -1075,6 +1079,158 @@ async def test_the_guard_becomes_a_hook_on_the_delivery_call(monkeypatch, tmp_pa
     )
     (matcher,) = seen[0][1].hooks["PreToolUse"]
     assert matcher.matcher == "StructuredOutput"
+
+
+def _callable_marker(value):
+    """A stable stand-in for a function object: whether one is wired, and by which
+    function, never the object itself -- `options_for` builds a fresh closure on every
+    call, so identity across two calls would never match even when nothing changed."""
+    return None if value is None else ("present", value.__qualname__)
+
+
+def _normalised_options(options: ClaudeAgentOptions, fixture_dir: Path) -> dict:
+    """The whole `ClaudeAgentOptions` `options_for` returned, as a plain dict with one
+    entry per `dataclasses.fields(ClaudeAgentOptions)` -- so a field the SDK adds, or a
+    kwarg `options_for` starts passing, shows up here (and has to be named in
+    `test_options_for_tech_lead_reviewer_is_pinned` below) rather than being missed.
+
+    Four fields do not compare as themselves, and this is the whole of this pin's
+    normalisation, not a loosening of it:
+    - `cwd` is rendered relative to `fixture_dir` (the pytest tmp dir): the absolute
+      path is different on every run and every machine, so a literal expected value
+      could never be written for it.
+    - `can_use_tool` and `stderr` are callables `options_for` builds fresh on every
+      call (`_deny_writes` returns a new closure each time); `_callable_marker` reduces
+      either to "wired, and by which function" -- the only fact that can be pinned.
+    - `debug_stderr` is the SDK's own default, a live reference to `sys.stderr` set
+      once when `claude_agent_sdk.types` is imported; the comparable fact is only
+      whether it is still that object, not its identity value.
+    """
+    raw = {f.name: getattr(options, f.name) for f in dataclass_fields(ClaudeAgentOptions)}
+    raw["cwd"] = None if raw["cwd"] is None else str(Path(raw["cwd"]).relative_to(fixture_dir))
+    raw["can_use_tool"] = _callable_marker(raw["can_use_tool"])
+    raw["stderr"] = _callable_marker(raw["stderr"])
+    raw["debug_stderr"] = raw["debug_stderr"] is sys.stderr
+    return raw
+
+
+def test_options_for_tech_lead_reviewer_is_pinned(tmp_path):
+    # Items 1 and 3 of the task's request ask to confirm that no path sets `thinking`
+    # (Opus 5.5 cannot turn it off; ADR-0023's own point) or forces `tool_choice`.
+    # Neither string exists under `agentic/` today, so an assertion over that absence
+    # would be the enforcement artefact ADR-0023 names as one whose tests can never
+    # fail -- forbidden by this task's own invariants. This pins the whole object
+    # `options_for` returns instead: a field it is found to set that this test does not
+    # name is a failure to look at, not an omission (`ClaudeAgentOptions` carries no
+    # `tool_choice` field at all in the pinned SDK, so an unnamed key catches that one
+    # exactly the same way it would catch a `thinking` key).
+    #
+    # `TECH_LEAD_REVIEWER` is the widest verifier surface: the only role that exercises
+    # `options_for`'s own skill branches (`SKILL_TOOL` appended to `tools` and to
+    # `allowed`, `plugins` populated) with `can_use_tool` wired (it does not execute) --
+    # exactly where a stray `thinking` or a forced `tool_choice` kwarg would most
+    # plausibly land, and a toy role built just for this test would leave unpinned.
+    schema = {
+        "type": "object",
+        "properties": {"markdown": {"type": "string"}},
+        "required": ["markdown"],
+    }
+    options = options_for(
+        TECH_LEAD_REVIEWER,
+        system_prompt="s",
+        model="model-x",  # arbitrary: no test this task adds names a real model
+        json_schema=schema,
+        cwd=tmp_path,
+        resume=None,
+        max_budget_usd=None,
+        traceparent=None,
+        partial=False,
+        env={},
+        resource_attributes=None,
+    )
+
+    # Projections of `TECH_LEAD_REVIEWER` itself, not copied literals: an unrelated
+    # task that adds one permission, one skill or raises `max_turns` on this role
+    # re-pins nothing here, while a new `ClaudeAgentOptions` key still fails below.
+    expected_tools = list(TECH_LEAD_REVIEWER.tools)
+    if TECH_LEAD_REVIEWER.skills and module.SKILL_TOOL not in expected_tools:
+        expected_tools.append(module.SKILL_TOOL)
+    expected_allowed = list(TECH_LEAD_REVIEWER.allowed)
+    if TECH_LEAD_REVIEWER.skills and expected_allowed and module.SKILL_TOOL not in expected_allowed:
+        expected_allowed.append(module.SKILL_TOOL)
+    expected_permission_mode = "bypassPermissions" if TECH_LEAD_REVIEWER.executes else "default"
+    expected_skills = [f"{module.PLUGIN}:{skill}" for skill in TECH_LEAD_REVIEWER.skills] or None
+    expected_plugins = (
+        [{"type": "local", "path": str(module.PLUGIN_DIR)}] if TECH_LEAD_REVIEWER.skills else []
+    )
+
+    actual = _normalised_options(options, tmp_path)
+    expected = {
+        "tools": expected_tools,
+        "allowed_tools": expected_allowed,
+        "system_prompt": "s",
+        "mcp_servers": {},
+        "strict_mcp_config": True,
+        "permission_mode": expected_permission_mode,
+        "continue_conversation": False,
+        "resume": None,
+        "session_id": None,
+        "max_turns": TECH_LEAD_REVIEWER.max_turns,
+        "max_budget_usd": None,
+        "disallowed_tools": list(TECH_LEAD_REVIEWER.denied),
+        "model": "model-x",
+        "fallback_model": None,
+        "betas": [],
+        "permission_prompt_tool_name": None,
+        "cwd": ".",  # `tmp_path` itself, relative to itself (`_normalised_options`)
+        "cli_path": None,
+        "settings": None,
+        "add_dirs": [],
+        "env": {},  # no traceparent, no ambient marker to add (`_child_env`)
+        "extra_args": {},
+        "max_buffer_size": None,
+        "debug_stderr": True,  # still the SDK's own default `sys.stderr`
+        "stderr": None,
+        "can_use_tool": ("present", "_deny_writes.<locals>.deny"),  # the role does not execute
+        "hooks": None,  # no cage (does not execute), no guard, no presubmit, no turn notice
+        "user": None,
+        "include_partial_messages": False,
+        "include_hook_events": False,
+        "forward_subagent_text": False,
+        "fork_session": False,
+        "resume_session_at": None,
+        "resume_drops_turn": None,
+        "agents": None,
+        "setting_sources": [],
+        "skills": expected_skills,
+        "sandbox": None,
+        "plugins": expected_plugins,
+        "max_thinking_tokens": None,
+        "thinking": None,  # item 1 of the task's request: nobody sets this
+        "effort": "medium",  # `Role`'s own default; `TECH_LEAD_REVIEWER` does not override it
+        "output_format": {"type": "json_schema", "schema": schema},
+        "enable_file_checkpointing": False,
+        "session_store": None,
+        "session_store_flush": "batched",
+        "load_timeout_ms": 60000,
+        "task_budget": None,
+    }
+    all_fields = {f.name for f in dataclass_fields(ClaudeAgentOptions)}
+    assert set(expected) == all_fields, (
+        "this pin's own expected dict is missing or over-naming a "
+        "dataclasses.fields(ClaudeAgentOptions) key -- fix the pin, not the assertion below"
+    )
+    missing = all_fields - set(actual)
+    extra = set(actual) - all_fields
+    assert not missing and not extra, (
+        f"options_for produced a ClaudeAgentOptions with a field this pin does not "
+        f"enumerate (missing from actual: {missing}, unexpected: {extra}) -- re-pin "
+        "deliberately, do not widen this assertion"
+    )
+    assert actual == expected, (
+        "options_for's ClaudeAgentOptions for TECH_LEAD_REVIEWER changed shape -- "
+        "look at the diff between this and `expected` before re-pinning"
+    )
 
 
 def test_options_for_wires_the_guard_ahead_of_the_presubmit(tmp_path):
