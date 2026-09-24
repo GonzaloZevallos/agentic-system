@@ -50,8 +50,8 @@ autonomía (entregas fusionadas limpias sobre tareas terminadas), fallos propios
 los de límite de cuenta ni los de caída del proveedor), costo por entrega y retrabajo. Mejora si
 la primera no baja y la segunda baja; las otras dos desempatan. Es una consulta sobre los
 documentos de tarea de una línea de base, no una muestra ni un backend de métricas: la misma
-lectura que hace `agentic eval compare`, y la que `agentic close` empuja como scores a Langfuse
-(ADR-0036), una sola fuente de verdad para los dos caminos. "Propios" se lee sobre el motivo del fallo: quedan afuera los dos
+lectura que hace `agentic eval compare` — el único lector; esta tarea no empuja ningún score
+a Langfuse (ADR-0036). "Propios" se lee sobre el motivo del fallo: quedan afuera los dos
 motivos externos (`account_limit`, el límite de la cuenta del proveedor, y `upstream`, su caída)
 y quedan adentro los nuestros, el tope por intento (`limit`) incluido, que es una configuración
 nuestra y no de nadie más. Los fallos anteriores al commit que separó esos motivos llevan

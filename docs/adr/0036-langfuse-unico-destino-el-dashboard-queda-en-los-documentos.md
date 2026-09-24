@@ -50,9 +50,13 @@ hoy segmentan (`product`, `system_baseline`, `arm`, `system_version`, `type`, `r
 scorecard.py` ya computa las cuatro cifras de ADR-0028 (autonomía, fallos propios por tarea
 excluyendo `account_limit` y `upstream`, costo por entrega, retrabajo) leyendo los documentos
 de tarea de una línea de base — el mismo camino que `agentic eval compare` recorre. Ninguna
-cifra se deriva dos veces: Langfuse nunca calcula un scorecard propio, sólo recibe el que
-`agentic close` empuja como scores sobre la traza de la tarea que cierra. "Los mismos números
-leídos por los dos caminos" es cierto por construcción, no por reconciliación.
+cifra se deriva dos veces: Langfuse nunca calcula un scorecard propio, y esta tarea no le
+empuja ninguno tampoco — la compuerta de la sección siguiente resultó desfavorable o
+`unreachable` en tres de sus cuatro respuestas, así que `langfuse-panels` no construyó ningún
+cliente de ingesta de scores (ver "La subtarea de paneles" más abajo). El lector del
+scorecard es `agentic eval compare` sobre los documentos de tarea de la línea de base; "los
+mismos números leídos por los dos caminos" es cierto porque hay un solo camino, no por
+reconciliar dos.
 
 ## Spelling: las dos mitades de la regla de ADR-0008
 
@@ -261,10 +265,12 @@ mostrado quedan con su lector nombrado, en vez de con un panel:
   separe un brazo de otro dentro de una línea de base — el corte por experimento del
   panel de Grafana se pierde con esta tarea. Lo que queda es el `experiment` que cada
   documento de tarea ya guarda en su frontmatter (ADR-0030, un dict por tarea, no
-  agregado) y la misma snapshot dentro de `baseline_id` en cada línea del JSONL que
-  `agentic eval score` escribe (issue #28): separar un brazo de otro es leer esos
-  documentos o ese JSONL a mano, o escribir un script de un solo uso sobre ellos, nunca
-  un comando existente.
+  agregado) y la clave hermana `experiment` que `agentic eval score` escribe en cada
+  línea del JSONL (issue #28) — legible directamente, a diferencia de `baseline_id`, que
+  sólo mezcla esa snapshot en un digest SHA-256 truncado a 8 hex (para que los dos brazos
+  de una misma declaración caigan en líneas de base distintas) y no se puede leer de
+  vuelta. Separar un brazo de otro es leer esos documentos o ese JSONL a mano, o escribir
+  un script de un solo uso sobre ellos, nunca un comando existente.
 
 ## Consecuencias
 

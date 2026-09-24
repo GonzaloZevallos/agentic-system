@@ -1282,9 +1282,10 @@ JSON por tarea, leída entera del documento de esa tarea -- nunca de una métric
 línea de base. Cada línea lleva lo que un span no puede dar por sí solo: hash de prompts, el
 mapa `prompts` completo, `system_version`, el resultado binario y la nota (siempre `null`:
 la carga el humano a mano). El costo por tarea sale de `cost_usd`, ya en el documento, la
-misma cifra que lee el scorecard (`observability/README.md`, ADR-0036) publicado en
-Langfuse; los dos caminos son una sola función de dominio, nunca dos cuentas que puedan
-desacordar. Además, evals de nodo intermedio como tests de pytest ("PjM
+misma cifra que lee el scorecard (`observability/README.md`, ADR-0036); Langfuse no calcula
+ni recibe un scorecard propio, `agentic eval compare` es su único lector, y los dos caminos
+son una sola función de dominio, nunca dos cuentas que puedan desacordar. Además, evals de
+nodo intermedio como tests de pytest ("PjM
 clasifica estas descripciones así", "PM devuelve esta definición incompleta"), marcados
 `llm` y **excluidos de CI**: el SDK se autentica con la suscripción, que GitHub Actions no
 tiene. CI corre solo tests puros: parser del documento, reducers, configuración, ruteo con

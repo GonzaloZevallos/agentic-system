@@ -1315,7 +1315,7 @@ async def _eval_score(
 ) -> None:
     """`agentic eval score`: one JSONL line per evaluation-set task, each entirely
     `evaluation.evaluation_record`'s own read of that task's document -- no `gh`, no
-    Grafana, no metric emission, no write other than `out_path` (Tech Lead plan,
+    Langfuse, no metric emission, no write other than `out_path` (Tech Lead plan,
     subtask `eval-cli`). Refuses outright when `out_path` already exists, before the
     declaration is even read: a new file per invocation, merge and history left to
     git, so no run can eat a baseline. Blockable by nothing except the documents it
@@ -1519,7 +1519,7 @@ async def _invoke(
                 final = await app.ainvoke(graph_input, config=config)
             except Exception:
                 # The run broke outside any use case; the task span still closes with a
-                # status, so Grafana counts it (`crashed` is telemetry-only, never state).
+                # status, so the trace carries it (`crashed` is telemetry-only, never state).
                 crashed = cast(TaskState, {**task, "status": "crashed"})
                 run.finish(crashed)
                 run.finish_invocation(entering, crashed, kind, decision)
