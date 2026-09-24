@@ -1,150 +1,131 @@
-"""Whether declared signals justify a stack review (ADR-0034). Pure: no port, no
-`Path`, no `Ports` — every fact arrives as a plain value, the caller's own read."""
+"""Whether declared signals justify a stack review (ADR-0034, ADR-0038). Pure: no port, no
+`Path`, no `Ports` — every fact arrives as a plain value, the caller's own read. Order is
+a position on the main line's first-parent chain, never a date."""
 
 from agentic.core.process.domain.stack_signals import (
     MERGED_TASKS_THRESHOLD,
     Signals,
     description,
     fired,
+    needs_merge_commit,
     signals,
 )
 
-ANCHOR_DATE = "2026-01-01T00:00:00Z"
+ANCHOR = 10
 
 
-def _merged(n: int) -> list[tuple[str, str]]:
-    return [("2026-06-01T00:00:00Z", "merged") for _ in range(n)]
+def _merged(n: int, pos: int | None = ANCHOR + 5) -> list[tuple[int | None, str]]:
+    return [(pos, "merged") for _ in range(n)]
+
+
+def _quiet(**kw):
+    args = {"anchor": "abc123", "anchor_pos": ANCHOR, "brief_pos": ANCHOR, "deliveries": []}
+    args.update(kw)
+    return signals(reason="", **args)
 
 
 def test_fired_on_greenfield_with_no_anchor_at_all():
-    # Vacuously true: a repo with no `.agentic/stack.yaml` yet has nothing to compare
-    # the Brief or the deliveries against, so every signal is satisfied by default.
-    # Isolated from the other branches: `anchor_date` equals `brief_date` (so
-    # `brief_changed` is false), there are no deliveries and no reason — only
-    # `anchor == ""` can be firing this.
-    s = signals(anchor="", anchor_date="", brief_date="", deliveries=[], reason="")
+    s = signals(anchor="", anchor_pos=None, brief_pos=None, deliveries=[], reason="")
     assert not s.brief_changed
     assert s.merged_since == 0
     assert fired(s)
 
 
 def test_not_fired_with_an_anchor_and_nothing_else():
-    s = signals(
-        anchor="abc123",
-        anchor_date=ANCHOR_DATE,
-        brief_date=ANCHOR_DATE,
-        deliveries=[],
-        reason="",
-    )
-    assert not fired(s)
+    assert not fired(_quiet())
 
 
-def test_fired_when_the_brief_changed_since_the_anchor():
-    s = signals(
-        anchor="abc123",
-        anchor_date=ANCHOR_DATE,
-        brief_date="2026-06-01T00:00:00Z",
-        deliveries=[],
-        reason="",
-    )
+def test_brief_landing_after_the_anchor_fires():
+    # The issue's table: the Brief was written first but reached the main line later.
+    s = _quiet(brief_pos=ANCHOR + 1)
     assert s.brief_changed
     assert fired(s)
 
 
-def test_not_fired_when_the_brief_is_not_newer_than_the_anchor():
-    # Same instant, lexicographically equal: not "changed since".
-    s = signals(
-        anchor="abc123", anchor_date=ANCHOR_DATE, brief_date=ANCHOR_DATE, deliveries=[], reason=""
-    )
+def test_brief_landing_before_the_anchor_does_not_fire():
+    s = _quiet(brief_pos=ANCHOR - 1)
     assert not s.brief_changed
     assert not fired(s)
 
 
+def test_one_commit_bringing_both_is_not_a_change_since():
+    assert not _quiet(brief_pos=ANCHOR).brief_changed
+
+
+def test_no_brief_on_the_main_line_is_not_a_change():
+    assert not _quiet(brief_pos=None).brief_changed
+
+
+def test_brief_with_no_anchor_at_all_is_a_change():
+    s = signals(anchor="", anchor_pos=None, brief_pos=0, deliveries=[], reason="")
+    assert s.brief_changed
+
+
 def test_not_fired_one_merged_task_below_the_threshold():
-    s = signals(
-        anchor="abc123",
-        anchor_date=ANCHOR_DATE,
-        brief_date=ANCHOR_DATE,
-        deliveries=_merged(MERGED_TASKS_THRESHOLD - 1),
-        reason="",
-    )
+    s = _quiet(deliveries=_merged(MERGED_TASKS_THRESHOLD - 1))
     assert s.merged_since == MERGED_TASKS_THRESHOLD - 1
     assert not fired(s)
 
 
 def test_fired_at_the_merged_threshold_exactly():
-    s = signals(
-        anchor="abc123",
-        anchor_date=ANCHOR_DATE,
-        brief_date=ANCHOR_DATE,
-        deliveries=_merged(MERGED_TASKS_THRESHOLD),
-        reason="",
-    )
+    s = _quiet(deliveries=_merged(MERGED_TASKS_THRESHOLD))
     assert s.merged_since == MERGED_TASKS_THRESHOLD
     assert fired(s)
 
 
 def test_merged_since_ignores_an_outcome_not_in_merged_outcomes():
-    deliveries = [("2026-06-01T00:00:00Z", "closed")] * MERGED_TASKS_THRESHOLD
-    s = signals(
-        anchor="abc123",
-        anchor_date=ANCHOR_DATE,
-        brief_date=ANCHOR_DATE,
-        deliveries=deliveries,
-        reason="",
-    )
+    s = _quiet(deliveries=[(ANCHOR + 5, "closed")] * MERGED_TASKS_THRESHOLD)
     assert s.merged_since == 0
     assert not fired(s)
 
 
-def test_merged_since_ignores_a_delivery_closed_before_the_anchor():
-    deliveries = [("2025-01-01T00:00:00Z", "merged")] * MERGED_TASKS_THRESHOLD
-    s = signals(
-        anchor="abc123",
-        anchor_date=ANCHOR_DATE,
-        brief_date=ANCHOR_DATE,
-        deliveries=deliveries,
-        reason="",
-    )
+def test_merged_since_ignores_a_delivery_landed_before_the_anchor():
+    s = _quiet(deliveries=_merged(MERGED_TASKS_THRESHOLD, ANCHOR - 1))
     assert s.merged_since == 0
     assert not fired(s)
 
 
-def test_merged_since_ignores_a_delivery_closed_exactly_on_the_anchor_date():
-    # Strict `>`, not `>=`: the anchor's own instant is not "since" it.
-    deliveries = [(ANCHOR_DATE, "merged")] * MERGED_TASKS_THRESHOLD
-    s = signals(
-        anchor="abc123",
-        anchor_date=ANCHOR_DATE,
-        brief_date=ANCHOR_DATE,
-        deliveries=deliveries,
-        reason="",
-    )
-    assert s.merged_since == 0
-    assert not fired(s)
+def test_merged_since_ignores_a_delivery_landed_on_the_anchor_itself():
+    assert _quiet(deliveries=_merged(MERGED_TASKS_THRESHOLD, ANCHOR)).merged_since == 0
+
+
+def test_merged_since_ignores_a_delivery_with_no_position():
+    assert _quiet(deliveries=_merged(MERGED_TASKS_THRESHOLD, None)).merged_since == 0
+
+
+def test_merged_since_counts_every_positioned_delivery_when_there_is_no_anchor():
+    s = signals(anchor="", anchor_pos=None, brief_pos=None, deliveries=_merged(3, 0), reason="")
+    assert s.merged_since == 3
 
 
 def test_merged_since_counts_merged_with_changes_too():
-    deliveries = [("2026-06-01T00:00:00Z", "merged_with_changes")] * MERGED_TASKS_THRESHOLD
-    s = signals(
-        anchor="abc123",
-        anchor_date=ANCHOR_DATE,
-        brief_date=ANCHOR_DATE,
-        deliveries=deliveries,
-        reason="",
-    )
+    s = _quiet(deliveries=[(ANCHOR + 5, "merged_with_changes")] * MERGED_TASKS_THRESHOLD)
     assert s.merged_since == MERGED_TASKS_THRESHOLD
 
 
 def test_fired_on_a_reason_alone():
     s = signals(
         anchor="abc123",
-        anchor_date=ANCHOR_DATE,
-        brief_date=ANCHOR_DATE,
+        anchor_pos=ANCHOR,
+        brief_pos=ANCHOR,
         deliveries=[],
         reason="the CI's Python pin broke the build",
     )
     assert fired(s)
+
+
+def test_needs_merge_commit_accepts_a_closed_merged_document_without_it():
+    assert needs_merge_commit({"closed_at": "t", "delivery_outcome": "merged"})
+    assert needs_merge_commit({"closed_at": "t", "delivery_outcome": "merged_with_changes"})
+
+
+def test_needs_merge_commit_rejects_everything_else():
+    assert not needs_merge_commit({"delivery_outcome": "merged"})  # not closed
+    assert not needs_merge_commit({"closed_at": "t", "delivery_outcome": "closed"})
+    assert not needs_merge_commit({"closed_at": "t"})
+    assert not needs_merge_commit(
+        {"closed_at": "t", "delivery_outcome": "merged", "merge_commit": "abc"}
+    )
 
 
 def test_description_carries_the_reason_text_byte_for_byte():

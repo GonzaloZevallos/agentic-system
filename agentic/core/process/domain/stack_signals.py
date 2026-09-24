@@ -3,12 +3,12 @@ as its request (ADR-0034, `docs/adr/0034-la-revision-de-stack-corre-roles-sin-ta
 
 Pure: no port, no `Path`, no `Ports`. ADR-0019's own argument is what this module is
 for — a guessed antecedent gets the step that decides everything else wrong — so every
-fact (the anchor's sha and date, the Brief's date, each task's own delivery) is
+fact (the anchor's sha and position, the Brief's position, each task's own delivery) is
 computed by the caller and handed over as data, never asserted by the model."""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 # The count of merged tasks that alone justifies a review, and the closed set of
@@ -34,27 +34,42 @@ class Signals:
 def signals(
     *,
     anchor: str,
-    anchor_date: str,
-    brief_date: str,
-    deliveries: Sequence[tuple[str, str]],
+    anchor_pos: int | None,
+    brief_pos: int | None,
+    deliveries: Sequence[tuple[int | None, str]],
     reason: str,
 ) -> Signals:
-    """`Signals` from the caller's own reads. `anchor` is the sha of the last commit to
-    `.agentic/stack.yaml` (`""` when the file has none: the greenfield repo).
-    `anchor_date`/`brief_date` are ISO-8601, compared lexicographically. `deliveries` is
-    each task document's own `(closed_at, delivery_outcome)`, ISO-8601 `closed_at`; a
-    delivery counts toward `merged_since` when its outcome is in `MERGED_OUTCOMES` and
-    its `closed_at` is after `anchor_date`."""
+    """`Signals` from the caller's own reads (ADR-0038). `anchor` is the sha of the commit
+    that brought `.agentic/stack.yaml` to the main line (`""` when none: the greenfield
+    repo). Every `*_pos` is a 0-based position on `HEAD`'s first-parent chain, oldest
+    first, `None` when there is none; no clock decides anything here. `deliveries` is
+    each task document's `(landing position of its merge commit, delivery_outcome)`; one
+    counts toward `merged_since` when its outcome is in `MERGED_OUTCOMES`, its position
+    is known and it is after the anchor (or there is no anchor). The Brief changed when
+    it landed strictly after the anchor: a commit that brought both files decided the
+    stack with that Brief in the tree."""
     merged_since = sum(
         1
-        for closed_at, outcome in deliveries
-        if outcome in MERGED_OUTCOMES and closed_at > anchor_date
+        for pos, outcome in deliveries
+        if outcome in MERGED_OUTCOMES
+        and pos is not None
+        and (anchor_pos is None or pos > anchor_pos)
     )
     return Signals(
         anchor=anchor,
-        brief_changed=brief_date > anchor_date,
+        brief_changed=brief_pos is not None and (anchor_pos is None or brief_pos > anchor_pos),
         merged_since=merged_since,
         reason=reason,
+    )
+
+
+def needs_merge_commit(raw: Mapping[str, object]) -> bool:
+    """Whether a task document is closed as merged yet lacks `merge_commit`: the one
+    decision both `close --all` and `close --issue` take to backfill it (ADR-0038)."""
+    return (
+        bool(raw.get("closed_at"))
+        and raw.get("delivery_outcome") in MERGED_OUTCOMES
+        and not raw.get("merge_commit")
     )
 
 
