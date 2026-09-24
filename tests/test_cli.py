@@ -19,7 +19,7 @@ from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.adapters.github import inbox
 from agentic.core.process.application.ports import LockHeld, LockRecord
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
-from tests.fakes import MemoryStack, MemoryTracker, memory_ports
+from tests.fakes import MemoryKnowledge, MemoryStack, MemoryTracker, memory_ports
 
 
 @asynccontextmanager
@@ -2543,3 +2543,135 @@ async def test_eval_score_reports_fingerprint_divergence_as_a_fact_not_an_error(
     out = tmp_path / "out.jsonl"
     await cli._eval_score(Configuration(product_dir=root), ports, None, str(out))  # never raises
     assert "diverges" in capsys.readouterr().out
+
+
+# `agentic stack review` (ADR-0032): the Tech Lead in proactive mode, with no task
+# behind it. Seam: `agentic/cli.py`, `agentic stack review` through `main()`, the same
+# seam the rest of this file already uses.
+
+
+def _greenfield(tmp_path, name, *, git=True, brief="# Brief\n\nGym members book classes.\n"):
+    """A product with only `BRIEF.md`: no `.agentic/` at all, so every other command
+    refuses it outright (`test_preflight_rejects_a_dir_without_agentic`) and only
+    `agentic stack review` may run over it (ADR-0032, item 4)."""
+    root = tmp_path / name
+    root.mkdir(parents=True)
+    if brief is not None:
+        (root / "BRIEF.md").write_text(brief)
+    if git:
+        gitcmd = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+        subprocess.run([*gitcmd, "init", "-q", "-b", "master", str(root)], check=True)
+        subprocess.run([*gitcmd, "add", "-A"], cwd=root, check=True)
+        subprocess.run([*gitcmd, "commit", "-q", "-m", "brief"], cwd=root, check=True)
+    return root
+
+
+def test_stack_review_refuses_a_directory_that_is_not_a_git_repository(monkeypatch, tmp_path):
+    root = _greenfield(tmp_path, "g", git=False)
+    monkeypatch.setattr("sys.argv", ["agentic", "stack", "review", "--product-dir", str(root)])
+    with pytest.raises(SystemExit) as info:
+        cli.main()
+    assert info.value.code == 2
+
+
+def test_stack_review_names_both_halves_of_the_repository_refusal(monkeypatch, tmp_path, capsys):
+    root = _greenfield(tmp_path, "g", git=False)
+    monkeypatch.setattr("sys.argv", ["agentic", "stack", "review", "--product-dir", str(root)])
+    with pytest.raises(SystemExit):
+        cli.main()
+    err = capsys.readouterr().err
+    assert "not a git repository" in err and "git is not installed" in err
+
+
+def test_stack_review_proceeds_once_git_init_makes_it_a_repository(monkeypatch, tmp_path, capsys):
+    """The same path `git init` turns into a repository proceeds past the verb's own
+    refusal into `--dry-run`'s report -- no `gh` call, no lock, no document."""
+    root = _greenfield(tmp_path, "g")
+    calls = fake_gh(monkeypatch)
+    monkeypatch.setattr(
+        "sys.argv", ["agentic", "stack", "review", "--product-dir", str(root), "--dry-run"]
+    )
+    cli.main()
+    out = capsys.readouterr().out
+    assert "anchor: (none, greenfield)" in out
+    assert calls == []
+
+
+def test_stack_review_dry_run_takes_no_lock_writes_no_file_and_calls_no_gh(
+    monkeypatch, tmp_path, capsys
+):
+    root = _greenfield(tmp_path, "g")
+    calls = fake_gh(monkeypatch)
+    monkeypatch.setattr(
+        "sys.argv", ["agentic", "stack", "review", "--product-dir", str(root), "--dry-run"]
+    )
+    cli.main()
+    assert calls == []
+    assert not (root / ".agentic" / "runs").exists()
+    assert not (root / ".agentic" / "stack-reviews").exists()
+    assert not (root / ".agentic" / "tasks").exists()
+
+
+@pytest.mark.anyio
+async def test_stack_review_refuses_on_an_already_open_proposal_spending_nothing(tmp_path):
+    """`GhInbox`/`GhTracker` bind their `subprocess.run` default at import time
+    (`inbox.py`'s own docstring: old form stays old form), so a real `main()` round
+    trip cannot fake `gh` for `open_issues` the way `fake_gh` fakes `task()` -- this
+    calls `cli._stack_review` directly with `MemoryInbox`, the same seam
+    `test_eval_run_dry_run_prefers_the_set_override...` already uses for a full round
+    trip over in-memory ports (ADR-0032)."""
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import MemoryInbox
+
+    root = _greenfield(tmp_path, "g")
+    marker = "<!-- agentic:stack-review anchor=none -->"
+    url = "https://github.com/o/r/issues/9"
+    ports = memory_ports(inbox=MemoryInbox(open_issues=[(url, f"{marker}\n\nolder review")]))
+    ports.workspace.repositories[root] = root
+    cfg = Configuration(product_dir=root)
+
+    with pytest.raises(cli.CannotStart) as info:
+        await cli._stack_review(cfg, ports, None, False)
+    assert url in str(info.value)
+    assert ports.tracker.opened_issues == []  # no write of any kind
+    assert not (root / ".agentic" / "runs").exists()
+    assert not (root / ".agentic" / "stack-reviews").exists()
+
+
+def test_stack_review_every_other_subcommand_still_refuses_no_agentic_dir(monkeypatch, tmp_path):
+    """`main()`'s `.agentic/` refusal stays global for every command but `stack review`
+    (invariant): `close` is the cheapest other command to prove it on."""
+    monkeypatch.setattr(
+        "sys.argv", ["agentic", "close", "--issue", "1", "--product-dir", str(tmp_path)]
+    )
+    with pytest.raises(SystemExit) as info:
+        cli.main()
+    assert info.value.code == 2
+
+
+@pytest.mark.anyio
+async def test_stack_review_writes_its_document_under_stack_reviews_never_under_tasks(tmp_path):
+    """A completed review (Brief present, the greenfield anchor firing vacuously) runs
+    the interview and the author through `ScriptedRunner`, and its document lands
+    under `.agentic/stack-reviews/`, never `.agentic/tasks/` (invariant)."""
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import ScriptedRunner, questions, stack_proposal
+
+    root = _greenfield(tmp_path, "g")
+    ask, author = "tech_lead_ephemeral_stack", "tech_lead_stack"
+    runner = ScriptedRunner(
+        **{ask: [questions(done=True, session="e1")]},
+        **{author: [stack_proposal(session="t1")]},
+    )
+    ports = memory_ports(runner, knowledge=MemoryKnowledge(brief="# Brief\n\nfits."))
+    ports.workspace.repositories[root] = root
+    cfg = Configuration(product_dir=root)
+
+    await cli._stack_review(cfg, ports, None, False)
+
+    reviews_dir = root / ".agentic" / "stack-reviews"
+    assert [p.name for p in reviews_dir.glob("*.md")]
+    assert not (root / ".agentic" / "tasks").exists()
+    [(title, body)] = ports.tracker.opened_issues
+    assert "needs-info" not in title
+    assert "keep the stack" in body

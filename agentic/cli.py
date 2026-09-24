@@ -22,7 +22,7 @@ import sys
 import uuid
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import AbstractAsyncContextManager, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -38,11 +38,12 @@ from langgraph.types import Command
 from . import composition
 from .composition import default_ports, graph
 from .core.knowledge.domain import knowledge
+from .core.knowledge.domain import stack as knowledge_stack
 from .core.measurement.adapters.otel import telemetry
 from .core.measurement.adapters.otel.telemetry import InvocationKind
 from .core.measurement.domain import evaluation, scorecard
 from .core.measurement.domain import metrics as delivery_metrics
-from .core.process.adapters.filesystem import FilesystemRunLock
+from .core.process.adapters.filesystem import FilesystemRunLock, FilesystemTaskDocuments
 from .core.process.adapters.git.workspace import GitError
 from .core.process.adapters.langgraph.graph import ESCALATE
 from .core.process.application import archive
@@ -50,17 +51,31 @@ from .core.process.application import resume as resuming
 from .core.process.application.escalate import NEEDS_HUMAN
 from .core.process.application.ports import LockHeld, LockRecord, Ports, RunLock
 from .core.process.application.preflight import (
+    PLACEHOLDERS,
+    declared_stack,
     declared_stack_of,
     no_forbidden,
     no_setup,
     preflight,
     product_name,
+    refuse_its_own_checkout,
     unfixed_stage0,
 )
+from .core.process.application.run_role import load_prompt
+from .core.process.application.stack_review import stack_review as run_stack_review
 from .core.process.domain import document as task_document
+from .core.process.domain import stack_review as stack_review_texts
+from .core.process.domain import stack_signals
+from .core.process.domain.roles import ROLES
 from .core.process.domain.task import PullRequest, TaskInput, TaskState
 from .shared.configuration import ENV_PREFIX, LOGS_DIR, Configuration, MissingProductDir
 from .shared.environment import without_own_toolchain
+
+# The stack review's own corpus (ADR-0032): beside `.agentic/tasks/`, never inside it,
+# so `close --all`, `eval score` and `_bucket_documents` -- which reach the task corpus
+# through `documents.ids()` -- stay blind to it (`document.relative_path`/
+# `FilesystemTaskDocuments`'s own `subdir` keyword).
+STACK_REVIEWS_SUBDIR = Path(".agentic/stack-reviews")
 
 Checkpointer = Callable[[Configuration], AbstractAsyncContextManager[BaseCheckpointSaver]]
 # Re-execs `argv` (already stripped of `--detach`) detached from this session and
@@ -252,6 +267,28 @@ def main() -> None:
         help="the system checkout to resolve a document's own system_commit against "
         "(defaults to the pinned stage0 checkout)",
     )
+    stack = sub.add_parser("stack", help="the product's own stack (ADR-0032)")
+    stack_sub = stack.add_subparsers(dest="stack_command", required=True)
+    stack_review = stack_sub.add_parser(
+        "review",
+        help="the Tech Lead in proactive mode decides whether the product's stack "
+        "still fits its Brief; never a direct change, always a proposal issue",
+    )
+    stack_review.add_argument(
+        "--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)"
+    )
+    stack_review.add_argument(
+        "--reason",
+        metavar="TEXT",
+        help="a reason of your own; counts as a trigger on its own and is reproduced "
+        "verbatim among the signals in the issue body",
+    )
+    stack_review.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="show which signals hold, the anchor and what would be opened; spends "
+        "nothing, takes no lock, writes no file and makes no `gh` call",
+    )
     for command in (run, resume):
         command.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
         command.add_argument(
@@ -302,10 +339,13 @@ def main() -> None:
         os.environ[ENV_PREFIX + "TASK_BUDGET_USD"] = str(args.task_budget)
     try:
         cfg = Configuration.from_sources({}, os.environ)
-        if not cfg.agentic_dir.is_dir():
+        # Every command but `stack review` still refuses byte for byte on a directory
+        # with no `.agentic/` at all: a greenfield product has nothing else, and that
+        # is exactly the case this one verb exists to run over (ADR-0032, item 4).
+        if args.command != "stack" and not cfg.agentic_dir.is_dir():
             raise ValueError(f"{cfg.product_dir} is not a product repo: no .agentic/ directory")
         ports = default_ports(cfg)
-        if args.command not in ("close", "eval"):
+        if args.command not in ("close", "eval", "stack"):
             # `close` runs no role and spends nothing, so the gate that renders every
             # role's prompt and checks the product's stack before a run spends money
             # does not apply to it (Tech Lead plan, subtask `close-command`): only
@@ -384,6 +424,8 @@ def main() -> None:
                 work = partial(_eval_score, cfg, ports, args.set, args.out)
             else:
                 work = partial(_eval_compare, cfg, ports, args.frm, args.to, args.system_repo)
+        elif args.command == "stack":
+            work = partial(_stack_review, cfg, ports, args.reason, args.dry_run)
         else:
             if args.issue is not None:
                 task = ports.inbox.task(args.issue)
@@ -1000,6 +1042,164 @@ async def _close_all(cfg: Configuration, ports: Ports) -> None:
         raise CannotStart("no document could be read")
     print(f"agentic: closed {len(closed)}: {', '.join(closed) or '(none)'}")
     print(f"agentic: remaining {len(remaining)}: {', '.join(remaining) or '(none)'}")
+
+
+def _git_log_1(product_dir: Path, relative: str) -> tuple[str, str]:
+    """The last commit to `relative`, as `git log -1` sees it: its sha and its
+    committer date, ISO-8601 (`stack_signals.signals`'s own `anchor`/`anchor_date` and
+    `brief_date` arguments, ADR-0032). `("", "")` when the path was never committed --
+    a greenfield product's own `.agentic/stack.yaml`, or a repo with no `BRIEF.md` yet
+    -- which sorts before every other date, so every signal fires vacuously
+    (`stack_signals.fired`'s own docstring)."""
+    result = subprocess.run(
+        ["git", "log", "-1", "--format=%H%x1f%cI", "--", relative],
+        cwd=product_dir,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    line = result.stdout.strip()
+    if not line:
+        return "", ""
+    sha, _, date = line.partition("\x1f")
+    return sha, date
+
+
+def _task_deliveries(ports: Ports) -> list[tuple[str, str]]:
+    """Every task document's own `(closed_at, delivery_outcome)`, off the product's own
+    `.agentic/tasks/` corpus `ports.documents` already is (never the stack review's own
+    `.agentic/stack-reviews/`, which this command is about to write to): the plain
+    values `stack_signals.signals`'s own `deliveries` argument takes -- the pure module
+    itself takes no port (ADR-0032)."""
+    deliveries: list[tuple[str, str]] = []
+    for task_id in ports.documents.ids():
+        raw = ports.documents.load(task_id) or {}
+        deliveries.append((str(raw.get("closed_at") or ""), str(raw.get("delivery_outcome") or "")))
+    return deliveries
+
+
+def _stack_review_id() -> str:
+    """`stack-<YYYY-MM-DD>` (ADR-0032): a same-day rerun overwrites its own document,
+    and the shape is deliberately outside `^GH-(\\d+)$`, so every keyed `Tracker` verb
+    -- `comment`, `label`, `pull_request` -- is a no-op against it. Never reused to open
+    a pull request: `open_pull_request` is the one verb that does not guard on
+    `issue_number` (Tech Lead plan, subtask `verb`)."""
+    return f"stack-{datetime.now(UTC).strftime('%Y-%m-%d')}"
+
+
+def _print_stack_dry_run(signals: stack_signals.Signals) -> None:
+    """`--dry-run`'s own report: the anchor, every signal's own text and what the real
+    run would open -- no `gh` call, no lock, no file (invariant)."""
+    print(f"agentic: anchor: {signals.anchor or '(none, greenfield)'}")
+    for line in stack_signals.description(signals).splitlines():
+        print(f"agentic: {line}")
+    if stack_signals.fired(signals):
+        print(
+            "agentic: would open: a proposal issue (or a [needs-info] issue, if the "
+            "Brief is missing or the interview cannot decide)"
+        )
+    else:
+        print("agentic: no signal fired; would open nothing")
+
+
+def _open_needs_info_for_missing_brief(
+    ports: Ports, review_id: str, signals: stack_signals.Signals
+) -> str:
+    """The spec's own item 1: no `BRIEF.md`, no decision (ADR-0025) -- a `[needs-info]`
+    issue with the system's own template, the same text `no_brief` already prints on
+    `run`, and no role runs at all."""
+    verdict = (
+        "the product has no `BRIEF.md`: a stack review needs it to decide against "
+        "(ADR-0025). Write it at the product's root, and commit it:\n\n"
+        + knowledge.DEFAULT_BRIEF_TEMPLATE.read_text(encoding="utf-8")
+    )
+    body = stack_review_texts.body(
+        signals.anchor, stack_signals.description(signals), verdict, "", "", ""
+    )
+    if (refusal := stack_review_texts.body_refusal(body)) is not None:
+        raise CannotStart(refusal)
+    return ports.tracker.open_issue(f"[needs-info] Stack review {review_id}: no BRIEF.md", body)
+
+
+async def _stack_review(
+    cfg: Configuration, ports: Ports, reason: str | None, dry_run: bool
+) -> None:
+    """`agentic stack review [--reason TEXT] [--dry-run]`: the Tech Lead in proactive
+    mode over the product, with no task behind it at all (ADR-0032) -- no PjM, no issue
+    it came from, no branch. Composes its own gate here instead of a flag on
+    `preflight` (`preflight.py` stays byte-identical): `refuse_its_own_checkout` and
+    the free per-role prompt render always; `declared_stack`/`ports.stack.product()`
+    only when `.agentic/stack.yaml` is already declared at HEAD, since its absence is
+    the one fact this verb exists to change and `preflight` would otherwise refuse on
+    it (`knowledge_stack.NotDeclared` is the one exception this gate swallows; any
+    other failure of a declared stack still propagates).
+
+    Two refusals of the verb's own, both before anything is spent: `product_dir` not a
+    git repository, or git not installed (`repository_at` answers the same `None` for
+    both, so both halves are named), and an already-open proposal this path opened
+    before (`Inbox.open_issues` + `domain.stack_review.open_proposal`), which refuses
+    with that issue's URL and prints the anchor so a stale one reads as stale.
+    `--dry-run` returns before either the `gh` read or the lock: it reports the
+    signals, the anchor and what would be opened, and spends nothing."""
+    if ports.workspace.repository_at(cfg.product_dir) is None:
+        raise CannotStart(f"{cfg.product_dir} is not a git repository, or git is not installed")
+    refuse_its_own_checkout(cfg, ports)
+    vocabulary = ports.flags.load()
+    for role in ROLES:
+        load_prompt(role, cfg, ports, vocabulary, **PLACEHOLDERS)
+    try:
+        declared_stack(ports)
+        ports.stack.product()
+    except knowledge_stack.NotDeclared:
+        pass
+
+    anchor, anchor_date = _git_log_1(cfg.product_dir, str(knowledge_stack.OVERLAY))
+    _, brief_date = _git_log_1(cfg.product_dir, "BRIEF.md")
+    signals = stack_signals.signals(
+        anchor=anchor,
+        anchor_date=anchor_date,
+        brief_date=brief_date,
+        deliveries=_task_deliveries(ports),
+        reason=reason or "",
+    )
+    if dry_run:
+        _print_stack_dry_run(signals)
+        return
+
+    open_issues = ports.inbox.open_issues()
+    if (existing := stack_review_texts.open_proposal(open_issues)) is not None:
+        raise CannotStart(
+            f"a stack review proposal is already open: {existing} (anchor "
+            f"{signals.anchor or '(none)'}); close it before this path opens another"
+        )
+
+    review_id = _stack_review_id()
+    lock = _lock_for(cfg)
+    if ports.knowledge.brief() is None:
+        with _locked(lock, review_id):
+            url = _open_needs_info_for_missing_brief(ports, review_id, signals)
+        print(f"agentic: opened {url}")
+        return
+    if not stack_signals.fired(signals):
+        for line in stack_signals.description(signals).splitlines():
+            print(f"agentic: {line}")
+        print("agentic: no signal fired; nothing to review")
+        return
+
+    stack_ports = replace(
+        ports, documents=FilesystemTaskDocuments(cfg.product_dir, subdir=STACK_REVIEWS_SUBDIR)
+    )
+    description = stack_signals.description(signals)
+    with _locked(lock, review_id):
+        # No plan yet -- a stack review's synthetic `TaskState` never carries
+        # `subtasks` -- so `rules.task_cap` (through `run_role`) is its base alone,
+        # today's $30, never the plan's per-subtask share (ADR-0004, fourth addendum;
+        # ADR-0032).
+        result = await run_stack_review(review_id, description, signals.anchor, cfg, stack_ports)
+    print(f"id:         {review_id}")
+    print(f"needs_info: {result.needs_info}")
+    print(f"issue:      {result.issue_url}")
+    print(f"doc:        {result.document}")
 
 
 def _now_iso() -> str:
