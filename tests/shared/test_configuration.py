@@ -7,6 +7,37 @@ from agentic.shared.configuration import Configuration, MissingProductDir, exper
 PRODUCT = {"product_dir": "/tmp/p"}
 
 
+def test_max_concurrent_runs_defaults_to_one():
+    # The human's own call (GH-137): one run at a time, because two in parallel hit
+    # the account's own 429 and clashed merging.
+    cfg = Configuration.from_sources(PRODUCT, {})
+    assert cfg.max_concurrent_runs == 1
+    raised = Configuration.from_sources(PRODUCT, {"AGENTIC_MAX_CONCURRENT_RUNS": "3"})
+    assert raised.max_concurrent_runs == 3
+    with pytest.raises(ValueError):
+        Configuration(product_dir=Path("/tmp/p"), max_concurrent_runs=0)
+
+
+def test_run_registry_dir_defaults_under_xdg_state_home(monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", "/tmp/state")
+    cfg = Configuration.from_sources(PRODUCT, {})
+    assert cfg.run_registry_dir == Path("/tmp/state/agentic/runs")
+
+
+def test_run_registry_dir_falls_back_to_the_home_dot_local_state(monkeypatch):
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: Path("/home/t"))
+    cfg = Configuration.from_sources(PRODUCT, {})
+    assert cfg.run_registry_dir == Path("/home/t/.local/state/agentic/runs")
+
+
+def test_run_registry_dir_is_overridable_so_tests_never_touch_the_real_one():
+    # `tests/conftest.py` of a future subtask redirects every test through this same
+    # env override (invariant: no test writes to the real run registry).
+    cfg = Configuration.from_sources(PRODUCT, {"AGENTIC_RUN_REGISTRY_DIR": "/tmp/fake-runs"})
+    assert cfg.run_registry_dir == Path("/tmp/fake-runs")
+
+
 def test_defaults():
     cfg = Configuration.from_sources(PRODUCT, {})
     assert cfg.max_changes_requested_per_pair == 2

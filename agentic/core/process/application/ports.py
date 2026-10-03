@@ -9,9 +9,11 @@ second product arrived and it is this repo (README.md, 8; ADR-0017).
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from ..domain.roles import Role
 from ..domain.rules import motive
@@ -496,6 +498,47 @@ class Workspace(Protocol):
         `.agentic/tasks/` the way this repo and gym-saas both happen to."""
         ...
 
+    def is_ancestor(self, path: Path, sha: str, ref: str = "HEAD") -> bool:
+        """Whether `sha` already sits on `ref` (`HEAD` by default) at `path` (GH-137: a
+        blocking issue's merge commit, checked before the poller launches what it
+        blocked). False, never an exception, for a `sha` this checkout has no object for
+        at all -- a merge commit `gh` reported that a stale local checkout has not
+        fetched yet -- which is the launch predicate's own "ante la duda, no lanza", not
+        this port's business to tell apart from "fetched, but not an ancestor". Raises
+        `GitError` for anything else `git merge-base --is-ancestor` answers beside its
+        own two documented exit codes (0: is an ancestor, 1: is not): that is a git
+        failure, not an unresolved blocker, and must not read as "launch anyway"."""
+        ...
+
+
+@dataclass(frozen=True)
+class IssueState:
+    """The structured facts of one GitHub issue the poller's blocker/launch predicates
+    read (GH-137; invariant: no predicate reads prose). `state_reason` is `""` for an
+    open issue, `"COMPLETED"` or `"NOT_PLANNED"` for a closed one -- `gh`'s own closed
+    set, never widened here. `blocked_by` is `None` when `gh` does not expose the
+    native dependency at all (an older CLI, GH issue's own JSON field request failing),
+    the signal that tells a caller to fall back to the issue body's own `Blocked by:`
+    line instead of reading a lack of blockers into an empty tuple it never asked for.
+    `closing_merge_commit` is the merge commit of the pull request that closed this
+    issue, when `gh` names one; `None` for an issue still open, one closed without a
+    linked pull request, or one whose pull request never merged."""
+
+    state: Literal["OPEN", "CLOSED"]
+    state_reason: str
+    blocked_by: tuple[int, ...] | None
+    closing_merge_commit: str | None
+
+
+@dataclass(frozen=True)
+class IssueComment:
+    """One comment of an issue, with its timestamp (GH-137): `rules.next_attempt_at`'s
+    own `since` reads a structured `createdAt`, never a parsed sentence, and `prior`
+    counts comments after the last one a human (not the system) wrote."""
+
+    body: str
+    created_at: str
+
 
 class Tracker(Protocol):
     """Where the human is told (ADR-0011): the pull request, the issue's comments and
@@ -533,7 +576,30 @@ class Tracker(Protocol):
         stored in the document, always explicit -- never the bare form, which would
         resolve whatever branch `product_dir` has checked out, and a task restarted
         with `--fresh` has two pull requests with only the document knowing which is
-        this run's."""
+        this run's. Its own `.state` is the pull request's state -- no separate
+        `pull_request_state` verb exists, since this already answers it."""
+        ...
+
+    def queue(self) -> list[int]:
+        """Every open issue carrying the `agentic` label (README.md, 5), by number,
+        ascending (GH-137): the poller's own candidate pool, so "primero el número más
+        bajo" is decided here and not left to however `gh issue list` happens to order
+        a page today."""
+        ...
+
+    def issue_state(self, number: int) -> IssueState:
+        """The structured facts `poll_plan`'s predicates read off one issue -- a launch
+        candidate or a blocker alike (GH-137)."""
+        ...
+
+    def timestamped_comments(self, task_id: str) -> list[IssueComment]:
+        """Every comment of the task's issue, oldest first, each with its own
+        timestamp (GH-137) -- `issue_comments`'s bodies-only answer is not enough for
+        `rules.next_attempt_at`, which needs `createdAt` too. Named apart from
+        `issue_comments` on purpose, not only `comments`: the in-memory double already
+        carries a `comments` attribute of its own (every posted comment, the fixture's
+        long-standing test-inspection surface), and the two must never collide. Empty
+        when the task has no issue, the same shape `issue_comments` already has."""
         ...
 
 
@@ -594,6 +660,88 @@ class RunLock(Protocol):
         there is none, or when the lock now belongs to someone else -- a takeover
         that happened after this process's own claim was lost must never be undone
         by this process releasing on its way out."""
+        ...
+
+
+@dataclass(frozen=True)
+class RunRegistration:
+    """One live `agentic run`/`resume` invocation, as `RunRegistry.live` hands it
+    back (GH-137): what the poller counts against `AGENTIC_MAX_CONCURRENT_RUNS`, across
+    every product on this machine -- the account's own 429 is not scoped to one."""
+
+    pid: int
+    host: str
+    product: str
+    task_id: str
+
+
+@dataclass(frozen=True)
+class LaunchAttempt:
+    """What a launch left behind when it tried but did not reach a registered run
+    (GH-137, `launches/<product>-<issue>.json`): `since` and `prior` feed
+    `rules.next_attempt_at` directly, the same shape a resume's own schedule has, so
+    one issue is never relaunched every turn while its own backoff has not run out."""
+
+    since: datetime
+    prior: int
+
+
+class RunRegistry(Protocol):
+    """How many `agentic` invocations are alive on this machine right now, across every
+    product (GH-137), and the poller's own record of a launch attempt that has not
+    registered a run yet. Scoped to `Configuration.run_registry_dir`, outside every
+    product -- the account's session limit a 429 names is the machine's, not a
+    product's."""
+
+    def register(self, product: str, task_id: str) -> None:
+        """Write this process's own entry (`os.getpid()`, this host). `run`/`resume`
+        call this inside their own per-task lock, right after they acquire it."""
+        ...
+
+    def unregister(self) -> None:
+        """Remove this process's own entry. A no-op if it never registered one."""
+        ...
+
+    def live(self) -> list[RunRegistration]:
+        """Every entry whose pid answers on this host, right now. An entry recorded
+        under a different host is never probed -- the same coin-flip `RunLock` already
+        refuses to take -- and so never counts as live here either."""
+        ...
+
+    def exclusive(self) -> AbstractContextManager[None]:
+        """The one lock the poller decides under (`runs/.lock`): counting `live()` and
+        deciding how many launches fit is atomic across every poller on this machine,
+        not only within one product's."""
+        ...
+
+    def launch_attempts(self, product: str, issue: int) -> LaunchAttempt | None:
+        """The schedule of a launch attempt that has not cleared yet; `None` when this
+        issue has never been attempted, or its attempt already cleared."""
+        ...
+
+    def record_launch(self, product: str, issue: int, when: datetime) -> None:
+        """Note one more launch attempt of `issue`, timestamped `when` (the poller's own
+        clock, never read here): `prior` grows by one, `since` becomes `when`."""
+        ...
+
+    def clear_launch(self, product: str, issue: int) -> None:
+        """Forget the schedule once the launch registered a real run (`register` saw
+        it) or once the issue is no longer a candidate at all. A no-op when there is
+        none."""
+        ...
+
+
+class Launcher(Protocol):
+    """Spawns one child `agentic` invocation, detached (GH-137): the poller's own way of
+    closing, resuming and launching, never running a role in its own process (the
+    plan's own invariant). Wraps `cli._spawn_detached`: the real implementation picks
+    its own log path the same way `cli._log_file_for` already does, so
+    `application/poll.py` never has to invent one, and can be tested against a
+    recording double instead of a real `Popen`."""
+
+    def spawn(self, argv: list[str]) -> int:
+        """Returns the child's pid, exactly as `cli.Spawner` already does once its own
+        log path is picked."""
         ...
 
 

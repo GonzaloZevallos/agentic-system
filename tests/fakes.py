@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable
 from pathlib import Path
 
 from agentic.core.knowledge.domain import knowledge
-from agentic.core.process.application.ports import Checkout, CommandResult, Ports, RawResult
+from agentic.core.process.application.ports import (
+    Checkout,
+    CommandResult,
+    IssueComment,
+    IssueState,
+    LaunchAttempt,
+    Ports,
+    RawResult,
+    RunRegistration,
+)
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.roles import PROMPTS_DIR, Role
 from agentic.core.process.domain.suppressions import Forbidden
@@ -295,6 +305,10 @@ class MemoryWorkspace:
         # the product's `.gitignore`; empty is a product that ignores nothing.
         self.ignored: set[str] = set()
         self.ignored_checks: list[tuple[Path, str]] = []
+        # `sha`s a test declares already landed; `is_ancestor` answers True for those
+        # alone. Every call is kept too (GH-137's own blocker/launch predicates).
+        self.ancestors: set[str] = set()
+        self.ancestor_checks: list[tuple[Path, str, str]] = []
         self.checkouts: list[Path] = []
         # The worktrees this fake has made, as a real one has them on disk.
         self.on_disk: set[Path] = set()
@@ -394,6 +408,10 @@ class MemoryWorkspace:
         self.ignored_checks.append((root, relative))
         return relative in self.ignored
 
+    def is_ancestor(self, path: Path, sha: str, ref: str = "HEAD") -> bool:
+        self.ancestor_checks.append((path, sha, ref))
+        return sha in self.ancestors
+
 
 class MemoryTracker:
     def __init__(self, url: str = "https://github.com/o/r/pull/7"):
@@ -406,6 +424,14 @@ class MemoryTracker:
         self.earlier: list[str] = []
         # `(title, body)` of every issue `open_issue` opened, in order.
         self.opened_issues: list[tuple[str, str]] = []
+        # GH-137: the poller's own candidate pool, and the structured facts per issue
+        # number a test scripts with `states`.
+        self._queue: list[int] = []
+        self.states: dict[int, IssueState] = {}
+        # `timestamped_comments`'s own answer, keyed by task id -- separate from
+        # `earlier`/`issue_comments`, which stay bodies-only, and from `self.comments`
+        # above, which is every comment *this fake posted*, not the issue's own.
+        self.timestamped: dict[str, list[IssueComment]] = {}
 
     def open_pull_request(self, task_id: str, branch: str, title: str, body: str) -> str:
         self.pull_requests.append((branch, title, body))
@@ -426,6 +452,67 @@ class MemoryTracker:
 
     def issue_comments(self, task_id: str) -> list[str]:
         return [*self.earlier, *(text for _, text in self.comments)]
+
+    def timestamped_comments(self, task_id: str) -> list[IssueComment]:
+        return self.timestamped.get(task_id, [])
+
+    def queue(self) -> list[int]:
+        return sorted(self._queue)
+
+    def issue_state(self, number: int) -> IssueState:
+        return self.states[number]
+
+
+class MemoryRunRegistry:
+    """GH-137: no real pid, no real file. `live` answers whatever a test pre-loads in
+    `entries`, since this fake never actually forks a second process to be alive."""
+
+    def __init__(self, entries: list[RunRegistration] | None = None):
+        self.entries: list[RunRegistration] = list(entries or [])
+        self.registered: list[tuple[str, str]] = []
+        self.unregistered = 0
+        self.exclusive_entries = 0
+        self.attempts: dict[tuple[str, int], LaunchAttempt] = {}
+        self.cleared: list[tuple[str, int]] = []
+
+    def register(self, product: str, task_id: str) -> None:
+        self.registered.append((product, task_id))
+
+    def unregister(self) -> None:
+        self.unregistered += 1
+
+    def live(self) -> list[RunRegistration]:
+        return list(self.entries)
+
+    @contextlib.contextmanager
+    def exclusive(self):
+        self.exclusive_entries += 1
+        yield
+
+    def launch_attempts(self, product: str, issue: int) -> LaunchAttempt | None:
+        return self.attempts.get((product, issue))
+
+    def record_launch(self, product: str, issue: int, when) -> None:
+        existing = self.attempts.get((product, issue))
+        prior = existing.prior if existing is not None else 0
+        self.attempts[(product, issue)] = LaunchAttempt(when, prior + 1)
+
+    def clear_launch(self, product: str, issue: int) -> None:
+        self.attempts.pop((product, issue), None)
+        self.cleared.append((product, issue))
+
+
+class FakeLauncher:
+    """GH-137: records every `argv` a poller would have spawned, in order, instead of
+    ever calling `_spawn_detached`."""
+
+    def __init__(self, pid: int = 4242):
+        self.pid = pid
+        self.spawned: list[list[str]] = []
+
+    def spawn(self, argv: list[str]) -> int:
+        self.spawned.append(list(argv))
+        return self.pid
 
 
 def memory_ports(runner: ScriptedRunner | None = None, **overrides) -> Ports:
