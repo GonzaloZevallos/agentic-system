@@ -79,6 +79,31 @@ El texto de PM que gobierna el resto de la tarea: comportamiento, flujo, diseño
 _Avoid_: spec, requerimientos, definición única (el nombre anterior del mismo término)
 _Campo_: de producto humano. `spec` en el mundo agéntico viene pegado a un flujo de archivos (GitHub Spec Kit: `/specify` → `/plan` → `/tasks`) que no es el nuestro
 
+**Flujo**:
+Lo que UX Designer escribe por cada job del PRD cuando la tarea toca UI: desde dónde empieza la persona hasta el job cumplido, cada paso con su pantalla, lo que puede salir mal y cómo se recupera, a dónde vuelve y cuántos toques lleva. Es la evaluación de la experiencia: la fricción se mide en pasos contra el job. Lo valida UX Lead y PM lo consolida en el PRD. Si la tarea no cambia el flujo, lo dice y nada más.
+_Avoid_: user journey, crítica de pantallas (evaluar lo diseñado sin escribir el flujo)
+_Campo_: user flow — del diseño de interacción; el conteo de pasos contra la tarea viene del modelo KLM (Card, Moran y Newell, 1980)
+
+**Recorrido**:
+Lo que hace UX Lead para validar un flujo: recorre el prototipo del producto en un navegador, paso a paso por cada job, y compara con el flujo escrito. Cada hallazgo nombra la pantalla y el paso. Es su fuente propia: el UX Designer escribió el flujo sin recorrerlo.
+_Avoid_: revisión heurística (una lista de criterios sin navegar no es fuente propia)
+_Campo_: cognitive walkthrough — Wharton, Rieman, Lewis y Polson (1994). Donde el flujo pasa por una pantalla que el prototipo no tiene, ese tramo se evalúa sobre el texto y el hallazgo lo dice ("sin prototipo")
+
+**Diseño de pantallas**:
+Lo que UI Designer escribe sobre el flujo validado cuando la tarea toca UI: por cada pantalla que la tarea toca, qué pantalla del diseño del producto aplica (o cómo armar una nueva con sus componentes, si no existe), sus estados y lo que el PRD obliga a cambiar. Lo valida Design Lead, PM lo consolida en el PRD y cada brief de front nombra las suyas. La fidelidad que pide es igual a ojo: misma estructura, jerarquía, tipografía, colores, espaciado y componentes.
+_Avoid_: spec visual (el glosario evita spec), visual
+_Campo_: design spec / redlines — del handoff entre diseño y desarrollo
+
+**Observación al diseño**:
+Fricción que UX encuentra en el diseño del humano sin que impida cumplir el job. No pausa la tarea: se sigue con el diseño tal cual, como supuesto, y la observación le llega al humano en el pull request para que decida después. Si el problema sí impide cumplir el job (falta una pantalla o un estado que el PRD exige), no es observación: es pregunta para el humano. El sistema nunca cambia el diseño del humano por su cuenta.
+_Avoid_: hallazgo (lo de un validador sobre un pensador), sugerencia
+_Campo_: sin término de arte
+
+**Comparación**:
+Una pantalla del prototipo y la misma pantalla de la app de muestra, lado a lado y del mismo ancho. La saca un comando del producto. El Developer mira las suyas antes de entregar y Design Lead las juzga en la validación final de PM.
+_Avoid_: par de capturas (Par ya es el rol que devuelve y el que recibe), screenshot diff (no se compara pixel a pixel)
+_Campo_: visual comparison; el vecino estricto es visual regression testing, que sí compara pixeles
+
 **Flag**:
 Marca de alcance sobre una tarea, como "toca UI" o "toca textos", tomada del vocabulario de flags del producto. Los propone Product Analyst y los valida PM; el set validado reemplaza al propuesto.
 _Campo_: sin término de arte
