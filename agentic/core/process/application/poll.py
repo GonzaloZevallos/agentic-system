@@ -21,7 +21,7 @@ from datetime import datetime
 from agentic.shared.configuration import Configuration
 
 from ..domain import rules
-from .ports import IssueComment, Launcher, Ports, RunRegistry
+from .ports import GitError, IssueComment, Launcher, Ports, RunRegistry
 
 # How long `execute` waits for a spawned `run`/`resume` child to register itself
 # (Human decision, issue #137): a second round must never count a slot this round's
@@ -203,11 +203,16 @@ def _blocker_resolved(cfg: Configuration, ports: Ports, blocker: int) -> bool:
 def _blocked(cfg: Configuration, ports: Ports, number: int) -> bool:
     """Whether `number` still has an unresolved blocker. Any doubt -- an unknown git
     object, a `gh` failure, a blocker whose own `stateReason` this function does not
-    recognize -- reads as blocked (Tech Lead plan: "ante la duda, no lanza")."""
+    recognize, or a real git failure (`GitError` out of `Workspace.is_ancestor`,
+    `ValueError`/`OSError` out of a `gh` call that is not merely "unknown field") --
+    reads as blocked (Tech Lead plan: "ante la duda, no lanza"). A `GitError` escaping
+    here would otherwise end the whole `_poll` loop, which has no handler of its own
+    (the blocking finding this closes): one candidate's git trouble must cost that
+    candidate's own launch, never the round, and never the process."""
     try:
         blockers = _blocker_numbers(ports, number)
         return not all(_blocker_resolved(cfg, ports, b) for b in blockers)
-    except (ValueError, OSError, KeyError):
+    except (ValueError, OSError, KeyError, GitError):
         return True
 
 

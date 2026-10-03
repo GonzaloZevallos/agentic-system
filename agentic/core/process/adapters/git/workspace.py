@@ -26,6 +26,7 @@ from pathlib import Path
 from agentic.shared.configuration import LOGS_DIR, STATE_FILE
 
 from ...application.ports import Checkout
+from ...application.ports import GitError as GitError  # re-exported: see ports.py
 from ...domain import rules
 from ...domain.task import DependencyState, MergeOutcome
 
@@ -34,10 +35,6 @@ WORKTREES = Path(".agentic/worktrees")
 # (README.md, 14; issue #33), through this same mechanism rather than the product's own
 # `.gitignore`, which is the product's business.
 EXCLUDES = (f"{WORKTREES}/", f"{STATE_FILE}*", f"{LOGS_DIR}/")
-
-
-class GitError(RuntimeError):
-    pass
 
 
 class GitWorkspace:

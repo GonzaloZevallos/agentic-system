@@ -390,6 +390,18 @@ class Checkout:
     created: bool = False
 
 
+class GitError(RuntimeError):
+    """A real git failure -- not a question `Workspace`'s own contract answers some
+    other way, like `is_ancestor`'s `False` for an object this checkout does not have
+    (GH-137: a stale local checkout, not a broken one). Defined here, in the port
+    `application` layer owns, rather than in the adapter that raises it, because the
+    poller's launch predicate (`application/poll.py`, which may not import adapters at
+    all -- the architecture test) must catch it: "ante la duda, no lanza" covers a git
+    failure the same as an unknown object or a `gh` error. The adapter module still
+    exposes the same name, imported from here, so existing call sites and tests that
+    import it from `adapters.git.workspace` keep working unchanged."""
+
+
 class Workspace(Protocol):
     """The product repository as git sees it (ADR-0011): one branch and worktree per
     task, one per subtask, all idempotent so a use case can ask again."""

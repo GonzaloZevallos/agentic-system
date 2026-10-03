@@ -10,6 +10,7 @@ from agentic.core.knowledge.domain import knowledge
 from agentic.core.process.application.ports import (
     Checkout,
     CommandResult,
+    GitError,
     IssueComment,
     IssueState,
     LaunchAttempt,
@@ -309,6 +310,11 @@ class MemoryWorkspace:
         # alone. Every call is kept too (GH-137's own blocker/launch predicates).
         self.ancestors: set[str] = set()
         self.ancestor_checks: list[tuple[Path, str, str]] = []
+        # GH-137 blocking finding: a `sha` here makes `is_ancestor` raise `GitError`
+        # instead of answering, the real-git-failure case a stale/unknown object must
+        # not be confused with ("ante la duda, no lanza" needs a rejected-input test
+        # for this, not only for the known-false case `ancestors` already covers).
+        self.ancestor_errors: set[str] = set()
         self.checkouts: list[Path] = []
         # The worktrees this fake has made, as a real one has them on disk.
         self.on_disk: set[Path] = set()
@@ -410,6 +416,8 @@ class MemoryWorkspace:
 
     def is_ancestor(self, path: Path, sha: str, ref: str = "HEAD") -> bool:
         self.ancestor_checks.append((path, sha, ref))
+        if sha in self.ancestor_errors:
+            raise GitError(f"git merge-base --is-ancestor {sha} {ref} failed: scripted")
         return sha in self.ancestors
 
 
@@ -428,6 +436,11 @@ class MemoryTracker:
         # number a test scripts with `states`.
         self._queue: list[int] = []
         self.states: dict[int, IssueState] = {}
+        # GH-137 blocking finding: a number here makes `issue_state` raise `ValueError`
+        # (`gh`'s own failure shape, `GhTracker._gh`) instead of answering, so a
+        # blocker predicate's "an error of `gh` counts as unresolved" has a rejected
+        # input to reject, not only the happy structured answer `states` gives.
+        self.state_errors: set[int] = set()
         # `timestamped_comments`'s own answer, keyed by task id -- separate from
         # `earlier`/`issue_comments`, which stay bodies-only, and from `self.comments`
         # above, which is every comment *this fake posted*, not the issue's own.
@@ -460,6 +473,8 @@ class MemoryTracker:
         return sorted(self._queue)
 
     def issue_state(self, number: int) -> IssueState:
+        if number in self.state_errors:
+            raise ValueError(f"gh issue view {number} failed: scripted")
         return self.states[number]
 
 

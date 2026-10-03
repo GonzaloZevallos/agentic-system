@@ -136,6 +136,39 @@ def test_an_issue_with_every_blocker_closed_launches(tmp_path):
     assert registry.attempts[("product", 5)].prior == 1
 
 
+def test_a_blocker_whose_ancestor_check_raises_a_git_error_does_not_launch(tmp_path):
+    """Tech Lead's blocking finding: `is_ancestor` can raise `GitError` for a real git
+    failure (never for an unknown object, which answers `False` instead), and that must
+    read as an unresolved blocker, not escape `run_once` and end the long-lived `_poll`
+    loop, which has no handler of its own."""
+    ports = memory_ports()
+    ports.tracker._queue = [5]
+    ports.tracker.states[5] = IssueState("OPEN", "", (3,), None)
+    ports.tracker.states[3] = IssueState("CLOSED", "COMPLETED", None, "deadbeef")
+    ports.workspace.ancestor_errors = {"deadbeef"}
+    registry = MemoryRunRegistry()
+    launcher = FakeLauncher()
+    lines = _round(_cfg(tmp_path), ports, registry, launcher, ESCALATED_AT)
+    assert lines == ["agentic: poll: nothing to do this round"]
+    assert launcher.spawned == []
+
+
+def test_a_blocker_whose_issue_state_raises_does_not_launch(tmp_path):
+    """Tech Lead's blocking finding: a `gh` failure reading a blocker's own state (here,
+    `ValueError`, the shape `GhTracker._gh` raises it in) counts as an unresolved
+    blocker -- "ante la duda, no lanza" -- the same as the git failure above, not an
+    exception `run_once` propagates."""
+    ports = memory_ports()
+    ports.tracker._queue = [5]
+    ports.tracker.states[5] = IssueState("OPEN", "", (3,), None)
+    ports.tracker.state_errors = {3}
+    registry = MemoryRunRegistry()
+    launcher = FakeLauncher()
+    lines = _round(_cfg(tmp_path), ports, registry, launcher, ESCALATED_AT)
+    assert lines == ["agentic: poll: nothing to do this round"]
+    assert launcher.spawned == []
+
+
 def test_nothing_launches_when_the_machine_wide_cap_is_full(tmp_path):
     ports = memory_ports()
     ports.tracker._queue = [5]
