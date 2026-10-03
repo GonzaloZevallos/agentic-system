@@ -449,6 +449,12 @@ class Subtask(TypedDict, total=False):
     brief: str
     seams: list[str]
     depends_on: list[str]
+    # The screens of the design (ADR-0040) this subtask builds, for a front subtask of
+    # a `touches_ui` task; the Developer's brief names them (`plan_view._brief`).
+    # Persisted only when non-empty; absent on every document written before this key
+    # existed and on a subtask with no screen of its own -- every read is
+    # `.get("screens", [])`.
+    screens: list[str]
     status: SubtaskStatus
     branch: str
     # Commit the branch started from: the first review diffs from it.
