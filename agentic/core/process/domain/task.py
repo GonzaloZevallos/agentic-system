@@ -474,20 +474,37 @@ class Subtask(TypedDict, total=False):
     conflicted_paths: list[str]
 
 
-class PauseEntry(TypedDict):
-    """One entry of `TaskState.pause_log` (issue #137): the append-only register the
-    poller's own eligibility reads, never `escalation_class` or any failure's `error`
-    text. Three shapes, by `kind`: `"resumed"` (`rules.resumed`'s own patch) marks a
-    fresh epoch boundary, with neither `value` nor `section`; `"escalation"` carries
-    the `EscalationClass` a patch's own `escalation_class` already named, composed by
-    `rules.logged`; `"failure"` carries one `Failure`'s own `reason` and `section`,
-    one entry per failure `run_role.escalation` hands `rules.logged` as `exc.failures`.
-    The *current epoch* (`rules.auto_resumable`'s own reading) is every entry after the
-    last `"resumed"` one, or the whole log when there is none."""
+# One entry of `TaskState.pause_log` (issue #137): the append-only register the
+# poller's own eligibility reads, never `escalation_class` or any failure's `error`
+# text. A discriminated union on `kind`, one `TypedDict` per shape, rather than one
+# `TypedDict` with optional fields: `auto_resumable` reads a `FailurePauseEntry`'s own
+# `value` as the `FailureReason` it always is, with nothing to narrow by hand (ADR-0021
+# forbids a `cast` to make a wider field fit). `ResumedPauseEntry` (`rules.resumed`'s
+# own patch) marks a fresh epoch boundary, with neither `value` nor `section`.
+# `EscalationPauseEntry` carries the `EscalationClass` a patch's own `escalation_class`
+# already named, composed by `rules.logged`. `FailurePauseEntry` carries one `Failure`'s
+# own `reason` and `section`, one entry per failure `run_role.escalation` hands
+# `rules.logged` as `exc.failures`. The *current epoch* (`rules.auto_resumable`'s own
+# reading) is every entry after the last `ResumedPauseEntry`, or the whole log when
+# there is none.
 
-    kind: Literal["resumed", "escalation", "failure"]
-    value: NotRequired[EscalationClass | FailureReason]
-    section: NotRequired[str]
+
+class ResumedPauseEntry(TypedDict):
+    kind: Literal["resumed"]
+
+
+class EscalationPauseEntry(TypedDict):
+    kind: Literal["escalation"]
+    value: EscalationClass
+
+
+class FailurePauseEntry(TypedDict):
+    kind: Literal["failure"]
+    value: FailureReason
+    section: str
+
+
+PauseEntry = ResumedPauseEntry | EscalationPauseEntry | FailurePauseEntry
 
 
 class TaskState(TaskInput, total=False):

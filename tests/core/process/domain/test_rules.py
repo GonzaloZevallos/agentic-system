@@ -1407,6 +1407,42 @@ def test_poll_plan_launches_nothing_when_the_cap_is_full():
     assert actions == []
 
 
+def test_poll_plan_does_not_launch_an_issue_whose_own_wait_has_not_elapsed():
+    # Rejected input: the only launch candidate there is was attempted a minute ago,
+    # its own first 15-minute slot has not elapsed yet -- nothing launches this round.
+    not_due = rules.LaunchCandidate(
+        issue=9, blocked=False, since=NOW - timedelta(minutes=1), prior=0, limit=6
+    )
+    actions = rules.poll_plan(closes=[], resumes=[], launches=[not_due], available_slots=1, now=NOW)
+    assert actions == []
+
+
+def test_poll_plan_does_not_launch_an_issue_whose_own_calendar_is_spent():
+    # Rejected input: every slot of this issue's own calendar already ran out
+    # (`prior == limit`) -- excluded until a human acts, per "al llegar al límite".
+    exhausted = rules.LaunchCandidate(
+        issue=9, blocked=False, since=NOW - timedelta(days=1), prior=6, limit=6
+    )
+    actions = rules.poll_plan(
+        closes=[], resumes=[], launches=[exhausted], available_slots=1, now=NOW
+    )
+    assert actions == []
+
+
+def test_poll_plan_launches_even_though_an_exhausted_resume_elsewhere_cannot_retry():
+    # A resume whose own calendar is spent (`prior >= limit`) is not "an external wait
+    # not yet elapsed": it needs a human now, like any other escalation, and must not
+    # freeze every launch in the product until one acts.
+    exhausted = rules.ResumeCandidate(
+        issue=5, reason="account_limit", since=NOW - timedelta(days=1), prior=6, limit=6
+    )
+    ready = rules.LaunchCandidate(issue=9, blocked=False, since=None, prior=0, limit=6)
+    actions = rules.poll_plan(
+        closes=[], resumes=[exhausted], launches=[ready], available_slots=1, now=NOW
+    )
+    assert actions == [rules.PollAction("launch", 9)]
+
+
 def test_poll_plan_launches_nothing_while_a_pause_elsewhere_still_waits():
     # No se lanza nada mientras haya una espera externa sin vencer en el producto,
     # whether or not a slot is free for the launch.

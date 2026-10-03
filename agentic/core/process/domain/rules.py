@@ -10,7 +10,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 from . import presubmit
 from .denials import denial_for
@@ -36,12 +36,15 @@ from .task import (
     DependencyState,
     EscalationClass,
     EscalationPatch,
+    EscalationPauseEntry,
     Failure,
+    FailurePauseEntry,
     FailureReason,
     FindingCategory,
     FindingRecord,
     MergeOutcome,
     PauseEntry,
+    ResumedPauseEntry,
     ReviewKind,
     RoleRun,
     Status,
@@ -1327,7 +1330,7 @@ def resumed(state: TaskState, decision: str | None) -> dict[str, Any]:
         # A fresh epoch (issue #137): `rules.auto_resumable` reads only the entries
         # after the last one of this kind, so a pause the human just resolved never
         # counts toward what the poller may retry on its own next time.
-        "pause_log": [PauseEntry(kind="resumed")],
+        "pause_log": [ResumedPauseEntry(kind="resumed")],
     }
     if pair := returns_pair(state):
         patch["changes_requested"] = {pair: 0}
@@ -1402,11 +1405,13 @@ def logged(patch: dict[str, Any], failures: Sequence[Failure] = ()) -> dict[str,
     about its own cause must never read as `account_limit` and ease into an automatic
     retry."""
     entries: list[PauseEntry] = [
-        PauseEntry(kind="failure", value=f.get("reason", "other"), section=f.get("section", ""))
+        FailurePauseEntry(
+            kind="failure", value=f.get("reason", "other"), section=f.get("section", "")
+        )
         for f in failures
     ]
     if (cls := patch.get("escalation_class")) is not None:
-        entries.append(PauseEntry(kind="escalation", value=cls))
+        entries.append(EscalationPauseEntry(kind="escalation", value=cls))
     return {**patch, "pause_log": entries}
 
 
@@ -1415,7 +1420,10 @@ def _current_epoch(state: TaskState) -> list[PauseEntry]:
     after the last `"resumed"` entry (a human's decision, or the poller's own retake),
     or the whole log when the task has never been resumed."""
     log = state.get("pause_log", [])
-    last_resumed = max((i for i, e in enumerate(log) if e["kind"] == "resumed"), default=-1)
+    last_resumed = -1
+    for i, entry in enumerate(log):
+        if entry["kind"] == "resumed":
+            last_resumed = i
     return log[last_resumed + 1 :]
 
 
@@ -1430,16 +1438,20 @@ def auto_resumable(state: TaskState) -> FailureReason | None:
     `"cap"` or `"returns"` is not purely an external cut, whatever its failures were),
     and every `"failure"` entry's own reason is in `EXTERNAL_REASONS`. The reason
     returned is the most recent failure's -- what still blocks this pause right now."""
-    epoch = _current_epoch(state)
-    failures = [e for e in epoch if e["kind"] == "failure"]
-    escalations = [e for e in epoch if e["kind"] == "escalation"]
+    failures: list[FailurePauseEntry] = []
+    escalations: list[EscalationPauseEntry] = []
+    for entry in _current_epoch(state):
+        if entry["kind"] == "failure":
+            failures.append(entry)
+        elif entry["kind"] == "escalation":
+            escalations.append(entry)
     if not failures:
         return None
-    if not all(e.get("value") == "failure" for e in escalations):
+    if not all(e["value"] == "failure" for e in escalations):
         return None
-    if not all(e.get("value") in EXTERNAL_REASONS for e in failures):
+    if not all(f["value"] in EXTERNAL_REASONS for f in failures):
         return None
-    return cast(FailureReason, failures[-1]["value"])
+    return failures[-1]["value"]
 
 
 def auto_resume_limit(state: TaskState) -> int:
@@ -1449,27 +1461,35 @@ def auto_resume_limit(state: TaskState) -> int:
     interview two rounds of margin (`INTERVIEW_RETAKE_ROUNDS`), so a long automatic
     chase on top of that is not this task's own risk to take -- six otherwise, the
     whole calendar."""
-    epoch = _current_epoch(state)
-    in_interview = any(
-        e["kind"] == "failure" and e.get("section") in _INTERVIEW_SECTIONS for e in epoch
-    )
+    in_interview = False
+    for entry in _current_epoch(state):
+        if entry["kind"] == "failure" and entry["section"] in _INTERVIEW_SECTIONS:
+            in_interview = True
     return 1 if in_interview else len(AUTO_RESUME_SCHEDULE)
+
+
+def _schedule_exhausted(prior: int, limit: int) -> bool:
+    """Whether `prior` automatic attempts have already used up every slot
+    `AUTO_RESUME_SCHEDULE[:limit]` has: `next_attempt_at`'s own exhaustion check,
+    factored out so `poll_plan` can tell it apart from "not due yet" -- both of those
+    read as `None` from `next_attempt_at` alone, and only the first (a calendar that
+    ran out, not one still ticking) must stop blocking a launch."""
+    return prior >= len(AUTO_RESUME_SCHEDULE[:limit])
 
 
 def next_attempt_at(since: datetime, prior: int, limit: int, now: datetime) -> datetime | None:
     """The next automatic attempt's own time, but only once it is due (issue #137):
-    `None` both when the calendar is spent (`prior` already reached `limit`, no slot
-    left to schedule) and when the next slot has not arrived yet (`now` before it) --
-    the two reasons a caller does not act on this pause read alike, one check instead
-    of two. `since` is the moment the wait is measured from: the last `Escalated:`
-    comment's own time for a retake, the last launch attempt's own time for a launch
-    (Tech Lead plan); `prior` is how many automatic attempts already happened since
-    then. Never reads a clock of its own (README.md, 14): `now` arrives as an argument,
-    like `since`."""
-    schedule = AUTO_RESUME_SCHEDULE[:limit]
-    if prior >= len(schedule):
+    `None` both when the calendar is spent (`_schedule_exhausted`, no slot left to
+    schedule) and when the next slot has not arrived yet (`now` before it) -- the two
+    reasons a caller does not act on this pause read alike, one check instead of two.
+    `since` is the moment the wait is measured from: the last `Escalated:` comment's
+    own time for a retake, the last launch attempt's own time for a launch (Tech Lead
+    plan); `prior` is how many automatic attempts already happened since then. Never
+    reads a clock of its own (README.md, 14): `now` arrives as an argument, like
+    `since`."""
+    if _schedule_exhausted(prior, limit):
         return None
-    target = since + timedelta(minutes=schedule[prior])
+    target = since + timedelta(minutes=AUTO_RESUME_SCHEDULE[prior])
     return target if target <= now else None
 
 
@@ -1551,10 +1571,13 @@ def poll_plan(
     retakes next, lowest issue first, while `available_slots` lasts; at most one
     launch, the lowest-numbered issue with every blocker resolved and its own wait (if
     any) elapsed -- and only when no eligible pause anywhere in the product is still
-    waiting out its own calendar, whether or not a slot is free for it. `available_
-    slots` already reflects the machine-wide cap (`AGENTIC_MAX_CONCURRENT_RUNS`) minus
-    every run alive right now, counted by the caller; this function never reads the
-    registry itself."""
+    waiting out its own calendar (its own next slot has not arrived yet, but one is
+    still scheduled), whether or not a slot is free for it. A pause whose calendar is
+    spent (`_schedule_exhausted`) does not count as "still waiting": it needs a human
+    now, same as any other escalation, and must not freeze every launch in the product
+    until one acts. `available_slots` already reflects the machine-wide cap
+    (`AGENTIC_MAX_CONCURRENT_RUNS`) minus every run alive right now, counted by the
+    caller; this function never reads the registry itself."""
     actions = [PollAction("close", issue) for issue in sorted(closes)]
 
     due_resumes = sorted(
@@ -1565,7 +1588,11 @@ def poll_plan(
     actions.extend(PollAction("resume", r.issue) for r in taken)
 
     slots_left = max(available_slots - len(taken), 0)
-    some_resume_still_waiting = len(due_resumes) < len(resumes)
+    some_resume_still_waiting = any(
+        not _schedule_exhausted(r.prior, r.limit)
+        and next_attempt_at(r.since, r.prior, r.limit, now) is None
+        for r in resumes
+    )
     if slots_left > 0 and not some_resume_still_waiting:
         ready = sorted(
             (
