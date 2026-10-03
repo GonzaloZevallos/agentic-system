@@ -19,6 +19,7 @@ from agentic.core.process.application.ports import (
     RunRegistration,
 )
 from agentic.core.process.domain import rules
+from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.roles import PROMPTS_DIR, Role
 from agentic.core.process.domain.suppressions import Forbidden
 from agentic.core.process.domain.task import DependencyState, MergeOutcome, TaskInput, TaskState
@@ -189,6 +190,7 @@ class MemoryStack:
         product: str | None = "product",
         witness: str | None = None,
         forbidden: list[Forbidden] | None = None,
+        design: Design | None = None,
     ):
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -201,6 +203,10 @@ class MemoryStack:
         # product but this repo's own future tasks -- the same legitimate absence
         # `witness` has.
         self.declared_forbidden = [] if forbidden is None else forbidden
+        # None is a product that declares no design block (ADR-0040), the same
+        # legitimate absence `witness` has: every product but the one a design task
+        # prepares for.
+        self.declared_design = design
         self.revisions: list[str] = []
 
     def checks(self, revision: str) -> dict[str, str]:
@@ -225,6 +231,10 @@ class MemoryStack:
         if self.declared_product is None:
             raise ValueError("expected `product`, the name this product goes by")
         return self.declared_product
+
+    def design(self, revision: str) -> Design | None:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_design
 
 
 class MemoryCommands:

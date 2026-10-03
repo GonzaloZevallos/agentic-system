@@ -30,3 +30,15 @@ checks:
 # denial carries verbatim. One that was already in the file is not the task's. What a
 # suppression looks like in this product's own tools is this key's to spell, never the
 # system's -- see this repo's own `.agentic/stack.yaml` for a worked declaration.
+#
+# `design`: optional (ADR-0040). Without it, a task with `touches_ui` still runs, on
+# text alone: no rendered screen, no comparison. Four pieces, two required once the
+# block is there:
+#
+# design:
+#   prototype: docs/product/design-system/pantallas  # the static screens' directory
+#   entry: Home                                       # the screen a walk starts from
+#   sample_app: npm run dev                           # optional: starts the real app,
+#                                                      # prints its address and user
+#   compare: npm run compare                          # optional: renders this task's
+#                                                      # comparisons, prints the paths

@@ -2,6 +2,7 @@ import pytest
 import yaml
 
 from agentic.core.knowledge.domain import stack
+from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.suppressions import Forbidden
 
 
@@ -172,3 +173,67 @@ def test_a_pattern_that_does_not_compile_raises_at_load():
 def test_the_template_declares_no_forbidden_rule_either():
     data = yaml.safe_load(stack.TEMPLATE.read_text())
     assert stack.forbidden(data, stack.TEMPLATE) == ()
+
+
+# -- the optional `design` block (ADR-0040) -------------------------------------------
+
+
+def test_a_product_that_declares_no_design_block_has_none():
+    # Absent is legitimate, the same shape `witness`'s absence has: not every product
+    # has handed the human a prototype yet.
+    declared = {"checks": {"tests": "pytest"}}
+    assert stack.design(declared, "x") is None
+
+
+def test_the_minimal_valid_block_is_prototype_and_entry_alone():
+    declared = {
+        "checks": {"tests": "pytest"},
+        "design": {"prototype": "docs/product/design-system/pantallas", "entry": "Home"},
+    }
+    found = stack.design(declared, "x")
+    assert found == Design(
+        prototype="docs/product/design-system/pantallas",
+        entry="Home",
+        sample_app=None,
+        compare=None,
+    )
+
+
+def test_a_full_block_carries_both_commands():
+    declared = {
+        "checks": {"tests": "pytest"},
+        "design": {
+            "prototype": "pantallas",
+            "entry": "Home",
+            "sample_app": "npm run dev",
+            "compare": "npm run compare",
+        },
+    }
+    found = stack.design(declared, "x")
+    assert found is not None
+    assert found.sample_app == "npm run dev"
+    assert found.compare == "npm run compare"
+
+
+@pytest.mark.parametrize(
+    "design",
+    [
+        ["pantallas", "Home"],  # a list, not a mapping
+        {},  # present but empty is a half-written file, `setup`'s own shape
+        {"prototype": "", "entry": "Home"},  # blank prototype
+        {"prototype": "pantallas"},  # missing entry
+        {"prototype": "pantallas", "entry": ""},  # blank entry
+        {"prototype": "pantallas", "entry": "Home", "sample_app": 3},  # not a string
+        {"prototype": "pantallas", "entry": "Home", "compare": "  "},  # blank command
+        {"prototype": "pantallas", "entry": "Home", "screens": "x"},  # unknown sub-key
+    ],
+)
+def test_a_broken_design_declaration_raises_at_load(design):
+    declared = {"checks": {"tests": "pytest"}, "design": design}
+    with pytest.raises(ValueError, match="stack.yaml: expected|unknown"):
+        stack.design(declared, "stack.yaml")
+
+
+def test_the_template_declares_no_design_block(tmp_path):
+    data = yaml.safe_load(stack.TEMPLATE.read_text())
+    assert stack.design(data, stack.TEMPLATE) is None

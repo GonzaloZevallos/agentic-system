@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
+from ..domain.design import Design
 from ..domain.roles import Role
 from ..domain.rules import motive
 from ..domain.suppressions import Forbidden
@@ -332,6 +333,14 @@ class ProductStack(Protocol):
     def product(self, revision: str = "HEAD") -> str:
         """The name the product goes by, the label every span and metric of a run over it
         carries (issue #47)."""
+        ...
+
+    def design(self, revision: str) -> Design | None:
+        """The optional `design` block (ADR-0040, `core.knowledge`, glossary: Diseño
+        del producto): the static prototype, its entry screen, and the optional
+        `sample_app`/`compare` commands a design role reaches instead of a browser or
+        an arbitrary URL. `None` when the product declares none, which is every
+        product that has not handed the human a prototype yet -- never an error."""
         ...
 
 
