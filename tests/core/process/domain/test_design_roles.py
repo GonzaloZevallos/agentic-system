@@ -95,13 +95,166 @@ def test_no_new_prompt_names_a_concrete_tool_framework_path_or_command():
             assert term not in text, (slug, term)
 
 
-@pytest.mark.parametrize(
-    "schema",
-    [schemas.DesignDraft, schemas.DesignReview, schemas.Consolidation, schemas.FinalValidation],
-)
-def test_json_schema_is_pinned_for_every_new_output(schema):
-    out = schemas.json_schema(schema, {})
-    assert out["properties"]["markdown"]["type"] == "string"
+# Shared by every new output: `RoleOutput.markdown` itself, unchanged by any of them.
+_MARKDOWN = {
+    "description": "The role's Markdown section, free text, `###` headings",
+    "title": "Markdown",
+    "type": "string",
+}
+
+# `DesignItem` is nested under both `DesignReview.items` and `Consolidation.observations`
+# (schemas.py): Pydantic lifts it into `$defs` once and refs it from both, so this exact
+# block is what a dropped `verdict`, a renamed field or a widened `kind` enum would move.
+_DESIGN_ITEM_DEF = {
+    "description": (
+        "One remark from a design lead or from PM's consolidation (ADR-0040), the unit\n"
+        "`design_items` is made of. `blocking` means the job cannot be completed as the\n"
+        "design stands; anything else is `observation`, friction that does not pause the\n"
+        "task (glossary: Observación al diseño). Never written from section prose: only\n"
+        "from this field, structured."
+    ),
+    "properties": {
+        "kind": {"enum": ["observation", "blocking"], "title": "Kind", "type": "string"},
+        "step": {
+            "description": "The flow step or screen this remark is about",
+            "title": "Step",
+            "type": "string",
+        },
+        "text": {
+            "description": "The remark itself, one or two sentences",
+            "title": "Text",
+            "type": "string",
+        },
+    },
+    "required": ["kind", "step", "text"],
+    "title": "DesignItem",
+    "type": "object",
+}
+
+
+def test_design_draft_json_schema_is_pinned():
+    # The thinker output (UX Designer, UI Designer): `markdown` alone, the usual fields
+    # and nothing else -- a field added here would be structure the next role cannot see
+    # (the content is the section's prose, read by name, not as data).
+    assert schemas.json_schema(schemas.DesignDraft, {}) == {
+        "description": (
+            "UX Designer's flow or UI Designer's screens design (ADR-0040): the content is\n"
+            "the `markdown` itself, nothing structured beyond the usual fields -- the next role\n"
+            "reads it as a section, not as data."
+        ),
+        "properties": {"markdown": _MARKDOWN},
+        "required": ["markdown"],
+        "title": "DesignDraft",
+        "type": "object",
+    }
+
+
+def test_design_review_json_schema_is_pinned():
+    # The lead output (UX Lead, Design Lead, and their final-validation counterparts):
+    # a `verdict` that gates the design step, a `reason` and the structured `items`.
+    assert schemas.json_schema(schemas.DesignReview, {}) == {
+        "$defs": {"DesignItem": _DESIGN_ITEM_DEF},
+        "description": (
+            "UX Lead's walk or Design Lead's comparison judgement (ADR-0040), and the same\n"
+            "shape for their final-validation counterparts: a verdict the design step\n"
+            "(`rules.design_step`) reads, with the remarks that back it. Leads never return to\n"
+            "a Developer (README.md, 4): a `returned` verdict here sends the thinker back, never\n"
+            "the code."
+        ),
+        "properties": {
+            "markdown": _MARKDOWN,
+            "verdict": {"enum": ["approved", "returned"], "title": "Verdict", "type": "string"},
+            "reason": {
+                "description": "One line. On `returned`, what the thinker must fix",
+                "title": "Reason",
+                "type": "string",
+            },
+            "items": {
+                "description": (
+                    "Every remark, blocking or observation; empty only when there is none"
+                ),
+                "items": {"$ref": "#/$defs/DesignItem"},
+                "title": "Items",
+                "type": "array",
+            },
+        },
+        "required": ["markdown", "verdict", "reason", "items"],
+        "title": "DesignReview",
+        "type": "object",
+    }
+
+
+def test_consolidation_json_schema_is_pinned():
+    # PM's consolidation: a verdict, the two routed piles (`questions_for_human` as a
+    # line-list, `observations` as structured `DesignItem`s), on top of the usual fields.
+    assert schemas.json_schema(schemas.Consolidation, {}) == {
+        "$defs": {"DesignItem": _DESIGN_ITEM_DEF},
+        "description": (
+            "PM's consolidation of the validated flow and screens design into the PRD\n"
+            "(ADR-0040): `markdown` is the consolidated PRD section. What UX marked as\n"
+            "impeding the job becomes a question for the human; the rest of the friction\n"
+            "becomes an observation."
+        ),
+        "properties": {
+            "markdown": _MARKDOWN,
+            "verdict": {"enum": ["approved", "returned"], "title": "Verdict", "type": "string"},
+            "reason": {
+                "description": "One line. On `returned`, what Product Analyst must fix",
+                "title": "Reason",
+                "type": "string",
+            },
+            "questions_for_human": {
+                "type": "string",
+                "description": (
+                    "What UX or UI marked as impeding the job, written for a person who has not "
+                    "read the task. Empty if none. One per line; an empty string if none"
+                ),
+            },
+            "observations": {
+                "description": (
+                    "Friction that does not impede the job (kind is always `observation` here): "
+                    "it travels to the pull request, never pauses the task. Empty if none"
+                ),
+                "items": {"$ref": "#/$defs/DesignItem"},
+                "title": "Observations",
+                "type": "array",
+            },
+        },
+        "required": ["markdown", "verdict", "reason", "questions_for_human", "observations"],
+        "title": "Consolidation",
+        "type": "object",
+    }
+
+
+def test_final_validation_json_schema_is_pinned():
+    # PM's early final validation: a verdict, a reason and `blocking` as the one-line
+    # claims the integration review must settle -- a line-list like `questions_for_human`.
+    assert schemas.json_schema(schemas.FinalValidation, {}) == {
+        "description": (
+            "PM's early, UI-only final validation (ADR-0040): the verdict over UX Lead's\n"
+            "final walk and Design Lead's final comparisons, before Tech Lead's own close."
+        ),
+        "properties": {
+            "markdown": _MARKDOWN,
+            "verdict": {"enum": ["approved", "returned"], "title": "Verdict", "type": "string"},
+            "reason": {
+                "description": "One line. On `returned`, what Tech Lead must fix first",
+                "title": "Reason",
+                "type": "string",
+            },
+            "blocking": {
+                "type": "string",
+                "description": (
+                    "On `returned`, one-line claims the integration review must settle, each "
+                    "checkable on the diff alone. Empty on `approved`. One per line; an empty "
+                    "string if none"
+                ),
+            },
+        },
+        "required": ["markdown", "verdict", "reason", "blocking"],
+        "title": "FinalValidation",
+        "type": "object",
+    }
 
 
 def test_design_review_rejects_a_kind_outside_observation_or_blocking():
