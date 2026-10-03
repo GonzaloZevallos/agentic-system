@@ -2969,3 +2969,66 @@ async def test_merged_since_counts_by_the_merge_commit_position_not_by_closed_at
         ports.documents.save(doc)
     await _dry_run(root, ports)
     assert "Merged since anchor: 1" in capsys.readouterr().out
+
+
+# -- `agentic poll` (GH-137): the long-lived, per-product queue-mover -------------
+
+
+def test_poll_child_label_names_the_command_and_the_issue_when_present():
+    assert (
+        cli._poll_child_label(["agentic", "resume", "--issue", "19", "--yes"]) == "poll-resume-19"
+    )
+    assert cli._poll_child_label(["agentic", "close", "--issue", "3"]) == "poll-close-3"
+    assert cli._poll_child_label(["agentic", "run", "--detach"]) == "poll-run"
+    assert cli._poll_child_label(["agentic"]) == "poll-run"  # no command at all: the default
+
+
+def test_spawn_launcher_wraps_spawn_detached_with_a_freshly_minted_log_path(monkeypatch, tmp_path):
+    from agentic.shared.configuration import Configuration
+
+    calls = []
+
+    def fake_spawn_detached(argv, log_path):
+        calls.append((argv, log_path))
+        return 777
+
+    monkeypatch.setattr(cli, "_spawn_detached", fake_spawn_detached)
+    launcher = cli.SpawnLauncher(Configuration(product_dir=tmp_path))
+    argv = ["agentic", "resume", "--issue", "19", "--yes", "--detach"]
+    assert launcher.spawn(argv) == 777
+    assert len(calls) == 1
+    spawned_argv, log_path = calls[0]
+    assert spawned_argv == argv
+    assert "poll-resume-19" in log_path
+    assert log_path.startswith(str(tmp_path))
+
+
+@pytest.mark.anyio
+async def test_poll_detach_spawns_the_child_and_returns_without_running_a_round(
+    monkeypatch, tmp_path, capsys
+):
+    """Seam: the injected spawner on `_poll`. The parent never calls `poll.run_once`:
+    a monkeypatch that raises would fail the test if it somehow did."""
+    from agentic.core.process.application import poll as pollmod
+    from agentic.shared.configuration import Configuration
+
+    def broken_run_once(*args, **kwargs):
+        raise AssertionError("a round must never run in the parent under --detach")
+
+    monkeypatch.setattr(pollmod, "run_once", broken_run_once)
+    spawn = FakeSpawn()
+    lock = FakeLock()
+    child_argv = ["agentic", "poll", "--detach"]
+    await cli._poll(
+        Configuration(product_dir=tmp_path),
+        memory_ports(),
+        60.0,
+        run_lock=lock,
+        log_file="/tmp/x.log",
+        detach=True,
+        child_argv=child_argv,
+        spawn=spawn,
+    )
+    assert spawn.calls == [(child_argv, "/tmp/x.log")]
+    assert lock.acquired == []  # the parent never holds it -- the child does, after it re-execs
+    assert "54321" in capsys.readouterr().out

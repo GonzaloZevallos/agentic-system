@@ -51,9 +51,17 @@ from .core.process.adapters.filesystem import (
 from .core.process.adapters.git.workspace import GitError
 from .core.process.adapters.langgraph.graph import ESCALATE
 from .core.process.application import archive
+from .core.process.application import poll as pollmod
 from .core.process.application import resume as resuming
 from .core.process.application.escalate import NEEDS_HUMAN
-from .core.process.application.ports import LockHeld, LockRecord, Ports, RunLock, RunRegistry
+from .core.process.application.ports import (
+    Launcher,
+    LockHeld,
+    LockRecord,
+    Ports,
+    RunLock,
+    RunRegistry,
+)
 from .core.process.application.preflight import (
     PLACEHOLDERS,
     declared_stack,
@@ -293,6 +301,25 @@ def main() -> None:
         help="show which signals hold, the anchor and what would be opened; spends "
         "nothing, takes no lock, writes no file and makes no `gh` call",
     )
+    poll_parser = sub.add_parser(
+        "poll",
+        help="a long-lived process per product (GH-137): closes merged pull requests, "
+        "retakes a pause an external API cut caused once its own wait elapses, and "
+        "launches the next unblocked issue, never past AGENTIC_MAX_CONCURRENT_RUNS",
+    )
+    poll_parser.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
+    poll_parser.add_argument(
+        "--detach",
+        action="store_true",
+        help="detach this poller (setsid), print the pid and the log path, and exit",
+    )
+    poll_parser.add_argument(
+        "--interval",
+        type=float,
+        default=60.0,
+        metavar="SECONDS",
+        help="how long to wait between rounds (default 60)",
+    )
     for command in (run, resume):
         command.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
         command.add_argument(
@@ -349,7 +376,7 @@ def main() -> None:
         if args.command != "stack" and not cfg.agentic_dir.is_dir():
             raise ValueError(f"{cfg.product_dir} is not a product repo: no .agentic/ directory")
         ports = default_ports(cfg)
-        if args.command not in ("close", "eval", "stack"):
+        if args.command not in ("close", "eval", "stack", "poll"):
             # `close` runs no role and spends nothing, so the gate that renders every
             # role's prompt and checks the product's stack before a run spends money
             # does not apply to it (Tech Lead plan, subtask `close-command`): only
@@ -380,6 +407,10 @@ def main() -> None:
         elif args.command == "eval" and args.eval_command == "run":
             # `eval run` spends real money and detaches the same way `run`/`resume`
             # do; `eval score` never spends anything and skips this warning entirely.
+            _warn_no_tty(args.detach)
+        elif args.command == "poll":
+            # `poll` spends nothing itself (every role runs in a spawned child's own
+            # process); it still detaches the same way, and the same TTY warning applies.
             _warn_no_tty(args.detach)
         if args.command == "resume":
             task_id = ports.inbox.task_id(args.issue)
@@ -430,6 +461,17 @@ def main() -> None:
                 work = partial(_eval_compare, cfg, ports, args.frm, args.to, args.system_repo)
         elif args.command == "stack":
             work = partial(_stack_review, cfg, ports, args.reason, args.dry_run)
+        elif args.command == "poll":
+            log_file = _log_file_for(cfg, "poll")
+            work = partial(
+                _poll,
+                cfg,
+                ports,
+                args.interval,
+                log_file=log_file,
+                detach=args.detach,
+                child_argv=_child_argv(),
+            )
         else:
             if args.issue is not None:
                 task = ports.inbox.task(args.issue)
@@ -701,6 +743,39 @@ def _registered(registry: RunRegistry, product: str, task_id: str) -> Iterator[N
             registry.unregister()
         except OSError as exc:
             print(f"agentic: could not clear the run registration: {exc}", file=sys.stderr)
+
+
+async def _poll(
+    cfg: Configuration,
+    ports: Ports,
+    interval_s: float,
+    run_lock: RunLock | None = None,
+    registry: RunRegistry | None = None,
+    launcher: Launcher | None = None,
+    log_file: str | None = None,
+    detach: bool = False,
+    child_argv: list[str] | None = None,
+    spawn: Spawner | None = None,
+) -> None:
+    """`agentic poll --product-dir <dir> [--detach]` (GH-137): a long-lived process per
+    product, one `poll.run_once` round every `interval_s` seconds, under the same
+    per-product `FilesystemRunLock` `run`/`resume`/`close` already take -- keyed by
+    `poll.LOCK_KEY` instead of a task id, so two pollers over the same product refuse
+    each other the same way two `run`s over the same task already do. `--detach` re-execs
+    exactly as `run --detach`/`resume --detach` do (`_detach`); `_signal_guarded`
+    (`main`'s own wrapper) turns a SIGTERM/SIGHUP into a clean stop between rounds, the
+    lock released on the way out."""
+    lock = run_lock if run_lock is not None else _lock_for(cfg)
+    if detach:
+        _detach(lock, pollmod.LOCK_KEY, child_argv or [], log_file or "", spawn)
+        return
+    registry = registry if registry is not None else _registry_for(cfg)
+    real_launcher = launcher if launcher is not None else SpawnLauncher(cfg)
+    with _locked(lock, pollmod.LOCK_KEY):
+        while True:
+            for line in pollmod.run_once(cfg, ports, registry, real_launcher, datetime.now(UTC)):
+                print(line)
+            await anyio.sleep(interval_s)
 
 
 async def _run(
