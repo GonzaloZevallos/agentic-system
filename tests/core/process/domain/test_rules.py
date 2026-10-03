@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 from typing import get_args
 
 from agentic.core.process.domain import document, roles, rules, task
@@ -964,6 +965,27 @@ def test_failure_reason_budget_subtype_wins_over_upstream_status():
     assert rules.failure_reason(report) == "limit"
 
 
+def test_failure_reason_gh19_api_error_with_no_status_is_network():
+    # apostrophe GH-19: "API Error: Can't reach the API server -- check your internet
+    # or DNS (EAI_AGAIN)", a `ResultError` with no HTTP status to read at all (issue
+    # #137). Never read from the prose: only `terminal_reason` and the absent status.
+    report = rules.ReportedFailure(
+        subtype="success",
+        result="API Error: Can't reach the API server — check your internet or DNS (EAI_AGAIN)",
+        terminal_reason="api_error",
+        exit_code=1,
+    )
+    assert rules.failure_reason(report) == "network"
+
+
+def test_failure_reason_api_error_with_a_status_is_not_network():
+    # The declared seam's rejected input: the same `terminal_reason="api_error"` the
+    # network clause looks at, but with a status present, must still read as whatever
+    # status clause matches -- never fall through to `network`.
+    report = rules.ReportedFailure(terminal_reason="api_error", api_error_status=429)
+    assert rules.failure_reason(report) == "account_limit"
+
+
 def test_max_turns_motive_carries_metadata_when_there_is_no_prose():
     report = rules.ReportedFailure(subtype="error_max_turns", terminal_reason="api_error")
     assert rules.max_turns_motive(12, report) == (
@@ -1163,3 +1185,244 @@ def test_next_archive_run_does_not_confuse_gh_1_with_gh_12():
     refs = ["archive/run1-abc1234/GH-12"]
     live = ["agentic/GH-12"]
     assert rules.next_archive_run(refs, live, "GH-1") is None
+
+
+# The poller's own pure core (issue #137): `rules.logged`, `rules.auto_resumable`,
+# `rules.auto_resume_limit`, `rules.next_attempt_at`, `rules.blocker_resolved` and
+# `rules.poll_plan`. `rules.escalation` and `rules.unmergeable` are untouched; `logged`
+# is the only place a `pause_log` entry is ever appended.
+
+
+def test_logged_appends_one_escalation_entry_reading_the_patchs_own_class():
+    patch = {"status": "waiting_on_human"} | rules.escalation("cap", "PjM stopped: 1 of 1")
+    logged = rules.logged(patch)
+    assert logged["pause_log"] == [{"kind": "escalation", "value": "cap"}]
+    # Everything else in the patch travels untouched.
+    assert logged["escalated"] == "PjM stopped: 1 of 1" and logged["status"] == "waiting_on_human"
+
+
+def test_logged_folds_failures_before_the_escalation_entry_in_order():
+    patch = rules.escalation("failure", "Developer failed 2 times: network down")
+    failures = [
+        {
+            "role": "Developer",
+            "attempt": 1,
+            "error": "x",
+            "cost_usd": 0.1,
+            "session_id": "",
+            "reason": "network",
+            "section": "Developer: api",
+        },
+        {
+            "role": "Developer",
+            "attempt": 2,
+            "error": "y",
+            "cost_usd": 0.2,
+            "session_id": "",
+            "reason": "account_limit",
+            "section": "Developer: api",
+        },
+    ]
+    logged = rules.logged(patch, failures)
+    assert logged["pause_log"] == [
+        {"kind": "failure", "value": "network", "section": "Developer: api"},
+        {"kind": "failure", "value": "account_limit", "section": "Developer: api"},
+        {"kind": "escalation", "value": "failure"},
+    ]
+
+
+def test_logged_defaults_a_legacy_failure_with_no_reason_to_other():
+    failures = [{"role": "PM", "attempt": 1, "error": "x", "cost_usd": 0.0, "session_id": ""}]
+    logged = rules.logged(rules.escalation("failure", "PM failed 2 times: x"), failures)
+    assert logged["pause_log"][0] == {"kind": "failure", "value": "other", "section": ""}
+
+
+def test_logged_with_unmergeable_has_no_failures_since_no_role_ran():
+    patch = rules.unmergeable("api", "domain", "CONFLICT (content): x.py")
+    logged = rules.logged(patch)
+    assert logged["pause_log"] == [{"kind": "escalation", "value": "unmergeable"}]
+
+
+def _failure_entry(reason: str, section: str = "Developer: api") -> dict:
+    return {"kind": "failure", "value": reason, "section": section}
+
+
+def _escalation_entry(cls: str) -> dict:
+    return {"kind": "escalation", "value": cls}
+
+
+def test_auto_resumable_is_the_reason_of_an_account_limit_pause():
+    state = {"pause_log": [_failure_entry("account_limit"), _escalation_entry("failure")]}
+    assert rules.auto_resumable(state) == "account_limit"
+
+
+def test_auto_resumable_is_none_for_questions():
+    # A `questions`-class escalation never carries a `"failure"` entry at all: no role
+    # broke, an interviewee simply ran out of things it could decide.
+    state = {"pause_log": [_escalation_entry("questions")]}
+    assert rules.auto_resumable(state) is None
+
+
+def test_auto_resumable_is_none_when_the_class_is_not_failure():
+    # Rejected input: a `"failure"` entry sits beside an `"escalation"` entry that is
+    # not `"failure"` -- e.g. the task cap landed right after an external failure.
+    state = {"pause_log": [_failure_entry("upstream"), _escalation_entry("cap")]}
+    assert rules.auto_resumable(state) is None
+
+
+def test_auto_resumable_is_none_when_a_failure_reason_is_not_external():
+    # Rejected input: a genuine `sdk` break alongside an external one in the same
+    # epoch must not read as auto-resumable.
+    state = {
+        "pause_log": [
+            _failure_entry("account_limit"),
+            _failure_entry("sdk"),
+            _escalation_entry("failure"),
+        ]
+    }
+    assert rules.auto_resumable(state) is None
+
+
+def test_auto_resumable_returns_the_most_recent_failures_reason():
+    state = {
+        "pause_log": [
+            _failure_entry("account_limit"),
+            _failure_entry("upstream"),
+            _escalation_entry("failure"),
+        ]
+    }
+    assert rules.auto_resumable(state) == "upstream"
+
+
+def test_auto_resumable_only_reads_the_current_epoch_after_the_last_resumed():
+    # An old epoch's external failure must not leak into a fresh one that escalated on
+    # `questions` after a human already resumed the task once.
+    state = {
+        "pause_log": [
+            _failure_entry("account_limit"),
+            _escalation_entry("failure"),
+            {"kind": "resumed"},
+            _escalation_entry("questions"),
+        ]
+    }
+    assert rules.auto_resumable(state) is None
+
+
+def test_auto_resume_limit_is_one_inside_an_interview_section():
+    section = INTERVIEW_SOLUTION.section
+    state = {"pause_log": [_failure_entry("account_limit", section=section)]}
+    assert rules.auto_resume_limit(state) == 1
+
+
+def test_auto_resume_limit_is_six_outside_an_interview_section():
+    state = {"pause_log": [_failure_entry("account_limit", section="Developer: api")]}
+    assert rules.auto_resume_limit(state) == 6
+
+
+def test_next_attempt_at_is_none_before_its_own_slot_elapses():
+    since = datetime(2026, 10, 3, 19, 30)
+    now = datetime(2026, 10, 3, 19, 40)  # 10 of the first slot's 15 minutes
+    assert rules.next_attempt_at(since, prior=0, limit=6, now=now) is None
+
+
+def test_next_attempt_at_is_due_once_its_own_slot_elapses():
+    since = datetime(2026, 10, 3, 19, 30)
+    now = datetime(2026, 10, 3, 19, 46)
+    assert rules.next_attempt_at(since, prior=0, limit=6, now=now) == datetime(2026, 10, 3, 19, 45)
+
+
+def test_next_attempt_at_is_none_once_the_calendar_is_spent():
+    since = datetime(2026, 10, 3, 19, 30)
+    now = datetime(2026, 10, 4, 19, 30)  # a full day later, no slot left to run out
+    assert rules.next_attempt_at(since, prior=1, limit=1, now=now) is None
+
+
+def test_blocker_resolved_not_planned_resolves_without_a_merge():
+    assert rules.blocker_resolved("NOT_PLANNED", merged_into_checkout=False) is True
+
+
+def test_blocker_resolved_completed_needs_the_merge_in_the_checkout():
+    assert rules.blocker_resolved("COMPLETED", merged_into_checkout=True) is True
+    assert rules.blocker_resolved("COMPLETED", merged_into_checkout=False) is False
+
+
+def test_blocker_resolved_rejects_open_and_unknown_state_reasons():
+    assert rules.blocker_resolved("OPEN", merged_into_checkout=True) is False
+    assert rules.blocker_resolved(None, merged_into_checkout=True) is False
+    assert rules.blocker_resolved("SOME_FUTURE_REASON", merged_into_checkout=True) is False
+
+
+NOW = datetime(2026, 10, 3, 20, 0)
+
+
+def test_poll_plan_closes_everything_lowest_first_and_never_spends_a_slot():
+    actions = rules.poll_plan(closes=[9, 3], resumes=[], launches=[], available_slots=0, now=NOW)
+    assert actions == [rules.PollAction("close", 3), rules.PollAction("close", 9)]
+
+
+def test_poll_plan_resumes_a_due_account_limit_pause():
+    due = rules.ResumeCandidate(
+        issue=5, reason="account_limit", since=NOW.replace(hour=0), prior=0, limit=6
+    )
+    actions = rules.poll_plan(closes=[], resumes=[due], launches=[], available_slots=1, now=NOW)
+    assert actions == [rules.PollAction("resume", 5)]
+
+
+def test_poll_plan_does_not_resume_a_pause_still_waiting_out_its_own_calendar():
+    # Escalated one minute ago: its own 15-minute first slot has not elapsed yet.
+    not_due = rules.ResumeCandidate(
+        issue=5, reason="account_limit", since=NOW - timedelta(minutes=1), prior=0, limit=6
+    )
+    actions = rules.poll_plan(closes=[], resumes=[not_due], launches=[], available_slots=1, now=NOW)
+    assert actions == []
+
+
+def test_poll_plan_caps_resumes_at_available_slots_lowest_issue_first():
+    since = NOW.replace(hour=0)
+    a = rules.ResumeCandidate(issue=20, reason="upstream", since=since, prior=0, limit=6)
+    b = rules.ResumeCandidate(issue=5, reason="upstream", since=since, prior=0, limit=6)
+    actions = rules.poll_plan(closes=[], resumes=[a, b], launches=[], available_slots=1, now=NOW)
+    assert actions == [rules.PollAction("resume", 5)]
+
+
+def test_poll_plan_launches_the_lowest_unblocked_issue():
+    blocked = rules.LaunchCandidate(issue=4, blocked=True, since=None, prior=0, limit=6)
+    ready = rules.LaunchCandidate(issue=9, blocked=False, since=None, prior=0, limit=6)
+    actions = rules.poll_plan(
+        closes=[], resumes=[], launches=[blocked, ready], available_slots=1, now=NOW
+    )
+    assert actions == [rules.PollAction("launch", 9)]
+
+
+def test_poll_plan_does_not_launch_an_issue_with_an_open_blocker():
+    # Rejected input: the one candidate there is stays blocked -- nothing launches.
+    blocked = rules.LaunchCandidate(issue=4, blocked=True, since=None, prior=0, limit=6)
+    actions = rules.poll_plan(closes=[], resumes=[], launches=[blocked], available_slots=1, now=NOW)
+    assert actions == []
+
+
+def test_poll_plan_launches_nothing_when_the_cap_is_full():
+    ready = rules.LaunchCandidate(issue=9, blocked=False, since=None, prior=0, limit=6)
+    actions = rules.poll_plan(closes=[], resumes=[], launches=[ready], available_slots=0, now=NOW)
+    assert actions == []
+
+
+def test_poll_plan_launches_nothing_while_a_pause_elsewhere_still_waits():
+    # No se lanza nada mientras haya una espera externa sin vencer en el producto,
+    # whether or not a slot is free for the launch.
+    not_due = rules.ResumeCandidate(
+        issue=5, reason="account_limit", since=NOW - timedelta(minutes=1), prior=0, limit=6
+    )
+    ready = rules.LaunchCandidate(issue=9, blocked=False, since=None, prior=0, limit=6)
+    actions = rules.poll_plan(
+        closes=[], resumes=[not_due], launches=[ready], available_slots=1, now=NOW
+    )
+    assert actions == []
+
+
+def test_poll_plan_called_twice_with_the_same_closes_never_doubles_the_action():
+    # `poll_plan` is pure and stateless: not relaunching an already-registered issue is
+    # the caller's own bookkeeping (the launches ledger), never this function's memory.
+    once = rules.poll_plan(closes=[7], resumes=[], launches=[], available_slots=1, now=NOW)
+    twice = rules.poll_plan(closes=[7], resumes=[], launches=[], available_slots=1, now=NOW)
+    assert once == twice == [rules.PollAction("close", 7)]
