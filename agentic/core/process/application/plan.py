@@ -143,7 +143,7 @@ def _proposed(state: TaskState, spec: Interview, invariants: list[str]) -> str:
 
 
 def _pending(item: dict) -> Subtask:
-    return {
+    pending: Subtask = {
         "id": item["id"],
         "title": item["title"],
         "brief": item["brief"],
@@ -151,3 +151,8 @@ def _pending(item: dict) -> Subtask:
         "depends_on": item["depends_on"],
         "status": "pending",
     }
+    # Persisted only when non-empty (ADR-0040): a plan from before `screens` existed,
+    # and a subtask with no screen of its own, both read back `.get("screens", [])`.
+    if item.get("screens"):
+        pending["screens"] = item["screens"]
+    return pending

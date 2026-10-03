@@ -359,6 +359,28 @@ def merge_notice(dependency: str, branch: str, conflicted_paths: Sequence[str]) 
     )
 
 
+def screens_notice(screens: Sequence[str], compare: str | None) -> str:
+    """The turn-message text telling the Developer to look at its comparisons before
+    delivering (ADR-0040), the way `merge_notice` tells it about a dependency. Empty
+    `screens` means this subtask names none: the caller does not add this notice to
+    the turn message at all, the same way `plan_view._brief` projects no `Screens:`
+    line. `compare` is the product's declared command (`design.compare`), or `None`
+    when the product declares no `design` block: the Developer still gets the names of
+    its screens, told plainly that no comparison exists to run."""
+    listed = "\n".join(f"- `{s}`" for s in screens)
+    if compare is None:
+        return (
+            f"Your subtask's screens, from the plan:\n\n{listed}\n\n"
+            "The product declares no `design` block, so there is no comparison to run: "
+            "build to the brief and the screens named above."
+        )
+    return (
+        f"Before you deliver, look at the comparisons for your screens:\n\n{listed}\n\n"
+        f"Run `{compare}` in your checkout and read what it writes, one comparison per "
+        "screen above, side by side with the prototype at the same width."
+    )
+
+
 def resumed_after_unmergeable(state: TaskState, subtask_id: str, branch: str, head: str) -> str:
     """What a Developer with a session on record but no review section reads on this
     run: the document shape only this task's path creates, because the previous run
