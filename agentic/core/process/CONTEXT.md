@@ -79,6 +79,16 @@ El texto de PM que gobierna el resto de la tarea: comportamiento, flujo, diseño
 _Avoid_: spec, requerimientos, definición única (el nombre anterior del mismo término)
 _Campo_: de producto humano. `spec` en el mundo agéntico viene pegado a un flujo de archivos (GitHub Spec Kit: `/specify` → `/plan` → `/tasks`) que no es el nuestro
 
+**Flujo**:
+Lo que UX Designer escribe por cada job del PRD cuando la tarea toca UI: desde dónde empieza la persona hasta el job cumplido, cada paso con su pantalla, lo que puede salir mal y cómo se recupera, a dónde vuelve y cuántos toques lleva. Es la evaluación de la experiencia: la fricción se mide en pasos contra el job. Lo valida UX Lead y PM lo consolida en el PRD. Si la tarea no cambia el flujo, lo dice y nada más.
+_Avoid_: user journey, crítica de pantallas (evaluar lo diseñado sin escribir el flujo)
+_Campo_: user flow — del diseño de interacción; el conteo de pasos contra la tarea viene del modelo KLM (Card, Moran y Newell, 1980)
+
+**Recorrido**:
+Lo que hace UX Lead para validar un flujo: recorre el prototipo del producto en un navegador, paso a paso por cada job, y compara con el flujo escrito. Cada hallazgo nombra la pantalla y el paso. Es su fuente propia: el UX Designer escribió el flujo sin recorrerlo.
+_Avoid_: revisión heurística (una lista de criterios sin navegar no es fuente propia)
+_Campo_: cognitive walkthrough — Wharton, Rieman, Lewis y Polson (1994)
+
 **Flag**:
 Marca de alcance sobre una tarea, como "toca UI" o "toca textos", tomada del vocabulario de flags del producto. Los propone Product Analyst y los valida PM; el set validado reemplaza al propuesto.
 _Campo_: sin término de arte
