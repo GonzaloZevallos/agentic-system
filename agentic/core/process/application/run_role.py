@@ -57,6 +57,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 
 from agentic.shared.configuration import Configuration
 
@@ -583,14 +584,19 @@ def task_cap(state: TaskState, cfg: Configuration) -> float:
 def escalation(exc: Escalating) -> TaskState:
     """The patch of a role that failed twice, or that the task cap stopped: the human
     sees it (README.md, 3), with its escalation class (`rules.escalation`) — `cap` for
-    the task cap, `failure` for a role `run_with_retry` gave up on."""
+    the task cap, `failure` for a role `run_with_retry` gave up on.
+
+    Composed through `rules.logged` (issue #137), `exc.failures` passed along: the one
+    call site that ever has a role's own failures to log, so `pause_log`'s eligibility
+    for an automatic retake reads the reason each attempt actually failed with."""
     cls: EscalationClass = "cap" if isinstance(exc, TaskCapReached) else "failure"
-    return {
+    patch: dict[str, Any] = {
         "failures": exc.failures,
         "cost_usd": exc.cost_usd,
         "status": WAITING_ON_HUMAN,
         **rules.escalation(cls, str(exc)),
     }
+    return cast(TaskState, rules.logged(patch, exc.failures))
 
 
 def run_record(state: TaskState, role: Role, section: str, output: Output) -> RoleRun:
