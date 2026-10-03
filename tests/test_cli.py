@@ -742,6 +742,81 @@ async def test_a_run_with_no_lock_injected_uses_the_products_own_runs_dir(monkey
 
 
 @pytest.mark.anyio
+async def test_a_run_registers_itself_and_unregisters_once_it_finishes(monkeypatch, tmp_path):
+    """GH-137: `run` registers under `Configuration.run_registry_dir` inside its own
+    lock, so the poller's concurrency cap has something to count, and clears it once
+    the invocation is done -- the product's name comes off `ports.stack.product()`,
+    `MemoryStack`'s own default."""
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import MemoryRunRegistry, memory_ports
+
+    monkeypatch.setattr(cli, "graph", Delivers({"id": "T-9", "title": "t", "status": "open"}))
+    registry = MemoryRunRegistry()
+    task = {"id": "T-9", "title": "t", "description": "d"}
+    await cli._run(
+        task,
+        Configuration(product_dir=tmp_path),
+        memory_ports(),
+        checkpointer=in_memory,
+        registry=registry,
+    )
+    assert registry.registered == [("product", "T-9")]
+    assert registry.unregistered == 1
+
+
+@pytest.mark.anyio
+async def test_a_run_unregisters_even_if_the_graph_breaks(monkeypatch, tmp_path):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import MemoryRunRegistry, memory_ports
+
+    class Broken(Delivers):
+        async def ainvoke(self, task, config):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(cli, "graph", Broken())
+    registry = MemoryRunRegistry()
+    task = {"id": "T-9", "title": "t", "description": "d"}
+    with pytest.raises(RuntimeError, match="boom"):
+        await cli._run(
+            task,
+            Configuration(product_dir=tmp_path),
+            memory_ports(),
+            checkpointer=in_memory,
+            registry=registry,
+        )
+    assert registry.registered == [("product", "T-9")]
+    assert registry.unregistered == 1
+
+
+@pytest.mark.anyio
+async def test_a_run_still_happens_when_the_registry_cannot_be_written(
+    monkeypatch, tmp_path, capsys
+):
+    """Best effort only (GH-137): a registry that cannot write must not turn into a
+    `CannotStart` -- nothing about the task itself failed."""
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    class BrokenRegistry:
+        def register(self, product, task_id):
+            raise OSError("disk full")
+
+        def unregister(self):
+            raise OSError("disk full")
+
+    monkeypatch.setattr(cli, "graph", Delivers({"id": "T-9", "title": "t", "status": "open"}))
+    task = {"id": "T-9", "title": "t", "description": "d"}
+    await cli._run(
+        task,
+        Configuration(product_dir=tmp_path),
+        memory_ports(),
+        checkpointer=in_memory,
+        registry=BrokenRegistry(),
+    )
+    assert "could not register the run" in capsys.readouterr().err
+
+
+@pytest.mark.anyio
 async def test_resume_refuses_when_the_lock_is_held(monkeypatch, tmp_path):
     from agentic.shared.configuration import Configuration
     from tests.fakes import memory_ports
@@ -847,6 +922,39 @@ async def test_a_resumed_run_acquires_and_releases_the_lock_and_a_takeover_is_pr
     out = capsys.readouterr().out
     assert "999999999" in out
     assert ports.tracker.comments  # announced normally: the lock did not stop it
+
+
+@pytest.mark.anyio
+async def test_a_resume_registers_itself_and_unregisters_once_it_finishes(monkeypatch, tmp_path):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import MemoryRunRegistry, memory_ports
+
+    monkeypatch.setattr(cli, "graph", Delivers({"id": "GH-1", "title": "t", "status": "open"}))
+    ports = memory_ports()
+    ports.documents.save(
+        {
+            "id": "GH-1",
+            "title": "t",
+            "description": "d",
+            "type": "bug",
+            "status": "waiting_on_human",
+            "escalated": "Developer stopped by the task cap",
+            "cost_usd": 1.0,
+        }
+    )
+    ports.tracker.earlier = ["Escalated: Developer stopped by the task cap"]
+    registry = MemoryRunRegistry()
+    await cli._resume(
+        "GH-1",
+        Configuration(product_dir=tmp_path),
+        ports,
+        from_document=True,
+        yes=True,
+        checkpointer=in_memory,
+        registry=registry,
+    )
+    assert registry.registered == [("product", "GH-1")]
+    assert registry.unregistered == 1
 
 
 def test_a_product_that_declares_no_name_does_not_run(monkeypatch, tmp_path, capsys):

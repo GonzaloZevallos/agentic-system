@@ -114,7 +114,7 @@ class GhTracker:
         comments = json.loads(self._gh("issue", "view", str(number), "--json", "comments"))
         return [c.get("body") or "" for c in comments.get("comments", [])]
 
-    def comments(self, task_id: str) -> list[IssueComment]:
+    def timestamped_comments(self, task_id: str) -> list[IssueComment]:
         if (number := issue_number(task_id)) is None:
             return []
         raw = json.loads(self._gh("issue", "view", str(number), "--json", "comments"))

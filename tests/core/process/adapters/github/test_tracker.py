@@ -221,7 +221,7 @@ def test_a_resume_unlabels_and_reads_the_comments():
 # -- GH-137: the poller's own structured reads ---------------------------------------
 
 
-def test_comments_carries_each_bodys_own_timestamp():
+def test_timestamped_comments_carries_each_bodys_own_timestamp():
     stdout = json.dumps(
         {
             "comments": [
@@ -231,15 +231,15 @@ def test_comments_carries_each_bodys_own_timestamp():
         }
     )
     tracker = GhTracker(Path("/p"), Recorder(stdout=stdout))
-    comments = tracker.comments("GH-19")
+    comments = tracker.timestamped_comments("GH-19")
     assert [(c.body, c.created_at) for c in comments] == [
         ("Escalated: x", "2026-10-02T19:30:00Z"),
         ("Auto-resumed: account limit", "2026-10-02T19:46:00Z"),
     ]
 
 
-def test_comments_of_a_task_without_an_issue_is_empty():
-    assert GhTracker(Path("/p"), Recorder()).comments("T-abc") == []
+def test_timestamped_comments_of_a_task_without_an_issue_is_empty():
+    assert GhTracker(Path("/p"), Recorder()).timestamped_comments("T-abc") == []
 
 
 def test_queue_is_every_open_agentic_issue_sorted_ascending():

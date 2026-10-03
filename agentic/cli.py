@@ -43,13 +43,17 @@ from .core.measurement.adapters.otel import telemetry
 from .core.measurement.adapters.otel.telemetry import InvocationKind
 from .core.measurement.domain import evaluation, scorecard
 from .core.measurement.domain import metrics as delivery_metrics
-from .core.process.adapters.filesystem import FilesystemRunLock, FilesystemTaskDocuments
+from .core.process.adapters.filesystem import (
+    FilesystemRunLock,
+    FilesystemRunRegistry,
+    FilesystemTaskDocuments,
+)
 from .core.process.adapters.git.workspace import GitError
 from .core.process.adapters.langgraph.graph import ESCALATE
 from .core.process.application import archive
 from .core.process.application import resume as resuming
 from .core.process.application.escalate import NEEDS_HUMAN
-from .core.process.application.ports import LockHeld, LockRecord, Ports, RunLock
+from .core.process.application.ports import LockHeld, LockRecord, Ports, RunLock, RunRegistry
 from .core.process.application.preflight import (
     PLACEHOLDERS,
     declared_stack,
@@ -635,6 +639,31 @@ def _locked(lock: RunLock, task_id: str) -> Iterator[None]:
         lock.release(task_id)
 
 
+def _registry_for(cfg: Configuration) -> RunRegistry:
+    return FilesystemRunRegistry(cfg.run_registry_dir)
+
+
+@contextmanager
+def _registered(registry: RunRegistry, product: str, task_id: str) -> Iterator[None]:
+    """Registers this invocation under `Configuration.run_registry_dir` so the
+    poller's own concurrency cap (`AGENTIC_MAX_CONCURRENT_RUNS`, GH-137) can count it
+    across every product on this machine. Best effort only, the same shape every other
+    diagnostic write in this module already has: a `run`/`resume` that cannot write
+    here still runs, one stderr line the only trace -- it must never turn into a
+    `CannotStart`, since nothing about the task itself failed."""
+    try:
+        registry.register(product, task_id)
+    except OSError as exc:
+        print(f"agentic: could not register the run: {exc}", file=sys.stderr)
+    try:
+        yield
+    finally:
+        try:
+            registry.unregister()
+        except OSError as exc:
+            print(f"agentic: could not clear the run registration: {exc}", file=sys.stderr)
+
+
 async def _run(
     task: TaskInput,
     cfg: Configuration,
@@ -642,12 +671,14 @@ async def _run(
     fresh: bool = False,
     checkpointer: Checkpointer | None = None,
     run_lock: RunLock | None = None,
+    registry: RunRegistry | None = None,
     log_file: str | None = None,
     detach: bool = False,
     child_argv: list[str] | None = None,
     spawn: Spawner | None = None,
 ) -> None:
     lock = run_lock if run_lock is not None else _lock_for(cfg)
+    registry = registry if registry is not None else _registry_for(cfg)
     config: RunnableConfig = {"configurable": _configurable(task["id"], log_file)}
     async with (checkpointer or composition.checkpointer)(cfg) as saver:
         app = graph.compile(checkpointer=saver)
@@ -656,7 +687,7 @@ async def _run(
         if detach:
             _detach(lock, task["id"], child_argv or [], log_file or "", spawn)
             return
-        with _locked(lock, task["id"]):
+        with _locked(lock, task["id"]), _registered(registry, product_name(ports), task["id"]):
             _archive_previous_run(task["id"], ports)
             # A thread keeps its channels: a new run over it would add to the old cost.
             await saver.adelete_thread(task["id"])
@@ -741,12 +772,14 @@ async def _resume(
     yes: bool = False,
     checkpointer: Checkpointer | None = None,
     run_lock: RunLock | None = None,
+    registry: RunRegistry | None = None,
     log_file: str | None = None,
     detach: bool = False,
     child_argv: list[str] | None = None,
     spawn: Spawner | None = None,
 ) -> None:
     lock = run_lock if run_lock is not None else _lock_for(cfg)
+    registry = registry if registry is not None else _registry_for(cfg)
     config: RunnableConfig = {"configurable": _configurable(task_id, log_file)}
     async with (checkpointer or composition.checkpointer)(cfg) as saver:
         app = graph.compile(checkpointer=saver)
@@ -778,7 +811,7 @@ async def _resume(
             _detach(lock, task_id, child_argv or [], log_file or "", spawn)
             return
 
-        with _locked(lock, task_id):
+        with _locked(lock, task_id), _registered(registry, product_name(ports), task_id):
             if r.source == "document":
                 # Seeded as if `escalate` had just run: the task pauses once more,
                 # without telling the human again, and the answer below resumes it

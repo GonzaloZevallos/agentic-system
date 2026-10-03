@@ -592,11 +592,14 @@ class Tracker(Protocol):
         candidate or a blocker alike (GH-137)."""
         ...
 
-    def comments(self, task_id: str) -> list[IssueComment]:
+    def timestamped_comments(self, task_id: str) -> list[IssueComment]:
         """Every comment of the task's issue, oldest first, each with its own
         timestamp (GH-137) -- `issue_comments`'s bodies-only answer is not enough for
-        `rules.next_attempt_at`, which needs `createdAt` too. None when the task has no
-        issue, the same shape `issue_comments` already has."""
+        `rules.next_attempt_at`, which needs `createdAt` too. Named apart from
+        `issue_comments` on purpose, not only `comments`: the in-memory double already
+        carries a `comments` attribute of its own (every posted comment, the fixture's
+        long-standing test-inspection surface), and the two must never collide. Empty
+        when the task has no issue, the same shape `issue_comments` already has."""
         ...
 
 
@@ -730,12 +733,15 @@ class RunRegistry(Protocol):
 
 class Launcher(Protocol):
     """Spawns one child `agentic` invocation, detached (GH-137): the poller's own way of
-    closing, resuming and launching, never running a role in its own process. Wraps
-    `cli._spawn_detached`'s own shape (argv, log path) so `application/poll.py` can be
-    tested against a recording double instead of a real `Popen`."""
+    closing, resuming and launching, never running a role in its own process (the
+    plan's own invariant). Wraps `cli._spawn_detached`: the real implementation picks
+    its own log path the same way `cli._log_file_for` already does, so
+    `application/poll.py` never has to invent one, and can be tested against a
+    recording double instead of a real `Popen`."""
 
-    def __call__(self, argv: list[str], log_path: str) -> int:
-        """Returns the child's pid, exactly as `cli.Spawner` already does."""
+    def spawn(self, argv: list[str]) -> int:
+        """Returns the child's pid, exactly as `cli.Spawner` already does once its own
+        log path is picked."""
         ...
 
 
