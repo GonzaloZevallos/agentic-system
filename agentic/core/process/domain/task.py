@@ -440,6 +440,18 @@ class FindingRecord(TypedDict):
     status: FindingStatus
 
 
+class DesignItemRecord(TypedDict):
+    """One remark from a design lead's walk or comparisons, or from PM's consolidation
+    (ADR-0040), as `design_items` keeps it: the role that raised it (`Role.slug`),
+    never derived from a section's prose (`rules.design_effect_by_role`'s own per-role
+    count, the plan's own invariant: design items come from structured fields alone)."""
+
+    role_slug: str
+    kind: Literal["observation", "blocking"]
+    step: str
+    text: str
+
+
 class Subtask(TypedDict, total=False):
     """A part of the task assigned to one Developer (README.md, 4). Lives in its own
     branch; the pair Tech Lead→Developer counts returns per subtask."""
@@ -594,6 +606,10 @@ class TaskState(TaskInput, total=False):
     # it. The only source `rules.auto_resumable` reads for whether a pause is the
     # poller's to retry; never `escalation_class` or a failure's own `error` text.
     pause_log: Annotated[list[PauseEntry], operator.add]
+    # The design branch's own append-only register (ADR-0040, `DesignItemRecord`'s own
+    # docstring): every lead's remark and every consolidation observation, read with
+    # `.get("design_items", [])` since a document written before this task has none.
+    design_items: Annotated[list[DesignItemRecord], operator.add]
 
 
 def _reducers() -> dict[str, object]:

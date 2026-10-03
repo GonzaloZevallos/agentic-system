@@ -135,6 +135,11 @@ def render(
         # The poller's own append-only register (issue #137): written under its own
         # name, like `invariants` or `findings`, never renamed through `RECORDED_AS`.
         "pause_log": state.get("pause_log", []),
+        # The design branch's own register (ADR-0040): written under its own name too,
+        # never renamed through `RECORDED_AS`. Omitted would still read back as `[]`
+        # through `.get`, but every other append-only register is always written, so
+        # this one is too, for the same reason `findings` always is.
+        "design_items": state.get("design_items", []),
     }
 
     parts = [
