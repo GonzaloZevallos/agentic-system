@@ -545,8 +545,17 @@ def _log_file_for(cfg: Configuration, task_id: str) -> str:
     already told the human about would name two different files."""
     if cfg.log_file is not None:
         return str(cfg.log_file)
+    return _mint_log_path(cfg, task_id)
+
+
+def _mint_log_path(cfg: Configuration, label: str) -> str:
+    """The stamped path itself, `_log_file_for`'s own tail, factored out for
+    `SpawnLauncher` (GH-137): a poller's child always gets a fresh file, never the
+    poller's own `cfg.log_file` short-circuit above, which exists only for a
+    `--detach` child re-execed inside the *same* invocation, not a poller's unrelated
+    grandchild."""
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    path = cfg.product_dir / LOGS_DIR / f"{task_id}-{stamp}.log"
+    path = cfg.product_dir / LOGS_DIR / f"{label}-{stamp}.log"
     path.parent.mkdir(parents=True, exist_ok=True)
     print(f"agentic: log at {path}")
     return str(path)
@@ -581,6 +590,36 @@ def _spawn_detached(argv: list[str], log_path: str) -> int:
             stderr=log,
         )
     return process.pid
+
+
+class SpawnLauncher:
+    """The real `Launcher` (GH-137): the poller's one way to close, resume or launch,
+    each a detached `agentic close|resume|run` child, never a role in its own process.
+    Wraps `_spawn_detached` exactly as `run`/`resume --detach` do; the log path is
+    minted fresh (`_mint_log_path`, never `_log_file_for`'s `cfg.log_file`
+    short-circuit, which would make every child share the poller's own log), keyed off
+    the child's own command and issue number, parsed out of `argv` alone -- a poller
+    action has no task id of its own to pass, by the port's own shape."""
+
+    def __init__(self, cfg: Configuration) -> None:
+        self._cfg = cfg
+
+    def spawn(self, argv: list[str]) -> int:
+        return _spawn_detached(argv, _mint_log_path(self._cfg, _poll_child_label(argv)))
+
+
+def _poll_child_label(argv: list[str]) -> str:
+    """`poll-<command>-<issue>` when both are found in `argv` (always, for a poller's
+    own children), `poll-<command>` otherwise -- never raises on a shape this module
+    does not itself build, so a double or a future caller with a different argv still
+    gets a label instead of an exception."""
+    command = argv[1] if len(argv) > 1 else "run"
+    issue = None
+    if "--issue" in argv:
+        at = argv.index("--issue")
+        if at + 1 < len(argv):
+            issue = argv[at + 1]
+    return f"poll-{command}-{issue}" if issue else f"poll-{command}"
 
 
 def _refuse_if_locked(lock: RunLock, task_id: str) -> None:
