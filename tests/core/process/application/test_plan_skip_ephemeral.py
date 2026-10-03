@@ -90,6 +90,10 @@ async def test_a_plan_with_no_subtasks_heading_fails_the_check_and_retries(cfg):
         1,
         "tl-bad",
     )
+    motive = (
+        "the plan's markdown has no `### Subtasks` heading (exactly that line, outside "
+        "code fences); add it with one `####` per subtask: `api`."
+    )
     runner = ScriptedRunner(tech_lead=[no_heading, planned()])
     patch = await plan(TASK, cfg, memory_ports(runner))
 
@@ -97,10 +101,9 @@ async def test_a_plan_with_no_subtasks_heading_fails_the_check_and_retries(cfg):
     assert patch["status"] == "planned"  # the second attempt delivers
     failure = patch["failures"][0]
     assert failure["reason"] == "check"
-    assert "has no `### Subtasks` heading" in failure["error"]
+    assert failure["error"] == f"structured output invalid: {motive}"
     retry_prompt = runner.calls[1]["prompt"]
-    assert "PreviousAttemptFailed" in retry_prompt
-    assert "has no `### Subtasks` heading" in retry_prompt
+    assert f"<PreviousAttemptFailed>\n{failure['error']}\n</PreviousAttemptFailed>" in retry_prompt
 
 
 async def test_skip_ephemeral_unset_still_runs_the_interview(tmp_path):

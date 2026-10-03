@@ -183,37 +183,48 @@ def test_review_findings_are_typed_and_the_categories_closed():
     }
 
 
+NO_BLOCK_A = (
+    "the plan's markdown has no `### Subtasks` heading (exactly that line, outside code "
+    "fences); add it with one `####` per subtask: `a`."
+)
+TOO_FEW_A_B = (
+    "`### Subtasks` has 1 `####` headings but the structured output has 2 subtasks "
+    "(`a`, `b`); give each subtask its own `####`."
+)
+
+
 def test_plan_check_rejects_a_plan_with_no_subtasks_heading():
     # `plan_refusal` runs after every structural rule above it (issue #139): this plan
     # is otherwise valid (one slug, one seam, no bad dependency), so the only motive
-    # left is the markdown's own shape.
+    # left is the markdown's own shape. The exact motive, id list included (ADR-0023).
     data = _plan("### Solution\n\nHex.\n\n### Invariants\n\n1. x.", "a")
-    with pytest.raises(ValueError, match="has no `### Subtasks` heading"):
+    with pytest.raises(ValueError) as exc:
         schemas.plan_check(data)
+    assert str(exc.value) == NO_BLOCK_A
 
 
 def test_plan_check_rejects_a_heading_with_one_fewer_h4_than_subtasks():
     markdown = "### Solution\n\nHex.\n\n### Subtasks\n\n#### a\n\nbrief a"
     data = _plan(markdown, "a", "b")
-    with pytest.raises(
-        ValueError,
-        match=r"has 1 `####` headings but the structured output has 2 subtasks",
-    ):
+    with pytest.raises(ValueError) as exc:
         schemas.plan_check(data)
+    assert str(exc.value) == TOO_FEW_A_B
 
 
 def test_plan_check_rejects_subtasks_colon_as_the_heading():
     markdown = "### Solution\n\nHex.\n\n### Subtasks:\n\n#### a\n\nbrief a"
     data = _plan(markdown, "a")
-    with pytest.raises(ValueError, match="has no `### Subtasks` heading"):
+    with pytest.raises(ValueError) as exc:
         schemas.plan_check(data)
+    assert str(exc.value) == NO_BLOCK_A
 
 
 def test_plan_check_rejects_the_heading_only_inside_a_fence():
     markdown = "### Solution\n\nHex.\n\n```\n### Subtasks\n\n#### a\n```"
     data = _plan(markdown, "a")
-    with pytest.raises(ValueError, match="has no `### Subtasks` heading"):
+    with pytest.raises(ValueError) as exc:
         schemas.plan_check(data)
+    assert str(exc.value) == NO_BLOCK_A
 
 
 def test_plan_check_accepts_extra_internal_h4_headings():

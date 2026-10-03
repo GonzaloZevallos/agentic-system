@@ -209,6 +209,10 @@ def test_an_unclosed_fence_before_the_real_heading_gives_none():
     # is the documented, tested trade-off (Tech Lead's "Known risks").
     section = "### Solution\n\n```\nunterminated\n\n### Subtasks\n\n#### api\n\nDo it."
     assert subtasks_block(section) is None
+    # `for_reader` then appends the block: the brief appears twice (once inside the
+    # unclosed fence's text, once as the appended block), the trade-off named above.
+    trimmed = for_reader(section, "api", SUBTASKS)
+    assert trimmed == f"{section}\n\n### Subtasks\n\n{_brief_text('api')}\n\n{_index_text('api')}"
 
 
 def test_plan_refusal_accepts_a_block_with_one_heading_per_id():
@@ -246,4 +250,7 @@ def test_plan_refusal_rejects_fewer_h4_headings_than_subtasks():
 def test_plan_refusal_rejects_a_heading_that_only_exists_inside_a_fence():
     markdown = "### Solution\n\nx.\n\n```\n### Subtasks\n\n#### a\n```\n\n### Invariants\n\n1. y."
     reason = plan_refusal(markdown, ["a"])
-    assert reason is not None and "has no `### Subtasks` heading" in reason
+    assert reason == (
+        "the plan's markdown has no `### Subtasks` heading (exactly that line, outside "
+        "code fences); add it with one `####` per subtask: `a`."
+    )
