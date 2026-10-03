@@ -6,6 +6,7 @@ transcript -- and runs the Tech Lead cold instead. Unset, `plan()` behaves exact
 import pytest
 
 from agentic.core.process.application.plan import plan
+from agentic.core.process.application.ports import RawResult
 from agentic.core.process.application.run_role import context_for
 from agentic.core.process.domain.roles import SOLUTION_INTERVIEW, TECH_LEAD
 from agentic.shared.configuration import Configuration
@@ -71,6 +72,38 @@ async def test_skip_ephemeral_stamps_the_experiment_snapshot(cfg):
     patch = await plan(TASK, cfg, memory_ports(runner))
     assert patch["experiment"]["skip_ephemeral"] == "True"
     assert list(patch["experiment"]) == ["review_mode", "skip_ephemeral", "reviewer_model"]
+
+
+async def test_a_plan_with_no_subtasks_heading_fails_the_check_and_retries(cfg):
+    # issue #139: a Tech Lead plan missing `### Subtasks` is a role failure like any
+    # other (`schemas.plan_check` -> `plan_view.plan_refusal`), not something that
+    # reaches the Developer silently. Built here, not via `fakes.planned`, which
+    # always emits the heading now.
+    no_heading = RawResult(
+        {
+            "markdown": "### Solution\n\nHex, no `### Subtasks` heading this time.",
+            "subtasks": [{"id": "api", "title": "API", "brief": "Build it.", "seams": ["GET /x"]}],
+            "invariants": [],
+            "integration": "",
+        },
+        0.2,
+        1,
+        "tl-bad",
+    )
+    motive = (
+        "the plan's markdown has no `### Subtasks` heading (exactly that line, outside "
+        "code fences); add it with one `####` per subtask: `api`."
+    )
+    runner = ScriptedRunner(tech_lead=[no_heading, planned()])
+    patch = await plan(TASK, cfg, memory_ports(runner))
+
+    assert runner.slugs == ["tech_lead", "tech_lead"]
+    assert patch["status"] == "planned"  # the second attempt delivers
+    failure = patch["failures"][0]
+    assert failure["reason"] == "check"
+    assert failure["error"] == f"structured output invalid: {motive}"
+    retry_prompt = runner.calls[1]["prompt"]
+    assert f"<PreviousAttemptFailed>\n{failure['error']}\n</PreviousAttemptFailed>" in retry_prompt
 
 
 async def test_skip_ephemeral_unset_still_runs_the_interview(tmp_path):

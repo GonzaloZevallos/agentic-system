@@ -600,9 +600,12 @@ def planned(*subtasks: dict, cost=0.3, session="tl", invariants=(), integration=
         {"id": "api", "title": "API", "brief": "Build it.", "seams": ["GET /x"]},
         *subtasks,
     ]
+    markdown = "### Solution\n\nHex.\n\n### Subtasks\n\n" + "\n\n".join(
+        f"#### {i['id']}\n\n{i['brief']}" for i in items
+    )
     return RawResult(
         {
-            "markdown": "### Solution\n\nHex.",
+            "markdown": markdown,
             "subtasks": items,
             "invariants": list(invariants),
             "integration": integration,
