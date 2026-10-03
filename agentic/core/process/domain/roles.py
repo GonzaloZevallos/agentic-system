@@ -636,6 +636,13 @@ class Pair:
 
 PAIR_PM_PA = Pair(by=PM, to=PRODUCT_ANALYST)
 
+# The design branch's own pairs (ADR-0040): a lead returns to its own thinker, never
+# to a Developer (README.md, 4; §13). Same shape as `PAIR_PM_PA`, same return limit,
+# counted on its own key so a UX Lead return never shares a counter with Design
+# Lead's, or with PM's own PRD returns.
+PAIR_UX_LEAD = Pair(by=UX_LEAD, to=UX_DESIGNER)
+PAIR_DESIGN_LEAD = Pair(by=DESIGN_LEAD, to=UI_DESIGNER)
+
 
 def pair_for(subtask_id: str) -> Pair:
     """Tech Lead returns to the Developer of that subtask, never to another one."""

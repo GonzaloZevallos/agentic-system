@@ -694,7 +694,7 @@ def verdict(kind, reason="r", definitions=None, glossary=None, cost=0.2) -> RawR
             "markdown": f"### Verdict\n\n{kind}\n\n### For the next role\n\n{reason}",
             "verdict": kind,
             "reason": reason,
-            "flags": {"touches_ui": True, "touches_copy": False},
+            "flags": {"touches_ui": False, "touches_copy": False},
             "definitions": definitions,
             "glossary": glossary or [],
         },

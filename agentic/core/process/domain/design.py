@@ -48,3 +48,30 @@ def design_rules(design: Design | None) -> tuple[str, ...]:
     if design is None or design.compare is None:
         return ()
     return (f"Bash({design.compare}:*)",)
+
+
+def design_facts(design: Design | None) -> str:
+    """The prototype's own facts, as a design node's turn message hands them to any
+    design role (ADR-0040, §6): the directory and the entry screen, as data, never a
+    tool, a framework or a path named in a prompt. `""` for no block at all: the
+    caller decides what that absence means for its own section (a thinker's prompt
+    already says so in its own words; a lead's gets `NO_DESIGN_NOTE` instead)."""
+    if design is None:
+        return ""
+    return (
+        "Design data for this task:\n\n"
+        f"- Prototype: `{design.prototype}`\n"
+        f"- Entry screen: `{design.entry}`"
+    )
+
+
+def compare_facts(design: Design | None) -> str:
+    """The `compare` command, as data, for the lead that may run it -- appended after
+    `design_facts`, never in its place. `NO_COMPARE_NOTE` when the block exists but
+    declares no `compare`; `""` when there is no block at all, since `design_facts`
+    already says so alone and this would only repeat it."""
+    if design is None:
+        return ""
+    if design.compare is None:
+        return f"- {NO_COMPARE_NOTE}"
+    return f"- Comparisons: run `{design.compare}` and read what it writes, one per screen."

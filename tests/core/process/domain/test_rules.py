@@ -8,7 +8,9 @@ from agentic.core.process.domain.roles import (
     FINDINGS,
     INTERVIEW_DEFINITION,
     INTERVIEW_SOLUTION,
+    PAIR_DESIGN_LEAD,
     PAIR_PM_PA,
+    PAIR_UX_LEAD,
     PJM,
     PRODUCT_ANALYST_BUG,
     TECH_LEAD_EPHEMERAL,
@@ -170,6 +172,187 @@ def test_a_bug_is_diagnosed_then_validated_and_may_end_discarded():
     assert rules.after_validate({"status": "definition_ready", "type": "bug"}) == "plan"
     assert rules.after_validate({"status": "discarded"}) == "discard"
     assert rules.after_discard({}) is None
+
+
+# The definition-side design branch (ADR-0040).
+
+UX_FLAGS = {"type": "feature", "flags": {"touches_ui": True}}
+
+
+def test_design_step_is_none_off_the_feature_plus_touches_ui_path():
+    # Neither a bug nor a platform enhancement runs this branch, whatever its flags.
+    assert rules.design_step({"type": "bug", "flags": {"touches_ui": True}}) is None
+    platform = {"type": "platform_enhancement", "flags": {"touches_ui": True}}
+    assert rules.design_step(platform) is None
+    # A feature PM did not flag `touches_ui` does not either.
+    assert rules.design_step({"type": "feature", "flags": {}}) is None
+    assert rules.design_step({"type": "feature"}) is None
+    # `after_validate`/`resume_target` fall through to `plan` exactly as before this
+    # task on every one of these: a bug and a platform enhancement get today's nodes.
+    assert rules.after_validate({"status": "definition_ready", "type": "bug"}) == "plan"
+    assert rules.resume_target({"status": "definition_ready", "type": "bug"}) == "plan"
+
+
+def test_design_step_walks_the_five_steps_in_order_then_falls_through_to_plan():
+    """A `touches_ui` feature, built up one run at a time: each step is next exactly
+    once its own thinker has nothing new to validate, and consolidation is last."""
+    state: dict = {**UX_FLAGS, "runs": []}
+    assert rules.design_step(state) == "ux_flow"
+
+    state["runs"] = [*state["runs"], run("UX Designer")]
+    assert rules.design_step(state) == "ux_walk"
+
+    state["runs"] = [*state["runs"], run("UX Lead")]  # approved: no change_history entry
+    assert rules.design_step(state) == "ui_screens"
+
+    state["runs"] = [*state["runs"], run("UI Designer")]
+    assert rules.design_step(state) == "design_review"
+
+    state["runs"] = [*state["runs"], run("Design Lead")]  # approved
+    assert rules.design_step(state) == "consolidate"
+
+    state["runs"] = [*state["runs"], run("PM: consolidation")]
+    assert rules.design_step(state) is None
+    # The routing falls through to `plan` exactly like a task this branch does not
+    # apply to, once every step is satisfied.
+    assert rules.after_consolidate({**state, "status": "definition_ready"}) == "plan"
+
+
+def test_design_step_never_skips_ux_walk_even_with_a_stray_lead_run_out_of_order():
+    """An enforcement check: a UX Lead run recorded with no UX Designer run at all
+    (a malformed or out-of-order state) must not read as the UX step satisfied -- the
+    thinker is still next, never skipped on the strength of the lead's run alone."""
+    state = {**UX_FLAGS, "runs": [run("UX Lead")]}
+    assert rules.design_step(state) == "ux_flow"
+
+
+def test_a_ux_lead_return_sends_the_task_back_to_ux_designer_and_counts_its_pair():
+
+    state = {
+        **UX_FLAGS,
+        "runs": [run("UX Designer"), run("UX Lead")],
+        "change_history": [rules.change_entry(PAIR_UX_LEAD, rules.PRD_RETURN, "dead end")],
+    }
+    assert rules.design_step(state) == "ux_flow"
+    assert rules.after_ux_walk(state) == "ux_flow"
+    # A second return escalates, like any other pair at its limit; the design node's
+    # own `after_*` stops there, same as every other `after_*` on an escalation.
+    assert rules.after_ux_walk({**state, "escalated": "x"}) is None
+
+
+def test_design_step_table_covers_a_consolidation_return_and_prd_v2_reopening_the_branch():
+    """The table's own hard case (the plan's acceptance list): a consolidation return
+    to Product Analyst, a new PRD version, which reopens `ux_flow` even though UX Lead
+    had already approved; and the flow's own re-walk, which in turn reopens
+    `ui_screens` even though Design Lead had already approved that too."""
+    runs = [
+        run("Product Analyst"),  # PRD v1
+        run("UX Designer"),
+        run("UX Lead"),  # approved
+        run("UI Designer"),
+        run("Design Lead"),  # approved
+        run("PM: consolidation"),  # returned, below
+    ]
+    state = {**UX_FLAGS, "runs": runs}
+    assert rules.design_step(state) is None  # fully consolidated, falls through to plan
+
+    # PM's consolidation returns to Product Analyst; a new PRD lands.
+    state["runs"] = [*state["runs"], run("Product Analyst")]  # PRD v2
+    assert rules.design_step(state) == "ux_flow"
+
+    # The flow is rewritten and re-walked, approved again.
+    state["runs"] = [*state["runs"], run("UX Designer")]
+    assert rules.design_step(state) == "ux_walk"
+    state["runs"] = [*state["runs"], run("UX Lead")]
+    # UI's own step is now stale: UX Designer is newer than Design Lead's approval.
+    assert rules.design_step(state) == "ui_screens"
+
+
+def test_resume_target_sends_a_ui_feature_back_to_ux_designer_after_a_lead_hits_its_limit():
+
+    state = {
+        **UX_FLAGS,
+        "status": "definition_ready",
+        "runs": [run("Product Analyst"), run("PM"), run("UX Designer"), run("UX Lead")],
+        "change_history": [rules.change_entry(PAIR_UX_LEAD, rules.PRD_RETURN, "dead end")],
+        "changes_requested": {PAIR_UX_LEAD.key: 2},
+        **rules.escalation("returns", rules.limit_reached(PAIR_UX_LEAD, 2, "dead end")),
+    }
+    resumed = task.apply(state, rules.resumed(state, None))
+    assert resumed["changes_requested"][PAIR_UX_LEAD.key] == 0
+    assert rules.resume_target(resumed) == "ux_flow"
+
+
+def test_resume_target_lands_on_ui_screens_after_an_unrelated_failure_there():
+    """A UI feature with one UX Lead return (already resolved: UX Designer redid the
+    flow, UX Lead approved it), escalated later while at `ui_screens` by something
+    unrelated (a role failure, not a pair at its limit): the resume must land back on
+    `ui_screens`, not restart the whole branch at `define`."""
+
+    state = {
+        **UX_FLAGS,
+        "status": "definition_ready",
+        "runs": [
+            run("Product Analyst"),
+            run("PM"),
+            run("UX Designer"),
+            run("UX Lead"),  # returned
+            run("UX Designer"),
+            run("UX Lead"),  # approved
+        ],
+        "change_history": [rules.change_entry(PAIR_UX_LEAD, rules.PRD_RETURN, "dead end")],
+        **rules.escalation("failure", "UI Designer failed twice: boom"),
+    }
+    resumed = task.apply(state, rules.resumed(state, "fixed"))
+    assert rules.resume_target(resumed) == "ui_screens"
+
+
+def test_a_pre_change_document_with_no_design_sections_resumes_into_plan():
+    """A document written before this task existed: `definition_ready`, no `flags`
+    key at all, so `design_applies` reads `False` and the resume lands exactly where
+    it would have before this branch existed."""
+    assert rules.resume_target({"status": "definition_ready"}) == "plan"
+
+
+def test_resume_target_of_a_fresh_touches_ui_task_with_nothing_run_starts_at_ux_flow():
+    state = {**UX_FLAGS, "status": "definition_ready"}
+    assert rules.resume_target(state) == "ux_flow"
+
+
+def test_task_cap_adds_one_unit_for_the_design_branch_from_the_start():
+    assert rules.work_units(UX_FLAGS) == 1
+    assert rules.task_cap(UX_FLAGS, 30, 15, 250) == 45
+    # A feature without the flag, a bug, and a platform enhancement: unchanged.
+    assert rules.work_units({"type": "feature", "flags": {}}) == 0
+    assert rules.work_units({"type": "bug", "flags": {"touches_ui": True}}) == 0
+    assert rules.work_units({"type": "platform_enhancement", "flags": {"touches_ui": True}}) == 0
+    # Stacks with the subtasks' own units (existing behaviour, untouched).
+    assert rules.work_units({**UX_FLAGS, **subtasks("api", "domain")}) == 4
+
+
+def test_design_effect_by_role_counts_lead_returns_and_blocking_items_per_role():
+
+    state = {
+        "change_history": [
+            rules.change_entry(PAIR_UX_LEAD, rules.PRD_RETURN, "x"),
+            rules.change_entry(PAIR_DESIGN_LEAD, rules.PRD_RETURN, "y"),
+            rules.change_entry(PAIR_PM_PA, rules.PRD_RETURN, "z"),  # not a design pair
+        ],
+        "design_items": [
+            {"role_slug": "ux_lead", "kind": "blocking", "step": "Sign in", "text": "dead end"},
+            {"role_slug": "ux_lead", "kind": "observation", "step": "Pay", "text": "slow"},
+            {"role_slug": "design_lead", "kind": "blocking", "step": "Cart", "text": "no state"},
+        ],
+    }
+    assert rules.design_effect_by_role(state) == {"ux_lead": 2, "design_lead": 2}
+    assert rules.design_effect_by_role({}) == {}
+
+
+def test_design_observations_markdown_is_a_table_with_the_cell_escaping_findings_has():
+    items = [{"role_slug": "ux_lead", "step": "Pay | Cart", "text": "slow"}]
+    rendered = rules.design_observations_markdown(items)
+    assert rendered.splitlines()[0] == "| Role | Step | Text |"
+    assert "Pay \\| Cart" in rendered
 
 
 def test_review_kind_is_first_incremental_or_integration():

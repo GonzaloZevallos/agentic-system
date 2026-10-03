@@ -217,7 +217,7 @@ async def test_validate_approval_consolidates_into_the_knowledge(cfg):
     state = {**TASK, "type": "feature", "sections": {"Product Analyst": "v1"}}
     patch = await validate_prd(state, cfg, ports)
     assert patch["status"] == "definition_ready"
-    assert patch["flags"] == {"touches_ui": True, "touches_copy": False}  # PM replaces PA's set
+    assert patch["flags"] == {"touches_ui": False, "touches_copy": False}  # PM replaces PA's set
     assert ports.knowledge.definitions == {"reports": REPORTS}
     assert ports.knowledge.terms == {
         "Report": {"definition": "A CSV.", "avoid": "export", "context": ""}

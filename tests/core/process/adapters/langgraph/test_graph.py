@@ -180,7 +180,7 @@ async def test_definition_stage_then_delivery(config, tmp_path):
         "Developer: api",
         "Tech Lead: review api",
     ]
-    assert final["flags"] == {"touches_ui": True, "touches_copy": False}  # PM replaces PA's set
+    assert final["flags"] == {"touches_ui": False, "touches_copy": False}  # PM replaces PA's set
     assert final["failures"] == []
     assert final["branch"] == "agentic/GH-1" and final["pull_request"].endswith("/pull/7")
     # A single subtask builds on the task branch itself (ADR-0011).
