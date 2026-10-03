@@ -99,6 +99,11 @@ Fricción que UX encuentra en el diseño del humano sin que impida cumplir el jo
 _Avoid_: hallazgo (lo de un validador sobre un pensador), sugerencia
 _Campo_: sin término de arte
 
+**Comparación**:
+Una pantalla del prototipo y la misma pantalla de la app de muestra, lado a lado y del mismo ancho. La saca un comando del producto. El Developer mira las suyas antes de entregar y Design Lead las juzga en la validación final de PM.
+_Avoid_: par de capturas (Par ya es el rol que devuelve y el que recibe), screenshot diff (no se compara pixel a pixel)
+_Campo_: visual comparison; el vecino estricto es visual regression testing, que sí compara pixeles
+
 **Flag**:
 Marca de alcance sobre una tarea, como "toca UI" o "toca textos", tomada del vocabulario de flags del producto. Los propone Product Analyst y los valida PM; el set validado reemplaza al propuesto.
 _Campo_: sin término de arte

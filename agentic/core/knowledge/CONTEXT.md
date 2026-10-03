@@ -59,6 +59,21 @@ Con qué tecnología se construye y se verifica este producto, declarado por el 
 _Avoid_: checks, stack (a secas, cuando se habla del sistema), CI, validaciones
 _Campo_: stack — estándar; sus comandos son los presubmit checks del producto
 
+**Diseño del producto**:
+Lo que el producto declara en su stack para que UX y Design Lead vean pantallas: dónde está su prototipo, cómo se levanta su app de muestra y cómo se sacan sus comparaciones. Es opcional, como la preparación del entorno: un producto sin diseño declarado corre igual, pero sin recorrido real ni comparaciones, y el documento de la tarea lo dice.
+_Avoid_: design system (es una parte del diseño, la de tokens y componentes), mockups
+_Campo_: sin término de arte; la clave se llama `design` en el archivo
+
+**Prototipo**:
+Las pantallas del diseño del humano, estáticas y enlazadas entre sí, que se pueden recorrer en un navegador sin la app. Es el diseño que manda: el sistema nunca lo cambia por su cuenta.
+_Avoid_: mockup, maqueta, lienzo (el lienzo es donde el humano lo diseñó; el prototipo es lo que el producto guarda en su repo)
+_Campo_: clickable prototype — estándar en diseño de interacción
+
+**App de muestra**:
+La app construida corriendo con datos de muestra, aparte de la del humano y sin tocar sus datos, que el producto sabe levantar con un comando que dice la dirección y el usuario. Es lo que UX Lead recorre en la validación final.
+_Avoid_: demo, staging (staging es un entorno desplegado; esta vive y muere con la tarea)
+_Campo_: sin término de arte
+
 **Brief**:
 Lo que el humano escribe una vez por producto, antes de la primera tarea: el problema, los
 jobs y las restricciones. No es un PRD: no describe comportamiento.
