@@ -6,7 +6,14 @@ from collections.abc import Callable
 from pathlib import Path
 
 from agentic.core.knowledge.domain import knowledge
-from agentic.core.process.application.ports import Checkout, CommandResult, Ports, RawResult
+from agentic.core.process.application.ports import (
+    Checkout,
+    CommandResult,
+    IssueComment,
+    IssueState,
+    Ports,
+    RawResult,
+)
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.roles import PROMPTS_DIR, Role
 from agentic.core.process.domain.suppressions import Forbidden
@@ -414,6 +421,13 @@ class MemoryTracker:
         self.earlier: list[str] = []
         # `(title, body)` of every issue `open_issue` opened, in order.
         self.opened_issues: list[tuple[str, str]] = []
+        # GH-137: the poller's own candidate pool, and the structured facts per issue
+        # number a test scripts with `states`.
+        self._queue: list[int] = []
+        self.states: dict[int, IssueState] = {}
+        # `comments`'s own answer, keyed by task id -- separate from `earlier`/
+        # `issue_comments`, which stay bodies-only.
+        self.timestamped: dict[str, list[IssueComment]] = {}
 
     def open_pull_request(self, task_id: str, branch: str, title: str, body: str) -> str:
         self.pull_requests.append((branch, title, body))
@@ -434,6 +448,15 @@ class MemoryTracker:
 
     def issue_comments(self, task_id: str) -> list[str]:
         return [*self.earlier, *(text for _, text in self.comments)]
+
+    def comments(self, task_id: str) -> list[IssueComment]:
+        return self.timestamped.get(task_id, [])
+
+    def queue(self) -> list[int]:
+        return sorted(self._queue)
+
+    def issue_state(self, number: int) -> IssueState:
+        return self.states[number]
 
 
 def memory_ports(runner: ScriptedRunner | None = None, **overrides) -> Ports:

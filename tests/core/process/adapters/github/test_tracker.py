@@ -216,3 +216,122 @@ def test_a_resume_unlabels_and_reads_the_comments():
     ]
     assert GhTracker(Path("/p"), Recorder(stdout='{"comments": []}')).issue_comments("GH-1") == []
     assert tracker.issue_comments("T-abc") == [] and len(run.calls) == 2
+
+
+# -- GH-137: the poller's own structured reads ---------------------------------------
+
+
+def test_comments_carries_each_bodys_own_timestamp():
+    stdout = json.dumps(
+        {
+            "comments": [
+                {"body": "Escalated: x", "createdAt": "2026-10-02T19:30:00Z"},
+                {"body": "Auto-resumed: account limit", "createdAt": "2026-10-02T19:46:00Z"},
+            ]
+        }
+    )
+    tracker = GhTracker(Path("/p"), Recorder(stdout=stdout))
+    comments = tracker.comments("GH-19")
+    assert [(c.body, c.created_at) for c in comments] == [
+        ("Escalated: x", "2026-10-02T19:30:00Z"),
+        ("Auto-resumed: account limit", "2026-10-02T19:46:00Z"),
+    ]
+
+
+def test_comments_of_a_task_without_an_issue_is_empty():
+    assert GhTracker(Path("/p"), Recorder()).comments("T-abc") == []
+
+
+def test_queue_is_every_open_agentic_issue_sorted_ascending():
+    run = Recorder(stdout=json.dumps([{"number": 20}, {"number": 4}, {"number": 9}]))
+    tracker = GhTracker(Path("/p"), run)
+    assert tracker.queue() == [4, 9, 20]
+    assert run.calls == [
+        [
+            "gh",
+            "issue",
+            "list",
+            "--label",
+            "agentic",
+            "--state",
+            "open",
+            "--json",
+            "number",
+            "--limit",
+            "500",
+        ]
+    ]
+
+
+def test_issue_state_reads_blocked_by_state_reason_and_the_closing_merge_commit():
+    class Run(Recorder):
+        def __call__(self, args, cwd, capture_output, text, check):
+            self.calls.append(args)
+            if args[:2] == ["gh", "issue"]:
+                return subprocess.CompletedProcess(
+                    args,
+                    0,
+                    json.dumps(
+                        {
+                            "state": "CLOSED",
+                            "stateReason": "COMPLETED",
+                            "blockedBy": {"nodes": [{"number": 3}], "totalCount": 1},
+                            "closedByPullRequestsReferences": [
+                                {"number": 7, "url": "https://github.com/o/r/pull/7"}
+                            ],
+                        }
+                    ),
+                    "",
+                )
+            return subprocess.CompletedProcess(args, 0, self.stdout, "")
+
+    run = Run(stdout=_graphql_pull_request("MERGED", "2026-10-02", "2026-10-01", [], "deadbeef"))
+    state = GhTracker(Path("/p"), run).issue_state(19)
+    assert state.state == "CLOSED"
+    assert state.state_reason == "COMPLETED"
+    assert state.blocked_by == (3,)
+    assert state.closing_merge_commit == "deadbeef"
+
+
+def test_issue_state_of_an_open_issue_has_no_closing_merge_commit():
+    run = Recorder(
+        stdout=json.dumps(
+            {
+                "state": "OPEN",
+                "stateReason": "",
+                "blockedBy": {"nodes": [], "totalCount": 0},
+                "closedByPullRequestsReferences": [],
+            }
+        )
+    )
+    state = GhTracker(Path("/p"), run).issue_state(20)
+    assert (state.state, state.state_reason) == ("OPEN", "")
+    assert state.blocked_by == ()
+    assert state.closing_merge_commit is None
+
+
+def test_issue_state_falls_back_when_gh_does_not_expose_blocked_by():
+    """The rejected input of this predicate's own data source: an older `gh` that
+    errors on the `blockedBy` JSON field must not crash the read -- `blocked_by` comes
+    back `None`, the signal a caller falls back to the issue body's own line for."""
+
+    class Run(Recorder):
+        def __call__(self, args, cwd, capture_output, text, check):
+            self.calls.append(args)
+            if "blockedBy" in args:
+                raise subprocess.CalledProcessError(1, args, stderr="Unknown JSON field: blockedBy")
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                json.dumps(
+                    {
+                        "state": "OPEN",
+                        "stateReason": "",
+                        "closedByPullRequestsReferences": [],
+                    }
+                ),
+                "",
+            )
+
+    state = GhTracker(Path("/p"), Run()).issue_state(20)
+    assert state.blocked_by is None
