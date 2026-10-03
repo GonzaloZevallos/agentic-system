@@ -742,6 +742,31 @@ async def test_a_run_with_no_lock_injected_uses_the_products_own_runs_dir(monkey
 
 
 @pytest.mark.anyio
+async def test_a_run_with_no_registry_injected_leaves_nothing_in_the_watched_directory(
+    monkeypatch, tmp_path
+):
+    """The `no_real_run_registry` fixture's own contract, proved rather than assumed: a
+    `run` with no `registry=` of its own goes through the real `FilesystemRunRegistry`
+    (`cli._registry_for`), and `Configuration.run_registry_dir`'s default reads
+    `XDG_STATE_HOME` straight off the environment (`_default_run_registry_dir`), not
+    through `from_sources`. If the fixture ever stopped redirecting that variable, this
+    `run` would register a live pid under the real path of whatever machine runs the
+    suite instead of this test's own `watched` directory -- which it leaves empty,
+    `register`/`unregister` having run and cleared inside `_locked`."""
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    watched = tmp_path / "watched-xdg-state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(watched))
+    monkeypatch.setattr(cli, "graph", Delivers({"id": "T-9", "title": "t", "status": "open"}))
+    cfg = Configuration(product_dir=tmp_path / "product")
+    task = {"id": "T-9", "title": "t", "description": "d"}
+    await cli._run(task, cfg, memory_ports(), checkpointer=in_memory)
+    assert cfg.run_registry_dir == watched / "agentic" / "runs"
+    assert list(cfg.run_registry_dir.glob("*.json")) == []
+
+
+@pytest.mark.anyio
 async def test_a_run_registers_itself_and_unregisters_once_it_finishes(monkeypatch, tmp_path):
     """GH-137: `run` registers under `Configuration.run_registry_dir` inside its own
     lock, so the poller's concurrency cap has something to count, and clears it once
