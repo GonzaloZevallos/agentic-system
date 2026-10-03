@@ -583,14 +583,19 @@ def task_cap(state: TaskState, cfg: Configuration) -> float:
 def escalation(exc: Escalating) -> TaskState:
     """The patch of a role that failed twice, or that the task cap stopped: the human
     sees it (README.md, 3), with its escalation class (`rules.escalation`) — `cap` for
-    the task cap, `failure` for a role `run_with_retry` gave up on."""
+    the task cap, `failure` for a role `run_with_retry` gave up on.
+
+    Composed through `rules.logged` (issue #137), `exc.failures` passed along: the one
+    call site that ever has a role's own failures to log, so `pause_log`'s eligibility
+    for an automatic retake reads the reason each attempt actually failed with."""
     cls: EscalationClass = "cap" if isinstance(exc, TaskCapReached) else "failure"
-    return {
+    patch: TaskState = {
         "failures": exc.failures,
         "cost_usd": exc.cost_usd,
         "status": WAITING_ON_HUMAN,
         **rules.escalation(cls, str(exc)),
     }
+    return rules.logged(patch, exc.failures)
 
 
 def run_record(state: TaskState, role: Role, section: str, output: Output) -> RoleRun:
@@ -745,7 +750,13 @@ async def run_role(
             cold_prompt=cold_prompt,
         )
     except Escalating as exc:
-        return None, patch | escalation(exc)
+        # Never `patch | escalation(exc)` (issue #137): `escalation(exc)` already
+        # carries its own `pause_log` (`rules.logged`'s doing), and the dict `|`
+        # operator picks one side's value for a shared key instead of the list
+        # `pause_log`'s own reducer expects appended -- `patch` itself never has one
+        # at this point, but the guard that checks this is structural and does not
+        # know that, by design (`tests/core/process/application/test_pause_log_guard.py`).
+        return None, {**patch, **escalation(exc)}
 
     patch |= {
         "sections": rules.sections_for(state, section, _section_text(role, output)),

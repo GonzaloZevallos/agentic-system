@@ -14,6 +14,7 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
+from ...application.ports import IssueComment, IssueState
 from ...domain.task import PullRequest, PullRequestCommit
 
 _ISSUE = re.compile(r"^GH-(\d+)$")
@@ -53,6 +54,15 @@ query($owner: String!, $repo: String!, $number: Int!) {
 def issue_number(task_id: str) -> int | None:
     match = _ISSUE.match(task_id)
     return int(match.group(1)) if match else None
+
+
+def _blocked_by(raw: dict | None) -> tuple[int, ...] | None:
+    """`None` when `gh`'s own `blockedBy` field is absent from the response at all --
+    the signal `IssueState.blocked_by`'s own docstring names -- never read apart from
+    "exposed, with zero blockers", which is `{"nodes": [], "totalCount": 0}`."""
+    if raw is None:
+        return None
+    return tuple(node["number"] for node in raw.get("nodes", []) if "number" in node)
 
 
 def pull_request_number(url: str) -> int:
@@ -103,6 +113,58 @@ class GhTracker:
             return []
         comments = json.loads(self._gh("issue", "view", str(number), "--json", "comments"))
         return [c.get("body") or "" for c in comments.get("comments", [])]
+
+    def timestamped_comments(self, task_id: str) -> list[IssueComment]:
+        if (number := issue_number(task_id)) is None:
+            return []
+        raw = json.loads(self._gh("issue", "view", str(number), "--json", "comments"))
+        return [
+            IssueComment(body=c.get("body") or "", created_at=c.get("createdAt") or "")
+            for c in raw.get("comments", [])
+        ]
+
+    def queue(self) -> list[int]:
+        raw = self._gh(
+            "issue",
+            "list",
+            "--label",
+            "agentic",
+            "--state",
+            "open",
+            "--json",
+            "number",
+            "--limit",
+            "500",
+        )
+        return sorted(item["number"] for item in json.loads(raw))
+
+    def issue_state(self, number: int) -> IssueState:
+        fields = "state,stateReason,blockedBy,closedByPullRequestsReferences"
+        try:
+            raw = self._gh("issue", "view", str(number), "--json", fields)
+        except ValueError:
+            # An older `gh` that does not expose the native dependency at all: fall
+            # back to every other field, `blocked_by=None` tells the caller to read
+            # the issue body's own `Blocked by:` line instead.
+            raw = self._gh(
+                "issue",
+                "view",
+                str(number),
+                "--json",
+                "state,stateReason,closedByPullRequestsReferences",
+            )
+        data = json.loads(raw)
+        closing_merge_commit = None
+        for reference in data.get("closedByPullRequestsReferences") or []:
+            pull_request = self.pull_request(reference["url"])
+            closing_merge_commit = pull_request.merge_commit if pull_request else None
+            break  # the first one is enough: an issue closes once
+        return IssueState(
+            state=data["state"],
+            state_reason=data.get("stateReason") or "",
+            blocked_by=_blocked_by(data.get("blockedBy")),
+            closing_merge_commit=closing_merge_commit,
+        )
 
     def pull_request(self, reference: str) -> PullRequest | None:
         number = pull_request_number(reference)

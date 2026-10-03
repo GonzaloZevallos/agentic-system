@@ -132,6 +132,9 @@ def render(
         "failures": [
             dict(f, cost_usd=round(f.get("cost_usd", 0.0), 4)) for f in state.get("failures", [])
         ],
+        # The poller's own append-only register (issue #137): written under its own
+        # name, like `invariants` or `findings`, never renamed through `RECORDED_AS`.
+        "pause_log": state.get("pause_log", []),
     }
 
     parts = [

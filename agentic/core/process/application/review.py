@@ -122,5 +122,6 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
         patch |= rules.escalation(
             "returns", rules.limit_reached(pair, cfg.max_changes_requested_per_pair, reason)
         )
+        patch = rules.logged(patch)
         patch["status"] = WAITING_ON_HUMAN
     return finish(state, patch, ports)

@@ -43,13 +43,25 @@ from .core.measurement.adapters.otel import telemetry
 from .core.measurement.adapters.otel.telemetry import InvocationKind
 from .core.measurement.domain import evaluation, scorecard
 from .core.measurement.domain import metrics as delivery_metrics
-from .core.process.adapters.filesystem import FilesystemRunLock, FilesystemTaskDocuments
+from .core.process.adapters.filesystem import (
+    FilesystemRunLock,
+    FilesystemRunRegistry,
+    FilesystemTaskDocuments,
+)
 from .core.process.adapters.git.workspace import GitError
 from .core.process.adapters.langgraph.graph import ESCALATE
 from .core.process.application import archive
+from .core.process.application import poll as pollmod
 from .core.process.application import resume as resuming
 from .core.process.application.escalate import NEEDS_HUMAN
-from .core.process.application.ports import LockHeld, LockRecord, Ports, RunLock
+from .core.process.application.ports import (
+    Launcher,
+    LockHeld,
+    LockRecord,
+    Ports,
+    RunLock,
+    RunRegistry,
+)
 from .core.process.application.preflight import (
     PLACEHOLDERS,
     declared_stack,
@@ -289,6 +301,25 @@ def main() -> None:
         help="show which signals hold, the anchor and what would be opened; spends "
         "nothing, takes no lock, writes no file and makes no `gh` call",
     )
+    poll_parser = sub.add_parser(
+        "poll",
+        help="a long-lived process per product (GH-137): closes merged pull requests, "
+        "retakes a pause an external API cut caused once its own wait elapses, and "
+        "launches the next unblocked issue, never past AGENTIC_MAX_CONCURRENT_RUNS",
+    )
+    poll_parser.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
+    poll_parser.add_argument(
+        "--detach",
+        action="store_true",
+        help="detach this poller (setsid), print the pid and the log path, and exit",
+    )
+    poll_parser.add_argument(
+        "--interval",
+        type=float,
+        default=60.0,
+        metavar="SECONDS",
+        help="how long to wait between rounds (default 60)",
+    )
     for command in (run, resume):
         command.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
         command.add_argument(
@@ -345,7 +376,7 @@ def main() -> None:
         if args.command != "stack" and not cfg.agentic_dir.is_dir():
             raise ValueError(f"{cfg.product_dir} is not a product repo: no .agentic/ directory")
         ports = default_ports(cfg)
-        if args.command not in ("close", "eval", "stack"):
+        if args.command not in ("close", "eval", "stack", "poll"):
             # `close` runs no role and spends nothing, so the gate that renders every
             # role's prompt and checks the product's stack before a run spends money
             # does not apply to it (Tech Lead plan, subtask `close-command`): only
@@ -376,6 +407,10 @@ def main() -> None:
         elif args.command == "eval" and args.eval_command == "run":
             # `eval run` spends real money and detaches the same way `run`/`resume`
             # do; `eval score` never spends anything and skips this warning entirely.
+            _warn_no_tty(args.detach)
+        elif args.command == "poll":
+            # `poll` spends nothing itself (every role runs in a spawned child's own
+            # process); it still detaches the same way, and the same TTY warning applies.
             _warn_no_tty(args.detach)
         if args.command == "resume":
             task_id = ports.inbox.task_id(args.issue)
@@ -426,6 +461,17 @@ def main() -> None:
                 work = partial(_eval_compare, cfg, ports, args.frm, args.to, args.system_repo)
         elif args.command == "stack":
             work = partial(_stack_review, cfg, ports, args.reason, args.dry_run)
+        elif args.command == "poll":
+            log_file = _log_file_for(cfg, "poll")
+            work = partial(
+                _poll,
+                cfg,
+                ports,
+                args.interval,
+                log_file=log_file,
+                detach=args.detach,
+                child_argv=_child_argv(),
+            )
         else:
             if args.issue is not None:
                 task = ports.inbox.task(args.issue)
@@ -541,8 +587,17 @@ def _log_file_for(cfg: Configuration, task_id: str) -> str:
     already told the human about would name two different files."""
     if cfg.log_file is not None:
         return str(cfg.log_file)
+    return _mint_log_path(cfg, task_id)
+
+
+def _mint_log_path(cfg: Configuration, label: str) -> str:
+    """The stamped path itself, `_log_file_for`'s own tail, factored out for
+    `SpawnLauncher` (GH-137): a poller's child always gets a fresh file, never the
+    poller's own `cfg.log_file` short-circuit above, which exists only for a
+    `--detach` child re-execed inside the *same* invocation, not a poller's unrelated
+    grandchild."""
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    path = cfg.product_dir / LOGS_DIR / f"{task_id}-{stamp}.log"
+    path = cfg.product_dir / LOGS_DIR / f"{label}-{stamp}.log"
     path.parent.mkdir(parents=True, exist_ok=True)
     print(f"agentic: log at {path}")
     return str(path)
@@ -577,6 +632,36 @@ def _spawn_detached(argv: list[str], log_path: str) -> int:
             stderr=log,
         )
     return process.pid
+
+
+class SpawnLauncher:
+    """The real `Launcher` (GH-137): the poller's one way to close, resume or launch,
+    each a detached `agentic close|resume|run` child, never a role in its own process.
+    Wraps `_spawn_detached` exactly as `run`/`resume --detach` do; the log path is
+    minted fresh (`_mint_log_path`, never `_log_file_for`'s `cfg.log_file`
+    short-circuit, which would make every child share the poller's own log), keyed off
+    the child's own command and issue number, parsed out of `argv` alone -- a poller
+    action has no task id of its own to pass, by the port's own shape."""
+
+    def __init__(self, cfg: Configuration) -> None:
+        self._cfg = cfg
+
+    def spawn(self, argv: list[str]) -> int:
+        return _spawn_detached(argv, _mint_log_path(self._cfg, _poll_child_label(argv)))
+
+
+def _poll_child_label(argv: list[str]) -> str:
+    """`poll-<command>-<issue>` when both are found in `argv` (always, for a poller's
+    own children), `poll-<command>` otherwise -- never raises on a shape this module
+    does not itself build, so a double or a future caller with a different argv still
+    gets a label instead of an exception."""
+    command = argv[1] if len(argv) > 1 else "run"
+    issue = None
+    if "--issue" in argv:
+        at = argv.index("--issue")
+        if at + 1 < len(argv):
+            issue = argv[at + 1]
+    return f"poll-{command}-{issue}" if issue else f"poll-{command}"
 
 
 def _refuse_if_locked(lock: RunLock, task_id: str) -> None:
@@ -635,6 +720,64 @@ def _locked(lock: RunLock, task_id: str) -> Iterator[None]:
         lock.release(task_id)
 
 
+def _registry_for(cfg: Configuration) -> RunRegistry:
+    return FilesystemRunRegistry(cfg.run_registry_dir)
+
+
+@contextmanager
+def _registered(registry: RunRegistry, product: str, task_id: str) -> Iterator[None]:
+    """Registers this invocation under `Configuration.run_registry_dir` so the
+    poller's own concurrency cap (`AGENTIC_MAX_CONCURRENT_RUNS`, GH-137) can count it
+    across every product on this machine. Best effort only, the same shape every other
+    diagnostic write in this module already has: a `run`/`resume` that cannot write
+    here still runs, one stderr line the only trace -- it must never turn into a
+    `CannotStart`, since nothing about the task itself failed."""
+    try:
+        registry.register(product, task_id)
+    except OSError as exc:
+        print(f"agentic: could not register the run: {exc}", file=sys.stderr)
+    try:
+        yield
+    finally:
+        try:
+            registry.unregister()
+        except OSError as exc:
+            print(f"agentic: could not clear the run registration: {exc}", file=sys.stderr)
+
+
+async def _poll(
+    cfg: Configuration,
+    ports: Ports,
+    interval_s: float,
+    run_lock: RunLock | None = None,
+    registry: RunRegistry | None = None,
+    launcher: Launcher | None = None,
+    log_file: str | None = None,
+    detach: bool = False,
+    child_argv: list[str] | None = None,
+    spawn: Spawner | None = None,
+) -> None:
+    """`agentic poll --product-dir <dir> [--detach]` (GH-137): a long-lived process per
+    product, one `poll.run_once` round every `interval_s` seconds, under the same
+    per-product `FilesystemRunLock` `run`/`resume`/`close` already take -- keyed by
+    `poll.LOCK_KEY` instead of a task id, so two pollers over the same product refuse
+    each other the same way two `run`s over the same task already do. `--detach` re-execs
+    exactly as `run --detach`/`resume --detach` do (`_detach`); `_signal_guarded`
+    (`main`'s own wrapper) turns a SIGTERM/SIGHUP into a clean stop between rounds, the
+    lock released on the way out."""
+    lock = run_lock if run_lock is not None else _lock_for(cfg)
+    if detach:
+        _detach(lock, pollmod.LOCK_KEY, child_argv or [], log_file or "", spawn)
+        return
+    registry = registry if registry is not None else _registry_for(cfg)
+    real_launcher = launcher if launcher is not None else SpawnLauncher(cfg)
+    with _locked(lock, pollmod.LOCK_KEY):
+        while True:
+            for line in pollmod.run_once(cfg, ports, registry, real_launcher, datetime.now(UTC)):
+                print(line)
+            await anyio.sleep(interval_s)
+
+
 async def _run(
     task: TaskInput,
     cfg: Configuration,
@@ -642,12 +785,14 @@ async def _run(
     fresh: bool = False,
     checkpointer: Checkpointer | None = None,
     run_lock: RunLock | None = None,
+    registry: RunRegistry | None = None,
     log_file: str | None = None,
     detach: bool = False,
     child_argv: list[str] | None = None,
     spawn: Spawner | None = None,
 ) -> None:
     lock = run_lock if run_lock is not None else _lock_for(cfg)
+    registry = registry if registry is not None else _registry_for(cfg)
     config: RunnableConfig = {"configurable": _configurable(task["id"], log_file)}
     async with (checkpointer or composition.checkpointer)(cfg) as saver:
         app = graph.compile(checkpointer=saver)
@@ -656,7 +801,7 @@ async def _run(
         if detach:
             _detach(lock, task["id"], child_argv or [], log_file or "", spawn)
             return
-        with _locked(lock, task["id"]):
+        with _locked(lock, task["id"]), _registered(registry, product_name(ports), task["id"]):
             _archive_previous_run(task["id"], ports)
             # A thread keeps its channels: a new run over it would add to the old cost.
             await saver.adelete_thread(task["id"])
@@ -741,12 +886,14 @@ async def _resume(
     yes: bool = False,
     checkpointer: Checkpointer | None = None,
     run_lock: RunLock | None = None,
+    registry: RunRegistry | None = None,
     log_file: str | None = None,
     detach: bool = False,
     child_argv: list[str] | None = None,
     spawn: Spawner | None = None,
 ) -> None:
     lock = run_lock if run_lock is not None else _lock_for(cfg)
+    registry = registry if registry is not None else _registry_for(cfg)
     config: RunnableConfig = {"configurable": _configurable(task_id, log_file)}
     async with (checkpointer or composition.checkpointer)(cfg) as saver:
         app = graph.compile(checkpointer=saver)
@@ -778,7 +925,7 @@ async def _resume(
             _detach(lock, task_id, child_argv or [], log_file or "", spawn)
             return
 
-        with _locked(lock, task_id):
+        with _locked(lock, task_id), _registered(registry, product_name(ports), task_id):
             if r.source == "document":
                 # Seeded as if `escalate` had just run: the task pauses once more,
                 # without telling the human again, and the answer below resumes it

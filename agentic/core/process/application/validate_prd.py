@@ -67,6 +67,7 @@ async def validate_prd(state: TaskState, cfg: Configuration, ports: Ports) -> Ta
         # The pair hit its limit: escalate, always (README.md, 3). PM knew this was
         # its last return, so the reason is written for the human.
         patch |= rules.escalation("returns", rules.limit_reached(PAIR_PM_PA, limit, data["reason"]))
+        patch = rules.logged(patch)
         patch["status"] = WAITING_ON_HUMAN
     return finish(state, patch, ports)
 

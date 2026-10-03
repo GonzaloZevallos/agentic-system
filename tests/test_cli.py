@@ -742,6 +742,106 @@ async def test_a_run_with_no_lock_injected_uses_the_products_own_runs_dir(monkey
 
 
 @pytest.mark.anyio
+async def test_a_run_with_no_registry_injected_leaves_nothing_in_the_watched_directory(
+    monkeypatch, tmp_path
+):
+    """The `no_real_run_registry` fixture's own contract, proved rather than assumed: a
+    `run` with no `registry=` of its own goes through the real `FilesystemRunRegistry`
+    (`cli._registry_for`), and `Configuration.run_registry_dir`'s default reads
+    `XDG_STATE_HOME` straight off the environment (`_default_run_registry_dir`), not
+    through `from_sources`. If the fixture ever stopped redirecting that variable, this
+    `run` would register a live pid under the real path of whatever machine runs the
+    suite instead of this test's own `watched` directory -- which it leaves empty,
+    `register`/`unregister` having run and cleared inside `_locked`."""
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    watched = tmp_path / "watched-xdg-state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(watched))
+    monkeypatch.setattr(cli, "graph", Delivers({"id": "T-9", "title": "t", "status": "open"}))
+    cfg = Configuration(product_dir=tmp_path / "product")
+    task = {"id": "T-9", "title": "t", "description": "d"}
+    await cli._run(task, cfg, memory_ports(), checkpointer=in_memory)
+    assert cfg.run_registry_dir == watched / "agentic" / "runs"
+    assert list(cfg.run_registry_dir.glob("*.json")) == []
+
+
+@pytest.mark.anyio
+async def test_a_run_registers_itself_and_unregisters_once_it_finishes(monkeypatch, tmp_path):
+    """GH-137: `run` registers under `Configuration.run_registry_dir` inside its own
+    lock, so the poller's concurrency cap has something to count, and clears it once
+    the invocation is done -- the product's name comes off `ports.stack.product()`,
+    `MemoryStack`'s own default."""
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import MemoryRunRegistry, memory_ports
+
+    monkeypatch.setattr(cli, "graph", Delivers({"id": "T-9", "title": "t", "status": "open"}))
+    registry = MemoryRunRegistry()
+    task = {"id": "T-9", "title": "t", "description": "d"}
+    await cli._run(
+        task,
+        Configuration(product_dir=tmp_path),
+        memory_ports(),
+        checkpointer=in_memory,
+        registry=registry,
+    )
+    assert registry.registered == [("product", "T-9")]
+    assert registry.unregistered == 1
+
+
+@pytest.mark.anyio
+async def test_a_run_unregisters_even_if_the_graph_breaks(monkeypatch, tmp_path):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import MemoryRunRegistry, memory_ports
+
+    class Broken(Delivers):
+        async def ainvoke(self, task, config):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(cli, "graph", Broken())
+    registry = MemoryRunRegistry()
+    task = {"id": "T-9", "title": "t", "description": "d"}
+    with pytest.raises(RuntimeError, match="boom"):
+        await cli._run(
+            task,
+            Configuration(product_dir=tmp_path),
+            memory_ports(),
+            checkpointer=in_memory,
+            registry=registry,
+        )
+    assert registry.registered == [("product", "T-9")]
+    assert registry.unregistered == 1
+
+
+@pytest.mark.anyio
+async def test_a_run_still_happens_when_the_registry_cannot_be_written(
+    monkeypatch, tmp_path, capsys
+):
+    """Best effort only (GH-137): a registry that cannot write must not turn into a
+    `CannotStart` -- nothing about the task itself failed."""
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    class BrokenRegistry:
+        def register(self, product, task_id):
+            raise OSError("disk full")
+
+        def unregister(self):
+            raise OSError("disk full")
+
+    monkeypatch.setattr(cli, "graph", Delivers({"id": "T-9", "title": "t", "status": "open"}))
+    task = {"id": "T-9", "title": "t", "description": "d"}
+    await cli._run(
+        task,
+        Configuration(product_dir=tmp_path),
+        memory_ports(),
+        checkpointer=in_memory,
+        registry=BrokenRegistry(),
+    )
+    assert "could not register the run" in capsys.readouterr().err
+
+
+@pytest.mark.anyio
 async def test_resume_refuses_when_the_lock_is_held(monkeypatch, tmp_path):
     from agentic.shared.configuration import Configuration
     from tests.fakes import memory_ports
@@ -847,6 +947,39 @@ async def test_a_resumed_run_acquires_and_releases_the_lock_and_a_takeover_is_pr
     out = capsys.readouterr().out
     assert "999999999" in out
     assert ports.tracker.comments  # announced normally: the lock did not stop it
+
+
+@pytest.mark.anyio
+async def test_a_resume_registers_itself_and_unregisters_once_it_finishes(monkeypatch, tmp_path):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import MemoryRunRegistry, memory_ports
+
+    monkeypatch.setattr(cli, "graph", Delivers({"id": "GH-1", "title": "t", "status": "open"}))
+    ports = memory_ports()
+    ports.documents.save(
+        {
+            "id": "GH-1",
+            "title": "t",
+            "description": "d",
+            "type": "bug",
+            "status": "waiting_on_human",
+            "escalated": "Developer stopped by the task cap",
+            "cost_usd": 1.0,
+        }
+    )
+    ports.tracker.earlier = ["Escalated: Developer stopped by the task cap"]
+    registry = MemoryRunRegistry()
+    await cli._resume(
+        "GH-1",
+        Configuration(product_dir=tmp_path),
+        ports,
+        from_document=True,
+        yes=True,
+        checkpointer=in_memory,
+        registry=registry,
+    )
+    assert registry.registered == [("product", "GH-1")]
+    assert registry.unregistered == 1
 
 
 def test_a_product_that_declares_no_name_does_not_run(monkeypatch, tmp_path, capsys):
@@ -2836,3 +2969,66 @@ async def test_merged_since_counts_by_the_merge_commit_position_not_by_closed_at
         ports.documents.save(doc)
     await _dry_run(root, ports)
     assert "Merged since anchor: 1" in capsys.readouterr().out
+
+
+# -- `agentic poll` (GH-137): the long-lived, per-product queue-mover -------------
+
+
+def test_poll_child_label_names_the_command_and_the_issue_when_present():
+    assert (
+        cli._poll_child_label(["agentic", "resume", "--issue", "19", "--yes"]) == "poll-resume-19"
+    )
+    assert cli._poll_child_label(["agentic", "close", "--issue", "3"]) == "poll-close-3"
+    assert cli._poll_child_label(["agentic", "run", "--detach"]) == "poll-run"
+    assert cli._poll_child_label(["agentic"]) == "poll-run"  # no command at all: the default
+
+
+def test_spawn_launcher_wraps_spawn_detached_with_a_freshly_minted_log_path(monkeypatch, tmp_path):
+    from agentic.shared.configuration import Configuration
+
+    calls = []
+
+    def fake_spawn_detached(argv, log_path):
+        calls.append((argv, log_path))
+        return 777
+
+    monkeypatch.setattr(cli, "_spawn_detached", fake_spawn_detached)
+    launcher = cli.SpawnLauncher(Configuration(product_dir=tmp_path))
+    argv = ["agentic", "resume", "--issue", "19", "--yes", "--detach"]
+    assert launcher.spawn(argv) == 777
+    assert len(calls) == 1
+    spawned_argv, log_path = calls[0]
+    assert spawned_argv == argv
+    assert "poll-resume-19" in log_path
+    assert log_path.startswith(str(tmp_path))
+
+
+@pytest.mark.anyio
+async def test_poll_detach_spawns_the_child_and_returns_without_running_a_round(
+    monkeypatch, tmp_path, capsys
+):
+    """Seam: the injected spawner on `_poll`. The parent never calls `poll.run_once`:
+    a monkeypatch that raises would fail the test if it somehow did."""
+    from agentic.core.process.application import poll as pollmod
+    from agentic.shared.configuration import Configuration
+
+    def broken_run_once(*args, **kwargs):
+        raise AssertionError("a round must never run in the parent under --detach")
+
+    monkeypatch.setattr(pollmod, "run_once", broken_run_once)
+    spawn = FakeSpawn()
+    lock = FakeLock()
+    child_argv = ["agentic", "poll", "--detach"]
+    await cli._poll(
+        Configuration(product_dir=tmp_path),
+        memory_ports(),
+        60.0,
+        run_lock=lock,
+        log_file="/tmp/x.log",
+        detach=True,
+        child_argv=child_argv,
+        spawn=spawn,
+    )
+    assert spawn.calls == [(child_argv, "/tmp/x.log")]
+    assert lock.acquired == []  # the parent never holds it -- the child does, after it re-execs
+    assert "54321" in capsys.readouterr().out

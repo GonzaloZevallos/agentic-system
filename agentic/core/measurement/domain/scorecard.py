@@ -27,14 +27,20 @@ from agentic.core.process.domain.task import TaskState
 
 from . import metrics
 
-# The two failure reasons a scorecard's "own failures" excludes (ADR-0029), read here
-# and nowhere else in this diff: every other module that needs the exclusion imports
-# this constant rather than spelling the two strings again -- the drift the `Scorecard`
-# entry of `agentic/core/measurement/CONTEXT.md` names when it says "quedan afuera los
-# dos motivos externos (`account_limit`... y `upstream`...) y quedan adentro los
+# The three failure reasons a scorecard's "own failures" excludes (ADR-0029, extended
+# by issue #137's own `network`), read here and nowhere else in this diff: every other
+# module that needs the exclusion imports this constant rather than spelling the three
+# strings again -- the drift the `Scorecard` entry of `agentic/core/measurement/
+# CONTEXT.md` names when it says "quedan afuera los motivos externos (`account_limit`,
+# el límite de la cuenta del proveedor; `upstream`, su caída; y `network`, la red del
+# lado del sistema caída, nunca leída de la prosa del error) y quedan adentro los
 # nuestros, el tope por intento (`limit`) incluido". That entry is the statement this
-# tuple is a copy of; nothing here restates its reasoning, only its two members.
-EXTERNAL_FAILURE_REASONS = ("account_limit", "upstream")
+# tuple is a copy of; nothing here restates its reasoning, only its three members. A
+# separate copy from `core.process.domain.rules.EXTERNAL_REASONS`, never imported: the
+# two tuples read the same three literals on purpose, so a document's own `FailureReason`
+# string decides each independently, with no import between the two contexts' rule
+# modules.
+EXTERNAL_FAILURE_REASONS = ("account_limit", "upstream", "network")
 
 # "Tareas terminadas" (ADR-0008, 2026-09-18 second addendum): a Corrida that reached a
 # terminal status, whether or not a human has judged its pull request yet. Own failures

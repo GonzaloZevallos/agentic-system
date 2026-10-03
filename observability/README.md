@@ -102,13 +102,14 @@ acompañan a `agentic.role.failures`/`.tool_calls`/`.tokens`/`.presubmit.checks`
 dimensión del array: esa segmentación fina, cuando hace falta, se lee del documento de
 tarea, que ya lleva cada corrida con su `slug` y su sección. `reason` sigue siendo la
 única dimensión de `agentic.role.failures`/`.failure_cost_usd` ∈ {schema, check,
-max_turns, limit, account_limit, upstream, sdk, other}, decidido en el sitio donde se
-lanza `AttemptFailed`, nunca por parsear el mensaje de error.
+max_turns, limit, account_limit, upstream, network, sdk, other}, decidido en el sitio
+donde se lanza `AttemptFailed`, nunca por parsear el mensaje de error (`network`: un
+`api_error` sin status HTTP, ADR-0039).
 
 ### El scorecard (ADR-0028) se calcula igual, de una sola fuente
 
-Las cuatro figuras — autonomía, fallos propios por tarea (excluye `account_limit` y
-`upstream`, ADR-0029), costo por entrega, retrabajo — siguen calculándose en
+Las cuatro figuras — autonomía, fallos propios por tarea (excluye `account_limit`,
+`upstream` y `network`, ADR-0029 y ADR-0039), costo por entrega, retrabajo — siguen calculándose en
 `core/measurement/domain/scorecard.py`, leyendo los documentos de tarea de una línea de
 base: el mismo camino que `agentic eval compare` recorre. Langfuse no deriva ningún
 scorecard propio, y esta tarea no le empuja ninguno: no hay dashboard de Langfuse que lo

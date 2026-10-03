@@ -113,8 +113,8 @@ def test_task_figures_defaults_absent_closure_fields_to_none_not_zero():
 # --- EXTERNAL_FAILURE_REASONS: the one enumeration in this diff, with a rejecting case ---
 
 
-def test_external_failure_reasons_excludes_only_account_limit_and_upstream():
-    assert set(scorecard.EXTERNAL_FAILURE_REASONS) == {"account_limit", "upstream"}
+def test_external_failure_reasons_excludes_account_limit_upstream_and_network():
+    assert set(scorecard.EXTERNAL_FAILURE_REASONS) == {"account_limit", "upstream", "network"}
 
 
 def test_own_failures_excludes_the_external_reasons_but_keeps_limit_and_sdk():
@@ -156,13 +156,21 @@ def test_own_failures_excludes_the_external_reasons_but_keeps_limit_and_sdk():
                     "session_id": "",
                     "reason": "upstream",
                 },
+                {
+                    "role": "R",
+                    "attempt": 5,
+                    "error": "e",
+                    "cost_usd": 0.0,
+                    "session_id": "",
+                    "reason": "network",
+                },
             ]
         )
     )
     built = scorecard.build([figures])
-    # Two own failures (limit, sdk) over one terminated Corrida: the two external ones
-    # (account_limit, upstream) are excluded from the numerator, never from the count
-    # of terminated documents itself.
+    # Two own failures (limit, sdk) over one terminated Corrida: the three external
+    # ones (account_limit, upstream, network) are excluded from the numerator, never
+    # from the count of terminated documents itself.
     assert built.own_failures_per_task.value == pytest.approx(2.0)
     assert built.own_failures_per_task.denominator == 1
 

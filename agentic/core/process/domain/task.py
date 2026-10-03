@@ -85,11 +85,13 @@ ChangeCategory = FindingCategory | Literal["definition"]
 # case's own rule over otherwise-valid output, `max_turns` the harness cutting the
 # model off, `limit` a per-attempt money cap (issue #66), `account_limit` an HTTP 429
 # from the account's own quota — session, spend or rate — not our per-attempt cap,
-# `upstream` an HTTP 5xx from the provider's own server, `sdk` the harness breaking in
-# a way none of the named facts covers (narrowed by `account_limit` and `upstream`,
-# ADR-0029), `other` the residual nothing else names.
+# `upstream` an HTTP 5xx from the provider's own server, `network` an `api_error` with
+# no HTTP status at all — the network down (`EAI_AGAIN`) or the same shape, never read
+# from the prose (issue #137) — `sdk` the harness breaking in a way none of the named
+# facts covers (narrowed by `account_limit`, `upstream` and `network`, ADR-0029), `other`
+# the residual nothing else names.
 FailureReason = Literal[
-    "schema", "check", "max_turns", "limit", "account_limit", "upstream", "sdk", "other"
+    "schema", "check", "max_turns", "limit", "account_limit", "upstream", "network", "sdk", "other"
 ]
 # Which review this is (ADR-0016; `rules.review_kind`): `first` until a return sends the
 # subtask back, `incremental` (ADR-0015) after that, `integration` for the fan-in's own
@@ -472,6 +474,39 @@ class Subtask(TypedDict, total=False):
     conflicted_paths: list[str]
 
 
+# One entry of `TaskState.pause_log` (issue #137): the append-only register the
+# poller's own eligibility reads, never `escalation_class` or any failure's `error`
+# text. A discriminated union on `kind`, one `TypedDict` per shape, rather than one
+# `TypedDict` with optional fields: `auto_resumable` reads a `FailurePauseEntry`'s own
+# `value` as the `FailureReason` it always is, with nothing to narrow by hand (ADR-0021
+# forbids a `cast` to make a wider field fit). `ResumedPauseEntry` (`rules.resumed`'s
+# own patch) marks a fresh epoch boundary, with neither `value` nor `section`.
+# `EscalationPauseEntry` carries the `EscalationClass` a patch's own `escalation_class`
+# already named, composed by `rules.logged`. `FailurePauseEntry` carries one `Failure`'s
+# own `reason` and `section`, one entry per failure `run_role.escalation` hands
+# `rules.logged` as `exc.failures`. The *current epoch* (`rules.auto_resumable`'s own
+# reading) is every entry after the last `ResumedPauseEntry`, or the whole log when
+# there is none.
+
+
+class ResumedPauseEntry(TypedDict):
+    kind: Literal["resumed"]
+
+
+class EscalationPauseEntry(TypedDict):
+    kind: Literal["escalation"]
+    value: EscalationClass
+
+
+class FailurePauseEntry(TypedDict):
+    kind: Literal["failure"]
+    value: FailureReason
+    section: str
+
+
+PauseEntry = ResumedPauseEntry | EscalationPauseEntry | FailurePauseEntry
+
+
 class TaskState(TaskInput, total=False):
     type: str
     status: Annotated[Status, last]
@@ -548,6 +583,11 @@ class TaskState(TaskInput, total=False):
     # Counts of the interview this patch ran, if any (`InterviewStats`): measurement
     # only, like `subtask_id` above — never rendered into the document.
     interview_stats: InterviewStats
+    # The append-only pause register (issue #137, `PauseEntry`'s own docstring):
+    # `operator.add` like `runs`/`failures`, so `delta` already knows how to subtract
+    # it. The only source `rules.auto_resumable` reads for whether a pause is the
+    # poller's to retry; never `escalation_class` or a failure's own `error` text.
+    pause_log: Annotated[list[PauseEntry], operator.add]
 
 
 def _reducers() -> dict[str, object]:

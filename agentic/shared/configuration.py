@@ -8,6 +8,7 @@ nothing for the CLI. Every node reads it at the start of its run.
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
@@ -105,6 +106,21 @@ class Configuration(BaseModel):
     # skipped. `False` is today's path; the ephemeral-arm subtask is the only other
     # reader.
     skip_ephemeral: bool = False
+    # Runs alive at once across every product on this machine (GH-137, the poller's
+    # first piece): the human's own call is one at a time, default **1** -- two in
+    # parallel already hit the account's own session limit (one 429 for the whole
+    # account, never per product) and clashed merging. The poller counts live entries
+    # under `run_registry_dir` against this before it launches a child.
+    max_concurrent_runs: int = Field(default=1, ge=1)
+    # Where `run`/`resume` register the pid, host, product and task of a live
+    # invocation, and the poller counts them against `max_concurrent_runs` (GH-137).
+    # Outside every product, one per machine: `$XDG_STATE_HOME/agentic/runs`, or
+    # `~/.local/state/agentic/runs` when that variable is unset, the same fallback the
+    # XDG base-directory spec gives. A plain field, not a property reading the
+    # environment straight: the override precedence above (`AGENTIC_RUN_REGISTRY_DIR`)
+    # is what lets a test redirect it, the same way every other field already does, so
+    # no test ever writes to the real registry.
+    run_registry_dir: Path = Field(default_factory=lambda: _default_run_registry_dir())
 
     @classmethod
     def from_sources(
@@ -193,6 +209,12 @@ def experiment_snapshot(cfg: Configuration, reviewer_model: str) -> dict[str, st
         "skip_ephemeral": str(cfg.skip_ephemeral),
         "reviewer_model": reviewer_model,
     }
+
+
+def _default_run_registry_dir() -> Path:
+    base = os.environ.get("XDG_STATE_HOME")
+    root = Path(base) if base else Path.home() / ".local" / "state"
+    return root / "agentic" / "runs"
 
 
 def _from_env(raw: str, annotation: Any) -> Any:

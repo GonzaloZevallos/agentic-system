@@ -9,6 +9,7 @@ import math
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta
 from typing import Any, Literal
 
 from . import presubmit
@@ -17,6 +18,7 @@ from .document import HUMAN, demote
 from .roles import (
     DEVELOPER,
     FINDINGS,
+    INTERVIEWS,
     PAIR_PM_PA,
     PM,
     PRODUCT_ANALYST,
@@ -34,10 +36,15 @@ from .task import (
     DependencyState,
     EscalationClass,
     EscalationPatch,
+    EscalationPauseEntry,
+    Failure,
+    FailurePauseEntry,
     FailureReason,
     FindingCategory,
     FindingRecord,
     MergeOutcome,
+    PauseEntry,
+    ResumedPauseEntry,
     ReviewKind,
     RoleRun,
     Status,
@@ -489,7 +496,11 @@ def failure_reason(report: ReportedFailure) -> FailureReason:
        `terminal_reason == "structured_output_retry_exhausted"` -> `schema`: the CLI
        exhausting its own structured-output retries, a relabelling of what the
        glossary's Fallo de rol already names, not a new value.
-    5. Anything else -> `sdk`: the harness broke in a way none of the named facts
+    5. `terminal_reason == "api_error"` with no `api_error_status` at all -> `network`
+       (issue #137): the harness reported an API error with no HTTP status to read,
+       the shape a downed network or DNS (`EAI_AGAIN`) leaves, never read from the
+       prose that happens to name it.
+    6. Anything else -> `sdk`: the harness broke in a way none of the named facts
        covers.
     """
     subtype = report.subtype or ""
@@ -503,6 +514,8 @@ def failure_reason(report: ReportedFailure) -> FailureReason:
         return "schema"
     if report.terminal_reason == "structured_output_retry_exhausted":
         return "schema"
+    if report.terminal_reason == "api_error" and report.api_error_status is None:
+        return "network"
     return "sdk"
 
 
@@ -1314,6 +1327,10 @@ def resumed(state: TaskState, decision: str | None) -> dict[str, Any]:
         "escalation_class": None,
         "status": resumed_status(state),
         "questions_for_human": [],
+        # A fresh epoch (issue #137): `rules.auto_resumable` reads only the entries
+        # after the last one of this kind, so a pause the human just resolved never
+        # counts toward what the poller may retry on its own next time.
+        "pause_log": [ResumedPauseEntry(kind="resumed")],
     }
     if pair := returns_pair(state):
         patch["changes_requested"] = {pair: 0}
@@ -1345,3 +1362,247 @@ def resume_target(state: TaskState) -> str | None:
         return FIRST_NODE.get(state.get("type", ""), "define")
     # `discarded` is an end like `pull_request`: nothing left to run.
     return {"defined": "validate", "definition_ready": "plan"}.get(status)
+
+
+# The poller (issue #137, README.md, 14; ADR-0003's own forward reference: "the poller
+# of stage 5 will do the search"). First slice: retake a pause an external API cut
+# caused, close a task whose pull request merged, and launch the next unblocked issue,
+# never past the machine's own concurrency cap. Every predicate here is pure: the clock
+# and every fact it decides over arrive as arguments (README.md, 14), never a port, a
+# `subprocess` or a `Path`.
+
+# The three `FailureReason`s a pause never needed a human for (ADR-0029, extended by
+# issue #137's own `network`): the account's own quota, the provider's own server, or
+# the network down. `rules.auto_resumable` is the only reader of this tuple; the
+# scorecard's own exclusion (`core.measurement.domain.scorecard.EXTERNAL_FAILURE_
+# REASONS`) is a separate copy of the same three literals -- hexagonal keeps
+# `core.process.domain` from importing `core.measurement`, so nothing here imports it.
+EXTERNAL_REASONS: tuple[FailureReason, ...] = ("account_limit", "upstream", "network")
+
+# Minutes before each of the poller's own automatic attempts, first to last (ADR-0029's
+# addendum, issue #137): never read off an API's own "resets 7:30pm" prose. Indexed by
+# how many automatic attempts already happened (`prior`), capped by `rules.
+# auto_resume_limit`'s own 1 or 6.
+AUTO_RESUME_SCHEDULE: tuple[int, ...] = (15, 30, 60, 120, 120, 120)
+
+# Every interview's own section (`Interview.section`), computed once: what `rules.
+# auto_resume_limit` compares a failure's own `section` against, never a hand-kept copy
+# that could drift from `roles.INTERVIEWS` (the same worry `INTERVIEW_PARTICIPANT_
+# SLUGS` already names above).
+_INTERVIEW_SECTIONS = frozenset(spec.section for spec in INTERVIEWS)
+
+
+def logged(patch: dict[str, Any], failures: Sequence[Failure] = ()) -> dict[str, Any]:
+    """Every escalation composes with this (issue #137): the one place a `pause_log`
+    entry is appended, so `rules.escalation` and `rules.unmergeable` stay exactly as
+    they are and no call site ever merges a `pause_log` key by hand with `|`. Reads
+    `patch["escalation_class"]` -- already written by `rules.escalation`/`rules.
+    unmergeable`, never recomputed here -- for the `"escalation"` entry, and turns
+    `failures` (`run_role.escalation`'s own `exc.failures`, `()` for `rules.
+    unmergeable`'s own callers, which never ran a role) into one `"failure"` entry
+    each, in the order they failed, before the `"escalation"` entry that followed them.
+    A legacy `Failure` with no `reason` logs as `"other"`: a motive this ambiguous
+    about its own cause must never read as `account_limit` and ease into an automatic
+    retry."""
+    entries: list[PauseEntry] = [
+        FailurePauseEntry(
+            kind="failure", value=f.get("reason", "other"), section=f.get("section", "")
+        )
+        for f in failures
+    ]
+    if (cls := patch.get("escalation_class")) is not None:
+        entries.append(EscalationPauseEntry(kind="escalation", value=cls))
+    return {**patch, "pause_log": entries}
+
+
+def _current_epoch(state: TaskState) -> list[PauseEntry]:
+    """The entries `rules.auto_resumable`/`rules.auto_resume_limit` read: everything
+    after the last `"resumed"` entry (a human's decision, or the poller's own retake),
+    or the whole log when the task has never been resumed."""
+    log = state.get("pause_log", [])
+    last_resumed = -1
+    for i, entry in enumerate(log):
+        if entry["kind"] == "resumed":
+            last_resumed = i
+    return log[last_resumed + 1 :]
+
+
+def auto_resumable(state: TaskState) -> FailureReason | None:
+    """Whether the poller may retake this pause on its own, and with which reason
+    (issue #137): the only source of this decision, reading nothing else -- not
+    `escalation_class`, not `escalated`'s own text, not any `failures[].error`. Three
+    things must hold of the current epoch (`_current_epoch`) together: at least one
+    `"failure"` entry (a role actually broke; a pair at its return limit or a bare
+    `"escalation"` entry some other site composed alone is not this), every
+    `"escalation"` entry in it reads `"failure"` (an epoch that also escalated as
+    `"cap"` or `"returns"` is not purely an external cut, whatever its failures were),
+    and every `"failure"` entry's own reason is in `EXTERNAL_REASONS`. The reason
+    returned is the most recent failure's -- what still blocks this pause right now."""
+    failures: list[FailurePauseEntry] = []
+    escalations: list[EscalationPauseEntry] = []
+    for entry in _current_epoch(state):
+        if entry["kind"] == "failure":
+            failures.append(entry)
+        elif entry["kind"] == "escalation":
+            escalations.append(entry)
+    if not failures:
+        return None
+    if not all(e["value"] == "failure" for e in escalations):
+        return None
+    if not all(f["value"] in EXTERNAL_REASONS for f in failures):
+        return None
+    return failures[-1]["value"]
+
+
+def auto_resume_limit(state: TaskState) -> int:
+    """How many automatic attempts (`AUTO_RESUME_SCHEDULE`'s own length, at most) this
+    pause's current epoch gets: one when any of its `"failure"` entries broke inside an
+    interview's own section (`_INTERVIEW_SECTIONS`) -- a retake already gives an
+    interview two rounds of margin (`INTERVIEW_RETAKE_ROUNDS`), so a long automatic
+    chase on top of that is not this task's own risk to take -- six otherwise, the
+    whole calendar."""
+    in_interview = False
+    for entry in _current_epoch(state):
+        if entry["kind"] == "failure" and entry["section"] in _INTERVIEW_SECTIONS:
+            in_interview = True
+    return 1 if in_interview else len(AUTO_RESUME_SCHEDULE)
+
+
+def _schedule_exhausted(prior: int, limit: int) -> bool:
+    """Whether `prior` automatic attempts have already used up every slot
+    `AUTO_RESUME_SCHEDULE[:limit]` has: `next_attempt_at`'s own exhaustion check,
+    factored out so `poll_plan` can tell it apart from "not due yet" -- both of those
+    read as `None` from `next_attempt_at` alone, and only the first (a calendar that
+    ran out, not one still ticking) must stop blocking a launch."""
+    return prior >= len(AUTO_RESUME_SCHEDULE[:limit])
+
+
+def next_attempt_at(since: datetime, prior: int, limit: int, now: datetime) -> datetime | None:
+    """The next automatic attempt's own time, but only once it is due (issue #137):
+    `None` both when the calendar is spent (`_schedule_exhausted`, no slot left to
+    schedule) and when the next slot has not arrived yet (`now` before it) -- the two
+    reasons a caller does not act on this pause read alike, one check instead of two.
+    `since` is the moment the wait is measured from: the last `Escalated:` comment's
+    own time for a retake, the last launch attempt's own time for a launch (Tech Lead
+    plan); `prior` is how many automatic attempts already happened since then. Never
+    reads a clock of its own (README.md, 14): `now` arrives as an argument, like
+    `since`."""
+    if _schedule_exhausted(prior, limit):
+        return None
+    target = since + timedelta(minutes=AUTO_RESUME_SCHEDULE[prior])
+    return target if target <= now else None
+
+
+# The two `stateReason`s GitHub closes an issue with (Tech Lead plan): `NOT_PLANNED`
+# resolves a blocker on its own -- the blocking issue was dropped, not built -- and
+# `COMPLETED` resolves one only together with a merge the checkout can already see.
+_BLOCKER_NOT_PLANNED = "NOT_PLANNED"
+_BLOCKER_COMPLETED = "COMPLETED"
+
+
+def blocker_resolved(state_reason: str | None, merged_into_checkout: bool) -> bool:
+    """Whether one blocking issue no longer blocks a launch (Tech Lead plan): `True`
+    for `NOT_PLANNED` outright, `True` for `COMPLETED` only when `merged_into_checkout`
+    already says its pull request's merge commit is an ancestor of `HEAD` --
+    `Workspace.is_ancestor`'s own call, made by the caller, never by this function.
+    Anything else -- `OPEN`, an unknown or missing `stateReason`, a `COMPLETED` issue
+    with no pull request found or whose merge commit the checkout cannot see yet -- is
+    unresolved: on doubt, the launch predicate does not launch (Tech Lead plan)."""
+    if state_reason == _BLOCKER_NOT_PLANNED:
+        return True
+    if state_reason == _BLOCKER_COMPLETED:
+        return merged_into_checkout
+    return False
+
+
+PollActionKind = Literal["close", "resume", "launch"]
+
+
+@dataclass(frozen=True)
+class PollAction:
+    """One action `rules.poll_plan` orders into this round: which issue, and whether
+    the poller's child process is `agentic close|resume|run` (the kind names the verb,
+    the caller knows the mapping -- domain never names a CLI command)."""
+
+    kind: PollActionKind
+    issue: int
+
+
+@dataclass(frozen=True)
+class ResumeCandidate:
+    """One paused task `rules.auto_resumable` already found eligible, as `rules.
+    poll_plan` needs it: `reason` is what `auto_resumable` returned; `since`/`prior`/
+    `limit` are `rules.next_attempt_at`'s own arguments (the last `Escalated:`
+    comment's time, and how many `Auto-resumed:` comments followed it since the last
+    non-system one -- Tech Lead plan)."""
+
+    issue: int
+    reason: FailureReason
+    since: datetime
+    prior: int
+    limit: int
+
+
+@dataclass(frozen=True)
+class LaunchCandidate:
+    """One open, unlaunched `agentic` issue, as `rules.poll_plan` needs it: `blocked`
+    is whether any of its dependencies is still unresolved (`blocker_resolved`, folded
+    by the caller over every blocker); `since`/`prior`/`limit` are `rules.
+    next_attempt_at`'s own arguments for this issue's own launch attempts, `since`
+    `None` for one never attempted, which is always due."""
+
+    issue: int
+    blocked: bool
+    since: datetime | None
+    prior: int
+    limit: int
+
+
+def poll_plan(
+    *,
+    closes: Sequence[int],
+    resumes: Sequence[ResumeCandidate],
+    launches: Sequence[LaunchCandidate],
+    available_slots: int,
+    now: datetime,
+) -> list[PollAction]:
+    """This round's actions, in the order the Tech Lead plan fixes: every close first
+    (merging freed the slot it used, if any, so closing never spends one); the due
+    retakes next, lowest issue first, while `available_slots` lasts; at most one
+    launch, the lowest-numbered issue with every blocker resolved and its own wait (if
+    any) elapsed -- and only when no eligible pause anywhere in the product is still
+    waiting out its own calendar (its own next slot has not arrived yet, but one is
+    still scheduled), whether or not a slot is free for it. A pause whose calendar is
+    spent (`_schedule_exhausted`) does not count as "still waiting": it needs a human
+    now, same as any other escalation, and must not freeze every launch in the product
+    until one acts. `available_slots` already reflects the machine-wide cap
+    (`AGENTIC_MAX_CONCURRENT_RUNS`) minus every run alive right now, counted by the
+    caller; this function never reads the registry itself."""
+    actions = [PollAction("close", issue) for issue in sorted(closes)]
+
+    due_resumes = sorted(
+        (r for r in resumes if next_attempt_at(r.since, r.prior, r.limit, now) is not None),
+        key=lambda r: r.issue,
+    )
+    taken = due_resumes[: max(available_slots, 0)]
+    actions.extend(PollAction("resume", r.issue) for r in taken)
+
+    slots_left = max(available_slots - len(taken), 0)
+    some_resume_still_waiting = any(
+        not _schedule_exhausted(r.prior, r.limit)
+        and next_attempt_at(r.since, r.prior, r.limit, now) is None
+        for r in resumes
+    )
+    if slots_left > 0 and not some_resume_still_waiting:
+        ready = sorted(
+            (
+                c
+                for c in launches
+                if not c.blocked
+                and (c.since is None or next_attempt_at(c.since, c.prior, c.limit, now) is not None)
+            ),
+            key=lambda c: c.issue,
+        )
+        if ready:
+            actions.append(PollAction("launch", ready[0].issue))
+    return actions

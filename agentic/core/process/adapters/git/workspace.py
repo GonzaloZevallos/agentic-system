@@ -26,6 +26,7 @@ from pathlib import Path
 from agentic.shared.configuration import LOGS_DIR, STATE_FILE
 
 from ...application.ports import Checkout
+from ...application.ports import GitError as GitError  # re-exported: see ports.py
 from ...domain import rules
 from ...domain.task import DependencyState, MergeOutcome
 
@@ -34,10 +35,6 @@ WORKTREES = Path(".agentic/worktrees")
 # (README.md, 14; issue #33), through this same mechanism rather than the product's own
 # `.gitignore`, which is the product's business.
 EXCLUDES = (f"{WORKTREES}/", f"{STATE_FILE}*", f"{LOGS_DIR}/")
-
-
-class GitError(RuntimeError):
-    pass
 
 
 class GitWorkspace:
@@ -213,6 +210,24 @@ class GitWorkspace:
 
     def is_ignored(self, root: Path, relative: str) -> bool:
         result = self._run("check-ignore", "-q", relative, cwd=root)
+        return result.returncode == 0
+
+    def is_ancestor(self, path: Path, sha: str, ref: str = "HEAD") -> bool:
+        """False, never `GitError`, for a `sha` this checkout has no object for (the
+        launch predicate's own "ante la duda, no lanza", GH-137): `cat-file -e` is
+        asked first, and `merge-base --is-ancestor` only runs once it confirms the
+        object exists, so an unknown git object never reaches it. `merge-base
+        --is-ancestor` itself only ever means 0 (is an ancestor) or 1 (is not); any
+        other exit is a real git failure, raised as `GitError` instead of read as
+        "launch anyway"."""
+        exists = self._run("cat-file", "-e", f"{sha}^{{commit}}", cwd=path)
+        if exists.returncode != 0:
+            return False
+        result = self._run("merge-base", "--is-ancestor", sha, ref, cwd=path)
+        if result.returncode not in (0, 1):
+            raise GitError(
+                f"git merge-base --is-ancestor {sha} {ref} failed: {result.stderr.strip()}"
+            )
         return result.returncode == 0
 
     def exclude_system_files(self) -> None:

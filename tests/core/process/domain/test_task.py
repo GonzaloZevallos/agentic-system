@@ -48,6 +48,7 @@ def test_reducers_are_read_from_the_annotations():
         "escalation_class",
         "proposed_invariants",
         "experiment",
+        "pause_log",
     }
     assert REDUCERS["cost_usd"] is add and REDUCERS["sections"] is merge
     assert REDUCERS["experiment"] is last
@@ -173,6 +174,29 @@ def test_experiment_uses_last_and_two_branch_patches_fold_without_colliding():
     once = apply(state, {"experiment": snapshot})
     twice = apply(once, {"experiment": snapshot})
     assert twice["experiment"] == snapshot
+
+
+def test_pause_log_round_trips_through_delta_and_apply_with_a_non_empty_before():
+    """`pause_log` is `operator.add` like `runs`/`failures`: a branch that already has
+    entries, folded with what a new pause adds, round-trips through `delta` and `apply`
+    exactly like any other append-only key."""
+    before = {"id": "T-1", "pause_log": [{"kind": "escalation", "value": "cap"}]}
+    after = {
+        "id": "T-1",
+        "pause_log": [
+            {"kind": "escalation", "value": "cap"},
+            {"kind": "resumed"},
+            {"kind": "failure", "value": "account_limit", "section": "Developer: api"},
+        ],
+    }
+    patch = delta(before, after)
+    assert patch == {
+        "pause_log": [
+            {"kind": "resumed"},
+            {"kind": "failure", "value": "account_limit", "section": "Developer: api"},
+        ]
+    }
+    assert apply(before, patch) == after
 
 
 def test_a_cold_plan_patch_never_introduces_the_solution_interview_section():

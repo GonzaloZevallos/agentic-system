@@ -27,5 +27,6 @@ async def classify(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSt
             patch |= rules.escalation(
                 "classification", f"PjM could not classify with confidence: {output.data['reason']}"
             )
+            patch = rules.logged(patch)
             patch["status"] = WAITING_ON_HUMAN
     return finish(state, patch, ports)
