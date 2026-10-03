@@ -57,7 +57,6 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
 
 from agentic.shared.configuration import Configuration
 
@@ -590,13 +589,13 @@ def escalation(exc: Escalating) -> TaskState:
     call site that ever has a role's own failures to log, so `pause_log`'s eligibility
     for an automatic retake reads the reason each attempt actually failed with."""
     cls: EscalationClass = "cap" if isinstance(exc, TaskCapReached) else "failure"
-    patch: dict[str, Any] = {
+    patch: TaskState = {
         "failures": exc.failures,
         "cost_usd": exc.cost_usd,
         "status": WAITING_ON_HUMAN,
         **rules.escalation(cls, str(exc)),
     }
-    return cast(TaskState, rules.logged(patch, exc.failures))
+    return rules.logged(patch, exc.failures)
 
 
 def run_record(state: TaskState, role: Role, section: str, output: Output) -> RoleRun:
@@ -751,7 +750,13 @@ async def run_role(
             cold_prompt=cold_prompt,
         )
     except Escalating as exc:
-        return None, patch | escalation(exc)
+        # Never `patch | escalation(exc)` (issue #137): `escalation(exc)` already
+        # carries its own `pause_log` (`rules.logged`'s doing), and the dict `|`
+        # operator picks one side's value for a shared key instead of the list
+        # `pause_log`'s own reducer expects appended -- `patch` itself never has one
+        # at this point, but the guard that checks this is structural and does not
+        # know that, by design (`tests/core/process/application/test_pause_log_guard.py`).
+        return None, {**patch, **escalation(exc)}
 
     patch |= {
         "sections": rules.sections_for(state, section, _section_text(role, output)),
