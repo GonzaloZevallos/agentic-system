@@ -405,3 +405,33 @@ def test_is_ignored_answers_the_products_own_gitignore(product):
     git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "gitignore", cwd=product)
     assert ws.is_ignored(product, "x.secret") is True
     assert ws.is_ignored(product, "README.md") is False
+
+
+# -- ancestry (GH-137: a launch predicate never merges, so it only ever asks) --------
+
+
+def test_is_ancestor_is_true_once_the_commit_sits_on_head(product):
+    ws = GitWorkspace(product, IDENTITY)
+    sha = git("rev-parse", "HEAD", cwd=product)
+    (product / "README.md").write_text("v1\n")
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-aq", "-m", "v1", cwd=product)
+    assert ws.is_ancestor(product, sha) is True
+
+
+def test_is_ancestor_is_false_for_a_commit_on_a_diverging_branch(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-9")
+    (task.path / "feature.md").write_text("only on the task branch\n")
+    sha = ws.commit_all(task.path, "GH-9: feature")
+    # `product` itself never merged the task branch: its own commit is not an ancestor.
+    assert ws.is_ancestor(product, sha) is False
+
+
+def test_is_ancestor_is_false_and_does_not_raise_for_an_object_this_checkout_never_heard_of(
+    product,
+):
+    """The launch predicate's own 'ante la duda, no lanza': an unknown git object -- a
+    merge commit `gh` reported that this checkout has not fetched, say -- answers
+    False instead of raising `GitError` out of a bare `merge-base --is-ancestor`."""
+    ws = GitWorkspace(product, IDENTITY)
+    assert ws.is_ancestor(product, "0" * 40) is False

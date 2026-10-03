@@ -215,6 +215,17 @@ class GitWorkspace:
         result = self._run("check-ignore", "-q", relative, cwd=root)
         return result.returncode == 0
 
+    def is_ancestor(self, path: Path, sha: str) -> bool:
+        """False, never `GitError`, for a `sha` this checkout has no object for (the
+        launch predicate's own "ante la duda, no lanza", GH-137): `cat-file -e` is
+        asked first, and `merge-base --is-ancestor` only runs once it confirms the
+        object exists, so an unknown git object never reaches it."""
+        exists = self._run("cat-file", "-e", f"{sha}^{{commit}}", cwd=path)
+        if exists.returncode != 0:
+            return False
+        result = self._run("merge-base", "--is-ancestor", sha, "HEAD", cwd=path)
+        return result.returncode == 0
+
     def exclude_system_files(self) -> None:
         """Keep what the system writes in the product out of its `git status`. Outside a
         repository there is nothing to exclude from."""

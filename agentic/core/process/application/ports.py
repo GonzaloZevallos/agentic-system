@@ -496,6 +496,15 @@ class Workspace(Protocol):
         `.agentic/tasks/` the way this repo and gym-saas both happen to."""
         ...
 
+    def is_ancestor(self, path: Path, sha: str) -> bool:
+        """Whether `sha` already sits on `HEAD` at `path` (GH-137: a blocking issue's
+        merge commit, checked before the poller launches what it blocked). False, never
+        an exception, for a `sha` this checkout has no object for at all -- a merge
+        commit `gh` reported that a stale local checkout has not fetched yet -- which is
+        the launch predicate's own "ante la duda, no lanza", not this port's business to
+        tell apart from "fetched, but not an ancestor"."""
+        ...
+
 
 class Tracker(Protocol):
     """Where the human is told (ADR-0011): the pull request, the issue's comments and
