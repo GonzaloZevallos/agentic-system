@@ -295,6 +295,10 @@ class MemoryWorkspace:
         # the product's `.gitignore`; empty is a product that ignores nothing.
         self.ignored: set[str] = set()
         self.ignored_checks: list[tuple[Path, str]] = []
+        # `sha`s a test declares already landed; `is_ancestor` answers True for those
+        # alone. Every call is kept too (GH-137's own blocker/launch predicates).
+        self.ancestors: set[str] = set()
+        self.ancestor_checks: list[tuple[Path, str, str]] = []
         self.checkouts: list[Path] = []
         # The worktrees this fake has made, as a real one has them on disk.
         self.on_disk: set[Path] = set()
@@ -393,6 +397,10 @@ class MemoryWorkspace:
     def is_ignored(self, root: Path, relative: str) -> bool:
         self.ignored_checks.append((root, relative))
         return relative in self.ignored
+
+    def is_ancestor(self, path: Path, sha: str, ref: str = "HEAD") -> bool:
+        self.ancestor_checks.append((path, sha, ref))
+        return sha in self.ancestors
 
 
 class MemoryTracker:
