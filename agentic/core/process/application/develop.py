@@ -67,6 +67,13 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             handled_deps.append((dep, branch))
             conflicted_paths = [*conflicted_paths, *(p for p in paths if p not in conflicted_paths)]
             notices.append(rules.merge_notice(dep, branch, paths))
+    # The plan named this subtask's screens (ADR-0040): look at the comparisons before
+    # delivering, the product's own declared command when there is a `design` block,
+    # or the plain names when there is not (`rules.screens_notice`'s own two shapes).
+    if screens := subtask.get("screens", []):
+        design_block = ports.stack.design(task_base(state, ports))
+        compare = design_block.compare if design_block else None
+        notices.append(rules.screens_notice(screens, compare))
     notice_text = "\n\n".join(notices)
     before = ports.workspace.head(checkout.path)
     checks = declared_checks(state, ports)

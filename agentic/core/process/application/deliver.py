@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import document
+from ..domain import document, rules
 from ..domain.roles import DEVELOPER_INTEGRATOR, PJM, PM, TECH_LEAD
 from ..domain.task import TaskState
 from .checkouts import SetupFailed, task_checkout
@@ -42,9 +42,17 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
 
 
 def _body(state: TaskState) -> str:
-    """The definition and the plan, as the human reads them before the diff."""
+    """The definition and the plan, as the human reads them before the diff, plus the
+    design branch's own observations (ADR-0040) when there are any -- never when there
+    are none, so a task this branch never touched renders byte for byte as it always
+    has."""
     sections = state.get("sections", {})
     parts = [
         f"## {name}\n\n{sections[name]}" for name in (PM.name, TECH_LEAD.name) if name in sections
     ]
+    observations = [i for i in state.get("design_items", []) if i["kind"] == "observation"]
+    if observations:
+        parts.append(
+            f"## Observations on the design\n\n{rules.design_observations_markdown(observations)}"
+        )
     return "\n\n".join(parts) or state["title"]
