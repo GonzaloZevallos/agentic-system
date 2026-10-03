@@ -27,12 +27,17 @@ from .archive import STARTED_OVER
 from .deliver import READY
 from .discard import DISCARDED
 from .escalate import ESCALATED, NEEDS_HUMAN
+from .poll import AUTO_RESUMED
 from .ports import Ports, Workspace
 from .run_role import task_cap
 
 # How the system's comment on a resume starts.
 RESUMED = "Resumed: "
-SYSTEM_COMMENTS = (ESCALATED, RESUMED, READY, DISCARDED, STARTED_OVER)
+# GH-137: `AUTO_RESUMED` joins the set a human's answer is read past (`human_decision`),
+# so the poller's own comment never reads back as the human's decision on the next
+# `agentic resume` -- defined in `poll.py` itself (the module that posts it), imported
+# here in the same diff, per the plan's own invariant.
+SYSTEM_COMMENTS = (ESCALATED, RESUMED, READY, DISCARDED, STARTED_OVER, AUTO_RESUMED)
 # What the document's frontmatter carries that is not state: the version record.
 STATE_FIELDS = frozenset(get_type_hints(TaskState)) - {"subtask_id"}
 
