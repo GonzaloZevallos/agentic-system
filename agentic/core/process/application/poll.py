@@ -14,13 +14,22 @@ same diff so a resume reads it as the system's own, never a human's answer."""
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+import time
+from collections.abc import Callable, Sequence
 from datetime import datetime
 
 from agentic.shared.configuration import Configuration
 
 from ..domain import rules
 from .ports import IssueComment, Launcher, Ports, RunRegistry
+
+# How long `execute` waits for a spawned `run`/`resume` child to register itself
+# (Human decision, issue #137): a second round must never count a slot this round's
+# own spawn has not registered into yet, which is what let a round exceed
+# `AGENTIC_MAX_CONCURRENT_RUNS` before this. Polled, never slept once: a child that
+# registers after the first step must not wait out the whole 60 s for nothing.
+REGISTER_WAIT_S = 60.0
+_REGISTER_POLL_INTERVAL_S = 1.0
 
 # How the system's own auto-resume comment starts (issue #137): registered into
 # `resume.SYSTEM_COMMENTS` by `resume.py` itself (a deferred import there, to avoid the
@@ -66,6 +75,24 @@ def _since_last_escalated(comments: Sequence[IssueComment]) -> datetime | None:
     return _parse_timestamp(last.created_at) if last is not None else None
 
 
+def _last_non_system_index(
+    comments: Sequence[IssueComment], system_comments: tuple[str, ...]
+) -> int:
+    last = -1
+    for i, comment in enumerate(comments):
+        if not comment.body.startswith(system_comments):
+            last = i
+    return last
+
+
+def _last_system_index(comments: Sequence[IssueComment], system_comments: tuple[str, ...]) -> int:
+    last = -1
+    for i, comment in enumerate(comments):
+        if comment.body.startswith(system_comments):
+            last = i
+    return last
+
+
 def _prior_auto_resumes(comments: Sequence[IssueComment]) -> int:
     """How many `Auto-resumed:` comments followed the last comment that is not the
     system's own (`resume.SYSTEM_COMMENTS`, imported here only at call time to avoid
@@ -74,13 +101,22 @@ def _prior_auto_resumes(comments: Sequence[IssueComment]) -> int:
     already reads for a human's own answer."""
     from .resume import SYSTEM_COMMENTS
 
-    last_non_system = -1
-    for i, comment in enumerate(comments):
-        if not comment.body.startswith(SYSTEM_COMMENTS):
-            last_non_system = i
+    last_non_system = _last_non_system_index(comments, SYSTEM_COMMENTS)
     return sum(
         1 for comment in comments[last_non_system + 1 :] if comment.body.startswith(AUTO_RESUMED)
     )
+
+
+def _human_spoke_after_the_system(comments: Sequence[IssueComment]) -> bool:
+    """Whether a comment that is not the system's own (`resume.SYSTEM_COMMENTS`)
+    followed the system's own last one (Human decision, issue #137): a person is
+    talking, and this pause is the human's from here on, exactly the fact
+    `resume.human_decision` reads to build the decision itself -- this only needs
+    whether there is one at all, never what it says."""
+    from .resume import SYSTEM_COMMENTS
+
+    last_system = _last_system_index(comments, SYSTEM_COMMENTS)
+    return any(not c.body.startswith(SYSTEM_COMMENTS) for c in comments[last_system + 1 :])
 
 
 def gather_closes(ports: Ports) -> list[int]:
@@ -125,6 +161,11 @@ def gather_resumes(ports: Ports, now: datetime) -> list[rules.ResumeCandidate]:
         comments = ports.tracker.timestamped_comments(task_id)
         since = _since_last_escalated(comments)
         if since is None:
+            continue
+        if _human_spoke_after_the_system(comments):
+            # A person is talking (Human decision, issue #137): the pause is the
+            # human's from here on, whatever the calendar says -- never retaken on
+            # top of a comment `agentic resume`'s own `--yes` would otherwise run over.
             continue
         prior = _prior_auto_resumes(comments)
         limit = rules.auto_resume_limit(raw)
@@ -200,6 +241,26 @@ def _argv(argv0: str, command: str, number: int, product_dir: str, *extra: str) 
     return [argv0, command, "--issue", str(number), *extra, "--product-dir", product_dir]
 
 
+def _await_registration(
+    registry: RunRegistry, task_id: str, timeout_s: float, sleep: Callable[[float], None]
+) -> bool:
+    """Up to `timeout_s`, in `_REGISTER_POLL_INTERVAL_S` steps, until `task_id` shows up
+    in `registry.live()` (Human decision, issue #137): so a second poll round never
+    counts a slot this round's own spawn has not registered into yet, which is what let
+    a round exceed `AGENTIC_MAX_CONCURRENT_RUNS` before this. Returns whether it showed
+    up in time -- best-effort only, the same shape `cli._registered`'s own write
+    already has: a child that never registers within the timeout is not retried here,
+    and the round goes on rather than hang forever on one that crashed before it could."""
+    waited = 0.0
+    while True:
+        if any(r.task_id == task_id for r in registry.live()):
+            return True
+        if waited >= timeout_s:
+            return False
+        sleep(_REGISTER_POLL_INTERVAL_S)
+        waited += _REGISTER_POLL_INTERVAL_S
+
+
 def execute(
     actions: Sequence[rules.PollAction],
     cfg: Configuration,
@@ -208,13 +269,19 @@ def execute(
     launcher: Launcher,
     now: datetime,
     argv0: str = "agentic",
+    register_timeout_s: float = REGISTER_WAIT_S,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> list[str]:
     """Carries out this round's actions, in the order `rules.poll_plan` already fixed:
     a detached `agentic close|resume|run` child each, through `launcher.spawn` alone --
     never a role in this process. A resume posts `AUTO_RESUMED` first, so the comment
     is already on the issue by the time the child reads it; a launch records its own
     attempt first, so a child that never registers still counts against its own
-    calendar next round."""
+    calendar next round. A spawned `run`/`resume` (never `close`, which never
+    registers at all) is awaited into `registry.live()` before this round returns
+    (`_await_registration`, Human decision): still under `run_once`'s own
+    `registry.exclusive()`, so the next poller to decide -- this product's next round,
+    or another product's on the same machine -- never reads a stale count."""
     product = ports.stack.product()
     product_dir = str(cfg.product_dir)
     lines: list[str] = []
@@ -231,6 +298,8 @@ def execute(
             registry.record_launch(product, action.issue, now)
             argv = _argv(argv0, "run", action.issue, product_dir, "--detach")
         pid = launcher.spawn(argv)
+        if action.kind in ("resume", "launch"):
+            _await_registration(registry, task_id, register_timeout_s, sleep)
         lines.append(f"agentic: poll: {action.kind} #{action.issue} -> pid {pid}")
     return lines
 
@@ -242,12 +311,15 @@ def run_once(
     launcher: Launcher,
     now: datetime,
     argv0: str = "agentic",
+    register_timeout_s: float = REGISTER_WAIT_S,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> list[str]:
     """One round: gather, decide (`rules.poll_plan`), carry out. The slot count and the
     launch candidates are read under `registry.exclusive()` together (Tech Lead plan):
     deciding how many launches fit is atomic across every poller on this machine, not
     only within one product's, since the account's own 429 is the machine's, not a
-    product's."""
+    product's. `execute`'s own wait for a spawned child to register also runs inside
+    this same `exclusive()` block, for the same reason."""
     closes = gather_closes(ports)
     resumes = gather_resumes(ports, now)
     with registry.exclusive():
@@ -256,5 +328,7 @@ def run_once(
         actions = rules.poll_plan(
             closes=closes, resumes=resumes, launches=launches, available_slots=available, now=now
         )
-        lines = execute(actions, cfg, ports, registry, launcher, now, argv0)
+        lines = execute(
+            actions, cfg, ports, registry, launcher, now, argv0, register_timeout_s, sleep
+        )
     return lines or ["agentic: poll: nothing to do this round"]
