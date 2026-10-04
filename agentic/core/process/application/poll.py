@@ -273,37 +273,66 @@ def execute(
     registry: RunRegistry,
     launcher: Launcher,
     now: datetime,
-    argv0: str = "agentic",
+    argv0: str,
     register_timeout_s: float = REGISTER_WAIT_S,
     sleep: Callable[[float], None] = time.sleep,
 ) -> list[str]:
     """Carries out this round's actions, in the order `rules.poll_plan` already fixed:
     a detached `agentic close|resume|run` child each, through `launcher.spawn` alone --
-    never a role in this process. A resume posts `AUTO_RESUMED` first, so the comment
-    is already on the issue by the time the child reads it; a launch records its own
-    attempt first, so a child that never registers still counts against its own
-    calendar next round. A spawned `run`/`resume` (never `close`, which never
-    registers at all) is awaited into `registry.live()` before this round returns
-    (`_await_registration`, Human decision): still under `run_once`'s own
+    never a role in this process. `launcher.spawn` is the one call this function wraps
+    in `except OSError` (GH-140): the first real poller died on a `FileNotFoundError`
+    out of a bare `Popen`, and nothing here may let a launch failure end the round, let
+    alone the process. A resume posts `AUTO_RESUMED` only once its own spawn has
+    returned a pid -- never before, since a comment on an issue nothing actually
+    launched would claim a retake that never happened and burn the one retake
+    `auto_resume_limit` allows an interview failure. A launch records its own attempt
+    *before* the spawn, so a child that never launches at all still counts against its
+    own calendar next round, exactly as one that launched but never registered already
+    does. A spawned `run`/`resume` (never `close`, which never registers at all, and
+    never a failed spawn either) is awaited into `registry.live()` before this round
+    returns (`_await_registration`, Human decision): still under `run_once`'s own
     `registry.exclusive()`, so the next poller to decide -- this product's next round,
     or another product's on the same machine -- never reads a stale count."""
     product = ports.stack.product()
     product_dir = str(cfg.product_dir)
+    total_attempts = len(rules.AUTO_RESUME_SCHEDULE)
     lines: list[str] = []
     for action in actions:
         task_id = ports.inbox.task_id(action.issue)
         if action.kind == "close":
             argv = _argv(argv0, "close", action.issue, product_dir)
+            try:
+                pid = launcher.spawn(argv)
+            except OSError as exc:
+                lines.append(f"agentic: poll: close #{action.issue} -> not launched: {exc}")
+                continue
         elif action.kind == "resume":
+            argv = _argv(argv0, "resume", action.issue, product_dir, "--yes", "--detach")
+            try:
+                pid = launcher.spawn(argv)
+            except OSError as exc:
+                lines.append(
+                    f"agentic: poll: resume #{action.issue} -> not launched (not counted): {exc}"
+                )
+                continue
             raw = ports.documents.load(task_id) or {}
             reason = rules.auto_resumable(raw) or "other"
             ports.tracker.comment(task_id, f"{AUTO_RESUMED}{reason.replace('_', ' ')}")
-            argv = _argv(argv0, "resume", action.issue, product_dir, "--yes", "--detach")
+            _await_registration(registry, task_id, register_timeout_s, sleep)
         else:
             registry.record_launch(product, action.issue, now)
             argv = _argv(argv0, "run", action.issue, product_dir, "--detach")
-        pid = launcher.spawn(argv)
-        if action.kind in ("resume", "launch"):
+            try:
+                pid = launcher.spawn(argv)
+            except OSError as exc:
+                attempt = registry.launch_attempts(product, action.issue)
+                k = attempt.prior if attempt is not None else 0
+                spent = "; calendar spent, needs a human" if k >= total_attempts else ""
+                lines.append(
+                    f"agentic: poll: launch #{action.issue} -> not launched "
+                    f"(attempt {k} of {total_attempts}){spent}: {exc}"
+                )
+                continue
             _await_registration(registry, task_id, register_timeout_s, sleep)
         lines.append(f"agentic: poll: {action.kind} #{action.issue} -> pid {pid}")
     return lines
@@ -315,7 +344,7 @@ def run_once(
     registry: RunRegistry,
     launcher: Launcher,
     now: datetime,
-    argv0: str = "agentic",
+    argv0: str,
     register_timeout_s: float = REGISTER_WAIT_S,
     sleep: Callable[[float], None] = time.sleep,
 ) -> list[str]:
