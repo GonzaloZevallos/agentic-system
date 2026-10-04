@@ -368,6 +368,23 @@ class Inbox(Protocol):
 
     def task(self, number: int) -> TaskInput: ...
 
+    def task_id(self, number: int) -> str:
+        """The id of the task issue `number` becomes, without reading the issue."""
+        ...
+
+    def issue_of(self, task_id: str) -> int | None:
+        """The issue a task came from; None for a task that did not come from one."""
+        ...
+
+    def open_issues(self) -> list[tuple[str, str]]:
+        """Every open issue of the product repo, as `(url, body)` (ADR-0034): the read
+        side of the stack review's own suppression, over a bounded `gh issue list`.
+        Never filtered by a marker on the way in -- `domain.stack_review.open_proposal`
+        does that locally, as a plain substring, because GitHub's own `--search` index
+        is eventually consistent and does not treat the marker's punctuation as
+        literal."""
+        ...
+
 
 @dataclass(frozen=True)
 class SampleAppHandle:
@@ -396,23 +413,6 @@ class SampleApp(Protocol):
     def stop(self, handle: SampleAppHandle) -> None:
         """Ends the process group `start` began. Called from a `finally`: the app must
         not outlive the node, whatever PM's verdict was."""
-        ...
-
-    def task_id(self, number: int) -> str:
-        """The id of the task issue `number` becomes, without reading the issue."""
-        ...
-
-    def issue_of(self, task_id: str) -> int | None:
-        """The issue a task came from; None for a task that did not come from one."""
-        ...
-
-    def open_issues(self) -> list[tuple[str, str]]:
-        """Every open issue of the product repo, as `(url, body)` (ADR-0034): the read
-        side of the stack review's own suppression, over a bounded `gh issue list`.
-        Never filtered by a marker on the way in -- `domain.stack_review.open_proposal`
-        does that locally, as a plain substring, because GitHub's own `--search` index
-        is eventually consistent and does not treat the marker's punctuation as
-        literal."""
         ...
 
 
