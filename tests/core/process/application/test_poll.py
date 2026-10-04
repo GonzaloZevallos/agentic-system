@@ -508,6 +508,7 @@ def test_a_launch_whose_spawn_fails_still_counts_its_own_attempt(tmp_path):
     ports = memory_ports()
     ports.tracker._queue = [5]
     ports.tracker.states[5] = IssueState("OPEN", "", (), None)
+    _seed_body(ports, 5)
     registry = MemoryRunRegistry()
     launcher = FakeLauncher(fails={0})
     lines = _round(_cfg(tmp_path), ports, registry, launcher, ESCALATED_AT)
@@ -524,6 +525,7 @@ def test_a_launch_whose_spawn_fails_on_the_last_attempt_says_the_calendar_is_spe
     ports = memory_ports()
     ports.tracker._queue = [5]
     ports.tracker.states[5] = IssueState("OPEN", "", (), None)
+    _seed_body(ports, 5)
     registry = MemoryRunRegistry()
     registry.attempts[("product", 5)] = LaunchAttempt(
         since=ESCALATED_AT - timedelta(minutes=121), prior=5
@@ -543,6 +545,7 @@ def test_every_launched_action_uses_the_argv0_passed_in(tmp_path):
     ports = memory_ports()
     ports.tracker._queue = [5]
     ports.tracker.states[5] = IssueState("OPEN", "", (), None)
+    _seed_body(ports, 5)
     registry = MemoryRunRegistry()
     launcher = FakeLauncher()
     lines = poll.run_once(
