@@ -353,6 +353,24 @@ def test_final_validation_due_table_covers_the_single_subtask_case_and_a_pm_retu
     assert rules.final_validation_due(state) is True
 
 
+def test_a_task_escalated_in_deliver_after_final_validation_resumes_with_no_rerun():
+    """An escalation past final validation (`deliver`'s own `task_checkout` failing, for
+    instance) resumes through `integrate`, the same road every other subtask-based
+    resume takes; `after_integrate` reads the same approving run `final_validation_due`
+    already does and falls straight through to `deliver`, never back to
+    `final_validation`."""
+    review = rules.review_section("api")
+    state = {
+        **UX_FLAGS,
+        "subtasks": {"api": {"status": "approved"}},
+        "runs": [run("Tech Lead", review), run(roles.PM_FINAL.name)],
+        **rules.escalation("failure", "deliver's own checkout failed"),
+    }
+    resumed = task.apply(state, rules.resumed(state, "fixed"))
+    assert rules.resume_target(resumed) == "integrate"
+    assert rules.after_integrate(resumed) == "deliver"
+
+
 def test_return_section_reads_pm_final_validation_only_when_it_is_the_open_return():
     plain = {"subtasks": {"api": {"status": "returned"}}}
     assert rules.return_section(plain, "api") == rules.review_section("api")

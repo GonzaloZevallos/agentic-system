@@ -20,7 +20,7 @@ from agentic.core.process.adapters.telemetry import NoTelemetry
 from agentic.core.process.application import resume
 from agentic.core.process.application.ports import AttemptFailed
 from agentic.core.process.application.preflight import UNKNOWN_PRODUCT
-from agentic.core.process.domain.design import NO_DESIGN_NOTE
+from agentic.core.process.domain.design import NO_DESIGN_NOTE, NO_SAMPLE_APP_NOTE, Design
 from agentic.core.process.domain.roles import FINDINGS, PAIR_PM_PA, PJM, PM, PRODUCT_ANALYST
 from agentic.core.process.domain.task import INTEGRATION, WAITING_ON_HUMAN
 from agentic.shared.configuration import Configuration
@@ -28,6 +28,7 @@ from tests.fakes import (
     REPORTS,
     MemoryCommands,
     MemoryKnowledge,
+    MemorySampleApp,
     MemoryStack,
     MemoryTracker,
     MemoryWorkspace,
@@ -96,15 +97,27 @@ class Fakes:
         self.tracker = MemoryTracker()
 
 
-async def run_graph(script: ScriptedRunner, config, telemetry=NoTelemetry(), fakes=None):
-    return await compiled(script, telemetry, fakes).ainvoke(TASK, config=config)
+async def run_graph(
+    script: ScriptedRunner, config, telemetry=NoTelemetry(), fakes=None, stack=None, sample_app=None
+):
+    return await compiled(script, telemetry, fakes, stack=stack, sample_app=sample_app).ainvoke(
+        TASK, config=config
+    )
 
 
-def compiled(script: ScriptedRunner, telemetry=NoTelemetry(), fakes=None, saver=None, stack=None):
+def compiled(
+    script: ScriptedRunner,
+    telemetry=NoTelemetry(),
+    fakes=None,
+    saver=None,
+    stack=None,
+    sample_app=None,
+):
     """The graph with the real ports over the temporary product, the scripted runner in
     place of the SDK, git and GitHub in memory, and a checkpointer, as the CLI compiles
     it. `default_ports` is what the exported graph uses."""
     fakes = fakes or Fakes()
+    sample_app = sample_app or MemorySampleApp()
     # Every checkout "moved": Developers commit. The knowledge is read and written in
     # the memory worktree paths, which do not exist: point them at the product.
     fakes.workspace.moved.update({MemoryWorkspace.ROOT / "GH-1", MemoryWorkspace.ROOT / "GH-1.api"})
@@ -123,6 +136,7 @@ def compiled(script: ScriptedRunner, telemetry=NoTelemetry(), fakes=None, saver=
             # The product is no repository and the checkouts are names: nothing to run.
             stack=stack or MemoryStack(),
             commands=MemoryCommands(),
+            sample_app=sample_app,
         )
 
     return build_graph(ports_for, telemetry, arm_for=composition._arm_for).compile(
@@ -244,6 +258,9 @@ async def test_a_touches_ui_feature_passes_the_five_design_steps_in_order_then_p
     # carry the note instead of a rendered screen or a comparison (ADR-0040).
     assert final["sections"]["UX Lead"].startswith(f"_{NO_DESIGN_NOTE}_")
     assert final["sections"]["Design Lead"].startswith(f"_{NO_DESIGN_NOTE}_")
+    # No `design` block either, at final validation: the same system-written note,
+    # naming the narrower absence (no `sample_app`, not no block at all).
+    assert final["sections"]["UX Lead: final walk"].startswith(f"_{NO_SAMPLE_APP_NOTE}_")
 
 
 async def test_pm_final_validation_returns_to_the_developer_then_runs_again(config):
@@ -301,6 +318,104 @@ async def test_pm_final_validation_returns_to_the_developer_then_runs_again(conf
         }
     ]
     assert final["changes_requested"] == {"PM→Tech Lead": 1}
+
+
+FINAL_DESIGN = Design(
+    prototype="pantallas", entry="Home", sample_app="npm run sample", compare=None
+)
+
+
+async def test_a_declared_sample_app_reaches_ux_lead_final_and_is_stopped_after(config):
+    """A `design` block with `sample_app` declared (ADR-0040): the handle's own printed
+    lines reach UX Lead's final walk verbatim, its design items land with step `final`
+    (never the item's own, narrower `step`), and the app is stopped once the node ends,
+    whatever PM's verdict was."""
+    fakes = Fakes()
+    app = MemorySampleApp()
+    script = script_for(
+        pm=[verdict("approved", flags={"touches_ui": True, "touches_copy": False})],
+        ux_designer=[design_draft()],
+        ux_lead=[design_findings("approved")],
+        ui_designer=[design_draft()],
+        design_lead=[design_findings("approved")],
+        pm_consolidator=[consolidation("approved")],
+        ux_lead_final=[
+            design_findings(
+                "approved", items=[{"kind": "observation", "step": "Home", "text": "slow"}]
+            )
+        ],
+        design_lead_final=[
+            design_findings(
+                "approved", items=[{"kind": "blocking", "step": "Home", "text": "off palette"}]
+            )
+        ],
+        pm_final=[final_validation("approved")],
+        **technical(),
+    )
+    final = await run_graph(
+        script, config, fakes=fakes, stack=MemoryStack(design=FINAL_DESIGN), sample_app=app
+    )
+    assert final["status"] == "ready_for_review"
+    ux_lead_final_call = next(c for c in script.calls if c["slug"] == "ux_lead_final")
+    assert app.result.lines[0] in ux_lead_final_call["prompt"]
+    assert not final["sections"]["UX Lead: final walk"].startswith("_")  # no system note
+    assert final["design_items"] == [
+        {"role_slug": "ux_lead_final", "kind": "observation", "step": "final", "text": "slow"},
+        {
+            "role_slug": "design_lead_final",
+            "kind": "blocking",
+            "step": "final",
+            "text": "off palette",
+        },
+    ]
+    assert app.stopped == [app.result]
+
+
+async def test_a_sample_app_refusal_is_written_into_the_section_without_escalating(config):
+    fakes = Fakes()
+    refusal = "`npm run sample` exited 1:\nboom"
+    script = script_for(
+        pm=[verdict("approved", flags={"touches_ui": True, "touches_copy": False})],
+        ux_designer=[design_draft()],
+        ux_lead=[design_findings("approved")],
+        ui_designer=[design_draft()],
+        design_lead=[design_findings("approved")],
+        pm_consolidator=[consolidation("approved")],
+        ux_lead_final=[design_findings("approved")],
+        design_lead_final=[design_findings("approved")],
+        pm_final=[final_validation("approved")],
+        **technical(),
+    )
+    final = await run_graph(
+        script,
+        config,
+        fakes=fakes,
+        stack=MemoryStack(design=FINAL_DESIGN),
+        sample_app=MemorySampleApp(result=refusal),
+    )
+    assert final["status"] == "ready_for_review"
+    assert not final.get("escalated")
+    assert final["sections"]["UX Lead: final walk"].startswith(f"_{refusal}_")
+
+
+async def test_a_pm_final_return_past_its_limit_escalates_by_returns(config):
+    fakes = Fakes()
+    script = script_for(
+        pm=[verdict("approved", flags={"touches_ui": True, "touches_copy": False})],
+        ux_designer=[design_draft()],
+        ux_lead=[design_findings("approved")],
+        ui_designer=[design_draft()],
+        design_lead=[design_findings("approved")],
+        pm_consolidator=[consolidation("approved")],
+        ux_lead_final=[design_findings("approved")],
+        design_lead_final=[design_findings("approved")],
+        pm_final=[final_validation("returned", "too narrow", blocking=["still 1037px"])],
+        **technical(),
+    )
+    config["configurable"]["max_changes_requested_per_pair"] = 0
+    final = await run_graph(script, config, fakes=fakes)
+    assert final["status"] == WAITING_ON_HUMAN
+    assert final["escalation_class"] == "returns"
 
 
 async def test_a_bug_or_a_feature_without_touches_ui_never_runs_a_design_step(config):

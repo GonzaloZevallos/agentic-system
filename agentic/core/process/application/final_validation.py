@@ -33,7 +33,7 @@ from ..domain.roles import DESIGN_LEAD_FINAL, PAIR_PM_TECH_LEAD, PM_FINAL, UX_LE
 from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, TaskState, apply
 from .checkouts import SetupFailed, task_base, task_checkout
 from .ports import Ports, SampleAppHandle
-from .run_role import finish, run_role, with_context
+from .run_role import Output, finish, run_role, with_context
 
 Started = SampleAppHandle | str | None
 
@@ -46,10 +46,15 @@ async def final_validation(state: TaskState, cfg: Configuration, ports: Ports) -
     design_block = ports.stack.design(task_base(state, ports))
     started = _start(design_block, ports, task.path)
     try:
-        patch = await _ux_lead_final(state, cfg, ports, task.path, design_block, started)
+        ux_output, patch = await _ux_lead_final(state, cfg, ports, task.path, design_block, started)
+        patch = apply(patch, _design_items_patch(UX_LEAD_FINAL.slug, ux_output))
         state = apply(state, patch)
 
-        design_patch = await _design_lead_final(state, cfg, ports, task.path, design_block)
+        design_output, design_patch = await _design_lead_final(
+            state, cfg, ports, task.path, design_block
+        )
+        items = _design_items_patch(DESIGN_LEAD_FINAL.slug, design_output)
+        design_patch = apply(design_patch, items)
         state = apply(state, design_patch)
         patch = apply(patch, design_patch)
 
@@ -79,10 +84,10 @@ async def _ux_lead_final(
     cwd: Path,
     design_block: Design | None,
     started: Started,
-) -> TaskState:
+) -> tuple[Output | None, TaskState]:
     facts = _app_facts(design_block, started)
     prompt = with_context(state, UX_LEAD_FINAL, ports, cwd, facts)
-    _, patch = await run_role(state, UX_LEAD_FINAL, cfg, ports, cwd=cwd, prompt=prompt)
+    output, patch = await run_role(state, UX_LEAD_FINAL, cfg, ports, cwd=cwd, prompt=prompt)
     if design_block is None or design_block.sample_app is None or isinstance(started, str):
         note = started if isinstance(started, str) else NO_SAMPLE_APP_NOTE
         written = patch["sections"][UX_LEAD_FINAL.name]
@@ -90,7 +95,22 @@ async def _ux_lead_final(
             patch,
             {"sections": {UX_LEAD_FINAL.name: f"{rules.system_note(note)}\n\n{written}"}},
         )
-    return patch
+    return output, patch
+
+
+def _design_items_patch(role_slug: str, output: Output | None) -> TaskState:
+    """The leads' final items (ADR-0040), recorded the way `design.py`'s own
+    `_lead_walk` records a design-branch lead's: from structured output alone, never
+    section prose. `step` is the literal `'final'` here, not the item's own flow step
+    or screen -- this is a walk of the whole app, not of one step of it."""
+    if output is None:
+        return {}
+    return {
+        "design_items": [
+            {"role_slug": role_slug, "kind": item["kind"], "step": "final", "text": item["text"]}
+            for item in output.data["items"]
+        ]
+    }
 
 
 def _app_facts(design_block: Design | None, started: Started) -> str:
@@ -104,13 +124,12 @@ def _app_facts(design_block: Design | None, started: Started) -> str:
 
 async def _design_lead_final(
     state: TaskState, cfg: Configuration, ports: Ports, cwd: Path, design_block: Design | None
-) -> TaskState:
+) -> tuple[Output | None, TaskState]:
     extra = design_rules(design_block)
     widened = replace(DESIGN_LEAD_FINAL, allowed=DESIGN_LEAD_FINAL.allowed + extra)
     facts = "\n\n".join(filter(None, [design_facts(design_block), compare_facts(design_block)]))
     prompt = with_context(state, widened, ports, cwd, facts) if facts else None
-    _, patch = await run_role(state, widened, cfg, ports, cwd=cwd, prompt=prompt)
-    return patch
+    return await run_role(state, widened, cfg, ports, cwd=cwd, prompt=prompt)
 
 
 def _verdict_patch(state: TaskState, cfg: Configuration, data: dict[str, Any]) -> TaskState:
