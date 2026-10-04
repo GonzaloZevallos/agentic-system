@@ -246,6 +246,63 @@ async def test_a_touches_ui_feature_passes_the_five_design_steps_in_order_then_p
     assert final["sections"]["Design Lead"].startswith(f"_{NO_DESIGN_NOTE}_")
 
 
+async def test_pm_final_validation_returns_to_the_developer_then_runs_again(config):
+    """PM's early final validation (ADR-0040): a `returned` verdict reopens the single
+    subtask under `PAIR_PM_TECH_LEAD`, with PM's blocking claim entered into the
+    findings table as `spec-behaviour`/`plan`/`open`; the Developer resumes over a
+    delta built from PM's own section (`rules.return_section`), never the stale
+    `Tech Lead: review api`, which still reads approved. Once the incremental review
+    approves again, final validation runs a second time and this time approves,
+    straight on to delivery -- `final_validation_due`'s own table, end to end."""
+    fakes = Fakes()
+    script = script_for(
+        pm=[verdict("approved", flags={"touches_ui": True, "touches_copy": False})],
+        ux_designer=[design_draft()],
+        ux_lead=[design_findings("approved")],
+        ui_designer=[design_draft()],
+        design_lead=[design_findings("approved")],
+        pm_consolidator=[consolidation("approved")],
+        ux_lead_final=[design_findings("approved"), design_findings("approved")],
+        design_lead_final=[design_findings("approved"), design_findings("approved")],
+        pm_final=[
+            final_validation(
+                "returned", "still 1037px wide", blocking=["Nueva venta is 1037px wide"]
+            ),
+            final_validation("approved"),
+        ],
+        **technical(
+            developer=[delivered(), delivered("fixed the width")],
+            tech_lead_review=[reviewed("approved"), reviewed("approved")],
+        ),
+    )
+    final = await run_graph(script, config, fakes=fakes)
+    assert final["status"] == "ready_for_review"
+    assert script.slugs.count("pm_final") == 2
+    assert script.slugs.count("ux_lead_final") == 2
+    assert script.slugs.count("tech_lead_review") == 2
+
+    rerun = [c for c in script.calls if c["slug"] == "developer"][1]
+    assert rerun["resume"] == "dev"  # the same Developer session, not a fresh one
+    assert "## PM: final validation" in rerun["prompt"]
+    assert "**Returned:** still 1037px wide" in rerun["prompt"]
+    assert "## Tech Lead: review api" not in rerun["prompt"]  # stale: it still reads approved
+
+    claims = [f for f in final["findings"] if f["location"] == "PM: final validation"]
+    assert claims == [
+        {
+            "subtask": "api",
+            "version": 1,
+            "location": "PM: final validation",
+            "claim": "Nueva venta is 1037px wide",
+            "severity": "blocking",
+            "scope": "plan",
+            "category": "spec-behaviour",
+            "status": "open",
+        }
+    ]
+    assert final["changes_requested"] == {"PM→Tech Lead": 1}
+
+
 async def test_a_bug_or_a_feature_without_touches_ui_never_runs_a_design_step(config):
     """The invariant the rest of this task leans on: a bug, and a feature PM did not
     flag `touches_ui`, go through exactly today's nodes -- no design slug is ever

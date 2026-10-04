@@ -59,12 +59,12 @@ class ShellSampleApp:
             time.sleep(0.05)
         with lock:
             printed = tuple(line for line in lines if line.strip())
-        if process.poll() is None and printed:
+        exit_code = process.poll()  # before `_kill`: once killed, every exit reads -9
+        if exit_code is None and printed:
             return SampleAppHandle(lines=printed, token=process)
         self._kill(process)
         tail = "\n".join(printed) or "(no output)"
-        exit_code = process.poll()
-        detail = f"exited {exit_code}" if exit_code is not None else "printed nothing in time"
+        detail = "printed nothing in time" if exit_code is None else f"exited {exit_code}"
         return f"`{command}` {detail}:\n{tail}"
 
     def stop(self, handle: SampleAppHandle) -> None:
