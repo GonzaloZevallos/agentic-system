@@ -161,14 +161,17 @@ class PullRequestCommit:
     is what `metrics.human_lines_changed` and friends match against
     `Configuration.GIT_AUTHOR_EMAIL` to tell a human's own commit from the system's
     (never a GitHub login, which a human's own account would satisfy just the same);
-    `message_headline` is what a merge-commit constant matches against, since `gh`
-    exposes no parents to exclude them any other way; `additions`/`deletions` are
-    this commit's own line counts."""
+    `parent_count` is what tells a merge commit apart from an ordinary one -- two or
+    more parents, whatever its title -- since a hand-written headline (a merge that
+    resolved a conflict, say) can read just like a plain commit's; `message_headline`
+    is data only, never a criterion; `additions`/`deletions` are this commit's own
+    line counts."""
 
     author_emails: tuple[str, ...]
     message_headline: str
     additions: int
     deletions: int
+    parent_count: int
 
 
 @dataclass(frozen=True)
