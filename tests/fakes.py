@@ -273,13 +273,26 @@ class MemorySampleApp:
 
 
 class MemoryInbox:
-    def __init__(self, *, open_issues: list[tuple[str, str]] | None = None, **issues: TaskInput):
+    def __init__(
+        self,
+        *,
+        open_issues: list[tuple[str, str]] | None = None,
+        task_errors: set[int] | None = None,
+        **issues: TaskInput,
+    ):
         self.issues = issues
         # `(url, body)` pairs `open_issues()` hands back: a stack review's own read
         # seam, never filtered here -- the caller matches the marker (ADR-0034).
         self._open_issues = open_issues or []
+        # GH-142: a number here makes `task` raise `ValueError` (the shape a `gh`
+        # failure or an unreadable body takes), the same pattern `MemoryTracker.
+        # state_errors` already uses for `issue_state` -- a declared rejected input,
+        # never an accidental `KeyError` off an inbox a scenario forgot to seed.
+        self.task_errors = task_errors or set()
 
     def task(self, number: int) -> TaskInput:
+        if number in self.task_errors:
+            raise ValueError(f"issue #{number} has no body; the roles need a description")
         return self.issues[str(number)]
 
     def task_id(self, number: int) -> str:

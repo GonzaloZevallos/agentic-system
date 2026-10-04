@@ -1598,6 +1598,39 @@ def test_blocker_resolved_rejects_open_and_unknown_state_reasons():
     assert rules.blocker_resolved("SOME_FUTURE_REASON", merged_into_checkout=True) is False
 
 
+# GH-142 (apostrophe #8): an empty native list is `blockedBy.nodes: []`, GitHub's own
+# shape for "no native dependency", indistinguishable from a field GitHub never
+# exposed at all -- so `blocker_numbers` falls back to the body for both, the one
+# place in the product that branches on `blocked_by` being `None` or `()`.
+
+
+def test_blocker_numbers_falls_back_to_the_body_when_native_is_empty():
+    assert rules.blocker_numbers((), lambda: "Blocked by: #7") == (7,)
+
+
+def test_blocker_numbers_falls_back_to_the_body_when_native_is_none():
+    assert rules.blocker_numbers(None, lambda: "Blocked by: #7") == (7,)
+
+
+def test_blocker_numbers_is_empty_when_native_is_empty_and_the_body_names_none():
+    assert rules.blocker_numbers((), lambda: "just a description, no blockers") == ()
+
+
+def test_blocker_numbers_never_calls_the_body_thunk_when_native_is_not_empty():
+    def _raising() -> str:
+        raise AssertionError("body must not be read when native blockers exist")
+
+    assert rules.blocker_numbers((3,), _raising) == (3,)
+
+
+def test_blocker_numbers_reads_only_the_first_non_empty_line_of_the_body():
+    assert rules.blocker_numbers((), lambda: "intro\n\nBlocked by: #7") == ()
+
+
+def test_blocker_numbers_reads_several_blockers_off_one_line():
+    assert rules.blocker_numbers((), lambda: "Blocked by: #7, #9") == (7, 9)
+
+
 NOW = datetime(2026, 10, 3, 20, 0)
 
 

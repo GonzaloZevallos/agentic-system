@@ -10,7 +10,7 @@ from agentic.core.process.application import poll
 from agentic.core.process.application.ports import IssueComment, IssueState, RunRegistration
 from agentic.core.process.domain.task import PullRequest
 from agentic.shared.configuration import Configuration
-from tests.fakes import FakeLauncher, MemoryRunRegistry, MemoryTracker, memory_ports
+from tests.fakes import FakeLauncher, MemoryInbox, MemoryRunRegistry, MemoryTracker, memory_ports
 
 ESCALATED_AT = datetime(2026, 10, 2, 19, 30, tzinfo=UTC)
 
@@ -46,6 +46,18 @@ def _no_sleep(seconds: float) -> None:
 def _round(cfg, ports, registry, launcher, now, **kw):
     kw.setdefault("sleep", _no_sleep)
     return poll.run_once(cfg, ports, registry, launcher, now, **kw)
+
+
+def _seed_body(ports, number: int, description: str = "a plain description, no blockers") -> None:
+    """GH-142: with native blockers empty or absent, `_blocker_numbers` reads the
+    issue's own body -- so a scenario whose candidate has no native blockers must
+    seed the inbox itself, never rely on the empty `MemoryInbox` the fixture starts
+    with (that would hit `KeyError` by accident, not a scripted, declared outcome)."""
+    ports.inbox.issues[str(number)] = {
+        "id": f"GH-{number}",
+        "title": "t",
+        "description": description,
+    }
 
 
 def test_an_account_limit_resumes_once_its_own_wait_elapses_not_before(tmp_path):
@@ -169,10 +181,73 @@ def test_a_blocker_whose_issue_state_raises_does_not_launch(tmp_path):
     assert launcher.spawned == []
 
 
+def test_empty_native_blockers_fall_back_to_the_body_and_block_on_an_open_one(tmp_path):
+    """GH-142 (apostrophe #8): native blockers answer `()` -- GitHub's own shape for
+    "no native dependency" -- so the body's own `Blocked by: #7` line is read, and #7
+    is still OPEN: the candidate must not launch."""
+    ports = memory_ports()
+    ports.tracker._queue = [5]
+    ports.tracker.states[5] = IssueState("OPEN", "", (), None)
+    ports.tracker.states[7] = IssueState("OPEN", "", (), None)
+    _seed_body(ports, 5, "Blocked by: #7")
+    registry = MemoryRunRegistry()
+    launcher = FakeLauncher()
+    lines = _round(_cfg(tmp_path), ports, registry, launcher, ESCALATED_AT)
+    assert lines == ["agentic: poll: nothing to do this round"]
+    assert launcher.spawned == []
+
+
+def test_empty_native_blockers_with_no_body_line_launches(tmp_path):
+    """The other side of the same fallback: native blockers are `()` and the body
+    carries no `Blocked by:` line at all, so there is nothing to block on."""
+    ports = memory_ports()
+    ports.tracker._queue = [5]
+    ports.tracker.states[5] = IssueState("OPEN", "", (), None)
+    _seed_body(ports, 5)
+    registry = MemoryRunRegistry()
+    launcher = FakeLauncher()
+    lines = _round(_cfg(tmp_path), ports, registry, launcher, ESCALATED_AT)
+    assert lines == ["agentic: poll: launch #5 -> pid 4242"]
+
+
+def test_non_empty_native_blockers_win_over_a_contradicting_body(tmp_path):
+    """Non-empty native blockers never read the body at all (the plan's own
+    invariant): #3 is `NOT_PLANNED` (resolved) and the body's own `Blocked by: #9`
+    line would block if read, but it never is -- the candidate launches."""
+    ports = memory_ports()
+    ports.tracker._queue = [5]
+    ports.tracker.states[5] = IssueState("OPEN", "", (3,), None)
+    ports.tracker.states[3] = IssueState("CLOSED", "NOT_PLANNED", None, None)
+    ports.tracker.states[9] = IssueState("OPEN", "", (), None)
+    _seed_body(ports, 5, "Blocked by: #9")
+    registry = MemoryRunRegistry()
+    launcher = FakeLauncher()
+    lines = _round(_cfg(tmp_path), ports, registry, launcher, ESCALATED_AT)
+    assert lines == ["agentic: poll: launch #5 -> pid 4242"]
+
+
+def test_an_unreadable_body_does_not_launch_and_records_no_attempt(tmp_path):
+    """GH-142: native blockers are `()`, so the body is read -- and this candidate's
+    body cannot be read at all (`MemoryInbox.task_errors`, the same declared-failure
+    pattern `MemoryTracker.state_errors` already uses). `_blocked` treats the
+    `ValueError` as blocked, "ante la duda, no lanza", and nothing is recorded in
+    `launch_attempts` for a candidate that never actually launched."""
+    ports = memory_ports(inbox=MemoryInbox(task_errors={5}))
+    ports.tracker._queue = [5]
+    ports.tracker.states[5] = IssueState("OPEN", "", (), None)
+    registry = MemoryRunRegistry()
+    launcher = FakeLauncher()
+    lines = _round(_cfg(tmp_path), ports, registry, launcher, ESCALATED_AT)
+    assert lines == ["agentic: poll: nothing to do this round"]
+    assert launcher.spawned == []
+    assert registry.attempts == {}
+
+
 def test_nothing_launches_when_the_machine_wide_cap_is_full(tmp_path):
     ports = memory_ports()
     ports.tracker._queue = [5]
     ports.tracker.states[5] = IssueState("OPEN", "", (), None)
+    _seed_body(ports, 5)
     registry = MemoryRunRegistry(
         entries=[RunRegistration(pid=1, host="h", product="other-product", task_id="GH-1")]
     )
@@ -180,6 +255,21 @@ def test_nothing_launches_when_the_machine_wide_cap_is_full(tmp_path):
     lines = _round(_cfg(tmp_path, max_concurrent_runs=1), ports, registry, launcher, ESCALATED_AT)
     assert lines == ["agentic: poll: nothing to do this round"]
     assert launcher.spawned == []
+
+
+def test_the_same_candidate_launches_once_the_cap_has_a_free_slot(tmp_path):
+    """The cap test's own twin: the same unblocked candidate (empty native blockers,
+    a body with no `Blocked by:` line), with an empty registry instead of a full one,
+    does launch -- so the cap test above is proven to fail for the cap, not because
+    GH-142's own fallback silently swallowed the candidate."""
+    ports = memory_ports()
+    ports.tracker._queue = [5]
+    ports.tracker.states[5] = IssueState("OPEN", "", (), None)
+    _seed_body(ports, 5)
+    registry = MemoryRunRegistry()
+    launcher = FakeLauncher()
+    lines = _round(_cfg(tmp_path, max_concurrent_runs=1), ports, registry, launcher, ESCALATED_AT)
+    assert lines == ["agentic: poll: launch #5 -> pid 4242"]
 
 
 def test_a_merged_pull_request_is_closed_only_once(tmp_path):
@@ -286,6 +376,7 @@ def test_the_wait_for_registration_gives_up_after_its_own_timeout_without_hangin
     ports = memory_ports()
     ports.tracker._queue = [5]
     ports.tracker.states[5] = IssueState("OPEN", "", (), None)
+    _seed_body(ports, 5)
     registry = MemoryRunRegistry()
     launcher = FakeLauncher()
     slept: list[float] = []
@@ -309,6 +400,7 @@ def test_a_child_that_registers_while_waited_for_occupies_the_next_rounds_slot(t
     ports = memory_ports()
     ports.tracker._queue = [5]
     ports.tracker.states[5] = IssueState("OPEN", "", (), None)
+    _seed_body(ports, 5)
     registry = MemoryRunRegistry()
     launcher = FakeLauncher()
     registered = False

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any, Literal
@@ -1809,6 +1809,48 @@ def blocker_resolved(state_reason: str | None, merged_into_checkout: bool) -> bo
     if state_reason == _BLOCKER_COMPLETED:
         return merged_into_checkout
     return False
+
+
+# GH-142 (apostrophe #8): the poller launched an issue whose only blocker lived in
+# the body's own `Blocked by:` line, because an empty native list read as "no
+# blockers" instead of falling back to the body. GitHub answers `blockedBy.nodes: []`
+# for an issue with no native dependency at all -- the same shape as one that
+# genuinely has none, so the two are not told apart; both fall back to the body,
+# exactly like a native field GitHub never exposed (`None`). `blocker_numbers` is the
+# one place this product branches on `blocked_by` being `None` or `()`: no other site
+# does, `poll._blocker_numbers` included.
+
+_BLOCKED_BY_LINE = re.compile(r"^Blocked by:\s*(#\d+(?:\s*,\s*#\d+)*)\s*$", re.IGNORECASE)
+
+
+def blockers_from_body(body: str) -> tuple[int, ...]:
+    """The issue's own `Blocked by: #N[, #M]` line (the issue-tracker doc's fallback,
+    ADR-0034): the first non-empty line of the body, matched whole -- never a loose
+    search anywhere in the text, which could catch an unrelated mention in the
+    description. Empty when the body has no such line, or no body at all."""
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        match = _BLOCKED_BY_LINE.match(stripped)
+        return tuple(int(n) for n in re.findall(r"\d+", match.group(1))) if match else ()
+    return ()
+
+
+def blocker_numbers(native: tuple[int, ...] | None, body: Callable[[], str]) -> tuple[int, ...]:
+    """Which issue numbers block a launch (GH-142; ADR-0039): `native` wins whenever
+    it is non-empty, read straight off with no call to `body` at all. `None` (no
+    native field at all) and `()` (`blockedBy.nodes: []`) read the same way: both fall
+    back to `blockers_from_body(body())`.
+
+    `body` arrives as a thunk, not the string itself, for two reasons: a caller with
+    non-empty native blockers never pays for reading the issue body at all -- an
+    extra `gh` call `poll._blocker_numbers` would otherwise always make -- and the
+    read itself stays the caller's own I/O, never this function's (this module has
+    none, by design)."""
+    if native:
+        return native
+    return blockers_from_body(body())
 
 
 PollActionKind = Literal["close", "resume", "launch"]
