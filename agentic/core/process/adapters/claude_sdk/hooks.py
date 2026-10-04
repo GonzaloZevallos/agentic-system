@@ -139,19 +139,24 @@ class TurnCount:
     value: int = 0
 
 
-def git_denial(command: str, cwd: Path, relative_to: Path | None = None) -> str | None:
+def git_denial(
+    command: str, cwd: Path, relative_to: Path | None = None, checkout: Path | None = None
+) -> str | None:
     """Why the Bash `command` may not run, or None: git's own rules (`_git`, unchanged)
     and the signals verdict (`core.process.domain.signals`, ADR-0011 eighth addendum) --
     a role that executes may kill only a process whose own cwd falls inside its
     checkout, never one it reaches by name, pattern or port. `cwd` and `relative_to`
     keep meaning exactly what they did before that addendum, unresolved: the git branch
     (`_git`, `_inside`) never sees a path this function resolved, so a symlinked
-    checkout's `git -C` decisions do not change underneath it. `checkout`, the boundary
-    `signals.denial` compares a pid's `/proc/<pid>/cwd` against, is `cwd.resolve()`,
-    computed fresh on every call so a direct caller -- a test, a checkout handed over
-    through a symlink -- is answered correctly without having to pre-resolve anything
-    itself."""
-    reason = _reason(command, cwd, relative_to or cwd, cwd.resolve())
+    checkout's `git -C` decisions do not change underneath it. `checkout` is the
+    boundary `signals.denial` compares a pid's `/proc/<pid>/cwd` against: `_bash`
+    resolves it once, when it builds the Bash callback, and passes that same value on
+    every call this role's run makes; a caller that leaves it out -- a direct test, most
+    often -- gets `cwd.resolve()` computed here instead, so a checkout handed over
+    through a symlink is still answered correctly without the caller pre-resolving
+    anything itself."""
+    resolved = checkout if checkout is not None else cwd.resolve()
+    reason = _reason(command, cwd, relative_to or cwd, resolved)
     return _DENIED + reason if reason else None
 
 
@@ -230,11 +235,17 @@ def hooks_for(
 
 
 def _bash(cwd: Path) -> HookCallback:
+    # Resolved once, here, for every Bash call this role's run will ever make --
+    # `signals.denial`'s own checkout boundary (ADR-0011, eighth addendum). `cwd`
+    # itself stays unresolved: it is what the git branch keeps comparing against.
+    checkout = cwd.resolve()
+
     async def hook(
         data: HookInput, tool_use_id: str | None, context: HookContext
     ) -> HookJSONOutput:
         tool_input = _tool_input(data)
-        reason = git_denial(str(tool_input.get("command", "")), cwd, _where(data, cwd))
+        command = str(tool_input.get("command", ""))
+        reason = git_denial(command, cwd, _where(data, cwd), checkout)
         return _deny(reason) if reason else {}
 
     return hook
