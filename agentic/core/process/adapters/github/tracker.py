@@ -27,6 +27,10 @@ Run = Callable[..., subprocess.CompletedProcess[str]]
 # fallback, behind the same `pull_request` verb, so no consumer learns which ran.
 # `{owner}`/`{repo}` are `gh`'s own magic fields, resolved from `cwd`, which is why
 # `_gh` always runs with `cwd=product_dir` -- never the human's own checkout branch.
+# `parents(first: 1) { totalCount }` is what lets `metrics._is_human_commit` tell a
+# merge commit apart from an ordinary one by its parent count, never by its headline
+# (GH-136): GraphQL exposes it per commit, one page of one is enough since only the
+# count is read.
 _PULL_REQUEST_QUERY = """
 query($owner: String!, $repo: String!, $number: Int!) {
   repository(owner: $owner, name: $repo) {
@@ -42,6 +46,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
             additions
             deletions
             authors(first: 10) { nodes { email } }
+            parents(first: 1) { totalCount }
           }
         }
       }
@@ -187,6 +192,7 @@ class GhTracker:
                 message_headline=node["commit"]["messageHeadline"],
                 additions=node["commit"]["additions"],
                 deletions=node["commit"]["deletions"],
+                parent_count=node["commit"]["parents"]["totalCount"],
             )
             for node in pull_request["commits"]["nodes"]
         )

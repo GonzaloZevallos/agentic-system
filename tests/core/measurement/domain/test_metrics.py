@@ -365,9 +365,7 @@ def test_a_system_authored_commit_with_two_parents_is_still_excluded():
         created_at="2026-09-20T23:00:00Z",
         merged_at="2026-09-21T00:29:02Z",
         commits=(
-            commit(
-                [SYSTEM_EMAIL], parent_count=2, headline="Merge pull request #97 from x/y"
-            ),
+            commit([SYSTEM_EMAIL], parent_count=2, headline="Merge pull request #97 from x/y"),
         ),
     )
     assert metrics.human_commits(pr, SYSTEM_EMAIL) == 0
@@ -382,9 +380,7 @@ def test_human_commits_counts_only_non_system_non_merge_commits():
         commits=(
             commit([SYSTEM_EMAIL], parent_count=1),
             commit([HUMAN_EMAIL], parent_count=1),
-            commit(
-                [HUMAN_EMAIL], parent_count=2, headline="Merge pull request #1 from x/y"
-            ),
+            commit([HUMAN_EMAIL], parent_count=2, headline="Merge pull request #1 from x/y"),
         ),
     )
     assert metrics.human_commits(pr, SYSTEM_EMAIL) == 1
