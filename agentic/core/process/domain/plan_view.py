@@ -1,7 +1,9 @@
 """Projecting the `Tech Lead` section for a reader with a subtask of its own
-(issue #71, `plan-trim`), and the plan's own shape check (issue #139, `brief-always-
-reaches`): the Developer and the reviewer always get their brief, the plan always
-gives them a `### Subtasks` block to find it from, never both missing at once.
+(issue #71, `plan-trim`), and completing the plan's own `### Subtasks` block from its
+structured record when the model's markdown falls short of it (issue #139,
+`brief-always-reaches`; issue #152, `plan-block-fill`): the Developer and the reviewer
+always get their brief, the plan always gives them a `### Subtasks` block to find it
+from, never both missing at once.
 
 The document keeps one shape on disk, every section stored whole (ADR-0001); this
 module is the prompt's own view model over it. `for_reader` takes the `Tech Lead`
@@ -14,9 +16,10 @@ does fix) — followed by a one-line index of the sister subtasks, id and title 
 so nobody duplicates another's work. Everything outside that one `###`-level block
 survives byte-for-byte, in order. When the section has no such block (a Tech Lead
 model that used its own headings instead), the block is appended rather than
-skipped: `plan_refusal` is what keeps a *new* plan from reaching that state, but a
-plan written before this module existed must still project something, not nothing,
-when it is resumed.
+skipped: this is what every document resumed from before this module existed still
+needs, and also what a plan `with_subtasks_block` has already repaired, when the
+Tech Lead's own prose also left a near-miss heading next to the system's block,
+still projects.
 
 Degrades to the full section, never to an empty one (invariant 4): no reader id, an
 id absent from the plan, or `integration`, whose job is the seams between subtasks,
@@ -24,10 +27,15 @@ not one of them (ADR-0015).
 
 `subtasks_block` is the one place that knows what `### Subtasks` means: the exact
 heading line and the span of the block it opens, skipping anything inside a fenced
-code block. `plan_refusal` is the pure verdict over a plan's markdown and the ids its
-structured output declares: `None` when the block exists with one `####` per
-subtask, or else the exact reason a plan fails the check, as a model-facing string
-(ADR-0023). Both read fences the same bounded way: a fence opens with up to 3 spaces
+code block. `with_subtasks_block` is the plan stage's own repair over a plan's
+markdown and its structured subtasks, in plan order: when no exact `### Subtasks`
+line exists outside a fence, it appends one, built entirely from the structured
+record, with a note saying so; when the block exists but has fewer `####` than
+subtasks, it keeps the model's prose byte for byte and inserts the same kind of note
+naming the gap; otherwise the section is returned unchanged. Never a role failure
+(ADR-0023): a plan whose structured `subtasks` passed `schemas.plan_check` no longer
+escalates only because its markdown fell short of the heading. Both this function and
+`subtasks_block` read fences the same bounded way: a fence opens with up to 3 spaces
 of indentation and 3 or more equal backticks or tildes, with an optional info
 string; it closes with a line of the same character, at least as many, and no info
 string; a fence that never closes runs to the end of the text."""
@@ -47,13 +55,17 @@ _NEXT_TOP_HEADING = re.compile(r"^### ", re.M)
 _H4_HEADING = re.compile(r"^#### ", re.M)
 _FENCE_LINE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$", re.M)
 
-_NO_BLOCK = (
-    "the plan's markdown has no `### Subtasks` heading (exactly that line, outside code "
-    "fences); add it with one `####` per subtask: {ids}."
+# One prefix both notes share, so a single grep over a document finds either kind of
+# repair (issue #152).
+_NOTE_PREFIX = "`### Subtasks` written by the system from the structured plan: "
+NOTE_WRITTEN = (
+    _NOTE_PREFIX + "no exact `### Subtasks` line (outside code fences) was found in this "
+    "section, so the block below was built from the structured plan. Any list the Tech "
+    "Lead wrote under another heading is not the one the Developers read."
 )
-_TOO_FEW = (
-    "`### Subtasks` has {have} `####` headings but the structured output has {need} "
-    "subtasks ({ids}); give each subtask its own `####`."
+NOTE_SHORT = (
+    _NOTE_PREFIX + "the block below lists fewer `####` than the plan's {n} subtasks. Each "
+    "Developer's own brief still comes from the structured plan, not from this prose."
 )
 
 
@@ -82,23 +94,36 @@ def subtasks_block(section: str) -> tuple[int, int] | None:
     return heading.start(), end
 
 
-def plan_refusal(markdown: str, ids: Sequence[str]) -> str | None:
-    """The plan's own shape check (issue #139): `None` when `markdown` has a
-    `### Subtasks` block with at least one `####` heading per id in `ids`, otherwise
-    the exact reason, worded for the model that wrote it. Never compares a `####`
-    heading's text to an id or a title (invariant 3): it only counts them, because the
-    reader's brief comes from the structured output, not from the prose."""
-    listed = ", ".join(f"`{i}`" for i in ids)
-    span = subtasks_block(markdown)
+def with_subtasks_block(section: str, subtasks: Sequence[Subtask]) -> str:
+    """`section` with a complete `### Subtasks` block guaranteed, repaired from
+    `subtasks` (in plan order) when the model's own markdown falls short (issue #152):
+    the Developer and the reviewer always have a block to read their brief from
+    (`for_reader`), so a plan never escalates only because its markdown missed the
+    heading or wrote too few `####`.
+
+    No exact `### Subtasks` line outside a fence (`subtasks_block(section) is None`):
+    the block is appended, built entirely from `subtasks`, with `NOTE_WRITTEN`. The
+    block exists but has fewer unfenced `####` than `len(subtasks)`: the model's text
+    is kept byte for byte, with `NOTE_SHORT` inserted on its own paragraph right after
+    the heading line. Otherwise `section` is returned unchanged. Never compares a
+    `####` heading's text to an id or a title (invariant 3): it only counts them,
+    because the reader's brief comes from the structured output, not from the
+    prose."""
+    span = subtasks_block(section)
     if span is None:
-        return _NO_BLOCK.format(ids=listed)
+        briefs = "\n\n".join(_brief(s) for s in subtasks)
+        return f"{section.rstrip()}\n\n### Subtasks\n\n{NOTE_WRITTEN}\n\n{briefs}"
     start, end = span
-    block = markdown[start:end]
+    block = section[start:end]
     fenced = _fenced_ranges(block)
     have = sum(1 for m in _H4_HEADING.finditer(block) if not _in_fenced(m.start(), fenced))
-    if have < len(ids):
-        return _TOO_FEW.format(have=have, need=len(ids), ids=listed)
-    return None
+    if have >= len(subtasks):
+        return section
+    heading = _SUBTASKS_HEADING.search(block)
+    assert heading is not None  # `span` came from matching this same heading
+    note = NOTE_SHORT.format(n=len(subtasks))
+    repaired = block[: heading.end()] + f"\n\n{note}" + block[heading.end() :]
+    return section[:start] + repaired + section[end:]
 
 
 def for_reader(section: str, subtask_id: str | None, subtasks: Mapping[str, Subtask]) -> str:
@@ -108,8 +133,10 @@ def for_reader(section: str, subtask_id: str | None, subtasks: Mapping[str, Subt
     With a `### Subtasks` block, the replacement is exact, byte for byte the same as
     before this function read the block's span from `subtasks_block` instead of
     finding it inline. Without one, the block is appended after the section instead
-    of being skipped: a document a new plan can no longer produce (`plan_refusal`
-    rejects it first), but an old one, resumed, still needs its reader fed."""
+    of being skipped: this append branch now serves documents written before this
+    module's repair existed, and a repaired plan whose Tech Lead also left a
+    near-miss heading (`### Subtasks:`, say) next to the system's own block -- both
+    still need their reader fed, not skipped."""
     if subtask_id is None or subtask_id == INTEGRATION or subtask_id not in subtasks:
         return section
     block = f"### Subtasks\n\n{_brief(subtasks[subtask_id])}\n\n{_index(subtask_id, subtasks)}"

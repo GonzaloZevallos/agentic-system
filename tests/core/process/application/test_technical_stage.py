@@ -13,6 +13,7 @@ from agentic.core.process.application.ports import AttemptFailed, CommandResult,
 from agentic.core.process.application.review import review
 from agentic.core.process.application.validate_prd import validate_prd
 from agentic.core.process.domain import rules
+from agentic.core.process.domain.plan_view import NOTE_WRITTEN
 from agentic.core.process.domain.roles import FINDINGS, INTERVIEW_SOLUTION
 from agentic.core.process.domain.task import INTEGRATION, apply
 from agentic.shared.configuration import Configuration
@@ -91,6 +92,36 @@ async def test_plan_interviews_in_the_task_checkout_then_writes_the_subtasks(cfg
         "domain": sub("domain", title="Domain", brief="b", seams=["Dashboard"]),
     }
     assert "Interview: Tech Lead efímero→Tech Lead" in patch["sections"]
+
+
+async def test_plan_repairs_a_markdown_missing_the_subtasks_heading(cfg):
+    # issue #152 (GH-55): a Tech Lead plan with a valid structured `subtasks` list but
+    # no `### Subtasks` line in its markdown delivers on the first attempt -- the
+    # system completes the block (`plan_view.with_subtasks_block`) instead of failing
+    # `schemas.plan_check` and escalating after two such rounds, as it did before.
+    no_heading = RawResult(
+        {
+            "markdown": "### Solution\n\nHex, Tech Lead used its own headings.",
+            "subtasks": [{"id": "domain", "title": "Domain", "brief": "b", "seams": ["Dashboard"]}],
+            "invariants": [],
+            "integration": "",
+        },
+        0.3,
+        2,
+        "tl1",
+    )
+    runner = ScriptedRunner(
+        **{ASK: [questions(done=True, session="e1")]},
+        **{ANSWER: []},
+        tech_lead=[no_heading],
+    )
+    patch = await plan(TASK, cfg, memory_ports(runner))
+    assert runner.slugs == [ASK, "tech_lead"]
+    assert patch["status"] == "planned"
+    assert patch["failures"] == []
+    section = patch["sections"]["Tech Lead"]
+    assert section.startswith("### Solution\n\nHex, Tech Lead used its own headings.")
+    assert f"### Subtasks\n\n{NOTE_WRITTEN}\n\n#### Domain" in section
 
 
 async def test_plan_rejects_a_plan_without_seams_as_a_role_failure(cfg):
