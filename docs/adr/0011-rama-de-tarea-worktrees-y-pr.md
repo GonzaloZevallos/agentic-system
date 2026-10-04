@@ -578,3 +578,90 @@ motivo propio, no un descuido.
   acá, y un invariante del plan hace de "ningún `# type: ignore` o `# noqa` nuevo en
   `agentic/` o `tests/`" un grep sobre el diff en vez del juicio de un revisor sobre el
   estándar 6.
+
+## Adenda (2026-10-04, octava): un rol que ejecuta no manda señales a procesos ajenos
+
+En la corrida de apostrophe #32 un Developer corrió `pkill -f uvicorn` para liberar el
+puerto antes de levantar su propio e2e: mató, dos veces, la app local que el humano corre
+con `scripts/serve.sh` en `:8000` (issue #151). `pkill`, `killall`, `fuser -k` y un `kill`
+sin verificar a quién pertenece el pid alcanzan cualquier proceso del usuario, no solo el
+que el rol levantó; con corridas en paralelo, la misma línea puede tirar el servidor de
+e2e de otra corrida en medio de sus propios checks.
+
+**La propiedad de un proceso se decide solo con `/proc/<pid>/cwd`.** Nunca un patrón, un
+nombre de programa o un puerto: eso es lo que `pkill -f uvicorn` usaba, y es exactamente
+lo que tumbó una app que no era del rol. `core.process.domain.signals.denial` es la
+función pura que decide esto -- `owner: Callable[[int], Path | None]` inyectado, nunca
+`/proc` leído por el dominio -- y compara con `Path.is_relative_to` por componentes, así
+que un worktree hermano con prefijo de nombre (`GH-32` y `GH-32.new-sale`) no cuenta como
+propio. Un cwd ilegible, inexistente, `(deleted)` o cualquier excepción al resolverlo
+cuenta como ajeno: `hooks._owner`, el único lugar que lee `/proc` de verdad, falla
+cerrado ante cualquiera de los cuatro.
+
+**Se niega siempre, sea cual sea la forma que lo envuelve:** `pkill`, `killall`, `fuser`
+con `k` en sus opciones cortas o con `--kill`, y `kill-port` -- solo o detrás de `npx`,
+`npm exec`, `pnpm dlx` o `yarn dlx`. Un `kill` que llega detrás de `xargs` se niega
+siempre también, cualesquiera sean las opciones de `xargs`: el pid ahí es un dato que
+viene de un pipe, no uno que el rol conoce de antemano. `signals.command_of` pela, en un
+solo bucle junto con las asignaciones `NAME=valor`, los envoltorios que no cambian de qué
+proceso se trata (`xargs`, `env`, `sudo`, `timeout`, `setsid`, `nice`, `builtin`,
+`command`, `exec`, `nohup`, `time`); una opción de un envoltorio que el módulo no conoce
+se lee como una sin valor y el pelado sigue, nunca corta el análisis.
+
+**La gramática de `kill` es una lista blanca, no una lista negra.** `-l`/`-L` en primera
+posición no manda señal y pasa; si no, se consume a lo sumo una especificación de señal
+(`-9`, `-TERM`, `-s TERM`, `-n 9`, `--signal TERM`, `--signal=TERM`), después un `--`
+opcional, después los operandos. Un operando pasa solo si es `^[0-9]+$` y `owner` lo ubica
+dentro del checkout, o si calza exactamente `^\$(!|[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_]
+[A-Za-z0-9_]*\})$` (`$!`, `$NOMBRE`, `${NOMBRE}`): el puñado de formas que siempre nombran
+el último trabajo del rol o una variable que el rol mismo asignó, nunca el proceso de
+otro. Todo lo demás se niega, incluido `-<dígitos>` (un grupo de proceso), `0`, `%n`, un
+operando con `$(...)` o con comillas invertidas, y texto suelto. Una opción de señal sin
+su valor, o un `kill` que al final no tiene ningún operando, es por sí mismo una
+denegación: no es un problema de sintaxis distinto del resto, es la misma regla.
+
+**El checkout se resuelve una sola vez, en el adaptador.** `hooks._bash` calcula
+`cwd.resolve()` al construir el callback, no en cada llamada, y ese valor viaja a través
+de las llamadas recursivas que ya existían para `sh -c`/`bash -lc`. `git_denial` -- mismo
+nombre, misma firma -- vuelve a resolver su propio `cwd` igual, porque un llamador
+directo (un test, un checkout pasado por symlink) no tiene por qué haberlo resuelto antes;
+resolver dos veces es barato e idempotente. `_denial_of` gana una sola línea nueva, antes
+de su propio `while`: `signals.denial(words, cwd, _owner)` con las palabras crudas, sin
+pelar; si eso niega, es lo único que se devuelve. El resto de `_denial_of`, `_git`,
+`_WRAPPERS` y `_SHELLS` no cambia ni una línea.
+
+**Código nuevo junto al viejo, sin forzar una migración.** `signals.py` nace tipado,
+dentro de `[tool.mypy] files` (el directorio `core/process/domain` ya lo estaba); el
+parser de `_git` y sus constantes siguen fuera de mypy, como siempre, porque no es esta
+tarea la que decide mover esa unidad del dial de ADR-0021.
+
+### Riesgos conocidos
+
+- `PID=$(...); kill $PID` pasa: el pid literal que `kill` recibe es un pid común, y
+  `owner` lo verifica igual que a cualquier otro -- la línea completa nunca pasa por este
+  veredicto, solo el `kill $PID` final, que ya no tiene el `$(...)` adentro.
+- `find ... -exec kill {} \;`, `parallel kill`, los intérpretes (`python -c "os.kill(...)"`)
+  y las opciones largas de un envoltorio con valor separado que la tabla de
+  `signals.py` no nombra quedan afuera: ninguno es la forma que #32 usó, y cada uno abre
+  su propio costurero de parsing que esta tarea no resuelve.
+- Un `pkill` escrito en un archivo que corren el presubmit o el producto no lo ve esta
+  jaula, que solo mira la llamada a Bash: la salida es un `forbidden` del producto
+  (`.agentic/stack.yaml`), que se lee en la base y rige recién en la tarea siguiente al
+  merge, y solo cuenta ocurrencias nuevas. En apostrophe, declararlo contra `pkill` y
+  `killall` es del humano.
+- Un pid puede reusarse entre el momento en que el hook lo verifica y el momento en que
+  `kill` corre de verdad: una ventana que existe en cualquier sistema que decide por pid,
+  no una que esta tarea cierra.
+- Sin `/proc` (una plataforma que no es Linux), `owner` falla cerrado: todo pid lee como
+  ajeno, así que todo `kill` queda negado, incluido el de un pid propio.
+- La negación no queda escrita en el documento de la tarea, igual que la de git: el
+  rastro vive en lo que el modelo ve en su propio turno, no en un artefacto que el
+  revisor pueda releer después.
+- #32 sigue sin salida dentro del sistema: si el puerto lo ocupa un proceso ajeno, la
+  única vía que esta adenda deja es levantar en otro puerto o entregar nombrando la
+  brecha en `summary` -- no hay forma de liberar el puerto sin matar algo que no es del
+  rol.
+
+Para el cuerpo del pull request: el seguimiento (contar las negaciones de esta jaula por
+rol que ejecuta, igual que ya se cuenta la de git) y la acción del humano en apostrophe
+(declarar `forbidden` contra `pkill` y `killall`) quedan pendientes, fuera de esta tarea.
