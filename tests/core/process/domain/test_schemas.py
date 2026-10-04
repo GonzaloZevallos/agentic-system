@@ -183,48 +183,31 @@ def test_review_findings_are_typed_and_the_categories_closed():
     }
 
 
-NO_BLOCK_A = (
-    "the plan's markdown has no `### Subtasks` heading (exactly that line, outside code "
-    "fences); add it with one `####` per subtask: `a`."
-)
-TOO_FEW_A_B = (
-    "`### Subtasks` has 1 `####` headings but the structured output has 2 subtasks "
-    "(`a`, `b`); give each subtask its own `####`."
-)
-
-
-def test_plan_check_rejects_a_plan_with_no_subtasks_heading():
-    # `plan_refusal` runs after every structural rule above it (issue #139): this plan
-    # is otherwise valid (one slug, one seam, no bad dependency), so the only motive
-    # left is the markdown's own shape. The exact motive, id list included (ADR-0023).
+def test_plan_check_accepts_a_plan_with_no_subtasks_heading():
+    # issue #152: the markdown's own shape is no longer `plan_check`'s concern -- the
+    # plan stage repairs it afterwards (`plan_view.with_subtasks_block`). This plan is
+    # otherwise valid (one slug, one seam, no bad dependency), so nothing is left to
+    # reject.
     data = _plan("### Solution\n\nHex.\n\n### Invariants\n\n1. x.", "a")
-    with pytest.raises(ValueError) as exc:
-        schemas.plan_check(data)
-    assert str(exc.value) == NO_BLOCK_A
+    schemas.plan_check(data)  # does not raise
 
 
-def test_plan_check_rejects_a_heading_with_one_fewer_h4_than_subtasks():
+def test_plan_check_accepts_a_heading_with_fewer_h4_than_subtasks():
     markdown = "### Solution\n\nHex.\n\n### Subtasks\n\n#### a\n\nbrief a"
     data = _plan(markdown, "a", "b")
-    with pytest.raises(ValueError) as exc:
-        schemas.plan_check(data)
-    assert str(exc.value) == TOO_FEW_A_B
+    schemas.plan_check(data)  # does not raise
 
 
-def test_plan_check_rejects_subtasks_colon_as_the_heading():
+def test_plan_check_accepts_subtasks_colon_as_the_heading():
     markdown = "### Solution\n\nHex.\n\n### Subtasks:\n\n#### a\n\nbrief a"
     data = _plan(markdown, "a")
-    with pytest.raises(ValueError) as exc:
-        schemas.plan_check(data)
-    assert str(exc.value) == NO_BLOCK_A
+    schemas.plan_check(data)  # does not raise
 
 
-def test_plan_check_rejects_the_heading_only_inside_a_fence():
+def test_plan_check_accepts_the_heading_only_inside_a_fence():
     markdown = "### Solution\n\nHex.\n\n```\n### Subtasks\n\n#### a\n```"
     data = _plan(markdown, "a")
-    with pytest.raises(ValueError) as exc:
-        schemas.plan_check(data)
-    assert str(exc.value) == NO_BLOCK_A
+    schemas.plan_check(data)  # does not raise
 
 
 def test_plan_check_accepts_extra_internal_h4_headings():
@@ -233,3 +216,48 @@ def test_plan_check_accepts_extra_internal_h4_headings():
     )
     data = _plan(markdown, "a", "b")
     schemas.plan_check(data)  # does not raise
+
+
+# Every structural rule still rejects, with today's exact message, regardless of the
+# markdown's own shape (issue #152: only the heading stopped being a `plan_check`
+# motive) -- each built with NO `### Subtasks` heading, to prove the structural rule
+# alone is what raises.
+_NO_HEADING = "### Solution\n\nHex, no heading here."
+
+
+def test_plan_check_rejects_an_empty_subtasks_list():
+    data = _plan(_NO_HEADING)
+    with pytest.raises(ValueError, match="a plan needs at least one subtask"):
+        schemas.plan_check(data)
+
+
+def test_plan_check_rejects_a_non_slug_id():
+    data = _plan(_NO_HEADING, "Not A Slug")
+    with pytest.raises(ValueError, match=r"must be a slug \(lower-case, hyphens\)"):
+        schemas.plan_check(data)
+
+
+def test_plan_check_rejects_integration_as_an_id():
+    data = _plan(_NO_HEADING, "integration")
+    with pytest.raises(ValueError, match="is reserved for the integration"):
+        schemas.plan_check(data)
+
+
+def test_plan_check_rejects_a_subtask_with_no_seams():
+    data = _plan(_NO_HEADING, "a")
+    data["subtasks"][0]["seams"] = []
+    with pytest.raises(ValueError, match="declares no seams; tests need them"):
+        schemas.plan_check(data)
+
+
+def test_plan_check_rejects_an_unknown_dependency():
+    data = _plan(_NO_HEADING, "a")
+    data["subtasks"][0]["depends_on"] = ["ghost"]
+    with pytest.raises(ValueError, match="depends on unknown subtask 'ghost'"):
+        schemas.plan_check(data)
+
+
+def test_plan_check_rejects_duplicate_ids():
+    data = _plan(_NO_HEADING, "a", "a")
+    with pytest.raises(ValueError, match="subtask ids must be unique"):
+        schemas.plan_check(data)
