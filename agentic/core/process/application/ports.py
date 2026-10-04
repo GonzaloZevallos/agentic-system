@@ -568,9 +568,11 @@ class IssueState:
     read (GH-137; invariant: no predicate reads prose). `state_reason` is `""` for an
     open issue, `"COMPLETED"` or `"NOT_PLANNED"` for a closed one -- `gh`'s own closed
     set, never widened here. `blocked_by` is `None` when `gh` does not expose the
-    native dependency at all (an older CLI, GH issue's own JSON field request failing),
-    the signal that tells a caller to fall back to the issue body's own `Blocked by:`
-    line instead of reading a lack of blockers into an empty tuple it never asked for.
+    native dependency at all (an older CLI, GH issue's own JSON field request failing);
+    `()` when `gh` does expose it and answers `blockedBy.nodes: []`, "exposed, with no
+    native blockers". Whether either shape falls back to the issue body's own
+    `Blocked by:` line is not this type's own concern (GH-142): `rules.blocker_numbers`
+    is the one place that decides it.
     `closing_merge_commit` is the merge commit of the pull request that closed this
     issue, when `gh` names one; `None` for an issue still open, one closed without a
     linked pull request, or one whose pull request never merged."""

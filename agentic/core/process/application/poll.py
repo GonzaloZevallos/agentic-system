@@ -13,7 +13,6 @@ same diff so a resume reads it as the system's own, never a human's answer."""
 
 from __future__ import annotations
 
-import re
 import time
 from collections.abc import Callable, Sequence
 from datetime import datetime
@@ -41,22 +40,6 @@ AUTO_RESUMED = "Auto-resumed: "
 # product, the same `FilesystemRunLock` under the product's own `.agentic/runs`
 # `run`/`resume`/`close` already use, just keyed by this literal instead of a task id.
 LOCK_KEY = "poll"
-
-_BLOCKED_BY_LINE = re.compile(r"^Blocked by:\s*(#\d+(?:\s*,\s*#\d+)*)\s*$", re.IGNORECASE)
-
-
-def blockers_from_body(body: str) -> tuple[int, ...]:
-    """The issue's own `Blocked by: #N[, #M]` line (the issue-tracker doc's fallback,
-    ADR-0034): the first non-empty line of the body, matched whole -- never a loose
-    search anywhere in the text, which could catch an unrelated mention in the
-    description. Empty when the body has no such line, or no body at all."""
-    for line in body.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        match = _BLOCKED_BY_LINE.match(stripped)
-        return tuple(int(n) for n in re.findall(r"\d+", match.group(1))) if match else ()
-    return ()
 
 
 def _parse_timestamp(value: str) -> datetime:
@@ -175,10 +158,7 @@ def gather_resumes(ports: Ports, now: datetime) -> list[rules.ResumeCandidate]:
 
 def _blocker_numbers(ports: Ports, number: int) -> tuple[int, ...]:
     state = ports.tracker.issue_state(number)
-    if state.blocked_by is not None:
-        return state.blocked_by
-    body = ports.inbox.task(number)["description"]
-    return blockers_from_body(body)
+    return rules.blocker_numbers(state.blocked_by, lambda: ports.inbox.task(number)["description"])
 
 
 def _merge_commit_for(ports: Ports, blocker: int, closing_merge_commit: str | None) -> str | None:
