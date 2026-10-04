@@ -17,6 +17,10 @@ from pathlib import Path
 
 _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _SIMPLE_WRAPPERS = ("builtin", "command", "exec", "nohup", "time")
+# Options this handful of wrappers takes that carry a value: all but `exec`'s `-a NAME`
+# are flags, so an option this table does not name -- `-p`, `-v`, `-V` included -- is
+# read with no value and the scan goes on, the same rule every other wrapper gets.
+_SIMPLE_WRAPPER_VALUE: dict[str, tuple[str, ...]] = {"exec": ("-a",)}
 
 # xargs's own options: short ones that take a value (also glued to it, `-n1`, `-I{}`)
 # and GNU long ones (space-separated or `=`-joined). Anything else that starts with
@@ -77,6 +81,13 @@ FROM_SUBSTITUTION_OR_PIPE = "pid only known at run time, from a substitution or 
 MALFORMED_OPTION = "malformed option.\n\n" + _RULE
 
 
+def _basename(word: str) -> str:
+    """`word` with any leading directory stripped, so `/usr/bin/pkill`, `/bin/kill` and
+    a bare `pkill`/`kill` all name the same program to this module: the verdict is
+    about what a word runs, never about the literal spelling of the path to it."""
+    return word.rsplit("/", 1)[-1]
+
+
 def _skip_options(words: list[str], value: tuple[str, ...], glued: tuple[str, ...] = ()) -> int:
     """How many of `words`' leading tokens are one wrapper's own options. A known
     `value` option consumes the next word, unless it already carries its value after
@@ -98,58 +109,72 @@ def _skip_options(words: list[str], value: tuple[str, ...], glued: tuple[str, ..
     return i
 
 
-def _peel(words: list[str]) -> tuple[list[str], bool]:
-    """The real command behind every leading assignment (`NAME=value`) and recognized
-    wrapper, peeled in one pass, in whatever order they come; plus whether `xargs` was
-    among them -- the one fact `denial` needs that the peeled words alone no longer
-    carry, since a `kill` fed by a pipe is denied regardless of xargs's own options."""
-    via_xargs = False
+def command_of(words: list[str]) -> list[str]:
+    """The command `words` run once every leading assignment and recognized wrapper
+    (`xargs`, `env`, `sudo`, `timeout`, `setsid`, `nice`, `builtin`, `command`, `exec`,
+    `nohup`, `time`) is peeled away, in one pass, in whatever order they come -- by
+    basename, so a wrapper reached through a full path is peeled too. `command -v`/
+    `-V` and `builtin`/`exec` etc. with an option this module does not know for them
+    all read as a no-value flag and the scan goes on; the sole exception is `command
+    -v`/`-V` itself, a query that stops the peel right there so `denial` can answer
+    `None` for it before anything past it is even looked at."""
     while words:
         word = words[0]
+        name = _basename(word)
         if _ASSIGNMENT.match(word):
             words = words[1:]
-        elif word in _SIMPLE_WRAPPERS:
+        elif name == "command" and words[1:2] in (["-v"], ["-V"]):
+            break  # a query: left unpeeled, `denial` reads it and answers `None`
+        elif name in _SIMPLE_WRAPPERS:
             words = words[1:]
-        elif word == "xargs":
-            via_xargs = True
+            words = words[_skip_options(words, _SIMPLE_WRAPPER_VALUE.get(name, ())) :]
+        elif name == "xargs":
             words = words[1:]
             words = words[_skip_options(words, _XARGS_VALUE, _XARGS_GLUED) :]
-        elif word == "env":
+        elif name == "env":
             words = words[1:]
             words = words[_skip_options(words, _ENV_VALUE) :]
-        elif word == "sudo":
+        elif name == "sudo":
             words = words[1:]
             words = words[_skip_options(words, _SUDO_VALUE) :]
-        elif word == "timeout":
+        elif name == "timeout":
             words = words[1:]
             words = words[_skip_options(words, _TIMEOUT_VALUE) :]
             if words:  # the duration itself, always consumed when there is one
                 words = words[1:]
-        elif word == "setsid":
+        elif name == "setsid":
             words = words[1:]
             words = words[_skip_options(words, ()) :]
-        elif word == "nice":
+        elif name == "nice":
             words = words[1:]
             words = words[_skip_options(words, _NICE_VALUE) :]
         else:
             break
-    return words, via_xargs
+    return words
 
 
-def command_of(words: list[str]) -> list[str]:
-    """The command `words` run once every leading assignment and recognized wrapper
-    (`xargs`, `env`, `sudo`, `timeout`, `setsid`, `nice`, `builtin`, `command`, `exec`,
-    `nohup`, `time`) is peeled away."""
-    peeled, _ = _peel(words)
-    return peeled
+def _xargs_feeds_kill(words: list[str]) -> bool:
+    """Whether `kill` (or a path ending in it) appears anywhere after an `xargs` (or a
+    path ending in it) in `words`. Deliberately not tied to how far `command_of` itself
+    manages to peel `xargs`'s own options: a bundled short option (`xargs -rn 1 kill`)
+    or a GNU long one with a space-separated value this module does not know to expect
+    (`xargs --replace kill {}`) must never be a way past "a kill fed by a pipe is
+    denied, whatever xargs's own options are" (ADR-0011, eighth addendum)."""
+    for i, word in enumerate(words):
+        if _basename(word) == "xargs" and any(_basename(w) == "kill" for w in words[i + 1 :]):
+            return True
+    return False
 
 
 def _after_runner(words: list[str]) -> list[str]:
     """`words` with a JS package runner's own prefix (`npx`, `npm exec`, `pnpm dlx`,
-    `yarn dlx`) stripped, so `npx kill-port 8000` is seen for what it names."""
+    `yarn dlx`) stripped, by basename, so `npx kill-port 8000` is seen for what it
+    names even when `npx` is reached through a full path."""
+    names = [_basename(w) for w in words]
     for prefix in _RUNNERS:
-        if tuple(words[: len(prefix)]) == prefix:
-            return words[len(prefix) :]
+        if tuple(names[: len(prefix)]) == prefix:
+            rest = words[len(prefix) :]
+            return rest[_skip_options(rest, ()) :]  # e.g. `npx -y kill-port`: a flag
     return words
 
 
@@ -204,19 +229,20 @@ def _kill_denial(
 
 
 def _denial(words: list[str], checkout: Path, owner: Callable[[int], Path | None]) -> str | None:
-    peeled, via_xargs = _peel(list(words))
+    if _xargs_feeds_kill(words):
+        return FROM_SUBSTITUTION_OR_PIPE
+    peeled = command_of(list(words))
     if not peeled:
         return None
-    program = peeled[0]
+    if _basename(peeled[0]) == "command" and peeled[1:2] in (["-v"], ["-V"]):
+        return None  # a query: never sends a signal
     after_runner = _after_runner(peeled)
-    if after_runner and after_runner[0] in _PATTERN_PROGRAMS:
+    if after_runner and _basename(after_runner[0]) in _PATTERN_PROGRAMS:
         return PATTERN_OR_PORT
-    if after_runner and after_runner[0] == "fuser" and _fuser_kills(after_runner[1:]):
+    if after_runner and _basename(after_runner[0]) == "fuser" and _fuser_kills(after_runner[1:]):
         return PATTERN_OR_PORT
-    if program != "kill":
+    if _basename(peeled[0]) != "kill":
         return None
-    if via_xargs:
-        return FROM_SUBSTITUTION_OR_PIPE
     return _kill_denial(peeled[1:], checkout, owner)
 
 

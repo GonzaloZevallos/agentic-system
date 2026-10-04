@@ -143,14 +143,15 @@ def git_denial(command: str, cwd: Path, relative_to: Path | None = None) -> str 
     """Why the Bash `command` may not run, or None: git's own rules (`_git`, unchanged)
     and the signals verdict (`core.process.domain.signals`, ADR-0011 eighth addendum) --
     a role that executes may kill only a process whose own cwd falls inside its
-    checkout, never one it reaches by name, pattern or port. `cwd` is the role's
-    checkout, resolved here (`Path.resolve()`, idempotent) in case the caller -- a
-    direct test, most often -- did not already resolve it: a symlinked checkout must
-    still compare correctly against `/proc/<pid>/cwd`, which the adapter's own `owner`
-    always resolves. `relative_to` is where the shell stands, the checkout unless said
-    otherwise."""
-    checkout = cwd.resolve()
-    reason = _reason(command, checkout, relative_to.resolve() if relative_to else checkout)
+    checkout, never one it reaches by name, pattern or port. `cwd` and `relative_to`
+    keep meaning exactly what they did before that addendum, unresolved: the git branch
+    (`_git`, `_inside`) never sees a path this function resolved, so a symlinked
+    checkout's `git -C` decisions do not change underneath it. `checkout`, the boundary
+    `signals.denial` compares a pid's `/proc/<pid>/cwd` against, is `cwd.resolve()`,
+    computed fresh on every call so a direct caller -- a test, a checkout handed over
+    through a symlink -- is answered correctly without having to pre-resolve anything
+    itself."""
+    reason = _reason(command, cwd, relative_to or cwd, cwd.resolve())
     return _DENIED + reason if reason else None
 
 
@@ -229,15 +230,11 @@ def hooks_for(
 
 
 def _bash(cwd: Path) -> HookCallback:
-    # Resolved once, here, for every Bash call this role's run will ever make --
-    # `signals.denial`'s own checkout boundary (ADR-0011, eighth addendum).
-    checkout = cwd.resolve()
-
     async def hook(
         data: HookInput, tool_use_id: str | None, context: HookContext
     ) -> HookJSONOutput:
         tool_input = _tool_input(data)
-        reason = git_denial(str(tool_input.get("command", "")), checkout, _where(data, checkout))
+        reason = git_denial(str(tool_input.get("command", "")), cwd, _where(data, cwd))
         return _deny(reason) if reason else {}
 
     return hook
@@ -380,9 +377,14 @@ def _where(data: HookInput, cwd: Path) -> Path:
 # -- parsing -------------------------------------------------------------------------
 
 
-def _reason(command: str, cwd: Path, here: Path) -> str | None:
+def _reason(command: str, cwd: Path, here: Path, checkout: Path) -> str | None:
+    """`cwd`/`here` are git's own, unresolved, exactly as `_git`/`_inside` always
+    compared them. `checkout` is `cwd.resolve()`, computed once by `git_denial` and
+    carried unchanged through every recursive call this function makes for a nested
+    `sh -c`/`bash -lc`: `signals.denial`'s own boundary, kept apart from git's so
+    resolving it can never change what a symlinked checkout's `git -C` decides."""
     for words in _commands(command):
-        if reason := _denial_of(words, cwd, here):
+        if reason := _denial_of(words, cwd, here, checkout):
             return reason
     return None
 
@@ -418,8 +420,8 @@ def _without_heredocs(command: str) -> str:
     return "\n".join(lines)
 
 
-def _denial_of(words: list[str], cwd: Path, here: Path) -> str | None:
-    if reason := signals.denial(words, cwd, _owner):
+def _denial_of(words: list[str], cwd: Path, here: Path, checkout: Path) -> str | None:
+    if reason := signals.denial(words, checkout, _owner):
         return reason
     assigned = set()
     while words and (_ASSIGNMENT.match(words[0]) or words[0] in _WRAPPERS):
@@ -433,7 +435,7 @@ def _denial_of(words: list[str], cwd: Path, here: Path) -> str | None:
         # The script follows the first option cluster that holds `c`: `-c`, `-lc`.
         for i, word in enumerate(words[1:-1], start=1):
             if word.startswith("-") and not word.startswith("--") and "c" in word:
-                return _reason(words[i + 1], cwd, here)
+                return _reason(words[i + 1], cwd, here, checkout)
         return None
     if program != "git":
         return None
