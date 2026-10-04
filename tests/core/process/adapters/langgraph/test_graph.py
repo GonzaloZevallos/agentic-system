@@ -40,6 +40,7 @@ from tests.fakes import (
     design_draft,
     design_findings,
     diagnosed,
+    final_validation,
     finding,
     memory_ports,
     planned,
@@ -228,6 +229,9 @@ async def test_a_touches_ui_feature_passes_the_five_design_steps_in_order_then_p
         ui_designer=[design_draft()],
         design_lead=[design_findings("approved")],
         pm_consolidator=[consolidation("approved")],
+        ux_lead_final=[design_findings("approved")],
+        design_lead_final=[design_findings("approved")],
+        pm_final=[final_validation("approved")],
         **technical(),
     )
     final = await run_graph(script, config, fakes=fakes)
@@ -889,6 +893,7 @@ def test_exported_graph_uses_the_default_ports():
         "plan",
         "pipeline",
         "integrate",
+        "final_validation",
         "deliver",
         "discard",
         "escalate",

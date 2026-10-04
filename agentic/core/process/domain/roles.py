@@ -643,6 +643,12 @@ PAIR_PM_PA = Pair(by=PM, to=PRODUCT_ANALYST)
 PAIR_UX_LEAD = Pair(by=UX_LEAD, to=UX_DESIGNER)
 PAIR_DESIGN_LEAD = Pair(by=DESIGN_LEAD, to=UI_DESIGNER)
 
+# PM's early final validation return (ADR-0040, §13): PM reopens the integrator's own
+# subtask, never the Developer's, so the pair is PM's own, to Tech Lead -- the role
+# that leads the plan and the subtask Tech Lead hands the claims to, never a lead's own
+# pair and never `pair_for`'s per-subtask one.
+PAIR_PM_TECH_LEAD = Pair(by=PM, to=TECH_LEAD)
+
 
 def pair_for(subtask_id: str) -> Pair:
     """Tech Lead returns to the Developer of that subtask, never to another one."""

@@ -17,20 +17,24 @@ from .denials import denial_for
 from .document import HUMAN, demote
 from .roles import (
     DESIGN_LEAD,
+    DESIGN_LEAD_FINAL,
     DEVELOPER,
     FINDINGS,
     INTERVIEWS,
     PAIR_DESIGN_LEAD,
     PAIR_PM_PA,
+    PAIR_PM_TECH_LEAD,
     PAIR_UX_LEAD,
     PM,
     PM_CONSOLIDATOR,
+    PM_FINAL,
     PRODUCT_ANALYST,
     SOLUTION_INTERVIEW,
     TECH_LEAD,
     UI_DESIGNER,
     UX_DESIGNER,
     UX_LEAD,
+    UX_LEAD_FINAL,
     Interview,
     Pair,
     Role,
@@ -942,6 +946,20 @@ def review_section(subtask_id: str) -> str:
     return f"{REVIEW_PREFIX}{subtask_id}"
 
 
+def return_section(state: TaskState, subtask_id: str) -> str:
+    """Whose section a returned subtask's delta and the incremental reviewer's own spec
+    come from (ADR-0040): `review_section(subtask_id)`, as today, unless PM's early,
+    UI-only final validation is the open return (`subtasks[id]["returned_by"] ==
+    'final_validation'`), absent reading as `'review'` for every subtask this never
+    touched. The plan's own invariant: a returned item's delta and the incremental
+    reviewer's spec both come from this one function, never from `review_section`
+    directly."""
+    subtask = state.get("subtasks", {}).get(subtask_id, {})
+    if subtask.get("returned_by", "review") == "final_validation":
+        return PM_FINAL.name
+    return review_section(subtask_id)
+
+
 def returned_developer_delta(state: TaskState, subtask_id: str, branch: str, head: str) -> str:
     """What a returned Developer reads instead of the full context (ADR-0004, sixth
     addendum): what changed since its previous delivery. In order: the branch's current
@@ -964,7 +982,7 @@ def returned_developer_delta(state: TaskState, subtask_id: str, branch: str, hea
         parts.append(f"## {HUMAN}\n\n{human}")
     if findings := sections.get(FINDINGS):
         parts.append(f"## {FINDINGS}\n\n{findings}")
-    review = review_section(subtask_id)
+    review = return_section(state, subtask_id)
     reason = state.get("subtasks", {}).get(subtask_id, {}).get("reason", "").strip()
     lead = f"**Returned:** {reason}\n\n" if reason else ""
     parts.append(f"## {review}\n\n{lead}{sections.get(review, '')}")
@@ -1282,11 +1300,16 @@ def work_units(state: TaskState) -> int:
     before it exists: the cap has to cover it from the start. Plus one more, from the
     very start, on a feature that runs the design branch (ADR-0040, `design_applies`):
     five extra role runs land before the plan even exists, and the cap has to cover
-    them too, whether or not the plan has been written yet."""
+    them too, whether or not the plan has been written yet. Plus a second design unit,
+    once there is a plan, for PM's early final validation: three more role runs the
+    cap has to cover only from the point it could actually become due, not before --
+    there is nothing to validate without a plan yet."""
     real = [sid for sid in state.get("subtasks", {}) if sid != INTEGRATION]
     units = len(real) + (1 if len(real) > 1 else 0)
     if design_applies(state):
         units += 1
+        if real:
+            units += 1
     return units
 
 
@@ -1327,9 +1350,16 @@ def suggested_budget(state: TaskState, per_unit: float) -> int:
 PHASES = ("definition", "plan", "development", "review")
 
 
+_FINAL_VALIDATION_SECTIONS = frozenset((PM_FINAL.name, UX_LEAD_FINAL.name, DESIGN_LEAD_FINAL.name))
+
+
 def phase_of(section: str) -> str:
     """The phase a run's section belongs to. PM's consultations during the plan write
-    PM's section, so they count as definition."""
+    PM's section, so they count as definition. PM's early, UI-only final validation and
+    the two leads' own final sections (ADR-0040) map to `review`, same as any other
+    review: it runs after the integration review approves, never before it."""
+    if section in _FINAL_VALIDATION_SECTIONS:
+        return "review"
     if section.startswith(REVIEW_PREFIX):
         return "review"
     if section.startswith(f"{DEVELOPER.name}: "):
@@ -1438,12 +1468,54 @@ def after_develop(state: TaskState) -> str | None:
     return None if state.get("escalated") else "review"
 
 
+def final_validation_due(state: TaskState) -> bool:
+    """Whether PM's early, UI-only final validation (ADR-0040) still has to run before
+    `deliver`: the design branch applies to this task, every subtask is approved, and no
+    approving `PM: final validation` run is newer than the latest approving review of
+    `integration` -- or of the single subtask, when there is no integration. `False` for
+    every task outside the design branch, byte for byte as today (`design_applies`).
+
+    "Approving", for both sides, is read the way `_lead_satisfied` already reads a
+    lead's own verdict: `all_approved` already guarantees the target's *latest* review
+    was an approval, so that review's own run index is enough; a PM final-validation run
+    counts as the live approval over it only while `_pair_returns(PAIR_PM_TECH_LEAD)`
+    has not yet caught up with how many times it ran -- the same return-matches-run
+    counting `_lead_satisfied` uses, not a verdict stored per run."""
+    if not design_applies(state):
+        return False
+    if not all_approved(state):
+        return False
+    subtasks = state.get("subtasks", {})
+    target = INTEGRATION if INTEGRATION in subtasks else next(iter(subtasks), None)
+    if target is None:
+        return False
+    review_idx = _latest_index(state, review_section(target))
+    if review_idx is None:
+        return True
+    final_idx = _latest_index(state, PM_FINAL.name)
+    if final_idx is None or final_idx < review_idx:
+        return True
+    still_approving = _pair_returns(state, PAIR_PM_TECH_LEAD.key) < _run_count(state, PM_FINAL.name)
+    return not still_approving
+
+
 def after_integrate(state: TaskState) -> str | None:
     if state.get("escalated"):
         return None
     if dispatched_subtasks(state):
         return "pipeline"
-    return "deliver" if all_approved(state) else None
+    if not all_approved(state):
+        return None
+    return "final_validation" if final_validation_due(state) else "deliver"
+
+
+def after_final_validation(state: TaskState) -> str | None:
+    """Always back to the fan-in (ADR-0040): on `approved`, `final_validation_due` now
+    reads `False` and `after_integrate` falls through to `deliver`; on `returned`, the
+    reopened subtask is exactly what `dispatched_subtasks` picks up, and the fan-in
+    sends it back to its Developer like any other wave. No new predicate decides
+    between the two -- `after_integrate` already does, from the same state."""
+    return None if state.get("escalated") else "integrate"
 
 
 def after_deliver(state: TaskState) -> str | None:

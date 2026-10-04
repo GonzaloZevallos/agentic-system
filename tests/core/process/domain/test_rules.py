@@ -326,8 +326,10 @@ def test_task_cap_adds_one_unit_for_the_design_branch_from_the_start():
     assert rules.work_units({"type": "feature", "flags": {}}) == 0
     assert rules.work_units({"type": "bug", "flags": {"touches_ui": True}}) == 0
     assert rules.work_units({"type": "platform_enhancement", "flags": {"touches_ui": True}}) == 0
-    # Stacks with the subtasks' own units (existing behaviour, untouched).
-    assert rules.work_units({**UX_FLAGS, **subtasks("api", "domain")}) == 4
+    # Stacks with the subtasks' own units (existing behaviour, untouched): 2 subtasks +
+    # 1 integration + 1 design-branch unit + 1 final-validation unit, once there is a
+    # plan (ADR-0040, this task's own second unit).
+    assert rules.work_units({**UX_FLAGS, **subtasks("api", "domain")}) == 5
 
 
 def test_design_effect_by_role_counts_lead_returns_and_blocking_items_per_role():

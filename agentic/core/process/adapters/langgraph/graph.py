@@ -54,6 +54,7 @@ from ...application.develop import develop
 from ...application.diagnose import diagnose
 from ...application.discard import discard
 from ...application.escalate import escalate
+from ...application.final_validation import final_validation
 from ...application.integrate import integrate
 from ...application.limits import RunLimits
 from ...application.plan import plan
@@ -68,6 +69,7 @@ from ...domain.roles import (
     PJM,
     PM,
     PM_CONSOLIDATOR,
+    PM_FINAL,
     PRODUCT_ANALYST,
     TECH_LEAD,
     TECH_LEAD_REVIEWER,
@@ -261,6 +263,16 @@ def build_graph(
     graph.add_node("plan", _node(plan, TECH_LEAD, shared, telemetry, arm_for))
     graph.add_node(PIPELINE, _branch_node(shared, telemetry, arm_for))
     graph.add_node(INTEGRATE, _system_node(integrate, shared))
+    # PM's early, UI-only final validation (ADR-0040): only reached through
+    # `rules.final_validation_due`, from `after_integrate`. One node, one span, labelled
+    # by its own final decision-maker (`PM_FINAL`) -- the same shape `define`/`plan`
+    # already use for a node that runs more than one role in its own session
+    # (an interview's interviewer and interviewee, here UX Lead's and Design Lead's own
+    # final counterparts): the role spans in this graph are one per node, not one per
+    # `run_role` call, and `PM_FINAL` is the one that decides this node's own verdict.
+    graph.add_node(
+        "final_validation", _node(final_validation, PM_FINAL, shared, telemetry, arm_for)
+    )
     graph.add_node("deliver", _system_node(deliver, shared))
     graph.add_node("discard", _system_node(discard, shared))
     graph.add_node(ESCALATE, _system_node(escalate, shared))
@@ -300,7 +312,12 @@ def build_graph(
     # Every branch of the wave comes back here, once, however many were sent.
     graph.add_edge(PIPELINE, INTEGRATE)
     graph.add_conditional_edges(
-        INTEGRATE, _fanout(rules.after_integrate), [PIPELINE, "deliver", ESCALATE, END]
+        INTEGRATE,
+        _fanout(rules.after_integrate),
+        [PIPELINE, "final_validation", "deliver", ESCALATE, END],
+    )
+    graph.add_conditional_edges(
+        "final_validation", _route(rules.after_final_validation), [INTEGRATE, ESCALATE]
     )
     graph.add_conditional_edges("deliver", _route(rules.after_deliver), [END, ESCALATE])
     graph.add_conditional_edges("discard", _route(rules.after_discard), [END, ESCALATE])

@@ -97,7 +97,7 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             raise ValueError(reason)
 
     section = rules.developer_section(subtask_id)
-    extra_sections = (section, rules.review_section(subtask_id))
+    extra_sections = (section, rules.return_section(state, subtask_id))
     # A return goes back to the same Developer, over the session that wrote this
     # section, with only what the return added as its new input (README.md, 3; ADR-0004,
     # sixth addendum): the session already holds everything else. `role.name`, not
