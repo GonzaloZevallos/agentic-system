@@ -12,12 +12,13 @@ SYSTEM_EMAIL = "agentic-system@users.noreply.github.com"
 HUMAN_EMAIL = "gonzalo@example.com"
 
 
-def commit(author_emails, headline="Do the thing", additions=3, deletions=1):
+def commit(author_emails, parent_count, headline="Do the thing", additions=3, deletions=1):
     return PullRequestCommit(
         author_emails=tuple(author_emails),
         message_headline=headline,
         additions=additions,
         deletions=deletions,
+        parent_count=parent_count,
     )
 
 
@@ -264,21 +265,12 @@ def test_invocation_returns_by_category_is_empty_without_a_return_this_invocatio
     assert metrics.invocation_returns_by_category({}) == {}
 
 
-def test_merge_commit_headline_matches_the_three_forms_git_writes():
-    assert metrics.MERGE_COMMIT_HEADLINE.match("Merge branch 'main' into agentic/GH-73")
-    assert metrics.MERGE_COMMIT_HEADLINE.match(
-        "Merge remote-tracking branch 'origin/main' into agentic/GH-73"
-    )
-    assert metrics.MERGE_COMMIT_HEADLINE.match("Merge pull request #97 from GonzaloZevallos/x")
-    assert not metrics.MERGE_COMMIT_HEADLINE.match("cli: mergeable subtasks close a task")
-
-
 def test_delivery_outcome_is_merged_when_every_commit_is_the_systems():
     pr = PullRequest(
         state="MERGED",
         created_at="2026-09-20T23:00:00Z",
         merged_at="2026-09-21T00:29:02Z",
-        commits=(commit([SYSTEM_EMAIL]), commit([SYSTEM_EMAIL])),
+        commits=(commit([SYSTEM_EMAIL], parent_count=1), commit([SYSTEM_EMAIL], parent_count=1)),
     )
     assert metrics.delivery_outcome(pr, SYSTEM_EMAIL) == "merged"
 
@@ -288,7 +280,7 @@ def test_delivery_outcome_is_merged_with_changes_when_one_human_commit_exists():
         state="MERGED",
         created_at="2026-09-20T23:00:00Z",
         merged_at="2026-09-21T00:29:02Z",
-        commits=(commit([SYSTEM_EMAIL]), commit([HUMAN_EMAIL])),
+        commits=(commit([SYSTEM_EMAIL], parent_count=1), commit([HUMAN_EMAIL], parent_count=1)),
     )
     assert metrics.delivery_outcome(pr, SYSTEM_EMAIL) == "merged_with_changes"
 
@@ -298,17 +290,84 @@ def test_delivery_outcome_is_closed_for_a_pull_request_closed_unmerged():
     assert metrics.delivery_outcome(pr, SYSTEM_EMAIL) == "closed"
 
 
-def test_a_merge_commit_authored_by_the_human_changes_neither_count_nor_lines():
+# GH-136: a merge commit is never human work, whatever its title -- only
+# `parent_count` decides, never `message_headline` (apostrophe #16 and #21: a
+# human-authored merge of master with a hand-written title carried the whole diff
+# of master as if it were the human's own correction).
+
+
+def test_a_two_parent_merge_with_a_free_title_counts_neither_as_human_nor_in_its_lines():
     pr = PullRequest(
         state="MERGED",
         created_at="2026-09-20T23:00:00Z",
         merged_at="2026-09-21T00:29:02Z",
         commits=(
-            commit([SYSTEM_EMAIL]),
-            commit([HUMAN_EMAIL], headline="Merge branch 'main' into agentic/GH-73"),
+            commit(
+                [HUMAN_EMAIL],
+                parent_count=2,
+                headline="Merge master into GH-3: sales next to expenses and the front bootstrap",
+                additions=9071,
+                deletions=36,
+            ),
         ),
     )
     assert metrics.delivery_outcome(pr, SYSTEM_EMAIL) == "merged"
+    assert metrics.human_commits(pr, SYSTEM_EMAIL) == 0
+    assert metrics.human_lines_changed(pr, SYSTEM_EMAIL) == 0
+
+
+def test_the_same_merge_plus_an_ordinary_human_commit_counts_only_the_ordinary_one():
+    pr = PullRequest(
+        state="MERGED",
+        created_at="2026-09-20T23:00:00Z",
+        merged_at="2026-09-21T00:29:02Z",
+        commits=(
+            commit(
+                [HUMAN_EMAIL],
+                parent_count=2,
+                headline="Merge master into GH-3: sales next to expenses and the front bootstrap",
+                additions=9071,
+                deletions=36,
+            ),
+            commit([HUMAN_EMAIL], parent_count=1, headline="fix typo", additions=4, deletions=2),
+        ),
+    )
+    assert metrics.delivery_outcome(pr, SYSTEM_EMAIL) == "merged_with_changes"
+    assert metrics.human_commits(pr, SYSTEM_EMAIL) == 1
+    assert metrics.human_lines_changed(pr, SYSTEM_EMAIL) == 6
+
+
+def test_a_one_parent_commit_titled_merge_counts_as_human_work():
+    """The input the old headline criterion rejected: a hand-made commit titled like
+    a merge but with a single parent is ordinary human work."""
+    pr = PullRequest(
+        state="MERGED",
+        created_at="2026-09-20T23:00:00Z",
+        merged_at="2026-09-21T00:29:02Z",
+        commits=(
+            commit(
+                [HUMAN_EMAIL],
+                parent_count=1,
+                headline="Merge branch 'master' into agentic/GH-1",
+                additions=4,
+                deletions=2,
+            ),
+        ),
+    )
+    assert metrics.delivery_outcome(pr, SYSTEM_EMAIL) == "merged_with_changes"
+    assert metrics.human_commits(pr, SYSTEM_EMAIL) == 1
+    assert metrics.human_lines_changed(pr, SYSTEM_EMAIL) == 6
+
+
+def test_a_system_authored_commit_with_two_parents_is_still_excluded():
+    pr = PullRequest(
+        state="MERGED",
+        created_at="2026-09-20T23:00:00Z",
+        merged_at="2026-09-21T00:29:02Z",
+        commits=(
+            commit([SYSTEM_EMAIL], parent_count=2, headline="Merge pull request #97 from x/y"),
+        ),
+    )
     assert metrics.human_commits(pr, SYSTEM_EMAIL) == 0
     assert metrics.human_lines_changed(pr, SYSTEM_EMAIL) == 0
 
@@ -319,9 +378,9 @@ def test_human_commits_counts_only_non_system_non_merge_commits():
         created_at="2026-09-20T23:00:00Z",
         merged_at="2026-09-21T00:29:02Z",
         commits=(
-            commit([SYSTEM_EMAIL]),
-            commit([HUMAN_EMAIL]),
-            commit([HUMAN_EMAIL], headline="Merge pull request #1 from x/y"),
+            commit([SYSTEM_EMAIL], parent_count=1),
+            commit([HUMAN_EMAIL], parent_count=1),
+            commit([HUMAN_EMAIL], parent_count=2, headline="Merge pull request #1 from x/y"),
         ),
     )
     assert metrics.human_commits(pr, SYSTEM_EMAIL) == 1
@@ -333,8 +392,8 @@ def test_human_lines_changed_sums_additions_and_deletions_of_human_commits_only(
         created_at="2026-09-20T23:00:00Z",
         merged_at="2026-09-21T00:29:02Z",
         commits=(
-            commit([SYSTEM_EMAIL], additions=100, deletions=50),
-            commit([HUMAN_EMAIL], additions=4, deletions=2),
+            commit([SYSTEM_EMAIL], parent_count=1, additions=100, deletions=50),
+            commit([HUMAN_EMAIL], parent_count=1, additions=4, deletions=2),
         ),
     )
     assert metrics.human_lines_changed(pr, SYSTEM_EMAIL) == 6
@@ -345,7 +404,7 @@ def test_human_lines_changed_is_zero_for_a_clean_merge():
         state="MERGED",
         created_at="2026-09-20T23:00:00Z",
         merged_at="2026-09-21T00:29:02Z",
-        commits=(commit([SYSTEM_EMAIL], additions=100, deletions=50),),
+        commits=(commit([SYSTEM_EMAIL], parent_count=1, additions=100, deletions=50),),
     )
     assert metrics.human_lines_changed(pr, SYSTEM_EMAIL) == 0
 

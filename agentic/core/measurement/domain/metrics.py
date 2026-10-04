@@ -15,7 +15,6 @@ already lives inside the delivering run's own `cost_usd` (`run_role.py`), so a
 from __future__ import annotations
 
 import hashlib
-import re
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Literal
@@ -43,12 +42,6 @@ ARM_KEYS = ("review_mode", "skip_ephemeral")
 # emission gate (ADR-0008, 2026-09-18 second addendum). Not a rounding tolerance — that
 # job belongs to `RESIDUAL_FLOOR_USD` alone.
 RESIDUAL_EPSILON_USD = 1e-9
-# A pull request's merge commit, matched by headline since `gh` exposes no parents to
-# exclude it any other way (`GhTracker.pull_request`'s own docstring). Covers the three
-# headlines git writes for the merges a branch's own history can carry: a local
-# `git merge`, a fetch of a remote-tracking branch merged the same way, and GitHub's own
-# "Merge pull request #N from ..." for a dependency subtask merged through a PR.
-MERGE_COMMIT_HEADLINE = re.compile(r"^Merge (branch|remote-tracking branch|pull request)")
 # The rounding tolerance `rules.spent_by_phase` and the rework acceptance test compare
 # with: it stopped gating emission (ADR-0008, 2026-09-18 second addendum) because it is
 # a per-patch number and the promise it backs — the task's `rework_usd` equals the sum
@@ -256,13 +249,16 @@ def _is_human_commit(commit: PullRequestCommit, system_author_email: str) -> boo
     """Whether this is the human's own work, not the system's, for
     `human_commits`/`human_lines_changed`/`delivery_outcome`: the system's git author
     email (`Configuration.GIT_AUTHOR_EMAIL`) is never among the commit's authors, and
-    it is not a merge commit — `gh` exposes no parents to exclude those any other way,
-    so the headline is what `MERGE_COMMIT_HEADLINE` matches against instead. A GitHub
-    login is never consulted: a human's own account would satisfy it just the same as
-    the system's commits, which is exactly what this discriminates against."""
+    the commit is not a merge -- `parent_count < 2`. A merge is any commit with two or
+    more parents, whatever its title: a hand-written headline (resolving a conflict
+    while merging master, say) is still a merge. A one-parent commit titled "Merge …"
+    (a hand-made squash, for example) counts as human work all the same -- the title
+    is data on `PullRequestCommit`, never a criterion here. A GitHub login is never
+    consulted: a human's own account would satisfy it just the same as the system's
+    commits, which is exactly what this discriminates against."""
     if system_author_email in commit.author_emails:
         return False
-    return not MERGE_COMMIT_HEADLINE.match(commit.message_headline)
+    return commit.parent_count < 2
 
 
 def delivery_outcome(pull_request: PullRequest, system_author_email: str) -> DeliveryOutcome:
@@ -278,7 +274,7 @@ def delivery_outcome(pull_request: PullRequest, system_author_email: str) -> Del
 
 def human_commits(pull_request: PullRequest, system_author_email: str) -> int:
     """How many of the pull request's commits are the human's own: not the system's git
-    author email, and not a merge commit."""
+    author email, and not a merge commit -- `parent_count < 2`, whatever its title."""
     return sum(
         1 for commit in pull_request.commits if _is_human_commit(commit, system_author_email)
     )

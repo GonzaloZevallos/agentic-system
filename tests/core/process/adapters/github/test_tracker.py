@@ -109,9 +109,10 @@ def _graphql_pull_request(state, merged_at, created_at, commits, merge_oid=None)
                                         "additions": additions,
                                         "deletions": deletions,
                                         "authors": {"nodes": [{"email": email}]},
+                                        "parents": {"totalCount": parent_count},
                                     }
                                 }
-                                for email, headline, additions, deletions in commits
+                                for email, headline, additions, deletions, parent_count in commits
                             ]
                         },
                     }
@@ -127,7 +128,7 @@ def test_pull_request_never_calls_gh_bare_and_pins_the_reference_in_argv():
             "MERGED",
             "2026-09-21T00:29:02Z",
             "2026-09-20T23:00:00Z",
-            [("dev@example.com", "fix: x", 3, 1)],
+            [("dev@example.com", "fix: x", 3, 1, 1)],
         )
     )
     tracker = GhTracker(Path("/p"), run)
@@ -142,6 +143,7 @@ def test_pull_request_never_calls_gh_bare_and_pins_the_reference_in_argv():
                 message_headline="fix: x",
                 additions=3,
                 deletions=1,
+                parent_count=1,
             ),
         ),
     )
@@ -172,6 +174,31 @@ def test_pull_request_query_asks_for_the_merge_commit_oid():
     run = Recorder(stdout=_graphql_pull_request("OPEN", None, "2026-09-20T23:00:00Z", []))
     GhTracker(Path("/p"), run).pull_request("https://github.com/o/r/pull/9")
     assert any("mergeCommit { oid }" in part for part in run.calls[0])
+
+
+def test_pull_request_query_asks_for_each_commits_parent_count():
+    """GH-136: the fragment `metrics._is_human_commit` needs to tell a merge apart
+    from an ordinary commit by its parent count, never by its headline."""
+    run = Recorder(stdout=_graphql_pull_request("OPEN", None, "2026-09-20T23:00:00Z", []))
+    GhTracker(Path("/p"), run).pull_request("https://github.com/o/r/pull/9")
+    assert any("parents(first: 1) { totalCount }" in part for part in run.calls[0])
+
+
+def test_pull_request_reads_each_commits_own_parent_count():
+    run = Recorder(
+        stdout=_graphql_pull_request(
+            "MERGED",
+            "2026-09-21T00:29:02Z",
+            "2026-09-20T23:00:00Z",
+            [
+                ("dev@example.com", "fix: x", 3, 1, 1),
+                ("dev@example.com", "Merge master into GH-3", 9071, 36, 2),
+            ],
+        )
+    )
+    pr = GhTracker(Path("/p"), run).pull_request("https://github.com/o/r/pull/7")
+    assert pr is not None
+    assert [c.parent_count for c in pr.commits] == [1, 2]
 
 
 def test_pull_request_maps_a_closed_unmerged_and_an_open_pull_request():

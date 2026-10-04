@@ -1571,13 +1571,16 @@ def close_task(**overrides):
     return task
 
 
-def close_pull_request(*, state="MERGED", merged=True, human_commit=False):
+def close_pull_request(
+    *, state="MERGED", merged=True, human_commit=False, human_merge_parent_count=None
+):
     commits = [
         PullRequestCommit(
             author_emails=("agentic-system@users.noreply.github.com",),
             message_headline="feat: x",
             additions=10,
             deletions=2,
+            parent_count=1,
         )
     ]
     if human_commit:
@@ -1587,6 +1590,17 @@ def close_pull_request(*, state="MERGED", merged=True, human_commit=False):
                 message_headline="fix typo",
                 additions=3,
                 deletions=1,
+                parent_count=1,
+            )
+        )
+    if human_merge_parent_count is not None:
+        commits.append(
+            PullRequestCommit(
+                author_emails=("human@x.com",),
+                message_headline="Merge master into GH-9: resolve conflicts",
+                additions=500,
+                deletions=20,
+                parent_count=human_merge_parent_count,
             )
         )
     return PullRequest(
@@ -1836,6 +1850,30 @@ def test_close_happy_path_writes_the_five_keys_with_no_sample_emitted(
     assert doc["human_lines_changed"] == "4"
     assert doc["closed_at"]
     assert doc["status"] == "ready_for_review"  # no new `Status` value is added
+
+
+def test_close_treats_a_human_merge_of_master_as_no_human_change(monkeypatch, tmp_path, capsys):
+    """GH-136: the human's only commit on the branch is a two-parent merge of master
+    with a hand-written title (resolving a conflict, the apostrophe #16/#21 case) --
+    `parent_count` alone excludes it, so the close is `merged` with 0 lines, never
+    `merged_with_changes` carrying the whole diff of master."""
+    from agentic.core.measurement.adapters.otel import telemetry
+
+    root = close_root(tmp_path)
+    reference = "https://github.com/o/r/pull/7"
+    tracker = FakePullRequestTracker({reference: close_pull_request(human_merge_parent_count=2)})
+    ports = close_ports(root, tracker)
+    ports.documents.save(close_task(pull_request=reference))
+    telemetry.configure()
+    try:
+        _closed_run(monkeypatch, root, ports)
+        cli.main()
+    finally:
+        telemetry.configure()
+    doc = ports.documents.load("GH-9")
+    assert doc["delivery_outcome"] == "merged"
+    assert doc["human_commits"] == "0"
+    assert doc["human_lines_changed"] == "0"
 
 
 def test_close_persists_time_to_merge_seconds_when_the_pull_request_merged(monkeypatch, tmp_path):

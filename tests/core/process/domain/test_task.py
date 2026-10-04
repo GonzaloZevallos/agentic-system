@@ -137,6 +137,7 @@ def test_pull_request_is_a_frozen_value_object_equal_by_value():
         message_headline="fix: x",
         additions=3,
         deletions=1,
+        parent_count=1,
     )
     one = PullRequest(
         state="MERGED", created_at="2026-09-01T00:00:00Z", merged_at=None, commits=(commit,)
