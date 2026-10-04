@@ -49,10 +49,12 @@ from agentic.shared.configuration import Configuration
 from ...application.classify import classify
 from ...application.define import define
 from ...application.deliver import deliver
+from ...application.design import consolidate, design_review, ui_screens, ux_flow, ux_walk
 from ...application.develop import develop
 from ...application.diagnose import diagnose
 from ...application.discard import discard
 from ...application.escalate import escalate
+from ...application.final_validation import final_validation
 from ...application.integrate import integrate
 from ...application.limits import RunLimits
 from ...application.plan import plan
@@ -61,7 +63,21 @@ from ...application.preflight import product_name
 from ...application.review import review
 from ...application.validate_prd import validate_prd
 from ...domain import rules
-from ...domain.roles import DEVELOPER, PJM, PM, PRODUCT_ANALYST, TECH_LEAD, TECH_LEAD_REVIEWER, Role
+from ...domain.roles import (
+    DESIGN_LEAD,
+    DEVELOPER,
+    PJM,
+    PM,
+    PM_CONSOLIDATOR,
+    PM_FINAL,
+    PRODUCT_ANALYST,
+    TECH_LEAD,
+    TECH_LEAD_REVIEWER,
+    UI_DESIGNER,
+    UX_DESIGNER,
+    UX_LEAD,
+    Role,
+)
 from ...domain.task import TaskInput, TaskState, delta
 from ..telemetry import NoTelemetry, Telemetry
 
@@ -236,9 +252,27 @@ def build_graph(
     graph.add_node("define", _node(define, PRODUCT_ANALYST, shared, telemetry, arm_for))
     graph.add_node("diagnose", _node(diagnose, PRODUCT_ANALYST, shared, telemetry, arm_for))
     graph.add_node("validate", _node(validate_prd, PM, shared, telemetry, arm_for))
+    # The definition-side design branch (ADR-0040): only reached on a `touches_ui`
+    # feature, through `rules.design_step` (`after_validate`/`resume_target`/each
+    # node's own `after_*`), never wired to any other node directly.
+    graph.add_node("ux_flow", _node(ux_flow, UX_DESIGNER, shared, telemetry, arm_for))
+    graph.add_node("ux_walk", _node(ux_walk, UX_LEAD, shared, telemetry, arm_for))
+    graph.add_node("ui_screens", _node(ui_screens, UI_DESIGNER, shared, telemetry, arm_for))
+    graph.add_node("design_review", _node(design_review, DESIGN_LEAD, shared, telemetry, arm_for))
+    graph.add_node("consolidate", _node(consolidate, PM_CONSOLIDATOR, shared, telemetry, arm_for))
     graph.add_node("plan", _node(plan, TECH_LEAD, shared, telemetry, arm_for))
     graph.add_node(PIPELINE, _branch_node(shared, telemetry, arm_for))
     graph.add_node(INTEGRATE, _system_node(integrate, shared))
+    # PM's early, UI-only final validation (ADR-0040): only reached through
+    # `rules.final_validation_due`, from `after_integrate`. One node, one span, labelled
+    # by its own final decision-maker (`PM_FINAL`) -- the same shape `define`/`plan`
+    # already use for a node that runs more than one role in its own session
+    # (an interview's interviewer and interviewee, here UX Lead's and Design Lead's own
+    # final counterparts): the role spans in this graph are one per node, not one per
+    # `run_role` call, and `PM_FINAL` is the one that decides this node's own verdict.
+    graph.add_node(
+        "final_validation", _node(final_validation, PM_FINAL, shared, telemetry, arm_for)
+    )
     graph.add_node("deliver", _system_node(deliver, shared))
     graph.add_node("discard", _system_node(discard, shared))
     graph.add_node(ESCALATE, _system_node(escalate, shared))
@@ -253,13 +287,37 @@ def build_graph(
     graph.add_conditional_edges(
         "validate",
         _route(rules.after_validate),
-        ["define", "diagnose", "plan", "discard", ESCALATE],
+        ["define", "diagnose", "ux_flow", "plan", "discard", ESCALATE],
+    )
+    graph.add_conditional_edges(
+        "ux_flow", _route(rules.after_ux_flow), ["ux_walk", "plan", ESCALATE]
+    )
+    graph.add_conditional_edges(
+        "ux_walk", _route(rules.after_ux_walk), ["ux_flow", "ui_screens", "plan", ESCALATE]
+    )
+    graph.add_conditional_edges(
+        "ui_screens", _route(rules.after_ui_screens), ["design_review", "plan", ESCALATE]
+    )
+    graph.add_conditional_edges(
+        "design_review",
+        _route(rules.after_design_review),
+        ["ui_screens", "consolidate", "plan", ESCALATE],
+    )
+    graph.add_conditional_edges(
+        "consolidate",
+        _route(rules.after_consolidate),
+        ["define", "ux_flow", "plan", ESCALATE],
     )
     graph.add_conditional_edges("plan", _route(rules.after_plan), [INTEGRATE, ESCALATE])
     # Every branch of the wave comes back here, once, however many were sent.
     graph.add_edge(PIPELINE, INTEGRATE)
     graph.add_conditional_edges(
-        INTEGRATE, _fanout(rules.after_integrate), [PIPELINE, "deliver", ESCALATE, END]
+        INTEGRATE,
+        _fanout(rules.after_integrate),
+        [PIPELINE, "final_validation", "deliver", ESCALATE, END],
+    )
+    graph.add_conditional_edges(
+        "final_validation", _route(rules.after_final_validation), [INTEGRATE, ESCALATE]
     )
     graph.add_conditional_edges("deliver", _route(rules.after_deliver), [END, ESCALATE])
     graph.add_conditional_edges("discard", _route(rules.after_discard), [END, ESCALATE])
@@ -272,6 +330,11 @@ def build_graph(
             "define",
             "diagnose",
             "validate",
+            "ux_flow",
+            "ux_walk",
+            "ui_screens",
+            "design_review",
+            "consolidate",
             "plan",
             INTEGRATE,
             "deliver",

@@ -35,6 +35,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.suppressions import Forbidden
 
 # What a product copies to start, shown by the error when it declared nothing. It is a
@@ -43,7 +44,10 @@ TEMPLATE = Path(__file__).resolve().parent / "stack.yaml"
 OVERLAY = Path(".agentic/stack.yaml")
 # Every key the file may declare. An unknown one is a typo, not an extension: a product
 # that misspells `checks` would otherwise run with half a stack and never know.
-KEYS = ("product", "setup", "checks", "witness", "forbidden")
+KEYS = ("product", "setup", "checks", "witness", "forbidden", "design")
+# Every sub-key `design` may declare (ADR-0040): the same "unknown is a typo" rule,
+# one level down.
+DESIGN_KEYS = ("prototype", "entry", "sample_app", "compare")
 # The name is a label value in Prometheus and a variable in the dashboard: a slug keeps
 # one product from arriving under two spellings and keeps the panels' regexes honest.
 SLUG = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
@@ -130,6 +134,48 @@ def forbidden(data: object, source: object) -> tuple[Forbidden, ...]:
     if not isinstance(found, list) or not found:
         raise ValueError(f"{source}: expected `forbidden`, a non-empty list of rules")
     return tuple(_forbidden_rule(entry, source, index) for index, entry in enumerate(found))
+
+
+def design(data: object, source: object) -> Design | None:
+    """The optional `design` block (ADR-0040, glossary: Diseño del producto): the
+    static prototype's directory and entry screen, and the two optional commands --
+    `sample_app` and `compare` -- a design role may run instead of a browser.
+
+    Absent is a product that has not handed the human a prototype yet, the same
+    legitimate absence `witness` has: `None`, never an error. Present, it validates
+    like `forbidden`'s own entries: a non-mapping, a blank `prototype` or `entry`, a
+    missing `entry`, a non-string or blank command, or an unknown sub-key all raise
+    here, at load, so a broken declaration never reaches a lead mid-task."""
+    declared = _declared(data, source)
+    if "design" not in declared:
+        return None
+    found = _mapping(declared["design"], source, "design")
+    if unknown := [key for key in found if key not in DESIGN_KEYS]:
+        raise ValueError(
+            f"{source}: unknown key(s) {', '.join(sorted(unknown))} under `design`; "
+            f"expected {DESIGN_KEYS}"
+        )
+    prototype = found.get("prototype")
+    if not isinstance(prototype, str) or not prototype.strip():
+        raise ValueError(f"{source}: expected a non-empty `prototype` under `design`")
+    entry = found.get("entry")
+    if not isinstance(entry, str) or not entry.strip():
+        raise ValueError(f"{source}: expected a non-empty `entry` under `design`")
+    return Design(
+        prototype=prototype.strip(),
+        entry=entry.strip(),
+        sample_app=_design_command(found, source, "sample_app"),
+        compare=_design_command(found, source, "compare"),
+    )
+
+
+def _design_command(found: dict[str, Any], source: object, key: str) -> str | None:
+    if key not in found:
+        return None
+    value = found[key]
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{source}: expected a command for `{key}` under `design`")
+    return value.strip()
 
 
 def _forbidden_rule(entry: object, source: object, index: int) -> Forbidden:

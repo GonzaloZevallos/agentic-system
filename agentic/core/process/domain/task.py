@@ -50,6 +50,12 @@ WAITING_ON_HUMAN: Status = "waiting_on_human"
 # (ADR-0011). Only when there is more than one.
 INTEGRATION = "integration"
 SubtaskStatus = Literal["pending", "delivered", "approved", "returned"]
+# Who returned a subtask (ADR-0040): `review`, the default every reader's `.get` falls
+# back to, including every document written before this key existed; `final_validation`
+# only while PM's early, UI-only final validation is the open return -- `review.py`
+# resets it to `review` the moment it reviews the subtask again, so a second, ordinary
+# return never misreads as PM's.
+ReturnedBy = Literal["review", "final_validation"]
 # Why a review finding blocks, as a closed list (ADR-0016): `standard-*` is a hard
 # violation of a documented standard, `spec-*` a gap against the brief or the
 # definition, `process-*` a delivery that is not one, `plan-calibration` a threshold or
@@ -440,6 +446,18 @@ class FindingRecord(TypedDict):
     status: FindingStatus
 
 
+class DesignItemRecord(TypedDict):
+    """One remark from a design lead's walk or comparisons, or from PM's consolidation
+    (ADR-0040), as `design_items` keeps it: the role that raised it (`Role.slug`),
+    never derived from a section's prose (`rules.design_effect_by_role`'s own per-role
+    count, the plan's own invariant: design items come from structured fields alone)."""
+
+    role_slug: str
+    kind: Literal["observation", "blocking"]
+    step: str
+    text: str
+
+
 class Subtask(TypedDict, total=False):
     """A part of the task assigned to one Developer (README.md, 4). Lives in its own
     branch; the pair Tech Lead→Developer counts returns per subtask."""
@@ -449,6 +467,12 @@ class Subtask(TypedDict, total=False):
     brief: str
     seams: list[str]
     depends_on: list[str]
+    # The screens of the design (ADR-0040) this subtask builds, for a front subtask of
+    # a `touches_ui` task; the Developer's brief names them (`plan_view._brief`).
+    # Persisted only when non-empty; absent on every document written before this key
+    # existed and on a subtask with no screen of its own -- every read is
+    # `.get("screens", [])`.
+    screens: list[str]
     status: SubtaskStatus
     branch: str
     # Commit the branch started from: the first review diffs from it.
@@ -460,6 +484,11 @@ class Subtask(TypedDict, total=False):
     # category (ADR-0016).
     reason: str
     change_category: ChangeCategory
+    # Who returned this subtask (ADR-0040): absent, and read `.get("returned_by",
+    # "review")`, on every document written before PM's early final validation existed,
+    # and on every ordinary review return. `returned_developer_delta`'s own
+    # `rules.return_section` reads it to find which section carries the delta.
+    returned_by: ReturnedBy
     # Branches the fan-in could not bring into the task branch on its own. Only the
     # integration subtask carries it: what the integrator has left to resolve.
     conflicts: list[str]
@@ -588,6 +617,10 @@ class TaskState(TaskInput, total=False):
     # it. The only source `rules.auto_resumable` reads for whether a pause is the
     # poller's to retry; never `escalation_class` or a failure's own `error` text.
     pause_log: Annotated[list[PauseEntry], operator.add]
+    # The design branch's own append-only register (ADR-0040, `DesignItemRecord`'s own
+    # docstring): every lead's remark and every consolidation observation, read with
+    # `.get("design_items", [])` since a document written before this task has none.
+    design_items: Annotated[list[DesignItemRecord], operator.add]
 
 
 def _reducers() -> dict[str, object]:

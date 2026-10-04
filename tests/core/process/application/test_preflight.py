@@ -144,6 +144,27 @@ class BrokenForbiddenStack(MemoryStack):
         raise ValueError("stack.yaml: expected a non-empty `reason`")
 
 
+class BrokenDesignStack(MemoryStack):
+    """A stack whose `design` block is half-written: `declared_stack` must surface it
+    at load, before a single role is paid, not inside a design role mid-task."""
+
+    def design(self, revision: str):
+        raise ValueError("stack.yaml: expected a non-empty `prototype` under `design`")
+
+
+def test_a_broken_design_block_refuses_before_spending(stage0):
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    with pytest.raises(ValueError, match="expected a non-empty `prototype`"):
+        preflight(Configuration(product_dir=PRODUCT), replace(ports, stack=BrokenDesignStack()))
+
+
+def test_a_stack_without_design_passes_byte_for_byte(stage0):
+    """No `design` block is `None`, never an error: a product that has not written
+    one yet runs exactly as it does today."""
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    preflight(Configuration(product_dir=PRODUCT), replace(ports, stack=MemoryStack()))
+
+
 def test_declared_stack_validates_forbidden_at_load_too(stage0):
     """A broken `forbidden` must fail here, not inside an Edit/Write hook mid-task."""
     ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})

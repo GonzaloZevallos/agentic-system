@@ -49,6 +49,7 @@ def test_reducers_are_read_from_the_annotations():
         "proposed_invariants",
         "experiment",
         "pause_log",
+        "design_items",
     }
     assert REDUCERS["cost_usd"] is add and REDUCERS["sections"] is merge
     assert REDUCERS["experiment"] is last
@@ -194,6 +195,32 @@ def test_pause_log_round_trips_through_delta_and_apply_with_a_non_empty_before()
         "pause_log": [
             {"kind": "resumed"},
             {"kind": "failure", "value": "account_limit", "section": "Developer: api"},
+        ]
+    }
+    assert apply(before, patch) == after
+
+
+def test_design_items_round_trips_through_delta_and_apply_like_pause_log():
+    """`design_items` (ADR-0040) is `operator.add` too: a branch that already carries a
+    lead's remark, folded with what a later node adds, round-trips through `delta` and
+    `apply` exactly like `pause_log` does, with nothing bespoke for this key."""
+    before = {
+        "id": "T-1",
+        "design_items": [
+            {"role_slug": "ux_lead", "kind": "observation", "step": "Sign in", "text": "slow"}
+        ],
+    }
+    after = {
+        "id": "T-1",
+        "design_items": [
+            {"role_slug": "ux_lead", "kind": "observation", "step": "Sign in", "text": "slow"},
+            {"role_slug": "design_lead", "kind": "blocking", "step": "Pay", "text": "no button"},
+        ],
+    }
+    patch = delta(before, after)
+    assert patch == {
+        "design_items": [
+            {"role_slug": "design_lead", "kind": "blocking", "step": "Pay", "text": "no button"},
         ]
     }
     assert apply(before, patch) == after

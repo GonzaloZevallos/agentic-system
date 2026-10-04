@@ -17,8 +17,10 @@ from agentic.core.process.application.ports import (
     Ports,
     RawResult,
     RunRegistration,
+    SampleAppHandle,
 )
 from agentic.core.process.domain import rules
+from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.roles import PROMPTS_DIR, Role
 from agentic.core.process.domain.suppressions import Forbidden
 from agentic.core.process.domain.task import DependencyState, MergeOutcome, TaskInput, TaskState
@@ -189,6 +191,7 @@ class MemoryStack:
         product: str | None = "product",
         witness: str | None = None,
         forbidden: list[Forbidden] | None = None,
+        design: Design | None = None,
     ):
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -201,6 +204,10 @@ class MemoryStack:
         # product but this repo's own future tasks -- the same legitimate absence
         # `witness` has.
         self.declared_forbidden = [] if forbidden is None else forbidden
+        # None is a product that declares no design block (ADR-0040), the same
+        # legitimate absence `witness` has: every product but the one a design task
+        # prepares for.
+        self.declared_design = design
         self.revisions: list[str] = []
 
     def checks(self, revision: str) -> dict[str, str]:
@@ -226,6 +233,10 @@ class MemoryStack:
             raise ValueError("expected `product`, the name this product goes by")
         return self.declared_product
 
+    def design(self, revision: str) -> Design | None:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_design
+
 
 class MemoryCommands:
     """Answers each command from its queue, green when the queue is empty or missing;
@@ -239,6 +250,26 @@ class MemoryCommands:
         self.ran.append((cwd, command))
         queue = self.queues.get(command)
         return queue.pop(0) if queue else CommandResult(0, "ok")
+
+
+class MemorySampleApp:
+    """PM's early final validation's own sample app (ADR-0040), without a real process:
+    `result` is handed back from `start` as scripted, a handle by default -- a test that
+    wants a refusal passes a `str`. `stopped` keeps every handle `stop` was called with,
+    in order, so a test can tell the app never outlived the node."""
+
+    def __init__(self, result: SampleAppHandle | str | None = None):
+        default = SampleAppHandle(lines=("Listening on http://localhost:4242",), token=None)
+        self.result = result or default
+        self.started: list[tuple[str, Path]] = []
+        self.stopped: list[SampleAppHandle] = []
+
+    def start(self, command: str, cwd: Path) -> SampleAppHandle | str:
+        self.started.append((command, cwd))
+        return self.result
+
+    def stop(self, handle: SampleAppHandle) -> None:
+        self.stopped.append(handle)
 
 
 class MemoryInbox:
@@ -542,6 +573,7 @@ def memory_ports(runner: ScriptedRunner | None = None, **overrides) -> Ports:
         "tracker": MemoryTracker(),
         "stack": MemoryStack(),
         "commands": MemoryCommands(),
+        "sample_app": MemorySampleApp(),
     }
     return Ports(**{**fields, **overrides})
 
@@ -676,7 +708,7 @@ def defined(n=1, cost=0.1) -> RawResult:
     )
 
 
-def verdict(kind, reason="r", definitions=None, glossary=None, cost=0.2) -> RawResult:
+def verdict(kind, reason="r", definitions=None, glossary=None, cost=0.2, flags=None) -> RawResult:
     if definitions is None:
         definitions = [{"capability": "reports", "content": REPORTS}] if kind == "approved" else []
     return RawResult(
@@ -684,9 +716,61 @@ def verdict(kind, reason="r", definitions=None, glossary=None, cost=0.2) -> RawR
             "markdown": f"### Verdict\n\n{kind}\n\n### For the next role\n\n{reason}",
             "verdict": kind,
             "reason": reason,
-            "flags": {"touches_ui": True, "touches_copy": False},
+            "flags": {"touches_ui": False, "touches_copy": False} if flags is None else flags,
             "definitions": definitions,
             "glossary": glossary or [],
+        },
+        cost,
+    )
+
+
+# The design branch's own roles (ADR-0040): UX Designer/UI Designer write a plain
+# `DesignDraft` (nothing but `markdown`); UX Lead/Design Lead write a `DesignReview`
+# (a verdict plus every finding); PM's consolidation writes a `Consolidation` (a
+# verdict, the questions UX's blocking findings become, and the rest as observations).
+
+
+def design_draft(markdown="### Flow\n\nUnchanged.", cost=0.1) -> RawResult:
+    return RawResult({"markdown": markdown}, cost)
+
+
+def design_findings(kind, reason="r", items=None, cost=0.1) -> RawResult:
+    return RawResult(
+        {
+            "markdown": f"### Walk\n\nOk.\n\n### Verdict\n\n{kind}\n\n{reason}",
+            "verdict": kind,
+            "reason": reason,
+            "items": items or [],
+        },
+        cost,
+    )
+
+
+def final_validation(kind="approved", reason="r", blocking=None, cost=0.2) -> RawResult:
+    """PM's early, UI-only final validation (ADR-0040): same `verdict`/`reason` shape,
+    `blocking` in place of `definitions`/`observations` -- one-line claims the
+    integration review must settle, empty on `approved`."""
+    return RawResult(
+        {
+            "markdown": f"### Verdict\n\n{kind}\n\n{reason}",
+            "verdict": kind,
+            "reason": reason,
+            "blocking": list(blocking or []),
+        },
+        cost,
+    )
+
+
+def consolidation(
+    kind="approved", reason="r", questions=None, observations=None, cost=0.2
+) -> RawResult:
+    return RawResult(
+        {
+            "markdown": f"### Verdict\n\n{kind}\n\n{reason}\n\n### PRD\n\nConsolidated.",
+            "verdict": kind,
+            "reason": reason,
+            "questions_for_human": list(questions or []),
+            "observations": observations or [],
         },
         cost,
     )

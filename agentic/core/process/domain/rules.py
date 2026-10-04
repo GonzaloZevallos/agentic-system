@@ -16,14 +16,25 @@ from . import presubmit
 from .denials import denial_for
 from .document import HUMAN, demote
 from .roles import (
+    DESIGN_LEAD,
+    DESIGN_LEAD_FINAL,
     DEVELOPER,
     FINDINGS,
     INTERVIEWS,
+    PAIR_DESIGN_LEAD,
     PAIR_PM_PA,
+    PAIR_PM_TECH_LEAD,
+    PAIR_UX_LEAD,
     PM,
+    PM_CONSOLIDATOR,
+    PM_FINAL,
     PRODUCT_ANALYST,
     SOLUTION_INTERVIEW,
     TECH_LEAD,
+    UI_DESIGNER,
+    UX_DESIGNER,
+    UX_LEAD,
+    UX_LEAD_FINAL,
     Interview,
     Pair,
     Role,
@@ -34,6 +45,7 @@ from .task import (
     ChangeCategory,
     ChangesRequested,
     DependencyState,
+    DesignItemRecord,
     EscalationClass,
     EscalationPatch,
     EscalationPauseEntry,
@@ -357,6 +369,171 @@ def merge_notice(dependency: str, branch: str, conflicted_paths: Sequence[str]) 
         "The conflicted paths and the diff against the dependency branch will be "
         "written into your section for the review to check."
     )
+
+
+def screens_notice(screens: Sequence[str], compare: str | None) -> str:
+    """The turn-message text telling the Developer to look at its comparisons before
+    delivering (ADR-0040), the way `merge_notice` tells it about a dependency. Empty
+    `screens` means this subtask names none: the caller does not add this notice to
+    the turn message at all, the same way `plan_view._brief` projects no `Screens:`
+    line. `compare` is the product's declared command (`design.compare`), or `None`
+    when the product declares no `design` block: the Developer still gets the names of
+    its screens, told plainly that no comparison exists to run."""
+    listed = "\n".join(f"- `{s}`" for s in screens)
+    if compare is None:
+        return (
+            f"Your subtask's screens, from the plan:\n\n{listed}\n\n"
+            "The product declares no `design` block, so there is no comparison to run: "
+            "build to the brief and the screens named above."
+        )
+    return (
+        f"Before you deliver, look at the comparisons for your screens:\n\n{listed}\n\n"
+        f"Run `{compare}` in your checkout and read what it writes, one comparison per "
+        "screen above, side by side with the prototype at the same width."
+    )
+
+
+# The definition-side design branch (ADR-0040): UX Designer writes the flow, UX Lead
+# validates it with a walk, UI Designer writes the screens design over the validated
+# flow, Design Lead validates it, and PM consolidates both into the PRD. All five run
+# between PM's own validation and the plan, with `status` left at `definition_ready`
+# throughout -- ADR-0026 freezes `Status`, so no new value marks a position inside this
+# branch. `design_step` is the one place that answers "which node is next", from run
+# recency alone; `after_validate`, each design node's own `after_*` and `resume_target`
+# all call it, and only it, before falling through to `plan` (no other code computes
+# this position, the plan's own invariant).
+
+
+def design_applies(state: TaskState) -> bool:
+    """Whether this task runs the design branch at all (ADR-0040): a feature, with
+    `touches_ui` among the validated flags. Never a bug, never a platform enhancement,
+    and never a feature PM did not flag -- `FIRST_NODE`'s own fork decides the path by
+    `type`, and this is the narrower condition inside the feature path alone."""
+    return state.get("type") == "feature" and bool(state.get("flags", {}).get("touches_ui"))
+
+
+def _latest_index(state: TaskState, section: str) -> int | None:
+    """The position, in `state["runs"]`, of the latest run that wrote `section`
+    (`run.get("section", run["role"])`, the same key every version-counting reader of
+    `runs` already uses), or `None` when none ever did. Positions, not timestamps:
+    every node of this branch runs one at a time, never two at once, so the order
+    runs land in this one list already is the order they happened in, and comparing
+    indices is comparing recency."""
+    idx = None
+    for i, run in enumerate(state.get("runs", [])):
+        if run.get("section", run["role"]) == section:
+            idx = i
+    return idx
+
+
+def _pair_returns(state: TaskState, pair_key: str) -> int:
+    """How many returns `change_history` records for `pair_key`, read by its own key
+    (never by `category` alone: PM's PRD returns and a lead's own returns share the
+    `definition` category, and only the pair tells them apart)."""
+    return sum(1 for h in state.get("change_history", []) if h["pair"] == pair_key)
+
+
+def _run_count(state: TaskState, section: str) -> int:
+    return sum(1 for r in state.get("runs", []) if r.get("section", r["role"]) == section)
+
+
+def _lead_satisfied(
+    state: TaskState,
+    thinker_section: str,
+    lead_section: str,
+    pair_key: str,
+    newer_than: int | None,
+) -> bool:
+    """Whether `lead_section`'s latest run stands as a current, approving verdict over
+    `thinker_section`'s latest write: a run exists, it is at least as new as that write
+    and than `newer_than` (the staleness baseline: the latest Product Analyst PRD run
+    for a UX Lead check, the latest UX Designer run for a Design Lead one; `None` reads
+    as nothing to be newer than), and it was not itself a return.
+
+    No `RoleRun` carries a verdict, so a return is told apart from an approval by
+    counting instead: `_pair_returns(pair_key) < _run_count(lead_section)` holds
+    exactly when the lead's latest run has not yet been matched by a return of its
+    own pair, true for every path this branch's own routing can reach -- a return
+    always sends the thinker back before the lead can run again, in the same pass or,
+    past the pair's limit, after the human's resume -- except one no acceptance
+    scenario exercises: a return immediately following an unrelated stale re-run of
+    the same lead, which this reads as an approval instead of a pending return."""
+    thinker_idx = _latest_index(state, thinker_section)
+    lead_idx = _latest_index(state, lead_section)
+    if thinker_idx is None or lead_idx is None or lead_idx < thinker_idx:
+        return False
+    if newer_than is not None and newer_than > lead_idx:
+        return False
+    return _pair_returns(state, pair_key) < _run_count(state, lead_section)
+
+
+def design_step(state: TaskState) -> str | None:
+    """Which design node runs next (ADR-0040), ordered by run recency alone -- no new
+    persisted status, ADR-0026's own freeze on `Status`. `None` when this task does
+    not run the branch at all (`design_applies`), or when every step is already
+    satisfied: either way, the caller falls through to `plan`.
+
+    The ladder, in order: UX Designer writes when it has no run; UX Lead walks when it
+    has not yet validated UX Designer's latest write; UX Designer writes again when
+    UX Lead's latest run returned it, or when a newer PRD run (a consolidation return
+    to Product Analyst, followed by a new PRD) makes its old approval stale. The same
+    three-way ladder repeats for UI Designer/Design Lead, staled by a newer UX Designer
+    run instead of a newer PRD one (`ui_screens is stale when UX Designer is newer than
+    Design Lead's approval`, the plan's own wording) -- never by the PRD directly,
+    since a PRD new enough to matter already reopened `ux_flow` first, and from there a
+    fresh UX Designer run is what makes UI's own step stale in turn. Consolidation is
+    last, due once both leads are satisfied and no `PM: consolidation` run is newer
+    than both of their approvals."""
+    if not design_applies(state):
+        return None
+    prd_idx = _latest_index(state, PRODUCT_ANALYST.name)
+    ux_idx = _latest_index(state, UX_DESIGNER.name)
+    if ux_idx is None:
+        return "ux_flow"
+    ux_lead_idx = _latest_index(state, UX_LEAD.name)
+    if ux_lead_idx is None or ux_lead_idx < ux_idx:
+        return "ux_walk"
+    if not _lead_satisfied(state, UX_DESIGNER.name, UX_LEAD.name, PAIR_UX_LEAD.key, prd_idx):
+        return "ux_flow"
+    ui_idx = _latest_index(state, UI_DESIGNER.name)
+    if ui_idx is None:
+        return "ui_screens"
+    design_lead_idx = _latest_index(state, DESIGN_LEAD.name)
+    if design_lead_idx is None or design_lead_idx < ui_idx:
+        return "design_review"
+    if not _lead_satisfied(state, UI_DESIGNER.name, DESIGN_LEAD.name, PAIR_DESIGN_LEAD.key, ux_idx):
+        return "ui_screens"
+    consolidation_idx = _latest_index(state, PM_CONSOLIDATOR.name)
+    if consolidation_idx is None or consolidation_idx < max(ux_lead_idx, design_lead_idx):
+        return "consolidate"
+    return None
+
+
+def design_effect_by_role(state: TaskState) -> dict[str, int]:
+    """Per role slug, how many of this task's returns and blocking design items trace
+    to it (§11): a lead's own returns (`change_history`, by its pair), plus every
+    `blocking` item any design role raised (`design_items`, by `role_slug`). Ships with
+    its own test; nothing in this task reads it back."""
+    counts: dict[str, int] = {}
+    for h in state.get("change_history", []):
+        if h["pair"] == PAIR_UX_LEAD.key:
+            counts[UX_LEAD.slug] = counts.get(UX_LEAD.slug, 0) + 1
+        elif h["pair"] == PAIR_DESIGN_LEAD.key:
+            counts[DESIGN_LEAD.slug] = counts.get(DESIGN_LEAD.slug, 0) + 1
+    for item in state.get("design_items", []):
+        if item["kind"] == "blocking":
+            counts[item["role_slug"]] = counts.get(item["role_slug"], 0) + 1
+    return counts
+
+
+def design_observations_markdown(items: Sequence[DesignItemRecord]) -> str:
+    """The `## Observations on the design` table `deliver` appends (ADR-0040): role,
+    step, text, the same cell-escaping `findings_markdown` uses so a stray `|` in a
+    design item's own text cannot break the table. Called only when `items` is
+    non-empty; an empty table is not a shape this ever has to render."""
+    head = "| Role | Step | Text |\n| --- | --- | --- |"
+    lines = [f"| {i['role_slug']} | {_cell(i['step'])} | {_cell(i['text'])} |" for i in items]
+    return "\n".join([head, *lines])
 
 
 def resumed_after_unmergeable(state: TaskState, subtask_id: str, branch: str, head: str) -> str:
@@ -769,6 +946,20 @@ def review_section(subtask_id: str) -> str:
     return f"{REVIEW_PREFIX}{subtask_id}"
 
 
+def return_section(state: TaskState, subtask_id: str) -> str:
+    """Whose section a returned subtask's delta and the incremental reviewer's own spec
+    come from (ADR-0040): `review_section(subtask_id)`, as today, unless PM's early,
+    UI-only final validation is the open return (`subtasks[id]["returned_by"] ==
+    'final_validation'`), absent reading as `'review'` for every subtask this never
+    touched. The plan's own invariant: a returned item's delta and the incremental
+    reviewer's spec both come from this one function, never from `review_section`
+    directly."""
+    subtask = state.get("subtasks", {}).get(subtask_id, {})
+    if subtask.get("returned_by", "review") == "final_validation":
+        return PM_FINAL.name
+    return review_section(subtask_id)
+
+
 def returned_developer_delta(state: TaskState, subtask_id: str, branch: str, head: str) -> str:
     """What a returned Developer reads instead of the full context (ADR-0004, sixth
     addendum): what changed since its previous delivery. In order: the branch's current
@@ -791,7 +982,7 @@ def returned_developer_delta(state: TaskState, subtask_id: str, branch: str, hea
         parts.append(f"## {HUMAN}\n\n{human}")
     if findings := sections.get(FINDINGS):
         parts.append(f"## {FINDINGS}\n\n{findings}")
-    review = review_section(subtask_id)
+    review = return_section(state, subtask_id)
     reason = state.get("subtasks", {}).get(subtask_id, {}).get("reason", "").strip()
     lead = f"**Returned:** {reason}\n\n" if reason else ""
     parts.append(f"## {review}\n\n{lead}{sections.get(review, '')}")
@@ -1106,9 +1297,20 @@ def integration_work(brief: str, conflicts: Sequence[str]) -> Subtask:
 
 def work_units(state: TaskState) -> int:
     """The subtasks of the plan, plus the integration when there is more than one, counted
-    before it exists: the cap has to cover it from the start."""
+    before it exists: the cap has to cover it from the start. Plus one more, from the
+    very start, on a feature that runs the design branch (ADR-0040, `design_applies`):
+    five extra role runs land before the plan even exists, and the cap has to cover
+    them too, whether or not the plan has been written yet. Plus a second design unit,
+    once there is a plan, for PM's early final validation: three more role runs the
+    cap has to cover only from the point it could actually become due, not before --
+    there is nothing to validate without a plan yet."""
     real = [sid for sid in state.get("subtasks", {}) if sid != INTEGRATION]
-    return len(real) + (1 if len(real) > 1 else 0)
+    units = len(real) + (1 if len(real) > 1 else 0)
+    if design_applies(state):
+        units += 1
+        if real:
+            units += 1
+    return units
 
 
 def task_cap(state: TaskState, base: float, per_unit: float, ceiling: float) -> float:
@@ -1148,9 +1350,16 @@ def suggested_budget(state: TaskState, per_unit: float) -> int:
 PHASES = ("definition", "plan", "development", "review")
 
 
+_FINAL_VALIDATION_SECTIONS = frozenset((PM_FINAL.name, UX_LEAD_FINAL.name, DESIGN_LEAD_FINAL.name))
+
+
 def phase_of(section: str) -> str:
     """The phase a run's section belongs to. PM's consultations during the plan write
-    PM's section, so they count as definition."""
+    PM's section, so they count as definition. PM's early, UI-only final validation and
+    the two leads' own final sections (ADR-0040) map to `review`, same as any other
+    review: it runs after the integration review approves, never before it."""
+    if section in _FINAL_VALIDATION_SECTIONS:
+        return "review"
     if section.startswith(REVIEW_PREFIX):
         return "review"
     if section.startswith(f"{DEVELOPER.name}: "):
@@ -1208,14 +1417,45 @@ def after_diagnose(state: TaskState) -> str | None:
 
 def after_validate(state: TaskState) -> str | None:
     """PM's verdict routes the task: a return goes back to whoever wrote what PM
-    validated, an approval to the plan, unless PM ruled the behaviour expected, which
-    ends a bug discarded (README.md, 3; issue #65)."""
+    validated, an approval to the plan -- through the design branch first, on a
+    feature PM flagged `touches_ui` (ADR-0040, `design_step`) -- unless PM ruled the
+    behaviour expected, which ends a bug discarded (README.md, 3; issue #65)."""
     if state.get("escalated"):
         return None
     status = state.get("status", "")
     if status == "returned":
         return FIRST_NODE.get(state.get("type", ""), "define")
-    return {"definition_ready": "plan", "discarded": "discard"}.get(status)
+    if status == "definition_ready":
+        return design_step(state) or "plan"
+    return {"discarded": "discard"}.get(status)
+
+
+def after_ux_flow(state: TaskState) -> str | None:
+    return None if state.get("escalated") else (design_step(state) or "plan")
+
+
+def after_ux_walk(state: TaskState) -> str | None:
+    return None if state.get("escalated") else (design_step(state) or "plan")
+
+
+def after_ui_screens(state: TaskState) -> str | None:
+    return None if state.get("escalated") else (design_step(state) or "plan")
+
+
+def after_design_review(state: TaskState) -> str | None:
+    return None if state.get("escalated") else (design_step(state) or "plan")
+
+
+def after_consolidate(state: TaskState) -> str | None:
+    """PM's consolidation routes like PM's own validation does (`after_validate`): a
+    return goes back to Product Analyst, under `PAIR_PM_PA`, like any other PRD
+    return; an approval falls through `design_step` and on to `plan` once every design
+    step is satisfied (ADR-0040)."""
+    if state.get("escalated"):
+        return None
+    if state.get("status") == "returned":
+        return FIRST_NODE.get(state.get("type", ""), "define")
+    return design_step(state) or "plan"
 
 
 def after_plan(state: TaskState) -> str | None:
@@ -1228,12 +1468,54 @@ def after_develop(state: TaskState) -> str | None:
     return None if state.get("escalated") else "review"
 
 
+def final_validation_due(state: TaskState) -> bool:
+    """Whether PM's early, UI-only final validation (ADR-0040) still has to run before
+    `deliver`: the design branch applies to this task, every subtask is approved, and no
+    approving `PM: final validation` run is newer than the latest approving review of
+    `integration` -- or of the single subtask, when there is no integration. `False` for
+    every task outside the design branch, byte for byte as today (`design_applies`).
+
+    "Approving", for both sides, is read the way `_lead_satisfied` already reads a
+    lead's own verdict: `all_approved` already guarantees the target's *latest* review
+    was an approval, so that review's own run index is enough; a PM final-validation run
+    counts as the live approval over it only while `_pair_returns(PAIR_PM_TECH_LEAD)`
+    has not yet caught up with how many times it ran -- the same return-matches-run
+    counting `_lead_satisfied` uses, not a verdict stored per run."""
+    if not design_applies(state):
+        return False
+    if not all_approved(state):
+        return False
+    subtasks = state.get("subtasks", {})
+    target = INTEGRATION if INTEGRATION in subtasks else next(iter(subtasks), None)
+    if target is None:
+        return False
+    review_idx = _latest_index(state, review_section(target))
+    if review_idx is None:
+        return True
+    final_idx = _latest_index(state, PM_FINAL.name)
+    if final_idx is None or final_idx < review_idx:
+        return True
+    still_approving = _pair_returns(state, PAIR_PM_TECH_LEAD.key) < _run_count(state, PM_FINAL.name)
+    return not still_approving
+
+
 def after_integrate(state: TaskState) -> str | None:
     if state.get("escalated"):
         return None
     if dispatched_subtasks(state):
         return "pipeline"
-    return "deliver" if all_approved(state) else None
+    if not all_approved(state):
+        return None
+    return "final_validation" if final_validation_due(state) else "deliver"
+
+
+def after_final_validation(state: TaskState) -> str | None:
+    """Always back to the fan-in (ADR-0040): on `approved`, `final_validation_due` now
+    reads `False` and `after_integrate` falls through to `deliver`; on `returned`, the
+    reopened subtask is exactly what `dispatched_subtasks` picks up, and the fan-in
+    sends it back to its Developer like any other wave. No new predicate decides
+    between the two -- `after_integrate` already does, from the same state."""
+    return None if state.get("escalated") else "integrate"
 
 
 def after_deliver(state: TaskState) -> str | None:
@@ -1279,7 +1561,15 @@ def resumed_status(state: TaskState) -> Status:
     runs = state.get("runs", [])
     written = sum(1 for r in runs if _wrote_own_section(r, PRODUCT_ANALYST.name))
     validated = sum(1 for r in runs if _wrote_own_section(r, PM.name))
-    history = sum(1 for h in state.get("change_history", []) if h["category"] == PRD_RETURN)
+    # By pair key, never by `category` alone: a lead's own return (`PAIR_UX_LEAD`,
+    # `PAIR_DESIGN_LEAD`) shares the `definition` category with PM's PRD returns, and
+    # only the pair tells them apart (ADR-0040). An entry written before `pair` existed
+    # falls back to `PAIR_PM_PA`'s own key, the only pair there was then.
+    history = sum(
+        1
+        for h in state.get("change_history", [])
+        if h["category"] == PRD_RETURN and h.get("pair", PAIR_PM_PA.key) == PAIR_PM_PA.key
+    )
     # A document from before the history has only the counter, which a resume resets.
     returned = max(history, state.get("changes_requested", {}).get(PAIR_PM_PA.key, 0))
     if validated > returned:
@@ -1360,8 +1650,14 @@ def resume_target(state: TaskState) -> str | None:
         return FIRST_NODE.get(state.get("type", ""), "classify")
     if status == "returned":
         return FIRST_NODE.get(state.get("type", ""), "define")
+    if status == "definition_ready":
+        # Through the design branch first, on a feature PM flagged `touches_ui`
+        # (ADR-0040): the same one function `after_validate` and every design node's
+        # own `after_*` already call, so a resume lands exactly where the live routing
+        # would have, however many lead returns or PRD versions came before the pause.
+        return design_step(state) or "plan"
     # `discarded` is an end like `pull_request`: nothing left to run.
-    return {"defined": "validate", "definition_ready": "plan"}.get(status)
+    return {"defined": "validate"}.get(status)
 
 
 # The poller (issue #137, README.md, 14; ADR-0003's own forward reference: "the poller

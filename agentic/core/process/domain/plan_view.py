@@ -126,7 +126,13 @@ def _brief(subtask: Subtask) -> str:
     depends_on = ", ".join(f"`{d}`" for d in subtask.get("depends_on", [])) or "nothing"
     title = subtask.get("title", subtask.get("id", ""))
     brief = subtask.get("brief", "")
-    return f"#### {title}\n\n{brief}\n\nSeams: {seams}.\n\nDepends on: {depends_on}."
+    screens = subtask.get("screens", [])
+    # Only when non-empty (ADR-0040, invariant: "a task with no `observation` design
+    # items renders a pull request body byte-identical to today's" -- the same holds
+    # here, for a subtask with no screen of its own): a plan with no UI subtask moves
+    # this projection by not one byte.
+    screens_line = f"\n\nScreens: {', '.join(f'`{s}`' for s in screens)}." if screens else ""
+    return f"#### {title}\n\n{brief}\n\nSeams: {seams}.\n\nDepends on: {depends_on}.{screens_line}"
 
 
 def _index(subtask_id: str, subtasks: Mapping[str, Subtask]) -> str:

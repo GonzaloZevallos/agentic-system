@@ -252,6 +252,75 @@ class Subtask(BaseModel):
         description="Ids of subtasks that must be approved before this one starts. Empty "
         "when it can run in parallel with the rest",
     )
+    screens: list[str] = Field(
+        default_factory=list,
+        description="For a subtask that touches UI: the screens of the design (ADR-0040) "
+        "it builds, named as the diseño de pantallas names them. Empty for a subtask with "
+        "no screen of its own",
+    )
+
+
+class DesignItem(BaseModel):
+    """One remark from a design lead or from PM's consolidation (ADR-0040), the unit
+    `design_items` is made of. `blocking` means the job cannot be completed as the
+    design stands; anything else is `observation`, friction that does not pause the
+    task (glossary: Observación al diseño). Never written from section prose: only
+    from this field, structured."""
+
+    kind: Literal["observation", "blocking"]
+    step: str = Field(description="The flow step or screen this remark is about")
+    text: str = Field(description="The remark itself, one or two sentences")
+
+
+class DesignDraft(RoleOutput):
+    """UX Designer's flow or UI Designer's screens design (ADR-0040): the content is
+    the `markdown` itself, nothing structured beyond the usual fields -- the next role
+    reads it as a section, not as data."""
+
+
+class DesignReview(RoleOutput):
+    """UX Lead's walk or Design Lead's comparison judgement (ADR-0040), and the same
+    shape for their final-validation counterparts: a verdict the design step
+    (`rules.design_step`) reads, with the remarks that back it. Leads never return to
+    a Developer (README.md, 4): a `returned` verdict here sends the thinker back, never
+    the code."""
+
+    verdict: Literal["approved", "returned"]
+    reason: str = Field(description="One line. On `returned`, what the thinker must fix")
+    items: list[DesignItem] = Field(
+        description="Every remark, blocking or observation; empty only when there is none"
+    )
+
+
+class Consolidation(RoleOutput):
+    """PM's consolidation of the validated flow and screens design into the PRD
+    (ADR-0040): `markdown` is the consolidated PRD section. What UX marked as
+    impeding the job becomes a question for the human; the rest of the friction
+    becomes an observation."""
+
+    verdict: Literal["approved", "returned"]
+    reason: str = Field(description="One line. On `returned`, what Product Analyst must fix")
+    questions_for_human: list[str] = Field(
+        description="What UX or UI marked as impeding the job, written for a person who "
+        "has not read the task. Empty if none"
+    )
+    observations: list[DesignItem] = Field(
+        description="Friction that does not impede the job (kind is always "
+        "`observation` here): it travels to the pull request, never pauses the task. "
+        "Empty if none"
+    )
+
+
+class FinalValidation(RoleOutput):
+    """PM's early, UI-only final validation (ADR-0040): the verdict over UX Lead's
+    final walk and Design Lead's final comparisons, before Tech Lead's own close."""
+
+    verdict: Literal["approved", "returned"]
+    reason: str = Field(description="One line. On `returned`, what Tech Lead must fix first")
+    blocking: list[str] = Field(
+        description="On `returned`, one-line claims the integration review must settle, "
+        "each checkable on the diff alone. Empty on `approved`"
+    )
 
 
 class TechPlan(RoleOutput):

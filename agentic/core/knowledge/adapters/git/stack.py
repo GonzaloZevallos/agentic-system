@@ -7,6 +7,7 @@ from pathlib import Path
 
 import yaml
 
+from ....process.domain.design import Design
 from ....process.domain.suppressions import Forbidden
 from ...domain import stack
 
@@ -37,6 +38,10 @@ class GitStack:
         name at all (`domain/stack.py`)."""
         data, source = self._declaration(revision)
         return stack.product(data, source)
+
+    def design(self, revision: str) -> Design | None:
+        data, source = self._declaration(revision)
+        return stack.design(data, source)
 
     def _declaration(self, revision: str) -> tuple[object, object]:
         """The file as `revision` holds it. Absent, the run stops: there is no default to
