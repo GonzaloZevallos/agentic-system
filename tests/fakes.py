@@ -686,7 +686,7 @@ def defined(n=1, cost=0.1) -> RawResult:
     )
 
 
-def verdict(kind, reason="r", definitions=None, glossary=None, cost=0.2) -> RawResult:
+def verdict(kind, reason="r", definitions=None, glossary=None, cost=0.2, flags=None) -> RawResult:
     if definitions is None:
         definitions = [{"capability": "reports", "content": REPORTS}] if kind == "approved" else []
     return RawResult(
@@ -694,9 +694,46 @@ def verdict(kind, reason="r", definitions=None, glossary=None, cost=0.2) -> RawR
             "markdown": f"### Verdict\n\n{kind}\n\n### For the next role\n\n{reason}",
             "verdict": kind,
             "reason": reason,
-            "flags": {"touches_ui": False, "touches_copy": False},
+            "flags": {"touches_ui": False, "touches_copy": False} if flags is None else flags,
             "definitions": definitions,
             "glossary": glossary or [],
+        },
+        cost,
+    )
+
+
+# The design branch's own roles (ADR-0040): UX Designer/UI Designer write a plain
+# `DesignDraft` (nothing but `markdown`); UX Lead/Design Lead write a `DesignReview`
+# (a verdict plus every finding); PM's consolidation writes a `Consolidation` (a
+# verdict, the questions UX's blocking findings become, and the rest as observations).
+
+
+def design_draft(markdown="### Flow\n\nUnchanged.", cost=0.1) -> RawResult:
+    return RawResult({"markdown": markdown}, cost)
+
+
+def design_findings(kind, reason="r", items=None, cost=0.1) -> RawResult:
+    return RawResult(
+        {
+            "markdown": f"### Walk\n\nOk.\n\n### Verdict\n\n{kind}\n\n{reason}",
+            "verdict": kind,
+            "reason": reason,
+            "items": items or [],
+        },
+        cost,
+    )
+
+
+def consolidation(
+    kind="approved", reason="r", questions=None, observations=None, cost=0.2
+) -> RawResult:
+    return RawResult(
+        {
+            "markdown": f"### Verdict\n\n{kind}\n\n{reason}\n\n### PRD\n\nConsolidated.",
+            "verdict": kind,
+            "reason": reason,
+            "questions_for_human": list(questions or []),
+            "observations": observations or [],
         },
         cost,
     )

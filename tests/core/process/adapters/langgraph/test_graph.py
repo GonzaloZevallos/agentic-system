@@ -20,6 +20,7 @@ from agentic.core.process.adapters.telemetry import NoTelemetry
 from agentic.core.process.application import resume
 from agentic.core.process.application.ports import AttemptFailed
 from agentic.core.process.application.preflight import UNKNOWN_PRODUCT
+from agentic.core.process.domain.design import NO_DESIGN_NOTE
 from agentic.core.process.domain.roles import FINDINGS, PAIR_PM_PA, PJM, PM, PRODUCT_ANALYST
 from agentic.core.process.domain.task import INTEGRATION, WAITING_ON_HUMAN
 from agentic.shared.configuration import Configuration
@@ -33,8 +34,11 @@ from tests.fakes import (
     ScriptedRunner,
     answers,
     classified,
+    consolidation,
     defined,
     delivered,
+    design_draft,
+    design_findings,
     diagnosed,
     finding,
     memory_ports,
@@ -207,6 +211,68 @@ async def test_definition_stage_then_delivery(config, tmp_path):
     assert doc["status"] == "ready_for_review"
     assert doc["sections"][PM.name].startswith("### Verdict")
     assert doc["pull_request"] == final["pull_request"]
+
+
+# The definition-side design branch (ADR-0040): only reached when PM validates with
+# `touches_ui` set, between PM's own validation and the plan.
+
+DESIGN_SLUGS = ["ux_designer", "ux_lead", "ui_designer", "design_lead", "pm_consolidator"]
+
+
+async def test_a_touches_ui_feature_passes_the_five_design_steps_in_order_then_plan(config):
+    fakes = Fakes()
+    script = script_for(
+        pm=[verdict("approved", flags={"touches_ui": True, "touches_copy": False})],
+        ux_designer=[design_draft()],
+        ux_lead=[design_findings("approved")],
+        ui_designer=[design_draft()],
+        design_lead=[design_findings("approved")],
+        pm_consolidator=[consolidation("approved")],
+        **technical(),
+    )
+    final = await run_graph(script, config, fakes=fakes)
+    assert final["status"] == "ready_for_review"
+    i = script.slugs.index("ux_designer")
+    assert script.slugs[i : i + len(DESIGN_SLUGS)] == DESIGN_SLUGS
+    # Straight on into the plan once consolidation approves.
+    assert script.slugs[i + len(DESIGN_SLUGS)] == "tech_lead_ephemeral"
+    # No `design` block declared (the default `MemoryStack`): both leads' sections
+    # carry the note instead of a rendered screen or a comparison (ADR-0040).
+    assert final["sections"]["UX Lead"].startswith(f"_{NO_DESIGN_NOTE}_")
+    assert final["sections"]["Design Lead"].startswith(f"_{NO_DESIGN_NOTE}_")
+
+
+async def test_a_bug_or_a_feature_without_touches_ui_never_runs_a_design_step(config):
+    """The invariant the rest of this task leans on: a bug, and a feature PM did not
+    flag `touches_ui`, go through exactly today's nodes -- no design slug is ever
+    called, whatever the product's `design` block says."""
+    script = script_for(**technical())  # `verdict()`'s own default: touches_ui False
+    final = await run_graph(script, config)
+    assert final["status"] == "ready_for_review"
+    assert not set(script.slugs) & set(DESIGN_SLUGS)
+
+
+async def test_a_consolidation_with_a_question_pauses_with_the_questions_class(config):
+    """What UX marked as impeding the job becomes a question for the human, escalated
+    under the existing `questions` class -- never `returns`, since nothing here is a
+    pair at its limit (ADR-0040)."""
+    fakes = Fakes()
+    script = script_for(
+        pm=[verdict("approved", flags={"touches_ui": True, "touches_copy": False})],
+        ux_designer=[design_draft()],
+        ux_lead=[design_findings("approved")],
+        ui_designer=[design_draft()],
+        design_lead=[design_findings("approved")],
+        pm_consolidator=[
+            consolidation("approved", questions=["Can checkout proceed with no card on file?"])
+        ],
+    )
+    final = await run_graph(script, config, fakes=fakes)
+    assert final["status"] == WAITING_ON_HUMAN
+    assert final["escalation_class"] == "questions"
+    assert final["questions_for_human"] == ["Can checkout proceed with no card on file?"]
+    # The branch never reached the plan: consolidation itself paused the task.
+    assert "tech_lead_ephemeral" not in script.slugs
 
 
 async def test_two_subtasks_fan_out_loop_on_a_return_and_integrate(config):
