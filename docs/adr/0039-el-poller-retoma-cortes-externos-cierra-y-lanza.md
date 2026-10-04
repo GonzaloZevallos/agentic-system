@@ -136,8 +136,9 @@ sus códigos de salida, sus mensajes y las claves que escriben.
 Un candidato sin bloqueantes nativos (`blockedBy` ausente o con `blockedBy.nodes: []`)
 ya no cuenta como "sin bloqueantes": se lee del cuerpo del issue con la regla de
 `rules.blockers_from_body`, la misma función que decide qué línea cuenta y cómo se
-parsea. `rules.blocker_numbers` es el único sitio que distingue `None` de `()`; todo lo
-demás, `poll._blocker_numbers` incluido, los trata igual.
+parsea. `rules.blocker_numbers` trata `None` y `()` igual -- las dos caen al cuerpo;
+quien sí distingue "el campo nativo no vino" de "vino vacío" es el adapter
+(`tracker._blocked_by`, que devuelve `None` en el primer caso y `()` en el segundo).
 
 ### Error al leer el cuerpo
 
@@ -169,10 +170,10 @@ de estas cifras es el costo de la vuelta completa, sólo el de esta función:
 - Por cada bloqueante que el candidato sí tiene, +1 `issue_state` desde
   `poll._blocker_resolved`.
 - +1 `GhTracker.pull_request` (un `gh api graphql`) por cada issue que ese
-  `issue_state` leyó cerrado con al menos una referencia en
-  `closedByPullRequestsReferences`: lo dispara `GhTracker.issue_state` sobre la
-  primera de esas referencias, nunca `poll._blocker_resolved` ni
-  `poll._blocker_numbers` directamente.
+  `issue_state` leyó con al menos una referencia en
+  `closedByPullRequestsReferences` -- `GhTracker.issue_state` la paga sobre la
+  primera de esas referencias cualquiera sea el `state` del issue, abierto o
+  cerrado; nunca `poll._blocker_resolved` ni `poll._blocker_numbers` directamente.
 
 ### Qué corre bajo el lock
 
