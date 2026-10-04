@@ -37,6 +37,11 @@ NO_DESIGN_NOTE = "no design block: walk on text, no rendered screens, no compari
 NO_SAMPLE_APP_NOTE = "no `sample_app` command: no sample app to walk, text only"
 NO_COMPARE_NOTE = "no `compare` command: no comparisons"
 
+# How long PM's early final validation (ADR-0040) waits for `sample_app` to print its
+# first non-empty lines before giving up on it: a domain constant, read by the use case
+# and the shell adapter alike, never a config a product can tune away the wait on.
+SAMPLE_APP_READY_S = 20.0
+
 
 def design_rules(design: Design | None) -> tuple[str, ...]:
     """A permission rule for the lead that may run `compare`, mirroring

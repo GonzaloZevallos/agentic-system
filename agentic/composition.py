@@ -28,7 +28,7 @@ from .core.process.adapters.filesystem import FilesystemPrompts, FilesystemTaskD
 from .core.process.adapters.git import GitWorkspace
 from .core.process.adapters.github import GhInbox, GhTracker
 from .core.process.adapters.langgraph.graph import build_graph
-from .core.process.adapters.shell import ShellCommands
+from .core.process.adapters.shell import ShellCommands, ShellSampleApp
 from .core.process.application.ports import Ports
 from .core.process.application.preflight import refuse_its_own_checkout
 from .shared.configuration import Configuration
@@ -74,6 +74,7 @@ def _ports(cfg: Configuration) -> Ports:
         tracker=GhTracker(cfg.product_dir),
         stack=GitStack(cfg.product_dir),
         commands=ShellCommands(),
+        sample_app=ShellSampleApp(),
     )
 
 

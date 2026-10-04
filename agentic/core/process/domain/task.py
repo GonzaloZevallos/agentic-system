@@ -50,6 +50,12 @@ WAITING_ON_HUMAN: Status = "waiting_on_human"
 # (ADR-0011). Only when there is more than one.
 INTEGRATION = "integration"
 SubtaskStatus = Literal["pending", "delivered", "approved", "returned"]
+# Who returned a subtask (ADR-0040): `review`, the default every reader's `.get` falls
+# back to, including every document written before this key existed; `final_validation`
+# only while PM's early, UI-only final validation is the open return -- `review.py`
+# resets it to `review` the moment it reviews the subtask again, so a second, ordinary
+# return never misreads as PM's.
+ReturnedBy = Literal["review", "final_validation"]
 # Why a review finding blocks, as a closed list (ADR-0016): `standard-*` is a hard
 # violation of a documented standard, `spec-*` a gap against the brief or the
 # definition, `process-*` a delivery that is not one, `plan-calibration` a threshold or
@@ -478,6 +484,11 @@ class Subtask(TypedDict, total=False):
     # category (ADR-0016).
     reason: str
     change_category: ChangeCategory
+    # Who returned this subtask (ADR-0040): absent, and read `.get("returned_by",
+    # "review")`, on every document written before PM's early final validation existed,
+    # and on every ordinary review return. `returned_developer_delta`'s own
+    # `rules.return_section` reads it to find which section carries the delta.
+    returned_by: ReturnedBy
     # Branches the fan-in could not bring into the task branch on its own. Only the
     # integration subtask carries it: what the integrator has left to resolve.
     conflicts: list[str]

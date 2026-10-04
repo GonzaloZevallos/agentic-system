@@ -387,6 +387,36 @@ class Inbox(Protocol):
 
 
 @dataclass(frozen=True)
+class SampleAppHandle:
+    """What `SampleApp.start` hands back on success (ADR-0040): the first non-empty
+    lines the command printed within `design.SAMPLE_APP_READY_S`, for UX Lead's final
+    walk to read verbatim, and a `token` opaque to everyone but the adapter that must
+    stop it -- the domain never inspects it, only ever passes it back to `stop`."""
+
+    lines: tuple[str, ...]
+    token: Any
+
+
+class SampleApp(Protocol):
+    """The product's `sample_app` command (ADR-0040, glossary: App de muestra), as a
+    long-lived process the system owns for the length of one `final_validation` node,
+    never a role: no role gets a browser, a server or a network tool (§8). The shell
+    adapter starts its own process group and collects output for up to
+    `design.SAMPLE_APP_READY_S`; a fake stands in for tests."""
+
+    def start(self, command: str, cwd: Path) -> SampleAppHandle | str:
+        """A handle to walk, or a refusal: the last lines of output when the command
+        exited, or did not print anything, before the deadline. Not a role failure --
+        the node writes the refusal into the lead's own section instead."""
+        ...
+
+    def stop(self, handle: SampleAppHandle) -> None:
+        """Ends the process group `start` began. Called from a `finally`: the app must
+        not outlive the node, whatever PM's verdict was."""
+        ...
+
+
+@dataclass(frozen=True)
 class Checkout:
     """A branch of the product checked out somewhere the roles can work (ADR-0011)."""
 
@@ -778,6 +808,7 @@ class Ports:
     tracker: Tracker
     stack: ProductStack
     commands: Commands
+    sample_app: SampleApp
     # Not a port: the run as a process, shared by every branch of a fan-out, with
     # nothing outside it to talk to (`limits.py`). It rides here because `Ports` is
     # what a use case receives.

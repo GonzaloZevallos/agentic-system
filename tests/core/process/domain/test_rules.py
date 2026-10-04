@@ -319,6 +319,67 @@ def test_resume_target_of_a_fresh_touches_ui_task_with_nothing_run_starts_at_ux_
     assert rules.resume_target(state) == "ux_flow"
 
 
+def test_final_validation_due_rejects_a_plain_feature_and_an_unapproved_one():
+    """The guard's own rejecting inputs: no design branch at all, and a design-branch
+    task not every subtask of which is approved yet -- neither is ever due, whatever
+    `runs` holds."""
+    plain = {"type": "feature", "flags": {}, "subtasks": {"api": {"status": "approved"}}}
+    assert rules.final_validation_due(plain) is False
+    pending = {**UX_FLAGS, "subtasks": {"api": {"status": "pending"}}}
+    assert rules.final_validation_due(pending) is False
+
+
+def test_final_validation_due_table_covers_the_single_subtask_case_and_a_pm_return():
+    """The accepting case -- due once the single subtask's own review approved and PM
+    never validated it -- and the table's own hard case: PM's return is matched by a
+    newer, approving review before this reads due again (ADR-0040's own ladder)."""
+    review = rules.review_section("api")
+    state = {
+        **UX_FLAGS,
+        "subtasks": {"api": {"status": "approved"}},
+        "runs": [run("Tech Lead", review)],
+    }
+    assert rules.final_validation_due(state) is True
+
+    # PM's own approving run now covers this review: not due again.
+    state["runs"] = [*state["runs"], run(roles.PM_FINAL.name)]
+    assert rules.final_validation_due(state) is False
+
+    # PM returns the subtask; the Developer and a fresh, approving review follow.
+    state["change_history"] = [
+        rules.change_entry(roles.PAIR_PM_TECH_LEAD, "spec-behaviour", "fix the gap")
+    ]
+    state["runs"] = [*state["runs"], run("Tech Lead", review)]
+    assert rules.final_validation_due(state) is True
+
+
+def test_a_task_escalated_in_deliver_after_final_validation_resumes_with_no_rerun():
+    """An escalation past final validation (`deliver`'s own `task_checkout` failing, for
+    instance) resumes through `integrate`, the same road every other subtask-based
+    resume takes; `after_integrate` reads the same approving run `final_validation_due`
+    already does and falls straight through to `deliver`, never back to
+    `final_validation`."""
+    review = rules.review_section("api")
+    state = {
+        **UX_FLAGS,
+        "subtasks": {"api": {"status": "approved"}},
+        "runs": [run("Tech Lead", review), run(roles.PM_FINAL.name)],
+        **rules.escalation("failure", "deliver's own checkout failed"),
+    }
+    resumed = task.apply(state, rules.resumed(state, "fixed"))
+    assert rules.resume_target(resumed) == "integrate"
+    assert rules.after_integrate(resumed) == "deliver"
+
+
+def test_return_section_reads_pm_final_validation_only_when_it_is_the_open_return():
+    plain = {"subtasks": {"api": {"status": "returned"}}}
+    assert rules.return_section(plain, "api") == rules.review_section("api")
+    final = {"subtasks": {"api": {"status": "returned", "returned_by": "final_validation"}}}
+    assert rules.return_section(final, "api") == roles.PM_FINAL.name
+    # Absent entirely -- a document from before this key existed -- the same default.
+    assert rules.return_section({"subtasks": {}}, "api") == rules.review_section("api")
+
+
 def test_task_cap_adds_one_unit_for_the_design_branch_from_the_start():
     assert rules.work_units(UX_FLAGS) == 1
     assert rules.task_cap(UX_FLAGS, 30, 15, 250) == 45
@@ -326,8 +387,10 @@ def test_task_cap_adds_one_unit_for_the_design_branch_from_the_start():
     assert rules.work_units({"type": "feature", "flags": {}}) == 0
     assert rules.work_units({"type": "bug", "flags": {"touches_ui": True}}) == 0
     assert rules.work_units({"type": "platform_enhancement", "flags": {"touches_ui": True}}) == 0
-    # Stacks with the subtasks' own units (existing behaviour, untouched).
-    assert rules.work_units({**UX_FLAGS, **subtasks("api", "domain")}) == 4
+    # Stacks with the subtasks' own units (existing behaviour, untouched): 2 subtasks +
+    # 1 integration + 1 design-branch unit + 1 final-validation unit, once there is a
+    # plan (ADR-0040, this task's own second unit).
+    assert rules.work_units({**UX_FLAGS, **subtasks("api", "domain")}) == 5
 
 
 def test_design_effect_by_role_counts_lead_returns_and_blocking_items_per_role():

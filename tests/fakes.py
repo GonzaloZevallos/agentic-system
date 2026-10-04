@@ -17,6 +17,7 @@ from agentic.core.process.application.ports import (
     Ports,
     RawResult,
     RunRegistration,
+    SampleAppHandle,
 )
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.design import Design
@@ -249,6 +250,26 @@ class MemoryCommands:
         self.ran.append((cwd, command))
         queue = self.queues.get(command)
         return queue.pop(0) if queue else CommandResult(0, "ok")
+
+
+class MemorySampleApp:
+    """PM's early final validation's own sample app (ADR-0040), without a real process:
+    `result` is handed back from `start` as scripted, a handle by default -- a test that
+    wants a refusal passes a `str`. `stopped` keeps every handle `stop` was called with,
+    in order, so a test can tell the app never outlived the node."""
+
+    def __init__(self, result: SampleAppHandle | str | None = None):
+        default = SampleAppHandle(lines=("Listening on http://localhost:4242",), token=None)
+        self.result = result or default
+        self.started: list[tuple[str, Path]] = []
+        self.stopped: list[SampleAppHandle] = []
+
+    def start(self, command: str, cwd: Path) -> SampleAppHandle | str:
+        self.started.append((command, cwd))
+        return self.result
+
+    def stop(self, handle: SampleAppHandle) -> None:
+        self.stopped.append(handle)
 
 
 class MemoryInbox:
@@ -552,6 +573,7 @@ def memory_ports(runner: ScriptedRunner | None = None, **overrides) -> Ports:
         "tracker": MemoryTracker(),
         "stack": MemoryStack(),
         "commands": MemoryCommands(),
+        "sample_app": MemorySampleApp(),
     }
     return Ports(**{**fields, **overrides})
 
@@ -719,6 +741,21 @@ def design_findings(kind, reason="r", items=None, cost=0.1) -> RawResult:
             "verdict": kind,
             "reason": reason,
             "items": items or [],
+        },
+        cost,
+    )
+
+
+def final_validation(kind="approved", reason="r", blocking=None, cost=0.2) -> RawResult:
+    """PM's early, UI-only final validation (ADR-0040): same `verdict`/`reason` shape,
+    `blocking` in place of `definitions`/`observations` -- one-line claims the
+    integration review must settle, empty on `approved`."""
+    return RawResult(
+        {
+            "markdown": f"### Verdict\n\n{kind}\n\n{reason}",
+            "verdict": kind,
+            "reason": reason,
+            "blocking": list(blocking or []),
         },
         cost,
     )
