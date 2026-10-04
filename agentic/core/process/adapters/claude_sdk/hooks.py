@@ -10,7 +10,10 @@ What the cage covers, for a role that executes:
 - Bash: `git config` (reading is fine) and `git -c user.*`, `git push`, `git worktree`,
   `--git-dir` and `GIT_DIR=`, `git -C` outside the checkout, skipping the commit hooks
   (`--no-verify`, `-n`, `-c core.hooksPath`), and switching branches (`git switch`,
-  `git checkout` without `--`). Found anywhere in the command: after `;`, `&&`, `|`, a
+  `git checkout` without `--`); and, since ADR-0011's eighth addendum, a signal to a
+  process the role did not start -- `pkill`, `killall`, `fuser -k`/`--kill`, `kill-port`
+  and a `kill` whose pid `/proc/<pid>/cwd` does not resolve under the checkout
+  (`core.process.domain.signals`). Found anywhere in the command: after `;`, `&&`, `|`, a
   newline, inside `$(...)`, `sh -c '...'` or `bash -lc '...'`, or behind `VAR=value`.
 - Edit and Write: paths inside `.git/` or outside the checkout, and a new occurrence of
   a suppression the product declares under `forbidden` in `.agentic/stack.yaml`
@@ -80,7 +83,7 @@ import anyio
 from claude_agent_sdk import HookCallback, HookContext, HookInput, HookJSONOutput, HookMatcher
 
 from ...application.ports import Presubmit, SchemaGuard
-from ...domain import suppressions, turn_notice
+from ...domain import signals, suppressions, turn_notice
 from ...domain.roles import Role
 from ...domain.suppressions import Forbidden
 
@@ -137,9 +140,17 @@ class TurnCount:
 
 
 def git_denial(command: str, cwd: Path, relative_to: Path | None = None) -> str | None:
-    """Why the Bash `command` may not run, or None. `cwd` is the role's checkout;
-    `relative_to` is where the shell stands, the checkout unless said otherwise."""
-    reason = _reason(command, cwd, relative_to or cwd)
+    """Why the Bash `command` may not run, or None: git's own rules (`_git`, unchanged)
+    and the signals verdict (`core.process.domain.signals`, ADR-0011 eighth addendum) --
+    a role that executes may kill only a process whose own cwd falls inside its
+    checkout, never one it reaches by name, pattern or port. `cwd` is the role's
+    checkout, resolved here (`Path.resolve()`, idempotent) in case the caller -- a
+    direct test, most often -- did not already resolve it: a symlinked checkout must
+    still compare correctly against `/proc/<pid>/cwd`, which the adapter's own `owner`
+    always resolves. `relative_to` is where the shell stands, the checkout unless said
+    otherwise."""
+    checkout = cwd.resolve()
+    reason = _reason(command, checkout, relative_to.resolve() if relative_to else checkout)
     return _DENIED + reason if reason else None
 
 
@@ -218,14 +229,31 @@ def hooks_for(
 
 
 def _bash(cwd: Path) -> HookCallback:
+    # Resolved once, here, for every Bash call this role's run will ever make --
+    # `signals.denial`'s own checkout boundary (ADR-0011, eighth addendum).
+    checkout = cwd.resolve()
+
     async def hook(
         data: HookInput, tool_use_id: str | None, context: HookContext
     ) -> HookJSONOutput:
         tool_input = _tool_input(data)
-        reason = git_denial(str(tool_input.get("command", "")), cwd, _where(data, cwd))
+        reason = git_denial(str(tool_input.get("command", "")), checkout, _where(data, checkout))
         return _deny(reason) if reason else {}
 
     return hook
+
+
+def _owner(pid: int) -> Path | None:
+    """The real `owner` port `signals.denial` is handed: `/proc/<pid>/cwd`, resolved
+    strictly -- the process must exist for this to mean anything. A dead pid, a cwd
+    gone `(deleted)` or any other `Exception` (permission, a pid that never existed, a
+    `/proc` this platform does not have) all read as "not mine": failing open here
+    would let a stale or unreadable pid pass as owned."""
+    try:
+        target = Path(f"/proc/{pid}/cwd").resolve(strict=True)
+    except Exception:
+        return None
+    return None if str(target).endswith(" (deleted)") else target
 
 
 def _edit(cwd: Path, forbidden: Sequence[Forbidden]) -> HookCallback:
@@ -391,6 +419,8 @@ def _without_heredocs(command: str) -> str:
 
 
 def _denial_of(words: list[str], cwd: Path, here: Path) -> str | None:
+    if reason := signals.denial(words, cwd, _owner):
+        return reason
     assigned = set()
     while words and (_ASSIGNMENT.match(words[0]) or words[0] in _WRAPPERS):
         if _ASSIGNMENT.match(words[0]):
