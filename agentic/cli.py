@@ -609,7 +609,7 @@ def _self_executable() -> str:
     the current directory so a relative invocation (`./bin/agentic`, or a bare
     `agentic` a shell found on `$PATH`) still names a path that keeps working from
     wherever a spawned child's own `cwd` ends up. The one source of a child's own
-    argv0, here and in `poll._poll`'s own default -- `application/` never reads
+    argv0, here and in `cli._poll`'s own default -- `application/` never reads
     `sys.argv` or the filesystem to find it."""
     return os.path.abspath(sys.argv[0])
 
@@ -793,9 +793,11 @@ async def _poll(
     (`main`'s own wrapper) turns a SIGTERM/SIGHUP into a clean stop between rounds, the
     lock released on the way out.
 
-    `argv0` names the executable every spawned child gets (GH-140), `_self_executable`
-    by default -- `main`'s own `_poll` dispatch passes `_child_argv()[0]` instead,
-    computed once there already; a test passes its own string. Every line a round
+    `argv0` names the executable every spawned child gets (GH-140); `main`'s own
+    `_poll` dispatch never passes it, so the default `_self_executable()` wins -- the
+    same value `_child_argv()[0]` would give, computed once there already. `argv0`
+    exists for whoever calls `_poll` directly, a test among them, to pass its own
+    string. Every line a round
     produced is printed with `flush=True` as soon as it is known, the process still
     alive to write it: block-buffered to a file (a redirected stdout's own default) is
     exactly how the first real poller's 32 minutes of `nothing to do` sat unseen until

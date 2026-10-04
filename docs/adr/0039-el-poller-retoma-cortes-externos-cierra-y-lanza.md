@@ -128,3 +128,82 @@ sus códigos de salida, sus mensajes y las claves que escriben.
 - **Un tope por producto**: los productos comparten la misma cuenta; dos corridas en
   paralelo chocaron con el límite de sesión (429) y con merges entre sí (apostrophe,
   2026-10-03).
+
+## Adenda (2026-10-04): lo que cuesta leer el cuerpo de cada candidato
+
+### Cambio de conducta de #142
+
+Un candidato sin bloqueantes nativos (`blockedBy` ausente o con `blockedBy.nodes: []`)
+ya no cuenta como "sin bloqueantes": se lee del cuerpo del issue con la regla de
+`rules.blockers_from_body`, la misma función que decide qué línea cuenta y cómo se
+parsea. `rules.blocker_numbers` trata `None` y `()` igual -- las dos caen al cuerpo;
+quien sí distingue "el campo nativo no vino" de "vino vacío" es el adapter
+(`tracker._blocked_by`, que devuelve `None` en el primer caso y `()` en el segundo).
+
+### Error al leer el cuerpo
+
+`rules.blocker_numbers` llama a su `body` (un thunk) sólo cuando hace falta, y ese
+thunk es `ports.inbox.task(number)["description"]` en `poll._blocker_numbers`. Si
+`GhInbox.task` lanza -- un cuerpo vacío (`ValueError("issue #N has no body...")`) o
+una falla de `gh` -- la excepción sube hasta `poll._blocked`, que la atrapa junto con
+`OSError`, `KeyError` y `GitError` y responde `True`: ese candidato queda bloqueado
+"ante la duda, no lanza". Esto pasa en cada vuelta mientras el cuerpo siga vacío o
+`gh` siga fallando, sin dejar ninguna línea en el log de `poll.run_once` -- ni
+`execute` ni `gather_launches` imprimen nada por un candidato que ni llega a
+`rules.poll_plan` -- así que ese issue no se lanza nunca, y nada en lo que el poller
+escribe lo dice.
+
+### Cifras de `poll.gather_launches`, por vuelta
+
+Cada candidato recorrido en `gather_launches` paga, en el peor caso, esto -- ninguna
+de estas cifras es el costo de la vuelta completa, sólo el de esta función:
+
+- 1 `tracker.queue()`, una vez por vuelta, para enumerar los issues `agentic` abiertos.
+- Por cada candidato sin documento todavía, 1 `issue_state` desde `poll._blocker_numbers`.
+- +1 `inbox.task` cuando `blocked_by` llegó `None` o `()`: el thunk que
+  `rules.blocker_numbers` recibe sólo se evalúa en ese caso, nunca cuando el nativo ya
+  trae algo. Esto es el piso de 2·N de #142, con N = candidatos sin bloqueantes
+  nativos.
+- +1 `gh issue view` dentro de ese mismo `issue_state`, cuando el `gh` instalado no
+  expone `blockedBy` en absoluto (el `except ValueError` de `GhTracker.issue_state`
+  reintenta con un `--json` más chico).
+- Por cada bloqueante que el candidato sí tiene, +1 `issue_state` desde
+  `poll._blocker_resolved`.
+- +1 `GhTracker.pull_request` (un `gh api graphql`) por cada issue que ese
+  `issue_state` leyó con al menos una referencia en
+  `closedByPullRequestsReferences` -- `GhTracker.issue_state` la paga sobre la
+  primera de esas referencias cualquiera sea el `state` del issue, abierto o
+  cerrado; nunca `poll._blocker_resolved` ni `poll._blocker_numbers` directamente.
+
+### Qué corre bajo el lock
+
+`poll.run_once` llama a `gather_closes` y `gather_resumes` antes de
+`registry.exclusive()`; sólo `gather_launches`, de las tres lecturas de la vuelta,
+corre dentro de ese bloque, y las cifras de la sección anterior se pagan ahí haya o no
+plaza disponible -- `available` se calcula antes, pero `gather_launches` no lo
+consulta para decidir si lee. Mientras el bloque dura, este poller retiene el `flock`
+del registro de la máquina (`runs/.lock`) y cualquier otro poller, de este producto o
+de otro, que intente su propia decisión bajo `registry.exclusive()` espera. El bloque
+no termina cuando `gather_launches` vuelve: `execute`, con sus propios `launcher.spawn`
+y su propia espera de hasta `REGISTER_WAIT_S` segundos a que cada hijo se registre,
+corre también adentro.
+
+### Lo que también se paga en cada vuelta, antes del lock
+
+- `poll.gather_closes`: un `GhTracker.pull_request` por cada documento con
+  `pull_request` y sin `closed_at` todavía -- uno por tarea, no por candidato de
+  `gather_launches`.
+- `poll.gather_resumes`: un `tracker.timestamped_comments` por cada tarea que
+  `rules.auto_resumable` da por elegible para un retome.
+
+Ninguna de las dos corre bajo `registry.exclusive()`, así que ninguna retiene el
+`flock` de la máquina.
+
+### Riesgos que quedan para otra tarea
+
+- La lectura de `gather_launches` corre bajo el lock en vez de antes, como
+  `gather_closes` y `gather_resumes`.
+- Un cuerpo vacío deja el issue bloqueado para siempre sin ninguna línea de log que lo
+  diga.
+- `gather_closes` no tiene tope: un documento con `pull_request` y sin `closed_at`
+  paga su `GhTracker.pull_request` en cada vuelta hasta que alguien lo cierre.
