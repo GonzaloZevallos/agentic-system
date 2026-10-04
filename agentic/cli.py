@@ -603,13 +603,24 @@ def _mint_log_path(cfg: Configuration, label: str) -> str:
     return str(path)
 
 
+def _self_executable() -> str:
+    """This process's own executable, absolute (GH-140): `sys.argv[0]`, the console
+    script `pyproject.toml` declares (`agentic = "agentic.cli:main"`), resolved against
+    the current directory so a relative invocation (`./bin/agentic`, or a bare
+    `agentic` a shell found on `$PATH`) still names a path that keeps working from
+    wherever a spawned child's own `cwd` ends up. The one source of a child's own
+    argv0, here and in `poll._poll`'s own default -- `application/` never reads
+    `sys.argv` or the filesystem to find it."""
+    return os.path.abspath(sys.argv[0])
+
+
 def _child_argv() -> list[str]:
     """This invocation's own argv, `--detach` stripped so the child can never re-detach
-    (Tech Lead plan, subtask `--detach`). Launched through `sys.argv[0]`, the console
-    script `pyproject.toml` declares (`agentic = "agentic.cli:main"`), which is already
-    how this process itself was started -- there is no `agentic/__main__.py`, so
-    `[sys.executable, "-m", "agentic"]` is not an option."""
-    return [sys.argv[0], *(arg for arg in sys.argv[1:] if arg != "--detach")]
+    (Tech Lead plan, subtask `--detach`), and `sys.argv[0]` resolved through
+    `_self_executable` rather than read bare: a relative or PATH-found argv0 would
+    still work for a re-exec in the same directory, but GH-140's poller spawns from
+    wherever it was started, long after that directory stopped mattering."""
+    return [_self_executable(), *(arg for arg in sys.argv[1:] if arg != "--detach")]
 
 
 def _spawn_detached(argv: list[str], log_path: str) -> int:
@@ -620,17 +631,31 @@ def _spawn_detached(argv: list[str], log_path: str) -> int:
     with stdin closed (a detached child cannot answer a prompt) and stdout/stderr onto
     the log file before any role runs. `AGENTIC_LOG_FILE` carries this invocation's
     already-computed, already-printed path into the child, so `_log_file_for` there
-    returns the same string instead of minting a second file."""
+    returns the same string instead of minting a second file.
+
+    When `Popen` itself raises (GH-140: a poller's own `argv0` not found, a bare
+    `FileNotFoundError`), the log file this call opened is removed before the
+    exception propagates -- but only when this very call created it (`existed`,
+    checked before the `open`): a poller's own child failing every round must not leak
+    one empty log file per round forever, but a log path a previous, successful
+    invocation already wrote into is never this call's file to delete. The `env` this
+    builds does not otherwise change: this product's own child inherits it whole."""
     env = {**os.environ, ENV_PREFIX + "LOG_FILE": log_path}
-    with open(log_path, "ab", buffering=0) as log:
-        process = subprocess.Popen(
-            argv,
-            env=env,
-            start_new_session=True,
-            stdin=subprocess.DEVNULL,
-            stdout=log,
-            stderr=log,
-        )
+    existed = os.path.exists(log_path)
+    try:
+        with open(log_path, "ab", buffering=0) as log:
+            process = subprocess.Popen(
+                argv,
+                env=env,
+                start_new_session=True,
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=log,
+            )
+    except OSError:
+        if not existed and os.path.exists(log_path):
+            os.unlink(log_path)
+        raise
     return process.pid
 
 
@@ -756,6 +781,8 @@ async def _poll(
     detach: bool = False,
     child_argv: list[str] | None = None,
     spawn: Spawner | None = None,
+    argv0: str | None = None,
+    sleep: Callable[[float], Awaitable[None]] = anyio.sleep,
 ) -> None:
     """`agentic poll --product-dir <dir> [--detach]` (GH-137): a long-lived process per
     product, one `poll.run_once` round every `interval_s` seconds, under the same
@@ -764,18 +791,31 @@ async def _poll(
     each other the same way two `run`s over the same task already do. `--detach` re-execs
     exactly as `run --detach`/`resume --detach` do (`_detach`); `_signal_guarded`
     (`main`'s own wrapper) turns a SIGTERM/SIGHUP into a clean stop between rounds, the
-    lock released on the way out."""
+    lock released on the way out.
+
+    `argv0` names the executable every spawned child gets (GH-140), `_self_executable`
+    by default -- `main`'s own `_poll` dispatch passes `_child_argv()[0]` instead,
+    computed once there already; a test passes its own string. Every line a round
+    produced is printed with `flush=True` as soon as it is known, the process still
+    alive to write it: block-buffered to a file (a redirected stdout's own default) is
+    exactly how the first real poller's 32 minutes of `nothing to do` sat unseen until
+    it died. `sleep` replaces the bare `anyio.sleep` call between rounds, injectable
+    the same way `poll.run_once`'s own `sleep` already is, for a test to prove every
+    line of a round is flushed before this ever awaits it."""
     lock = run_lock if run_lock is not None else _lock_for(cfg)
     if detach:
         _detach(lock, pollmod.LOCK_KEY, child_argv or [], log_file or "", spawn)
         return
     registry = registry if registry is not None else _registry_for(cfg)
     real_launcher = launcher if launcher is not None else SpawnLauncher(cfg)
+    executable = argv0 if argv0 is not None else _self_executable()
     with _locked(lock, pollmod.LOCK_KEY):
         while True:
-            for line in pollmod.run_once(cfg, ports, registry, real_launcher, datetime.now(UTC)):
-                print(line)
-            await anyio.sleep(interval_s)
+            for line in pollmod.run_once(
+                cfg, ports, registry, real_launcher, datetime.now(UTC), executable
+            ):
+                print(line, flush=True)
+            await sleep(interval_s)
 
 
 async def _run(

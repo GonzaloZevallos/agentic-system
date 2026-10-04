@@ -7,7 +7,12 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from agentic.core.process.application import poll
-from agentic.core.process.application.ports import IssueComment, IssueState, RunRegistration
+from agentic.core.process.application.ports import (
+    IssueComment,
+    IssueState,
+    LaunchAttempt,
+    RunRegistration,
+)
 from agentic.core.process.domain.task import PullRequest
 from agentic.shared.configuration import Configuration
 from tests.fakes import FakeLauncher, MemoryInbox, MemoryRunRegistry, MemoryTracker, memory_ports
@@ -45,6 +50,7 @@ def _no_sleep(seconds: float) -> None:
 
 def _round(cfg, ports, registry, launcher, now, **kw):
     kw.setdefault("sleep", _no_sleep)
+    kw.setdefault("argv0", "agentic")
     return poll.run_once(cfg, ports, registry, launcher, now, **kw)
 
 
@@ -385,7 +391,7 @@ def test_the_wait_for_registration_gives_up_after_its_own_timeout_without_hangin
         slept.append(seconds)
 
     lines = poll.run_once(
-        _cfg(tmp_path), ports, registry, launcher, ESCALATED_AT, sleep=counting_sleep
+        _cfg(tmp_path), ports, registry, launcher, ESCALATED_AT, "agentic", sleep=counting_sleep
     )
     assert lines == ["agentic: poll: launch #5 -> pid 4242"]
     assert sum(slept) == poll.REGISTER_WAIT_S  # it gave up, never registering
@@ -414,10 +420,139 @@ def test_a_child_that_registers_while_waited_for_occupies_the_next_rounds_slot(t
             registered = True
 
     cfg = _cfg(tmp_path, max_concurrent_runs=1)
-    first = poll.run_once(cfg, ports, registry, launcher, ESCALATED_AT, sleep=slow_register)
+    first = poll.run_once(
+        cfg, ports, registry, launcher, ESCALATED_AT, "agentic", sleep=slow_register
+    )
     assert first == ["agentic: poll: launch #5 -> pid 4242"]
     assert registered  # the wait polled until it showed up, not the full 60 s
 
-    second = poll.run_once(cfg, ports, registry, launcher, ESCALATED_AT, sleep=slow_register)
+    second = poll.run_once(
+        cfg, ports, registry, launcher, ESCALATED_AT, "agentic", sleep=slow_register
+    )
     assert second == ["agentic: poll: nothing to do this round"]
     assert len(launcher.spawned) == 1  # the second round launched nothing more
+
+
+def _merged_pr(number: int) -> PullRequest:
+    return PullRequest(
+        state="MERGED",
+        created_at="2026-10-01T00:00:00Z",
+        merged_at="2026-10-02T00:00:00Z",
+        commits=(),
+        merge_commit=f"c0ffee{number}",
+    )
+
+
+def test_a_spawn_failure_does_not_stop_the_rounds_other_actions(tmp_path):
+    """Acceptance (a): a `Launcher` that raises `FileNotFoundError` on action 1 of 3
+    still runs actions 2 and 3, and action 1's own line says `not launched`."""
+    prs = {f"https://github.com/o/r/pull/{n}": _merged_pr(n) for n in (7, 8, 9)}
+    tracker = _TrackerWithPullRequest(prs)
+    ports = memory_ports(tracker=tracker)
+    for issue, pr in zip((3, 4, 5), (7, 8, 9), strict=True):
+        ports.documents.save(
+            {"id": f"GH-{issue}", "pull_request": f"https://github.com/o/r/pull/{pr}"}
+        )
+    registry = MemoryRunRegistry()
+    launcher = FakeLauncher(fails={0})
+    lines = _round(_cfg(tmp_path), ports, registry, launcher, ESCALATED_AT)
+    assert lines[0].startswith("agentic: poll: close #3 -> not launched: ")
+    assert lines[1] == "agentic: poll: close #4 -> pid 4242"
+    assert lines[2] == "agentic: poll: close #5 -> pid 4242"
+    assert launcher.spawned == [
+        ["agentic", "close", "--issue", "4", "--product-dir", str(tmp_path)],
+        ["agentic", "close", "--issue", "5", "--product-dir", str(tmp_path)],
+    ]
+
+
+def test_a_resume_whose_spawn_fails_posts_no_comment_and_never_waits(tmp_path):
+    """Acceptance (b): the comment order is inverted from a plain `pid N` resume --
+    `AUTO_RESUMED` only goes up once the spawn itself returned a pid, so a failed spawn
+    leaves no comment and never awaits registration (a wait that would only ever time
+    out, since nothing was launched to register)."""
+    ports = memory_ports()
+    ports.documents.save(
+        _paused(
+            "GH-19",
+            "Developer failed 2 times: API Error: 429",
+            [
+                {"kind": "failure", "value": "account_limit", "section": "Developer"},
+                {"kind": "failure", "value": "account_limit", "section": "Developer"},
+                {"kind": "escalation", "value": "failure"},
+            ],
+        )
+    )
+    ports.tracker.timestamped["GH-19"] = [
+        IssueComment(
+            body="Escalated: Developer failed 2 times: API Error: 429",
+            created_at="2026-10-02T19:30:00Z",
+        )
+    ]
+    registry = MemoryRunRegistry()
+    launcher = FakeLauncher(fails={0})
+    slept: list[float] = []
+    due = ESCALATED_AT + timedelta(minutes=16)
+    lines = poll.run_once(
+        _cfg(tmp_path), ports, registry, launcher, due, "agentic", sleep=slept.append
+    )
+    assert len(lines) == 1
+    assert lines[0].startswith("agentic: poll: resume #19 -> not launched (not counted): ")
+    assert ports.tracker.comments == []  # never posted Auto-resumed:
+    assert slept == []  # never awaited registration
+
+
+def test_a_launch_whose_spawn_fails_still_counts_its_own_attempt(tmp_path):
+    """Acceptance (c), first attempt: `record_launch` ran before the failed spawn, so
+    the failure still spends an attempt against the issue's own calendar, and the line
+    names it -- `attempt 1 of 6`, with the schedule not yet spent."""
+    ports = memory_ports()
+    ports.tracker._queue = [5]
+    ports.tracker.states[5] = IssueState("OPEN", "", (), None)
+    registry = MemoryRunRegistry()
+    launcher = FakeLauncher(fails={0})
+    lines = _round(_cfg(tmp_path), ports, registry, launcher, ESCALATED_AT)
+    assert len(lines) == 1
+    assert lines[0].startswith("agentic: poll: launch #5 -> not launched (attempt 1 of 6): ")
+    assert "calendar spent" not in lines[0]
+    assert registry.attempts[("product", 5)].prior == 1
+
+
+def test_a_launch_whose_spawn_fails_on_the_last_attempt_says_the_calendar_is_spent(tmp_path):
+    """Acceptance (c), last attempt: with 5 prior attempts already on record, this
+    failure is the 6th and last the schedule (`AUTO_RESUME_SCHEDULE`, length 6) allows
+    -- the line says so, for a human to notice."""
+    ports = memory_ports()
+    ports.tracker._queue = [5]
+    ports.tracker.states[5] = IssueState("OPEN", "", (), None)
+    registry = MemoryRunRegistry()
+    registry.attempts[("product", 5)] = LaunchAttempt(
+        since=ESCALATED_AT - timedelta(minutes=121), prior=5
+    )
+    launcher = FakeLauncher(fails={0})
+    lines = _round(_cfg(tmp_path), ports, registry, launcher, ESCALATED_AT)
+    assert len(lines) == 1
+    assert lines[0].startswith("agentic: poll: launch #5 -> not launched (attempt 6 of 6)")
+    assert "; calendar spent, needs a human: " in lines[0]
+    assert registry.attempts[("product", 5)].prior == 6
+
+
+def test_every_launched_action_uses_the_argv0_passed_in(tmp_path):
+    """Acceptance (d): every spawned child's own argv starts with the `argv0` this
+    call passed explicitly -- never a literal `"agentic"` `poll.py` picked on its own,
+    which is the whole point of this issue's fix."""
+    ports = memory_ports()
+    ports.tracker._queue = [5]
+    ports.tracker.states[5] = IssueState("OPEN", "", (), None)
+    registry = MemoryRunRegistry()
+    launcher = FakeLauncher()
+    lines = poll.run_once(
+        _cfg(tmp_path),
+        ports,
+        registry,
+        launcher,
+        ESCALATED_AT,
+        "/venv/bin/agentic",
+        sleep=_no_sleep,
+    )
+    assert lines == ["agentic: poll: launch #5 -> pid 4242"]
+    assert launcher.spawned[0][0] == "/venv/bin/agentic"

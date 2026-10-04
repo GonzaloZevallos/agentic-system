@@ -563,13 +563,23 @@ class MemoryRunRegistry:
 
 class FakeLauncher:
     """GH-137: records every `argv` a poller would have spawned, in order, instead of
-    ever calling `_spawn_detached`."""
+    ever calling `_spawn_detached`. `fails`, when given, is the set of 0-based call
+    indices (counting every `spawn`, including the ones that fail) that raise
+    `FileNotFoundError` instead of returning a pid -- `poll.execute`'s own `except
+    OSError` seam (GH-140), never added to `spawned` since a real `Popen` never got the
+    chance to run either."""
 
-    def __init__(self, pid: int = 4242):
+    def __init__(self, pid: int = 4242, fails: set[int] | None = None):
         self.pid = pid
         self.spawned: list[list[str]] = []
+        self._fails = fails or set()
+        self._calls = 0
 
     def spawn(self, argv: list[str]) -> int:
+        index = self._calls
+        self._calls += 1
+        if index in self._fails:
+            raise FileNotFoundError(2, "No such file or directory")
         self.spawned.append(list(argv))
         return self.pid
 

@@ -1202,6 +1202,15 @@ def test_child_argv_strips_detach_but_keeps_everything_else(monkeypatch):
     assert cli._child_argv() == ["/venv/bin/agentic", "resume", "--issue", "1", "--yes"]
 
 
+def test_child_argv_resolves_a_relative_argv0_to_an_absolute_path(monkeypatch):
+    """Acceptance (i): `_child_argv()[0]` is absolute even when `sys.argv[0]` is not --
+    GH-140's own fix, through `_self_executable`, never a bare `sys.argv[0]` read."""
+    monkeypatch.setattr("sys.argv", ["bin/agentic", "run", "t", "d"])
+    argv0 = cli._child_argv()[0]
+    assert os.path.isabs(argv0)
+    assert argv0 == os.path.abspath("bin/agentic")
+
+
 def test_spawn_detached_redirects_stdout_and_stderr_onto_the_log_before_any_role_runs(
     monkeypatch, tmp_path
 ):
@@ -1228,6 +1237,30 @@ def test_spawn_detached_redirects_stdout_and_stderr_onto_the_log_before_any_role
     assert calls["kwargs"]["stdout"].name == str(log_path)
     assert calls["kwargs"]["env"][cli.ENV_PREFIX + "LOG_FILE"] == str(log_path)
     assert log_path.is_file()  # opened before the (faked) exec, never after
+
+
+def test_spawn_detached_removes_the_log_file_it_created_when_popen_fails(tmp_path):
+    """Acceptance (g): a `Popen` that raises `FileNotFoundError` (a poller's own
+    `argv0` not found) must not leave an empty log file behind every round -- the file
+    this very call created is removed before the exception propagates."""
+    log_path = tmp_path / "logs" / "poll-run-5-20261004T000000Z.log"
+    log_path.parent.mkdir(parents=True)
+    missing = str(tmp_path / "does-not-exist")
+    with pytest.raises(FileNotFoundError):
+        cli._spawn_detached([missing, "run"], str(log_path))
+    assert list(tmp_path.glob("logs/*")) == []
+
+
+def test_spawn_detached_keeps_a_pre_existing_log_file_when_popen_fails(tmp_path):
+    """Acceptance (h): a log path a previous invocation already wrote into is never
+    this call's own file to delete, even when this call's own `Popen` then fails."""
+    log_path = tmp_path / "logs" / "poll-run-5-20261004T000000Z.log"
+    log_path.parent.mkdir(parents=True)
+    log_path.write_text("already here\n")
+    missing = str(tmp_path / "does-not-exist")
+    with pytest.raises(FileNotFoundError):
+        cli._spawn_detached([missing, "run"], str(log_path))
+    assert log_path.read_text() == "already here\n"
 
 
 class FakeSpawn:
@@ -3032,3 +3065,68 @@ async def test_poll_detach_spawns_the_child_and_returns_without_running_a_round(
     assert spawn.calls == [(child_argv, "/tmp/x.log")]
     assert lock.acquired == []  # the parent never holds it -- the child does, after it re-execs
     assert "54321" in capsys.readouterr().out
+
+
+@pytest.mark.anyio
+async def test_poll_flushes_every_line_of_a_round_before_awaiting_the_wait(monkeypatch, tmp_path):
+    """Acceptance (f): GH-140's own fix for the first poller's 32 minutes of lines
+    stuck in a block-buffered file -- every line a round printed is already flushed by
+    the time `_poll` awaits the wait to the next one. Checked through the `sleep`
+    `_poll` now takes as a keyword, never a monkeypatch on `anyio` itself: that wait is
+    `_poll`'s own seam, not `anyio.sleep`'s."""
+    from agentic.core.process.domain.task import PullRequest
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import FakeLauncher, MemoryRunRegistry
+
+    merged = PullRequest(
+        state="MERGED",
+        created_at="2026-10-01T00:00:00Z",
+        merged_at="2026-10-02T00:00:00Z",
+        commits=(),
+        merge_commit="c0ffee",
+    )
+    tracker = FakePullRequestTracker(
+        {
+            "https://github.com/o/r/pull/7": merged,
+            "https://github.com/o/r/pull/8": merged,
+        }
+    )
+    ports = memory_ports(tracker=tracker)
+    ports.documents.save({"id": "GH-3", "pull_request": "https://github.com/o/r/pull/7"})
+    ports.documents.save({"id": "GH-4", "pull_request": "https://github.com/o/r/pull/8"})
+
+    class RecordingStream:
+        def __init__(self):
+            self.flushes = 0
+
+        def write(self, s):
+            return len(s)
+
+        def flush(self):
+            self.flushes += 1
+
+    stream = RecordingStream()
+    monkeypatch.setattr(cli.sys, "stdout", stream)
+
+    class Stop(Exception):
+        pass
+
+    flushes_before_the_wait = []
+
+    async def sleep(seconds: float) -> None:
+        flushes_before_the_wait.append(stream.flushes)
+        raise Stop()
+
+    with pytest.raises(Stop):
+        await cli._poll(
+            Configuration(product_dir=tmp_path),
+            ports,
+            60.0,
+            run_lock=FakeLock(),
+            registry=MemoryRunRegistry(),
+            launcher=FakeLauncher(),
+            argv0="agentic",
+            sleep=sleep,
+        )
+    # Round 1 closed both GH-3 and GH-4: both lines were flushed before the wait.
+    assert flushes_before_the_wait == [2]
