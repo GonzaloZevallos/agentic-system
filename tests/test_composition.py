@@ -93,9 +93,15 @@ async def test_concurrent_aputs_for_two_tasks_both_complete(tmp_path):
 
 
 async def test_a_lock_on_one_tasks_file_never_blocks_the_other(tmp_path):
-    """Negative control: a raw connection holds `BEGIN IMMEDIATE` on GH-1's own file
-    while GH-2's `aput` runs concurrently. Any routing that put the two tasks in the
-    same file would raise `database is locked` here."""
+    """Negative control: a raw connection holds `BEGIN IMMEDIATE` on GH-1's own file.
+    The lock is released only once this test's own two actions are both done --
+    never on a timeout racing either of them, so a routing regression cannot pass by
+    outlasting a bounded wait.
+
+    GH-2's `aput` lands on a different file and completes while the lock is still
+    held: the input that must succeed. An `aput` aimed straight at GH-1's own file,
+    the lock still held, fails with `database is locked`: the input that must fail,
+    proving the lock is real and that GH-2 succeeding actually means something."""
     cfg = Configuration(product_dir=tmp_path)
     async with composition.checkpointer(cfg, "GH-1") as saver1:
         path1 = await _db_path(saver1)
@@ -104,23 +110,28 @@ async def test_a_lock_on_one_tasks_file_never_blocks_the_other(tmp_path):
     release = threading.Event()
 
     def hold_lock() -> None:
-        conn = sqlite3.connect(path1, timeout=5, isolation_level=None)
+        conn = sqlite3.connect(path1, isolation_level=None)
         conn.execute("BEGIN IMMEDIATE")
         conn.execute("CREATE TABLE IF NOT EXISTS _lock_probe (x int)")
         holding.set()
-        release.wait(5)
+        release.wait()
         conn.execute("ROLLBACK")
         conn.close()
 
     thread = threading.Thread(target=hold_lock)
     thread.start()
     try:
-        assert holding.wait(5)
+        holding.wait()
+        # Must succeed: a different file, never contended by GH-1's lock.
         async with composition.checkpointer(cfg, "GH-2") as saver2:
             await _aput(saver2, "GH-2")
+        # Must fail: GH-1's own file, still locked by the thread above.
+        async with AsyncSqliteSaver.from_conn_string(path1) as locked_saver:
+            with pytest.raises(sqlite3.OperationalError, match="locked"):
+                await _aput(locked_saver, "GH-1")
     finally:
         release.set()
-        thread.join(5)
+        thread.join()
 
 
 async def test_a_task_already_in_the_legacy_file_keeps_using_it(tmp_path):
