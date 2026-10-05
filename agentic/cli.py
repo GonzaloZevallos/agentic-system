@@ -976,23 +976,33 @@ async def _resume(
             return
 
         with _locked(lock, task_id), _registered(registry, product_name(ports), task_id):
-            crashed = r.source == "checkpoint" and not snapshot.interrupts
-            command: Command | None = None if crashed else Command(resume={"decision": r.decision})
-            resuming.announce(r, ports)
             if r.source == "document":
                 # Seeded as if `escalate` had just run: the task pauses once more,
                 # without telling the human again, and the answer below resumes it
                 # like a checkpoint. The thread just dropped: routing now resolves to
                 # the task's own file (ADR-0003, addendum 2026-10-04), so a task
-                # resumed from its document migrates off the shared store.
+                # resumed from its document migrates off the shared store. Seeding
+                # happens before `resuming.announce` (today's order, unchanged): a
+                # failure reopening the store -- the legacy lookup's own
+                # `database is locked` risk among them -- must not unlabel
+                # `needs-human` or post a "Resumed:" comment for a resume that never
+                # actually seeded anything.
                 await saver.adelete_thread(task_id)
                 async with open_checkpointer(cfg, task_id) as migrated_saver:
                     migrated_app = graph.compile(checkpointer=migrated_saver)
                     await migrated_app.aupdate_state(config, r.paused, as_node=ESCALATE)
+                    crashed = r.source == "checkpoint" and not snapshot.interrupts
+                    command: Command | None = (
+                        None if crashed else Command(resume={"decision": r.decision})
+                    )
+                    resuming.announce(r, ports)
                     final = await _invoke(
                         migrated_app, command, config, r.paused, ports, cfg, "resume", r.decision
                     )
             else:
+                crashed = r.source == "checkpoint" and not snapshot.interrupts
+                command = None if crashed else Command(resume={"decision": r.decision})
+                resuming.announce(r, ports)
                 final = await _invoke(
                     app, command, config, r.paused, ports, cfg, "resume", r.decision
                 )
