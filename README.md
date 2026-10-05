@@ -19,13 +19,14 @@ re-argumentan.
 
 ## 1. Roles
 
-17 roles agénticos más el humano, que actúa como aprobador y destino de escalados.
+18 roles agénticos más el humano, que actúa como aprobador y destino de escalados.
 
 ### Coordinación
 
 | Rol | Responsabilidad |
 |---|---|
 | **PjM** (Project Manager) | Clasifica, enruta, registra todo, controla loops, cierra, mide el proceso y lo mejora |
+| **Reflector** | Después de que una tarea cierra, lee sus devoluciones y propone lecciones para el rol que cometió cada error (ADR-0043). Propone: el curador es código, y una persona fusiona |
 
 ### Producto
 
@@ -332,6 +333,10 @@ Dispara cuando detecta un patrón negativo.
   ciclo anterior.
 - Requiere versionado de prompts y parámetros para poder revertir: los overrides viven en
   el repo del producto y cada tarea registra el hash de los prompts que corrió (ADR-0005).
+- **Las lecciones por rol no las hace PjM.** Las proponen el Reflector y un curador que es
+  código, en un playbook por rol dentro del producto, con la ventana de 10 y 10 tareas
+  cerradas y un resumen cada 10; una persona fusiona el pull request candidato (ADR-0043).
+  Lo de arriba sigue valiendo para los parámetros y para los cambios de prompt hechos a mano.
 
 ### PM — Product Manager
 
@@ -861,7 +866,7 @@ enteramente de la asimetría de modelo y de prompt. Si no la tienen, sobran.
 
 ## 11. Orden de implementación
 
-Los 17 roles quedan en el diseño. Lo que se ordena es el orden en que se construyen.
+Los 18 roles quedan en el diseño. Lo que se ordena es el orden en que se construyen.
 
 **Regla**: cada rol nuevo tiene que mostrar que las cinco tareas salen **mejor con él que
 sin él**. Es lo que convierte la intuición de organigrama en una hipótesis que se puede
@@ -993,6 +998,8 @@ Se anotan para no reintroducirlas por error.
 | El set entero se re-corre cada vez que se cambia un prompt o un parámetro | Solo en hitos (rol nuevo, cambio de estructura de revisión, cambio de modelo por rol); un cambio de prompt o de parámetro corre solo la tarea de humo que la declaración del set nombra, y una que escala a mitad de corrida queda sin puntaje, no con uno peor (sección 9; GH-27) |
 | El costo por tarea del set de evaluación sale de Grafana | Grafana no puede: ningún span ni ninguna métrica lleva id de tarea y ninguno lo hará (ADR-0008, segunda adenda). Sale de `cost_usd`, ya en el documento de cada tarea; `agentic eval score` lo lee de ahí, nunca de una métrica (sección 12, pendiente 14; GH-27) |
 | El efímero usa modelo más capaz | Corre en el modelo de los pensadores, distinto del de Tech Lead (ADR-0014, adenda) |
+| PjM mejora el proceso aplicando solo los cambios menores a prompts y revierte si la métrica empeoró | Para las lecciones de los roles, un Reflector (rol 18) propone y un curador determinista las aplica como deltas a un playbook por rol del producto; solo entran por un pull request que una persona fusiona, y la ventana de 10 tareas decide si se proponen para retirar (ADR-0043). Reemplaza esa mecánica; el resto de «Mejora del proceso» sigue |
+| El hash de un prompt es el de su texto crudo (ADR-0019) | Es el del texto crudo cuando el playbook del rol está vacío, y el del crudo más la sección del playbook cuando no (ADR-0043 reemplaza esa frase de ADR-0019) |
 
 ---
 
