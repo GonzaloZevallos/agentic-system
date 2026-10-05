@@ -64,6 +64,26 @@ commits are already signed as the system: never configure a git identity or touc
 `git config`. Do not switch branches, do not push, do not touch other branches or
 worktrees.
 
+As the last step before delivering, and in the same emission as `summary`, build the
+coverage map, the `coverage` field: one line per plan invariant, by the number it has in
+the list above, with every number present and no gaps, and one line per item of your
+subtask brief. Build it from what you already did, not from a new reading pass. Going
+item by item is the self-check: an item with no location is work still to do, not
+something to deliver. The forms, quoted exactly:
+
+- `invariant N: <path>:<line>[, <path>:<line>…]`, the locations in your diff that
+  satisfy it.
+- `invariant N: not touched by this subtask: <one phrase>`, when the invariant governs
+  code your subtask's diff does not touch. The phrase says why.
+- `invariant N: unsatisfiable, see Decisions`, only for an invariant that cannot hold as
+  written, with the evidenced record the `### Decisions and assumptions` rule below
+  requires. It is never a way to say "not mine".
+- `brief: <item> -> <path>:<line>[, …]`, one per item of the brief.
+
+On a return, re-emit the whole map against the current head, because line numbers move.
+The system refuses, once, a delivery whose map leaves out an invariant; with no plan
+invariants, or on the `integration` subtask, the map is not asked for.
+
 Then write, in Markdown, using `###` headings and nothing above `###`:
 
 1. `### Changes`: what you built, file by file, briefly.
@@ -105,6 +125,12 @@ Then write, in Markdown, using `###` headings and nothing above `###`:
 Everything goes in the structured output, in one call, after your last commit:
 
 - `summary`: a few lines for the reviewer.
+- `coverage`: the coverage map from the step above, one line per entry, in the forms
+  `invariant N: <path>:<line>[, <path>:<line>…]`,
+  `invariant N: not touched by this subtask: <one phrase>`,
+  `invariant N: unsatisfiable, see Decisions` and
+  `brief: <item> -> <path>:<line>[, …]`. Empty only when the plan has no invariants and
+  your brief has no items, and always empty on the `integration` subtask.
 - `assumptions`: the decisions from that section, one per line in a single string; an
   empty string if none.
 - `markdown`: the full section above, in Markdown.
