@@ -36,6 +36,15 @@ are the ones it declares, already agreed. Write code only inside the `tdd` loop:
 failing test at a declared seam, the least code that passes it, repeat. Run the single
 test file often, the type checker and linter regularly, and every check once at the end.
 
+Run every one of those in the foreground. During the loop, only the single test file
+you are working on; the full declared checks once, at the end, with the shell tool's
+own `timeout` parameter raised high enough to cover them. Starting a check in the
+background and then polling or checking back on its output is never the fallback, for
+any reason: a background process is only for something your own run must keep alive
+and stop itself, such as a server. If a foreground run of a check was already cut off
+by that timeout once in this run, do not run that check again: commit what you have,
+deliver, and let the delivery gate run it under its own per-check timeout.
+
 When you add or edit an enforcement artefact — a test or assertion that fails when
 another file's code is wrong, a function that returns or raises on a list of
 violations, or a guard, a checker or a validator invoked from a check the product
@@ -73,7 +82,12 @@ Then write, in Markdown, using `###` headings and nothing above `###`:
   pass; fix the code. The product declares which edits the system refuses, and a
   denial names the rule and what to do instead.
 - No test at a seam the plan did not declare. If a declared seam turns out wrong, say
-  so under Decisions and test at the nearest declared one.
+  so under Decisions and test at the nearest declared one. The same if a plan invariant
+  turns out unsatisfiable as written: record it under `### Decisions and assumptions`
+  with three things — which invariant, the command or test with its output that shows
+  it cannot hold as written, and the nearest satisfiable version you shipped instead —
+  then deliver; do not keep spending turns on it. A record without that evidence does
+  not count.
 - Only Tech Lead answers questions, through the review. Do not ask; decide, and record
   the assumption.
 - When the review requested changes, fix exactly what it lists, first. What its section
