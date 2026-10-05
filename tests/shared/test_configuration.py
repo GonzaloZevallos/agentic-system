@@ -138,10 +138,11 @@ def test_role_env_carries_the_git_identity_and_the_subagent_model():
     # identity and the model the Agent tool hands to sub-agents (ADR-0013, addendum),
     # forced over the model an agent type or a call names (issue #19).
     cfg = Configuration.from_sources(PRODUCT, {})
-    assert cfg.subagent_model == "claude-sonnet-5"
+    subagent_model = Configuration.model_fields["subagent_model"].default
+    assert cfg.subagent_model == subagent_model
     assert cfg.role_env == {
         **cfg.git_identity,
-        "CLAUDE_CODE_SUBAGENT_MODEL": "claude-sonnet-5",
+        "CLAUDE_CODE_SUBAGENT_MODEL": subagent_model,
         "CLAUDE_CODE_SUBAGENT_MODEL_FORCE": "1",
     }
     custom = Configuration.from_sources(PRODUCT, {"AGENTIC_SUBAGENT_MODEL": "haiku"})
