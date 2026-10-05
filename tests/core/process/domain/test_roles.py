@@ -9,11 +9,51 @@ from agentic.core.process.domain.roles import (
     PRODUCT_ANALYST,
     PROMPTS_DIR,
     ROLES,
+    TECH_LEAD_EPHEMERAL,
+    TECH_LEAD_EPHEMERAL_PLATFORM,
+    TECH_LEAD_EPHEMERAL_STACK,
     Pair,
     describe_flags,
     prompt_hash,
     render,
 )
+from agentic.shared.configuration import Configuration
+
+EPHEMERAL_ROLES = (TECH_LEAD_EPHEMERAL, TECH_LEAD_EPHEMERAL_PLATFORM, TECH_LEAD_EPHEMERAL_STACK)
+
+
+def test_every_role_but_the_ephemeral_tech_lead_runs_on_its_own_kind():
+    # `runs_on` is what `model_for` is given (ADR-0014, addendum of 2026-10-05): for
+    # every role but the three ephemeral slugs, it is exactly `kind`, unchanged.
+    for role in ROLES:
+        if role not in EPHEMERAL_ROLES:
+            assert role.runs_on == role.kind, role.slug
+
+
+def test_the_three_ephemeral_slugs_run_on_the_actor_model(tmp_path):
+    cfg = Configuration(
+        product_dir=tmp_path,
+        actor_model="actor-sentinel",
+        verifier_model="verifier-sentinel",
+        model_overrides={},
+    )
+    for role in EPHEMERAL_ROLES:
+        # `kind` itself stays the glossary term (Validador): only the model changes.
+        assert role.kind == "verifier"
+        assert cfg.model_for(role.slug, role.runs_on) == cfg.actor_model
+        # Rejected case: none of the three resolves to the verifier model.
+        assert cfg.model_for(role.slug, role.runs_on) != cfg.verifier_model
+
+
+def test_an_explicit_override_still_wins_for_an_ephemeral_slug(tmp_path):
+    for role in EPHEMERAL_ROLES:
+        cfg = Configuration(
+            product_dir=tmp_path,
+            actor_model="actor-sentinel",
+            verifier_model="verifier-sentinel",
+            model_overrides={role.slug: "override-sentinel"},
+        )
+        assert cfg.model_for(role.slug, role.runs_on) == "override-sentinel"
 
 
 def test_the_roles_that_execute_cannot_touch_git_beyond_their_branch():

@@ -61,6 +61,9 @@ class Role:
     slug: str
     kind: RoleKind
     schema: type[RoleOutput]
+    # `kind` is the glossary term (Validador or Pensador); `model_kind`, when set, is the
+    # model the role runs on instead of its own `kind` (ADR-0014, addendum 2026-10-05).
+    model_kind: RoleKind | None = None
     # Sections of the task document this role reads, in full (README.md, 6).
     # Declarative, so PjM can record it and see what a failing role was missing.
     # A role that lists itself reads its own previous section on a return. The human's
@@ -85,6 +88,12 @@ class Role:
     executes: bool = False
     # Product roles also receive the engineering standards, whole (ADR-0012).
     reads_standards: bool = False
+
+    @property
+    def runs_on(self) -> RoleKind:
+        """What `Configuration.model_for` is given: `model_kind` when the role sets one,
+        `kind` otherwise (ADR-0014, addendum 2026-10-05)."""
+        return self.model_kind or self.kind
 
 
 def render(raw: str, source: Path, **placeholders: object) -> Prompt:
@@ -379,6 +388,9 @@ TECH_LEAD_EPHEMERAL = Role(
     name="Tech Lead efímero",
     slug="tech_lead_ephemeral",
     kind="verifier",
+    # The asymmetry the efímero exists for is a model distinct from the one Tech Lead
+    # plans with, not a more capable one (README.md, 10; ADR-0014, addendum 2026-10-05).
+    model_kind="actor",
     schema=SolutionTurn,
     reads=(ORIGINAL, "PM"),
     reads_knowledge=True,
