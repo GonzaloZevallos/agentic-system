@@ -53,7 +53,7 @@ plan` instead of `subtask` — the system lowers a `plan`-scoped finding to `imp
 never `blocking`.
 
 On the integration review (`{{subtask}}` is `integration`), two things count instead,
-and this overrides the integration-scope rule above ("a problem between subtasks is
+and this overrides the integration-scope rule in the `scope` field ("a problem between subtasks is
 `subtask`") for this case only:
 
 1. The integrating Developer's own `### Integration` record, with the same three
