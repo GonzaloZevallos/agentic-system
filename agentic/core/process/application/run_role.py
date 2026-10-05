@@ -285,6 +285,29 @@ def load_prompt(
     )
 
 
+def playbook_patch(state: TaskState, role: Role, loaded: Prompt) -> TaskState:
+    """The playbook keys of a run's patch (ADR-0043): which playbook section the role
+    ran with, for the window and `eval compare`, beside `prompts` (which stays last-wins).
+
+    With an empty playbook nothing is written, so a task with none has neither key. The
+    first non-empty hash goes in `playbooks` and is never overwritten (`task.first`). A
+    different later hash goes in `playbooks_changed`, and so does the first hash of a
+    role that already ran with no playbook (`prompts` has its slug, `playbooks` does
+    not): the section hash of that first run is the segment `empty`, and a task that
+    ran under two playbooks is excluded from every window the same way."""
+    if not loaded.playbook:
+        return {}
+    recorded = state.get("playbooks", {}).get(role.slug)
+    if recorded is None:
+        patch: TaskState = {"playbooks": {role.slug: loaded.playbook}}
+        if role.slug in state.get("prompts", {}):
+            patch["playbooks_changed"] = {role.slug: loaded.playbook}
+        return patch
+    if recorded != loaded.playbook:
+        return {"playbooks_changed": {role.slug: loaded.playbook}}
+    return {}
+
+
 async def run_with_retry(
     role: Role,
     prompt: str,
@@ -744,7 +767,11 @@ async def run_role(
     section = section or role.name
     vocabulary = ports.flags.load()
     loaded = load_prompt(role, cfg, ports, vocabulary, **placeholders)
-    patch: TaskState = {"current_role": role.name, "prompts": {role.slug: loaded.hash}}
+    patch: TaskState = {
+        "current_role": role.name,
+        "prompts": {role.slug: loaded.hash},
+        **playbook_patch(state, role, loaded),
+    }
     if prompt is None:
         standards, knowledge = preamble(role, ports, cwd)
         prompt = context_for(

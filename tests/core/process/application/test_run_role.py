@@ -37,7 +37,7 @@ from agentic.core.process.domain.roles import (
     prompt_hash,
     render,
 )
-from agentic.core.process.domain.task import FailureReason
+from agentic.core.process.domain.task import FailureReason, apply, delta
 from agentic.shared.configuration import Configuration
 from tests.fakes import ScriptedRunner, classified, delivered, memory_ports, questions, tech_answers
 
@@ -1024,3 +1024,87 @@ def test_the_section_is_never_filled_like_the_template():
     ports.prompts.playbooks["developer"] = lessons("Keep {{date}} and {{nope}} as they are.")
     loaded = load(ports)
     assert "- Keep {{date}} and {{nope}} as they are. (spec-behaviour)" in loaded.text
+
+
+async def _run_developer(state, ports, tmp_path):
+    return await run_role(
+        state,
+        DEVELOPER,
+        Configuration(product_dir=tmp_path),
+        ports,
+        subtask="api",
+        invariants="",
+        branches="",
+        checks="",
+    )
+
+
+def _ports_for_runs(count: int = 1):
+    runner = ScriptedRunner(
+        developer=[RawResult(delivered().structured_output, 0.03) for _ in range(count)]
+    )
+    return memory_ports(runner)
+
+
+def _playbook_hash(ports) -> str:
+    return load(ports).playbook
+
+
+async def test_the_first_run_with_a_playbook_records_its_hash_under_playbooks(tmp_path):
+    ports = _ports_for_runs()
+    ports.prompts.playbooks["developer"] = lessons("Run the checks first.")
+    _, patch = await _run_developer({"id": "T-1", "title": "t", "description": "d"}, ports, tmp_path)
+    assert patch["playbooks"] == {"developer": _playbook_hash(ports)}
+    assert "playbooks_changed" not in patch
+
+
+async def test_a_task_with_no_playbook_gets_neither_key(tmp_path):
+    ports = _ports_for_runs()
+    _, patch = await _run_developer({"id": "T-1", "title": "t", "description": "d"}, ports, tmp_path)
+    assert "playbooks" not in patch
+    assert "playbooks_changed" not in patch
+
+
+async def test_the_first_playbook_hash_is_never_overwritten_across_runs(tmp_path):
+    ports = _ports_for_runs(3)
+    ports.prompts.playbooks["developer"] = lessons("Run the checks first.")
+    state = {"id": "T-1", "title": "t", "description": "d"}
+    first_hash = _playbook_hash(ports)
+    _, first = await _run_developer(state, ports, tmp_path)
+    state = apply(state, first)
+    # The same playbook again: nothing new to record.
+    _, same = await _run_developer(state, ports, tmp_path)
+    assert "playbooks" not in same and "playbooks_changed" not in same
+    # A different one: the first stays, the later goes beside it.
+    ports.prompts.playbooks["developer"] = lessons("Run the checks first.", "Cite the file.")
+    later_hash = _playbook_hash(ports)
+    _, later = await _run_developer(state, ports, tmp_path)
+    assert "playbooks" not in later
+    assert later["playbooks_changed"] == {"developer": later_hash}
+    folded = apply(state, later)
+    assert folded["playbooks"] == {"developer": first_hash}
+    assert folded["playbooks_changed"] == {"developer": later_hash}
+
+
+async def test_a_playbook_that_appears_after_an_empty_first_run_is_recorded_as_changed(tmp_path):
+    ports = _ports_for_runs(2)
+    state = {"id": "T-1", "title": "t", "description": "d"}
+    _, first = await _run_developer(state, ports, tmp_path)
+    state = apply(state, first)
+    ports.prompts.playbooks["developer"] = lessons("Run the checks first.")
+    _, later = await _run_developer(state, ports, tmp_path)
+    recorded = {"developer": _playbook_hash(ports)}
+    assert later["playbooks"] == recorded
+    assert later["playbooks_changed"] == recorded
+
+
+def test_the_playbook_keys_fold_and_subtract_through_the_reducers():
+    before = {"id": "T-1", "title": "t", "description": "d", "playbooks": {"developer": "a"}}
+    patch = {"playbooks": {"developer": "b", "pm": "c"}, "playbooks_changed": {"developer": "b"}}
+    after = apply(before, patch)
+    assert after["playbooks"] == {"developer": "a", "pm": "c"}
+    assert after["playbooks_changed"] == {"developer": "b"}
+    assert delta(before, after) == {
+        "playbooks": {"pm": "c"},
+        "playbooks_changed": {"developer": "b"},
+    }
