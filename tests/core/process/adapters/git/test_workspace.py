@@ -154,9 +154,12 @@ def test_the_checkpointer_file_stays_out_of_the_products_status(product, tmp_pat
     (product / ".agentic").mkdir()
     (product / ".agentic/state.sqlite").write_text("x")
     (product / ".agentic/state.sqlite-journal").write_text("x")
+    (product / ".agentic/state").mkdir()
+    (product / ".agentic/state/GH-1.sqlite").write_text("x")
     assert git("status", "--porcelain", cwd=product) == ""
     exclude = (product / ".git/info/exclude").read_text().splitlines()
     assert exclude.count(".agentic/state.sqlite*") == 1
+    assert exclude.count(".agentic/state/") == 1
     (tmp_path / "not-a-repo").mkdir()
     GitWorkspace(tmp_path / "not-a-repo", IDENTITY).exclude_system_files()  # nothing to do
 

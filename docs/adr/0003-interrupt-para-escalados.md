@@ -84,3 +84,46 @@ con otro plan.
 Descartado: que la CLI busque sola las tareas cuyo issue ya no tiene `needs-human`. El
 humano nombra la tarea que reanuda; la cola sigue siendo la etiqueta, y el poller de la
 etapa 5 hará la búsqueda.
+
+## Adenda (2026-10-04): un store de checkpoints por tarea
+
+apostrophe GH-8: varias corridas de un mismo producto escriben en el único
+`.agentic/state.sqlite` desde procesos distintos, y una se cae con `database is
+locked`. WAL y un `busy_timeout` generoso ya estaban puestos -- `AsyncSqliteSaver.setup`
+corre `PRAGMA journal_mode=WAL` y `sqlite3.connect` trae `timeout=5.0` por defecto -- y
+no alcanzan: el choque es entre *procesos*, no entre hilos de uno solo, y bajo WAL un
+`SQLITE_BUSY_SNAPSHOT` vuelve en el acto, sin esperar el timeout.
+
+**Un store por tarea.** `thread_id` ya es el id de tarea, y ningún comando lee entre
+tareas: dos tareas nunca compiten por el mismo archivo si cada una tiene el suyo,
+`.agentic/state/<task_id>.sqlite` (`shared.configuration.state_file_for`).
+`composition.checkpointer(cfg, task_id)` es el único sitio que abre una conexión al
+store o construye un `AsyncSqliteSaver`, y rutea en tres pasos: si el archivo propio ya
+existe, ese; si no, y el compartido tiene al menos una fila de `checkpoints` con ese
+`thread_id`, el compartido, tal cual hoy; si no, el propio, nuevo.
+
+**La consulta de ruteo nunca escribe.** Antes de conectar, comprueba
+`legacy.resolve().is_file()`; si abre, es de solo lectura,
+`sqlite3.connect(legacy.as_uri() + "?mode=ro", uri=True)`, nunca un f-string con la ruta
+cruda -- `Path.as_uri()` escapa `#` y `%`, que un f-string no. Un `OperationalError` de
+"no such table" lee como cero filas (un compartido de antes de que existiera la tabla);
+cualquier otro, por ejemplo un `database is locked` durante la recuperación del WAL tras
+un crash, sube: pasa al arrancar, antes de cualquier rol, así que no cuesta plata.
+
+**La migración es la reapertura después de `adelete_thread`.** `cli._run --fresh` y
+`cli._resume --from-document` ya borran el thread antes de invocar; con el thread
+borrado, el ruteo ya no encuentra filas en el compartido, así que una segunda apertura
+de `composition.checkpointer(cfg, task_id)`, con el grafo compilado de nuevo, resuelve
+al archivo propio. La primera conexión no retiene ningún lock mientras corre la
+segunda: `adelete_thread` hace commit y las lecturas previas (`aget_state`,
+`_refuse_a_started_task`) son `SELECT`. Una tarea reanudada desde su checkpoint
+(`resume` sin `--from-document`) no reabre: sigue en el archivo donde el ruteo la
+encontró.
+
+**Riesgos conocidos.** Una tarea vieja reanudada desde su checkpoint sigue en el
+compartido hasta que se reinicia o se cierra -- compite solo con otras tareas viejas,
+nunca con una nueva. Los archivos se acumulan, uno por tarea, y nada los borra, el
+compartido incluido -- la misma situación que ya tienen los threads hoy. Que una corrida
+muera por cualquier otra excepción sigue dejando la tarea `developing` sin proceso
+vivo, sin escalar y sin que el poller la vea: queda fuera de esta adenda (`_invoke`,
+`poll.py` y `rules.auto_resumable` no cambian).

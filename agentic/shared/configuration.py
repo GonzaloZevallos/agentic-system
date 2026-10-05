@@ -16,9 +16,15 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 ENV_PREFIX = "AGENTIC_"
-# The graph's checkpointer, relative to the product root, outside version control
-# (README.md, 8; ADR-0003).
+# The legacy, shared checkpointer file, relative to the product root, outside version
+# control (README.md, 8; ADR-0003). A task with rows already there keeps using it until
+# it is restarted; every other task gets its own file under `STATE_DIR` (ADR-0003,
+# addendum 2026-10-04).
 STATE_FILE = Path(".agentic/state.sqlite")
+# One checkpoint store per task, relative to the product root, outside version control:
+# `STATE_DIR / f"{task_id}.sqlite"` (`state_file_for`). Concurrent runs on one product
+# never contend for the same file (ADR-0003, addendum 2026-10-04).
+STATE_DIR = Path(".agentic/state")
 # Where every invocation's log lives, relative to the product root, outside version
 # control: one file per invocation under this, named `<task>-<UTC timestamp>.log`
 # (README.md, 14; issue #33).
@@ -151,10 +157,6 @@ class Configuration(BaseModel):
         return self.product_dir / ".agentic"
 
     @property
-    def state_file(self) -> Path:
-        return self.product_dir / STATE_FILE
-
-    @property
     def git_identity(self) -> dict[str, str]:
         """The identity as environment, the one form every `git` honours and that beats
         any `user.*` in a config: for the adapter's own commands and for the process
@@ -209,6 +211,17 @@ def experiment_snapshot(cfg: Configuration, reviewer_model: str) -> dict[str, st
         "skip_ephemeral": str(cfg.skip_ephemeral),
         "reviewer_model": reviewer_model,
     }
+
+
+def state_file_for(task_id: str) -> Path:
+    """`STATE_DIR / f"{task_id}.sqlite"`, relative to the product root like `STATE_FILE`
+    (`composition.checkpointer`'s routing, ADR-0003 addendum 2026-10-04). `task_id`
+    reaches here straight from the CLI (an issue number or a title's slug), so it is
+    rejected rather than trusted: empty, or carrying `/`, `\\` or `..`, could otherwise
+    name a file outside `STATE_DIR` or collide with another task's."""
+    if not task_id or "/" in task_id or "\\" in task_id or ".." in task_id:
+        raise ValueError(f"not a valid task id for a state file: {task_id!r}")
+    return STATE_DIR / f"{task_id}.sqlite"
 
 
 def _default_run_registry_dir() -> Path:

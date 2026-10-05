@@ -2,9 +2,24 @@ from pathlib import Path
 
 import pytest
 
-from agentic.shared.configuration import Configuration, MissingProductDir, experiment_snapshot
+from agentic.shared.configuration import (
+    Configuration,
+    MissingProductDir,
+    experiment_snapshot,
+    state_file_for,
+)
 
 PRODUCT = {"product_dir": "/tmp/p"}
+
+
+def test_state_file_for_names_the_tasks_own_store():
+    assert state_file_for("GH-1") == Path(".agentic/state/GH-1.sqlite")
+
+
+@pytest.mark.parametrize("bad_id", ["", "a/b", "a\\b", "..", "x/../y"])
+def test_state_file_for_rejects_an_id_that_could_escape_state_dir(bad_id):
+    with pytest.raises(ValueError):
+        state_file_for(bad_id)
 
 
 def test_max_concurrent_runs_defaults_to_one():
