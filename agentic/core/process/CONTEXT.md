@@ -34,7 +34,7 @@ Escribir archivos del producto y correr comandos sin aprobación por comando. So
 _Campo_: sin término de arte para el permiso; el campo nombra el mecanismo (tool use), no la autonomía que le concede
 
 **Validador**:
-Rol que revisa a un pensador aportando una fuente que el pensador no tuvo. En el código y en los prompts se llama `verifier`, no `judge`: el judge opina y el verifier ejecuta, y desde ADR-0016 el Tech Lead corre los chequeos que respaldan cada objeción.
+Rol que revisa a un pensador aportando una fuente que el pensador no tuvo. Tech Lead es un validador que además escribe el plan, y luego lo revisa en cada subtarea y en la integración; el Tech Lead efímero valida ese mismo plan antes de que exista, trayendo un modelo distinto del que lo escribe. En el código y en los prompts se llama `verifier`, no `judge`: el judge opina y el verifier ejecuta, y desde ADR-0016 el Tech Lead corre los chequeos que respaldan cada objeción.
 _Avoid_: revisor, judge
 _Campo_: verifier — Cobbe 2021 y Lightman 2023 ("Let's Verify Step by Step"); Evaluator en Reflexion, critic en CriticGPT, LLM-as-a-judge en Zheng 2023
 
@@ -43,7 +43,7 @@ El rol que devuelve y el rol que recibe la devolución. Las devoluciones se cuen
 _Campo_: sin término de arte
 
 **Tech Lead efímero**:
-Segundo Tech Lead que existe solo durante la entrevista técnica, con modelo más capaz y prompt de adversario. Entrevista a Tech Lead; no decide. No es un rol de la lista: es el entrevistador del pingpong.
+Segundo Tech Lead que existe solo durante la entrevista técnica, con un modelo distinto del de Tech Lead y prompt de adversario. Entrevista a Tech Lead; no decide. No es un rol de la lista: es el entrevistador del pingpong.
 _Campo_: sin término de arte
 
 **Developer integrador**:

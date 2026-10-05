@@ -441,8 +441,9 @@ Uno por tarea. **Nunca codea, siempre delega.**
 
 1. Propone la solución técnica.
 2. La pingponea con un **segundo Tech Lead efímero** hasta validarla. El efímero corre con
-   modelo más capaz y **prompt de adversario**: su trabajo es encontrar el fallo, no validar.
-   Sin esas dos asimetrías el pingpong solo ratifica.
+   un modelo distinto del de Tech Lead y **prompt de adversario** (ADR-0014, adenda): su
+   trabajo es encontrar el fallo, no validar. Sin esas dos asimetrías el pingpong solo
+   ratifica.
 3. Revisa y ajusta el plan de tests funcionales.
 4. Decide si la 2ª pasada necesita QA Seguridad y/o QA Performance.
 5. Parte en subtareas, marca las paralelizables, prioriza por valor entregado rápido. Puede
@@ -842,7 +843,12 @@ valida**. La regla es que todo validador traiga una fuente que el pensador no tu
 |---|---|---|
 | Pensadores | Sonnet | Son los que más llamadas hacen |
 | Validadores | Opus | Asimetría más barata de implementar y de medir |
+| Tech Lead efímero | Sonnet (el de los pensadores) | Necesita un modelo distinto del que escribió el plan: un validador en el mismo modelo ratifica (ADR-0014, adenda) |
 | Subagentes de cualquier rol | Sonnet | Leen y resumen para un padre que razona en el suyo; en Opus eran 5-10 USD por revisión (ADR-0013, adenda) |
+
+Tech Lead, el validador que además escribe el plan, sigue en el modelo de los
+validadores: partirlo en dos roles rompería la continuidad entre plan y revisión en que
+se apoya la revisión incremental (ADR-0015).
 
 Las otras fuentes de asimetría, cuando existen, valen más que el modelo: QA Funcional
 ejecuta tests contra el producto real, QA Seguridad y Performance leen código real, Data
@@ -986,6 +992,7 @@ Se anotan para no reintroducirlas por error.
 | Este repo lee el default de estándares del sistema porque describe bien lo que el repo ya hace (ADR-0017) | ADR-0012's addendum replaces the ADR-0017 bullet that had this repo reading the system default because it described what the repo already does; from here the default is practices and this repo materialises them in its own `CODING_STANDARDS.md` |
 | El set entero se re-corre cada vez que se cambia un prompt o un parámetro | Solo en hitos (rol nuevo, cambio de estructura de revisión, cambio de modelo por rol); un cambio de prompt o de parámetro corre solo la tarea de humo que la declaración del set nombra, y una que escala a mitad de corrida queda sin puntaje, no con uno peor (sección 9; GH-27) |
 | El costo por tarea del set de evaluación sale de Grafana | Grafana no puede: ningún span ni ninguna métrica lleva id de tarea y ninguno lo hará (ADR-0008, segunda adenda). Sale de `cost_usd`, ya en el documento de cada tarea; `agentic eval score` lo lee de ahí, nunca de una métrica (sección 12, pendiente 14; GH-27) |
+| El efímero usa modelo más capaz | Corre en el modelo de los pensadores, distinto del de Tech Lead (ADR-0014, adenda) |
 
 ---
 
