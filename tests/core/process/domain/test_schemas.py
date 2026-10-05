@@ -314,3 +314,21 @@ def test_a_coverage_string_validates_as_its_lines():
         "invariant 1: a.py:1",
         "brief: x -> b.py:2",
     ]
+
+
+def test_the_coverage_description_quotes_the_forms_from_the_one_module_byte_for_byte():
+    from agentic.core.process.domain import coverage
+
+    description = schemas.json_schema(schemas.Delivery, VOCAB)["properties"]["coverage"][
+        "description"
+    ]
+    for form in (
+        coverage.MAPPED_FORM,
+        coverage.UNSATISFIABLE_FORM,
+        coverage.NOT_TOUCHED_FORM,
+        coverage.BRIEF_FORM,
+    ):
+        assert f"`{form}`" in description
+    # The forms use the typographic ellipsis the prompts quote, never an ASCII stand-in.
+    assert "..." not in description
+    assert "…" in coverage.MAPPED_FORM and "…" in coverage.BRIEF_FORM

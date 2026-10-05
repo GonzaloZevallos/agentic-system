@@ -81,8 +81,9 @@ something to deliver. The forms, quoted exactly:
 - `brief: <item> -> <path>:<line>[, …]`, one per item of the brief.
 
 On a return, re-emit the whole map against the current head, because line numbers move.
-The system refuses, once, a delivery whose map leaves out an invariant; with no plan
-invariants, or on the `integration` subtask, the map is not asked for.
+The system refuses, once, a delivery whose map leaves out an invariant. With no plan
+invariants it checks nothing, and the map is only the `brief:` lines; on the
+`integration` subtask the map is not asked for.
 
 Then write, in Markdown, using `###` headings and nothing above `###`:
 

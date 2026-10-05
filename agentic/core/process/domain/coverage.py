@@ -8,10 +8,10 @@ map is the reviewer's starting list, a claim the review still verifies on the di
 
 Accepted lines:
 
-- `invariant N: <path>:<line>[, <path>:<line>...]`
+- `invariant N: <path>:<line>[, <path>:<line>…]`
 - `invariant N: unsatisfiable, see Decisions`
 - `invariant N: not touched by this subtask: <one phrase>`
-- `brief: <item> -> <path>:<line>[, ...]` (rendered, never checked)
+- `brief: <item> -> <path>:<line>[, …]` (rendered, never checked)
 
 Parsing is lenient in two ways: surrounding whitespace is stripped and the word
 `invariant` matches in any case. An out-of-range or duplicate number is ignored."""
@@ -28,7 +28,8 @@ NOT_TOUCHED = "not touched by this subtask"
 # counter lives in `application/coverage_guard.py`, the cap here with the format.
 REFUSALS = 1
 
-MAPPED_FORM = "invariant N: <path>:<line>[, <path>:<line>...]"
+MAPPED_FORM = "invariant N: <path>:<line>[, <path>:<line>…]"
+BRIEF_FORM = "brief: <item> -> <path>:<line>[, …]"
 UNSATISFIABLE_FORM = f"invariant N: {UNSATISFIABLE}"
 NOT_TOUCHED_FORM = f"invariant N: {NOT_TOUCHED}: <one phrase>"
 

@@ -1192,6 +1192,7 @@ async def test_the_integrator_never_maps_invariants_and_writes_no_coverage_block
     patch = await develop(state, cfg, ports)
     assert "Coverage" not in patch["sections"]["Developer: integration"]
     assert patch["sections"]["Developer: integration"].endswith("| passed |\n\n### Changes\n\nx.py")
+    assert "### Coverage" not in patch["sections"]["Developer: integration"]
     # Only the schema guard: no map check is wired on the integration.
     assert type(runner.calls[0]["guard"]).__name__ == "RoleSchemaGuard"
 
@@ -1202,5 +1203,10 @@ async def test_a_plan_with_no_invariants_wires_no_map_check_and_writes_no_block(
     ports = memory_ports(runner)
     ports.workspace.moved.add(ports.workspace.subtask_checkout("GH-12", "api").path)
     patch = await develop(state, cfg, ports)
-    assert "Coverage" not in patch["sections"]["Developer: api"]
+    # Exactly what the section was before the coverage map existed: checks, then the text.
+    assert patch["sections"]["Developer: api"] == (
+        "### Checks\n\nRun by the system on `head2` when the Developer delivered.\n\n"
+        "| Check | Command | Result |\n|---|---|---|\n| `tests` | `pytest` | passed |\n\n"
+        "### Changes\n\nx.py"
+    )
     assert type(runner.calls[0]["guard"]).__name__ == "RoleSchemaGuard"
