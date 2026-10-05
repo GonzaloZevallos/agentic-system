@@ -806,7 +806,7 @@ async def test_an_escalation_by_the_task_cap_breaks_the_spending_down_and_propos
     text = ports.tracker.comments[0][1]
     assert "Spent by phase:\n\n- definition: 2.27 USD\n- plan: 0.00 USD" in text
     assert "- development: 40.00 USD\n- review: 64.00 USD" in text
-    assert text.endswith("then run `agentic resume --issue 12 --task-budget 122`.")
+    assert text.endswith("then run `agentic resume --issue 12 --task-budget 117`.")
     # Any other escalation says how to resume, without a cap to raise.
     ports = memory_ports()
     await escalate({**TASK, "escalated": "PM could not decide"}, cfg, ports)

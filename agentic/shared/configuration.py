@@ -54,18 +54,13 @@ class Configuration(BaseModel):
     # measures quality, not money.
     max_budget_usd: float = Field(default=10.0, gt=0)
     # Money cap of the whole run, checked before every attempt of any role: reached,
-    # the task escalates and pauses instead of spending more (ADR-0004, third and fourth
-    # addenda). It grows with the plan: the base until there is one, then the base plus
-    # a share per subtask, the integration counted, never over the ceiling. A fixed 100
-    # cut run 4 of GH-12 one step from its pull request, with seven subtasks where five
-    # were expected. The numbers come from that run and are recalibrated after the first
-    # run without the MCP leak (issue #18), which should cost 35-45 USD. Parallel
-    # branches see the total at the fan-out, so the overrun is bounded by the attempt cap.
-    task_budget_base_usd: float = Field(default=30.0, gt=0)
-    task_budget_per_subtask_usd: float = Field(default=15.0, ge=0)
+    # the task escalates and pauses instead of spending more (ADR-0004, third addendum).
+    # `task_max_budget_usd` is the flat task cap, the same for any plan size (ADR-0004,
+    # 2026-10-05 addendum). Parallel branches see the total at the fan-out, so the
+    # overrun is bounded by the attempt cap.
     task_max_budget_usd: float = Field(default=250.0, gt=0)
     # The cap the human sets for one run, `agentic resume --task-budget`: it raises the
-    # cap in force above the formula and the ceiling, never lowers it.
+    # cap in force above the flat ceiling, never lowers it.
     task_budget_usd: float | None = Field(default=None, gt=0)
     # The model of every sub-agent a role spawns through the Agent tool, the two of
     # the `code-review` skill among them. They read and summarise for a parent that

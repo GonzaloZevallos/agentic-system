@@ -1189,7 +1189,7 @@ async def test_the_task_cap_pauses_the_task_and_a_raised_cap_resumes_it_to_deliv
     }
     assert (await app.aget_state(config)).next == ("pause",)
     assert fakes.tracker.labels == [("GH-1", "needs-human")]
-    assert "`agentic resume --issue 1 --task-budget 16`" in fakes.tracker.comments[0][1]
+    assert "`agentic resume --issue 1 --task-budget 11`" in fakes.tracker.comments[0][1]
 
     final = await app.ainvoke(Command(resume={"decision": None}), config=raised(config))
     assert final["status"] == "ready_for_review" and final["escalated"] is None

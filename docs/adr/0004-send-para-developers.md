@@ -499,3 +499,63 @@ siempre, así que `prompts.fingerprint` no se mueve mientras el comportamiento e
 ejecución sí cambia — la comparación segmentada por fingerprint de antes de este commit no
 va a mostrar este cambio, y esa es la razón por la que se dice acá en vez de descubrirse en
 un panel.
+
+## Adenda (2026-10-05): el tope de tarea es un techo plano de 250, sin fórmula
+
+**Por qué.** El pedido del issue #181 y el caso que lo disparó: GH-166 pausó en 47.69 de
+45.00 USD con una sola subtarea, y el plan ya había gastado 27.60. Los números de la cuarta
+adenda salieron de la cuarta corrida de GH-12 y no se recalibraron después del issue #18,
+como se había dicho.
+
+**El corpus.** Fuente: el `cost_usd` del frontmatter de los documentos de las tareas
+entregadas de agentic-system, apostrophe y gym-saas al 2026-10-05, agrupadas por cantidad de
+subtareas, tal como las reporta el pedido del issue #181. 98 tareas entregadas:
+
+| Subtareas | n | mediana USD | p90 USD | máx USD | tope por fórmula |
+|---|---|---|---|---|---|
+| 1 | 42 | 23.5 | 31.9 | 93.0 | 45 |
+| 3 | 17 | 28.9 | 37.3 | 92.2 | 75 |
+| 4 | 17 | 36.2 | 82.1 | 143.2 | 90 |
+| 5 | 10 | 45.6 | 77.2 | 97.4 | 105 |
+| 6+ | 12 | 84.7 | 128.2 | 181.4 | 120–195 |
+
+9 terminaron por encima del tope que les daba la fórmula:
+
+- apostrophe: GH-8 (143.2/90), GH-55 (93.0/45), GH-26 (92.2/75), GH-58 (181.4/165), GH-63 (45.7/45);
+- agentic-system: GH-154 (61.9/45), GH-137 (96.6/90), GH-151 (48.3/45), GH-112 (46.2/45).
+
+Ninguna de las 98 llegó a 250 (máximo 181.4, apostrophe GH-58).
+
+**Decisión.**
+
+- `rules.task_cap(ceiling, override)` es `max(ceiling, override)`, sin `TaskState`: el tamaño
+  del plan no puede llegar a la cuenta.
+- Los campos `task_budget_base_usd` y `task_budget_per_subtask_usd` y sus variables
+  `AGENTIC_TASK_BUDGET_*` salen de `Configuration`; `task_max_budget_usd` (250) es el tope.
+- `suggested_budget` propone lo gastado más un tope por intento.
+- Alcanzar el tope sigue escalando y pausando.
+- `--task-budget` sube el tope y nunca lo baja.
+- El tope por intento sigue en 10 USD: ningún documento registra un fallo `reason: limit`.
+- El máximo de 12 subtareas de `plan_check` se queda.
+
+**Qué reemplaza.** De la cuarta adenda: la fórmula `min(techo, base + por_subtarea ×
+unidades)`, los campos `task_budget_base_usd` y `task_budget_per_subtask_usd`, y "X lo gastado
+más una subtarea" (ahora "lo gastado más un tope por intento"). De ADR-0034: "la base de 30
+USD" para una revisión de stack.
+
+**Consecuencias.**
+
+- Las corridas sin plan (definición, fase de plan, revisión de stack) pasan de 30 a 250.
+- Una revisión de stack queda acotada por su propio lazo en unos 200 USD: a lo sumo 4 rondas
+  de entrevista de dos corridas de rol, un turno de cierre del entrevistador y una corrida del
+  autor (`stack_review.py:59,64`, `interview.py:246,292`), cada una de a lo sumo 2 intentos de
+  10 USD. La cota se lee del lazo, no está medida.
+- Una tarea pausada por el tope antes del 2026-10-05 reanuda sin `--task-budget` si lo gastado
+  es menor que 250. Su `reason:` guardado muestra el tope viejo como historia, junto a
+  `task cap: 250.00 USD (ceiling 250)`.
+- Un `--task-budget` igual o menor que 250 no hace nada, y el resumen muestra el techo. Un
+  aviso es otro issue.
+- Los nombres `AGENTIC_TASK_BUDGET_*` viejos se ignoran, no se rechazan. Hasta que el humano
+  saque `AGENTIC_TASK_MAX_BUDGET_USD=1000000` del `.env` de los dos stage0 tras el merge, ese
+  valor manda.
+- Ninguna señal se mueve, y `prompts.fingerprint` no se mueve.

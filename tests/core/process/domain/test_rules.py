@@ -380,19 +380,6 @@ def test_return_section_reads_pm_final_validation_only_when_it_is_the_open_retur
     assert rules.return_section({"subtasks": {}}, "api") == rules.review_section("api")
 
 
-def test_task_cap_adds_one_unit_for_the_design_branch_from_the_start():
-    assert rules.work_units(UX_FLAGS) == 1
-    assert rules.task_cap(UX_FLAGS, 30, 15, 250) == 45
-    # A feature without the flag, a bug, and a platform enhancement: unchanged.
-    assert rules.work_units({"type": "feature", "flags": {}}) == 0
-    assert rules.work_units({"type": "bug", "flags": {"touches_ui": True}}) == 0
-    assert rules.work_units({"type": "platform_enhancement", "flags": {"touches_ui": True}}) == 0
-    # Stacks with the subtasks' own units (existing behaviour, untouched): 2 subtasks +
-    # 1 integration + 1 design-branch unit + 1 final-validation unit, once there is a
-    # plan (ADR-0040, this task's own second unit).
-    assert rules.work_units({**UX_FLAGS, **subtasks("api", "domain")}) == 5
-
-
 def test_design_effect_by_role_counts_lead_returns_and_blocking_items_per_role():
 
     state = {
@@ -501,27 +488,26 @@ def test_a_return_is_recorded_with_its_category_for_the_history():
     }
 
 
-# The task cap and the phases (ADR-0004, fourth addendum).
+# The task cap and the phases (ADR-0004, 2026-10-05 addendum).
 
 
 def subtasks(*ids):
     return {"subtasks": {sid: {"id": sid, "status": "pending"} for sid in ids}}
 
 
-def test_the_task_cap_is_the_base_until_the_plan_then_grows_with_its_units():
-    assert rules.task_cap({}, 30, 15, 250) == 30
-    assert rules.task_cap(subtasks("api"), 30, 15, 250) == 45  # one subtask, no integration
-    assert rules.work_units(subtasks("api", "domain")) == 3  # the integration counts ahead
-    assert rules.work_units(subtasks("api", "domain", INTEGRATION)) == 3  # and only once
-    assert rules.task_cap(subtasks(*[f"s{n}" for n in range(12)]), 30, 15, 180) == 180
+def test_the_task_cap_is_the_flat_ceiling_which_an_override_raises_and_never_lowers():
+    assert rules.task_cap(250, None) == 250
+    assert rules.task_cap(250, 400) == 400
+    assert rules.task_cap(250, 120) == 250  # rejected: an override below the ceiling
+    assert rules.task_cap(0.7, None) == 0.7
 
 
-def test_a_cap_escalation_is_recognised_and_proposes_one_more_unit():
+def test_a_cap_escalation_is_recognised_and_proposes_one_more_attempt_cap():
     reason = rules.cap_reached("Developer", 106.27, 100)
     assert reason == "Developer stopped by the task cap: 106.27 of 100.00 USD spent"
     assert rules.stopped_by_cap({"escalated": reason})
     assert not rules.stopped_by_cap({"escalated": "PM hit 2 returns: x"})
-    assert rules.suggested_budget({"cost_usd": 106.27}, 15) == 122
+    assert rules.suggested_budget({"cost_usd": 106.27}, 10) == 117
 
 
 def test_spent_by_phase_sums_the_runs_by_section_and_keeps_what_they_miss():

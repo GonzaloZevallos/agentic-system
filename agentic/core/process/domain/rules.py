@@ -1291,32 +1291,14 @@ def integration_work(brief: str, conflicts: Sequence[str]) -> Subtask:
     }
 
 
-# The task cap (README.md, 3; ADR-0004, fourth addendum): a base for the definition and
-# the plan, a share per unit of work once the plan says how many there are.
+# The task cap (README.md, 3; ADR-0004, 2026-10-05 addendum): one flat ceiling, the same
+# for any plan size, which the human may raise and never lower.
 
 
-def work_units(state: TaskState) -> int:
-    """The subtasks of the plan, plus the integration when there is more than one, counted
-    before it exists: the cap has to cover it from the start. Plus one more, from the
-    very start, on a feature that runs the design branch (ADR-0040, `design_applies`):
-    five extra role runs land before the plan even exists, and the cap has to cover
-    them too, whether or not the plan has been written yet. Plus a second design unit,
-    once there is a plan, for PM's early final validation: three more role runs the
-    cap has to cover only from the point it could actually become due, not before --
-    there is nothing to validate without a plan yet."""
-    real = [sid for sid in state.get("subtasks", {}) if sid != INTEGRATION]
-    units = len(real) + (1 if len(real) > 1 else 0)
-    if design_applies(state):
-        units += 1
-        if real:
-            units += 1
-    return units
-
-
-def task_cap(state: TaskState, base: float, per_unit: float, ceiling: float) -> float:
-    """What the run may spend: the base until there is a plan, then the base plus a share
-    per unit, never over the ceiling."""
-    return min(ceiling, base + per_unit * work_units(state))
+def task_cap(ceiling: float, override: float | None) -> float:
+    """What the run may spend: the flat ceiling, or the human's override when it is
+    higher. It takes no state, so the size of the plan cannot reach it."""
+    return max(ceiling, override or 0.0)
 
 
 def cap_reached(role_name: str, spent_usd: float, cap_usd: float) -> str:
@@ -1341,10 +1323,10 @@ def stopped_by_cap(state: TaskState) -> bool:
     return _CAP_PHRASE in (state.get("escalated") or "")
 
 
-def suggested_budget(state: TaskState, per_unit: float) -> int:
+def suggested_budget(state: TaskState, step: float) -> int:
     """The `--task-budget` an escalation by the cap proposes: what was spent plus one more
-    unit of work, in whole dollars. A starting point for the human, not an estimate."""
-    return math.ceil(state.get("cost_usd", 0.0) + per_unit)
+    attempt's cap, in whole dollars. A starting point for the human, not an estimate."""
+    return math.ceil(state.get("cost_usd", 0.0) + step)
 
 
 PHASES = ("definition", "plan", "development", "review")

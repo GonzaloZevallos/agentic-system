@@ -206,30 +206,57 @@ def test_the_decision_skips_a_started_over_comment_too():
     assert resume.human_decision(comments) == "Use USD."
 
 
-def test_a_resume_under_the_formula_goes_on_to_the_returned_integration(cfg):
+def test_a_resume_under_the_flat_ceiling_goes_on_to_the_returned_integration(cfg):
     ports = memory_ports()
     ports.tracker.earlier = ["Escalated: " + CAP]
     ports.workspace.checkouts = [cfg.product_dir / ".agentic/worktrees/GH-12"]
     r = resume.prepare("GH-12", paused(cost_usd=60.0), "document", cfg, ports)
     assert r.decision is None and r.target == "integrate"
-    assert r.cap_usd == 30 + 15 * 3  # two subtasks and the integration
+    assert r.cap_usd == 250  # the flat ceiling, whatever the plan's size
     assert r.resumed["escalated"] is None and r.resumed["status"] == "developing"
     text = resume.summary(r, cfg, ports)
     assert "reason:    " + CAP in text
     assert "spent:     60.00 USD (definition 0.00, plan 0.00, development 25.00, " in text
     assert "review 25.00, other 10.00)" in text
-    assert "task cap:  75.00 USD (base 30 + 15 x 3 units, ceiling 250)" in text
+    assert "task cap:  250.00 USD (ceiling 250)" in text
     assert "resumes:   integrate (integration)" in text
     assert "session:   Developer: integration: d1" in text
     assert "session:   Tech Lead: review integration: r1" in text
     assert "worktree:  " + str(cfg.product_dir / ".agentic/worktrees/GH-12") in text
 
 
-def test_a_cap_already_spent_is_refused_and_the_human_can_raise_it(cfg, tmp_path):
+def test_a_task_paused_by_the_old_cap_resumes_under_the_flat_ceiling(cfg):
+    # Spent 106.27, stopped by the old formula's 100: the stored reason is history, the
+    # ceiling governs and no --task-budget is needed (ADR-0004, 2026-10-05 addendum).
     ports = memory_ports()
+    ports.tracker.earlier = ["Escalated: " + CAP]
+    r = resume.prepare("GH-12", paused(), "document", cfg, ports)
+    assert r.cap_usd == 250
+    text = resume.summary(r, cfg, ports)
+    assert "reason:    " + CAP in text
+    assert "task cap:  250.00 USD (ceiling 250)" in text
+
+
+@pytest.mark.parametrize("subtask_count", [1, 12])
+def test_the_resume_cap_is_the_same_for_any_plan_size(cfg, tmp_path, subtask_count):
+    subtasks = {
+        f"s{n}": sub(f"s{n}", "returned", f"agentic/GH-12.s{n}", "b1", reviewed_head="x")
+        for n in range(subtask_count)
+    }
+    state = paused(cost_usd=60.0, subtasks=subtasks, runs=[])
+    ports = memory_ports()
+    ports.tracker.earlier = ["Escalated: " + CAP]
+    assert resume.prepare("GH-12", state, "document", cfg, ports).cap_usd == 250
+    raised = Configuration(product_dir=tmp_path, task_budget_usd=400)
+    assert resume.prepare("GH-12", state, "document", raised, ports).cap_usd == 400
+
+
+def test_a_cap_already_spent_is_refused_and_the_human_can_raise_it(tmp_path):
+    ports = memory_ports()
+    low = Configuration(product_dir=tmp_path, task_max_budget_usd=100)
     with pytest.raises(ValueError, match="pass --task-budget above 106.27"):
-        resume.prepare("GH-12", paused(), "checkpoint", cfg, ports)
-    raised = Configuration(product_dir=tmp_path, task_budget_usd=125)
+        resume.prepare("GH-12", paused(), "checkpoint", low, ports)
+    raised = Configuration(product_dir=tmp_path, task_max_budget_usd=100, task_budget_usd=125)
     r = resume.prepare("GH-12", paused(), "checkpoint", raised, ports)
     assert r.cap_usd == 125
     assert "task cap:  125.00 USD (--task-budget)" in resume.summary(r, raised, ports)
@@ -310,7 +337,9 @@ def test_announcing_an_interrupted_resume_names_the_crashed_role(cfg):
 
 def test_announcing_takes_the_task_out_of_the_queue(cfg):
     ports = memory_ports()
-    raised = Configuration(product_dir=cfg.product_dir, task_budget_usd=125)
+    raised = Configuration(
+        product_dir=cfg.product_dir, task_max_budget_usd=100, task_budget_usd=125
+    )
     ports.tracker.earlier = ["Escalated: " + CAP, "Go on, but keep MRR per active subscription."]
     r = resume.prepare("GH-12", paused(), "checkpoint", raised, ports)
     resume.announce(r, ports)
