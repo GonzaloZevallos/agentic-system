@@ -12,6 +12,7 @@ ran, not vocabulary, and are never rewritten.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from typing import Any
 
 # Named here so the literal old name lives in exactly one place (the invariant this
@@ -63,7 +64,7 @@ def _translate_pair(pair: str) -> str:
 
 
 def _renamed_keys(
-    mapping: dict[str, Any], translate: Any, field: str, source: object
+    mapping: dict[str, Any], translate: Callable[[str], str], field: str, source: object
 ) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in mapping.items():
@@ -116,8 +117,12 @@ def rename_legacy_roles(state: dict[str, Any], source: object = "document") -> d
         )
 
     if "change_history" in state:
+        # `pair` is absent on an entry recorded before it existed (`rules.resumed_
+        # status`'s own `h.get("pair", PAIR_PM_PA.key)` reads around the same gap):
+        # nothing to translate there, so the entry passes through unchanged.
         result["change_history"] = [
-            {**h, "pair": _translate_pair(h["pair"])} for h in state["change_history"]
+            {**h, "pair": _translate_pair(h["pair"])} if "pair" in h else dict(h)
+            for h in state["change_history"]
         ]
 
     if "pause_log" in state:

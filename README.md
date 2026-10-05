@@ -141,7 +141,7 @@ Comportamiento esperado → la tarea termina **descartada**: el sistema comenta 
 el issue, borra el worktree y el humano cierra el issue, como hoy mergea el pull request
 (ADR-0011); no se escribe definición, porque una tarea descartada no entrega nada que la
 lleve. Bug → el plan, con PM consultado en la entrevista de solución como en feature,
-Developers, revisión y pull request. Sin flags, métricas ni dashboard. UI Designer y Design
+Developers, revisión y pull request. Sin flags, métricas ni dashboard. UI Designer y UI
 Lead (etapa 4) y QA (etapa 2) esperan a sus etapas (§11).
 
 ### Platform enhancement

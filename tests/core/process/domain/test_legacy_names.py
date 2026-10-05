@@ -160,6 +160,21 @@ def test_rename_legacy_roles_agrees_with_rules_over_the_new_names_fixture():
     assert rules.design_effect_by_role(renamed) == {"ui_lead": 2}
 
 
+def test_rename_legacy_roles_tolerates_a_change_history_entry_without_a_pair():
+    """A `change_history` entry recorded before `pair` existed has no such key
+    (`rules.resumed_status`'s own `h.get("pair", ...)` reads around the same gap):
+    translation must not raise on it, and must leave it exactly as it was."""
+    state = {
+        "change_history": [
+            {"category": "definition", "reason": "r"},
+            {"pair": "Design Lead→UI Designer", "category": "definition", "reason": "r2"},
+        ]
+    }
+    renamed = legacy_names.rename_legacy_roles(state)
+    assert renamed["change_history"][0] == {"category": "definition", "reason": "r"}
+    assert renamed["change_history"][1]["pair"] == "UI Lead→UI Designer"
+
+
 def test_rename_legacy_roles_is_idempotent():
     once = legacy_names.rename_legacy_roles(_old_fixture())
     twice = legacy_names.rename_legacy_roles(once)

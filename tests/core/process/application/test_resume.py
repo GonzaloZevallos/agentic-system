@@ -3,7 +3,7 @@
 import pytest
 
 from agentic.core.process.application import resume
-from agentic.core.process.domain import document, rules
+from agentic.core.process.domain import document, legacy_names, rules
 from agentic.shared.configuration import Configuration
 from tests.fakes import memory_ports
 
@@ -144,6 +144,37 @@ def test_a_document_written_before_the_prd_rename_still_resumes():
     resumed = resume.from_document("GH-2", ports)
     assert resumed["status"] == "definition_ready"
     assert rules.resume_target(resumed) == "plan"
+
+
+def test_a_document_with_old_role_names_still_resumes():
+    # 2026-10-05 rename: `document.parse` (via `from_frontmatter`) translates the old
+    # role name to the new one before `resume.from_document` ever sees the state, so a
+    # task paused before the rename still resumes with the same section, pair and
+    # return count -- under the new name, as the plan's own invariant requires. The old
+    # name itself comes from `legacy_names`'s own constants, never typed again here.
+    old = (
+        "---\n"
+        "id: GH-4\n"
+        "title: t\n"
+        "status: waiting_on_human\n"
+        "type: feature\n"
+        f"current_role: {legacy_names.OLD_NAME}\n"
+        f"returns: {{'{legacy_names.OLD_NAME}→UI Designer': 1}}\n"
+        "return_history: "
+        f"[{{pair: '{legacy_names.OLD_NAME}→UI Designer', category: definition, reason: r}}]\n"
+        "---\n"
+        f"\n# t\n\n## Original request\n\nd\n\n## {legacy_names.OLD_NAME}\n\napproved\n"
+    )
+    ports = memory_ports()
+    ports.documents.save(document.parse(old))
+    resumed = resume.from_document("GH-4", ports)
+    assert resumed["current_role"] == legacy_names.NEW_NAME
+    assert resumed["changes_requested"] == {f"{legacy_names.NEW_NAME}→UI Designer": 1}
+    assert resumed["change_history"][0]["pair"] == f"{legacy_names.NEW_NAME}→UI Designer"
+    assert set(resumed["sections"]) == {legacy_names.NEW_NAME}
+    # `resume_target` reads the same facts a routing node would: no crash, no stale
+    # old-named section stops it from deciding where this task goes next.
+    assert rules.resume_target(resumed) is None  # `status` still `waiting_on_human`
 
 
 def test_a_document_written_before_system_baseline_existed_still_resumes():

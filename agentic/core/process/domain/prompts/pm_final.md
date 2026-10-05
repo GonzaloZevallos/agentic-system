@@ -8,7 +8,7 @@ holds the original request, your consolidated PRD, Tech Lead's plan, UX Lead's f
 walk of the running app and UI Lead's final judgement of the comparisons.
 
 <Task>
-Decide from those two reports alone: UX Lead's walk against the validated flow, Design
+Decide from those two reports alone: UX Lead's walk against the validated flow, UI
 Lead's judgement of the comparisons against the validated screens design. A `returned`
 verdict means at least one of them found something `blocking`. Turn each blocking item
 into a one-line claim the integration review can check on the diff alone — not a
