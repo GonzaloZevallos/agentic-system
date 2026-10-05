@@ -20,6 +20,7 @@ from datetime import datetime
 from agentic.shared.configuration import Configuration
 
 from ..domain import rules
+from ..domain.task import TaskState
 from .ports import GitError, IssueComment, Launcher, Ports, RunRegistry
 
 # How long `execute` waits for a spawned `run`/`resume` child to register itself
@@ -90,6 +91,51 @@ def _prior_auto_resumes(comments: Sequence[IssueComment]) -> int:
     )
 
 
+def _retake_times(comments: Sequence[IssueComment]) -> list[datetime]:
+    """The `createdAt` of the `Auto-resumed:` comments `_prior_auto_resumes` counts:
+    the same set, with the time each one was posted."""
+    from .resume import SYSTEM_COMMENTS
+
+    last_non_system = _last_non_system_index(comments, SYSTEM_COMMENTS)
+    return [
+        _parse_timestamp(comment.created_at)
+        for comment in comments[last_non_system + 1 :]
+        if comment.body.startswith(AUTO_RESUMED)
+    ]
+
+
+def _interview_round_starts(raw: TaskState) -> list[datetime] | None:
+    """When every round of every interview this epoch broke inside started, joined
+    (a retake is productive if any of those interviews ran a round in its window);
+    `None` when any start is missing or unreadable."""
+    starts: list[datetime] = []
+    for spec in rules.failed_interviews(raw):
+        spec_starts = rules.round_starts(rules.interview_rounds(raw, spec))
+        if spec_starts is None:
+            return None
+        starts.extend(spec_starts)
+    return starts
+
+
+def _account_limit_counts(
+    raw: TaskState, comments: Sequence[IssueComment], chase: int
+) -> tuple[int, bool]:
+    """`(prior, ceiling_spent)` of an `account_limit` pause: `prior` counts only the
+    retakes of the current account window (a delivered run proves the quota was back
+    and opens a new one), falling back to the whole chase when any run's end is
+    unreadable; the ceiling is spent once a retake ran an interview round. Pure reads
+    of the document and the comments already fetched, never a new port call."""
+    retakes = _retake_times(comments)
+    ends = rules.run_ends(raw)
+    prior = chase if ends is None else rules.window_probes(retakes, max(ends, default=None))
+    productive = (
+        rules.productive_retakes(retakes, _interview_round_starts(raw))
+        if rules.failed_interviews(raw)
+        else 0
+    )
+    return prior, rules.interview_ceiling_spent(raw, "account_limit", productive)
+
+
 def _human_spoke_after_the_system(comments: Sequence[IssueComment]) -> bool:
     """Whether a comment that is not the system's own (`resume.SYSTEM_COMMENTS`)
     followed the system's own last one (Human decision, issue #137): a person is
@@ -127,7 +173,8 @@ def gather_closes(ports: Ports) -> list[int]:
 
 def gather_resumes(ports: Ports, now: datetime) -> list[rules.ResumeCandidate]:
     """Every paused task `rules.auto_resumable` finds eligible, with the `since`/
-    `prior`/`limit` `rules.next_attempt_at` needs. A task with no `Escalated:` comment
+    `prior`/`limit` `rules.next_attempt_at` needs, and the `chase_prior`/`ceiling_spent`
+    `rules.resume_exhausted` decides over. A task with no `Escalated:` comment
     at all (its document disagrees with the issue, or it has no issue) is skipped: there
     is no wait to measure `since` from."""
     resumes: list[rules.ResumeCandidate] = []
@@ -150,9 +197,15 @@ def gather_resumes(ports: Ports, now: datetime) -> list[rules.ResumeCandidate]:
             # human's from here on, whatever the calendar says -- never retaken on
             # top of a comment `agentic resume`'s own `--yes` would otherwise run over.
             continue
-        prior = _prior_auto_resumes(comments)
-        limit = rules.auto_resume_limit(raw)
-        resumes.append(rules.ResumeCandidate(number, reason, since, prior, limit))
+        chase = _prior_auto_resumes(comments)
+        if reason == "account_limit":
+            prior, ceiling_spent = _account_limit_counts(raw, comments, chase)
+        else:
+            prior, ceiling_spent = chase, False
+        limit = rules.auto_resume_limit(raw, reason)
+        resumes.append(
+            rules.ResumeCandidate(number, reason, since, prior, limit, chase, ceiling_spent)
+        )
     return resumes
 
 
@@ -217,7 +270,7 @@ def gather_launches(
         since = attempt.since if attempt is not None else None
         prior = attempt.prior if attempt is not None else 0
         launches.append(
-            rules.LaunchCandidate(number, blocked, since, prior, len(rules.AUTO_RESUME_SCHEDULE))
+            rules.LaunchCandidate(number, blocked, since, prior, len(rules.LAUNCH_SCHEDULE))
         )
     return launches
 
@@ -275,7 +328,7 @@ def execute(
     or another product's on the same machine -- never reads a stale count."""
     product = ports.stack.product()
     product_dir = str(cfg.product_dir)
-    total_attempts = len(rules.AUTO_RESUME_SCHEDULE)
+    total_attempts = len(rules.LAUNCH_SCHEDULE)
     lines: list[str] = []
     for action in actions:
         task_id = ports.inbox.task_id(action.issue)

@@ -888,12 +888,23 @@ class InterviewProgress:
     invariants: list[str] = field(default_factory=list)
 
 
+def interview_rounds(state: TaskState, spec: Interview) -> list[RoleRun]:
+    """The interviewer's own runs of `spec`'s section, closing turn included: every
+    round has exactly one, so this is what counts the rounds. The only filter over
+    `state["runs"]` that decides what an interview round is -- `interview_progress` and
+    the poller's productive-retake count both read it, never a copy of the predicate."""
+    return [
+        r
+        for r in state.get("runs", [])
+        if r.get("section", r["role"]) == spec.section and r["role"] == spec.interviewer.name
+    ]
+
+
 def interview_progress(state: TaskState, spec: Interview, max_rounds: int) -> InterviewProgress:
     """`InterviewProgress` for `spec` at this state, against `max_rounds` (the ordinary
     cap, `cfg.interview_max_rounds`): zero rounds done and the whole budget for an
     interview that never ran, whatever a retake already spent otherwise."""
-    runs = [r for r in state.get("runs", []) if r.get("section", r["role"]) == spec.section]
-    rounds_done = sum(1 for r in runs if r["role"] == spec.interviewer.name)
+    rounds_done = len(interview_rounds(state, spec))
     rounds_left = max(max_rounds - rounds_done, INTERVIEW_RETAKE_ROUNDS)
     sessions = {
         role.slug: session
@@ -1678,14 +1689,22 @@ EXTERNAL_REASONS: tuple[FailureReason, ...] = ("account_limit", "upstream", "net
 # Minutes before each of the poller's own automatic attempts, first to last (ADR-0029's
 # addendum, issue #137): never read off an API's own "resets 7:30pm" prose. Indexed by
 # how many automatic attempts already happened (`prior`), capped by `rules.
-# auto_resume_limit`'s own 1 or 6.
-AUTO_RESUME_SCHEDULE: tuple[int, ...] = (15, 30, 60, 120, 120, 120)
+# auto_resume_limit`'s own 1 or 6. Two calendars with the same values today, split so
+# a launch that never registered a run (not a 429) never follows a retake's calendar.
+LAUNCH_SCHEDULE: tuple[int, ...] = (15, 30, 60, 120, 120, 120)
+RETAKE_SCHEDULE: tuple[int, ...] = (15, 30, 60, 120, 120, 120)
 
-# Every interview's own section (`Interview.section`), computed once: what `rules.
-# auto_resume_limit` compares a failure's own `section` against, never a hand-kept copy
-# that could drift from `roles.INTERVIEWS` (the same worry `INTERVIEW_PARTICIPANT_
-# SLUGS` already names above).
-_INTERVIEW_SECTIONS = frozenset(spec.section for spec in INTERVIEWS)
+# After a 429 the only thing that matters is how soon after the account's own reset the
+# next attempt lands, and an attempt the limit cuts again costs ~$0 (the 429 arrives on
+# the role's first turn): a flat 15 minutes, 24 slots to cover a whole 5-hour window
+# (ADR-0039, 2026-10-05 addendum). Never read off the API's "resets at" prose.
+ACCOUNT_LIMIT_SCHEDULE: tuple[int, ...] = (15,) * 24
+
+# Backstop for a loop the per-window count cannot see: a cheap role keeps delivering
+# runs (each one opens a fresh window) while another role keeps hitting a per-model
+# 429. Compared against the whole-chase count a delivered run never resets, only a
+# human comment does: four windows of 24.
+ACCOUNT_LIMIT_CHASE_MAX = 96
 
 
 def logged(patch: dict[str, Any], failures: Sequence[Failure] = ()) -> dict[str, Any]:
@@ -1750,30 +1769,139 @@ def auto_resumable(state: TaskState) -> FailureReason | None:
     return failures[-1]["value"]
 
 
-def auto_resume_limit(state: TaskState) -> int:
-    """How many automatic attempts (`AUTO_RESUME_SCHEDULE`'s own length, at most) this
-    pause's current epoch gets: one when any of its `"failure"` entries broke inside an
-    interview's own section (`_INTERVIEW_SECTIONS`) -- a retake already gives an
+def schedule_for(reason: FailureReason) -> tuple[int, ...]:
+    """The calendar a retake of `reason` follows: the flat `ACCOUNT_LIMIT_SCHEDULE` for
+    a 429, the growing `RETAKE_SCHEDULE` for everything else. The only place a reason
+    maps to a calendar."""
+    return ACCOUNT_LIMIT_SCHEDULE if reason == "account_limit" else RETAKE_SCHEDULE
+
+
+def interview_for_section(section: str) -> Interview | None:
+    """The interview whose own section is `section`, `None` for any other."""
+    for spec in INTERVIEWS:
+        if spec.section == section:
+            return spec
+    return None
+
+
+def failed_interviews(state: TaskState) -> list[Interview]:
+    """The interviews any `"failure"` entry of the current epoch broke inside, each
+    once, in order of failure: empty when none did."""
+    specs: list[Interview] = []
+    for entry in _current_epoch(state):
+        if entry["kind"] != "failure":
+            continue
+        spec = interview_for_section(entry["section"])
+        if spec is not None and spec not in specs:
+            specs.append(spec)
+    return specs
+
+
+def auto_resume_limit(state: TaskState, reason: FailureReason) -> int:
+    """How many window slots this pause's current epoch gets, never `0` and never a
+    flag. An `account_limit` gets the whole flat calendar, interview or not: its
+    interview ceiling is `interview_ceiling_spent`'s, which counts only the retakes
+    that ran a round. Otherwise one when any `"failure"` entry broke inside an
+    interview's own section (`failed_interviews`) -- a retake already gives an
     interview two rounds of margin (`INTERVIEW_RETAKE_ROUNDS`), so a long automatic
     chase on top of that is not this task's own risk to take -- six otherwise, the
     whole calendar."""
-    in_interview = False
-    for entry in _current_epoch(state):
-        if entry["kind"] == "failure" and entry["section"] in _INTERVIEW_SECTIONS:
-            in_interview = True
-    return 1 if in_interview else len(AUTO_RESUME_SCHEDULE)
+    if reason == "account_limit":
+        return len(ACCOUNT_LIMIT_SCHEDULE)
+    return 1 if failed_interviews(state) else len(RETAKE_SCHEDULE)
 
 
-def _schedule_exhausted(prior: int, limit: int) -> bool:
+# Slack on every comparison between a child's own clock (`started_at`/`ended_at`, the
+# machine's) and GitHub's `createdAt` of a comment the poller posted: it absorbs the
+# `gh issue comment` round trip after the spawn, GitHub's whole-second timestamps and
+# NTP skew, and is far below the 15 minutes between two slots. Every error it allows
+# resolves toward spending (a retake counted, a ceiling spent), which sends the task to
+# a human sooner and never pays for an attempt that should not happen.
+CLOCK_TOLERANCE = timedelta(seconds=120)
+
+
+def _instant(value: object) -> datetime | None:
+    """`value` as an aware datetime, `None` when it is missing, not text, not ISO-8601
+    or carries no offset (it could not be compared with GitHub's own `createdAt`)."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
+def run_ends(state: TaskState) -> list[datetime] | None:
+    """Every run's own `ended_at`, `None` when any is missing or unreadable: the caller
+    then falls back to the whole-chase count, which fails toward the human."""
+    ends: list[datetime] = []
+    for run in state.get("runs", []):
+        end = _instant(run.get("ended_at"))
+        if end is None:
+            return None
+        ends.append(end)
+    return ends
+
+
+def round_starts(rounds: Sequence[RoleRun]) -> list[datetime] | None:
+    """Every round's own `started_at`, `None` when any is missing or unreadable."""
+    starts: list[datetime] = []
+    for run in rounds:
+        start = _instant(run.get("started_at"))
+        if start is None:
+            return None
+        starts.append(start)
+    return starts
+
+
+def window_probes(retake_times: Sequence[datetime], last_run_end: datetime | None) -> int:
+    """How many retakes of the current account window (ADR-0039, 2026-10-05 addendum):
+    the `Auto-resumed:` comments' own times that fall after the last delivered run
+    ended -- a delivered run proves the account's quota was back, so the window starts
+    over. `last_run_end=None` means no run at all: they all count."""
+    if last_run_end is None:
+        return len(retake_times)
+    return sum(1 for t in retake_times if t > last_run_end - CLOCK_TOLERANCE)
+
+
+def productive_retakes(retake_times: Sequence[datetime], starts: Sequence[datetime] | None) -> int:
+    """How many retakes ran at least one interview round: retake i is productive when
+    some round started in `[t_i - CLOCK_TOLERANCE, t_{i+1} - CLOCK_TOLERANCE)`, the
+    last window open-ended. A retake the 429 cut on turn 1 ran nothing, so it does not
+    spend the interview's ceiling. `starts=None` (a round's start unreadable) returns
+    1: the ceiling counts as spent, failing closed."""
+    if starts is None:
+        return 1
+    times = sorted(retake_times)
+    productive = 0
+    for i, t in enumerate(times):
+        lower = t - CLOCK_TOLERANCE
+        upper = times[i + 1] - CLOCK_TOLERANCE if i + 1 < len(times) else None
+        if any(s >= lower and (upper is None or s < upper) for s in starts):
+            productive += 1
+    return productive
+
+
+def interview_ceiling_spent(state: TaskState, reason: FailureReason, productive: int) -> bool:
+    """Whether an `account_limit` pause cut inside an interview already had a retake
+    that ran a round: the ceiling ADR-0039 gives interviews (a retake gives it
+    `INTERVIEW_RETAKE_ROUNDS` more rounds), spent only by retakes that ran something."""
+    return reason == "account_limit" and bool(failed_interviews(state)) and productive >= 1
+
+
+def _schedule_exhausted(prior: int, limit: int, *, schedule: tuple[int, ...]) -> bool:
     """Whether `prior` automatic attempts have already used up every slot
-    `AUTO_RESUME_SCHEDULE[:limit]` has: `next_attempt_at`'s own exhaustion check,
+    `schedule[:limit]` has: `next_attempt_at`'s own exhaustion check,
     factored out so `poll_plan` can tell it apart from "not due yet" -- both of those
     read as `None` from `next_attempt_at` alone, and only the first (a calendar that
     ran out, not one still ticking) must stop blocking a launch."""
-    return prior >= len(AUTO_RESUME_SCHEDULE[:limit])
+    return prior >= len(schedule[:limit])
 
 
-def next_attempt_at(since: datetime, prior: int, limit: int, now: datetime) -> datetime | None:
+def next_attempt_at(
+    since: datetime, prior: int, limit: int, now: datetime, *, schedule: tuple[int, ...]
+) -> datetime | None:
     """The next automatic attempt's own time, but only once it is due (issue #137):
     `None` both when the calendar is spent (`_schedule_exhausted`, no slot left to
     schedule) and when the next slot has not arrived yet (`now` before it) -- the two
@@ -1782,10 +1910,11 @@ def next_attempt_at(since: datetime, prior: int, limit: int, now: datetime) -> d
     own time for a retake, the last launch attempt's own time for a launch (Tech Lead
     plan); `prior` is how many automatic attempts already happened since then. Never
     reads a clock of its own (README.md, 14): `now` arrives as an argument, like
-    `since`."""
-    if _schedule_exhausted(prior, limit):
+    `since`. `schedule` is the calendar the caller's own attempts follow, never
+    defaulted: a launch passes `LAUNCH_SCHEDULE`, a retake the one its reason names."""
+    if _schedule_exhausted(prior, limit, schedule=schedule):
         return None
-    target = since + timedelta(minutes=AUTO_RESUME_SCHEDULE[prior])
+    target = since + timedelta(minutes=schedule[prior])
     return target if target <= now else None
 
 
@@ -1879,6 +2008,23 @@ class ResumeCandidate:
     since: datetime
     prior: int
     limit: int
+    # The whole-chase count (a delivered run never resets it, only a human comment
+    # does) `ACCOUNT_LIMIT_CHASE_MAX` bounds, and whether an interview's ceiling is
+    # spent: appended with defaults so a candidate built without them stays valid.
+    chase_prior: int = 0
+    ceiling_spent: bool = False
+
+
+def resume_exhausted(r: ResumeCandidate) -> bool:
+    """Whether a resume candidate needs a human now: its own calendar is spent
+    (`limit` counts window slots only, `0` is just an empty calendar), the whole chase
+    reached `ACCOUNT_LIMIT_CHASE_MAX`, or an interview's ceiling is spent. The one
+    exhaustion decision `poll_plan` takes over a resume."""
+    return (
+        _schedule_exhausted(r.prior, r.limit, schedule=schedule_for(r.reason))
+        or r.chase_prior >= ACCOUNT_LIMIT_CHASE_MAX
+        or r.ceiling_spent
+    )
 
 
 @dataclass(frozen=True)
@@ -1911,7 +2057,7 @@ def poll_plan(
     any) elapsed -- and only when no eligible pause anywhere in the product is still
     waiting out its own calendar (its own next slot has not arrived yet, but one is
     still scheduled), whether or not a slot is free for it. A pause whose calendar is
-    spent (`_schedule_exhausted`) does not count as "still waiting": it needs a human
+    spent (`resume_exhausted`) does not count as "still waiting": it needs a human
     now, same as any other escalation, and must not freeze every launch in the product
     until one acts. `available_slots` already reflects the machine-wide cap
     (`AGENTIC_MAX_CONCURRENT_RUNS`) minus every run alive right now, counted by the
@@ -1919,7 +2065,13 @@ def poll_plan(
     actions = [PollAction("close", issue) for issue in sorted(closes)]
 
     due_resumes = sorted(
-        (r for r in resumes if next_attempt_at(r.since, r.prior, r.limit, now) is not None),
+        (
+            r
+            for r in resumes
+            if not resume_exhausted(r)
+            and next_attempt_at(r.since, r.prior, r.limit, now, schedule=schedule_for(r.reason))
+            is not None
+        ),
         key=lambda r: r.issue,
     )
     taken = due_resumes[: max(available_slots, 0)]
@@ -1927,8 +2079,8 @@ def poll_plan(
 
     slots_left = max(available_slots - len(taken), 0)
     some_resume_still_waiting = any(
-        not _schedule_exhausted(r.prior, r.limit)
-        and next_attempt_at(r.since, r.prior, r.limit, now) is None
+        not resume_exhausted(r)
+        and next_attempt_at(r.since, r.prior, r.limit, now, schedule=schedule_for(r.reason)) is None
         for r in resumes
     )
     if slots_left > 0 and not some_resume_still_waiting:
@@ -1937,7 +2089,11 @@ def poll_plan(
                 c
                 for c in launches
                 if not c.blocked
-                and (c.since is None or next_attempt_at(c.since, c.prior, c.limit, now) is not None)
+                and (
+                    c.since is None
+                    or next_attempt_at(c.since, c.prior, c.limit, now, schedule=LAUNCH_SCHEDULE)
+                    is not None
+                )
             ),
             key=lambda c: c.issue,
         )
