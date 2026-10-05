@@ -112,65 +112,125 @@ la misma que ADR-0036 pidió.
 
 Comando: `uv run pytest -m llm tests/llm/test_sonnet_side_model.py -v -s`.
 
-Corrida de decisión (contra el literal `claude-sonnet-5-5`, antes de mover los
-defaults):
+### Corrida de decisión (histórica)
+
+Contra el literal `claude-sonnet-5-5` declarado en el archivo antes de mover
+los defaults -- ese literal ya no existe en el diff committeado (el archivo
+hoy resuelve `Configuration.model_fields[...].default`), así que este bloque
+es la salida tal como se capturó en ese momento, pegada sin editar, y no algo
+que un `git checkout` de este commit pueda reproducir:
 
 ```
-tests/llm/test_sonnet_side_model.py::test_sonnet_5_5_is_accepted_as_actor_model[high]
+tests/llm/test_sonnet_side_model.py::test_sonnet_5_5_is_accepted_as_actor_model[high] [claude-code:unrecognized_model] {"model":"claude-sonnet-5-5","query_source":"sdk"}
 effort='high' candidate actor model: claude-sonnet-5-5
 effort='high' attempt 1: green, cost 0.009656
+effort='high' ResultMessage.is_error: False
+effort='high' ResultMessage.total_cost_usd: 0.009656
+effort='high' ResultMessage.model_usage: {'claude-sonnet-5-5': {'inputTokens': 2, 'outputTokens': 66, 'cacheReadInputTokens': 0, 'cacheCreationInputTokens': 1041, 'webSearchRequests': 0, 'costUSD': 0.009656, 'contextWindow': 200000, 'maxOutputTokens': 128000, 'thinkingTokens': 0, 'canonicalModel': 'claude-sonnet-5-5', 'provider': 'firstParty', 'costBasis': 'unknown'}}
 PASSED
-tests/llm/test_sonnet_side_model.py::test_sonnet_5_5_is_accepted_as_actor_model[low]
+tests/llm/test_sonnet_side_model.py::test_sonnet_5_5_is_accepted_as_actor_model[low] [claude-code:unrecognized_model] {"model":"claude-sonnet-5-5","query_source":"sdk"}
 effort='low' candidate actor model: claude-sonnet-5-5
 effort='low' attempt 1: green, cost 0.0065024
+effort='low' ResultMessage.is_error: False
+effort='low' ResultMessage.total_cost_usd: 0.0065024
+effort='low' ResultMessage.model_usage: {'claude-haiku-4-5-20251001': {'inputTokens': 936, 'outputTokens': 12, 'cacheReadInputTokens': 0, 'cacheCreationInputTokens': 0, 'webSearchRequests': 0, 'costUSD': 0.000996, 'contextWindow': 200000, 'maxOutputTokens': 32000, 'thinkingTokens': 0, 'canonicalModel': 'claude-haiku-4-5', 'provider': 'firstParty', 'costBasis': 'list'}, 'claude-sonnet-5-5': {'inputTokens': 2, 'outputTokens': 66, 'cacheReadInputTokens': 532, 'cacheCreationInputTokens': 509, 'webSearchRequests': 0, 'costUSD': 0.0055064, 'contextWindow': 200000, 'maxOutputTokens': 128000, 'thinkingTokens': 0, 'canonicalModel': 'claude-sonnet-5-5', 'provider': 'firstParty', 'costBasis': 'unknown'}}
 PASSED
-tests/llm/test_sonnet_side_model.py::test_sonnet_5_5_is_accepted_as_actor_model[medium]
+tests/llm/test_sonnet_side_model.py::test_sonnet_5_5_is_accepted_as_actor_model[medium] [claude-code:unrecognized_model] {"model":"claude-sonnet-5-5","query_source":"sdk"}
 effort='medium' candidate actor model: claude-sonnet-5-5
 effort='medium' attempt 1: green, cost 0.0065124
+effort='medium' ResultMessage.is_error: False
+effort='medium' ResultMessage.total_cost_usd: 0.0065124
+effort='medium' ResultMessage.model_usage: {'claude-haiku-4-5-20251001': {'inputTokens': 936, 'outputTokens': 14, 'cacheReadInputTokens': 0, 'cacheCreationInputTokens': 0, 'webSearchRequests': 0, 'costUSD': 0.001006, 'contextWindow': 200000, 'maxOutputTokens': 32000, 'thinkingTokens': 0, 'canonicalModel': 'claude-haiku-4-5', 'provider': 'firstParty', 'costBasis': 'list'}, 'claude-sonnet-5-5': {'inputTokens': 2, 'outputTokens': 66, 'cacheReadInputTokens': 532, 'cacheCreationInputTokens': 509, 'webSearchRequests': 0, 'costUSD': 0.0055064, 'contextWindow': 200000, 'maxOutputTokens': 128000, 'thinkingTokens': 0, 'canonicalModel': 'claude-sonnet-5-5', 'provider': 'firstParty', 'costBasis': 'unknown'}}
 PASSED
-tests/llm/test_sonnet_side_model.py::test_sonnet_5_5_is_accepted_as_subagent_model
+tests/llm/test_sonnet_side_model.py::test_sonnet_5_5_is_accepted_as_subagent_model [claude-code:unrecognized_model] {"model":"claude-sonnet-5-5","query_source":"agent:builtin:general-purpose"}
 parent model (verifier_model default): claude-opus-5-5
 candidate subagent model: claude-sonnet-5-5
 attempt 1: green, cost 0.05119819999999999
+ResultMessage.is_error: False
+ResultMessage.total_cost_usd: 0.05119819999999999
+ResultMessage.model_usage: {'claude-haiku-4-5-20251001': {'inputTokens': 978, 'outputTokens': 13, 'cacheReadInputTokens': 0, 'cacheCreationInputTokens': 0, 'webSearchRequests': 0, 'costUSD': 0.0010429999999999999, 'contextWindow': 200000, 'maxOutputTokens': 32000, 'thinkingTokens': 0, 'canonicalModel': 'claude-haiku-4-5', 'provider': 'firstParty', 'costBasis': 'list'}, 'claude-opus-5-5': {'inputTokens': 4, 'outputTokens': 218, 'cacheReadInputTokens': 2591, 'cacheCreationInputTokens': 3041, 'webSearchRequests': 0, 'costUSD': 0.029222199999999997, 'contextWindow': 1000000, 'maxOutputTokens': 128000, 'thinkingTokens': 0, 'canonicalModel': 'claude-opus-5-5', 'provider': 'firstParty', 'costBasis': 'list'}, 'claude-sonnet-5-5': {'inputTokens': 2, 'outputTokens': 3, 'cacheReadInputTokens': 0, 'cacheCreationInputTokens': 4173, 'webSearchRequests': 0, 'costUSD': 0.020932999999999997, 'contextWindow': 200000, 'maxOutputTokens': 32000, 'thinkingTokens': 0, 'canonicalModel': 'claude-sonnet-5-5', 'provider': 'firstParty', 'costBasis': 'unknown'}}
 PASSED
 
-4 passed, 1 warning in 15.49s
+=============================== warnings summary ===============================
+tests/llm/test_sonnet_side_model.py::test_sonnet_5_5_is_accepted_as_subagent_model
+  .venv/lib/python3.13/site-packages/claude_agent_sdk/types.py:1939: CanUseToolShadowedWarning: can_use_tool will not be invoked for: Agent. An allowed_tools entry that allows a whole tool auto-approves it before the callback is consulted. To gate every tool call, use a PreToolUse hook; or narrow the entry so calls fall through to can_use_tool. Allow rules from settings files can also shadow the callback but are not visible here.
+    _warn_if_can_use_tool_shadowed(options)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 4 passed, 1 warning in 15.49s =========================
 ```
 
 Suma de la corrida de decisión: `0.009656 + 0.0065024 + 0.0065124 +
-0.05119819999999999 = 0.07386899...` USD.
+0.05119819999999999 = 0.07386899999999999` USD.
 
-Corrida posterior al movimiento (el archivo ya resuelve
-`Configuration.model_fields["actor_model"].default` /
-`["subagent_model"].default`, nunca un literal):
+### Corrida sobre el archivo committeado (verbatim)
+
+Esta es la salida real de correr el archivo tal como quedó en el commit de
+esta subtarea (resuelve `Configuration.model_fields["actor_model"].default` /
+`["subagent_model"].default`, nunca un literal; imprime `is_error`,
+`total_cost_usd` y `model_usage` de cada intento, `agent_seen`/`denials`
+incluidos para el caso de sub-agente), pegada completa y sin editar:
 
 ```
-tests/llm/test_sonnet_side_model.py::test_sonnet_5_5_is_accepted_as_actor_model[high]
+============================= test session starts ==============================
+platform linux -- Python 3.13.15, pytest-9.1.1, pluggy-1.6.0 -- .venv/bin/python
+cachedir: .pytest_cache
+rootdir: /home/zeta/dev/repos/agentic-system/.agentic/worktrees/GH-163
+configfile: pyproject.toml
+plugins: langsmith-0.12.4, anyio-4.15.1
+collecting ... collected 4 items
+
+tests/llm/test_sonnet_side_model.py::test_sonnet_5_5_is_accepted_as_actor_model[high] [claude-code:unrecognized_model] {"model":"claude-sonnet-5-5","query_source":"sdk"}
 effort='high' resolved actor_model default: claude-sonnet-5-5
-effort='high' attempt 1: green, cost 0.0065074
+effort='high' attempt 1: ResultMessage.is_error=False total_cost_usd=0.0065024 model_usage={'claude-haiku-4-5-20251001': {'inputTokens': 936, 'outputTokens': 12, 'cacheReadInputTokens': 0, 'cacheCreationInputTokens': 0, 'webSearchRequests': 0, 'costUSD': 0.000996, 'contextWindow': 200000, 'maxOutputTokens': 32000, 'thinkingTokens': 0, 'canonicalModel': 'claude-haiku-4-5', 'provider': 'firstParty', 'costBasis': 'list'}, 'claude-sonnet-5-5': {'inputTokens': 2, 'outputTokens': 66, 'cacheReadInputTokens': 532, 'cacheCreationInputTokens': 509, 'webSearchRequests': 0, 'costUSD': 0.0055064, 'contextWindow': 200000, 'maxOutputTokens': 128000, 'thinkingTokens': 0, 'canonicalModel': 'claude-sonnet-5-5', 'provider': 'firstParty', 'costBasis': 'unknown'}}
+effort='high' attempt 1: green, cost 0.0065024
 PASSED
-tests/llm/test_sonnet_side_model.py::test_sonnet_5_5_is_accepted_as_actor_model[low]
+tests/llm/test_sonnet_side_model.py::test_sonnet_5_5_is_accepted_as_actor_model[low] [claude-code:unrecognized_model] {"model":"claude-sonnet-5-5","query_source":"sdk"}
 effort='low' resolved actor_model default: claude-sonnet-5-5
+effort='low' attempt 1: ResultMessage.is_error=False total_cost_usd=0.0065074 model_usage={'claude-haiku-4-5-20251001': {'inputTokens': 936, 'outputTokens': 13, 'cacheReadInputTokens': 0, 'cacheCreationInputTokens': 0, 'webSearchRequests': 0, 'costUSD': 0.001001, 'contextWindow': 200000, 'maxOutputTokens': 32000, 'thinkingTokens': 0, 'canonicalModel': 'claude-haiku-4-5', 'provider': 'firstParty', 'costBasis': 'list'}, 'claude-sonnet-5-5': {'inputTokens': 2, 'outputTokens': 66, 'cacheReadInputTokens': 532, 'cacheCreationInputTokens': 509, 'webSearchRequests': 0, 'costUSD': 0.0055064, 'contextWindow': 200000, 'maxOutputTokens': 128000, 'thinkingTokens': 0, 'canonicalModel': 'claude-sonnet-5-5', 'provider': 'firstParty', 'costBasis': 'unknown'}}
 effort='low' attempt 1: green, cost 0.0065074
 PASSED
-tests/llm/test_sonnet_side_model.py::test_sonnet_5_5_is_accepted_as_actor_model[medium]
+tests/llm/test_sonnet_side_model.py::test_sonnet_5_5_is_accepted_as_actor_model[medium] [claude-code:unrecognized_model] {"model":"claude-sonnet-5-5","query_source":"sdk"}
 effort='medium' resolved actor_model default: claude-sonnet-5-5
-effort='medium' attempt 1: green, cost 0.0065124
+effort='medium' attempt 1: ResultMessage.is_error=False total_cost_usd=0.0065024 model_usage={'claude-haiku-4-5-20251001': {'inputTokens': 936, 'outputTokens': 12, 'cacheReadInputTokens': 0, 'cacheCreationInputTokens': 0, 'webSearchRequests': 0, 'costUSD': 0.000996, 'contextWindow': 200000, 'maxOutputTokens': 32000, 'thinkingTokens': 0, 'canonicalModel': 'claude-haiku-4-5', 'provider': 'firstParty', 'costBasis': 'list'}, 'claude-sonnet-5-5': {'inputTokens': 2, 'outputTokens': 66, 'cacheReadInputTokens': 532, 'cacheCreationInputTokens': 509, 'webSearchRequests': 0, 'costUSD': 0.0055064, 'contextWindow': 200000, 'maxOutputTokens': 128000, 'thinkingTokens': 0, 'canonicalModel': 'claude-sonnet-5-5', 'provider': 'firstParty', 'costBasis': 'unknown'}}
+effort='medium' attempt 1: green, cost 0.0065024
 PASSED
-tests/llm/test_sonnet_side_model.py::test_sonnet_5_5_is_accepted_as_subagent_model
+tests/llm/test_sonnet_side_model.py::test_sonnet_5_5_is_accepted_as_subagent_model [claude-code:unrecognized_model] {"model":"claude-sonnet-5-5","query_source":"agent:builtin:general-purpose"}
 parent model (verifier_model default): claude-opus-5-5
 resolved subagent_model default: claude-sonnet-5-5
-attempt 1: green, cost 0.021801400000000002
+attempt 1: ResultMessage.is_error=False total_cost_usd=0.021795400000000003 model_usage={'claude-haiku-4-5-20251001': {'inputTokens': 978, 'outputTokens': 15, 'cacheReadInputTokens': 0, 'cacheCreationInputTokens': 0, 'webSearchRequests': 0, 'costUSD': 0.001053, 'contextWindow': 200000, 'maxOutputTokens': 32000, 'thinkingTokens': 0, 'canonicalModel': 'claude-haiku-4-5', 'provider': 'firstParty', 'costBasis': 'list'}, 'claude-opus-5-5': {'inputTokens': 4, 'outputTokens': 218, 'cacheReadInputTokens': 4055, 'cacheCreationInputTokens': 1576, 'webSearchRequests': 0, 'costUSD': 0.017795000000000002, 'contextWindow': 1000000, 'maxOutputTokens': 128000, 'thinkingTokens': 0, 'canonicalModel': 'claude-opus-5-5', 'provider': 'firstParty', 'costBasis': 'list'}, 'claude-sonnet-5-5': {'inputTokens': 2, 'outputTokens': 3, 'cacheReadInputTokens': 3747, 'cacheCreationInputTokens': 426, 'webSearchRequests': 0, 'costUSD': 0.0029474, 'contextWindow': 200000, 'maxOutputTokens': 32000, 'thinkingTokens': 0, 'canonicalModel': 'claude-sonnet-5-5', 'provider': 'firstParty', 'costBasis': 'unknown'}} (agent_seen=True, denials=0)
+attempt 1: green, cost 0.021795400000000003
 PASSED
 
-4 passed, 1 warning in 15.06s
+=============================== warnings summary ===============================
+tests/llm/test_sonnet_side_model.py::test_sonnet_5_5_is_accepted_as_subagent_model
+  .venv/lib/python3.13/site-packages/claude_agent_sdk/types.py:1939: CanUseToolShadowedWarning: can_use_tool will not be invoked for: Agent. An allowed_tools entry that allows a whole tool auto-approves it before the callback is consulted. To gate every tool call, use a PreToolUse hook; or narrow the entry so calls fall through to can_use_tool. Allow rules from settings files can also shadow the callback but are not visible here.
+    _warn_if_can_use_tool_shadowed(options)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 4 passed, 1 warning in 15.43s =========================
 ```
 
-Suma de la segunda corrida: `0.0065074 + 0.0065074 + 0.0065124 +
-0.021801400000000002 = 0.0413286...` USD.
+Confirma, byte a byte, la clave exacta `claude-sonnet-5-5` en `model_usage` del
+caso de sub-agente con `costUSD=0.0029474` (> 0), y `agent_seen=True`,
+`denials=0` antes de esa lectura -- el sub-agente efectivamente corrió, y
+corrió sobre el candidato.
 
-Suma de las dos corridas: `≈ 0.1158` USD -- muy por debajo del techo de 16 USD
-que el plan fijó para el gate de esta subtarea.
+Suma de esta corrida: `0.0065024 + 0.0065074 + 0.0065024 +
+0.021795400000000003 = 0.0413076` USD.
+
+### Suma total y corridas intermedias
+
+Entre la corrida de decisión y la corrida verbatim de arriba, dos corridas
+intermedias del mismo archivo (una sobre el head committeado tal cual, antes
+de que esta misma revisión pidiera que cada intento imprimiera su propio
+`is_error`/`total_cost_usd`/`model_usage`; otra inmediatamente después de ese
+cambio de impresión) resultaron igual de verdes, en 0.05926319999999999 y
+0.0413076 USD respectivamente -- no se pegan completas aquí porque la de
+arriba ya es la que corresponde al archivo tal como quedó committeado. Sumando
+las cuatro corridas: `0.07386899999999999 + 0.0413282 + 0.059263199999999995 +
+0.0413076 ≈ 0.2158` USD -- muy por debajo del techo de 16 USD que el plan fijó
+para el gate de esta subtarea.
 
 El `CanUseToolShadowedWarning` que la SDK emite en el caso de sub-agente es
 esperado y benigno: `Agent` está en `allowed`, así que la SDK auto-aprueba la

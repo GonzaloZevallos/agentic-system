@@ -11,9 +11,9 @@ never a literal, and never the environment (`from_sources` reads
 someone pulled the rollback lever would prove a model that is not shipping, silently).
 
 Same shape as `test_verifier_model.py`, not a refactor of it. Toy roles are built here,
-never added to `agentic/domain/roles.py` (invariant: no subtask adds a `Role` to the
-domain, not even for a test), with `schemas.RoleOutput` itself as their schema -- the
-one-field `markdown` shape, never a real actor's.
+never added to `agentic/core/process/domain/roles.py` (invariant: no subtask adds a
+`Role` to the domain, not even for a test), with `schemas.RoleOutput` itself as their
+schema -- the one-field `markdown` shape, never a real actor's.
 
 Options go through `options_for`, the same function production calls. Bounded:
 `max_budget_usd=1.0`, `max_turns=4`, capped at two attempts per case (`RETRY_BUDGET`),
@@ -162,6 +162,14 @@ async def test_sonnet_5_5_is_accepted_as_actor_model(effort: str, tmp_path: Path
     reason: str | None = None
     for attempt in range(1, RETRY_BUDGET + 1):
         result, exc = await _actor_attempt(tmp_path, role, model)
+        if result is not None:
+            print(
+                f"effort={effort!r} attempt {attempt}: ResultMessage.is_error="
+                f"{result.is_error} total_cost_usd={result.total_cost_usd} "
+                f"model_usage={result.model_usage}"
+            )
+        else:
+            print(f"effort={effort!r} attempt {attempt}: no ResultMessage, exception={exc!r}")
         if result is not None and not result.is_error and result.total_cost_usd:
             print(f"effort={effort!r} attempt {attempt}: green, cost {result.total_cost_usd}")
             break
@@ -173,9 +181,6 @@ async def test_sonnet_5_5_is_accepted_as_actor_model(effort: str, tmp_path: Path
     assert result is not None, (
         f"effort={effort!r}: no ResultMessage on any attempt (last classified: {reason!r})"
     )
-    print(f"effort={effort!r} ResultMessage.is_error:", result.is_error)
-    print(f"effort={effort!r} ResultMessage.total_cost_usd:", result.total_cost_usd)
-    print(f"effort={effort!r} ResultMessage.model_usage:", result.model_usage)
     assert not result.is_error, f"effort={effort!r}: run failed, classified {reason!r}"
     assert result.total_cost_usd is not None and result.total_cost_usd > 0
 
@@ -272,6 +277,17 @@ async def test_sonnet_5_5_is_accepted_as_subagent_model(tmp_path: Path) -> None:
     denials = 0
     for attempt in range(1, RETRY_BUDGET + 1):
         result, exc, agent_seen, denials = await _subagent_attempt(tmp_path, env)
+        if result is not None:
+            print(
+                f"attempt {attempt}: ResultMessage.is_error={result.is_error} "
+                f"total_cost_usd={result.total_cost_usd} model_usage={result.model_usage} "
+                f"(agent_seen={agent_seen}, denials={denials})"
+            )
+        else:
+            print(
+                f"attempt {attempt}: no ResultMessage, exception={exc!r} "
+                f"(agent_seen={agent_seen}, denials={denials})"
+            )
         if result is not None and not result.is_error and result.total_cost_usd:
             print(f"attempt {attempt}: green, cost {result.total_cost_usd}")
             break
@@ -281,9 +297,6 @@ async def test_sonnet_5_5_is_accepted_as_subagent_model(tmp_path: Path) -> None:
             break
 
     assert result is not None, f"no ResultMessage on any attempt (last classified: {reason!r})"
-    print("ResultMessage.is_error:", result.is_error)
-    print("ResultMessage.total_cost_usd:", result.total_cost_usd)
-    print("ResultMessage.model_usage:", result.model_usage)
 
     # The sub-agent must actually have run, or neither this assertion nor the one on
     # `model_usage` below is evidence about the model at all (module docstring): a
