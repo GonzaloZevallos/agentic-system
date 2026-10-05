@@ -13,6 +13,7 @@ same diff so a resume reads it as the system's own, never a human's answer."""
 
 from __future__ import annotations
 
+import functools
 import time
 from collections.abc import Callable, Sequence
 from datetime import datetime
@@ -20,7 +21,7 @@ from datetime import datetime
 from agentic.shared.configuration import Configuration
 
 from ..domain import rules
-from .ports import GitError, IssueComment, Launcher, Ports, RunRegistry
+from .ports import GitError, IssueComment, Launcher, Ports, RunRegistry, Upstream
 
 # How long `execute` waits for a spawned `run`/`resume` child to register itself
 # (Human decision, issue #137): a second round must never count a slot this round's
@@ -171,16 +172,25 @@ def _merge_commit_for(ports: Ports, blocker: int, closing_merge_commit: str | No
     return closing_merge_commit
 
 
-def _blocker_resolved(cfg: Configuration, ports: Ports, blocker: int) -> bool:
+def _blocker_resolved(
+    cfg: Configuration, ports: Ports, blocker: int, upstream: Callable[[], Upstream]
+) -> bool:
     state = ports.tracker.issue_state(blocker)
     if state.state != "CLOSED":
         return False
     merge_commit = _merge_commit_for(ports, blocker, state.closing_merge_commit)
-    merged = merge_commit is not None and ports.workspace.is_ancestor(cfg.product_dir, merge_commit)
+    # The fetched tip, never local `HEAD` (GH-180): a merge on the remote that nobody
+    # pulled is merged. `upstream` is asked only here, when a merge commit is to be
+    # judged, and is memoised per round by `run_once`: at most one fetch.
+    merged = merge_commit is not None and ports.workspace.is_ancestor(
+        cfg.product_dir, merge_commit, ref=upstream().sha or "HEAD"
+    )
     return rules.blocker_resolved(state.state_reason, merged)
 
 
-def _blocked(cfg: Configuration, ports: Ports, number: int) -> bool:
+def _blocked(
+    cfg: Configuration, ports: Ports, number: int, upstream: Callable[[], Upstream]
+) -> bool:
     """Whether `number` still has an unresolved blocker. Any doubt -- an unknown git
     object, a `gh` failure, a blocker whose own `stateReason` this function does not
     recognize, or a real git failure (`GitError` out of `Workspace.is_ancestor`,
@@ -191,13 +201,16 @@ def _blocked(cfg: Configuration, ports: Ports, number: int) -> bool:
     candidate's own launch, never the round, and never the process."""
     try:
         blockers = _blocker_numbers(ports, number)
-        return not all(_blocker_resolved(cfg, ports, b) for b in blockers)
+        return not all(_blocker_resolved(cfg, ports, b, upstream) for b in blockers)
     except (ValueError, OSError, KeyError, GitError):
         return True
 
 
 def gather_launches(
-    cfg: Configuration, ports: Ports, registry: RunRegistry
+    cfg: Configuration,
+    ports: Ports,
+    registry: RunRegistry,
+    upstream: Callable[[], Upstream] | None = None,
 ) -> list[rules.LaunchCandidate]:
     """Every open `agentic`-labelled issue with no document yet (no run, so nothing
     delivered and no pull request either): `rules.poll_plan`'s own launch candidates,
@@ -205,6 +218,7 @@ def gather_launches(
     launch that never registered a run does not relaunch every round. An issue that
     now has a document clears its own stale attempt record (`registry.clear_launch`):
     it is no longer a candidate at all."""
+    upstream = upstream or functools.cache(ports.workspace.upstream)
     product = ports.stack.product()
     launches: list[rules.LaunchCandidate] = []
     for number in ports.tracker.queue():
@@ -212,7 +226,7 @@ def gather_launches(
         if ports.documents.load(task_id) is not None:
             registry.clear_launch(product, number)
             continue
-        blocked = _blocked(cfg, ports, number)
+        blocked = _blocked(cfg, ports, number, upstream)
         attempt = registry.launch_attempts(product, number)
         since = attempt.since if attempt is not None else None
         prior = attempt.prior if attempt is not None else 0
@@ -318,6 +332,14 @@ def execute(
     return lines
 
 
+def _upstream_notes(asked: bool, upstream: Callable[[], Upstream]) -> list[str]:
+    """The one line a round says about its upstream, when it asked for one at all and the
+    answer was not the plain fetched tip (GH-180): the poller's output is where a human
+    watching it learns the fetch failed or local commits were left out."""
+    note = upstream().note if asked else None
+    return [f"agentic: poll: upstream: {note}"] if note else []
+
+
 def run_once(
     cfg: Configuration,
     ports: Ports,
@@ -338,11 +360,13 @@ def run_once(
     resumes = gather_resumes(ports, now)
     with registry.exclusive():
         available = max(cfg.max_concurrent_runs - len(registry.live()), 0)
-        launches = gather_launches(cfg, ports, registry)
+        upstream = functools.cache(ports.workspace.upstream)
+        launches = gather_launches(cfg, ports, registry, upstream)
+        notes = _upstream_notes(upstream.cache_info().currsize > 0, upstream)
         actions = rules.poll_plan(
             closes=closes, resumes=resumes, launches=launches, available_slots=available, now=now
         )
         lines = execute(
             actions, cfg, ports, registry, launcher, now, argv0, register_timeout_s, sleep
         )
-    return lines or ["agentic: poll: nothing to do this round"]
+    return [*notes, *(lines or ["agentic: poll: nothing to do this round"])]

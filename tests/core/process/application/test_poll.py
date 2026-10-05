@@ -12,6 +12,7 @@ from agentic.core.process.application.ports import (
     IssueState,
     LaunchAttempt,
     RunRegistration,
+    Upstream,
 )
 from agentic.core.process.domain.task import PullRequest
 from agentic.shared.configuration import Configuration
@@ -559,3 +560,62 @@ def test_every_launched_action_uses_the_argv0_passed_in(tmp_path):
     )
     assert lines == ["agentic: poll: launch #5 -> pid 4242"]
     assert launcher.spawned[0][0] == "/venv/bin/agentic"
+
+
+def _two_candidates_with_merged_blockers(ports) -> None:
+    ports.tracker._queue = [5, 6]
+    ports.tracker.states[5] = IssueState("OPEN", "", (3,), None)
+    ports.tracker.states[6] = IssueState("OPEN", "", (4,), None)
+    ports.tracker.states[3] = IssueState("CLOSED", "COMPLETED", None, "aaa111")
+    ports.tracker.states[4] = IssueState("CLOSED", "COMPLETED", None, "bbb222")
+
+
+def test_an_empty_queue_never_asks_for_the_upstream(tmp_path):
+    ports = memory_ports()
+    _round(_cfg(tmp_path), ports, MemoryRunRegistry(), FakeLauncher(), ESCALATED_AT)
+    assert ports.workspace.upstream_calls == 0
+
+
+def test_candidates_with_no_blockers_never_ask_for_the_upstream(tmp_path):
+    ports = memory_ports()
+    ports.tracker._queue = [5, 6]
+    for number in (5, 6):
+        ports.tracker.states[number] = IssueState("OPEN", "", (), None)
+        _seed_body(ports, number)
+    _round(_cfg(tmp_path), ports, MemoryRunRegistry(), FakeLauncher(), ESCALATED_AT)
+    assert ports.workspace.upstream_calls == 0
+
+
+def test_two_candidates_with_merged_blockers_fetch_once_and_judge_against_that_tip(tmp_path):
+    ports = memory_ports()
+    _two_candidates_with_merged_blockers(ports)
+    ports.workspace.upstream_answer = Upstream("origin/master", "f00dcafe", None)
+    ports.workspace.ancestors = {"aaa111", "bbb222"}
+    _round(_cfg(tmp_path), ports, MemoryRunRegistry(), FakeLauncher(), ESCALATED_AT)
+    assert ports.workspace.upstream_calls == 1
+    assert [ref for _, _, ref in ports.workspace.ancestor_checks] == ["f00dcafe", "f00dcafe"]
+
+
+def test_an_upstream_with_no_sha_judges_against_head_and_keeps_both_blocked(tmp_path):
+    ports = memory_ports()
+    _two_candidates_with_merged_blockers(ports)
+    ports.workspace.upstream_answer = Upstream("HEAD", None, "HEAD is unborn")
+    registry = MemoryRunRegistry()
+    launcher = FakeLauncher()
+    lines = _round(_cfg(tmp_path), ports, registry, launcher, ESCALATED_AT)
+    assert ports.workspace.upstream_calls == 1
+    assert {ref for _, _, ref in ports.workspace.ancestor_checks} == {"HEAD"}
+    assert launcher.spawned == []
+    assert lines == [
+        "agentic: poll: upstream: HEAD is unborn",
+        "agentic: poll: nothing to do this round",
+    ]
+
+
+def test_the_upstream_note_is_one_line_of_the_round_however_many_blockers_judged(tmp_path):
+    ports = memory_ports()
+    _two_candidates_with_merged_blockers(ports)
+    ports.workspace.upstream_answer = Upstream("origin/master", "f00dcafe", "fetch failed")
+    ports.workspace.ancestors = {"aaa111", "bbb222"}
+    lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(), FakeLauncher(), ESCALATED_AT)
+    assert lines.count("agentic: poll: upstream: fetch failed") == 1
