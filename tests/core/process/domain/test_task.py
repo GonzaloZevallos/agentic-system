@@ -215,13 +215,13 @@ def test_design_items_round_trips_through_delta_and_apply_like_pause_log():
         "id": "T-1",
         "design_items": [
             {"role_slug": "ux_lead", "kind": "observation", "step": "Sign in", "text": "slow"},
-            {"role_slug": "design_lead", "kind": "blocking", "step": "Pay", "text": "no button"},
+            {"role_slug": "ui_lead", "kind": "blocking", "step": "Pay", "text": "no button"},
         ],
     }
     patch = delta(before, after)
     assert patch == {
         "design_items": [
-            {"role_slug": "design_lead", "kind": "blocking", "step": "Pay", "text": "no button"},
+            {"role_slug": "ui_lead", "kind": "blocking", "step": "Pay", "text": "no button"},
         ]
     }
     assert apply(before, patch) == after

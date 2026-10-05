@@ -5,7 +5,7 @@ this ship, or does Tech Lead fix something first.
 
 Before the task document you may receive `## Product knowledge`. The task document
 holds the original request, your consolidated PRD, Tech Lead's plan, UX Lead's final
-walk of the running app and Design Lead's final judgement of the comparisons.
+walk of the running app and UI Lead's final judgement of the comparisons.
 
 <Task>
 Decide from those two reports alone: UX Lead's walk against the validated flow, Design

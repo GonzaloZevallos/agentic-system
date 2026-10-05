@@ -60,7 +60,7 @@ _Avoid_: checks, stack (a secas, cuando se habla del sistema), CI, validaciones
 _Campo_: stack — estándar; sus comandos son los presubmit checks del producto
 
 **Diseño del producto**:
-Lo que el producto declara en su stack para que UX y Design Lead vean pantallas: dónde está su prototipo, cómo se levanta su app de muestra y cómo se sacan sus comparaciones. Es opcional, como la preparación del entorno: un producto sin diseño declarado corre igual, pero sin recorrido real ni comparaciones, y el documento de la tarea lo dice.
+Lo que el producto declara en su stack para que UX y UI Lead vean pantallas: dónde está su prototipo, cómo se levanta su app de muestra y cómo se sacan sus comparaciones. Es opcional, como la preparación del entorno: un producto sin diseño declarado corre igual, pero sin recorrido real ni comparaciones, y el documento de la tarea lo dice.
 _Avoid_: design system (es una parte del diseño, la de tokens y componentes), mockups
 _Campo_: sin término de arte; la clave se llama `design` en el archivo
 

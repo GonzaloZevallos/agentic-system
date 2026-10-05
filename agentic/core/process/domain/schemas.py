@@ -260,9 +260,9 @@ class Subtask(BaseModel):
 
 
 class DesignItem(BaseModel):
-    """One remark from a design lead or from PM's consolidation (ADR-0040), the unit
-    `design_items` is made of. `blocking` means the job cannot be completed as the
-    design stands; anything else is `observation`, friction that does not pause the
+    """One remark from a lead (UX Lead or UI Lead) or from PM's consolidation (ADR-0040),
+    the unit `design_items` is made of. `blocking` means the job cannot be completed as
+    the design stands; anything else is `observation`, friction that does not pause the
     task (glossary: Observación al diseño). Never written from section prose: only
     from this field, structured."""
 
@@ -278,7 +278,7 @@ class DesignDraft(RoleOutput):
 
 
 class DesignReview(RoleOutput):
-    """UX Lead's walk or Design Lead's comparison judgement (ADR-0040), and the same
+    """UX Lead's walk or UI Lead's comparison judgement (ADR-0040), and the same
     shape for their final-validation counterparts: a verdict the design step
     (`rules.design_step`) reads, with the remarks that back it. Leads never return to
     a Developer (README.md, 4): a `returned` verdict here sends the thinker back, never
@@ -312,7 +312,7 @@ class Consolidation(RoleOutput):
 
 class FinalValidation(RoleOutput):
     """PM's early, UI-only final validation (ADR-0040): the verdict over UX Lead's
-    final walk and Design Lead's final comparisons, before Tech Lead's own close."""
+    final walk and UI Lead's final comparisons, before Tech Lead's own close."""
 
     verdict: Literal["approved", "returned"]
     reason: str = Field(description="One line. On `returned`, what Tech Lead must fix first")

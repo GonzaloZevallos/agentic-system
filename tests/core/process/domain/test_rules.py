@@ -8,8 +8,8 @@ from agentic.core.process.domain.roles import (
     FINDINGS,
     INTERVIEW_DEFINITION,
     INTERVIEW_SOLUTION,
-    PAIR_DESIGN_LEAD,
     PAIR_PM_PA,
+    PAIR_UI_LEAD,
     PAIR_UX_LEAD,
     PJM,
     PRODUCT_ANALYST_BUG,
@@ -208,7 +208,7 @@ def test_design_step_walks_the_five_steps_in_order_then_falls_through_to_plan():
     state["runs"] = [*state["runs"], run("UI Designer")]
     assert rules.design_step(state) == "design_review"
 
-    state["runs"] = [*state["runs"], run("Design Lead")]  # approved
+    state["runs"] = [*state["runs"], run("UI Lead")]  # approved
     assert rules.design_step(state) == "consolidate"
 
     state["runs"] = [*state["runs"], run("PM: consolidation")]
@@ -244,13 +244,13 @@ def test_design_step_table_covers_a_consolidation_return_and_prd_v2_reopening_th
     """The table's own hard case (the plan's acceptance list): a consolidation return
     to Product Analyst, a new PRD version, which reopens `ux_flow` even though UX Lead
     had already approved; and the flow's own re-walk, which in turn reopens
-    `ui_screens` even though Design Lead had already approved that too."""
+    `ui_screens` even though UI Lead had already approved that too."""
     runs = [
         run("Product Analyst"),  # PRD v1
         run("UX Designer"),
         run("UX Lead"),  # approved
         run("UI Designer"),
-        run("Design Lead"),  # approved
+        run("UI Lead"),  # approved
         run("PM: consolidation"),  # returned, below
     ]
     state = {**UX_FLAGS, "runs": runs}
@@ -264,7 +264,7 @@ def test_design_step_table_covers_a_consolidation_return_and_prd_v2_reopening_th
     state["runs"] = [*state["runs"], run("UX Designer")]
     assert rules.design_step(state) == "ux_walk"
     state["runs"] = [*state["runs"], run("UX Lead")]
-    # UI's own step is now stale: UX Designer is newer than Design Lead's approval.
+    # UI's own step is now stale: UX Designer is newer than UI Lead's approval.
     assert rules.design_step(state) == "ui_screens"
 
 
@@ -398,16 +398,16 @@ def test_design_effect_by_role_counts_lead_returns_and_blocking_items_per_role()
     state = {
         "change_history": [
             rules.change_entry(PAIR_UX_LEAD, rules.PRD_RETURN, "x"),
-            rules.change_entry(PAIR_DESIGN_LEAD, rules.PRD_RETURN, "y"),
+            rules.change_entry(PAIR_UI_LEAD, rules.PRD_RETURN, "y"),
             rules.change_entry(PAIR_PM_PA, rules.PRD_RETURN, "z"),  # not a design pair
         ],
         "design_items": [
             {"role_slug": "ux_lead", "kind": "blocking", "step": "Sign in", "text": "dead end"},
             {"role_slug": "ux_lead", "kind": "observation", "step": "Pay", "text": "slow"},
-            {"role_slug": "design_lead", "kind": "blocking", "step": "Cart", "text": "no state"},
+            {"role_slug": "ui_lead", "kind": "blocking", "step": "Cart", "text": "no state"},
         ],
     }
-    assert rules.design_effect_by_role(state) == {"ux_lead": 2, "design_lead": 2}
+    assert rules.design_effect_by_role(state) == {"ux_lead": 2, "ui_lead": 2}
     assert rules.design_effect_by_role({}) == {}
 
 

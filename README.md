@@ -33,7 +33,7 @@ re-argumentan.
 |---|---|---|
 | Product Analyst | PM, luego Data Analyst | Definición de comportamiento, flags, métricas |
 | UX Designer | UX Lead | Flujos e interacción |
-| UI Designer | Design Lead | Visual |
+| UI Designer | UI Lead | Visual |
 | Tech Writer | — (independiente) | Textos |
 
 PM es además validador final de producto y proponente proactivo de features.
@@ -77,7 +77,7 @@ PjM clasifica
   → PM valida PRD y flags
   → Data Analyst valida métricas
   → [si toca UI]    UX Designer define flujos    → UX Lead valida
-  → [si toca UI]    UI Designer diseña sobre el flujo validado → Design Lead valida
+  → [si toca UI]    UI Designer diseña sobre el flujo validado → UI Lead valida
   → [si toca textos] Tech Writer escribe sobre flujo y diseño validados
   → PM consolida el PRD
   → QA Funcional (1ª pasada): observa el PRD, casos borde, casos de prueba
@@ -86,7 +86,7 @@ PjM clasifica
   → entre olas, el sistema: integración incremental y la ola siguiente
   → Developer integrador, bajo revisión de Tech Lead
   → [si toca UI] validación final de PM adelantada: consulta a UX Lead (recorrido de la
-      app de muestra) y a Design Lead (comparaciones) → aprueba o devuelve a Tech Lead
+      app de muestra) y a UI Lead (comparaciones) → aprueba o devuelve a Tech Lead
   → QA 2ª pasada (funcional + seguridad/performance si fueron convocados)
   → PM valida producto
   → PjM cierra
@@ -103,11 +103,11 @@ también, salvo la parte adelantada de abajo.
 
 **Implementado (etapa 4, ADR-0040)**: en tareas de feature con `touches_ui`, UX Designer
 escribe el flujo, UX Lead lo valida con un recorrido del prototipo, UI Designer escribe el
-diseño de pantallas sobre el flujo validado, Design Lead lo valida, y PM consolida ambos en
+diseño de pantallas sobre el flujo validado, UI Lead lo valida, y PM consolida ambos en
 el PRD — lo que UX marcó como impedimento para el job pasa a pregunta para el humano, la
 fricción a observación al diseño en el pull request. También la validación final de PM
 adelantada: tras la revisión de la rama entera, PM consulta a UX Lead (recorrido de la app
-de muestra contra el flujo validado) y a Design Lead (comparaciones, fidelidad igual a ojo)
+de muestra contra el flujo validado) y a UI Lead (comparaciones, fidelidad igual a ojo)
 y devuelve a Tech Lead si corresponde. Sin `touches_ui`, y en bug y platform enhancement,
 nada de esto corre: el camino es byte a byte el de antes.
 
@@ -119,7 +119,7 @@ PjM clasifica
       · sin definición previa → consulta a PM, que decide
   → PM valida el dictamen
       · comportamiento esperado → PjM descarta y cierra
-  → [si es visual] UI Designer define el visual correcto → Design Lead valida
+  → [si es visual] UI Designer define el visual correcto → UI Lead valida
   → Tech Lead → Developers → QA → PM valida → PjM cierra
 ```
 
@@ -197,7 +197,7 @@ Los pares validador→pensador resuelven dentro del par, sin pasar por PjM:
 - PM → Product Analyst
 - Data Analyst → Product Analyst
 - UX Lead → UX Designer
-- Design Lead → UI Designer
+- UI Lead → UI Designer
 
 El validador **reporta** cada devolución a PjM, y cuentan para el límite.
 
@@ -288,7 +288,7 @@ El cierre es **aprobado** o **descartado**: un bug cuyo dictamen PM valida como
 el sistema lo comenta en el issue con el motivo y termina la corrida; cerrar el issue es
 del humano (#65).
 
-UX Lead, Design Lead y Tech Writer **no aprueban al cierre**. Esa regla existió y fue
+UX Lead, UI Lead y Tech Writer **no aprueban al cierre**. Esa regla existió y fue
 reemplazada: PM es el único que valida producto porque construyó el PRD junto con
 ellos. PM puede consultar a los leads, pero la aprobación es suya. Si el
 Developer se desvía del diseño o de los textos, es PM quien lo detecta y lo devuelve.
@@ -336,13 +336,13 @@ Dispara cuando detecta un patrón negativo.
 ### PM — Product Manager
 
 - Valida el PRD y los flags que redacta Product Analyst.
-- Delega en orden a UX Lead, Design Lead y Tech Writer según los flags.
+- Delega en orden a UX Lead, UI Lead y Tech Writer según los flags.
 - Consolida el PRD. Es su dueño: comportamiento, flujo, diseño y textos.
 - **Destila al aprobar**: devuelve en su salida estructurada el archivo completo de cada
   capacidad que la tarea tocó (`docs/product/<capacidad>.md`) y los términos nuevos o
   corregidos del glosario del producto (`CONTEXT.md`). Los escribe el grafo; PM no tiene
   tools. Aprobar una feature sin destilar es salida inválida, o sea fallo de rol.
-- Valida la implementación final de producto. Puede consultar a UX Lead y Design Lead.
+- Valida la implementación final de producto. Puede consultar a UX Lead y UI Lead.
 - Valida que la feature salga medida.
 - Evalúa el aporte al negocio de cada funcionalidad antes de aprobar.
 - Analiza competidores.
@@ -409,15 +409,15 @@ a PjM, y PjM reclasifica.
 - No validan al cierre: devuelven, dentro de la etapa de definición, a UX Designer. Nunca
   devuelven a Developer (§13).
 
-### Design Lead / UI Designer
+### UI Lead / UI Designer
 
 - UI Designer escribe el diseño de pantallas sobre el flujo ya validado: por cada pantalla
   que la tarea toca, qué pantalla del diseño del producto aplica (o cómo armar una nueva con
   sus componentes), sus estados y lo que el PRD obliga a cambiar.
-- Design Lead lo valida. Su fuente propia son las comparaciones que el producto declara:
+- UI Lead lo valida. Su fuente propia son las comparaciones que el producto declara:
   juzga con fidelidad igual a ojo (misma estructura, jerarquía, tipografía, colores,
   espaciado y componentes), nunca pixel a pixel.
-- En la validación final (adelantada, solo con `touches_ui`), Design Lead juzga las
+- En la validación final (adelantada, solo con `touches_ui`), UI Lead juzga las
   comparaciones entre el prototipo y la app de muestra con el mismo criterio.
 - Participan cuando el flag "toca UI" está marcado, incluso en bugs visuales (etapa 4,
   pendiente).
@@ -654,7 +654,7 @@ modelo con los subagentes, turnos) y fallos con su texto.
 | PM | Validación, ajustes, decisiones ante consultas, PRD |
 | Data Analyst | Validación de métricas |
 | UX Designer / UX Lead | Flujos y validación |
-| UI Designer / Design Lead | Visual y validación |
+| UI Designer / UI Lead | Visual y validación |
 | Tech Writer | Textos |
 | QA Lead / Funcional (1ª) | Observaciones al PRD, casos borde, casos de prueba |
 | Tech Lead | Solución técnica, resultado del pingpong, plan de tests ajustado, QAs convocados, subtareas |
@@ -777,7 +777,7 @@ si no sale medida" se pueda probar de verdad y no quede como teatro.
 
 **Stack**: Python, FastAPI, SQLite, pytest. **Solo API, sin frontend.**
 
-Sin frontend, UX Designer, UX Lead, UI Designer y Design Lead no tienen nada que hacer. Eso
+Sin frontend, UX Designer, UX Lead, UI Designer y UI Lead no tienen nada que hacer. Eso
 es deliberado: entran cuando haya interfaz, no antes.
 
 ### La versión cero la construye el humano
@@ -866,13 +866,13 @@ refutar.
 | 1 | PjM, Product Analyst, PM, Tech Lead, Developer | Mínimo para llegar a un diff medible |
 | 2 | QA Lead, QA Funcional | Primer validador con información nueva real |
 | 3 | Data Analyst, QA Seguridad, QA Performance | Cuando haya métricas y código que valga auditar |
-| 4 | UX, UI, Design Lead, Tech Writer | Cuando haya frontend |
+| 4 | UX, UI, UI Lead, Tech Writer | Cuando haya frontend |
 | 5 | SRE/Ops, Customer Insights | Cuando haya producción y usuarios |
 
 **La regla de orden se rompió una vez, a propósito (ADR-0040).** El front de apostrophe
 salió de seis tareas sin parecerse a su diseño porque nadie era dueño de lo visual y
 `touches_ui` no disparaba nada; eso no esperó a que hubiera frontend en general, ya lo
-había. Por eso parte de la etapa 4 — UX Designer, UX Lead, UI Designer y Design Lead, en el
+había. Por eso parte de la etapa 4 — UX Designer, UX Lead, UI Designer y UI Lead, en el
 camino de feature con `touches_ui` — y parte de la validación final de PM entran antes que
 la etapa 2, que sigue sin QA. Cada rol nuevo se gana el lugar igual: la primera corrida real
 es el rediseño de Ventas en apostrophe, las mismas pantallas que salieron mal sin estos
@@ -913,7 +913,7 @@ existe justamente para pagar ese costo solo donde compre calidad.
 | 4 | Frecuencia de cada reloj proactivo. Parcialmente resuelto para la revisión de stack (ADR-0034): sus señales de disparo y el verbo manual que las evalúa (`agentic stack review`, sección 14) ya existen; lo que sigue abierto es solo la **frecuencia** con la que la etapa 5 la agenda (y la de los demás relojes proactivos) | Etapa 5 |
 | 5 | Señales y umbrales de SRE/Ops para decidir que algo es bug, más deduplicación | SRE/Ops, etapa 5 |
 | 6 | ~~Lista de secciones que lee cada rol~~ **resuelto**: `Role.reads`, la entrada del rol son esas secciones completas. Cada rol nuevo declara la suya al entrar | — |
-| 7 | ~~UX Lead, Design Lead y Tech Writer en detalle~~ **parcialmente resuelto** (ADR-0040): UX Lead y Design Lead en detalle en §4, con el flujo, el recorrido, el diseño de pantallas y las comparaciones. Queda abierto: UI en bugs visuales, Tech Writer, y el resto de la validación final de PM, que entra con QA (etapa 2) | UI en bugs visuales y Tech Writer: etapa 4; el resto de la validación final: etapa 2 |
+| 7 | ~~UX Lead, UI Lead y Tech Writer en detalle~~ **parcialmente resuelto** (ADR-0040): UX Lead y UI Lead en detalle en §4, con el flujo, el recorrido, el diseño de pantallas y las comparaciones. Queda abierto: UI en bugs visuales, Tech Writer, y el resto de la validación final de PM, que entra con QA (etapa 2) | UI en bugs visuales y Tech Writer: etapa 4; el resto de la validación final: etapa 2 |
 | 8 | ~~Criterio de clasificación de PjM y qué hace si duda~~ **resuelto** (#46): el criterio es qué notaría un usuario del producto, no quién escribió el issue ni cuán técnico suena; vive en el prompt de PjM. Si encaja en dos tipos o en ninguno, `confidence: low` escala | — |
 | 9 | ~~Cuántos Tech Leads existen~~ **resuelto**: un rol, una instancia por tarea; el modo proactivo es el mismo rol. El efímero no es un rol de la lista, es el entrevistador de Tech Lead (ADR-0014) | — |
 | 10 | ~~Versionado de prompts~~ **resuelto**: `.md` por rol con overlay en el producto, hash por tarea (ADR-0005). Falta el versionado de **parámetros** de `Configuration` | Mejora del proceso de PjM |

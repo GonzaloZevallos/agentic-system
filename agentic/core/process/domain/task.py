@@ -450,7 +450,7 @@ class FindingRecord(TypedDict):
 
 
 class DesignItemRecord(TypedDict):
-    """One remark from a design lead's walk or comparisons, or from PM's consolidation
+    """One remark from a lead's (UX Lead's or UI Lead's) walk or comparisons, or from PM's consolidation
     (ADR-0040), as `design_items` keeps it: the role that raised it (`Role.slug`),
     never derived from a section's prose (`rules.design_effect_by_role`'s own per-role
     count, the plan's own invariant: design items come from structured fields alone)."""

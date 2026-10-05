@@ -1,7 +1,7 @@
 """PM's early, UI-only final validation (ADR-0040): between the approving review of
 the whole branch and `deliver`, only for a feature PM flagged `touches_ui`
 (`rules.final_validation_due`). UX Lead walks the sample app the product's `design`
-block may declare, Design Lead judges the comparisons at equal-to-the-eye fidelity,
+block may declare, UI Lead judges the comparisons at equal-to-the-eye fidelity,
 and PM decides -- consulting both, never running them as a role of their own.
 
 The sample app is the system's, never a role's (§8): it is started here, in the
@@ -29,7 +29,7 @@ from agentic.shared.configuration import Configuration
 
 from ..domain import rules
 from ..domain.design import NO_SAMPLE_APP_NOTE, Design, compare_facts, design_facts, design_rules
-from ..domain.roles import DESIGN_LEAD_FINAL, PAIR_PM_TECH_LEAD, PM_FINAL, UX_LEAD_FINAL
+from ..domain.roles import PAIR_PM_TECH_LEAD, PM_FINAL, UI_LEAD_FINAL, UX_LEAD_FINAL
 from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, TaskState, apply
 from .checkouts import SetupFailed, task_base, task_checkout
 from .ports import Ports, SampleAppHandle
@@ -50,10 +50,10 @@ async def final_validation(state: TaskState, cfg: Configuration, ports: Ports) -
         patch = apply(patch, _design_items_patch(UX_LEAD_FINAL.slug, ux_output))
         state = apply(state, patch)
 
-        design_output, design_patch = await _design_lead_final(
+        design_output, design_patch = await _ui_lead_final(
             state, cfg, ports, task.path, design_block
         )
-        items = _design_items_patch(DESIGN_LEAD_FINAL.slug, design_output)
+        items = _design_items_patch(UI_LEAD_FINAL.slug, design_output)
         design_patch = apply(design_patch, items)
         state = apply(state, design_patch)
         patch = apply(patch, design_patch)
@@ -122,11 +122,11 @@ def _app_facts(design_block: Design | None, started: Started) -> str:
     return "The sample app's first lines on start:\n\n" + "\n".join(started.lines)
 
 
-async def _design_lead_final(
+async def _ui_lead_final(
     state: TaskState, cfg: Configuration, ports: Ports, cwd: Path, design_block: Design | None
 ) -> tuple[Output | None, TaskState]:
     extra = design_rules(design_block)
-    widened = replace(DESIGN_LEAD_FINAL, allowed=DESIGN_LEAD_FINAL.allowed + extra)
+    widened = replace(UI_LEAD_FINAL, allowed=UI_LEAD_FINAL.allowed + extra)
     facts = "\n\n".join(filter(None, [design_facts(design_block), compare_facts(design_block)]))
     prompt = with_context(state, widened, ports, cwd, facts) if facts else None
     return await run_role(state, widened, cfg, ports, cwd=cwd, prompt=prompt)

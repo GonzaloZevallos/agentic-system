@@ -64,7 +64,6 @@ from ...application.review import review
 from ...application.validate_prd import validate_prd
 from ...domain import rules
 from ...domain.roles import (
-    DESIGN_LEAD,
     DEVELOPER,
     PJM,
     PM,
@@ -74,6 +73,7 @@ from ...domain.roles import (
     TECH_LEAD,
     TECH_LEAD_REVIEWER,
     UI_DESIGNER,
+    UI_LEAD,
     UX_DESIGNER,
     UX_LEAD,
     Role,
@@ -258,7 +258,7 @@ def build_graph(
     graph.add_node("ux_flow", _node(ux_flow, UX_DESIGNER, shared, telemetry, arm_for))
     graph.add_node("ux_walk", _node(ux_walk, UX_LEAD, shared, telemetry, arm_for))
     graph.add_node("ui_screens", _node(ui_screens, UI_DESIGNER, shared, telemetry, arm_for))
-    graph.add_node("design_review", _node(design_review, DESIGN_LEAD, shared, telemetry, arm_for))
+    graph.add_node("design_review", _node(design_review, UI_LEAD, shared, telemetry, arm_for))
     graph.add_node("consolidate", _node(consolidate, PM_CONSOLIDATOR, shared, telemetry, arm_for))
     graph.add_node("plan", _node(plan, TECH_LEAD, shared, telemetry, arm_for))
     graph.add_node(PIPELINE, _branch_node(shared, telemetry, arm_for))
@@ -267,7 +267,7 @@ def build_graph(
     # `rules.final_validation_due`, from `after_integrate`. One node, one span, labelled
     # by its own final decision-maker (`PM_FINAL`) -- the same shape `define`/`plan`
     # already use for a node that runs more than one role in its own session
-    # (an interview's interviewer and interviewee, here UX Lead's and Design Lead's own
+    # (an interview's interviewer and interviewee, here UX Lead's and UI Lead's own
     # final counterparts): the role spans in this graph are one per node, not one per
     # `run_role` call, and `PM_FINAL` is the one that decides this node's own verdict.
     graph.add_node(

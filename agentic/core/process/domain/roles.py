@@ -201,7 +201,7 @@ PM = Role(
 # The design branch (ADR-0040): on the feature path, only when `touches_ui` is set,
 # after PM validates the PRD. UX Designer writes the flow of each job; UX Lead
 # validates it with a walk of the prototype. UI Designer writes the screens design
-# over the validated flow; Design Lead validates it. PM then consolidates both into
+# over the validated flow; UI Lead validates it. PM then consolidates both into
 # the PRD. No routing lives here (`rules.design_step` and the nodes that call it are
 # another subtask's): these are the roles and the outputs the branch runs.
 #
@@ -245,9 +245,9 @@ UI_DESIGNER = Role(
     max_turns=12,
 )
 
-DESIGN_LEAD = Role(
-    name="Design Lead",
-    slug="design_lead",
+UI_LEAD = Role(
+    name="UI Lead",
+    slug="ui_lead",
     kind="verifier",
     schema=DesignReview,
     reads=(
@@ -257,7 +257,7 @@ DESIGN_LEAD = Role(
         "UX Designer",
         "UX Lead",
         "UI Designer",
-        "Design Lead",
+        "UI Lead",
     ),
     tools=READ_CODE,
     allowed=READ_CODE_RULES,
@@ -281,7 +281,7 @@ PM_CONSOLIDATOR = replace(
         "UX Designer",
         "UX Lead",
         "UI Designer",
-        "Design Lead",
+        "UI Lead",
         "PM: consolidation",
     ),
     max_turns=20,
@@ -289,7 +289,7 @@ PM_CONSOLIDATOR = replace(
 
 # PM's early, UI-only final validation (ADR-0040): the leads below walk the sample app
 # and judge the comparisons; PM decides and, on `returned`, hands Tech Lead the claims
-# the integration review must settle. `replace(UX_LEAD, ...)`/`replace(DESIGN_LEAD,
+# the integration review must settle. `replace(UX_LEAD, ...)`/`replace(UI_LEAD,
 # ...)`/`replace(PM, ...)`: same tools and schema shape, their own slugs, sections and
 # a wider `reads` that reaches the plan (`Tech Lead`) and the earlier design sections.
 UX_LEAD_FINAL = replace(
@@ -303,17 +303,17 @@ UX_LEAD_FINAL = replace(
         "UX Designer",
         "UX Lead",
         "UI Designer",
-        "Design Lead",
+        "UI Lead",
         "PM: consolidation",
         "Tech Lead",
         "UX Lead: final walk",
     ),
 )
 
-DESIGN_LEAD_FINAL = replace(
-    DESIGN_LEAD,
-    name="Design Lead: final comparisons",
-    slug="design_lead_final",
+UI_LEAD_FINAL = replace(
+    UI_LEAD,
+    name="UI Lead: final comparisons",
+    slug="ui_lead_final",
     reads=(
         ORIGINAL,
         "Product Analyst",
@@ -321,10 +321,10 @@ DESIGN_LEAD_FINAL = replace(
         "UX Designer",
         "UX Lead",
         "UI Designer",
-        "Design Lead",
+        "UI Lead",
         "PM: consolidation",
         "Tech Lead",
-        "Design Lead: final comparisons",
+        "UI Lead: final comparisons",
     ),
 )
 
@@ -340,7 +340,7 @@ PM_FINAL = replace(
         "PM",
         "PM: consolidation",
         "UX Lead: final walk",
-        "Design Lead: final comparisons",
+        "UI Lead: final comparisons",
         "Tech Lead",
         "PM: final validation",
     ),
@@ -595,10 +595,10 @@ ROLES = (
     UX_DESIGNER,
     UX_LEAD,
     UI_DESIGNER,
-    DESIGN_LEAD,
+    UI_LEAD,
     PM_CONSOLIDATOR,
     UX_LEAD_FINAL,
-    DESIGN_LEAD_FINAL,
+    UI_LEAD_FINAL,
     PM_FINAL,
     PRODUCT_ANALYST_BUG,
     PM_BUG,
@@ -641,7 +641,7 @@ PAIR_PM_PA = Pair(by=PM, to=PRODUCT_ANALYST)
 # counted on its own key so a UX Lead return never shares a counter with Design
 # Lead's, or with PM's own PRD returns.
 PAIR_UX_LEAD = Pair(by=UX_LEAD, to=UX_DESIGNER)
-PAIR_DESIGN_LEAD = Pair(by=DESIGN_LEAD, to=UI_DESIGNER)
+PAIR_UI_LEAD = Pair(by=UI_LEAD, to=UI_DESIGNER)
 
 # PM's early final validation return (ADR-0040, §13): PM reopens the integrator's own
 # subtask, never the Developer's, so the pair is PM's own, to Tech Lead -- the role

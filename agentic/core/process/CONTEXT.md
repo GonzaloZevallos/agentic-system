@@ -29,6 +29,11 @@ _Campo_: de la organización de software humana
 Rol que produce: Product Analyst, UX Designer, UI Designer, Developer, Tech Writer. En el código y en los prompts se llama `actor`.
 _Campo_: actor — Reflexion (Shinn 2023), que lo define junto a Evaluator y Self-Reflection; generator en Cobbe 2021 y Lightman 2023
 
+**UI Lead**:
+Validador de UI Designer (ADR-0040): valida el diseño de pantallas sobre el flujo validado y, en la validación final de PM, juzga las comparaciones.
+_Avoid_: Design Lead
+_Campo_: sin término de arte
+
 **Ejecutar**:
 Escribir archivos del producto y correr comandos sin aprobación por comando. Solo Developer ejecuta, dentro de una jaula: su checkout, un tope de costo y lo que el sistema le niega aun así. Correr los chequeos del producto sin escribir no es ejecutar: Tech Lead, al revisar, lee el código y el diff y corre los chequeos sobre el test que respalda una objeción, y los entrevistadores escriben únicamente el glosario y los ADRs.
 _Campo_: sin término de arte para el permiso; el campo nombra el mecanismo (tool use), no la autonomía que le concede
@@ -90,7 +95,7 @@ _Avoid_: revisión heurística (una lista de criterios sin navegar no es fuente 
 _Campo_: cognitive walkthrough — Wharton, Rieman, Lewis y Polson (1994). Donde el flujo pasa por una pantalla que el prototipo no tiene, ese tramo se evalúa sobre el texto y el hallazgo lo dice ("sin prototipo")
 
 **Diseño de pantallas**:
-Lo que UI Designer escribe sobre el flujo validado cuando la tarea toca UI: por cada pantalla que la tarea toca, qué pantalla del diseño del producto aplica (o cómo armar una nueva con sus componentes, si no existe), sus estados y lo que el PRD obliga a cambiar. Lo valida Design Lead, PM lo consolida en el PRD y cada brief de front nombra las suyas. La fidelidad que pide es igual a ojo: misma estructura, jerarquía, tipografía, colores, espaciado y componentes.
+Lo que UI Designer escribe sobre el flujo validado cuando la tarea toca UI: por cada pantalla que la tarea toca, qué pantalla del diseño del producto aplica (o cómo armar una nueva con sus componentes, si no existe), sus estados y lo que el PRD obliga a cambiar. Lo valida UI Lead, PM lo consolida en el PRD y cada brief de front nombra las suyas. La fidelidad que pide es igual a ojo: misma estructura, jerarquía, tipografía, colores, espaciado y componentes.
 _Avoid_: spec visual (el glosario evita spec), visual
 _Campo_: design spec / redlines — del handoff entre diseño y desarrollo
 
@@ -100,7 +105,7 @@ _Avoid_: hallazgo (lo de un validador sobre un pensador), sugerencia
 _Campo_: sin término de arte
 
 **Comparación**:
-Una pantalla del prototipo y la misma pantalla de la app de muestra, lado a lado y del mismo ancho. La saca un comando del producto. El Developer mira las suyas antes de entregar y Design Lead las juzga en la validación final de PM.
+Una pantalla del prototipo y la misma pantalla de la app de muestra, lado a lado y del mismo ancho. La saca un comando del producto. El Developer mira las suyas antes de entregar y UI Lead las juzga en la validación final de PM.
 _Avoid_: par de capturas (Par ya es el rol que devuelve y el que recibe), screenshot diff (no se compara pixel a pixel)
 _Campo_: visual comparison; el vecino estricto es visual regression testing, que sí compara pixeles
 

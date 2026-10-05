@@ -21,6 +21,7 @@ from typing import Any
 
 import yaml
 
+from .legacy_names import rename_legacy_roles
 from .task import RoleRun
 
 TASKS_SUBDIR = Path(".agentic/tasks")
@@ -60,8 +61,13 @@ def _recorded(subtask: dict[str, Any]) -> dict[str, Any]:
     return {SUBTASK_RECORDED_AS.get(k, k): v for k, v in subtask.items()}
 
 
-def from_frontmatter(data: dict[str, Any]) -> dict[str, Any]:
-    """The inverse of what `render` writes: the frontmatter under the state's names."""
+def from_frontmatter(data: dict[str, Any], source: object = "document") -> dict[str, Any]:
+    """The inverse of what `render` writes: the frontmatter under the state's names,
+    with the 2026-10-05 Design Lead -> UI Lead alias applied last (`legacy_names.
+    rename_legacy_roles`), so a document written before the rename seeds the same
+    sections, pairs and return counts under the new names. `source` is `parse`'s own,
+    for the alias's `ValueError` alone; `render`/`record_closure` never call this with
+    anything to translate the other way, by design (ADR-0040's role, renamed)."""
     inverse = {key: field for field, key in RECORDED_AS.items()}
     state = {inverse.get(k, k): v for k, v in data.items()}
     subtask_inverse = {key: field for field, key in SUBTASK_RECORDED_AS.items()}
@@ -70,7 +76,7 @@ def from_frontmatter(data: dict[str, Any]) -> dict[str, Any]:
             sid: {subtask_inverse.get(k, k): v for k, v in sub.items()}
             for sid, sub in subtasks.items()
         }
-    return state
+    return rename_legacy_roles(state, source)
 
 
 def render(
@@ -239,7 +245,6 @@ def parse(raw: str, source: object = "document") -> dict[str, Any]:
     match = _FRONTMATTER.match(raw)
     if not match:
         raise ValueError(f"{source}: missing frontmatter")
-    data = from_frontmatter(yaml.safe_load(match.group(1)) or {})
     body = raw[match.end() :]
 
     sections: dict[str, str] = {}
@@ -248,6 +253,11 @@ def parse(raw: str, source: object = "document") -> dict[str, Any]:
         end = headings[i + 1].start() if i + 1 < len(headings) else len(body)
         sections[heading.group(1)] = body[heading.end() : end].strip()
 
-    data["description"] = sections.pop(ORIGINAL, "")
-    data["sections"] = sections
+    # `sections` rides along into `from_frontmatter` so its own alias application
+    # (`legacy_names.rename_legacy_roles`) translates the section keys too, in the
+    # same pass as `current_role`/`changes_requested`/etc: one call site, not two.
+    raw_frontmatter = yaml.safe_load(match.group(1)) or {}
+    raw_frontmatter["sections"] = sections
+    data = from_frontmatter(raw_frontmatter, source)
+    data["description"] = data["sections"].pop(ORIGINAL, "")
     return data
