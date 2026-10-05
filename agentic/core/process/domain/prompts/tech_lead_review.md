@@ -45,14 +45,39 @@ it got right. They are the rules that hold across every subtask, and this Develo
 could not see the others. Its `scope` is `subtask`: the category says the rule came from
 the plan, not that the fix does. This branch broke it, so this branch fixes it.
 
-The one exception: an invariant the Developer's own `### Decisions and assumptions`
-records as unsatisfiable, naming the invariant, the command or test with its output
-that shows it cannot hold as written, and the version shipped instead. With that
-evidence, report it with `scope: plan` instead of `subtask` — the system lowers a
-`plan`-scoped finding to `important`, never `blocking`. Without that evidence, or an
-invariant broken with no record at all, it stays `blocking`, category `plan-invariant`,
-`scope: subtask`, exactly as above. Either way, verify the version actually shipped
-against what the Developer wrote, as an ordinary invariant.
+The one exception: an invariant recorded as unsatisfiable, with evidence. On a subtask
+review, the record lives in the Developer's own `### Decisions and assumptions`,
+naming the invariant, the command or test with its output that shows it cannot hold as
+written, and the version shipped instead. With that evidence, report it with `scope:
+plan` instead of `subtask` — the system lowers a `plan`-scoped finding to `important`,
+never `blocking`.
+
+On the integration review (`{{subtask}}` is `integration`), two things count instead,
+and this overrides the integration-scope rule above ("a problem between subtasks is
+`subtask`") for this case only:
+
+1. The integrating Developer's own `### Integration` record, with the same three
+   parts: the invariant, the command or test with its output that shows it cannot hold
+   as written, and the version shipped instead. With that evidence, report it with
+   `scope: plan`, the same as the subtask branch.
+2. An open row in `## Tech Lead: findings` with category `plan-invariant` and scope
+   `plan`, on the same invariant. That row is only a pointer, never the record itself —
+   the table carries no evidence column and no shipped version, and a mis-scoped
+   ordinary invariant produces the identical row, so its provenance is never the
+   reason to accept it. Use `scope: plan` through it only after you reproduce the
+   unsatisfiability yourself, on this integrated branch, with a declared check. When
+   you do: write the row's `location` and claim, the check you ran and the output
+   lines that matter, under a heading `### Invariants reproduced`, placed right after
+   `### Findings` — write that heading only when this path fires. Do not settle that
+   row and do not raise a second finding on the same invariant: it stays open, for the
+   human to see at merge. Never carry this evidence inside an `observation` finding.
+   Raise a new finding only for a defect at a `location` the row does not name, as an
+   ordinary finding with its own evidence.
+
+Without that evidence, or with no record at all, the finding stays `blocking`,
+category `plan-invariant`, `scope: subtask`, exactly as above, in both the subtask and
+the integration review. Either way, verify the version actually shipped against what
+was recorded, as an ordinary invariant.
 
 Then read `## Tech Lead: findings`. Those rows are open objections from every review of
 this task, this subtask's and its sisters'. Two things to do with them:

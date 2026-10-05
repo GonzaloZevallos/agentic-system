@@ -482,6 +482,7 @@ def test_every_role_reads_the_human_decisions_last_without_declaring_them():
 
 async def test_run_role_builds_the_patch_and_the_history(tmp_path):
     cfg = Configuration(product_dir=tmp_path)
+    actor_model = Configuration.model_fields["actor_model"].default
     runner = ScriptedRunner(
         product_analyst=[
             RawResult(
@@ -491,7 +492,7 @@ async def test_run_role_builds_the_patch_and_the_history(tmp_path):
                 "s2",
                 # A sub-agent spent part of this: 0.02 of the 0.1 total is not the
                 # role's own model.
-                cost_by_model={"claude-sonnet-5": 0.08, "claude-haiku-5": 0.02},
+                cost_by_model={actor_model: 0.08, "claude-haiku-5": 0.02},
                 usage={"input": 100, "output": 50, "cache_read": 10, "cache_write": 5},
                 calls=2,
                 tool_calls={"Read": 1},
@@ -532,9 +533,9 @@ async def test_run_role_builds_the_patch_and_the_history(tmp_path):
         "section": "Product Analyst",
         "version": 2,
         "session_id": "s2",
-        "model": "claude-sonnet-5",
+        "model": actor_model,
         "cost_usd": 0.1,
-        "cost_by_model": {"claude-sonnet-5": 0.08, "claude-haiku-5": 0.02},
+        "cost_by_model": {actor_model: 0.08, "claude-haiku-5": 0.02},
         "turns": 3,
         "max_turns": PRODUCT_ANALYST.max_turns,
         "tokens": {"input": 100, "output": 50, "cache_read": 10, "cache_write": 5},

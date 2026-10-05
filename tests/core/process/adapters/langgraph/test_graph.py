@@ -837,7 +837,7 @@ async def test_role_failure_escalates_and_keeps_failures(config, tmp_path):
         "section": "PjM",
         "version": 1,
         "session_id": "",
-        "model": "claude-sonnet-5",
+        "model": Configuration.model_fields["actor_model"].default,
         "cost_usd": 0.01,
         "cost_by_model": {},
         "turns": 0,
@@ -1028,7 +1028,10 @@ async def test_each_node_opens_and_finishes_the_roles_span(config):
         role_spans[3].attributes["agentic.role.version"] == 2
         and role_spans[3].attributes["agentic.role.rework"]
     )
-    assert role_spans[6].attributes["agentic.role.model"] == "claude-sonnet-5"
+    assert (
+        role_spans[6].attributes["agentic.role.model"]
+        == Configuration.model_fields["actor_model"].default
+    )
     assert task.attributes["task.status"] == "ready_for_review"
     assert task.attributes["task.returns"] == 1
     # Every role span says which product the run was over, read from what the product
