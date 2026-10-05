@@ -23,7 +23,7 @@ import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from agentic.shared.configuration import LOGS_DIR, STATE_FILE
+from agentic.shared.configuration import LOGS_DIR, STATE_DIR, STATE_FILE
 
 from ...application.ports import Checkout
 from ...application.ports import GitError as GitError  # re-exported: see ports.py
@@ -34,7 +34,7 @@ WORKTREES = Path(".agentic/worktrees")
 # The glob covers SQLite's journal next to the file. `LOGS_DIR`: every invocation's log
 # (README.md, 14; issue #33), through this same mechanism rather than the product's own
 # `.gitignore`, which is the product's business.
-EXCLUDES = (f"{WORKTREES}/", f"{STATE_FILE}*", f"{LOGS_DIR}/")
+EXCLUDES = (f"{WORKTREES}/", f"{STATE_FILE}*", f"{STATE_DIR}/", f"{LOGS_DIR}/")
 
 
 class GitWorkspace:
