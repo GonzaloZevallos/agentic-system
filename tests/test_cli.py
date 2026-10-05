@@ -3,6 +3,7 @@ import os
 import signal
 import socket
 import subprocess
+import weakref
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from functools import partial
@@ -21,10 +22,23 @@ from agentic.core.process.application.ports import LockHeld, LockRecord
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
 from tests.fakes import MemoryKnowledge, MemoryStack, MemoryTracker, memory_ports
 
+# `_run`/`_resume` now open their checkpointer twice per invocation (ADR-0003, addendum
+# 2026-10-04: a second open after `adelete_thread` is how a task migrates). This double
+# must hand back the SAME saver both times for the same `cfg`, as the real file would,
+# never a fresh `InMemorySaver` that would look like an empty store to the second open.
+# Keyed on `id(cfg)` rather than `cfg` itself (`Configuration` is an unhashable pydantic
+# model); the entry is dropped the moment `cfg` is garbage-collected, so two unrelated
+# tests can never collide on a reused id.
+_IN_MEMORY_SAVERS: dict[int, InMemorySaver] = {}
+
 
 @asynccontextmanager
-async def in_memory(cfg):
-    yield InMemorySaver()
+async def in_memory(cfg, task_id):
+    key = id(cfg)
+    if key not in _IN_MEMORY_SAVERS:
+        _IN_MEMORY_SAVERS[key] = InMemorySaver()
+        weakref.finalize(cfg, _IN_MEMORY_SAVERS.pop, key, None)
+    yield _IN_MEMORY_SAVERS[key]
 
 
 STACK = "product: p\nchecks:\n  tests: pytest\nsetup:\n  deps: uv sync\n"
@@ -234,7 +248,7 @@ class Saver:
         self.saver = InMemorySaver()
 
     @asynccontextmanager
-    async def __call__(self, cfg):
+    async def __call__(self, cfg, task_id):
         yield self.saver
 
 
@@ -1540,6 +1554,125 @@ async def test_resume_from_document_still_reads_the_frontmatter_unchanged(tmp_pa
         checkpointer=in_memory,
     )
     assert "from:      document" in capsys.readouterr().out
+
+
+def _trivial_graph():
+    """A real, tiny `StateGraph` -- no interrupt -- compiled fresh against whatever
+    saver `_run`/`_resume` hand it: real enough to write real checkpoint rows through a
+    real `composition.checkpointer`, unlike the `Delivers`/`in_memory` doubles the rest
+    of this module uses (invariant: a migration claim is proven over real SQLite, never
+    a double). An `escalate` node, named like the real graph's `ESCALATE`, is what lets
+    `_resume`'s `aupdate_state(..., as_node=ESCALATE)` target an existing node."""
+    from langgraph.graph import END, START, StateGraph
+
+    from agentic.core.process.adapters.langgraph.graph import ESCALATE
+
+    def escalate(state):
+        return {}
+
+    def node(state):
+        return {"status": "ready_for_review"}
+
+    g = StateGraph(dict)
+    g.add_node(ESCALATE, escalate)
+    g.add_node("n", node)
+    g.add_edge(START, ESCALATE)
+    g.add_edge(ESCALATE, "n")
+    g.add_edge("n", END)
+    return g
+
+
+async def _seed_legacy_checkpoint(product_dir, thread_id: str) -> None:
+    """A real checkpoint for `thread_id` in the product's legacy shared store, written
+    with a real `AsyncSqliteSaver` (the same real seam `tests/test_composition.py`
+    uses): what makes GH-1 resolve to the shared file on the first open, the state a
+    migration test starts from."""
+    from langgraph.checkpoint.base import empty_checkpoint
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+    legacy = product_dir / ".agentic/state.sqlite"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    async with AsyncSqliteSaver.from_conn_string(str(legacy)) as saver:
+        config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+        metadata = {"source": "update", "step": 1, "parents": {}}
+        await saver.aput(config, empty_checkpoint(), metadata, {})
+
+
+def _checkpoint_count(path, thread_id: str) -> int:
+    import sqlite3
+
+    conn = sqlite3.connect(path)
+    try:
+        return conn.execute(
+            "SELECT count(*) FROM checkpoints WHERE thread_id = ?", (thread_id,)
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+
+@pytest.mark.anyio
+async def test_run_fresh_migrates_a_legacy_task_to_its_own_file(monkeypatch, tmp_path):
+    """`_run(..., fresh=True)` over a task already in the legacy shared store: the
+    reopen after `adelete_thread` is how it migrates off it (ADR-0003, addendum
+    2026-10-04)."""
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setattr(cli, "graph", _trivial_graph())
+    await _seed_legacy_checkpoint(tmp_path, "GH-1")
+    ports = memory_ports()
+    task = {"id": "GH-1", "title": "t", "description": "d"}
+    cfg = Configuration(product_dir=tmp_path)
+
+    await cli._run(task, cfg, ports, fresh=True, checkpointer=composition.checkpointer)
+
+    legacy = tmp_path / ".agentic/state.sqlite"
+    own = tmp_path / ".agentic/state/GH-1.sqlite"
+    assert _checkpoint_count(legacy, "GH-1") == 0
+    assert _checkpoint_count(own, "GH-1") >= 1
+    async with composition.checkpointer(cfg, "GH-1") as saver:
+        app = _trivial_graph().compile(checkpointer=saver)
+        snapshot = await app.aget_state({"configurable": {"thread_id": "GH-1"}})
+    assert snapshot.values.get("status") == "ready_for_review"
+
+
+@pytest.mark.anyio
+async def test_resume_from_document_migrates_a_legacy_task_to_its_own_file(monkeypatch, tmp_path):
+    """`_resume(..., from_document=True)` over a task already in the legacy shared
+    store: the second saver opened after `adelete_thread` is where `aupdate_state` and
+    the resumed invocation both land (ADR-0003, addendum 2026-10-04)."""
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setattr(cli, "graph", _trivial_graph())
+    await _seed_legacy_checkpoint(tmp_path, "GH-1")
+    ports = memory_ports()
+    ports.documents.save(
+        {
+            "id": "GH-1",
+            "title": "t",
+            "description": "d",
+            "type": "bug",
+            "status": "waiting_on_human",
+            "escalated": "Developer stopped by the task cap",
+            "cost_usd": 1.0,
+        }
+    )
+    ports.tracker.earlier = ["Escalated: Developer stopped by the task cap"]
+    cfg = Configuration(product_dir=tmp_path)
+
+    await cli._resume(
+        "GH-1", cfg, ports, from_document=True, yes=True, checkpointer=composition.checkpointer
+    )
+
+    legacy = tmp_path / ".agentic/state.sqlite"
+    own = tmp_path / ".agentic/state/GH-1.sqlite"
+    assert _checkpoint_count(legacy, "GH-1") == 0
+    assert _checkpoint_count(own, "GH-1") >= 1
+    async with composition.checkpointer(cfg, "GH-1") as saver:
+        app = _trivial_graph().compile(checkpointer=saver)
+        snapshot = await app.aget_state({"configurable": {"thread_id": "GH-1"}})
+    assert snapshot.values.get("status") == "ready_for_review"
 
 
 # `agentic close --issue N` (Tech Lead plan, subtask `close-command`). Its declared

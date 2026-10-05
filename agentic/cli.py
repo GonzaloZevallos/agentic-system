@@ -89,7 +89,7 @@ from .shared.environment import without_own_toolchain
 # `FilesystemTaskDocuments`'s own `subdir` keyword).
 STACK_REVIEWS_SUBDIR = Path(".agentic/stack-reviews")
 
-Checkpointer = Callable[[Configuration], AbstractAsyncContextManager[BaseCheckpointSaver]]
+Checkpointer = Callable[[Configuration, str], AbstractAsyncContextManager[BaseCheckpointSaver]]
 # Re-execs `argv` (already stripped of `--detach`) detached from this session and
 # returns the child's pid: the shape `checkpointer` already uses, injectable on
 # `_run`/`_resume` so a test asserts argv and redirection without spawning anything
@@ -836,7 +836,8 @@ async def _run(
     lock = run_lock if run_lock is not None else _lock_for(cfg)
     registry = registry if registry is not None else _registry_for(cfg)
     config: RunnableConfig = {"configurable": _configurable(task["id"], log_file)}
-    async with (checkpointer or composition.checkpointer)(cfg) as saver:
+    open_checkpointer = checkpointer or composition.checkpointer
+    async with open_checkpointer(cfg, task["id"]) as saver:
         app = graph.compile(checkpointer=saver)
         if not fresh:
             await _refuse_a_started_task(app, config, task["id"], ports)
@@ -847,7 +848,13 @@ async def _run(
             _archive_previous_run(task["id"], ports)
             # A thread keeps its channels: a new run over it would add to the old cost.
             await saver.adelete_thread(task["id"])
-            final = await _invoke(app, task, config, task, ports, cfg, "run")
+            # The thread just dropped: routing now resolves to the task's own file
+            # (ADR-0003, addendum 2026-10-04), so an old task migrates off the shared
+            # store the moment it is started over. A no-op in cost alone for a task
+            # already on its own file.
+            async with open_checkpointer(cfg, task["id"]) as migrated_saver:
+                migrated_app = graph.compile(checkpointer=migrated_saver)
+                final = await _invoke(migrated_app, task, config, task, ports, cfg, "run")
     _report(final, task["id"], ports)
 
 
@@ -937,7 +944,8 @@ async def _resume(
     lock = run_lock if run_lock is not None else _lock_for(cfg)
     registry = registry if registry is not None else _registry_for(cfg)
     config: RunnableConfig = {"configurable": _configurable(task_id, log_file)}
-    async with (checkpointer or composition.checkpointer)(cfg) as saver:
+    open_checkpointer = checkpointer or composition.checkpointer
+    async with open_checkpointer(cfg, task_id) as saver:
         app = graph.compile(checkpointer=saver)
         snapshot = await app.aget_state(config)
         try:
@@ -968,16 +976,26 @@ async def _resume(
             return
 
         with _locked(lock, task_id), _registered(registry, product_name(ports), task_id):
-            if r.source == "document":
-                # Seeded as if `escalate` had just run: the task pauses once more,
-                # without telling the human again, and the answer below resumes it
-                # like a checkpoint.
-                await saver.adelete_thread(task_id)
-                await app.aupdate_state(config, r.paused, as_node=ESCALATE)
             crashed = r.source == "checkpoint" and not snapshot.interrupts
             command: Command | None = None if crashed else Command(resume={"decision": r.decision})
             resuming.announce(r, ports)
-            final = await _invoke(app, command, config, r.paused, ports, cfg, "resume", r.decision)
+            if r.source == "document":
+                # Seeded as if `escalate` had just run: the task pauses once more,
+                # without telling the human again, and the answer below resumes it
+                # like a checkpoint. The thread just dropped: routing now resolves to
+                # the task's own file (ADR-0003, addendum 2026-10-04), so a task
+                # resumed from its document migrates off the shared store.
+                await saver.adelete_thread(task_id)
+                async with open_checkpointer(cfg, task_id) as migrated_saver:
+                    migrated_app = graph.compile(checkpointer=migrated_saver)
+                    await migrated_app.aupdate_state(config, r.paused, as_node=ESCALATE)
+                    final = await _invoke(
+                        migrated_app, command, config, r.paused, ports, cfg, "resume", r.decision
+                    )
+            else:
+                final = await _invoke(
+                    app, command, config, r.paused, ports, cfg, "resume", r.decision
+                )
     _report(final, task_id, ports)
 
 
