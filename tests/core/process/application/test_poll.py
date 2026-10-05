@@ -13,6 +13,7 @@ from agentic.core.process.application.ports import (
     LaunchAttempt,
     RunRegistration,
 )
+from agentic.core.process.domain.roles import INTERVIEW_SOLUTION
 from agentic.core.process.domain.task import PullRequest
 from agentic.shared.configuration import Configuration
 from tests.fakes import FakeLauncher, MemoryInbox, MemoryRunRegistry, MemoryTracker, memory_ports
@@ -95,7 +96,7 @@ def test_an_account_limit_resumes_once_its_own_wait_elapses_not_before(tmp_path)
     ]
     assert launcher.spawned == []
 
-    due = ESCALATED_AT + timedelta(minutes=16)  # RETAKE_SCHEDULE[0] == 15
+    due = ESCALATED_AT + timedelta(minutes=16)  # ACCOUNT_LIMIT_SCHEDULE[0] == 15
     lines = _round(cfg, ports, registry, launcher, due)
     assert lines == ["agentic: poll: resume #19 -> pid 4242"]
     assert launcher.spawned == [
@@ -520,7 +521,7 @@ def test_a_launch_whose_spawn_fails_still_counts_its_own_attempt(tmp_path):
 
 def test_a_launch_whose_spawn_fails_on_the_last_attempt_says_the_calendar_is_spent(tmp_path):
     """Acceptance (c), last attempt: with 5 prior attempts already on record, this
-    failure is the 6th and last the schedule (`RETAKE_SCHEDULE`, length 6) allows
+    failure is the 6th and last the schedule (`LAUNCH_SCHEDULE`, length 6) allows
     -- the line says so, for a human to notice."""
     ports = memory_ports()
     ports.tracker._queue = [5]
@@ -559,3 +560,170 @@ def test_every_launched_action_uses_the_argv0_passed_in(tmp_path):
     )
     assert lines == ["agentic: poll: launch #5 -> pid 4242"]
     assert launcher.spawned[0][0] == "/venv/bin/agentic"
+
+
+# GH-172: an account-limit pause is retaken on a flat 15-minute calendar counted per
+# account window, and an interview keeps its ceiling for retakes that ran a round.
+
+
+def _stamp(moment: datetime) -> str:
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _run_time(moment: datetime) -> str:
+    return moment.isoformat(timespec="milliseconds")
+
+
+def _chase_comments(
+    probes: int, first: datetime = ESCALATED_AT, period_min: int = 16
+) -> list[IssueComment]:
+    """One `Escalated:`, then `probes` pairs of `Auto-resumed:` + `Escalated:`, a
+    `period_min` apart: the shape a chase that kept hitting the same 429 leaves."""
+    comments = [IssueComment(body="Escalated: cut", created_at=_stamp(first))]
+    for k in range(1, probes + 1):
+        at = first + timedelta(minutes=period_min * k)
+        comments.append(IssueComment(body="Auto-resumed: account limit", created_at=_stamp(at)))
+        comments.append(
+            IssueComment(body="Escalated: cut", created_at=_stamp(at + timedelta(minutes=1)))
+        )
+    return comments
+
+
+def _account_limit_ports(section: str, comments: list[IssueComment], runs: list[dict]):
+    ports = memory_ports()
+    ports.documents.save(
+        _paused(
+            "GH-19",
+            "Developer failed 2 times: API Error: 429",
+            [
+                {"kind": "failure", "value": "account_limit", "section": section},
+                {"kind": "escalation", "value": "failure"},
+            ],
+            runs=runs,
+        )
+    )
+    ports.tracker.timestamped["GH-19"] = comments
+    return ports
+
+
+def _retaken(ports, now: datetime, tmp_path) -> bool:
+    launcher = FakeLauncher()
+    lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(), launcher, now)
+    return lines == ["agentic: poll: resume #19 -> pid 4242"]
+
+
+def test_an_account_limit_pause_gets_a_fresh_window_once_a_run_delivered_after_its_probes(
+    tmp_path,
+):
+    comments = _chase_comments(probes=24)
+    last_probe = ESCALATED_AT + timedelta(minutes=16 * 24)
+    now = last_probe + timedelta(minutes=1 + 16)
+    delivered = [
+        {
+            "role": "Developer",
+            "section": "Developer",
+            "started_at": _run_time(last_probe + timedelta(seconds=10)),
+            "ended_at": _run_time(last_probe + timedelta(seconds=40)),
+        }
+    ]
+    # Rejected input: with no delivered run the same 24 probes are one window, spent.
+    spent = _account_limit_ports("Developer", comments, runs=[])
+    assert not _retaken(spent, now, tmp_path)
+    # A delivered run after the last probe: the next 429 is a new window, retaken 15
+    # minutes after its own `Escalated:` though earlier probes exist.
+    fresh = _account_limit_ports("Developer", comments, runs=delivered)
+    assert not _retaken(fresh, last_probe + timedelta(minutes=1 + 14), tmp_path)
+    assert _retaken(fresh, now, tmp_path)
+
+
+def test_an_account_limit_pause_whose_run_ends_are_unreadable_counts_the_whole_chase(tmp_path):
+    comments = _chase_comments(probes=24)
+    now = ESCALATED_AT + timedelta(minutes=16 * 24 + 1 + 16)
+    runs = [{"role": "Developer", "section": "Developer", "ended_at": "not a time"}]
+    assert not _retaken(_account_limit_ports("Developer", comments, runs), now, tmp_path)
+
+
+def test_the_chase_backstop_hands_a_looping_account_limit_pause_to_a_human(tmp_path):
+    # A cheap role keeps delivering (a fresh window each time) while another keeps
+    # hitting a 429: the whole-chase count, which a delivered run never resets, stops it.
+    last_probe_at = ESCALATED_AT + timedelta(minutes=16 * 96)
+    delivered = [
+        {
+            "role": "Developer",
+            "section": "Developer",
+            "started_at": _run_time(last_probe_at),
+            "ended_at": _run_time(last_probe_at + timedelta(seconds=30)),
+        }
+    ]
+    now = last_probe_at + timedelta(minutes=1 + 16)
+    over = _account_limit_ports("Developer", _chase_comments(probes=96), delivered)
+    assert not _retaken(over, now, tmp_path)
+    under_at = ESCALATED_AT + timedelta(minutes=16 * 95)
+    under_runs = [
+        {
+            "role": "Developer",
+            "section": "Developer",
+            "started_at": _run_time(under_at),
+            "ended_at": _run_time(under_at + timedelta(seconds=30)),
+        }
+    ]
+    under = _account_limit_ports("Developer", _chase_comments(probes=95), under_runs)
+    assert _retaken(under, under_at + timedelta(minutes=1 + 16), tmp_path)
+
+
+def test_an_account_limit_interview_pause_with_a_productive_retake_goes_to_a_human(tmp_path):
+    section = INTERVIEW_SOLUTION.section
+    comments = _chase_comments(probes=1)
+    probe = ESCALATED_AT + timedelta(minutes=16)
+    now = probe + timedelta(minutes=1 + 16)
+    round_run = {
+        "role": INTERVIEW_SOLUTION.interviewer.name,
+        "section": section,
+        "started_at": _run_time(probe + timedelta(seconds=20)),
+        "ended_at": _run_time(probe + timedelta(minutes=5)),
+    }
+    # The retake ran an interview round: the ceiling is spent, nobody retakes it.
+    productive = _account_limit_ports(section, comments, [round_run])
+    assert not _retaken(productive, now, tmp_path)
+    # Control: the retake's 429 arrived on turn 1 and ran no round, so the ceiling
+    # still stands and the next slot is retaken.
+    unproductive = _account_limit_ports(section, comments, [])
+    assert _retaken(unproductive, now, tmp_path)
+    # Fail closed: a round whose start is unreadable counts as spent.
+    unreadable = _account_limit_ports(section, comments, [{**round_run, "started_at": "?"}])
+    assert not _retaken(unreadable, now, tmp_path)
+
+
+def test_an_upstream_interview_pause_keeps_its_single_retake_and_never_reads_the_runs(tmp_path):
+    section = INTERVIEW_SOLUTION.section
+    malformed = [
+        {
+            "role": INTERVIEW_SOLUTION.interviewer.name,
+            "section": section,
+            "started_at": "garbage",
+            "ended_at": "garbage",
+        }
+    ]
+
+    def _ports(comments: list[IssueComment]):
+        ports = memory_ports()
+        ports.documents.save(
+            _paused(
+                "GH-19",
+                "Tech Lead failed 2 times: 503",
+                [
+                    {"kind": "failure", "value": "upstream", "section": section},
+                    {"kind": "escalation", "value": "failure"},
+                ],
+                runs=malformed,
+            )
+        )
+        ports.tracker.timestamped["GH-19"] = comments
+        return ports
+
+    assert _retaken(
+        _ports(_chase_comments(probes=0)), ESCALATED_AT + timedelta(minutes=16), tmp_path
+    )
+    after_one = _chase_comments(probes=1)
+    now = ESCALATED_AT + timedelta(days=1)
+    assert not _retaken(_ports(after_one), now, tmp_path)

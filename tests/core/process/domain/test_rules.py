@@ -1,4 +1,5 @@
-from datetime import datetime, timedelta
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from typing import get_args
 
 from agentic.core.process.domain import document, roles, rules, task
@@ -1556,13 +1557,23 @@ def test_auto_resumable_only_reads_the_current_epoch_after_the_last_resumed():
 
 def test_auto_resume_limit_is_one_inside_an_interview_section():
     section = INTERVIEW_SOLUTION.section
-    state = {"pause_log": [_failure_entry("account_limit", section=section)]}
-    assert rules.auto_resume_limit(state) == 1
+    state = {"pause_log": [_failure_entry("upstream", section=section)]}
+    assert rules.auto_resume_limit(state, "upstream") == 1
 
 
 def test_auto_resume_limit_is_six_outside_an_interview_section():
+    state = {"pause_log": [_failure_entry("upstream", section="Developer: api")]}
+    assert rules.auto_resume_limit(state, "upstream") == 6
+
+
+def test_auto_resume_limit_of_an_account_limit_is_the_whole_window_calendar_in_an_interview():
+    state = {"pause_log": [_failure_entry("account_limit", section=INTERVIEW_SOLUTION.section)]}
+    assert rules.auto_resume_limit(state, "account_limit") == 24
+
+
+def test_auto_resume_limit_of_an_account_limit_is_the_whole_window_calendar_outside_one():
     state = {"pause_log": [_failure_entry("account_limit", section="Developer: api")]}
-    assert rules.auto_resume_limit(state) == 6
+    assert rules.auto_resume_limit(state, "account_limit") == 24
 
 
 def test_next_attempt_at_is_none_before_its_own_slot_elapses():
@@ -1610,6 +1621,178 @@ def test_poll_plan_launches_a_late_attempt_once_its_growing_slot_elapses():
     )
     actions = rules.poll_plan(closes=[], resumes=[], launches=[late], available_slots=1, now=NOW)
     assert actions == [rules.PollAction("launch", 9)]
+
+
+ACCOUNT = rules.ACCOUNT_LIMIT_SCHEDULE
+T0 = datetime(2026, 10, 5, 7, 40)
+
+
+def test_next_attempt_at_on_the_account_limit_calendar_is_flat_fifteen_minutes():
+    for k in (0, 12, 23):
+        due = rules.next_attempt_at(
+            T0, prior=k, limit=24, now=T0 + timedelta(minutes=15), schedule=ACCOUNT
+        )
+        assert due == T0 + timedelta(minutes=15)
+
+
+def test_next_attempt_at_on_the_account_limit_calendar_is_none_a_second_early():
+    now = T0 + timedelta(minutes=14, seconds=59)
+    assert rules.next_attempt_at(T0, prior=23, limit=24, now=now, schedule=ACCOUNT) is None
+
+
+def test_next_attempt_at_on_the_account_limit_calendar_is_none_after_the_last_slot():
+    now = T0 + timedelta(days=1)
+    assert rules.next_attempt_at(T0, prior=24, limit=24, now=now, schedule=ACCOUNT) is None
+    assert rules._schedule_exhausted(24, 24, schedule=ACCOUNT)
+    assert not rules._schedule_exhausted(23, 24, schedule=ACCOUNT)
+
+
+def test_the_account_limit_calendar_covers_a_whole_five_hour_window():
+    assert rules.ACCOUNT_LIMIT_SCHEDULE == (15,) * 24
+    assert sum(rules.ACCOUNT_LIMIT_SCHEDULE) >= 5 * 60
+
+
+def test_next_attempt_at_on_the_growing_calendar_is_none_past_its_six_slots():
+    now = T0 + timedelta(days=1)
+    assert (
+        rules.next_attempt_at(T0, prior=10, limit=6, now=now, schedule=rules.RETAKE_SCHEDULE)
+        is None
+    )
+
+
+def test_schedule_for_gives_the_flat_calendar_to_an_account_limit_only():
+    assert rules.schedule_for("account_limit") == rules.ACCOUNT_LIMIT_SCHEDULE
+    assert rules.schedule_for("upstream") == rules.RETAKE_SCHEDULE
+    assert rules.schedule_for("network") == rules.RETAKE_SCHEDULE
+
+
+def test_a_mixed_epoch_takes_the_calendar_of_its_last_failure():
+    account_then_upstream = {
+        "pause_log": [_failure_entry("account_limit"), _failure_entry("upstream")]
+    }
+    upstream_then_account = {
+        "pause_log": [_failure_entry("upstream"), _failure_entry("account_limit")]
+    }
+    reason = rules.auto_resumable(account_then_upstream)
+    assert reason is not None and rules.schedule_for(reason) == rules.RETAKE_SCHEDULE
+    reason = rules.auto_resumable(upstream_then_account)
+    assert reason is not None and rules.schedule_for(reason) == rules.ACCOUNT_LIMIT_SCHEDULE
+
+
+def test_the_chase_backstop_is_inert_for_an_upstream_whose_schedule_is_spent():
+    spent = rules.ResumeCandidate(5, "upstream", T0, prior=6, limit=6, chase_prior=6)
+    assert rules.resume_exhausted(spent)
+    live = rules.ResumeCandidate(5, "upstream", T0, prior=5, limit=6, chase_prior=5)
+    assert not rules.resume_exhausted(live)
+
+
+def test_resume_exhausted_by_the_chase_backstop_or_the_interview_ceiling():
+    base = rules.ResumeCandidate(5, "account_limit", T0, prior=2, limit=24, chase_prior=95)
+    assert not rules.resume_exhausted(base)
+    assert rules.resume_exhausted(replace(base, chase_prior=96))
+    assert rules.resume_exhausted(replace(base, ceiling_spent=True))
+
+
+def test_window_probes_counts_a_comment_inside_the_clock_tolerance_of_the_last_run_end():
+    end = datetime(2026, 10, 5, 8, 0)
+    inside = end - timedelta(seconds=119)
+    outside = end - timedelta(seconds=121)
+    assert rules.window_probes([inside], end) == 1
+    assert rules.window_probes([outside], end) == 0
+
+
+def test_window_probes_counts_everything_when_no_run_ended():
+    times = [T0, T0 + timedelta(minutes=16), T0 + timedelta(minutes=32)]
+    assert rules.window_probes(times, None) == 3
+
+
+def _starts(*offsets_s: int) -> list[datetime]:
+    return [T0 + timedelta(seconds=s) for s in offsets_s]
+
+
+def test_productive_retakes_counts_a_round_just_before_its_comment():
+    retakes = [T0 + timedelta(minutes=15)]
+    assert rules.productive_retakes(retakes, [retakes[0] - timedelta(seconds=1)]) == 1
+
+
+def test_productive_retakes_counts_a_round_inside_the_tolerance_before_its_comment():
+    retakes = [T0 + timedelta(minutes=15)]
+    assert rules.productive_retakes(retakes, [retakes[0] - timedelta(seconds=119)]) == 1
+
+
+def test_productive_retakes_does_not_count_a_round_older_than_the_tolerance():
+    retakes = [T0 + timedelta(minutes=15)]
+    assert rules.productive_retakes(retakes, [retakes[0] - timedelta(seconds=121)]) == 0
+
+
+def test_productive_retakes_attributes_a_round_to_the_retake_whose_window_holds_it():
+    first, second = T0 + timedelta(minutes=15), T0 + timedelta(minutes=31)
+    # One round, in the second window: only the second retake ran something.
+    assert rules.productive_retakes([first, second], [second + timedelta(minutes=1)]) == 1
+    # A round in each window: both were productive.
+    both = [first + timedelta(minutes=1), second + timedelta(minutes=1)]
+    assert rules.productive_retakes([first, second], both) == 2
+
+
+def test_productive_retakes_is_zero_when_no_retake_ran_a_round():
+    retakes = [T0 + timedelta(minutes=m) for m in (15, 31, 47)]
+    assert rules.productive_retakes(retakes, []) == 0
+
+
+def test_productive_retakes_fails_closed_when_the_round_starts_are_unreadable():
+    assert rules.productive_retakes([T0], None) == 1
+
+
+def test_interview_rounds_is_the_interviewers_own_runs_of_the_section():
+    section = INTERVIEW_DEFINITION.section
+    runs = [
+        {"role": "Product Analyst", "section": section},
+        {"role": "PM", "section": section},
+        {"role": "Product Analyst", "section": "PM"},
+    ]
+    assert rules.interview_rounds({"runs": runs}, INTERVIEW_DEFINITION) == [runs[0]]
+    assert rules.interview_rounds({}, INTERVIEW_DEFINITION) == []
+
+
+def test_round_starts_parses_every_started_at():
+    rounds = [{"started_at": "2026-10-05T08:00:00.000+00:00"}]
+    assert rules.round_starts(rounds) == [datetime(2026, 10, 5, 8, 0, tzinfo=UTC)]
+    assert rules.round_starts([]) == []
+
+
+def test_round_starts_is_none_when_any_start_is_missing_or_unparseable():
+    good = {"started_at": "2026-10-05T08:00:00.000+00:00"}
+    assert rules.round_starts([good, {}]) is None
+    assert rules.round_starts([good, {"started_at": ""}]) is None
+    assert rules.round_starts([good, {"started_at": "not a time"}]) is None
+    # A start with no offset cannot be compared with GitHub's own aware timestamps.
+    assert rules.round_starts([{"started_at": "2026-10-05T08:00:00"}]) is None
+
+
+def test_run_ends_is_none_when_any_end_is_missing_or_unparseable():
+    good = {"ended_at": "2026-10-05T08:00:00.000+00:00"}
+    assert rules.run_ends({"runs": [good]}) == [datetime(2026, 10, 5, 8, 0, tzinfo=UTC)]
+    assert rules.run_ends({}) == []
+    assert rules.run_ends({"runs": [good, {"role": "PM"}]}) is None
+    assert rules.run_ends({"runs": [good, {"ended_at": "garbage"}]}) is None
+
+
+def test_interview_for_section_finds_the_interview_of_a_section_only():
+    assert rules.interview_for_section(INTERVIEW_SOLUTION.section) == INTERVIEW_SOLUTION
+    assert rules.interview_for_section("Developer: api") is None
+
+
+def test_interview_ceiling_is_spent_by_a_productive_account_limit_interview_retake():
+    state = {"pause_log": [_failure_entry("account_limit", section=INTERVIEW_SOLUTION.section)]}
+    assert rules.interview_ceiling_spent(state, "account_limit", 1) is True
+    assert rules.interview_ceiling_spent(state, "account_limit", 0) is False
+
+
+def test_interview_ceiling_is_never_spent_for_upstream_or_outside_an_interview():
+    interview = {"pause_log": [_failure_entry("upstream", section=INTERVIEW_SOLUTION.section)]}
+    assert rules.interview_ceiling_spent(interview, "upstream", 3) is False
+    outside = {"pause_log": [_failure_entry("account_limit", section="Developer: api")]}
+    assert rules.interview_ceiling_spent(outside, "account_limit", 3) is False
 
 
 def test_blocker_resolved_not_planned_resolves_without_a_merge():
@@ -1742,7 +1925,7 @@ def test_poll_plan_launches_even_though_an_exhausted_resume_elsewhere_cannot_ret
     # not yet elapsed": it needs a human now, like any other escalation, and must not
     # freeze every launch in the product until one acts.
     exhausted = rules.ResumeCandidate(
-        issue=5, reason="account_limit", since=NOW - timedelta(days=1), prior=6, limit=6
+        issue=5, reason="account_limit", since=NOW - timedelta(days=1), prior=24, limit=24
     )
     ready = rules.LaunchCandidate(issue=9, blocked=False, since=None, prior=0, limit=6)
     actions = rules.poll_plan(
@@ -1770,3 +1953,69 @@ def test_poll_plan_called_twice_with_the_same_closes_never_doubles_the_action():
     once = rules.poll_plan(closes=[7], resumes=[], launches=[], available_slots=1, now=NOW)
     twice = rules.poll_plan(closes=[7], resumes=[], launches=[], available_slots=1, now=NOW)
     assert once == twice == [rules.PollAction("close", 7)]
+
+
+def _ready_launch() -> rules.LaunchCandidate:
+    return rules.LaunchCandidate(issue=9, blocked=False, since=None, prior=0, limit=6)
+
+
+def test_poll_plan_blocks_a_launch_while_the_last_account_limit_slot_still_waits():
+    waiting = rules.ResumeCandidate(
+        issue=5, reason="account_limit", since=NOW - timedelta(minutes=1), prior=23, limit=24
+    )
+    actions = rules.poll_plan(
+        closes=[], resumes=[waiting], launches=[_ready_launch()], available_slots=1, now=NOW
+    )
+    assert actions == []
+
+
+def test_poll_plan_retakes_an_account_limit_pause_on_the_flat_calendar():
+    due = rules.ResumeCandidate(
+        issue=5, reason="account_limit", since=NOW - timedelta(minutes=16), prior=12, limit=24
+    )
+    actions = rules.poll_plan(closes=[], resumes=[due], launches=[], available_slots=1, now=NOW)
+    assert actions == [rules.PollAction("resume", 5)]
+
+
+def test_poll_plan_does_not_retake_nor_block_when_the_chase_backstop_is_reached():
+    since = NOW - timedelta(minutes=16)
+    over = rules.ResumeCandidate(
+        issue=5, reason="account_limit", since=since, prior=2, limit=24, chase_prior=96
+    )
+    actions = rules.poll_plan(
+        closes=[], resumes=[over], launches=[_ready_launch()], available_slots=1, now=NOW
+    )
+    assert actions == [rules.PollAction("launch", 9)]
+    under = replace(over, chase_prior=95)
+    actions = rules.poll_plan(closes=[], resumes=[under], launches=[], available_slots=1, now=NOW)
+    assert actions == [rules.PollAction("resume", 5)]
+
+
+def test_poll_plan_does_not_retake_nor_block_once_the_interview_ceiling_is_spent():
+    since = NOW - timedelta(minutes=16)
+    spent = rules.ResumeCandidate(
+        issue=5, reason="account_limit", since=since, prior=1, limit=24, ceiling_spent=True
+    )
+    actions = rules.poll_plan(
+        closes=[], resumes=[spent], launches=[_ready_launch()], available_slots=1, now=NOW
+    )
+    assert actions == [rules.PollAction("launch", 9)]
+    open_ceiling = replace(spent, ceiling_spent=False)
+    actions = rules.poll_plan(
+        closes=[], resumes=[open_ceiling], launches=[], available_slots=1, now=NOW
+    )
+    assert actions == [rules.PollAction("resume", 5)]
+
+
+def test_poll_plan_treats_a_zero_limit_as_exhausted_never_as_a_flag():
+    for prior in (0, 3):
+        zero = rules.ResumeCandidate(
+            issue=5, reason="account_limit", since=NOW - timedelta(days=1), prior=prior, limit=0
+        )
+        assert (
+            rules.next_attempt_at(zero.since, zero.prior, zero.limit, NOW, schedule=ACCOUNT) is None
+        )
+        actions = rules.poll_plan(
+            closes=[], resumes=[zero], launches=[_ready_launch()], available_slots=1, now=NOW
+        )
+        assert actions == [rules.PollAction("launch", 9)]
