@@ -5,7 +5,7 @@ change: it already says why the run stopped. The task pauses right after, in a n
 of its own (ADR-0003, addendum), so resuming never tells the human twice.
 
 An escalation by the task cap also breaks the spending down by phase and proposes a
-new cap: raising it is the human's call (ADR-0004, fourth addendum).
+new cap: raising it is the human's call (ADR-0004, 2026-10-05 addendum).
 
 The document is saved once more, from the merged state this node receives. Each branch
 of a fan-out saves its own view of it (`finish`), so the last writer loses its sisters'

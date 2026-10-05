@@ -17,10 +17,9 @@ seventh addendum) instead of the "Retry. Fix exactly what failed." every other
 The task cap is checked here too, before every attempt, because every role passes
 through here: the routing between nodes would miss the rounds of an interview.
 Reached, `TaskCapReached` escalates the same way, but it is not a role failure: the
-role did not break (ADR-0004, third addendum). The cap is read off the state each
-time, so it grows as soon as the plan is in (fourth addendum), and against what the
-whole process spent, which is what the state cannot hold once branches run in
-parallel (fifth addendum, `limits.py`).
+role did not break (ADR-0004, third addendum). The cap is a flat ceiling, the same for any
+plan size (2026-10-05 addendum), checked against what the whole process spent, which is
+what the state cannot hold once branches run in parallel (fifth addendum, `limits.py`).
 
 Context rule (README.md, 6): each role reads, in full, the sections it declares in
 `Role.reads`, after the engineering standards and the product knowledge if it reads

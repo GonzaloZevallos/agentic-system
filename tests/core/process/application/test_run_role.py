@@ -908,7 +908,7 @@ async def test_the_task_cap_is_the_same_flat_ceiling_for_any_plan_size(tmp_path,
         )
         return output, patch, runner
 
-    default = Configuration(product_dir=tmp_path)
+    default = Configuration(product_dir=tmp_path, task_max_budget_usd=250.0)
     output, _, runner = await run(249.0, default)
     assert output is not None and len(runner.calls) == 1
     output, patch, runner = await run(250.0, default)
@@ -916,7 +916,7 @@ async def test_the_task_cap_is_the_same_flat_ceiling_for_any_plan_size(tmp_path,
     assert patch["escalation_class"] == "cap"
     assert patch["escalated"] == "PjM stopped by the task cap: 250.00 of 250.00 USD spent"
     # The human raises it, and the plan size changes nothing.
-    raised = Configuration(product_dir=tmp_path, task_budget_usd=400.0)
+    raised = Configuration(product_dir=tmp_path, task_max_budget_usd=250.0, task_budget_usd=400.0)
     output, _, runner = await run(250.0, raised)
     assert output is not None and len(runner.calls) == 1
 
