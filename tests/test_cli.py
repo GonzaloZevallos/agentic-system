@@ -19,6 +19,7 @@ from agentic.core.measurement.domain import evaluation
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.adapters.github import inbox
 from agentic.core.process.application.ports import LockHeld, LockRecord
+from agentic.core.process.domain import legacy_names
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
 from tests.fakes import MemoryKnowledge, MemoryStack, MemoryTracker, memory_ports
 
@@ -1675,10 +1676,11 @@ async def test_resume_from_document_migrates_a_legacy_task_to_its_own_file(monke
     assert snapshot.values.get("status") == "ready_for_review"
 
 
-# `cli._resume` over a checkpoint seeded with the old Design Lead names (2026-10-05
-# rename, Tech Lead plan subtask `rename`): a fake checkpointer/graph double is the
-# declared seam, since `aget_state`'s `values`/`interrupts` are what the new branching
-# reads, never a real paused run reproduced end to end.
+# `cli._resume` over a checkpoint seeded with the pre-rename role names (2026-10-05,
+# Tech Lead plan subtask `rename`): a fake checkpointer/graph double is the declared
+# seam, since `aget_state`'s `values`/`interrupts` are what the new branching reads,
+# never a real paused run reproduced end to end. The old name itself is never typed
+# here: it comes from `legacy_names`'s own constants, the one place it lives.
 
 
 class _LegacyFakeSaver:
@@ -1730,19 +1732,19 @@ class LegacyGraph:
 
 def _legacy_checkpoint_values():
     """A checkpoint snapshot as a pre-rename run would have left it: `current_role`,
-    `runs[].section/.slug` and `changes_requested` all still naming Design Lead."""
+    `runs[].section/.slug` and `changes_requested` all still naming the old role."""
     return {
         "id": "GH-1",
         "title": "t",
         "status": "waiting_on_human",
-        "current_role": "Design Lead",
-        "escalated": "Design Lead stopped by the task cap",
+        "current_role": legacy_names.OLD_NAME,
+        "escalated": f"{legacy_names.OLD_NAME} stopped by the task cap",
         "cost_usd": 0.3,
         "runs": [
             {
-                "role": "Design Lead",
-                "section": "Design Lead",
-                "slug": "design_lead",
+                "role": legacy_names.OLD_NAME,
+                "section": legacy_names.OLD_NAME,
+                "slug": legacy_names.OLD_SLUG,
                 "version": 1,
                 "session_id": "s1",
                 "model": "m",
@@ -1750,23 +1752,23 @@ def _legacy_checkpoint_values():
                 "turns": 1,
             }
         ],
-        "changes_requested": {"Design Lead→UI Designer": 1},
+        "changes_requested": {f"{legacy_names.OLD_NAME}→UI Designer": 1},
     }
 
 
-def _legacy_document(**extra):
+def _new_named_document(**extra):
     return {
         "id": "GH-1",
         "title": "t",
         "description": "d",
-        "current_role": "UI Lead",
+        "current_role": legacy_names.NEW_NAME,
         "cost_usd": 0.1,
-        "changes_requested": {"UI Lead→UI Designer": 1},
+        "changes_requested": {f"{legacy_names.NEW_NAME}→UI Designer": 1},
         "runs": [
             {
-                "role": "UI Lead",
-                "section": "UI Lead",
-                "slug": "ui_lead",
+                "role": legacy_names.NEW_NAME,
+                "section": legacy_names.NEW_NAME,
+                "slug": legacy_names.NEW_SLUG,
                 "version": 1,
                 "session_id": "s0",
                 "model": "m",
@@ -1779,14 +1781,14 @@ def _legacy_document(**extra):
 
 
 @pytest.mark.anyio
-async def test_resume_takes_the_document_branch_when_a_paused_checkpoint_names_design_lead(
+async def test_resume_takes_the_document_branch_for_a_paused_legacy_checkpoint(
     monkeypatch, tmp_path
 ):
     from agentic.shared.configuration import Configuration
     from tests.fakes import memory_ports
 
     ports = memory_ports()
-    ports.documents.save(_legacy_document())
+    ports.documents.save(_new_named_document())
     graph_double = LegacyGraph(_legacy_checkpoint_values(), interrupts=("paused",))
     monkeypatch.setattr(cli, "graph", graph_double)
     checkpointer = LegacyFakeCheckpointer()
@@ -1801,9 +1803,9 @@ async def test_resume_takes_the_document_branch_when_a_paused_checkpoint_names_d
     assert as_node == cli.ESCALATE
     # Reseeded from the document alone -- not merged with the checkpoint's own old-named
     # run, which `operator.add` would have duplicated.
-    assert reseeded["runs"] == _legacy_document()["runs"]
-    assert reseeded["changes_requested"] == {"UI Lead→UI Designer": 1}
-    assert "Design Lead" not in str(reseeded)
+    assert reseeded["runs"] == _new_named_document()["runs"]
+    assert reseeded["changes_requested"] == {f"{legacy_names.NEW_NAME}→UI Designer": 1}
+    assert legacy_names.OLD_NAME not in str(reseeded)
 
 
 @pytest.mark.anyio
@@ -1814,7 +1816,7 @@ async def test_resume_prefixes_the_rename_cause_when_the_forced_document_branch_
     from tests.fakes import memory_ports
 
     ports = memory_ports()
-    ports.documents.save(_legacy_document(branch="agentic/GH-1"))  # no such branch in git
+    ports.documents.save(_new_named_document(branch="agentic/GH-1"))  # no such branch in git
     monkeypatch.setattr(
         cli, "graph", LegacyGraph(_legacy_checkpoint_values(), interrupts=("paused",))
     )
@@ -1829,21 +1831,19 @@ async def test_resume_prefixes_the_rename_cause_when_the_forced_document_branch_
         )
     message = str(info.value)
     assert message.startswith(
-        "this task's checkpoint names Design Lead, renamed to UI Lead; it resumes from "
-        "its document, which was checked against git:"
+        f"this task's checkpoint {legacy_names.RENAME_CAUSE}; it resumes from its "
+        "document, which was checked against git:"
     )
     assert "agentic/GH-1" in message
 
 
 @pytest.mark.anyio
-async def test_resume_refuses_a_crashed_checkpoint_that_still_names_design_lead(
-    monkeypatch, tmp_path
-):
+async def test_resume_refuses_a_crashed_legacy_checkpoint(monkeypatch, tmp_path):
     from agentic.shared.configuration import Configuration
     from tests.fakes import memory_ports
 
     ports = memory_ports()
-    ports.documents.save(_legacy_document())
+    ports.documents.save(_new_named_document())
     monkeypatch.setattr(
         cli, "graph", LegacyGraph(_legacy_checkpoint_values(), interrupts=())  # crashed
     )
@@ -1857,7 +1857,7 @@ async def test_resume_refuses_a_crashed_checkpoint_that_still_names_design_lead(
             checkpointer=LegacyFakeCheckpointer(),
         )
     message = str(info.value)
-    assert "Design Lead" in message and "UI Lead" in message
+    assert legacy_names.OLD_NAME in message and legacy_names.NEW_NAME in message
     assert "--from-document" in message
     assert "--issue 1" in message
 

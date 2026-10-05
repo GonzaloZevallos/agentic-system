@@ -63,8 +63,8 @@ def _recorded(subtask: dict[str, Any]) -> dict[str, Any]:
 
 def from_frontmatter(data: dict[str, Any], source: object = "document") -> dict[str, Any]:
     """The inverse of what `render` writes: the frontmatter under the state's names,
-    with the 2026-10-05 Design Lead -> UI Lead alias applied last (`legacy_names.
-    rename_legacy_roles`), so a document written before the rename seeds the same
+    with the 2026-10-05 role-rename alias applied last (`legacy_names.
+    rename_legacy_roles`), so a document written before that rename seeds the same
     sections, pairs and return counts under the new names. `source` is `parse`'s own,
     for the alias's `ValueError` alone; `render`/`record_closure` never call this with
     anything to translate the other way, by design (ADR-0040's role, renamed)."""

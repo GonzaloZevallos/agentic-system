@@ -1,7 +1,7 @@
 import pytest
 
 from agentic.core.process.application import resume
-from agentic.core.process.domain import document, rules
+from agentic.core.process.domain import document, legacy_names, rules
 
 
 def test_render_then_parse_roundtrip():
@@ -514,28 +514,32 @@ def test_record_closure_quotes_values_that_yaml_would_otherwise_retype():
 
 
 def test_a_document_with_old_role_names_parses_under_the_new_ones():
-    """2026-10-05 rename: a document written before it names Design Lead everywhere
+    """2026-10-05 rename: a document written before it names the old role everywhere
     the alias (`legacy_names`) translates; `parse` (via `from_frontmatter`) hands back
-    the same sections, pairs and return counts under UI Lead instead, so a resume off
-    this document reads them unchanged (ADR-0040's own role, renamed)."""
+    the same sections, pairs and return counts under the new one instead, so a resume
+    off this document reads them unchanged (ADR-0040's own role, renamed). The old name
+    itself comes from `legacy_names`'s own constants, never typed again here (the
+    invariant the whole rename keeps: the literal name lives in one module alone)."""
     old = (
         "---\n"
         "id: T-1\n"
         "title: t\n"
-        "current_role: Design Lead\n"
-        "returns: {'Design Lead→UI Designer': 1}\n"
-        "return_history: [{pair: 'Design Lead→UI Designer', category: definition, reason: r}]\n"
-        "design_items: [{role_slug: design_lead, kind: blocking, step: Pay, text: no button}]\n"
+        f"current_role: {legacy_names.OLD_NAME}\n"
+        f"returns: {{'{legacy_names.OLD_NAME}→UI Designer': 1}}\n"
+        "return_history: "
+        f"[{{pair: '{legacy_names.OLD_NAME}→UI Designer', category: definition, reason: r}}]\n"
+        f"design_items: [{{role_slug: {legacy_names.OLD_SLUG}, kind: blocking, step: Pay, "
+        "text: no button}]\n"
         "---\n"
-        "\n# t\n\n## Original request\n\nd\n\n## Design Lead\n\napproved\n"
+        f"\n# t\n\n## Original request\n\nd\n\n## {legacy_names.OLD_NAME}\n\napproved\n"
     )
     state = document.parse(old, "T-1")
-    assert state["current_role"] == "UI Lead"
-    assert state["changes_requested"] == {"UI Lead→UI Designer": 1}
-    assert state["change_history"][0]["pair"] == "UI Lead→UI Designer"
-    assert state["design_items"][0]["role_slug"] == "ui_lead"
-    assert set(state["sections"]) == {"UI Lead"}
-    assert state["sections"]["UI Lead"] == "approved"
+    assert state["current_role"] == legacy_names.NEW_NAME
+    assert state["changes_requested"] == {f"{legacy_names.NEW_NAME}→UI Designer": 1}
+    assert state["change_history"][0]["pair"] == f"{legacy_names.NEW_NAME}→UI Designer"
+    assert state["design_items"][0]["role_slug"] == legacy_names.NEW_SLUG
+    assert set(state["sections"]) == {legacy_names.NEW_NAME}
+    assert state["sections"][legacy_names.NEW_NAME] == "approved"
 
 
 def test_render_never_writes_an_old_role_name():
@@ -546,12 +550,12 @@ def test_render_never_writes_an_old_role_name():
         "id": "T-1",
         "title": "t",
         "description": "d",
-        "current_role": "UI Lead",
-        "sections": {"UI Lead": "approved"},
+        "current_role": legacy_names.NEW_NAME,
+        "sections": {legacy_names.NEW_NAME: "approved"},
     }
     rendered = document.render(state)
-    assert "Design Lead" not in rendered
-    assert "UI Lead" in rendered
+    assert legacy_names.OLD_NAME not in rendered
+    assert legacy_names.NEW_NAME in rendered
 
 
 def test_a_document_written_before_escalation_class_existed_still_parses():

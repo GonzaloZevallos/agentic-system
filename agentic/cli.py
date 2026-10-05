@@ -168,7 +168,8 @@ class CannotStart(Exception):
         self.code = code
 
 
-# 2026-10-05 rename: a checkpoint written before it still names Design Lead, and
+# 2026-10-05 rename: a checkpoint written before it still names the old role
+# (`legacy_names.RENAME_CAUSE`, the one place the old name is spelled out), and
 # `aupdate_state` with translated values is never used on an existing thread -- the
 # `operator.add`/`merge` reducers (`TaskState.change_history`/`.changes_requested`/
 # `.design_items`/`.pause_log`) would duplicate runs, failures and cost. A paused
@@ -176,8 +177,8 @@ class CannotStart(Exception):
 # as `--from-document` does; a crashed one (no interrupt) has nothing to reseed from
 # safely and refuses.
 _LEGACY_DISAGREEMENT_CAUSE = (
-    "this task's checkpoint names Design Lead, renamed to UI Lead; it resumes from "
-    "its document, which was checked against git:"
+    f"this task's checkpoint {legacy_names.RENAME_CAUSE}; it resumes from its "
+    "document, which was checked against git:"
 )
 
 
@@ -185,8 +186,8 @@ def _legacy_crashed_message(task_id: str, ports: Ports) -> str:
     number = ports.inbox.issue_of(task_id)
     flag = f"--issue {number}" if number is not None else f"--issue N  # {task_id}"
     return (
-        f"{task_id}'s checkpoint names Design Lead, renamed to UI Lead, and it crashed "
-        f"rather than paused: resume it with `agentic resume {flag} --from-document`."
+        f"{task_id}'s checkpoint {legacy_names.RENAME_CAUSE}, and it crashed rather "
+        f"than paused: resume it with `agentic resume {flag} --from-document`."
     )
 
 

@@ -14,12 +14,28 @@ from __future__ import annotations
 import re
 from typing import Any
 
+# Named here so the literal old name lives in exactly one place (the invariant this
+# module exists to satisfy): a caller that needs it for a message or a test fixture
+# imports the constant rather than typing it again elsewhere.
+OLD_NAME = "Design Lead"
+NEW_NAME = "UI Lead"
+OLD_NAME_FINAL = "Design Lead: final comparisons"
+NEW_NAME_FINAL = "UI Lead: final comparisons"
+OLD_SLUG = "design_lead"
+NEW_SLUG = "ui_lead"
+OLD_SLUG_FINAL = "design_lead_final"
+NEW_SLUG_FINAL = "ui_lead_final"
+
 _NAMES: dict[str, str] = {
-    "Design Lead": "UI Lead",
-    "Design Lead: final comparisons": "UI Lead: final comparisons",
-    "design_lead": "ui_lead",
-    "design_lead_final": "ui_lead_final",
+    OLD_NAME: NEW_NAME,
+    OLD_NAME_FINAL: NEW_NAME_FINAL,
+    OLD_SLUG: NEW_SLUG,
+    OLD_SLUG_FINAL: NEW_SLUG_FINAL,
 }
+
+# What a refusal says when a checkpoint still names the old role (`cli._resume`): built
+# from the constants above, so `cli.py` never types the old name itself.
+RENAME_CAUSE = f"names {OLD_NAME}, renamed to {NEW_NAME}"
 
 _VERSION = re.compile(r"^(.*)( \(v\d+\))$")
 
