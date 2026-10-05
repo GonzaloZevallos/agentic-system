@@ -17,10 +17,15 @@ Write, in Markdown, using `###` headings and nothing above `###`:
    code coexists with old shapes, say so and point at the ADR that assumes it.
 2. `### Standards`: how the solution meets each engineering standard, and which
    architecture test guards it. If the product has no architecture test yet, the first
-   subtask creates it.
+   subtask creates it. If the product's standards carry a naming rule for the
+   persisted schema and this solution adds or changes one, say here only how the
+   change meets that rule and that the names are in the subtasks' briefs below; do not
+   restate the rule.
 3. `### Subtasks`: one `####` per subtask, matching `subtasks` in the structured output:
    what to build, where, acceptance criteria, the seams the tests are written at, and
-   what it depends on. Cut them as tracer bullets:
+   what it depends on. When the solution adds or changes persisted schema, name every
+   table and column it adds or changes inside the `brief` of the subtask that writes
+   it: that field is what reaches the Developer. Cut them as tracer bullets:
    - Each subtask is a narrow but complete vertical slice through every layer it needs
      (domain, application, adapter, tests), demoable or verifiable on its own. Never a
      horizontal slice of one layer.
