@@ -733,7 +733,7 @@ async def run_role(
             role,
             prompt,
             system_prompt=loaded.text,
-            model=cfg.model_for(role.slug, role.kind),
+            model=cfg.model_for(role.slug, role.runs_on),
             retries=cfg.role_retries,
             vocabulary=vocabulary,
             cwd=cwd or cfg.product_dir,

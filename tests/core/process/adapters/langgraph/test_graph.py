@@ -581,11 +581,15 @@ async def test_models_follow_kind(config):
     script = script_for(**technical())
     await run_graph(script, config)
     models = {c["slug"]: c["model"] for c in script.calls}
+    actor_model = Configuration.model_fields["actor_model"].default
     verifier_model = Configuration.model_fields["verifier_model"].default
-    assert models["pjm"] == models["product_analyst"] == "claude-sonnet-5"
-    assert models["product_analyst_interviewer"] == models["developer"] == "claude-sonnet-5"
+    assert models["pjm"] == models["product_analyst"] == actor_model
+    assert models["product_analyst_interviewer"] == models["developer"] == actor_model
     assert models["pm"] == models["pm_interviewee"] == verifier_model
-    assert models["tech_lead_ephemeral"] == models["tech_lead"] == verifier_model
+    # The efímero (interviewer) runs on the actor model (ADR-0014, addendum
+    # 2026-10-05); Tech Lead (who plans and reviews) stays on the verifier model.
+    assert models["tech_lead_ephemeral"] == actor_model
+    assert models["tech_lead"] == verifier_model
     assert models["tech_lead_review"] == verifier_model
 
 

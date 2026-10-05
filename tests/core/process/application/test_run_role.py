@@ -21,10 +21,18 @@ from agentic.core.process.application.run_role import (
 from agentic.core.process.application.schema_guard import RoleSchemaGuard
 from agentic.core.process.domain import rules, turn_notice
 from agentic.core.process.domain.document import HUMAN
-from agentic.core.process.domain.roles import DEVELOPER, PJM, PM, PRODUCT_ANALYST, ROLES
+from agentic.core.process.domain.roles import (
+    DEVELOPER,
+    PJM,
+    PM,
+    PRODUCT_ANALYST,
+    ROLES,
+    TECH_LEAD_EPHEMERAL,
+    TECH_LEAD_INTERVIEWEE,
+)
 from agentic.core.process.domain.task import FailureReason
 from agentic.shared.configuration import Configuration
-from tests.fakes import ScriptedRunner, classified, delivered, memory_ports
+from tests.fakes import ScriptedRunner, classified, delivered, memory_ports, questions, tech_answers
 
 pytestmark = pytest.mark.anyio
 
@@ -902,3 +910,28 @@ def test_the_task_cap_in_force_grows_with_the_plan_and_the_human_overrides_it(tm
     # stop the task again once the plan makes the formula larger.
     early = Configuration(product_dir=tmp_path, task_budget_usd=45.0)
     assert task_cap(state, early) == 45.0 and task_cap(two, early) == 75.0
+
+
+async def test_the_ephemeral_tech_lead_runs_on_the_actor_model_the_interviewee_does_not(
+    tmp_path,
+):
+    # ADR-0014, addendum 2026-10-05: the efímero (interviewer) resolves to `actor_model`
+    # through `role.runs_on`, while Tech Lead interviewee (who plans) stays on
+    # `verifier_model`, unmoved -- the rejected case that fails if `run_role.py` still
+    # passes `role.kind` for the efímero.
+    cfg = Configuration(
+        product_dir=tmp_path, actor_model="actor-sentinel", verifier_model="verifier-sentinel"
+    )
+    state = {"id": "T-1", "title": "t", "description": "d"}
+    runner = ScriptedRunner(
+        tech_lead_ephemeral=[questions(done=True)],
+        tech_lead_interviewee=[tech_answers()],
+    )
+    ports = memory_ports(runner)
+    await run_role(state, TECH_LEAD_EPHEMERAL, cfg, ports, round=1, max_rounds=12)
+    await run_role(state, TECH_LEAD_INTERVIEWEE, cfg, ports)
+    ephemeral_call = next(c for c in runner.calls if c["slug"] == "tech_lead_ephemeral")
+    interviewee_call = next(c for c in runner.calls if c["slug"] == "tech_lead_interviewee")
+    assert ephemeral_call["model"] == cfg.actor_model
+    assert interviewee_call["model"] == cfg.verifier_model
+    assert interviewee_call["model"] != cfg.actor_model
