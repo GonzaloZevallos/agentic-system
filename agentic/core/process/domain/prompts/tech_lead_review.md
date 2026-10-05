@@ -45,6 +45,15 @@ it got right. They are the rules that hold across every subtask, and this Develo
 could not see the others. Its `scope` is `subtask`: the category says the rule came from
 the plan, not that the fix does. This branch broke it, so this branch fixes it.
 
+The one exception: an invariant the Developer's own `### Decisions and assumptions`
+records as unsatisfiable, naming the invariant, the command or test with its output
+that shows it cannot hold as written, and the version shipped instead. With that
+evidence, report it with `scope: plan` instead of `subtask` — the system lowers a
+`plan`-scoped finding to `important`, never `blocking`. Without that evidence, or an
+invariant broken with no record at all, it stays `blocking`, category `plan-invariant`,
+`scope: subtask`, exactly as above. Either way, verify the version actually shipped
+against what the Developer wrote, as an ordinary invariant.
+
 Then read `## Tech Lead: findings`. Those rows are open objections from every review of
 this task, this subtask's and its sisters'. Two things to do with them:
 

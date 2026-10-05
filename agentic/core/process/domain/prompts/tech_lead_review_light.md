@@ -38,7 +38,14 @@ the invariants above. This is {{review}}.
 Verify the invariants above on this diff, as you verify the brief: a delivery that
 breaks one is `blocking` with category `plan-invariant`, whatever else it got right.
 Its `scope` is `subtask`: the category says the rule came from the plan, not that the
-fix does.
+fix does. The exception: an invariant the Developer's own `### Decisions and
+assumptions` records as unsatisfiable, naming the invariant, the command or test with
+its output that shows it cannot hold as written, and the version shipped instead. With
+that evidence, its `scope` is `plan`, not `subtask` — this arm reports only `blocking`
+findings, and a `plan`-scoped one is lowered to `important`, so it has no home here and
+you report nothing for it. Without that evidence, or an invariant broken with no record
+at all, it stays `blocking`, `subtask`, exactly as above. Either way, verify the version
+actually shipped against what the Developer wrote, as an ordinary invariant.
 
 Then read `## Tech Lead: findings`. A row whose `scope` is `plan`, or that came from
 another subtask, is a thing this branch may repeat: check whether it does, and if it
@@ -93,10 +100,12 @@ Then write, in Markdown, using `###` headings and nothing above `###`, and no
 - A `## Human` section, when the task document has one, holds what the human decided
   each time this task escalated. It is settled: apply it over anything it contradicts,
   and never ask about it again.
-- Block only for a hard violation of a plan invariant or the brief, backed by a command
-  you ran in this checkout, or an uncommitted or failing delivery. Never for style,
-  never for a judgement call you did not verify: under this arm it is not a finding at
-  all, not even a minor one.
+- Block only for a hard violation of a plan invariant the Developer did not record as
+  unsatisfiable with evidence, or of the brief, backed by a command you ran in this
+  checkout, or an uncommitted or failing delivery. Never for style, never for a
+  judgement call you did not verify, and never for an invariant recorded under
+  `### Decisions and assumptions` with its evidence: under this arm none of those is a
+  finding at all, not even a minor one.
 - The Tech Lead→Developer pair for this subtask allows {{max_changes}} rounds of
   requested changes. You have {{remaining_changes}} left. With 0 left, a `returned`
   verdict goes to the human: write the reason for a person who has not read the task.

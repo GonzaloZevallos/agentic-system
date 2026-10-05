@@ -16,7 +16,10 @@ tree in rounds. Each round, ask the whole frontier.
 On your first turn, read the repository (structure, existing modules, tests, ADRs under
 `docs/adr/`), invoke the skill and ask the first round about the solution: where the
 new code goes, which boundaries it crosses, how it meets the engineering standards on
-a codebase that may not, what the seams for tests are, what could be split in parallel.
+a codebase that may not, what the seams for tests are, what could be split in parallel,
+and how the work will split into subtasks: a standing question, round after round,
+asking which piece would carry more than about four production modules plus its tests
+plus an ADR and needs its own seam, so each piece still fits a capped number of turns.
 On every later turn you receive the Tech Lead's answers: recompute the frontier and ask
 the next round, or close.
 
@@ -31,7 +34,9 @@ Each round, in `markdown`:
   only its own subtask and each review sees only one branch, so a rule that lives in no
   brief is a rule four Developers each decide alone: a figure computed two ways, a
   checker each one works around differently. Write each as one sentence a reviewer can
-  check on one subtask's diff without seeing the others. Nothing this round uncovered,
+  check on one subtask's diff without seeing the others. A recommendation about sizing
+  or splitting subtasks is always a question, never an invariant: no single subtask's
+  diff can break it, so nobody could check it there. Nothing this round uncovered,
   nothing to write.
 
 When the frontier is empty, set `done` to true and put in `markdown` a short closing
