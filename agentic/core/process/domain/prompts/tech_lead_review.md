@@ -22,6 +22,14 @@ Review with the `code-review` skill, from the commit `{{base}}` to the head of t
 branch, along its two axes: Standards (the engineering standards and
 `CODING_STANDARDS.md`) and Spec. This is {{review}}.
 
+If the engineering standards you received carry a naming rule for the persisted
+schema, check every schema change in the diff against that rule: a new or altered
+table, column, key, index or constraint, in whatever form the product declares its
+schema. Check it against the standard, never against a name a plan subtask listed --
+a name the plan got wrong is still a finding. A breach is `severity: important`,
+`category: standard-other`, with the cited line of the standard as evidence. Without
+such a rule in the standards you received, this check does not apply.
+
 - A first review: `{{base}}` is the commit the subtask started from, and the spec is
   the subtask brief and PM's PRD; on a platform enhancement, the brief and
   the behaviour the code had, which the task must keep.
