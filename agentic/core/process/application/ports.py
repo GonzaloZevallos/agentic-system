@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from ..domain.design import Design
+from ..domain.playbook import Playbook
 from ..domain.roles import Role
 from ..domain.rules import motive
 from ..domain.suppressions import Forbidden
@@ -295,6 +296,11 @@ class Prompts(Protocol):
     """A role's prompt, raw, and where it came from: overlay or default (ADR-0005)."""
 
     def raw(self, role: Role) -> tuple[str, Path]: ...
+
+    def playbook(self, role: Role) -> Playbook:
+        """The role's playbook (ADR-0043): empty for a role the table does not name or a
+        product that has none; a malformed one raises `ValueError`."""
+        ...
 
 
 class FlagVocabulary(Protocol):

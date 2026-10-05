@@ -21,6 +21,7 @@ from agentic.core.process.application.ports import (
 )
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.design import Design
+from agentic.core.process.domain.playbook import Playbook
 from agentic.core.process.domain.roles import PROMPTS_DIR, Role
 from agentic.core.process.domain.suppressions import Forbidden
 from agentic.core.process.domain.task import DependencyState, MergeOutcome, TaskInput, TaskState
@@ -164,6 +165,11 @@ class MemoryPrompts:
 
     def __init__(self, **overrides: str):
         self.overrides = overrides
+        # Seeded by slug; a role with none has an empty playbook.
+        self.playbooks: dict[str, Playbook] = {}
+
+    def playbook(self, role: Role) -> Playbook:
+        return self.playbooks.get(role.slug, Playbook(slug=role.slug))
 
     def raw(self, role: Role) -> tuple[str, Path]:
         if role.slug in self.overrides:

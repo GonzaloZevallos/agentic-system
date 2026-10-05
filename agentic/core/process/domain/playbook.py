@@ -36,6 +36,9 @@ REVIEW_PAIR = "Tech Lead→Developer"
 # The categories that are the plan's, not the branch's: Tech Lead's own mistake.
 _PLANNER = ("plan-calibration", "integration-crosscut")
 SECTION_TITLE = "### Playbook"
+# The other files `.agentic/playbooks/` holds at its top level: the delivery's own
+# records, not a role's playbook. `summaries/` is a subdirectory and never listed.
+RECORD_FILES = ("reflected", "rejected")
 
 ACCOUNTABLE: dict[tuple[str, str, bool], str] = {
     (task_type, category, integration): (

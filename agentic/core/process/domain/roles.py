@@ -53,6 +53,9 @@ class Prompt:
     text: str
     hash: str
     source: Path
+    # The hash of the playbook section the text ends with; "" when there is none, and
+    # then `text` and `hash` are exactly what `render` made (ADR-0043).
+    playbook: str = ""
 
 
 @dataclass(frozen=True)

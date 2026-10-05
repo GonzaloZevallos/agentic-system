@@ -60,9 +60,17 @@ from pathlib import Path
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import document, plan_view, rules, schemas, turn_notice
+from ..domain import document, plan_view, playbook, rules, schemas, turn_notice
 from ..domain.document import HUMAN
-from ..domain.roles import ORIGINAL, TECH_LEAD, Prompt, Role, describe_flags, render
+from ..domain.roles import (
+    ORIGINAL,
+    TECH_LEAD,
+    Prompt,
+    Role,
+    describe_flags,
+    prompt_hash,
+    render,
+)
 from ..domain.suppressions import Forbidden
 from ..domain.task import WAITING_ON_HUMAN, EscalationClass, Failure, RoleRun, TaskState, apply
 from .limits import RunLimits
@@ -251,15 +259,29 @@ def with_context(
 def load_prompt(
     role: Role, cfg: Configuration, ports: Ports, vocabulary: dict[str, str], **placeholders: object
 ) -> Prompt:
-    """The role's system prompt, overlay applied, with the limits and the vocabulary in."""
+    """The role's system prompt, overlay applied, with the limits and the vocabulary in.
+
+    The role's playbook (ADR-0043) is appended after the placeholders are filled, so it
+    never goes through them. With none, the prompt is exactly what `render` made; with
+    one, the hash covers the raw text and the section, so a playbook change is a prompt
+    change for comparison."""
     raw, source = ports.prompts.raw(role)
-    return render(
+    rendered = render(
         raw,
         source,
         max_changes=cfg.max_changes_requested_per_pair,
         max_turns=role.max_turns,
         flags=describe_flags(vocabulary),
         **placeholders,
+    )
+    text = playbook.section(ports.prompts.playbook(role))
+    if not text:
+        return rendered
+    return Prompt(
+        text=rendered.text + "\n\n" + text,
+        hash=prompt_hash(raw + "\n" + text),
+        source=source,
+        playbook=prompt_hash(text),
     )
 
 
