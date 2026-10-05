@@ -53,6 +53,11 @@ class Configuration(BaseModel):
     # second addendum). Exceeding it is a role failure, not a return: the return limit
     # measures quality, not money.
     max_budget_usd: float = Field(default=10.0, gt=0)
+    # What one attempt of the reflector may cost (ADR-0043): it reads a closed task's
+    # returns and proposes lessons, nothing that needs the 10 above. `reflect` also stops
+    # at `reflect_max_tasks_per_run` tasks per invocation, so the most one run spends is
+    # that many tasks times two attempts times this.
+    reflect_max_budget_usd: float = Field(default=1.0, gt=0)
     # Money cap of the whole run, checked before every attempt of any role: reached,
     # the task escalates and pauses instead of spending more (ADR-0004, third and fourth
     # addenda). It grows with the plan: the base until there is one, then the base plus
