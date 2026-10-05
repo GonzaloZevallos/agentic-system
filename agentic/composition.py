@@ -13,8 +13,10 @@ from `core.measurement` and is handed to the process adapters here, so
 from __future__ import annotations
 
 import os
+import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -31,7 +33,7 @@ from .core.process.adapters.langgraph.graph import build_graph
 from .core.process.adapters.shell import ShellCommands, ShellSampleApp
 from .core.process.application.ports import Ports
 from .core.process.application.preflight import refuse_its_own_checkout
-from .shared.configuration import Configuration
+from .shared.configuration import STATE_FILE, Configuration, state_file_for
 from .shared.environment import own_configuration_unset
 
 
@@ -79,13 +81,52 @@ def _ports(cfg: Configuration) -> Ports:
 
 
 @asynccontextmanager
-async def checkpointer(cfg: Configuration) -> AsyncIterator[BaseCheckpointSaver]:
+async def checkpointer(cfg: Configuration, task_id: str) -> AsyncIterator[BaseCheckpointSaver]:
     """The async saver: the CLI runs the graph under anyio, and the sync `SqliteSaver`
-    does not implement the async reads `ainvoke` makes."""
+    does not implement the async reads `ainvoke` makes. The ONLY place that opens a
+    connection to the checkpoint store or builds an `AsyncSqliteSaver` (ADR-0003,
+    addendum 2026-10-04): a task gets its own file unless it already has rows in the
+    legacy shared one, `_route`'s own three cases."""
     GitWorkspace(cfg.product_dir, cfg.git_identity).exclude_system_files()
-    cfg.state_file.parent.mkdir(parents=True, exist_ok=True)
-    async with AsyncSqliteSaver.from_conn_string(str(cfg.state_file)) as saver:
+    path = _route(cfg, task_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    async with AsyncSqliteSaver.from_conn_string(str(path)) as saver:
         yield saver
+
+
+def _route(cfg: Configuration, task_id: str) -> Path:
+    """Which file `task_id` lives in: its own, if it has one already; else the legacy
+    shared file, if that already carries its rows; else its own, fresh."""
+    own = cfg.product_dir / state_file_for(task_id)
+    if own.is_file():
+        return own
+    if _legacy_has_rows_for(cfg, task_id):
+        return cfg.product_dir / STATE_FILE
+    return own
+
+
+def _legacy_has_rows_for(cfg: Configuration, task_id: str) -> bool:
+    """Whether the legacy shared store already carries a checkpoint for `task_id`, read
+    without ever creating or writing it: a product that never had one must not grow
+    `.agentic/state.sqlite` just by being asked. The URI is built with `Path.as_uri()`
+    on the resolved path, never an f-string, so a product directory holding `#` or `%`
+    still resolves correctly -- `as_uri()` percent-encodes both. `no such table` reads
+    as no rows (a legacy file from before any checkpoint was ever written); any other
+    `OperationalError` -- a `database is locked` among them -- propagates, since it
+    surfaces before any role runs and before anything is spent."""
+    legacy = (cfg.product_dir / STATE_FILE).resolve()
+    if not legacy.is_file():
+        return False
+    conn = sqlite3.connect(legacy.as_uri() + "?mode=ro", uri=True)
+    try:
+        cursor = conn.execute("SELECT 1 FROM checkpoints WHERE thread_id = ? LIMIT 1", (task_id,))
+        return cursor.fetchone() is not None
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc):
+            return False
+        raise
+    finally:
+        conn.close()
 
 
 def _arm_for(cfg: Configuration) -> str:

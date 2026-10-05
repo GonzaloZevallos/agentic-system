@@ -1,8 +1,14 @@
 """The checkpointer the CLI opens: a real SQLite file in the product (ADR-0003)."""
 
+import asyncio
+import sqlite3
 import subprocess
+import threading
+from pathlib import Path
 
 import pytest
+from langgraph.checkpoint.base import empty_checkpoint
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
@@ -30,15 +36,141 @@ async def test_a_pause_survives_the_process_in_the_products_state_file(tmp_path)
     config = {"configurable": {"thread_id": "GH-1"}}
     state = {"id": "GH-1", "title": "t", "description": "d", "escalated": "cap", "cost_usd": 1.5}
 
-    async with composition.checkpointer(cfg) as saver:
+    async with composition.checkpointer(cfg, "GH-1") as saver:
         await graph.compile(checkpointer=saver).ainvoke(state, config)
-    assert cfg.state_file == tmp_path / ".agentic/state.sqlite" and cfg.state_file.is_file()
-    async with composition.checkpointer(cfg) as saver:
+    own_file = tmp_path / ".agentic/state/GH-1.sqlite"
+    assert own_file.is_file()
+    async with composition.checkpointer(cfg, "GH-1") as saver:
         app = graph.compile(checkpointer=saver)
         assert [i.value for i in (await app.aget_state(config)).interrupts] == [{"reason": "cap"}]
         final = await app.ainvoke(Command(resume={"decision": "go"}), config)
     assert final["escalated"] is None and final["sections"] == {"Human": "go"}
     assert final["cost_usd"] == 1.5
+
+
+async def _db_path(saver) -> str:
+    """The file SQLite itself reports for `saver`'s own connection: never recomputed
+    with `state_file_for`, which would prove nothing about where the connection
+    actually lives (invariant: every isolation test reads the store path off the open
+    connection)."""
+    cursor = await saver.conn.execute("PRAGMA database_list")
+    (_, _, file) = (await cursor.fetchall())[0]
+    return file
+
+
+async def _aput(saver, thread_id: str) -> None:
+    config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+    await saver.aput(config, empty_checkpoint(), {"source": "update", "step": 1, "parents": {}}, {})
+
+
+async def _seed_legacy(path: Path, thread_id: str) -> None:
+    """A real checkpoint for `thread_id`, written with a real `AsyncSqliteSaver` on
+    `path` (invariant: a migration claim is proven over real SQLite, never the
+    `InMemorySaver` double)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    async with AsyncSqliteSaver.from_conn_string(str(path)) as saver:
+        await _aput(saver, thread_id)
+
+
+async def test_two_tasks_report_different_database_files(tmp_path):
+    cfg = Configuration(product_dir=tmp_path)
+    async with composition.checkpointer(cfg, "GH-1") as saver1:
+        path1 = await _db_path(saver1)
+    async with composition.checkpointer(cfg, "GH-2") as saver2:
+        path2 = await _db_path(saver2)
+    assert path1 != path2
+    assert Path(path1).resolve() == (tmp_path / ".agentic/state/GH-1.sqlite").resolve()
+    assert Path(path2).resolve() == (tmp_path / ".agentic/state/GH-2.sqlite").resolve()
+
+
+async def test_concurrent_aputs_for_two_tasks_both_complete(tmp_path):
+    cfg = Configuration(product_dir=tmp_path)
+    async with (
+        composition.checkpointer(cfg, "GH-1") as saver1,
+        composition.checkpointer(cfg, "GH-2") as saver2,
+    ):
+        await asyncio.gather(_aput(saver1, "GH-1"), _aput(saver2, "GH-2"))
+
+
+async def test_a_lock_on_one_tasks_file_never_blocks_the_other(tmp_path):
+    """Negative control: a raw connection holds `BEGIN IMMEDIATE` on GH-1's own file
+    while GH-2's `aput` runs concurrently. Any routing that put the two tasks in the
+    same file would raise `database is locked` here."""
+    cfg = Configuration(product_dir=tmp_path)
+    async with composition.checkpointer(cfg, "GH-1") as saver1:
+        path1 = await _db_path(saver1)
+
+    holding = threading.Event()
+    release = threading.Event()
+
+    def hold_lock() -> None:
+        conn = sqlite3.connect(path1, timeout=5, isolation_level=None)
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("CREATE TABLE IF NOT EXISTS _lock_probe (x int)")
+        holding.set()
+        release.wait(5)
+        conn.execute("ROLLBACK")
+        conn.close()
+
+    thread = threading.Thread(target=hold_lock)
+    thread.start()
+    try:
+        assert holding.wait(5)
+        async with composition.checkpointer(cfg, "GH-2") as saver2:
+            await _aput(saver2, "GH-2")
+    finally:
+        release.set()
+        thread.join(5)
+
+
+async def test_a_task_already_in_the_legacy_file_keeps_using_it(tmp_path):
+    cfg = Configuration(product_dir=tmp_path)
+    legacy = tmp_path / ".agentic/state.sqlite"
+    await _seed_legacy(legacy, "GH-1")
+
+    async with composition.checkpointer(cfg, "GH-1") as saver1:
+        path1 = await _db_path(saver1)
+    assert Path(path1).resolve() == legacy.resolve()
+
+    async with composition.checkpointer(cfg, "GH-2") as saver2:
+        path2 = await _db_path(saver2)
+    assert Path(path2).resolve() == (tmp_path / ".agentic/state/GH-2.sqlite").resolve()
+
+
+async def test_with_no_legacy_file_asking_for_a_checkpointer_creates_none(tmp_path):
+    cfg = Configuration(product_dir=tmp_path)
+    async with composition.checkpointer(cfg, "GH-1"):
+        pass
+    assert not (tmp_path / ".agentic/state.sqlite").exists()
+
+
+async def test_a_legacy_file_with_no_checkpoints_table_resolves_to_the_tasks_own_file(tmp_path):
+    cfg = Configuration(product_dir=tmp_path)
+    legacy = tmp_path / ".agentic/state.sqlite"
+    legacy.parent.mkdir(parents=True)
+    sqlite3.connect(legacy).close()  # exists, but never had a `checkpoints` table
+    async with composition.checkpointer(cfg, "GH-1") as saver:
+        path = await _db_path(saver)
+    assert Path(path).resolve() == (tmp_path / ".agentic/state/GH-1.sqlite").resolve()
+
+
+async def test_a_product_dir_with_hash_and_percent_still_resolves_the_legacy_uri(tmp_path):
+    """Invariant: the routing lookup's URI is built with `Path.as_uri()` on the
+    resolved path, never an f-string -- both `#` and `%` would otherwise corrupt a
+    hand-built `sqlite:///...` string."""
+    product_dir = tmp_path / "c#p%20q"
+    product_dir.mkdir()
+    cfg = Configuration(product_dir=product_dir)
+    legacy = product_dir / ".agentic/state.sqlite"
+    await _seed_legacy(legacy, "GH-1")
+
+    async with composition.checkpointer(cfg, "GH-1") as saver1:
+        path1 = await _db_path(saver1)
+    assert Path(path1).resolve() == legacy.resolve()
+
+    async with composition.checkpointer(cfg, "GH-2") as saver2:
+        path2 = await _db_path(saver2)
+    assert Path(path2).resolve() == (product_dir / ".agentic/state/GH-2.sqlite").resolve()
 
 
 def a_repository(path):
