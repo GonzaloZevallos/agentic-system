@@ -57,6 +57,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from agentic.shared.configuration import Configuration
 
@@ -279,6 +280,7 @@ async def run_with_retry(
     spent_usd: float = 0.0,
     task_cap_usd: float | None = None,
     presubmit: Presubmit | None = None,
+    delivery_check: SchemaGuard | None = None,
     forbidden: Sequence[Forbidden] | None = None,
     limits: RunLimits | None = None,
     section: str | None = None,
@@ -301,6 +303,10 @@ async def run_with_retry(
     `forbidden` is handed to every attempt too: the product's own declared suppression
     cage (issue #38), `None` by default, byte for byte what every caller but a
     Developer's own already passes.
+
+    `delivery_check` is a second in-turn refuser of the delivery (GH-174: the Developer's
+    coverage map), asked after the role's own schema guard and before the presubmit.
+    `None` leaves the guard the runner receives exactly as it was.
 
     `section` is what a successful attempt would write (`run_record`'s own default,
     the role's name, when the caller has none yet): a failed attempt stamps it on its
@@ -331,7 +337,10 @@ async def run_with_retry(
     # would reset it every attempt. Wired only for a role that executes (Developer, the
     # integrator): every other role's `hooks_for`/`options_for` see `None`, byte for
     # byte what they saw before this guard existed.
-    guard: SchemaGuard | None = RoleSchemaGuard(role.schema, vocabulary) if role.executes else None
+    schema_guard: SchemaGuard | None = (
+        RoleSchemaGuard(role.schema, vocabulary) if role.executes else None
+    )
+    guard = _chain(schema_guard, delivery_check)
     for attempt in range(1, max(retries, 0) + 2):
         total = max(spent_usd + spent(failures), limits.spent_usd)
         if task_cap_usd is not None and total >= task_cap_usd:
@@ -401,6 +410,29 @@ async def run_with_retry(
         output.cold_fallback = fallback_now
         return output
     raise RoleFailure(role, failures)
+
+
+class GuardChain:
+    """Chain of Responsibility over two `SchemaGuard`s that share the delivery hook's one
+    guard seat: asked in order, the first denial wins and the second is not asked.
+    `refusals` is the sum of the two, each keeping its own cap."""
+
+    def __init__(self, first: SchemaGuard, second: SchemaGuard):
+        self.first = first
+        self.second = second
+
+    @property
+    def refusals(self) -> int:
+        return self.first.refusals + self.second.refusals
+
+    def __call__(self, tool_input: dict[str, Any]) -> str | None:
+        return self.first(tool_input) or self.second(tool_input)
+
+
+def _chain(first: SchemaGuard | None, second: SchemaGuard | None) -> SchemaGuard | None:
+    if first is None or second is None:
+        return first or second
+    return GuardChain(first, second)
 
 
 def _stale_session(resume: str | None, failures: list[Failure], cold_prompt: str | None) -> bool:
@@ -700,6 +732,7 @@ async def run_role(
     prompt: str | None = None,
     cold_prompt: str | None = None,
     presubmit: Presubmit | None = None,
+    delivery_check: SchemaGuard | None = None,
     forbidden: Sequence[Forbidden] | None = None,
     **placeholders: object,
 ) -> tuple[Output | None, TaskState]:
@@ -713,7 +746,8 @@ async def run_role(
     already holds it (an interview's later rounds); `presubmit` is asked when it
     delivers. `forbidden` is the product's own declared suppression cage (issue #38),
     threaded through exactly where `presubmit` already travels: `None` by default, and
-    only `develop.py`'s Developer call passes one. `cold_prompt` is the full context for
+    only `develop.py`'s Developer call passes one. `delivery_check` is the Developer's
+    coverage guard (GH-174), threaded the same way. `cold_prompt` is the full context for
     the one retry that drops `resume` when it turns out stale (`run_with_retry`'s own
     doc): `run_role` never builds one on its own, since only the caller knows what a
     message it did not build should contain (ADR-0004, sixth addendum) — a caller that
@@ -744,6 +778,7 @@ async def run_role(
             spent_usd=state.get("cost_usd", 0.0),
             task_cap_usd=task_cap(state, cfg),
             presubmit=presubmit,
+            delivery_check=delivery_check,
             forbidden=forbidden,
             limits=ports.limits,
             section=section,
