@@ -1609,6 +1609,7 @@ async def _eval_score(
         raise CannotStart(str(exc)) from exc
     lines: list[str] = []
     fingerprints: dict[str, list[str]] = {}
+    grouped: dict[str, list[evaluation.TaskDocument]] = {}
     pending: list[int] = []
     for issue in declaration.issues:
         task_id = ports.inbox.task_id(issue)
@@ -1627,6 +1628,7 @@ async def _eval_score(
         }
         lines.append(json.dumps(line, sort_keys=True))
         fingerprints.setdefault(record["prompts_fingerprint"], []).append(task_id)
+        grouped.setdefault(record["prompts_fingerprint"], []).append(document)
         if record["score"] is None:
             pending.append(issue)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -1639,6 +1641,11 @@ async def _eval_score(
         )
         for fingerprint, task_ids in fingerprints.items():
             print(f"  {fingerprint}: {', '.join(sorted(task_ids))}")
+        playbook_roles, template_roles = evaluation.fingerprint_divergence(list(grouped.values()))
+        if playbook_roles:
+            print(f"  playbook differs for: {', '.join(playbook_roles)}")
+        if template_roles:
+            print(f"  template differs for: {', '.join(template_roles)}")
     for issue in pending:
         print(f"agentic close --issue {issue}")
 

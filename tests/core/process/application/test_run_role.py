@@ -1053,14 +1053,18 @@ def _playbook_hash(ports) -> str:
 async def test_the_first_run_with_a_playbook_records_its_hash_under_playbooks(tmp_path):
     ports = _ports_for_runs()
     ports.prompts.playbooks["developer"] = lessons("Run the checks first.")
-    _, patch = await _run_developer({"id": "T-1", "title": "t", "description": "d"}, ports, tmp_path)
+    _, patch = await _run_developer(
+        {"id": "T-1", "title": "t", "description": "d"}, ports, tmp_path
+    )
     assert patch["playbooks"] == {"developer": _playbook_hash(ports)}
     assert "playbooks_changed" not in patch
 
 
 async def test_a_task_with_no_playbook_gets_neither_key(tmp_path):
     ports = _ports_for_runs()
-    _, patch = await _run_developer({"id": "T-1", "title": "t", "description": "d"}, ports, tmp_path)
+    _, patch = await _run_developer(
+        {"id": "T-1", "title": "t", "description": "d"}, ports, tmp_path
+    )
     assert "playbooks" not in patch
     assert "playbooks_changed" not in patch
 

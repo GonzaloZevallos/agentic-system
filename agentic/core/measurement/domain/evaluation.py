@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NotRequired, TypedDict
@@ -260,3 +260,31 @@ def evaluation_record(product: str, issue: int, document: TaskDocument) -> Evalu
     if experiment := document.get("experiment"):
         record["experiment"] = experiment
     return record
+
+
+def fingerprint_divergence(
+    groups: Sequence[Sequence[TaskDocument]],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """`(playbook_roles, template_roles)`: why `eval compare`'s fingerprint groups differ
+    (ADR-0043), each a sorted tuple of role slugs. `groups` are the documents of each
+    group; a group shares one prompt fingerprint, so its first document stands for it.
+
+    A role whose `playbooks` value differs between groups (absent counts as its own
+    value) is a playbook difference. A role whose `prompts` hash differs while its
+    `playbooks` value is equal is a template difference. Only a role every group ran is
+    compared: a role one group never reached (a task that stopped early) is no
+    difference of prompt, and the message already says so."""
+    firsts = [group[0] for group in groups if group]
+    if not firsts:
+        return (), ()
+    ran = set.intersection(*(set(document.get("prompts", {})) for document in firsts))
+    playbook_roles: list[str] = []
+    template_roles: list[str] = []
+    for role in sorted(ran):
+        playbooks = {document.get("playbooks", {}).get(role, "") for document in firsts}
+        prompts = {document.get("prompts", {}).get(role, "") for document in firsts}
+        if len(playbooks) > 1:
+            playbook_roles.append(role)
+        elif len(prompts) > 1:
+            template_roles.append(role)
+    return tuple(playbook_roles), tuple(template_roles)
