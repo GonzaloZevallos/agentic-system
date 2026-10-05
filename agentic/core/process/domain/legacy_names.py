@@ -63,7 +63,7 @@ def _translate_pair(pair: str) -> str:
 
 
 def _renamed_keys(
-    mapping: dict[str, Any], translate: "Any", field: str, source: object
+    mapping: dict[str, Any], translate: Any, field: str, source: object
 ) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in mapping.items():

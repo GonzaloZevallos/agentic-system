@@ -76,9 +76,8 @@ from .core.process.application.preflight import (
 from .core.process.application.run_role import load_prompt
 from .core.process.application.stack_review import stack_review as run_stack_review
 from .core.process.domain import document as task_document
-from .core.process.domain import legacy_names
+from .core.process.domain import legacy_names, stack_signals
 from .core.process.domain import stack_review as stack_review_texts
-from .core.process.domain import stack_signals
 from .core.process.domain.roles import ROLES
 from .core.process.domain.task import PullRequest, TaskInput, TaskState
 from .shared.configuration import ENV_PREFIX, LOGS_DIR, Configuration, MissingProductDir

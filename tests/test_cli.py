@@ -1845,7 +1845,9 @@ async def test_resume_refuses_a_crashed_legacy_checkpoint(monkeypatch, tmp_path)
     ports = memory_ports()
     ports.documents.save(_new_named_document())
     monkeypatch.setattr(
-        cli, "graph", LegacyGraph(_legacy_checkpoint_values(), interrupts=())  # crashed
+        cli,
+        "graph",
+        LegacyGraph(_legacy_checkpoint_values(), interrupts=()),  # crashed
     )
 
     with pytest.raises(cli.CannotStart) as info:
