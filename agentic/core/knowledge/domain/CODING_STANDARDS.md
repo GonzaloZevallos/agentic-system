@@ -73,3 +73,18 @@ in this product's own `CODING_STANDARDS.md`, which replaces this default whole
   permission) says in the plan what it now allows and to whom.
 - A change whose cost scales with data size or traffic says so in the plan, with the
   shape of the cost, not only that it was measured once.
+
+## 9. Naming of persisted schema
+
+Covers tables, columns, keys, indexes and constraints of the persisted schema.
+
+- Lowercase `snake_case` for every table, column, index and constraint.
+- Singular table names (`customer`, not `customers`); a junction table is named
+  `<a>_<b>`, after the two tables it joins.
+- Primary key `id`; a foreign key is named `<referenced_table>_id`.
+- A boolean starts with `is_` (`is_vip`, `is_shown`).
+- `_on` suffixes a calendar date, `_at` a moment in time.
+- An index is named `ix_<table>_<columns>`, a unique constraint `uq_<table>_<columns>`.
+
+These rules apply to new tables and columns and to the ones a task touches; renaming
+existing schema is a task of its own, never a side effect.
