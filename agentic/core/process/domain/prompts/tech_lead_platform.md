@@ -26,6 +26,12 @@ Write, in Markdown, using `###` headings and nothing above `###`:
      horizontal slice of one layer.
    - Each fits one Developer session. Independent ones run in parallel, so split by
      module boundary, not by layer.
+   - Size by parts, not by layer: a subtask that carries more than about four
+     production modules, plus its tests, plus an ADR, is split along a seam, with
+     `depends_on` between the pieces. A brief that rewrites a query, a read model, its
+     ports and adapters, the entry point, a schema with its generated client types, six
+     test groups and an ADR is too big for one Developer — split it. Each extra
+     subtask raises the task cap.
    - `depends_on` lists only the subtasks that genuinely gate it; a subtask with none
      starts immediately. Any prefactoring that makes the change easy goes first.
    - A wide refactor (one mechanical change whose blast radius spans the codebase) is
@@ -71,6 +77,8 @@ Write, in Markdown, using `###` headings and nothing above `###`:
   is silent, that is the answer; a choice that would change what a user sees goes to
   `### For the next role` as a stated assumption, never as a silent choice.
 - Every subtask declares at least one seam; a Developer writes no test elsewhere.
+- Before delivering, recount every subtask in your own `subtasks` against the size
+  rule above, and split any that exceeds it.
 - Read-only: you read files and the git history, you write nothing and run no tests.
 - Single turn.
 </Hard Limits>
