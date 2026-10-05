@@ -22,6 +22,7 @@ from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, Field
 
+from .coverage import NOT_TOUCHED, UNSATISFIABLE
 from .task import INTEGRATION, FindingCategory, FindingScope, Severity
 
 TaskType = Literal["bug", "feature", "platform_enhancement"]
@@ -366,6 +367,18 @@ class StackProposal(RoleOutput):
 class Delivery(RoleOutput):
     summary: str = Field(description="What changed, in a few lines, for the reviewer")
     assumptions: list[str] = Field(description="Decisions taken where the brief was silent")
+    coverage: list[str] = Field(
+        default_factory=list,
+        description="The coverage map: one line per plan invariant (numbered as the prompt "
+        "numbers them) and per item of your subtask brief, each mapped to the `file:line` "
+        "locations in your diff that satisfy it. Forms: "
+        f"`invariant N: <path>:<line>[, <path>:<line>...]`, `invariant N: {UNSATISFIABLE}`, "
+        f"`invariant N: {NOT_TOUCHED}: <one phrase>`, "
+        "`brief: <item> -> <path>:<line>[, ...]`. An item with no location is work still to "
+        "do. Empty only when the plan has no invariants and the brief has no items, and "
+        "always empty on the integration subtask",
+        json_schema_extra={"lines_required": True},
+    )
 
 
 CATEGORIES: tuple[str, ...] = get_args(FindingCategory)
@@ -455,10 +468,11 @@ def json_schema(schema: type[RoleOutput], vocabulary: dict[str, str]) -> dict[st
         }
     for name in line_lists(schema):
         description = out["properties"][name].get("description", "")
-        out["properties"][name] = {
-            "type": "string",
-            "description": f"{description}. One per line; an empty string if none",
-        }
+        # A field that is never empty when there is something to map does not invite the
+        # empty string; every other line list keeps its suffix byte for byte.
+        required = out["properties"][name].get("lines_required", False)
+        suffix = ". One per line" if required else ". One per line; an empty string if none"
+        out["properties"][name] = {"type": "string", "description": f"{description}{suffix}"}
     return out
 
 
