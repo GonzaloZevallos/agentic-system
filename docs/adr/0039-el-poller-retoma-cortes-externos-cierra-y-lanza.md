@@ -207,3 +207,76 @@ Ninguna de las dos corre bajo `registry.exclusive()`, así que ninguna retiene e
   diga.
 - `gather_closes` no tiene tope: un documento con `pull_request` y sin `closed_at`
   paga su `GhTracker.pull_request` en cada vuelta hasta que alguien lo cierre.
+
+## Adenda (2026-10-05): `fetch` sí, y la base de cada corrida es el upstream (#180)
+
+### Lo que cambia en "Lo que el poller no hace"
+
+"Nunca `fetch`, `pull`, `checkout` ni `reset`" pasa a ser: **`fetch` sí; `pull`, `checkout`,
+`reset`, `merge` y avance rápido del checkout del producto, nunca** (ADR-0002, segunda
+adenda: el humano puede estar editando ese checkout mientras corre una tarea). `git fetch`
+sólo escribe refs de seguimiento remoto y objetos. Sólo `GitWorkspace.upstream()`, a través
+de su `_fetch` privado, lo corre; ningún otro módulo toca la red.
+
+### La evidencia
+
+2026-10-05, apostrophe: el poller lanzó GH-45, GH-46 y GH-47 entre las 14:17 y las 14:24,
+las tres con `agenticBase` `6cc7bb2`, mientras `origin/master` ya tenía `f08013c` (#88) y
+`78adf48` (#89, GH-58, los diseños de `docs/product/design-system/pantallas/`) y el checkout
+no se había actualizado. El PM de GH-47 escaló preguntando por los diseños; GH-45 y GH-46
+corrieron sin ellos; las tres se reiniciaron con `--fresh`. El riesgo "un checkout local
+atrasado no lanza hasta que el humano hace pull" ya costó corridas reales, y del lado de la
+corrida nadie lo había aceptado.
+
+### La regla de base
+
+- **Una rama de tarea que se crea** (y sólo entonces) parte del upstream de la rama actual
+  del checkout, `@{upstream}` tras un `fetch` del remoto configurado, no del `HEAD` local;
+  `agenticBase` registra ese commit. Una rama que ya existe nunca dispara un `fetch` ni
+  cambia de base; un checkout de subtarea nunca hace `fetch` (parte de la rama de la tarea).
+- **Sin remoto, sin upstream, `HEAD` suelto o un upstream local (`remote = .`):** `HEAD`,
+  como hoy, con una nota.
+- **`HEAD` con commits que el upstream no tiene:** la base es el upstream (la entrega es un
+  PR contra el remoto) y la nota nombra los commits que quedan fuera por sha corto (hasta 10
+  y "and N more").
+- **El `fetch` falla o vence** (30 s, `FETCH_TIMEOUT_S`; se mata el grupo de procesos entero,
+  sin stdin, `GIT_TERMINAL_PROMPT=0`, `GIT_ASKPASS` vacío): se usa el último ref traído
+  *sólo* si `HEAD` está atrás de él o divergió; sin último ref, o con `HEAD` por delante, se
+  usa `HEAD`. **Esto se aparta a propósito de la letra del pedido** ("caer al último ref
+  traído si lo hay"): un `fetch` fallido no aprendió nada nuevo del remoto, así que sin red
+  el comportamiento queda igual al de hoy en vez de pasar a descartar commits locales por un
+  ref viejo. La nota da la razón.
+- **El poller** juzga el commit de merge de un bloqueante contra ese mismo sha
+  (`is_ancestor(..., ref=sha)`), con un `fetch` por vuelta como máximo (`functools.cache`) y
+  ninguno en una vuelta sin un bloqueante cerrado con commit de merge. La nota va como una
+  línea de la salida de la vuelta. Ante la duda sigue sin lanzar: un objeto desconocido es
+  `False`, y un `sha` ausente cae a `HEAD`.
+- Todo falla a una nota, nunca a una excepción: `upstream()` devuelve siempre un `Upstream`.
+  La nota de una corrida va a stderr, que en una corrida desacoplada es su log.
+
+### Convivencia con ADR-0038
+
+La revisión de stack sigue leyendo `HEAD` (no `origin/HEAD`), y `preflight`, `stack.product()`
+y los avisos del cli también: esta adenda no los mueve. Lo que pasa por `checkouts.task_base`
+(checks, setup, witness) y por la raíz del checkout (conocimiento) sigue la base nueva sin
+cambios de código.
+
+### Lo que cuesta
+
+`registry.exclusive()` es un `flock` bloqueante sin timeout, y el `fetch` corre dentro de
+`gather_launches`: en una vuelta que juzga un bloqueante puede retener el lock hasta ~30 s más
+el fallback. `REGISTER_WAIT_S = 60` corre en `execute`, después del `fetch`. Del lado de la
+corrida, `cli._registered` envuelve `_invoke` (el primer nodo que pide un checkout), de modo
+que el hijo ya está registrado cuando hace su `fetch`: la ventana de registro no se come el
+`fetch` de la corrida. Un `fetch` por creación de rama de tarea.
+
+### Riesgos nuevos
+
+- Los lectores que siguen en `HEAD` (`preflight`, `stack.product()`, avisos del cli, revisión
+  de stack): un `stack.yaml` roto que sólo existe en origin escapa a `preflight` y falla
+  dentro de un nodo si el checkout está atrasado.
+- Refspec angosto: un clon de una sola rama, o un `branch.<b>.merge` fuera del refspec del
+  remoto, puede dejar `@{upstream}` viejo tras un `fetch` "exitoso", sin nota.
+- Lock: un `fetch` lento retiene el lock del poller de la máquina hasta ~30 s.
+- Un `fetch` exitoso deja fuera de la base los commits locales que el upstream no tiene; es
+  lo buscado y la nota los nombra.
