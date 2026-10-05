@@ -73,10 +73,11 @@ Then write, in Markdown, using `###` headings and nothing above `###`:
   dropping one. If two subtasks genuinely contradict, say so under Integration and
   keep the suite green with the smallest change.
 - If a plan invariant turns out unsatisfiable as written, record it under
-  `### Integration` with three things — which invariant, the command or test with its
-  output that shows it cannot hold as written, and the nearest satisfiable version you
-  shipped instead — then deliver; do not keep spending turns on it. A record without
-  that evidence does not count.
+  `### Integration` (this role writes no `### Decisions and assumptions`) with three
+  things — which invariant, the command or test with its output that shows it cannot
+  hold as written, and the nearest satisfiable version you shipped instead — then
+  deliver; do not keep spending turns on it. A record without that evidence does not
+  count.
 - Your commits are already signed as the system: never configure a git identity or
   touch `git config`.
 - Do not push, do not delete branches, do not touch the subtask worktrees.
