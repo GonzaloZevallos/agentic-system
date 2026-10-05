@@ -1,11 +1,17 @@
-"""Unit tests of `plan_view.for_reader`, `subtasks_block` and `plan_refusal`, pure:
-no state, no ports, no prompt seam.
+"""Unit tests of `plan_view.for_reader`, `subtasks_block` and `with_subtasks_block`,
+pure: no state, no ports, no prompt seam.
 
 The fixture section reuses the three-brief, three-heading-shape plan
 (`#### api`, `#### api — SQL adapter`, `#### 2. api`) `context-golden` (issue #71)
 introduced, so this module is proven never to key off any one of those shapes."""
 
-from agentic.core.process.domain.plan_view import for_reader, plan_refusal, subtasks_block
+from agentic.core.process.domain.plan_view import (
+    NOTE_SHORT,
+    NOTE_WRITTEN,
+    for_reader,
+    subtasks_block,
+    with_subtasks_block,
+)
 from agentic.core.process.domain.task import INTEGRATION
 
 SECTION = """### Solution
@@ -141,8 +147,8 @@ def test_adds_the_subtasks_block_when_the_heading_is_missing():
     # heading`): a plan whose Tech Lead used its own headings instead of `### Subtasks`
     # (every `claude-opus-5-5` plan, GH-134 on) no longer leaves the reader with
     # nothing of their own -- the block is appended, not skipped (issue #139).
-    # `plan_refusal` is what stops a *new* plan from reaching this shape; this is what
-    # an old one, already on disk, still gets when it is resumed.
+    # `with_subtasks_block` repairs a *new* plan's markdown before anyone reads it;
+    # this is what an old one, already on disk, still gets when it is resumed.
     no_heading = "### Solution\n\nOne subtask only, no plural heading needed."
     trimmed = for_reader(no_heading, "api", SUBTASKS)
     assert trimmed.startswith(no_heading)
@@ -153,9 +159,10 @@ def test_adds_the_subtasks_block_when_the_heading_is_missing():
 
 def _brief_text(subtask_id: str) -> str:
     sub = SUBTASKS[subtask_id]
+    depends_on = ", ".join(f"`{d}`" for d in sub["depends_on"]) or "nothing"
     return (
         f"#### {sub['title']}\n\n{sub['brief']}\n\n"
-        f"Seams: `{sub['seams'][0]}`.\n\nDepends on: nothing."
+        f"Seams: `{sub['seams'][0]}`.\n\nDepends on: {depends_on}."
     )
 
 
@@ -203,10 +210,11 @@ def test_subtasks_with_a_colon_or_at_the_wrong_level_do_not_count_as_the_heading
 
 
 def test_an_unclosed_fence_before_the_real_heading_gives_none():
-    # A document whose heading only exists past an unclosed fence (a shape no *new*
-    # plan can reach, since `plan_refusal` rejects it first) degrades the same as no
-    # heading at all: the block is appended, carrying the reader's brief twice, which
-    # is the documented, tested trade-off (Tech Lead's "Known risks").
+    # A document whose heading only exists past an unclosed fence (a shape
+    # `with_subtasks_block` repairs for any *new* plan before anyone reads it)
+    # degrades the same as no heading at all: the block is appended, carrying the
+    # reader's brief twice, which is the documented, tested trade-off (Tech Lead's
+    # "Known risks").
     section = "### Solution\n\n```\nunterminated\n\n### Subtasks\n\n#### api\n\nDo it."
     assert subtasks_block(section) is None
     # `for_reader` then appends the block: the brief appears twice (once inside the
@@ -215,42 +223,50 @@ def test_an_unclosed_fence_before_the_real_heading_gives_none():
     assert trimmed == f"{section}\n\n### Subtasks\n\n{_brief_text('api')}\n\n{_index_text('api')}"
 
 
-def test_plan_refusal_accepts_a_block_with_one_heading_per_id():
-    markdown = "### Solution\n\nx.\n\n### Subtasks\n\n#### a\n\nbrief a\n\n#### b\n\nbrief b"
-    assert plan_refusal(markdown, ["a", "b"]) is None
-
-
-def test_plan_refusal_accepts_extra_internal_h4_headings():
-    # "At least" len(ids), never exactly: a brief with internal `####` sub-headings of
-    # its own does not get rejected for having more than the minimum.
-    markdown = (
-        "### Solution\n\nx.\n\n### Subtasks\n\n#### a\n\n#### Design\n\ndetail\n\n#### b\n\nbrief"
-    )
-    assert plan_refusal(markdown, ["a", "b"]) is None
-
-
-def test_plan_refusal_rejects_a_plan_with_no_subtasks_heading():
-    markdown = "### Solution\n\nHex.\n\n### Invariants\n\n1. x."
-    reason = plan_refusal(markdown, ["a", "b"])
-    assert reason == (
-        "the plan's markdown has no `### Subtasks` heading (exactly that line, outside "
-        "code fences); add it with one `####` per subtask: `a`, `b`."
+def test_with_subtasks_block_writes_the_missing_heading_from_the_structured_plan():
+    # The issue's own case (GH-55): a valid structured `subtasks` list, no `###
+    # Subtasks` line anywhere. The earlier text survives byte for byte, then the
+    # system's own block, one `####` per subtask in plan order, with `NOTE_WRITTEN`.
+    section = "### Solution\n\nHex.\n\n### Invariants\n\n1. x."
+    subs = [SUBTASKS["api"], SUBTASKS["sql"], SUBTASKS["wire"]]
+    briefs = "\n\n".join(_brief_text(s["id"]) for s in subs)
+    assert with_subtasks_block(section, subs) == (
+        f"{section}\n\n### Subtasks\n\n{NOTE_WRITTEN}\n\n{briefs}"
     )
 
 
-def test_plan_refusal_rejects_fewer_h4_headings_than_subtasks():
-    markdown = "### Solution\n\nx.\n\n### Subtasks\n\n#### a\n\nbrief a"
-    reason = plan_refusal(markdown, ["a", "b"])
-    assert reason == (
-        "`### Subtasks` has 1 `####` headings but the structured output has 2 subtasks "
-        "(`a`, `b`); give each subtask its own `####`."
+def test_with_subtasks_block_leaves_a_complete_block_unchanged():
+    # SECTION already has one `####` per subtask (three), regardless of their text
+    # (invariant 3: heading text is never compared with ids).
+    assert with_subtasks_block(SECTION, list(SUBTASKS.values())) == SECTION
+
+
+def test_with_subtasks_block_treats_a_fenced_heading_as_missing():
+    section = (
+        "### Solution\n\nSee the example below.\n\n"
+        "```markdown\n### Subtasks\n\nNot a real heading.\n```\n\n"
+        "### Invariants\n\n1. x."
+    )
+    assert with_subtasks_block(section, [SUBTASKS["api"]]) == (
+        f"{section}\n\n### Subtasks\n\n{NOTE_WRITTEN}\n\n{_brief_text('api')}"
     )
 
 
-def test_plan_refusal_rejects_a_heading_that_only_exists_inside_a_fence():
-    markdown = "### Solution\n\nx.\n\n```\n### Subtasks\n\n#### a\n```\n\n### Invariants\n\n1. y."
-    reason = plan_refusal(markdown, ["a"])
-    assert reason == (
-        "the plan's markdown has no `### Subtasks` heading (exactly that line, outside "
-        "code fences); add it with one `####` per subtask: `a`."
+def test_with_subtasks_block_keeps_the_models_prose_and_adds_the_short_note():
+    section = "### Solution\n\nx.\n\n### Subtasks\n\n#### a\n\nbrief a\n\n### Invariants\n\n1. y."
+    note = NOTE_SHORT.format(n=2)
+    assert with_subtasks_block(section, [SUBTASKS["api"], SUBTASKS["sql"]]) == (
+        f"### Solution\n\nx.\n\n### Subtasks\n\n{note}\n\n"
+        "#### a\n\nbrief a\n\n### Invariants\n\n1. y."
+    )
+
+
+def test_with_subtasks_block_appends_after_a_near_miss_heading_without_naming_it():
+    # `### Subtasks:` is not the exact heading (`subtasks_block` already proves this
+    # elsewhere), so it is treated as missing: the near-miss text, with its own `####
+    # a`, survives byte for byte, and the system's block is appended after it. Nothing
+    # about the near miss is detected or named.
+    section = "### Solution\n\nx.\n\n### Subtasks:\n\n#### a\n\nbrief a"
+    assert with_subtasks_block(section, [SUBTASKS["api"]]) == (
+        f"{section}\n\n### Subtasks\n\n{NOTE_WRITTEN}\n\n{_brief_text('api')}"
     )

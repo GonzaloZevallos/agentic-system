@@ -8,6 +8,7 @@ import pytest
 from agentic.core.process.application.plan import plan
 from agentic.core.process.application.ports import RawResult
 from agentic.core.process.application.run_role import context_for
+from agentic.core.process.domain.plan_view import NOTE_WRITTEN
 from agentic.core.process.domain.roles import SOLUTION_INTERVIEW, TECH_LEAD
 from agentic.shared.configuration import Configuration
 from tests.fakes import MemoryWorkspace, ScriptedRunner, memory_ports, planned, questions
@@ -74,11 +75,11 @@ async def test_skip_ephemeral_stamps_the_experiment_snapshot(cfg):
     assert list(patch["experiment"]) == ["review_mode", "skip_ephemeral", "reviewer_model"]
 
 
-async def test_a_plan_with_no_subtasks_heading_fails_the_check_and_retries(cfg):
-    # issue #139: a Tech Lead plan missing `### Subtasks` is a role failure like any
-    # other (`schemas.plan_check` -> `plan_view.plan_refusal`), not something that
-    # reaches the Developer silently. Built here, not via `fakes.planned`, which
-    # always emits the heading now.
+async def test_a_plan_with_no_subtasks_heading_is_repaired_not_retried(cfg):
+    # issue #152 (GH-55): a Tech Lead plan missing `### Subtasks` no longer fails
+    # `schemas.plan_check` -- the plan stage repairs the markdown from the structured
+    # `subtasks` instead (`plan_view.with_subtasks_block`), so the first attempt
+    # delivers. Built here, not via `fakes.planned`, which always emits the heading.
     no_heading = RawResult(
         {
             "markdown": "### Solution\n\nHex, no `### Subtasks` heading this time.",
@@ -90,20 +91,15 @@ async def test_a_plan_with_no_subtasks_heading_fails_the_check_and_retries(cfg):
         1,
         "tl-bad",
     )
-    motive = (
-        "the plan's markdown has no `### Subtasks` heading (exactly that line, outside "
-        "code fences); add it with one `####` per subtask: `api`."
-    )
-    runner = ScriptedRunner(tech_lead=[no_heading, planned()])
+    runner = ScriptedRunner(tech_lead=[no_heading])
     patch = await plan(TASK, cfg, memory_ports(runner))
 
-    assert runner.slugs == ["tech_lead", "tech_lead"]
-    assert patch["status"] == "planned"  # the second attempt delivers
-    failure = patch["failures"][0]
-    assert failure["reason"] == "check"
-    assert failure["error"] == f"structured output invalid: {motive}"
-    retry_prompt = runner.calls[1]["prompt"]
-    assert f"<PreviousAttemptFailed>\n{failure['error']}\n</PreviousAttemptFailed>" in retry_prompt
+    assert runner.slugs == ["tech_lead"]  # one attempt, no retry
+    assert patch["status"] == "planned"
+    assert patch["failures"] == []
+    section = patch["sections"]["Tech Lead"]
+    assert section.startswith("### Solution\n\nHex, no `### Subtasks` heading this time.")
+    assert f"### Subtasks\n\n{NOTE_WRITTEN}\n\n#### API" in section
 
 
 async def test_skip_ephemeral_unset_still_runs_the_interview(tmp_path):

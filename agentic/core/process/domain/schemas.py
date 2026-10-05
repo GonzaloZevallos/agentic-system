@@ -22,7 +22,6 @@ from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, Field
 
-from . import plan_view
 from .task import INTEGRATION, FindingCategory, FindingScope, Severity
 
 TaskType = Literal["bug", "feature", "platform_enhancement"]
@@ -412,12 +411,11 @@ class Review(RoleOutput):
 
 def plan_check(data: dict[str, Any]) -> None:
     """A plan's subtasks are slugs, each with seams, depending only on subtasks that
-    exist; `integration` is the system's own. The structural rules run first, because
-    an invalid id is the cheaper motive to hand back; `plan_view.plan_refusal` runs
-    last, over the plan's own markdown, once every structural rule above it has
-    already passed (issue #139: the Developer and the reviewer read their brief from
-    `### Subtasks`, so a plan without it, or with fewer `####` than subtasks, is a
-    role failure like any other)."""
+    exist; `integration` is the system's own. Only the structured output is checked
+    here: the markdown's own `### Subtasks` block is never a role failure (issue
+    #152) -- the plan stage completes it from these same subtasks afterwards
+    (`plan_view.with_subtasks_block`), so a model that gets the structure right never
+    retries, or escalates, over the prose alone."""
     subtasks = data.get("subtasks", [])
     if not subtasks:
         raise ValueError("a plan needs at least one subtask")
@@ -439,9 +437,6 @@ def plan_check(data: dict[str, Any]) -> None:
                 raise ValueError(f"subtask {item['id']!r} depends on unknown subtask {dep!r}")
     if len(set(ids)) != len(ids):
         raise ValueError("subtask ids must be unique")
-    refusal = plan_view.plan_refusal(data["markdown"], ids)
-    if refusal is not None:
-        raise ValueError(refusal)
 
 
 def json_schema(schema: type[RoleOutput], vocabulary: dict[str, str]) -> dict[str, Any]:

@@ -10,7 +10,10 @@ What the cage covers, for a role that executes:
 - Bash: `git config` (reading is fine) and `git -c user.*`, `git push`, `git worktree`,
   `--git-dir` and `GIT_DIR=`, `git -C` outside the checkout, skipping the commit hooks
   (`--no-verify`, `-n`, `-c core.hooksPath`), and switching branches (`git switch`,
-  `git checkout` without `--`). Found anywhere in the command: after `;`, `&&`, `|`, a
+  `git checkout` without `--`); and, since ADR-0011's eighth addendum, a signal to a
+  process the role did not start -- `pkill`, `killall`, `fuser -k`/`--kill`, `kill-port`
+  and a `kill` whose pid `/proc/<pid>/cwd` does not resolve under the checkout
+  (`core.process.domain.signals`). Found anywhere in the command: after `;`, `&&`, `|`, a
   newline, inside `$(...)`, `sh -c '...'` or `bash -lc '...'`, or behind `VAR=value`.
 - Edit and Write: paths inside `.git/` or outside the checkout, and a new occurrence of
   a suppression the product declares under `forbidden` in `.agentic/stack.yaml`
@@ -80,7 +83,7 @@ import anyio
 from claude_agent_sdk import HookCallback, HookContext, HookInput, HookJSONOutput, HookMatcher
 
 from ...application.ports import Presubmit, SchemaGuard
-from ...domain import suppressions, turn_notice
+from ...domain import signals, suppressions, turn_notice
 from ...domain.roles import Role
 from ...domain.suppressions import Forbidden
 
@@ -136,10 +139,24 @@ class TurnCount:
     value: int = 0
 
 
-def git_denial(command: str, cwd: Path, relative_to: Path | None = None) -> str | None:
-    """Why the Bash `command` may not run, or None. `cwd` is the role's checkout;
-    `relative_to` is where the shell stands, the checkout unless said otherwise."""
-    reason = _reason(command, cwd, relative_to or cwd)
+def git_denial(
+    command: str, cwd: Path, relative_to: Path | None = None, checkout: Path | None = None
+) -> str | None:
+    """Why the Bash `command` may not run, or None: git's own rules (`_git`, unchanged)
+    and the signals verdict (`core.process.domain.signals`, ADR-0011 eighth addendum) --
+    a role that executes may kill only a process whose own cwd falls inside its
+    checkout, never one it reaches by name, pattern or port. `cwd` and `relative_to`
+    keep meaning exactly what they did before that addendum, unresolved: the git branch
+    (`_git`, `_inside`) never sees a path this function resolved, so a symlinked
+    checkout's `git -C` decisions do not change underneath it. `checkout` is the
+    boundary `signals.denial` compares a pid's `/proc/<pid>/cwd` against: `_bash`
+    resolves it once, when it builds the Bash callback, and passes that same value on
+    every call this role's run makes; a caller that leaves it out -- a direct test, most
+    often -- gets `cwd.resolve()` computed here instead, so a checkout handed over
+    through a symlink is still answered correctly without the caller pre-resolving
+    anything itself."""
+    resolved = checkout if checkout is not None else cwd.resolve()
+    reason = _reason(command, cwd, relative_to or cwd, resolved)
     return _DENIED + reason if reason else None
 
 
@@ -218,14 +235,33 @@ def hooks_for(
 
 
 def _bash(cwd: Path) -> HookCallback:
+    # Resolved once, here, for every Bash call this role's run will ever make --
+    # `signals.denial`'s own checkout boundary (ADR-0011, eighth addendum). `cwd`
+    # itself stays unresolved: it is what the git branch keeps comparing against.
+    checkout = cwd.resolve()
+
     async def hook(
         data: HookInput, tool_use_id: str | None, context: HookContext
     ) -> HookJSONOutput:
         tool_input = _tool_input(data)
-        reason = git_denial(str(tool_input.get("command", "")), cwd, _where(data, cwd))
+        command = str(tool_input.get("command", ""))
+        reason = git_denial(command, cwd, _where(data, cwd), checkout)
         return _deny(reason) if reason else {}
 
     return hook
+
+
+def _owner(pid: int) -> Path | None:
+    """The real `owner` port `signals.denial` is handed: `/proc/<pid>/cwd`, resolved
+    strictly -- the process must exist for this to mean anything. A dead pid, a cwd
+    gone `(deleted)` or any other `Exception` (permission, a pid that never existed, a
+    `/proc` this platform does not have) all read as "not mine": failing open here
+    would let a stale or unreadable pid pass as owned."""
+    try:
+        target = Path(f"/proc/{pid}/cwd").resolve(strict=True)
+    except Exception:
+        return None
+    return None if str(target).endswith(" (deleted)") else target
 
 
 def _edit(cwd: Path, forbidden: Sequence[Forbidden]) -> HookCallback:
@@ -352,9 +388,14 @@ def _where(data: HookInput, cwd: Path) -> Path:
 # -- parsing -------------------------------------------------------------------------
 
 
-def _reason(command: str, cwd: Path, here: Path) -> str | None:
+def _reason(command: str, cwd: Path, here: Path, checkout: Path) -> str | None:
+    """`cwd`/`here` are git's own, unresolved, exactly as `_git`/`_inside` always
+    compared them. `checkout` is `cwd.resolve()`, computed once by `git_denial` and
+    carried unchanged through every recursive call this function makes for a nested
+    `sh -c`/`bash -lc`: `signals.denial`'s own boundary, kept apart from git's so
+    resolving it can never change what a symlinked checkout's `git -C` decides."""
     for words in _commands(command):
-        if reason := _denial_of(words, cwd, here):
+        if reason := _denial_of(words, cwd, here, checkout):
             return reason
     return None
 
@@ -390,7 +431,9 @@ def _without_heredocs(command: str) -> str:
     return "\n".join(lines)
 
 
-def _denial_of(words: list[str], cwd: Path, here: Path) -> str | None:
+def _denial_of(words: list[str], cwd: Path, here: Path, checkout: Path) -> str | None:
+    if reason := signals.denial(words, checkout, _owner):
+        return reason
     assigned = set()
     while words and (_ASSIGNMENT.match(words[0]) or words[0] in _WRAPPERS):
         if _ASSIGNMENT.match(words[0]):
@@ -403,7 +446,7 @@ def _denial_of(words: list[str], cwd: Path, here: Path) -> str | None:
         # The script follows the first option cluster that holds `c`: `-c`, `-lc`.
         for i, word in enumerate(words[1:-1], start=1):
             if word.startswith("-") and not word.startswith("--") and "c" in word:
-                return _reason(words[i + 1], cwd, here)
+                return _reason(words[i + 1], cwd, here, checkout)
         return None
     if program != "git":
         return None

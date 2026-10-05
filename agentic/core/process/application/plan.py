@@ -17,7 +17,7 @@ from pathlib import Path
 
 from agentic.shared.configuration import Configuration, experiment_snapshot
 
-from ..domain import schemas
+from ..domain import plan_view, schemas
 from ..domain.roles import (
     INTERVIEW_SOLUTION,
     INTERVIEW_SOLUTION_PLATFORM,
@@ -63,7 +63,7 @@ async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
         resume=transcript.sessions.get(spec.author_side.slug),
         proposed_invariants=_proposed(state, spec, transcript.invariants),
     )
-    return finish(state, apply(patch, _delivered(cfg, output, written)), ports)
+    return finish(state, apply(patch, _delivered(cfg, output, written, spec.author.name)), ports)
 
 
 async def _plan_cold(
@@ -89,14 +89,23 @@ async def _plan_cold(
         cwd=cwd,
         proposed_invariants=_SKIPPED_PROPOSAL,
     )
-    return finish(state, _delivered(cfg, output, written), ports)
+    return finish(state, _delivered(cfg, output, written, spec.author.name), ports)
 
 
-def _delivered(cfg: Configuration, output: Output | None, written: TaskState) -> TaskState:
+def _delivered(
+    cfg: Configuration, output: Output | None, written: TaskState, section: str
+) -> TaskState:
     """What a successful plan call adds to its own patch, on either path: the subtasks,
     the invariants, the integration brief, the status, and the experiment snapshot
     (issue #28) -- `{}` when both switches are at their default, which
-    `document.render` then omits, so the default path's document does not move."""
+    `document.render` then omits, so the default path's document does not move.
+
+    `section` is the Tech Lead's own section key (`spec.author.name`, the same on both
+    paths): once `written["subtasks"]` exists, that section's markdown is repaired in
+    place to carry a complete `### Subtasks` block (issue #152, `plan_view.with_
+    subtasks_block`), never touching `Tech Lead (vN)` or any other section -- the text
+    being written here is never versioned (`rules.sections_for` versions only the
+    earlier delivery)."""
     if output is not None:
         written["subtasks"] = {s["id"]: _pending(s) for s in output.data["subtasks"]}
         written["invariants"] = output.data["invariants"]
@@ -104,6 +113,9 @@ def _delivered(cfg: Configuration, output: Output | None, written: TaskState) ->
         written["status"] = "planned"
         reviewer_model = cfg.model_for(TECH_LEAD_REVIEWER.slug, TECH_LEAD_REVIEWER.kind)
         written["experiment"] = experiment_snapshot(cfg, reviewer_model)
+        written["sections"][section] = plan_view.with_subtasks_block(
+            written["sections"][section], list(written["subtasks"].values())
+        )
     return written
 
 
