@@ -95,7 +95,7 @@ def test_an_account_limit_resumes_once_its_own_wait_elapses_not_before(tmp_path)
     ]
     assert launcher.spawned == []
 
-    due = ESCALATED_AT + timedelta(minutes=16)  # AUTO_RESUME_SCHEDULE[0] == 15
+    due = ESCALATED_AT + timedelta(minutes=16)  # RETAKE_SCHEDULE[0] == 15
     lines = _round(cfg, ports, registry, launcher, due)
     assert lines == ["agentic: poll: resume #19 -> pid 4242"]
     assert launcher.spawned == [
@@ -520,7 +520,7 @@ def test_a_launch_whose_spawn_fails_still_counts_its_own_attempt(tmp_path):
 
 def test_a_launch_whose_spawn_fails_on_the_last_attempt_says_the_calendar_is_spent(tmp_path):
     """Acceptance (c), last attempt: with 5 prior attempts already on record, this
-    failure is the 6th and last the schedule (`AUTO_RESUME_SCHEDULE`, length 6) allows
+    failure is the 6th and last the schedule (`RETAKE_SCHEDULE`, length 6) allows
     -- the line says so, for a human to notice."""
     ports = memory_ports()
     ports.tracker._queue = [5]

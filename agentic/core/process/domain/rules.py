@@ -1678,8 +1678,10 @@ EXTERNAL_REASONS: tuple[FailureReason, ...] = ("account_limit", "upstream", "net
 # Minutes before each of the poller's own automatic attempts, first to last (ADR-0029's
 # addendum, issue #137): never read off an API's own "resets 7:30pm" prose. Indexed by
 # how many automatic attempts already happened (`prior`), capped by `rules.
-# auto_resume_limit`'s own 1 or 6.
-AUTO_RESUME_SCHEDULE: tuple[int, ...] = (15, 30, 60, 120, 120, 120)
+# auto_resume_limit`'s own 1 or 6. Two calendars with the same values today, split so
+# a launch that never registered a run (not a 429) never follows a retake's calendar.
+LAUNCH_SCHEDULE: tuple[int, ...] = (15, 30, 60, 120, 120, 120)
+RETAKE_SCHEDULE: tuple[int, ...] = (15, 30, 60, 120, 120, 120)
 
 # Every interview's own section (`Interview.section`), computed once: what `rules.
 # auto_resume_limit` compares a failure's own `section` against, never a hand-kept copy
@@ -1751,7 +1753,7 @@ def auto_resumable(state: TaskState) -> FailureReason | None:
 
 
 def auto_resume_limit(state: TaskState) -> int:
-    """How many automatic attempts (`AUTO_RESUME_SCHEDULE`'s own length, at most) this
+    """How many automatic attempts (`RETAKE_SCHEDULE`'s own length, at most) this
     pause's current epoch gets: one when any of its `"failure"` entries broke inside an
     interview's own section (`_INTERVIEW_SECTIONS`) -- a retake already gives an
     interview two rounds of margin (`INTERVIEW_RETAKE_ROUNDS`), so a long automatic
@@ -1761,19 +1763,21 @@ def auto_resume_limit(state: TaskState) -> int:
     for entry in _current_epoch(state):
         if entry["kind"] == "failure" and entry["section"] in _INTERVIEW_SECTIONS:
             in_interview = True
-    return 1 if in_interview else len(AUTO_RESUME_SCHEDULE)
+    return 1 if in_interview else len(RETAKE_SCHEDULE)
 
 
-def _schedule_exhausted(prior: int, limit: int) -> bool:
+def _schedule_exhausted(prior: int, limit: int, *, schedule: tuple[int, ...]) -> bool:
     """Whether `prior` automatic attempts have already used up every slot
-    `AUTO_RESUME_SCHEDULE[:limit]` has: `next_attempt_at`'s own exhaustion check,
+    `schedule[:limit]` has: `next_attempt_at`'s own exhaustion check,
     factored out so `poll_plan` can tell it apart from "not due yet" -- both of those
     read as `None` from `next_attempt_at` alone, and only the first (a calendar that
     ran out, not one still ticking) must stop blocking a launch."""
-    return prior >= len(AUTO_RESUME_SCHEDULE[:limit])
+    return prior >= len(schedule[:limit])
 
 
-def next_attempt_at(since: datetime, prior: int, limit: int, now: datetime) -> datetime | None:
+def next_attempt_at(
+    since: datetime, prior: int, limit: int, now: datetime, *, schedule: tuple[int, ...]
+) -> datetime | None:
     """The next automatic attempt's own time, but only once it is due (issue #137):
     `None` both when the calendar is spent (`_schedule_exhausted`, no slot left to
     schedule) and when the next slot has not arrived yet (`now` before it) -- the two
@@ -1782,10 +1786,11 @@ def next_attempt_at(since: datetime, prior: int, limit: int, now: datetime) -> d
     own time for a retake, the last launch attempt's own time for a launch (Tech Lead
     plan); `prior` is how many automatic attempts already happened since then. Never
     reads a clock of its own (README.md, 14): `now` arrives as an argument, like
-    `since`."""
-    if _schedule_exhausted(prior, limit):
+    `since`. `schedule` is the calendar the caller's own attempts follow, never
+    defaulted: a launch passes `LAUNCH_SCHEDULE`, a retake the one its reason names."""
+    if _schedule_exhausted(prior, limit, schedule=schedule):
         return None
-    target = since + timedelta(minutes=AUTO_RESUME_SCHEDULE[prior])
+    target = since + timedelta(minutes=schedule[prior])
     return target if target <= now else None
 
 
@@ -1919,7 +1924,11 @@ def poll_plan(
     actions = [PollAction("close", issue) for issue in sorted(closes)]
 
     due_resumes = sorted(
-        (r for r in resumes if next_attempt_at(r.since, r.prior, r.limit, now) is not None),
+        (
+            r
+            for r in resumes
+            if next_attempt_at(r.since, r.prior, r.limit, now, schedule=RETAKE_SCHEDULE) is not None
+        ),
         key=lambda r: r.issue,
     )
     taken = due_resumes[: max(available_slots, 0)]
@@ -1927,8 +1936,8 @@ def poll_plan(
 
     slots_left = max(available_slots - len(taken), 0)
     some_resume_still_waiting = any(
-        not _schedule_exhausted(r.prior, r.limit)
-        and next_attempt_at(r.since, r.prior, r.limit, now) is None
+        not _schedule_exhausted(r.prior, r.limit, schedule=RETAKE_SCHEDULE)
+        and next_attempt_at(r.since, r.prior, r.limit, now, schedule=RETAKE_SCHEDULE) is None
         for r in resumes
     )
     if slots_left > 0 and not some_resume_still_waiting:
@@ -1937,7 +1946,11 @@ def poll_plan(
                 c
                 for c in launches
                 if not c.blocked
-                and (c.since is None or next_attempt_at(c.since, c.prior, c.limit, now) is not None)
+                and (
+                    c.since is None
+                    or next_attempt_at(c.since, c.prior, c.limit, now, schedule=LAUNCH_SCHEDULE)
+                    is not None
+                )
             ),
             key=lambda c: c.issue,
         )

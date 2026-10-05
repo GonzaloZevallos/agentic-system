@@ -1568,19 +1568,48 @@ def test_auto_resume_limit_is_six_outside_an_interview_section():
 def test_next_attempt_at_is_none_before_its_own_slot_elapses():
     since = datetime(2026, 10, 3, 19, 30)
     now = datetime(2026, 10, 3, 19, 40)  # 10 of the first slot's 15 minutes
-    assert rules.next_attempt_at(since, prior=0, limit=6, now=now) is None
+    assert (
+        rules.next_attempt_at(since, prior=0, limit=6, now=now, schedule=rules.RETAKE_SCHEDULE)
+        is None
+    )
 
 
 def test_next_attempt_at_is_due_once_its_own_slot_elapses():
     since = datetime(2026, 10, 3, 19, 30)
     now = datetime(2026, 10, 3, 19, 46)
-    assert rules.next_attempt_at(since, prior=0, limit=6, now=now) == datetime(2026, 10, 3, 19, 45)
+    due = rules.next_attempt_at(since, prior=0, limit=6, now=now, schedule=rules.RETAKE_SCHEDULE)
+    assert due == datetime(2026, 10, 3, 19, 45)
 
 
 def test_next_attempt_at_is_none_once_the_calendar_is_spent():
     since = datetime(2026, 10, 3, 19, 30)
     now = datetime(2026, 10, 4, 19, 30)  # a full day later, no slot left to run out
-    assert rules.next_attempt_at(since, prior=1, limit=1, now=now) is None
+    assert (
+        rules.next_attempt_at(since, prior=1, limit=1, now=now, schedule=rules.RETAKE_SCHEDULE)
+        is None
+    )
+
+
+def test_launch_schedule_keeps_the_growing_calendar():
+    assert rules.LAUNCH_SCHEDULE == (15, 30, 60, 120, 120, 120)
+
+
+def test_poll_plan_does_not_launch_a_late_attempt_before_its_growing_slot():
+    # prior=5 is the sixth slot, 120 minutes: 20 minutes after the last attempt is far
+    # from it, so the launch calendar is never the flat 15-minute one.
+    late = rules.LaunchCandidate(
+        issue=9, blocked=False, since=NOW - timedelta(minutes=20), prior=5, limit=6
+    )
+    actions = rules.poll_plan(closes=[], resumes=[], launches=[late], available_slots=1, now=NOW)
+    assert actions == []
+
+
+def test_poll_plan_launches_a_late_attempt_once_its_growing_slot_elapses():
+    late = rules.LaunchCandidate(
+        issue=9, blocked=False, since=NOW - timedelta(minutes=121), prior=5, limit=6
+    )
+    actions = rules.poll_plan(closes=[], resumes=[], launches=[late], available_slots=1, now=NOW)
+    assert actions == [rules.PollAction("launch", 9)]
 
 
 def test_blocker_resolved_not_planned_resolves_without_a_merge():

@@ -217,7 +217,7 @@ def gather_launches(
         since = attempt.since if attempt is not None else None
         prior = attempt.prior if attempt is not None else 0
         launches.append(
-            rules.LaunchCandidate(number, blocked, since, prior, len(rules.AUTO_RESUME_SCHEDULE))
+            rules.LaunchCandidate(number, blocked, since, prior, len(rules.LAUNCH_SCHEDULE))
         )
     return launches
 
@@ -275,7 +275,7 @@ def execute(
     or another product's on the same machine -- never reads a stale count."""
     product = ports.stack.product()
     product_dir = str(cfg.product_dir)
-    total_attempts = len(rules.AUTO_RESUME_SCHEDULE)
+    total_attempts = len(rules.LAUNCH_SCHEDULE)
     lines: list[str] = []
     for action in actions:
         task_id = ports.inbox.task_id(action.issue)
