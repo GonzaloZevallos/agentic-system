@@ -47,6 +47,21 @@ you report nothing for it. Without that evidence, or an invariant broken with no
 at all, it stays `blocking`, `subtask`, exactly as above. Either way, verify the version
 actually shipped against what the Developer wrote, as an ordinary invariant.
 
+When the Developer's section carries a `### Coverage` block, it is the Developer's own
+map of each invariant, by its number above, and each brief item to `file:line`
+locations: a claim, not evidence. Use it as the checklist of where to look first, and
+still verify each invariant against the diff yourself. It may be cited as a finding's
+`location`, never as its `evidence`. As everywhere in this arm, report only what blocks:
+
+- A mapped location that does not do what it claims is a `plan-invariant` blocker.
+- A `Not touched` number that the diff contradicts is a `plan-invariant` blocker, with
+  the diff hunk as evidence.
+- A `Claimed unsatisfiable` number with no evidence-bearing record under `### Decisions
+  and assumptions` is a `plan-invariant` blocker: the exception above applies only with
+  that record.
+- A `Not mapped` number is unverified by the Developer: check it as you would without a
+  map.
+
 Then read `## Tech Lead: findings`. A row whose `scope` is `plan`, or that came from
 another subtask, is a thing this branch may repeat: check whether it does, and if it
 does, it is a finding of yours, in your own words, with your own evidence. A row this
