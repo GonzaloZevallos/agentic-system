@@ -40,7 +40,7 @@ class MissingProductDir(ValueError):
 class Configuration(BaseModel):
     # Actors make most of the calls; verifiers need a model the actor did not
     # have, which is the cheapest asymmetry to build and measure (README.md, 10).
-    actor_model: str = "claude-sonnet-5"
+    actor_model: str = "claude-sonnet-5-5"
     verifier_model: str = "claude-opus-5-5"
     # Per-role override, keyed by role slug. Wins over the kind mapping.
     model_overrides: dict[str, str] = Field(default_factory=dict)
@@ -72,7 +72,7 @@ class Configuration(BaseModel):
     # keeps its own model; on the parent's model they cost 5-10 USD a review
     # (ADR-0013, addendum). Forced: an agent type whose definition names a model
     # (`Explore` inherits the parent's) would otherwise ignore it (issue #19).
-    subagent_model: str = "claude-sonnet-5"
+    subagent_model: str = "claude-sonnet-5-5"
     # How long one product check may run inside the presubmit before it counts as
     # failed (issue #22). The presubmit's hook waits for all of them.
     check_timeout_s: float = Field(default=600.0, gt=0)

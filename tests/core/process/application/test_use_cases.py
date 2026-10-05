@@ -42,7 +42,7 @@ async def test_classify_sets_the_type_and_saves_the_document(cfg):
     assert patch["type"] == "feature" and "escalated" not in patch
     assert patch["sections"] == {"PjM": "Clear."}
     assert ports.documents.last["id"] == "T-1" and ports.documents.last["type"] == "feature"
-    assert ports.runner.calls[0]["model"] == "claude-sonnet-5"
+    assert ports.runner.calls[0]["model"] == Configuration.model_fields["actor_model"].default
     assert "## Product knowledge" not in ports.runner.calls[0]["prompt"]  # PjM does not read it
 
 
