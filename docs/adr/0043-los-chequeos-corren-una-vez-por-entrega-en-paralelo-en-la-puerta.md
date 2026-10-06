@@ -145,3 +145,112 @@ por lo tanto, en serie: el `parallel_checks: true` que esta subtask agrega a
 puerta en paralelo es la de esa tarea.
 
 ## La puerta
+
+`CheckoutPresubmit` gana `parallel: bool = False`, sólo por nombre y junto a
+`witness`; `develop` se lo pasa desde `ports.stack.parallel_checks(task_base(...))`,
+en el único sitio donde se construye (sirve al Developer y al integrador).
+
+### Los dos modos
+
+- **Serial (por defecto).** La lista por comprensión de siempre: un chequeo
+  tras otro, en el orden declarado. Un producto que no escribe la llave corre
+  igual que antes.
+- **Concurrente (`parallel_checks: true`).** Los chequeos corren por un
+  `ThreadPoolExecutor` con un hilo por chequeo. `map` devuelve en el orden
+  declarado y cada `_run` mide su propio `duration_s` en su hilo. El testigo
+  corre antes, primero y solo, como siempre; `WITNESS_REFUSALS` y `REFUSALS` no
+  se tocan.
+- **Por qué opt-in.** Lo dice la sección de la llave: un producto cuyos
+  chequeos comparten un puerto, un archivo de base de datos o una caché
+  fallaría en rojo sin que el código haya cambiado.
+
+### `timeout_s` por modo
+
+Serial: la fórmula de hoy, `check_timeout_s × max(len(checks), 1)` más
+`check_timeout_s` si hay testigo. Concurrente: `check_timeout_s`, más
+`check_timeout_s` si hay testigo; nunca menos. Cada chequeo sigue con su propio
+`check_timeout_s` y su propio corte del grupo de procesos en `ShellCommands.run`
+(que arma su entorno por llamada y no guarda estado: es seguro entre hilos).
+
+### Un chequeo que levanta, en paralelo
+
+Si un `_run` levanta una excepción, la salida del `with` espera a que los demás
+chequeos ya arrancados terminen, y recién entonces la excepción sale de la
+puerta. Ningún chequeo sobrevive a la llamada. No se escribe `head`, `results`
+ni `invocations` para esa llamada, igual que en serial.
+
+### Procesos y contención de CPU
+
+Hasta `len(checks)` procesos por puerta en lugar de 1: como mucho
+`AGENTIC_MAX_CONCURRENT_ROLES × chequeos` en vuelo (16 en este repo con los
+valores por defecto), y sólo para los productos que optaron. La contención de
+CPU puede empujar a un chequeo más allá de su `check_timeout_s`: se ve como un
+rojo `timed_out` con su propio mensaje, nunca como un verde silencioso.
+
+### El fin de turno del Developer
+
+`developer.md` ya no pide "todos los chequeos una vez al final": pide, una vez
+antes de entregar, los archivos de prueba de lo que cambió, las pruebas que
+escribió y los chequeos declarados de tipos, lint y formato. La suite completa
+es de la puerta, y su rechazo devuelve el fallo en el mismo turno
+(`presubmit.REFUSALS`). Las reglas de correr en primer plano y de no sondear un
+chequeo en segundo plano quedan como estaban. `developer_integrator.md` conserva
+una corrida completa para encontrar lo que el merge rompió, y no la repite antes
+de entregar: la puerta es, por diseño, su segunda corrida completa. La puerta
+sigue corriendo **todos** los chequeos declarados en cada entrega, y el revisor
+sigue reproduciendo con ellos (ADR-0016, adenda): la cobertura no baja.
+
+No hay prueba que mire la prosa de esos prompts (ADR-0023); la guarda de que no
+nombran una herramienta es `test_prompts_stack_flavour.py`.
+
+### `REFUSALS = 2` no cambia: línea base
+
+Ahora la puerta es la primera corrida completa, así que los rechazos por
+entrega pueden subir. Línea base, una lectura de una sola vez (el script no se
+commitea; `/tmp/gh175_baseline.py`) sobre `.agentic/tasks/*.md` de este repo y
+del de apostrophe (`/home/zeta/dev/repos/apostrophe`, legible). Alcance: entradas
+de `runs[]` con `slug: developer` y `started_at` ≥ 2026-10-04; "rojo" es una
+sección `## Developer: …` (las `(vN)` incluidas) de esas tareas cuya tabla
+`### Checks` tiene una fila `**failed**`; "trabajo" es
+`ended_at − started_at − queue_wait_s`. Campos confirmados en
+`domain/task.py` (`RoleRun`: `slug`, `started_at`, `ended_at`, `queue_wait_s`,
+`presubmit_denials`).
+
+```
+$ python3 /tmp/gh175_baseline.py
+agentic-system tasks 23 developer runs 40 sections 48
+  mean presubmit_denials 0.05
+  mean work seconds 411.6 over 40
+  red share 0 / 48 = 0.0
+apostrophe tasks 26 developer runs 142 sections 159
+  mean presubmit_denials 0.42
+  mean work seconds 797.6 over 142
+  red share 9 / 159 = 0.06
+```
+
+Cota posterior al merge: `presubmit_denials` medio por corrida de Developer
+≤ 1.0, y una proporción de entregas en rojo no mayor que la línea base de arriba.
+Pasarse de la cota es un issue de seguimiento para subir `REFUSALS`,
+dimensionado con esos números, no un cambio de esta tarea.
+
+### Cuándo se lee la aceptación
+
+Sólo después del merge, y en apostrophe sólo después de que su humano agregue
+la llave. El tiempo de pared de la puerta con `parallel_checks` es el máximo de
+los `duration_s` que el documento y `agentic.presubmit.duration` ya llevan; su
+suma lo sobreestima (`observability/README.md` lo dice en esa fila). Los minutos
+de Developer por entrega se leen como `ended_at − started_at − queue_wait_s` de
+`runs[]` con `slug: developer`, en una muestra chica. Cuántas corridas de la
+suite completa hace cada Developer no se puede leer del documento.
+
+### La huella de los prompts
+
+`prompts.fingerprint` se mueve para `developer` y `developer_integrator` en el
+commit de merge de esta tarea. Las lecturas segmentadas por huella para esos dos
+roles (costo, duración, turnos, `presubmit_denials`) no son comparables a través
+de ese corte. El scorecard y `agentic eval compare` agrupan por
+`system_baseline` y siguen siendo comparables entre cohortes. Se le pide al
+humano un `bl-*` nuevo al mergear.
+
+No se agrega, renombra ni quita ninguna métrica, etiqueta, atributo de span ni
+llave de documento.
