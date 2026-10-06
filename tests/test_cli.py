@@ -65,7 +65,7 @@ def capture_run(monkeypatch):
 
     def fake_run(func, *args):
         assert func is cli._signal_guarded
-        (work,) = args
+        work, *_stop = args  # `run`/`resume` also pass their `StopCause`
         task, cfg, ports, *options = work.args
         seen.update(fn=work.func, task=task, cfg=cfg, ports=ports, options=tuple(options))
 
@@ -649,9 +649,13 @@ class FakeLock:
         self.taken_over = taken_over
         self.acquired: list[tuple[str, str]] = []
         self.released: list[str] = []
+        self.kept: list[str] = []
 
     def read(self, task_id):
         return self.held
+
+    def keep_at_shutdown(self, task_id):
+        self.kept.append(task_id)
 
     def acquire(self, task_id, command):
         self.acquired.append((task_id, command))
@@ -1094,6 +1098,82 @@ async def test_a_signal_cancels_the_invocation_releases_the_lock_and_exits_nonze
         await cli._signal_guarded(work)
     assert info.value.code != 0
     assert lock.released == ["T-9"]  # `_locked`'s own `finally`, surviving cancellation
+
+
+async def _signalled_run(monkeypatch, tmp_path, lock, probe):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setattr(cli, "graph", Hangs())
+    monkeypatch.setattr(cli.anyio, "open_signal_receiver", lambda *sigs: FiresOnce())
+    stop = cli.StopCause()
+    work = partial(
+        cli._run,
+        {"id": "T-9", "title": "t", "description": "d"},
+        Configuration(product_dir=tmp_path),
+        memory_ports(),
+        checkpointer=in_memory,
+        run_lock=lock,
+        stop=stop,
+    )
+    with pytest.raises(SystemExit):
+        await cli._signal_guarded(work, stop, shutdown_probe=probe)
+    return stop
+
+
+@pytest.mark.anyio
+async def test_a_signal_at_system_shutdown_keeps_the_lock_record_marked(monkeypatch, tmp_path):
+    from agentic.core.process.adapters.filesystem import FilesystemRunLock
+
+    lock = FilesystemRunLock(tmp_path / "locks", boot_id=lambda: "boot-1")
+    stop = await _signalled_run(monkeypatch, tmp_path, lock, lambda: True)
+    assert stop.at_shutdown is True
+    record = lock.read("T-9")
+    assert record is not None
+    assert record.stopped_at_shutdown is True
+    assert record.boot_id == "boot-1"
+
+
+@pytest.mark.anyio
+async def test_a_signal_outside_a_shutdown_releases_the_lock(monkeypatch, tmp_path):
+    from agentic.core.process.adapters.filesystem import FilesystemRunLock
+
+    lock = FilesystemRunLock(tmp_path / "locks", boot_id=lambda: "boot-1")
+    stop = await _signalled_run(monkeypatch, tmp_path, lock, lambda: False)
+    assert stop.at_shutdown is False
+    assert lock.read("T-9") is None
+
+
+def test_each_invocation_has_its_own_stop_cause():
+    first, second = cli.StopCause(), cli.StopCause()
+    first.at_shutdown = True
+    assert second.at_shutdown is False
+
+
+def test_system_is_stopping_only_on_exactly_stopping(monkeypatch):
+    def answering(text):
+        return lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout=text, stderr="")
+
+    for output, expected in (
+        ("stopping\n", True),
+        ("running\n", False),
+        ("degraded\n", False),
+        ("", False),
+    ):
+        monkeypatch.setattr(cli.subprocess, "run", answering(output))
+        assert cli._system_is_stopping() is expected
+
+
+def test_system_is_stopping_is_false_when_systemctl_is_missing_or_slow(monkeypatch):
+    def missing(*a, **k):
+        raise FileNotFoundError
+
+    def slow(*a, **k):
+        raise subprocess.TimeoutExpired("systemctl", 2)
+
+    for failing in (missing, slow):
+        monkeypatch.setattr(cli.subprocess, "run", failing)
+        assert cli._system_is_stopping() is False
 
 
 @pytest.mark.anyio
@@ -2358,6 +2438,9 @@ class FakeKeyedLock:
         if record is None:
             return None
         return f"{task_id} is already running: pid {record.pid}"
+
+    def keep_at_shutdown(self, task_id):
+        pass
 
     def release(self, task_id):
         self.released.append(task_id)

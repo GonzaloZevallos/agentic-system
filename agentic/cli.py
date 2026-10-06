@@ -430,6 +430,7 @@ def main() -> None:
             # `poll` spends nothing itself (every role runs in a spawned child's own
             # process); it still detaches the same way, and the same TTY warning applies.
             _warn_no_tty(args.detach)
+        stop: StopCause | None = None
         if args.command == "resume":
             task_id = ports.inbox.task_id(args.issue)
             base = declared_stack_of(task_id, ports)
@@ -442,6 +443,7 @@ def main() -> None:
                 print(f"agentic: {problem}", file=sys.stderr)
             log_file = _log_file_for(cfg, task_id)
             options = (args.from_document, args.dry_run, args.yes)
+            stop = StopCause()
             work: Callable[[], Awaitable[None]] = partial(
                 _resume,
                 task_id,
@@ -451,6 +453,7 @@ def main() -> None:
                 log_file=log_file,
                 detach=args.detach,
                 child_argv=_child_argv(),
+                stop=stop,
             )
         elif args.command == "close":
             if args.all:
@@ -519,6 +522,7 @@ def main() -> None:
             if not args.fresh:
                 declared_stack_of(task["id"], ports)
             log_file = _log_file_for(cfg, task["id"])
+            stop = StopCause()
             work = partial(
                 _run,
                 task,
@@ -528,16 +532,48 @@ def main() -> None:
                 log_file=log_file,
                 detach=args.detach,
                 child_argv=_child_argv(),
+                stop=stop,
             )
     except (MissingProductDir, ValueError, OSError) as exc:
         parser.exit(2, f"agentic: {exc}\n")
     try:
-        anyio.run(_signal_guarded, work)
+        # Only `run`/`resume` carry a `StopCause`: the other commands release as ever.
+        guard_args = (work,) if stop is None else (work, stop)
+        anyio.run(_signal_guarded, *guard_args)
     except CannotStart as exc:
         parser.exit(exc.code, f"agentic: {exc}\n")
 
 
-async def _signal_guarded(work: Callable[[], Awaitable[None]]) -> None:
+@dataclass
+class StopCause:
+    """Why this invocation was stopped, one per invocation and handed down as an
+    argument (never module state): `_signal_guarded` sets `at_shutdown` before it
+    cancels, `_locked` reads it in its `finally` to keep the lock record or release it."""
+
+    at_shutdown: bool = False
+
+
+def _system_is_stopping() -> bool:
+    """True only when systemd says the whole system is shutting down, not when a human
+    or a service manager merely stops this one process. Any failure answers False."""
+    try:
+        done = subprocess.run(
+            ["systemctl", "is-system-running"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.stdout.strip() == "stopping"
+
+
+async def _signal_guarded(
+    work: Callable[[], Awaitable[None]],
+    stop: StopCause | None = None,
+    shutdown_probe: Callable[[], bool] = _system_is_stopping,
+) -> None:
     """Wraps `work` (`_run`/`_resume`, built in `main`) in a task group a SIGTERM or a
     SIGHUP cancels (Tech Lead plan, subtask `signals`). This is the one place that
     restructures the `anyio.run(work)` call; every other subtask takes its shape as it
@@ -567,6 +603,9 @@ async def _signal_guarded(work: Callable[[], Awaitable[None]]) -> None:
         with anyio.open_signal_receiver(signal.SIGTERM, signal.SIGHUP) as signals:
             async for _ in signals:
                 interrupted = True
+                if stop is not None:
+                    # Before the cancel: `_locked`'s `finally` reads the answer.
+                    stop.at_shutdown = await anyio.to_thread.run_sync(shutdown_probe)
                 tg.cancel_scope.cancel()
                 return
 
@@ -758,9 +797,11 @@ def _print_lock(lock: RunLock, task_id: str) -> None:
 
 
 @contextmanager
-def _locked(lock: RunLock, task_id: str) -> Iterator[None]:
+def _locked(lock: RunLock, task_id: str, stop: StopCause | None = None) -> Iterator[None]:
     """Around the invocation only (Tech Lead plan): refuses before anything is spent,
-    releases whether the invocation delivers, escalates or raises."""
+    releases whether the invocation delivers, escalates or raises -- except when the
+    system shutdown stopped it (`stop.at_shutdown`): the record stays, marked, so the
+    next boot can retake the run."""
     taken_over = _acquire(lock, task_id)
     if taken_over is not None:
         print(
@@ -770,7 +811,10 @@ def _locked(lock: RunLock, task_id: str) -> Iterator[None]:
     try:
         yield
     finally:
-        lock.release(task_id)
+        if stop is not None and stop.at_shutdown:
+            lock.keep_at_shutdown(task_id)
+        else:
+            lock.release(task_id)
 
 
 def _registry_for(cfg: Configuration) -> RunRegistry:
@@ -860,6 +904,7 @@ async def _run(
     detach: bool = False,
     child_argv: list[str] | None = None,
     spawn: Spawner | None = None,
+    stop: StopCause | None = None,
 ) -> None:
     lock = run_lock if run_lock is not None else _lock_for(cfg)
     registry = registry if registry is not None else _registry_for(cfg)
@@ -872,7 +917,10 @@ async def _run(
         if detach:
             _detach(lock, task["id"], child_argv or [], log_file or "", spawn)
             return
-        with _locked(lock, task["id"]), _registered(registry, product_name(ports), task["id"]):
+        with (
+            _locked(lock, task["id"], stop),
+            _registered(registry, product_name(ports), task["id"]),
+        ):
             _archive_previous_run(task["id"], ports)
             # A thread keeps its channels: a new run over it would add to the old cost.
             await saver.adelete_thread(task["id"])
@@ -968,6 +1016,7 @@ async def _resume(
     detach: bool = False,
     child_argv: list[str] | None = None,
     spawn: Spawner | None = None,
+    stop: StopCause | None = None,
 ) -> None:
     lock = run_lock if run_lock is not None else _lock_for(cfg)
     registry = registry if registry is not None else _registry_for(cfg)
@@ -1003,7 +1052,10 @@ async def _resume(
             _detach(lock, task_id, child_argv or [], log_file or "", spawn)
             return
 
-        with _locked(lock, task_id), _registered(registry, product_name(ports), task_id):
+        with (
+            _locked(lock, task_id, stop),
+            _registered(registry, product_name(ports), task_id),
+        ):
             if r.source == "document":
                 # Seeded as if `escalate` had just run: the task pauses once more,
                 # without telling the human again, and the answer below resumes it

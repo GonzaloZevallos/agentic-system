@@ -108,3 +108,31 @@ def test_launches_of_different_products_or_issues_do_not_collide(tmp_path):
     assert registry.launch_attempts("apostrophe", 20) == LaunchAttempt(when, 1)
     assert registry.launch_attempts("gym-saas", 20) == LaunchAttempt(when, 1)
     assert registry.launch_attempts("apostrophe", 5) == LaunchAttempt(when, 1)
+
+
+# -- boot id (GH-176) -----------------------------------------------------------------
+
+
+def test_register_writes_the_boot_id_and_live_keeps_the_same_boot(tmp_path):
+    registry = FilesystemRunRegistry(tmp_path / "runs", boot_id=lambda: "boot-1")
+    registry.register("apostrophe", "GH-19")
+    assert len(registry.live()) == 1
+
+
+def test_a_live_pid_registered_in_another_boot_does_not_count_as_live(tmp_path):
+    """The rejected input: the pid is this test's own, so `os.kill` says alive, and a
+    phantom entry would block every launch under `max_concurrent_runs = 1`."""
+    FilesystemRunRegistry(tmp_path / "runs", boot_id=lambda: "boot-1").register("a", "GH-19")
+    after_reboot = FilesystemRunRegistry(tmp_path / "runs", boot_id=lambda: "boot-2")
+    assert after_reboot.live() == []
+    assert list((tmp_path / "runs").glob("*.json"))  # live() never deletes
+
+
+def test_an_entry_without_a_boot_id_is_decided_by_os_kill(tmp_path):
+    import os
+
+    registry = FilesystemRunRegistry(tmp_path / "runs", boot_id=lambda: "boot-2")
+    registry._write(os.getpid(), socket.gethostname(), "a", "GH-19")
+    path = tmp_path / "runs" / f"{os.getpid()}.json"
+    path.write_text(path.read_text().replace(', "boot_id": null', ""), encoding="utf-8")
+    assert len(registry.live()) == 1

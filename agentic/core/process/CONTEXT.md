@@ -311,6 +311,16 @@ Una corrida que terminó sin cierre ni escalado porque su proceso murió. No esp
 _Avoid_: cortada, abortada, crash (el estado de telemetría, no el concepto)
 _Campo_: sin término de arte
 
+**Arranque**:
+Un encendido de la máquina, identificado por el id de arranque del kernel. Un registro de lock o de corridas vivas escrito en otro arranque está muerto, diga lo que diga su pid: el sistema operativo pudo haber reutilizado ese número para un proceso ajeno. Un registro sin id de arranque (anterior a este cambio, o una máquina sin `/proc`) no afirma nada: lo decide el sistema operativo, como siempre.
+_Avoid_: reinicio (es el acto, no el período), sesión
+_Campo_: boot id, del kernel de Linux (`/proc/sys/kernel/random/boot_id`)
+
+**Parada por apagado**:
+Una corrida que el apagado del sistema detuvo con una señal. Conserva su registro de lock, con la marca, para que el arranque siguiente pueda retomarla como Corrida interrumpida; cualquier otra parada por señal libera el lock.
+_Avoid_: caída, corte
+_Campo_: sin término de arte
+
 **Invocación**:
 Una llamada a `agentic run` o `agentic resume`: entra, corre lo que el grafo tenga para correr y termina (entregada, escalada, o caída). Distinta de la Corrida, que es toda la ejecución del sistema sobre una tarea de punta a punta: una tarea que se pausó y se reanudó dos veces tuvo una Corrida y tres Invocaciones, y cada una gastó y tardó solo lo suyo, nunca el acumulado de la tarea que sí lleva la Corrida. `langgraph dev` corre el grafo directo, sin pasar por una invocación de la CLI, así que no deja ninguna de sus muestras.
 _Avoid_: corrida, ejecución (eso es la Corrida completa), run (en inglés, para no perder la distinción con Corrida)
