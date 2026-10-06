@@ -445,6 +445,9 @@ class MemoryWorkspace:
         # alone. Every call is kept too (GH-137's own blocker/launch predicates).
         self.ancestors: set[str] = set()
         self.ancestor_checks: list[tuple[Path, str, str]] = []
+        # GH-204: `ref` -> the shas `is_ancestor` answers True for against that ref alone,
+        # consulted before `ancestors` (a remote tip inside an archive but not inside HEAD).
+        self.ancestors_by_ref: dict[str, set[str]] = {}
         # GH-137 blocking finding: a `sha` here makes `is_ancestor` raise `GitError`
         # instead of answering, the real-git-failure case a stale/unknown object must
         # not be confused with ("ante la duda, no lanza" needs a rejected-input test
@@ -586,6 +589,8 @@ class MemoryWorkspace:
         self.ancestor_checks.append((path, sha, ref))
         if sha in self.ancestor_errors:
             raise GitError(f"git merge-base --is-ancestor {sha} {ref} failed: scripted")
+        if ref in self.ancestors_by_ref:
+            return sha in self.ancestors_by_ref[ref]
         return sha in self.ancestors
 
     def upstream(self) -> Upstream:

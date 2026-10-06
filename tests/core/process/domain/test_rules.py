@@ -2,6 +2,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import get_args
 
+from agentic.core.process.application.ports import BranchPullRequest
 from agentic.core.process.domain import document, roles, rules, task
 from agentic.core.process.domain.denials import denial_for
 from agentic.core.process.domain.roles import (
@@ -16,7 +17,6 @@ from agentic.core.process.domain.roles import (
     PRODUCT_ANALYST_BUG,
     TECH_LEAD_EPHEMERAL,
 )
-from agentic.core.process.application.ports import BranchPullRequest
 from agentic.core.process.domain.task import INTEGRATION
 
 PAIR = PAIR_PM_PA

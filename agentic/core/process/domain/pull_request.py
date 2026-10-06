@@ -73,9 +73,7 @@ def bounded_body(
     if preface:
         room = limit - github_length(preface) - len(_SEPARATOR)
         inner = bounded_body(parts, fallback, pointer, room)
-        return BoundedBody(
-            f"{preface}{_SEPARATOR}{inner.text}", inner.bounded, inner.omitted
-        )
+        return BoundedBody(f"{preface}{_SEPARATOR}{inner.text}", inner.bounded, inner.omitted)
     rendered = [f"## {heading}\n\n{text}" for heading, text in parts]
     full = _SEPARATOR.join(rendered) or fallback
     if github_length(full) <= limit:
