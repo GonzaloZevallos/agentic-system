@@ -226,7 +226,9 @@ def _merge(
         log(f"agentic: merge: {task_id}: master moved since the checks ({master} -> {again.sha})")
         return MergeResult("refused", "master_moved")
     # The intent, immediately before the merge call: after a crash the document still
-    # shows the system meant to merge this head (`delivery_outcome` reads it).
+    # shows the system meant to merge this head (`delivery_outcome` reads it). The method
+    # is not part of it: it is written only after the merge returned (ADR-0045, addendum
+    # 2026-10-06).
     ports.documents.record_closure(
         task_id,
         {"auto_merge_head": head, "auto_merge_master": master, "auto_merge_at": clock()},

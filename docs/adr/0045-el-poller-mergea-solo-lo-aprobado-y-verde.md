@@ -238,6 +238,40 @@ de lectura y de log, sin llamadas de modelo.
   `MERGE_ATTEMPTS_MAX`, `AUTO_MERGE_REFUSED`, `AUTO_MERGED`, `OUTCOME_CLASS`,
   `AUTONOMY_MIN_JUDGED` y `agentic merge`.
 
+## Adenda (2026-10-06): el método se registra al éxito, no con la intención
+
+El paso 8 de «El poller y el verbo `agentic merge`» lista `auto_merge_method` dentro de la
+intención que se escribe antes de la llamada. El código nunca lo hizo así (issue #195), y esta
+adenda precisa el texto, no el código.
+
+- **La intención previa al merge** son `auto_merge_head`, `auto_merge_master` y
+  `auto_merge_at`. Se escriben en un solo `record_closure`, justo antes de llamar a
+  `Tracker.merge`.
+- **El método** se escribe junto con `auto_merged_at`, en un solo `record_closure`,
+  inmediatamente después de que `Tracker.merge` vuelve sin lanzar, y antes del comentario
+  `Auto-merged:` y de `_close_document`. Si `Tracker.merge` lanza, ninguna de las dos claves
+  se escribe, ni cuando el PR sigue `OPEN` ni cuando quedó `MERGED`.
+- Esto precisa el paso 8 y concuerda con el párrafo «El método de merge», que ya decía que
+  `Tracker.merge` devuelve el método y el verbo lo escribe en `auto_merge_method`.
+
+**Por qué no se adelanta el método.**
+
+- Nadie lo lee antes del merge: `close` y `delivery_outcome` sólo comparan `auto_merge_head`
+  con el `head_oid` del PR.
+- `GhTracker.merge` elige el método y mergea en un mismo verbo. Conocerlo antes obliga a
+  partir el port `Tracker.merge`, su adaptador y sus dobles, para registrar antes un dato que
+  nadie lee.
+- El paso 11 limpia sólo `auto_merge_head` cuando el PR sigue `OPEN`. Un método escrito con
+  la intención quedaría huérfano, con el PR todavía sin mergear.
+
+**Riesgo aceptado.** Si el proceso muere entre un `gh pr merge` exitoso y esa escritura, el
+documento queda con la intención y sin método. `close` lo clasifica `auto_merged` igual, por
+el riesgo «Crash ambiguo», y el método se lee del PR en GitHub. Un lector del método antes del
+merge pediría un ADR nuevo.
+
+**Qué no cambia.** Ninguna señal, label, atributo de span ni clave de documento se agrega,
+mueve o quita, y ningún prompt cambia: `prompts.fingerprint` no se mueve.
+
 ## Adenda (2026-10-06): un `gh pr merge` que falla se cuenta por head (GH-196)
 
 Si `gh pr merge` fallaba y el PR seguía `OPEN`, nada de lo que lee `auto_merge_decision`
