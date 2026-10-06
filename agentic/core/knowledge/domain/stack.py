@@ -21,6 +21,12 @@ itself knows none of this; every spelling lives here, in the product's own file.
 the `ProductStack` port's job; running the setup when a checkout is born, the checks when a
 Developer delivers, and the suppression cage while it writes, is `core.process`'s.
 
+**`parallel_checks`**: optional, a strict boolean (ADR-0044), absent meaning `False`. `true`
+is the product saying that no two of its declared checks share a port, a database file or a
+cache, so the delivery gate may run them concurrently; without it the gate runs them one
+after the other, as it always has. Anything that is not a bool (`"true"`, `1`, `null`) is a
+declaration that is there but broken, and fails at load instead of being read as a no.
+
 The name is the one part that is not read at the task's base. It says *who* the repository
 is, not what held at a commit: read at the base, a task older than the key would resume
 into a run with no name, and a rename mid-task would split one task's samples across two
@@ -44,7 +50,7 @@ TEMPLATE = Path(__file__).resolve().parent / "stack.yaml"
 OVERLAY = Path(".agentic/stack.yaml")
 # Every key the file may declare. An unknown one is a typo, not an extension: a product
 # that misspells `checks` would otherwise run with half a stack and never know.
-KEYS = ("product", "setup", "checks", "witness", "forbidden", "design")
+KEYS = ("product", "setup", "checks", "witness", "parallel_checks", "forbidden", "design")
 # Every sub-key `design` may declare (ADR-0040): the same "unknown is a typo" rule,
 # one level down.
 DESIGN_KEYS = ("prototype", "entry", "sample_app", "compare")
@@ -114,6 +120,23 @@ def witness(data: object, source: object) -> str | None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{source}: expected a command for `witness`, a non-empty string")
     return value.strip()
+
+
+def parallel_checks(data: object, source: object) -> bool:
+    """Whether the product lets its declared checks run concurrently (ADR-0044).
+
+    Opt-in: a key absent is `False`, the serial gate of today. Present, it must be a real
+    bool -- `isinstance`, so `1` and `"true"` are refused and not coerced -- the same
+    "declared but broken" rule `witness` follows: a typo that quietly read as a no would
+    leave a product serial while it believes it is parallel, and one that read as a yes
+    would race checks that share a port."""
+    declared = _declared(data, source)
+    if "parallel_checks" not in declared:
+        return False
+    value = declared["parallel_checks"]
+    if not isinstance(value, bool):
+        raise ValueError(f"{source}: expected `parallel_checks` to be true or false, a boolean")
+    return value
 
 
 def forbidden(data: object, source: object) -> tuple[Forbidden, ...]:

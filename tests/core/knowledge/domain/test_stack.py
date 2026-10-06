@@ -237,3 +237,44 @@ def test_a_broken_design_declaration_raises_at_load(design):
 def test_the_template_declares_no_design_block(tmp_path):
     data = yaml.safe_load(stack.TEMPLATE.read_text())
     assert stack.design(data, stack.TEMPLATE) is None
+
+
+# -- `parallel_checks`: the opt-in to run the declared checks concurrently ------------
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_parallel_checks_reads_a_declared_bool_as_it_is(value):
+    declared = {"checks": {"tests": "pytest"}, "parallel_checks": value}
+    assert stack.parallel_checks(declared, "x") is value
+
+
+def test_a_product_that_does_not_declare_parallel_checks_keeps_them_serial():
+    assert stack.parallel_checks({"checks": {"tests": "pytest"}}, "x") is False
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["true", "false", "yes", 1, 0, None, [], [True], {"on": True}, 1.0],
+    ids=[
+        "str-true",
+        "str-false",
+        "str-yes",
+        "one",
+        "zero",
+        "null",
+        "empty-list",
+        "list",
+        "map",
+        "float",
+    ],
+)
+def test_a_parallel_checks_that_is_not_a_bool_is_an_error_never_ignored(value):
+    declared = {"checks": {"tests": "pytest"}, "parallel_checks": value}
+    with pytest.raises(ValueError, match=r"stack.yaml: expected `parallel_checks`.*true or false"):
+        stack.parallel_checks(declared, "stack.yaml")
+
+
+def test_the_template_keeps_parallel_checks_commented_out():
+    data = yaml.safe_load(stack.TEMPLATE.read_text(encoding="utf-8"))
+    assert "parallel_checks" not in data
+    assert "parallel_checks" in stack.TEMPLATE.read_text(encoding="utf-8")

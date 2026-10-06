@@ -32,8 +32,11 @@ Nothing conflicting does not mean nothing to do: the pieces are in the same bran
 the first time, and what they do together is yours to make work.
 
 Run every check in the foreground. During the `tdd` loop, only the single test file
-you are fixing; the full declared checks once, at the end, with the shell tool's own
-`timeout` parameter raised high enough to cover them. Starting a check in the
+you are fixing; the full declared checks once, to find what the merge broke, with the
+shell tool's own `timeout` parameter raised high enough to cover them. Once you have
+fixed what they showed, run only the tests for those fixes and the declared type-check,
+lint and format checks: the delivery gate is the second full run, by design, and you do
+not repeat it before delivering. Starting a check in the
 background and then polling or checking back on its output is never the fallback, for
 any reason: a background process is only for something your own run must keep alive
 and stop itself, such as a server. If a foreground run of a check was already cut off

@@ -34,10 +34,13 @@ review checks each one against your diff.
 Build the subtask: your spec is the subtask brief in the plan, and the seams to test
 are the ones it declares, already agreed. Write code only inside the `tdd` loop: one
 failing test at a declared seam, the least code that passes it, repeat. Run the single
-test file often, the type checker and linter regularly, and every check once at the end.
+test file often, the type checker and linter regularly. Once before delivering, run the
+test files for what you changed and the tests you wrote, and the declared type-check,
+lint and format checks. The full declared suite is the delivery gate's, not yours: its
+refusal returns any failure to you in the same turn.
 
 Run every one of those in the foreground. During the loop, only the single test file
-you are working on; the full declared checks once, at the end, with the shell tool's
+you are working on; the checks of that last step once, at the end, with the shell tool's
 own `timeout` parameter raised high enough to cover them. Starting a check in the
 background and then polling or checking back on its output is never the fallback, for
 any reason: a background process is only for something your own run must keep alive

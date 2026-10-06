@@ -82,7 +82,7 @@ marcada en ningún lado hace fallar el chequeo con su propio nombre.
 | `agentic.role.cold_fallback` | `agentic.role.cold_fallback` | rol | `true` si alguna corrida o intento fallido de la patch arrancó en frío; antes una muestra por rol y fase, ahora un booleano sobre la patch entera |
 | `agentic.review.findings` | `agentic.review.findings` | rol | Hallazgos de la revisión, array `"severidad/categoría/estado=conteo"`, en el span del rol que revisó |
 | `agentic.presubmit.checks` | `agentic.presubmit.checks` | rol | Chequeos de cada invocación de la puerta de entrega, array `"check/result/final=conteo"` (sin `phase`: sigue en el documento de tarea si hace falta) |
-| `agentic.presubmit.duration` | `agentic.presubmit.duration` | rol | Duración de cada chequeo, array `"check=segundos"`, una entrada por ocurrencia, sin agregar |
+| `agentic.presubmit.duration` | `agentic.presubmit.duration` | rol | Duración de cada chequeo, array `"check=segundos"`, una entrada por ocurrencia, sin agregar; con `parallel_checks` la suma de las entradas de una puerta no es su tiempo de pared, que es su máximo |
 | `agentic.invocation.cost_usd` | `agentic.invocation.cost_usd` | invocación | Lo que esa invocación sola gastó, sin cambios |
 | `agentic.invocation.rework_usd` | `agentic.invocation.rework_usd` | invocación | Retrabajo de esa invocación sola, sin cambios |
 | `agentic.invocation.duration` | `agentic.invocation.duration` | invocación | Tiempo de reloj de esa invocación, sin cambios |

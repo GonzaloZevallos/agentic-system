@@ -85,6 +85,7 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         checks,
         cfg.check_timeout_s,
         witness=ports.stack.witness(task_base(state, ports)),
+        parallel=ports.stack.parallel_checks(task_base(state, ports)),
     )
     # The product's own declared suppression cage (issue #38), at the task's base like
     # every other key here, never the branch's own: keyword-only through `run_role`, so

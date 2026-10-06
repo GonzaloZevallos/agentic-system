@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import threading
 from collections.abc import Callable
 from pathlib import Path
 
@@ -200,6 +201,7 @@ class MemoryStack:
         witness: str | None = None,
         forbidden: list[Forbidden] | None = None,
         design: Design | None = None,
+        parallel_checks: bool = False,
     ):
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -216,6 +218,9 @@ class MemoryStack:
         # legitimate absence `witness` has: every product but the one a design task
         # prepares for.
         self.declared_design = design
+        # False is a product that does not opt in to concurrent checks (ADR-0044), which
+        # is every product until its own file says otherwise.
+        self.declared_parallel_checks = parallel_checks
         self.revisions: list[str] = []
 
     def checks(self, revision: str) -> dict[str, str]:
@@ -231,6 +236,10 @@ class MemoryStack:
         # list to prove exactly `checks` and `setup` are asked (issue #22, 7), and a
         # witness read must not silently grow that count out from under them.
         return self.declared_witness
+
+    def parallel_checks(self, revision: str) -> bool:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_parallel_checks
 
     def forbidden(self, revision: str) -> list[Forbidden]:
         # Not tracked in `revisions` either, `witness`'s own reason.
@@ -248,16 +257,58 @@ class MemoryStack:
 
 class MemoryCommands:
     """Answers each command from its queue, green when the queue is empty or missing;
-    `ran` keeps (cwd, command)."""
+    `ran` keeps (cwd, command).
 
-    def __init__(self, **queues: list[CommandResult]):
+    Safe to call from several threads (the parallel gate does): a lock guards `ran` and
+    the queues. `in_flight` counts the calls inside `run` now and `high_water` the most
+    there ever were at once. `holds` maps a command to a `threading.Event`: that call
+    waits inside `run` until the test sets it (never a `sleep` as a proof). `raises`
+    lists commands whose call raises `RuntimeError`. `completed` keeps every command
+    whose call has left `run`, raised or not, in the order they left. With none of these
+    options the behaviour is the plain one."""
+
+    HOLD_LIMIT_S = 10.0  # a test that forgets to release must fail, not hang the suite
+
+    def __init__(
+        self,
+        *,
+        holds: dict[str, threading.Event] | None = None,
+        raises: set[str] | None = None,
+        **queues: list[CommandResult],
+    ):
         self.queues = {k: list(v) for k, v in queues.items()}
         self.ran: list[tuple[Path, str]] = []
+        self.holds = holds or {}
+        self.raises = raises or set()
+        self.in_flight = 0
+        self.high_water = 0
+        self.completed: list[str] = []
+        self._changed = threading.Condition()
+
+    def wait_until(self, predicate: Callable[[], bool], timeout_s: float = 5.0) -> bool:
+        """Block until `predicate` holds over this fake's state; False on timeout."""
+        with self._changed:
+            return self._changed.wait_for(predicate, timeout_s)
 
     def run(self, cwd: Path, command: str, timeout_s: float) -> CommandResult:
-        self.ran.append((cwd, command))
-        queue = self.queues.get(command)
-        return queue.pop(0) if queue else CommandResult(0, "ok")
+        with self._changed:
+            self.ran.append((cwd, command))
+            self.in_flight += 1
+            self.high_water = max(self.high_water, self.in_flight)
+            self._changed.notify_all()
+        try:
+            if (hold := self.holds.get(command)) is not None:
+                hold.wait(self.HOLD_LIMIT_S)
+            if command in self.raises:
+                raise RuntimeError(f"{command} blew up")
+            with self._changed:
+                queue = self.queues.get(command)
+                return queue.pop(0) if queue else CommandResult(0, "ok")
+        finally:
+            with self._changed:
+                self.in_flight -= 1
+                self.completed.append(command)
+                self._changed.notify_all()
 
 
 class MemorySampleApp:
