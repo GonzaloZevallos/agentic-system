@@ -179,6 +179,14 @@ class GitWorkspace:
         self._git("commit", "-q", "-m", message, cwd=path)
         return self.head(path)
 
+    def commit_paths(self, path: Path, relatives: Sequence[str], message: str) -> str | None:
+        self._git("add", "--", *relatives, cwd=path)
+        if not self._git("status", "--porcelain", "--", *relatives, cwd=path):
+            return None
+        # With a pathspec `git commit` takes those paths only, whatever else is staged.
+        self._git("commit", "-q", "-m", message, "--", *relatives, cwd=path)
+        return self.head(path)
+
     def push(self, branch: str, *, replace: bool = False) -> None:
         if replace:
             remote = self._git("ls-remote", "--heads", "origin", f"refs/heads/{branch}").split()

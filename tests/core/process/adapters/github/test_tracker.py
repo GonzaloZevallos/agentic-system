@@ -29,28 +29,64 @@ def test_issue_number_is_read_off_the_task_id():
     assert issue_number("GH-12") == 12 and issue_number("T-abc") is None
 
 
-def test_pull_request_comment_and_label_go_through_gh():
+def test_comment_and_label_go_through_gh():
     run = Recorder()
     tracker = GhTracker(Path("/p"), run)
-    url = tracker.open_pull_request("GH-12", "agentic/GH-12", "Dashboard", "body")
-    assert url == "https://github.com/o/r/pull/7"
     tracker.comment("GH-12", "PR: x")
     tracker.label("GH-12", "needs-human")
     assert run.calls == [
-        [
-            "gh",
-            "pr",
-            "create",
-            "--head",
-            "agentic/GH-12",
-            "--title",
-            "Dashboard",
-            "--body",
-            "Closes #12\n\nbody",
-        ],
         ["gh", "issue", "comment", "12", "--body", "PR: x"],
         ["gh", "issue", "edit", "12", "--add-label", "needs-human"],
     ]
+
+
+def test_open_pull_request_sends_the_closes_prefixed_body_in_a_file_never_in_argv():
+    written = {}
+
+    class RecordingRun(Recorder):
+        def __call__(self, args, cwd, capture_output, text, check):
+            self.calls.append(args)
+            path = args[args.index("--body-file") + 1]
+            written["path"] = path
+            written["body"] = Path(path).read_text(encoding="utf-8")
+            return subprocess.CompletedProcess(args, 0, self.stdout, "")
+
+    run = RecordingRun()
+    body = "## PM\n\n" + "😀" * 30_000  # a multibyte body well past what one argv slot takes
+    url = GhTracker(Path("/p"), run).open_pull_request("GH-12", "agentic/GH-12", "Dashboard", body)
+    assert url == "https://github.com/o/r/pull/7"
+    [call] = run.calls
+    assert call[:3] == ["gh", "pr", "create"]
+    assert call[call.index("--head") + 1] == "agentic/GH-12"
+    assert call[call.index("--title") + 1] == "Dashboard"
+    assert "--body-file" in call and "--body" not in call
+    assert written["body"] == f"Closes #12\n\n{body}"
+    assert not any(body in argument for argument in call)
+    # The temp file does not outlive the call.
+    assert not Path(written["path"]).exists()
+
+
+def test_open_pull_request_removes_its_file_when_gh_fails():
+    seen = {}
+
+    def run(args, cwd, capture_output, text, check):
+        seen["path"] = args[args.index("--body-file") + 1]
+        raise subprocess.CalledProcessError(1, args, stderr="Body is too long")
+
+    with pytest.raises(ValueError, match="gh pr create failed: Body is too long"):
+        GhTracker(Path("/p"), run).open_pull_request("GH-12", "b", "t", "x")
+    assert not Path(seen["path"]).exists()
+
+
+def test_a_task_without_an_issue_opens_its_pull_request_with_no_closes_prefix():
+    seen = {}
+
+    def run(args, cwd, capture_output, text, check):
+        seen["body"] = Path(args[args.index("--body-file") + 1]).read_text(encoding="utf-8")
+        return subprocess.CompletedProcess(args, 0, "https://github.com/o/r/pull/7\n", "")
+
+    GhTracker(Path("/p"), run).open_pull_request("T-abc", "b", "t", "x")
+    assert seen["body"] == "x"
 
 
 def test_open_issue_uses_body_file_and_sends_no_label(tmp_path, monkeypatch):

@@ -481,3 +481,25 @@ def test_a_base_recorded_short_against_a_full_one_in_git_is_no_disagreement():
 def test_a_different_base_is_a_disagreement():
     problems = _approved_at(FULL_SHA, FULL_SHA, base="1234567", recorded=FULL_SHA)
     assert len(problems) == 1 and "base" in problems[0]
+
+
+def test_an_all_approved_task_paused_at_delivery_still_resumes_through_integrate():
+    # GH-203: a delivery that failed (push, `gh pr create`) leaves every subtask
+    # approved and no pull request. `resume_target` is unchanged: it sends the task
+    # through the fan-in, whose merges are no-ops, and the route reaches `deliver`.
+    paused = {
+        "id": "GH-12",
+        "title": "t",
+        "type": "feature",
+        "status": "waiting_on_human",
+        "subtasks": {
+            "api": {"id": "api", "status": "approved"},
+            "domain": {"id": "domain", "status": "approved"},
+            "integration": {"id": "integration", "status": "approved"},
+        },
+        "sections": {"PM": "p", "Tech Lead": "t"},
+        **rules.escalation("failure", "gh pr create failed: Body is too long"),
+    }
+    resumed = {**paused, **rules.resumed(paused, None)}
+    assert resumed["escalated"] is None
+    assert rules.resume_target(resumed) == "integrate"

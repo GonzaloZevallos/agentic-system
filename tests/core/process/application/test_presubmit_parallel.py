@@ -6,6 +6,7 @@ mark and events the test releases, never with a `sleep`."""
 
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -85,6 +86,9 @@ def test_each_check_times_its_own_duration_in_parallel_mode():
     assert commands.wait_until(
         lambda: "pytest" in commands.completed and "mypy" in commands.completed
     )
+    # The held check has to be held for longer than the clock's resolution between the
+    # others finishing and this release, or the comparison below is a race of microseconds.
+    time.sleep(0.05)
     slow.set()
     thread.join(10)
     durations = {c["name"]: c["duration_s"] for c in gate_.results or []}
