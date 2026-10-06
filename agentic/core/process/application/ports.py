@@ -554,11 +554,18 @@ class Workspace(Protocol):
         stray file along. Raises `GitError`."""
         ...
 
-    def push(self, branch: str, *, replace: bool = False) -> None:
-        """Publish `branch` to `origin`. `replace` is for a branch the system owns whose
-        previous pull request is closed or merged and which was started again from the
-        default branch (`agentic/playbook`): the remote one is replaced, guarded by a lease
-        on the sha read just before, so nothing a person pushed in between is lost."""
+    def push(self, branch: str, *, lease: str | None = None) -> None:
+        """Publish `branch` to `origin`. `None` is a plain push. A sha is a replace: a
+        force push guarded by a lease on exactly that sha, so nothing pushed after the
+        caller observed it is lost. The adapter never reads the remote again to pick the
+        sha, and it never decides whether a replace is warranted: its caller does."""
+        ...
+
+    def remote_tip(self, path: Path, branch: str) -> str | None:
+        """The full sha `origin` holds for `branch`, whose object is local afterwards (it
+        is fetched into a private ref, never under `refs/heads/`); `None` only when the
+        remote has no such branch. A failed read, an unreachable origin or a remote that
+        moved between the read and the fetch raises `GitError`: it is never "absent"."""
         ...
 
     def show(self, ref: str, relative: str) -> str | None:
@@ -700,6 +707,16 @@ class ListedPullRequest:
     branch: str
 
 
+@dataclass(frozen=True)
+class BranchPullRequest:
+    """One pull request whose head is a given branch, as `Tracker.pull_requests_on`
+    reports it: `state` is the platform's own, nothing is inferred from it here."""
+
+    number: int
+    state: Literal["OPEN", "CLOSED", "MERGED"]
+    url: str
+
+
 class Tracker(Protocol):
     """Where the human is told (ADR-0011): the pull request, the issue's comments and
     labels. A task that did not come from an issue has no issue to write to; the
@@ -730,6 +747,12 @@ class Tracker(Protocol):
         """Every pull request of the product, any state, with its body: the playbook
         delivery filters them locally for its marker block (never through the search
         index, which lags a body edit)."""
+        ...
+
+    def pull_requests_on(self, branch: str) -> list[BranchPullRequest]:
+        """Every pull request, any state, whose head branch is `branch`. Raises
+        `ValueError` when the platform cannot answer, answers something unreadable, or
+        may have answered a truncated page: a failed lookup is never an empty list."""
         ...
 
     def update_pull_request_body(self, number: int, body: str) -> None: ...

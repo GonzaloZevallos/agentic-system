@@ -15,6 +15,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ...application.ports import (
+    BranchPullRequest,
     IssueComment,
     IssueState,
     ListedPullRequest,
@@ -31,6 +32,10 @@ _MERGE_METHODS = (
     ("squash", "squashMergeAllowed"),
     ("rebase", "rebaseMergeAllowed"),
 )
+
+# `pull_requests_on` asks for one page of this size; a full page may be a truncated one.
+_BRANCH_PAGE = 50
+_PR_STATES = ("OPEN", "CLOSED", "MERGED")
 
 Run = Callable[..., subprocess.CompletedProcess[str]]
 
@@ -156,6 +161,41 @@ class GhTracker:
             )
             for item in json.loads(raw)
         ]
+
+    def pull_requests_on(self, branch: str) -> list[BranchPullRequest]:
+        raw = self._gh(
+            "pr",
+            "list",
+            "--head",
+            branch,
+            "--state",
+            "all",
+            "--json",
+            "number,state,url",
+            "--limit",
+            str(_BRANCH_PAGE),
+        )
+        try:
+            items = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"gh pr list on {branch} answered unreadable JSON") from exc
+        if not isinstance(items, list):
+            raise ValueError(f"gh pr list on {branch} did not answer a list")
+        if len(items) >= _BRANCH_PAGE:
+            raise ValueError(f"gh pr list on {branch} filled its page of {_BRANCH_PAGE}: truncated")
+        found: list[BranchPullRequest] = []
+        for item in items:
+            row = item if isinstance(item, dict) else {}
+            number, state, url = row.get("number"), row.get("state"), row.get("url")
+            if (
+                not isinstance(number, int)
+                or isinstance(number, bool)
+                or not isinstance(url, str)
+                or state not in _PR_STATES
+            ):
+                raise ValueError(f"gh pr list on {branch} answered an unusable row: {item!r}")
+            found.append(BranchPullRequest(number=number, state=state, url=url))
+        return found
 
     def update_pull_request_body(self, number: int, body: str) -> None:
         # `--body-file`, as `open_issue`: the limit that can bite is GitHub's own.

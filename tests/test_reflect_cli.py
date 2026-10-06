@@ -7,6 +7,7 @@ Seam: `agentic.cli reflect (agentic reflect verb)`, `_reflect` over real ports."
 
 from __future__ import annotations
 
+import dataclasses
 import subprocess
 from pathlib import Path
 
@@ -176,3 +177,31 @@ async def test_an_auto_merged_task_is_neither_reflected_nor_counted_as_kept(tmp_
     assert "reflected 1, 0 left for the next run" in capsys.readouterr().out
     ledger = pc.parse_ledger(git(root, "show", f"agentic/playbook:{pc.LEDGER_FILE}"))
     assert list(ledger.tasks) == ["GH-1"]
+
+
+async def test_a_replaced_candidate_branch_is_pushed_on_a_lease_at_the_tip_remote_tip_read(
+    tmp_path,
+):
+    """The playbook branch is the system's own: the replace asks `remote_tip` and leases
+    on that sha (the first push, with no remote branch, is plain)."""
+    root, cfg, ports, tracker = product(tmp_path, 8)
+    leases: list[str | None] = []
+    tips: list[str | None] = []
+
+    class Spy(GitWorkspace):
+        def push(self, branch, *, lease=None):
+            leases.append(lease)
+            super().push(branch, lease=lease)
+
+        def remote_tip(self, path, branch):
+            tip = super().remote_tip(path, branch)
+            tips.append(tip)
+            return tip
+
+    ports = dataclasses.replace(ports, workspace=Spy(root, cfg.git_identity))
+    await cli._reflect(cfg, ports, None, "2026-10-01")
+    assert leases == [None]
+    first = git(root, "rev-parse", "agentic/playbook")
+    listed(tracker, "CLOSED")
+    await cli._reflect(cfg, ports, None, "2026-10-01")
+    assert tips == [first] and leases == [None, first]

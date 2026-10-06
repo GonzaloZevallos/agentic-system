@@ -265,7 +265,10 @@ async def reflect(
     open_pr = known.open_pr
     url = open_pr.url if open_pr else ""
     if sha is not None or open_pr is None:
-        ports.workspace.push(BRANCH, replace=replace)
+        # The playbook branch is the system's own (ADR-0043): its replace is not a
+        # `push_plan` decision, it leases on whatever the remote holds now.
+        lease = ports.workspace.remote_tip(checkout.path, BRANCH) if replace else None
+        ports.workspace.push(BRANCH, lease=lease)
     record = _record(ledger, known)
     if open_pr is None:
         url = ports.tracker.open_pull_request(TASK_ID, BRANCH, TITLE, _body(INTRO, summary, record))

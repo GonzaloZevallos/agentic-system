@@ -11,6 +11,7 @@ from pathlib import Path
 
 from agentic.core.knowledge.domain import knowledge
 from agentic.core.process.application.ports import (
+    BranchPullRequest,
     Checkout,
     CommandResult,
     GitError,
@@ -413,6 +414,13 @@ class MemoryWorkspace:
         self.dependency_state_calls: list[tuple[Path, str, tuple[str, ...]]] = []
         self.dependency_states: dict[str, list[DependencyState]] = {}
         self.pushed: list[str] = []
+        # The `lease` every `push` received, in order (the failed ones too); `remote_tips`
+        # is what `remote_tip` answers per branch (absent is `None`, the remote has none),
+        # `remote_tip_error` makes it raise `GitError`, and `remote_tip_calls` is each ask.
+        self.leases: list[str | None] = []
+        self.remote_tips: dict[str, str] = {}
+        self.remote_tip_error: str | None = None
+        self.remote_tip_calls: list[tuple[Path, str]] = []
         # `(path, relatives, message)` of every `commit_paths`, and `events`: that call and
         # every `push`, in order, so a test says which came first (GH-203).
         self.path_commits: list[tuple[Path, tuple[str, ...], str]] = []
@@ -528,12 +536,19 @@ class MemoryWorkspace:
         self.path_commits.append((path, tuple(relatives), message))
         return "c2"
 
-    def push(self, branch: str, *, replace: bool = False) -> None:
+    def push(self, branch: str, *, lease: str | None = None) -> None:
         self.events.append("push")
+        self.leases.append(lease)
         if self.push_failures > 0:
             self.push_failures -= 1
             raise GitError("git push -u origin failed: scripted")
         self.pushed.append(branch)
+
+    def remote_tip(self, path: Path, branch: str) -> str | None:
+        self.remote_tip_calls.append((path, branch))
+        if self.remote_tip_error is not None:
+            raise GitError(self.remote_tip_error)
+        return self.remote_tips.get(branch)
 
     def show(self, ref: str, relative: str) -> str | None:
         return self.files.get((ref, relative))
@@ -628,6 +643,11 @@ class MemoryTracker:
         self.attempted_bodies: list[str] = []
         self.open_error = "gh pr create failed: Body is too long"
         self.comment_failures = 0
+        # `pull_requests_on`: the pull requests scripted per head branch, `lookup_error`
+        # to make it raise `ValueError` (`gh`'s own failure shape), and each branch asked.
+        self.on_branch: dict[str, list[BranchPullRequest]] = {}
+        self.lookup_error: str | None = None
+        self.lookups: list[str] = []
 
     def pull_request(self, reference: str) -> PullRequest | None:
         self.events.append("pull_request")
@@ -672,6 +692,12 @@ class MemoryTracker:
 
     def list_pull_requests(self) -> list[ListedPullRequest]:
         return list(self.listed)
+
+    def pull_requests_on(self, branch: str) -> list[BranchPullRequest]:
+        self.lookups.append(branch)
+        if self.lookup_error is not None:
+            raise ValueError(self.lookup_error)
+        return list(self.on_branch.get(branch, []))
 
     def update_pull_request_body(self, number: int, body: str) -> None:
         self.updated_bodies.append((number, body))
