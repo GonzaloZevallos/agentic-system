@@ -91,12 +91,14 @@ def test_gh_failures_are_value_errors():
         GhTracker(Path("/p"), Recorder(fail=True)).open_pull_request("T-1", "b", "t", "x")
 
 
-def _graphql_pull_request(state, merged_at, created_at, commits, merge_oid=None):
+def _graphql_pull_request(state, merged_at, created_at, commits, merge_oid=None, head_oid=...):
+    head = {} if head_oid is ... else {"headRefOid": head_oid}
     return json.dumps(
         {
             "data": {
                 "repository": {
                     "pullRequest": {
+                        **head,
                         "state": state,
                         "mergedAt": merged_at,
                         "createdAt": created_at,
@@ -168,6 +170,32 @@ def test_pull_request_carries_the_merge_commit_only_when_it_merged():
         Recorder(stdout=_graphql_pull_request("CLOSED", None, "2026-09-20T23:00:00Z", [])),
     ).pull_request("https://github.com/o/r/pull/8")
     assert closed is not None and closed.merge_commit is None
+
+
+def test_pull_request_reads_the_head_oid_and_maps_a_missing_one_to_none():
+    with_head = GhTracker(
+        Path("/p"),
+        Recorder(
+            stdout=_graphql_pull_request(
+                "OPEN", None, "2026-09-20T23:00:00Z", [], head_oid="9f8e7d6"
+            )
+        ),
+    ).pull_request("https://github.com/o/r/pull/7")
+    assert with_head is not None and with_head.head_oid == "9f8e7d6"
+    for stdout in (
+        _graphql_pull_request("OPEN", None, "2026-09-20T23:00:00Z", []),
+        _graphql_pull_request("OPEN", None, "2026-09-20T23:00:00Z", [], head_oid=None),
+    ):
+        without = GhTracker(Path("/p"), Recorder(stdout=stdout)).pull_request(
+            "https://github.com/o/r/pull/7"
+        )
+        assert without is not None and without.head_oid is None
+
+
+def test_pull_request_query_asks_for_the_head_oid():
+    run = Recorder(stdout=_graphql_pull_request("OPEN", None, "2026-09-20T23:00:00Z", []))
+    GhTracker(Path("/p"), run).pull_request("https://github.com/o/r/pull/9")
+    assert any("headRefOid" in part for part in run.calls[0])
 
 
 def test_pull_request_query_asks_for_the_merge_commit_oid():

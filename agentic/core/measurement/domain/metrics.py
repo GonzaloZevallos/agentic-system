@@ -242,7 +242,17 @@ def invocation_returns_by_category(patch: TaskState) -> dict[str, int]:
     return counts
 
 
-DeliveryOutcome = Literal["merged", "merged_with_changes", "closed"]
+DeliveryOutcome = Literal["merged", "merged_with_changes", "auto_merged", "closed"]
+OutcomeClass = Literal["human_kept", "landed_unjudged", "closed"]
+# What each outcome says about the delivery, so no consumer decides by a literal of its
+# own: `human_kept` carries a human's verdict, `landed_unjudged` landed without one
+# (ADR-0045), `closed` never landed.
+OUTCOME_CLASS: dict[DeliveryOutcome, OutcomeClass] = {
+    "merged": "human_kept",
+    "merged_with_changes": "human_kept",
+    "auto_merged": "landed_unjudged",
+    "closed": "closed",
+}
 
 
 def _is_human_commit(commit: PullRequestCommit, system_author_email: str) -> bool:
@@ -261,12 +271,19 @@ def _is_human_commit(commit: PullRequestCommit, system_author_email: str) -> boo
     return commit.parent_count < 2
 
 
-def delivery_outcome(pull_request: PullRequest, system_author_email: str) -> DeliveryOutcome:
-    """The human's verdict on the delivery: `merged_with_changes` when the pull request
-    merged with at least one human commit on it, `merged` when it merged with none, and
-    `closed` when it never merged at all."""
+def delivery_outcome(
+    pull_request: PullRequest, system_author_email: str, *, auto_merge_head: str | None = None
+) -> DeliveryOutcome:
+    """How the delivery ended: `closed` when the pull request never merged at all;
+    `auto_merged` when it merged and the task document's `auto_merge_head` -- the
+    intent the system wrote before it called the merge -- is the very head that
+    merged (`None` and `""` are no intent); otherwise the human's verdict:
+    `merged_with_changes` when it merged with at least one human commit on it, `merged`
+    when it merged with none."""
     if pull_request.merged_at is None:
         return "closed"
+    if auto_merge_head and auto_merge_head == pull_request.head_oid:
+        return "auto_merged"
     if human_commits(pull_request, system_author_email) > 0:
         return "merged_with_changes"
     return "merged"

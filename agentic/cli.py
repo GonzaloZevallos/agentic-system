@@ -1222,7 +1222,9 @@ def _close_document(task_id: str, cfg: Configuration, ports: Ports) -> _ClosureO
         )
 
     author = cfg.git_author_email
-    outcome = delivery_metrics.delivery_outcome(pull_request, author)
+    outcome = delivery_metrics.delivery_outcome(
+        pull_request, author, auto_merge_head=raw.get("auto_merge_head")
+    )
     human_commits = delivery_metrics.human_commits(pull_request, author)
     human_lines_changed = delivery_metrics.human_lines_changed(pull_request, author)
     time_to_merge = delivery_metrics.time_to_merge_seconds(pull_request)

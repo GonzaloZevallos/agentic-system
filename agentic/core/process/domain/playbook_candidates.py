@@ -27,7 +27,9 @@ from . import playbook as pb
 
 MARKER = "<!-- agentic:playbook -->"
 # Closed task documents whose delivery a person kept: a closed pull request taught
-# nothing about the code that merged.
+# nothing about the code that merged. `auto_merged` is left out on purpose: no human
+# endorsed that delivery (ADR-0045). Declared here, not imported from measurement
+# (ADR-0010); a test keeps it equal to `metrics.OUTCOME_CLASS`'s `human_kept`.
 KEPT = ("merged", "merged_with_changes")
 # Reflected tasks that make a summary due, and the files this module owns beside the
 # playbooks (`playbook.RECORD_FILES` names the same two).

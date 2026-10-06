@@ -184,13 +184,16 @@ class PullRequest:
     `merged_at` is `None` for a pull request that never merged (open or closed
     unmerged); `commits` is every commit on the branch, oldest first;
     `merge_commit` is the sha GitHub says the merge produced on the base branch, `None`
-    when it never merged (ADR-0038)."""
+    when it never merged (ADR-0038); `head_oid` is the sha of the pull request's final
+    head commit, `None` when `gh` did not say -- what `delivery_outcome` compares the
+    document's `auto_merge_head` against (ADR-0045)."""
 
     state: Literal["OPEN", "MERGED", "CLOSED"]
     created_at: str
     merged_at: str | None
     commits: tuple[PullRequestCommit, ...]
     merge_commit: str | None = None
+    head_oid: str | None = None
 
 
 def add(current: float, new: float) -> float:
