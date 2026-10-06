@@ -67,7 +67,8 @@ another subtask, is a thing this branch may repeat: check whether it does, and i
 does, it is a finding of yours, in your own words, with your own evidence. A row this
 delivery settles goes in `settled`, by its `location`, and out of your findings; approving
 this subtask also closes its own earlier `blocking` rows that this review does not raise
-again, and every other row closes only through `settled`. Do not re-litigate a row: what an earlier review dismissed stays dismissed.
+again, and every other row closes only through `settled`. Do not re-litigate a row:
+what an earlier review dismissed stays dismissed.
 
 Do not run a whole check again: the system already ran every one when the Developer
 delivered, and wrote the result under `### Checks` in the Developer's section, which

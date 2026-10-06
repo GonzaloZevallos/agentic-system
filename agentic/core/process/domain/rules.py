@@ -233,10 +233,12 @@ def _covered(
     """Whether an approval settled this very record: its own subtask's, `blocking`, scope
     `subtask`, and from a version below the approving one. Anything else, an `important`
     included, is never covered."""
+    if (version := approved.get((record["subtask"], key))) is None:
+        return False
     return (
         record["severity"] == "blocking"
         and record["scope"] == "subtask"
-        and record["version"] < approved.get((record["subtask"], key), 0)
+        and record["version"] < version
     )
 
 
