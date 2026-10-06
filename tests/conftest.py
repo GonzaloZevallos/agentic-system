@@ -31,3 +31,20 @@ def no_real_run_registry(tmp_path, monkeypatch):
     suite. A test that wants the real default back overrides this with its own
     `monkeypatch.setenv`/`delenv`, same as any other fixture value."""
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg-state"))
+
+
+@pytest.fixture(autouse=True)
+def no_real_inhibitor(monkeypatch):
+    """GH-176: `_run`/`_resume` hold a logind inhibitor for their lifetime; a test that
+    runs one must not take a real sleep/shutdown lock on the machine running the suite.
+    A test of the warning itself overrides this with its own `cli.inhibitor`."""
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    @contextmanager
+    def nothing(why):
+        yield None
+
+    # The module `cli` holds is replaced, never `inhibitor.hold` itself: the adapter's own
+    # tests use the real one.
+    monkeypatch.setattr("agentic.cli.inhibitor", SimpleNamespace(hold=nothing))
