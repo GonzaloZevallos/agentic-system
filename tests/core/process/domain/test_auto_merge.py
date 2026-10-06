@@ -234,3 +234,40 @@ def test_every_merge_failure_class_has_advice_and_the_terminal_ones_are_classes(
     assert all(rules.MERGE_FAILURE_ADVICE[c].strip() for c in classes)
     assert rules.TERMINAL_MERGE_FAILURES <= classes
     assert rules.MERGE_FAILURE_UNKNOWN_ADVICE.strip()
+
+
+FULL_HEAD = "0258d6f10b0c8f84d6e3a819f0173809f18d7a12"
+
+
+def test_a_short_reviewed_head_that_prefixes_the_full_pr_head_is_reviewed():
+    facts = _facts(reviewed_head=FULL_HEAD[:7], pr_head=FULL_HEAD, checks_head=FULL_HEAD)
+    assert rules.auto_merge_decision(facts) == MergeDecision("merge", None)
+
+
+def test_a_different_short_reviewed_head_is_not_reviewed():
+    facts = _facts(reviewed_head="1234567", pr_head=FULL_HEAD, checks_head=FULL_HEAD)
+    assert rules.auto_merge_decision(facts) == MergeDecision("refuse", "head_not_reviewed")
+
+
+def test_a_sha256_pr_head_equal_to_the_reviewed_head_is_reviewed():
+    head = "c" * 64
+    facts = _facts(reviewed_head=head, pr_head=head, checks_head=head)
+    assert rules.auto_merge_decision(facts) == MergeDecision("merge", None)
+
+
+@pytest.mark.parametrize("length", [39, 41])
+def test_a_pr_head_that_is_not_a_full_id_is_not_reviewed_even_when_equal(length):
+    head = "a" * length
+    facts = _facts(reviewed_head=head, pr_head=head, checks_head=head)
+    assert rules.auto_merge_decision(facts) == MergeDecision("refuse", "head_not_reviewed")
+
+
+def test_a_short_pr_head_is_not_reviewed_even_when_the_reviewed_head_is_full_and_prefixed():
+    facts = _facts(reviewed_head=FULL_HEAD, pr_head=FULL_HEAD[:7], checks_head=FULL_HEAD)
+    assert rules.auto_merge_decision(facts) == MergeDecision("refuse", "head_not_reviewed")
+
+
+@pytest.mark.parametrize("reviewed", [None, "", "  "])
+def test_an_empty_reviewed_head_is_not_reviewed(reviewed):
+    facts = _facts(reviewed_head=reviewed)
+    assert rules.auto_merge_decision(facts) == MergeDecision("refuse", "head_not_reviewed")
