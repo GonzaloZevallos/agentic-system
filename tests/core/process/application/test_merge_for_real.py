@@ -19,6 +19,7 @@ from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.adapters.git.workspace import GitWorkspace
 from agentic.core.process.adapters.shell.commands import ShellCommands
 from agentic.core.process.application.ports import Upstream
+from agentic.core.process.domain import rules
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
 from agentic.shared.configuration import Configuration
 from tests.fakes import MemoryTracker, memory_ports
@@ -297,3 +298,156 @@ def test_a_witness_that_disagrees_makes_the_checks_fail_even_when_they_pass(
 
     assert world.doc()["merge_checks"]["passed"] is passed
     assert bool(world.tracker.merge_calls) is passed
+
+
+# GH-196: a merge that keeps failing with the pull request still OPEN.
+SECRET = "remote: token ghp_SECRET rejected"
+
+
+def _failing(world, failure="gh_rejected"):
+    world.tracker.merge_error = SECRET
+    world.tracker.merge_failure = failure
+
+
+def _first_lines(world):
+    return [text.splitlines()[0] for _, text in world.tracker.comments]
+
+
+def test_a_merge_that_keeps_failing_stops_at_the_budget_and_comments_once_on_the_last(world):
+    _failing(world)
+    seen = []
+    for _ in range(rules.MERGE_CALLS_MAX):
+        world.merge()
+        seen.append(len(world.tracker.comments))
+    assert seen == [0] * (rules.MERGE_CALLS_MAX - 1) + [1]
+    world.merge()
+    world.merge()
+
+    assert len(world.tracker.merge_calls) == rules.MERGE_CALLS_MAX
+    assert _first_lines(world) == [
+        f"Auto-merge refused: {world.head} gh pr merge failed: gh_rejected"
+    ]
+    body = world.tracker.comments[0][1]
+    assert rules.MERGE_FAILURE_ADVICE["gh_rejected"] in body
+    assert body.endswith("Left for the human to merge.")
+    assert world.doc()["merge_failures"] == {
+        "head": world.head,
+        "count": rules.MERGE_CALLS_MAX,
+        "failure": "gh_rejected",
+    }
+    assert world.doc()["auto_merge_head"] == ""
+
+
+def test_a_terminal_failure_costs_one_call_and_then_the_comment(world):
+    _failing(world, "no_merge_method")
+    world.merge()
+    world.merge()
+
+    assert len(world.tracker.merge_calls) == 1
+    assert _first_lines(world) == [
+        f"Auto-merge refused: {world.head} gh pr merge failed: no_merge_method"
+    ]
+    assert rules.MERGE_FAILURE_ADVICE["no_merge_method"] in world.tracker.comments[0][1]
+
+
+def test_a_plain_value_error_counts_as_unreadable_and_stops_at_the_budget(world):
+    world.tracker.merge_error = SECRET  # no `merge_failure`: a bare `ValueError`
+    for _ in range(rules.MERGE_CALLS_MAX + 2):
+        world.merge()
+
+    assert len(world.tracker.merge_calls) == rules.MERGE_CALLS_MAX
+    assert _first_lines(world) == [
+        f"Auto-merge refused: {world.head} gh pr merge failed: gh_unreadable"
+    ]
+
+
+def test_the_failure_is_recorded_before_the_pull_request_is_read_again(world, monkeypatch):
+    _failing(world)
+    recorded_at_read = []
+    real = world.tracker.pull_request
+
+    def spy(reference):
+        if world.tracker.merge_calls:  # a read after the merge call
+            recorded_at_read.append(world.doc().get("merge_failures"))
+        return real(reference)
+
+    monkeypatch.setattr(world.tracker, "pull_request", spy)
+    world.merge()
+
+    assert recorded_at_read == [{"head": world.head, "count": 1, "failure": "gh_rejected"}]
+
+
+def test_nothing_is_fetched_or_diffed_after_the_merge_call_and_no_stderr_is_recorded(world):
+    _failing(world)
+    real = world.ports.workspace
+    events = world.tracker.events
+
+    class Watching:
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+        def fetch_commit(self, sha):
+            events.append("fetch_commit")
+            return real.fetch_commit(sha)
+
+        def changed_paths(self, base, head):
+            events.append("changed_paths")
+            return real.changed_paths(base, head)
+
+    world.ports = dataclasses.replace(world.ports, workspace=Watching())
+    for _ in range(rules.MERGE_CALLS_MAX):
+        events.clear()
+        world.merge()
+        after = events[events.index("merge") + 1 :]
+        assert "fetch_commit" not in after and "changed_paths" not in after
+        assert "fetch_commit" in events and "changed_paths" in events
+
+    assert "SECRET" not in repr(world.doc())
+    assert all("SECRET" not in text for _, text in world.tracker.comments)
+
+
+def test_a_spent_document_with_no_comment_gets_exactly_one_comment(world):
+    world.ports.documents.record_closure(
+        "GH-9",
+        {
+            "merge_failures": {
+                "head": world.head,
+                "count": rules.MERGE_CALLS_MAX,
+                "failure": "gh_rejected",
+            }
+        },
+    )
+    world.merge()
+    assert _first_lines(world) == [
+        f"Auto-merge refused: {world.head} gh pr merge failed: gh_rejected"
+    ]
+    world.merge()
+    assert len(world.tracker.comments) == 1
+    assert world.tracker.merge_calls == []
+
+
+def test_a_spent_document_without_a_valid_class_comments_with_the_unknown_advice(world):
+    world.ports.documents.record_closure(
+        "GH-9",
+        {"merge_failures": {"head": world.head, "count": rules.MERGE_CALLS_MAX, "failure": SECRET}},
+    )
+    world.merge()
+    assert _first_lines(world) == [f"Auto-merge refused: {world.head} gh pr merge failed: unknown"]
+    assert rules.MERGE_FAILURE_UNKNOWN_ADVICE in world.tracker.comments[0][1]
+    assert SECRET not in world.tracker.comments[0][1]
+
+
+def test_a_new_head_resets_the_failure_count_and_the_merge_goes_ahead(world):
+    world.ports.documents.record_closure(
+        "GH-9",
+        {
+            "merge_failures": {
+                "head": "c" * 40,
+                "count": rules.MERGE_CALLS_MAX,
+                "failure": "gh_rejected",
+            }
+        },
+    )
+    world.merge()
+    assert world.tracker.merge_calls == [(9, world.head)]
+    assert world.doc()["delivery_outcome"] == "auto_merged"

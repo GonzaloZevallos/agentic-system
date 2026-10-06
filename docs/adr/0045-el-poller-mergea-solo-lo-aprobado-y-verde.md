@@ -271,3 +271,58 @@ merge pediría un ADR nuevo.
 
 **Qué no cambia.** Ninguna señal, label, atributo de span ni clave de documento se agrega,
 mueve o quita, y ningún prompt cambia: `prompts.fingerprint` no se mueve.
+
+## Adenda (2026-10-06): un `gh pr merge` que falla se cuenta por head (GH-196)
+
+Si `gh pr merge` fallaba y el PR seguía `OPEN`, nada de lo que lee `auto_merge_decision`
+cambiaba: `merge_checks` seguía cubriendo el head con `passed=True` y `merge_attempts` sólo
+se mueve al correr los chequeos. Cada vuelta del poller lanzaba `agentic merge` y llamaba a
+`gh pr merge` otra vez, sin límite. Esta adenda lo acota.
+
+- **Presupuesto propio.** `MERGE_CALLS_MAX = 3` acota las llamadas de merge que fallaron por
+  head; `MERGE_ATTEMPTS_MAX` sigue acotando las corridas de chequeos. Son dos costos
+  distintos con dos causas distintas y no comparten cuenta. El límite se compara sólo en
+  `auto_merge_decision` (`merge_failed`), y el chequeo va justo después de `guarded_path` y
+  **antes** de `covers`: un head gastado no vuelve a correr chequeos cuando el master se
+  mueve, porque la decisión no pregunta por los chequeos antes de rendirse.
+- **Conjunto cerrado.** `MergeFailure` = `no_merge_method`, `gh_unavailable`,
+  `gh_unreadable`, `gh_rejected`. `GhTracker.merge` levanta sólo `MergeCallFailed`, con la
+  clase elegida en el paso que falló (ADR-0029): `gh` ausente en `repo view` o en `pr merge`
+  es `gh_unavailable`; cualquier otro fallo de `repo view`, o un JSON ilegible, es
+  `gh_unreadable`; ningún método permitido es `no_merge_method`; un `pr merge` que sale con
+  error es `gh_rejected`. No se lee stderr para elegir la clase. Un `ValueError` común que
+  llegue al verbo cuenta como `gh_unreadable`.
+- **La clase terminal cuesta una llamada.** Repetir no cambia `no_merge_method`, así que el
+  verbo gasta todo el presupuesto de una vez (`TERMINAL_MERGE_FAILURES`).
+- **La clave `merge_failures`.** `{head, count, failure}` en el documento de la tarea. El
+  verbo la escribe tras cada llamada fallida y **antes** de volver a leer el PR; el poller la
+  lee como `merge_attempts`: falta, un `count` que no es entero o otro head leen como 0 y sin
+  clase. Un documento anterior a este cambio decide exactamente como antes. En un comentario
+  o en la clave sólo aparece un miembro de `MergeFailure` (o `unknown` en el comentario); el
+  texto crudo de `gh` queda en las líneas de log del verbo.
+- **El comentario.** Al agotarse el presupuesto el verbo comenta una vez por (head, razón)
+  `Auto-merge refused: <head> gh pr merge failed: <clase>`, una frase fija de consejo por
+  clase (`MERGE_FAILURE_ADVICE`) y `Left for the human to merge.`. Antes de eso sólo loguea
+  `merge failed (<clase>), N of 3`.
+- **Cambia un "se comenta".** `no_merge_method` ya no llega al humano como razón propia
+  sino como la clase dentro de un comentario `merge_failed`. Esto modifica lo que este ADR
+  decía en "El poller y el verbo" ("ninguno permitido es `no_merge_method`, y se comenta"):
+  el comentario sigue existiendo, con otro texto.
+
+Riesgos conocidos de esta adenda:
+
+- **Fallos transitorios.** Tres fallos transitorios de `gh` seguidos sobre un head entregan
+  un PR mergeable al humano. El costo está acotado y no hay bucle.
+- **Verbo muerto en `pr merge`.** Si matan al verbo durante `pr merge`, esa llamada no se
+  cuenta: cae en el camino ambiguo que ya cubre este ADR. El conteo no se escribe antes de la
+  llamada porque un merge exitoso contaría como fallo.
+- **Comentario perdido.** Si el comentario se pierde tras el último fallo, el poller no lo
+  reintenta: sólo loguea `merge_failed` cada vuelta. Correr `agentic merge --issue N` a mano
+  lo publica.
+- **Reinicio.** Un head gastado se reinicia sólo con un push, como `attempts_exhausted` y
+  `guarded_path`.
+- **`gh_rejected` es grueso.** No distingue protección de rama de permisos. Agregar
+  `mergeStateStatus` a la consulta del PR queda como seguimiento.
+
+No se agrega ni se mueve ninguna métrica, etiqueta, span ni prompt; `prompts.fingerprint` no
+cambia.

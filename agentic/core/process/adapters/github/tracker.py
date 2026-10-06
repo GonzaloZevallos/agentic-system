@@ -14,7 +14,12 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
-from ...application.ports import IssueComment, IssueState, ListedPullRequest
+from ...application.ports import (
+    IssueComment,
+    IssueState,
+    ListedPullRequest,
+    MergeCallFailed,
+)
 from ...domain.task import PullRequest, PullRequestCommit
 
 _ISSUE = re.compile(r"^GH-(\d+)$")
@@ -247,20 +252,36 @@ class GhTracker:
         )
 
     def merge(self, number: int, head_sha: str) -> str:
-        allowed = json.loads(
-            self._gh(
-                "repo",
-                "view",
-                "--json",
-                "mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed",
+        """Raises only `MergeCallFailed`, its class chosen at the step that failed: never
+        by reading `gh`'s stderr (ADR-0029)."""
+        try:
+            allowed = json.loads(
+                self._gh(
+                    "repo",
+                    "view",
+                    "--json",
+                    "mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed",
+                )
             )
-        )
+        except ValueError as exc:  # `_gh`'s own failure, or a `JSONDecodeError`
+            missing = isinstance(exc.__cause__, FileNotFoundError)
+            raise MergeCallFailed(
+                "gh_unavailable" if missing else "gh_unreadable", str(exc)
+            ) from exc
+        if not isinstance(allowed, dict):
+            raise MergeCallFailed(
+                "gh_unreadable", "gh repo view answered something else than an object"
+            )
         method = next((name for name, key in _MERGE_METHODS if allowed.get(key)), None)
         if method is None:
-            raise ValueError("no_merge_method")
+            raise MergeCallFailed("no_merge_method", "no_merge_method")
         # The head sha pins the merge to what the decision saw (GH-178); no `--auto` and no
         # `--delete-branch`: the poller's own `close` owns what happens after.
-        self._gh("pr", "merge", str(number), f"--{method}", "--match-head-commit", head_sha)
+        try:
+            self._gh("pr", "merge", str(number), f"--{method}", "--match-head-commit", head_sha)
+        except ValueError as exc:
+            missing = isinstance(exc.__cause__, FileNotFoundError)
+            raise MergeCallFailed("gh_unavailable" if missing else "gh_rejected", str(exc)) from exc
         return method
 
     def _gh(self, *args: str) -> str:

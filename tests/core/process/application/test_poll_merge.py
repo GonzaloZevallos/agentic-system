@@ -177,6 +177,36 @@ def test_attempts_count_only_for_the_current_head():
     assert _merges(other)[0] == [5]
 
 
+def _facts_of(raw):
+    return poll._merge_facts("GH-5", raw, _pr(), frozenset(), 5, MASTER)
+
+
+def test_merge_failures_read_as_zero_when_absent_or_for_another_head():
+    assert _facts_of({}).merge_failures == 0
+    assert _facts_of({}).merge_failure is None
+    other = {"merge_failures": {"head": "c" * 40, "count": 2, "failure": "gh_rejected"}}
+    assert (_facts_of(other).merge_failures, _facts_of(other).merge_failure) == (0, None)
+    mine = {"merge_failures": {"head": HEAD, "count": 2, "failure": "gh_rejected"}}
+    assert (_facts_of(mine).merge_failures, _facts_of(mine).merge_failure) == (2, "gh_rejected")
+
+
+def test_an_invalid_failure_class_or_count_reads_as_none_and_zero():
+    invalid = {"merge_failures": {"head": HEAD, "count": 2, "failure": "boom: stderr text"}}
+    assert (_facts_of(invalid).merge_failures, _facts_of(invalid).merge_failure) == (2, None)
+    odd = {"merge_failures": {"head": HEAD, "count": "2", "failure": "gh_rejected"}}
+    assert _facts_of(odd).merge_failures == 0
+    assert _facts_of({"merge_failures": "x"}).merge_failures == 0
+
+
+def test_a_spent_merge_budget_for_the_current_head_proposes_no_merge():
+    spent = {"head": HEAD, "count": rules.MERGE_CALLS_MAX, "failure": "gh_rejected"}
+    found, lines = _merges(_ports(5, merge_failures=spent))
+    assert found == []
+    assert lines == ["agentic: poll: auto-merge #5 -> left to the human: merge_failed"]
+    again = _ports(5, merge_failures={**spent, "head": "c" * 40})
+    assert _merges(again)[0] == [5]
+
+
 def test_an_unknown_upstream_leaves_every_issue_alone():
     assert _merges(_ports(5), master=None) == ([], [])
 

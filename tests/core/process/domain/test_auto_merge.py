@@ -53,6 +53,7 @@ REFUSALS = [
         {"checks_master": "d" * 40, "attempts": rules.MERGE_ATTEMPTS_MAX},
     ),
     ("checks_failed", {"checks_passed": False}),
+    ("merge_failed", {"merge_failures": rules.MERGE_CALLS_MAX}),
 ]
 
 
@@ -198,3 +199,38 @@ def test_poll_plan_a_retake_takes_the_slot_a_merge_would_have_used():
         merges=[7],
     )
     assert actions == [rules.PollAction("retake", 2)]
+
+
+def test_merge_calls_below_the_budget_still_merge_and_the_budget_refuses():
+    assert rules.MERGE_CALLS_MAX == 3
+    below = _facts(merge_failures=rules.MERGE_CALLS_MAX - 1, merge_failure="gh_rejected")
+    assert rules.auto_merge_decision(below) == MergeDecision("merge", None)
+    spent = _facts(merge_failures=rules.MERGE_CALLS_MAX, merge_failure="gh_rejected")
+    assert rules.auto_merge_decision(spent) == MergeDecision("refuse", "merge_failed")
+
+
+def test_a_spent_merge_budget_is_not_sent_back_to_run_checks_when_master_moved():
+    facts = _facts(merge_failures=rules.MERGE_CALLS_MAX, checks_master="d" * 40, attempts=0)
+    assert rules.auto_merge_decision(facts) == MergeDecision("refuse", "merge_failed")
+
+
+def test_an_earlier_refusal_wins_over_a_spent_merge_budget():
+    facts = _facts(merge_failures=rules.MERGE_CALLS_MAX, pr_state="MERGED")
+    assert rules.auto_merge_decision(facts) == MergeDecision("refuse", "pr_not_open")
+    guarded = _facts(merge_failures=rules.MERGE_CALLS_MAX, touched_paths=(".github/x.yml",))
+    assert rules.auto_merge_decision(guarded).reason == "guarded_path"
+
+
+def test_the_decision_never_reads_the_failure_class():
+    facts = _facts(merge_failures=rules.MERGE_CALLS_MAX)
+    assert rules.auto_merge_decision(replace(facts, merge_failure="no_merge_method")) == (
+        rules.auto_merge_decision(replace(facts, merge_failure=None))
+    )
+
+
+def test_every_merge_failure_class_has_advice_and_the_terminal_ones_are_classes():
+    classes = set(get_args(rules.MergeFailure))
+    assert set(rules.MERGE_FAILURE_ADVICE) == classes
+    assert all(rules.MERGE_FAILURE_ADVICE[c].strip() for c in classes)
+    assert rules.TERMINAL_MERGE_FAILURES <= classes
+    assert rules.MERGE_FAILURE_UNKNOWN_ADVICE.strip()

@@ -20,7 +20,7 @@ import functools
 import time
 from collections.abc import Callable, Sequence
 from datetime import datetime
-from typing import assert_never
+from typing import assert_never, get_args
 
 from agentic.shared.configuration import Configuration
 
@@ -208,9 +208,9 @@ def gather_closes(ports: Ports) -> list[int]:
 
 
 def _recorded(raw: TaskState, key: str) -> dict[str, object]:
-    """A record the merge verb wrote (`merge_checks`, `merge_attempts`), read with `.get`:
-    absent on every document that never saw one, and anything that is not a mapping reads
-    as absent too."""
+    """A record the merge verb wrote (`merge_checks`, `merge_attempts`, `merge_failures`),
+    read with `.get`: absent on every document that never saw one, and anything that is not
+    a mapping reads as absent too."""
     value = raw.get(key)
     return value if isinstance(value, dict) else {}
 
@@ -231,8 +231,12 @@ def _merge_facts(
     pr_head = pull_request.head_oid if pull_request is not None else None
     checks = _recorded(raw, "merge_checks")
     attempts = _recorded(raw, "merge_attempts")
+    failures = _recorded(raw, "merge_failures")
     passed = checks.get("passed")
     count = attempts.get("count")
+    failed_count = failures.get("count")
+    failed_here = failures.get("head") == pr_head
+    failure = failures.get("failure")
     return rules.MergeFacts(
         task_id=task_id,
         status=raw.get("status"),
@@ -250,6 +254,8 @@ def _merge_facts(
         checks_master=_text(checks.get("master")),
         checks_passed=passed if isinstance(passed, bool) else None,
         current_master=current_master,
+        merge_failures=failed_count if isinstance(failed_count, int) and failed_here else 0,
+        merge_failure=failure if failed_here and failure in get_args(rules.MergeFailure) else None,
     )
 
 

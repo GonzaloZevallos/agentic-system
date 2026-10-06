@@ -18,7 +18,7 @@ from typing import Any, Literal, Protocol
 from ..domain.design import Design
 from ..domain.playbook import Playbook
 from ..domain.roles import Role
-from ..domain.rules import SpendRun, motive
+from ..domain.rules import MergeFailure, SpendRun, motive
 from ..domain.suppressions import Forbidden
 from ..domain.task import (
     DependencyState,
@@ -448,6 +448,16 @@ class Checkout:
     created: bool = False
 
 
+class MergeCallFailed(ValueError):
+    """`Tracker.merge` failed (GH-196). `failure` is the closed class the adapter decided at
+    the step that raised, never by reading the CLI's text; `str()` is the raw error, for the
+    merge verb's log lines and nowhere else."""
+
+    def __init__(self, failure: MergeFailure, message: str):
+        super().__init__(message)
+        self.failure = failure
+
+
 class GitError(RuntimeError):
     """A real git failure -- not a question `Workspace`'s own contract answers some
     other way, like `is_ancestor`'s `False` for an object this checkout does not have
@@ -752,8 +762,9 @@ class Tracker(Protocol):
     def merge(self, number: int, head_sha: str) -> str:
         """Merges pull request `number` only if its head is still `head_sha` (GH-178: the
         sha the automatic-merge decision was taken on, never "whatever is there now"), and
-        returns the method used. Raises `ValueError` when the tracker refuses -- the head
-        moved, a check or a rule blocks it, the pull request is not open."""
+        returns the method used. Raises `MergeCallFailed` (a `ValueError`) when the tracker
+        refuses -- the head moved, a check or a rule blocks it, the pull request is not
+        open -- carrying the class of the step that failed."""
         ...
 
 

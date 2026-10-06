@@ -2357,6 +2357,36 @@ def poll_plan(
 # asks for another full run.
 MERGE_ATTEMPTS_MAX = 3
 
+# How many failed `Tracker.merge` calls one head may cost (GH-196): it bounds merge calls,
+# while `MERGE_ATTEMPTS_MAX` bounds check runs. A merge that fails with the pull request
+# still open changes nothing else the decision reads, so without this bound every poll
+# round would call `gh pr merge` again.
+MERGE_CALLS_MAX = 3
+
+MergeFailure = Literal["no_merge_method", "gh_unavailable", "gh_unreadable", "gh_rejected"]
+"""Why a `Tracker.merge` call failed, a closed set decided where the error is raised (the
+adapter, never by reading `gh`'s stderr): `no_merge_method` the repository allows none,
+`gh_unavailable` the CLI is not installed, `gh_unreadable` its answer about the
+repository's settings could not be read, `gh_rejected` `gh pr merge` itself failed."""
+
+# A class that repeating cannot change costs one call, not `MERGE_CALLS_MAX`.
+TERMINAL_MERGE_FAILURES: frozenset[MergeFailure] = frozenset({"no_merge_method"})
+
+MERGE_FAILURE_ADVICE: dict[MergeFailure, str] = {
+    "gh_rejected": (
+        "GitHub refused the merge; check branch protection, required reviews and the "
+        "token's permissions, then merge by hand."
+    ),
+    "no_merge_method": (
+        "The repository allows no merge method; enable one in its settings or merge by hand."
+    ),
+    "gh_unavailable": "`gh` is not installed where the poller runs.",
+    "gh_unreadable": "`gh` could not read the repository's merge settings.",
+}
+
+# For a document whose stored class is missing or invalid.
+MERGE_FAILURE_UNKNOWN_ADVICE = "The recorded failure class is missing; read the merge verb's log."
+
 MergeRefusal = Literal[
     "not_ready",
     "not_approved",
@@ -2369,6 +2399,7 @@ MergeRefusal = Literal[
     "attempts_exhausted",
     "checks_failed",
     "master_moved",
+    "merge_failed",
 ]
 """Why `auto_merge_decision` refuses, one reason per condition:
 
@@ -2388,6 +2419,7 @@ MergeRefusal = Literal[
 - `checks_failed`: the checks ran on this head merged with the current master and failed.
 - `master_moved`: master moved between the checks and the merge. Only the merge verb
   gives it, after its last fetch; the decision cannot see a fact that did not exist yet.
+- `merge_failed`: `Tracker.merge` already failed `MERGE_CALLS_MAX` times on this head.
 """
 
 
@@ -2398,7 +2430,9 @@ class MergeFacts:
     request's own copy of the task document (GH-178). `in_eval_set` is `None` when the
     set was unreadable; `touched_paths` is `None` when not yet known (the poller decides
     before any worktree exists, the verb after); `current_master` is `None` when the
-    upstream sha could not be read."""
+    upstream sha could not be read. `merge_failures` counts the failed merge calls on this
+    head and `merge_failure` is the last one's class, which only the refusal comment reads
+    (GH-196)."""
 
     task_id: str
     status: str | None
@@ -2414,6 +2448,8 @@ class MergeFacts:
     checks_master: str | None
     checks_passed: bool | None
     current_master: str | None
+    merge_failures: int = 0
+    merge_failure: MergeFailure | None = None
 
 
 @dataclass(frozen=True)
@@ -2452,7 +2488,10 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     docstring and refused at the first that fails. The checks last: they are the costly
     fact, so nothing is run for a pull request that is refused anyway, and a run is asked
     for only when the recorded one does not cover this head on this master. `attempts`
-    bounds those runs per head (`MERGE_ATTEMPTS_MAX`), here and nowhere else."""
+    bounds those runs per head (`MERGE_ATTEMPTS_MAX`), here and nowhere else; `merge_failures`
+    bounds the failed merge calls per head (`MERGE_CALLS_MAX`), here and nowhere else, ahead
+    of the checks so a spent head is not sent back to run them when master moves. The class
+    of the last failure (`merge_failure`) is never read."""
     if facts.status != "ready_for_review":
         return MergeDecision("refuse", "not_ready")
     if not facts.reviewed_unit_approved:
@@ -2471,6 +2510,8 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
         guarded_path(path, facts.task_id) for path in facts.touched_paths
     ):
         return MergeDecision("refuse", "guarded_path")
+    if facts.merge_failures >= MERGE_CALLS_MAX:
+        return MergeDecision("refuse", "merge_failed")
     covers = (
         facts.checks_passed is not None
         and facts.checks_head == facts.pr_head
