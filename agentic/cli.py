@@ -1509,10 +1509,9 @@ async def _stack_review(
     )
     description = stack_signals.description(signals)
     with _locked(lock, review_id):
-        # No plan yet -- a stack review's synthetic `TaskState` never carries
-        # `subtasks` -- so `rules.task_cap` (through `run_role`) is its base alone,
-        # today's $30, never the plan's per-subtask share (ADR-0004, fourth addendum;
-        # ADR-0034).
+        # A stack review's synthetic `TaskState` is capped by the flat ceiling, 250,
+        # like any task (`rules.task_cap` through `run_role`; ADR-0004, 2026-10-05
+        # addendum).
         result = await run_stack_review(review_id, description, signals.anchor, cfg, stack_ports)
     print(f"id:         {review_id}")
     print(f"needs_info: {result.needs_info}")

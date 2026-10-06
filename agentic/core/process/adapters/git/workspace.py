@@ -2,7 +2,7 @@
 
 Layout, all under the product root and outside version control:
 
-    .agentic/worktrees/<task>/            branch agentic/<task>, from the product's HEAD
+    .agentic/worktrees/<task>/            branch agentic/<task>, from the product's fetched upstream
     .agentic/worktrees/<task>.<subtask>/  branch agentic/<task>.<subtask>, from the task branch
 
 Every operation is idempotent: asking for a checkout that exists returns it. The
@@ -14,18 +14,26 @@ The commits are the system's, so they carry the system's identity, not whatever 
 machine or the product has in `git config` (which may be nothing: a fresh box or a
 background job). The identity travels as environment (`Configuration.git_identity`),
 the same the roles that commit receive, so there is one way the system signs.
+
+The one place that touches the network is `upstream()` (GH-180): a new task branch starts
+from the fetched tip of the checkout's current branch, never from a stale local `HEAD`, and
+never by pulling, checking out, resetting or fast-forwarding the human's checkout
+(ADR-0002): `git fetch` writes only remote-tracking refs and objects.
 """
 
 from __future__ import annotations
 
+import contextlib
 import os
+import signal
 import subprocess
-from collections.abc import Mapping, Sequence
+import sys
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 from agentic.shared.configuration import LOGS_DIR, STATE_DIR, STATE_FILE
 
-from ...application.ports import Checkout
+from ...application.ports import Checkout, Upstream
 from ...application.ports import GitError as GitError  # re-exported: see ports.py
 from ...domain import rules
 from ...domain.task import DependencyState, MergeOutcome
@@ -35,6 +43,12 @@ WORKTREES = Path(".agentic/worktrees")
 # (README.md, 14; issue #33), through this same mechanism rather than the product's own
 # `.gitignore`, which is the product's business.
 EXCLUDES = (f"{WORKTREES}/", f"{STATE_FILE}*", f"{STATE_DIR}/", f"{LOGS_DIR}/")
+
+# How long `git fetch` may take before its whole process group is killed (GH-180): the
+# network blinking must cost a run a fallback and a note, never a hang.
+FETCH_TIMEOUT_S: float = 30
+# At most this many left-out local commits are named in a note.
+_LEFT_OUT_SHOWN = 10
 
 
 class GitWorkspace:
@@ -71,7 +85,7 @@ class GitWorkspace:
 
     def task_checkout(self, task_id: str) -> Checkout:
         return self._checkout(
-            rules.task_branch(task_id), WORKTREES / task_id, start=self._product_head()
+            rules.task_branch(task_id), WORKTREES / task_id, start=self._new_task_base
         )
 
     def subtask_checkout(self, task_id: str, subtask_id: str) -> Checkout:
@@ -79,14 +93,14 @@ class GitWorkspace:
         return self._checkout(
             rules.subtask_branch(task_id, subtask_id),
             WORKTREES / f"{task_id}.{subtask_id}",
-            start=task.branch,
+            start=lambda: task.branch,
         )
 
-    def _checkout(self, branch: str, relative: Path, start: str) -> Checkout:
+    def _checkout(self, branch: str, relative: Path, start: Callable[[], str]) -> Checkout:
         path = self.product_dir / relative
         self.exclude_system_files()
         if not self._branch_exists(branch):
-            self._git("branch", branch, start)
+            self._git("branch", branch, start())
             base = self._git("rev-parse", "--short", branch)
             self._note_base(branch, base)
         # The worktree on disk and not the branch decides `created`: the directory is
@@ -240,6 +254,93 @@ class GitWorkspace:
             )
         return result.returncode == 0
 
+    def upstream(self) -> Upstream:
+        """See `Workspace.upstream`. The only caller of `_fetch`; every failure of git, of
+        the network or of the machine (no `git` at all) comes back as a note."""
+        try:
+            return self._upstream()
+        except (GitError, OSError, subprocess.SubprocessError) as exc:
+            return Upstream("HEAD", None, f"could not resolve an upstream, no base ({exc})")
+
+    def _upstream(self) -> Upstream:
+        head = self._git("rev-parse", "HEAD")
+        branch = self._run("symbolic-ref", "--quiet", "--short", "HEAD").stdout.strip()
+        if not branch:
+            return Upstream("HEAD", head, "detached HEAD has no upstream: starting from HEAD")
+        found = self._git(
+            "for-each-ref",
+            "--format=%(upstream)|%(upstream:remotename)",
+            f"refs/heads/{branch}",
+        )
+        ref, _, remote = found.partition("|")
+        if not ref or not remote:
+            return Upstream("HEAD", head, f"{branch} has no upstream: starting from HEAD")
+        if remote == ".":
+            return Upstream("HEAD", head, f"{branch} tracks a local branch: starting from HEAD")
+        failure = self._fetch(remote)
+        tip = self._run("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}").stdout.strip()
+        if failure is None and tip:
+            return Upstream(ref, tip, _left_out_note(self._left_out(ref), None))
+        reason = failure or f"{ref} is not there after the fetch"
+        # A failed fetch learnt nothing new about the remote: the last one we did is used
+        # only when HEAD is behind it or diverged from it; a HEAD ahead of it, or no last
+        # fetch at all, stays as it is today.
+        if tip and self._run("merge-base", "--is-ancestor", tip, head).returncode != 0:
+            return Upstream(
+                ref, tip, _left_out_note(self._left_out(ref), f"fetch failed: {reason}")
+            )
+        return Upstream("HEAD", head, f"fetch failed ({reason}): starting from HEAD")
+
+    def _left_out(self, ref: str) -> list[str]:
+        """The short shas HEAD has that `ref` lacks: the commits a base from `ref` leaves out."""
+        out = self._git("rev-list", "--abbrev-commit", f"{ref}..HEAD")
+        return [line for line in out.splitlines() if line]
+
+    def _fetch(self, remote: str) -> str | None:
+        """`git fetch <remote>`, bounded: None when it worked, else why it did not. A
+        branch ref locked by a concurrent fetch (another run, the human's own) is retried
+        once. Never `pull`: only remote-tracking refs and objects are written."""
+        code, stderr = self._fetch_once(remote)
+        if code != 0 and code is not None and "cannot lock ref" in stderr:
+            code, stderr = self._fetch_once(remote)
+        if code == 0:
+            return None
+        if code is None:
+            return f"timed out after {FETCH_TIMEOUT_S:g} s"
+        first = next((line.strip() for line in stderr.splitlines() if line.strip()), "")
+        return first or f"git fetch exited {code}"
+
+    def _fetch_once(self, remote: str) -> tuple[int | None, str]:
+        """(exit code, stderr); the code is None when it ran out of time. Its own session
+        and no stdin, so a credential prompt can never wait on a terminal nobody is at,
+        and the whole process group (git and the ssh or helper it started) dies on time."""
+        proc = subprocess.Popen(
+            ["git", "fetch", "--quiet", remote],
+            cwd=self.product_dir,
+            env={**os.environ, **self.identity, "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": ""},
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        try:
+            _, stderr = proc.communicate(timeout=FETCH_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            proc.communicate()
+            return None, ""
+        return proc.returncode, stderr
+
+    def _new_task_base(self) -> str:
+        """Where a task branch that does not exist yet starts (called only then): the
+        fetched upstream, its note on stderr, which a detached run's log keeps."""
+        found = self.upstream()
+        if found.note:
+            print(f"agentic: {found.note}", file=sys.stderr)
+        return found.sha or self._product_head()
+
     def exclude_system_files(self) -> None:
         """Keep what the system writes in the product out of its `git status`. Outside a
         repository there is nothing to exclude from."""
@@ -287,6 +388,18 @@ class GitWorkspace:
         if result.returncode != 0:
             raise GitError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
         return result.stdout.strip()
+
+
+def _left_out_note(left_out: list[str], failure: str | None) -> str | None:
+    """What a base from the upstream leaves behind, by short sha, so a human who wonders
+    where a local commit went finds it named; None when there is nothing to say."""
+    parts = [failure] if failure else []
+    if left_out:
+        shown = ", ".join(left_out[:_LEFT_OUT_SHOWN])
+        more = len(left_out) - _LEFT_OUT_SHOWN
+        extra = f" and {more} more" if more > 0 else ""
+        parts.append(f"local commits not on the upstream are left out of the base: {shown}{extra}")
+    return "; ".join(parts) or None
 
 
 def _key(branch: str) -> str:

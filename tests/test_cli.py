@@ -1167,7 +1167,9 @@ async def test_an_uninterrupted_run_over_the_guard_comments_exactly_as_before(
         checkpointer=in_memory,
     )
     await cli._signal_guarded(work)
-    assert ports.tracker.comments == [("GH-1", "Resumed: diagnose, under a task cap of 30.00 USD.")]
+    assert ports.tracker.comments == [
+        ("GH-1", "Resumed: diagnose, under a task cap of 250.00 USD.")
+    ]
 
 
 # --detach (subtask `--detach`): argparse refusals, seam `agentic.cli.main`.
