@@ -1366,7 +1366,7 @@ async def test_what_one_review_found_reaches_the_next_wave_and_the_integration(c
     # reviews gets the invariant, from the first wave on, when the table is still empty.
     assert final["invariants"] == ["Every subscription query folds duplicates."]
     first_wave = [c for c in script.calls if c["slug"] == "developer"][0]
-    assert "- Every subscription query folds duplicates." in first_wave["system_prompt"]
+    assert "1. Every subscription query folds duplicates." in first_wave["system_prompt"]
     assert f"## {FINDINGS}\n\nNone open." in first_wave["prompt"]
 
     # The second wave's Developer rebuilds `domain` seeing what `api`'s review found,

@@ -15,10 +15,11 @@ from __future__ import annotations
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import presubmit, rules
+from ..domain import coverage, presubmit, rules
 from ..domain.roles import DEVELOPER, DEVELOPER_INTEGRATOR
 from ..domain.task import INTEGRATION, TaskState
 from .checkouts import SetupFailed, subtask_checkout, task_base
+from .coverage_guard import InvariantCoverageGuard
 from .ports import Ports
 from .presubmit import CheckoutPresubmit, declared_checks
 from .run_role import finish, run_role, with_context
@@ -125,6 +126,10 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         prompt = with_context(
             state, role, ports, checkout.path, notice_text, extra_sections, subtask_id
         )
+    # The Developer's coverage map (GH-174): only a subtask's own Developer maps the plan's
+    # invariants, never the integrator, and only when the plan has any. Built once per
+    # run, so its one-denial cap survives the retry.
+    mapped = 0 if subtask_id == INTEGRATION else len(state.get("invariants", []))
     output, patch = await run_role(
         state,
         role,
@@ -138,6 +143,7 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         prompt=prompt,
         cold_prompt=cold_prompt,
         presubmit=delivery_presubmit,
+        delivery_check=InvariantCoverageGuard(mapped) if mapped else None,
         forbidden=forbidden,
         subtask=subtask_id,
         invariants=rules.invariants_markdown(state),
@@ -149,8 +155,10 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         lead = [rules.cold_fallback_note()] if output.cold_fallback else []
         if record is not None:
             lead.append(record)
-        if lead:
-            patch["sections"] = {**patch["sections"], section: "\n\n".join([*lead, output.text])}
+        block = coverage.render(output.data.get("coverage", []), mapped)
+        if lead or block:
+            text = [*lead, output.text, *([block] if block else [])]
+            patch["sections"] = {**patch["sections"], section: "\n\n".join(text)}
     if delivery_presubmit.invocations:
         # Measurement only (like `subtask_id`): read once by the adapter for
         # `agentic.presubmit.checks`/`.duration`, never persisted.

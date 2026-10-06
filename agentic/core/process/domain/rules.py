@@ -242,8 +242,11 @@ def findings_section(state: TaskState) -> dict[str, str]:
 
 
 def invariants_markdown(state: TaskState) -> str:
-    """The plan's invariants as a prompt shows them."""
-    return "\n".join(f"- {line}" for line in state.get("invariants", [])) or "- none"
+    """The plan's invariants as a prompt shows them, numbered in the order the state holds
+    them: the Developer's coverage map (`domain/coverage.py`) names them `invariant N`,
+    and both reviewers read the same numbers from here."""
+    lines = state.get("invariants", [])
+    return "\n".join(f"{n}. {line}" for n, line in enumerate(lines, 1)) or "- none"
 
 
 def escalation(cls: EscalationClass, reason: str) -> EscalationPatch:
@@ -997,6 +1000,11 @@ def returned_developer_delta(state: TaskState, subtask_id: str, branch: str, hea
     reason = state.get("subtasks", {}).get(subtask_id, {}).get("reason", "").strip()
     lead = f"**Returned:** {reason}\n\n" if reason else ""
     parts.append(f"## {review}\n\n{lead}{sections.get(review, '')}")
+    if state.get("invariants"):
+        parts.append(
+            "The coverage map belongs to the whole delivery, not to what you change now: "
+            "emit it again in full against the current head, because line numbers move."
+        )
     return "\n\n".join(parts)
 
 

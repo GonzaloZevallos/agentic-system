@@ -261,3 +261,74 @@ def test_plan_check_rejects_duplicate_ids():
     data = _plan(_NO_HEADING, "a", "a")
     with pytest.raises(ValueError, match="subtask ids must be unique"):
         schemas.plan_check(data)
+
+
+def test_delivery_carries_a_coverage_map_that_reaches_the_model_as_lines():
+    out = schemas.json_schema(schemas.Delivery, VOCAB)
+    field = out["properties"]["coverage"]
+    assert field["type"] == "string" and "items" not in field
+    assert "lines_required" not in field
+    # The one line-list field that is never "none" when there are invariants: its suffix
+    # does not invite an empty string.
+    assert field["description"].endswith(". One per line")
+    assert "invariant N: <path>:<line>" in field["description"]
+    assert "unsatisfiable, see Decisions" in field["description"]
+    assert "not touched by this subtask" in field["description"]
+    assert "brief: <item> -> <path>:<line>" in field["description"]
+    assert "integration" in field["description"]
+
+
+def test_every_other_line_list_keeps_its_suffix_byte_for_byte():
+    out = schemas.json_schema(schemas.Delivery, VOCAB)
+    assert out["properties"]["assumptions"] == {
+        "type": "string",
+        "description": "Decisions taken where the brief was silent. "
+        "One per line; an empty string if none",
+    }
+    assert out["properties"]["summary"] == {
+        "type": "string",
+        "title": "Summary",
+        "description": "What changed, in a few lines, for the reviewer",
+    }
+    review = schemas.json_schema(schemas.Review, VOCAB)["properties"]["settled"]["description"]
+    assert review.endswith("One per line; an empty string if none")
+    answers = schemas.json_schema(TechAnswers, VOCAB)["properties"]["questions_for_pm"]
+    assert answers["description"].endswith(". One per line; an empty string if none")
+
+
+def test_a_delivery_written_before_the_coverage_field_still_validates():
+    data = schemas.validate(
+        schemas.Delivery, {"markdown": "x", "summary": "s", "assumptions": []}, VOCAB
+    )
+    assert data["coverage"] == []
+
+
+def test_a_coverage_string_validates_as_its_lines():
+    raw = {
+        "markdown": "x",
+        "summary": "s",
+        "assumptions": "",
+        "coverage": "invariant 1: a.py:1\n\n brief: x -> b.py:2 \n",
+    }
+    assert schemas.validate(schemas.Delivery, raw, VOCAB)["coverage"] == [
+        "invariant 1: a.py:1",
+        "brief: x -> b.py:2",
+    ]
+
+
+def test_the_coverage_description_quotes_the_forms_from_the_one_module_byte_for_byte():
+    from agentic.core.process.domain import coverage
+
+    description = schemas.json_schema(schemas.Delivery, VOCAB)["properties"]["coverage"][
+        "description"
+    ]
+    for form in (
+        coverage.MAPPED_FORM,
+        coverage.UNSATISFIABLE_FORM,
+        coverage.NOT_TOUCHED_FORM,
+        coverage.BRIEF_FORM,
+    ):
+        assert f"`{form}`" in description
+    # The forms use the typographic ellipsis the prompts quote, never an ASCII stand-in.
+    assert "..." not in description
+    assert "…" in coverage.MAPPED_FORM and "…" in coverage.BRIEF_FORM

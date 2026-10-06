@@ -1068,13 +1068,13 @@ async def test_the_invariants_reach_the_developer_and_the_reviewer(cfg):
     state = {**two_delivered(), "invariants": ["Every subscription query folds duplicates."]}
     runner = ScriptedRunner(tech_lead_review=[reviewed("approved")])
     await review({**state, "subtask_id": "api"}, cfg, memory_ports(runner))
-    assert "- Every subscription query folds duplicates." in runner.calls[0]["system_prompt"]
+    assert "1. Every subscription query folds duplicates." in runner.calls[0]["system_prompt"]
 
     building = ScriptedRunner(developer=[delivered()])
     ports = memory_ports(building)
     ports.workspace.moved.add(MemoryWorkspace.ROOT / "GH-12.api")
     await develop({**state, "subtask_id": "api"}, cfg, ports)
-    assert "- Every subscription query folds duplicates." in building.calls[0]["system_prompt"]
+    assert "1. Every subscription query folds duplicates." in building.calls[0]["system_prompt"]
 
 
 async def test_every_review_appends_its_findings_whatever_the_verdict(cfg):
@@ -1132,3 +1132,81 @@ async def test_the_table_is_written_even_when_a_branch_escalated(cfg):
     assert patch["status"] == "waiting_on_human"
     assert "counts twice" in patch["sections"][FINDINGS]
     assert ports.workspace.merges == []  # nothing was touched
+
+
+def _mapped(*lines: str) -> RawResult:
+    data = {**delivered().structured_output, "coverage": list(lines)}
+    return RawResult(data, 0.5, 10, "dev")
+
+
+async def test_the_developers_section_carries_the_coverage_map_when_the_plan_has_invariants(cfg):
+    state = {
+        **TASK,
+        "invariants": ["fold duplicates", "no relative imports"],
+        "subtasks": {"api": sub("api"), "b": sub("b")},
+        "subtask_id": "api",
+    }
+    runner = ScriptedRunner(
+        developer=[_mapped("invariant 1: a.py:3", "invariant 2: not touched by this subtask: x")]
+    )
+    ports = memory_ports(runner)
+    ports.workspace.moved.add(ports.workspace.subtask_checkout("GH-12", "api").path)
+    patch = await develop(state, cfg, ports)
+    text = patch["sections"]["Developer: api"]
+    assert text.endswith(
+        "### Changes\n\nx.py\n\n### Coverage\ninvariant 1: a.py:3\n"
+        "invariant 2: not touched by this subtask: x\n\nNot touched: 2"
+    )
+    # The invariants reach the prompt numbered, and the map check is wired in.
+    assert "1. fold duplicates\n2. no relative imports" in runner.calls[0]["system_prompt"]
+    assert runner.calls[0]["guard"] is not None
+
+
+async def test_a_map_the_cap_let_through_says_which_invariants_were_not_mapped(cfg):
+    state = {
+        **TASK,
+        "invariants": ["a", "b"],
+        "subtasks": {"api": sub("api"), "b": sub("b")},
+        "subtask_id": "api",
+    }
+    runner = ScriptedRunner(developer=[_mapped("invariant 2: a.py:1")])
+    ports = memory_ports(runner)
+    ports.workspace.moved.add(ports.workspace.subtask_checkout("GH-12", "api").path)
+    patch = await develop(state, cfg, ports)
+    assert patch["sections"]["Developer: api"].endswith("\n\nNot mapped: 1")
+
+
+async def test_the_integrator_never_maps_invariants_and_writes_no_coverage_block(cfg):
+    state = {
+        **TASK,
+        "invariants": ["fold duplicates"],
+        "subtasks": {
+            "api": sub("api", "approved", branch="agentic/GH-12.api"),
+            INTEGRATION: sub(INTEGRATION),
+        },
+        "subtask_id": INTEGRATION,
+    }
+    runner = ScriptedRunner(developer_integrator=[delivered()])
+    ports = memory_ports(runner)
+    ports.workspace.moved.add(TASK_PATH)
+    patch = await develop(state, cfg, ports)
+    assert "Coverage" not in patch["sections"]["Developer: integration"]
+    assert patch["sections"]["Developer: integration"].endswith("| passed |\n\n### Changes\n\nx.py")
+    assert "### Coverage" not in patch["sections"]["Developer: integration"]
+    # Only the schema guard: no map check is wired on the integration.
+    assert type(runner.calls[0]["guard"]).__name__ == "RoleSchemaGuard"
+
+
+async def test_a_plan_with_no_invariants_wires_no_map_check_and_writes_no_block(cfg):
+    state = {**TASK, "subtasks": {"api": sub("api"), "b": sub("b")}, "subtask_id": "api"}
+    runner = ScriptedRunner(developer=[delivered()])
+    ports = memory_ports(runner)
+    ports.workspace.moved.add(ports.workspace.subtask_checkout("GH-12", "api").path)
+    patch = await develop(state, cfg, ports)
+    # Exactly what the section was before the coverage map existed: checks, then the text.
+    assert patch["sections"]["Developer: api"] == (
+        "### Checks\n\nRun by the system on `head2` when the Developer delivered.\n\n"
+        "| Check | Command | Result |\n|---|---|---|\n| `tests` | `pytest` | passed |\n\n"
+        "### Changes\n\nx.py"
+    )
+    assert type(runner.calls[0]["guard"]).__name__ == "RoleSchemaGuard"

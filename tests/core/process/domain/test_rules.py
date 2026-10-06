@@ -1004,8 +1004,34 @@ def test_the_integration_runs_a_developer_only_when_there_is_something_to_do():
 
 def test_the_invariants_reach_a_prompt_as_a_list():
     state = {"invariants": ["fold duplicates", "no relative imports"]}
-    assert rules.invariants_markdown(state) == "- fold duplicates\n- no relative imports"
+    # Numbered, in the order the state holds them: the coverage map refers to them as
+    # `invariant N` (GH-174), and every reader numbers them through this one renderer.
+    assert rules.invariants_markdown(state) == "1. fold duplicates\n2. no relative imports"
     assert rules.invariants_markdown({}) == "- none"
+    assert rules.invariants_markdown({"invariants": []}) == "- none"
+
+
+def _returned_state(**more) -> dict:
+    return {
+        "subtasks": {"api": {"status": "returned", "reason": "half the brief"}},
+        "sections": {"Review of api": "Missing the docs."},
+        **more,
+    }
+
+
+def test_the_returned_delta_asks_for_the_whole_map_again_only_with_invariants():
+    plain = rules.returned_developer_delta(_returned_state(), "api", "agentic/GH-1.api", "abc")
+    empty = rules.returned_developer_delta(
+        _returned_state(invariants=[]), "api", "agentic/GH-1.api", "abc"
+    )
+    assert plain == empty
+    assert "coverage map" not in plain
+    with_invariants = rules.returned_developer_delta(
+        _returned_state(invariants=["fold duplicates"]), "api", "agentic/GH-1.api", "abc"
+    )
+    assert with_invariants.startswith(plain)
+    tail = with_invariants[len(plain) :]
+    assert "coverage map" in tail and "current head" in tail and "full" in tail
 
 
 def test_an_integration_with_nothing_to_do_enters_at_its_review():
