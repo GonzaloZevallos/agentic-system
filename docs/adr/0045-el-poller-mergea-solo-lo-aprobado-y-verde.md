@@ -160,8 +160,10 @@ worktree descartable bajo `.agentic/worktrees/`. Nada del camino escribe en el r
 `stage0` ni corre `checkout`, `merge`, `reset` o `pull` en el árbol de trabajo del checkout
 del producto: el merge de upstream vive en el worktree descartable.
 
-**El método de merge** es el que el repositorio ya usa para sus pull requests, un commit de
-merge (`gh pr merge --merge`): conserva los commits de la rama, que `delivery_outcome` lee
+**El método de merge** es el primero que el repositorio permite, en el orden `merge`,
+`squash`, `rebase` (`gh repo view --json mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed`;
+ninguno permitido es `no_merge_method`, y se comenta). Se prefiere el commit de merge
+(`gh pr merge --merge`): conserva los commits de la rama, que `delivery_outcome` lee
 para separar los del sistema de los del humano, y no reescribe historia que una squash
 perdería. `Tracker.merge` devuelve el método usado y el verbo lo escribe en
 `auto_merge_method`.
@@ -212,6 +214,12 @@ de lectura y de log, sin llamadas de modelo.
 - **La muestra de autonomía se achica.** Cuanto más mergea el sistema, menos entregas
   juzgadas hay. Debajo de cinco, `eval compare` no muestra tasa. Es el costo declarado de la
   decisión de Zeta, no un defecto.
+- **Camino guardado.** El poller no ve el diff, así que sólo el verbo descubre un
+  `guarded_path`. Para que no se lance un hijo por vuelta para siempre, el verbo gasta
+  entonces los intentos del head (`merge_attempts.count = MERGE_ATTEMPTS_MAX`) y la decisión
+  misma lo deja de proponer (`attempts_exhausted`, sólo una línea de log) hasta que un push
+  dé un head nuevo. Un diff ilegible o un head inalcanzable no gastan intentos: el verbo se
+  detiene sin escribir y la vuelta siguiente lo reintenta.
 - **Master ocupado.** Un PR aprobado puede quedar sin mergear tras tres corridas de los
   chequeos (`attempts_exhausted`). Queda para el humano, que es el comportamiento de hoy.
 - **Credenciales.** El código de la rama corre con las credenciales del usuario, como en la

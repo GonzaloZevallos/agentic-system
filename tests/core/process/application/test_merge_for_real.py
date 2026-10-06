@@ -49,7 +49,7 @@ class MergingTracker(MemoryTracker):
 
 
 class World:
-    def __init__(self, tmp_path: Path, checks: str):
+    def __init__(self, tmp_path: Path, checks: str, witness: str | None = None):
         self.origin = tmp_path / "origin.git"
         self.product = tmp_path / "product"
         git("init", "-q", "--bare", "-b", "master", str(self.origin), cwd=tmp_path)
@@ -57,6 +57,7 @@ class World:
         (self.product / ".agentic").mkdir()
         (self.product / ".agentic/stack.yaml").write_text(
             f"product: demo\nchecks:\n  tests: {checks!r}\n"
+            + (f"witness: {witness!r}\n" if witness else "")
         )
         git("add", "-A", cwd=self.product)
         git("commit", "-q", "-m", "v0", cwd=self.product)
@@ -186,6 +187,11 @@ def test_master_moving_after_the_checks_refuses_and_writes_nothing(world, monkey
     assert world.tracker.merge_calls == [] and "auto_merge_head" not in doc
     assert doc["merge_checks"]["passed"] is True
     assert world.tracker.comments == []
+    # The human merges that very head untouched later: the human's verdict, `merged`.
+    world.tracker.prs[URL] = dataclasses.replace(
+        world.tracker.prs[URL], state="MERGED", merged_at="2026-10-06T01:00:00Z"
+    )
+    assert cli._close_document("GH-9", world.cfg, world.ports).outcome == "merged"
 
 
 def test_a_merge_that_fails_with_the_pull_request_open_withdraws_the_intent(world):
@@ -244,3 +250,44 @@ def test_the_eval_set_helper_reads_upstream_and_refuses_what_it_cannot_read(worl
     assert cli._upstream_eval_set(world.ports, world.ports.workspace.upstream()) is None
 
     assert cli._upstream_eval_set(world.ports, Upstream("HEAD", "a" * 40, "fell back")) is None
+
+
+def test_a_guarded_path_is_refused_once_and_the_poller_stops_spawning_for_the_head(world):
+    from agentic.core.process.application import poll
+    from tests.core.process.application.test_poll import _Locks
+
+    checkout = world.ports.workspace.task_checkout("GH-9")
+    (checkout.path / "CODING_STANDARDS.md").write_text("weaker\n")
+    git("add", "-A", cwd=checkout.path)
+    git("commit", "-q", "-m", "standards", cwd=checkout.path)
+    head = git("rev-parse", "HEAD", cwd=checkout.path)
+    world.ports.workspace.discard(checkout.path)
+    world.head = head
+    world.deliver()
+
+    world.merge()
+    world.merge()
+
+    doc = world.doc()
+    assert world.tracker.merge_calls == [] and "auto_merge_head" not in doc
+    assert [text.splitlines()[0] for _, text in world.tracker.comments] == [
+        f"Auto-merge refused: {head} guarded_path"
+    ]
+    master = world.ports.workspace.upstream().sha
+    assert poll.gather_merges(world.ports, frozenset(), master, _Locks()) == []
+
+
+@pytest.mark.parametrize(
+    ("witness", "passed"),
+    [("pwd", True), ("echo /somewhere/else", False)],
+    ids=["agrees", "disagrees"],
+)
+def test_a_witness_that_disagrees_makes_the_checks_fail_even_when_they_pass(
+    tmp_path, witness, passed
+):
+    world = World(tmp_path, GREEN, witness=witness)
+
+    world.merge()
+
+    assert world.doc()["merge_checks"]["passed"] is passed
+    assert bool(world.tracker.merge_calls) is passed

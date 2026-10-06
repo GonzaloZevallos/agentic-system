@@ -98,6 +98,8 @@ def merge_task(
         decision = rules.auto_merge_decision(facts)
     if decision.kind == "refuse":
         assert decision.reason is not None
+        if decision.reason == "guarded_path" and head is not None:
+            _spend_attempts(task_id, raw, head, ports)
         return _refuse(task_id, head, decision.reason, ports)
     if decision.kind != "merge" or head is None:
         return MergeResult("stopped", "no_decision")
@@ -159,11 +161,13 @@ def _run_checks(
                 parallel=ports.stack.parallel_checks(base),
             )
             gate()
-            # No declared check proves nothing: it cannot pass.
+            # No declared check proves nothing: it cannot pass; a witness that says the
+            # checks ran against another checkout makes them prove nothing either.
             passed = (
                 bool(checks)
                 and gate.results is not None
                 and all(result["passed"] for result in gate.results)
+                and (gate.witness_result is None or gate.witness_result["passed"])
             )
     except GitError as exc:
         log(f"agentic: merge: {task_id}: could not build the worktree: {exc}")
@@ -176,6 +180,22 @@ def _run_checks(
         "duration_s": round(time.monotonic() - started, 1),
     }
     ports.documents.record_closure(task_id, {"merge_checks": record})
+
+
+def _spend_attempts(task_id: str, raw: TaskState, head: str, ports: Ports) -> None:
+    """The poller cannot see a diff, so it would spawn this child for a guarded-path head
+    every round. Spending the head's attempts makes `auto_merge_decision` itself leave the
+    pull request alone (`attempts_exhausted`, a log line) until a push gives a new head."""
+    recorded = raw.get("merge_attempts")
+    count = (
+        recorded.get("count", 0)
+        if isinstance(recorded, dict) and recorded.get("head") == head
+        else 0
+    )
+    if count < rules.MERGE_ATTEMPTS_MAX:
+        ports.documents.record_closure(
+            task_id, {"merge_attempts": {"head": head, "count": rules.MERGE_ATTEMPTS_MAX}}
+        )
 
 
 def _setup(base: str, path: Path, cfg: Configuration, ports: Ports) -> bool:

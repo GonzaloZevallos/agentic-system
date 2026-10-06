@@ -139,3 +139,18 @@ def test_description_carries_the_anchor_and_the_merged_count():
     text = description(s)
     assert "abc123" in text
     assert "12" in text
+
+
+def test_an_auto_merged_delivery_counts_as_landed_and_needs_its_merge_commit():
+    from agentic.core.process.domain import stack_signals as ss
+
+    s = ss.signals(
+        anchor="",
+        anchor_pos=None,
+        brief_pos=None,
+        deliveries=[(1, "auto_merged"), (2, "closed")],
+        reason="",
+    )
+    assert s.merged_since == 1
+    assert ss.needs_merge_commit({"closed_at": "t", "delivery_outcome": "auto_merged"})
+    assert not ss.needs_merge_commit({"closed_at": "t", "delivery_outcome": "closed"})
