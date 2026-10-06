@@ -122,6 +122,13 @@ class Configuration(BaseModel):
     # account, never per product) and clashed merging. The poller counts live entries
     # under `run_registry_dir` against this before it launches a child.
     max_concurrent_runs: int = Field(default=1, ge=1)
+    # Spend-paced concurrency (GH-177): off by default, so the poller behaves exactly as
+    # before. When on, a launch beyond the first live run goes out only while the
+    # machine's trailing 5 h spend is under `spend_pace_usd_per_h`; `max_concurrent_runs`
+    # stays the hard ceiling. The pace is read only when `spend_pacing` is true, and 35
+    # is a starting value taken from one 41 h sample (ADR-0039), not a measured one.
+    spend_pacing: bool = False
+    spend_pace_usd_per_h: float = Field(default=35.0, gt=0)
     # Where `run`/`resume` register the pid, host, product and task of a live
     # invocation, and the poller counts them against `max_concurrent_runs` (GH-137).
     # Outside every product, one per machine: `$XDG_STATE_HOME/agentic/runs`, or

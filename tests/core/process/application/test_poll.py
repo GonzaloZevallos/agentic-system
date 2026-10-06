@@ -1160,3 +1160,180 @@ def test_a_round_still_retakes_a_run_with_two_of_its_three_retakes_spent():
     assert lines[0] == "agentic: poll: retake #30 -> pid 4242"
     assert "retake 3 of 3" in lines[1]
     assert len(launcher.spawned) == 1
+
+
+# -- spend pacing (GH-177) ---------------------------------------------------------------
+
+PACE_NOW = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
+
+
+def _spent_run(ended_ago_min: int, cost: float, length_min: int = 60, **more) -> dict:
+    end = PACE_NOW - timedelta(minutes=ended_ago_min)
+    return {
+        "started_at": (end - timedelta(minutes=length_min)).isoformat(),
+        "ended_at": end.isoformat(),
+        "cost_usd": cost,
+        **more,
+    }
+
+
+def _paced_ports(runs: list[dict]):
+    """A queue with one launchable issue (#5) and a closed-off task whose `runs` carry
+    the spend."""
+    ports = memory_ports()
+    ports.tracker._queue = [5]
+    ports.tracker.states[5] = IssueState("OPEN", "", (), None)
+    _seed_body(ports, 5)
+    ports.documents.save({"id": "GH-1", "title": "t", "description": "d", "runs": runs})
+    return ports
+
+
+def _one_live() -> list[RunRegistration]:
+    return [RunRegistration(pid=1, host="h", product="other-product", task_id="GH-1")]
+
+
+def test_with_pacing_off_nothing_is_published_or_read_and_the_actions_are_todays(tmp_path):
+    ports = _paced_ports([_spent_run(10, 500.0)])
+    registry = MemoryRunRegistry(entries=_one_live())
+    launcher = FakeLauncher()
+    cfg = _cfg(tmp_path, max_concurrent_runs=2)
+    lines = _round(cfg, ports, registry, launcher, PACE_NOW)
+    assert lines == ["agentic: poll: launch #5 -> pid 4242"]
+    assert registry.publish_calls == [] and registry.spend_calls == []
+
+
+def test_pacing_on_with_spend_over_pace_and_a_live_run_holds_the_launch_back(tmp_path):
+    ports = _paced_ports([_spent_run(10, 200.0)])
+    registry = MemoryRunRegistry(entries=_one_live())
+    launcher = FakeLauncher()
+    cfg = _cfg(tmp_path, max_concurrent_runs=2, spend_pacing=True)
+    lines = _round(cfg, ports, registry, launcher, PACE_NOW)
+    assert lines == ["agentic: poll: nothing to do this round"]
+    assert launcher.spawned == []
+    assert len(registry.publish_calls) == 1 and len(registry.spend_calls) == 1
+
+
+def test_pacing_on_with_spend_under_pace_and_a_live_run_launches(tmp_path):
+    ports = _paced_ports([_spent_run(10, 5.0)])
+    registry = MemoryRunRegistry(entries=_one_live())
+    launcher = FakeLauncher()
+    cfg = _cfg(tmp_path, max_concurrent_runs=2, spend_pacing=True)
+    lines = _round(cfg, ports, registry, launcher, PACE_NOW)
+    assert lines == ["agentic: poll: launch #5 -> pid 4242"]
+
+
+def test_pacing_on_with_an_empty_machine_launches_even_over_pace(tmp_path):
+    ports = _paced_ports([_spent_run(10, 500.0)])
+    registry = MemoryRunRegistry()
+    launcher = FakeLauncher()
+    cfg = _cfg(tmp_path, max_concurrent_runs=2, spend_pacing=True)
+    lines = _round(cfg, ports, registry, launcher, PACE_NOW)
+    assert lines == ["agentic: poll: launch #5 -> pid 4242"]
+
+
+def test_pacing_publishes_this_products_runs_under_its_own_document_dir_and_name(tmp_path):
+    ports = _paced_ports([_spent_run(10, 5.0)])
+    ports.stack.declared_product = "apostrophe"
+    registry = MemoryRunRegistry()
+    cfg = _cfg(tmp_path, max_concurrent_runs=1, spend_pacing=True)
+    _round(cfg, ports, registry, FakeLauncher(), PACE_NOW)
+    [(root, product, runs, now)] = registry.publish_calls
+    assert root == tmp_path / ".agentic/tasks" and product == "apostrophe" and now == PACE_NOW
+    assert [r.cost_usd for r in runs] == [5.0]
+    assert registry.spend_calls == [PACE_NOW - timedelta(hours=5)]
+
+
+def test_spend_that_another_product_published_counts_toward_the_pace(tmp_path):
+    ports = _paced_ports([])
+    registry = MemoryRunRegistry(entries=_one_live())
+    registry.publish_spend(
+        tmp_path / "elsewhere",
+        "gym",
+        [
+            rules_spend_run(
+                PACE_NOW - timedelta(minutes=70), PACE_NOW - timedelta(minutes=10), 300.0
+            )
+        ],
+        PACE_NOW,
+    )
+    launcher = FakeLauncher()
+    cfg = _cfg(tmp_path, max_concurrent_runs=2, spend_pacing=True)
+    assert _round(cfg, ports, registry, launcher, PACE_NOW) == [
+        "agentic: poll: nothing to do this round"
+    ]
+    assert launcher.spawned == []
+
+
+def rules_spend_run(start: datetime, end: datetime, cost: float):
+    from agentic.core.process.domain.rules import SpendRun
+
+    return SpendRun(start, end, cost)
+
+
+def test_a_run_with_no_ended_at_is_counted_in_a_note_and_never_raises(tmp_path):
+    ports = _paced_ports(
+        [
+            {"started_at": PACE_NOW.isoformat(), "cost_usd": 4.0},
+            {
+                "started_at": PACE_NOW.isoformat(),
+                "ended_at": "2026-10-06T11:00:00",
+                "cost_usd": 1.0,
+            },
+            _spent_run(10, 2.0),
+        ]
+    )
+    registry = MemoryRunRegistry()
+    cfg = _cfg(tmp_path, max_concurrent_runs=1, spend_pacing=True)
+    lines = _round(cfg, ports, registry, FakeLauncher(), PACE_NOW)
+    assert lines == [
+        "agentic: poll: 2 runs without timestamps not counted",
+        "agentic: poll: launch #5 -> pid 4242",
+    ]
+    assert [r.cost_usd for r in registry.publish_calls[0][2]] == [2.0]
+
+
+def test_registry_notes_come_before_the_skip_note(tmp_path):
+    ports = _paced_ports([{"cost_usd": 4.0}])
+    registry = MemoryRunRegistry()
+    registry.spend_notes = ["agentic: poll: spend file abc.json unreadable, skipped"]
+    cfg = _cfg(tmp_path, max_concurrent_runs=1, spend_pacing=True)
+    lines = _round(cfg, ports, registry, FakeLauncher(), PACE_NOW)
+    assert lines[:2] == [
+        "agentic: poll: spend file abc.json unreadable, skipped",
+        "agentic: poll: 1 runs without timestamps not counted",
+    ]
+
+
+def test_only_cost_usd_is_summed_never_the_subagent_or_failed_share(tmp_path):
+    ports = _paced_ports(
+        [_spent_run(10, 1.0, length_min=30, subagent_cost_usd=900.0, failed_cost_usd=900.0)]
+    )
+    registry = MemoryRunRegistry(entries=_one_live())
+    cfg = _cfg(tmp_path, max_concurrent_runs=2, spend_pacing=True)
+    lines = _round(cfg, ports, registry, FakeLauncher(), PACE_NOW)
+    assert lines == ["agentic: poll: launch #5 -> pid 4242"]
+
+
+def test_the_pace_never_holds_back_a_close_while_it_holds_the_launch(tmp_path):
+    merged = PullRequest(
+        state="MERGED",
+        created_at="2026-10-01T00:00:00Z",
+        merged_at="2026-10-02T00:00:00Z",
+        commits=(),
+        merge_commit="c0ffee",
+    )
+    ports = memory_ports(tracker=_TrackerWithPullRequest({"https://github.com/o/r/pull/7": merged}))
+    ports.tracker._queue = [5]
+    ports.tracker.states[5] = IssueState("OPEN", "", (), None)
+    _seed_body(ports, 5)
+    ports.documents.save(
+        {
+            "id": "GH-3",
+            "pull_request": "https://github.com/o/r/pull/7",
+            "runs": [_spent_run(10, 500.0)],
+        }
+    )
+    registry = MemoryRunRegistry(entries=_one_live())
+    cfg = _cfg(tmp_path, max_concurrent_runs=2, spend_pacing=True)
+    lines = _round(cfg, ports, registry, FakeLauncher(), PACE_NOW)
+    assert lines == ["agentic: poll: close #3 -> pid 4242"]
