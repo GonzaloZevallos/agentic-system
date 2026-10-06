@@ -14,7 +14,7 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
-from ...application.ports import IssueComment, IssueState
+from ...application.ports import IssueComment, IssueState, ListedPullRequest
 from ...domain.task import PullRequest, PullRequestCommit
 
 _ISSUE = re.compile(r"^GH-(\d+)$")
@@ -112,6 +112,39 @@ class GhTracker:
     def unlabel(self, task_id: str, label: str) -> None:
         if (number := issue_number(task_id)) is not None:
             self._gh("issue", "edit", str(number), "--remove-label", label)
+
+    def pull_requests(self) -> list[ListedPullRequest]:
+        raw = self._gh(
+            "pr",
+            "list",
+            "--state",
+            "all",
+            "--json",
+            "number,url,state,body,mergeCommit,headRefName",
+            "--limit",
+            "500",
+        )
+        return [
+            ListedPullRequest(
+                number=item["number"],
+                url=item["url"],
+                state=item["state"],
+                body=item.get("body") or "",
+                merge_commit=(item.get("mergeCommit") or {}).get("oid") or "",
+                branch=item.get("headRefName") or "",
+            )
+            for item in json.loads(raw)
+        ]
+
+    def update_pull_request_body(self, number: int, body: str) -> None:
+        # `--body-file`, as `open_issue`: the limit that can bite is GitHub's own.
+        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as handle:
+            handle.write(body)
+            path = handle.name
+        try:
+            self._gh("pr", "edit", str(number), "--body-file", path)
+        finally:
+            Path(path).unlink(missing_ok=True)
 
     def issue_comments(self, task_id: str) -> list[str]:
         if (number := issue_number(task_id)) is None:

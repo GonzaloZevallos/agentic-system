@@ -58,6 +58,10 @@ class Configuration(BaseModel):
     # at `reflect_max_tasks_per_run` tasks per invocation, so the most one run spends is
     # that many tasks times two attempts times this.
     reflect_max_budget_usd: float = Field(default=1.0, gt=0)
+    # How many closed tasks one `agentic reflect` invocation reflects on (ADR-0043); the
+    # rest wait for the next run, so one invocation never costs more than this times two
+    # attempts times the cap above.
+    reflect_max_tasks_per_run: int = Field(default=5, ge=1)
     # Money cap of the whole run, checked before every attempt of any role: reached,
     # the task escalates and pauses instead of spending more (ADR-0004, third and fourth
     # addenda). It grows with the plan: the base until there is one, then the base plus

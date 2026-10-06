@@ -161,8 +161,20 @@ class GitWorkspace:
         self._git("commit", "-q", "-m", message, cwd=path)
         return self.head(path)
 
-    def push(self, branch: str) -> None:
+    def push(self, branch: str, *, replace: bool = False) -> None:
+        if replace:
+            remote = self._git("ls-remote", "--heads", "origin", f"refs/heads/{branch}").split()
+            if remote:
+                self._git(
+                    "push", "-u", f"--force-with-lease=refs/heads/{branch}:{remote[0]}",
+                    "origin", branch,
+                )  # fmt: skip
+                return
         self._git("push", "-u", "origin", branch)
+
+    def show(self, ref: str, relative: str) -> str | None:
+        result = self._run("show", f"{ref}:{relative}")
+        return result.stdout if result.returncode == 0 else None
 
     def cleanup(self, task_id: str) -> None:
         root = self.product_dir / WORKTREES

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from agentic.core.knowledge.domain import knowledge
 from agentic.core.process.application.ports import (
+    ListedPullRequest,
     Checkout,
     CommandResult,
     GitError,
@@ -347,6 +348,8 @@ class MemoryWorkspace:
         self.dependency_state_calls: list[tuple[Path, str, tuple[str, ...]]] = []
         self.dependency_states: dict[str, list[DependencyState]] = {}
         self.pushed: list[str] = []
+        # `(ref, relative)` -> the text `show` answers; absent is `None`.
+        self.files: dict[tuple[str, str], str] = {}
         self.cleaned: list[str] = []
         self._looks: dict[Path, int] = {}
         self.existing_branches: dict[str, tuple[str, str]] = {}
@@ -434,8 +437,11 @@ class MemoryWorkspace:
         self.commits.append((path, message))
         return "c1"
 
-    def push(self, branch: str) -> None:
+    def push(self, branch: str, *, replace: bool = False) -> None:
         self.pushed.append(branch)
+
+    def show(self, ref: str, relative: str) -> str | None:
+        return self.files.get((ref, relative))
 
     def cleanup(self, task_id: str) -> None:
         self.cleaned.append(task_id)
@@ -495,6 +501,10 @@ class MemoryTracker:
         # `earlier`/`issue_comments`, which stay bodies-only, and from `self.comments`
         # above, which is every comment *this fake posted*, not the issue's own.
         self.timestamped: dict[str, list[IssueComment]] = {}
+        # The playbook delivery's reads and writes: every PR `pull_requests` lists, and
+        # `(number, body)` of each body update.
+        self.listed: list[ListedPullRequest] = []
+        self.updated_bodies: list[tuple[int, str]] = []
 
     def open_pull_request(self, task_id: str, branch: str, title: str, body: str) -> str:
         self.pull_requests.append((branch, title, body))
@@ -512,6 +522,12 @@ class MemoryTracker:
 
     def unlabel(self, task_id: str, label: str) -> None:
         self.unlabeled.append((task_id, label))
+
+    def pull_requests(self) -> list[ListedPullRequest]:
+        return list(self.listed)
+
+    def update_pull_request_body(self, number: int, body: str) -> None:
+        self.updated_bodies.append((number, body))
 
     def issue_comments(self, task_id: str) -> list[str]:
         return [*self.earlier, *(text for _, text in self.comments)]

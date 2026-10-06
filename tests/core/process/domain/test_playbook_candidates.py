@@ -161,8 +161,13 @@ def test_eligible_keeps_closed_kept_deliveries_after_the_clock_oldest_first_and_
 
 
 def test_since_reaches_back_and_with_no_clock_nothing_is_eligible():
-    docs = [document("GH-1", "2026-10-01T09:00:00+00:00"), document("GH-2", "2026-10-06T09:00:00+00:00")]
-    assert [d["id"] for d in pc.eligible(docs, set(), "2026-10-05T00:00:00+00:00", "2026-10-01")] == [
+    docs = [
+        document("GH-1", "2026-10-01T09:00:00+00:00"),
+        document("GH-2", "2026-10-06T09:00:00+00:00"),
+    ]
+    assert [
+        d["id"] for d in pc.eligible(docs, set(), "2026-10-05T00:00:00+00:00", "2026-10-01")
+    ] == [
         "GH-1",
         "GH-2",
     ]
