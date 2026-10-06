@@ -184,13 +184,16 @@ class PullRequest:
     `merged_at` is `None` for a pull request that never merged (open or closed
     unmerged); `commits` is every commit on the branch, oldest first;
     `merge_commit` is the sha GitHub says the merge produced on the base branch, `None`
-    when it never merged (ADR-0038)."""
+    when it never merged (ADR-0038). `head_oid` is the sha of the branch's tip, the
+    exact commit an automatic merge is decided on and `Tracker.merge` is pinned to
+    (GH-178); `None` when the adapter did not read it."""
 
     state: Literal["OPEN", "MERGED", "CLOSED"]
     created_at: str
     merged_at: str | None
     commits: tuple[PullRequestCommit, ...]
     merge_commit: str | None = None
+    head_oid: str | None = None
 
 
 def add(current: float, new: float) -> float:

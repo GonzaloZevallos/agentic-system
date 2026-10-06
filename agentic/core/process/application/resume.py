@@ -27,7 +27,7 @@ from .archive import STARTED_OVER
 from .deliver import READY
 from .discard import DISCARDED
 from .escalate import ESCALATED, NEEDS_HUMAN
-from .poll import AUTO_RESUMED, RETAKEN
+from .poll import AUTO_MERGE_REFUSED, AUTO_MERGED, AUTO_RESUMED, RETAKEN
 from .ports import Ports, Workspace
 from .run_role import task_cap
 
@@ -37,7 +37,17 @@ RESUMED = "Resumed: "
 # so the poller's own comment never reads back as the human's decision on the next
 # `agentic resume` -- defined in `poll.py` itself (the module that posts it), imported
 # here in the same diff, per the plan's own invariant.
-SYSTEM_COMMENTS = (ESCALATED, RESUMED, READY, DISCARDED, STARTED_OVER, AUTO_RESUMED, RETAKEN)
+SYSTEM_COMMENTS = (
+    ESCALATED,
+    RESUMED,
+    READY,
+    DISCARDED,
+    STARTED_OVER,
+    AUTO_RESUMED,
+    RETAKEN,
+    AUTO_MERGE_REFUSED,
+    AUTO_MERGED,
+)
 # What the document's frontmatter carries that is not state: the version record.
 STATE_FIELDS = frozenset(get_type_hints(TaskState)) - {"subtask_id"}
 
