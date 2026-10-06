@@ -18,6 +18,7 @@ from agentic.core.process.application.ports import (
     RawResult,
     RunRegistration,
     SampleAppHandle,
+    Upstream,
 )
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.design import Design
@@ -359,6 +360,11 @@ class MemoryWorkspace:
         # not be confused with ("ante la duda, no lanza" needs a rejected-input test
         # for this, not only for the known-false case `ancestors` already covers).
         self.ancestor_errors: set[str] = set()
+        # What `upstream()` answers (the poller's blocker tip, GH-180) and how many times
+        # it was asked: the real one fetches, so "once per round, and only when a blocker
+        # needs it" is a count.
+        self.upstream_answer = Upstream("HEAD", None, None)
+        self.upstream_calls = 0
         self.checkouts: list[Path] = []
         # The worktrees this fake has made, as a real one has them on disk.
         self.on_disk: set[Path] = set()
@@ -463,6 +469,10 @@ class MemoryWorkspace:
         if sha in self.ancestor_errors:
             raise GitError(f"git merge-base --is-ancestor {sha} {ref} failed: scripted")
         return sha in self.ancestors
+
+    def upstream(self) -> Upstream:
+        self.upstream_calls += 1
+        return self.upstream_answer
 
 
 class MemoryTracker:

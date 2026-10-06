@@ -441,6 +441,21 @@ class GitError(RuntimeError):
     import it from `adapters.git.workspace` keep working unchanged."""
 
 
+@dataclass(frozen=True)
+class Upstream:
+    """Where new work starts from and what the poller judges a merge against (GH-180):
+    the fetched tip of the product checkout's current branch."""
+
+    # The ref the commit came from: the upstream's own name, or "HEAD" when there was
+    # nothing better. Informational; callers use `sha`.
+    ref: str
+    # The commit. None only when even `HEAD` could not be read (an unborn branch, no git).
+    sha: str | None
+    # Why it is not the plain fetched upstream (no remote, fetch failed, local commits
+    # left out), for the run's log and the poll round's output. None when nothing to say.
+    note: str | None
+
+
 class Workspace(Protocol):
     """The product repository as git sees it (ADR-0011): one branch and worktree per
     task, one per subtask, all idempotent so a use case can ask again."""
@@ -559,6 +574,14 @@ class Workspace(Protocol):
         `GitError` for anything else `git merge-base --is-ancestor` answers beside its
         own two documented exit codes (0: is an ancestor, 1: is not): that is a git
         failure, not an unresolved blocker, and must not read as "launch anyway"."""
+        ...
+
+    def upstream(self) -> Upstream:
+        """The fetched upstream of the checkout's current branch (GH-180). Never returns
+        None and never raises for a git failure or a missing git: every failure is an
+        `Upstream` with a `note`. The only place that fetches (never `pull`, `checkout`,
+        `reset` or a fast-forward: the human's branch is theirs, ADR-0002) and the only
+        one that picks a fallback when the fetch fails."""
         ...
 
 
