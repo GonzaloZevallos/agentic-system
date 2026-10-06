@@ -195,12 +195,16 @@ def test_master_moving_after_the_checks_refuses_and_writes_nothing(world, monkey
 
 
 def test_a_merge_that_fails_with_the_pull_request_open_withdraws_the_intent(world):
-    world.tracker.merge = lambda number, head: (_ for _ in ()).throw(ValueError("head moved"))  # type: ignore[method-assign]
+    world.tracker.merge_error = "head moved"
 
     world.merge()
 
     doc = world.doc()
     assert doc["auto_merge_head"] == ""
+    # The method and the merge time are written only after a merge that returned; the
+    # withdrawal touches the head alone.
+    assert "auto_merge_method" not in doc and "auto_merged_at" not in doc
+    assert doc.get("auto_merge_master") and doc.get("auto_merge_at")
     # The human merges that very head untouched later: the human's verdict, `merged`.
     world.tracker.prs[URL] = dataclasses.replace(
         world.tracker.prs[URL], state="MERGED", merged_at="2026-10-06T01:00:00Z"
@@ -220,8 +224,10 @@ def test_a_merge_that_fails_but_landed_keeps_the_intent_and_closes_as_auto_merge
 
     world.merge()
 
-    assert world.doc()["auto_merge_head"] == world.head
-    assert world.doc()["delivery_outcome"] == "auto_merged"
+    doc = world.doc()
+    assert doc["auto_merge_head"] == world.head
+    assert "auto_merge_method" not in doc and "auto_merged_at" not in doc
+    assert doc["delivery_outcome"] == "auto_merged"
 
 
 def test_an_issue_in_the_eval_set_on_upstream_alone_is_never_merged(world):
