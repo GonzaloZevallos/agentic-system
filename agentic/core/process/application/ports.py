@@ -8,7 +8,7 @@ second product arrived and it is this repo (README.md, 8; ADR-0017).
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -253,7 +253,7 @@ class TaskDocuments(Protocol):
         The path it wrote, or None when the task has no document to write."""
         ...
 
-    def record_closure(self, task_id: str, values: dict[str, str]) -> Path:
+    def record_closure(self, task_id: str, values: Mapping[str, object]) -> Path:
         """Line-level edit of the closure's own top-level frontmatter keys
         (`document.record_closure`'s own docstring) into the document already on disk.
         Never goes through `save`, which re-renders `system_commit` from today's sha
@@ -596,6 +596,26 @@ class Workspace(Protocol):
         `GitError` for anything else `git merge-base --is-ancestor` answers beside its
         own two documented exit codes (0: is an ancestor, 1: is not): that is a git
         failure, not an unresolved blocker, and must not read as "launch anyway"."""
+        ...
+
+    def changed_paths(self, base: str, head: str) -> tuple[str, ...]:
+        """The paths `git diff --name-only <base>...<head>` names (GH-178): what the
+        pull request changes against the commit it branched from. Raises `GitError`."""
+        ...
+
+    def fetch_commit(self, sha: str) -> bool:
+        """Whether `sha` is a commit this checkout has, fetching it from `origin` when it
+        is not (a pull request's head the local branch never saw). Never raises."""
+        ...
+
+    def detached_checkout(self, name: str, sha: str) -> Path:
+        """A throwaway worktree `.agentic/worktrees/<name>` detached at `sha` (GH-178);
+        the caller removes it with `remove_checkout`. Raises `GitError`."""
+        ...
+
+    def remove_checkout(self, name: str) -> None:
+        """Removes `.agentic/worktrees/<name>` whatever state it is in: registered or
+        not, there or not. Never raises for one that is absent."""
         ...
 
     def upstream(self) -> Upstream:

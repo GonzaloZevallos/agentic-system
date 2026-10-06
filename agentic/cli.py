@@ -56,6 +56,7 @@ from .core.process.application import archive, reflect_run
 from .core.process.application import poll as pollmod
 from .core.process.application import resume as resuming
 from .core.process.application.escalate import NEEDS_HUMAN
+from .core.process.application.merge import merge_task
 from .core.process.application.ports import (
     Launcher,
     LockHeld,
@@ -63,6 +64,7 @@ from .core.process.application.ports import (
     Ports,
     RunLock,
     RunRegistry,
+    Upstream,
 )
 from .core.process.application.preflight import (
     PLACEHOLDERS,
@@ -247,6 +249,13 @@ def main() -> None:
         "(Tech Lead plan, subtask `close-all`)",
     )
     close.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
+    merge = sub.add_parser(
+        "merge",
+        help="merge a task's approved pull request when the checks pass on its head merged "
+        "with the upstream master (GH-178, ADR-0045); the poller spawns it, nobody else needs to",
+    )
+    merge.add_argument("--issue", type=int, metavar="N", required=True)
+    merge.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
     eval_parser = sub.add_parser(
         "eval", help="drive or score README.md 9's fixed five-task evaluation set"
     )
@@ -419,7 +428,7 @@ def main() -> None:
         if args.command != "stack" and not cfg.agentic_dir.is_dir():
             raise ValueError(f"{cfg.product_dir} is not a product repo: no .agentic/ directory")
         ports = default_ports(cfg)
-        if args.command not in ("close", "eval", "stack", "poll", "reflect"):
+        if args.command not in ("close", "eval", "stack", "poll", "reflect", "merge"):
             # `close` runs no role and spends nothing, so the gate that renders every
             # role's prompt and checks the product's stack before a run spends money
             # does not apply to it (Tech Lead plan, subtask `close-command`): only
@@ -486,6 +495,8 @@ def main() -> None:
             else:
                 task_id = ports.inbox.task_id(args.issue)
                 work = partial(_close, task_id, cfg, ports)
+        elif args.command == "merge":
+            work = partial(_merge, ports.inbox.task_id(args.issue), args.issue, cfg, ports)
         elif args.command == "eval":
             if args.eval_command == "run":
                 log_file = _log_file_for(cfg, "eval")
@@ -931,6 +942,7 @@ async def _poll(
                 executable,
                 lock=lock,
                 current_boot=liveness.current_boot_id(),
+                eval_set=_round_eval_set(ports),
             ):
                 print(line, flush=True)
             await sleep(interval_s)
@@ -1277,6 +1289,59 @@ def _backfill_merge_commit(
         f"{task_id}: merge_commit backfilled ({pull_request.merge_commit})",
         path=path,
     )
+
+
+def _upstream_eval_set(ports: Ports, upstream: Upstream) -> frozenset[int] | None:
+    """The issues of the evaluation set as the upstream sha declares them (GH-178): their
+    merge is the human's verdict, so `rules.auto_merge_decision` never merges one. No file
+    there is an empty set; a file that does not parse, an upstream that fell back with a
+    note, or none at all is `None`, which refuses every merge -- nothing then proves the
+    issue is outside the set. `cli.py` is the one place that reads the declaration."""
+    if upstream.sha is None or upstream.note:
+        return None
+    text = ports.workspace.show(upstream.sha, str(evaluation.DECLARATION_PATH))
+    if text is None:
+        return frozenset()
+    try:
+        return frozenset(evaluation.parse_eval_set(yaml.safe_load(text), "eval set").issues)
+    except (ValueError, yaml.YAMLError):
+        return None
+
+
+def _round_eval_set(ports: Ports) -> frozenset[int] | None:
+    """What one poll round hands `poll.run_once`: read (one upstream fetch) only when some
+    delivered task awaits a merge at all, the empty set otherwise, which nothing reads."""
+    if not pollmod.awaiting_merge(ports):
+        return frozenset()
+    return _upstream_eval_set(ports, ports.workspace.upstream())
+
+
+async def _merge(task_id: str, issue: int, cfg: Configuration, ports: Ports) -> None:
+    """`agentic merge --issue N` (GH-178, ADR-0045): the task's pull request merged when
+    `rules.auto_merge_decision` says so, after the checks ran on its head merged with the
+    upstream. Under the task's own run lock and registered like any run; spends no model
+    money and opens no span, like `close`. The closure runs in this process once the pull
+    request is merged."""
+    lock = _lock_for(cfg)
+    with _locked(lock, task_id), _registered(_registry_for(cfg), product_name(ports), task_id):
+        raw = ports.documents.load(task_id)
+        if raw is None or not raw.get("pull_request"):
+            raise CannotStart(f"{task_id} has no pull request to merge")
+        upstream = ports.workspace.upstream()
+        result = merge_task(
+            task_id,
+            issue,
+            cfg,
+            ports,
+            upstream,
+            _upstream_eval_set(ports, upstream),
+            lambda line: print(line, flush=True),
+        )
+        closed = _close_document(task_id, cfg, ports) if result.kind == "merged" else None
+    suffix = f": {result.reason}" if result.reason else ""
+    print(f"agentic: merge: {task_id} -> {result.kind}{suffix}", flush=True)
+    if closed is not None and closed.status != "closed":
+        print(f"agentic: merge: {task_id}: not closed yet: {closed.message}", flush=True)
 
 
 async def _close(task_id: str, cfg: Configuration, ports: Ports) -> None:

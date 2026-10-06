@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -253,6 +254,45 @@ class GitWorkspace:
                 f"git merge-base --is-ancestor {sha} {ref} failed: {result.stderr.strip()}"
             )
         return result.returncode == 0
+
+    def changed_paths(self, base: str, head: str) -> tuple[str, ...]:
+        out = self._git("diff", "--name-only", f"{base}...{head}")
+        return tuple(line for line in out.splitlines() if line)
+
+    def fetch_commit(self, sha: str) -> bool:
+        if self._run("cat-file", "-e", f"{sha}^{{commit}}").returncode == 0:
+            return True
+        try:
+            self._run_bounded("fetch", "--quiet", "origin", sha)
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return self._run("cat-file", "-e", f"{sha}^{{commit}}").returncode == 0
+
+    def detached_checkout(self, name: str, sha: str) -> Path:
+        path = self.product_dir / WORKTREES / name
+        self.exclude_system_files()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._git("worktree", "add", "--detach", str(path), sha)
+        return path
+
+    def remove_checkout(self, name: str) -> None:
+        path = self.product_dir / WORKTREES / name
+        self._run("worktree", "prune")
+        self._run("worktree", "remove", "--force", str(path))
+        if path.exists():
+            shutil.rmtree(path, ignore_errors=True)
+        self._run("worktree", "prune")
+
+    def _run_bounded(self, *args: str) -> None:
+        subprocess.run(
+            ["git", *args],
+            cwd=self.product_dir,
+            env={**os.environ, **self.identity, "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": ""},
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=FETCH_TIMEOUT_S,
+        )
 
     def upstream(self) -> Upstream:
         """See `Workspace.upstream`. The only caller of `_fetch`; every failure of git, of

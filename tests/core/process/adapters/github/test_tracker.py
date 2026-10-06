@@ -390,3 +390,56 @@ def test_issue_state_falls_back_when_gh_does_not_expose_blocked_by():
 
     state = GhTracker(Path("/p"), Run()).issue_state(20)
     assert state.blocked_by is None
+
+
+class MethodRecorder(Recorder):
+    """`gh repo view` answers which merge methods the repository allows."""
+
+    def __init__(self, merge: bool, squash: bool, rebase: bool):
+        super().__init__()
+        self.allowed = {
+            "mergeCommitAllowed": merge,
+            "squashMergeAllowed": squash,
+            "rebaseMergeAllowed": rebase,
+        }
+
+    def __call__(self, args, cwd, capture_output, text, check):
+        result = super().__call__(args, cwd, capture_output, text, check)
+        if args[1:3] == ["repo", "view"]:
+            return subprocess.CompletedProcess(args, 0, json.dumps(self.allowed), "")
+        return result
+
+
+@pytest.mark.parametrize(
+    ("allowed", "method"),
+    [
+        ((True, True, True), "merge"),
+        ((False, True, True), "squash"),
+        ((False, False, True), "rebase"),
+    ],
+)
+def test_merge_picks_the_first_allowed_method_and_pins_the_head(allowed, method):
+    run = MethodRecorder(*allowed)
+    assert GhTracker(Path("/p"), run).merge(7, "abc123") == method
+    assert run.calls[-1] == [
+        "gh",
+        "pr",
+        "merge",
+        "7",
+        f"--{method}",
+        "--match-head-commit",
+        "abc123",
+    ]
+
+
+def test_merge_with_no_allowed_method_raises_and_merges_nothing():
+    run = MethodRecorder(False, False, False)
+    with pytest.raises(ValueError, match="no_merge_method"):
+        GhTracker(Path("/p"), run).merge(7, "abc123")
+    assert all(call[1:3] != ["pr", "merge"] for call in run.calls)
+
+
+def test_merge_never_asks_for_auto_or_branch_deletion():
+    run = MethodRecorder(True, True, True)
+    GhTracker(Path("/p"), run).merge(7, "abc123")
+    assert "--auto" not in run.calls[-1] and "--delete-branch" not in run.calls[-1]

@@ -16,6 +16,7 @@ one, and the frontmatter lists every run with its Claude Code session id.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -199,7 +200,7 @@ def ordered(sections: dict[str, str]) -> dict[str, str]:
     return result
 
 
-def record_closure(raw: str, values: dict[str, str]) -> str:
+def record_closure(raw: str, values: Mapping[str, object]) -> str:
     """Line-level surgery on the frontmatter block: replace the line of a top-level
     scalar key `values` owns, append when it is absent, everything else -- the body
     included -- byte-for-byte. A `safe_load`/`safe_dump` round-trip of the whole
@@ -237,7 +238,12 @@ def _is_continuation(line: str) -> bool:
     return line[:1] in (" ", "\t") or line.startswith("-")
 
 
-def _scalar_line(key: str, value: str) -> str:
+def _scalar_line(key: str, value: object) -> str:
+    if isinstance(value, Mapping):
+        # A record the system keeps about itself (`merge_checks`, GH-178): one flow-style
+        # line, so it replaces in place like any scalar and parses back as a mapping.
+        flow = yaml.safe_dump(dict(value), default_flow_style=True, width=10**6).strip()
+        return f"{key}: {flow}"
     dumped: str = yaml.safe_dump({key: value}, default_flow_style=False, sort_keys=False)
     line, _, rest = dumped.partition("\n")
     if rest.strip():
