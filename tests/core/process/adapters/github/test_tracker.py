@@ -91,12 +91,14 @@ def test_gh_failures_are_value_errors():
         GhTracker(Path("/p"), Recorder(fail=True)).open_pull_request("T-1", "b", "t", "x")
 
 
-def _graphql_pull_request(state, merged_at, created_at, commits, merge_oid=None):
+def _graphql_pull_request(state, merged_at, created_at, commits, merge_oid=None, head_oid=...):
+    head = {} if head_oid is ... else {"headRefOid": head_oid}
     return json.dumps(
         {
             "data": {
                 "repository": {
                     "pullRequest": {
+                        **head,
                         "state": state,
                         "mergedAt": merged_at,
                         "createdAt": created_at,
@@ -168,6 +170,32 @@ def test_pull_request_carries_the_merge_commit_only_when_it_merged():
         Recorder(stdout=_graphql_pull_request("CLOSED", None, "2026-09-20T23:00:00Z", [])),
     ).pull_request("https://github.com/o/r/pull/8")
     assert closed is not None and closed.merge_commit is None
+
+
+def test_pull_request_reads_the_head_oid_and_maps_a_missing_one_to_none():
+    with_head = GhTracker(
+        Path("/p"),
+        Recorder(
+            stdout=_graphql_pull_request(
+                "OPEN", None, "2026-09-20T23:00:00Z", [], head_oid="9f8e7d6"
+            )
+        ),
+    ).pull_request("https://github.com/o/r/pull/7")
+    assert with_head is not None and with_head.head_oid == "9f8e7d6"
+    for stdout in (
+        _graphql_pull_request("OPEN", None, "2026-09-20T23:00:00Z", []),
+        _graphql_pull_request("OPEN", None, "2026-09-20T23:00:00Z", [], head_oid=None),
+    ):
+        without = GhTracker(Path("/p"), Recorder(stdout=stdout)).pull_request(
+            "https://github.com/o/r/pull/7"
+        )
+        assert without is not None and without.head_oid is None
+
+
+def test_pull_request_query_asks_for_the_head_oid():
+    run = Recorder(stdout=_graphql_pull_request("OPEN", None, "2026-09-20T23:00:00Z", []))
+    GhTracker(Path("/p"), run).pull_request("https://github.com/o/r/pull/9")
+    assert any("headRefOid" in part for part in run.calls[0])
 
 
 def test_pull_request_query_asks_for_the_merge_commit_oid():
@@ -362,3 +390,56 @@ def test_issue_state_falls_back_when_gh_does_not_expose_blocked_by():
 
     state = GhTracker(Path("/p"), Run()).issue_state(20)
     assert state.blocked_by is None
+
+
+class MethodRecorder(Recorder):
+    """`gh repo view` answers which merge methods the repository allows."""
+
+    def __init__(self, merge: bool, squash: bool, rebase: bool):
+        super().__init__()
+        self.allowed = {
+            "mergeCommitAllowed": merge,
+            "squashMergeAllowed": squash,
+            "rebaseMergeAllowed": rebase,
+        }
+
+    def __call__(self, args, cwd, capture_output, text, check):
+        result = super().__call__(args, cwd, capture_output, text, check)
+        if args[1:3] == ["repo", "view"]:
+            return subprocess.CompletedProcess(args, 0, json.dumps(self.allowed), "")
+        return result
+
+
+@pytest.mark.parametrize(
+    ("allowed", "method"),
+    [
+        ((True, True, True), "merge"),
+        ((False, True, True), "squash"),
+        ((False, False, True), "rebase"),
+    ],
+)
+def test_merge_picks_the_first_allowed_method_and_pins_the_head(allowed, method):
+    run = MethodRecorder(*allowed)
+    assert GhTracker(Path("/p"), run).merge(7, "abc123") == method
+    assert run.calls[-1] == [
+        "gh",
+        "pr",
+        "merge",
+        "7",
+        f"--{method}",
+        "--match-head-commit",
+        "abc123",
+    ]
+
+
+def test_merge_with_no_allowed_method_raises_and_merges_nothing():
+    run = MethodRecorder(False, False, False)
+    with pytest.raises(ValueError, match="no_merge_method"):
+        GhTracker(Path("/p"), run).merge(7, "abc123")
+    assert all(call[1:3] != ["pr", "merge"] for call in run.calls)
+
+
+def test_merge_never_asks_for_auto_or_branch_deletion():
+    run = MethodRecorder(True, True, True)
+    GhTracker(Path("/p"), run).merge(7, "abc123")
+    assert "--auto" not in run.calls[-1] and "--delete-branch" not in run.calls[-1]

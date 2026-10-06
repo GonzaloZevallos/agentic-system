@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import threading
 from collections.abc import Callable
 from datetime import datetime
@@ -28,7 +29,13 @@ from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.playbook import Playbook
 from agentic.core.process.domain.roles import PROMPTS_DIR, Role
 from agentic.core.process.domain.suppressions import Forbidden
-from agentic.core.process.domain.task import DependencyState, MergeOutcome, TaskInput, TaskState
+from agentic.core.process.domain.task import (
+    DependencyState,
+    MergeOutcome,
+    PullRequest,
+    TaskInput,
+    TaskState,
+)
 
 VOCAB = {"touches_ui": "UI", "touches_copy": "copy"}
 
@@ -570,6 +577,29 @@ class MemoryTracker:
         # `(number, body)` of each body update.
         self.listed: list[ListedPullRequest] = []
         self.updated_bodies: list[tuple[int, str]] = []
+        # GH-178: `pull_request`'s canned answers by reference (the URL the document
+        # stores); `head_oid`, when set, is what every answered pull request reports as
+        # its head, so a test moves the head without rebuilding the pull request.
+        self.prs: dict[str, PullRequest | None] = {}
+        self.head_oid: str | None = None
+        # `merge`'s own record: `(number, head_sha)` of every call, the method it answers,
+        # and `merge_error`, which makes it raise `ValueError` the way a refused `gh pr
+        # merge` does.
+        self.merge_calls: list[tuple[int, str]] = []
+        self.merge_method = "squash"
+        self.merge_error: str | None = None
+
+    def pull_request(self, reference: str) -> PullRequest | None:
+        pr = self.prs.get(reference)
+        if pr is not None and self.head_oid is not None:
+            return dataclasses.replace(pr, head_oid=self.head_oid)
+        return pr
+
+    def merge(self, number: int, head_sha: str) -> str:
+        self.merge_calls.append((number, head_sha))
+        if self.merge_error is not None:
+            raise ValueError(self.merge_error)
+        return self.merge_method
 
     def open_pull_request(self, task_id: str, branch: str, title: str, body: str) -> str:
         self.pull_requests.append((branch, title, body))

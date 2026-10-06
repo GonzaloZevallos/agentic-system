@@ -2098,7 +2098,12 @@ def close_task(**overrides):
 
 
 def close_pull_request(
-    *, state="MERGED", merged=True, human_commit=False, human_merge_parent_count=None
+    *,
+    state="MERGED",
+    merged=True,
+    human_commit=False,
+    human_merge_parent_count=None,
+    head_oid=None,
 ):
     commits = [
         PullRequestCommit(
@@ -2135,6 +2140,7 @@ def close_pull_request(
         merged_at="2026-09-01T01:00:00+00:00" if merged else None,
         commits=tuple(commits),
         merge_commit="c0ffee" if merged else None,
+        head_oid=head_oid,
     )
 
 
@@ -2376,6 +2382,36 @@ def test_close_happy_path_writes_the_five_keys_with_no_sample_emitted(
     assert doc["human_lines_changed"] == "4"
     assert doc["closed_at"]
     assert doc["status"] == "ready_for_review"  # no new `Status` value is added
+
+
+@pytest.mark.parametrize(
+    ("extra", "expected"),
+    [
+        ({"auto_merge_head": "abc123"}, "auto_merged"),
+        ({"auto_merge_head": ""}, "merged"),
+        ({"auto_merge_head": "older-head"}, "merged"),
+        ({}, "merged"),
+    ],
+)
+def test_close_classifies_auto_merged_by_the_intent_head(monkeypatch, tmp_path, extra, expected):
+    """The intent the merge verb wrote (`auto_merge_head`) names the head it merged ->
+    `auto_merged`; an empty, stale or missing one leaves the human's verdict as before."""
+    from agentic.core.measurement.adapters.otel import telemetry
+
+    root = close_root(tmp_path)
+    reference = "https://github.com/o/r/pull/7"
+    tracker = FakePullRequestTracker({reference: close_pull_request(head_oid="abc123")})
+    ports = close_ports(root, tracker)
+    ports.documents.save(close_task(pull_request=reference))
+    if extra:  # `render` only writes the state's own keys; the verb edits the line in
+        ports.documents.record_closure("GH-9", extra)
+    telemetry.configure()
+    try:
+        _closed_run(monkeypatch, root, ports)
+        cli.main()
+    finally:
+        telemetry.configure()
+    assert ports.documents.load("GH-9")["delivery_outcome"] == expected
 
 
 def test_close_treats_a_human_merge_of_master_as_no_human_change(monkeypatch, tmp_path, capsys):

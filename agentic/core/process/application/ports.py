@@ -8,7 +8,7 @@ second product arrived and it is this repo (README.md, 8; ADR-0017).
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -260,7 +260,7 @@ class TaskDocuments(Protocol):
         The path it wrote, or None when the task has no document to write."""
         ...
 
-    def record_closure(self, task_id: str, values: dict[str, str]) -> Path:
+    def record_closure(self, task_id: str, values: Mapping[str, object]) -> Path:
         """Line-level edit of the closure's own top-level frontmatter keys
         (`document.record_closure`'s own docstring) into the document already on disk.
         Never goes through `save`, which re-renders `system_commit` from today's sha
@@ -605,6 +605,26 @@ class Workspace(Protocol):
         failure, not an unresolved blocker, and must not read as "launch anyway"."""
         ...
 
+    def changed_paths(self, base: str, head: str) -> tuple[str, ...]:
+        """The paths `git diff --name-only <base>...<head>` names (GH-178): what the
+        pull request changes against the commit it branched from. Raises `GitError`."""
+        ...
+
+    def fetch_commit(self, sha: str) -> bool:
+        """Whether `sha` is a commit this checkout has, fetching it from `origin` when it
+        is not (a pull request's head the local branch never saw). Never raises."""
+        ...
+
+    def detached_checkout(self, name: str, sha: str) -> Path:
+        """A throwaway worktree `.agentic/worktrees/<name>` detached at `sha` (GH-178);
+        the caller removes it with `remove_checkout`. Raises `GitError`."""
+        ...
+
+    def remove_checkout(self, name: str) -> None:
+        """Removes `.agentic/worktrees/<name>` whatever state it is in: registered or
+        not, there or not. Never raises for one that is absent."""
+        ...
+
     def upstream(self) -> Upstream:
         """The fetched upstream of the checkout's current branch (GH-180). Never returns
         None and never raises for a git failure or a missing git: every failure is an
@@ -727,6 +747,13 @@ class Tracker(Protocol):
         carries a `comments` attribute of its own (every posted comment, the fixture's
         long-standing test-inspection surface), and the two must never collide. Empty
         when the task has no issue, the same shape `issue_comments` already has."""
+        ...
+
+    def merge(self, number: int, head_sha: str) -> str:
+        """Merges pull request `number` only if its head is still `head_sha` (GH-178: the
+        sha the automatic-merge decision was taken on, never "whatever is there now"), and
+        returns the method used. Raises `ValueError` when the tracker refuses -- the head
+        moved, a check or a rule blocks it, the pull request is not open."""
         ...
 
 

@@ -159,3 +159,20 @@ async def test_a_pr_closed_unmerged_is_never_asked_twice_and_its_lesson_is_refus
     assert git(root, "branch", "--list", "archive/playbook-*")
     assert len(tracker.pull_requests) == 2  # a fresh candidate, never an edit of the old
     assert not reflect_run.pending(cfg, ports)
+
+
+async def test_an_auto_merged_task_is_neither_reflected_nor_counted_as_kept(tmp_path, capsys):
+    """ADR-0045: an auto-merged delivery landed without a human verdict, so there is
+    nothing a person kept to learn from; `pc.KEPT` holds only `human_kept` outcomes."""
+    root, cfg, ports, _tracker = product(tmp_path, 2)
+    ports.documents.record_closure(
+        "GH-2", {"closed_at": CLOSED.format(day=2), "delivery_outcome": "auto_merged"}
+    )
+    git(root, "add", "-A")
+    git(root, "commit", "-qm", "GH-2 auto-merged")
+    assert "auto_merged" not in pc.KEPT
+    assert [d["id"] for d in reflect_run.pending(cfg, ports, since="2026-10-01")] == ["GH-1"]
+    await cli._reflect(cfg, ports, None, "2026-10-01")
+    assert "reflected 1, 0 left for the next run" in capsys.readouterr().out
+    ledger = pc.parse_ledger(git(root, "show", f"agentic/playbook:{pc.LEDGER_FILE}"))
+    assert list(ledger.tasks) == ["GH-1"]

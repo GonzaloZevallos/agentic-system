@@ -177,3 +177,14 @@ def test_since_reaches_back_and_with_no_clock_nothing_is_eligible():
 @pytest.mark.parametrize(("count", "due"), [(0, False), (9, False), (10, True), (23, True)])
 def test_a_summary_is_due_every_ten_reflected_tasks(count, due):
     assert pc.summary_due(count) is due
+
+
+def test_an_auto_merged_delivery_is_never_a_kept_candidate():
+    from agentic.core.process.domain import playbook_candidates as pc
+
+    docs = [
+        {"id": "GH-1", "closed_at": "2026-10-06T00:00:00", "delivery_outcome": "auto_merged"},
+        {"id": "GH-2", "closed_at": "2026-10-06T00:00:00", "delivery_outcome": "merged"},
+    ]
+    names = [d["id"] for d in pc.eligible(docs, [], "2026-10-01", None)]
+    assert names == ["GH-2"]

@@ -20,6 +20,13 @@ from ...domain.task import PullRequest, PullRequestCommit
 _ISSUE = re.compile(r"^GH-(\d+)$")
 _PULL_REQUEST_URL = re.compile(r"/pull/(\d+)$")
 
+# The order a merge method is picked in: the first the repository allows.
+_MERGE_METHODS = (
+    ("merge", "mergeCommitAllowed"),
+    ("squash", "squashMergeAllowed"),
+    ("rebase", "rebaseMergeAllowed"),
+)
+
 Run = Callable[..., subprocess.CompletedProcess[str]]
 
 # `gh pr view --json commits` carries no `additions`/`deletions` per commit (the gate
@@ -39,6 +46,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
       createdAt
       mergedAt
       mergeCommit { oid }
+      headRefOid
       commits(first: 250) {
         nodes {
           commit {
@@ -234,8 +242,26 @@ class GhTracker:
             created_at=pull_request["createdAt"],
             merged_at=pull_request["mergedAt"],
             merge_commit=(pull_request.get("mergeCommit") or {}).get("oid"),
+            head_oid=pull_request.get("headRefOid") or None,
             commits=commits,
         )
+
+    def merge(self, number: int, head_sha: str) -> str:
+        allowed = json.loads(
+            self._gh(
+                "repo",
+                "view",
+                "--json",
+                "mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed",
+            )
+        )
+        method = next((name for name, key in _MERGE_METHODS if allowed.get(key)), None)
+        if method is None:
+            raise ValueError("no_merge_method")
+        # The head sha pins the merge to what the decision saw (GH-178); no `--auto` and no
+        # `--delete-branch`: the poller's own `close` owns what happens after.
+        self._gh("pr", "merge", str(number), f"--{method}", "--match-head-commit", head_sha)
+        return method
 
     def _gh(self, *args: str) -> str:
         try:

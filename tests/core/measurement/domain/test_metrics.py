@@ -290,6 +290,84 @@ def test_delivery_outcome_is_closed_for_a_pull_request_closed_unmerged():
     assert metrics.delivery_outcome(pr, SYSTEM_EMAIL) == "closed"
 
 
+def _merged_pull_request(head_oid, *, human_commit=False):
+    commits = [commit([SYSTEM_EMAIL], parent_count=1)]
+    if human_commit:
+        commits.append(commit([HUMAN_EMAIL], parent_count=1))
+    return PullRequest(
+        state="MERGED",
+        created_at="2026-09-20T23:00:00Z",
+        merged_at="2026-09-21T00:29:02Z",
+        commits=tuple(commits),
+        head_oid=head_oid,
+    )
+
+
+def test_delivery_outcome_is_auto_merged_when_the_intent_names_the_merged_head():
+    pr = _merged_pull_request("abc123")
+    assert metrics.delivery_outcome(pr, SYSTEM_EMAIL, auto_merge_head="abc123") == "auto_merged"
+
+
+@pytest.mark.parametrize("intent", [None, ""])
+def test_delivery_outcome_reads_no_intent_as_the_humans_verdict(intent):
+    pr = _merged_pull_request("abc123")
+    assert metrics.delivery_outcome(pr, SYSTEM_EMAIL, auto_merge_head=intent) == "merged"
+
+
+def test_delivery_outcome_ignores_an_intent_for_a_different_head():
+    """A human pushed after a failed auto-merge: the merged head is not the one the
+    system meant to merge, so the human's verdict stands."""
+    clean = _merged_pull_request("def456")
+    changed = _merged_pull_request("def456", human_commit=True)
+    assert metrics.delivery_outcome(clean, SYSTEM_EMAIL, auto_merge_head="abc123") == "merged"
+    assert (
+        metrics.delivery_outcome(changed, SYSTEM_EMAIL, auto_merge_head="abc123")
+        == "merged_with_changes"
+    )
+
+
+def test_delivery_outcome_never_matches_an_intent_against_an_unknown_head():
+    pr = _merged_pull_request(None)
+    assert metrics.delivery_outcome(pr, SYSTEM_EMAIL, auto_merge_head="abc123") == "merged"
+
+
+def test_delivery_outcome_is_closed_when_unmerged_even_with_an_intent():
+    pr = PullRequest(
+        state="CLOSED",
+        created_at="2026-09-20T23:00:00Z",
+        merged_at=None,
+        commits=(),
+        head_oid="abc123",
+    )
+    assert metrics.delivery_outcome(pr, SYSTEM_EMAIL, auto_merge_head="abc123") == "closed"
+
+
+def test_every_outcome_is_classified_exactly_once():
+    from typing import get_args
+
+    assert set(metrics.OUTCOME_CLASS) == set(get_args(metrics.DeliveryOutcome))
+    assert metrics.OUTCOME_CLASS == {
+        "merged": "human_kept",
+        "merged_with_changes": "human_kept",
+        "auto_merged": "landed_unjudged",
+        "closed": "closed",
+    }
+
+
+def test_the_process_tuples_follow_the_outcome_classes():
+    """`playbook_candidates.KEPT` and `stack_signals.MERGED_OUTCOMES` are literal in
+    the process domain (ADR-0010); this is what keeps them equal to the classes."""
+    from agentic.core.process.domain.playbook_candidates import KEPT
+    from agentic.core.process.domain.stack_signals import MERGED_OUTCOMES
+
+    human_kept = {o for o, c in metrics.OUTCOME_CLASS.items() if c == "human_kept"}
+    not_closed = {o for o, c in metrics.OUTCOME_CLASS.items() if c != "closed"}
+    assert set(KEPT) == human_kept
+    assert "auto_merged" not in KEPT
+    assert set(MERGED_OUTCOMES) == not_closed
+    assert "closed" not in MERGED_OUTCOMES
+
+
 # GH-136: a merge commit is never human work, whatever its title -- only
 # `parent_count` decides, never `message_headline` (apostrophe #16 and #21: a
 # human-authored merge of master with a hand-written title carried the whole diff

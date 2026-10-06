@@ -17,7 +17,7 @@ from dataclasses import dataclass
 # stack over). Declared here, not imported: this module is `core/process/domain`, the
 # outcome lives in `core/measurement/domain`, and hexagonal keeps the two apart.
 MERGED_TASKS_THRESHOLD = 10
-MERGED_OUTCOMES = ("merged", "merged_with_changes")
+MERGED_OUTCOMES = ("merged", "merged_with_changes", "auto_merged")
 
 
 @dataclass(frozen=True)

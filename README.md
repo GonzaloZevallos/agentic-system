@@ -139,10 +139,10 @@ definición previa no hay consulta (§3) todavía: Product Analyst entrega el di
 devolución de PM (reproducción que falta, definición mal leída) cuenta contra el par. Si PM
 decide que es bug, escribe ahí la definición que faltaba, para que Tech Lead tenga spec.
 Comportamiento esperado → la tarea termina **descartada**: el sistema comenta el motivo en
-el issue, borra el worktree y el humano cierra el issue, como hoy mergea el pull request
-(ADR-0011); no se escribe definición, porque una tarea descartada no entrega nada que la
-lleve. Bug → el plan, con PM consultado en la entrevista de solución como en feature,
-Developers, revisión y pull request. Sin flags, métricas ni dashboard. UI Designer y UI
+el issue, borra el worktree y el humano cierra el issue, como el pull request que el poller
+no mergea lo mergea el humano (ADR-0011, ADR-0045); no se escribe definición, porque una
+tarea descartada no entrega nada que la lleve. Bug → el plan, con PM consultado en la
+entrevista de solución como en feature, Developers, revisión y pull request. Sin flags, métricas ni dashboard. UI Designer y UI
 Lead (etapa 4) y QA (etapa 2) esperan a sus etapas (§11).
 
 ### Platform enhancement
@@ -167,10 +167,10 @@ entrevista a Tech Lead con el issue, el conocimiento de producto y el motivo de 
 único insumo; como no hay PM a quien consultar, lo que sólo una persona puede decidir va al
 humano. Se espera que no haya nada: una pregunta de producto en este camino es señal de
 que la tarea era una feature mal clasificada. Developers y revisión, iguales que en
-feature. Mientras no hay QA cierra como el camino de feature, un pull request que el humano
-mergea o no (ADR-0011): que el comportamiento no cambió lo verifica hoy la revisión de
-Tech Lead contra el brief y el código previo, y la devolución QA→PjM→PM queda para cuando
-QA entre (etapa 2, §11). Ningún nodo de este camino exige flags, métricas ni dashboard.
+feature. Mientras no hay QA cierra como el camino de feature, un pull request que mergea el
+poller si pasa la decisión de ADR-0045 y, si no, el humano (ADR-0011): que el comportamiento
+no cambió lo verifica hoy la revisión de Tech Lead contra el brief y el código previo, y la
+devolución QA→PjM→PM queda para cuando QA entre (etapa 2, §11). Ningún nodo de este camino exige flags, métricas ni dashboard.
 
 ---
 
@@ -769,7 +769,8 @@ sistema (ADR-0006). Los tres llegan enteros en el prompt de todo rol que lee con
 ADRs incluidos: un rol sin tools no tiene otra forma de saber qué decidió un ADR, y para PM
 un ADR cierra la pregunta, nunca va al humano (ADR-0006, adenda segunda). Los ADRs los
 valida el Tech Lead efímero en el pingpong, y el humano ve todo el conocimiento igual al
-revisar el diff antes de mergear.
+revisar el diff antes de mergear lo que el poller no mergea solo (ADR-0045); lo que el
+poller mergea lo ve después.
 
 ### El producto de prueba
 
@@ -809,7 +810,11 @@ se puede separar si mejoró el prompt o si las tareas eran más fáciles.
 
 **Puntaje binario y estricto.** Una tarea cuenta solo si el diff pasa los tests y el humano
 lo mergea **sin tocar**. No hay crédito parcial: es lo único que no se corre con el humor
-del día.
+del día. Desde ADR-0045 el puntaje cuenta entregas **juzgadas por un humano**: el poller
+mergea solo lo que Tech Lead aprobó y los chequeos dejan verde, y ese merge es el resultado
+`auto_merged`, que no puntúa (ni como éxito ni como fracaso) y no entra en la autonomía.
+Las tareas del set de evaluación nunca se mergean solas, así que el set sigue midiendo el
+veredicto del humano.
 
 **Nota aparte.** Cada tarea deja anotado qué le faltó. No puntúa, pero dice qué prompt tocar
 sin ensuciar el número.
@@ -826,8 +831,8 @@ escalada corta menos que la corrida completa que dejó el puntaje anterior.
 
 **El loop humano.** `agentic eval run --budget <USD> --yes` corre el set (o, en una
 tarea de humo, la única del set que la declaración marca) desde cero, una tarea a la
-vez; el humano mergea cada pull request o no; `agentic close --issue N` por cada tarea
-del set registra el veredicto -- se niega con `"no metrics endpoint configured;
+vez; el humano mergea cada pull request o no (el poller no mergea las del set, ADR-0045);
+`agentic close --issue N` por cada tarea del set registra el veredicto -- se niega con `"no metrics endpoint configured;
 nothing recorded"` si no hay endpoint de métricas (`cli.py`, `_close`), la línea que
 alguien lee seis semanas después cuando la línea de base son cinco nulos; `agentic eval
 score --out <archivo>.jsonl` escribe una línea por tarea,
@@ -898,9 +903,9 @@ producto propio entra siempre por platform enhancement (§8, ADR-0017).
 
 **Segunda consecuencia asumida**: en la etapa 1 no hay QA, así que Tech Lead arranca sin el
 plan de tests funcionales y Developer escribe los tests desde la definición y las costuras
-que el plan declara. La tarea termina **lista para revisión**: un pull request que el humano
-mergea o no (ADR-0011). El Tech Lead efímero entra en la misma etapa, como entrevistador
-de Tech Lead (ADR-0014).
+que el plan declara. La tarea termina **lista para revisión**: un pull request que
+mergea el poller si pasa la decisión de ADR-0045 o, si no, el humano (ADR-0011). El Tech
+Lead efímero entra en la misma etapa, como entrevistador de Tech Lead (ADR-0014).
 
 **Riesgo conocido de la estructura por roles.** Un organigrama humano existe porque las
 personas tienen contexto limitado, no se pueden clonar, y alguien rinde cuentas. Los agentes
@@ -996,6 +1001,7 @@ Se anotan para no reintroducirlas por error.
 | El costo por tarea del set de evaluación sale de Grafana | Grafana no puede: ningún span ni ninguna métrica lleva id de tarea y ninguno lo hará (ADR-0008, segunda adenda). Sale de `cost_usd`, ya en el documento de cada tarea; `agentic eval score` lo lee de ahí, nunca de una métrica (sección 12, pendiente 14; GH-27) |
 | El efímero usa modelo más capaz | Corre en el modelo de los pensadores, distinto del de Tech Lead (ADR-0014, adenda) |
 | PjM mejora el proceso aplicando solo los cambios menores a prompts y revierte si la métrica empeoró | Para las lecciones de los roles, un Reflector (rol 18) propone y un curador determinista las aplica como deltas a un playbook por rol del producto; solo entran por un pull request que una persona fusiona, y la ventana de 10 tareas decide si se proponen para retirar (ADR-0043). Reemplaza esa mecánica; el resto de «Mejora del proceso» sigue |
+| El merge del humano es el único cierre de una entrega y el único éxito: "el humano lo mergea sin tocar", "No mergea" (README sección 9, ADR-0011, ADR-0039) | El poller mergea el pull request que Tech Lead aprobó, con los chequeos verdes sobre el head mergeado con el master y sin hallazgos `blocking` ni `important` abiertos; es el resultado propio `auto_merged`, sin puntaje. Las tareas del set de evaluación nunca se mergean solas y la autonomía se lee sobre entregas juzgadas por un humano (ADR-0045) |
 | El hash de un prompt es el de su texto crudo (ADR-0019) | Es el del texto crudo cuando el playbook del rol está vacío, y el del crudo más la sección del playbook cuando no (ADR-0043 reemplaza esa frase de ADR-0019) |
 
 ---
