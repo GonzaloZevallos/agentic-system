@@ -6,6 +6,7 @@ import contextlib
 import dataclasses
 import threading
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 from agentic.core.knowledge.domain import knowledge
@@ -106,6 +107,9 @@ class MemoryDocuments:
 
     def ids(self) -> list[str]:
         return sorted({state["id"] for state in self.saved})
+
+    def ids_touched_since(self, since: datetime) -> list[str]:
+        return self.ids()
 
     def load(self, task_id: str) -> dict | None:
         mine = [s for s in self.saved if s["id"] == task_id]
@@ -646,6 +650,12 @@ class MemoryRunRegistry:
         self.exclusive_entries = 0
         self.attempts: dict[tuple[str, int], LaunchAttempt] = {}
         self.cleared: list[tuple[str, int]] = []
+        # GH-177: what each root published, and every call, so a test can assert none
+        # happened (pacing off) or read what a round handed over.
+        self.published: dict[Path, list[rules.SpendRun]] = {}
+        self.publish_calls: list[tuple[Path, str, list[rules.SpendRun], datetime]] = []
+        self.spend_calls: list[datetime] = []
+        self.spend_notes: list[str] = []
 
     def register(self, product: str, task_id: str) -> None:
         self.registered.append((product, task_id))
@@ -672,6 +682,16 @@ class MemoryRunRegistry:
     def clear_launch(self, product: str, issue: int) -> None:
         self.attempts.pop((product, issue), None)
         self.cleared.append((product, issue))
+
+    def publish_spend(self, root: Path, product: str, runs, now: datetime) -> list[str]:
+        self.publish_calls.append((root, product, list(runs), now))
+        self.published[root] = rules.merged_spend(self.published.get(root, []), runs, now)
+        return []
+
+    def spend(self, since: datetime) -> tuple[list[rules.SpendRun], list[str]]:
+        self.spend_calls.append(since)
+        runs = [r for mine in self.published.values() for r in mine if r.ended_at >= since]
+        return runs, list(self.spend_notes)
 
 
 class FakeLauncher:

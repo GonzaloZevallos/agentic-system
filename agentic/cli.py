@@ -80,7 +80,7 @@ from .core.process.application.preflight import (
 from .core.process.application.run_role import load_prompt
 from .core.process.application.stack_review import stack_review as run_stack_review
 from .core.process.domain import document as task_document
-from .core.process.domain import legacy_names, stack_signals
+from .core.process.domain import legacy_names, rules, stack_signals
 from .core.process.domain import stack_review as stack_review_texts
 from .core.process.domain.playbook import Delta, Playbook
 from .core.process.domain.roles import ROLES
@@ -987,7 +987,10 @@ async def _run(
             # already on its own file.
             async with open_checkpointer(cfg, task["id"]) as migrated_saver:
                 migrated_app = graph.compile(checkpointer=migrated_saver)
-                final = await _invoke(migrated_app, task, config, task, ports, cfg, "run")
+                # The one place `decided` is set (`rules.entering`): before any node
+                # runs, so `--fresh`, the poller and `eval run` all reach it.
+                entered = rules.entering(task, cap=cfg.decided_cap)
+                final = await _invoke(migrated_app, entered, config, entered, ports, cfg, "run")
     _report(final, task["id"], ports)
 
 

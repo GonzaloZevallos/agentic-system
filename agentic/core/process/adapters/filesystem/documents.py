@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 from ...domain import document
@@ -46,6 +47,22 @@ class FilesystemTaskDocuments:
         if not tasks_dir.is_dir():
             return []
         return sorted(path.stem for path in tasks_dir.glob("*.md"))
+
+    def ids_touched_since(self, since: datetime) -> list[str]:
+        """Ids of the documents whose file `mtime` is at or after `since`, sorted. Only
+        `stat` runs here -- nothing is parsed -- and only inside the documents subdir."""
+        tasks_dir = self.product_dir / self.subdir
+        if not tasks_dir.is_dir():
+            return []
+        cutoff = since.timestamp()
+        touched = []
+        for path in tasks_dir.glob("*.md"):
+            try:
+                if path.stat().st_mtime >= cutoff:
+                    touched.append(path.stem)
+            except OSError:
+                continue
+        return sorted(touched)
 
     def save(self, state: TaskState) -> Path:
         path = self.path_for(state["id"])

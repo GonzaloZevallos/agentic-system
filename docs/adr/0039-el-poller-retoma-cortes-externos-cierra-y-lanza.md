@@ -493,3 +493,84 @@ forzado lo supera.
   request existente es un cambio aparte, nombrado en el cuerpo del PR.
 - Un lock de otro host con un id de arranque ajeno se lee como vivo (`refusal` no lo sondea): nunca
   se retoma desde otra máquina.
+
+
+## Adenda (2026-10-06): una segunda corrida lanza solo si el gasto de las últimas 5 h va bajo un ritmo sostenible (#177)
+
+### Evidencia
+
+`AGENTIC_MAX_CONCURRENT_RUNS` es un tope fijo, pero lo que limita el rendimiento es el gasto de la
+cuenta por ventana de 5 horas. La adenda del 2026-10-05 (17 tareas, 41,2 h) vio los cortes en
+$177, $184, $200 y $163 por ventana, es decir ≈ $33–40/h sostenibles.
+
+- Las tareas grandes ya superan ese ritmo en serie: $50–57/h (apostrophe #58, $181, 9 subtareas).
+  En paralelo solo adelantan el 429: 3–5 corridas gastaron $100–195/h y chocaron con el límite a
+  las 1,5–1,8 h, contra 2,9 h en serie.
+- Las tareas chicas corren en serie a ≈ $30/h (#65: $8 en 16 min; #67: $9 en 19 min), así que la
+  ventana se reinicia con presupuesto sin usar (lo informado en el issue #177). Estimación: hasta
+  +20–25 % de tareas por ventana si se usa esa holgura.
+
+La regla correcta no es «N a la vez» sino «otra corrida solo mientras el gasto reciente va bajo un
+ritmo sostenible».
+
+### Decisión
+
+- Solo se regula `launch`. Un cierre, una retoma tras reinicio o una reanudación nunca se frenan.
+- La primera corrida nunca se frena: con ninguna corrida viva (ni lanzada antes en la misma
+  vuelta) el lanzamiento sale aunque el ritmo esté superado. Solo se regula la segunda en adelante.
+- Una pausa que aún espera su calendario sigue bloqueando todo lanzamiento, como hoy.
+- Apagado por omisión: `AGENTIC_SPEND_PACING=true` lo enciende. `max_concurrent_runs` sigue como
+  tope duro y con su valor 1. Con el interruptor apagado `poll_plan(pace=None)` devuelve lo mismo
+  que antes, no se lee ni se escribe ningún archivo de gasto y la salida de la vuelta es idéntica.
+- El ritmo (`AGENTIC_SPEND_PACE_USD_PER_H`, 35) es un valor de partida tomado de una muestra de
+  41 h, no una constante medida. Se revisará con `agentic eval compare` contra la primera línea
+  base que corra con el ritmo encendido.
+- Cada poller lee solo los documentos de su propio producto; el gasto de los demás llega
+  únicamente por `run_registry_dir/spend/`. Ningún camino lee el directorio de otro producto.
+
+### Archivos de gasto
+
+Cada poller publica `spend/<12 hex del sha256 del directorio de documentos resuelto>.json` en
+`run_registry_dir`, con `product`, `root` (para la persona), `written_at` y `runs` como lista de
+`[started_at, ended_at, cost_usd]`. La clave es el directorio, no el nombre del producto: dos
+checkouts con el mismo nombre se cuentan los dos. La escritura es atómica (archivo temporal en el
+mismo directorio y `os.replace`) y ocurre bajo `registry.exclusive()`. `spend/` solo se crea al
+publicar, así que `live()` (glob `*.json` del nivel superior) y `launch_attempts` (rutas exactas bajo
+`launches/`) no lo ven.
+
+La fusión (`rules.merged_spend`) clava cada corrida en `(started_at, ended_at)`: el costo recién
+publicado reemplaza al ya publicado, y una corrida publicada que ya no está en los documentos se
+conserva mientras siga dentro de la ventana. Archivar, cerrar o `--fresh` nunca bajan el gasto
+reciente y ninguna corrida se cuenta dos veces. Solo se suma `RoleRun.cost_usd`; `subagent_cost_usd`
+y `failed_cost_usd` no se leen. El gasto es el costo prorrateado por el solape con `[ahora-5 h,
+ahora]`, dividido por el tiempo cubierto (mínimo 30 min, máximo 5 h).
+
+### Filtro por `mtime` y su costo
+
+Cada vuelta hace un `stat` por documento propio y solo parsea los tocados en las últimas 5 h, todo
+fuera del candado. Bajo el candado cuesta una lectura-fusión-escritura de su propio archivo más una
+lectura por producto con poller.
+
+### Reglas de marcas de tiempo
+
+Toda fecha que reciben las reglas es consciente de zona horaria y en UTC. Una corrida sin
+`ended_at`, o con uno ingenuo o ilegible, se omite y se cuenta en una línea
+(`N runs without timestamps not counted`). Un archivo de gasto ilegible, o una entrada ingenua o mal
+formada, se omite con una nota y nunca lanza.
+
+### Riesgos conocidos
+
+Todos se equivocan hacia lanzar; el tope y el calendario del 429 siguen de respaldo.
+
+- Un rol aún corriendo no registró su `cost_usd`.
+- El gasto de intentos fallidos que escalaron sin `RoleRun` no se cuenta.
+- Un producto corrido a mano sin poller en esta máquina no se cuenta.
+- La cifra de cada producto es tan fresca como la última vuelta de su poller.
+- Un archivo de gasto ilegible se omite con una nota.
+- Una corrida sin `ended_at` utilizable se omite y se cuenta.
+
+### Lo que no se mueve
+
+Ninguna métrica, etiqueta, atributo de span, clave de documento, prompt ni `prompts.fingerprint` se
+agrega, mueve o renombra. Los archivos de gasto viven en `run_registry_dir`, fuera de todo
+repositorio, y solo con el ritmo encendido.

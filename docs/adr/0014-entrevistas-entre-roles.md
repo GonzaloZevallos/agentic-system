@@ -297,3 +297,72 @@ usa modelo más capaz"):
    cambiar de nombre: el efímero que ese brazo mide, de aquí en más, corre en otro
    modelo que antes de este commit. No se compara un lado de este commit contra el
    otro.
+
+## Adenda 2026-10-06: una ronda cuando el pedido ya decide (issue #179), vacía de resultados
+
+Mecanismo, no medición: esta adenda registra el tope antes de medirlo.
+
+1. **El contrato del encabezado y su dueño.** Un pedido que lleva `## Decided` (nivel 2)
+   dice «estas decisiones ya se tomaron en un grill». El dueño del encabezado es el
+   humano: ponerlo en un issue a medio decidir es su decisión, y su costo es una
+   entrevista más corta, visible en los `runs` de esa tarea. El sistema nunca lee prosa
+   para dudar del encabezado.
+2. **El detector y la entrada.** Hay un solo detector, `rules.decided(text, level=2)`:
+   una línea fuera de bloques cercados (``` y `~~~`) que es exactamente `level` `#`, un
+   espacio y `Decided`, sin distinguir mayúsculas, con espacios finales y a lo sumo un
+   `:` final ignorados. `rules.entering(task, cap=...)` escribe `decided: true` en el
+   estado, y se llama una sola vez, desde `cli._run`: el poller, `eval run` y `--fresh`
+   llegan todos a esa línea. Ningún nodo lo calcula ni lo pisa; `classify` no se toca.
+3. **El tope.** `rules.interview_cap` devuelve `min(1, configurado)` para un estado
+   decidido en una etapa de `DECIDED_CAP_STAGES = {"definition", "solution"}`, y el
+   configurado en cualquier otro caso. Para apagar el tope en una entrevista se quita su
+   etapa de ese conjunto. `interview.py` sigue pasando `cfg.interview_max_rounds`;
+   `interview_progress` lo convierte con `interview_cap`.
+4. **El margen de la retoma.** `rounds_left = max(tope - rondas_hechas,
+   min(INTERVIEW_RETAKE_ROUNDS, tope))`. Con tope de 2 o más es idéntico a antes; con
+   tope 1, una retoma recibe 1 ronda nueva. `interview_rounds` no cambió (el techo de
+   retomas productivas del poller, ADR-0039, lo lee). Por eso una retoma de tope 1 tras
+   un cierre forzado les dice a los roles «ronda 3 de 3»: es lo previsto.
+5. **Qué no se topa.** Las tareas que entraron antes de este merge, también cuando
+   reanudan desde un checkpoint o se rescatan con `--from-document`: una clave ausente
+   se lee como no decidida aunque el pedido lleve un `### Decided` demotado (para
+   incluirla, `agentic run --fresh`). Tampoco `stack_review` ni `langgraph dev`, que no
+   pasan por `cli._run`.
+6. **Interruptor, no brazo.** `Configuration.decided_cap` (`AGENTIC_DECIDED_CAP`,
+   por defecto activo) solo existe para correr el contrafactual y se lee en un único
+   lugar, el `entering` de `cli._run`. No es un brazo: `ARM_KEYS`, `EXPERIMENT_KEYS` y
+   `experiment_snapshot` no cambian, porque una tercera clave renombraría el valor de la
+   etiqueta de todo brazo no predeterminado existente (ADR-0008, ADR-0030).
+7. **Cambio de comportamiento.** Con `AGENTIC_INTERVIEW_MAX_ROUNDS=1`, una retoma daba
+   2 rondas nuevas; desde este commit da 1.
+
+**Protocolo de medición** (lo hace el humano después del merge; sin resultados):
+
+- Declarar un `bl-*` nuevo en este merge, que no sea la línea de base de #174, para
+  separar este cambio de #163, #164 y #174.
+- El contrafactual se aparea por issue: el mismo issue Decided corre una vez con la
+  configuración por defecto y otra con `--fresh` y `AGENTIC_DECIDED_CAP=0`.
+- La cifra es el gasto de la fase `plan`: la suma de `runs[].cost_usd` sobre los runs que
+  `rules.phase_of` asigna a esa fase (el `total_cost_usd` del SDK, con caché incluida).
+- Los resguardos: devoluciones `plan-invariant`, pasadas de revisión por subtarea y, para
+  la etapa de definición, devoluciones de categoría `definition`.
+- Definición y solución se leen por separado; con menos de 5 pares en una etapa, esa
+  etapa es no concluyente, nunca un «no sube».
+- Distinguir los lados en los documentos: un `### Decided` demotado (`decided(texto,
+  level=3)`) con `decided: true` es una corrida topada; el mismo encabezado sin la clave
+  es una corrida sin tope (o con `AGENTIC_DECIDED_CAP=0`).
+- Si el gasto no baja o un resguardo sube, la etapa sale de `DECIDED_CAP_STAGES`.
+- Las tareas Decided anteriores al merge corrieron con los modelos que #163 y #164
+  reemplazaron: son solo contexto.
+
+**A/B del efímero.** Sin código nuevo: el brazo `AGENTIC_SKIP_EPHEMERAL` existente, en
+tareas comparables bajo el mismo `bl-*`, con al menos 5 tareas por brazo. Resguardos los
+de la adenda del 2026-09-22: devoluciones `plan-invariant` y `spec-behaviour`, y
+escalaciones de clase `questions`.
+
+**Riesgos conocidos.** Un autor en frío puede costar más que uno que retoma una sesión
+larga, así que el gasto del plan puede no bajar. Un issue a medio decidir pierde
+invariantes: con menos rondas se proponen menos (en este repo solo corre la entrevista
+de solución; la evidencia de la de definición sale de otro producto). Una corrida con
+`decided_cap=0` no deja marcador explícito: se infiere de «encabezado presente, clave
+ausente», y las pruebas del ida y vuelta del documento fijan esa inferencia.

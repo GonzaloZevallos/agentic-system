@@ -223,6 +223,11 @@ class TaskInput(TypedDict):
     id: str
     title: str
     description: str
+    # Whether the request carried a `## Decided` heading when the task entered
+    # (`rules.entering`, called only from `cli._run`), so its interviews run one round
+    # (`rules.interview_cap`; ADR-0014, addendum of 2026-10-06). Declared here because the
+    # graph's `input_schema` keeps only declared keys. Absent reads as not decided.
+    decided: NotRequired[bool]
 
 
 class Failure(TypedDict):

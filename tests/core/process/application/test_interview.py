@@ -792,3 +792,135 @@ async def test_a_retake_seeds_invariants_and_counts_only_the_new_ones(cfg):
     # Only this invocation's own round proposed anything new; the seeded one is not
     # counted again.
     assert patch["interview_stats"]["invariants_proposed"] == 1
+
+
+# A request that carries `## Decided` runs its interviews in one round (ADR-0014,
+# addendum of 2026-10-06): the closing turn is the one the cap already forces.
+
+
+def _decided(state: dict) -> dict:
+    return {**state, "decided": True}
+
+
+async def test_a_decided_interviewer_that_closes_in_round_one_keeps_its_invariants(cfg):
+    runner = ScriptedRunner(**{TL_ASK: [questions(done=True, invariants=["Every X does Y."])]})
+    transcript, patch = await interview(
+        _decided(PLANNED), INTERVIEW_SOLUTION, cfg, memory_ports(runner)
+    )
+
+    assert transcript is not None and transcript.invariants == ["Every X does Y."]
+    assert runner.slugs == [TL_ASK]  # no answer turn
+    assert patch["proposed_invariants"] == ["Every X does Y."]
+    assert "escalated" not in patch
+
+
+async def test_a_decided_interviewer_that_asks_gets_one_answer_then_the_forced_close(
+    cfg, spy_run_role
+):
+    runner = ScriptedRunner(
+        **{
+            TL_ASK: [questions(1), questions(done=True, invariants=["Late rule."])],
+            TL_ANSWER: [tech_answers(1)],
+        }
+    )
+    transcript, patch = await interview(
+        _decided(PLANNED), INTERVIEW_SOLUTION, cfg, memory_ports(runner)
+    )
+
+    assert transcript is not None
+    assert runner.slugs == [TL_ASK, TL_ANSWER, TL_ASK]
+    assert "The rounds are over" in runner.calls[-1]["prompt"]
+    assert [c["max_rounds"] for c in spy_run_role] == [1, 1, 1]
+    assert [c["round"] for c in spy_run_role] == [1, 1, 1]
+    # The forced closing turn can still propose an invariant.
+    assert patch["proposed_invariants"] == ["Late rule."]
+    assert "escalated" not in patch
+
+
+async def test_a_decided_interview_with_a_question_for_the_human_escalates_as_today(cfg):
+    runner = ScriptedRunner(
+        **{
+            TL_ASK: [questions(1), questions(done=True)],
+            TL_ANSWER: [tech_answers(1, for_pm=["Which currency?"])],
+            CONSULT: [consulted(1, for_human=["Which currency, really?"])],
+        }
+    )
+    transcript, patch = await interview(
+        _decided(PLANNED), INTERVIEW_SOLUTION, cfg, memory_ports(runner)
+    )
+
+    assert transcript is None
+    assert patch["questions_for_human"] == ["Which currency, really?"]
+    assert patch["escalation_class"] == "questions"
+
+
+async def test_a_decided_consultation_still_runs_in_round_one(cfg):
+    runner = ScriptedRunner(
+        **{
+            TL_ASK: [questions(1), questions(done=True)],
+            TL_ANSWER: [tech_answers(1, for_pm=["Stored end date?"])],
+            CONSULT: [consulted(1)],
+        }
+    )
+    transcript, _ = await interview(
+        _decided(PLANNED), INTERVIEW_SOLUTION, cfg, memory_ports(runner)
+    )
+
+    assert transcript is not None
+    assert runner.slugs == [TL_ASK, TL_ANSWER, CONSULT, TL_ASK]
+
+
+async def test_a_decided_definition_interview_is_capped_at_one_round_too(cfg):
+    runner = ScriptedRunner(**{ASK: [questions(1), questions(done=True)], ANSWER: [answers(1)]})
+    transcript, _ = await interview(_decided(TASK), INTERVIEW_DEFINITION, cfg, memory_ports(runner))
+
+    assert transcript is not None and runner.slugs == [ASK, ANSWER, ASK]
+
+
+async def test_a_state_without_decided_runs_the_configured_rounds_whatever_its_request_holds(cfg):
+    state = {**TASK, "description": "Users want CSV.\n\n### Decided\n- csv"}
+    runner = ScriptedRunner(
+        **{
+            ASK: [questions(1), questions(2), questions(done=True)],
+            ANSWER: [answers(1), answers(2)],
+        }
+    )
+    transcript, _ = await interview(state, INTERVIEW_DEFINITION, cfg, memory_ports(runner))
+
+    assert transcript is not None and runner.slugs == [ASK, ANSWER, ASK, ANSWER, ASK]
+
+
+async def test_a_decided_retake_gets_one_new_round_then_the_forced_close(cfg, spy_run_role):
+    # After a decided interview escalated: one interviewer run already on record, the
+    # forced close (two rounds done), and the human's decision. The retake reads
+    # "round 3 of 3": rounds_done 2 plus the one round it is given.
+    section = INTERVIEW_SOLUTION.section
+    done = [
+        {"role": "Tech Lead efímero", "section": section, "session_id": "e1"},
+        {"role": "Tech Lead", "section": section, "session_id": "t1"},
+        {"role": "Tech Lead efímero", "section": section, "session_id": "e1"},
+    ]
+    state = _decided(
+        {
+            **PLANNED,
+            "branch": "agentic/T-1",
+            "sections": {
+                **PLANNED["sections"],
+                section: OLD_SOLUTION_TRANSCRIPT,
+                "Human": "### Decision 1\n\nUSD, always.",
+            },
+            "runs": [*PLANNED["runs"], *done],
+        }
+    )
+    runner = ScriptedRunner(
+        **{
+            TL_ASK: [questions(1, session="e1"), questions(done=True, session="e1")],
+            TL_ANSWER: [tech_answers(1, session="t1")],
+        }
+    )
+    transcript, _ = await interview(state, INTERVIEW_SOLUTION, cfg, memory_ports(runner))
+
+    assert transcript is not None
+    assert [c["slug"] for c in spy_run_role] == [TL_ASK, TL_ANSWER, TL_ASK]
+    assert [c["round"] for c in spy_run_role] == [3, 3, 3]
+    assert [c["max_rounds"] for c in spy_run_role] == [3, 3, 3]
