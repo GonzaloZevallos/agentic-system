@@ -2278,7 +2278,10 @@ def _approved(state, subtask="api", version=2, findings=()):
     settled = rules.settled_on_approval(state, subtask, version, list(findings))
     return {
         **state,
-        "findings": [*state.get("findings", []), *rules.finding_records(subtask, version, findings)],
+        "findings": [
+            *state.get("findings", []),
+            *rules.finding_records(subtask, version, findings),
+        ],
         "approval_settled": [*state.get("approval_settled", []), *settled],
     }
 
@@ -2291,7 +2294,9 @@ def test_an_approval_closes_its_own_subtasks_earlier_blocking_row():
     """The apostrophe GH-107 shape: a v1 blocking, a v2 approval with nothing to settle."""
     state = {"findings": rules.finding_records("api", 1, [found()])}
     settled = rules.settled_on_approval(state, "api", 2, [])
-    assert settled == [{"subtask": "api", "location": "x.py:1", "claim": "double count", "version": 2}]
+    assert settled == [
+        {"subtask": "api", "location": "x.py:1", "claim": "double count", "version": 2}
+    ]
     approved = _approved(state)
     assert _statuses(approved) == {"double count": "fixed"}
     assert rules.open_findings(approved) == []
@@ -2302,7 +2307,9 @@ def test_an_approval_never_settles_what_is_not_its_subtasks_blocking_record():
     earlier blocking records and nothing else."""
     rejected = {
         "its own important": rules.finding_records("api", 1, [found(severity="important")]),
-        "a plan-scope row": rules.finding_records("api", 1, [found(scope="plan", severity="important")]),
+        "a plan-scope row": rules.finding_records(
+            "api", 1, [found(scope="plan", severity="important")]
+        ),
         "a blocking lowered to important": rules.finding_records(
             "api", 1, rules.lower_unbacked_blocks([found(scope="plan")])[0]
         ),
@@ -2376,7 +2383,10 @@ def test_a_later_regression_reopens_the_row_an_approval_closed():
     """Coverage is per record, never per key: a v3 blocking at the same key is not covered."""
     approved = _approved({"findings": rules.finding_records("api", 1, [found()])})
     assert _statuses(approved) == {"double count": "fixed"}
-    regressed = {**approved, "findings": [*approved["findings"], *rules.finding_records("api", 3, [found()])]}
+    regressed = {
+        **approved,
+        "findings": [*approved["findings"], *rules.finding_records("api", 3, [found()])],
+    }
     assert _statuses(regressed) == {"double count": "open"}
 
 

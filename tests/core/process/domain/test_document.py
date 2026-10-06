@@ -630,3 +630,48 @@ def test_a_document_without_the_key_parses_without_it_and_keeps_the_configured_c
     assert "decided" not in parsed
     assert rules.decided(parsed["description"], level=3)
     assert rules.interview_cap(parsed, roles.INTERVIEW_SOLUTION, 4) == 4
+
+
+def test_an_approval_settlement_survives_the_document_and_keeps_the_row_fixed():
+    """GH-201: `approval_settled` is a `TaskState` field, so it is restored through
+    `STATE_FIELDS`, and the fold over what was read back still closes the row."""
+    records = rules.finding_records(
+        "api",
+        1,
+        [
+            {
+                "location": "x.py:1",
+                "claim": "double count",
+                "evidence": "$ pytest\nF",
+                "severity": "blocking",
+                "scope": "subtask",
+                "category": "spec-behaviour",
+            }
+        ],
+    )
+    state = {
+        "id": "T-1",
+        "title": "t",
+        "description": "d",
+        "findings": records,
+        "approval_settled": [
+            {"subtask": "api", "location": "x.py:1", "claim": "double count", "version": 2}
+        ],
+    }
+    assert "approval_settled" in resume.STATE_FIELDS
+    back = {
+        k: v for k, v in document.parse(document.render(state)).items() if k in resume.STATE_FIELDS
+    }
+    assert back["approval_settled"] == state["approval_settled"]
+    assert [row["status"] for row in rules.findings_rows(back)] == ["fixed"]
+    assert rules.open_findings(back) == []
+
+
+def test_a_state_without_a_settlement_renders_no_key_for_it():
+    """Written only when non-empty: a document without it is byte-identical to one written
+    before GH-201, whether the key is absent or empty."""
+    state = {"id": "T-1", "title": "t", "description": "d"}
+    plain = document.render(state)
+    assert "approval_settled" not in plain
+    assert document.render({**state, "approval_settled": []}) == plain
+    assert "approval_settled" not in document.parse(plain)

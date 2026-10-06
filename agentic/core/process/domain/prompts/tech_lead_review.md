@@ -102,8 +102,9 @@ this task, this subtask's and its sisters'. Two things to do with them:
   branch may repeat. Check whether it does. If it does, it is a finding of yours, in
   your own words, with your own evidence.
 - A row this delivery settles goes in `settled`, by its `location`, and out of your
-  findings. Only that closes a row. Leaving it out without listing it there keeps it
-  open, on purpose: this pass is told not to re-read what the last one approved, so
+  findings. Only that closes a row, except that approving this subtask also
+  closes this subtask's own earlier `blocking` rows that this review does not raise
+  again. Leaving any other row out without listing it there keeps it open, on purpose: this pass is told not to re-read what the last one approved, so
   saying nothing about a row means you did not look, not that it is fixed. Settle only
   what you actually checked in this checkout.
 

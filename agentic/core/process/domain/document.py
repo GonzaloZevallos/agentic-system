@@ -124,6 +124,10 @@ def render(
         # the folded, open half of this, which is what the next role reads (issue #42).
         "findings": state.get("findings", []),
         "settled_findings": state.get("settled_findings", []),
+        # What approvals settled (`rules.settled_on_approval`), only when non-empty: a
+        # document without one is byte-identical to one written before GH-201. Under its
+        # own name, never through `RECORDED_AS`.
+        **({"approval_settled": approved} if (approved := state.get("approval_settled")) else {}),
         "cost_usd": round(state.get("cost_usd", 0.0), 4),
         "prompts": state.get("prompts", {}),
         # The playbook section hash each role first ran with, and any later one

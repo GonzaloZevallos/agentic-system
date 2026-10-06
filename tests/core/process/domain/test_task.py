@@ -44,6 +44,7 @@ def test_reducers_are_read_from_the_annotations():
         "subtasks",
         "findings",
         "settled_findings",
+        "approval_settled",
         "status",
         "current_role",
         "escalated",
