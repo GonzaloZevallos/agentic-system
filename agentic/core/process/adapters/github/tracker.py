@@ -106,9 +106,7 @@ class GhTracker:
             path = h.name
         try:
             # Not a draft: the human merges it as it is (README.md, 9), or does not.
-            return self._gh(
-                "pr", "create", "--head", branch, "--title", title, "--body-file", path
-            )
+            return self._gh("pr", "create", "--head", branch, "--title", title, "--body-file", path)
         finally:
             Path(path).unlink(missing_ok=True)
 

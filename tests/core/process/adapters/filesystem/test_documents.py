@@ -127,3 +127,17 @@ def test_ids_touched_since_stays_inside_the_documents_subdir_and_with_no_dir(tmp
     reviews.save({"id": "stack-1", "title": "s", "description": "d"})
     assert tasks.ids_touched_since(long_ago) == []
     assert reviews.ids_touched_since(long_ago) == ["stack-1"]
+
+
+def test_load_reads_the_product_copy_not_the_one_a_delivery_committed_on_the_branch(tmp_path):
+    """GH-203: a bounded delivery commits a snapshot of the document on the task branch.
+    The resume reads the product checkout's own copy, which has the status and the later
+    fields, never the branch's."""
+    product = tmp_path / "product"
+    branch = tmp_path / "product/.agentic/worktrees/GH-1"
+    state = {"id": "GH-1", "title": "t", "description": "d", "status": "integrating"}
+    FilesystemTaskDocuments(product).save(state)
+    FilesystemTaskDocuments(branch).save({**state, "status": "branch snapshot"})
+
+    loaded = FilesystemTaskDocuments(product).load("GH-1")
+    assert loaded is not None and loaded["status"] == "integrating"

@@ -624,6 +624,8 @@ class MemoryTracker:
         # GH-203: `open_pull_request` raises `ValueError` (`gh`'s own failure shape) for its
         # first N calls, and `comment` raises it for as many as it is told to.
         self.open_failures = 0
+        # The body of every `open_pull_request` call, the failed ones too.
+        self.attempted_bodies: list[str] = []
         self.open_error = "gh pr create failed: Body is too long"
         self.comment_failures = 0
 
@@ -644,6 +646,7 @@ class MemoryTracker:
         return self.merge_method
 
     def open_pull_request(self, task_id: str, branch: str, title: str, body: str) -> str:
+        self.attempted_bodies.append(body)
         if self.open_failures > 0:
             self.open_failures -= 1
             raise ValueError(self.open_error)

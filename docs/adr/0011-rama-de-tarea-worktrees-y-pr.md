@@ -665,3 +665,36 @@ tarea la que decide mover esa unidad del dial de ADR-0021.
 Para el cuerpo del pull request: el seguimiento (contar las negaciones de esta jaula por
 rol que ejecuta, igual que ya se cuenta la de git) y la acción del humano en apostrophe
 (declarar `forbidden` contra `pkill` y `killall`) quedan pendientes, fuera de esta tarea.
+
+## Adenda 2026-10-06: el cuerpo del pull request tiene tope y la entrega que falla escala (GH-203)
+
+apostrophe GH-47 terminó la integración, empujó su rama y murió en `deliver`: GitHub
+rechaza un cuerpo de más de 65.536 caracteres y la tarea quedó en `developing`, sin pull
+request y sin escalado.
+
+- El cuerpo tiene tope en 60.000 unidades UTF-16 (`pull_request.PR_BODY_MAX`; es la unidad
+  que cuenta GitHub, un emoji vale dos), con margen para el `Closes #N`. Un cuerpo que
+  cabe sale byte por byte como siempre. Si no cabe, solo se descartan secciones enteras
+  (la primera, la del PM, puede recortarse en una línea en blanco fuera de un bloque de
+  código) y una sección `Task document` apunta al documento de tarea, que las tiene
+  completas. El cuerpo viaja con `--body-file`.
+- El puntero nombra un documento que existe en la rama: solo cuando el cuerpo tiene tope,
+  `deliver` guarda el documento con el estado que recibió, lo escribe en el worktree y
+  commitea esa única ruta (`Workspace.commit_paths`, nunca `commit_all`). Es una
+  instantánea: su estado y sus campos posteriores quedan en la copia del checkout del
+  producto. Si el producto ignora la ruta, el puntero lo dice.
+- Un fallo del commit del documento, del `push` o de `gh pr create` es un escalado de
+  clase `failure` cuyo motivo nombra el paso. No lo retoma el poller
+  (`rules.auto_resumable` exige una entrada `failure` en el `pause_log`, y este escalado
+  solo escribe la de `escalation`): lo resuelve el humano. `resume_target` no cambia: la
+  reanudación pasa por `integrate` sin costo (los merges ya están hechos, no se despacha
+  ningún rol) y llega a `deliver`.
+- Una vez que `gh` devolvió la URL, nada en `deliver` lanza: el comentario del issue y
+  `cleanup` son de mejor esfuerzo y el parche con `pull_request` se arma antes.
+
+Riesgos que quedan: el error de un comentario o un `cleanup` que falló después del PR se
+traga sin registro; un proceso muerto entre `gh pr create` y el checkpoint termina en un
+escalado visible por "already exists" (encontrar el PR existente sigue diferido, adenda de
+ADR-0039); la instantánea mergeada conserva un estado viejo, y quién versiona el documento
+final no se resuelve acá; un `OSError` de `documents.save` o `write_into` sigue sin
+atraparse.
