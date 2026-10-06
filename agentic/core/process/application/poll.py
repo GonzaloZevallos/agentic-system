@@ -7,11 +7,12 @@ action is a detached `agentic close|resume|run` child (`Launcher.spawn`); no rol
 runs in this process (the plan's own invariant).
 
 `rules.poll_plan` decides the order and which issues qualify; this module only gathers
-the facts it needs from the ports and carries out what it returns. `AUTO_RESUMED` and
-`RETAKEN` are the comment prefixes this module posts, both registered into
-`resume.SYSTEM_COMMENTS` so a resume reads them as the system's own, never a human's
-answer. A retake (GH-176) is the poller taking up a run a reboot interrupted: it reads the
-run's lock through `RunLock.read`, never `acquire`, and decides in `rules.interrupted_run`."""
+the facts it needs from the ports and carries out what it returns. `AUTO_RESUMED`,
+`RETAKEN`, `AUTO_MERGE_REFUSED` and `AUTO_MERGED` are the comment prefixes the system
+posts, all registered into `resume.SYSTEM_COMMENTS` so a resume reads them as the
+system's own, never a human's answer. A retake (GH-176) is the poller taking up a run a
+reboot interrupted: it reads the run's lock through `RunLock.read`, never `acquire`, and
+decides in `rules.interrupted_run`."""
 
 from __future__ import annotations
 
@@ -25,7 +26,7 @@ from agentic.shared.configuration import Configuration
 
 from ..domain import rules
 from ..domain.boot import boot_verdict
-from ..domain.task import TaskState
+from ..domain.task import PullRequest, TaskState
 from . import reflect_run
 from .ports import (
     GitError,
@@ -55,6 +56,12 @@ AUTO_RESUMED = "Auto-resumed: "
 # How the comment of a retake after a reboot starts (GH-176): registered into
 # `resume.SYSTEM_COMMENTS` beside `AUTO_RESUMED`, posted only once the spawn returned a pid.
 RETAKEN = "Retaken after reboot: "
+
+# The two comments the automatic merge posts (GH-178, ADR-0045), both registered into
+# `resume.SYSTEM_COMMENTS` the same way: a refusal the human can act on, and the merge
+# itself. Defined here, imported by `resume.py`, so neither is ever read as a human's answer.
+AUTO_MERGE_REFUSED = "Auto-merge refused: "
+AUTO_MERGED = "Auto-merged: "
 
 # The per-product lock key `agentic poll` takes (Tech Lead plan): one poller per
 # product, the same `FilesystemRunLock` under the product's own `.agentic/runs`
@@ -198,6 +205,111 @@ def gather_closes(ports: Ports) -> list[int]:
         if pull_request is not None and pull_request.state == "MERGED":
             closes.append(number)
     return closes
+
+
+def _recorded(raw: TaskState, key: str) -> dict[str, object]:
+    """A record the merge verb wrote (`merge_checks`, `merge_attempts`), read with `.get`:
+    absent on every document that never saw one, and anything that is not a mapping reads
+    as absent too."""
+    value = raw.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def _merge_facts(
+    task_id: str,
+    raw: TaskState,
+    pull_request: PullRequest | None,
+    eval_set: frozenset[int] | None,
+    number: int,
+    current_master: str | None,
+) -> rules.MergeFacts:
+    """What the poller can know about a delivered task before any worktree exists, every
+    fact off the product checkout's own document, the tracker and the upstream sha --
+    never the pull request's copy of the document. `touched_paths` stays `None`: the diff
+    is the verb's to read, in its worktree."""
+    unit = rules.reviewed_unit(raw)
+    pr_head = pull_request.head_oid if pull_request is not None else None
+    checks = _recorded(raw, "merge_checks")
+    attempts = _recorded(raw, "merge_attempts")
+    passed = checks.get("passed")
+    count = attempts.get("count")
+    return rules.MergeFacts(
+        task_id=task_id,
+        status=raw.get("status"),
+        reviewed_unit_approved=unit is not None and unit.get("status") == "approved",
+        reviewed_head=unit.get("reviewed_head") if unit is not None else None,
+        open_blocking_or_important=sum(
+            1 for row in rules.open_findings(raw) if row["severity"] in ("blocking", "important")
+        ),
+        pr_state=pull_request.state if pull_request is not None else None,
+        pr_head=pr_head,
+        in_eval_set=None if eval_set is None else number in eval_set,
+        touched_paths=None,
+        attempts=count if isinstance(count, int) and attempts.get("head") == pr_head else 0,
+        checks_head=_text(checks.get("head")),
+        checks_master=_text(checks.get("master")),
+        checks_passed=passed if isinstance(passed, bool) else None,
+        current_master=current_master,
+    )
+
+
+def _text(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def awaiting_merge(ports: Ports) -> bool:
+    """Whether any task has a pull request and no closure: the one cheap read, on exactly
+    what `gather_merges` itself filters on, that decides if the round needs the upstream
+    sha at all (a fetch). Whether such a task may merge is `rules.auto_merge_decision`'s."""
+    for task_id in ports.documents.ids():
+        raw = ports.documents.load(task_id) or {}
+        if raw.get("pull_request") and not raw.get("closed_at"):
+            return True
+    return False
+
+
+def gather_merges(
+    ports: Ports,
+    eval_set: frozenset[int] | None,
+    current_master: str | None,
+    lock: RunLock,
+    lines: list[str] | None = None,
+) -> list[int]:
+    """Every delivered, unclosed task `rules.auto_merge_decision` finds worth a merge
+    child -- `merge` or `run_checks` -- and a line appended to `lines` for each one it
+    refuses, naming the reason (GH-178). A task whose run lock reads alive is skipped
+    before anything else is read: a merge child already works on it, or a run does. An
+    unreadable upstream sha leaves every task alone, since the checks could not be told
+    from stale ones; an unreadable pull request reads as not open. This decides over the
+    facts the poller has: the verb decides again, after its checks, with the diff's paths
+    too, so a candidate here is a reason to look, never the merge."""
+    out = lines if lines is not None else []
+    if current_master is None:
+        return []  # the round's own upstream note already says why
+    found: list[int] = []
+    for task_id in ports.documents.ids():
+        number = ports.inbox.issue_of(task_id)
+        if number is None:
+            continue
+        raw = ports.documents.load(task_id) or {}
+        reference = raw.get("pull_request")
+        if raw.get("closed_at") or not reference:
+            continue
+        if lock.refusal(task_id) is not None:
+            continue
+        try:
+            pull_request = ports.tracker.pull_request(reference)
+        except (ValueError, OSError):
+            pull_request = None  # reads as not open: refused below, with its line
+        facts = _merge_facts(task_id, raw, pull_request, eval_set, number, current_master)
+        decision = rules.auto_merge_decision(facts)
+        if decision.kind == "refuse":
+            out.append(
+                f"agentic: poll: auto-merge #{number} -> left to the human: {decision.reason}"
+            )
+        else:
+            found.append(number)
+    return found
 
 
 def gather_resumes(ports: Ports, now: datetime) -> list[rules.ResumeCandidate]:
@@ -528,6 +640,15 @@ def execute(
                 register_timeout_s,
                 sleep,
             )
+        elif action.kind == "merge":
+            argv = _argv(argv0, "merge", action.issue, product_dir)
+            try:
+                pid = launcher.spawn(argv)
+            except OSError as exc:
+                lines.append(f"agentic: poll: merge #{action.issue} -> not launched: {exc}")
+                continue
+            _await_registration(registry, task_id, register_timeout_s, sleep)
+            lines.append(f"agentic: poll: merge #{action.issue} -> pid {pid}")
         elif action.kind == "launch":
             registry.record_launch(product, action.issue, now)
             argv = _argv(argv0, "run", action.issue, product_dir, "--detach")
@@ -569,6 +690,7 @@ def run_once(
     *,
     lock: RunLock,
     current_boot: str | None,
+    eval_set: frozenset[int] | None = frozenset(),
 ) -> list[str]:
     """One round: gather, decide (`rules.poll_plan`), carry out. The slot count and the
     launch candidates are read under `registry.exclusive()` together (Tech Lead plan):
@@ -577,7 +699,11 @@ def run_once(
     product's. `execute`'s own wait for a spawned child to register also runs inside
     this same `exclusive()` block, for the same reason. The retakes (GH-176) are gathered
     here too, before anything spawns and from the lock records as the dead runs left
-    them; the lines for the runs left to the human come first in the round's output."""
+    them; the lines for the runs left to the human come first in the round's output.
+    The merges (GH-178) are gathered inside the same exclusive section, from the same
+    memoised upstream, and only when some delivered task awaits one: `eval_set` is the
+    issues whose merge is the human's verdict, `None` when it could not be read, which
+    refuses every merge (`rules.auto_merge_decision`)."""
     closes = gather_closes(ports)
     resumes = gather_resumes(ports, now)
     retakes, human_lines = gather_retakes(ports, lock, current_boot)
@@ -585,6 +711,10 @@ def run_once(
         available = max(cfg.max_concurrent_runs - len(registry.live()), 0)
         upstream = functools.cache(ports.workspace.upstream)
         launches = gather_launches(cfg, ports, registry, upstream)
+        merges: list[int] = []
+        merge_lines: list[str] = []
+        if awaiting_merge(ports):
+            merges = gather_merges(ports, eval_set, upstream().sha, lock, merge_lines)
         notes = _upstream_notes(upstream.cache_info().currsize > 0, upstream)
         actions = rules.poll_plan(
             closes=closes,
@@ -593,6 +723,7 @@ def run_once(
             available_slots=available,
             now=now,
             retakes=retakes,
+            merges=merges,
         )
         lines = execute(
             actions, cfg, ports, registry, launcher, now, argv0, register_timeout_s, sleep
@@ -600,5 +731,5 @@ def run_once(
     # Outside the registry's exclusive section: reflecting takes no slot of the cap and
     # touches no task.
     lines += reflect_lines(cfg, ports, launcher, argv0)
-    lines = [*human_lines, *lines]
+    lines = [*human_lines, *merge_lines, *lines]
     return [*notes, *(lines or ["agentic: poll: nothing to do this round"])]

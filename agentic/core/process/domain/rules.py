@@ -2023,13 +2023,13 @@ def interrupted_run(raw: TaskState, lock: LockFacts | None, prior_retakes: int) 
     return "human"
 
 
-PollActionKind = Literal["close", "retake", "resume", "launch"]
+PollActionKind = Literal["close", "retake", "resume", "launch", "merge"]
 
 
 @dataclass(frozen=True)
 class PollAction:
     """One action `rules.poll_plan` orders into this round: which issue, and whether
-    the poller's child process is `agentic close|resume|run` (the kind names the verb,
+    the poller's child process is `agentic close|resume|run|merge` (the kind names the verb,
     the caller knows the mapping -- domain never names a CLI command)."""
 
     kind: PollActionKind
@@ -2091,6 +2091,7 @@ def poll_plan(
     available_slots: int,
     now: datetime,
     retakes: Sequence[int] = (),
+    merges: Sequence[int] = (),
 ) -> list[PollAction]:
     """This round's actions, in the order the Tech Lead plan fixes: every close first
     (merging freed the slot it used, if any, so closing never spends one); then every
@@ -2106,7 +2107,13 @@ def poll_plan(
     never changes the rule above: a waiting resume still blocks every launch.
     `available_slots` already reflects the machine-wide cap
     (`AGENTIC_MAX_CONCURRENT_RUNS`) minus every run alive right now, counted by the
-    caller; this function never reads the registry itself."""
+    caller; this function never reads the registry itself.
+
+    `merges` (GH-178) are the issues `rules.auto_merge_decision` found ready to merge or
+    to check: at most one, the lowest, comes last and only into a slot still left after
+    the retakes, the resumes and the launch -- the merge child registers in the machine
+    registry like any run, so it counts against the cap, and it never takes a slot a task
+    waiting for a role could use."""
     actions = [PollAction("close", issue) for issue in sorted(closes)]
 
     retaken = sorted(retakes)[: max(available_slots, 0)]
@@ -2148,4 +2155,141 @@ def poll_plan(
         )
         if ready:
             actions.append(PollAction("launch", ready[0].issue))
+            slots_left -= 1
+    if merges and slots_left > 0:
+        actions.append(PollAction("merge", min(merges)))
     return actions
+
+
+# How many times the checks run on one pull request head before the poller leaves it to
+# the human (GH-178, ADR-0045): a busy master moves under an approved PR, and each move
+# asks for another full run.
+MERGE_ATTEMPTS_MAX = 3
+
+MergeRefusal = Literal[
+    "not_ready",
+    "not_approved",
+    "head_not_reviewed",
+    "open_findings",
+    "pr_not_open",
+    "eval_set",
+    "eval_set_unreadable",
+    "guarded_path",
+    "attempts_exhausted",
+    "checks_failed",
+    "master_moved",
+]
+"""Why `auto_merge_decision` refuses, one reason per condition:
+
+- `not_ready`: the task is not `ready_for_review`.
+- `not_approved`: the reviewed unit (`reviewed_unit`) is not approved.
+- `head_not_reviewed`: the pull request head is not the one Tech Lead reviewed, or either
+  is unknown.
+- `open_findings`: a `blocking` or `important` finding is still open.
+- `pr_not_open`: the pull request is merged, closed or unreadable.
+- `eval_set`: the issue is in the evaluation set; its merge is the human's verdict.
+- `eval_set_unreadable`: the evaluation set could not be read, so nothing proves the
+  issue is outside it.
+- `guarded_path`: the diff touches `.agentic/**` (but the task's own document),
+  `CODING_STANDARDS.md` or `.github/**`.
+- `attempts_exhausted`: the checks already ran `MERGE_ATTEMPTS_MAX` times on this head
+  and the master moved again.
+- `checks_failed`: the checks ran on this head merged with the current master and failed.
+- `master_moved`: master moved between the checks and the merge. Only the merge verb
+  gives it, after its last fetch; the decision cannot see a fact that did not exist yet.
+"""
+
+
+@dataclass(frozen=True)
+class MergeFacts:
+    """Every fact `auto_merge_decision` reads, gathered by the caller from the product
+    checkout's documents, the tracker and the upstream sha -- never from the pull
+    request's own copy of the task document (GH-178). `in_eval_set` is `None` when the
+    set was unreadable; `touched_paths` is `None` when not yet known (the poller decides
+    before any worktree exists, the verb after); `current_master` is `None` when the
+    upstream sha could not be read."""
+
+    task_id: str
+    status: str | None
+    reviewed_unit_approved: bool
+    reviewed_head: str | None
+    open_blocking_or_important: int
+    pr_state: str | None
+    pr_head: str | None
+    in_eval_set: bool | None
+    touched_paths: tuple[str, ...] | None
+    attempts: int
+    checks_head: str | None
+    checks_master: str | None
+    checks_passed: bool | None
+    current_master: str | None
+
+
+@dataclass(frozen=True)
+class MergeDecision:
+    """`merge`: call `Tracker.merge`. `run_checks`: the recorded checks do not cover this
+    head on this master and attempts remain. `refuse`: leave it, `reason` says why."""
+
+    kind: Literal["merge", "run_checks", "refuse"]
+    reason: MergeRefusal | None
+
+
+def reviewed_unit(state: TaskState) -> Subtask | None:
+    """The subtask whose approval stands for the whole task: the `integration` one when
+    the plan had several, else the only one. `None` for several subtasks with no
+    integration yet, or none at all."""
+    subtasks = state.get("subtasks", {})
+    if INTEGRATION in subtasks:
+        return subtasks[INTEGRATION]
+    if len(subtasks) == 1:
+        return next(iter(subtasks.values()))
+    return None
+
+
+def guarded_path(path: str, task_id: str) -> bool:
+    """Whether a diff touching `path` keeps the pull request from merging itself: the
+    system's own record and configuration (`.agentic/**`, but the task's own document,
+    which every delivery writes), the standards and the workflows."""
+    if path == f".agentic/tasks/{task_id}.md":
+        return False
+    return path.startswith((".agentic/", ".github/")) or path == "CODING_STANDARDS.md"
+
+
+def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
+    """The one place the conditions of an automatic merge live (GH-178, ADR-0045); no
+    adapter, CLI or poller re-derives any of them. Checked in the order of `MergeRefusal`'s
+    docstring and refused at the first that fails. The checks last: they are the costly
+    fact, so nothing is run for a pull request that is refused anyway, and a run is asked
+    for only when the recorded one does not cover this head on this master. `attempts`
+    bounds those runs per head (`MERGE_ATTEMPTS_MAX`), here and nowhere else."""
+    if facts.status != "ready_for_review":
+        return MergeDecision("refuse", "not_ready")
+    if not facts.reviewed_unit_approved:
+        return MergeDecision("refuse", "not_approved")
+    if facts.reviewed_head is None or facts.reviewed_head != facts.pr_head:
+        return MergeDecision("refuse", "head_not_reviewed")
+    if facts.open_blocking_or_important > 0:
+        return MergeDecision("refuse", "open_findings")
+    if facts.pr_state != "OPEN":
+        return MergeDecision("refuse", "pr_not_open")
+    if facts.in_eval_set is None:
+        return MergeDecision("refuse", "eval_set_unreadable")
+    if facts.in_eval_set:
+        return MergeDecision("refuse", "eval_set")
+    if facts.touched_paths is not None and any(
+        guarded_path(path, facts.task_id) for path in facts.touched_paths
+    ):
+        return MergeDecision("refuse", "guarded_path")
+    covers = (
+        facts.checks_passed is not None
+        and facts.checks_head == facts.pr_head
+        and facts.current_master is not None
+        and facts.checks_master == facts.current_master
+    )
+    if covers:
+        if facts.checks_passed:
+            return MergeDecision("merge", None)
+        return MergeDecision("refuse", "checks_failed")
+    if facts.attempts >= MERGE_ATTEMPTS_MAX:
+        return MergeDecision("refuse", "attempts_exhausted")
+    return MergeDecision("run_checks", None)
