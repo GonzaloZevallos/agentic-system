@@ -7,10 +7,10 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta
-from typing import Any, Literal
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal, NamedTuple
 
 from . import presubmit
 from .denials import denial_for
@@ -2023,6 +2023,135 @@ def interrupted_run(raw: TaskState, lock: LockFacts | None, prior_retakes: int) 
     return "human"
 
 
+# Spend-paced concurrency (GH-177, ADR-0039 addendum): another run launches only while
+# the account's trailing spend is under a sustainable pace. Everything below is pure:
+# the caller reads the documents and the clock and hands over plain values.
+TRAILING_SPEND_WINDOW = timedelta(hours=5)
+# The shortest span a trailing figure is divided by: a ten-minute burst of ten dollars is
+# 20 USD/h over the floor, not the 60 USD/h its own ten minutes would suggest.
+SPEND_PACE_FLOOR_S = 1800.0
+
+
+class SpendRun(NamedTuple):
+    """One run's cost over the span it ran, both ends timezone-aware UTC."""
+
+    started_at: datetime
+    ended_at: datetime
+    cost_usd: float
+
+
+def spend_runs(runs: Sequence[Mapping[str, object]]) -> tuple[list[SpendRun], int]:
+    """The `SpendRun`s of a task document's `runs`, and how many it skipped.
+
+    Reads `RoleRun.cost_usd` only: `subagent_cost_usd` is not additive (it is a share of
+    what `cost_usd` already holds) and `failed_cost_usd` is already inside `cost_usd`,
+    so summing either would count the same dollars twice. A run is skipped (and counted)
+    when its `ended_at` is missing, unparseable or naive, or its `cost_usd` is not a
+    finite non-negative number. A missing, unparseable or naive `started_at`, or one
+    later than `ended_at`, makes the run zero-length at `ended_at`. Aware values are
+    converted to UTC."""
+    out: list[SpendRun] = []
+    skipped = 0
+    for run in runs:
+        end = _instant(run.get("ended_at"))
+        cost = run.get("cost_usd")
+        if (
+            end is None
+            or isinstance(cost, bool)
+            or not isinstance(cost, int | float)
+            or not math.isfinite(cost)
+            or cost < 0
+        ):
+            skipped += 1
+            continue
+        end = end.astimezone(UTC)
+        start = _instant(run.get("started_at"))
+        start = end if start is None else min(start.astimezone(UTC), end)
+        out.append(SpendRun(start, end, float(cost)))
+    return out, skipped
+
+
+def merged_spend(
+    published: Sequence[SpendRun], fresh: Sequence[SpendRun], now: datetime
+) -> list[SpendRun]:
+    """What a poller publishes: `published` and `fresh` keyed on `(started_at,
+    ended_at)`, the fresh entry winning over a published one with the same key (a cost
+    that changed counts once, at its new value), a published entry absent from `fresh`
+    kept (archiving or closing a document never lowers the trailing spend), and every
+    entry that ended before `now - TRAILING_SPEND_WINDOW` dropped -- the only pruning.
+    Sorted, so the same facts always serialise the same way."""
+    by_key: dict[tuple[datetime, datetime], SpendRun] = {}
+    for entry in (*published, *fresh):
+        by_key[(entry.started_at, entry.ended_at)] = entry
+    horizon = now - TRAILING_SPEND_WINDOW
+    return sorted(e for e in by_key.values() if e.ended_at >= horizon)
+
+
+def trailing_spend(
+    runs: Sequence[SpendRun], now: datetime, window: timedelta = TRAILING_SPEND_WINDOW
+) -> tuple[float, float]:
+    """`(prorated USD, covered seconds)` of `runs` over `[now - window, now]`.
+
+    A run counts by the share of its own duration that overlaps the window, its end
+    clamped to `now`; a zero-length run counts whole when it ended inside the window.
+    Covered seconds is the span from the earliest overlapping start to `now`, capped at
+    the window and floored at `SPEND_PACE_FLOOR_S`; with nothing in the window it is the
+    floor."""
+    horizon = now - window
+    spent = 0.0
+    earliest: datetime | None = None
+    for r in runs:
+        if r.ended_at < horizon:
+            continue
+        end = min(r.ended_at, now)
+        start = min(max(r.started_at, horizon), end)
+        duration = (r.ended_at - r.started_at).total_seconds()
+        if duration <= 0:
+            spent += r.cost_usd
+        else:
+            overlap = (end - start).total_seconds()
+            if overlap <= 0:
+                continue
+            spent += r.cost_usd * overlap / duration
+        earliest = start if earliest is None else min(earliest, start)
+    if earliest is None:
+        return 0.0, SPEND_PACE_FLOOR_S
+    covered = min(window.total_seconds(), (now - earliest).total_seconds())
+    return spent, max(covered, SPEND_PACE_FLOOR_S)
+
+
+def paced_launch_fits(
+    *,
+    spent_usd: float,
+    covered_s: float,
+    live_runs: int,
+    ceiling: int,
+    pace_usd_per_h: float | None,
+) -> bool:
+    """Whether one more run may launch: with no pace, only while `live_runs < ceiling`
+    (today's rule); with no run live, whenever the ceiling allows any (the first run is
+    never held back by the pace); otherwise also only while the trailing spend per hour
+    is strictly under `pace_usd_per_h`."""
+    if live_runs == 0:
+        return ceiling > 0
+    if live_runs >= ceiling:
+        return False
+    if pace_usd_per_h is None:
+        return True
+    return spent_usd / (max(covered_s, SPEND_PACE_FLOOR_S) / 3600) < pace_usd_per_h
+
+
+@dataclass(frozen=True)
+class SpendPace:
+    """What `poll_plan` needs to gate a launch by spend: the machine's trailing figure
+    (`spent_usd` over `covered_s`), `live_runs` alive before this round, and the pace."""
+
+    spent_usd: float
+    covered_s: float
+    live_runs: int
+    pace_usd_per_h: float
+
+
 PollActionKind = Literal["close", "retake", "resume", "launch"]
 
 
@@ -2091,6 +2220,7 @@ def poll_plan(
     available_slots: int,
     now: datetime,
     retakes: Sequence[int] = (),
+    pace: SpendPace | None = None,
 ) -> list[PollAction]:
     """This round's actions, in the order the Tech Lead plan fixes: every close first
     (merging freed the slot it used, if any, so closing never spends one); then every
@@ -2106,8 +2236,15 @@ def poll_plan(
     never changes the rule above: a waiting resume still blocks every launch.
     `available_slots` already reflects the machine-wide cap
     (`AGENTIC_MAX_CONCURRENT_RUNS`) minus every run alive right now, counted by the
-    caller; this function never reads the registry itself."""
+    caller; this function never reads the registry itself.
+
+    `pace` (GH-177, `None` is today's behaviour) gates only the launch: it goes out only
+    if `paced_launch_fits` says so, counting this round's retakes and resumes as live
+    runs (a launch after one on an empty machine is the second run) against a ceiling of
+    `pace.live_runs` plus the `available_slots` received. Closes, retakes and resumes
+    are never gated, and a waiting pause still blocks every launch."""
     actions = [PollAction("close", issue) for issue in sorted(closes)]
+    received_slots = available_slots
 
     retaken = sorted(retakes)[: max(available_slots, 0)]
     actions.extend(PollAction("retake", issue) for issue in retaken)
@@ -2146,6 +2283,15 @@ def poll_plan(
             ),
             key=lambda c: c.issue,
         )
-        if ready:
+        if ready and (
+            pace is None
+            or paced_launch_fits(
+                spent_usd=pace.spent_usd,
+                covered_s=pace.covered_s,
+                live_runs=pace.live_runs + len(retaken) + len(taken),
+                ceiling=pace.live_runs + received_slots,
+                pace_usd_per_h=pace.pace_usd_per_h,
+            )
+        ):
             actions.append(PollAction("launch", ready[0].issue))
     return actions

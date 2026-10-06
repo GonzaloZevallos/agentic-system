@@ -33,6 +33,30 @@ def test_max_concurrent_runs_defaults_to_one():
         Configuration(product_dir=Path("/tmp/p"), max_concurrent_runs=0)
 
 
+def test_spend_pacing_is_off_by_default_and_the_pace_defaults_to_35():
+    cfg = Configuration.from_sources(PRODUCT, {})
+    assert cfg.spend_pacing is False
+    assert cfg.spend_pace_usd_per_h == 35.0
+    assert cfg.max_concurrent_runs == 1
+
+
+def test_spend_pacing_and_pace_read_their_environment_overrides():
+    cfg = Configuration.from_sources(
+        PRODUCT,
+        {"AGENTIC_SPEND_PACING": "true", "AGENTIC_SPEND_PACE_USD_PER_H": "42.5"},
+    )
+    assert cfg.spend_pacing is True
+    assert cfg.spend_pace_usd_per_h == 42.5
+
+
+@pytest.mark.parametrize("bad", ["0", "-5"])
+def test_spend_pace_usd_per_h_must_be_positive(bad):
+    with pytest.raises(ValueError):
+        Configuration.from_sources(PRODUCT, {"AGENTIC_SPEND_PACE_USD_PER_H": bad})
+    with pytest.raises(ValueError):
+        Configuration(product_dir=Path("/tmp/p"), spend_pace_usd_per_h=float(bad))
+
+
 def test_run_registry_dir_defaults_under_xdg_state_home(monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", "/tmp/state")
     cfg = Configuration.from_sources(PRODUCT, {})
