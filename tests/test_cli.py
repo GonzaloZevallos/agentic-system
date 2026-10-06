@@ -324,6 +324,62 @@ async def test_a_paused_task_resumes_through_the_cli_and_run_refuses_to_redo_it(
 
 
 @pytest.mark.anyio
+async def test_a_checkpointed_decided_task_is_still_decided_after_a_resume(
+    monkeypatch, tmp_path, capsys
+):
+    from agentic.core.process.adapters.langgraph.graph import build_graph
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import (
+        MemoryWorkspace,
+        ScriptedRunner,
+        answers,
+        classified,
+        defined,
+        delivered,
+        memory_ports,
+        planned,
+        questions,
+        reviewed,
+        verdict,
+    )
+
+    script = ScriptedRunner(
+        pjm=[classified()],
+        product_analyst_interviewer=[questions(1), questions(done=True)],
+        pm_interviewee=[answers(1)],
+        product_analyst=[defined()],
+        pm=[verdict("approved")],
+        tech_lead_ephemeral=[questions(done=True)],
+        tech_lead=[planned()],
+        developer=[delivered()],
+        tech_lead_review=[reviewed("approved")],
+    )
+    ports = memory_ports(script)
+    ports.workspace.moved.add(MemoryWorkspace.ROOT / "GH-1")
+    app = build_graph(lambda cfg: ports, arm_for=composition._arm_for)
+    monkeypatch.setattr(cli, "graph", app)
+    monkeypatch.setenv("AGENTIC_PRODUCT_DIR", str(tmp_path))
+    monkeypatch.setenv("AGENTIC_TASK_MAX_BUDGET_USD", "0.7")
+    cfg = Configuration.from_sources({}, os.environ)
+    saver = Saver()
+    task = {"id": "GH-1", "title": "Export", "description": "CSV.\n\n## Decided\n- csv\n"}
+
+    with pytest.raises(SystemExit):
+        await cli._run(task, cfg, ports, checkpointer=saver)
+    thread = {"configurable": {"thread_id": "GH-1"}}
+    paused = await app.compile(checkpointer=saver.saver).aget_state(thread)
+    assert paused.values["decided"] is True
+
+    monkeypatch.setenv("AGENTIC_TASK_BUDGET_USD", "50")
+    raised = Configuration.from_sources({}, os.environ)
+    await cli._resume("GH-1", raised, ports, yes=True, checkpointer=saver)
+    resumed = await app.compile(checkpointer=saver.saver).aget_state(thread)
+    assert resumed.values["decided"] is True
+    # The definition interview ran its one round: the interviewer asked once, then closed.
+    assert script.slugs.count("product_analyst_interviewer") == 2
+
+
+@pytest.mark.anyio
 async def test_the_log_file_travels_in_configurable_to_every_node(monkeypatch, tmp_path):
     """`_run` puts the string next to `thread_id` in the config it hands `ainvoke`
     (invariant 12: a `str`, never a `Path`); each node reads it back off its own
