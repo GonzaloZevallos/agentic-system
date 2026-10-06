@@ -16,8 +16,8 @@ StartLimitIntervalSec=0
 [Service]
 Type=simple
 WorkingDirectory=@STAGE0@
-Environment=PATH=@PATH@
-ExecStart=@STAGE0@/.venv/bin/agentic poll --product-dir @PRODUCT_DIR@
+Environment="PATH=@PATH@"
+ExecStart="@STAGE0@/.venv/bin/agentic" poll --product-dir "@PRODUCT_DIR@"
 Restart=on-failure
 RestartSec=30
 KillMode=process

@@ -60,12 +60,13 @@ done
 path="$path:/usr/bin:/bin"
 
 template="$here/scripts/systemd/agentic-poll.service.in"
-# `|` as the sed delimiter: paths carry `/`. A path carrying `|`, `&` or a newline would
-# break the rendering, so it is refused instead of escaped.
+# `|` as the sed delimiter: paths carry `/`. The template quotes both directories for
+# systemd, so spaces are fine. A path carrying `|`, `&`, `"`, `\`, `$`, `%` or a newline
+# would break the rendering or systemd's own quoting, so it is refused instead of escaped.
 for value in "$product" "$stage0" "$path"; do
     case "$value" in
-        *[\|\&\\\$]* | *$'\n'* | *%*)
-            echo "install-poller: refusing a path with | & \\ $ % or a newline: $value" >&2
+        *[\|\&\"\\\$]* | *$'\n'* | *%*)
+            echo "install-poller: refusing a path with | & \" \\ \$ % or a newline: $value" >&2
             exit 1
             ;;
     esac

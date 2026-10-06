@@ -3,6 +3,7 @@ rendered unit must hold for a poller to survive a reboot (GH-176). The script an
 template are outside mypy (ADR-0021); this render is what covers them."""
 
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -61,11 +62,14 @@ def test_the_rendered_unit_is_absolute_complete_and_free_of_specifiers(tmp_path,
     assert not re.search(r"@[A-Z0-9_]+@", unit)
     assert "%" not in unit
     exec_start = next(line for line in unit.splitlines() if line.startswith("ExecStart="))
-    binary = Path(exec_start.removeprefix("ExecStart=").split()[0])
+    # What systemd parses: whitespace separates arguments unless the item is quoted, and
+    # the product dir of the fixture has a space in it.
+    argv = shlex.split(exec_start.removeprefix("ExecStart="))
+    binary = Path(argv[0])
     assert binary.is_absolute() and binary.exists() and binary.stat().st_mode & stat.S_IXUSR
     assert f"WorkingDirectory={stage0.resolve()}" in unit
-    assert f"--product-dir {product.resolve()}" in exec_start
-    assert exec_start.endswith(str(product.resolve()))
+    assert " " in str(product.resolve())
+    assert argv[1:] == ["poll", "--product-dir", str(product.resolve())]
     assert "--detach" not in exec_start
     for line in (
         "Restart=on-failure",
@@ -75,8 +79,8 @@ def test_the_rendered_unit_is_absolute_complete_and_free_of_specifiers(tmp_path,
         "WantedBy=default.target",
     ):
         assert line in unit.splitlines()
-    env_path = next(line for line in unit.splitlines() if line.startswith("Environment=PATH="))
-    dirs = env_path.removeprefix("Environment=PATH=").split(":")
+    env_path = next(line for line in unit.splitlines() if line.startswith('Environment="PATH='))
+    dirs = env_path.removeprefix('Environment="PATH=').removesuffix('"').split(":")
     assert dirs == [str(tmp_path / "tools-a"), str(tmp_path / "tools-b"), "/usr/bin", "/bin"]
     assert all(d.startswith("/") for d in dirs)
 
@@ -110,8 +114,9 @@ def test_a_stage0_without_the_agentic_binary_is_refused(tmp_path, product):
     assert ".venv/bin/agentic" in result.stderr
 
 
-def test_a_path_that_would_break_the_rendering_is_refused(tmp_path, stage0):
-    bad = tmp_path / "a|b"
+@pytest.mark.parametrize("name", ["a|b", 'a"b', "a$b"])
+def test_a_path_that_would_break_the_rendering_is_refused(tmp_path, stage0, name):
+    bad = tmp_path / name
     bad.mkdir()
 
     result = render(bad, stage0, stub_path(tmp_path))
