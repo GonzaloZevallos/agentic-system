@@ -2031,3 +2031,157 @@ def test_poll_plan_treats_a_zero_limit_as_exhausted_never_as_a_flag():
             closes=[], resumes=[zero], launches=[_ready_launch()], available_slots=1, now=NOW
         )
         assert actions == [rules.PollAction("launch", 9)]
+
+
+# --- interrupted_run: the pure decision to retake a run a reboot cut (GH-176) ---
+
+
+def _interrupted_task(**more) -> dict:
+    """An open task a run is in the middle of: no `closed_at`, not escalated, no pull
+    request, status `developing`. `more` overrides or adds document keys."""
+    return {"status": "developing", **more}
+
+
+PREVIOUS_BOOT = rules.LockFacts(other_boot=True, alive=False)
+SAME_BOOT = rules.LockFacts(other_boot=False, alive=False)
+UNKNOWN_BOOT = rules.LockFacts(other_boot=None, alive=False)
+
+
+def test_a_dead_lock_from_a_previous_boot_is_retaken():
+    assert rules.interrupted_run(_interrupted_task(), PREVIOUS_BOOT, 0) == "retake"
+
+
+def test_a_dead_lock_from_the_same_boot_is_left_to_the_human():
+    assert rules.interrupted_run(_interrupted_task(), SAME_BOOT, 0) == "human"
+
+
+def test_a_dead_lock_with_no_boot_id_is_never_retaken():
+    assert rules.interrupted_run(_interrupted_task(), UNKNOWN_BOOT, 0) == "human"
+
+
+def test_a_lock_whose_process_is_alive_is_running():
+    alive = rules.LockFacts(other_boot=False, alive=True)
+    assert rules.interrupted_run(_interrupted_task(), alive, 0) == "running"
+
+
+def test_no_lock_record_means_there_is_nothing_to_retake():
+    assert rules.interrupted_run(_interrupted_task(), None, 0) == "none"
+
+
+def test_a_task_with_any_of_these_fields_is_not_an_interrupted_run():
+    for extra in (
+        {"closed_at": "2026-10-05T10:00:00.000Z"},
+        {"escalated": "needs a human"},
+        {"pull_request": "https://github.com/o/r/pull/3"},
+    ):
+        task_doc = _interrupted_task(**extra)
+        assert rules.interrupted_run(task_doc, PREVIOUS_BOOT, 0) == "none", extra
+
+
+def test_a_task_in_a_finished_or_waiting_status_is_not_an_interrupted_run():
+    for status in ("ready_for_review", "discarded", "waiting_on_human"):
+        assert rules.interrupted_run({"status": status}, PREVIOUS_BOOT, 0) == "none", status
+
+
+def test_a_falsy_closed_at_escalated_or_pull_request_does_not_stop_a_retake():
+    task_doc = _interrupted_task(closed_at=None, escalated="", pull_request=None)
+    assert rules.interrupted_run(task_doc, PREVIOUS_BOOT, 0) == "retake"
+
+
+def test_a_document_with_no_status_goes_to_the_human():
+    assert rules.interrupted_run({}, PREVIOUS_BOOT, 0) == "human"
+
+
+def test_retakes_stop_at_the_cap_and_the_task_goes_to_the_human():
+    under = rules.RETAKE_AFTER_REBOOT_MAX - 1
+    assert rules.interrupted_run(_interrupted_task(), PREVIOUS_BOOT, under) == "retake"
+    spent = rules.RETAKE_AFTER_REBOOT_MAX
+    assert rules.interrupted_run(_interrupted_task(), PREVIOUS_BOOT, spent) == "human"
+
+
+def test_a_live_process_stays_running_even_when_the_boot_is_another():
+    # A record from another boot whose pid `liveness` still reads as alive: not ours to
+    # retake, whatever the caller derived `other_boot` as.
+    alive = rules.LockFacts(other_boot=True, alive=True)
+    assert rules.interrupted_run(_interrupted_task(), alive, 0) == "running"
+
+
+def test_poll_plan_orders_closes_then_retakes_then_resumes_then_a_launch():
+    due = rules.ResumeCandidate(
+        issue=2, reason="account_limit", since=NOW.replace(hour=0), prior=0, limit=6
+    )
+    actions = rules.poll_plan(
+        closes=[8],
+        retakes=[6, 4],
+        resumes=[due],
+        launches=[_ready_launch()],
+        available_slots=3,
+        now=NOW,
+    )
+    assert actions == [
+        rules.PollAction("close", 8),
+        rules.PollAction("retake", 4),
+        rules.PollAction("retake", 6),
+        rules.PollAction("resume", 2),
+    ]
+
+
+def test_poll_plan_launches_after_a_retake_only_when_a_slot_remains():
+    plan = dict(closes=[], resumes=[], launches=[_ready_launch()], now=NOW)
+    assert rules.poll_plan(retakes=[4], available_slots=2, **plan) == [
+        rules.PollAction("retake", 4),
+        rules.PollAction("launch", 9),
+    ]
+    assert rules.poll_plan(retakes=[4], available_slots=1, **plan) == [
+        rules.PollAction("retake", 4)
+    ]
+
+
+def test_poll_plan_never_spends_more_slots_than_available_on_retakes_resumes_and_a_launch():
+    since = NOW.replace(hour=0)
+    resumes = [
+        rules.ResumeCandidate(issue=n, reason="upstream", since=since, prior=0, limit=6)
+        for n in (1, 2)
+    ]
+    for slots in range(0, 6):
+        actions = rules.poll_plan(
+            closes=[],
+            retakes=[10, 11, 12],
+            resumes=resumes,
+            launches=[_ready_launch()],
+            available_slots=slots,
+            now=NOW,
+        )
+        spent = [a for a in actions if a.kind != "close"]
+        assert len(spent) == min(slots, 6), slots
+
+
+def test_poll_plan_gives_retakes_the_slots_before_resumes():
+    since = NOW.replace(hour=0)
+    resume = rules.ResumeCandidate(issue=1, reason="upstream", since=since, prior=0, limit=6)
+    actions = rules.poll_plan(
+        closes=[], retakes=[9], resumes=[resume], launches=[], available_slots=1, now=NOW
+    )
+    assert actions == [rules.PollAction("retake", 9)]
+
+
+def test_poll_plan_retakes_nothing_when_the_cap_is_full():
+    actions = rules.poll_plan(
+        closes=[], retakes=[9], resumes=[], launches=[], available_slots=0, now=NOW
+    )
+    assert actions == []
+
+
+def test_poll_plan_retakes_do_not_unblock_a_launch_while_a_resume_still_waits():
+    not_due = rules.ResumeCandidate(
+        issue=5, reason="account_limit", since=NOW - timedelta(minutes=1), prior=0, limit=6
+    )
+    actions = rules.poll_plan(
+        closes=[],
+        retakes=[4],
+        resumes=[not_due],
+        launches=[_ready_launch()],
+        available_slots=3,
+        now=NOW,
+    )
+    assert actions == [rules.PollAction("retake", 4)]
