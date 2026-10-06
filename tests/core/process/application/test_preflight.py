@@ -12,6 +12,7 @@ from agentic.core.process.application.preflight import (
     PLACEHOLDERS,
     UNKNOWN_PRODUCT,
     RunsOnItsOwnCheckout,
+    declared_stack,
     declared_stack_of,
     no_forbidden,
     no_setup,
@@ -150,6 +151,31 @@ class BrokenDesignStack(MemoryStack):
 
     def design(self, revision: str):
         raise ValueError("stack.yaml: expected a non-empty `prototype` under `design`")
+
+
+class BrokenParallelChecksStack(MemoryStack):
+    """A stack whose `parallel_checks` is not a bool: `declared_stack` must surface it at
+    load, before the gate would silently read it as a yes or a no."""
+
+    def parallel_checks(self, revision: str) -> bool:
+        raise ValueError("stack.yaml: expected `parallel_checks` to be true or false")
+
+
+def test_a_broken_parallel_checks_refuses_before_spending(stage0):
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    with pytest.raises(ValueError, match="expected `parallel_checks`"):
+        preflight(
+            Configuration(product_dir=PRODUCT), replace(ports, stack=BrokenParallelChecksStack())
+        )
+
+
+def test_a_stack_without_parallel_checks_passes_and_keeps_its_setup_as_the_answer(stage0):
+    """Absent is serial, never an error; and the validation call does not move what
+    `declared_stack` returns."""
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    stack = MemoryStack(setup={"deps": "uv sync"})
+    preflight(Configuration(product_dir=PRODUCT), replace(ports, stack=stack))
+    assert declared_stack(replace(ports, stack=stack)) == {"deps": "uv sync"}
 
 
 def test_a_broken_design_block_refuses_before_spending(stage0):

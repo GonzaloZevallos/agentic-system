@@ -193,6 +193,7 @@ class MemoryStack:
         witness: str | None = None,
         forbidden: list[Forbidden] | None = None,
         design: Design | None = None,
+        parallel_checks: bool = False,
     ):
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -209,6 +210,9 @@ class MemoryStack:
         # legitimate absence `witness` has: every product but the one a design task
         # prepares for.
         self.declared_design = design
+        # False is a product that does not opt in to concurrent checks (ADR-0043), which
+        # is every product until its own file says otherwise.
+        self.declared_parallel_checks = parallel_checks
         self.revisions: list[str] = []
 
     def checks(self, revision: str) -> dict[str, str]:
@@ -224,6 +228,10 @@ class MemoryStack:
         # list to prove exactly `checks` and `setup` are asked (issue #22, 7), and a
         # witness read must not silently grow that count out from under them.
         return self.declared_witness
+
+    def parallel_checks(self, revision: str) -> bool:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_parallel_checks
 
     def forbidden(self, revision: str) -> list[Forbidden]:
         # Not tracked in `revisions` either, `witness`'s own reason.

@@ -322,6 +322,12 @@ class ProductStack(Protocol):
         is the presubmit of today, byte for byte unchanged."""
         ...
 
+    def parallel_checks(self, revision: str) -> bool:
+        """Whether the product lets the presubmit run its declared checks concurrently
+        (`core.knowledge`, ADR-0043). Opt-in: `False` when the product declares nothing,
+        which is the serial presubmit of today."""
+        ...
+
     def forbidden(self, revision: str) -> Sequence[Forbidden]:
         """The suppressions this product forbids a Developer's Edit or Write from
         adding (`core.knowledge`, issue #38), in file order: first declared rule wins.

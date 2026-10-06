@@ -28,6 +28,10 @@ class GitStack:
         data, source = self._declaration(revision)
         return stack.witness(data, source)
 
+    def parallel_checks(self, revision: str) -> bool:
+        data, source = self._declaration(revision)
+        return stack.parallel_checks(data, source)
+
     def forbidden(self, revision: str) -> tuple[Forbidden, ...]:
         data, source = self._declaration(revision)
         return stack.forbidden(data, source)

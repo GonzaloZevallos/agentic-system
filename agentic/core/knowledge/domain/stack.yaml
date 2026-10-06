@@ -25,6 +25,12 @@ checks:
 #
 # witness: uv run python -c "import pathlib; print(pathlib.Path('.').resolve())"
 #
+# `parallel_checks`: optional, true or false. The presubmit runs the checks one after the
+# other unless this is true; turn it on only when no two declared checks share a port, a
+# database file or a cache (ADR-0043).
+#
+# parallel_checks: true
+#
 # `forbidden`: optional. A list of rules the Edit/Write hook denies a Developer from
 # adding: each names a `pattern`, the `extensions` it applies to, and the `reason` a
 # denial carries verbatim. One that was already in the file is not the task's. What a
