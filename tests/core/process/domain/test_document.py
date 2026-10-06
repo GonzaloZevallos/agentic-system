@@ -1,7 +1,7 @@
 import pytest
 
 from agentic.core.process.application import resume
-from agentic.core.process.domain import document, rules
+from agentic.core.process.domain import document, legacy_names, rules
 
 
 def test_render_then_parse_roundtrip():
@@ -511,6 +511,51 @@ def test_record_closure_quotes_values_that_yaml_would_otherwise_retype():
     data = document.parse(closed)
     assert data["human_commits"] == "3"  # a digit string stays a string, not an int
     assert data["delivery_outcome"] == "merged"
+
+
+def test_a_document_with_old_role_names_parses_under_the_new_ones():
+    """2026-10-05 rename: a document written before it names the old role everywhere
+    the alias (`legacy_names`) translates; `parse` (via `from_frontmatter`) hands back
+    the same sections, pairs and return counts under the new one instead, so a resume
+    off this document reads them unchanged (ADR-0040's own role, renamed). The old name
+    itself comes from `legacy_names`'s own constants, never typed again here (the
+    invariant the whole rename keeps: the literal name lives in one module alone)."""
+    old = (
+        "---\n"
+        "id: T-1\n"
+        "title: t\n"
+        f"current_role: {legacy_names.OLD_NAME}\n"
+        f"returns: {{'{legacy_names.OLD_NAME}→UI Designer': 1}}\n"
+        "return_history: "
+        f"[{{pair: '{legacy_names.OLD_NAME}→UI Designer', category: definition, reason: r}}]\n"
+        f"design_items: [{{role_slug: {legacy_names.OLD_SLUG}, kind: blocking, step: Pay, "
+        "text: no button}]\n"
+        "---\n"
+        f"\n# t\n\n## Original request\n\nd\n\n## {legacy_names.OLD_NAME}\n\napproved\n"
+    )
+    state = document.parse(old, "T-1")
+    assert state["current_role"] == legacy_names.NEW_NAME
+    assert state["changes_requested"] == {f"{legacy_names.NEW_NAME}→UI Designer": 1}
+    assert state["change_history"][0]["pair"] == f"{legacy_names.NEW_NAME}→UI Designer"
+    assert state["design_items"][0]["role_slug"] == legacy_names.NEW_SLUG
+    assert set(state["sections"]) == {legacy_names.NEW_NAME}
+    assert state["sections"][legacy_names.NEW_NAME] == "approved"
+
+
+def test_render_never_writes_an_old_role_name():
+    """`render` only ever writes new names (Tech Lead plan): a state already carrying
+    the new ones (what the domain produces from here on) round-trips with no old name
+    reappearing, and `RECORDED_AS` stays the frontmatter-key rename alone."""
+    state = {
+        "id": "T-1",
+        "title": "t",
+        "description": "d",
+        "current_role": legacy_names.NEW_NAME,
+        "sections": {legacy_names.NEW_NAME: "approved"},
+    }
+    rendered = document.render(state)
+    assert legacy_names.OLD_NAME not in rendered
+    assert legacy_names.NEW_NAME in rendered
 
 
 def test_a_document_written_before_escalation_class_existed_still_parses():

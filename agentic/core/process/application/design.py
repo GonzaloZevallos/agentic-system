@@ -1,6 +1,6 @@
 """The definition-side design branch (ADR-0040): UX Designer writes the flow, UX Lead
 validates it with a walk of the prototype, UI Designer writes the screens design over
-the validated flow, Design Lead validates it, and PM consolidates both into the PRD.
+the validated flow, UI Lead validates it, and PM consolidates both into the PRD.
 All five run in the task's own checkout, between PM's own validation and the plan,
 with `status` left at `definition_ready` throughout (ADR-0026 freezes `Status`);
 `rules.design_step` is the only place that says which of them runs next, and these
@@ -24,12 +24,12 @@ from agentic.shared.configuration import Configuration
 from ..domain import rules
 from ..domain.design import NO_DESIGN_NOTE, compare_facts, design_facts, design_rules
 from ..domain.roles import (
-    DESIGN_LEAD,
-    PAIR_DESIGN_LEAD,
     PAIR_PM_PA,
+    PAIR_UI_LEAD,
     PAIR_UX_LEAD,
     PM_CONSOLIDATOR,
     UI_DESIGNER,
+    UI_LEAD,
     UX_DESIGNER,
     UX_LEAD,
     Pair,
@@ -61,12 +61,12 @@ async def ux_flow(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
 
 async def ui_screens(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
     """UI Designer writes the screens design over the flow UX Lead already validated,
-    or rewrites it on a return from Design Lead's own comparisons."""
+    or rewrites it on a return from UI Lead's own comparisons."""
     try:
         task = task_checkout(state, cfg, ports)
     except SetupFailed as unprepared:
         return finish(state, unprepared.patch(UI_DESIGNER), ports)
-    extra = ("Design Lead",)
+    extra = ("UI Lead",)
     facts = design_facts(ports.stack.design(task_base(state, ports)))
     prompt = with_context(state, UI_DESIGNER, ports, task.path, facts, extra) if facts else None
     _, patch = await run_role(
@@ -78,7 +78,7 @@ async def ui_screens(state: TaskState, cfg: Configuration, ports: Ports) -> Task
 async def _lead_walk(
     state: TaskState, cfg: Configuration, ports: Ports, role: Role, pair: Pair
 ) -> TaskState:
-    """The shape UX Lead's walk and Design Lead's comparisons share: validate the
+    """The shape UX Lead's walk and UI Lead's comparisons share: validate the
     thinker's latest write, with the product's `design` block as data and, when it
     declares `compare`, the one `Bash` rule to run it; return to the thinker within the
     pair's limit, or escalate past it; record every item -- blocking or observation --
@@ -123,7 +123,7 @@ async def ux_walk(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
 
 
 async def design_review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
-    return await _lead_walk(state, cfg, ports, DESIGN_LEAD, PAIR_DESIGN_LEAD)
+    return await _lead_walk(state, cfg, ports, UI_LEAD, PAIR_UI_LEAD)
 
 
 async def consolidate(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:

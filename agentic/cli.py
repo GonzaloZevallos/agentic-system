@@ -78,8 +78,8 @@ from .core.process.application.preflight import (
 from .core.process.application.run_role import load_prompt
 from .core.process.application.stack_review import stack_review as run_stack_review
 from .core.process.domain import document as task_document
+from .core.process.domain import legacy_names, stack_signals
 from .core.process.domain import stack_review as stack_review_texts
-from .core.process.domain import stack_signals
 from .core.process.domain.playbook import Delta, Playbook
 from .core.process.domain.roles import ROLES
 from .core.process.domain.task import PullRequest, TaskInput, TaskState
@@ -168,6 +168,29 @@ class CannotStart(Exception):
     def __init__(self, message: str, code: int = 2):
         super().__init__(message)
         self.code = code
+
+
+# 2026-10-05 rename: a checkpoint written before it still names the old role
+# (`legacy_names.RENAME_CAUSE`, the one place the old name is spelled out), and
+# `aupdate_state` with translated values is never used on an existing thread -- the
+# `operator.add`/`merge` reducers (`TaskState.change_history`/`.changes_requested`/
+# `.design_items`/`.pause_log`) would duplicate runs, failures and cost. A paused
+# snapshot (`snapshot.interrupts` non-empty) takes the document branch instead, exactly
+# as `--from-document` does; a crashed one (no interrupt) has nothing to reseed from
+# safely and refuses.
+_LEGACY_DISAGREEMENT_CAUSE = (
+    f"this task's checkpoint {legacy_names.RENAME_CAUSE}; it resumes from its "
+    "document, which was checked against git:"
+)
+
+
+def _legacy_crashed_message(task_id: str, ports: Ports) -> str:
+    number = ports.inbox.issue_of(task_id)
+    flag = f"--issue {number}" if number is not None else f"--issue N  # {task_id}"
+    return (
+        f"{task_id}'s checkpoint {legacy_names.RENAME_CAUSE}, and it crashed rather "
+        f"than paused: resume it with `agentic resume {flag} --from-document`."
+    )
 
 
 def main() -> None:
@@ -1054,6 +1077,22 @@ async def _resume(
             elif not snapshot.next:
                 status = snapshot.values.get("status", "open")
                 raise CannotStart(f"{task_id} is not paused: its run ended ({status})")
+            elif legacy_names.has_legacy_roles(snapshot.values):
+                if not snapshot.interrupts:
+                    # Crashed, not paused: nothing to reseed from safely.
+                    raise CannotStart(_legacy_crashed_message(task_id, ports))
+                # Paused: take the document branch exactly as `--from-document` does,
+                # never `aupdate_state` with translated values on this existing thread.
+                try:
+                    paused = resuming.from_document(task_id, ports)
+                except ValueError as exc:
+                    prefix = f"the document of {task_id} and git disagree:"
+                    message = str(exc)
+                    if message.startswith(prefix):
+                        listed = message[len(prefix) :].lstrip("\n")
+                        raise ValueError(f"{_LEGACY_DISAGREEMENT_CAUSE}\n{listed}") from exc
+                    raise
+                r = resuming.prepare(task_id, paused, "document", cfg, ports)
             else:
                 # No interrupt with nodes still to run: the run crashed rather than paused.
                 pending = () if snapshot.interrupts else tuple(snapshot.next)

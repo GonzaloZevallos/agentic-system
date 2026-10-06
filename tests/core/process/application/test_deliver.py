@@ -38,7 +38,7 @@ async def test_an_observation_item_lands_in_its_own_pr_section_blocking_items_do
         "design_items": [
             {"role_slug": "ux_lead", "kind": "observation", "step": "Pay", "text": "slow"},
             {
-                "role_slug": "design_lead",
+                "role_slug": "ui_lead",
                 "kind": "blocking",
                 "step": "Cart",
                 "text": "never here",

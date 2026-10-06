@@ -8,8 +8,6 @@ import pytest
 
 from agentic.core.process.domain import plan_view, rules, schemas
 from agentic.core.process.domain.roles import (
-    DESIGN_LEAD,
-    DESIGN_LEAD_FINAL,
     PM,
     PM_CONSOLIDATOR,
     PM_FINAL,
@@ -18,6 +16,8 @@ from agentic.core.process.domain.roles import (
     READ_CODE_RULES,
     ROLES,
     UI_DESIGNER,
+    UI_LEAD,
+    UI_LEAD_FINAL,
     UX_DESIGNER,
     UX_LEAD,
     UX_LEAD_FINAL,
@@ -30,10 +30,10 @@ def test_the_design_roles_are_all_read_only_and_registered_for_preflight():
         UX_DESIGNER,
         UX_LEAD,
         UI_DESIGNER,
-        DESIGN_LEAD,
+        UI_LEAD,
         PM_CONSOLIDATOR,
         UX_LEAD_FINAL,
-        DESIGN_LEAD_FINAL,
+        UI_LEAD_FINAL,
         PM_FINAL,
     )
     for role in design_roles:
@@ -47,7 +47,7 @@ def test_the_design_roles_are_all_read_only_and_registered_for_preflight():
         assert role.tools == READ_CODE and role.allowed == READ_CODE_RULES
         assert role.reads_knowledge
 
-    for role in (UX_LEAD, DESIGN_LEAD, UX_LEAD_FINAL, DESIGN_LEAD_FINAL):
+    for role in (UX_LEAD, UI_LEAD, UX_LEAD_FINAL, UI_LEAD_FINAL):
         assert role.kind == "verifier"
         assert role.tools == READ_CODE and role.allowed == READ_CODE_RULES
 
@@ -59,18 +59,18 @@ def test_the_final_roles_are_their_own_slugs_and_sections_not_edits():
     # `replace(...)` only: the base lead/PM tuples are untouched, each final variant is
     # its own `Role`, with its own section title and its own prompt file.
     assert UX_LEAD_FINAL.slug != UX_LEAD.slug and UX_LEAD_FINAL.name != UX_LEAD.name
-    assert DESIGN_LEAD_FINAL.slug != DESIGN_LEAD.slug
+    assert UI_LEAD_FINAL.slug != UI_LEAD.slug
     assert PM_FINAL.slug != PM.slug != PM_CONSOLIDATOR.slug
-    assert "Tech Lead" in UX_LEAD_FINAL.reads and "Tech Lead" in DESIGN_LEAD_FINAL.reads
+    assert "Tech Lead" in UX_LEAD_FINAL.reads and "Tech Lead" in UI_LEAD_FINAL.reads
     assert "Tech Lead" in PM_FINAL.reads
     # The thinker/lead each returns-to reads its own section and the thinker's, for a
     # resumed round after a return.
     assert "UX Designer" in UX_LEAD.reads and "UX Lead" in UX_LEAD.reads
-    assert "UI Designer" in DESIGN_LEAD.reads and "Design Lead" in DESIGN_LEAD.reads
+    assert "UI Designer" in UI_LEAD.reads and "UI Lead" in UI_LEAD.reads
 
 
 def test_turn_limits_are_12_for_thinkers_and_leads_20_for_pm_modes():
-    for role in (UX_DESIGNER, UX_LEAD, UI_DESIGNER, DESIGN_LEAD, UX_LEAD_FINAL, DESIGN_LEAD_FINAL):
+    for role in (UX_DESIGNER, UX_LEAD, UI_DESIGNER, UI_LEAD, UX_LEAD_FINAL, UI_LEAD_FINAL):
         assert role.max_turns == 12
     for role in (PM_CONSOLIDATOR, PM_FINAL):
         assert role.max_turns == 20
@@ -84,10 +84,10 @@ def test_no_new_prompt_names_a_concrete_tool_framework_path_or_command():
         "ux_designer",
         "ux_lead",
         "ui_designer",
-        "design_lead",
+        "ui_lead",
         "pm_consolidator",
         "ux_lead_final",
-        "design_lead_final",
+        "ui_lead_final",
         "pm_final",
     ):
         text = (PROMPTS_DIR / f"{slug}.md").read_text().lower()
@@ -107,9 +107,9 @@ _MARKDOWN = {
 # block is what a dropped `verdict`, a renamed field or a widened `kind` enum would move.
 _DESIGN_ITEM_DEF = {
     "description": (
-        "One remark from a design lead or from PM's consolidation (ADR-0040), the unit\n"
-        "`design_items` is made of. `blocking` means the job cannot be completed as the\n"
-        "design stands; anything else is `observation`, friction that does not pause the\n"
+        "One remark from a lead (UX Lead or UI Lead) or from PM's consolidation (ADR-0040),\n"
+        "the unit `design_items` is made of. `blocking` means the job cannot be completed as\n"
+        "the design stands; anything else is `observation`, friction that does not pause the\n"
         "task (glossary: Observación al diseño). Never written from section prose: only\n"
         "from this field, structured."
     ),
@@ -150,12 +150,12 @@ def test_design_draft_json_schema_is_pinned():
 
 
 def test_design_review_json_schema_is_pinned():
-    # The lead output (UX Lead, Design Lead, and their final-validation counterparts):
+    # The lead output (UX Lead, UI Lead, and their final-validation counterparts):
     # a `verdict` that gates the design step, a `reason` and the structured `items`.
     assert schemas.json_schema(schemas.DesignReview, {}) == {
         "$defs": {"DesignItem": _DESIGN_ITEM_DEF},
         "description": (
-            "UX Lead's walk or Design Lead's comparison judgement (ADR-0040), and the same\n"
+            "UX Lead's walk or UI Lead's comparison judgement (ADR-0040), and the same\n"
             "shape for their final-validation counterparts: a verdict the design step\n"
             "(`rules.design_step`) reads, with the remarks that back it. Leads never return to\n"
             "a Developer (README.md, 4): a `returned` verdict here sends the thinker back, never\n"
@@ -232,7 +232,7 @@ def test_final_validation_json_schema_is_pinned():
     assert schemas.json_schema(schemas.FinalValidation, {}) == {
         "description": (
             "PM's early, UI-only final validation (ADR-0040): the verdict over UX Lead's\n"
-            "final walk and Design Lead's final comparisons, before Tech Lead's own close."
+            "final walk and UI Lead's final comparisons, before Tech Lead's own close."
         ),
         "properties": {
             "markdown": _MARKDOWN,

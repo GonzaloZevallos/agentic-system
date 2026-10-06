@@ -16,14 +16,12 @@ from . import presubmit
 from .denials import denial_for
 from .document import HUMAN, demote
 from .roles import (
-    DESIGN_LEAD,
-    DESIGN_LEAD_FINAL,
     DEVELOPER,
     FINDINGS,
     INTERVIEWS,
-    PAIR_DESIGN_LEAD,
     PAIR_PM_PA,
     PAIR_PM_TECH_LEAD,
+    PAIR_UI_LEAD,
     PAIR_UX_LEAD,
     PM,
     PM_CONSOLIDATOR,
@@ -32,6 +30,8 @@ from .roles import (
     SOLUTION_INTERVIEW,
     TECH_LEAD,
     UI_DESIGNER,
+    UI_LEAD,
+    UI_LEAD_FINAL,
     UX_DESIGNER,
     UX_LEAD,
     UX_LEAD_FINAL,
@@ -398,7 +398,7 @@ def screens_notice(screens: Sequence[str], compare: str | None) -> str:
 
 # The definition-side design branch (ADR-0040): UX Designer writes the flow, UX Lead
 # validates it with a walk, UI Designer writes the screens design over the validated
-# flow, Design Lead validates it, and PM consolidates both into the PRD. All five run
+# flow, UI Lead validates it, and PM consolidates both into the PRD. All five run
 # between PM's own validation and the plan, with `status` left at `definition_ready`
 # throughout -- ADR-0026 freezes `Status`, so no new value marks a position inside this
 # branch. `design_step` is the one place that answers "which node is next", from run
@@ -450,7 +450,7 @@ def _lead_satisfied(
     """Whether `lead_section`'s latest run stands as a current, approving verdict over
     `thinker_section`'s latest write: a run exists, it is at least as new as that write
     and than `newer_than` (the staleness baseline: the latest Product Analyst PRD run
-    for a UX Lead check, the latest UX Designer run for a Design Lead one; `None` reads
+    for a UX Lead check, the latest UX Designer run for a UI Lead one; `None` reads
     as nothing to be newer than), and it was not itself a return.
 
     No `RoleRun` carries a verdict, so a return is told apart from an approval by
@@ -480,9 +480,9 @@ def design_step(state: TaskState) -> str | None:
     has not yet validated UX Designer's latest write; UX Designer writes again when
     UX Lead's latest run returned it, or when a newer PRD run (a consolidation return
     to Product Analyst, followed by a new PRD) makes its old approval stale. The same
-    three-way ladder repeats for UI Designer/Design Lead, staled by a newer UX Designer
+    three-way ladder repeats for UI Designer/UI Lead, staled by a newer UX Designer
     run instead of a newer PRD one (`ui_screens is stale when UX Designer is newer than
-    Design Lead's approval`, the plan's own wording) -- never by the PRD directly,
+    UI Lead's approval`, the plan's own wording) -- never by the PRD directly,
     since a PRD new enough to matter already reopened `ux_flow` first, and from there a
     fresh UX Designer run is what makes UI's own step stale in turn. Consolidation is
     last, due once both leads are satisfied and no `PM: consolidation` run is newer
@@ -501,13 +501,13 @@ def design_step(state: TaskState) -> str | None:
     ui_idx = _latest_index(state, UI_DESIGNER.name)
     if ui_idx is None:
         return "ui_screens"
-    design_lead_idx = _latest_index(state, DESIGN_LEAD.name)
-    if design_lead_idx is None or design_lead_idx < ui_idx:
+    ui_lead_idx = _latest_index(state, UI_LEAD.name)
+    if ui_lead_idx is None or ui_lead_idx < ui_idx:
         return "design_review"
-    if not _lead_satisfied(state, UI_DESIGNER.name, DESIGN_LEAD.name, PAIR_DESIGN_LEAD.key, ux_idx):
+    if not _lead_satisfied(state, UI_DESIGNER.name, UI_LEAD.name, PAIR_UI_LEAD.key, ux_idx):
         return "ui_screens"
     consolidation_idx = _latest_index(state, PM_CONSOLIDATOR.name)
-    if consolidation_idx is None or consolidation_idx < max(ux_lead_idx, design_lead_idx):
+    if consolidation_idx is None or consolidation_idx < max(ux_lead_idx, ui_lead_idx):
         return "consolidate"
     return None
 
@@ -521,8 +521,8 @@ def design_effect_by_role(state: TaskState) -> dict[str, int]:
     for h in state.get("change_history", []):
         if h["pair"] == PAIR_UX_LEAD.key:
             counts[UX_LEAD.slug] = counts.get(UX_LEAD.slug, 0) + 1
-        elif h["pair"] == PAIR_DESIGN_LEAD.key:
-            counts[DESIGN_LEAD.slug] = counts.get(DESIGN_LEAD.slug, 0) + 1
+        elif h["pair"] == PAIR_UI_LEAD.key:
+            counts[UI_LEAD.slug] = counts.get(UI_LEAD.slug, 0) + 1
     for item in state.get("design_items", []):
         if item["kind"] == "blocking":
             counts[item["role_slug"]] = counts.get(item["role_slug"], 0) + 1
@@ -1351,7 +1351,7 @@ def suggested_budget(state: TaskState, step: float) -> int:
 PHASES = ("definition", "plan", "development", "review")
 
 
-_FINAL_VALIDATION_SECTIONS = frozenset((PM_FINAL.name, UX_LEAD_FINAL.name, DESIGN_LEAD_FINAL.name))
+_FINAL_VALIDATION_SECTIONS = frozenset((PM_FINAL.name, UX_LEAD_FINAL.name, UI_LEAD_FINAL.name))
 
 
 def phase_of(section: str) -> str:
@@ -1563,7 +1563,7 @@ def resumed_status(state: TaskState) -> Status:
     written = sum(1 for r in runs if _wrote_own_section(r, PRODUCT_ANALYST.name))
     validated = sum(1 for r in runs if _wrote_own_section(r, PM.name))
     # By pair key, never by `category` alone: a lead's own return (`PAIR_UX_LEAD`,
-    # `PAIR_DESIGN_LEAD`) shares the `definition` category with PM's PRD returns, and
+    # `PAIR_UI_LEAD`) shares the `definition` category with PM's PRD returns, and
     # only the pair tells them apart (ADR-0040). An entry written before `pair` existed
     # falls back to `PAIR_PM_PA`'s own key, the only pair there was then.
     history = sum(

@@ -231,7 +231,7 @@ async def test_definition_stage_then_delivery(config, tmp_path):
 # The definition-side design branch (ADR-0040): only reached when PM validates with
 # `touches_ui` set, between PM's own validation and the plan.
 
-DESIGN_SLUGS = ["ux_designer", "ux_lead", "ui_designer", "design_lead", "pm_consolidator"]
+DESIGN_SLUGS = ["ux_designer", "ux_lead", "ui_designer", "ui_lead", "pm_consolidator"]
 
 
 async def test_a_touches_ui_feature_passes_the_five_design_steps_in_order_then_plan(config):
@@ -241,10 +241,10 @@ async def test_a_touches_ui_feature_passes_the_five_design_steps_in_order_then_p
         ux_designer=[design_draft()],
         ux_lead=[design_findings("approved")],
         ui_designer=[design_draft()],
-        design_lead=[design_findings("approved")],
+        ui_lead=[design_findings("approved")],
         pm_consolidator=[consolidation("approved")],
         ux_lead_final=[design_findings("approved")],
-        design_lead_final=[design_findings("approved")],
+        ui_lead_final=[design_findings("approved")],
         pm_final=[final_validation("approved")],
         **technical(),
     )
@@ -257,7 +257,7 @@ async def test_a_touches_ui_feature_passes_the_five_design_steps_in_order_then_p
     # No `design` block declared (the default `MemoryStack`): both leads' sections
     # carry the note instead of a rendered screen or a comparison (ADR-0040).
     assert final["sections"]["UX Lead"].startswith(f"_{NO_DESIGN_NOTE}_")
-    assert final["sections"]["Design Lead"].startswith(f"_{NO_DESIGN_NOTE}_")
+    assert final["sections"]["UI Lead"].startswith(f"_{NO_DESIGN_NOTE}_")
     # No `design` block either, at final validation: the same system-written note,
     # naming the narrower absence (no `sample_app`, not no block at all).
     assert final["sections"]["UX Lead: final walk"].startswith(f"_{NO_SAMPLE_APP_NOTE}_")
@@ -277,10 +277,10 @@ async def test_pm_final_validation_returns_to_the_developer_then_runs_again(conf
         ux_designer=[design_draft()],
         ux_lead=[design_findings("approved")],
         ui_designer=[design_draft()],
-        design_lead=[design_findings("approved")],
+        ui_lead=[design_findings("approved")],
         pm_consolidator=[consolidation("approved")],
         ux_lead_final=[design_findings("approved"), design_findings("approved")],
-        design_lead_final=[design_findings("approved"), design_findings("approved")],
+        ui_lead_final=[design_findings("approved"), design_findings("approved")],
         pm_final=[
             final_validation(
                 "returned", "still 1037px wide", blocking=["Nueva venta is 1037px wide"]
@@ -337,14 +337,14 @@ async def test_a_declared_sample_app_reaches_ux_lead_final_and_is_stopped_after(
         ux_designer=[design_draft()],
         ux_lead=[design_findings("approved")],
         ui_designer=[design_draft()],
-        design_lead=[design_findings("approved")],
+        ui_lead=[design_findings("approved")],
         pm_consolidator=[consolidation("approved")],
         ux_lead_final=[
             design_findings(
                 "approved", items=[{"kind": "observation", "step": "Home", "text": "slow"}]
             )
         ],
-        design_lead_final=[
+        ui_lead_final=[
             design_findings(
                 "approved", items=[{"kind": "blocking", "step": "Home", "text": "off palette"}]
             )
@@ -362,7 +362,7 @@ async def test_a_declared_sample_app_reaches_ux_lead_final_and_is_stopped_after(
     assert final["design_items"] == [
         {"role_slug": "ux_lead_final", "kind": "observation", "step": "final", "text": "slow"},
         {
-            "role_slug": "design_lead_final",
+            "role_slug": "ui_lead_final",
             "kind": "blocking",
             "step": "final",
             "text": "off palette",
@@ -379,10 +379,10 @@ async def test_a_sample_app_refusal_is_written_into_the_section_without_escalati
         ux_designer=[design_draft()],
         ux_lead=[design_findings("approved")],
         ui_designer=[design_draft()],
-        design_lead=[design_findings("approved")],
+        ui_lead=[design_findings("approved")],
         pm_consolidator=[consolidation("approved")],
         ux_lead_final=[design_findings("approved")],
-        design_lead_final=[design_findings("approved")],
+        ui_lead_final=[design_findings("approved")],
         pm_final=[final_validation("approved")],
         **technical(),
     )
@@ -405,10 +405,10 @@ async def test_a_pm_final_return_past_its_limit_escalates_by_returns(config):
         ux_designer=[design_draft()],
         ux_lead=[design_findings("approved")],
         ui_designer=[design_draft()],
-        design_lead=[design_findings("approved")],
+        ui_lead=[design_findings("approved")],
         pm_consolidator=[consolidation("approved")],
         ux_lead_final=[design_findings("approved")],
-        design_lead_final=[design_findings("approved")],
+        ui_lead_final=[design_findings("approved")],
         pm_final=[final_validation("returned", "too narrow", blocking=["still 1037px"])],
         **technical(),
     )
@@ -438,7 +438,7 @@ async def test_a_consolidation_with_a_question_pauses_with_the_questions_class(c
         ux_designer=[design_draft()],
         ux_lead=[design_findings("approved")],
         ui_designer=[design_draft()],
-        design_lead=[design_findings("approved")],
+        ui_lead=[design_findings("approved")],
         pm_consolidator=[
             consolidation("approved", questions=["Can checkout proceed with no card on file?"])
         ],

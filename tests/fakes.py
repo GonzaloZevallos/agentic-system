@@ -831,7 +831,7 @@ def verdict(kind, reason="r", definitions=None, glossary=None, cost=0.2, flags=N
 
 
 # The design branch's own roles (ADR-0040): UX Designer/UI Designer write a plain
-# `DesignDraft` (nothing but `markdown`); UX Lead/Design Lead write a `DesignReview`
+# `DesignDraft` (nothing but `markdown`); UX Lead/UI Lead write a `DesignReview`
 # (a verdict plus every finding); PM's consolidation writes a `Consolidation` (a
 # verdict, the questions UX's blocking findings become, and the rest as observations).
 

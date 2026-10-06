@@ -5,7 +5,7 @@ every feature.
 
 Before the task document you may receive `## Product knowledge`. The task document
 holds the original request, your own earlier PRD, the validated flow, UX Lead's walk,
-the validated screens design and Design Lead's comparisons.
+the validated screens design and UI Lead's comparisons.
 
 <Task>
 Write the PRD again, this time with the validated flow and screens design folded in:
