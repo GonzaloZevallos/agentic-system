@@ -8,6 +8,7 @@ import pytest
 
 from agentic.core.process.adapters.github import GhTracker
 from agentic.core.process.adapters.github.tracker import issue_number
+from agentic.core.process.application.ports import MergeCallFailed
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
 
 
@@ -443,3 +444,68 @@ def test_merge_never_asks_for_auto_or_branch_deletion():
     run = MethodRecorder(True, True, True)
     GhTracker(Path("/p"), run).merge(7, "abc123")
     assert "--auto" not in run.calls[-1] and "--delete-branch" not in run.calls[-1]
+
+
+class _Step(MethodRecorder):
+    """One `gh` step fails, or answers with something that is not what it should be."""
+
+    def __init__(self, fail_at=None, error=None, repo_view_stdout=None, allowed=(True, True, True)):
+        super().__init__(*allowed)
+        self.fail_at = fail_at
+        self.error = error
+        self.repo_view_stdout = repo_view_stdout
+
+    def __call__(self, args, cwd, capture_output, text, check):
+        if self.fail_at and tuple(args[1:3]) == self.fail_at:
+            self.calls.append(args)
+            raise self.error
+        if args[1:3] == ["repo", "view"] and self.repo_view_stdout is not None:
+            self.calls.append(args)
+            return subprocess.CompletedProcess(args, 0, self.repo_view_stdout, "")
+        return super().__call__(args, cwd, capture_output, text, check)
+
+
+_REJECTED = subprocess.CalledProcessError(1, "gh", stderr="Pull request is not mergeable: secret")
+
+
+def ids_without_cause(run):
+    """The two rejections that are not a `gh` failure: nothing was raised to chain."""
+    return run.repo_view_stdout == "[]" or run.allowed["mergeCommitAllowed"] is False
+
+
+@pytest.mark.parametrize(
+    ("run", "failure"),
+    [
+        (_Step(("repo", "view"), FileNotFoundError("gh")), "gh_unavailable"),
+        (_Step(("repo", "view"), _REJECTED), "gh_unreadable"),
+        (_Step(repo_view_stdout="not json"), "gh_unreadable"),
+        (_Step(repo_view_stdout="[]"), "gh_unreadable"),
+        (_Step(allowed=(False, False, False)), "no_merge_method"),
+        (_Step(("pr", "merge"), _REJECTED), "gh_rejected"),
+        (_Step(("pr", "merge"), FileNotFoundError("gh")), "gh_unavailable"),
+    ],
+    ids=[
+        "repo_view_gh_missing",
+        "repo_view_error",
+        "bad_json",
+        "not_an_object",
+        "no_method",
+        "pr_merge_rejected",
+        "pr_merge_gh_missing",
+    ],
+)
+def test_merge_raises_only_merge_call_failed_with_the_class_of_the_step_that_failed(run, failure):
+    with pytest.raises(MergeCallFailed) as raised:
+        GhTracker(Path("/p"), run).merge(7, "abc123")
+    assert raised.value.failure == failure
+    assert type(raised.value) is MergeCallFailed
+    assert isinstance(raised.value, ValueError)
+    assert raised.value.__cause__ is not None or ids_without_cause(run)
+
+
+def test_merge_call_failed_carries_the_raw_error_as_its_message_never_as_its_class():
+    run = _Step(("pr", "merge"), _REJECTED)
+    with pytest.raises(MergeCallFailed, match="not mergeable") as raised:
+        GhTracker(Path("/p"), run).merge(7, "abc123")
+    assert raised.value.failure == "gh_rejected"
+    assert str(raised.value) == "gh pr merge failed: Pull request is not mergeable: secret"
