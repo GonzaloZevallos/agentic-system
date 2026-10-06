@@ -33,6 +33,7 @@ from .schemas import (
     FinalValidation,
     InterviewTurn,
     PlatformAnswers,
+    Reflection,
     Review,
     RoleOutput,
     Ruling,
@@ -53,6 +54,9 @@ class Prompt:
     text: str
     hash: str
     source: Path
+    # The hash of the playbook section the text ends with; "" when there is none, and
+    # then `text` and `hash` are exactly what `render` made (ADR-0043).
+    playbook: str = ""
 
 
 @dataclass(frozen=True)
@@ -563,6 +567,21 @@ DEVELOPER_INTEGRATOR = Role(
     max_turns=80,
 )
 
+# The reflector (ADR-0043): after a task closes, it reads that task's returns and proposes
+# lessons for the role each one is attributable to. It runs outside any task, so it never
+# enters a task's prompt fingerprint. Its input arrives whole in the prompt, built by code
+# from the closed document (`application/reflect.py`), so it reads no section, no tool and
+# no checkout: nothing to write with and nothing to look up.
+REFLECTOR = Role(
+    name="Reflector",
+    slug="reflector",
+    kind="actor",
+    schema=Reflection,
+    reads=(),
+    effort="medium",
+    max_turns=6,
+)
+
 
 def check_rules(checks: Mapping[str, str]) -> tuple[str, ...]:
     """A permission rule per declared check. A prefix: the reviewer runs the command on
@@ -628,6 +647,7 @@ ROLES = (
     TECH_LEAD_REVIEWER_LIGHT,
     DEVELOPER,
     DEVELOPER_INTEGRATOR,
+    REFLECTOR,
 )
 
 

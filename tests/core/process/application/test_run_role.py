@@ -5,13 +5,16 @@ from typing import get_args
 
 import anyio
 import pytest
+import yaml
 
 from agentic.core.process.application.ports import AttemptFailed, RawResult
+from agentic.core.process.application.preflight import PLACEHOLDERS
 from agentic.core.process.application.run_role import (
     Output,
     RoleFailure,
     TaskCapReached,
     context_for,
+    load_prompt,
     run_record,
     run_role,
     run_with_retry,
@@ -20,6 +23,7 @@ from agentic.core.process.application.run_role import (
 from agentic.core.process.application.schema_guard import RoleSchemaGuard
 from agentic.core.process.domain import rules, turn_notice
 from agentic.core.process.domain.document import HUMAN
+from agentic.core.process.domain.playbook import Item, Playbook, parse
 from agentic.core.process.domain.roles import (
     DEVELOPER,
     PJM,
@@ -28,14 +32,26 @@ from agentic.core.process.domain.roles import (
     ROLES,
     TECH_LEAD_EPHEMERAL,
     TECH_LEAD_INTERVIEWEE,
+    describe_flags,
+    prompt_hash,
+    render,
 )
-from agentic.core.process.domain.task import FailureReason
+from agentic.core.process.domain.task import FailureReason, apply, delta
 from agentic.shared.configuration import Configuration
 from tests.fakes import ScriptedRunner, classified, delivered, memory_ports, questions, tech_answers
 
 pytestmark = pytest.mark.anyio
 
 OK = classified(cost=0.03)
+
+LESSON = {
+    "id": "developer-1",
+    "lesson": "Run the checks first.",
+    "category": "spec-behaviour",
+    "since": "empty",
+    "seen_in": ["GH-1"],
+    "added_at": "2026-10-05",
+}
 
 
 async def run_pjm(
@@ -944,3 +960,163 @@ async def test_the_ephemeral_tech_lead_runs_on_the_actor_model_the_interviewee_d
     assert ephemeral_call["model"] == cfg.actor_model
     assert interviewee_call["model"] == cfg.verifier_model
     assert interviewee_call["model"] != cfg.actor_model
+
+
+def lessons(*texts: str) -> Playbook:
+    return Playbook(
+        slug="developer",
+        items=tuple(
+            Item(
+                id=f"developer-{n}",
+                lesson=text,
+                category="spec-behaviour",
+                since="empty",
+                seen_in=("GH-1",),
+                added_at="2026-10-05",
+            )
+            for n, text in enumerate(texts, 1)
+        ),
+    )
+
+
+CFG = Configuration(product_dir=Path("/repos/product"))
+
+
+def load(ports, role=DEVELOPER):
+    return load_prompt(role, CFG, ports, ports.flags.load(), **PLACEHOLDERS)
+
+
+def test_an_empty_playbook_leaves_the_prompt_and_its_hash_as_render_makes_them():
+    ports = memory_ports()
+    raw, source = ports.prompts.raw(DEVELOPER)
+    expected = render(
+        raw,
+        source,
+        max_changes=CFG.max_changes_requested_per_pair,
+        max_turns=DEVELOPER.max_turns,
+        flags=describe_flags(ports.flags.load()),
+        **PLACEHOLDERS,
+    )
+    assert load(ports) == expected
+    assert load(ports).playbook == ""
+
+
+def test_a_playbook_adds_its_section_after_the_text_and_moves_the_hash():
+    ports = memory_ports()
+    empty = load(ports)
+    ports.prompts.playbooks["developer"] = lessons("Run the checks first.", "Cite the file.")
+    loaded = load(ports)
+    section = (
+        "### Playbook\n- Run the checks first. (spec-behaviour)\n- Cite the file. (spec-behaviour)"
+    )
+    assert loaded.text == empty.text + "\n\n" + section
+    raw, _ = ports.prompts.raw(DEVELOPER)
+    assert loaded.hash == prompt_hash(raw + "\n" + section)
+    assert loaded.hash != empty.hash
+    assert loaded.playbook == prompt_hash(section)
+    assert loaded.source == empty.source
+
+
+def test_a_lesson_with_a_placeholder_cannot_even_be_parsed():
+    with pytest.raises(ValueError, match="placeholder"):
+        parse(
+            yaml.safe_dump({"items": [{**LESSON, "lesson": "Use {{date}} always."}]}),
+            "developer",
+        )
+
+
+def test_the_section_is_never_filled_like_the_template():
+    """Built past `parse` on purpose, so the section's own text is under test: a
+    `{{date}}` in it stays `{{date}}`, not today's date, and no placeholder is looked up."""
+    ports = memory_ports()
+    ports.prompts.playbooks["developer"] = lessons("Keep {{date}} and {{nope}} as they are.")
+    loaded = load(ports)
+    assert "- Keep {{date}} and {{nope}} as they are. (spec-behaviour)" in loaded.text
+
+
+async def _run_developer(state, ports, tmp_path):
+    return await run_role(
+        state,
+        DEVELOPER,
+        Configuration(product_dir=tmp_path),
+        ports,
+        subtask="api",
+        invariants="",
+        branches="",
+        checks="",
+    )
+
+
+def _ports_for_runs(count: int = 1):
+    runner = ScriptedRunner(
+        developer=[RawResult(delivered().structured_output, 0.03) for _ in range(count)]
+    )
+    return memory_ports(runner)
+
+
+def _playbook_hash(ports) -> str:
+    return load(ports).playbook
+
+
+async def test_the_first_run_with_a_playbook_records_its_hash_under_playbooks(tmp_path):
+    ports = _ports_for_runs()
+    ports.prompts.playbooks["developer"] = lessons("Run the checks first.")
+    _, patch = await _run_developer(
+        {"id": "T-1", "title": "t", "description": "d"}, ports, tmp_path
+    )
+    assert patch["playbooks"] == {"developer": _playbook_hash(ports)}
+    assert "playbooks_changed" not in patch
+
+
+async def test_a_task_with_no_playbook_gets_neither_key(tmp_path):
+    ports = _ports_for_runs()
+    _, patch = await _run_developer(
+        {"id": "T-1", "title": "t", "description": "d"}, ports, tmp_path
+    )
+    assert "playbooks" not in patch
+    assert "playbooks_changed" not in patch
+
+
+async def test_the_first_playbook_hash_is_never_overwritten_across_runs(tmp_path):
+    ports = _ports_for_runs(3)
+    ports.prompts.playbooks["developer"] = lessons("Run the checks first.")
+    state = {"id": "T-1", "title": "t", "description": "d"}
+    first_hash = _playbook_hash(ports)
+    _, first = await _run_developer(state, ports, tmp_path)
+    state = apply(state, first)
+    # The same playbook again: nothing new to record.
+    _, same = await _run_developer(state, ports, tmp_path)
+    assert "playbooks" not in same and "playbooks_changed" not in same
+    # A different one: the first stays, the later goes beside it.
+    ports.prompts.playbooks["developer"] = lessons("Run the checks first.", "Cite the file.")
+    later_hash = _playbook_hash(ports)
+    _, later = await _run_developer(state, ports, tmp_path)
+    assert "playbooks" not in later
+    assert later["playbooks_changed"] == {"developer": later_hash}
+    folded = apply(state, later)
+    assert folded["playbooks"] == {"developer": first_hash}
+    assert folded["playbooks_changed"] == {"developer": later_hash}
+
+
+async def test_a_playbook_that_appears_after_an_empty_first_run_is_recorded_as_changed(tmp_path):
+    ports = _ports_for_runs(2)
+    state = {"id": "T-1", "title": "t", "description": "d"}
+    _, first = await _run_developer(state, ports, tmp_path)
+    state = apply(state, first)
+    ports.prompts.playbooks["developer"] = lessons("Run the checks first.")
+    _, later = await _run_developer(state, ports, tmp_path)
+    recorded = {"developer": _playbook_hash(ports)}
+    assert later["playbooks"] == recorded
+    assert later["playbooks_changed"] == recorded
+
+
+def test_the_playbook_keys_fold_and_subtract_through_the_reducers():
+    before = {"id": "T-1", "title": "t", "description": "d", "playbooks": {"developer": "a"}}
+    patch = {"playbooks": {"developer": "b", "pm": "c"}, "playbooks_changed": {"developer": "b"}}
+    after = apply(before, patch)
+    assert after["playbooks"] == {"developer": "a", "pm": "c"}
+    assert after["playbooks_changed"] == {"developer": "b"}
+    assert delta(before, after) == {
+        "playbooks": {"pm": "c"},
+        "playbooks_changed": {"developer": "b"},
+    }

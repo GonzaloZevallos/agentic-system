@@ -119,6 +119,11 @@ def render(
         "settled_findings": state.get("settled_findings", []),
         "cost_usd": round(state.get("cost_usd", 0.0), 4),
         "prompts": state.get("prompts", {}),
+        # The playbook section hash each role first ran with, and any later one
+        # (ADR-0043), written under their own names and only when non-empty, so a task
+        # with no playbook is byte-identical to a document written before them.
+        **({"playbooks": playbooks} if (playbooks := state.get("playbooks")) else {}),
+        **({"playbooks_changed": changed} if (changed := state.get("playbooks_changed")) else {}),
         # The review-mode/ephemeral-arm switches this run ran under
         # (`shared.configuration.experiment_snapshot`), omitted entirely when empty --
         # the switches are at their default -- so a default-path document stays

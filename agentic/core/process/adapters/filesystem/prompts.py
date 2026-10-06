@@ -1,13 +1,17 @@
 """`Prompts` with the product overlay (ADR-0005): `.agentic/prompts/<slug>.md` in the
-product repo wins over the system's default in `agentic/core/process/domain/prompts/`."""
+product repo wins over the system's default in `agentic/core/process/domain/prompts/`.
+The role's playbook (ADR-0043) comes from the same overlay, `.agentic/playbooks/`."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
+from ...domain import playbook
+from ...domain.playbook import Playbook
 from ...domain.roles import PROMPTS_DIR, Role
 
 OVERLAY_SUBDIR = Path(".agentic/prompts")
+PLAYBOOKS_SUBDIR = Path(".agentic/playbooks")
 
 
 class FilesystemPrompts:
@@ -19,3 +23,28 @@ class FilesystemPrompts:
         if not source.exists():
             source = PROMPTS_DIR / f"{role.slug}.md"
         return source.read_text(encoding="utf-8"), source
+
+    def playbook(self, role: Role) -> Playbook:
+        """The role's playbook; empty when the file is absent or the role has none. A
+        file that is not a playbook, or a top-level file that is neither a playbook of
+        a role in the set nor a record, raises `ValueError` (preflight refuses it)."""
+        directory = self.product_dir / PLAYBOOKS_SUBDIR
+        self._refuse_strays(directory)
+        if role.slug not in playbook.PLAYBOOK_ROLES:
+            return Playbook(slug=role.slug)
+        source = directory / f"{role.slug}.yaml"
+        if not source.exists():
+            return Playbook(slug=role.slug)
+        return playbook.parse(source.read_text(encoding="utf-8"), role.slug)
+
+    @staticmethod
+    def _refuse_strays(directory: Path) -> None:
+        if not directory.is_dir():
+            return
+        allowed = playbook.PLAYBOOK_ROLES | set(playbook.RECORD_FILES)
+        for path in sorted(directory.glob("*.yaml")):
+            if path.stem not in allowed:
+                raise ValueError(
+                    f"{path}: {path.stem} is not a role with a playbook "
+                    f"({', '.join(sorted(playbook.PLAYBOOK_ROLES))}) nor a record file"
+                )

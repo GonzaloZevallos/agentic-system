@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from ..domain.design import Design
+from ..domain.playbook import Playbook
 from ..domain.roles import Role
 from ..domain.rules import motive
 from ..domain.suppressions import Forbidden
@@ -296,6 +297,11 @@ class Prompts(Protocol):
 
     def raw(self, role: Role) -> tuple[str, Path]: ...
 
+    def playbook(self, role: Role) -> Playbook:
+        """The role's playbook (ADR-0043): empty for a role the table does not name or a
+        product that has none; a malformed one raises `ValueError`."""
+        ...
+
 
 class FlagVocabulary(Protocol):
     def load(self) -> dict[str, str]: ...
@@ -514,7 +520,17 @@ class Workspace(Protocol):
         """Commit everything changed under `path`; `None` when there was nothing."""
         ...
 
-    def push(self, branch: str) -> None: ...
+    def push(self, branch: str, *, replace: bool = False) -> None:
+        """Publish `branch` to `origin`. `replace` is for a branch the system owns whose
+        previous pull request is closed or merged and which was started again from the
+        default branch (`agentic/playbook`): the remote one is replaced, guarded by a lease
+        on the sha read just before, so nothing a person pushed in between is lost."""
+        ...
+
+    def show(self, ref: str, relative: str) -> str | None:
+        """The text of `relative` at `ref` (a branch, `HEAD` or a commit), or `None` when
+        the ref or the file does not exist there."""
+        ...
 
     def cleanup(self, task_id: str) -> None:
         """Remove the task's worktrees. The branches stay."""
@@ -616,6 +632,20 @@ class IssueComment:
     created_at: str
 
 
+@dataclass(frozen=True)
+class ListedPullRequest:
+    """One pull request of the product as the playbook delivery reads it (ADR-0043):
+    `state` is `OPEN`, `MERGED` or `CLOSED`, `merge_commit` the commit a merge made (empty
+    otherwise) and `branch` the head it came from."""
+
+    number: int
+    url: str
+    state: str
+    body: str
+    merge_commit: str
+    branch: str
+
+
 class Tracker(Protocol):
     """Where the human is told (ADR-0011): the pull request, the issue's comments and
     labels. A task that did not come from an issue has no issue to write to; the
@@ -641,6 +671,14 @@ class Tracker(Protocol):
     def label(self, task_id: str, label: str) -> None: ...
 
     def unlabel(self, task_id: str, label: str) -> None: ...
+
+    def list_pull_requests(self) -> list[ListedPullRequest]:
+        """Every pull request of the product, any state, with its body: the playbook
+        delivery filters them locally for its marker block (never through the search
+        index, which lags a body edit)."""
+        ...
+
+    def update_pull_request_body(self, number: int, body: str) -> None: ...
 
     def issue_comments(self, task_id: str) -> list[str]:
         """The bodies of the issue's comments, oldest first, whoever wrote them; none

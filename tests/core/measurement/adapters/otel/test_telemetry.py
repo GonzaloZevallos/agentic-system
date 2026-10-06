@@ -288,6 +288,7 @@ def _maximal_patch() -> dict:
         "failures": [failure],
         "cost_usd": 0.62,
         "prompts": {"developer": "deadbeef"},
+        "playbooks": {"developer": "cafe0123"},
         "change_history": [
             {"pair": "Tech Lead→Developer:api", "category": "process-suite-red", "reason": "r"}
         ],
@@ -1026,3 +1027,20 @@ def test_system_baseline_git_command_carries_the_match_argument(monkeypatch):
     (describe,) = [c for c in calls if "describe" in c]
     assert "--match" in describe
     assert describe[describe.index("--match") + 1] == telemetry.BASELINE_TAG_GLOB == "bl-*"
+
+
+def test_role_finish_stamps_the_playbook_hashes_only_when_there_are_some(spans):
+    with telemetry.role_span("Developer", "developer", "gym-saas", arm="default") as run:
+        run.finish({"cost_usd": 0.1, "prompts": {"developer": "h"}})
+    assert "agentic.role.playbook_hash" not in spans.get_finished_spans()[-1].attributes
+    with telemetry.role_span("Developer", "developer", "gym-saas", arm="default") as run:
+        run.finish(
+            {
+                "cost_usd": 0.1,
+                "prompts": {"developer": "h"},
+                "playbooks": {"developer": "pb1"},
+                "playbooks_changed": {"developer": "pb1"},
+            }
+        )
+    attributes = spans.get_finished_spans()[-1].attributes
+    assert attributes["agentic.role.playbook_hash"] == ("pb1",)

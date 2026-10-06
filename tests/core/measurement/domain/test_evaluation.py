@@ -247,3 +247,42 @@ def test_evaluation_record_score_pending_when_the_task_is_not_yet_closed():
     assert record["score_pending_reason"] is not None
     assert record["system_version"] is None
     assert record["delivery_outcome"] is None
+
+
+# `fingerprint_divergence` (ADR-0043): which roles' playbook and which roles' template
+# make `eval compare`'s fingerprint groups differ.
+
+
+def test_two_groups_differing_only_in_a_playbook_name_the_playbook_role():
+    a = [doc(prompts={"developer": "h1", "pm": "p"}, playbooks={"developer": "pb1"})]
+    b = [doc(prompts={"developer": "h2", "pm": "p"}, playbooks={"developer": "pb2"})]
+    assert evaluation.fingerprint_divergence([a, b]) == (("developer",), ())
+
+
+def test_a_playbook_present_in_one_group_and_absent_in_the_other_is_a_playbook_difference():
+    a = [doc(prompts={"developer": "h1"}, playbooks={"developer": "pb1"})]
+    b = [doc(prompts={"developer": "h2"})]
+    assert evaluation.fingerprint_divergence([a, b]) == (("developer",), ())
+
+
+def test_two_groups_differing_only_in_the_template_name_the_template_role():
+    a = [doc(prompts={"developer": "h1", "pm": "p"}, playbooks={"developer": "pb"})]
+    b = [doc(prompts={"developer": "h1", "pm": "q"}, playbooks={"developer": "pb"})]
+    assert evaluation.fingerprint_divergence([a, b]) == ((), ("pm",))
+
+
+def test_a_template_difference_with_no_playbooks_at_all_is_still_a_template_difference():
+    a = [doc(prompts={"developer": "h1"})]
+    b = [doc(prompts={"developer": "h2"})]
+    assert evaluation.fingerprint_divergence([a, b]) == ((), ("developer",))
+
+
+def test_a_role_that_ran_in_only_one_group_is_named_in_neither_list():
+    a = [doc(prompts={"developer": "h1", "tech_lead": "t"})]
+    b = [doc(prompts={"developer": "h1"})]
+    assert evaluation.fingerprint_divergence([a, b]) == ((), ())
+
+
+def test_identical_groups_diverge_nowhere():
+    a = [doc(prompts={"developer": "h1"}, playbooks={"developer": "pb"})]
+    assert evaluation.fingerprint_divergence([a, a]) == ((), ())

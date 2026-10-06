@@ -60,9 +60,17 @@ from typing import Any
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import document, plan_view, rules, schemas, turn_notice
+from ..domain import document, plan_view, playbook, rules, schemas, turn_notice
 from ..domain.document import HUMAN
-from ..domain.roles import ORIGINAL, TECH_LEAD, Prompt, Role, describe_flags, render
+from ..domain.roles import (
+    ORIGINAL,
+    TECH_LEAD,
+    Prompt,
+    Role,
+    describe_flags,
+    prompt_hash,
+    render,
+)
 from ..domain.suppressions import Forbidden
 from ..domain.task import WAITING_ON_HUMAN, EscalationClass, Failure, RoleRun, TaskState, apply
 from .limits import RunLimits
@@ -251,9 +259,14 @@ def with_context(
 def load_prompt(
     role: Role, cfg: Configuration, ports: Ports, vocabulary: dict[str, str], **placeholders: object
 ) -> Prompt:
-    """The role's system prompt, overlay applied, with the limits and the vocabulary in."""
+    """The role's system prompt, overlay applied, with the limits and the vocabulary in.
+
+    The role's playbook (ADR-0043) is appended after the placeholders are filled, so it
+    never goes through them. With none, the prompt is exactly what `render` made; with
+    one, the hash covers the raw text and the section, so a playbook change is a prompt
+    change for comparison."""
     raw, source = ports.prompts.raw(role)
-    return render(
+    rendered = render(
         raw,
         source,
         max_changes=cfg.max_changes_requested_per_pair,
@@ -261,6 +274,38 @@ def load_prompt(
         flags=describe_flags(vocabulary),
         **placeholders,
     )
+    text = playbook.section(ports.prompts.playbook(role))
+    if not text:
+        return rendered
+    return Prompt(
+        text=rendered.text + "\n\n" + text,
+        hash=prompt_hash(raw + "\n" + text),
+        source=source,
+        playbook=prompt_hash(text),
+    )
+
+
+def playbook_patch(state: TaskState, role: Role, loaded: Prompt) -> TaskState:
+    """The playbook keys of a run's patch (ADR-0043): which playbook section the role
+    ran with, for the window and `eval compare`, beside `prompts` (which stays last-wins).
+
+    With an empty playbook nothing is written, so a task with none has neither key. The
+    first non-empty hash goes in `playbooks` and is never overwritten (`task.first`). A
+    different later hash goes in `playbooks_changed`, and so does the first hash of a
+    role that already ran with no playbook (`prompts` has its slug, `playbooks` does
+    not): the section hash of that first run is the segment `empty`, and a task that
+    ran under two playbooks is excluded from every window the same way."""
+    if not loaded.playbook:
+        return {}
+    recorded = state.get("playbooks", {}).get(role.slug)
+    if recorded is None:
+        patch: TaskState = {"playbooks": {role.slug: loaded.playbook}}
+        if role.slug in state.get("prompts", {}):
+            patch["playbooks_changed"] = {role.slug: loaded.playbook}
+        return patch
+    if recorded != loaded.playbook:
+        return {"playbooks_changed": {role.slug: loaded.playbook}}
+    return {}
 
 
 async def run_with_retry(
@@ -750,7 +795,11 @@ async def run_role(
     section = section or role.name
     vocabulary = ports.flags.load()
     loaded = load_prompt(role, cfg, ports, vocabulary, **placeholders)
-    patch: TaskState = {"current_role": role.name, "prompts": {role.slug: loaded.hash}}
+    patch: TaskState = {
+        "current_role": role.name,
+        "prompts": {role.slug: loaded.hash},
+        **playbook_patch(state, role, loaded),
+    }
     if prompt is None:
         standards, knowledge = preamble(role, ports, cwd)
         prompt = context_for(

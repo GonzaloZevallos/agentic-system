@@ -237,6 +237,13 @@ def tracer() -> trace.Tracer:
     return _tracer_provider.get_tracer("agentic")
 
 
+def _playbook_hashes(patch: TaskState) -> tuple[str, ...]:
+    """Every non-empty playbook hash the patch carries, first recorded then changed,
+    each once, in order."""
+    values = [*patch.get("playbooks", {}).values(), *patch.get("playbooks_changed", {}).values()]
+    return tuple(dict.fromkeys(value for value in values if value))
+
+
 def _counts(pairs: Mapping[str, int | float]) -> tuple[str, ...]:
     """One `"<dimension>=<count>"` string per key, sorted for a deterministic span
     attribute -- the array shape ADR-0008's 2026-09-17 addendum already chose for
@@ -411,6 +418,11 @@ class RoleRun(Run):
         # that ran, not the last one written, which used to overwrite the others.
         if prompt_hashes := tuple(patch.get("prompts", {}).values()):
             attributes["agentic.role.prompt_hash"] = prompt_hashes
+        # The playbook section hashes the patch recorded (ADR-0043), set only when it
+        # recorded any: a run that ran with no playbook, or with the one already on the
+        # task, writes none, so the attribute is never an empty tuple.
+        if playbook_hashes := _playbook_hashes(patch):
+            attributes["agentic.role.playbook_hash"] = playbook_hashes
         if categories := system_metrics.change_categories(patch):
             attributes["agentic.role.return_categories"] = categories
         if failures := patch.get("failures", []):
