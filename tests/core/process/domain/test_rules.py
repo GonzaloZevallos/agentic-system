@@ -195,7 +195,9 @@ def test_a_state_with_no_decided_key_keeps_the_configured_cap_whatever_its_reque
 
 def test_interview_progress_for_a_cap_of_two_or_more_is_what_it_always_was():
     section = INTERVIEW_DEFINITION.section
-    runs = [{"role": "Product Analyst", "section": section, "session_id": f"q{i}"} for i in range(4)]
+    runs = [
+        {"role": "Product Analyst", "section": section, "session_id": f"q{i}"} for i in range(4)
+    ]
     for cap, done, left in [(4, 0, 4), (4, 4, 2), (3, 3, 2), (2, 2, 2), (2, 0, 2)]:
         progress = rules.interview_progress({"runs": runs[:done]}, INTERVIEW_DEFINITION, cap)
         assert (progress.rounds_done, progress.rounds_left) == (done, left)
@@ -203,7 +205,9 @@ def test_interview_progress_for_a_cap_of_two_or_more_is_what_it_always_was():
 
 def test_interview_progress_of_a_decided_state_gives_a_retake_one_round():
     section = INTERVIEW_DEFINITION.section
-    runs = [{"role": "Product Analyst", "section": section, "session_id": f"q{i}"} for i in range(2)]
+    runs = [
+        {"role": "Product Analyst", "section": section, "session_id": f"q{i}"} for i in range(2)
+    ]
     for done in (0, 1, 2):
         state = {"decided": True, "runs": runs[:done]}
         progress = rules.interview_progress(state, INTERVIEW_DEFINITION, 4)

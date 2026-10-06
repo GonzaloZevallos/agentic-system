@@ -871,9 +871,7 @@ async def test_a_decided_consultation_still_runs_in_round_one(cfg):
 
 
 async def test_a_decided_definition_interview_is_capped_at_one_round_too(cfg):
-    runner = ScriptedRunner(
-        **{ASK: [questions(1), questions(done=True)], ANSWER: [answers(1)]}
-    )
+    runner = ScriptedRunner(**{ASK: [questions(1), questions(done=True)], ANSWER: [answers(1)]})
     transcript, _ = await interview(_decided(TASK), INTERVIEW_DEFINITION, cfg, memory_ports(runner))
 
     assert transcript is not None and runner.slugs == [ASK, ANSWER, ASK]

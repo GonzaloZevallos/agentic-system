@@ -3882,9 +3882,7 @@ async def test_run_hands_the_graph_no_decided_key_without_the_heading(monkeypatc
 
 
 @pytest.mark.anyio
-async def test_run_with_the_cap_switched_off_hands_the_graph_no_decided_key(
-    monkeypatch, tmp_path
-):
+async def test_run_with_the_cap_switched_off_hands_the_graph_no_decided_key(monkeypatch, tmp_path):
     entered = await _graph_input_of(
         monkeypatch, tmp_path, "Body\n\n## Decided\n- a\n", decided_cap=False
     )
