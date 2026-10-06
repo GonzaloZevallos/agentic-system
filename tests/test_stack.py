@@ -124,6 +124,15 @@ def test_the_declared_witness_runs_at_the_repo_root_and_resolves_under_it():
     assert printed.is_absolute() and printed.is_relative_to(REPO), result.output
 
 
+def test_the_declared_parallel_checks_is_a_bool_the_gate_can_read():
+    """This repo's own `parallel_checks`, read through the domain exactly as `GitStack`
+    would: opted in only on the evidence ADR-0043 pastes, and a real bool either way, so
+    a broken value fails here before it fails preflight."""
+    data = yaml.safe_load(STACK_YAML.read_text(encoding="utf-8"))
+    assert stack.parallel_checks(data, STACK_YAML) is True
+    assert "ADR-0043" in STACK_YAML.read_text(encoding="utf-8")
+
+
 def _mypy_option_names() -> list[str]:
     """Every `[tool.mypy]` key except `files` itself: the registry `CODING_STANDARDS.md`
     is allowed to point at, never one of its options (ADR-0012, adenda `standards`)."""
