@@ -3428,3 +3428,104 @@ async def test_eval_score_names_the_role_whose_template_differs(tmp_path, capsys
     out = capsys.readouterr().out
     assert "template differs for: pm" in out
     assert "playbook differs" not in out
+
+
+# --- GH-176: the poller retakes a run a reboot cut, and `_resume` takes it up --------
+
+
+def _two_step_graph(ran: list[str], seen_lock: list, lock, fail_b: bool):
+    """A real, tiny `StateGraph`: `a` then `b`. Run with `fail_b`, it leaves the real
+    per-task checkpoint a killed run leaves -- `a` done, `b` still pending, no interrupt."""
+    from langgraph.graph import END, START, StateGraph
+
+    from agentic.core.process.adapters.langgraph.graph import ESCALATE
+
+    def a(state):
+        ran.append("a")
+        return {**state, "status": "developing"}
+
+    def b(state):
+        if fail_b:
+            raise RuntimeError("the machine went down")
+        ran.append("b")
+        seen_lock.append(lock.read(state["id"]))
+        return {**state, "status": "ready_for_review"}
+
+    g = StateGraph(dict)
+    g.add_node(ESCALATE, lambda state: {})
+    g.add_node("a", a)
+    g.add_node("b", b)
+    g.add_edge(START, "a")
+    g.add_edge("a", "b")
+    g.add_edge("b", END)
+    return g
+
+
+@pytest.mark.anyio
+async def test_the_poller_retakes_a_run_a_reboot_cut_and_resume_takes_over_its_lock(
+    monkeypatch, tmp_path, capsys
+):
+    """The join: a real per-task checkpoint left mid-run, a real lock record written in
+    a previous boot (by a pid that is alive now, as a reused pid would be), `run_once`
+    deciding the retake from that unmodified record, and `_resume` driven from the argv
+    it spawned."""
+    from datetime import UTC, datetime
+
+    from agentic.core.process.adapters.filesystem import FilesystemRunLock
+    from agentic.core.process.application import poll
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import FakeLauncher, MemoryRunRegistry, memory_ports
+
+    cfg = Configuration(product_dir=tmp_path)
+    ports = memory_ports()
+    ports.documents.save({"id": "GH-30", "title": "t", "status": "developing"})
+    old_boot = FilesystemRunLock(tmp_path / "locks", boot_id=lambda: "old")
+    old_boot.acquire("GH-30", "agentic run")  # this very pid: `os.kill` alone says alive
+    lock = FilesystemRunLock(tmp_path / "locks", boot_id=lambda: "new")
+
+    ran: list[str] = []
+    seen: list = []
+    crashed = _two_step_graph(ran, seen, lock, fail_b=True)
+    async with composition.checkpointer(cfg, "GH-30") as saver:
+        app = crashed.compile(checkpointer=saver)
+        with pytest.raises(RuntimeError):
+            await app.ainvoke(
+                {"id": "GH-30", "title": "t", "status": "open"},
+                config={"configurable": {"thread_id": "GH-30"}},
+            )
+    assert ran == ["a"]  # the checkpoint: `b` is pending, nothing interrupted
+
+    launcher = FakeLauncher()
+    lines = poll.run_once(
+        cfg,
+        ports,
+        MemoryRunRegistry(),
+        launcher,
+        datetime.now(UTC),
+        "agentic",
+        register_timeout_s=0.0,
+        sleep=lambda s: None,
+        lock=lock,
+        current_boot="new",
+    )
+    assert lines[0] == "agentic: poll: retake #30 -> pid 4242"
+    (argv,) = launcher.spawned
+    assert argv[:2] == ["agentic", "resume"] and {"--yes", "--detach"} <= set(argv)
+    assert ports.tracker.comments == [("GH-30", "Retaken after reboot: previous boot")]
+
+    ran.clear()
+    monkeypatch.setattr(cli, "graph", _two_step_graph(ran, seen, lock, fail_b=False))
+    await cli._resume(
+        f"GH-{argv[argv.index('--issue') + 1]}",
+        cfg,
+        ports,
+        yes=True,
+        checkpointer=composition.checkpointer,
+        run_lock=lock,
+        registry=MemoryRunRegistry(),
+    )
+    assert "took over the lock" in capsys.readouterr().out
+    assert ran == ["b"]  # only the pending node ran again
+    (held,) = seen
+    assert held.boot_id == "new" and held.pid == os.getpid()
+    assert lock.read("GH-30") is None  # released on the way out, as any run is

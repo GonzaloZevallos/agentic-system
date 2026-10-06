@@ -385,3 +385,111 @@ que el hijo ya está registrado cuando hace su `fetch`: la ventana de registro n
 - Lock: un `fetch` lento retiene el lock del poller de la máquina hasta ~30 s.
 - Un `fetch` exitoso deja fuera de la base los commits locales que el upstream no tiene; es
   lo buscado y la nota los nombra.
+
+## Adenda (2026-10-06): los pollers y las corridas sobreviven a un reinicio (#176)
+
+El 2026-10-05 la máquina estuvo apagada de 08:36 a 12:16 UTC: mató tres corridas y los dos
+pollers, y nada volvió solo. Esta adenda registra lo que se cambió para que un reinicio no
+exija recuperación manual. Ningún cuerpo ni adenda anterior se edita.
+
+### El id de arranque y la vida de un registro
+
+`/proc/sys/kernel/random/boot_id` es el id del arranque (glosario: **Arranque**). Lo lee un solo
+módulo, `adapters/filesystem/liveness.py` (`current_boot_id()`), y ese mismo módulo tiene la única
+sonda de pid, `is_alive(pid, recorded_boot, current_boot)`. `FilesystemRunLock` y
+`FilesystemRunRegistry` escriben el id en cada registro y reciben el actual por un callable de
+constructor, de modo que ningún test toca `/proc`. El veredicto es puro: `domain/boot.py:
+boot_verdict(recorded, current)` da `other_boot`, `same_boot` o `unknown`. Un registro de otro
+arranque está muerto, diga lo que diga `os.kill`; uno sin id (anterior a este cambio, o una máquina
+sin `/proc`) es `unknown`: decide `os.kill`, como hasta ahora, y el poller nunca lo retoma. El poller
+no importa `liveness` (la arquitectura lo prohíbe a `application/`): pregunta la vida al propio lock
+con `RunLock.refusal`, que usa la misma `is_alive` que `acquire`, así que ambos no pueden discrepar.
+Un lock de otro host se lee como vivo, igual que en `acquire`.
+
+### La marca de apagado
+
+Cuando `_signal_guarded` recibe SIGTERM o SIGHUP corre una sonda (`systemctl is-system-running`,
+2 s de timeout, verdadera sólo si la salida es exactamente `stopping`) antes de cancelar. La
+respuesta llega a la liberación del lock como un valor por invocación (`StopCause`), nunca como
+estado de módulo. Si es verdadera, `RunLock.keep_at_shutdown` reescribe el registro propio con
+`stopped_at_shutdown: true` y su id de arranque; en cualquier otro caso el lock se libera como
+siempre. Como `acquire` ya toma un registro muerto, conservarlo no filtra el lock (glosario:
+**Parada por apagado**).
+
+### La regla de retoma y su tope
+
+`rules.interrupted_run(raw, lock, prior_retakes)` decide, pura, junto a `poll_plan`. No es una
+corrida interrumpida si no hay registro de lock, o si el documento tiene `closed_at`, `escalated` o
+`pull_request`, o su `status` es `ready_for_review`, `discarded` o `waiting_on_human`. Si el lock
+está vivo, sigue corriendo. Con el lock muerto: de otro arranque y con menos de
+`RETAKE_AFTER_REBOOT_MAX = 3` retomas previas, `retake`; en cualquier otro caso (mismo arranque,
+arranque desconocido, un documento sin `status`, o el tope gastado) es del humano.
+`poll.gather_retakes` lee el lock con `RunLock.read` (nunca `acquire`) antes de que algo lance, de
+modo que la decisión se toma sobre el registro tal como lo dejó la corrida muerta. Las retomas
+previas son los comentarios `Retaken after reboot: ` posteriores al último comentario que no es del
+sistema; el prefijo (`poll.RETAKEN`) está en `resume.SYSTEM_COMMENTS`, así que un comentario humano
+reinicia la cuenta y `agentic resume` nunca lo lee como decisión. `poll_plan(retakes=...)` pone las
+retomas después de los cierres y antes de las reanudaciones vencidas, y gastan los mismos
+`available_slots` que cualquier lanzamiento (el tope de `AGENTIC_MAX_CONCURRENT_RUNS`).
+`poll.execute` tiene ahora cuatro ramas explícitas (`close`, `resume`, `retake`, `launch`) y termina
+en `assert_never`; `resume` y `retake` comparten `_spawn_resume`: lanzan `agentic resume --issue N
+--yes --detach`, comentan sólo después de que `spawn` devolvió un pid, y esperan el registro. Una
+retoma nunca llama a `record_launch` ni a `launch_attempts`. Una corrida del mismo arranque que
+murió (la mató un humano, o se cayó) se deja al humano con una línea por vuelta:
+`#N died in this boot (lock pid P since T), left to the human: agentic resume --issue N`
+(`stopped at shutdown` si el registro tiene la marca; `retake cap spent` si fue el tope).
+
+### Unidades, reinicio y linger
+
+`scripts/install-poller.sh` renderiza `scripts/systemd/agentic-poll.service.in` en una unidad de
+usuario por `--product-dir`, bajo `~/.config/systemd/user`, sin raíz. La unidad lleva rutas
+absolutas, ningún especificador `%`, `WorkingDirectory=<stage0>` (para que `load_dotenv()` lea
+`.env`) y un `PATH` resuelto al instalar con `git`, `gh`, `uv` y `claude` (si falta uno, la
+instalación falla). Política: `Restart=on-failure`, `RestartSec=30`, `StartLimitIntervalSec=0`,
+`KillMode=process` (los hijos desprendidos de `run`/`resume` no mueren con el poller al
+reiniciarlo). El humano corre una vez `loginctl enable-linger $USER` para que arranquen al
+encender sin sesión; el script imprime la instrucción.
+
+### El inhibidor
+
+`run` y `resume` toman un lock de inhibición de logind (`systemd-inhibit --what=sleep:shutdown
+--mode=block`, sostenido por un pipe de stdin) mientras viven, dentro de `_locked` y `_registered`,
+de modo que hay un solo pid. Si no está disponible, escribe una línea en stderr y la corrida sigue.
+No detiene un apagado forzado ni un corte de luz: eso lo cubre la retoma.
+
+### Lo que no cambia
+
+`.agentic/stack.yaml`; los prompts y su `fingerprint`; ninguna métrica, etiqueta, atributo de span
+ni clave del documento de tarea (los únicos campos nuevos persistidos son `boot_id` y
+`stopped_at_shutdown`, en el archivo de lock y el de corridas vivas, leídos con `.get`);
+`EscalationClass`; `ROLE_RETRIES`; el tope de 10 USD por intento y el tope de tarea.
+
+### Lo que cuesta (§8)
+
+Una retoma reejecuta el nodo interrumpido con el `resume --yes` existente: como mucho 3
+reanudaciones extra por tarea abierta y por decisión humana, cada una bajo los mismos topes. El
+costo no crece con el tamaño de los datos. Una retoma rechazada antes de registrarse retiene el
+`flock` del registro hasta 60 s, como mucho 3 vueltas por tarea; se informa como `retake #N -> not
+registered (retake k of 3)`.
+
+### Seguridad (§8)
+
+El script escribe unidades de usuario y las habilita con `systemctl --user`: no necesita raíz. Una
+corrida viva ahora puede bloquear la suspensión y el apagado ordenado del usuario; un apagado
+forzado lo supera.
+
+### Riesgos nuevos
+
+- Un pid reutilizado dentro del mismo arranque sigue leyéndose vivo. Registrar el tiempo de inicio
+  del proceso lo cerraría; no se pidió.
+- Si el bus del sistema ya cayó cuando llega SIGTERM, o el administrador de usuario se detiene sin
+  apagado del sistema, el lock se libera y la tarea no se retoma.
+- La línea del mismo arranque se repite en cada vuelta: el poller no guarda estado.
+- Una retoma rechazada antes de registrarse retiene el `flock` del registro hasta 60 s, como mucho
+  3 vueltas por tarea.
+- Dos pollers sobre un mismo producto se reinician cada 30 s hasta que se detenga uno.
+- `deliver` ejecutado dos veces cae al humano: `gh pr create` rechaza una cabeza ya existente, así
+  que no crea un pull request duplicado, pero la tarea queda del humano. Hacer que encuentre el pull
+  request existente es un cambio aparte, nombrado en el cuerpo del PR.
+- Un lock de otro host con un id de arranque ajeno se lee como vivo (`refusal` no lo sondea): nunca
+  se retoma desde otra máquina.

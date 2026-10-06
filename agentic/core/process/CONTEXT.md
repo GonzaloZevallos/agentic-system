@@ -307,7 +307,7 @@ _Avoid_: reintento (eso es tras un fallo de rol), relanzar (eso es empezar de ce
 _Campo_: resume — estándar (LangGraph, Temporal, el Claude Agent SDK)
 
 **Corrida interrumpida**:
-Una corrida que terminó sin cierre ni escalado porque su proceso murió. No espera a nadie: se reanuda sin decisión del humano, desde el último estado guardado. Lo que el rol en curso hizo y no entregó puede estar en su checkout sin commitear, y su costo en dólares no se conoce: el sistema registra los tokens que vio y lo dice, en vez de callarlo.
+Una corrida que terminó sin cierre ni escalado porque su proceso murió. No espera a nadie: se reanuda sin decisión del humano, desde el último estado guardado. El poller la retoma sin decisión del humano cuando su lock es de un arranque anterior (una Parada por apagado incluida), como mucho 3 veces por cada decisión del humano; si murió en el mismo arranque, la deja al humano. Lo que el rol en curso hizo y no entregó puede estar en su checkout sin commitear, y su costo en dólares no se conoce: el sistema registra los tokens que vio y lo dice, en vez de callarlo.
 _Avoid_: cortada, abortada, crash (el estado de telemetría, no el concepto)
 _Campo_: sin término de arte
 

@@ -47,6 +47,7 @@ from .core.process.adapters.filesystem import (
     FilesystemRunLock,
     FilesystemRunRegistry,
     FilesystemTaskDocuments,
+    liveness,
 )
 from .core.process.adapters.git.workspace import GitError
 from .core.process.adapters.langgraph.graph import ESCALATE
@@ -886,7 +887,14 @@ async def _poll(
     with _locked(lock, pollmod.LOCK_KEY):
         while True:
             for line in pollmod.run_once(
-                cfg, ports, registry, real_launcher, datetime.now(UTC), executable
+                cfg,
+                ports,
+                registry,
+                real_launcher,
+                datetime.now(UTC),
+                executable,
+                lock=lock,
+                current_boot=liveness.current_boot_id(),
             ):
                 print(line, flush=True)
             await sleep(interval_s)
