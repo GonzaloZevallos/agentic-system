@@ -113,7 +113,7 @@ class GhTracker:
         if (number := issue_number(task_id)) is not None:
             self._gh("issue", "edit", str(number), "--remove-label", label)
 
-    def pull_requests(self) -> list[ListedPullRequest]:
+    def list_pull_requests(self) -> list[ListedPullRequest]:
         raw = self._gh(
             "pr",
             "list",

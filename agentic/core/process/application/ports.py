@@ -649,7 +649,7 @@ class Tracker(Protocol):
 
     def unlabel(self, task_id: str, label: str) -> None: ...
 
-    def pull_requests(self) -> list[ListedPullRequest]:
+    def list_pull_requests(self) -> list[ListedPullRequest]:
         """Every pull request of the product, any state, with its body: the playbook
         delivery filters them locally for its marker block (never through the search
         index, which lags a body edit)."""

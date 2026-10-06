@@ -72,7 +72,7 @@ def gather(cfg: Configuration, ports: Ports) -> Known:
     """Records at `HEAD`, on the candidate branch and in the blocks of every candidate PR,
     whatever its state. A record that cannot be read raises `ValueError`: the verb does not
     guess what was already paid for."""
-    listed = ports.tracker.pull_requests()
+    listed = ports.tracker.list_pull_requests()
     candidates = [
         (pr, pc.Candidate(pr.state, pr.merge_commit, record))
         for pr in listed

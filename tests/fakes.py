@@ -523,7 +523,7 @@ class MemoryTracker:
     def unlabel(self, task_id: str, label: str) -> None:
         self.unlabeled.append((task_id, label))
 
-    def pull_requests(self) -> list[ListedPullRequest]:
+    def list_pull_requests(self) -> list[ListedPullRequest]:
         return list(self.listed)
 
     def update_pull_request_body(self, number: int, body: str) -> None:
