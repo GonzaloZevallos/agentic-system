@@ -232,7 +232,8 @@ def reflect_lines(cfg: Configuration, ports: Ports, launcher: Launcher, argv0: s
     itself, so a second spawn while one is working refuses and exits."""
     try:
         due = reflect_run.pending(cfg, ports)
-    except (ValueError, OSError, GitError):
+    except (ValueError, OSError, GitError, KeyError, TypeError):
+        # a malformed `gh` item must never fail the poll round (invariant 12)
         return []
     if not due:
         return []

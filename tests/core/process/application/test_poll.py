@@ -596,3 +596,17 @@ def test_the_poller_does_not_launch_reflect_with_nothing_eligible(tmp_path):
         lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(), launcher, ESCALATED_AT)
         assert launcher.spawned == []
         assert lines == ["agentic: poll: nothing to do this round"]
+
+
+def test_a_malformed_pull_request_listing_never_fails_the_poll_round(tmp_path, monkeypatch):
+    from agentic.core.process.application import reflect_run
+
+    def malformed(cfg, ports):
+        raise KeyError("mergeCommit")
+
+    monkeypatch.setattr(reflect_run, "pending", malformed)
+    ports = _reflect_ports(tmp_path, "2026-10-05T00:00:00+00:00", closed=True)
+    launcher = FakeLauncher()
+    lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(), launcher, ESCALATED_AT)
+    assert launcher.spawned == []
+    assert lines == ["agentic: poll: nothing to do this round"]

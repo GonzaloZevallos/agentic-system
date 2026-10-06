@@ -21,7 +21,7 @@ from agentic.core.process.application.reflect import Reflected, reflect_task
 from agentic.core.process.application.run_role import load_prompt
 from agentic.core.process.domain import playbook as pb
 from agentic.core.process.domain import schemas
-from agentic.core.process.domain.roles import REFLECTOR, ROLES
+from agentic.core.process.domain.roles import REFLECTOR, ROLES, prompt_hash
 from agentic.shared.configuration import Configuration
 from tests.fakes import MemoryPrompts, ScriptedRunner, memory_ports
 
@@ -159,7 +159,10 @@ async def test_an_applicable_delta_returns_the_new_playbook_and_the_cost(cfg):
     assert result.cost_usd == pytest.approx(0.37)
     [item] = result.playbooks["developer"].items
     assert item.lesson == LESSON and item.seen_in == ("GH-10",)
-    assert item.since == "empty" and item.added_at == NOW
+    # `since` is the hash of the section that contains the item: the key a task that ran
+    # with it carries in `playbooks`, which is what the window matches.
+    assert item.since == prompt_hash(pb.section(result.playbooks["developer"]))
+    assert item.added_at == NOW
 
 
 async def test_the_runner_gets_the_actor_model_and_the_reflect_cap(tmp_path):

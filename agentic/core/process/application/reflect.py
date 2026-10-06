@@ -146,6 +146,23 @@ def _id_order(item_id: str) -> tuple[int, str]:
     return (int(tail), item_id) if tail.isdigit() else (10**9, item_id)
 
 
+def _stamp_since(before: pb.Playbook, after: pb.Playbook) -> pb.Playbook:
+    """Give every item `after` introduced the hash of the section that contains it.
+
+    `playbook_window.compare` judges an item at the boundary where the segment key (the
+    hash of the section a task ran with, `Prompt.playbook`) equals the item's `since`. A
+    task runs with the section *after* the add, so that is the hash a new item must
+    record; `apply` only knows the section before it, so it is stamped here, once the
+    whole batch for the slug is folded in."""
+    known = {i.id for i in before.items}
+    final = pb.section(after)
+    since = prompt_hash(final) if final else "empty"
+    return replace(
+        after,
+        items=tuple(i if i.id in known else replace(i, since=since) for i in after.items),
+    )
+
+
 async def reflect_task(
     cfg: Configuration,
     ports: Ports,
@@ -252,7 +269,7 @@ def _fold(
         applied.extend(outcome.applied)
         refused.extend(outcome.refused)
         if outcome.playbook != before:
-            changed[slug] = outcome.playbook
+            changed[slug] = _stamp_since(before, outcome.playbook)
     return replace(
         Reflected(task_id),
         playbooks=changed,

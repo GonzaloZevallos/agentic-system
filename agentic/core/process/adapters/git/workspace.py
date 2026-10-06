@@ -165,10 +165,8 @@ class GitWorkspace:
         if replace:
             remote = self._git("ls-remote", "--heads", "origin", f"refs/heads/{branch}").split()
             if remote:
-                self._git(
-                    "push", "-u", f"--force-with-lease=refs/heads/{branch}:{remote[0]}",
-                    "origin", branch,
-                )  # fmt: skip
+                lease = f"--force-with-lease=refs/heads/{branch}:{remote[0]}"
+                self._git("push", "-u", lease, "origin", branch)
                 return
         self._git("push", "-u", "origin", branch)
 
