@@ -99,8 +99,18 @@ class GhTracker:
     def open_pull_request(self, task_id: str, branch: str, title: str, body: str) -> str:
         if (number := issue_number(task_id)) is not None:
             body = f"Closes #{number}\n\n{body}"
-        # Not a draft: the human merges it as it is (README.md, 9), or does not.
-        return self._gh("pr", "create", "--head", branch, "--title", title, "--body", body)
+        # `--body-file`, as `open_issue`: a multibyte body near the bound is larger than
+        # one argv slot takes, and the limit that can bite is GitHub's own (ADR-0034).
+        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as h:
+            h.write(body)
+            path = h.name
+        try:
+            # Not a draft: the human merges it as it is (README.md, 9), or does not.
+            return self._gh(
+                "pr", "create", "--head", branch, "--title", title, "--body-file", path
+            )
+        finally:
+            Path(path).unlink(missing_ok=True)
 
     def open_issue(self, title: str, body: str) -> str:
         # `--body-file`, never `--body`: the one limit that can bite is GitHub's own,
