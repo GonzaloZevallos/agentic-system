@@ -307,8 +307,18 @@ _Avoid_: reintento (eso es tras un fallo de rol), relanzar (eso es empezar de ce
 _Campo_: resume — estándar (LangGraph, Temporal, el Claude Agent SDK)
 
 **Corrida interrumpida**:
-Una corrida que terminó sin cierre ni escalado porque su proceso murió. No espera a nadie: se reanuda sin decisión del humano, desde el último estado guardado. Lo que el rol en curso hizo y no entregó puede estar en su checkout sin commitear, y su costo en dólares no se conoce: el sistema registra los tokens que vio y lo dice, en vez de callarlo.
+Una corrida que terminó sin cierre ni escalado porque su proceso murió. No espera a nadie: se reanuda sin decisión del humano, desde el último estado guardado. El poller la retoma sin decisión del humano cuando su lock es de un arranque anterior (una Parada por apagado incluida), como mucho 3 veces por cada decisión del humano; si murió en el mismo arranque, la deja al humano. Lo que el rol en curso hizo y no entregó puede estar en su checkout sin commitear, y su costo en dólares no se conoce: el sistema registra los tokens que vio y lo dice, en vez de callarlo.
 _Avoid_: cortada, abortada, crash (el estado de telemetría, no el concepto)
+_Campo_: sin término de arte
+
+**Arranque**:
+Un encendido de la máquina, identificado por el id de arranque del kernel. Un registro de lock o de corridas vivas escrito en otro arranque está muerto, diga lo que diga su pid: el sistema operativo pudo haber reutilizado ese número para un proceso ajeno. Un registro sin id de arranque (anterior a este cambio, o una máquina sin `/proc`) no afirma nada: lo decide el sistema operativo, como siempre.
+_Avoid_: reinicio (es el acto, no el período), sesión
+_Campo_: boot id, del kernel de Linux (`/proc/sys/kernel/random/boot_id`)
+
+**Parada por apagado**:
+Una corrida que el apagado del sistema detuvo con una señal. Conserva su registro de lock, con la marca, para que el arranque siguiente pueda retomarla como Corrida interrumpida; cualquier otra parada por señal libera el lock.
+_Avoid_: caída, corte
 _Campo_: sin término de arte
 
 **Invocación**:

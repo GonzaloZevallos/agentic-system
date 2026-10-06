@@ -733,6 +733,8 @@ class LockRecord:
     host: str
     started_at: str
     command: str
+    boot_id: str | None = None
+    stopped_at_shutdown: bool = False
 
 
 class LockHeld(Exception):
@@ -780,6 +782,13 @@ class RunLock(Protocol):
         there is none, or when the lock now belongs to someone else -- a takeover
         that happened after this process's own claim was lost must never be undone
         by this process releasing on its way out."""
+        ...
+
+    def keep_at_shutdown(self, task_id: str) -> None:
+        """What a run does instead of `release` when the system shutdown stopped it:
+        rewrite this process's own record (same pid, same host) with
+        `stopped_at_shutdown` set, keeping its boot id, so the next boot can retake the
+        run. A no-op when there is none, or when the record belongs to another pid."""
         ...
 
 

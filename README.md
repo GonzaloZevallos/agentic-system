@@ -1161,6 +1161,39 @@ Sin TTY y sin `--detach` avisa una vez que el proceso muere con su sesión; no s
 desacopla solo, porque CI, los tests y `agentic eval` (#27) necesitan el código de
 salida.
 
+### El poller como servicio y el inhibidor (GH-176)
+
+Un poller por producto corre como servicio de usuario de systemd, para que un reinicio o
+una caída no lo dejen muerto. Se instala desde el checkout stage0 (ADR-0017), no desde el
+que se edita:
+
+```
+scripts/install-poller.sh <product-dir> [<stage0-dir>]     # stage0: este repo por defecto
+loginctl enable-linger $USER                               # una vez: arranca sin login
+```
+
+El script renderiza `scripts/systemd/agentic-poll.service.in` con rutas absolutas (sin
+especificadores `%`), exige que existan `git`, `gh`, `uv` y `claude` y que
+`<stage0>/.venv/bin/agentic` sea ejecutable, escribe
+`~/.config/systemd/user/agentic-poll-<ruta>.service` y lo habilita con
+`systemctl --user enable --now`. `--print` solo muestra la unidad. No necesita root. La
+unidad usa `Restart=on-failure`, `RestartSec=30`, `StartLimitIntervalSec=0` y
+`KillMode=process`: este último deja vivas las corridas que el poller lanzó con
+`--detach` (viven en su cgroup) cuando el poller se reinicia. El `.env` lo lee el propio
+poller desde el directorio de trabajo (el stage0), por eso no hay `EnvironmentFile=`. Los
+logs están en `journalctl --user -u <unidad>`.
+
+Para detenerlo y quitarlo: `systemctl --user disable --now <unidad>`, borrar el archivo de
+`~/.config/systemd/user/` y `systemctl --user daemon-reload`. Un segundo poller levantado a
+mano sobre el mismo producto se niega (el lock del poller ya está tomado) y la unidad lo
+reintenta cada 30 s hasta que se detenga uno de los dos.
+
+`run` y `resume` (el proceso que corre, no el padre de `--detach`) toman un inhibidor de
+logind (`systemd-inhibit --what=sleep:shutdown`) mientras viven: un apagado o una
+suspensión ordenados esperan a que terminen. Donde no hay `systemd-inhibit`, bus o permiso,
+imprimen una línea en stderr (`agentic: sleep/shutdown inhibitor unavailable: …`) y corren
+igual. No frena un apagado forzado ni un corte de luz.
+
 ### Fallo de rol
 
 Mecánicamente es una de cuatro cosas: excepción del SDK, `max_turns` agotado sin resultado,

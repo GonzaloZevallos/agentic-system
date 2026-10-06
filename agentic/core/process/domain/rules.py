@@ -1972,7 +1972,58 @@ def blocker_numbers(native: tuple[int, ...] | None, body: Callable[[], str]) -> 
     return blockers_from_body(body())
 
 
-PollActionKind = Literal["close", "resume", "launch"]
+@dataclass(frozen=True)
+class LockFacts:
+    """What `rules.interrupted_run` needs of a run's lock record: `other_boot` is
+    whether the record was written in a previous boot (`None`: the boot is unknown, an
+    old record or a machine with no `/proc`), `alive` is whether the process it names
+    is running now. The caller derives both (`boot.boot_verdict` and `liveness.
+    is_alive`); this module imports neither, it only decides."""
+
+    other_boot: bool | None
+    alive: bool
+
+
+RetakeVerdict = Literal["retake", "human", "running", "none"]
+
+# How many times the poller retakes one task after a reboot before the run is the
+# human's. A judgement, not a measurement: a reboot is rare, so a run that keeps being
+# found dead after three retakes is dying of something else.
+RETAKE_AFTER_REBOOT_MAX = 3
+
+# The statuses where a run has nothing left to retake: the work is delivered, ruled
+# out, or waiting on a human's answer.
+_NOT_INTERRUPTED_STATUSES = ("ready_for_review", "discarded", "waiting_on_human")
+
+
+def interrupted_run(raw: TaskState, lock: LockFacts | None, prior_retakes: int) -> RetakeVerdict:
+    """Whether the poller retakes an open task whose run is gone (GH-176):
+
+    - `none`: there is no lock record (`lock is None`), or the document has a truthy
+      `closed_at`, `escalated` or `pull_request`, or its `status` is `ready_for_review`,
+      `discarded` or `waiting_on_human` -- this is not an interrupted run at all;
+    - `human`: the document has no `status` key at all (not one this rule can read);
+    - `running`: `lock.alive`, the process still runs;
+    - `retake`: `lock.other_boot is True` and `prior_retakes` is under
+      `RETAKE_AFTER_REBOOT_MAX` -- a reboot killed it;
+    - `human` in every other case: the same boot (a human killed it, or it crashed),
+      an unknown boot (never retaken), or the cap spent."""
+    if lock is None:
+        return "none"
+    if raw.get("closed_at") or raw.get("escalated") or raw.get("pull_request"):
+        return "none"
+    if "status" not in raw:
+        return "human"
+    if raw["status"] in _NOT_INTERRUPTED_STATUSES:
+        return "none"
+    if lock.alive:
+        return "running"
+    if lock.other_boot is True and prior_retakes < RETAKE_AFTER_REBOOT_MAX:
+        return "retake"
+    return "human"
+
+
+PollActionKind = Literal["close", "retake", "resume", "launch"]
 
 
 @dataclass(frozen=True)
@@ -2039,20 +2090,28 @@ def poll_plan(
     launches: Sequence[LaunchCandidate],
     available_slots: int,
     now: datetime,
+    retakes: Sequence[int] = (),
 ) -> list[PollAction]:
     """This round's actions, in the order the Tech Lead plan fixes: every close first
-    (merging freed the slot it used, if any, so closing never spends one); the due
-    retakes next, lowest issue first, while `available_slots` lasts; at most one
-    launch, the lowest-numbered issue with every blocker resolved and its own wait (if
-    any) elapsed -- and only when no eligible pause anywhere in the product is still
-    waiting out its own calendar (its own next slot has not arrived yet, but one is
-    still scheduled), whether or not a slot is free for it. A pause whose calendar is
-    spent (`resume_exhausted`) does not count as "still waiting": it needs a human
-    now, same as any other escalation, and must not freeze every launch in the product
-    until one acts. `available_slots` already reflects the machine-wide cap
+    (merging freed the slot it used, if any, so closing never spends one); then every
+    `retakes` issue (a run a reboot interrupted, `interrupted_run`), lowest first,
+    while `available_slots` lasts; then the due resumes, lowest first, with what is
+    left; at most one launch, the lowest-numbered issue with every blocker resolved and
+    its own wait (if any) elapsed -- and only when no eligible pause anywhere in the
+    product is still waiting out its own calendar (its own next slot has not arrived
+    yet, but one is still scheduled), whether or not a slot is free for it. A pause
+    whose calendar is spent (`resume_exhausted`) does not count as "still waiting": it
+    needs a human now, same as any other escalation, and must not freeze every launch
+    in the product until one acts. A retake spends a slot exactly as a resume does, and
+    never changes the rule above: a waiting resume still blocks every launch.
+    `available_slots` already reflects the machine-wide cap
     (`AGENTIC_MAX_CONCURRENT_RUNS`) minus every run alive right now, counted by the
     caller; this function never reads the registry itself."""
     actions = [PollAction("close", issue) for issue in sorted(closes)]
+
+    retaken = sorted(retakes)[: max(available_slots, 0)]
+    actions.extend(PollAction("retake", issue) for issue in retaken)
+    available_slots = max(available_slots - len(retaken), 0)
 
     due_resumes = sorted(
         (

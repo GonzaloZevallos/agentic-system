@@ -60,6 +60,7 @@ files = [
     "agentic/core/process/domain",
     "agentic/core/knowledge/adapters",
     "agentic/core/measurement/adapters",
+    "agentic/core/process/adapters/shell/inhibitor.py",
 ]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
