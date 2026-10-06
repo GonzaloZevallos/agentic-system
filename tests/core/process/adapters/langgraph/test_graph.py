@@ -1189,7 +1189,7 @@ async def test_the_task_cap_pauses_the_task_and_a_raised_cap_resumes_it_to_deliv
     }
     assert (await app.aget_state(config)).next == ("pause",)
     assert fakes.tracker.labels == [("GH-1", "needs-human")]
-    assert "`agentic resume --issue 1 --task-budget 16`" in fakes.tracker.comments[0][1]
+    assert "`agentic resume --issue 1 --task-budget 11`" in fakes.tracker.comments[0][1]
 
     final = await app.ainvoke(Command(resume={"decision": None}), config=raised(config))
     assert final["status"] == "ready_for_review" and final["escalated"] is None
@@ -1366,7 +1366,7 @@ async def test_what_one_review_found_reaches_the_next_wave_and_the_integration(c
     # reviews gets the invariant, from the first wave on, when the table is still empty.
     assert final["invariants"] == ["Every subscription query folds duplicates."]
     first_wave = [c for c in script.calls if c["slug"] == "developer"][0]
-    assert "- Every subscription query folds duplicates." in first_wave["system_prompt"]
+    assert "1. Every subscription query folds duplicates." in first_wave["system_prompt"]
     assert f"## {FINDINGS}\n\nNone open." in first_wave["prompt"]
 
     # The second wave's Developer rebuilds `domain` seeing what `api`'s review found,

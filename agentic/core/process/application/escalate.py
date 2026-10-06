@@ -5,7 +5,7 @@ change: it already says why the run stopped. The task pauses right after, in a n
 of its own (ADR-0003, addendum), so resuming never tells the human twice.
 
 An escalation by the task cap also breaks the spending down by phase and proposes a
-new cap: raising it is the human's call (ADR-0004, fourth addendum).
+new cap: raising it is the human's call (ADR-0004, 2026-10-05 addendum).
 
 The document is saved once more, from the merged state this node receives. Each branch
 of a fan-out saves its own view of it (`finish`), so the last writer loses its sisters'
@@ -51,7 +51,7 @@ def comment(state: TaskState, cfg: Configuration, ports: Ports) -> str:
         lines.extend(
             f"- {phase}: {usd:.2f} USD" for phase, usd in rules.spent_by_phase(state).items()
         )
-        budget = rules.suggested_budget(state, cfg.task_budget_per_subtask_usd)
+        budget = rules.suggested_budget(state, cfg.max_budget_usd)
         resume = f"{resume} --task-budget {budget}" if resume else ""
     lines.append(f"\nTask document: `{document.relative_path(state['id'])}`")
     if resume:

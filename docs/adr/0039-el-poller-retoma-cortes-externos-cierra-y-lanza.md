@@ -208,6 +208,111 @@ Ninguna de las dos corre bajo `registry.exclusive()`, así que ninguna retiene e
 - `gather_closes` no tiene tope: un documento con `pull_request` y sin `closed_at`
   paga su `GhTracker.pull_request` en cada vuelta hasta que alguien lo cierre.
 
+## Adenda (2026-10-05): tras un 429 el poller reintenta cada 15 minutos, no sobre un calendario creciente
+
+### Qué cambia
+
+`AUTO_RESUME_SCHEDULE` se parte en tres constantes de `rules.py`, y la constante vieja
+deja de existir (sin alias):
+
+- `LAUNCH_SCHEDULE = (15, 30, 60, 120, 120, 120)`: el calendario de los intentos de
+  lanzamiento. No cambia: un lanzamiento que nunca se registró no es un 429.
+- `RETAKE_SCHEDULE = (15, 30, 60, 120, 120, 120)`: el de los retomes de `upstream` y
+  `network`. No cambia.
+- `ACCOUNT_LIMIT_SCHEDULE = (15,) * 24`: el de los retomes de `account_limit`, plano.
+
+`rules.schedule_for(reason)` es el único lugar donde un motivo se vuelve calendario, y
+`next_attempt_at` y `_schedule_exhausted` reciben ese calendario como argumento
+obligatorio (`schedule`, sólo por nombre, sin valor por defecto): cada lanzamiento pasa
+`LAUNCH_SCHEDULE`, nunca el de un retome. El motivo que elige el calendario es el que ya
+devuelve `auto_resumable` (el último fallo de la época). Sigue sin parsearse ningún
+"resets at": la espera cuenta desde el `createdAt` del último `Escalated:`.
+
+### Evidencia
+
+El calendario creciente se pasaba del reinicio de la cuenta:
+
+- 2026-10-04: el límite se reinició a las 01:20; el retome llegó a las 02:15 (55 min ociosos).
+- GH-11: unas 2 h ociosas después del reinicio.
+- 2026-10-05: el reinicio fue a las 07:40; el siguiente reintento programado hubiera sido
+  a las 09:32.
+
+En las últimas 17 tareas (2026-10-04 00:00 → 2026-10-05 17:15 UTC, una ventana de 41.2 h)
+hubo 89 fallos por 429, unas 7.8 h detenidas por ellos, y la máquina estuvo ociosa 23.2 h
+(56%). La cuenta corta a ≈ $165–200 por ventana de 5 horas (cortes vistos a $177, $184,
+$200, $163). Un reintento que vuelve a chocar con el límite cuesta ≈ $0: el 429 llega en el
+primer turno del rol. Una espera larga no compra nada; lo único que importa es qué tan
+pronto después del reinicio cae el siguiente intento.
+
+### Cuenta por ventana de la cuenta
+
+Para `account_limit`, `prior` ya no es la cantidad de `Auto-resumed:` de toda la cadena sino
+la de la ventana actual (`rules.window_probes`): los `Auto-resumed:` posteriores al último
+comentario que no es del sistema **y** creados después del `ended_at` más tardío de
+`state["runs"]` menos `CLOCK_TOLERANCE`. Una corrida entregada prueba que la cuota había
+vuelto, así que abre una ventana nueva.
+
+- **Tolerancia de 120 s** (`CLOCK_TOLERANCE`): absorbe el viaje de `gh issue comment` tras el
+  spawn, los segundos enteros de `createdAt` y el desfase NTP entre el reloj de la máquina
+  (`started_at`/`ended_at`) y el de GitHub, y está muy por debajo de los 15 minutos entre
+  dos slots. Todo error que permite se resuelve hacia gastar (un retome contado, un techo
+  gastado): manda la tarea al humano antes y nunca paga un retome que no corresponde. Es un
+  juicio, no una medición; es una constante con nombre.
+- **Fallbacks que fallan hacia el humano**: si algún `ended_at` falta o no se puede leer, se
+  usa la cuenta de toda la cadena; si algún `started_at` de una ronda de entrevista falta o
+  no se puede leer, el techo de la entrevista cuenta como gastado.
+- `upstream` y `network` no cambian: `prior` sigue siendo `_prior_auto_resumes`, y ese
+  camino no lee `state["runs"]`.
+
+### Tope de la cadena entera
+
+`ACCOUNT_LIMIT_CHASE_MAX = 96` (cuatro ventanas de 24) se compara con la cuenta de toda la
+cadena (`chase_prior`), que una corrida entregada nunca reinicia; sólo la reinicia un
+comentario humano. Acota un lazo de cuota por modelo: un rol barato entrega corridas (y
+abre ventanas nuevas) mientras otro rol sigue chocando con su 429. Costo aceptado: unas
+26 h y unos 192 comentarios del sistema antes de preguntarle al humano. Es un juicio, no una
+medición; es una constante con nombre. `rules.resume_exhausted` es la única decisión de
+agotamiento de un retome (calendario gastado, tope de la cadena o techo de entrevista) y
+`poll_plan` la usa tanto para filtrar los vencidos como para decidir si el retome sigue
+bloqueando lanzamientos. `ResumeCandidate.limit` cuenta sólo slots de ventana y nunca es 0
+como señal.
+
+### El techo de las entrevistas
+
+El límite de 1 de ADR-0039 existe porque cada retome que corre le da a la entrevista hasta
+`INTERVIEW_RETAKE_ROUNDS` rondas más. Con un calendario de 15 minutos ese 1 casi siempre cae
+dentro de la misma ventana y entrega la tarea a un humano sin que el retome corriera nada.
+Para `account_limit`, `auto_resume_limit` da ahora los 24 slots, entrevista o no, y el techo
+se gasta sólo con retomes *productivos* (`rules.interview_ceiling_spent`): uno es productivo
+si una ronda de la entrevista (`rules.interview_rounds`, el único filtro de `state["runs"]`
+que decide qué es una ronda, el mismo de `interview_progress`, cuyo `rounds_done` no
+cambia) empezó entre el `createdAt` de su `Auto-resumed:` menos la tolerancia y el del
+siguiente (la última ventana queda abierta). Un 429 que llega en el turno 1 no corre ninguna
+ronda y no gasta el techo; con un solo retome productivo el techo está gastado y la tarea
+pasa al humano. El techo no desaparece. Para `upstream` y `network` el límite sigue siendo 1.
+
+### Épocas mixtas
+
+El motivo del último fallo de la época elige el calendario. El `prior` de `upstream` y
+`network` sigue acumulándose entre épocas como hasta ahora, de modo que un fallo `upstream`
+después de una cadena larga de `account_limit` encuentra su calendario creciente ya gastado
+y va directo a un humano. Se acepta.
+
+### Costos aceptados
+
+- **Período observado**: unos 16–17 min por intento (15 min más lo que corre el sondeo
+  fallido más los 60 s de la vuelta del poller), así que 24 slots cubren unas 6.5 h.
+- **Lanzamientos bloqueados**: se mantiene lo decidido arriba (un retome que espera bloquea
+  los lanzamientos, porque un 429 es de la cuenta y no de una tarea): una sola pausa puede
+  retener la cola unas 6.5 h. Un lanzamiento en esa ventana chocaría con el mismo 429.
+- **Comentarios**: hasta dos comentarios del sistema por intento en el issue
+  (`Auto-resumed:` y `Escalated:`).
+- **Desfase de reloj**: el desfase entre el `started_at` del hijo y el `createdAt` de GitHub
+  sólo está acotado por la tolerancia, no garantizado; todo error resuelve hacia gastar.
+
+Nada observable se mueve: ningún métrico, etiqueta, atributo de span, clave de documento,
+prompt ni texto de comentario se agrega, renombra o quita.
+
 ## Adenda (2026-10-05): `fetch` sí, y la base de cada corrida es el upstream (#180)
 
 ### Lo que cambia en "Lo que el poller no hace"

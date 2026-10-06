@@ -79,6 +79,22 @@ category `plan-invariant`, `scope: subtask`, exactly as above, in both the subta
 the integration review. Either way, verify the version actually shipped against what
 was recorded, as an ordinary invariant.
 
+The Developer's section may carry a `### Coverage` block: the Developer's own map of
+each invariant, by its number above, and each brief item to `file:line` locations. It is
+the Developer's claim, not evidence. Use it as the checklist of where to look first, and
+still verify each invariant against the diff yourself. It may be cited as a finding's
+`location`, never as its `evidence`: evidence stays what you ran or read.
+
+- A mapped location that does not do what it claims is a `plan-invariant` blocker, as
+  above.
+- A `Not touched` number that the diff contradicts is a `plan-invariant` blocker, with
+  the diff hunk as evidence.
+- A `Claimed unsatisfiable` number with no evidence-bearing record under `### Decisions
+  and assumptions` is a `plan-invariant` blocker: the exception above applies only with
+  that record.
+- A `Not mapped` number is unverified by the Developer: check it as you would without a
+  map.
+
 Then read `## Tech Lead: findings`. Those rows are open objections from every review of
 this task, this subtask's and its sisters'. Two things to do with them:
 

@@ -220,18 +220,15 @@ El validador **reporta** cada devolución a PjM, y cuentan para el límite.
 
 ### Tope de tarea
 
-El acumulado de una corrida tiene tope, y crece con el plan: **30 USD** de base hasta que
-hay plan; después, base más **15 USD por subtarea**, con la integración contada, nunca por
-encima del techo de **250 USD** (`AGENTIC_TASK_BUDGET_BASE_USD`,
-`AGENTIC_TASK_BUDGET_PER_SUBTASK_USD`, `AGENTIC_TASK_MAX_BUDGET_USD`). Un plan tiene como
-mucho 12 subtareas. Los números salen de la cuarta corrida de GH-12 y se recalibran tras la
-primera corrida sin la fuga de MCP (issue #18).
+El acumulado de una corrida tiene tope: un **techo plano de 250 USD**, igual para cualquier
+tamaño de plan (`AGENTIC_TASK_MAX_BUDGET_USD`). Un plan tiene como mucho 12 subtareas.
+Ver ADR-0004, adenda del 2026-10-05.
 
 Se mira antes de cada intento de cualquier rol; alcanzado, el sistema escala al humano con
 el total gastado y el tope como motivo, y la tarea **pausa** (sección 14). El comentario del
 issue trae lo gastado por fase y la línea `agentic resume --issue N --task-budget X`: subir
-el tope es decisión del humano, y `--task-budget` lo sube para esa corrida, nunca lo baja: el
-techo limita la fórmula, no al humano.
+el tope es decisión del humano, y `--task-budget` lo sube para esa corrida por encima del
+techo, nunca lo baja.
 No es fallo de rol ni devolución y no cuenta para ningún límite. Como el tope por
 intento, es red de seguridad, bien arriba de lo que cuesta una tarea sana, no presupuesto de
 trabajo. En paralelo cada rama ve el total al momento del fan-out, así que el desborde
@@ -971,7 +968,7 @@ Se anotan para no reintroducirlas por error.
 | La corrida termina cuando el último rol entrega | Termina en un pull request del producto, lista para revisión; el issue recibe el link (ADR-0011) |
 | El tope de costo por intento es solo del Developer | Es de todo rol, `AGENTIC_MAX_BUDGET_USD`; los subagentes de cualquier rol corren en Sonnet (ADR-0004 y ADR-0013, adendas) |
 | El único tope de costo es por intento | Hay también un tope de tarea sobre el acumulado, que escala en vez de seguir (ADR-0004, adenda tercera) |
-| Tope de tarea fijo en 100 USD, y escalar termina la corrida | Base más proporcional por subtarea con techo, y alcanzarlo pausa: el humano sube el tope y reanuda (ADR-0004, adenda cuarta; ADR-0003, adenda) |
+| Tope de tarea fijo en 100 USD, y escalar termina la corrida | Base más proporcional por subtarea con techo, y alcanzarlo pausa: el humano sube el tope y reanuda (ADR-0004, adenda cuarta; ADR-0003, adenda); base + por subtarea → techo plano de 250 (ADR-0004, adenda del 2026-10-05) |
 | Cada revisión del Tech Lead arranca desde la base de la subtarea | La primera sí; después de una devolución es incremental, desde el head ya revisado (ADR-0015) |
 | Los Developers corren en paralelo y después Tech Lead revisa todas las entregas | Cada Developer y su revisión son una rama del fan-out: la revisión arranca cuando entrega *su* Developer (ADR-0004, adenda quinta) |
 | La integración es una subtarea final del integrador | Incremental en el fan-in, apenas se aprueba cada subtarea; el integrador y la revisión de la rama entera siguen al final (ADR-0004, adenda quinta) |
