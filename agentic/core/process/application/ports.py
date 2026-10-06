@@ -547,6 +547,13 @@ class Workspace(Protocol):
         """Commit everything changed under `path`; `None` when there was nothing."""
         ...
 
+    def commit_paths(self, path: Path, relatives: Sequence[str], message: str) -> str | None:
+        """Commit only `relatives` (paths relative to the checkout at `path`), whatever
+        else is changed there; `None` when those paths have nothing to commit. The
+        delivery's own document commit (GH-203) is the caller: `commit_all` would take a
+        stray file along. Raises `GitError`."""
+        ...
+
     def push(self, branch: str, *, replace: bool = False) -> None:
         """Publish `branch` to `origin`. `replace` is for a branch the system owns whose
         previous pull request is closed or merged and which was started again from the

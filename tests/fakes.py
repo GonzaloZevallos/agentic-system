@@ -5,7 +5,7 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
 
@@ -413,6 +413,15 @@ class MemoryWorkspace:
         self.dependency_state_calls: list[tuple[Path, str, tuple[str, ...]]] = []
         self.dependency_states: dict[str, list[DependencyState]] = {}
         self.pushed: list[str] = []
+        # `(path, relatives, message)` of every `commit_paths`, and `events`: that call and
+        # every `push`, in order, so a test says which came first (GH-203).
+        self.path_commits: list[tuple[Path, tuple[str, ...], str]] = []
+        self.events: list[str] = []
+        # Raises `GitError` from `push` for its first N calls / always from `commit_paths`
+        # and `cleanup` when set: the failures a delivery must name or swallow.
+        self.push_failures = 0
+        self.commit_paths_error: str | None = None
+        self.cleanup_error: str | None = None
         # `(ref, relative)` -> the text `show` answers; absent is `None`.
         self.files: dict[tuple[str, str], str] = {}
         self.cleaned: list[str] = []
@@ -512,13 +521,26 @@ class MemoryWorkspace:
         self.commits.append((path, message))
         return "c1"
 
+    def commit_paths(self, path: Path, relatives: Sequence[str], message: str) -> str | None:
+        self.events.append("commit_paths")
+        if self.commit_paths_error is not None:
+            raise GitError(self.commit_paths_error)
+        self.path_commits.append((path, tuple(relatives), message))
+        return "c2"
+
     def push(self, branch: str, *, replace: bool = False) -> None:
+        self.events.append("push")
+        if self.push_failures > 0:
+            self.push_failures -= 1
+            raise GitError("git push -u origin failed: scripted")
         self.pushed.append(branch)
 
     def show(self, ref: str, relative: str) -> str | None:
         return self.files.get((ref, relative))
 
     def cleanup(self, task_id: str) -> None:
+        if self.cleanup_error is not None:
+            raise GitError(self.cleanup_error)
         self.cleaned.append(task_id)
 
     def branch_head(self, branch: str) -> str | None:
@@ -599,6 +621,11 @@ class MemoryTracker:
         self.merge_error: str | None = None
         self.merge_failure: MergeFailure | None = None
         self.events: list[str] = []
+        # GH-203: `open_pull_request` raises `ValueError` (`gh`'s own failure shape) for its
+        # first N calls, and `comment` raises it for as many as it is told to.
+        self.open_failures = 0
+        self.open_error = "gh pr create failed: Body is too long"
+        self.comment_failures = 0
 
     def pull_request(self, reference: str) -> PullRequest | None:
         self.events.append("pull_request")
@@ -617,6 +644,9 @@ class MemoryTracker:
         return self.merge_method
 
     def open_pull_request(self, task_id: str, branch: str, title: str, body: str) -> str:
+        if self.open_failures > 0:
+            self.open_failures -= 1
+            raise ValueError(self.open_error)
         self.pull_requests.append((branch, title, body))
         return self.url
 
@@ -626,6 +656,9 @@ class MemoryTracker:
 
     def comment(self, task_id: str, text: str) -> None:
         self.events.append("comment")
+        if self.comment_failures > 0:
+            self.comment_failures -= 1
+            raise ValueError("gh issue failed: scripted")
         self.comments.append((task_id, text))
 
     def label(self, task_id: str, label: str) -> None:

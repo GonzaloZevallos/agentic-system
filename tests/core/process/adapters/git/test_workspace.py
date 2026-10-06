@@ -741,3 +741,42 @@ def test_full_head_is_a_whole_object_id_and_head_abbreviates_it(product):
 def test_head_stays_abbreviated_and_is_not_a_full_id(product):
     ws = GitWorkspace(product, IDENTITY)
     assert not rules.full_commit_id(ws.head(product))
+
+
+def test_commit_paths_commits_only_the_named_paths(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    document = ".agentic/tasks/GH-12.md"
+    (task.path / ".agentic/tasks").mkdir(parents=True)
+    (task.path / document).write_text("the task document\n")
+    (task.path / "stray.txt").write_text("untracked\n")
+    (task.path / "README.md").write_text("modified\n")
+
+    sha = ws.commit_paths(task.path, [document], "GH-12: task document")
+
+    assert sha == ws.head(task.path)
+    assert git("show", "--name-only", "--format=", "HEAD", cwd=task.path) == document
+    assert git("log", "-1", "--format=%s", cwd=task.path) == "GH-12: task document"
+    # What was not named stays where it was: modified, and untracked.
+    status = git("status", "--porcelain", cwd=task.path).splitlines()
+    assert sorted(line.strip() for line in status) == ["?? stray.txt", "M README.md"]
+
+
+def test_commit_paths_has_nothing_to_commit_when_the_path_is_already_committed(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    document = ".agentic/tasks/GH-12.md"
+    (task.path / ".agentic/tasks").mkdir(parents=True)
+    (task.path / document).write_text("the task document\n")
+    assert ws.commit_paths(task.path, [document], "first") is not None
+    head = ws.head(task.path)
+
+    assert ws.commit_paths(task.path, [document], "again") is None
+    assert ws.head(task.path) == head
+
+
+def test_commit_paths_raises_a_git_error_for_a_path_git_cannot_add(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    with pytest.raises(GitError, match="git add"):
+        ws.commit_paths(task.path, [".agentic/tasks/not-there.md"], "x")
