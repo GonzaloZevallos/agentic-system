@@ -61,6 +61,7 @@ from .task import (
     RoleRun,
     Status,
     Subtask,
+    TaskInput,
     TaskState,
 )
 
@@ -865,6 +866,49 @@ def sections_for(state: TaskState, section: str, text: str) -> dict[str, str]:
 
 INTERVIEW_RETAKE_ROUNDS = 2
 
+# A request that carries a `## Decided` heading already settled its decisions in a grill
+# with the human: its interviews run one round instead of the configured cap (ADR-0014,
+# addendum of 2026-10-06). Removing a stage from this set disables the cap for it.
+DECIDED_CAP_STAGES = frozenset({"definition", "solution"})
+
+
+def decided(text: str, level: int = 2) -> bool:
+    """Whether `text` has a heading of `level` that reads `Decided`: the one and only
+    matcher of that heading. A mechanical check, never prose: a line outside fenced
+    blocks (``` and ~~~ each toggle one) that is exactly `level` `#` characters, a
+    space and the word, ignoring case, trailing whitespace and one trailing `:`. Level 2
+    is the heading as the human writes it; level 3 reads the request back from a task
+    document, where `document.demote` pushed it one level down."""
+    heading = f"{'#' * level} decided"
+    fenced = False
+    for line in text.splitlines():
+        if line.lstrip().startswith(("```", "~~~")):
+            fenced = not fenced
+        elif not fenced:
+            candidate = line.rstrip()
+            candidate = candidate.removesuffix(":")
+            if candidate.lower() == heading:
+                return True
+    return False
+
+
+def entering(task: TaskInput, *, cap: bool) -> TaskInput:
+    """`task` as it enters the graph: with `decided: True` when `cap` is on and its
+    request carries the heading, and otherwise unchanged, with no key added. Called
+    once, from `cli._run`; nothing else sets `decided`."""
+    if cap and decided(task["description"]):
+        return {**task, "decided": True}
+    return task
+
+
+def interview_cap(state: TaskState, spec: Interview, configured: int) -> int:
+    """The rounds `spec` may run at this state: one for a decided request at a stage in
+    `DECIDED_CAP_STAGES`, never above `configured`, and `configured` otherwise. A state
+    with no `decided` key is not decided, whatever its request holds."""
+    if state.get("decided") and spec.stage in DECIDED_CAP_STAGES:
+        return min(1, configured)
+    return configured
+
 
 @dataclass(frozen=True)
 class InterviewProgress:
@@ -908,7 +952,8 @@ def interview_progress(state: TaskState, spec: Interview, max_rounds: int) -> In
     cap, `cfg.interview_max_rounds`): zero rounds done and the whole budget for an
     interview that never ran, whatever a retake already spent otherwise."""
     rounds_done = len(interview_rounds(state, spec))
-    rounds_left = max(max_rounds - rounds_done, INTERVIEW_RETAKE_ROUNDS)
+    cap = interview_cap(state, spec, max_rounds)
+    rounds_left = max(cap - rounds_done, min(INTERVIEW_RETAKE_ROUNDS, cap))
     sessions = {
         role.slug: session
         for role in (spec.interviewer, spec.interviewee)

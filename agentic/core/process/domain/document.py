@@ -135,6 +135,10 @@ def render(
         # the switches are at their default -- so a default-path document stays
         # byte-identical to one written before this task (issue #28).
         **({"experiment": experiment} if (experiment := state.get("experiment")) else {}),
+        # Whether the request entered with a `## Decided` heading and so runs one-round
+        # interviews (`rules.entering`): written only when true, so a document without it
+        # is byte-identical to one written before the cap existed, and reads as not decided.
+        **({"decided": True} if state.get("decided") else {}),
         "plugins": plugins or {},
         "system_commit": system_commit,
         **({"system_version": system_version} if system_version else {}),

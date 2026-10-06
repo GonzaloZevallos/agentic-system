@@ -3784,3 +3784,52 @@ async def test_the_poller_retakes_a_run_a_reboot_cut_and_resume_takes_over_its_l
     (held,) = seen
     assert held.boot_id == "new" and held.pid == os.getpid()
     assert lock.read("GH-30") is None  # released on the way out, as any run is
+
+
+class Records(Delivers):
+    """A graph double that keeps what `ainvoke` was handed: the graph's input."""
+
+    def __init__(self):
+        super().__init__()
+        self.inputs = []
+
+    async def ainvoke(self, task, config):
+        self.inputs.append(task)
+        return self.final
+
+
+async def _graph_input_of(monkeypatch, tmp_path, description, **cfg_fields):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    graph = Records()
+    monkeypatch.setattr(cli, "graph", graph)
+    task = {"id": "T-9", "title": "t", "description": description}
+    cfg = Configuration(product_dir=tmp_path, **cfg_fields)
+    await cli._run(task, cfg, memory_ports(), checkpointer=in_memory, run_lock=FakeLock())
+    (entered,) = graph.inputs
+    return entered
+
+
+@pytest.mark.anyio
+async def test_run_hands_the_graph_decided_when_the_request_carries_the_heading(
+    monkeypatch, tmp_path
+):
+    entered = await _graph_input_of(monkeypatch, tmp_path, "Body\n\n## Decided\n- a\n")
+    assert entered["decided"] is True
+
+
+@pytest.mark.anyio
+async def test_run_hands_the_graph_no_decided_key_without_the_heading(monkeypatch, tmp_path):
+    entered = await _graph_input_of(monkeypatch, tmp_path, "Body, we decided things.\n")
+    assert "decided" not in entered
+
+
+@pytest.mark.anyio
+async def test_run_with_the_cap_switched_off_hands_the_graph_no_decided_key(
+    monkeypatch, tmp_path
+):
+    entered = await _graph_input_of(
+        monkeypatch, tmp_path, "Body\n\n## Decided\n- a\n", decided_cap=False
+    )
+    assert "decided" not in entered

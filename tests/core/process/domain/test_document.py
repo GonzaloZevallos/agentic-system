@@ -1,7 +1,7 @@
 import pytest
 
 from agentic.core.process.application import resume
-from agentic.core.process.domain import document, legacy_names, rules
+from agentic.core.process.domain import document, legacy_names, roles, rules
 
 
 def test_render_then_parse_roundtrip():
@@ -602,3 +602,31 @@ def test_an_old_document_without_the_playbook_keys_reads_as_empty():
     parsed = document.parse(document.render({"id": "T-1", "title": "t", "description": "d"}))
     assert parsed.get("playbooks", {}) == {}
     assert parsed.get("playbooks_changed", {}) == {}
+
+
+def test_render_writes_decided_only_when_it_is_true():
+    base = {"id": "T-1", "title": "t", "description": "d"}
+    bare = document.render(base)
+    assert "decided" not in bare
+    assert document.render({**base, "decided": False}) == bare
+    assert "\ndecided: true\n" in document.render({**base, "decided": True})
+
+
+def test_decided_round_trips_and_gives_a_one_round_cap():
+    state = {"id": "T-1", "title": "t", "description": "## Decided\n- a\n", "decided": True}
+    rendered = document.render(state)
+    parsed = document.parse(rendered)
+    assert parsed["decided"] is True
+    assert rules.interview_cap(parsed, roles.INTERVIEW_SOLUTION, 4) == 1
+    # What a document records of the request is the demoted heading, readable at level 3.
+    assert rules.decided(parsed["description"], level=3)
+
+
+def test_a_document_without_the_key_parses_without_it_and_keeps_the_configured_cap():
+    # The shape of a task that entered before this change, or ran with the cap off:
+    # the heading is there, the key is not.
+    state = {"id": "T-1", "title": "t", "description": "## Decided\n- a\n"}
+    parsed = document.parse(document.render(state))
+    assert "decided" not in parsed
+    assert rules.decided(parsed["description"], level=3)
+    assert rules.interview_cap(parsed, roles.INTERVIEW_SOLUTION, 4) == 4
