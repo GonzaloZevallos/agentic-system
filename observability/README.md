@@ -93,7 +93,7 @@ marcada en ningún lado hace fallar el chequeo con su propio nombre.
 | `agentic.interview.rounds` | `agentic.interview.rounds` | rol | Sin cambios de valor, ahora un entero en el span en vez de una muestra |
 | `agentic.interview.questions` | `agentic.interview.questions` | rol | Preguntas por destino, array `"destino=conteo"` en vez de una muestra por destino |
 | `agentic.interview.invariants` | `agentic.interview.invariants` | rol | Propuestos/adoptados, array `"estado=conteo"` en vez de una muestra por estado |
-| `agentic.delivery.outcome` | — | — | Ya no es una muestra: `agentic close` la escribe en el documento de tarea (`delivery_outcome`) |
+| `agentic.delivery.outcome` | — | — | Ya no es una muestra: `agentic close` la escribe en el documento de tarea (`delivery_outcome`: `merged`, `merged_with_changes`, `closed` y, desde ADR-0045, `auto_merged`, el merge del poller, sin veredicto humano) |
 | `agentic.delivery.human_commits` | — | — | Ya no es una muestra: en el documento de tarea (`human_commits`) |
 | `agentic.delivery.human_lines_changed` | — | — | Ya no es una muestra: en el documento de tarea (`human_lines_changed`) |
 | `agentic.delivery.time_to_merge` | — | — | Ya no es una muestra: en el documento de tarea (`time_to_merge_seconds`) |
