@@ -23,7 +23,7 @@ from ..domain import rules
 from ..domain.task import PullRequest, TaskState
 from .checkouts import task_base
 from .poll import AUTO_MERGE_REFUSED, AUTO_MERGED, _merge_facts
-from .ports import GitError, Ports, Upstream
+from .ports import GitError, MergeCallFailed, Ports, Upstream
 from .presubmit import CheckoutPresubmit
 
 # The refusals a human can act on, and so the only ones commented, once per (head, reason).
@@ -33,6 +33,7 @@ COMMENTED: tuple[str, ...] = (
     "no_merge_method",
     "eval_set_unreadable",
     "attempts_exhausted",
+    "merge_failed",
 )
 
 # Nothing was committed before the merge worktree existed: every head differs from it, so
@@ -100,7 +101,8 @@ def merge_task(
         assert decision.reason is not None
         if decision.reason == "guarded_path" and head is not None:
             _spend_attempts(task_id, raw, head, ports)
-        return _refuse(task_id, head, decision.reason, ports)
+        failure = facts.merge_failure if decision.reason == "merge_failed" else None
+        return _refuse(task_id, head, decision.reason, ports, failure=failure)
     if decision.kind != "merge" or head is None:
         return MergeResult("stopped", "no_decision")
     return _merge(task_id, number, str(reference), head, ports, facts, clock, log)
@@ -231,8 +233,12 @@ def _merge(
     )
     try:
         method = ports.tracker.merge(number, head)
+    except MergeCallFailed as exc:
+        return _after_failure(task_id, reference, head, facts, exc.failure, str(exc), ports, log)
     except ValueError as exc:
-        return _after_failure(task_id, reference, head, str(exc), ports, log)
+        return _after_failure(
+            task_id, reference, head, facts, "gh_unreadable", str(exc), ports, log
+        )
     ports.documents.record_closure(
         task_id, {"auto_merged_at": clock(), "auto_merge_method": method}
     )
@@ -244,41 +250,84 @@ def _after_failure(
     task_id: str,
     reference: str,
     head: str,
-    reason: str,
+    facts: rules.MergeFacts,
+    failure: rules.MergeFailure,
+    error: str,
     ports: Ports,
     log: Callable[[str], None],
 ) -> MergeResult:
-    """`Tracker.merge` raised. The pull request is read again: still `OPEN` means the
-    merge did not happen, so the intent is withdrawn (a later human merge of this head is
-    the human's); `MERGED` keeps it; anything else, or a read that fails, keeps it and
-    says so."""
+    """`Tracker.merge` raised (GH-196). The failed call is counted first, before anything
+    else is read: a terminal class spends the whole budget, any other one call of it. The
+    pull request is then read again: still `OPEN` means the merge did not happen, so the
+    intent is withdrawn (a later human merge of this head is the human's) and the decision
+    itself says whether the budget is spent -- the comment is the last failure's, once;
+    `MERGED` keeps the intent; anything else, or a read that fails, keeps it and says so.
+    `error` is the raw text of the CLI and goes to `log` only."""
+    count = (
+        rules.MERGE_CALLS_MAX
+        if failure in rules.TERMINAL_MERGE_FAILURES
+        else facts.merge_failures + 1
+    )
+    ports.documents.record_closure(
+        task_id, {"merge_failures": {"head": head, "count": count, "failure": failure}}
+    )
     try:
         current = ports.tracker.pull_request(reference)
     except (ValueError, OSError) as exc:
         log(
-            f"agentic: merge: {task_id}: merge failed ({reason}), pull request "
+            f"agentic: merge: {task_id}: merge failed ({failure}: {error}), pull request "
             f"unreadable ({exc}): intent kept"
         )
         return MergeResult("stopped", "ambiguous")
     if current is not None and current.state == "OPEN":
         ports.documents.record_closure(task_id, {"auto_merge_head": ""})
-        return _refuse(task_id, head, reason, ports)
+        decision = rules.auto_merge_decision(
+            replace(facts, merge_failures=count, merge_failure=failure)
+        )
+        if decision.kind == "refuse" and decision.reason == "merge_failed":
+            log(f"agentic: merge: {task_id}: merge failed ({failure}: {error}), budget spent")
+            return _refuse(task_id, head, "merge_failed", ports, failure=failure)
+        log(
+            f"agentic: merge: {task_id}: merge failed ({failure}: {error}), "
+            f"{count} of {rules.MERGE_CALLS_MAX}"
+        )
+        return MergeResult("refused", "merge_failed")
     if current is not None and current.state == "MERGED":
-        return MergeResult("merged", reason)
-    log(f"agentic: merge: {task_id}: merge failed ({reason}), pull request not open: intent kept")
+        return MergeResult("merged", failure)
+    log(
+        f"agentic: merge: {task_id}: merge failed ({failure}: {error}), "
+        "pull request not open: intent kept"
+    )
     return MergeResult("stopped", "ambiguous")
 
 
-def _refuse(task_id: str, head: str | None, reason: str, ports: Ports) -> MergeResult:
+def _refuse(
+    task_id: str,
+    head: str | None,
+    reason: str,
+    ports: Ports,
+    failure: rules.MergeFailure | None = None,
+) -> MergeResult:
     """Comments a refusal the human can act on, once per (head, reason): the last
-    `Auto-merge refused:` comment naming the same head and reason is enough."""
+    `Auto-merge refused:` comment naming the same head and reason is enough. A
+    `merge_failed` one names the closed class of the last failure (or `unknown`) and a
+    fixed advice sentence, never the CLI's own text."""
     if reason in COMMENTED and head is not None:
         first = f"{AUTO_MERGE_REFUSED}{head} {reason}"
+        text = f"{first}\n\nLeft for the human to merge."
+        if reason == "merge_failed":
+            advice = (
+                rules.MERGE_FAILURE_ADVICE[failure]
+                if failure is not None
+                else rules.MERGE_FAILURE_UNKNOWN_ADVICE
+            )
+            first = f"{AUTO_MERGE_REFUSED}{head} gh pr merge failed: {failure or 'unknown'}"
+            text = f"{first}\n\n{advice}\n\nLeft for the human to merge."
         refused = [
             body
             for body in ports.tracker.issue_comments(task_id)
             if body.startswith(AUTO_MERGE_REFUSED)
         ]
         if not refused or refused[-1].splitlines()[0] != first:
-            ports.tracker.comment(task_id, f"{first}\n\nLeft for the human to merge.")
+            ports.tracker.comment(task_id, text)
     return MergeResult("refused", reason)

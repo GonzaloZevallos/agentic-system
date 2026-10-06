@@ -18,6 +18,7 @@ from agentic.core.process.application.ports import (
     IssueState,
     LaunchAttempt,
     ListedPullRequest,
+    MergeCallFailed,
     Ports,
     RawResult,
     RunRegistration,
@@ -28,6 +29,7 @@ from agentic.core.process.domain import rules
 from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.playbook import Playbook
 from agentic.core.process.domain.roles import PROMPTS_DIR, Role
+from agentic.core.process.domain.rules import MergeFailure
 from agentic.core.process.domain.suppressions import Forbidden
 from agentic.core.process.domain.task import (
     DependencyState,
@@ -584,20 +586,28 @@ class MemoryTracker:
         self.head_oid: str | None = None
         # `merge`'s own record: `(number, head_sha)` of every call, the method it answers,
         # and `merge_error`, which makes it raise `ValueError` the way a refused `gh pr
-        # merge` does.
+        # merge` does. GH-196: `merge_failure` makes that error a `MergeCallFailed` of that
+        # class, the adapter's own shape; with it unset the error stays a plain `ValueError`.
+        # `events` is every `pull_request`, `merge` and `comment` call in order.
         self.merge_calls: list[tuple[int, str]] = []
         self.merge_method = "squash"
         self.merge_error: str | None = None
+        self.merge_failure: MergeFailure | None = None
+        self.events: list[str] = []
 
     def pull_request(self, reference: str) -> PullRequest | None:
+        self.events.append("pull_request")
         pr = self.prs.get(reference)
         if pr is not None and self.head_oid is not None:
             return dataclasses.replace(pr, head_oid=self.head_oid)
         return pr
 
     def merge(self, number: int, head_sha: str) -> str:
+        self.events.append("merge")
         self.merge_calls.append((number, head_sha))
         if self.merge_error is not None:
+            if self.merge_failure is not None:
+                raise MergeCallFailed(self.merge_failure, self.merge_error)
             raise ValueError(self.merge_error)
         return self.merge_method
 
@@ -610,6 +620,7 @@ class MemoryTracker:
         return self.url
 
     def comment(self, task_id: str, text: str) -> None:
+        self.events.append("comment")
         self.comments.append((task_id, text))
 
     def label(self, task_id: str, label: str) -> None:
