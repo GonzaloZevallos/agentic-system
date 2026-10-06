@@ -49,6 +49,18 @@ EXTERNAL_FAILURE_REASONS = ("account_limit", "upstream", "network")
 # set that a task never reaches without first passing through one of these two.
 TERMINATED_STATUSES = ("ready_for_review", "discarded")
 
+# The smallest judged denominator at which autonomy prints a rate (ADR-0045): the size
+# of the evaluation set. Auto-merged deliveries carry no human verdict and leave the
+# judged set, so the sample shrinks as auto-merge grows; below this many judged tasks
+# `eval compare` shows `n/m` and no rate.
+AUTONOMY_MIN_JUDGED = 5
+
+# The outcomes that landed without a human verdict, read off the class mapping so no
+# outcome string is spelled here.
+LANDED_UNJUDGED = frozenset(
+    outcome for outcome, kind in metrics.OUTCOME_CLASS.items() if kind == "landed_unjudged"
+)
+
 
 class ScorecardDocument(TaskState, total=False):
     """The closure keys `task_figures` reads beyond `TaskState`, declared again here
@@ -167,6 +179,13 @@ class Figure:
     excluded: int
 
 
+def _is_judged(figures: TaskFigures) -> bool:
+    """A delivery a human has judged: closed, and whose outcome class is not
+    `landed_unjudged` (an `auto_merged` delivery landed without a human verdict,
+    ADR-0045). An outcome the mapping does not know, or none, keeps today's reading."""
+    return bool(figures.closed_at) and figures.delivery_outcome not in LANDED_UNJUDGED
+
+
 def _ratio(numerator: int, denominator: int, excluded: int) -> Figure:
     if denominator == 0:
         return Figure(None, denominator, excluded)
@@ -202,11 +221,16 @@ class Scorecard:
 def build(figures: Sequence[TaskFigures]) -> Scorecard:
     """The scorecard over one baseline's own `TaskFigures` (already grouped by the
     caller: this function never resolves a baseline itself). `judged` deliveries are
-    the ones with a `closed_at`; `terminated` Corridas are the ones whose `status` is
-    `TERMINATED_STATUSES` -- a task that has not reached either yet is simply excluded,
-    counted in `excluded`, never a zero pretending to be a measurement."""
+    the ones with a `closed_at` whose outcome class is not `landed_unjudged`: an
+    `auto_merged` delivery carries no human verdict, so it is out of autonomy and of
+    cost per delivery (ADR-0045). Autonomy prints no rate (`value is None`) while fewer
+    than `AUTONOMY_MIN_JUDGED` deliveries are judged; `denominator` still says `n`.
+    `terminated` Corridas are the ones whose `status` is `TERMINATED_STATUSES`, and
+    they include the auto-merged ones, so own failures and rework still count them. A
+    task that has not reached either yet is simply excluded, counted in `excluded`,
+    never a zero pretending to be a measurement."""
     total = len(figures)
-    judged = [f for f in figures if f.closed_at]
+    judged = [f for f in figures if _is_judged(f)]
     terminated = [f for f in figures if f.status in TERMINATED_STATUSES]
 
     autonomy = _ratio(
@@ -214,6 +238,8 @@ def build(figures: Sequence[TaskFigures]) -> Scorecard:
         denominator=len(judged),
         excluded=total - len(judged),
     )
+    if autonomy.denominator < AUTONOMY_MIN_JUDGED:
+        autonomy = Figure(None, autonomy.denominator, autonomy.excluded)
     cost_per_delivery = _average(values=[f.cost_usd for f in judged], excluded=total - len(judged))
     own_failures_per_task = _average(
         values=[float(_own_failures(f)) for f in terminated], excluded=total - len(terminated)
@@ -261,16 +287,23 @@ def _direction(before: float | None, after: float | None) -> Literal["down", "up
 def verdict(frm: Scorecard, frm_baseline: str, to: Scorecard, to_baseline: str) -> Verdict:
     """ADR-0028's own rule: `to` improves over `from` when autonomy does not drop and
     own failures per task drop; cost per delivery and rework per task break a tie.
-    Autonomy `n/a` on either side -- no judged delivery to read a clean merge off --
+    Autonomy `n/a` on either side -- fewer than `AUTONOMY_MIN_JUDGED` judged
+    deliveries to read a clean merge off --
     makes the whole verdict undecidable, naming the baseline that has none (checked
     `frm` first): never "improves", never "worse" for a scorecard with nothing to
     compare (Tech Lead plan; the round-1 straddle inference is rejected, see the plan's
     `Invariants`). Every other figure that reads `n/a` is left out of the leg it would
     have decided, never coerced into a direction."""
     if frm.autonomy.value is None:
-        return Verdict("undecidable", f"no judged delivery under {frm_baseline}")
+        return Verdict(
+            "undecidable",
+            f"no autonomy rate under {frm_baseline}: under {AUTONOMY_MIN_JUDGED} judged",
+        )
     if to.autonomy.value is None:
-        return Verdict("undecidable", f"no judged delivery under {to_baseline}")
+        return Verdict(
+            "undecidable",
+            f"no autonomy rate under {to_baseline}: under {AUTONOMY_MIN_JUDGED} judged",
+        )
 
     autonomy_dir = _direction(frm.autonomy.value, to.autonomy.value)
     failures_dir = _direction(frm.own_failures_per_task.value, to.own_failures_per_task.value)

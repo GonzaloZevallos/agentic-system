@@ -44,7 +44,7 @@ from typing import NotRequired, TypedDict
 from agentic.core.process.domain.task import TaskState
 
 from .metrics import DeliveryOutcome, changes_requested_total, prompts_fingerprint, run_duration_s
-from .scorecard import task_figures
+from .scorecard import LANDED_UNJUDGED, task_figures
 
 # `.agentic/eval-set.yaml`, relative to the product root, like `stack.yaml`, `flags.yaml`
 # and `BRIEF.md`: the set travels with the product whose issues it names. The caller
@@ -162,13 +162,21 @@ def baseline_id(system_version: str, declaration_text: str, experiment: Mapping[
     return f"{system_version}+{digest}"
 
 
+# Why an auto-merged delivery has no score (ADR-0045): the pull request merged without a
+# human, so there is no verdict to read -- never `False`, which would say the human judged it.
+AUTO_MERGED_REASON = (
+    "auto-merged deliveries carry no human verdict (ADR-0045): the merge was the system's own"
+)
+
+
 @dataclass(frozen=True)
 class Score:
     """README.md 9's binary score for one task. `value` is `True` for a pull request
     that merged clean (`delivery_outcome == "merged"`), `False` for one merged with
     human changes or closed unmerged, and `None` -- a fact, not a zero -- for a task
-    `agentic close` has not scored yet. `pending_reason` names the exact command that
-    would score it, and is `None` whenever `value` is not."""
+    `agentic close` has not scored yet or one that `auto_merged` without a human verdict
+    (ADR-0045). `pending_reason` says why there is no score, and is `None` whenever
+    `value` is not."""
 
     value: bool | None
     pending_reason: str | None
@@ -180,6 +188,9 @@ def score(document: TaskDocument, issue: int) -> Score:
     docstring for `_close`)."""
     if not document.get("closed_at"):
         return Score(None, f"`agentic close --issue {issue}` has not run yet")
+    outcome = document.get("delivery_outcome")
+    if outcome in LANDED_UNJUDGED:
+        return Score(None, AUTO_MERGED_REASON)
     return Score(document.get("delivery_outcome") == "merged", None)
 
 

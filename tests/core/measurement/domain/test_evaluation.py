@@ -152,6 +152,15 @@ def test_score_is_false_for_a_closed_unmerged_pull_request():
     assert result.value is False
 
 
+def test_score_is_unscored_with_the_adr_reason_for_an_auto_merged_delivery():
+    document = doc(closed_at="2026-09-01T00:00:00.000Z", delivery_outcome="auto_merged")
+    result = evaluation.score(document, issue=10)
+    assert result.value is None
+    assert result.pending_reason is not None
+    assert "ADR-0045" in result.pending_reason
+    assert "no human verdict" in result.pending_reason
+
+
 def test_score_is_none_with_a_pending_reason_when_not_yet_closed():
     document = doc()
     result = evaluation.score(document, issue=42)

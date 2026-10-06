@@ -18,6 +18,10 @@ def doc(**overrides):
     return base
 
 
+def judged(outcome, n):
+    return [scorecard.task_figures(doc(closed_at="t", delivery_outcome=outcome)) for _ in range(n)]
+
+
 # --- rework: `docs/product/rework.md`'s own acceptance case, moved onto the documents
 # (ADR-0037: no telemetry backend left to derive it from a live reader's own samples;
 # `task_figures.rework_usd` and `metrics.run_rework_usd` are the one implementation both
@@ -180,13 +184,13 @@ def test_own_failures_excludes_the_external_reasons_but_keeps_limit_and_sdk():
 
 def test_build_autonomy_is_clean_merges_over_judged_deliveries():
     figures = [
-        scorecard.task_figures(doc(closed_at="t", delivery_outcome="merged")),
-        scorecard.task_figures(doc(closed_at="t", delivery_outcome="merged_with_changes")),
+        *judged("merged", 3),
+        *judged("merged_with_changes", 3),
         scorecard.task_figures(doc()),  # not judged: excluded from autonomy's denominator
     ]
     built = scorecard.build(figures)
     assert built.autonomy.value == pytest.approx(0.5)
-    assert built.autonomy.denominator == 2
+    assert built.autonomy.denominator == 6
     assert built.autonomy.excluded == 1
 
 
@@ -227,7 +231,7 @@ def test_build_time_to_merge_known_counts_only_judged_deliveries_that_carry_it()
 def test_verdict_improves_when_autonomy_holds_and_own_failures_drop():
     frm = scorecard.build(
         [
-            scorecard.task_figures(doc(closed_at="t", delivery_outcome="merged")),
+            *judged("merged", 5),
             scorecard.task_figures(
                 doc(
                     failures=[
@@ -246,7 +250,7 @@ def test_verdict_improves_when_autonomy_holds_and_own_failures_drop():
     )
     to = scorecard.build(
         [
-            scorecard.task_figures(doc(closed_at="t", delivery_outcome="merged")),
+            *judged("merged", 5),
             scorecard.task_figures(doc()),
         ]
     )
@@ -257,15 +261,13 @@ def test_verdict_improves_when_autonomy_holds_and_own_failures_drop():
 def test_verdict_worse_when_autonomy_drops_and_own_failures_rise():
     frm = scorecard.build(
         [
-            scorecard.task_figures(doc(closed_at="t", delivery_outcome="merged")),
-            scorecard.task_figures(doc(closed_at="t", delivery_outcome="merged")),
+            *judged("merged", 5),
             scorecard.task_figures(doc()),
         ]
     )
     to = scorecard.build(
         [
-            scorecard.task_figures(doc(closed_at="t", delivery_outcome="closed")),
-            scorecard.task_figures(doc(closed_at="t", delivery_outcome="closed")),
+            *judged("closed", 5),
             scorecard.task_figures(
                 doc(
                     failures=[
@@ -288,16 +290,79 @@ def test_verdict_worse_when_autonomy_drops_and_own_failures_rise():
 
 def test_verdict_is_undecidable_when_autonomy_has_no_judged_delivery():
     empty = scorecard.build([scorecard.task_figures(doc())])
-    to = scorecard.build([scorecard.task_figures(doc(closed_at="t", delivery_outcome="merged"))])
+    to = scorecard.build(judged("merged", 5))
     result = scorecard.verdict(empty, "pre-baseline", to, "bl-2026-09-23")
     assert result.outcome == "undecidable"
     assert "pre-baseline" in result.reason
 
 
 def test_verdict_ties_when_nothing_moves():
-    same = scorecard.build([scorecard.task_figures(doc(closed_at="t", delivery_outcome="merged"))])
+    same = scorecard.build(judged("merged", 5))
     result = scorecard.verdict(same, "a", same, "b")
     assert result.outcome == "ties"
+
+
+# --- auto_merged (ADR-0045): landed without a human verdict ---
+
+
+def test_autonomy_is_over_the_human_judged_tasks_and_leaves_the_auto_merged_out():
+    built = scorecard.build(
+        [*judged("merged", 3), *judged("merged_with_changes", 2), *judged("auto_merged", 3)]
+    )
+    assert built.autonomy.value == pytest.approx(3 / 5)
+    assert built.autonomy.denominator == 5
+    assert built.autonomy.excluded == 3
+    assert built.judged == 5
+
+
+def test_cost_per_delivery_leaves_the_auto_merged_ones_out():
+    cheap = [
+        scorecard.task_figures(doc(closed_at="t", delivery_outcome="merged", cost_usd=2.0))
+        for _ in range(5)
+    ]
+    dear = [
+        scorecard.task_figures(doc(closed_at="t", delivery_outcome="auto_merged", cost_usd=50.0))
+        for _ in range(3)
+    ]
+    built = scorecard.build([*cheap, *dear])
+    assert built.cost_per_delivery.value == pytest.approx(2.0)
+    assert built.cost_per_delivery.denominator == 5
+    assert built.cost_per_delivery.excluded == 3
+
+
+def test_own_failures_and_rework_still_count_the_auto_merged_ones():
+    failure = {
+        "role": "R",
+        "attempt": 1,
+        "error": "e",
+        "cost_usd": 0.0,
+        "session_id": "",
+        "reason": "other",
+    }
+    clean = [scorecard.task_figures(doc(closed_at="t", delivery_outcome="merged"))]
+    auto = [
+        scorecard.task_figures(
+            doc(closed_at="t", delivery_outcome="auto_merged", failures=[failure, failure])
+        )
+    ]
+    built = scorecard.build([*clean, *auto])
+    assert built.own_failures_per_task.denominator == 2
+    assert built.own_failures_per_task.value == pytest.approx(1.0)
+    assert built.rework_per_task.denominator == 2
+
+
+def test_autonomy_prints_no_rate_below_the_evaluation_set_size_but_keeps_n_over_m():
+    built = scorecard.build([*judged("merged", 4), *judged("auto_merged", 3)])
+    assert scorecard.AUTONOMY_MIN_JUDGED == 5
+    assert built.autonomy.value is None
+    assert built.autonomy.denominator == 4
+
+
+def test_verdict_is_undecidable_while_autonomy_is_below_the_minimum_sample():
+    thin = scorecard.build(judged("merged", 4))
+    enough = scorecard.build(judged("merged", 5))
+    assert scorecard.verdict(thin, "a", enough, "b").outcome == "undecidable"
+    assert scorecard.verdict(enough, "a", thin, "b").outcome == "undecidable"
 
 
 # --- bucket_by_baseline: every bucket, including `untagged` and `unreadable`, rejects ---
