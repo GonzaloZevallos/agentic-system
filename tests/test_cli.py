@@ -365,7 +365,7 @@ def unavailable_inhibitor(monkeypatch, seen: list[str]):
         seen.append(why)
         yield "systemd-inhibit not found"
 
-    monkeypatch.setattr(cli.inhibitor, "hold", hold)
+    monkeypatch.setattr(cli, "inhibitor", SimpleNamespace(hold=hold))
 
 
 @pytest.mark.anyio
@@ -391,7 +391,9 @@ async def test_run_says_once_that_the_inhibitor_is_unavailable_and_goes_on(
         await cli._run(task, cfg, memory_ports(), checkpointer=Saver())
 
     err = capsys.readouterr().err
-    assert err.count("agentic: sleep/shutdown inhibitor unavailable: systemd-inhibit not found") == 1
+    assert (
+        err.count("agentic: sleep/shutdown inhibitor unavailable: systemd-inhibit not found") == 1
+    )
     assert held == ["GH-1: run"]
 
 
@@ -415,7 +417,9 @@ async def test_resume_says_once_that_the_inhibitor_is_unavailable_and_goes_on(
         await cli._resume("GH-1", cfg, ports, yes=True, checkpointer=Saver())
 
     err = capsys.readouterr().err
-    assert err.count("agentic: sleep/shutdown inhibitor unavailable: systemd-inhibit not found") == 1
+    assert (
+        err.count("agentic: sleep/shutdown inhibitor unavailable: systemd-inhibit not found") == 1
+    )
     assert held == ["GH-1: resume"]
 
 

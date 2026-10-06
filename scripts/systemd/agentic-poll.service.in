@@ -1,0 +1,26 @@
+# One poller per product, as a `systemd --user` service (GH-176). Not installed by hand:
+# `scripts/install-poller.sh` renders the placeholders into absolute paths and writes
+# the result under ~/.config/systemd/user.
+#
+# KillMode=process: the runs the poller launches with `--detach` stay in this unit's
+# cgroup (setsid leaves the session, not the cgroup). With the default `control-group`
+# every restart of the poller would kill the runs it launched. `process` stops only the
+# poller itself and leaves its runs alone; they are found again through their locks.
+#
+# There is no EnvironmentFile=: the poller reads `.env` itself with `load_dotenv()` from
+# its working directory, which is why WorkingDirectory= is the stage0 checkout.
+[Unit]
+Description=agentic poller for @PRODUCT_DIR@
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=@STAGE0@
+Environment=PATH=@PATH@
+ExecStart=@STAGE0@/.venv/bin/agentic poll --product-dir @PRODUCT_DIR@
+Restart=on-failure
+RestartSec=30
+KillMode=process
+
+[Install]
+WantedBy=default.target
