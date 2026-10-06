@@ -44,6 +44,11 @@ _Avoid_: versión, cohorte, época, hito (se usa en prosa, no como término)
 _Campo_: baseline — de la evaluación de modelos; `baseline_id` del set de evaluación es más fino
 (incluye la declaración y el brazo) y no lo reemplaza
 
+**Ventana**:
+Las 10 tareas cerradas de un lado de una comparación de playbook: las 10 que corrieron con una misma sección de playbook de un rol y las 10 anteriores. Cuenta solo el brazo `default` y no las tareas cuyo playbook cambió a mitad de corrida; no concluye con menos de 10 por lado ni cuando cruza más de una línea de base.
+_Avoid_: período, cohorte, muestra (la muestra es otra cosa en este glosario)
+_Campo_: evaluation window — el diseño de PjM del README (10 tareas); before/after en la evaluación de cambios de prompt
+
 **Scorecard**:
 Las cuatro métricas del sistema, en orden, que dicen si una línea de base es mejor que otra:
 autonomía (entregas fusionadas limpias sobre tareas terminadas), fallos propios por tarea (sin

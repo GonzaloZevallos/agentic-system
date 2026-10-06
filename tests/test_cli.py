@@ -3303,3 +3303,45 @@ async def test_poll_flushes_every_line_of_a_round_before_awaiting_the_wait(monke
         )
     # Round 1 closed both GH-3 and GH-4: both lines were flushed before the wait.
     assert flushes_before_the_wait == [2]
+
+
+@pytest.mark.anyio
+async def test_eval_score_names_the_role_whose_playbook_differs(tmp_path, capsys):
+    from agentic.shared.configuration import Configuration
+
+    root = eval_root(tmp_path)
+    ports = memory_ports()
+    ports.documents.save(
+        {
+            "id": "GH-1",
+            "status": "open",
+            "prompts": {"developer": "a", "pm": "p"},
+            "playbooks": {"developer": "pb1"},
+        }
+    )
+    ports.documents.save(
+        {
+            "id": "GH-2",
+            "status": "open",
+            "prompts": {"developer": "b", "pm": "p"},
+            "playbooks": {"developer": "pb2"},
+        }
+    )
+    await cli._eval_score(Configuration(product_dir=root), ports, None, str(tmp_path / "out.jsonl"))
+    out = capsys.readouterr().out
+    assert "playbook differs for: developer" in out
+    assert "template differs for" not in out
+
+
+@pytest.mark.anyio
+async def test_eval_score_names_the_role_whose_template_differs(tmp_path, capsys):
+    from agentic.shared.configuration import Configuration
+
+    root = eval_root(tmp_path)
+    ports = memory_ports()
+    ports.documents.save({"id": "GH-1", "status": "open", "prompts": {"developer": "a", "pm": "p"}})
+    ports.documents.save({"id": "GH-2", "status": "open", "prompts": {"developer": "a", "pm": "q"}})
+    await cli._eval_score(Configuration(product_dir=root), ports, None, str(tmp_path / "out.jsonl"))
+    out = capsys.readouterr().out
+    assert "template differs for: pm" in out
+    assert "playbook differs" not in out

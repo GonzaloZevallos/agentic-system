@@ -78,6 +78,7 @@ marcada en ningún lado hace fallar el chequeo con su propio nombre.
 | `agentic.role.max_turns` | — | — | Sin atributo: sigue en el documento de tarea, `runs[].max_turns` |
 | `agentic.role.tool_calls` | `agentic.role.tool_calls` | rol | Herramientas usadas por la patch entera, array `"tool=conteo"`, sumadas sobre todas sus corridas |
 | `agentic.role.subagent_cost_usd` | — | — | Sin atributo: sigue en el documento de tarea, `runs[].subagent_cost_usd` |
+| `agentic.role.playbook_hash` | `agentic.role.playbook_hash` | rol | Nueva con ADR-0043, sin métrica anterior: la **tupla** de los hashes de la sección de playbook que la patch registró (`playbooks` y `playbooks_changed` del documento), cada uno una vez; ausente si la patch no registró ninguno (rol sin playbook, o con el que la tarea ya tenía). Qué roles difieren por playbook y cuáles por plantilla lo dice `agentic eval compare` |
 | `agentic.role.cold_fallback` | `agentic.role.cold_fallback` | rol | `true` si alguna corrida o intento fallido de la patch arrancó en frío; antes una muestra por rol y fase, ahora un booleano sobre la patch entera |
 | `agentic.review.findings` | `agentic.review.findings` | rol | Hallazgos de la revisión, array `"severidad/categoría/estado=conteo"`, en el span del rol que revisó |
 | `agentic.presubmit.checks` | `agentic.presubmit.checks` | rol | Chequeos de cada invocación de la puerta de entrega, array `"check/result/final=conteo"` (sin `phase`: sigue en el documento de tarea si hace falta) |

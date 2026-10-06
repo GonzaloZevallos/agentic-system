@@ -15,6 +15,7 @@ from agentic.core.process.application.ports import (
     IssueComment,
     IssueState,
     LaunchAttempt,
+    ListedPullRequest,
     Ports,
     RawResult,
     RunRegistration,
@@ -23,6 +24,7 @@ from agentic.core.process.application.ports import (
 )
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.design import Design
+from agentic.core.process.domain.playbook import Playbook
 from agentic.core.process.domain.roles import PROMPTS_DIR, Role
 from agentic.core.process.domain.suppressions import Forbidden
 from agentic.core.process.domain.task import DependencyState, MergeOutcome, TaskInput, TaskState
@@ -166,6 +168,11 @@ class MemoryPrompts:
 
     def __init__(self, **overrides: str):
         self.overrides = overrides
+        # Seeded by slug; a role with none has an empty playbook.
+        self.playbooks: dict[str, Playbook] = {}
+
+    def playbook(self, role: Role) -> Playbook:
+        return self.playbooks.get(role.slug, Playbook(slug=role.slug))
 
     def raw(self, role: Role) -> tuple[str, Path]:
         if role.slug in self.overrides:
@@ -211,7 +218,7 @@ class MemoryStack:
         # legitimate absence `witness` has: every product but the one a design task
         # prepares for.
         self.declared_design = design
-        # False is a product that does not opt in to concurrent checks (ADR-0043), which
+        # False is a product that does not opt in to concurrent checks (ADR-0044), which
         # is every product until its own file says otherwise.
         self.declared_parallel_checks = parallel_checks
         self.revisions: list[str] = []
@@ -393,6 +400,8 @@ class MemoryWorkspace:
         self.dependency_state_calls: list[tuple[Path, str, tuple[str, ...]]] = []
         self.dependency_states: dict[str, list[DependencyState]] = {}
         self.pushed: list[str] = []
+        # `(ref, relative)` -> the text `show` answers; absent is `None`.
+        self.files: dict[tuple[str, str], str] = {}
         self.cleaned: list[str] = []
         self._looks: dict[Path, int] = {}
         self.existing_branches: dict[str, tuple[str, str]] = {}
@@ -485,8 +494,11 @@ class MemoryWorkspace:
         self.commits.append((path, message))
         return "c1"
 
-    def push(self, branch: str) -> None:
+    def push(self, branch: str, *, replace: bool = False) -> None:
         self.pushed.append(branch)
+
+    def show(self, ref: str, relative: str) -> str | None:
+        return self.files.get((ref, relative))
 
     def cleanup(self, task_id: str) -> None:
         self.cleaned.append(task_id)
@@ -550,6 +562,10 @@ class MemoryTracker:
         # `earlier`/`issue_comments`, which stay bodies-only, and from `self.comments`
         # above, which is every comment *this fake posted*, not the issue's own.
         self.timestamped: dict[str, list[IssueComment]] = {}
+        # The playbook delivery's reads and writes: every PR `pull_requests` lists, and
+        # `(number, body)` of each body update.
+        self.listed: list[ListedPullRequest] = []
+        self.updated_bodies: list[tuple[int, str]] = []
 
     def open_pull_request(self, task_id: str, branch: str, title: str, body: str) -> str:
         self.pull_requests.append((branch, title, body))
@@ -567,6 +583,12 @@ class MemoryTracker:
 
     def unlabel(self, task_id: str, label: str) -> None:
         self.unlabeled.append((task_id, label))
+
+    def list_pull_requests(self) -> list[ListedPullRequest]:
+        return list(self.listed)
+
+    def update_pull_request_body(self, number: int, body: str) -> None:
+        self.updated_bodies.append((number, body))
 
     def issue_comments(self, task_id: str) -> list[str]:
         return [*self.earlier, *(text for _, text in self.comments)]

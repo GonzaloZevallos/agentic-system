@@ -1,4 +1,4 @@
-"""`CheckoutPresubmit` in its concurrent mode (ADR-0043), over fakes and over the real
+"""`CheckoutPresubmit` in its concurrent mode (ADR-0044), over fakes and over the real
 shell: the gate still runs every declared check and reports them in declared order, the
 serial mode is the same gate with one check at a time, and a check that raises lets the
 others finish before the error leaves. Overlap is proven with an in-flight high-water

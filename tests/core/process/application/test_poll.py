@@ -563,6 +563,57 @@ def test_every_launched_action_uses_the_argv0_passed_in(tmp_path):
     assert launcher.spawned[0][0] == "/venv/bin/agentic"
 
 
+# ---- `agentic reflect --all` (ADR-0043) ---------------------------------------------------
+
+
+def _reflect_ports(tmp_path, started_at: str, closed: bool):
+    from agentic.core.process.domain import playbook_candidates as pc
+
+    ports = memory_ports()
+    if started_at:
+        ports.workspace.files[("HEAD", pc.LEDGER_FILE)] = pc.render_ledger(
+            pc.Ledger(started_at=started_at)
+        )
+    if closed:
+        ports.documents.save({"id": "GH-9", "title": "t", "description": "d"})
+        ports.documents.record_closure(
+            "GH-9", {"closed_at": "2026-10-06T09:00:00.000+00:00", "delivery_outcome": "merged"}
+        )
+    return ports
+
+
+def test_the_poller_launches_reflect_only_when_a_kept_closed_task_awaits(tmp_path):
+    ports = _reflect_ports(tmp_path, "2026-10-05T00:00:00+00:00", closed=True)
+    launcher = FakeLauncher()
+    lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(), launcher, ESCALATED_AT)
+    assert launcher.spawned == [["agentic", "reflect", "--all", "--product-dir", str(tmp_path)]]
+    assert lines == ["agentic: poll: reflect 1 task(s) -> pid 4242"]
+
+
+def test_the_poller_does_not_launch_reflect_with_nothing_eligible(tmp_path):
+    # No clock yet, a closed task before it, and no closed task at all: never a launch.
+    for started_at, closed in (("", True), ("2026-10-07T00:00:00+00:00", True), ("x", False)):
+        ports = _reflect_ports(tmp_path, started_at, closed)
+        launcher = FakeLauncher()
+        lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(), launcher, ESCALATED_AT)
+        assert launcher.spawned == []
+        assert lines == ["agentic: poll: nothing to do this round"]
+
+
+def test_a_malformed_pull_request_listing_never_fails_the_poll_round(tmp_path, monkeypatch):
+    from agentic.core.process.application import reflect_run
+
+    def malformed(cfg, ports):
+        raise KeyError("mergeCommit")
+
+    monkeypatch.setattr(reflect_run, "pending", malformed)
+    ports = _reflect_ports(tmp_path, "2026-10-05T00:00:00+00:00", closed=True)
+    launcher = FakeLauncher()
+    lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(), launcher, ESCALATED_AT)
+    assert launcher.spawned == []
+    assert lines == ["agentic: poll: nothing to do this round"]
+
+
 def _two_candidates_with_merged_blockers(ports) -> None:
     ports.tracker._queue = [5, 6]
     ports.tracker.states[5] = IssueState("OPEN", "", (3,), None)

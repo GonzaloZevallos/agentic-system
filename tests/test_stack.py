@@ -126,11 +126,11 @@ def test_the_declared_witness_runs_at_the_repo_root_and_resolves_under_it():
 
 def test_the_declared_parallel_checks_is_a_bool_the_gate_can_read():
     """This repo's own `parallel_checks`, read through the domain exactly as `GitStack`
-    would: opted in only on the evidence ADR-0043 pastes, and a real bool either way, so
+    would: opted in only on the evidence ADR-0044 pastes, and a real bool either way, so
     a broken value fails here before it fails preflight."""
     data = yaml.safe_load(STACK_YAML.read_text(encoding="utf-8"))
     assert stack.parallel_checks(data, STACK_YAML) is True
-    assert "ADR-0043" in STACK_YAML.read_text(encoding="utf-8")
+    assert "ADR-0044" in STACK_YAML.read_text(encoding="utf-8")
 
 
 def _mypy_option_names() -> list[str]:

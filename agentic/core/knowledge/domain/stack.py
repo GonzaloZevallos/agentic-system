@@ -21,7 +21,7 @@ itself knows none of this; every spelling lives here, in the product's own file.
 the `ProductStack` port's job; running the setup when a checkout is born, the checks when a
 Developer delivers, and the suppression cage while it writes, is `core.process`'s.
 
-**`parallel_checks`**: optional, a strict boolean (ADR-0043), absent meaning `False`. `true`
+**`parallel_checks`**: optional, a strict boolean (ADR-0044), absent meaning `False`. `true`
 is the product saying that no two of its declared checks share a port, a database file or a
 cache, so the delivery gate may run them concurrently; without it the gate runs them one
 after the other, as it always has. Anything that is not a bool (`"true"`, `1`, `null`) is a
@@ -123,7 +123,7 @@ def witness(data: object, source: object) -> str | None:
 
 
 def parallel_checks(data: object, source: object) -> bool:
-    """Whether the product lets its declared checks run concurrently (ADR-0043).
+    """Whether the product lets its declared checks run concurrently (ADR-0044).
 
     Opt-in: a key absent is `False`, the serial gate of today. Present, it must be a real
     bool -- `isinstance`, so `1` and `"true"` are refused and not coerced -- the same

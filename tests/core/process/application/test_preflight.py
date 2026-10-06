@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from agentic.core.knowledge.domain import stack
+from agentic.core.process.adapters.filesystem import FilesystemPrompts
 from agentic.core.process.application import preflight as module
 from agentic.core.process.application.preflight import (
     PLACEHOLDERS,
@@ -292,3 +293,29 @@ def test_the_label_falls_back_instead_of_killing_a_node_already_running():
     assert (
         product_name(replace(memory_ports(), stack=MemoryStack(product="gym-saas"))) == "gym-saas"
     )
+
+
+def overlay_ports(product: Path, **files: str):
+    """Ports whose prompts are the real overlay reader over `product`."""
+    for stem, text in files.items():
+        path = product / ".agentic/playbooks" / f"{stem}.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    return memory_ports(prompts=FilesystemPrompts(product))
+
+
+def test_a_malformed_playbook_refuses_before_spending(stage0, tmp_path):
+    ports = overlay_ports(tmp_path, developer="items: not-a-list")
+    with pytest.raises(ValueError, match="developer"):
+        preflight(Configuration(product_dir=tmp_path), ports)
+
+
+def test_a_playbook_for_a_role_the_table_does_not_name_refuses(stage0, tmp_path):
+    ports = overlay_ports(tmp_path, pm="items: []")
+    with pytest.raises(ValueError, match="pm"):
+        preflight(Configuration(product_dir=tmp_path), ports)
+
+
+def test_the_delivery_records_are_not_mistaken_for_playbooks(stage0, tmp_path):
+    ports = overlay_ports(tmp_path, reflected="tasks: []", rejected="adds: []")
+    preflight(Configuration(product_dir=tmp_path), ports)
