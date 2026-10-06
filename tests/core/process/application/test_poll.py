@@ -1114,3 +1114,49 @@ def test_a_round_lists_a_run_left_to_the_human_every_round():
     second = _round(_cfg("/p"), ports, MemoryRunRegistry(), launcher, ESCALATED_AT, lock=locks)
     assert first == second and "#30 died in this boot" in first[0]
     assert launcher.spawned == []
+
+
+def _retaken_comments(count: int) -> list[IssueComment]:
+    retaken = IssueComment(
+        body="Retaken after reboot: previous boot", created_at="2026-10-05T09:00:00Z"
+    )
+    human = IssueComment(body="a human decision", created_at="2026-10-05T07:00:00Z")
+    return [human, *[retaken] * count]
+
+
+def test_a_round_leaves_a_run_to_the_human_once_its_three_retakes_are_spent():
+    ports = memory_ports()
+    _open_task(ports)
+    ports.tracker.timestamped["GH-30"] = _retaken_comments(poll.rules.RETAKE_AFTER_REBOOT_MAX)
+    launcher = FakeLauncher()
+    lines = _round(
+        _cfg("/p"),
+        ports,
+        MemoryRunRegistry(),
+        launcher,
+        ESCALATED_AT,
+        lock=_Locks(_dead_lock("GH-30")),
+    )
+    assert launcher.spawned == []
+    assert ports.tracker.comments == []
+    assert len(lines) == 1
+    assert lines[0].startswith("agentic: poll: #30 retake cap spent (lock pid 777")
+    assert lines[0].endswith("left to the human: agentic resume --issue 30")
+
+
+def test_a_round_still_retakes_a_run_with_two_of_its_three_retakes_spent():
+    ports = memory_ports()
+    _open_task(ports)
+    ports.tracker.timestamped["GH-30"] = _retaken_comments(2)
+    launcher = FakeLauncher()
+    lines = _round(
+        _cfg("/p"),
+        ports,
+        MemoryRunRegistry(),
+        launcher,
+        ESCALATED_AT,
+        lock=_Locks(_dead_lock("GH-30")),
+    )
+    assert lines[0] == "agentic: poll: retake #30 -> pid 4242"
+    assert "retake 3 of 3" in lines[1]
+    assert len(launcher.spawned) == 1

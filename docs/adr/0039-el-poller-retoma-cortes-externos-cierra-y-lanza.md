@@ -437,7 +437,7 @@ en `assert_never`; `resume` y `retake` comparten `_spawn_resume`: lanzan `agenti
 retoma nunca llama a `record_launch` ni a `launch_attempts`. Una corrida del mismo arranque que
 murió (la mató un humano, o se cayó) se deja al humano con una línea por vuelta:
 `#N died in this boot (lock pid P since T), left to the human: agentic resume --issue N`
-(`stopped at shutdown` si el registro tiene la marca; `retake cap spent` si fue el tope).
+(`stopped at shutdown` si el registro tiene la marca; `retake cap spent` si fue el tope; `died (boot unknown)` si el registro no trae id de arranque).
 
 ### Unidades, reinicio y linger
 
