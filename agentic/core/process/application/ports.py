@@ -503,6 +503,10 @@ class Workspace(Protocol):
 
     def head(self, path: Path) -> str: ...
 
+    def full_head(self, path: Path) -> str:
+        """The full object id of HEAD in `path`; read-only. `head` keeps its short form."""
+        ...
+
     def is_clean(self, path: Path) -> bool:
         """No uncommitted change, tracked or untracked, under the checkout at `path`."""
         ...

@@ -326,3 +326,27 @@ Riesgos conocidos de esta adenda:
 
 No se agrega ni se mueve ninguna métrica, etiqueta, span ni prompt; `prompts.fingerprint` no
 cambia.
+
+## Adenda (2026-10-06): el head revisado se compara por prefijo, y se guarda completo (GH-199)
+
+`auto_merge_decision` comparaba `reviewed_head` con el head del PR por igualdad de texto, pero
+`reviewed_head` se guardaba abreviado (`git rev-parse --short`) y el head del PR llega
+completo desde el tracker: ningún PR aprobado pasaba y todos se rechazaban con
+`head_not_reviewed`. Ahora la comparación vive en un solo lugar del dominio
+(`rules.same_commit`) y `review` guarda el id completo (`Workspace.full_head`).
+
+- **Ensanchamiento de §8.** Un `reviewed_head` abreviado guardado cuenta como el head del PR
+  cuando es un prefijo hexadecimal de al menos `MIN_SHA_PREFIX` (7) caracteres. Dos ids
+  completos se comparan estrictamente. Dos commits distintos que compartan ese prefijo
+  podrían pasar esta sola condición; el tope real es `Tracker.merge`, que sigue fijando el
+  head exacto con `--match-head-commit`.
+- **La puerta.** El head del PR debe ser un id completo, de 40 o 64 hex (`FULL_SHA_LENGTHS`);
+  si no lo es, la decisión es `head_not_reviewed` sin llegar a comparar.
+- **Riesgo conocido.** Un documento en vuelo con `reviewed_head` abreviado sigue siendo la
+  base de la próxima revisión incremental. Si esa abreviatura se volvió ambigua, el diff del
+  revisor falla o vuelve vacío. Termina tras una revisión más de cada tarea así; no se
+  corrige.
+- **Sin señales nuevas.** No se agrega ni se mueve ninguna métrica, etiqueta, span, clave del
+  documento ni prompt; `prompts.fingerprint` no cambia. Los rechazos anteriores por
+  `head_not_reviewed` de heads sin mover venían del sha abreviado (apostrophe GH-103 / PR
+  #108, probablemente también #198).

@@ -477,6 +477,11 @@ class MemoryWorkspace:
         self._looks[path] = self._looks.get(path, 0) + 1
         return f"head{self._looks[path]}"
 
+    def full_head(self, path: Path) -> str:
+        """A look like `head`: on a moved path each call to either verb advances the same
+        counter; production reads are side-effect free."""
+        return self.head(path)
+
     def is_clean(self, path: Path) -> bool:
         return path not in self.dirty and path not in self.uncommitted
 

@@ -1210,3 +1210,32 @@ async def test_a_plan_with_no_invariants_wires_no_map_check_and_writes_no_block(
         "### Changes\n\nx.py"
     )
     assert type(runner.calls[0]["guard"]).__name__ == "RoleSchemaGuard"
+
+
+class _ShortAndFullHeads(MemoryWorkspace):
+    """A checkout whose `head` is abbreviated, as git's `--short`, and `full_head` is not."""
+
+    FULL = "0258d6f10b0c8f84d6e3a819f0173809f18d7a12"
+
+    def head(self, path):
+        return self.FULL[:7]
+
+    def full_head(self, path):
+        return self.FULL
+
+
+async def test_a_review_records_the_full_head_it_reviewed(cfg):
+    state = {
+        **TASK,
+        "subtasks": {
+            "api": sub("api", "delivered", branch="agentic/GH-12.api", base="base1"),
+            "b": sub("b"),
+        },
+        "sections": {**TASK["sections"], "Developer: api": "x"},
+        "subtask_id": "api",
+    }
+    ports = memory_ports(
+        ScriptedRunner(tech_lead_review=[reviewed()]), workspace=_ShortAndFullHeads()
+    )
+    patch = await review(state, cfg, ports)
+    assert patch["subtasks"]["api"]["reviewed_head"] == _ShortAndFullHeads.FULL

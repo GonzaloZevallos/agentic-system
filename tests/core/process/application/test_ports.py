@@ -56,3 +56,19 @@ def test_write_into_answers_the_path_once_the_task_has_a_document():
     documents.save({"id": "GH-1"})
     root = Path("/memory/worktrees/GH-1")
     assert documents.write_into("GH-1", root) == root / ".agentic" / "tasks" / "GH-1.md"
+
+
+def test_full_head_is_a_look_like_head_that_is_stable_on_an_unmoved_path():
+    workspace = MemoryWorkspace()
+    path = Path("/memory/worktrees/GH-1")
+    assert workspace.full_head(path) == workspace.head(path) == "base"
+    assert workspace.full_head(path) == "base"
+
+
+def test_full_head_on_a_moved_path_advances_the_counter_head_shares():
+    workspace = MemoryWorkspace()
+    path = Path("/memory/worktrees/GH-1")
+    workspace.moved.add(path)
+    assert workspace.full_head(path) == "head1"
+    assert workspace.full_head(path) == "head2"
+    assert workspace.head(path) == "head3"

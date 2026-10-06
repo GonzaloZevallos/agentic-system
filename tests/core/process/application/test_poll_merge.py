@@ -400,3 +400,21 @@ def test_a_tracker_that_raises_reading_the_pull_request_is_a_refusal_with_its_li
     found, lines = _merges(ports)
     assert found == []
     assert lines == ["agentic: poll: auto-merge #5 -> left to the human: head_not_reviewed"]
+
+
+def test_a_short_reviewed_head_against_the_full_head_oid_is_a_merge_candidate():
+    ports = _ports(
+        7, subtasks={"only": {"id": "only", "status": "approved", "reviewed_head": HEAD[:7]}}
+    )
+    found, lines = _merges(ports)
+    assert found == [7]
+    assert lines == []
+
+
+def test_a_reviewed_head_of_another_commit_is_not_a_merge_candidate():
+    ports = _ports(
+        7, subtasks={"only": {"id": "only", "status": "approved", "reviewed_head": "c" * 7}}
+    )
+    found, lines = _merges(ports)
+    assert found == []
+    assert any("head_not_reviewed" in line for line in lines)
