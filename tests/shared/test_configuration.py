@@ -251,3 +251,12 @@ def test_experiment_snapshot_is_non_empty_when_only_skip_ephemeral_moves():
         "skip_ephemeral": "True",
         "reviewer_model": "claude-opus-5",
     }
+
+
+def test_decided_cap_is_on_by_default_and_is_not_an_arm():
+    cfg = Configuration.from_sources(PRODUCT, {})
+    assert cfg.decided_cap is True
+    off = Configuration.from_sources(PRODUCT, {"AGENTIC_DECIDED_CAP": "0"})
+    assert off.decided_cap is False
+    # A switch for the human's counterfactual, never a label: the snapshot is blind to it.
+    assert experiment_snapshot(off, "claude-sonnet-5") == {}

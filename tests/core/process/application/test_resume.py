@@ -3,7 +3,7 @@
 import pytest
 
 from agentic.core.process.application import resume
-from agentic.core.process.domain import document, legacy_names, rules
+from agentic.core.process.domain import document, legacy_names, roles, rules
 from agentic.shared.configuration import Configuration
 from tests.fakes import memory_ports
 
@@ -419,3 +419,29 @@ def test_a_task_with_nothing_left_to_run_is_not_resumed(cfg):
     ports.tracker.earlier = ["Discarded: weekly by definition", "ok, closing"]
     with pytest.raises(ValueError, match=r"nothing left to run \(discarded\)"):
         resume.prepare("GH-12", discarded, "document", raised(), ports)
+
+
+def test_from_document_keeps_a_decided_task_decided_and_capped():
+    # The `--from-document` rescue of a state `rules.entering` marked: `render` writes the
+    # key, `parse` reads it back, `STATE_FIELDS` carries it, and the cap is still one.
+    ports = memory_ports()
+    git_as_recorded(ports)
+    state = paused(description="Body\n\n## Decided\n- a\n", decided=True)
+    ports.documents.save(document.parse(document.render(state)))
+    resumed = resume.from_document("GH-12", ports)
+    assert resumed["decided"] is True
+    assert rules.interview_cap(resumed, roles.INTERVIEW_SOLUTION, 4) == 1
+
+
+def test_from_document_of_a_task_from_before_the_cap_keeps_the_configured_cap():
+    # Pre-merge shape: the request holds the heading (demoted in the document), the key
+    # is absent. A rescue never infers it from prose.
+    ports = memory_ports()
+    git_as_recorded(ports)
+    state = paused(description="Body\n\n## Decided\n- a\n")
+    ports.documents.save(document.parse(document.render(state)))
+    resumed = resume.from_document("GH-12", ports)
+    assert "decided" not in resumed
+    assert rules.decided(resumed["description"], level=3)
+    assert rules.interview_cap(resumed, roles.INTERVIEW_SOLUTION, 4) == 4
+    assert rules.interview_cap(resumed, roles.INTERVIEW_DEFINITION, 4) == 4

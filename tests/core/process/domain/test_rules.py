@@ -132,6 +132,88 @@ def test_interview_progress_ignores_runs_of_other_sections():
     assert progress.sessions == {"product_analyst_interviewer": "q1"}
 
 
+def test_decided_is_true_for_a_level_two_heading_however_it_is_cased_or_punctuated():
+    assert rules.decided("Intro\n\n## Decided\n- one\n")
+    assert rules.decided("## Decided:\n")
+    assert rules.decided("## DECIDED  \n")
+    assert rules.decided("## decided")
+
+
+def test_decided_rejects_what_is_not_a_level_two_heading_outside_a_fence():
+    assert not rules.decided("### Decided\n")
+    assert not rules.decided("# Decided\n")
+    assert not rules.decided("## Decided later\n")
+    assert not rules.decided("## Decided::\n")
+    assert not rules.decided("We Decided this in a grill.\n## Undecided\n")
+    assert not rules.decided("```\n## Decided\n```\n")
+    assert not rules.decided("~~~md\n## Decided\n~~~\n")
+    assert not rules.decided("")
+
+
+def test_decided_reads_the_heading_again_once_a_fence_closes_and_at_the_level_asked():
+    assert rules.decided("```\nx\n```\n## Decided\n")
+    assert rules.decided("### Decided\n", level=3)
+    assert not rules.decided("## Decided\n", level=3)
+
+
+def test_decided_reads_the_demoted_request_back_at_level_three():
+    assert rules.decided(document.demote("## Decided\n- a\n"), level=3)
+
+
+def test_entering_marks_a_decided_request_only_when_the_cap_is_on():
+    task = {"id": "GH-1", "title": "t", "description": "Body\n\n## Decided\n- a\n"}
+    assert rules.entering(task, cap=True) == {**task, "decided": True}
+    assert "decided" not in task
+    assert rules.entering(task, cap=False) == task
+    assert "decided" not in rules.entering(task, cap=False)
+    plain = {"id": "GH-1", "title": "t", "description": "Body\n"}
+    assert "decided" not in rules.entering(plain, cap=True)
+
+
+def test_interview_cap_is_one_only_for_a_decided_state_at_a_stage_in_the_set():
+    decided = {"decided": True}
+    assert rules.interview_cap(decided, INTERVIEW_DEFINITION, 4) == 1
+    assert rules.interview_cap(decided, INTERVIEW_SOLUTION, 4) == 1
+    assert rules.interview_cap({}, INTERVIEW_SOLUTION, 4) == 4
+    assert rules.interview_cap({"decided": False}, INTERVIEW_SOLUTION, 4) == 4
+    assert rules.interview_cap(decided, INTERVIEW_SOLUTION, 1) == 1
+    # A configured cap below one stays: the cap never raises.
+    assert rules.interview_cap(decided, INTERVIEW_SOLUTION, 0) == 0
+
+
+def test_interview_cap_ignores_a_stage_that_is_not_in_the_set(monkeypatch):
+    monkeypatch.setattr(rules, "DECIDED_CAP_STAGES", frozenset({"definition"}))
+    assert rules.interview_cap({"decided": True}, INTERVIEW_SOLUTION, 4) == 4
+    assert rules.interview_cap({"decided": True}, INTERVIEW_DEFINITION, 4) == 1
+
+
+def test_a_state_with_no_decided_key_keeps_the_configured_cap_whatever_its_request_holds():
+    state = {"description": "Body\n\n### Decided\n- a\n"}
+    assert rules.interview_cap(state, INTERVIEW_SOLUTION, 4) == 4
+    assert rules.interview_progress(state, INTERVIEW_SOLUTION, 4).rounds_left == 4
+
+
+def test_interview_progress_for_a_cap_of_two_or_more_is_what_it_always_was():
+    section = INTERVIEW_DEFINITION.section
+    runs = [
+        {"role": "Product Analyst", "section": section, "session_id": f"q{i}"} for i in range(4)
+    ]
+    for cap, done, left in [(4, 0, 4), (4, 4, 2), (3, 3, 2), (2, 2, 2), (2, 0, 2)]:
+        progress = rules.interview_progress({"runs": runs[:done]}, INTERVIEW_DEFINITION, cap)
+        assert (progress.rounds_done, progress.rounds_left) == (done, left)
+
+
+def test_interview_progress_of_a_decided_state_gives_a_retake_one_round():
+    section = INTERVIEW_DEFINITION.section
+    runs = [
+        {"role": "Product Analyst", "section": section, "session_id": f"q{i}"} for i in range(2)
+    ]
+    for done in (0, 1, 2):
+        state = {"decided": True, "runs": runs[:done]}
+        progress = rules.interview_progress(state, INTERVIEW_DEFINITION, 4)
+        assert (progress.rounds_done, progress.rounds_left) == (done, 1)
+
+
 def test_interview_retake_delta_names_the_branch_the_head_and_the_edit_rule():
     delta = rules.interview_retake_delta({}, INTERVIEW_DEFINITION, "agentic/GH-1", "abc123")
     assert "`agentic/GH-1`" in delta and "`abc123`" in delta
