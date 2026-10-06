@@ -16,6 +16,7 @@ from agentic.core.process.domain.roles import (
     PRODUCT_ANALYST_BUG,
     TECH_LEAD_EPHEMERAL,
 )
+from agentic.core.process.application.ports import BranchPullRequest
 from agentic.core.process.domain.task import INTEGRATION
 
 PAIR = PAIR_PM_PA
@@ -2426,3 +2427,111 @@ def test_an_approval_does_not_close_a_key_the_integration_also_raised():
     assert _statuses(_approved(state)) == {"double count": "open"}
     settled = {**_approved(state), "settled_findings": ["x.py:1"]}
     assert _statuses(settled) == {"double count": "fixed"}
+
+
+# --- GH-204: what delivery does with a remote task branch that has diverged ----------
+
+
+def _pr(number, state):
+    return BranchPullRequest(number, state, f"https://github.com/o/r/pull/{number}")
+
+
+def _plan(remote="abc123", in_head=False, prs=(), in_archive=False):
+    return rules.push_plan(remote, in_head, list(prs), in_archive)
+
+
+def test_push_plan_pushes_when_the_remote_has_no_branch_or_is_inside_head():
+    assert _plan(remote=None).kind == "push"
+    assert _plan(in_head=True).kind == "push"
+    # Pull requests are never consulted for a remote that fast-forwards: even an open
+    # one does not matter.
+    assert _plan(in_head=True, prs=[_pr(1, "OPEN")]).kind == "push"
+
+
+def test_push_plan_refuses_a_diverged_branch_with_an_open_pull_request():
+    plan = _plan(prs=[_pr(1, "CLOSED"), _pr(2, "OPEN")], in_archive=True)
+    # A refusal still carries the observed remote sha, so its reason can name it.
+    assert (plan.kind, plan.reason, plan.old_sha) == ("refuse", "open_pull_request", "abc123")
+
+
+def test_push_plan_refuses_a_merged_pull_request_and_open_wins_over_merged():
+    merged = _plan(prs=[_pr(1, "CLOSED"), _pr(3, "MERGED")], in_archive=True)
+    assert (merged.kind, merged.reason) == ("refuse", "merged_pull_request")
+    both = _plan(prs=[_pr(3, "MERGED"), _pr(4, "OPEN")])
+    assert both.reason == "open_pull_request"
+
+
+def test_push_plan_replaces_when_every_pull_request_is_closed():
+    plan = _plan(prs=[_pr(1, "CLOSED"), _pr(2, "CLOSED")])
+    assert (plan.kind, plan.old_sha, plan.reason) == ("replace", "abc123", None)
+
+
+def test_push_plan_with_no_pull_request_replaces_only_its_own_archive():
+    assert _plan(in_archive=True).kind == "replace"
+    assert _plan(in_archive=True).old_sha == "abc123"
+    refused = _plan(in_archive=False)
+    assert (refused.kind, refused.reason) == ("refuse", "unowned_divergence")
+
+
+def test_archived_task_branches_are_this_tasks_own_in_both_spellings():
+    refs = [
+        "archive/run1-abc1234/agentic/GH-1",
+        "archive/run2-unknown/agentic/GH-1",
+        "archive/run3-04abd2c/GH-1",
+        "archive/run1-abc1234/agentic/GH-12",
+        "archive/run1-abc1234/GH-12",
+        "archive/run1-abc1234/agentic/GH-1.s2",
+        "archive/run1-abc1234/GH-1.s2",
+        "agentic/GH-1",
+        "archive/other/agentic/GH-1",
+    ]
+    assert rules.archived_task_branches(refs, "GH-1") == [
+        "archive/run1-abc1234/agentic/GH-1",
+        "archive/run2-unknown/agentic/GH-1",
+        "archive/run3-04abd2c/GH-1",
+    ]
+    assert rules.archived_task_branches(refs, "GH-12") == [
+        "archive/run1-abc1234/agentic/GH-12",
+        "archive/run1-abc1234/GH-12",
+    ]
+
+
+def test_replace_record_sets_on_a_replace_and_clears_on_a_refusal():
+    replace_plan = _plan(prs=[_pr(1, "CLOSED")])
+    assert rules.replace_record(None, replace_plan, False) == "abc123"
+    assert rules.replace_record("old", replace_plan, True) == "abc123"
+    refuse = _plan(prs=[_pr(1, "OPEN")])
+    assert rules.replace_record("old", refuse, False) is None
+
+
+def test_replace_record_clears_after_a_lost_lease_and_keeps_after_a_landed_replace():
+    push = _plan(remote="new", in_head=True)
+    # Lost lease: the remote is still (or contains) the recorded sha.
+    assert rules.replace_record("old", push, recorded_in_remote=True) is None
+    # Landed replace: the remote is our pushed head, which does not contain `old`.
+    assert rules.replace_record("old", push, recorded_in_remote=False) == "old"
+    # Nothing recorded, nothing to keep.
+    assert rules.replace_record(None, push, recorded_in_remote=False) is None
+    # An absent remote with a recorded sha: the remote no longer contains it either.
+    assert rules.replace_record("old", _plan(remote=None), False) == "old"
+
+
+def test_push_refused_reason_names_the_branch_the_sha_and_the_pull_requests():
+    plan = _plan(prs=[_pr(1, "CLOSED"), _pr(2, "OPEN")])
+    reason = rules.push_refused_reason(plan, [_pr(1, "CLOSED"), _pr(2, "OPEN")], "agentic/GH-9")
+    assert "agentic/GH-9" in reason and "abc123" in reason and "#2" in reason
+    assert "open" in reason.lower()
+    merged = rules.push_plan("abc123", False, [_pr(5, "MERGED")], False)
+    assert "merged" in rules.push_refused_reason(merged, [_pr(5, "MERGED")], "agentic/GH-9").lower()
+    unowned = rules.push_plan("abc123", False, [], False)
+    text = rules.push_refused_reason(unowned, [], "agentic/GH-9")
+    assert "abc123" in text and "archive" in text.lower()
+
+
+def test_replaced_note_names_the_sha_and_how_to_recover_it():
+    note = rules.replaced_note("abc123", [_pr(1, "CLOSED"), _pr(2, "CLOSED")], "agentic/GH-9")
+    assert "`agentic/GH-9`" in note and "`abc123`" in note
+    assert "#1" in note and "#2" in note
+    assert "git push origin abc123:refs/heads/" in note
+    bare = rules.replaced_note("abc123", [], "agentic/GH-9")
+    assert "`abc123`" in bare and "#" not in bare
