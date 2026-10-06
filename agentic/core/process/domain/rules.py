@@ -59,6 +59,7 @@ from .task import (
     ResumedPauseEntry,
     ReviewKind,
     RoleRun,
+    SettledRow,
     Status,
     Subtask,
     TaskInput,
@@ -177,25 +178,101 @@ def findings_rows(state: TaskState) -> list[FindingRecord]:
     is the one that stands: a later review re-raising what an earlier one dismissed does
     not reopen the argument.
 
-    **A row closes only because a reviewer said it did.** Every pass after the first is
+    **A row closes only because a reviewer said it did**, with one exception: an approval
+    (`settled_on_approval`, recorded in `approval_settled`) closes the blocking records of
+    its own subtask that it does not raise again. Every pass after the first is
     incremental (ADR-0015) and is told not to look again at what it already approved, so
     a pass that stops mentioning a row usually means it did not look. Closing on silence
     would make the first return of any subtask wipe that subtask's carried-forward
-    remarks, which is the exact class of thing issue #17 is about."""
+    remarks, which is the exact class of thing issue #17 is about.
+
+    The status, in order: a row whose first record is `dismissed` stays so; the
+    reviewer's `settled_findings` closes an open row by location, first and for good;
+    and an open row an approval covers closes only when *every* open record of its key is
+    covered, record by record (`_covered`), so a later regression, a sister's re-raise or
+    an `important` at the same key keeps it open, whatever order they were appended in."""
     settled = {_norm(location) for location in state.get("settled_findings", [])}
+    approved = _approved_versions(state)
     rows: dict[tuple[str, str], FindingRecord] = {}
+    open_records: dict[tuple[str, str], list[FindingRecord]] = {}
     for record in state.get("findings", []):
         key = (_norm(record["location"]), _norm(record["claim"]))
+        if record["status"] == "open":
+            open_records.setdefault(key, []).append(record)
         if (row := rows.get(key)) is None:
             rows[key] = record
         elif record["subtask"] not in row["subtask"].split(", "):
             rows[key] = {**row, "subtask": f"{row['subtask']}, {record['subtask']}"}
     return [
         {**row, "status": "fixed"}
-        if row["status"] == "open" and _norm(row["location"]) in settled
+        if row["status"] == "open"
+        and (
+            _norm(row["location"]) in settled
+            or all(_covered(record, key, approved) for record in open_records[key])
+        )
         else row
-        for row in rows.values()
+        for key, row in rows.items()
     ]
+
+
+def _approved_versions(state: TaskState) -> dict[tuple[str, tuple[str, str]], int]:
+    """The highest approving version per (subtask, normalised key): a record below it is
+    covered, which is "some `SettledRow` covers it" without scanning them per record."""
+    approved: dict[tuple[str, tuple[str, str]], int] = {}
+    for settled in state.get("approval_settled", []):
+        key = (settled["subtask"], (_norm(settled["location"]), _norm(settled["claim"])))
+        approved[key] = max(approved.get(key, 0), settled["version"])
+    return approved
+
+
+def _covered(
+    record: FindingRecord,
+    key: tuple[str, str],
+    approved: dict[tuple[str, tuple[str, str]], int],
+) -> bool:
+    """Whether an approval settled this very record: its own subtask's, `blocking`, scope
+    `subtask`, and from a version below the approving one. Anything else, an `important`
+    included, is never covered."""
+    if (version := approved.get((record["subtask"], key))) is None:
+        return False
+    return (
+        record["severity"] == "blocking"
+        and record["scope"] == "subtask"
+        and record["version"] < version
+    )
+
+
+def settled_on_approval(
+    state: TaskState, subtask_id: str, version: int, findings: list[dict[str, Any]]
+) -> list[SettledRow]:
+    """What an approval of `subtask_id` at `version` settles: one `SettledRow` per key
+    with an earlier `blocking` record of this subtask and scope `subtask`, unless
+    `findings`, the approving review's own (after `lower_unbacked_blocks`), raise the key
+    again at any severity.
+
+    Approval derives from "no blocking exists" (ADR-0016), so it is a verdict on this
+    subtask's own earlier blocking records and nothing else: never an `important`, a
+    `plan` row or a sister's record. Reads the raw records, never `findings_rows`, so the
+    fold and this decision cannot feed each other."""
+    raised = {(_norm(item["location"]), _norm(item["claim"])) for item in findings}
+    rows: dict[tuple[str, str], SettledRow] = {}
+    for record in state.get("findings", []):
+        key = (_norm(record["location"]), _norm(record["claim"]))
+        if (
+            record["subtask"] == subtask_id
+            and record["scope"] == "subtask"
+            and record["severity"] == "blocking"
+            and record["version"] < version
+            and key not in raised
+            and key not in rows
+        ):
+            rows[key] = {
+                "subtask": subtask_id,
+                "location": record["location"],
+                "claim": record["claim"],
+                "version": version,
+            }
+    return list(rows.values())
 
 
 def _norm(text: str) -> str:

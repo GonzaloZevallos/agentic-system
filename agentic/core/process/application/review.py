@@ -101,6 +101,13 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
         },
     )
     if category is None:
+        # An approval is a verdict that no blocking exists (ADR-0016), so it closes this
+        # subtask's own earlier blocking rows that this review does not raise again. Written
+        # into the patch, never derived from the status at read time (ADR-0015, addendum).
+        patch = apply(
+            patch,
+            {"approval_settled": rules.settled_on_approval(state, subtask_id, version, findings)},
+        )
         patch = apply(patch, {"subtasks": {subtask_id: {**subtask, "status": "approved"}}})
         return finish(state, patch, ports)
 

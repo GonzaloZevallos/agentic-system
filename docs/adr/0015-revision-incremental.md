@@ -100,3 +100,47 @@ sesión larga es la de la planificación, donde el contexto es el mismo problema
 vez más hondo; en la revisión sería el contexto de otra rama, que es justo lo que no se
 quiere arrastrar. Lo que una revisión tiene que saber de otra entra por la tabla, que es
 dato y se puede medir.
+
+## Adenda (2026-10-06): la aprobación cierra los bloqueantes previos de su propia subtarea (GH-201)
+
+**La excepción.** "Una fila se cierra sólo porque un revisor la dio por saldada" tiene una
+excepción: cuando Tech Lead **aprueba** la subtarea S en la versión N, los registros
+`blocking` de S, de alcance `subtask` y de versión menor que N, cuya clave el propio
+review aprobatorio no vuelve a levantar, dejan de estar abiertos. El motivo es ADR-0016:
+el veredicto se deriva de "no existe un bloqueante", así que una aprobación con un
+bloqueante abierto es una contradicción. Pasó en apostrophe GH-107 (PR #111): el
+bloqueante de v1 lo arregló el Developer, la v2 aprobó con `settled` vacío, y la fila
+quedó `open` para siempre, con el auto-merge refusando por `open_findings`.
+
+**Cómo.** `rules.settled_on_approval` decide qué se cierra, y es el único lugar que lo
+decide. `review.py` agrega el resultado al parche (`approval_settled`) sólo en la rama de
+aprobación; nunca se deriva del estado de la subtarea al leer. Cada `SettledRow` es
+`{subtask, location, claim, version}` y la cobertura es **por registro**
+(subtarea, clave, versión), nunca por clave: `findings_rows` aplica primero el `settled`
+del revisor, sin cambios (sólo por ubicación y global), y después la cobertura. Una fila
+se cierra sólo si **todos** sus registros abiertos están cubiertos; un `important` o una
+`observation` de la misma clave, un registro de una subtarea hermana o una regresión en
+una versión posterior la mantienen abierta, en cualquier orden de agregado.
+
+**El caso de la integración.** Una clave levantada por `api` y también por `integration`
+sigue abierta aunque `api` apruebe en v2, hasta que la revisión de integración la dé por
+saldada. Es intencional: `api` no puede dar por cerrado lo que la integración también vio.
+
+**Riesgos.**
+
+- Una v2 aprobada sin re-verificar una fila la cierra en silencio. Se acepta: aprobar
+  significa "no existe un bloqueante" (ADR-0016).
+- El `settled` del revisor sigue siendo por ubicación y global, y puede esconder una
+  reaparición posterior en la misma ubicación. Es el comportamiento de hoy y la
+  integración lo necesita para las filas `plan`; queda como seguimiento.
+- Los documentos ya aprobados no se vuelven a plegar: apostrophe GH-107 sigue con la fila
+  abierta y se mergea a mano.
+- Un `important` que el revisor olvida listar en `settled` sigue bloqueando el auto-merge.
+
+**Medición.** La huella (`prompts.fingerprint`) de `tech_lead_review` y
+`tech_lead_review_light` se mueve, porque cada prompt gana una cláusula; se pide un
+`bl-*` nuevo al mergear. `agentic.review.findings` no lleva la huella como etiqueta, así
+que sigue siendo comparable. No se agrega, mueve ni renombra ninguna métrica, etiqueta ni
+span, ni se renombra ninguna clave del documento: la única clave nueva es
+`approval_settled`, que se escribe sólo si no está vacía, por lo que un documento sin ella
+se renderiza igual byte a byte.

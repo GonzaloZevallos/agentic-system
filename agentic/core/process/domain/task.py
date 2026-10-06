@@ -555,6 +555,18 @@ class FailurePauseEntry(TypedDict):
 PauseEntry = ResumedPauseEntry | EscalationPauseEntry | FailurePauseEntry
 
 
+class SettledRow(TypedDict):
+    """An approval's settlement (`rules.settled_on_approval`): the records of `subtask`
+    at this `location` and `claim` with severity `blocking`, scope `subtask` and a
+    `version` below this one are settled. Per record, never per folded key: a later
+    record of the same key is not covered."""
+
+    subtask: str
+    location: str
+    claim: str
+    version: int
+
+
 class TaskState(TaskInput, total=False):
     type: str
     status: Annotated[Status, last]
@@ -600,6 +612,11 @@ class TaskState(TaskInput, total=False):
     # incremental (ADR-0015) and is told not to look at what it already approved, so
     # silence there means "did not look", not "fixed".
     settled_findings: Annotated[list[str], operator.add]
+    # Where a review's approval closed its own subtask's earlier blocking records
+    # (`rules.settled_on_approval`), appended in the patch that approves and never
+    # derived from the subtask's status at read time. Applied per record by
+    # `rules.findings_rows`, after `settled_findings`.
+    approval_settled: Annotated[list[SettledRow], operator.add]
     # The task branch, and the pull request once delivered.
     branch: str
     pull_request: str | None

@@ -650,6 +650,93 @@ async def test_a_review_after_a_return_starts_from_the_head_it_reviewed(cfg):
     assert patch["review_kind"] == "incremental"
 
 
+async def test_an_approval_after_a_return_settles_the_blocking_it_returned_for(cfg):
+    """apostrophe GH-107: a v1 blocking, the Developer fixes it, the v2 review approves with
+    nothing to settle. The document then has no open blocking and auto-merge does not
+    refuse for `open_findings`; a genuinely open `important` still does."""
+    state = {
+        **TASK,
+        "subtasks": {"api": sub("api", "delivered", branch="agentic/GH-12.api", base="base1")},
+        "sections": {**TASK["sections"], "Developer: api": "x"},
+        "subtask_id": "api",
+    }
+    runner = ScriptedRunner(tech_lead_review=[reviewed("returned", "no test"), reviewed()])
+    ports = memory_ports(runner)
+    patch = await review(state, cfg, ports)
+    assert "approval_settled" not in patch
+
+    again = apply(state, patch)
+    again["subtasks"]["api"]["status"] = "delivered"
+    patch = await review(again, cfg, ports)
+    assert patch["subtasks"]["api"]["status"] == "approved"
+    saved = ports.documents.last
+    assert saved["approval_settled"] == [
+        {"subtask": "api", "location": "x.py:1", "claim": "no test", "version": 2}
+    ]
+    assert rules.open_findings(saved) == []
+    assert _open_findings_refusal(saved) is None
+
+    # An extra open `important` is not covered: the blocking closes, the merge is refused.
+    runner = ScriptedRunner(
+        tech_lead_review=[
+            reviewed(findings=[finding(claim="no test"), finding("important", claim="naming")]),
+            reviewed(),
+        ]
+    )
+    ports = memory_ports(runner)
+    patch = await review(state, cfg, ports)
+    again = apply(state, patch)
+    again["subtasks"]["api"]["status"] = "delivered"
+    await review(again, cfg, ports)
+    extra = ports.documents.last
+    assert [r["claim"] for r in rules.open_findings(extra)] == ["naming"]
+    assert _open_findings_refusal(extra) == "open_findings"
+
+    # Rejected: the approving review raises the same key again as `important`, so nothing
+    # settles and the genuinely open row still refuses the merge.
+    runner = ScriptedRunner(
+        tech_lead_review=[
+            reviewed("returned", "no test"),
+            reviewed(findings=[finding("important", claim="no test")]),
+        ]
+    )
+    ports = memory_ports(runner)
+    patch = await review(state, cfg, ports)
+    again = apply(state, patch)
+    again["subtasks"]["api"]["status"] = "delivered"
+    await review(again, cfg, ports)
+    still_open = ports.documents.last
+    assert not still_open.get("approval_settled")
+    assert _open_findings_refusal(still_open) == "open_findings"
+
+
+def _open_findings_refusal(saved):
+    """`auto_merge_decision`'s refusal over facts built the way the poller builds them:
+    every other condition satisfied, so only the findings can refuse."""
+    unit = rules.reviewed_unit(saved)
+    assert unit is not None
+    facts = rules.MergeFacts(
+        task_id="GH-12",
+        status="ready_for_review",
+        reviewed_unit_approved=unit["status"] == "approved",
+        reviewed_head="a" * 40,
+        open_blocking_or_important=sum(
+            1 for row in rules.open_findings(saved) if row["severity"] in ("blocking", "important")
+        ),
+        pr_state="OPEN",
+        pr_head="a" * 40,
+        in_eval_set=False,
+        touched_paths=(),
+        attempts=0,
+        checks_head=None,
+        checks_master=None,
+        checks_passed=None,
+        current_master=None,
+    )
+    decision = rules.auto_merge_decision(facts)
+    return decision.reason if decision.reason == "open_findings" else None
+
+
 async def test_review_reaches_its_own_brief_not_its_sisters_under_tech_lead(cfg):
     # `plan-trim` (issue #71): the reviewer gets the same projection as the Developer.
     state = {

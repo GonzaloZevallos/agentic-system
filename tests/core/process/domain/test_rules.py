@@ -2267,3 +2267,162 @@ def test_poll_plan_retakes_do_not_unblock_a_launch_while_a_resume_still_waits():
         now=NOW,
     )
     assert actions == [rules.PollAction("retake", 4)]
+
+
+# An approval settles its own subtask's earlier blocking records (GH-201, ADR-0015 addendum).
+
+
+def _approved(state, subtask="api", version=2, findings=()):
+    """`state` after `subtask`'s review at `version` approved: the settlement the approval
+    appends, plus that review's own findings, exactly as `review.py` appends them."""
+    settled = rules.settled_on_approval(state, subtask, version, list(findings))
+    return {
+        **state,
+        "findings": [
+            *state.get("findings", []),
+            *rules.finding_records(subtask, version, findings),
+        ],
+        "approval_settled": [*state.get("approval_settled", []), *settled],
+    }
+
+
+def _statuses(state):
+    return {row["claim"]: row["status"] for row in rules.findings_rows(state)}
+
+
+def test_an_approval_closes_its_own_subtasks_earlier_blocking_row():
+    """The apostrophe GH-107 shape: a v1 blocking, a v2 approval with nothing to settle."""
+    state = {"findings": rules.finding_records("api", 1, [found()])}
+    settled = rules.settled_on_approval(state, "api", 2, [])
+    assert settled == [
+        {"subtask": "api", "location": "x.py:1", "claim": "double count", "version": 2}
+    ]
+    approved = _approved(state)
+    assert _statuses(approved) == {"double count": "fixed"}
+    assert rules.open_findings(approved) == []
+
+
+def test_an_approval_never_settles_what_is_not_its_subtasks_blocking_record():
+    """Each input here must leave the row open: approval is a verdict on this subtask's own
+    earlier blocking records and nothing else."""
+    rejected = {
+        "its own important": rules.finding_records("api", 1, [found(severity="important")]),
+        "a plan-scope row": rules.finding_records(
+            "api", 1, [found(scope="plan", severity="important")]
+        ),
+        "a blocking lowered to important": rules.finding_records(
+            "api", 1, rules.lower_unbacked_blocks([found(scope="plan")])[0]
+        ),
+        "a sister's blocking at the same key": rules.finding_records("domain", 1, [found()]),
+        "its own observation": rules.finding_records("api", 1, [found(severity="observation")]),
+    }
+    for name, records in rejected.items():
+        state = {"findings": records}
+        assert rules.settled_on_approval(state, "api", 2, []) == [], name
+        assert {r["status"] for r in rules.findings_rows(_approved(state))} == {"open"}, name
+
+
+def test_a_key_raised_by_both_the_approved_subtask_and_a_sister_stays_open():
+    state = {
+        "findings": [
+            *rules.finding_records("api", 1, [found()]),
+            *rules.finding_records("domain", 1, [found()]),
+        ]
+    }
+    (row,) = rules.findings_rows(_approved(state))
+    assert row["status"] == "open" and row["subtask"] == "api, domain"
+
+
+def test_a_sisters_row_at_the_same_location_with_another_claim_stays_open():
+    state = {
+        "findings": [
+            *rules.finding_records("api", 1, [found()]),
+            *rules.finding_records("domain", 1, [found(claim="something else")]),
+        ]
+    }
+    assert _statuses(_approved(state)) == {"double count": "fixed", "something else": "open"}
+
+
+def test_a_same_key_important_keeps_the_row_open_after_the_approval():
+    """The blocking is covered, the important beside it is not: the row is one key."""
+    state = {
+        "findings": [
+            *rules.finding_records("api", 1, [found()]),
+            *rules.finding_records("api", 1, [found(severity="important")]),
+        ]
+    }
+    assert rules.settled_on_approval(state, "api", 2, []) != []
+    assert _statuses(_approved(state)) == {"double count": "open"}
+
+
+def test_an_approval_that_raises_the_key_again_settles_nothing():
+    state = {"findings": rules.finding_records("api", 1, [found()])}
+    again = [found(severity="important")]
+    assert rules.settled_on_approval(state, "api", 2, again) == []
+    assert _statuses(_approved(state, findings=again)) == {"double count": "open"}
+
+
+def test_an_approval_at_the_first_version_settles_nothing():
+    state = {"findings": rules.finding_records("api", 1, [found()])}
+    assert rules.settled_on_approval(state, "api", 1, []) == []
+    assert _statuses(_approved(state, version=1)) == {"double count": "open"}
+
+
+def test_an_approval_covers_every_earlier_version_even_with_gaps():
+    state = {
+        "findings": [
+            *rules.finding_records("api", 1, [found()]),
+            *rules.finding_records("api", 3, [found()]),
+        ]
+    }
+    assert len(rules.settled_on_approval(state, "api", 5, [])) == 1
+    assert _statuses(_approved(state, version=5)) == {"double count": "fixed"}
+
+
+def test_a_later_regression_reopens_the_row_an_approval_closed():
+    """Coverage is per record, never per key: a v3 blocking at the same key is not covered."""
+    approved = _approved({"findings": rules.finding_records("api", 1, [found()])})
+    assert _statuses(approved) == {"double count": "fixed"}
+    regressed = {
+        **approved,
+        "findings": [*approved["findings"], *rules.finding_records("api", 3, [found()])],
+    }
+    assert _statuses(regressed) == {"double count": "open"}
+
+
+def test_a_late_sister_re_raise_stays_open_in_either_append_order():
+    state = {"findings": rules.finding_records("api", 1, [found()])}
+    approved = _approved(state)
+    sister = rules.finding_records("domain", 2, [found()])
+    after = {**approved, "findings": [*approved["findings"], *sister]}
+    before = {**approved, "findings": [*sister, *approved["findings"]]}
+    assert _statuses(after) == {"double count": "open"}
+    assert _statuses(before) == {"double count": "open"}
+
+
+def test_the_reviewers_settled_runs_first_and_is_never_reopened_by_approval_coverage():
+    """A location in `settled_findings` closes the row for good, even beside a later record
+    no settlement covers."""
+    state = {
+        "findings": [
+            *rules.finding_records("api", 1, [found()]),
+            *rules.finding_records("domain", 2, [found()]),
+        ],
+        "settled_findings": ["x.py:1"],
+    }
+    assert _statuses(state) == {"double count": "fixed"}
+    assert _statuses(_approved(state)) == {"double count": "fixed"}
+
+
+def test_an_approval_does_not_close_a_key_the_integration_also_raised():
+    """`api` and `integration` both raised it; `api` approving at v2 leaves it open until
+    the integration review settles it."""
+    state = {
+        "findings": [
+            *rules.finding_records("api", 1, [found()]),
+            *rules.finding_records(INTEGRATION, 1, [found()]),
+        ]
+    }
+    assert _statuses(_approved(state)) == {"double count": "open"}
+    settled = {**_approved(state), "settled_findings": ["x.py:1"]}
+    assert _statuses(settled) == {"double count": "fixed"}
