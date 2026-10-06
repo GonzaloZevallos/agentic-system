@@ -258,13 +258,13 @@ def _text(value: object) -> str | None:
 
 
 def awaiting_merge(ports: Ports) -> bool:
-    """Whether any task is ready for review with its pull request still unclosed: the one
-    cheap read that decides if the round needs the upstream sha at all (a fetch)."""
+    """Whether any task has a pull request and no closure: the one cheap read, on exactly
+    what `gather_merges` itself filters on, that decides if the round needs the upstream
+    sha at all (a fetch). Whether such a task may merge is `rules.auto_merge_decision`'s."""
     for task_id in ports.documents.ids():
         raw = ports.documents.load(task_id) or {}
-        if raw.get("status") == "ready_for_review" and raw.get("pull_request"):
-            if not raw.get("closed_at"):
-                return True
+        if raw.get("pull_request") and not raw.get("closed_at"):
+            return True
     return False
 
 
@@ -300,7 +300,7 @@ def gather_merges(
         try:
             pull_request = ports.tracker.pull_request(reference)
         except (ValueError, OSError):
-            continue
+            pull_request = None  # reads as not open: refused below, with its line
         facts = _merge_facts(task_id, raw, pull_request, eval_set, number, current_master)
         decision = rules.auto_merge_decision(facts)
         if decision.kind == "refuse":

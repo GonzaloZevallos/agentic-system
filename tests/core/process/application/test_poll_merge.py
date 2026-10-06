@@ -345,3 +345,28 @@ def test_a_task_waiting_for_its_merge_is_neither_retaken_nor_resumed():
     assert poll.gather_resumes(ports, ESCALATED_AT.replace(day=3)) == []
     record = LockRecord(1, "h", "2026-10-05T08:00:00Z", "agentic merge", "boot-old")
     assert poll.gather_retakes(ports, _Locks({"GH-5": record}), "boot-now") == ([], [])
+
+
+def test_a_ready_task_with_an_open_pull_request_reaches_the_decision_and_the_upstream(tmp_path):
+    ports = _ports(5)
+    lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(), FakeLauncher(), ESCALATED_AT)
+    assert ports.workspace.upstream_calls == 1
+    assert lines == ["agentic: poll: merge #5 -> pid 4242"]
+
+
+def test_a_task_not_ready_still_reaches_the_decision_which_refuses_it_by_name(tmp_path):
+    ports = _ports(5)
+    ports.documents.record_closure("GH-5", {"status": "developing"})
+    lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(), FakeLauncher(), ESCALATED_AT)
+    assert lines == ["agentic: poll: auto-merge #5 -> left to the human: not_ready"]
+
+
+def test_a_tracker_that_raises_reading_the_pull_request_is_a_refusal_with_its_line():
+    def raising(reference):
+        raise ValueError("gh failed")
+
+    ports = _ports(5)
+    ports.tracker.pull_request = raising
+    found, lines = _merges(ports)
+    assert found == []
+    assert lines == ["agentic: poll: auto-merge #5 -> left to the human: head_not_reviewed"]
