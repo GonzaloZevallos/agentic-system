@@ -51,7 +51,7 @@ _Campo_: evaluation window — el diseño de PjM del README (10 tareas); before/
 
 **Scorecard**:
 Las cuatro métricas del sistema, en orden, que dicen si una línea de base es mejor que otra:
-autonomía (entregas fusionadas limpias sobre tareas terminadas), fallos propios por tarea (sin
+autonomía (entregas fusionadas limpias sobre las entregas juzgadas por un humano: las que el sistema fusionó solo no cuentan, y sin cinco juzgadas no hay tasa, sólo `n/m`), fallos propios por tarea (sin
 los de límite de cuenta ni los de caída del proveedor), costo por entrega y retrabajo. Mejora si
 la primera no baja y la segunda baja; las otras dos desempatan. Es una consulta sobre los
 documentos de tarea de una línea de base, no una muestra ni un backend de métricas: la misma
@@ -86,7 +86,8 @@ paga sin dejar un registro de la corrida que lo pagó
 **Resultado de entrega**:
 El veredicto del humano sobre el pull request de una tarea, leído por `agentic close` y no
 por ningún revisor del sistema: si fusionó, si lo corrigió antes de fusionar, o si lo cerró
-sin fusionar. Es la métrica de calidad que falta después de `ready_for_review`, donde hoy se
+sin fusionar. También puede ser el merge del propio sistema, que no es un veredicto
+(**Fusionado por el sistema**). Es la métrica de calidad que falta después de `ready_for_review`, donde hoy se
 corta toda medición.
 _Campo_: outcome — el vecino más cercano es change failure rate (DORA), que mide si un deploy
 rompió algo, no si el humano corrigió el trabajo antes de aceptarlo
@@ -100,6 +101,14 @@ _Campo_: merged — GitHub, para el estado de un pull request fusionado
 El pull request se fusionó, pero con al menos un commit humano, que no sea de fusión,
 posterior al último commit del sistema: el humano corrigió antes de aceptar.
 _Campo_: sin término de arte — GitHub no distingue este caso de una fusión limpia
+
+**Fusionado por el sistema** (`auto_merged`):
+El sistema fusionó el pull request, tras la decisión de ADR-0045 (aprobado por Tech Lead,
+chequeos verdes sobre el head mergeado con el master, sin hallazgos importantes abiertos).
+No es un veredicto del humano: no puntúa, no entra en la autonomía ni en el costo por
+entrega, y las tareas del set de evaluación nunca llegan a este valor.
+_Avoid_: fusionado automático, merge limpio (`merged` es el humano aceptando tal cual)
+_Campo_: sin término de arte — GitHub no distingue quién fusiona un pull request
 
 **Cerrado** (`closed`):
 El pull request se cerró sin fusionarse: el humano descartó la entrega.
