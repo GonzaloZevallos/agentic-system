@@ -296,19 +296,16 @@ def merge_ledgers(ledgers: Sequence[Ledger], candidates: Sequence[Candidate] = (
             tasks.setdefault(task, Entry(cost_usd=cost))
     starts = [
         x
-        for x in (*(l.started_at for l in ledgers), *(c.record.started_at for c in candidates))
+        for x in (*(g.started_at for g in ledgers), *(c.record.started_at for c in candidates))
         if x
     ]
+    summaries = (*(g.summaries for g in ledgers), *(c.record.summaries for c in candidates))
+    summarised = (*(g.summarised for g in ledgers), *(c.record.summarised for c in candidates))
     return Ledger(
         started_at=min(starts) if starts else "",
         tasks=tasks,
-        summaries=max(
-            (*(l.summaries for l in ledgers), *(c.record.summaries for c in candidates)), default=0
-        ),
-        summarised=max(
-            (*(l.summarised for l in ledgers), *(c.record.summarised for c in candidates)),
-            default=0,
-        ),
+        summaries=max(summaries, default=0),
+        summarised=max(summarised, default=0),
     )
 
 

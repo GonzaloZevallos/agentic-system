@@ -8,13 +8,13 @@ from pathlib import Path
 
 from agentic.core.knowledge.domain import knowledge
 from agentic.core.process.application.ports import (
-    ListedPullRequest,
     Checkout,
     CommandResult,
     GitError,
     IssueComment,
     IssueState,
     LaunchAttempt,
+    ListedPullRequest,
     Ports,
     RawResult,
     RunRegistration,

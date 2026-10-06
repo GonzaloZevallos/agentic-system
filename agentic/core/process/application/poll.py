@@ -20,6 +20,7 @@ from datetime import datetime
 from agentic.shared.configuration import Configuration
 
 from ..domain import rules
+from . import reflect_run
 from .ports import GitError, IssueComment, Launcher, Ports, RunRegistry
 
 # How long `execute` waits for a spawned `run`/`resume` child to register itself
@@ -222,6 +223,27 @@ def gather_launches(
     return launches
 
 
+def reflect_lines(cfg: Configuration, ports: Ports, launcher: Launcher, argv0: str) -> list[str]:
+    """Launches `agentic reflect --all` (ADR-0043) -- a detached child, like every other
+    action here -- only when the product has closed tasks nobody reflected on yet. It reads
+    and spawns and nothing else: no task state, no document, no lock of a task. Any doubt
+    (a `gh` or git failure, an unreadable record) reads as nothing to reflect on, and a
+    failed spawn is a line, never the round's end. The child takes the `playbook` run lock
+    itself, so a second spawn while one is working refuses and exits."""
+    try:
+        due = reflect_run.pending(cfg, ports)
+    except (ValueError, OSError, GitError):
+        return []
+    if not due:
+        return []
+    argv = [argv0, "reflect", "--all", "--product-dir", str(cfg.product_dir)]
+    try:
+        pid = launcher.spawn(argv)
+    except OSError as exc:
+        return [f"agentic: poll: reflect -> not launched: {exc}"]
+    return [f"agentic: poll: reflect {len(due)} task(s) -> pid {pid}"]
+
+
 def _argv(argv0: str, command: str, number: int, product_dir: str, *extra: str) -> list[str]:
     return [argv0, command, "--issue", str(number), *extra, "--product-dir", product_dir]
 
@@ -345,4 +367,7 @@ def run_once(
         lines = execute(
             actions, cfg, ports, registry, launcher, now, argv0, register_timeout_s, sleep
         )
+    # Outside the registry's exclusive section: reflecting takes no slot of the cap and
+    # touches no task.
+    lines += reflect_lines(cfg, ports, launcher, argv0)
     return lines or ["agentic: poll: nothing to do this round"]

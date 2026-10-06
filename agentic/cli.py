@@ -20,13 +20,13 @@ import signal
 import subprocess
 import sys
 import uuid
-from collections.abc import Awaitable, Callable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, contextmanager
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from functools import partial
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 import anyio
 import yaml
@@ -41,7 +41,7 @@ from .core.knowledge.domain import knowledge
 from .core.knowledge.domain import stack as knowledge_stack
 from .core.measurement.adapters.otel import telemetry
 from .core.measurement.adapters.otel.telemetry import InvocationKind
-from .core.measurement.domain import evaluation, scorecard
+from .core.measurement.domain import evaluation, playbook_window, scorecard
 from .core.measurement.domain import metrics as delivery_metrics
 from .core.process.adapters.filesystem import (
     FilesystemRunLock,
@@ -50,7 +50,7 @@ from .core.process.adapters.filesystem import (
 )
 from .core.process.adapters.git.workspace import GitError
 from .core.process.adapters.langgraph.graph import ESCALATE
-from .core.process.application import archive
+from .core.process.application import archive, reflect_run
 from .core.process.application import poll as pollmod
 from .core.process.application import resume as resuming
 from .core.process.application.escalate import NEEDS_HUMAN
@@ -78,6 +78,7 @@ from .core.process.application.stack_review import stack_review as run_stack_rev
 from .core.process.domain import document as task_document
 from .core.process.domain import stack_review as stack_review_texts
 from .core.process.domain import stack_signals
+from .core.process.domain.playbook import Delta, Playbook
 from .core.process.domain.roles import ROLES
 from .core.process.domain.task import PullRequest, TaskInput, TaskState
 from .shared.configuration import ENV_PREFIX, LOGS_DIR, Configuration, MissingProductDir
@@ -320,6 +321,23 @@ def main() -> None:
         metavar="SECONDS",
         help="how long to wait between rounds (default 60)",
     )
+    reflect = sub.add_parser(
+        "reflect",
+        help="what closed tasks' returns teach each role (ADR-0043): candidate playbook "
+        "deltas on the branch agentic/playbook, in one pull request for a person to merge",
+    )
+    reflect.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
+    reflect_scope = reflect.add_mutually_exclusive_group(required=True)
+    reflect_scope.add_argument("--issue", type=int, metavar="N", help="reflect on issue N's task")
+    reflect_scope.add_argument(
+        "--all", action="store_true", help="reflect on every eligible closed task, up to the cap"
+    )
+    reflect.add_argument(
+        "--since",
+        metavar="YYYY-MM-DD",
+        help="reach back to tasks closed on or after this day (the first run reflects "
+        "nothing older than itself otherwise)",
+    )
     for command in (run, resume):
         command.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
         command.add_argument(
@@ -376,7 +394,7 @@ def main() -> None:
         if args.command != "stack" and not cfg.agentic_dir.is_dir():
             raise ValueError(f"{cfg.product_dir} is not a product repo: no .agentic/ directory")
         ports = default_ports(cfg)
-        if args.command not in ("close", "eval", "stack", "poll"):
+        if args.command not in ("close", "eval", "stack", "poll", "reflect"):
             # `close` runs no role and spends nothing, so the gate that renders every
             # role's prompt and checks the product's stack before a run spends money
             # does not apply to it (Tech Lead plan, subtask `close-command`): only
@@ -459,6 +477,16 @@ def main() -> None:
                 work = partial(_eval_score, cfg, ports, args.set, args.out)
             else:
                 work = partial(_eval_compare, cfg, ports, args.frm, args.to, args.system_repo)
+        elif args.command == "reflect":
+            if args.since is not None:
+                date.fromisoformat(args.since)  # ValueError -> exit 2, before anything is spent
+            work = partial(
+                _reflect,
+                cfg,
+                ports,
+                None if args.all else ports.inbox.task_id(args.issue),
+                args.since,
+            )
         elif args.command == "stack":
             work = partial(_stack_review, cfg, ports, args.reason, args.dry_run)
         elif args.command == "poll":
@@ -1351,6 +1379,63 @@ def _open_needs_info_for_missing_brief(
     if (refusal := stack_review_texts.body_refusal(body)) is not None:
         raise CannotStart(refusal)
     return ports.tracker.open_issue(f"[needs-info] Stack review {review_id}: no BRIEF.md", body)
+
+
+def _window_summary(
+    documents: Sequence[Mapping[str, Any]],
+    playbooks: Mapping[str, Playbook],
+    applied: Sequence[Delta],
+    gained: int,
+) -> tuple[str, list[Delta]]:
+    """The summary every 10 reflected tasks (`measurement.playbook_window`), plus the
+    retirements it proposes as deltas: the root is the one place that may join the
+    process use case to the measurement window (ADR-0010)."""
+    comparisons: list[playbook_window.Comparison] = []
+    proposals: list[playbook_window.CheckProposal] = []
+    retirements: list[Delta] = []
+    for slug in sorted(playbooks):
+        found = playbook_window.compare(documents, playbooks[slug])
+        comparisons += found
+        proposals += playbook_window.check_proposals(found, playbooks[slug])
+        retirements += [
+            Delta("retire", slug, item_id=item_id)
+            for comparison in found
+            if comparison.conclusive
+            for item_id in comparison.retire
+        ]
+    text = playbook_window.summary_markdown(
+        comparisons, proposals, [*applied, *retirements], items_gained=gained
+    )
+    return text, retirements
+
+
+async def _reflect(
+    cfg: Configuration,
+    ports: Ports,
+    task_id: str | None,
+    since: str | None,
+    run_lock: RunLock | None = None,
+) -> None:
+    """`agentic reflect --product-dir D [--issue N | --all] [--since YYYY-MM-DD]` (ADR-0043):
+    the reflector over the closed tasks no earlier run reflected on, at most
+    `reflect_max_tasks_per_run` of them, delivered as candidate playbook deltas on
+    `agentic/playbook`. Under the run lock keyed `playbook`, so two invocations (the
+    poller's and a person's) never reflect on the same task twice. It runs no task and
+    writes to none: a reflection that fails is recorded in `reflected.yaml`, never raised
+    into a task."""
+    if ports.workspace.repository_at(cfg.product_dir) is None:
+        raise CannotStart(f"{cfg.product_dir} is not a git repository, or git is not installed")
+    lock = run_lock if run_lock is not None else _lock_for(cfg)
+    try:
+        with _locked(lock, reflect_run.TASK_ID):
+            outcome = await reflect_run.reflect(
+                cfg, ports, now=_now_iso(), summarise=_window_summary, since=since, task_id=task_id
+            )
+    except (ValueError, GitError, OSError) as exc:
+        raise CannotStart(f"reflect: {exc}") from exc
+    print(f"reflected {outcome.reflected}, {outcome.left} left for the next run")
+    if outcome.url:
+        print(f"candidate:  {outcome.url}")
 
 
 async def _stack_review(
