@@ -87,3 +87,43 @@ def test_write_into_copies_the_document_without_touching_where_save_keeps_it(tmp
     assert written.read_text() == documents.path_for("T-1").read_text()
     # `save`'s own file is untouched: still where it always lived.
     assert documents.path_for("T-1") == tmp_path / ".agentic/tasks/T-1.md"
+
+
+def test_ids_touched_since_returns_only_documents_whose_mtime_is_in_range(tmp_path):
+    import os
+    from datetime import UTC, datetime
+
+    documents = FilesystemTaskDocuments(tmp_path)
+    for task_id in ("T-old", "T-new", "T-edge"):
+        documents.save({"id": task_id, "title": "t", "description": "d"})
+    since = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
+    stamp = since.timestamp()
+    os.utime(documents.path_for("T-old"), (stamp - 3600, stamp - 3600))
+    os.utime(documents.path_for("T-new"), (stamp + 60, stamp + 60))
+    os.utime(documents.path_for("T-edge"), (stamp, stamp))
+    assert documents.ids_touched_since(since) == ["T-edge", "T-new"]
+
+
+def test_ids_touched_since_never_parses_a_document_outside_the_range(tmp_path):
+    import os
+    from datetime import UTC, datetime
+
+    documents = FilesystemTaskDocuments(tmp_path)
+    garbage = documents.path_for("T-garbage")
+    garbage.parent.mkdir(parents=True)
+    garbage.write_text("\x00 not a document", encoding="utf-8")
+    since = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
+    os.utime(garbage, (since.timestamp() - 10, since.timestamp() - 10))
+    assert documents.ids_touched_since(since) == []
+
+
+def test_ids_touched_since_stays_inside_the_documents_subdir_and_with_no_dir(tmp_path):
+    from datetime import UTC, datetime
+
+    tasks = FilesystemTaskDocuments(tmp_path)
+    reviews = FilesystemTaskDocuments(tmp_path, subdir=Path(".agentic/stack-reviews"))
+    long_ago = datetime(2000, 1, 1, tzinfo=UTC)
+    assert tasks.ids_touched_since(long_ago) == []
+    reviews.save({"id": "stack-1", "title": "s", "description": "d"})
+    assert tasks.ids_touched_since(long_ago) == []
+    assert reviews.ids_touched_since(long_ago) == ["stack-1"]

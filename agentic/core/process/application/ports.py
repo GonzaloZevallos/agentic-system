@@ -18,7 +18,7 @@ from typing import Any, Literal, Protocol
 from ..domain.design import Design
 from ..domain.playbook import Playbook
 from ..domain.roles import Role
-from ..domain.rules import motive
+from ..domain.rules import SpendRun, motive
 from ..domain.suppressions import Forbidden
 from ..domain.task import (
     DependencyState,
@@ -239,6 +239,13 @@ class TaskDocuments(Protocol):
         --all` reads this instead of globbing `.agentic/tasks/` itself: the adapter
         already owns `document.relative_path`, and a glob in the composition root
         would put the document layout in two modules."""
+        ...
+
+    def ids_touched_since(self, since: datetime) -> list[str]:
+        """The ids of the documents modified at or after `since` (file `mtime`, read
+        before anything is parsed), sorted: what a poller reads to learn the recent
+        spend without parsing the whole corpus (GH-177). Inside this port's own
+        documents directory only."""
         ...
 
     def load(self, task_id: str) -> dict | None:
@@ -857,6 +864,21 @@ class RunRegistry(Protocol):
         """Forget the schedule once the launch registered a real run (`register` saw
         it) or once the issue is no longer a candidate at all. A no-op when there is
         none."""
+        ...
+
+    def publish_spend(
+        self, root: Path, product: str, runs: Sequence[SpendRun], now: datetime
+    ) -> list[str]:
+        """Merge `runs` (this poller's own product, read from the task documents under
+        `root`) into this poller's own spend file, keyed by the resolved `root` and
+        replaced atomically (GH-177). Called under `exclusive()`. Returns the notes of
+        what it could not read, never raises on a damaged file."""
+        ...
+
+    def spend(self, since: datetime) -> tuple[list[SpendRun], list[str]]:
+        """Every product's published runs that ended at or after `since`, from the spend
+        files under this registry only -- never from another product's directory --
+        and the notes of the files or entries it skipped."""
         ...
 
 

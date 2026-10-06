@@ -23,7 +23,7 @@ from typing import assert_never
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import rules
+from ..domain import document, rules
 from ..domain.boot import boot_verdict
 from ..domain.task import TaskState
 from . import reflect_run
@@ -549,6 +549,23 @@ def execute(
     return lines
 
 
+def _recent_spend(ports: Ports, now: datetime) -> tuple[list[rules.SpendRun], int]:
+    """This product's own runs that may still be inside the trailing window, as
+    `SpendRun`s, and how many it skipped for lack of usable timestamps (GH-177). Only the
+    documents `ids_touched_since` names are loaded -- a `stat` per document, a parse only
+    of what changed in the window -- and only this product's: never another's directory."""
+    fresh: list[rules.SpendRun] = []
+    skipped = 0
+    for task_id in ports.documents.ids_touched_since(now - rules.TRAILING_SPEND_WINDOW):
+        raw = ports.documents.load(task_id)
+        if raw is None:
+            continue
+        found, count = rules.spend_runs(raw.get("runs", []))
+        fresh.extend(found)
+        skipped += count
+    return fresh, skipped
+
+
 def _upstream_notes(asked: bool, upstream: Callable[[], Upstream]) -> list[str]:
     """The one line a round says about its upstream, when it asked for one at all and the
     answer was not the plain fetched tip (GH-180): the poller's output is where a human
@@ -581,11 +598,26 @@ def run_once(
     closes = gather_closes(ports)
     resumes = gather_resumes(ports, now)
     retakes, human_lines = gather_retakes(ports, lock, current_boot)
+    # Outside the lock, and only with pacing on: pacing off reads and writes nothing.
+    fresh, skipped = _recent_spend(ports, now) if cfg.spend_pacing else ([], 0)
     with registry.exclusive():
-        available = max(cfg.max_concurrent_runs - len(registry.live()), 0)
+        live = len(registry.live())
+        available = max(cfg.max_concurrent_runs - live, 0)
+        pace: rules.SpendPace | None = None
+        spend_notes: list[str] = []
+        if cfg.spend_pacing:
+            root = cfg.product_dir / document.TASKS_SUBDIR
+            spend_notes = registry.publish_spend(root, ports.stack.product(), fresh, now)
+            window = now - rules.TRAILING_SPEND_WINDOW
+            machine, read_notes = registry.spend(window)
+            spend_notes += read_notes
+            if skipped:
+                spend_notes.append(f"agentic: poll: {skipped} runs without timestamps not counted")
+            spent, covered = rules.trailing_spend(machine, now)
+            pace = rules.SpendPace(spent, covered, live, cfg.spend_pace_usd_per_h)
         upstream = functools.cache(ports.workspace.upstream)
         launches = gather_launches(cfg, ports, registry, upstream)
-        notes = _upstream_notes(upstream.cache_info().currsize > 0, upstream)
+        notes = [*spend_notes, *_upstream_notes(upstream.cache_info().currsize > 0, upstream)]
         actions = rules.poll_plan(
             closes=closes,
             resumes=resumes,
@@ -593,6 +625,7 @@ def run_once(
             available_slots=available,
             now=now,
             retakes=retakes,
+            pace=pace,
         )
         lines = execute(
             actions, cfg, ports, registry, launcher, now, argv0, register_timeout_s, sleep

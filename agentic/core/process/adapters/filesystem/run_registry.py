@@ -3,27 +3,34 @@ invocations are alive on this machine right now, across every product (GH-137,
 `AGENTIC_MAX_CONCURRENT_RUNS` -- the account's own 429 is not scoped to one product),
 and the poller's own schedule for a launch attempt that has not registered a run yet.
 
-Two kinds of file live under the same directory, all plain JSON written whole: one
+Three kinds of file live under the same directory, all plain JSON written whole: one
 entry per live process, named by its own pid (`<pid>.json`, mirroring
-`FilesystemRunLock`'s one-file-per-task shape), and one per launch attempt that has
-not cleared yet (`launches/<product>-<issue>.json`)."""
+`FilesystemRunLock`'s one-file-per-task shape), one per launch attempt that has
+not cleared yet (`launches/<product>-<issue>.json`), and, only when `AGENTIC_SPEND_PACING`
+is on, one spend ledger per task-document directory (`spend/<key>.json`, GH-177) -- the
+only way a poller learns what the other products spent."""
 
 from __future__ import annotations
 
 import contextlib
 import fcntl
+import hashlib
 import json
+import math
 import os
 import socket
-from collections.abc import Callable, Iterator
-from datetime import datetime
+import tempfile
+from collections.abc import Callable, Iterator, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 
 from ...application.ports import LaunchAttempt, RunRegistration
+from ...domain import rules
 from .liveness import current_boot_id, is_alive
 
 _LOCK_NAME = ".lock"
 _LAUNCHES_DIR = "launches"
+_SPEND_DIR = "spend"
 
 
 class FilesystemRunRegistry:
@@ -106,6 +113,104 @@ class FilesystemRunRegistry:
 
     def _launch_path(self, product: str, issue: int) -> Path:
         return self.dir / _LAUNCHES_DIR / f"{product}-{issue}.json"
+
+    # -- spend ledger (GH-177) --------------------------------------------------------
+
+    def publish_spend(
+        self, root: Path, product: str, runs: Sequence[rules.SpendRun], now: datetime
+    ) -> list[str]:
+        """Merges `runs` into this poller's own file, keyed by the resolved `root` (two
+        products may share a name, two checkouts may share a product). The caller holds
+        `exclusive()`; the write is a temp file in the same directory then `os.replace`,
+        so a reader never sees half a file. `spend/` is created only here."""
+        resolved = root.resolve()
+        path = self._spend_path(resolved)
+        published, notes = self._read_spend_file(path, now - rules.TRAILING_SPEND_WINDOW)
+        merged = rules.merged_spend(published, runs, now)
+        record = {
+            "product": product,
+            "root": str(resolved),
+            "written_at": now.isoformat(),
+            "runs": [
+                [r.started_at.isoformat(), r.ended_at.isoformat(), r.cost_usd] for r in merged
+            ],
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle, temp = tempfile.mkstemp(dir=path.parent, prefix=".tmp-", suffix=".json")
+        try:
+            with os.fdopen(handle, "w", encoding="utf-8") as out:
+                out.write(json.dumps(record))
+            os.replace(temp, path)
+        except BaseException:
+            Path(temp).unlink(missing_ok=True)
+            raise
+        return notes
+
+    def spend(self, since: datetime) -> tuple[list[rules.SpendRun], list[str]]:
+        """Every spend file's entries that ended at or after `since`, and a note per file
+        or entry skipped. Never raises on what is in a file."""
+        directory = self.dir / _SPEND_DIR
+        if not directory.is_dir():
+            return [], []
+        runs: list[rules.SpendRun] = []
+        notes: list[str] = []
+        for path in sorted(directory.glob("*.json")):
+            found, skipped = self._read_spend_file(path, since)
+            runs.extend(found)
+            notes.extend(skipped)
+        return runs, notes
+
+    def _spend_path(self, root: Path) -> Path:
+        key = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:12]
+        return self.dir / _SPEND_DIR / f"{key}.json"
+
+    @staticmethod
+    def _read_spend_file(path: Path, since: datetime) -> tuple[list[rules.SpendRun], list[str]]:
+        """The entries of one spend file that ended at or after `since`; an unparseable
+        file is `[]` plus a note, and a naive or malformed entry is skipped with a note."""
+        if not path.is_file():
+            return [], []
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            entries = data["runs"]
+            if not isinstance(entries, list):
+                raise TypeError("runs is not a list")
+        except (OSError, ValueError, KeyError, TypeError):
+            return [], [f"agentic: poll: spend file {path.name} unreadable, skipped"]
+        runs: list[rules.SpendRun] = []
+        bad = 0
+        for entry in entries:
+            parsed = _spend_entry(entry)
+            if parsed is None:
+                bad += 1
+            elif parsed.ended_at >= since:
+                runs.append(parsed)
+        notes = (
+            [f"agentic: poll: spend file {path.name}: {bad} malformed entries skipped"]
+            if bad
+            else []
+        )
+        return runs, notes
+
+
+def _spend_entry(entry: object) -> rules.SpendRun | None:
+    """`[started_at, ended_at, cost_usd]` as the ledger writes it; `None` for anything
+    else: wrong shape, an unparseable or naive instant, a cost that is not a finite
+    non-negative number."""
+    if not isinstance(entry, list) or len(entry) != 3:
+        return None
+    started, ended, cost = entry
+    if isinstance(cost, bool) or not isinstance(cost, int | float):
+        return None
+    if not math.isfinite(cost) or cost < 0:
+        return None
+    try:
+        start, end = datetime.fromisoformat(started), datetime.fromisoformat(ended)
+    except (TypeError, ValueError):
+        return None
+    if start.tzinfo is None or end.tzinfo is None:
+        return None
+    return rules.SpendRun(start.astimezone(UTC), end.astimezone(UTC), float(cost))
 
 
 def _host() -> str:
