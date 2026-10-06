@@ -1458,3 +1458,36 @@ async def test_a_failed_delivery_resumes_through_integrate_to_deliver_at_no_cost
     first, second = fakes.tracker.attempted_bodies
     assert first == second
     assert fakes.workspace.cleaned == ["GH-1"]
+
+
+async def test_a_failed_delivery_of_a_platform_task_resumes_to_deliver_at_no_cost(config):
+    """The platform route has no PM and no final validation: pause -> integrate ->
+    deliver all the same (GH-203)."""
+    fakes = Fakes()
+    fakes.tracker.open_failures = 1
+    script = ScriptedRunner(
+        pjm=[classified(type_="platform_enhancement")],
+        tech_lead_ephemeral_platform=[questions(done=True)],
+        tech_lead_platform=[planned()],
+        developer=[delivered()],
+        tech_lead_review=[reviewed("approved")],
+    )
+    app = compiled(script, fakes=fakes)
+
+    paused = await app.ainvoke(TASK, config=config)
+    assert paused["type"] == "platform_enhancement"
+    assert "gh pr create failed" in paused["escalated"]
+    assert paused["escalation_class"] == "failure" and paused["status"] == WAITING_ON_HUMAN
+    assert "pull_request" not in paused
+    assert rules.auto_resumable(paused) is None
+    assert (await app.aget_state(config)).next == ("pause",)
+    calls, cost = len(script.calls), paused["cost_usd"]
+
+    final = await app.ainvoke(Command(resume={"decision": None}), config=config)
+
+    assert final["status"] == "ready_for_review" and final["escalated"] is None
+    assert final["pull_request"] == fakes.tracker.url
+    assert len(script.calls) == calls and final["cost_usd"] == cost
+    first, second = fakes.tracker.attempted_bodies
+    assert first == second
+    assert fakes.workspace.cleaned == ["GH-1"]

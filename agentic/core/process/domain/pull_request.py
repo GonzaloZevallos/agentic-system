@@ -57,9 +57,10 @@ def bounded_body(
 ) -> BoundedBody:
     """`parts` are `(heading, text)` pairs rendered as `## heading` sections. A body
     within `limit` is exactly their join, or `fallback` when there are none. A longer one
-    keeps whole sections from the front while they fit, trims the first section (and only
-    it) at a blank line outside a fence, drops every other whole, and ends with the
-    pointer, which names what was left out.
+    keeps whole sections from the front while they fit, trims the first section (the
+    PM's; on a platform task, which has none, whichever comes first) and only it, at a
+    blank line outside a fence, drops every other whole, and ends with the pointer, which
+    names what was left out.
 
     Room for the pointer is reserved for the longest list it can be given (every
     heading), so the real one, shorter or equal, always fits."""
