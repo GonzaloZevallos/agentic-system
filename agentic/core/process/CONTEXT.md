@@ -312,7 +312,7 @@ _Avoid_: presupuesto (eso sería lo que se espera gastar), guardrail (no signifi
 _Campo_: per_instance_cost_limit — SWE-agent
 
 **Tope de tarea**:
-Gasto acumulado de una tarea a partir del cual el sistema escala y pausa en vez de seguir. Crece con el plan: una base hasta que hay plan, después la base más una parte por subtarea, integración incluida, con un techo que limita esa cuenta. Se mira antes de cada intento de cualquier rol, contra lo que gastó la corrida entera y no sólo la rama que va a gastar. Subirlo al reanudar es decisión del humano, que puede pasar el techo y nunca lo baja. Alcanzado, lo que ya está corriendo termina: sólo frena lo que todavía no arrancó. No es fallo de rol ni devolución y no cuenta para ningún límite. Como el tope por intento, es red de seguridad, bien arriba de lo que cuesta una tarea sana. Hoy 30 USD de base, 15 por subtarea, techo 250.
+Gasto acumulado de una tarea a partir del cual el sistema escala y pausa en vez de seguir. Es un techo plano, el mismo para cualquier tamaño de plan. Se mira antes de cada intento de cualquier rol, contra lo que gastó la corrida entera y no sólo la rama que va a gastar. Subirlo al reanudar es decisión del humano, que puede pasar el techo y nunca lo baja. Alcanzado, lo que ya está corriendo termina: sólo frena lo que todavía no arrancó. No es fallo de rol ni devolución y no cuenta para ningún límite. Como el tope por intento, es red de seguridad, bien arriba de lo que cuesta una tarea sana. Hoy 250 USD.
 _Avoid_: presupuesto de tarea
 _Campo_: total_cost_limit — SWE-agent
 

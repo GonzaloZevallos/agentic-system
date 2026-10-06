@@ -15,7 +15,6 @@ from agentic.core.process.application.run_role import (
     run_record,
     run_role,
     run_with_retry,
-    task_cap,
     with_context,
 )
 from agentic.core.process.application.schema_guard import RoleSchemaGuard
@@ -879,7 +878,7 @@ async def test_run_role_turns_a_role_failure_into_an_escalation(tmp_path):
 
 
 async def test_run_role_escalates_when_the_task_cap_is_reached(tmp_path):
-    cfg = Configuration(product_dir=tmp_path, task_budget_usd=50.0)
+    cfg = Configuration(product_dir=tmp_path, task_max_budget_usd=50.0)
     runner = ScriptedRunner(pjm=[OK])
     output, patch = await run_role(
         {"id": "T-1", "title": "t", "description": "d", "cost_usd": 50.0},
@@ -896,21 +895,30 @@ async def test_run_role_escalates_when_the_task_cap_is_reached(tmp_path):
     assert "sections" not in patch and "runs" not in patch
 
 
-def test_the_task_cap_in_force_grows_with_the_plan_and_the_human_overrides_it(tmp_path):
-    # ADR-0004, fourth addendum: the base until there is a plan, then a share per
-    # subtask with the integration counted, never over the ceiling.
-    cfg = Configuration(product_dir=tmp_path)
-    state = {"id": "T-1", "title": "t", "description": "d"}
-    assert task_cap(state, cfg) == 30.0
-    two = {**state, "subtasks": {"api": {}, "domain": {}}}
-    assert task_cap(two, cfg) == 30.0 + 15.0 * 3
-    many = {**state, "subtasks": {f"s{n}": {} for n in range(20)}}
-    assert task_cap(many, cfg) == 250.0
-    assert task_cap(many, Configuration(product_dir=tmp_path, task_budget_usd=400.0)) == 400.0
-    # The human raises the cap, never lowers it: a budget set before the plan does not
-    # stop the task again once the plan makes the formula larger.
-    early = Configuration(product_dir=tmp_path, task_budget_usd=45.0)
-    assert task_cap(state, early) == 45.0 and task_cap(two, early) == 75.0
+@pytest.mark.parametrize("subtask_count", [1, 12])
+async def test_the_task_cap_is_the_same_flat_ceiling_for_any_plan_size(tmp_path, subtask_count):
+    # ADR-0004, 2026-10-05 addendum: 250 for a 1-subtask plan and a 12-subtask plan alike.
+    subtasks = {f"s{n}": {} for n in range(subtask_count)}
+
+    async def run(cost_usd, cfg):
+        state = {"id": "T-1", "title": "t", "description": "d", "subtasks": subtasks}
+        runner = ScriptedRunner(pjm=[OK])
+        output, patch = await run_role(
+            {**state, "cost_usd": cost_usd}, PJM, cfg, memory_ports(runner), product="x"
+        )
+        return output, patch, runner
+
+    default = Configuration(product_dir=tmp_path, task_max_budget_usd=250.0)
+    output, _, runner = await run(249.0, default)
+    assert output is not None and len(runner.calls) == 1
+    output, patch, runner = await run(250.0, default)
+    assert output is None and runner.calls == []
+    assert patch["escalation_class"] == "cap"
+    assert patch["escalated"] == "PjM stopped by the task cap: 250.00 of 250.00 USD spent"
+    # The human raises it, and the plan size changes nothing.
+    raised = Configuration(product_dir=tmp_path, task_max_budget_usd=250.0, task_budget_usd=400.0)
+    output, _, runner = await run(250.0, raised)
+    assert output is not None and len(runner.calls) == 1
 
 
 async def test_the_ephemeral_tech_lead_runs_on_the_actor_model_the_interviewee_does_not(

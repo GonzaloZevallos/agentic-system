@@ -162,7 +162,7 @@ def prepare(
                 "start it over with `agentic run --fresh` if that is what you want"
             )
         target = next_node
-    cap = task_cap(resumed, cfg)
+    cap = task_cap(cfg)
     spent = paused.get("cost_usd", 0.0)
     if cap <= spent:
         raise ValueError(
@@ -181,10 +181,7 @@ def summary(r: Resumption, cfg: Configuration, ports: Ports) -> str:
     if cfg.task_budget_usd is not None and cfg.task_budget_usd >= r.cap_usd:
         how = "--task-budget"
     else:
-        how = (
-            f"base {cfg.task_budget_base_usd:g} + {cfg.task_budget_per_subtask_usd:g} x "
-            f"{rules.work_units(r.resumed)} units, ceiling {cfg.task_max_budget_usd:g}"
-        )
+        how = f"ceiling {cfg.task_max_budget_usd:g}"
     lines = [
         f"task:      {r.task_id} {state.get('title', '')}".rstrip(),
         f"from:      {r.source}",

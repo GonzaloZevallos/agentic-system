@@ -17,10 +17,9 @@ seventh addendum) instead of the "Retry. Fix exactly what failed." every other
 The task cap is checked here too, before every attempt, because every role passes
 through here: the routing between nodes would miss the rounds of an interview.
 Reached, `TaskCapReached` escalates the same way, but it is not a role failure: the
-role did not break (ADR-0004, third addendum). The cap is read off the state each
-time, so it grows as soon as the plan is in (fourth addendum), and against what the
-whole process spent, which is what the state cannot hold once branches run in
-parallel (fifth addendum, `limits.py`).
+role did not break (ADR-0004, third addendum). The cap is a flat ceiling, the same for any
+plan size (2026-10-05 addendum), checked against what the whole process spent, which is
+what the state cannot hold once branches run in parallel (fifth addendum, `limits.py`).
 
 Context rule (README.md, 6): each role reads, in full, the sections it declares in
 `Role.reads`, after the engineering standards and the product knowledge if it reads
@@ -601,15 +600,10 @@ def _subagent_cost_usd(cost_by_model: dict[str, float], model: str) -> float:
     return sum(cost for spent_on, cost in cost_by_model.items() if spent_on != model)
 
 
-def task_cap(state: TaskState, cfg: Configuration) -> float:
-    """The cap in force for this state: the formula over the plan (ADR-0004, fourth
-    addendum), or the human's when a resume set a higher one. The human raises the cap,
-    never lowers it: a budget given before the plan must not stop the task again when the
-    plan makes the formula larger."""
-    formula = rules.task_cap(
-        state, cfg.task_budget_base_usd, cfg.task_budget_per_subtask_usd, cfg.task_max_budget_usd
-    )
-    return max(formula, cfg.task_budget_usd or 0.0)
+def task_cap(cfg: Configuration) -> float:
+    """The cap in force: one flat ceiling, the same for any plan size (ADR-0004,
+    2026-10-05 addendum). The human raises it with a task budget, never lowers it."""
+    return rules.task_cap(cfg.task_max_budget_usd, cfg.task_budget_usd)
 
 
 def escalation(exc: Escalating) -> TaskState:
@@ -776,7 +770,7 @@ async def run_role(
             resume=resume,
             max_budget_usd=cfg.max_budget_usd,
             spent_usd=state.get("cost_usd", 0.0),
-            task_cap_usd=task_cap(state, cfg),
+            task_cap_usd=task_cap(cfg),
             presubmit=presubmit,
             delivery_check=delivery_check,
             forbidden=forbidden,

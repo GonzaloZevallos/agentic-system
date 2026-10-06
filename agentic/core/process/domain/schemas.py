@@ -27,8 +27,8 @@ from .task import INTEGRATION, FindingCategory, FindingScope, Severity
 
 TaskType = Literal["bug", "feature", "platform_enhancement"]
 SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-# Subtasks a plan may hold: the task cap grows with each one (ADR-0004, fourth addendum),
-# so the plan cannot raise it without bound.
+# Subtasks a plan may hold: it bounds the plan; the task cap does not depend on it
+# (ADR-0004, 2026-10-05 addendum).
 MAX_SUBTASKS = 12
 
 
