@@ -233,7 +233,7 @@ Revisión que arranca del head revisado en el pase anterior, no de la base de la
 _Campo_: sin término de arte; GitHub lo ofrece sin nombrarlo, como "changes since your last review"
 
 **Head revisado**:
-El commit hasta donde llegó la última revisión de una subtarea.
+El commit hasta donde llegó la última revisión de una subtarea. Se guarda como el id completo del commit; uno anterior puede estar abreviado, y se compara con `same_commit`, nunca por igualdad de texto.
 _Campo_: sin término de arte
 
 **Integración incremental**:

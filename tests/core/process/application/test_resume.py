@@ -52,7 +52,7 @@ def git_as_recorded(ports):
         {
             "agentic/GH-12": ("i2", "b0"),
             "agentic/GH-12.api": ("a2", "b1"),
-            "agentic/GH-12.domain": ("d2f00", "b1"),
+            "agentic/GH-12.domain": ("d2", "b1"),
         }
     )
 
@@ -445,3 +445,39 @@ def test_from_document_of_a_task_from_before_the_cap_keeps_the_configured_cap():
     assert rules.decided(resumed["description"], level=3)
     assert rules.interview_cap(resumed, roles.INTERVIEW_SOLUTION, 4) == 4
     assert rules.interview_cap(resumed, roles.INTERVIEW_DEFINITION, 4) == 4
+
+
+FULL_SHA = "0258d6f10b0c8f84d6e3a819f0173809f18d7a12"
+
+
+def _approved_at(reviewed: str, head: str, base: str = "b1", recorded: str = "b1"):
+    ports = memory_ports()
+    ports.workspace.existing_branches["agentic/GH-9"] = (head, recorded)
+    state = {
+        "subtasks": {
+            "only": sub("only", "approved", "agentic/GH-9", base, reviewed_head=reviewed),
+        }
+    }
+    return resume.disagreements(state, ports.workspace)
+
+
+def test_a_full_reviewed_head_against_a_short_branch_head_is_no_disagreement():
+    assert _approved_at(FULL_SHA, FULL_SHA[:7]) == []
+
+
+def test_a_short_reviewed_head_against_a_full_branch_head_is_no_disagreement():
+    assert _approved_at(FULL_SHA[:7], FULL_SHA) == []
+
+
+def test_a_different_reviewed_head_is_a_disagreement():
+    problems = _approved_at(FULL_SHA, "1234567")
+    assert len(problems) == 1 and "approved at" in problems[0]
+
+
+def test_a_base_recorded_short_against_a_full_one_in_git_is_no_disagreement():
+    assert _approved_at(FULL_SHA, FULL_SHA, base=FULL_SHA[:7], recorded=FULL_SHA) == []
+
+
+def test_a_different_base_is_a_disagreement():
+    problems = _approved_at(FULL_SHA, FULL_SHA, base="1234567", recorded=FULL_SHA)
+    assert len(problems) == 1 and "base" in problems[0]

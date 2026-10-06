@@ -2387,6 +2387,45 @@ MERGE_FAILURE_ADVICE: dict[MergeFailure, str] = {
 # For a document whose stored class is missing or invalid.
 MERGE_FAILURE_UNKNOWN_ADVICE = "The recorded failure class is missing; read the merge verb's log."
 
+# Commit ids (GH-199, ADR-0045 addendum): a full id is 40 hex (SHA-1) or 64 (SHA-256); an
+# abbreviation older than the change that records full ids counts as a prefix from here.
+MIN_SHA_PREFIX = 7
+FULL_SHA_LENGTHS = (40, 64)
+
+_HEX = re.compile(r"[0-9a-fA-F]+")
+
+
+def full_commit_id(commit: str | None) -> bool:
+    """`commit`, stripped, is a whole object id: hex of a length in `FULL_SHA_LENGTHS`."""
+    if commit is None:
+        return False
+    text = commit.strip()
+    return len(text) in FULL_SHA_LENGTHS and _HEX.fullmatch(text) is not None
+
+
+def same_commit(a: str | None, b: str | None) -> bool:
+    """Whether two ids name the same commit, whatever length each was recorded at. The one
+    comparison of a `reviewed_head` or a recorded `base`; no other prefix test of ids
+    exists. An empty or missing id matches nothing; a prefix counts only between hex ids
+    with the shorter at least `MIN_SHA_PREFIX` long."""
+    if a is None or b is None:
+        return False
+    left, right = a.strip().lower(), b.strip().lower()
+    if not left or not right:
+        return False
+    # Equal ids match whatever they are: the opaque ids of `tests/fakes.py` ("base",
+    # "headN") keep matching themselves.
+    if left == right:
+        return True
+    short, long = sorted((left, right), key=len)
+    return (
+        len(short) >= MIN_SHA_PREFIX
+        and _HEX.fullmatch(short) is not None
+        and _HEX.fullmatch(long) is not None
+        and long.startswith(short)
+    )
+
+
 MergeRefusal = Literal[
     "not_ready",
     "not_approved",
@@ -2496,7 +2535,7 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
         return MergeDecision("refuse", "not_ready")
     if not facts.reviewed_unit_approved:
         return MergeDecision("refuse", "not_approved")
-    if facts.reviewed_head is None or facts.reviewed_head != facts.pr_head:
+    if not (full_commit_id(facts.pr_head) and same_commit(facts.reviewed_head, facts.pr_head)):
         return MergeDecision("refuse", "head_not_reviewed")
     if facts.open_blocking_or_important > 0:
         return MergeDecision("refuse", "open_findings")

@@ -52,7 +52,7 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
     remaining = rules.remaining_changes(state, pair, cfg.max_changes_requested_per_pair)
     section = rules.review_section(subtask_id)
     version = rules.next_version(state, section)
-    head = ports.workspace.head(checkout.path)
+    head = ports.workspace.full_head(checkout.path)
     output, patch = await run_role(
         state,
         reviewer,

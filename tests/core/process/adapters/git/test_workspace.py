@@ -728,3 +728,16 @@ def test_a_local_only_stack_edit_never_reaches_the_new_task_base(remote):
     assert probe.returncode == 1
     assert GitStack(remote.clone).checks(base or "") == {"tests": "origin"}
     assert local[:7] in (ws.upstream().note or "")
+
+
+def test_full_head_is_a_whole_object_id_and_head_abbreviates_it(product):
+    ws = GitWorkspace(product, IDENTITY)
+    full = ws.full_head(product)
+    assert rules.full_commit_id(full)
+    assert full == git("rev-parse", "HEAD", cwd=product)
+    assert full.startswith(ws.head(product)) and ws.head(product) != full
+
+
+def test_head_stays_abbreviated_and_is_not_a_full_id(product):
+    ws = GitWorkspace(product, IDENTITY)
+    assert not rules.full_commit_id(ws.head(product))

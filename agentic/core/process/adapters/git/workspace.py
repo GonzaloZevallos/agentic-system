@@ -116,6 +116,9 @@ class GitWorkspace:
     def head(self, path: Path) -> str:
         return self._git("rev-parse", "--short", "HEAD", cwd=path)
 
+    def full_head(self, path: Path) -> str:
+        return self._git("rev-parse", "HEAD", cwd=path)
+
     def is_clean(self, path: Path) -> bool:
         return not self._git("status", "--porcelain", cwd=path)
 

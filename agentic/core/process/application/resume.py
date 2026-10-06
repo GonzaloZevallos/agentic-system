@@ -107,17 +107,12 @@ def disagreements(state: TaskState, workspace: Workspace) -> list[str]:
             problems.append(f"{sid}: branch `{branch}` does not exist")
             continue
         recorded = workspace.base_of(branch)
-        if sub.get("base") and recorded and not _same_commit(sub["base"], recorded):
+        if sub.get("base") and recorded and not rules.same_commit(sub["base"], recorded):
             problems.append(f"{sid}: base {sub['base']} in the document, {recorded} in git")
         reviewed = sub.get("reviewed_head")
-        if sub.get("status") == "approved" and reviewed and not _same_commit(reviewed, head):
+        if sub.get("status") == "approved" and reviewed and not rules.same_commit(reviewed, head):
             problems.append(f"{sid}: approved at {reviewed}, but `{branch}` is at {head}")
     return problems
-
-
-def _same_commit(a: str, b: str) -> bool:
-    # Short hashes grow with the repository: one may be a prefix of the other.
-    return a.startswith(b) or b.startswith(a)
 
 
 def human_decision(comments: Sequence[str]) -> str | None:
