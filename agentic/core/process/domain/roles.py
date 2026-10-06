@@ -33,6 +33,7 @@ from .schemas import (
     FinalValidation,
     InterviewTurn,
     PlatformAnswers,
+    Reflection,
     Review,
     RoleOutput,
     Ruling,
@@ -53,6 +54,9 @@ class Prompt:
     text: str
     hash: str
     source: Path
+    # The hash of the playbook section the text ends with; "" when there is none, and
+    # then `text` and `hash` are exactly what `render` made (ADR-0043).
+    playbook: str = ""
 
 
 @dataclass(frozen=True)
@@ -61,6 +65,9 @@ class Role:
     slug: str
     kind: RoleKind
     schema: type[RoleOutput]
+    # `kind` is the glossary term (Validador or Pensador); `model_kind`, when set, is the
+    # model the role runs on instead of its own `kind` (ADR-0014, addendum 2026-10-05).
+    model_kind: RoleKind | None = None
     # Sections of the task document this role reads, in full (README.md, 6).
     # Declarative, so PjM can record it and see what a failing role was missing.
     # A role that lists itself reads its own previous section on a return. The human's
@@ -85,6 +92,12 @@ class Role:
     executes: bool = False
     # Product roles also receive the engineering standards, whole (ADR-0012).
     reads_standards: bool = False
+
+    @property
+    def runs_on(self) -> RoleKind:
+        """What `Configuration.model_for` is given: `model_kind` when the role sets one,
+        `kind` otherwise (ADR-0014, addendum 2026-10-05)."""
+        return self.model_kind or self.kind
 
 
 def render(raw: str, source: Path, **placeholders: object) -> Prompt:
@@ -379,6 +392,9 @@ TECH_LEAD_EPHEMERAL = Role(
     name="Tech Lead efímero",
     slug="tech_lead_ephemeral",
     kind="verifier",
+    # The asymmetry the efímero exists for is a model distinct from the one Tech Lead
+    # plans with, not a more capable one (README.md, 10; ADR-0014, addendum 2026-10-05).
+    model_kind="actor",
     schema=SolutionTurn,
     reads=(ORIGINAL, "PM"),
     reads_knowledge=True,
@@ -551,6 +567,21 @@ DEVELOPER_INTEGRATOR = Role(
     max_turns=80,
 )
 
+# The reflector (ADR-0043): after a task closes, it reads that task's returns and proposes
+# lessons for the role each one is attributable to. It runs outside any task, so it never
+# enters a task's prompt fingerprint. Its input arrives whole in the prompt, built by code
+# from the closed document (`application/reflect.py`), so it reads no section, no tool and
+# no checkout: nothing to write with and nothing to look up.
+REFLECTOR = Role(
+    name="Reflector",
+    slug="reflector",
+    kind="actor",
+    schema=Reflection,
+    reads=(),
+    effort="medium",
+    max_turns=6,
+)
+
 
 def check_rules(checks: Mapping[str, str]) -> tuple[str, ...]:
     """A permission rule per declared check. A prefix: the reviewer runs the command on
@@ -616,6 +647,7 @@ ROLES = (
     TECH_LEAD_REVIEWER_LIGHT,
     DEVELOPER,
     DEVELOPER_INTEGRATOR,
+    REFLECTOR,
 )
 
 

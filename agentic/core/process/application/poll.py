@@ -7,20 +7,36 @@ action is a detached `agentic close|resume|run` child (`Launcher.spawn`); no rol
 runs in this process (the plan's own invariant).
 
 `rules.poll_plan` decides the order and which issues qualify; this module only gathers
-the facts it needs from the ports and carries out what it returns. `AUTO_RESUMED` is the
-one comment prefix this module posts, registered into `resume.SYSTEM_COMMENTS` in the
-same diff so a resume reads it as the system's own, never a human's answer."""
+the facts it needs from the ports and carries out what it returns. `AUTO_RESUMED` and
+`RETAKEN` are the comment prefixes this module posts, both registered into
+`resume.SYSTEM_COMMENTS` so a resume reads them as the system's own, never a human's
+answer. A retake (GH-176) is the poller taking up a run a reboot interrupted: it reads the
+run's lock through `RunLock.read`, never `acquire`, and decides in `rules.interrupted_run`."""
 
 from __future__ import annotations
 
+import functools
 import time
 from collections.abc import Callable, Sequence
 from datetime import datetime
+from typing import assert_never
 
 from agentic.shared.configuration import Configuration
 
 from ..domain import rules
-from .ports import GitError, IssueComment, Launcher, Ports, RunRegistry
+from ..domain.boot import boot_verdict
+from ..domain.task import TaskState
+from . import reflect_run
+from .ports import (
+    GitError,
+    IssueComment,
+    Launcher,
+    LockRecord,
+    Ports,
+    RunLock,
+    RunRegistry,
+    Upstream,
+)
 
 # How long `execute` waits for a spawned `run`/`resume` child to register itself
 # (Human decision, issue #137): a second round must never count a slot this round's
@@ -35,6 +51,10 @@ _REGISTER_POLL_INTERVAL_S = 1.0
 # cycle this module would otherwise have with it) -- never read as the human's decision
 # on the next `agentic resume`.
 AUTO_RESUMED = "Auto-resumed: "
+
+# How the comment of a retake after a reboot starts (GH-176): registered into
+# `resume.SYSTEM_COMMENTS` beside `AUTO_RESUMED`, posted only once the spawn returned a pid.
+RETAKEN = "Retaken after reboot: "
 
 # The per-product lock key `agentic poll` takes (Tech Lead plan): one poller per
 # product, the same `FilesystemRunLock` under the product's own `.agentic/runs`
@@ -90,6 +110,61 @@ def _prior_auto_resumes(comments: Sequence[IssueComment]) -> int:
     )
 
 
+def _prior_retakes(comments: Sequence[IssueComment]) -> int:
+    """How many `Retaken after reboot:` comments followed the last comment that is not
+    the system's own: the same shape as `_prior_auto_resumes`, so a human comment resets
+    the count `rules.RETAKE_AFTER_REBOOT_MAX` bounds."""
+    from .resume import SYSTEM_COMMENTS
+
+    last_non_system = _last_non_system_index(comments, SYSTEM_COMMENTS)
+    return sum(1 for comment in comments[last_non_system + 1 :] if comment.body.startswith(RETAKEN))
+
+
+def _retake_times(comments: Sequence[IssueComment]) -> list[datetime]:
+    """The `createdAt` of the `Auto-resumed:` comments `_prior_auto_resumes` counts:
+    the same set, with the time each one was posted."""
+    from .resume import SYSTEM_COMMENTS
+
+    last_non_system = _last_non_system_index(comments, SYSTEM_COMMENTS)
+    return [
+        _parse_timestamp(comment.created_at)
+        for comment in comments[last_non_system + 1 :]
+        if comment.body.startswith(AUTO_RESUMED)
+    ]
+
+
+def _interview_round_starts(raw: TaskState) -> list[datetime] | None:
+    """When every round of every interview this epoch broke inside started, joined
+    (a retake is productive if any of those interviews ran a round in its window);
+    `None` when any start is missing or unreadable."""
+    starts: list[datetime] = []
+    for spec in rules.failed_interviews(raw):
+        spec_starts = rules.round_starts(rules.interview_rounds(raw, spec))
+        if spec_starts is None:
+            return None
+        starts.extend(spec_starts)
+    return starts
+
+
+def _account_limit_counts(
+    raw: TaskState, comments: Sequence[IssueComment], chase: int
+) -> tuple[int, bool]:
+    """`(prior, ceiling_spent)` of an `account_limit` pause: `prior` counts only the
+    retakes of the current account window (a delivered run proves the quota was back
+    and opens a new one), falling back to the whole chase when any run's end is
+    unreadable; the ceiling is spent once a retake ran an interview round. Pure reads
+    of the document and the comments already fetched, never a new port call."""
+    retakes = _retake_times(comments)
+    ends = rules.run_ends(raw)
+    prior = chase if ends is None else rules.window_probes(retakes, max(ends, default=None))
+    productive = (
+        rules.productive_retakes(retakes, _interview_round_starts(raw))
+        if rules.failed_interviews(raw)
+        else 0
+    )
+    return prior, rules.interview_ceiling_spent(raw, "account_limit", productive)
+
+
 def _human_spoke_after_the_system(comments: Sequence[IssueComment]) -> bool:
     """Whether a comment that is not the system's own (`resume.SYSTEM_COMMENTS`)
     followed the system's own last one (Human decision, issue #137): a person is
@@ -127,7 +202,8 @@ def gather_closes(ports: Ports) -> list[int]:
 
 def gather_resumes(ports: Ports, now: datetime) -> list[rules.ResumeCandidate]:
     """Every paused task `rules.auto_resumable` finds eligible, with the `since`/
-    `prior`/`limit` `rules.next_attempt_at` needs. A task with no `Escalated:` comment
+    `prior`/`limit` `rules.next_attempt_at` needs, and the `chase_prior`/`ceiling_spent`
+    `rules.resume_exhausted` decides over. A task with no `Escalated:` comment
     at all (its document disagrees with the issue, or it has no issue) is skipped: there
     is no wait to measure `since` from."""
     resumes: list[rules.ResumeCandidate] = []
@@ -150,10 +226,74 @@ def gather_resumes(ports: Ports, now: datetime) -> list[rules.ResumeCandidate]:
             # human's from here on, whatever the calendar says -- never retaken on
             # top of a comment `agentic resume`'s own `--yes` would otherwise run over.
             continue
-        prior = _prior_auto_resumes(comments)
-        limit = rules.auto_resume_limit(raw)
-        resumes.append(rules.ResumeCandidate(number, reason, since, prior, limit))
+        chase = _prior_auto_resumes(comments)
+        if reason == "account_limit":
+            prior, ceiling_spent = _account_limit_counts(raw, comments, chase)
+        else:
+            prior, ceiling_spent = chase, False
+        limit = rules.auto_resume_limit(raw, reason)
+        resumes.append(
+            rules.ResumeCandidate(number, reason, since, prior, limit, chase, ceiling_spent)
+        )
     return resumes
+
+
+def _human_line(
+    number: int, record: LockRecord, other_boot: bool | None, verdict_cap_spent: bool
+) -> str:
+    """The one line a run left to the human says: what happened to its lock, whose it
+    was, and the command that takes it up. It repeats every round (the poller keeps no
+    state), which is how a human watching the output learns of it."""
+    if verdict_cap_spent:
+        what = "retake cap spent"
+    elif record.stopped_at_shutdown:
+        what = "stopped at shutdown"
+    elif other_boot is None:
+        what = "died (boot unknown)"
+    else:
+        what = "died in this boot"
+    return (
+        f"agentic: poll: #{number} {what} (lock pid {record.pid} since {record.started_at}), "
+        f"left to the human: agentic resume --issue {number}"
+    )
+
+
+def gather_retakes(
+    ports: Ports, lock: RunLock, current_boot: str | None
+) -> tuple[list[int], list[str]]:
+    """Every open task whose run a reboot interrupted (`rules.interrupted_run`), and the
+    lines for the ones left to the human. The lock is only ever *read* here
+    (`RunLock.read`, and `RunLock.refusal` for liveness, which never writes): taking it
+    over is the retaken `resume`'s own first act, never the poller's, and a decision made
+    over a record the poller had just rewritten would read its own pid. Liveness is
+    asked of the lock itself, the one place that knows the boot id (`liveness.is_alive`),
+    so this decision and `acquire` cannot disagree; a lock of another host reads as
+    alive, as `acquire` reads it. The comments are fetched only for a task the first,
+    cheap verdict did not already rule out."""
+    retakes: list[int] = []
+    lines: list[str] = []
+    for task_id in ports.documents.ids():
+        number = ports.inbox.issue_of(task_id)
+        if number is None:
+            continue
+        record = lock.read(task_id)
+        if record is None:
+            continue
+        raw = ports.documents.load(task_id) or {}
+        verdict = boot_verdict(record.boot_id, current_boot)
+        other_boot = None if verdict == "unknown" else verdict == "other_boot"
+        facts = rules.LockFacts(other_boot, alive=lock.refusal(task_id) is not None)
+        first = rules.interrupted_run(raw, facts, 0)
+        if first in ("none", "running"):
+            continue
+        prior = _prior_retakes(ports.tracker.timestamped_comments(task_id))
+        decision = rules.interrupted_run(raw, facts, prior)
+        if decision == "retake":
+            retakes.append(number)
+        elif decision == "human":
+            cap_spent = first == "retake"  # only the count turned it into the human's
+            lines.append(_human_line(number, record, other_boot, cap_spent))
+    return retakes, lines
 
 
 def _blocker_numbers(ports: Ports, number: int) -> tuple[int, ...]:
@@ -171,16 +311,25 @@ def _merge_commit_for(ports: Ports, blocker: int, closing_merge_commit: str | No
     return closing_merge_commit
 
 
-def _blocker_resolved(cfg: Configuration, ports: Ports, blocker: int) -> bool:
+def _blocker_resolved(
+    cfg: Configuration, ports: Ports, blocker: int, upstream: Callable[[], Upstream]
+) -> bool:
     state = ports.tracker.issue_state(blocker)
     if state.state != "CLOSED":
         return False
     merge_commit = _merge_commit_for(ports, blocker, state.closing_merge_commit)
-    merged = merge_commit is not None and ports.workspace.is_ancestor(cfg.product_dir, merge_commit)
+    # The fetched tip, never local `HEAD` (GH-180): a merge on the remote that nobody
+    # pulled is merged. `upstream` is asked only here, when a merge commit is to be
+    # judged, and is memoised per round by `run_once`: at most one fetch.
+    merged = merge_commit is not None and ports.workspace.is_ancestor(
+        cfg.product_dir, merge_commit, ref=upstream().sha or "HEAD"
+    )
     return rules.blocker_resolved(state.state_reason, merged)
 
 
-def _blocked(cfg: Configuration, ports: Ports, number: int) -> bool:
+def _blocked(
+    cfg: Configuration, ports: Ports, number: int, upstream: Callable[[], Upstream]
+) -> bool:
     """Whether `number` still has an unresolved blocker. Any doubt -- an unknown git
     object, a `gh` failure, a blocker whose own `stateReason` this function does not
     recognize, or a real git failure (`GitError` out of `Workspace.is_ancestor`,
@@ -191,13 +340,16 @@ def _blocked(cfg: Configuration, ports: Ports, number: int) -> bool:
     candidate's own launch, never the round, and never the process."""
     try:
         blockers = _blocker_numbers(ports, number)
-        return not all(_blocker_resolved(cfg, ports, b) for b in blockers)
+        return not all(_blocker_resolved(cfg, ports, b, upstream) for b in blockers)
     except (ValueError, OSError, KeyError, GitError):
         return True
 
 
 def gather_launches(
-    cfg: Configuration, ports: Ports, registry: RunRegistry
+    cfg: Configuration,
+    ports: Ports,
+    registry: RunRegistry,
+    upstream: Callable[[], Upstream] | None = None,
 ) -> list[rules.LaunchCandidate]:
     """Every open `agentic`-labelled issue with no document yet (no run, so nothing
     delivered and no pull request either): `rules.poll_plan`'s own launch candidates,
@@ -205,6 +357,7 @@ def gather_launches(
     launch that never registered a run does not relaunch every round. An issue that
     now has a document clears its own stale attempt record (`registry.clear_launch`):
     it is no longer a candidate at all."""
+    upstream = upstream or functools.cache(ports.workspace.upstream)
     product = ports.stack.product()
     launches: list[rules.LaunchCandidate] = []
     for number in ports.tracker.queue():
@@ -212,14 +365,36 @@ def gather_launches(
         if ports.documents.load(task_id) is not None:
             registry.clear_launch(product, number)
             continue
-        blocked = _blocked(cfg, ports, number)
+        blocked = _blocked(cfg, ports, number, upstream)
         attempt = registry.launch_attempts(product, number)
         since = attempt.since if attempt is not None else None
         prior = attempt.prior if attempt is not None else 0
         launches.append(
-            rules.LaunchCandidate(number, blocked, since, prior, len(rules.AUTO_RESUME_SCHEDULE))
+            rules.LaunchCandidate(number, blocked, since, prior, len(rules.LAUNCH_SCHEDULE))
         )
     return launches
+
+
+def reflect_lines(cfg: Configuration, ports: Ports, launcher: Launcher, argv0: str) -> list[str]:
+    """Launches `agentic reflect --all` (ADR-0043) -- a detached child, like every other
+    action here -- only when the product has closed tasks nobody reflected on yet. It reads
+    and spawns and nothing else: no task state, no document, no lock of a task. Any doubt
+    (a `gh` or git failure, an unreadable record) reads as nothing to reflect on, and a
+    failed spawn is a line, never the round's end. The child takes the `playbook` run lock
+    itself, so a second spawn while one is working refuses and exits."""
+    try:
+        due = reflect_run.pending(cfg, ports)
+    except (ValueError, OSError, GitError, KeyError, TypeError):
+        # a malformed `gh` item must never fail the poll round (invariant 12)
+        return []
+    if not due:
+        return []
+    argv = [argv0, "reflect", "--all", "--product-dir", str(cfg.product_dir)]
+    try:
+        pid = launcher.spawn(argv)
+    except OSError as exc:
+        return [f"agentic: poll: reflect -> not launched: {exc}"]
+    return [f"agentic: poll: reflect {len(due)} task(s) -> pid {pid}"]
 
 
 def _argv(argv0: str, command: str, number: int, product_dir: str, *extra: str) -> list[str]:
@@ -244,6 +419,46 @@ def _await_registration(
             return False
         sleep(_REGISTER_POLL_INTERVAL_S)
         waited += _REGISTER_POLL_INTERVAL_S
+
+
+def _spawn_resume(
+    action: rules.PollAction,
+    ports: Ports,
+    registry: RunRegistry,
+    launcher: Launcher,
+    argv0: str,
+    product_dir: str,
+    comment: str,
+    register_timeout_s: float,
+    sleep: Callable[[float], None],
+) -> list[str]:
+    """What a `resume` and a `retake` share (GH-176): a detached `agentic resume --issue N
+    --yes --detach` child, the system comment (`comment`, `AUTO_RESUMED` or `RETAKEN`
+    plus its reason) posted only once `spawn` returned a pid, and the wait for the child
+    to register. A retake that never registered says so, with which of its tries it was:
+    it is the only case where the wait ends with the registry flock held for nothing.
+    Neither kind records a launch attempt: that calendar belongs to `launch` alone."""
+    number = action.issue
+    task_id = ports.inbox.task_id(number)
+    prior = (
+        _prior_retakes(ports.tracker.timestamped_comments(task_id))
+        if action.kind == "retake"
+        else 0
+    )
+    argv = _argv(argv0, "resume", number, product_dir, "--yes", "--detach")
+    try:
+        pid = launcher.spawn(argv)
+    except OSError as exc:
+        return [f"agentic: poll: {action.kind} #{number} -> not launched (not counted): {exc}"]
+    ports.tracker.comment(task_id, comment)
+    registered = _await_registration(registry, task_id, register_timeout_s, sleep)
+    lines = [f"agentic: poll: {action.kind} #{number} -> pid {pid}"]
+    if action.kind == "retake" and not registered:
+        lines.append(
+            f"agentic: poll: retake #{number} -> not registered "
+            f"(retake {prior + 1} of {rules.RETAKE_AFTER_REBOOT_MAX})"
+        )
+    return lines
 
 
 def execute(
@@ -275,7 +490,7 @@ def execute(
     or another product's on the same machine -- never reads a stale count."""
     product = ports.stack.product()
     product_dir = str(cfg.product_dir)
-    total_attempts = len(rules.AUTO_RESUME_SCHEDULE)
+    total_attempts = len(rules.LAUNCH_SCHEDULE)
     lines: list[str] = []
     for action in actions:
         task_id = ports.inbox.task_id(action.issue)
@@ -286,20 +501,34 @@ def execute(
             except OSError as exc:
                 lines.append(f"agentic: poll: close #{action.issue} -> not launched: {exc}")
                 continue
+            lines.append(f"agentic: poll: close #{action.issue} -> pid {pid}")
         elif action.kind == "resume":
-            argv = _argv(argv0, "resume", action.issue, product_dir, "--yes", "--detach")
-            try:
-                pid = launcher.spawn(argv)
-            except OSError as exc:
-                lines.append(
-                    f"agentic: poll: resume #{action.issue} -> not launched (not counted): {exc}"
-                )
-                continue
             raw = ports.documents.load(task_id) or {}
             reason = rules.auto_resumable(raw) or "other"
-            ports.tracker.comment(task_id, f"{AUTO_RESUMED}{reason.replace('_', ' ')}")
-            _await_registration(registry, task_id, register_timeout_s, sleep)
-        else:
+            lines += _spawn_resume(
+                action,
+                ports,
+                registry,
+                launcher,
+                argv0,
+                product_dir,
+                f"{AUTO_RESUMED}{reason.replace('_', ' ')}",
+                register_timeout_s,
+                sleep,
+            )
+        elif action.kind == "retake":
+            lines += _spawn_resume(
+                action,
+                ports,
+                registry,
+                launcher,
+                argv0,
+                product_dir,
+                f"{RETAKEN}previous boot",
+                register_timeout_s,
+                sleep,
+            )
+        elif action.kind == "launch":
             registry.record_launch(product, action.issue, now)
             argv = _argv(argv0, "run", action.issue, product_dir, "--detach")
             try:
@@ -314,8 +543,18 @@ def execute(
                 )
                 continue
             _await_registration(registry, task_id, register_timeout_s, sleep)
-        lines.append(f"agentic: poll: {action.kind} #{action.issue} -> pid {pid}")
+            lines.append(f"agentic: poll: launch #{action.issue} -> pid {pid}")
+        else:
+            assert_never(action.kind)
     return lines
+
+
+def _upstream_notes(asked: bool, upstream: Callable[[], Upstream]) -> list[str]:
+    """The one line a round says about its upstream, when it asked for one at all and the
+    answer was not the plain fetched tip (GH-180): the poller's output is where a human
+    watching it learns the fetch failed or local commits were left out."""
+    note = upstream().note if asked else None
+    return [f"agentic: poll: upstream: {note}"] if note else []
 
 
 def run_once(
@@ -327,22 +566,39 @@ def run_once(
     argv0: str,
     register_timeout_s: float = REGISTER_WAIT_S,
     sleep: Callable[[float], None] = time.sleep,
+    *,
+    lock: RunLock,
+    current_boot: str | None,
 ) -> list[str]:
     """One round: gather, decide (`rules.poll_plan`), carry out. The slot count and the
     launch candidates are read under `registry.exclusive()` together (Tech Lead plan):
     deciding how many launches fit is atomic across every poller on this machine, not
     only within one product's, since the account's own 429 is the machine's, not a
     product's. `execute`'s own wait for a spawned child to register also runs inside
-    this same `exclusive()` block, for the same reason."""
+    this same `exclusive()` block, for the same reason. The retakes (GH-176) are gathered
+    here too, before anything spawns and from the lock records as the dead runs left
+    them; the lines for the runs left to the human come first in the round's output."""
     closes = gather_closes(ports)
     resumes = gather_resumes(ports, now)
+    retakes, human_lines = gather_retakes(ports, lock, current_boot)
     with registry.exclusive():
         available = max(cfg.max_concurrent_runs - len(registry.live()), 0)
-        launches = gather_launches(cfg, ports, registry)
+        upstream = functools.cache(ports.workspace.upstream)
+        launches = gather_launches(cfg, ports, registry, upstream)
+        notes = _upstream_notes(upstream.cache_info().currsize > 0, upstream)
         actions = rules.poll_plan(
-            closes=closes, resumes=resumes, launches=launches, available_slots=available, now=now
+            closes=closes,
+            resumes=resumes,
+            launches=launches,
+            available_slots=available,
+            now=now,
+            retakes=retakes,
         )
         lines = execute(
             actions, cfg, ports, registry, launcher, now, argv0, register_timeout_s, sleep
         )
-    return lines or ["agentic: poll: nothing to do this round"]
+    # Outside the registry's exclusive section: reflecting takes no slot of the cap and
+    # touches no task.
+    lines += reflect_lines(cfg, ports, launcher, argv0)
+    lines = [*human_lines, *lines]
+    return [*notes, *(lines or ["agentic: poll: nothing to do this round"])]

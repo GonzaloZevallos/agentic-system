@@ -40,7 +40,7 @@ class MissingProductDir(ValueError):
 class Configuration(BaseModel):
     # Actors make most of the calls; verifiers need a model the actor did not
     # have, which is the cheapest asymmetry to build and measure (README.md, 10).
-    actor_model: str = "claude-sonnet-5"
+    actor_model: str = "claude-sonnet-5-5"
     verifier_model: str = "claude-opus-5-5"
     # Per-role override, keyed by role slug. Wins over the kind mapping.
     model_overrides: dict[str, str] = Field(default_factory=dict)
@@ -53,26 +53,30 @@ class Configuration(BaseModel):
     # second addendum). Exceeding it is a role failure, not a return: the return limit
     # measures quality, not money.
     max_budget_usd: float = Field(default=10.0, gt=0)
+    # What one attempt of the reflector may cost (ADR-0043): it reads a closed task's
+    # returns and proposes lessons, nothing that needs the 10 above. `reflect` also stops
+    # at `reflect_max_tasks_per_run` tasks per invocation, so the most one run spends is
+    # that many tasks times two attempts times this.
+    reflect_max_budget_usd: float = Field(default=1.0, gt=0)
+    # How many closed tasks one `agentic reflect` invocation reflects on (ADR-0043); the
+    # rest wait for the next run, so one invocation never costs more than this times two
+    # attempts times the cap above.
+    reflect_max_tasks_per_run: int = Field(default=5, ge=1)
     # Money cap of the whole run, checked before every attempt of any role: reached,
-    # the task escalates and pauses instead of spending more (ADR-0004, third and fourth
-    # addenda). It grows with the plan: the base until there is one, then the base plus
-    # a share per subtask, the integration counted, never over the ceiling. A fixed 100
-    # cut run 4 of GH-12 one step from its pull request, with seven subtasks where five
-    # were expected. The numbers come from that run and are recalibrated after the first
-    # run without the MCP leak (issue #18), which should cost 35-45 USD. Parallel
-    # branches see the total at the fan-out, so the overrun is bounded by the attempt cap.
-    task_budget_base_usd: float = Field(default=30.0, gt=0)
-    task_budget_per_subtask_usd: float = Field(default=15.0, ge=0)
+    # the task escalates and pauses instead of spending more (ADR-0004, third addendum).
+    # `task_max_budget_usd` is the flat task cap, the same for any plan size (ADR-0004,
+    # 2026-10-05 addendum). Parallel branches see the total at the fan-out, so the
+    # overrun is bounded by the attempt cap.
     task_max_budget_usd: float = Field(default=250.0, gt=0)
     # The cap the human sets for one run, `agentic resume --task-budget`: it raises the
-    # cap in force above the formula and the ceiling, never lowers it.
+    # cap in force above the flat ceiling, never lowers it.
     task_budget_usd: float | None = Field(default=None, gt=0)
     # The model of every sub-agent a role spawns through the Agent tool, the two of
     # the `code-review` skill among them. They read and summarise for a parent that
     # keeps its own model; on the parent's model they cost 5-10 USD a review
     # (ADR-0013, addendum). Forced: an agent type whose definition names a model
     # (`Explore` inherits the parent's) would otherwise ignore it (issue #19).
-    subagent_model: str = "claude-sonnet-5"
+    subagent_model: str = "claude-sonnet-5-5"
     # How long one product check may run inside the presubmit before it counts as
     # failed (issue #22). The presubmit's hook waits for all of them.
     check_timeout_s: float = Field(default=600.0, gt=0)

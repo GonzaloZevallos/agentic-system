@@ -7,11 +7,13 @@ from pathlib import Path
 import pytest
 
 from agentic.core.knowledge.domain import stack
+from agentic.core.process.adapters.filesystem import FilesystemPrompts
 from agentic.core.process.application import preflight as module
 from agentic.core.process.application.preflight import (
     PLACEHOLDERS,
     UNKNOWN_PRODUCT,
     RunsOnItsOwnCheckout,
+    declared_stack,
     declared_stack_of,
     no_forbidden,
     no_setup,
@@ -152,6 +154,31 @@ class BrokenDesignStack(MemoryStack):
         raise ValueError("stack.yaml: expected a non-empty `prototype` under `design`")
 
 
+class BrokenParallelChecksStack(MemoryStack):
+    """A stack whose `parallel_checks` is not a bool: `declared_stack` must surface it at
+    load, before the gate would silently read it as a yes or a no."""
+
+    def parallel_checks(self, revision: str) -> bool:
+        raise ValueError("stack.yaml: expected `parallel_checks` to be true or false")
+
+
+def test_a_broken_parallel_checks_refuses_before_spending(stage0):
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    with pytest.raises(ValueError, match="expected `parallel_checks`"):
+        preflight(
+            Configuration(product_dir=PRODUCT), replace(ports, stack=BrokenParallelChecksStack())
+        )
+
+
+def test_a_stack_without_parallel_checks_passes_and_keeps_its_setup_as_the_answer(stage0):
+    """Absent is serial, never an error; and the validation call does not move what
+    `declared_stack` returns."""
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    stack = MemoryStack(setup={"deps": "uv sync"})
+    preflight(Configuration(product_dir=PRODUCT), replace(ports, stack=stack))
+    assert declared_stack(replace(ports, stack=stack)) == {"deps": "uv sync"}
+
+
 def test_a_broken_design_block_refuses_before_spending(stage0):
     ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
     with pytest.raises(ValueError, match="expected a non-empty `prototype`"):
@@ -266,3 +293,29 @@ def test_the_label_falls_back_instead_of_killing_a_node_already_running():
     assert (
         product_name(replace(memory_ports(), stack=MemoryStack(product="gym-saas"))) == "gym-saas"
     )
+
+
+def overlay_ports(product: Path, **files: str):
+    """Ports whose prompts are the real overlay reader over `product`."""
+    for stem, text in files.items():
+        path = product / ".agentic/playbooks" / f"{stem}.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    return memory_ports(prompts=FilesystemPrompts(product))
+
+
+def test_a_malformed_playbook_refuses_before_spending(stage0, tmp_path):
+    ports = overlay_ports(tmp_path, developer="items: not-a-list")
+    with pytest.raises(ValueError, match="developer"):
+        preflight(Configuration(product_dir=tmp_path), ports)
+
+
+def test_a_playbook_for_a_role_the_table_does_not_name_refuses(stage0, tmp_path):
+    ports = overlay_ports(tmp_path, pm="items: []")
+    with pytest.raises(ValueError, match="pm"):
+        preflight(Configuration(product_dir=tmp_path), ports)
+
+
+def test_the_delivery_records_are_not_mistaken_for_playbooks(stage0, tmp_path):
+    ports = overlay_ports(tmp_path, reflected="tasks: []", rejected="adds: []")
+    preflight(Configuration(product_dir=tmp_path), ports)

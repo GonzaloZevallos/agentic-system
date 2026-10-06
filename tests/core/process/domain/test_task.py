@@ -38,6 +38,8 @@ def test_reducers_are_read_from_the_annotations():
         "failures",
         "runs",
         "prompts",
+        "playbooks",
+        "playbooks_changed",
         "cost_usd",
         "subtasks",
         "findings",

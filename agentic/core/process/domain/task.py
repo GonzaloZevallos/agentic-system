@@ -207,6 +207,12 @@ def merge[T](current: dict[str, T] | None, update: dict[str, T] | None) -> dict[
     return {**(current or {}), **(update or {})}
 
 
+def first[T](current: dict[str, T] | None, update: dict[str, T] | None) -> dict[str, T]:
+    """The earliest write per key wins: a key already there is never overwritten, a new
+    key is added. For a value that is a fact about the first time something happened."""
+    return {**(update or {}), **(current or {})}
+
+
 class TaskInput(TypedDict):
     """What enters the graph. `id` is also the thread id (ADR-0003)."""
 
@@ -561,6 +567,14 @@ class TaskState(TaskInput, total=False):
     runs: Annotated[list[RoleRun], operator.add]
     # Short hash of each prompt that ran, keyed by role slug (ADR-0005).
     prompts: Annotated[dict[str, str], merge]
+    # Short hash of the playbook section each role first ran with, keyed by role slug
+    # (ADR-0043): `first`, never overwritten, so a window compares a task by the
+    # playbook it started with. Written only for a non-empty playbook, so a task with
+    # none has no key and an old document reads `{}`.
+    playbooks: Annotated[dict[str, str], first]
+    # A later, different playbook hash of the same role, or any hash of a role whose
+    # first run had none (`run_role.playbook_patch`): the window excludes the task.
+    playbooks_changed: Annotated[dict[str, str], merge]
     cost_usd: Annotated[float, add]
     # The technical stage (ADR-0011): subtasks by id, each Developer patches its own.
     subtasks: Annotated[dict[str, Subtask], merge]
@@ -685,6 +699,9 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
         elif reducer is operator.add:
             if len(value) > len(old):
                 patch[key] = value[len(old) :]
+        elif reducer is first:
+            if added := {k: v for k, v in value.items() if k not in old}:
+                patch[key] = added
         elif reducer is merge:
             if changed := {k: v for k, v in value.items() if k not in old or old[k] != v}:
                 patch[key] = changed

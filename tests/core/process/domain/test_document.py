@@ -575,3 +575,30 @@ def test_a_document_written_before_escalation_class_existed_still_parses():
     assert state["escalated"] == "PM→Product Analyst hit 2 returns: gap"
     assert "escalation_class" not in state
     assert rules.returns_pair(state) == "PM→Product Analyst"
+
+
+def test_render_writes_the_playbook_keys_only_when_non_empty():
+    base = {"id": "T-1", "title": "t", "description": "d"}
+    bare = document.render(base)
+    empty = document.render({**base, "playbooks": {}, "playbooks_changed": {}})
+    assert "playbooks" not in bare
+    assert empty == bare
+
+
+def test_the_playbook_keys_round_trip():
+    state = {
+        "id": "T-1",
+        "title": "t",
+        "description": "d",
+        "playbooks": {"developer": "abc123"},
+        "playbooks_changed": {"developer": "def456"},
+    }
+    parsed = document.parse(document.render(state))
+    assert parsed["playbooks"] == {"developer": "abc123"}
+    assert parsed["playbooks_changed"] == {"developer": "def456"}
+
+
+def test_an_old_document_without_the_playbook_keys_reads_as_empty():
+    parsed = document.parse(document.render({"id": "T-1", "title": "t", "description": "d"}))
+    assert parsed.get("playbooks", {}) == {}
+    assert parsed.get("playbooks_changed", {}) == {}

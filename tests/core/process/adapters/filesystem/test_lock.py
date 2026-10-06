@@ -108,3 +108,73 @@ def test_refusal_matches_what_acquire_would_raise_and_takes_nothing(tmp_path):
     assert message == str(info.value)
     # A read-only refusal is not itself an acquisition.
     assert lock.read("GH-1").command == "agentic run t d"
+
+
+# -- boot id (GH-176) -----------------------------------------------------------------
+
+
+def _lock(tmp_path, boot):
+    return FilesystemRunLock(tmp_path / "runs", boot_id=lambda: boot)
+
+
+def test_acquire_writes_the_boot_id(tmp_path):
+    lock = _lock(tmp_path, "boot-1")
+    lock.acquire("GH-1", "agentic run t d")
+    assert lock.read("GH-1").boot_id == "boot-1"
+
+
+def test_a_live_pid_recorded_in_another_boot_is_taken_over_and_not_refused(tmp_path):
+    """The rejected input: the pid is this test's own, so `os.kill` says alive."""
+    old = _lock(tmp_path, "boot-1")
+    old.acquire("GH-1", "agentic run t d")
+    new = _lock(tmp_path, "boot-2")
+    assert new.refusal("GH-1") is None
+    taken_over = new.acquire("GH-1", "agentic resume --issue 1")
+    assert taken_over is not None
+    assert taken_over.boot_id == "boot-1"
+    assert new.read("GH-1").boot_id == "boot-2"
+
+
+def test_a_live_pid_in_the_same_boot_still_refuses(tmp_path):
+    _lock(tmp_path, "boot-1").acquire("GH-1", "agentic run t d")
+    assert _lock(tmp_path, "boot-1").refusal("GH-1") is not None
+
+
+def test_a_record_without_a_boot_id_behaves_as_before(tmp_path):
+    lock = _lock(tmp_path, "boot-2")
+    lock._write("GH-1", pid=os.getpid(), host=lock._host(), started_at="2026-09-15T00:00:00Z")
+    path = lock._path("GH-1")
+    path.write_text(path.read_text().replace(', "boot_id": null', ""), encoding="utf-8")
+    assert lock.read("GH-1").boot_id is None
+    assert lock.refusal("GH-1") is not None  # os.kill decides: the pid is alive
+    lock._write("GH-2", pid=DEAD_PID, host=lock._host(), started_at="2026-09-15T00:00:00Z")
+    assert lock.refusal("GH-2") is None
+
+
+def test_keep_at_shutdown_marks_this_processs_record_and_keeps_the_boot_id(tmp_path):
+    lock = _lock(tmp_path, "boot-1")
+    lock.acquire("GH-1", "agentic run t d")
+    lock.keep_at_shutdown("GH-1")
+    record = lock.read("GH-1")
+    assert record.stopped_at_shutdown is True
+    assert record.boot_id == "boot-1"
+    assert record.command == "agentic run t d"
+
+
+def test_keep_at_shutdown_leaves_another_pids_record_untouched(tmp_path):
+    lock = _lock(tmp_path, "boot-1")
+    lock._write(
+        "GH-1",
+        pid=os.getpid() + 1,
+        host=lock._host(),
+        started_at="2026-09-15T00:00:00Z",
+        boot_id="boot-1",
+    )
+    lock.keep_at_shutdown("GH-1")
+    assert lock.read("GH-1").stopped_at_shutdown is False
+
+
+def test_keep_at_shutdown_with_no_record_is_a_no_op(tmp_path):
+    lock = _lock(tmp_path, "boot-1")
+    lock.keep_at_shutdown("GH-1")
+    assert lock.read("GH-1") is None

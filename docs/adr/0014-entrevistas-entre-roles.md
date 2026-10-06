@@ -263,3 +263,37 @@ Esta adenda no trae números: los aporta la corrida del experimento, después de
 merge, sobre el set de cinco (issue #27). Si el efímero se corta, README §13 registra
 "pingpong con efímero" como reemplazado y esta misma adenda se completa con el
 resultado — no una nueva.
+
+## Adenda 2026-10-05: el efímero corre en el modelo de los pensadores
+
+README §10 dice que un validador sin fuente propia **sobra** si no tiene asimetría de
+modelo y de prompt. Hasta esta adenda el efímero y Tech Lead corrían ambos en el
+modelo validador, así que solo quedaba la asimetría de prompt. Esta adenda supersede,
+de esta ADR, tanto la frase "modelo más capaz" como "se activa con `model_overrides`",
+que describían el mecanismo hasta ahora. Cuatro puntos (README §13, fila "El efímero
+usa modelo más capaz"):
+
+1. **La asimetría es un modelo distinto, no uno más capaz.** El efímero corre en el
+   modelo de los pensadores, el que no usó Tech Lead para escribir el plan que
+   entrevista. No es una jerarquía de capacidad: un validador en el mismo modelo que
+   el pensador ratifica, no valida (README §10), y eso es cierto tanto si ambos corren
+   en el modelo validador como si ambos corrieran en el de los pensadores. Lo que
+   cuenta es que sean distintos.
+2. **La regla vive en el `Role`, no en un default de `model_overrides`.** Los tres
+   slugs del efímero (`tech_lead_ephemeral`, `tech_lead_ephemeral_platform`,
+   `tech_lead_ephemeral_stack`) declaran `model_kind="actor"` en su propia definición;
+   `Role.runs_on` se lo da a `Configuration.model_for` en vez de `kind`.
+   `AGENTIC_MODEL_OVERRIDES` reemplaza el diccionario entero de overrides: un default
+   ahí para el efímero habría hecho que un override puesto para otra cosa (el brazo
+   liviano, por ejemplo) devolviera el efímero al modelo validador sin aviso, y un
+   literal de modelo habría dejado de seguir a `actor_model` cuando este se mueva
+   (issue hermano). Un `model_overrides[slug]` explícito sobre cualquiera de los tres
+   sigue ganando, antes que esta regla: `model_for` no cambió su orden.
+3. **Tech Lead sigue en el modelo validador.** Escribe el plan y también aprueba cada
+   subtarea y la integración; partirlo en dos roles rompería la continuidad entre plan
+   y revisión en que se apoya la revisión incremental (ADR-0015).
+4. **`skip_ephemeral` sigue siendo el experimento posterior** (adenda del
+   2026-09-22, arriba). Su brazo "con efímero" cambia de contenido con esta adenda sin
+   cambiar de nombre: el efímero que ese brazo mide, de aquí en más, corre en otro
+   modelo que antes de este commit. No se compara un lado de este commit contra el
+   otro.

@@ -9,6 +9,7 @@ Developer's word."""
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from ..domain import presubmit
@@ -37,6 +38,7 @@ class CheckoutPresubmit:
         check_timeout_s: float,
         *,
         witness: str | None = None,
+        parallel: bool = False,
     ):
         self.ports = ports
         self.path = path
@@ -48,6 +50,10 @@ class CheckoutPresubmit:
         # checkout). Keyword-only with this default so every existing construction
         # site compiles untouched.
         self.witness = witness
+        # The product's `parallel_checks`: run the declared checks concurrently. False
+        # (the default) is the serial gate of before, byte for byte; keyword-only so
+        # every existing construction site compiles untouched.
+        self.parallel = parallel
         self.refusals = 0
         # The witness's own budget, separate from `refusals`/`REFUSALS`: a misdeclared
         # witness must never spend the budget the checks need.
@@ -66,6 +72,10 @@ class CheckoutPresubmit:
 
     @property
     def timeout_s(self) -> float:
+        if self.parallel:
+            # Every check runs at once, each under its own `check_timeout_s`: the
+            # slowest one bounds the call, and the witness runs before them, alone.
+            return self.check_timeout_s + (self.check_timeout_s if self.witness else 0)
         base = self.check_timeout_s * max(len(self.checks), 1)
         return base + (self.check_timeout_s if self.witness else 0)
 
@@ -81,7 +91,8 @@ class CheckoutPresubmit:
         if moved and clean:
             if self.witness is not None:
                 witness_reason = self._run_witness(self.witness)
-            self.head, self.results = head, [self._run(n, c) for n, c in self.checks.items()]
+            results = self._run_all()
+            self.head, self.results = head, results
             self.invocations.append(self.results)
         # A witness disagreement leads, on its own capped budget: `refusals`/`REFUSALS`
         # stay for the checks alone, so a bad witness declaration cannot spend the
@@ -94,6 +105,15 @@ class CheckoutPresubmit:
             return None
         self.refusals += 1
         return presubmit.refused(reason, self.refusals)
+
+    def _run_all(self) -> list[CheckResult]:
+        if not self.parallel:
+            return [self._run(n, c) for n, c in self.checks.items()]
+        # `map` keeps declared order. If a `_run` raises, leaving the `with` waits for
+        # the other started checks before the error propagates, so no check outlives
+        # the call; nothing is recorded for it, the same as serial.
+        with ThreadPoolExecutor(max_workers=max(len(self.checks), 1)) as pool:
+            return list(pool.map(lambda item: self._run(*item), self.checks.items()))
 
     def markdown(self) -> str | None:
         """The checks as the Developer's section opens with them; None if none ran. The

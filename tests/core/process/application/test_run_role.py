@@ -5,30 +5,53 @@ from typing import get_args
 
 import anyio
 import pytest
+import yaml
 
 from agentic.core.process.application.ports import AttemptFailed, RawResult
+from agentic.core.process.application.preflight import PLACEHOLDERS
 from agentic.core.process.application.run_role import (
     Output,
     RoleFailure,
     TaskCapReached,
     context_for,
+    load_prompt,
     run_record,
     run_role,
     run_with_retry,
-    task_cap,
     with_context,
 )
 from agentic.core.process.application.schema_guard import RoleSchemaGuard
 from agentic.core.process.domain import rules, turn_notice
 from agentic.core.process.domain.document import HUMAN
-from agentic.core.process.domain.roles import DEVELOPER, PJM, PM, PRODUCT_ANALYST, ROLES
-from agentic.core.process.domain.task import FailureReason
+from agentic.core.process.domain.playbook import Item, Playbook, parse
+from agentic.core.process.domain.roles import (
+    DEVELOPER,
+    PJM,
+    PM,
+    PRODUCT_ANALYST,
+    ROLES,
+    TECH_LEAD_EPHEMERAL,
+    TECH_LEAD_INTERVIEWEE,
+    describe_flags,
+    prompt_hash,
+    render,
+)
+from agentic.core.process.domain.task import FailureReason, apply, delta
 from agentic.shared.configuration import Configuration
-from tests.fakes import ScriptedRunner, classified, delivered, memory_ports
+from tests.fakes import ScriptedRunner, classified, delivered, memory_ports, questions, tech_answers
 
 pytestmark = pytest.mark.anyio
 
 OK = classified(cost=0.03)
+
+LESSON = {
+    "id": "developer-1",
+    "lesson": "Run the checks first.",
+    "category": "spec-behaviour",
+    "since": "empty",
+    "seen_in": ["GH-1"],
+    "added_at": "2026-10-05",
+}
 
 
 async def run_pjm(
@@ -474,6 +497,7 @@ def test_every_role_reads_the_human_decisions_last_without_declaring_them():
 
 async def test_run_role_builds_the_patch_and_the_history(tmp_path):
     cfg = Configuration(product_dir=tmp_path)
+    actor_model = Configuration.model_fields["actor_model"].default
     runner = ScriptedRunner(
         product_analyst=[
             RawResult(
@@ -483,7 +507,7 @@ async def test_run_role_builds_the_patch_and_the_history(tmp_path):
                 "s2",
                 # A sub-agent spent part of this: 0.02 of the 0.1 total is not the
                 # role's own model.
-                cost_by_model={"claude-sonnet-5": 0.08, "claude-haiku-5": 0.02},
+                cost_by_model={actor_model: 0.08, "claude-haiku-5": 0.02},
                 usage={"input": 100, "output": 50, "cache_read": 10, "cache_write": 5},
                 calls=2,
                 tool_calls={"Read": 1},
@@ -524,9 +548,9 @@ async def test_run_role_builds_the_patch_and_the_history(tmp_path):
         "section": "Product Analyst",
         "version": 2,
         "session_id": "s2",
-        "model": "claude-sonnet-5",
+        "model": actor_model,
         "cost_usd": 0.1,
-        "cost_by_model": {"claude-sonnet-5": 0.08, "claude-haiku-5": 0.02},
+        "cost_by_model": {actor_model: 0.08, "claude-haiku-5": 0.02},
         "turns": 3,
         "max_turns": PRODUCT_ANALYST.max_turns,
         "tokens": {"input": 100, "output": 50, "cache_read": 10, "cache_write": 5},
@@ -870,7 +894,7 @@ async def test_run_role_turns_a_role_failure_into_an_escalation(tmp_path):
 
 
 async def test_run_role_escalates_when_the_task_cap_is_reached(tmp_path):
-    cfg = Configuration(product_dir=tmp_path, task_budget_usd=50.0)
+    cfg = Configuration(product_dir=tmp_path, task_max_budget_usd=50.0)
     runner = ScriptedRunner(pjm=[OK])
     output, patch = await run_role(
         {"id": "T-1", "title": "t", "description": "d", "cost_usd": 50.0},
@@ -887,18 +911,212 @@ async def test_run_role_escalates_when_the_task_cap_is_reached(tmp_path):
     assert "sections" not in patch and "runs" not in patch
 
 
-def test_the_task_cap_in_force_grows_with_the_plan_and_the_human_overrides_it(tmp_path):
-    # ADR-0004, fourth addendum: the base until there is a plan, then a share per
-    # subtask with the integration counted, never over the ceiling.
-    cfg = Configuration(product_dir=tmp_path)
+@pytest.mark.parametrize("subtask_count", [1, 12])
+async def test_the_task_cap_is_the_same_flat_ceiling_for_any_plan_size(tmp_path, subtask_count):
+    # ADR-0004, 2026-10-05 addendum: 250 for a 1-subtask plan and a 12-subtask plan alike.
+    subtasks = {f"s{n}": {} for n in range(subtask_count)}
+
+    async def run(cost_usd, cfg):
+        state = {"id": "T-1", "title": "t", "description": "d", "subtasks": subtasks}
+        runner = ScriptedRunner(pjm=[OK])
+        output, patch = await run_role(
+            {**state, "cost_usd": cost_usd}, PJM, cfg, memory_ports(runner), product="x"
+        )
+        return output, patch, runner
+
+    default = Configuration(product_dir=tmp_path, task_max_budget_usd=250.0)
+    output, _, runner = await run(249.0, default)
+    assert output is not None and len(runner.calls) == 1
+    output, patch, runner = await run(250.0, default)
+    assert output is None and runner.calls == []
+    assert patch["escalation_class"] == "cap"
+    assert patch["escalated"] == "PjM stopped by the task cap: 250.00 of 250.00 USD spent"
+    # The human raises it, and the plan size changes nothing.
+    raised = Configuration(product_dir=tmp_path, task_max_budget_usd=250.0, task_budget_usd=400.0)
+    output, _, runner = await run(250.0, raised)
+    assert output is not None and len(runner.calls) == 1
+
+
+async def test_the_ephemeral_tech_lead_runs_on_the_actor_model_the_interviewee_does_not(
+    tmp_path,
+):
+    # ADR-0014, addendum 2026-10-05: the efímero (interviewer) resolves to `actor_model`
+    # through `role.runs_on`, while Tech Lead interviewee (who plans) stays on
+    # `verifier_model`, unmoved -- the rejected case that fails if `run_role.py` still
+    # passes `role.kind` for the efímero.
+    cfg = Configuration(
+        product_dir=tmp_path, actor_model="actor-sentinel", verifier_model="verifier-sentinel"
+    )
     state = {"id": "T-1", "title": "t", "description": "d"}
-    assert task_cap(state, cfg) == 30.0
-    two = {**state, "subtasks": {"api": {}, "domain": {}}}
-    assert task_cap(two, cfg) == 30.0 + 15.0 * 3
-    many = {**state, "subtasks": {f"s{n}": {} for n in range(20)}}
-    assert task_cap(many, cfg) == 250.0
-    assert task_cap(many, Configuration(product_dir=tmp_path, task_budget_usd=400.0)) == 400.0
-    # The human raises the cap, never lowers it: a budget set before the plan does not
-    # stop the task again once the plan makes the formula larger.
-    early = Configuration(product_dir=tmp_path, task_budget_usd=45.0)
-    assert task_cap(state, early) == 45.0 and task_cap(two, early) == 75.0
+    runner = ScriptedRunner(
+        tech_lead_ephemeral=[questions(done=True)],
+        tech_lead_interviewee=[tech_answers()],
+    )
+    ports = memory_ports(runner)
+    await run_role(state, TECH_LEAD_EPHEMERAL, cfg, ports, round=1, max_rounds=12)
+    await run_role(state, TECH_LEAD_INTERVIEWEE, cfg, ports)
+    ephemeral_call = next(c for c in runner.calls if c["slug"] == "tech_lead_ephemeral")
+    interviewee_call = next(c for c in runner.calls if c["slug"] == "tech_lead_interviewee")
+    assert ephemeral_call["model"] == cfg.actor_model
+    assert interviewee_call["model"] == cfg.verifier_model
+    assert interviewee_call["model"] != cfg.actor_model
+
+
+def lessons(*texts: str) -> Playbook:
+    return Playbook(
+        slug="developer",
+        items=tuple(
+            Item(
+                id=f"developer-{n}",
+                lesson=text,
+                category="spec-behaviour",
+                since="empty",
+                seen_in=("GH-1",),
+                added_at="2026-10-05",
+            )
+            for n, text in enumerate(texts, 1)
+        ),
+    )
+
+
+CFG = Configuration(product_dir=Path("/repos/product"))
+
+
+def load(ports, role=DEVELOPER):
+    return load_prompt(role, CFG, ports, ports.flags.load(), **PLACEHOLDERS)
+
+
+def test_an_empty_playbook_leaves_the_prompt_and_its_hash_as_render_makes_them():
+    ports = memory_ports()
+    raw, source = ports.prompts.raw(DEVELOPER)
+    expected = render(
+        raw,
+        source,
+        max_changes=CFG.max_changes_requested_per_pair,
+        max_turns=DEVELOPER.max_turns,
+        flags=describe_flags(ports.flags.load()),
+        **PLACEHOLDERS,
+    )
+    assert load(ports) == expected
+    assert load(ports).playbook == ""
+
+
+def test_a_playbook_adds_its_section_after_the_text_and_moves_the_hash():
+    ports = memory_ports()
+    empty = load(ports)
+    ports.prompts.playbooks["developer"] = lessons("Run the checks first.", "Cite the file.")
+    loaded = load(ports)
+    section = (
+        "### Playbook\n- Run the checks first. (spec-behaviour)\n- Cite the file. (spec-behaviour)"
+    )
+    assert loaded.text == empty.text + "\n\n" + section
+    raw, _ = ports.prompts.raw(DEVELOPER)
+    assert loaded.hash == prompt_hash(raw + "\n" + section)
+    assert loaded.hash != empty.hash
+    assert loaded.playbook == prompt_hash(section)
+    assert loaded.source == empty.source
+
+
+def test_a_lesson_with_a_placeholder_cannot_even_be_parsed():
+    with pytest.raises(ValueError, match="placeholder"):
+        parse(
+            yaml.safe_dump({"items": [{**LESSON, "lesson": "Use {{date}} always."}]}),
+            "developer",
+        )
+
+
+def test_the_section_is_never_filled_like_the_template():
+    """Built past `parse` on purpose, so the section's own text is under test: a
+    `{{date}}` in it stays `{{date}}`, not today's date, and no placeholder is looked up."""
+    ports = memory_ports()
+    ports.prompts.playbooks["developer"] = lessons("Keep {{date}} and {{nope}} as they are.")
+    loaded = load(ports)
+    assert "- Keep {{date}} and {{nope}} as they are. (spec-behaviour)" in loaded.text
+
+
+async def _run_developer(state, ports, tmp_path):
+    return await run_role(
+        state,
+        DEVELOPER,
+        Configuration(product_dir=tmp_path),
+        ports,
+        subtask="api",
+        invariants="",
+        branches="",
+        checks="",
+    )
+
+
+def _ports_for_runs(count: int = 1):
+    runner = ScriptedRunner(
+        developer=[RawResult(delivered().structured_output, 0.03) for _ in range(count)]
+    )
+    return memory_ports(runner)
+
+
+def _playbook_hash(ports) -> str:
+    return load(ports).playbook
+
+
+async def test_the_first_run_with_a_playbook_records_its_hash_under_playbooks(tmp_path):
+    ports = _ports_for_runs()
+    ports.prompts.playbooks["developer"] = lessons("Run the checks first.")
+    _, patch = await _run_developer(
+        {"id": "T-1", "title": "t", "description": "d"}, ports, tmp_path
+    )
+    assert patch["playbooks"] == {"developer": _playbook_hash(ports)}
+    assert "playbooks_changed" not in patch
+
+
+async def test_a_task_with_no_playbook_gets_neither_key(tmp_path):
+    ports = _ports_for_runs()
+    _, patch = await _run_developer(
+        {"id": "T-1", "title": "t", "description": "d"}, ports, tmp_path
+    )
+    assert "playbooks" not in patch
+    assert "playbooks_changed" not in patch
+
+
+async def test_the_first_playbook_hash_is_never_overwritten_across_runs(tmp_path):
+    ports = _ports_for_runs(3)
+    ports.prompts.playbooks["developer"] = lessons("Run the checks first.")
+    state = {"id": "T-1", "title": "t", "description": "d"}
+    first_hash = _playbook_hash(ports)
+    _, first = await _run_developer(state, ports, tmp_path)
+    state = apply(state, first)
+    # The same playbook again: nothing new to record.
+    _, same = await _run_developer(state, ports, tmp_path)
+    assert "playbooks" not in same and "playbooks_changed" not in same
+    # A different one: the first stays, the later goes beside it.
+    ports.prompts.playbooks["developer"] = lessons("Run the checks first.", "Cite the file.")
+    later_hash = _playbook_hash(ports)
+    _, later = await _run_developer(state, ports, tmp_path)
+    assert "playbooks" not in later
+    assert later["playbooks_changed"] == {"developer": later_hash}
+    folded = apply(state, later)
+    assert folded["playbooks"] == {"developer": first_hash}
+    assert folded["playbooks_changed"] == {"developer": later_hash}
+
+
+async def test_a_playbook_that_appears_after_an_empty_first_run_is_recorded_as_changed(tmp_path):
+    ports = _ports_for_runs(2)
+    state = {"id": "T-1", "title": "t", "description": "d"}
+    _, first = await _run_developer(state, ports, tmp_path)
+    state = apply(state, first)
+    ports.prompts.playbooks["developer"] = lessons("Run the checks first.")
+    _, later = await _run_developer(state, ports, tmp_path)
+    recorded = {"developer": _playbook_hash(ports)}
+    assert later["playbooks"] == recorded
+    assert later["playbooks_changed"] == recorded
+
+
+def test_the_playbook_keys_fold_and_subtract_through_the_reducers():
+    before = {"id": "T-1", "title": "t", "description": "d", "playbooks": {"developer": "a"}}
+    patch = {"playbooks": {"developer": "b", "pm": "c"}, "playbooks_changed": {"developer": "b"}}
+    after = apply(before, patch)
+    assert after["playbooks"] == {"developer": "a", "pm": "c"}
+    assert after["playbooks_changed"] == {"developer": "b"}
+    assert delta(before, after) == {
+        "playbooks": {"pm": "c"},
+        "playbooks_changed": {"developer": "b"},
+    }

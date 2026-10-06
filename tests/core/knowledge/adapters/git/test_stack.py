@@ -95,3 +95,21 @@ def test_the_name_is_read_at_head_and_not_at_the_tasks_base(product):
     assert GitStack(product).product() == "gym-saas"
     with pytest.raises(ValueError, match="expected `product`"):
         GitStack(product).product(base)
+
+
+def test_parallel_checks_is_read_from_the_base_commit(product):
+    base = commit_stack(product, "checks:\n  tests: pytest\nparallel_checks: true\n")
+    commit_stack(product, "checks:\n  tests: pytest\n")  # a later commit drops it: not the base's
+    assert GitStack(product).parallel_checks(base) is True
+    assert GitStack(product).parallel_checks("HEAD") is False
+
+
+def test_a_product_that_declares_no_parallel_checks_runs_them_serially(product):
+    base = commit_stack(product, "checks:\n  tests: pytest\n")
+    assert GitStack(product).parallel_checks(base) is False
+
+
+def test_a_parallel_checks_that_is_not_a_bool_at_the_base_is_an_error(product):
+    base = commit_stack(product, 'checks:\n  tests: pytest\nparallel_checks: "true"\n')
+    with pytest.raises(ValueError, match="expected `parallel_checks`"):
+        GitStack(product).parallel_checks(base)

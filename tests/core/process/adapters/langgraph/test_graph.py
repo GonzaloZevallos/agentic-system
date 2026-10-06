@@ -581,11 +581,15 @@ async def test_models_follow_kind(config):
     script = script_for(**technical())
     await run_graph(script, config)
     models = {c["slug"]: c["model"] for c in script.calls}
+    actor_model = Configuration.model_fields["actor_model"].default
     verifier_model = Configuration.model_fields["verifier_model"].default
-    assert models["pjm"] == models["product_analyst"] == "claude-sonnet-5"
-    assert models["product_analyst_interviewer"] == models["developer"] == "claude-sonnet-5"
+    assert models["pjm"] == models["product_analyst"] == actor_model
+    assert models["product_analyst_interviewer"] == models["developer"] == actor_model
     assert models["pm"] == models["pm_interviewee"] == verifier_model
-    assert models["tech_lead_ephemeral"] == models["tech_lead"] == verifier_model
+    # The efímero (interviewer) runs on the actor model (ADR-0014, addendum
+    # 2026-10-05); Tech Lead (who plans and reviews) stays on the verifier model.
+    assert models["tech_lead_ephemeral"] == actor_model
+    assert models["tech_lead"] == verifier_model
     assert models["tech_lead_review"] == verifier_model
 
 
@@ -833,7 +837,7 @@ async def test_role_failure_escalates_and_keeps_failures(config, tmp_path):
         "section": "PjM",
         "version": 1,
         "session_id": "",
-        "model": "claude-sonnet-5",
+        "model": Configuration.model_fields["actor_model"].default,
         "cost_usd": 0.01,
         "cost_by_model": {},
         "turns": 0,
@@ -1024,7 +1028,10 @@ async def test_each_node_opens_and_finishes_the_roles_span(config):
         role_spans[3].attributes["agentic.role.version"] == 2
         and role_spans[3].attributes["agentic.role.rework"]
     )
-    assert role_spans[6].attributes["agentic.role.model"] == "claude-sonnet-5"
+    assert (
+        role_spans[6].attributes["agentic.role.model"]
+        == Configuration.model_fields["actor_model"].default
+    )
     assert task.attributes["task.status"] == "ready_for_review"
     assert task.attributes["task.returns"] == 1
     # Every role span says which product the run was over, read from what the product
@@ -1182,7 +1189,7 @@ async def test_the_task_cap_pauses_the_task_and_a_raised_cap_resumes_it_to_deliv
     }
     assert (await app.aget_state(config)).next == ("pause",)
     assert fakes.tracker.labels == [("GH-1", "needs-human")]
-    assert "`agentic resume --issue 1 --task-budget 16`" in fakes.tracker.comments[0][1]
+    assert "`agentic resume --issue 1 --task-budget 11`" in fakes.tracker.comments[0][1]
 
     final = await app.ainvoke(Command(resume={"decision": None}), config=raised(config))
     assert final["status"] == "ready_for_review" and final["escalated"] is None
@@ -1359,7 +1366,7 @@ async def test_what_one_review_found_reaches_the_next_wave_and_the_integration(c
     # reviews gets the invariant, from the first wave on, when the table is still empty.
     assert final["invariants"] == ["Every subscription query folds duplicates."]
     first_wave = [c for c in script.calls if c["slug"] == "developer"][0]
-    assert "- Every subscription query folds duplicates." in first_wave["system_prompt"]
+    assert "1. Every subscription query folds duplicates." in first_wave["system_prompt"]
     assert f"## {FINDINGS}\n\nNone open." in first_wave["prompt"]
 
     # The second wave's Developer rebuilds `domain` seeing what `api`'s review found,

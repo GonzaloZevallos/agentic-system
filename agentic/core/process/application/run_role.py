@@ -17,10 +17,9 @@ seventh addendum) instead of the "Retry. Fix exactly what failed." every other
 The task cap is checked here too, before every attempt, because every role passes
 through here: the routing between nodes would miss the rounds of an interview.
 Reached, `TaskCapReached` escalates the same way, but it is not a role failure: the
-role did not break (ADR-0004, third addendum). The cap is read off the state each
-time, so it grows as soon as the plan is in (fourth addendum), and against what the
-whole process spent, which is what the state cannot hold once branches run in
-parallel (fifth addendum, `limits.py`).
+role did not break (ADR-0004, third addendum). The cap is a flat ceiling, the same for any
+plan size (2026-10-05 addendum), checked against what the whole process spent, which is
+what the state cannot hold once branches run in parallel (fifth addendum, `limits.py`).
 
 Context rule (README.md, 6): each role reads, in full, the sections it declares in
 `Role.reads`, after the engineering standards and the product knowledge if it reads
@@ -57,12 +56,21 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import document, plan_view, rules, schemas, turn_notice
+from ..domain import document, plan_view, playbook, rules, schemas, turn_notice
 from ..domain.document import HUMAN
-from ..domain.roles import ORIGINAL, TECH_LEAD, Prompt, Role, describe_flags, render
+from ..domain.roles import (
+    ORIGINAL,
+    TECH_LEAD,
+    Prompt,
+    Role,
+    describe_flags,
+    prompt_hash,
+    render,
+)
 from ..domain.suppressions import Forbidden
 from ..domain.task import WAITING_ON_HUMAN, EscalationClass, Failure, RoleRun, TaskState, apply
 from .limits import RunLimits
@@ -251,9 +259,14 @@ def with_context(
 def load_prompt(
     role: Role, cfg: Configuration, ports: Ports, vocabulary: dict[str, str], **placeholders: object
 ) -> Prompt:
-    """The role's system prompt, overlay applied, with the limits and the vocabulary in."""
+    """The role's system prompt, overlay applied, with the limits and the vocabulary in.
+
+    The role's playbook (ADR-0043) is appended after the placeholders are filled, so it
+    never goes through them. With none, the prompt is exactly what `render` made; with
+    one, the hash covers the raw text and the section, so a playbook change is a prompt
+    change for comparison."""
     raw, source = ports.prompts.raw(role)
-    return render(
+    rendered = render(
         raw,
         source,
         max_changes=cfg.max_changes_requested_per_pair,
@@ -261,6 +274,38 @@ def load_prompt(
         flags=describe_flags(vocabulary),
         **placeholders,
     )
+    text = playbook.section(ports.prompts.playbook(role))
+    if not text:
+        return rendered
+    return Prompt(
+        text=rendered.text + "\n\n" + text,
+        hash=prompt_hash(raw + "\n" + text),
+        source=source,
+        playbook=prompt_hash(text),
+    )
+
+
+def playbook_patch(state: TaskState, role: Role, loaded: Prompt) -> TaskState:
+    """The playbook keys of a run's patch (ADR-0043): which playbook section the role
+    ran with, for the window and `eval compare`, beside `prompts` (which stays last-wins).
+
+    With an empty playbook nothing is written, so a task with none has neither key. The
+    first non-empty hash goes in `playbooks` and is never overwritten (`task.first`). A
+    different later hash goes in `playbooks_changed`, and so does the first hash of a
+    role that already ran with no playbook (`prompts` has its slug, `playbooks` does
+    not): the section hash of that first run is the segment `empty`, and a task that
+    ran under two playbooks is excluded from every window the same way."""
+    if not loaded.playbook:
+        return {}
+    recorded = state.get("playbooks", {}).get(role.slug)
+    if recorded is None:
+        patch: TaskState = {"playbooks": {role.slug: loaded.playbook}}
+        if role.slug in state.get("prompts", {}):
+            patch["playbooks_changed"] = {role.slug: loaded.playbook}
+        return patch
+    if recorded != loaded.playbook:
+        return {"playbooks_changed": {role.slug: loaded.playbook}}
+    return {}
 
 
 async def run_with_retry(
@@ -279,6 +324,7 @@ async def run_with_retry(
     spent_usd: float = 0.0,
     task_cap_usd: float | None = None,
     presubmit: Presubmit | None = None,
+    delivery_check: SchemaGuard | None = None,
     forbidden: Sequence[Forbidden] | None = None,
     limits: RunLimits | None = None,
     section: str | None = None,
@@ -301,6 +347,10 @@ async def run_with_retry(
     `forbidden` is handed to every attempt too: the product's own declared suppression
     cage (issue #38), `None` by default, byte for byte what every caller but a
     Developer's own already passes.
+
+    `delivery_check` is a second in-turn refuser of the delivery (GH-174: the Developer's
+    coverage map), asked after the role's own schema guard and before the presubmit.
+    `None` leaves the guard the runner receives exactly as it was.
 
     `section` is what a successful attempt would write (`run_record`'s own default,
     the role's name, when the caller has none yet): a failed attempt stamps it on its
@@ -331,7 +381,10 @@ async def run_with_retry(
     # would reset it every attempt. Wired only for a role that executes (Developer, the
     # integrator): every other role's `hooks_for`/`options_for` see `None`, byte for
     # byte what they saw before this guard existed.
-    guard: SchemaGuard | None = RoleSchemaGuard(role.schema, vocabulary) if role.executes else None
+    schema_guard: SchemaGuard | None = (
+        RoleSchemaGuard(role.schema, vocabulary) if role.executes else None
+    )
+    guard = _chain(schema_guard, delivery_check)
     for attempt in range(1, max(retries, 0) + 2):
         total = max(spent_usd + spent(failures), limits.spent_usd)
         if task_cap_usd is not None and total >= task_cap_usd:
@@ -401,6 +454,29 @@ async def run_with_retry(
         output.cold_fallback = fallback_now
         return output
     raise RoleFailure(role, failures)
+
+
+class GuardChain:
+    """Chain of Responsibility over two `SchemaGuard`s that share the delivery hook's one
+    guard seat: asked in order, the first denial wins and the second is not asked.
+    `refusals` is the sum of the two, each keeping its own cap."""
+
+    def __init__(self, first: SchemaGuard, second: SchemaGuard):
+        self.first = first
+        self.second = second
+
+    @property
+    def refusals(self) -> int:
+        return self.first.refusals + self.second.refusals
+
+    def __call__(self, tool_input: dict[str, Any]) -> str | None:
+        return self.first(tool_input) or self.second(tool_input)
+
+
+def _chain(first: SchemaGuard | None, second: SchemaGuard | None) -> SchemaGuard | None:
+    if first is None or second is None:
+        return first or second
+    return GuardChain(first, second)
 
 
 def _stale_session(resume: str | None, failures: list[Failure], cold_prompt: str | None) -> bool:
@@ -569,15 +645,10 @@ def _subagent_cost_usd(cost_by_model: dict[str, float], model: str) -> float:
     return sum(cost for spent_on, cost in cost_by_model.items() if spent_on != model)
 
 
-def task_cap(state: TaskState, cfg: Configuration) -> float:
-    """The cap in force for this state: the formula over the plan (ADR-0004, fourth
-    addendum), or the human's when a resume set a higher one. The human raises the cap,
-    never lowers it: a budget given before the plan must not stop the task again when the
-    plan makes the formula larger."""
-    formula = rules.task_cap(
-        state, cfg.task_budget_base_usd, cfg.task_budget_per_subtask_usd, cfg.task_max_budget_usd
-    )
-    return max(formula, cfg.task_budget_usd or 0.0)
+def task_cap(cfg: Configuration) -> float:
+    """The cap in force: one flat ceiling, the same for any plan size (ADR-0004,
+    2026-10-05 addendum). The human raises it with a task budget, never lowers it."""
+    return rules.task_cap(cfg.task_max_budget_usd, cfg.task_budget_usd)
 
 
 def escalation(exc: Escalating) -> TaskState:
@@ -700,6 +771,7 @@ async def run_role(
     prompt: str | None = None,
     cold_prompt: str | None = None,
     presubmit: Presubmit | None = None,
+    delivery_check: SchemaGuard | None = None,
     forbidden: Sequence[Forbidden] | None = None,
     **placeholders: object,
 ) -> tuple[Output | None, TaskState]:
@@ -713,7 +785,8 @@ async def run_role(
     already holds it (an interview's later rounds); `presubmit` is asked when it
     delivers. `forbidden` is the product's own declared suppression cage (issue #38),
     threaded through exactly where `presubmit` already travels: `None` by default, and
-    only `develop.py`'s Developer call passes one. `cold_prompt` is the full context for
+    only `develop.py`'s Developer call passes one. `delivery_check` is the Developer's
+    coverage guard (GH-174), threaded the same way. `cold_prompt` is the full context for
     the one retry that drops `resume` when it turns out stale (`run_with_retry`'s own
     doc): `run_role` never builds one on its own, since only the caller knows what a
     message it did not build should contain (ADR-0004, sixth addendum) — a caller that
@@ -722,7 +795,11 @@ async def run_role(
     section = section or role.name
     vocabulary = ports.flags.load()
     loaded = load_prompt(role, cfg, ports, vocabulary, **placeholders)
-    patch: TaskState = {"current_role": role.name, "prompts": {role.slug: loaded.hash}}
+    patch: TaskState = {
+        "current_role": role.name,
+        "prompts": {role.slug: loaded.hash},
+        **playbook_patch(state, role, loaded),
+    }
     if prompt is None:
         standards, knowledge = preamble(role, ports, cwd)
         prompt = context_for(
@@ -733,7 +810,7 @@ async def run_role(
             role,
             prompt,
             system_prompt=loaded.text,
-            model=cfg.model_for(role.slug, role.kind),
+            model=cfg.model_for(role.slug, role.runs_on),
             retries=cfg.role_retries,
             vocabulary=vocabulary,
             cwd=cwd or cfg.product_dir,
@@ -742,8 +819,9 @@ async def run_role(
             resume=resume,
             max_budget_usd=cfg.max_budget_usd,
             spent_usd=state.get("cost_usd", 0.0),
-            task_cap_usd=task_cap(state, cfg),
+            task_cap_usd=task_cap(cfg),
             presubmit=presubmit,
+            delivery_check=delivery_check,
             forbidden=forbidden,
             limits=ports.limits,
             section=section,

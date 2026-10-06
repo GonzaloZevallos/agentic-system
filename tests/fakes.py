@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import threading
 from collections.abc import Callable
 from pathlib import Path
 
@@ -14,13 +15,16 @@ from agentic.core.process.application.ports import (
     IssueComment,
     IssueState,
     LaunchAttempt,
+    ListedPullRequest,
     Ports,
     RawResult,
     RunRegistration,
     SampleAppHandle,
+    Upstream,
 )
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.design import Design
+from agentic.core.process.domain.playbook import Playbook
 from agentic.core.process.domain.roles import PROMPTS_DIR, Role
 from agentic.core.process.domain.suppressions import Forbidden
 from agentic.core.process.domain.task import DependencyState, MergeOutcome, TaskInput, TaskState
@@ -164,6 +168,11 @@ class MemoryPrompts:
 
     def __init__(self, **overrides: str):
         self.overrides = overrides
+        # Seeded by slug; a role with none has an empty playbook.
+        self.playbooks: dict[str, Playbook] = {}
+
+    def playbook(self, role: Role) -> Playbook:
+        return self.playbooks.get(role.slug, Playbook(slug=role.slug))
 
     def raw(self, role: Role) -> tuple[str, Path]:
         if role.slug in self.overrides:
@@ -192,6 +201,7 @@ class MemoryStack:
         witness: str | None = None,
         forbidden: list[Forbidden] | None = None,
         design: Design | None = None,
+        parallel_checks: bool = False,
     ):
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -208,6 +218,9 @@ class MemoryStack:
         # legitimate absence `witness` has: every product but the one a design task
         # prepares for.
         self.declared_design = design
+        # False is a product that does not opt in to concurrent checks (ADR-0044), which
+        # is every product until its own file says otherwise.
+        self.declared_parallel_checks = parallel_checks
         self.revisions: list[str] = []
 
     def checks(self, revision: str) -> dict[str, str]:
@@ -223,6 +236,10 @@ class MemoryStack:
         # list to prove exactly `checks` and `setup` are asked (issue #22, 7), and a
         # witness read must not silently grow that count out from under them.
         return self.declared_witness
+
+    def parallel_checks(self, revision: str) -> bool:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_parallel_checks
 
     def forbidden(self, revision: str) -> list[Forbidden]:
         # Not tracked in `revisions` either, `witness`'s own reason.
@@ -240,16 +257,58 @@ class MemoryStack:
 
 class MemoryCommands:
     """Answers each command from its queue, green when the queue is empty or missing;
-    `ran` keeps (cwd, command)."""
+    `ran` keeps (cwd, command).
 
-    def __init__(self, **queues: list[CommandResult]):
+    Safe to call from several threads (the parallel gate does): a lock guards `ran` and
+    the queues. `in_flight` counts the calls inside `run` now and `high_water` the most
+    there ever were at once. `holds` maps a command to a `threading.Event`: that call
+    waits inside `run` until the test sets it (never a `sleep` as a proof). `raises`
+    lists commands whose call raises `RuntimeError`. `completed` keeps every command
+    whose call has left `run`, raised or not, in the order they left. With none of these
+    options the behaviour is the plain one."""
+
+    HOLD_LIMIT_S = 10.0  # a test that forgets to release must fail, not hang the suite
+
+    def __init__(
+        self,
+        *,
+        holds: dict[str, threading.Event] | None = None,
+        raises: set[str] | None = None,
+        **queues: list[CommandResult],
+    ):
         self.queues = {k: list(v) for k, v in queues.items()}
         self.ran: list[tuple[Path, str]] = []
+        self.holds = holds or {}
+        self.raises = raises or set()
+        self.in_flight = 0
+        self.high_water = 0
+        self.completed: list[str] = []
+        self._changed = threading.Condition()
+
+    def wait_until(self, predicate: Callable[[], bool], timeout_s: float = 5.0) -> bool:
+        """Block until `predicate` holds over this fake's state; False on timeout."""
+        with self._changed:
+            return self._changed.wait_for(predicate, timeout_s)
 
     def run(self, cwd: Path, command: str, timeout_s: float) -> CommandResult:
-        self.ran.append((cwd, command))
-        queue = self.queues.get(command)
-        return queue.pop(0) if queue else CommandResult(0, "ok")
+        with self._changed:
+            self.ran.append((cwd, command))
+            self.in_flight += 1
+            self.high_water = max(self.high_water, self.in_flight)
+            self._changed.notify_all()
+        try:
+            if (hold := self.holds.get(command)) is not None:
+                hold.wait(self.HOLD_LIMIT_S)
+            if command in self.raises:
+                raise RuntimeError(f"{command} blew up")
+            with self._changed:
+                queue = self.queues.get(command)
+                return queue.pop(0) if queue else CommandResult(0, "ok")
+        finally:
+            with self._changed:
+                self.in_flight -= 1
+                self.completed.append(command)
+                self._changed.notify_all()
 
 
 class MemorySampleApp:
@@ -341,6 +400,8 @@ class MemoryWorkspace:
         self.dependency_state_calls: list[tuple[Path, str, tuple[str, ...]]] = []
         self.dependency_states: dict[str, list[DependencyState]] = {}
         self.pushed: list[str] = []
+        # `(ref, relative)` -> the text `show` answers; absent is `None`.
+        self.files: dict[tuple[str, str], str] = {}
         self.cleaned: list[str] = []
         self._looks: dict[Path, int] = {}
         self.existing_branches: dict[str, tuple[str, str]] = {}
@@ -359,6 +420,11 @@ class MemoryWorkspace:
         # not be confused with ("ante la duda, no lanza" needs a rejected-input test
         # for this, not only for the known-false case `ancestors` already covers).
         self.ancestor_errors: set[str] = set()
+        # What `upstream()` answers (the poller's blocker tip, GH-180) and how many times
+        # it was asked: the real one fetches, so "once per round, and only when a blocker
+        # needs it" is a count.
+        self.upstream_answer = Upstream("HEAD", None, None)
+        self.upstream_calls = 0
         self.checkouts: list[Path] = []
         # The worktrees this fake has made, as a real one has them on disk.
         self.on_disk: set[Path] = set()
@@ -428,8 +494,11 @@ class MemoryWorkspace:
         self.commits.append((path, message))
         return "c1"
 
-    def push(self, branch: str) -> None:
+    def push(self, branch: str, *, replace: bool = False) -> None:
         self.pushed.append(branch)
+
+    def show(self, ref: str, relative: str) -> str | None:
+        return self.files.get((ref, relative))
 
     def cleanup(self, task_id: str) -> None:
         self.cleaned.append(task_id)
@@ -464,6 +533,10 @@ class MemoryWorkspace:
             raise GitError(f"git merge-base --is-ancestor {sha} {ref} failed: scripted")
         return sha in self.ancestors
 
+    def upstream(self) -> Upstream:
+        self.upstream_calls += 1
+        return self.upstream_answer
+
 
 class MemoryTracker:
     def __init__(self, url: str = "https://github.com/o/r/pull/7"):
@@ -489,6 +562,10 @@ class MemoryTracker:
         # `earlier`/`issue_comments`, which stay bodies-only, and from `self.comments`
         # above, which is every comment *this fake posted*, not the issue's own.
         self.timestamped: dict[str, list[IssueComment]] = {}
+        # The playbook delivery's reads and writes: every PR `pull_requests` lists, and
+        # `(number, body)` of each body update.
+        self.listed: list[ListedPullRequest] = []
+        self.updated_bodies: list[tuple[int, str]] = []
 
     def open_pull_request(self, task_id: str, branch: str, title: str, body: str) -> str:
         self.pull_requests.append((branch, title, body))
@@ -506,6 +583,12 @@ class MemoryTracker:
 
     def unlabel(self, task_id: str, label: str) -> None:
         self.unlabeled.append((task_id, label))
+
+    def list_pull_requests(self) -> list[ListedPullRequest]:
+        return list(self.listed)
+
+    def update_pull_request_body(self, number: int, body: str) -> None:
+        self.updated_bodies.append((number, body))
 
     def issue_comments(self, task_id: str) -> list[str]:
         return [*self.earlier, *(text for _, text in self.comments)]

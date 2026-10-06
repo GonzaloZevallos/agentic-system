@@ -20,13 +20,13 @@ import signal
 import subprocess
 import sys
 import uuid
-from collections.abc import Awaitable, Callable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, contextmanager
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from functools import partial
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 import anyio
 import yaml
@@ -41,16 +41,18 @@ from .core.knowledge.domain import knowledge
 from .core.knowledge.domain import stack as knowledge_stack
 from .core.measurement.adapters.otel import telemetry
 from .core.measurement.adapters.otel.telemetry import InvocationKind
-from .core.measurement.domain import evaluation, scorecard
+from .core.measurement.domain import evaluation, playbook_window, scorecard
 from .core.measurement.domain import metrics as delivery_metrics
 from .core.process.adapters.filesystem import (
     FilesystemRunLock,
     FilesystemRunRegistry,
     FilesystemTaskDocuments,
+    liveness,
 )
 from .core.process.adapters.git.workspace import GitError
 from .core.process.adapters.langgraph.graph import ESCALATE
-from .core.process.application import archive
+from .core.process.adapters.shell import inhibitor
+from .core.process.application import archive, reflect_run
 from .core.process.application import poll as pollmod
 from .core.process.application import resume as resuming
 from .core.process.application.escalate import NEEDS_HUMAN
@@ -78,6 +80,7 @@ from .core.process.application.stack_review import stack_review as run_stack_rev
 from .core.process.domain import document as task_document
 from .core.process.domain import legacy_names, stack_signals
 from .core.process.domain import stack_review as stack_review_texts
+from .core.process.domain.playbook import Delta, Playbook
 from .core.process.domain.roles import ROLES
 from .core.process.domain.task import PullRequest, TaskInput, TaskState
 from .shared.configuration import ENV_PREFIX, LOGS_DIR, Configuration, MissingProductDir
@@ -343,6 +346,23 @@ def main() -> None:
         metavar="SECONDS",
         help="how long to wait between rounds (default 60)",
     )
+    reflect = sub.add_parser(
+        "reflect",
+        help="what closed tasks' returns teach each role (ADR-0043): candidate playbook "
+        "deltas on the branch agentic/playbook, in one pull request for a person to merge",
+    )
+    reflect.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
+    reflect_scope = reflect.add_mutually_exclusive_group(required=True)
+    reflect_scope.add_argument("--issue", type=int, metavar="N", help="reflect on issue N's task")
+    reflect_scope.add_argument(
+        "--all", action="store_true", help="reflect on every eligible closed task, up to the cap"
+    )
+    reflect.add_argument(
+        "--since",
+        metavar="YYYY-MM-DD",
+        help="reach back to tasks closed on or after this day (the first run reflects "
+        "nothing older than itself otherwise)",
+    )
     for command in (run, resume):
         command.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
         command.add_argument(
@@ -399,7 +419,7 @@ def main() -> None:
         if args.command != "stack" and not cfg.agentic_dir.is_dir():
             raise ValueError(f"{cfg.product_dir} is not a product repo: no .agentic/ directory")
         ports = default_ports(cfg)
-        if args.command not in ("close", "eval", "stack", "poll"):
+        if args.command not in ("close", "eval", "stack", "poll", "reflect"):
             # `close` runs no role and spends nothing, so the gate that renders every
             # role's prompt and checks the product's stack before a run spends money
             # does not apply to it (Tech Lead plan, subtask `close-command`): only
@@ -435,6 +455,7 @@ def main() -> None:
             # `poll` spends nothing itself (every role runs in a spawned child's own
             # process); it still detaches the same way, and the same TTY warning applies.
             _warn_no_tty(args.detach)
+        stop: StopCause | None = None
         if args.command == "resume":
             task_id = ports.inbox.task_id(args.issue)
             base = declared_stack_of(task_id, ports)
@@ -447,6 +468,7 @@ def main() -> None:
                 print(f"agentic: {problem}", file=sys.stderr)
             log_file = _log_file_for(cfg, task_id)
             options = (args.from_document, args.dry_run, args.yes)
+            stop = StopCause()
             work: Callable[[], Awaitable[None]] = partial(
                 _resume,
                 task_id,
@@ -456,6 +478,7 @@ def main() -> None:
                 log_file=log_file,
                 detach=args.detach,
                 child_argv=_child_argv(),
+                stop=stop,
             )
         elif args.command == "close":
             if args.all:
@@ -482,6 +505,16 @@ def main() -> None:
                 work = partial(_eval_score, cfg, ports, args.set, args.out)
             else:
                 work = partial(_eval_compare, cfg, ports, args.frm, args.to, args.system_repo)
+        elif args.command == "reflect":
+            if args.since is not None:
+                date.fromisoformat(args.since)  # ValueError -> exit 2, before anything is spent
+            work = partial(
+                _reflect,
+                cfg,
+                ports,
+                None if args.all else ports.inbox.task_id(args.issue),
+                args.since,
+            )
         elif args.command == "stack":
             work = partial(_stack_review, cfg, ports, args.reason, args.dry_run)
         elif args.command == "poll":
@@ -514,6 +547,7 @@ def main() -> None:
             if not args.fresh:
                 declared_stack_of(task["id"], ports)
             log_file = _log_file_for(cfg, task["id"])
+            stop = StopCause()
             work = partial(
                 _run,
                 task,
@@ -523,16 +557,48 @@ def main() -> None:
                 log_file=log_file,
                 detach=args.detach,
                 child_argv=_child_argv(),
+                stop=stop,
             )
     except (MissingProductDir, ValueError, OSError) as exc:
         parser.exit(2, f"agentic: {exc}\n")
     try:
-        anyio.run(_signal_guarded, work)
+        # Only `run`/`resume` carry a `StopCause`: the other commands release as ever.
+        guard_args = (work,) if stop is None else (work, stop)
+        anyio.run(_signal_guarded, *guard_args)
     except CannotStart as exc:
         parser.exit(exc.code, f"agentic: {exc}\n")
 
 
-async def _signal_guarded(work: Callable[[], Awaitable[None]]) -> None:
+@dataclass
+class StopCause:
+    """Why this invocation was stopped, one per invocation and handed down as an
+    argument (never module state): `_signal_guarded` sets `at_shutdown` before it
+    cancels, `_locked` reads it in its `finally` to keep the lock record or release it."""
+
+    at_shutdown: bool = False
+
+
+def _system_is_stopping() -> bool:
+    """True only when systemd says the whole system is shutting down, not when a human
+    or a service manager merely stops this one process. Any failure answers False."""
+    try:
+        done = subprocess.run(
+            ["systemctl", "is-system-running"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.stdout.strip() == "stopping"
+
+
+async def _signal_guarded(
+    work: Callable[[], Awaitable[None]],
+    stop: StopCause | None = None,
+    shutdown_probe: Callable[[], bool] = _system_is_stopping,
+) -> None:
     """Wraps `work` (`_run`/`_resume`, built in `main`) in a task group a SIGTERM or a
     SIGHUP cancels (Tech Lead plan, subtask `signals`). This is the one place that
     restructures the `anyio.run(work)` call; every other subtask takes its shape as it
@@ -562,6 +628,9 @@ async def _signal_guarded(work: Callable[[], Awaitable[None]]) -> None:
         with anyio.open_signal_receiver(signal.SIGTERM, signal.SIGHUP) as signals:
             async for _ in signals:
                 interrupted = True
+                if stop is not None:
+                    # Before the cancel: `_locked`'s `finally` reads the answer.
+                    stop.at_shutdown = await anyio.to_thread.run_sync(shutdown_probe)
                 tg.cancel_scope.cancel()
                 return
 
@@ -753,9 +822,11 @@ def _print_lock(lock: RunLock, task_id: str) -> None:
 
 
 @contextmanager
-def _locked(lock: RunLock, task_id: str) -> Iterator[None]:
+def _locked(lock: RunLock, task_id: str, stop: StopCause | None = None) -> Iterator[None]:
     """Around the invocation only (Tech Lead plan): refuses before anything is spent,
-    releases whether the invocation delivers, escalates or raises."""
+    releases whether the invocation delivers, escalates or raises -- except when the
+    system shutdown stopped it (`stop.at_shutdown`): the record stays, marked, so the
+    next boot can retake the run."""
     taken_over = _acquire(lock, task_id)
     if taken_over is not None:
         print(
@@ -765,7 +836,22 @@ def _locked(lock: RunLock, task_id: str) -> Iterator[None]:
     try:
         yield
     finally:
-        lock.release(task_id)
+        if stop is not None and stop.at_shutdown:
+            lock.keep_at_shutdown(task_id)
+        else:
+            lock.release(task_id)
+
+
+@contextmanager
+def _inhibited(why: str) -> Iterator[None]:
+    """Holds a sleep/shutdown inhibitor for the invocation (GH-176). Best effort, the
+    same shape as `_registered`: where it is unavailable the run goes on, one stderr
+    line the only trace. Entered after the lock, inside the process that runs, so there
+    is a single pid and a refused run never took it."""
+    with inhibitor.hold(why) as unavailable:
+        if unavailable is not None:
+            print(f"agentic: sleep/shutdown inhibitor unavailable: {unavailable}", file=sys.stderr)
+        yield
 
 
 def _registry_for(cfg: Configuration) -> RunRegistry:
@@ -837,7 +923,14 @@ async def _poll(
     with _locked(lock, pollmod.LOCK_KEY):
         while True:
             for line in pollmod.run_once(
-                cfg, ports, registry, real_launcher, datetime.now(UTC), executable
+                cfg,
+                ports,
+                registry,
+                real_launcher,
+                datetime.now(UTC),
+                executable,
+                lock=lock,
+                current_boot=liveness.current_boot_id(),
             ):
                 print(line, flush=True)
             await sleep(interval_s)
@@ -855,6 +948,7 @@ async def _run(
     detach: bool = False,
     child_argv: list[str] | None = None,
     spawn: Spawner | None = None,
+    stop: StopCause | None = None,
 ) -> None:
     lock = run_lock if run_lock is not None else _lock_for(cfg)
     registry = registry if registry is not None else _registry_for(cfg)
@@ -867,7 +961,11 @@ async def _run(
         if detach:
             _detach(lock, task["id"], child_argv or [], log_file or "", spawn)
             return
-        with _locked(lock, task["id"]), _registered(registry, product_name(ports), task["id"]):
+        with (
+            _locked(lock, task["id"], stop),
+            _registered(registry, product_name(ports), task["id"]),
+            _inhibited(f"{task['id']}: run"),
+        ):
             _archive_previous_run(task["id"], ports)
             # A thread keeps its channels: a new run over it would add to the old cost.
             await saver.adelete_thread(task["id"])
@@ -963,6 +1061,7 @@ async def _resume(
     detach: bool = False,
     child_argv: list[str] | None = None,
     spawn: Spawner | None = None,
+    stop: StopCause | None = None,
 ) -> None:
     lock = run_lock if run_lock is not None else _lock_for(cfg)
     registry = registry if registry is not None else _registry_for(cfg)
@@ -1014,7 +1113,11 @@ async def _resume(
             _detach(lock, task_id, child_argv or [], log_file or "", spawn)
             return
 
-        with _locked(lock, task_id), _registered(registry, product_name(ports), task_id):
+        with (
+            _locked(lock, task_id, stop),
+            _registered(registry, product_name(ports), task_id),
+            _inhibited(f"{task_id}: resume"),
+        ):
             if r.source == "document":
                 # Seeded as if `escalate` had just run: the task pauses once more,
                 # without telling the human again, and the answer below resumes it
@@ -1392,6 +1495,63 @@ def _open_needs_info_for_missing_brief(
     return ports.tracker.open_issue(f"[needs-info] Stack review {review_id}: no BRIEF.md", body)
 
 
+def _window_summary(
+    documents: Sequence[Mapping[str, Any]],
+    playbooks: Mapping[str, Playbook],
+    applied: Sequence[Delta],
+    gained: int,
+) -> tuple[str, list[Delta]]:
+    """The summary every 10 reflected tasks (`measurement.playbook_window`), plus the
+    retirements it proposes as deltas: the root is the one place that may join the
+    process use case to the measurement window (ADR-0010)."""
+    comparisons: list[playbook_window.Comparison] = []
+    proposals: list[playbook_window.CheckProposal] = []
+    retirements: list[Delta] = []
+    for slug in sorted(playbooks):
+        found = playbook_window.compare(documents, playbooks[slug])
+        comparisons += found
+        proposals += playbook_window.check_proposals(found, playbooks[slug])
+        retirements += [
+            Delta("retire", slug, item_id=item_id)
+            for comparison in found
+            if comparison.conclusive
+            for item_id in comparison.retire
+        ]
+    text = playbook_window.summary_markdown(
+        comparisons, proposals, [*applied, *retirements], items_gained=gained
+    )
+    return text, retirements
+
+
+async def _reflect(
+    cfg: Configuration,
+    ports: Ports,
+    task_id: str | None,
+    since: str | None,
+    run_lock: RunLock | None = None,
+) -> None:
+    """`agentic reflect --product-dir D [--issue N | --all] [--since YYYY-MM-DD]` (ADR-0043):
+    the reflector over the closed tasks no earlier run reflected on, at most
+    `reflect_max_tasks_per_run` of them, delivered as candidate playbook deltas on
+    `agentic/playbook`. Under the run lock keyed `playbook`, so two invocations (the
+    poller's and a person's) never reflect on the same task twice. It runs no task and
+    writes to none: a reflection that fails is recorded in `reflected.yaml`, never raised
+    into a task."""
+    if ports.workspace.repository_at(cfg.product_dir) is None:
+        raise CannotStart(f"{cfg.product_dir} is not a git repository, or git is not installed")
+    lock = run_lock if run_lock is not None else _lock_for(cfg)
+    try:
+        with _locked(lock, reflect_run.TASK_ID):
+            outcome = await reflect_run.reflect(
+                cfg, ports, now=_now_iso(), summarise=_window_summary, since=since, task_id=task_id
+            )
+    except (ValueError, GitError, OSError) as exc:
+        raise CannotStart(f"reflect: {exc}") from exc
+    print(f"reflected {outcome.reflected}, {outcome.left} left for the next run")
+    if outcome.url:
+        print(f"candidate:  {outcome.url}")
+
+
 async def _stack_review(
     cfg: Configuration, ports: Ports, reason: str | None, dry_run: bool
 ) -> None:
@@ -1463,10 +1623,9 @@ async def _stack_review(
     )
     description = stack_signals.description(signals)
     with _locked(lock, review_id):
-        # No plan yet -- a stack review's synthetic `TaskState` never carries
-        # `subtasks` -- so `rules.task_cap` (through `run_role`) is its base alone,
-        # today's $30, never the plan's per-subtask share (ADR-0004, fourth addendum;
-        # ADR-0034).
+        # A stack review's synthetic `TaskState` is capped by the flat ceiling, 250,
+        # like any task (`rules.task_cap` through `run_role`; ADR-0004, 2026-10-05
+        # addendum).
         result = await run_stack_review(review_id, description, signals.anchor, cfg, stack_ports)
     print(f"id:         {review_id}")
     print(f"needs_info: {result.needs_info}")
@@ -1648,6 +1807,7 @@ async def _eval_score(
         raise CannotStart(str(exc)) from exc
     lines: list[str] = []
     fingerprints: dict[str, list[str]] = {}
+    grouped: dict[str, list[evaluation.TaskDocument]] = {}
     pending: list[int] = []
     for issue in declaration.issues:
         task_id = ports.inbox.task_id(issue)
@@ -1666,6 +1826,7 @@ async def _eval_score(
         }
         lines.append(json.dumps(line, sort_keys=True))
         fingerprints.setdefault(record["prompts_fingerprint"], []).append(task_id)
+        grouped.setdefault(record["prompts_fingerprint"], []).append(document)
         if record["score"] is None:
             pending.append(issue)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -1678,6 +1839,11 @@ async def _eval_score(
         )
         for fingerprint, task_ids in fingerprints.items():
             print(f"  {fingerprint}: {', '.join(sorted(task_ids))}")
+        playbook_roles, template_roles = evaluation.fingerprint_divergence(list(grouped.values()))
+        if playbook_roles:
+            print(f"  playbook differs for: {', '.join(playbook_roles)}")
+        if template_roles:
+            print(f"  template differs for: {', '.join(template_roles)}")
     for issue in pending:
         print(f"agentic close --issue {issue}")
 

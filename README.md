@@ -19,13 +19,14 @@ re-argumentan.
 
 ## 1. Roles
 
-17 roles agénticos más el humano, que actúa como aprobador y destino de escalados.
+18 roles agénticos más el humano, que actúa como aprobador y destino de escalados.
 
 ### Coordinación
 
 | Rol | Responsabilidad |
 |---|---|
 | **PjM** (Project Manager) | Clasifica, enruta, registra todo, controla loops, cierra, mide el proceso y lo mejora |
+| **Reflector** | Después de que una tarea cierra, lee sus devoluciones y propone lecciones para el rol que cometió cada error (ADR-0043). Propone: el curador es código, y una persona fusiona |
 
 ### Producto
 
@@ -220,18 +221,15 @@ El validador **reporta** cada devolución a PjM, y cuentan para el límite.
 
 ### Tope de tarea
 
-El acumulado de una corrida tiene tope, y crece con el plan: **30 USD** de base hasta que
-hay plan; después, base más **15 USD por subtarea**, con la integración contada, nunca por
-encima del techo de **250 USD** (`AGENTIC_TASK_BUDGET_BASE_USD`,
-`AGENTIC_TASK_BUDGET_PER_SUBTASK_USD`, `AGENTIC_TASK_MAX_BUDGET_USD`). Un plan tiene como
-mucho 12 subtareas. Los números salen de la cuarta corrida de GH-12 y se recalibran tras la
-primera corrida sin la fuga de MCP (issue #18).
+El acumulado de una corrida tiene tope: un **techo plano de 250 USD**, igual para cualquier
+tamaño de plan (`AGENTIC_TASK_MAX_BUDGET_USD`). Un plan tiene como mucho 12 subtareas.
+Ver ADR-0004, adenda del 2026-10-05.
 
 Se mira antes de cada intento de cualquier rol; alcanzado, el sistema escala al humano con
 el total gastado y el tope como motivo, y la tarea **pausa** (sección 14). El comentario del
 issue trae lo gastado por fase y la línea `agentic resume --issue N --task-budget X`: subir
-el tope es decisión del humano, y `--task-budget` lo sube para esa corrida, nunca lo baja: el
-techo limita la fórmula, no al humano.
+el tope es decisión del humano, y `--task-budget` lo sube para esa corrida por encima del
+techo, nunca lo baja.
 No es fallo de rol ni devolución y no cuenta para ningún límite. Como el tope por
 intento, es red de seguridad, bien arriba de lo que cuesta una tarea sana, no presupuesto de
 trabajo. En paralelo cada rama ve el total al momento del fan-out, así que el desborde
@@ -332,6 +330,10 @@ Dispara cuando detecta un patrón negativo.
   ciclo anterior.
 - Requiere versionado de prompts y parámetros para poder revertir: los overrides viven en
   el repo del producto y cada tarea registra el hash de los prompts que corrió (ADR-0005).
+- **Las lecciones por rol no las hace PjM.** Las proponen el Reflector y un curador que es
+  código, en un playbook por rol dentro del producto, con la ventana de 10 y 10 tareas
+  cerradas y un resumen cada 10; una persona fusiona el pull request candidato (ADR-0043).
+  Lo de arriba sigue valiendo para los parámetros y para los cambios de prompt hechos a mano.
 
 ### PM — Product Manager
 
@@ -441,8 +443,9 @@ Uno por tarea. **Nunca codea, siempre delega.**
 
 1. Propone la solución técnica.
 2. La pingponea con un **segundo Tech Lead efímero** hasta validarla. El efímero corre con
-   modelo más capaz y **prompt de adversario**: su trabajo es encontrar el fallo, no validar.
-   Sin esas dos asimetrías el pingpong solo ratifica.
+   un modelo distinto del de Tech Lead y **prompt de adversario** (ADR-0014, adenda): su
+   trabajo es encontrar el fallo, no validar. Sin esas dos asimetrías el pingpong solo
+   ratifica.
 3. Revisa y ajusta el plan de tests funcionales.
 4. Decide si la 2ª pasada necesita QA Seguridad y/o QA Performance.
 5. Parte en subtareas, marca las paralelizables, prioriza por valor entregado rápido. Puede
@@ -842,7 +845,12 @@ valida**. La regla es que todo validador traiga una fuente que el pensador no tu
 |---|---|---|
 | Pensadores | Sonnet | Son los que más llamadas hacen |
 | Validadores | Opus | Asimetría más barata de implementar y de medir |
+| Tech Lead efímero | Sonnet (el de los pensadores) | Necesita un modelo distinto del que escribió el plan: un validador en el mismo modelo ratifica (ADR-0014, adenda) |
 | Subagentes de cualquier rol | Sonnet | Leen y resumen para un padre que razona en el suyo; en Opus eran 5-10 USD por revisión (ADR-0013, adenda) |
+
+Tech Lead, el validador que además escribe el plan, sigue en el modelo de los
+validadores: partirlo en dos roles rompería la continuidad entre plan y revisión en que
+se apoya la revisión incremental (ADR-0015).
 
 Las otras fuentes de asimetría, cuando existen, valen más que el modelo: QA Funcional
 ejecuta tests contra el producto real, QA Seguridad y Performance leen código real, Data
@@ -855,7 +863,7 @@ enteramente de la asimetría de modelo y de prompt. Si no la tienen, sobran.
 
 ## 11. Orden de implementación
 
-Los 17 roles quedan en el diseño. Lo que se ordena es el orden en que se construyen.
+Los 18 roles quedan en el diseño. Lo que se ordena es el orden en que se construyen.
 
 **Regla**: cada rol nuevo tiene que mostrar que las cinco tareas salen **mejor con él que
 sin él**. Es lo que convierte la intuición de organigrama en una hipótesis que se puede
@@ -965,7 +973,7 @@ Se anotan para no reintroducirlas por error.
 | La corrida termina cuando el último rol entrega | Termina en un pull request del producto, lista para revisión; el issue recibe el link (ADR-0011) |
 | El tope de costo por intento es solo del Developer | Es de todo rol, `AGENTIC_MAX_BUDGET_USD`; los subagentes de cualquier rol corren en Sonnet (ADR-0004 y ADR-0013, adendas) |
 | El único tope de costo es por intento | Hay también un tope de tarea sobre el acumulado, que escala en vez de seguir (ADR-0004, adenda tercera) |
-| Tope de tarea fijo en 100 USD, y escalar termina la corrida | Base más proporcional por subtarea con techo, y alcanzarlo pausa: el humano sube el tope y reanuda (ADR-0004, adenda cuarta; ADR-0003, adenda) |
+| Tope de tarea fijo en 100 USD, y escalar termina la corrida | Base más proporcional por subtarea con techo, y alcanzarlo pausa: el humano sube el tope y reanuda (ADR-0004, adenda cuarta; ADR-0003, adenda); base + por subtarea → techo plano de 250 (ADR-0004, adenda del 2026-10-05) |
 | Cada revisión del Tech Lead arranca desde la base de la subtarea | La primera sí; después de una devolución es incremental, desde el head ya revisado (ADR-0015) |
 | Los Developers corren en paralelo y después Tech Lead revisa todas las entregas | Cada Developer y su revisión son una rama del fan-out: la revisión arranca cuando entrega *su* Developer (ADR-0004, adenda quinta) |
 | La integración es una subtarea final del integrador | Incremental en el fan-in, apenas se aprueba cada subtarea; el integrador y la revisión de la rama entera siguen al final (ADR-0004, adenda quinta) |
@@ -986,6 +994,9 @@ Se anotan para no reintroducirlas por error.
 | Este repo lee el default de estándares del sistema porque describe bien lo que el repo ya hace (ADR-0017) | ADR-0012's addendum replaces the ADR-0017 bullet that had this repo reading the system default because it described what the repo already does; from here the default is practices and this repo materialises them in its own `CODING_STANDARDS.md` |
 | El set entero se re-corre cada vez que se cambia un prompt o un parámetro | Solo en hitos (rol nuevo, cambio de estructura de revisión, cambio de modelo por rol); un cambio de prompt o de parámetro corre solo la tarea de humo que la declaración del set nombra, y una que escala a mitad de corrida queda sin puntaje, no con uno peor (sección 9; GH-27) |
 | El costo por tarea del set de evaluación sale de Grafana | Grafana no puede: ningún span ni ninguna métrica lleva id de tarea y ninguno lo hará (ADR-0008, segunda adenda). Sale de `cost_usd`, ya en el documento de cada tarea; `agentic eval score` lo lee de ahí, nunca de una métrica (sección 12, pendiente 14; GH-27) |
+| El efímero usa modelo más capaz | Corre en el modelo de los pensadores, distinto del de Tech Lead (ADR-0014, adenda) |
+| PjM mejora el proceso aplicando solo los cambios menores a prompts y revierte si la métrica empeoró | Para las lecciones de los roles, un Reflector (rol 18) propone y un curador determinista las aplica como deltas a un playbook por rol del producto; solo entran por un pull request que una persona fusiona, y la ventana de 10 tareas decide si se proponen para retirar (ADR-0043). Reemplaza esa mecánica; el resto de «Mejora del proceso» sigue |
+| El hash de un prompt es el de su texto crudo (ADR-0019) | Es el del texto crudo cuando el playbook del rol está vacío, y el del crudo más la sección del playbook cuando no (ADR-0043 reemplaza esa frase de ADR-0019) |
 
 ---
 
@@ -1149,6 +1160,39 @@ imprime el pid del hijo —el que toma el lock, nunca el padre— y la ruta del 
 Sin TTY y sin `--detach` avisa una vez que el proceso muere con su sesión; no se
 desacopla solo, porque CI, los tests y `agentic eval` (#27) necesitan el código de
 salida.
+
+### El poller como servicio y el inhibidor (GH-176)
+
+Un poller por producto corre como servicio de usuario de systemd, para que un reinicio o
+una caída no lo dejen muerto. Se instala desde el checkout stage0 (ADR-0017), no desde el
+que se edita:
+
+```
+scripts/install-poller.sh <product-dir> [<stage0-dir>]     # stage0: este repo por defecto
+loginctl enable-linger $USER                               # una vez: arranca sin login
+```
+
+El script renderiza `scripts/systemd/agentic-poll.service.in` con rutas absolutas (sin
+especificadores `%`), exige que existan `git`, `gh`, `uv` y `claude` y que
+`<stage0>/.venv/bin/agentic` sea ejecutable, escribe
+`~/.config/systemd/user/agentic-poll-<ruta>.service` y lo habilita con
+`systemctl --user enable --now`. `--print` solo muestra la unidad. No necesita root. La
+unidad usa `Restart=on-failure`, `RestartSec=30`, `StartLimitIntervalSec=0` y
+`KillMode=process`: este último deja vivas las corridas que el poller lanzó con
+`--detach` (viven en su cgroup) cuando el poller se reinicia. El `.env` lo lee el propio
+poller desde el directorio de trabajo (el stage0), por eso no hay `EnvironmentFile=`. Los
+logs están en `journalctl --user -u <unidad>`.
+
+Para detenerlo y quitarlo: `systemctl --user disable --now <unidad>`, borrar el archivo de
+`~/.config/systemd/user/` y `systemctl --user daemon-reload`. Un segundo poller levantado a
+mano sobre el mismo producto se niega (el lock del poller ya está tomado) y la unidad lo
+reintenta cada 30 s hasta que se detenga uno de los dos.
+
+`run` y `resume` (el proceso que corre, no el padre de `--detach`) toman un inhibidor de
+logind (`systemd-inhibit --what=sleep:shutdown`) mientras viven: un apagado o una
+suspensión ordenados esperan a que terminen. Donde no hay `systemd-inhibit`, bus o permiso,
+imprimen una línea en stderr (`agentic: sleep/shutdown inhibitor unavailable: …`) y corren
+igual. No frena un apagado forzado ni un corte de luz.
 
 ### Fallo de rol
 

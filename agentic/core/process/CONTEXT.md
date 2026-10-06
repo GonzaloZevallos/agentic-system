@@ -8,7 +8,7 @@ el dominio central del sistema: los otros dos contextos lo conocen, él no los c
 ### Actores
 
 **Rol**:
-Un agente con responsabilidad fija dentro del proceso. Hay 17.
+Un agente con responsabilidad fija dentro del proceso. Hay 18.
 _Avoid_: agente (a secas, cuando se habla de uno concreto)
 _Campo_: role — CrewAI, como atributo de su Agent; el resto del campo dice `agent` a secas
 
@@ -26,7 +26,7 @@ Dueño del PRD y del conocimiento de producto, que destila al aprobar.
 _Campo_: de la organización de software humana
 
 **Pensador**:
-Rol que produce: Product Analyst, UX Designer, UI Designer, Developer, Tech Writer. En el código y en los prompts se llama `actor`.
+Rol que produce: Product Analyst, UX Designer, UI Designer, Developer, Tech Writer, Reflector. En el código y en los prompts se llama `actor`.
 _Campo_: actor — Reflexion (Shinn 2023), que lo define junto a Evaluator y Self-Reflection; generator en Cobbe 2021 y Lightman 2023
 
 **UI Lead**:
@@ -39,7 +39,7 @@ Escribir archivos del producto y correr comandos sin aprobación por comando. So
 _Campo_: sin término de arte para el permiso; el campo nombra el mecanismo (tool use), no la autonomía que le concede
 
 **Validador**:
-Rol que revisa a un pensador aportando una fuente que el pensador no tuvo. En el código y en los prompts se llama `verifier`, no `judge`: el judge opina y el verifier ejecuta, y desde ADR-0016 el Tech Lead corre los chequeos que respaldan cada objeción.
+Rol que revisa a un pensador aportando una fuente que el pensador no tuvo. Tech Lead es un validador que además escribe el plan, y luego lo revisa en cada subtarea y en la integración; el Tech Lead efímero valida ese mismo plan antes de que exista, trayendo un modelo distinto del que lo escribe. En el código y en los prompts se llama `verifier`, no `judge`: el judge opina y el verifier ejecuta, y desde ADR-0016 el Tech Lead corre los chequeos que respaldan cada objeción.
 _Avoid_: revisor, judge
 _Campo_: verifier — Cobbe 2021 y Lightman 2023 ("Let's Verify Step by Step"); Evaluator en Reflexion, critic en CriticGPT, LLM-as-a-judge en Zheng 2023
 
@@ -48,7 +48,7 @@ El rol que devuelve y el rol que recibe la devolución. Las devoluciones se cuen
 _Campo_: sin término de arte
 
 **Tech Lead efímero**:
-Segundo Tech Lead que existe solo durante la entrevista técnica, con modelo más capaz y prompt de adversario. Entrevista a Tech Lead; no decide. No es un rol de la lista: es el entrevistador del pingpong.
+Segundo Tech Lead que existe solo durante la entrevista técnica, con un modelo distinto del de Tech Lead y prompt de adversario. Entrevista a Tech Lead; no decide. No es un rol de la lista: es el entrevistador del pingpong.
 _Campo_: sin término de arte
 
 **Developer integrador**:
@@ -58,6 +58,21 @@ _Campo_: sin término de arte
 **Rol proactivo**:
 Rol con reloj propio que genera tareas o insumos sin que nadie se lo pida.
 _Campo_: ambient agent — LangChain (Chase, enero de 2025): un agente que escucha un flujo de eventos en vez de un mensaje humano. Google ADK usa el nombre sin definirlo
+
+**Reflector**:
+El rol que, con una tarea ya cerrada, lee sus devoluciones y propone lecciones para el rol al que cada una se le puede atribuir. Solo propone: no escribe ningún playbook, y lo que propone lo decide el curador, que es código. No corre dentro de ninguna tarea.
+_Avoid_: PjM (el que mejora el proceso en el diseño original), curador (como si fuera un rol: es código), crítico
+_Campo_: reflector — ACE, Agentic Context Engineering (Zhang et al., 2025), que lo separa del curador; Reflexion (Shinn 2023) llama self-reflection a lo que un agente se dice sobre su propio intento
+
+**Playbook**:
+Las lecciones de un rol en un producto, a lo sumo 12, como datos versionados en el repo del producto; entra al prompt del rol como una sección propia después de rellenar los placeholders. Solo cambia por deltas (agregar, fusionar, sumar una cita, retirar), nunca reescrito entero. Con un playbook vacío el prompt y su hash son los de siempre.
+_Avoid_: memoria, guía de estilo, contexto aprendido
+_Campo_: playbook — ACE (Zhang et al., 2025), donde son bullets con contadores de ayuda y daño que un curador mantiene con deltas incrementales
+
+**Lección**:
+Una línea imperativa de a lo sumo 240 caracteres, para un rol, atada a una categoría de devolución y a las tareas cerradas que la citan. Se rechaza lo que tenga salto de línea, backtick, llaves dobles o un enlace, y una que una persona ya rechazó no vuelve a proponerse.
+_Avoid_: regla, tip, instrucción (la instrucción es el prompt)
+_Campo_: item — ACE, el bullet del playbook; lesson learned en Reflexion
 
 ### Trabajo
 
@@ -297,8 +312,18 @@ _Avoid_: reintento (eso es tras un fallo de rol), relanzar (eso es empezar de ce
 _Campo_: resume — estándar (LangGraph, Temporal, el Claude Agent SDK)
 
 **Corrida interrumpida**:
-Una corrida que terminó sin cierre ni escalado porque su proceso murió. No espera a nadie: se reanuda sin decisión del humano, desde el último estado guardado. Lo que el rol en curso hizo y no entregó puede estar en su checkout sin commitear, y su costo en dólares no se conoce: el sistema registra los tokens que vio y lo dice, en vez de callarlo.
+Una corrida que terminó sin cierre ni escalado porque su proceso murió. No espera a nadie: se reanuda sin decisión del humano, desde el último estado guardado. El poller la retoma sin decisión del humano cuando su lock es de un arranque anterior (una Parada por apagado incluida), como mucho 3 veces por cada decisión del humano; si murió en el mismo arranque, la deja al humano. Lo que el rol en curso hizo y no entregó puede estar en su checkout sin commitear, y su costo en dólares no se conoce: el sistema registra los tokens que vio y lo dice, en vez de callarlo.
 _Avoid_: cortada, abortada, crash (el estado de telemetría, no el concepto)
+_Campo_: sin término de arte
+
+**Arranque**:
+Un encendido de la máquina, identificado por el id de arranque del kernel. Un registro de lock o de corridas vivas escrito en otro arranque está muerto, diga lo que diga su pid: el sistema operativo pudo haber reutilizado ese número para un proceso ajeno. Un registro sin id de arranque (anterior a este cambio, o una máquina sin `/proc`) no afirma nada: lo decide el sistema operativo, como siempre.
+_Avoid_: reinicio (es el acto, no el período), sesión
+_Campo_: boot id, del kernel de Linux (`/proc/sys/kernel/random/boot_id`)
+
+**Parada por apagado**:
+Una corrida que el apagado del sistema detuvo con una señal. Conserva su registro de lock, con la marca, para que el arranque siguiente pueda retomarla como Corrida interrumpida; cualquier otra parada por señal libera el lock.
+_Avoid_: caída, corte
 _Campo_: sin término de arte
 
 **Invocación**:
@@ -317,7 +342,7 @@ _Avoid_: presupuesto (eso sería lo que se espera gastar), guardrail (no signifi
 _Campo_: per_instance_cost_limit — SWE-agent
 
 **Tope de tarea**:
-Gasto acumulado de una tarea a partir del cual el sistema escala y pausa en vez de seguir. Crece con el plan: una base hasta que hay plan, después la base más una parte por subtarea, integración incluida, con un techo que limita esa cuenta. Se mira antes de cada intento de cualquier rol, contra lo que gastó la corrida entera y no sólo la rama que va a gastar. Subirlo al reanudar es decisión del humano, que puede pasar el techo y nunca lo baja. Alcanzado, lo que ya está corriendo termina: sólo frena lo que todavía no arrancó. No es fallo de rol ni devolución y no cuenta para ningún límite. Como el tope por intento, es red de seguridad, bien arriba de lo que cuesta una tarea sana. Hoy 30 USD de base, 15 por subtarea, techo 250.
+Gasto acumulado de una tarea a partir del cual el sistema escala y pausa en vez de seguir. Es un techo plano, el mismo para cualquier tamaño de plan. Se mira antes de cada intento de cualquier rol, contra lo que gastó la corrida entera y no sólo la rama que va a gastar. Subirlo al reanudar es decisión del humano, que puede pasar el techo y nunca lo baja. Alcanzado, lo que ya está corriendo termina: sólo frena lo que todavía no arrancó. No es fallo de rol ni devolución y no cuenta para ningún límite. Como el tope por intento, es red de seguridad, bien arriba de lo que cuesta una tarea sana. Hoy 250 USD.
 _Avoid_: presupuesto de tarea
 _Campo_: total_cost_limit — SWE-agent
 

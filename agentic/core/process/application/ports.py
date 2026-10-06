@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from ..domain.design import Design
+from ..domain.playbook import Playbook
 from ..domain.roles import Role
 from ..domain.rules import motive
 from ..domain.suppressions import Forbidden
@@ -296,6 +297,11 @@ class Prompts(Protocol):
 
     def raw(self, role: Role) -> tuple[str, Path]: ...
 
+    def playbook(self, role: Role) -> Playbook:
+        """The role's playbook (ADR-0043): empty for a role the table does not name or a
+        product that has none; a malformed one raises `ValueError`."""
+        ...
+
 
 class FlagVocabulary(Protocol):
     def load(self) -> dict[str, str]: ...
@@ -320,6 +326,12 @@ class ProductStack(Protocol):
         measured lives (`core.knowledge`, glossary: Testigo del checkout), run by the
         presubmit before them. Optional: `None` when the product declares none, which
         is the presubmit of today, byte for byte unchanged."""
+        ...
+
+    def parallel_checks(self, revision: str) -> bool:
+        """Whether the product lets the presubmit run its declared checks concurrently
+        (`core.knowledge`, ADR-0044). Opt-in: `False` when the product declares nothing,
+        which is the serial presubmit of today."""
         ...
 
     def forbidden(self, revision: str) -> Sequence[Forbidden]:
@@ -441,6 +453,21 @@ class GitError(RuntimeError):
     import it from `adapters.git.workspace` keep working unchanged."""
 
 
+@dataclass(frozen=True)
+class Upstream:
+    """Where new work starts from and what the poller judges a merge against (GH-180):
+    the fetched tip of the product checkout's current branch."""
+
+    # The ref the commit came from: the upstream's own name, or "HEAD" when there was
+    # nothing better. Informational; callers use `sha`.
+    ref: str
+    # The commit. None only when even `HEAD` could not be read (an unborn branch, no git).
+    sha: str | None
+    # Why it is not the plain fetched upstream (no remote, fetch failed, local commits
+    # left out), for the run's log and the poll round's output. None when nothing to say.
+    note: str | None
+
+
 class Workspace(Protocol):
     """The product repository as git sees it (ADR-0011): one branch and worktree per
     task, one per subtask, all idempotent so a use case can ask again."""
@@ -499,7 +526,17 @@ class Workspace(Protocol):
         """Commit everything changed under `path`; `None` when there was nothing."""
         ...
 
-    def push(self, branch: str) -> None: ...
+    def push(self, branch: str, *, replace: bool = False) -> None:
+        """Publish `branch` to `origin`. `replace` is for a branch the system owns whose
+        previous pull request is closed or merged and which was started again from the
+        default branch (`agentic/playbook`): the remote one is replaced, guarded by a lease
+        on the sha read just before, so nothing a person pushed in between is lost."""
+        ...
+
+    def show(self, ref: str, relative: str) -> str | None:
+        """The text of `relative` at `ref` (a branch, `HEAD` or a commit), or `None` when
+        the ref or the file does not exist there."""
+        ...
 
     def cleanup(self, task_id: str) -> None:
         """Remove the task's worktrees. The branches stay."""
@@ -561,6 +598,14 @@ class Workspace(Protocol):
         failure, not an unresolved blocker, and must not read as "launch anyway"."""
         ...
 
+    def upstream(self) -> Upstream:
+        """The fetched upstream of the checkout's current branch (GH-180). Never returns
+        None and never raises for a git failure or a missing git: every failure is an
+        `Upstream` with a `note`. The only place that fetches (never `pull`, `checkout`,
+        `reset` or a fast-forward: the human's branch is theirs, ADR-0002) and the only
+        one that picks a fallback when the fetch fails."""
+        ...
+
 
 @dataclass(frozen=True)
 class IssueState:
@@ -593,6 +638,20 @@ class IssueComment:
     created_at: str
 
 
+@dataclass(frozen=True)
+class ListedPullRequest:
+    """One pull request of the product as the playbook delivery reads it (ADR-0043):
+    `state` is `OPEN`, `MERGED` or `CLOSED`, `merge_commit` the commit a merge made (empty
+    otherwise) and `branch` the head it came from."""
+
+    number: int
+    url: str
+    state: str
+    body: str
+    merge_commit: str
+    branch: str
+
+
 class Tracker(Protocol):
     """Where the human is told (ADR-0011): the pull request, the issue's comments and
     labels. A task that did not come from an issue has no issue to write to; the
@@ -618,6 +677,14 @@ class Tracker(Protocol):
     def label(self, task_id: str, label: str) -> None: ...
 
     def unlabel(self, task_id: str, label: str) -> None: ...
+
+    def list_pull_requests(self) -> list[ListedPullRequest]:
+        """Every pull request of the product, any state, with its body: the playbook
+        delivery filters them locally for its marker block (never through the search
+        index, which lags a body edit)."""
+        ...
+
+    def update_pull_request_body(self, number: int, body: str) -> None: ...
 
     def issue_comments(self, task_id: str) -> list[str]:
         """The bodies of the issue's comments, oldest first, whoever wrote them; none
@@ -666,6 +733,8 @@ class LockRecord:
     host: str
     started_at: str
     command: str
+    boot_id: str | None = None
+    stopped_at_shutdown: bool = False
 
 
 class LockHeld(Exception):
@@ -713,6 +782,13 @@ class RunLock(Protocol):
         there is none, or when the lock now belongs to someone else -- a takeover
         that happened after this process's own claim was lost must never be undone
         by this process releasing on its way out."""
+        ...
+
+    def keep_at_shutdown(self, task_id: str) -> None:
+        """What a run does instead of `release` when the system shutdown stopped it:
+        rewrite this process's own record (same pid, same host) with
+        `stopped_at_shutdown` set, keeping its boot id, so the next boot can retake the
+        run. A no-op when there is none, or when the record belongs to another pid."""
         ...
 
 

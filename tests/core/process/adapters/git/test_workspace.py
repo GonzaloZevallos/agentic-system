@@ -1,12 +1,16 @@
 """The git adapter against a real temporary repository with a bare remote."""
 
+import os
 import subprocess
+import time
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from agentic.core.knowledge.adapters.git.stack import GitStack
 from agentic.core.process.adapters.git import GitWorkspace
+from agentic.core.process.adapters.git import workspace as workspace_module
 from agentic.core.process.adapters.git.workspace import GitError
 from agentic.core.process.domain import rules
 from agentic.shared.configuration import Configuration
@@ -468,3 +472,259 @@ def test_is_ancestor_raises_git_error_on_anything_but_the_two_documented_exit_co
     monkeypatch.setattr(ws, "_run", fake)
     with pytest.raises(GitError, match="merge-base"):
         ws.is_ancestor(product, sha)
+
+
+# -- the fetched upstream (GH-180): a bare origin and a clone that is never pulled ------
+
+
+def _commit(repo: Path, name: str, text: str, message: str) -> None:
+    (repo / name).parent.mkdir(parents=True, exist_ok=True)
+    (repo / name).write_text(text)
+    git("add", "-A", cwd=repo)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", message, cwd=repo)
+
+
+class Remote:
+    """A bare `origin`, the `clone` a run works in, and a second clone that merges on
+    origin behind the first one's back, as a PR merged on GitHub does."""
+
+    def __init__(self, tmp_path: Path):
+        self.origin = tmp_path / "origin.git"
+        git("init", "--bare", "-q", "-b", "master", str(self.origin), cwd=tmp_path)
+        self.other = tmp_path / "other"
+        git("clone", "-q", str(self.origin), str(self.other), cwd=tmp_path)
+        git("checkout", "-q", "-b", "master", cwd=self.other)
+        _commit(self.other, "README.md", "v0\n", "v0")
+        _commit(self.other, ".agentic/stack.yaml", "checks:\n  tests: base\n", "stack")
+        git("push", "-q", "origin", "master", cwd=self.other)
+        self.clone = tmp_path / "clone"
+        git("clone", "-q", str(self.origin), str(self.clone), cwd=tmp_path)
+        self.n = 0
+
+    def merge_on_origin(self, files: dict[str, str] | None = None) -> str:
+        self.n += 1
+        git("checkout", "-q", "-b", f"pr{self.n}", cwd=self.other)
+        for name, text in (files or {f"pr{self.n}.txt": "x\n"}).items():
+            _commit(self.other, name, text, f"pr {self.n}")
+        git("checkout", "-q", "master", cwd=self.other)
+        git(
+            "-c", "user.name=t", "-c", "user.email=t@t",
+            "merge", "-q", "--no-ff", "-m", f"Merge pull request #{self.n}", f"pr{self.n}",
+            cwd=self.other,
+        )  # fmt: skip
+        git("push", "-q", "origin", "master", cwd=self.other)
+        return git("rev-parse", "HEAD", cwd=self.other)
+
+    def snapshot(self) -> dict[str, object]:
+        """HEAD, the local branch, the index and the worktree's files, all of them."""
+        relative = [p.relative_to(self.clone) for p in sorted(self.clone.rglob("*")) if p.is_file()]
+        files = {
+            str(r): (self.clone / r).read_bytes()
+            for r in relative
+            if r.parts[0] != ".git" and r.parts[:2] != (".agentic", "worktrees")
+        }
+        return {
+            "head": git("rev-parse", "HEAD", cwd=self.clone),
+            "master": git("rev-parse", "refs/heads/master", cwd=self.clone),
+            "index": git("ls-files", "-s", cwd=self.clone),
+            "status": git("status", "--porcelain", cwd=self.clone),
+            "files": files,
+        }
+
+    def tracking(self) -> str:
+        return git("rev-parse", "refs/remotes/origin/master", cwd=self.clone)
+
+
+@pytest.fixture
+def remote(tmp_path):
+    return Remote(tmp_path)
+
+
+def test_a_clone_one_merge_behind_origin_branches_from_the_merge_and_is_left_untouched(remote):
+    merge = remote.merge_on_origin()
+    before = remote.snapshot()
+    task = GitWorkspace(remote.clone, IDENTITY).task_checkout("GH-45")
+    assert git("rev-parse", "agentic/GH-45", cwd=remote.clone) == merge
+    assert (
+        task.base
+        == merge[:7]
+        == git("config", "--get", "branch.agentic/GH-45.agenticBase", cwd=remote.clone)
+    )
+    assert (task.path / "pr1.txt").exists()
+    assert remote.snapshot() == before
+    assert not (remote.clone / "pr1.txt").exists()
+
+
+def test_a_branch_with_commits_the_upstream_lacks_starts_from_the_upstream_and_names_them(remote):
+    merge = remote.merge_on_origin()
+    _commit(remote.clone, "local.txt", "l\n", "local only")
+    local = git("rev-parse", "--short", "HEAD", cwd=remote.clone)
+    found = GitWorkspace(remote.clone, IDENTITY).upstream()
+    assert (found.ref, found.sha) == ("refs/remotes/origin/master", merge)
+    assert found.note is not None and local in found.note
+
+
+def test_the_left_out_commits_are_capped_at_ten_and_the_rest_counted(remote):
+    for i in range(12):
+        _commit(remote.clone, f"l{i}.txt", "l\n", f"local {i}")
+    found = GitWorkspace(remote.clone, IDENTITY).upstream()
+    assert found.note is not None and "and 2 more" in found.note
+
+
+def test_with_no_remote_the_base_is_head_as_before(remote, capsys):
+    git("remote", "remove", "origin", cwd=remote.clone)
+    head = git("rev-parse", "HEAD", cwd=remote.clone)
+    ws = GitWorkspace(remote.clone, IDENTITY)
+    found = ws.upstream()
+    assert (found.ref, found.sha) == ("HEAD", head) and found.note
+    ws.task_checkout("GH-45")
+    assert git("rev-parse", "agentic/GH-45", cwd=remote.clone) == head
+    assert "starting from HEAD" in capsys.readouterr().err
+
+
+def test_a_detached_head_starts_from_head_with_a_note(remote):
+    git("checkout", "-q", "--detach", cwd=remote.clone)
+    found = GitWorkspace(remote.clone, IDENTITY).upstream()
+    assert found.sha == git("rev-parse", "HEAD", cwd=remote.clone)
+    assert found.note and "detached" in found.note
+
+
+def test_a_branch_with_no_upstream_starts_from_head_with_a_note(remote):
+    remote.merge_on_origin()
+    git("checkout", "-q", "-b", "feature", cwd=remote.clone)
+    found = GitWorkspace(remote.clone, IDENTITY).upstream()
+    assert found.sha == git("rev-parse", "HEAD", cwd=remote.clone)
+    assert found.note and "no upstream" in found.note
+
+
+def test_an_upstream_that_is_a_local_branch_starts_from_head_with_a_note(remote):
+    git("checkout", "-q", "-b", "feature", "--track", "master", cwd=remote.clone)
+    found = GitWorkspace(remote.clone, IDENTITY).upstream()
+    assert found.sha == git("rev-parse", "HEAD", cwd=remote.clone)
+    assert found.note and "local branch" in found.note
+
+
+def test_an_existing_task_branch_keeps_its_base_and_never_fetches(remote):
+    ws = GitWorkspace(remote.clone, IDENTITY)
+    first = ws.task_checkout("GH-45")
+    remote.merge_on_origin()
+    stale = remote.tracking()
+    again = ws.task_checkout("GH-45")
+    assert again.base == first.base
+    assert remote.tracking() == stale  # no fetch ran
+    assert git("rev-parse", "agentic/GH-45", cwd=remote.clone) == stale
+
+
+def test_a_subtask_checkout_never_fetches(remote):
+    ws = GitWorkspace(remote.clone, IDENTITY)
+    task = ws.task_checkout("GH-45")
+    remote.merge_on_origin()
+    stale = remote.tracking()
+    sub = ws.subtask_checkout("GH-45", "api")
+    assert remote.tracking() == stale
+    assert sub.base == task.base
+
+
+def _break_the_remote(remote: Remote, tmp_path: Path) -> None:
+    git("remote", "set-url", "origin", str(tmp_path / "nowhere.git"), cwd=remote.clone)
+
+
+def test_a_failed_fetch_with_head_ahead_of_the_last_fetched_ref_starts_from_head(remote, tmp_path):
+    _commit(remote.clone, "local.txt", "l\n", "local only")
+    _break_the_remote(remote, tmp_path)
+    found = GitWorkspace(remote.clone, IDENTITY).upstream()
+    assert (found.ref, found.sha) == ("HEAD", git("rev-parse", "HEAD", cwd=remote.clone))
+    assert found.note and "fetch failed" in found.note
+
+
+def test_a_failed_fetch_with_head_behind_the_last_fetched_ref_uses_that_ref(remote, tmp_path):
+    merge = remote.merge_on_origin()
+    git("fetch", "-q", cwd=remote.clone)
+    _break_the_remote(remote, tmp_path)
+    found = GitWorkspace(remote.clone, IDENTITY).upstream()
+    assert found.sha == merge
+    assert found.note and "fetch failed" in found.note
+
+
+def test_a_failed_fetch_with_a_diverged_head_uses_the_ref_and_names_the_left_out(remote, tmp_path):
+    merge = remote.merge_on_origin()
+    git("fetch", "-q", cwd=remote.clone)
+    _commit(remote.clone, "local.txt", "l\n", "local only")
+    local = git("rev-parse", "--short", "HEAD", cwd=remote.clone)
+    _break_the_remote(remote, tmp_path)
+    found = GitWorkspace(remote.clone, IDENTITY).upstream()
+    assert found.sha == merge
+    assert found.note and "fetch failed" in found.note and local in found.note
+
+
+def test_a_fetch_that_hangs_is_killed_with_its_whole_group_and_falls_back(
+    remote, tmp_path, monkeypatch
+):
+    pidfile = tmp_path / "ssh.pid"
+    script = tmp_path / "ssh.sh"
+    script.write_text(f"#!/bin/sh\necho $$ > {pidfile}\nexec sleep 30\n")
+    script.chmod(0o755)
+    git("remote", "set-url", "origin", "ssh://fake/x", cwd=remote.clone)
+    git("config", "core.sshCommand", str(script), cwd=remote.clone)
+    monkeypatch.setattr(workspace_module, "FETCH_TIMEOUT_S", 0.5)
+    started = time.monotonic()
+    found = GitWorkspace(remote.clone, IDENTITY).upstream()
+    assert time.monotonic() - started < 5
+    assert found.sha == git("rev-parse", "HEAD", cwd=remote.clone)
+    assert found.note and "timed out after 0.5 s" in found.note
+    pid = int(pidfile.read_text())
+    for _ in range(40):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+
+
+def test_an_unborn_head_with_an_origin_answers_a_note_and_no_sha(tmp_path):
+    repo = tmp_path / "unborn"
+    repo.mkdir()
+    git("init", "-q", "-b", "master", cwd=repo)
+    git("remote", "add", "origin", str(tmp_path / "nowhere.git"), cwd=repo)
+    found = GitWorkspace(repo, IDENTITY).upstream()
+    assert found.sha is None and found.note
+
+
+def test_without_git_on_the_path_upstream_answers_a_note_and_does_not_raise(remote, monkeypatch):
+    monkeypatch.setenv("PATH", "")
+    found = GitWorkspace(remote.clone, IDENTITY).upstream()
+    assert found.sha is None and found.note
+
+
+def test_a_merge_only_origin_has_is_an_ancestor_of_the_upstream_and_not_of_head(remote):
+    merge = remote.merge_on_origin()
+    ws = GitWorkspace(remote.clone, IDENTITY)
+    found = ws.upstream()
+    assert ws.is_ancestor(remote.clone, merge, ref=found.sha or "HEAD")
+    assert not ws.is_ancestor(remote.clone, merge)
+
+
+def test_with_no_remote_the_upstream_judges_exactly_as_head_does(remote):
+    git("remote", "remove", "origin", cwd=remote.clone)
+    ws = GitWorkspace(remote.clone, IDENTITY)
+    head = git("rev-parse", "HEAD", cwd=remote.clone)
+    ref = ws.upstream().sha or "HEAD"
+    assert ws.is_ancestor(remote.clone, head, ref=ref) and ws.is_ancestor(remote.clone, head)
+
+
+def test_a_local_only_stack_edit_never_reaches_the_new_task_base(remote):
+    merge = remote.merge_on_origin({".agentic/stack.yaml": "checks:\n  tests: origin\n"})
+    _commit(remote.clone, ".agentic/stack.yaml", "checks:\n  tests: local\n", "local stack")
+    local = git("rev-parse", "HEAD", cwd=remote.clone)
+    ws = GitWorkspace(remote.clone, IDENTITY)
+    ws.task_checkout("GH-45")
+    base = ws.base_of("agentic/GH-45")
+    assert base == merge[:7]
+    probe = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", local, "agentic/GH-45"], cwd=remote.clone
+    )
+    assert probe.returncode == 1
+    assert GitStack(remote.clone).checks(base or "") == {"tests": "origin"}
+    assert local[:7] in (ws.upstream().note or "")

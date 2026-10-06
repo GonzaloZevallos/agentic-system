@@ -11,8 +11,11 @@ from agentic.core.process.application.ports import (
     IssueComment,
     IssueState,
     LaunchAttempt,
+    LockRecord,
     RunRegistration,
+    Upstream,
 )
+from agentic.core.process.domain.roles import INTERVIEW_SOLUTION
 from agentic.core.process.domain.task import PullRequest
 from agentic.shared.configuration import Configuration
 from tests.fakes import FakeLauncher, MemoryInbox, MemoryRunRegistry, MemoryTracker, memory_ports
@@ -42,6 +45,33 @@ def _paused(task_id, escalated, pause_log, **more):
     return {"id": task_id, "escalated": escalated, "pause_log": pause_log, **more}
 
 
+class _Locks:
+    """A `RunLock` for the poller's reads: `records` is what the lock files hold, `alive`
+    the task ids whose process is still running. `acquire`, `release` and
+    `keep_at_shutdown` raise: the poller must never take, drop or rewrite a lock."""
+
+    def __init__(self, records: dict[str, LockRecord] | None = None, alive: set[str] | None = None):
+        self.records = records or {}
+        self.alive = alive or set()
+        self.reads: list[str] = []
+
+    def read(self, task_id):
+        self.reads.append(task_id)
+        return self.records.get(task_id)
+
+    def refusal(self, task_id):
+        return "held" if task_id in self.alive else None
+
+    def acquire(self, task_id, command):
+        raise AssertionError("the poller must never acquire a run's lock")
+
+    def release(self, task_id):
+        raise AssertionError("the poller must never release a run's lock")
+
+    def keep_at_shutdown(self, task_id):
+        raise AssertionError("the poller must never rewrite a run's lock")
+
+
 def _no_sleep(seconds: float) -> None:
     """The default `sleep` every test but the ones about the wait itself inject: a
     real `time.sleep` here would make a scenario that never registers block for the
@@ -51,6 +81,8 @@ def _no_sleep(seconds: float) -> None:
 def _round(cfg, ports, registry, launcher, now, **kw):
     kw.setdefault("sleep", _no_sleep)
     kw.setdefault("argv0", "agentic")
+    kw.setdefault("lock", _Locks())
+    kw.setdefault("current_boot", "boot-now")
     return poll.run_once(cfg, ports, registry, launcher, now, **kw)
 
 
@@ -95,7 +127,7 @@ def test_an_account_limit_resumes_once_its_own_wait_elapses_not_before(tmp_path)
     ]
     assert launcher.spawned == []
 
-    due = ESCALATED_AT + timedelta(minutes=16)  # AUTO_RESUME_SCHEDULE[0] == 15
+    due = ESCALATED_AT + timedelta(minutes=16)  # ACCOUNT_LIMIT_SCHEDULE[0] == 15
     lines = _round(cfg, ports, registry, launcher, due)
     assert lines == ["agentic: poll: resume #19 -> pid 4242"]
     assert launcher.spawned == [
@@ -391,7 +423,15 @@ def test_the_wait_for_registration_gives_up_after_its_own_timeout_without_hangin
         slept.append(seconds)
 
     lines = poll.run_once(
-        _cfg(tmp_path), ports, registry, launcher, ESCALATED_AT, "agentic", sleep=counting_sleep
+        _cfg(tmp_path),
+        ports,
+        registry,
+        launcher,
+        ESCALATED_AT,
+        "agentic",
+        sleep=counting_sleep,
+        lock=_Locks(),
+        current_boot=None,
     )
     assert lines == ["agentic: poll: launch #5 -> pid 4242"]
     assert sum(slept) == poll.REGISTER_WAIT_S  # it gave up, never registering
@@ -421,13 +461,29 @@ def test_a_child_that_registers_while_waited_for_occupies_the_next_rounds_slot(t
 
     cfg = _cfg(tmp_path, max_concurrent_runs=1)
     first = poll.run_once(
-        cfg, ports, registry, launcher, ESCALATED_AT, "agentic", sleep=slow_register
+        cfg,
+        ports,
+        registry,
+        launcher,
+        ESCALATED_AT,
+        "agentic",
+        sleep=slow_register,
+        lock=_Locks(),
+        current_boot=None,
     )
     assert first == ["agentic: poll: launch #5 -> pid 4242"]
     assert registered  # the wait polled until it showed up, not the full 60 s
 
     second = poll.run_once(
-        cfg, ports, registry, launcher, ESCALATED_AT, "agentic", sleep=slow_register
+        cfg,
+        ports,
+        registry,
+        launcher,
+        ESCALATED_AT,
+        "agentic",
+        sleep=slow_register,
+        lock=_Locks(),
+        current_boot=None,
     )
     assert second == ["agentic: poll: nothing to do this round"]
     assert len(launcher.spawned) == 1  # the second round launched nothing more
@@ -493,7 +549,15 @@ def test_a_resume_whose_spawn_fails_posts_no_comment_and_never_waits(tmp_path):
     slept: list[float] = []
     due = ESCALATED_AT + timedelta(minutes=16)
     lines = poll.run_once(
-        _cfg(tmp_path), ports, registry, launcher, due, "agentic", sleep=slept.append
+        _cfg(tmp_path),
+        ports,
+        registry,
+        launcher,
+        due,
+        "agentic",
+        sleep=slept.append,
+        lock=_Locks(),
+        current_boot=None,
     )
     assert len(lines) == 1
     assert lines[0].startswith("agentic: poll: resume #19 -> not launched (not counted): ")
@@ -520,7 +584,7 @@ def test_a_launch_whose_spawn_fails_still_counts_its_own_attempt(tmp_path):
 
 def test_a_launch_whose_spawn_fails_on_the_last_attempt_says_the_calendar_is_spent(tmp_path):
     """Acceptance (c), last attempt: with 5 prior attempts already on record, this
-    failure is the 6th and last the schedule (`AUTO_RESUME_SCHEDULE`, length 6) allows
+    failure is the 6th and last the schedule (`LAUNCH_SCHEDULE`, length 6) allows
     -- the line says so, for a human to notice."""
     ports = memory_ports()
     ports.tracker._queue = [5]
@@ -556,6 +620,543 @@ def test_every_launched_action_uses_the_argv0_passed_in(tmp_path):
         ESCALATED_AT,
         "/venv/bin/agentic",
         sleep=_no_sleep,
+        lock=_Locks(),
+        current_boot=None,
     )
     assert lines == ["agentic: poll: launch #5 -> pid 4242"]
     assert launcher.spawned[0][0] == "/venv/bin/agentic"
+
+
+# ---- `agentic reflect --all` (ADR-0043) ---------------------------------------------------
+
+
+def _reflect_ports(tmp_path, started_at: str, closed: bool):
+    from agentic.core.process.domain import playbook_candidates as pc
+
+    ports = memory_ports()
+    if started_at:
+        ports.workspace.files[("HEAD", pc.LEDGER_FILE)] = pc.render_ledger(
+            pc.Ledger(started_at=started_at)
+        )
+    if closed:
+        ports.documents.save({"id": "GH-9", "title": "t", "description": "d"})
+        ports.documents.record_closure(
+            "GH-9", {"closed_at": "2026-10-06T09:00:00.000+00:00", "delivery_outcome": "merged"}
+        )
+    return ports
+
+
+def test_the_poller_launches_reflect_only_when_a_kept_closed_task_awaits(tmp_path):
+    ports = _reflect_ports(tmp_path, "2026-10-05T00:00:00+00:00", closed=True)
+    launcher = FakeLauncher()
+    lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(), launcher, ESCALATED_AT)
+    assert launcher.spawned == [["agentic", "reflect", "--all", "--product-dir", str(tmp_path)]]
+    assert lines == ["agentic: poll: reflect 1 task(s) -> pid 4242"]
+
+
+def test_the_poller_does_not_launch_reflect_with_nothing_eligible(tmp_path):
+    # No clock yet, a closed task before it, and no closed task at all: never a launch.
+    for started_at, closed in (("", True), ("2026-10-07T00:00:00+00:00", True), ("x", False)):
+        ports = _reflect_ports(tmp_path, started_at, closed)
+        launcher = FakeLauncher()
+        lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(), launcher, ESCALATED_AT)
+        assert launcher.spawned == []
+        assert lines == ["agentic: poll: nothing to do this round"]
+
+
+def test_a_malformed_pull_request_listing_never_fails_the_poll_round(tmp_path, monkeypatch):
+    from agentic.core.process.application import reflect_run
+
+    def malformed(cfg, ports):
+        raise KeyError("mergeCommit")
+
+    monkeypatch.setattr(reflect_run, "pending", malformed)
+    ports = _reflect_ports(tmp_path, "2026-10-05T00:00:00+00:00", closed=True)
+    launcher = FakeLauncher()
+    lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(), launcher, ESCALATED_AT)
+    assert launcher.spawned == []
+    assert lines == ["agentic: poll: nothing to do this round"]
+
+
+def _two_candidates_with_merged_blockers(ports) -> None:
+    ports.tracker._queue = [5, 6]
+    ports.tracker.states[5] = IssueState("OPEN", "", (3,), None)
+    ports.tracker.states[6] = IssueState("OPEN", "", (4,), None)
+    ports.tracker.states[3] = IssueState("CLOSED", "COMPLETED", None, "aaa111")
+    ports.tracker.states[4] = IssueState("CLOSED", "COMPLETED", None, "bbb222")
+
+
+def test_an_empty_queue_never_asks_for_the_upstream(tmp_path):
+    ports = memory_ports()
+    _round(_cfg(tmp_path), ports, MemoryRunRegistry(), FakeLauncher(), ESCALATED_AT)
+    assert ports.workspace.upstream_calls == 0
+
+
+def test_candidates_with_no_blockers_never_ask_for_the_upstream(tmp_path):
+    ports = memory_ports()
+    ports.tracker._queue = [5, 6]
+    for number in (5, 6):
+        ports.tracker.states[number] = IssueState("OPEN", "", (), None)
+        _seed_body(ports, number)
+    _round(_cfg(tmp_path), ports, MemoryRunRegistry(), FakeLauncher(), ESCALATED_AT)
+    assert ports.workspace.upstream_calls == 0
+
+
+def test_two_candidates_with_merged_blockers_fetch_once_and_judge_against_that_tip(tmp_path):
+    ports = memory_ports()
+    _two_candidates_with_merged_blockers(ports)
+    ports.workspace.upstream_answer = Upstream("origin/master", "f00dcafe", None)
+    ports.workspace.ancestors = {"aaa111", "bbb222"}
+    _round(_cfg(tmp_path), ports, MemoryRunRegistry(), FakeLauncher(), ESCALATED_AT)
+    assert ports.workspace.upstream_calls == 1
+    assert [ref for _, _, ref in ports.workspace.ancestor_checks] == ["f00dcafe", "f00dcafe"]
+
+
+def test_an_upstream_with_no_sha_judges_against_head_and_keeps_both_blocked(tmp_path):
+    ports = memory_ports()
+    _two_candidates_with_merged_blockers(ports)
+    ports.workspace.upstream_answer = Upstream("HEAD", None, "HEAD is unborn")
+    registry = MemoryRunRegistry()
+    launcher = FakeLauncher()
+    lines = _round(_cfg(tmp_path), ports, registry, launcher, ESCALATED_AT)
+    assert ports.workspace.upstream_calls == 1
+    assert {ref for _, _, ref in ports.workspace.ancestor_checks} == {"HEAD"}
+    assert launcher.spawned == []
+    assert lines == [
+        "agentic: poll: upstream: HEAD is unborn",
+        "agentic: poll: nothing to do this round",
+    ]
+
+
+def test_the_upstream_note_is_one_line_of_the_round_however_many_blockers_judged(tmp_path):
+    ports = memory_ports()
+    _two_candidates_with_merged_blockers(ports)
+    ports.workspace.upstream_answer = Upstream("origin/master", "f00dcafe", "fetch failed")
+    ports.workspace.ancestors = {"aaa111", "bbb222"}
+    lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(), FakeLauncher(), ESCALATED_AT)
+    assert lines.count("agentic: poll: upstream: fetch failed") == 1
+
+
+# GH-172: an account-limit pause is retaken on a flat 15-minute calendar counted per
+# account window, and an interview keeps its ceiling for retakes that ran a round.
+
+
+def _stamp(moment: datetime) -> str:
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _run_time(moment: datetime) -> str:
+    return moment.isoformat(timespec="milliseconds")
+
+
+def _chase_comments(
+    probes: int, first: datetime = ESCALATED_AT, period_min: int = 16
+) -> list[IssueComment]:
+    """One `Escalated:`, then `probes` pairs of `Auto-resumed:` + `Escalated:`, a
+    `period_min` apart: the shape a chase that kept hitting the same 429 leaves."""
+    comments = [IssueComment(body="Escalated: cut", created_at=_stamp(first))]
+    for k in range(1, probes + 1):
+        at = first + timedelta(minutes=period_min * k)
+        comments.append(IssueComment(body="Auto-resumed: account limit", created_at=_stamp(at)))
+        comments.append(
+            IssueComment(body="Escalated: cut", created_at=_stamp(at + timedelta(minutes=1)))
+        )
+    return comments
+
+
+def _account_limit_ports(section: str, comments: list[IssueComment], runs: list[dict]):
+    ports = memory_ports()
+    ports.documents.save(
+        _paused(
+            "GH-19",
+            "Developer failed 2 times: API Error: 429",
+            [
+                {"kind": "failure", "value": "account_limit", "section": section},
+                {"kind": "escalation", "value": "failure"},
+            ],
+            runs=runs,
+        )
+    )
+    ports.tracker.timestamped["GH-19"] = comments
+    return ports
+
+
+def _retaken(ports, now: datetime, tmp_path) -> bool:
+    launcher = FakeLauncher()
+    lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(), launcher, now)
+    return lines == ["agentic: poll: resume #19 -> pid 4242"]
+
+
+def test_an_account_limit_pause_gets_a_fresh_window_once_a_run_delivered_after_its_probes(
+    tmp_path,
+):
+    comments = _chase_comments(probes=24)
+    last_probe = ESCALATED_AT + timedelta(minutes=16 * 24)
+    now = last_probe + timedelta(minutes=1 + 16)
+    delivered = [
+        {
+            "role": "Developer",
+            "section": "Developer",
+            "started_at": _run_time(last_probe + timedelta(seconds=10)),
+            "ended_at": _run_time(last_probe + timedelta(seconds=40)),
+        }
+    ]
+    # Rejected input: with no delivered run the same 24 probes are one window, spent.
+    spent = _account_limit_ports("Developer", comments, runs=[])
+    assert not _retaken(spent, now, tmp_path)
+    # A delivered run after the last probe: the next 429 is a new window, retaken 15
+    # minutes after its own `Escalated:` though earlier probes exist.
+    fresh = _account_limit_ports("Developer", comments, runs=delivered)
+    assert not _retaken(fresh, last_probe + timedelta(minutes=1 + 14), tmp_path)
+    assert _retaken(fresh, now, tmp_path)
+
+
+def test_an_account_limit_pause_whose_run_ends_are_unreadable_counts_the_whole_chase(tmp_path):
+    comments = _chase_comments(probes=24)
+    now = ESCALATED_AT + timedelta(minutes=16 * 24 + 1 + 16)
+    runs = [{"role": "Developer", "section": "Developer", "ended_at": "not a time"}]
+    assert not _retaken(_account_limit_ports("Developer", comments, runs), now, tmp_path)
+
+
+def test_the_chase_backstop_hands_a_looping_account_limit_pause_to_a_human(tmp_path):
+    # A cheap role keeps delivering (a fresh window each time) while another keeps
+    # hitting a 429: the whole-chase count, which a delivered run never resets, stops it.
+    last_probe_at = ESCALATED_AT + timedelta(minutes=16 * 96)
+    delivered = [
+        {
+            "role": "Developer",
+            "section": "Developer",
+            "started_at": _run_time(last_probe_at),
+            "ended_at": _run_time(last_probe_at + timedelta(seconds=30)),
+        }
+    ]
+    now = last_probe_at + timedelta(minutes=1 + 16)
+    over = _account_limit_ports("Developer", _chase_comments(probes=96), delivered)
+    assert not _retaken(over, now, tmp_path)
+    under_at = ESCALATED_AT + timedelta(minutes=16 * 95)
+    under_runs = [
+        {
+            "role": "Developer",
+            "section": "Developer",
+            "started_at": _run_time(under_at),
+            "ended_at": _run_time(under_at + timedelta(seconds=30)),
+        }
+    ]
+    under = _account_limit_ports("Developer", _chase_comments(probes=95), under_runs)
+    assert _retaken(under, under_at + timedelta(minutes=1 + 16), tmp_path)
+
+
+def test_an_account_limit_interview_pause_with_a_productive_retake_goes_to_a_human(tmp_path):
+    section = INTERVIEW_SOLUTION.section
+    comments = _chase_comments(probes=1)
+    probe = ESCALATED_AT + timedelta(minutes=16)
+    now = probe + timedelta(minutes=1 + 16)
+    round_run = {
+        "role": INTERVIEW_SOLUTION.interviewer.name,
+        "section": section,
+        "started_at": _run_time(probe + timedelta(seconds=20)),
+        "ended_at": _run_time(probe + timedelta(minutes=5)),
+    }
+    # The retake ran an interview round: the ceiling is spent, nobody retakes it.
+    productive = _account_limit_ports(section, comments, [round_run])
+    assert not _retaken(productive, now, tmp_path)
+    # Control: the retake's 429 arrived on turn 1 and ran no round, so the ceiling
+    # still stands and the next slot is retaken.
+    unproductive = _account_limit_ports(section, comments, [])
+    assert _retaken(unproductive, now, tmp_path)
+    # Fail closed: a round whose start is unreadable counts as spent.
+    unreadable = _account_limit_ports(section, comments, [{**round_run, "started_at": "?"}])
+    assert not _retaken(unreadable, now, tmp_path)
+
+
+def test_an_upstream_interview_pause_keeps_its_single_retake_and_never_reads_the_runs(tmp_path):
+    section = INTERVIEW_SOLUTION.section
+    malformed = [
+        {
+            "role": INTERVIEW_SOLUTION.interviewer.name,
+            "section": section,
+            "started_at": "garbage",
+            "ended_at": "garbage",
+        }
+    ]
+
+    def _ports(comments: list[IssueComment]):
+        ports = memory_ports()
+        ports.documents.save(
+            _paused(
+                "GH-19",
+                "Tech Lead failed 2 times: 503",
+                [
+                    {"kind": "failure", "value": "upstream", "section": section},
+                    {"kind": "escalation", "value": "failure"},
+                ],
+                runs=malformed,
+            )
+        )
+        ports.tracker.timestamped["GH-19"] = comments
+        return ports
+
+    assert _retaken(
+        _ports(_chase_comments(probes=0)), ESCALATED_AT + timedelta(minutes=16), tmp_path
+    )
+    after_one = _chase_comments(probes=1)
+    now = ESCALATED_AT + timedelta(days=1)
+    assert not _retaken(_ports(after_one), now, tmp_path)
+
+
+# --- GH-176: a run a reboot interrupted is retaken -----------------------------------
+
+
+def _dead_lock(task_id: str, boot_id: str | None = "boot-old", **more) -> dict[str, LockRecord]:
+    return {task_id: LockRecord(777, "h", "2026-10-05T08:00:00Z", "agentic run", boot_id, **more)}
+
+
+def _open_task(ports, task_id: str = "GH-30", status: str = "developing", **more) -> None:
+    ports.documents.save({"id": task_id, "status": status, **more})
+
+
+def test_gather_retakes_retakes_a_run_whose_lock_is_from_a_previous_boot():
+    ports = memory_ports()
+    _open_task(ports)
+    locks = _Locks(_dead_lock("GH-30"))
+    assert poll.gather_retakes(ports, locks, "boot-now") == ([30], [])
+    assert locks.reads == ["GH-30"]  # read, never acquired: `_Locks.acquire` raises
+
+
+def test_gather_retakes_leaves_a_same_boot_death_to_the_human_with_a_line():
+    ports = memory_ports()
+    _open_task(ports)
+    locks = _Locks(_dead_lock("GH-30", boot_id="boot-now"))
+    assert poll.gather_retakes(ports, locks, "boot-now") == (
+        [],
+        [
+            "agentic: poll: #30 died in this boot (lock pid 777 since 2026-10-05T08:00:00Z), "
+            "left to the human: agentic resume --issue 30"
+        ],
+    )
+
+
+def test_gather_retakes_says_stopped_at_shutdown_for_a_marked_record_of_this_boot():
+    ports = memory_ports()
+    _open_task(ports)
+    locks = _Locks(_dead_lock("GH-30", boot_id="boot-now", stopped_at_shutdown=True))
+    _, lines = poll.gather_retakes(ports, locks, "boot-now")
+    assert "#30 stopped at shutdown (lock pid 777" in lines[0]
+
+
+def test_gather_retakes_never_retakes_a_record_without_a_boot_id():
+    ports = memory_ports()
+    _open_task(ports)
+    retakes, lines = poll.gather_retakes(ports, _Locks(_dead_lock("GH-30", boot_id=None)), "b")
+    assert retakes == []
+    assert "#30 died (boot unknown)" in lines[0]
+
+
+def test_gather_retakes_leaves_a_live_lock_alone_and_says_nothing():
+    ports = memory_ports()
+    _open_task(ports)
+    locks = _Locks(_dead_lock("GH-30"), alive={"GH-30"})
+    assert poll.gather_retakes(ports, locks, "boot-now") == ([], [])
+
+
+def test_gather_retakes_skips_closed_escalated_and_delivered_tasks():
+    ports = memory_ports()
+    _open_task(ports, "GH-31", closed_at="2026-10-05")
+    _open_task(ports, "GH-32", escalated="Developer failed")
+    _open_task(ports, "GH-33", pull_request="https://x/pull/3")
+    _open_task(ports, "GH-34", status="ready_for_review")
+    locks = _Locks({t: r for n in (31, 32, 33, 34) for t, r in _dead_lock(f"GH-{n}").items()})
+    assert poll.gather_retakes(ports, locks, "boot-now") == ([], [])
+
+
+def test_gather_retakes_stops_at_the_cap_after_three_retakes_and_says_so():
+    ports = memory_ports()
+    _open_task(ports)
+    retaken = IssueComment(
+        body="Retaken after reboot: previous boot", created_at="2026-10-05T09:00:00Z"
+    )
+    ports.tracker.timestamped["GH-30"] = [
+        IssueComment(body="a human decision", created_at="2026-10-05T07:00:00Z"),
+        retaken,
+        retaken,
+    ]
+    locks = _Locks(_dead_lock("GH-30"))
+    assert poll.gather_retakes(ports, locks, "boot-now") == ([30], [])  # two of three spent
+    ports.tracker.timestamped["GH-30"].append(retaken)
+    retakes, lines = poll.gather_retakes(ports, locks, "boot-now")
+    assert retakes == []
+    assert "#30 retake cap spent" in lines[0]
+
+
+def test_a_human_comment_resets_the_retake_count():
+    ports = memory_ports()
+    _open_task(ports)
+    retaken = IssueComment(
+        body="Retaken after reboot: previous boot", created_at="2026-10-05T09:00:00Z"
+    )
+    ports.tracker.timestamped["GH-30"] = [
+        retaken,
+        retaken,
+        retaken,
+        IssueComment(body="try again", created_at="2026-10-05T10:00:00Z"),
+    ]
+    assert poll.gather_retakes(ports, _Locks(_dead_lock("GH-30")), "boot-now")[0] == [30]
+
+
+def test_retaken_is_a_system_comment_a_resume_reads_past():
+    from agentic.core.process.application import resume
+
+    assert poll.RETAKEN in resume.SYSTEM_COMMENTS
+
+
+def test_execute_runs_a_retake_as_a_detached_resume_and_never_records_a_launch():
+    from agentic.core.process.domain import rules
+
+    ports = memory_ports()
+    _open_task(ports)
+    registry = MemoryRunRegistry()
+    launcher = FakeLauncher()
+    lines = poll.execute(
+        [rules.PollAction("retake", 30)],
+        _cfg("/p"),
+        ports,
+        registry,
+        launcher,
+        ESCALATED_AT,
+        "agentic",
+        register_timeout_s=0.0,
+        sleep=_no_sleep,
+    )
+    assert launcher.spawned == [
+        ["agentic", "resume", "--issue", "30", "--yes", "--detach", "--product-dir", "/p"]
+    ]
+    assert registry.attempts == {}  # `record_launch` was never called
+    assert ports.tracker.comments == [("GH-30", "Retaken after reboot: previous boot")]
+    assert lines == [
+        "agentic: poll: retake #30 -> pid 4242",
+        "agentic: poll: retake #30 -> not registered (retake 1 of 3)",
+    ]
+
+
+def test_a_retake_whose_spawn_fails_posts_no_comment():
+    from agentic.core.process.domain import rules
+
+    ports = memory_ports()
+    launcher = FakeLauncher(fails={0})
+    lines = poll.execute(
+        [rules.PollAction("retake", 30)],
+        _cfg("/p"),
+        ports,
+        MemoryRunRegistry(),
+        launcher,
+        ESCALATED_AT,
+        "agentic",
+        register_timeout_s=0.0,
+        sleep=_no_sleep,
+    )
+    assert ports.tracker.comments == []
+    assert lines[0].startswith("agentic: poll: retake #30 -> not launched")
+
+
+def test_execute_has_no_catch_all_launch_for_an_unknown_kind():
+    """The rejected input: an action kind no branch knows must raise, never launch."""
+    import pytest
+
+    from agentic.core.process.domain import rules
+
+    registry = MemoryRunRegistry()
+    launcher = FakeLauncher()
+    with pytest.raises(AssertionError):
+        poll.execute(
+            [rules.PollAction("bogus", 30)],  # type: ignore[arg-type]
+            _cfg("/p"),
+            memory_ports(),
+            registry,
+            launcher,
+            ESCALATED_AT,
+            "agentic",
+        )
+    assert launcher.spawned == [] and registry.attempts == {}
+
+
+def test_a_round_retakes_before_anything_spawns_from_the_untouched_lock_record():
+    ports = memory_ports()
+    _open_task(ports)
+    locks = _Locks(_dead_lock("GH-30"))
+    before = dict(locks.records)
+    launcher = FakeLauncher()
+    lines = _round(_cfg("/p"), ports, MemoryRunRegistry(), launcher, ESCALATED_AT, lock=locks)
+    assert lines[0] == "agentic: poll: retake #30 -> pid 4242"
+    assert locks.records == before
+
+
+def test_retakes_count_against_the_machine_cap():
+    ports = memory_ports()
+    _open_task(ports, "GH-30")
+    _open_task(ports, "GH-31")
+    locks = _Locks({**_dead_lock("GH-30"), **_dead_lock("GH-31")})
+    registry = MemoryRunRegistry([RunRegistration(pid=1, host="h", product="p", task_id="GH-9")])
+    launcher = FakeLauncher()
+    lines = _round(
+        _cfg("/p", max_concurrent_runs=2), ports, registry, launcher, ESCALATED_AT, lock=locks
+    )
+    assert [a[3] for a in launcher.spawned] == ["30"]
+    assert len(launcher.spawned) == 1  # one slot free: the second retake waits
+    assert lines[0] == "agentic: poll: retake #30 -> pid 4242"
+
+
+def test_a_round_lists_a_run_left_to_the_human_every_round():
+    ports = memory_ports()
+    _open_task(ports)
+    locks = _Locks(_dead_lock("GH-30", boot_id="boot-now"))
+    launcher = FakeLauncher()
+    first = _round(_cfg("/p"), ports, MemoryRunRegistry(), launcher, ESCALATED_AT, lock=locks)
+    second = _round(_cfg("/p"), ports, MemoryRunRegistry(), launcher, ESCALATED_AT, lock=locks)
+    assert first == second and "#30 died in this boot" in first[0]
+    assert launcher.spawned == []
+
+
+def _retaken_comments(count: int) -> list[IssueComment]:
+    retaken = IssueComment(
+        body="Retaken after reboot: previous boot", created_at="2026-10-05T09:00:00Z"
+    )
+    human = IssueComment(body="a human decision", created_at="2026-10-05T07:00:00Z")
+    return [human, *[retaken] * count]
+
+
+def test_a_round_leaves_a_run_to_the_human_once_its_three_retakes_are_spent():
+    ports = memory_ports()
+    _open_task(ports)
+    ports.tracker.timestamped["GH-30"] = _retaken_comments(poll.rules.RETAKE_AFTER_REBOOT_MAX)
+    launcher = FakeLauncher()
+    lines = _round(
+        _cfg("/p"),
+        ports,
+        MemoryRunRegistry(),
+        launcher,
+        ESCALATED_AT,
+        lock=_Locks(_dead_lock("GH-30")),
+    )
+    assert launcher.spawned == []
+    assert ports.tracker.comments == []
+    assert len(lines) == 1
+    assert lines[0].startswith("agentic: poll: #30 retake cap spent (lock pid 777")
+    assert lines[0].endswith("left to the human: agentic resume --issue 30")
+
+
+def test_a_round_still_retakes_a_run_with_two_of_its_three_retakes_spent():
+    ports = memory_ports()
+    _open_task(ports)
+    ports.tracker.timestamped["GH-30"] = _retaken_comments(2)
+    launcher = FakeLauncher()
+    lines = _round(
+        _cfg("/p"),
+        ports,
+        MemoryRunRegistry(),
+        launcher,
+        ESCALATED_AT,
+        lock=_Locks(_dead_lock("GH-30")),
+    )
+    assert lines[0] == "agentic: poll: retake #30 -> pid 4242"
+    assert "retake 3 of 3" in lines[1]
+    assert len(launcher.spawned) == 1

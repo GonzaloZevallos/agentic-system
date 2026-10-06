@@ -118,12 +118,13 @@ def test_the_money_cap_and_the_interview_rounds_have_defaults():
     assert lower.max_budget_usd == 4.0
 
 
-def test_the_task_cap_is_a_base_a_share_per_subtask_and_a_ceiling():
-    # It grows with the plan instead of a fixed 100 (ADR-0004, fourth addendum); the
-    # human's own cap for a resumed run is unset unless given.
+def test_the_task_cap_is_one_flat_ceiling_with_no_formula_fields():
+    # One flat ceiling instead of a formula over the plan (ADR-0004, 2026-10-05
+    # addendum); the human's own cap for a resumed run is unset unless given.
     cfg = Configuration.from_sources(PRODUCT, {})
-    assert (cfg.task_budget_base_usd, cfg.task_budget_per_subtask_usd) == (30.0, 15.0)
     assert cfg.task_max_budget_usd == 250.0 and cfg.task_budget_usd is None
+    assert "task_budget_base_usd" not in Configuration.model_fields
+    assert "task_budget_per_subtask_usd" not in Configuration.model_fields
     env = {"AGENTIC_TASK_MAX_BUDGET_USD": "50", "AGENTIC_TASK_BUDGET_USD": "180.5"}
     lower = Configuration.from_sources(PRODUCT, env)
     assert lower.task_max_budget_usd == 50.0 and lower.task_budget_usd == 180.5
@@ -133,15 +134,26 @@ def test_the_task_cap_is_a_base_a_share_per_subtask_and_a_ceiling():
         Configuration(product_dir=Path("/tmp/p"), task_budget_usd=0)
 
 
+def test_the_old_formula_env_names_are_ignored_not_rejected():
+    env = {
+        "AGENTIC_PRODUCT_DIR": "/tmp/p",
+        "AGENTIC_TASK_BUDGET_BASE_USD": "30",
+        "AGENTIC_TASK_BUDGET_PER_SUBTASK_USD": "15",
+    }
+    cfg = Configuration.from_sources({}, env)
+    assert cfg.task_max_budget_usd == 250.0
+
+
 def test_role_env_carries_the_git_identity_and_the_subagent_model():
     # What every role's process gets on top of the inherited environment: the git
     # identity and the model the Agent tool hands to sub-agents (ADR-0013, addendum),
     # forced over the model an agent type or a call names (issue #19).
     cfg = Configuration.from_sources(PRODUCT, {})
-    assert cfg.subagent_model == "claude-sonnet-5"
+    subagent_model = Configuration.model_fields["subagent_model"].default
+    assert cfg.subagent_model == subagent_model
     assert cfg.role_env == {
         **cfg.git_identity,
-        "CLAUDE_CODE_SUBAGENT_MODEL": "claude-sonnet-5",
+        "CLAUDE_CODE_SUBAGENT_MODEL": subagent_model,
         "CLAUDE_CODE_SUBAGENT_MODEL_FORCE": "1",
     }
     custom = Configuration.from_sources(PRODUCT, {"AGENTIC_SUBAGENT_MODEL": "haiku"})

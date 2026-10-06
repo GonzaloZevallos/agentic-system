@@ -10,7 +10,9 @@ from agentic.core.knowledge.domain import knowledge, stack
 from agentic.core.measurement.adapters.otel import telemetry
 from agentic.core.measurement.domain import metrics, scorecard
 from agentic.core.process.domain import (
+    boot,
     document,
+    playbook,
     presubmit,
     roles,
     rules,
@@ -50,6 +52,10 @@ TYPES = {
     "Guarda de esquema": schema_guard,
     "Stack del producto": stack,
     "Brief": knowledge.brief_refusal,
+    "Reflector": roles.REFLECTOR,
+    "Playbook": playbook.Playbook,
+    "Lección": playbook.Item,
+    "Arranque": boot,
 }
 
 # Glossary term -> the field of the task state that holds it.

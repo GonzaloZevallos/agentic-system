@@ -81,6 +81,17 @@ KNOWN_TOOLS = frozenset(
     {"Bash", "Read", "Edit", "Write", "Grep", "Glob", AGENT_TOOL, SKILL_TOOL, "StructuredOutput"}
 )
 
+# The SDK's own cap on one JSON message off the CLI's stdout (`_DEFAULT_MAX_BUFFER_SIZE`,
+# 1 MiB, when this option is left unset): a `Read` on a screenshot over ~750 KB
+# (base64 in the tool result) exceeds it and kills the SDK's reader, which counts as an
+# `AttemptFailed(reason="sdk")` (apostrophe GH-58). The API accepts images up to ~5 MB,
+# ~6.7 MB base64-encoded plus JSON escaping; 16 MiB leaves more than double that margin,
+# so the API -- with its status visible -- always rejects first, and this local reader
+# never does. The same SDK value also thresholds its stderr buffer, but only when
+# `options.stderr` is set; `options_for` below never sets it, so that use is dead code
+# here.
+MAX_BUFFER_BYTES: int = 16 * 1024 * 1024
+
 
 def options_for(
     role: Role,
@@ -119,6 +130,7 @@ def options_for(
         skills=[f"{PLUGIN}:{skill}" for skill in role.skills] or None,
         plugins=[{"type": "local", "path": str(PLUGIN_DIR)}] if role.skills else [],
         max_budget_usd=max_budget_usd,
+        max_buffer_size=MAX_BUFFER_BYTES,
         resume=resume,
         cwd=cwd,
         model=model,

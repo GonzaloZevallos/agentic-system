@@ -15,24 +15,26 @@ import fcntl
 import json
 import os
 import socket
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime
 from pathlib import Path
 
 from ...application.ports import LaunchAttempt, RunRegistration
+from .liveness import current_boot_id, is_alive
 
 _LOCK_NAME = ".lock"
 _LAUNCHES_DIR = "launches"
 
 
 class FilesystemRunRegistry:
-    def __init__(self, dir: Path):
+    def __init__(self, dir: Path, boot_id: Callable[[], str | None] = current_boot_id):
         self.dir = dir
+        self._boot_id = boot_id
 
     # -- live runs ----------------------------------------------------------------
 
     def register(self, product: str, task_id: str) -> None:
-        self._write(os.getpid(), _host(), product, task_id)
+        self._write(os.getpid(), _host(), product, task_id, self._boot_id())
 
     def unregister(self) -> None:
         self._path(os.getpid()).unlink(missing_ok=True)
@@ -41,6 +43,7 @@ class FilesystemRunRegistry:
         if not self.dir.is_dir():
             return []
         here = _host()
+        current = self._boot_id()
         entries = []
         for path in sorted(self.dir.glob("*.json")):
             try:
@@ -49,8 +52,9 @@ class FilesystemRunRegistry:
             except (OSError, ValueError, KeyError):
                 continue
             # Never probed: a pid recorded on another host is a coin flip, the same
-            # rule `FilesystemRunLock` already enforces.
-            if host == here and _alive(pid):
+            # rule `FilesystemRunLock` already enforces. An entry from another boot is
+            # dead whatever the pid says (`liveness.is_alive`).
+            if host == here and is_alive(pid, data.get("boot_id"), current):
                 entries.append(RunRegistration(pid, host, data["product"], data["task_id"]))
         return entries
 
@@ -64,9 +68,17 @@ class FilesystemRunRegistry:
             finally:
                 fcntl.flock(handle, fcntl.LOCK_UN)
 
-    def _write(self, pid: int, host: str, product: str, task_id: str) -> None:
+    def _write(
+        self, pid: int, host: str, product: str, task_id: str, boot_id: str | None = None
+    ) -> None:
         self.dir.mkdir(parents=True, exist_ok=True)
-        record = {"pid": pid, "host": host, "product": product, "task_id": task_id}
+        record = {
+            "pid": pid,
+            "host": host,
+            "product": product,
+            "task_id": task_id,
+            "boot_id": boot_id,
+        }
         self._path(pid).write_text(json.dumps(record), encoding="utf-8")
 
     def _path(self, pid: int) -> Path:
@@ -98,13 +110,3 @@ class FilesystemRunRegistry:
 
 def _host() -> str:
     return socket.gethostname()
-
-
-def _alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True  # owned by someone else, but the OS knows it is there
-    return True

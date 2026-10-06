@@ -66,7 +66,7 @@ def capture_run(monkeypatch):
 
     def fake_run(func, *args):
         assert func is cli._signal_guarded
-        (work,) = args
+        work, *_stop = args  # `run`/`resume` also pass their `StopCause`
         task, cfg, ports, *options = work.args
         seen.update(fn=work.func, task=task, cfg=cfg, ports=ports, options=tuple(options))
 
@@ -356,6 +356,72 @@ async def test_the_log_file_travels_in_configurable_to_every_node(monkeypatch, t
         await cli._run(task, cfg, memory_ports(), checkpointer=saver, log_file=log_file)
 
     assert seen and seen[0].log_file == Path(log_file)
+
+
+def unavailable_inhibitor(monkeypatch, seen: list[str]):
+    from contextlib import contextmanager
+
+    @contextmanager
+    def hold(why):
+        seen.append(why)
+        yield "systemd-inhibit not found"
+
+    monkeypatch.setattr(cli, "inhibitor", SimpleNamespace(hold=hold))
+
+
+@pytest.mark.anyio
+async def test_run_says_once_that_the_inhibitor_is_unavailable_and_goes_on(
+    monkeypatch, tmp_path, capsys
+):
+    from agentic.core.process.adapters.langgraph.graph import build_graph
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import ScriptedRunner, classified, memory_ports
+
+    graph = build_graph(
+        lambda cfg: memory_ports(ScriptedRunner(pjm=[classified()])), arm_for=composition._arm_for
+    )
+    monkeypatch.setattr(cli, "graph", graph)
+    monkeypatch.setenv("AGENTIC_PRODUCT_DIR", str(tmp_path))
+    held: list[str] = []
+    unavailable_inhibitor(monkeypatch, held)
+    cfg = Configuration.from_sources({}, os.environ)
+    task = {"id": "GH-1", "title": "Export", "description": "CSV."}
+
+    with pytest.raises(AssertionError, match="no scripted result"):
+        # The run proceeds into the graph past the warning: it was not refused.
+        await cli._run(task, cfg, memory_ports(), checkpointer=Saver())
+
+    err = capsys.readouterr().err
+    assert (
+        err.count("agentic: sleep/shutdown inhibitor unavailable: systemd-inhibit not found") == 1
+    )
+    assert held == ["GH-1: run"]
+
+
+@pytest.mark.anyio
+async def test_resume_says_once_that_the_inhibitor_is_unavailable_and_goes_on(
+    monkeypatch, tmp_path, capsys
+):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setenv("AGENTIC_PRODUCT_DIR", str(tmp_path))
+    held: list[str] = []
+    unavailable_inhibitor(monkeypatch, held)
+    ports = memory_ports()
+    ports.documents.save(
+        {"id": "GH-1", "title": "t", "description": "d", "escalated": "Developer stopped"}
+    )
+    cfg = Configuration.from_sources({}, os.environ)
+
+    with pytest.raises(Exception):  # noqa: B017 -- what follows the warning is not the point
+        await cli._resume("GH-1", cfg, ports, yes=True, checkpointer=Saver())
+
+    err = capsys.readouterr().err
+    assert (
+        err.count("agentic: sleep/shutdown inhibitor unavailable: systemd-inhibit not found") == 1
+    )
+    assert held == ["GH-1: resume"]
 
 
 @pytest.mark.anyio
@@ -650,9 +716,13 @@ class FakeLock:
         self.taken_over = taken_over
         self.acquired: list[tuple[str, str]] = []
         self.released: list[str] = []
+        self.kept: list[str] = []
 
     def read(self, task_id):
         return self.held
+
+    def keep_at_shutdown(self, task_id):
+        self.kept.append(task_id)
 
     def acquire(self, task_id, command):
         self.acquired.append((task_id, command))
@@ -1097,6 +1167,82 @@ async def test_a_signal_cancels_the_invocation_releases_the_lock_and_exits_nonze
     assert lock.released == ["T-9"]  # `_locked`'s own `finally`, surviving cancellation
 
 
+async def _signalled_run(monkeypatch, tmp_path, lock, probe):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setattr(cli, "graph", Hangs())
+    monkeypatch.setattr(cli.anyio, "open_signal_receiver", lambda *sigs: FiresOnce())
+    stop = cli.StopCause()
+    work = partial(
+        cli._run,
+        {"id": "T-9", "title": "t", "description": "d"},
+        Configuration(product_dir=tmp_path),
+        memory_ports(),
+        checkpointer=in_memory,
+        run_lock=lock,
+        stop=stop,
+    )
+    with pytest.raises(SystemExit):
+        await cli._signal_guarded(work, stop, shutdown_probe=probe)
+    return stop
+
+
+@pytest.mark.anyio
+async def test_a_signal_at_system_shutdown_keeps_the_lock_record_marked(monkeypatch, tmp_path):
+    from agentic.core.process.adapters.filesystem import FilesystemRunLock
+
+    lock = FilesystemRunLock(tmp_path / "locks", boot_id=lambda: "boot-1")
+    stop = await _signalled_run(monkeypatch, tmp_path, lock, lambda: True)
+    assert stop.at_shutdown is True
+    record = lock.read("T-9")
+    assert record is not None
+    assert record.stopped_at_shutdown is True
+    assert record.boot_id == "boot-1"
+
+
+@pytest.mark.anyio
+async def test_a_signal_outside_a_shutdown_releases_the_lock(monkeypatch, tmp_path):
+    from agentic.core.process.adapters.filesystem import FilesystemRunLock
+
+    lock = FilesystemRunLock(tmp_path / "locks", boot_id=lambda: "boot-1")
+    stop = await _signalled_run(monkeypatch, tmp_path, lock, lambda: False)
+    assert stop.at_shutdown is False
+    assert lock.read("T-9") is None
+
+
+def test_each_invocation_has_its_own_stop_cause():
+    first, second = cli.StopCause(), cli.StopCause()
+    first.at_shutdown = True
+    assert second.at_shutdown is False
+
+
+def test_system_is_stopping_only_on_exactly_stopping(monkeypatch):
+    def answering(text):
+        return lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout=text, stderr="")
+
+    for output, expected in (
+        ("stopping\n", True),
+        ("running\n", False),
+        ("degraded\n", False),
+        ("", False),
+    ):
+        monkeypatch.setattr(cli.subprocess, "run", answering(output))
+        assert cli._system_is_stopping() is expected
+
+
+def test_system_is_stopping_is_false_when_systemctl_is_missing_or_slow(monkeypatch):
+    def missing(*a, **k):
+        raise FileNotFoundError
+
+    def slow(*a, **k):
+        raise subprocess.TimeoutExpired("systemctl", 2)
+
+    for failing in (missing, slow):
+        monkeypatch.setattr(cli.subprocess, "run", failing)
+        assert cli._system_is_stopping() is False
+
+
 @pytest.mark.anyio
 async def test_a_signal_still_flushes_telemetry_and_closes_the_task_span(monkeypatch, tmp_path):
     """`_invoke`'s `finally: telemetry.flush()` and `task_span`'s own context manager
@@ -1168,7 +1314,9 @@ async def test_an_uninterrupted_run_over_the_guard_comments_exactly_as_before(
         checkpointer=in_memory,
     )
     await cli._signal_guarded(work)
-    assert ports.tracker.comments == [("GH-1", "Resumed: diagnose, under a task cap of 30.00 USD.")]
+    assert ports.tracker.comments == [
+        ("GH-1", "Resumed: diagnose, under a task cap of 250.00 USD.")
+    ]
 
 
 # --detach (subtask `--detach`): argparse refusals, seam `agentic.cli.main`.
@@ -2546,6 +2694,9 @@ class FakeKeyedLock:
             return None
         return f"{task_id} is already running: pid {record.pid}"
 
+    def keep_at_shutdown(self, task_id):
+        pass
+
     def release(self, task_id):
         self.released.append(task_id)
         self.held.pop(task_id, None)
@@ -3490,3 +3641,146 @@ async def test_poll_flushes_every_line_of_a_round_before_awaiting_the_wait(monke
         )
     # Round 1 closed both GH-3 and GH-4: both lines were flushed before the wait.
     assert flushes_before_the_wait == [2]
+
+
+@pytest.mark.anyio
+async def test_eval_score_names_the_role_whose_playbook_differs(tmp_path, capsys):
+    from agentic.shared.configuration import Configuration
+
+    root = eval_root(tmp_path)
+    ports = memory_ports()
+    ports.documents.save(
+        {
+            "id": "GH-1",
+            "status": "open",
+            "prompts": {"developer": "a", "pm": "p"},
+            "playbooks": {"developer": "pb1"},
+        }
+    )
+    ports.documents.save(
+        {
+            "id": "GH-2",
+            "status": "open",
+            "prompts": {"developer": "b", "pm": "p"},
+            "playbooks": {"developer": "pb2"},
+        }
+    )
+    await cli._eval_score(Configuration(product_dir=root), ports, None, str(tmp_path / "out.jsonl"))
+    out = capsys.readouterr().out
+    assert "playbook differs for: developer" in out
+    assert "template differs for" not in out
+
+
+@pytest.mark.anyio
+async def test_eval_score_names_the_role_whose_template_differs(tmp_path, capsys):
+    from agentic.shared.configuration import Configuration
+
+    root = eval_root(tmp_path)
+    ports = memory_ports()
+    ports.documents.save({"id": "GH-1", "status": "open", "prompts": {"developer": "a", "pm": "p"}})
+    ports.documents.save({"id": "GH-2", "status": "open", "prompts": {"developer": "a", "pm": "q"}})
+    await cli._eval_score(Configuration(product_dir=root), ports, None, str(tmp_path / "out.jsonl"))
+    out = capsys.readouterr().out
+    assert "template differs for: pm" in out
+    assert "playbook differs" not in out
+
+
+# --- GH-176: the poller retakes a run a reboot cut, and `_resume` takes it up --------
+
+
+def _two_step_graph(ran: list[str], seen_lock: list, lock, fail_b: bool):
+    """A real, tiny `StateGraph`: `a` then `b`. Run with `fail_b`, it leaves the real
+    per-task checkpoint a killed run leaves -- `a` done, `b` still pending, no interrupt."""
+    from langgraph.graph import END, START, StateGraph
+
+    from agentic.core.process.adapters.langgraph.graph import ESCALATE
+
+    def a(state):
+        ran.append("a")
+        return {**state, "status": "developing"}
+
+    def b(state):
+        if fail_b:
+            raise RuntimeError("the machine went down")
+        ran.append("b")
+        seen_lock.append(lock.read(state["id"]))
+        return {**state, "status": "ready_for_review"}
+
+    g = StateGraph(dict)
+    g.add_node(ESCALATE, lambda state: {})
+    g.add_node("a", a)
+    g.add_node("b", b)
+    g.add_edge(START, "a")
+    g.add_edge("a", "b")
+    g.add_edge("b", END)
+    return g
+
+
+@pytest.mark.anyio
+async def test_the_poller_retakes_a_run_a_reboot_cut_and_resume_takes_over_its_lock(
+    monkeypatch, tmp_path, capsys
+):
+    """The join: a real per-task checkpoint left mid-run, a real lock record written in
+    a previous boot (by a pid that is alive now, as a reused pid would be), `run_once`
+    deciding the retake from that unmodified record, and `_resume` driven from the argv
+    it spawned."""
+    from datetime import UTC, datetime
+
+    from agentic.core.process.adapters.filesystem import FilesystemRunLock
+    from agentic.core.process.application import poll
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import FakeLauncher, MemoryRunRegistry, memory_ports
+
+    cfg = Configuration(product_dir=tmp_path)
+    ports = memory_ports()
+    ports.documents.save({"id": "GH-30", "title": "t", "status": "developing"})
+    old_boot = FilesystemRunLock(tmp_path / "locks", boot_id=lambda: "old")
+    old_boot.acquire("GH-30", "agentic run")  # this very pid: `os.kill` alone says alive
+    lock = FilesystemRunLock(tmp_path / "locks", boot_id=lambda: "new")
+
+    ran: list[str] = []
+    seen: list = []
+    crashed = _two_step_graph(ran, seen, lock, fail_b=True)
+    async with composition.checkpointer(cfg, "GH-30") as saver:
+        app = crashed.compile(checkpointer=saver)
+        with pytest.raises(RuntimeError):
+            await app.ainvoke(
+                {"id": "GH-30", "title": "t", "status": "open"},
+                config={"configurable": {"thread_id": "GH-30"}},
+            )
+    assert ran == ["a"]  # the checkpoint: `b` is pending, nothing interrupted
+
+    launcher = FakeLauncher()
+    lines = poll.run_once(
+        cfg,
+        ports,
+        MemoryRunRegistry(),
+        launcher,
+        datetime.now(UTC),
+        "agentic",
+        register_timeout_s=0.0,
+        sleep=lambda s: None,
+        lock=lock,
+        current_boot="new",
+    )
+    assert lines[0] == "agentic: poll: retake #30 -> pid 4242"
+    (argv,) = launcher.spawned
+    assert argv[:2] == ["agentic", "resume"] and {"--yes", "--detach"} <= set(argv)
+    assert ports.tracker.comments == [("GH-30", "Retaken after reboot: previous boot")]
+
+    ran.clear()
+    monkeypatch.setattr(cli, "graph", _two_step_graph(ran, seen, lock, fail_b=False))
+    await cli._resume(
+        f"GH-{argv[argv.index('--issue') + 1]}",
+        cfg,
+        ports,
+        yes=True,
+        checkpointer=composition.checkpointer,
+        run_lock=lock,
+        registry=MemoryRunRegistry(),
+    )
+    assert "took over the lock" in capsys.readouterr().out
+    assert ran == ["b"]  # only the pending node ran again
+    (held,) = seen
+    assert held.boot_id == "new" and held.pid == os.getpid()
+    assert lock.read("GH-30") is None  # released on the way out, as any run is

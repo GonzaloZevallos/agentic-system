@@ -21,7 +21,7 @@ from agentic.core.process.adapters.claude_sdk import runner as module
 from agentic.core.process.adapters.claude_sdk.runner import ClaudeSdkRunner, options_for
 from agentic.core.process.application.ports import AttemptFailed
 from agentic.core.process.domain.denials import denial_for
-from agentic.core.process.domain.roles import DEVELOPER, PJM, TECH_LEAD_REVIEWER
+from agentic.core.process.domain.roles import DEVELOPER, PJM, ROLES, TECH_LEAD_REVIEWER
 from agentic.shared.environment import RESOURCE_ROLE_SLUG_KEY, RESOURCE_TRACE_ID_KEY
 
 pytestmark = pytest.mark.anyio
@@ -677,6 +677,29 @@ def test_options_for_adds_no_marker_without_a_traceparent(tmp_path):
     assert "TRACEPARENT" not in options.env
 
 
+@pytest.mark.parametrize("role", ROLES, ids=lambda role: role.slug)
+def test_options_for_sets_max_buffer_size_for_every_role(role, tmp_path):
+    # GH-160: the SDK's `_DEFAULT_MAX_BUFFER_SIZE` (1 MiB) is the cap on one JSON
+    # message off the CLI's stdout; a `Read` on a screenshot over ~750 KB (base64 in
+    # the tool result) exceeded it and killed the SDK's reader (apostrophe GH-58).
+    # `options_for` is the one site in `agentic/` that builds `ClaudeAgentOptions`, so
+    # every role, parametrized over the whole closed set, must get the raised value.
+    options = options_for(
+        role,
+        system_prompt="s",
+        model="m",
+        json_schema={"type": "object"},
+        cwd=tmp_path,
+        resume=None,
+        max_budget_usd=None,
+        traceparent=None,
+        partial=False,
+        env={},
+        resource_attributes=None,
+    )
+    assert options.max_buffer_size == module.MAX_BUFFER_BYTES
+
+
 async def test_run_once_marks_against_the_real_ambient_resource_attributes(monkeypatch, tmp_path):
     # Review finding (blocking): the composed marker must preserve the process's own
     # ambient `OTEL_RESOURCE_ATTRIBUTES` (`os.environ`), not just whatever `env=` the
@@ -1188,7 +1211,7 @@ def test_options_for_tech_lead_reviewer_is_pinned(tmp_path):
         "add_dirs": [],
         "env": {},  # no traceparent, no ambient marker to add (`_child_env`)
         "extra_args": {},
-        "max_buffer_size": None,
+        "max_buffer_size": module.MAX_BUFFER_BYTES,
         "debug_stderr": True,  # still the SDK's own default `sys.stderr`
         "stderr": None,
         "can_use_tool": ("present", "_deny_writes.<locals>.deny"),  # the role does not execute

@@ -33,6 +33,10 @@ checks:
   lint: uv run ruff check .
   format: uv run ruff format --check .
   types: uv run mypy
+# `parallel_checks`: the gate runs the four checks above at once. Five concurrent runs of
+# them gave no red that the serial run did not give (ADR-0044, "Evidencia para este repo").
+# Read at a task's base, like every key here: it governs from the task after the merge.
+parallel_checks: true
 witness: uv run python -c "import agentic, pathlib; print(pathlib.Path(agentic.__file__).resolve().parent)"
 forbidden:
   - pattern: '#\s*(type:\s*ignore|noqa)\b'
