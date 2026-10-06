@@ -50,6 +50,7 @@ from .core.process.adapters.filesystem import (
 )
 from .core.process.adapters.git.workspace import GitError
 from .core.process.adapters.langgraph.graph import ESCALATE
+from .core.process.adapters.shell import inhibitor
 from .core.process.application import archive, reflect_run
 from .core.process.application import poll as pollmod
 from .core.process.application import resume as resuming
@@ -773,6 +774,18 @@ def _locked(lock: RunLock, task_id: str) -> Iterator[None]:
         lock.release(task_id)
 
 
+@contextmanager
+def _inhibited(why: str) -> Iterator[None]:
+    """Holds a sleep/shutdown inhibitor for the invocation (GH-176). Best effort, the
+    same shape as `_registered`: where it is unavailable the run goes on, one stderr
+    line the only trace. Entered after the lock, inside the process that runs, so there
+    is a single pid and a refused run never took it."""
+    with inhibitor.hold(why) as unavailable:
+        if unavailable is not None:
+            print(f"agentic: sleep/shutdown inhibitor unavailable: {unavailable}", file=sys.stderr)
+        yield
+
+
 def _registry_for(cfg: Configuration) -> RunRegistry:
     return FilesystemRunRegistry(cfg.run_registry_dir)
 
@@ -872,7 +885,11 @@ async def _run(
         if detach:
             _detach(lock, task["id"], child_argv or [], log_file or "", spawn)
             return
-        with _locked(lock, task["id"]), _registered(registry, product_name(ports), task["id"]):
+        with (
+            _locked(lock, task["id"]),
+            _registered(registry, product_name(ports), task["id"]),
+            _inhibited(f"{task['id']}: run"),
+        ):
             _archive_previous_run(task["id"], ports)
             # A thread keeps its channels: a new run over it would add to the old cost.
             await saver.adelete_thread(task["id"])
@@ -1003,7 +1020,11 @@ async def _resume(
             _detach(lock, task_id, child_argv or [], log_file or "", spawn)
             return
 
-        with _locked(lock, task_id), _registered(registry, product_name(ports), task_id):
+        with (
+            _locked(lock, task_id),
+            _registered(registry, product_name(ports), task_id),
+            _inhibited(f"{task_id}: resume"),
+        ):
             if r.source == "document":
                 # Seeded as if `escalate` had just run: the task pauses once more,
                 # without telling the human again, and the answer below resumes it

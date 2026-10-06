@@ -357,6 +357,68 @@ async def test_the_log_file_travels_in_configurable_to_every_node(monkeypatch, t
     assert seen and seen[0].log_file == Path(log_file)
 
 
+def unavailable_inhibitor(monkeypatch, seen: list[str]):
+    from contextlib import contextmanager
+
+    @contextmanager
+    def hold(why):
+        seen.append(why)
+        yield "systemd-inhibit not found"
+
+    monkeypatch.setattr(cli.inhibitor, "hold", hold)
+
+
+@pytest.mark.anyio
+async def test_run_says_once_that_the_inhibitor_is_unavailable_and_goes_on(
+    monkeypatch, tmp_path, capsys
+):
+    from agentic.core.process.adapters.langgraph.graph import build_graph
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import ScriptedRunner, classified, memory_ports
+
+    graph = build_graph(
+        lambda cfg: memory_ports(ScriptedRunner(pjm=[classified()])), arm_for=composition._arm_for
+    )
+    monkeypatch.setattr(cli, "graph", graph)
+    monkeypatch.setenv("AGENTIC_PRODUCT_DIR", str(tmp_path))
+    held: list[str] = []
+    unavailable_inhibitor(monkeypatch, held)
+    cfg = Configuration.from_sources({}, os.environ)
+    task = {"id": "GH-1", "title": "Export", "description": "CSV."}
+
+    with pytest.raises(AssertionError, match="no scripted result"):
+        # The run proceeds into the graph past the warning: it was not refused.
+        await cli._run(task, cfg, memory_ports(), checkpointer=Saver())
+
+    err = capsys.readouterr().err
+    assert err.count("agentic: sleep/shutdown inhibitor unavailable: systemd-inhibit not found") == 1
+    assert held == ["GH-1: run"]
+
+
+@pytest.mark.anyio
+async def test_resume_says_once_that_the_inhibitor_is_unavailable_and_goes_on(
+    monkeypatch, tmp_path, capsys
+):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setenv("AGENTIC_PRODUCT_DIR", str(tmp_path))
+    held: list[str] = []
+    unavailable_inhibitor(monkeypatch, held)
+    ports = memory_ports()
+    ports.documents.save(
+        {"id": "GH-1", "title": "t", "description": "d", "escalated": "Developer stopped"}
+    )
+    cfg = Configuration.from_sources({}, os.environ)
+
+    with pytest.raises(Exception):  # noqa: B017 -- what follows the warning is not the point
+        await cli._resume("GH-1", cfg, ports, yes=True, checkpointer=Saver())
+
+    err = capsys.readouterr().err
+    assert err.count("agentic: sleep/shutdown inhibitor unavailable: systemd-inhibit not found") == 1
+    assert held == ["GH-1: resume"]
+
+
 @pytest.mark.anyio
 async def test_a_resume_emits_only_what_it_spent_never_the_tasks_whole_cost(
     monkeypatch, tmp_path, capsys
