@@ -117,6 +117,13 @@ def render(
         "discard_reason": state.get("discard_reason"),
         "branch": state.get("branch"),
         "pull_request": state.get("pull_request"),
+        # The remote sha a delivery replaced (GH-204), written only when set so a document
+        # without a replace is byte-identical to one written before it.
+        **(
+            {"replaced_remote_tip": replaced}
+            if (replaced := state.get("replaced_remote_tip"))
+            else {}
+        ),
         "subtasks": {sid: _recorded(sub) for sid, sub in state.get("subtasks", {}).items()},
         "invariants": state.get("invariants", []),
         "integration_brief": state.get("integration_brief", ""),

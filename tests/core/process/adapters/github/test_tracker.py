@@ -545,3 +545,81 @@ def test_merge_call_failed_carries_the_raw_error_as_its_message_never_as_its_cla
         GhTracker(Path("/p"), run).merge(7, "abc123")
     assert raised.value.failure == "gh_rejected"
     assert str(raised.value) == "gh pr merge failed: Pull request is not mergeable: secret"
+
+
+# -- pull_requests_on ---------------------------------------------------------------------
+
+
+def _rows(*states, start=1):
+    return json.dumps(
+        [
+            {"number": start + i, "state": state, "url": f"https://github.com/o/r/pull/{start + i}"}
+            for i, state in enumerate(states)
+        ]
+    )
+
+
+def test_pull_requests_on_reads_the_three_states_from_one_gh_call():
+    run = Recorder(stdout=_rows("OPEN", "CLOSED", "MERGED"))
+    found = GhTracker(Path("/p"), run).pull_requests_on("agentic/GH-59")
+    assert [(pr.number, pr.state) for pr in found] == [(1, "OPEN"), (2, "CLOSED"), (3, "MERGED")]
+    assert found[0].url == "https://github.com/o/r/pull/1"
+    assert run.calls == [
+        [
+            "gh",
+            "pr",
+            "list",
+            "--head",
+            "agentic/GH-59",
+            "--state",
+            "all",
+            "--json",
+            "number,state,url",
+            "--limit",
+            "50",
+        ]
+    ]
+
+
+def test_pull_requests_on_a_branch_without_any_is_an_empty_list():
+    assert GhTracker(Path("/p"), Recorder(stdout="[]\n")).pull_requests_on("b") == []
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        "not json",
+        '{"number": 1}',
+        '[{"number": 1, "state": "OPEN"}]',
+        '[{"number": "1", "state": "OPEN", "url": "u"}]',
+        '[{"number": 1, "state": "DRAFT", "url": "u"}]',
+        '[{"number": 1, "state": "open", "url": "u"}]',
+        '["x"]',
+        _rows(*["CLOSED"] * 50),
+    ],
+    ids=[
+        "not-json",
+        "not-a-list",
+        "missing-key",
+        "number-not-int",
+        "unknown-state",
+        "lowercase-state",
+        "row-not-object",
+        "exactly-the-limit",
+    ],
+)
+def test_pull_requests_on_raises_on_anything_unreadable_never_an_empty_list(stdout):
+    with pytest.raises(ValueError, match="gh pr list on b"):
+        GhTracker(Path("/p"), Recorder(stdout=stdout)).pull_requests_on("b")
+
+
+def test_pull_requests_on_raises_when_gh_fails():
+    with pytest.raises(ValueError, match="gh pr list failed: no auth"):
+        GhTracker(Path("/p"), Recorder(fail=True)).pull_requests_on("b")
+
+
+def test_pull_requests_on_just_under_the_limit_is_returned_whole():
+    assert (
+        len(GhTracker(Path("/p"), Recorder(stdout=_rows(*["OPEN"] * 49))).pull_requests_on("b"))
+        == 49
+    )

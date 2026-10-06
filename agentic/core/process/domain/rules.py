@@ -10,7 +10,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, NamedTuple
+from typing import Any, Literal, NamedTuple, Protocol
 
 from . import presubmit
 from .denials import denial_for
@@ -1310,19 +1310,38 @@ def branches_of_task(names: Sequence[str], task_id: str) -> list[str]:
 _ARCHIVED_REF = re.compile(r"^archive/run(\d+)-[^/]*/(?:agentic/)?(.+)$")
 
 
+def _parse_archived(ref: str) -> tuple[int, str] | None:
+    """`(N, rest)` of an archived ref of either spelling -- `rest` is the task id and,
+    for a subtask branch, `.<subtask>` -- or `None` for a ref that is not an archive."""
+    match = _ARCHIVED_REF.match(ref)
+    if not match:
+        return None
+    n, rest = match.groups()
+    return int(n), rest
+
+
 def _archived_runs(refs: Sequence[str], task_id: str) -> list[int]:
     """The `N` of every archived ref, of either spelling, that belongs to `task_id`:
     the same whole-segment comparison `branches_of_task` makes, so `GH-1` never reads
     `GH-12`'s archive as its own."""
     runs = []
     for ref in refs:
-        match = _ARCHIVED_REF.match(ref)
-        if not match:
+        parsed = _parse_archived(ref)
+        if parsed is None:
             continue
-        n, rest = match.groups()
+        n, rest = parsed
         if rest == task_id or rest.startswith(f"{task_id}."):
-            runs.append(int(n))
+            runs.append(n)
     return runs
+
+
+def archived_task_branches(refs: Sequence[str], task_id: str) -> list[str]:
+    """The refs in `refs` that are archives of `task_id`'s own task branch, either
+    spelling and any `run<N>-<sha>` prefix (`unknown` included): never a subtask
+    archive (`.<subtask>`) and never another task's (`GH-1` against `GH-12`). What a
+    `--fresh` run left of a previous task branch, and so the one thing a remote that
+    diverged may be told apart from somebody else's push by (`push_plan`)."""
+    return [ref for ref in refs if (parsed := _parse_archived(ref)) and parsed[1] == task_id]
 
 
 def next_archive_run(refs: Sequence[str], live: Sequence[str], task_id: str) -> int | None:
@@ -2641,3 +2660,109 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     if facts.attempts >= MERGE_ATTEMPTS_MAX:
         return MergeDecision("refuse", "attempts_exhausted")
     return MergeDecision("run_checks", None)
+
+
+# Entrega con una rama remota que divergió (ADR-0011, addendum GH-204): the one place that
+# decides whether delivery may replace what `origin` holds under the task branch. The
+# facts -- the remote tip, whether HEAD or one of the task's own archives contains it, the
+# pull requests on the branch -- are gathered by `deliver`, once and in that order; this
+# only reads them.
+
+PushRefusal = Literal["open_pull_request", "merged_pull_request", "unowned_divergence"]
+
+
+class _BranchPullRequest(Protocol):
+    """What `push_plan` reads of a pull request on the task branch: the application's
+    `BranchPullRequest` satisfies it, so the domain imports nothing of it."""
+
+    @property
+    def number(self) -> int: ...
+
+    @property
+    def state(self) -> str: ...
+
+
+@dataclass(frozen=True)
+class PushPlan:
+    """`kind` is what delivery does with the push. `old_sha` is the remote tip the plan
+    was made against (`None` when `origin` has no such branch): it is the lease of a
+    `replace` and, on a `refuse`, the sha the reason names; no other kind uses it."""
+
+    kind: Literal["push", "replace", "refuse"]
+    old_sha: str | None = None
+    reason: PushRefusal | None = None
+
+
+def push_plan(
+    remote_tip: str | None,
+    remote_in_head: bool,
+    prs: Sequence[_BranchPullRequest],
+    remote_in_own_archive: bool,
+) -> PushPlan:
+    """A remote branch that is absent, or that HEAD already contains, is a plain push. A
+    diverged one is replaced only when it is certainly the system's own to replace: every
+    pull request that was ever on it was closed unmerged, or there is none and the tip is
+    in one of this task's own archives. An open or a merged pull request forbids a replace
+    in every case."""
+    if remote_tip is None or remote_in_head:
+        return PushPlan("push", remote_tip)
+    if any(pr.state == "OPEN" for pr in prs):
+        return PushPlan("refuse", remote_tip, "open_pull_request")
+    if any(pr.state == "MERGED" for pr in prs):
+        return PushPlan("refuse", remote_tip, "merged_pull_request")
+    if prs or remote_in_own_archive:
+        return PushPlan("replace", remote_tip)
+    return PushPlan("refuse", remote_tip, "unowned_divergence")
+
+
+def replace_record(recorded: str | None, plan: PushPlan, recorded_in_remote: bool) -> str | None:
+    """The `replaced_remote_tip` the task document holds from here on. A `replace` records
+    its own sha. A `push` keeps the recorded one only when the remote does not contain it
+    (`recorded_in_remote` False): that remote is the one our replace pushed, so the replace
+    landed and a later step failed. Anything else -- a lost lease whose remote still is the
+    old sha, a refusal -- clears it."""
+    if plan.kind == "replace":
+        return plan.old_sha
+    if plan.kind == "push" and recorded and not recorded_in_remote:
+        return recorded
+    return None
+
+
+def _numbers(prs: Sequence[_BranchPullRequest], state: str | None = None) -> str:
+    return ", ".join(f"#{pr.number}" for pr in prs if state is None or pr.state == state)
+
+
+def push_refused_reason(plan: PushPlan, prs: Sequence[_BranchPullRequest], branch: str) -> str:
+    """Why delivery did not push, for the escalation: the branch, the remote sha it
+    observed and the pull requests that decided it."""
+    where = f"remote `{branch}` is at `{plan.old_sha}` and has diverged from the task branch"
+    match plan.reason:
+        case "open_pull_request":
+            return (
+                f"{where}; open pull request {_numbers(prs, 'OPEN')} is on it, so it is "
+                f"never overwritten. Resolve that pull request, then resume to deliver again"
+            )
+        case "merged_pull_request":
+            return (
+                f"{where}; pull request {_numbers(prs, 'MERGED')} on it was merged, so it is "
+                f"never overwritten. Decide what the remote branch should hold, then resume"
+            )
+        case _:
+            return (
+                f"{where}, with no pull request on it and not in any archive of this task, "
+                f"so it is somebody else's work and is never overwritten. Decide what the "
+                f"remote branch should hold, then resume"
+            )
+
+
+def replaced_note(sha: str, prs: Sequence[_BranchPullRequest], branch: str) -> str:
+    """The line that makes a replace recoverable: the PR body's preface, the delivery
+    comment and the escalation after it all carry it."""
+    seen = ""
+    if prs:
+        label = "closed PR" if len(prs) == 1 else "closed PRs"
+        seen = f"{label} {_numbers(prs)}; "
+    return (
+        f"Replaced remote `{branch}` at `{sha}` ({seen}recover with "
+        f"`git push origin {sha}:refs/heads/recovered/{branch}`)"
+    )

@@ -187,14 +187,27 @@ class GitWorkspace:
         self._git("commit", "-q", "-m", message, "--", *relatives, cwd=path)
         return self.head(path)
 
-    def push(self, branch: str, *, replace: bool = False) -> None:
-        if replace:
-            remote = self._git("ls-remote", "--heads", "origin", f"refs/heads/{branch}").split()
-            if remote:
-                lease = f"--force-with-lease=refs/heads/{branch}:{remote[0]}"
-                self._git("push", "-u", lease, "origin", branch)
-                return
-        self._git("push", "-u", "origin", branch)
+    def push(self, branch: str, *, lease: str | None = None) -> None:
+        if lease is None:
+            self._git("push", "-u", "origin", branch)
+            return
+        # The sha is the caller's observation, never re-read here: re-reading would move
+        # the lease to whatever the remote holds now and defeat it.
+        self._git("push", "-u", f"--force-with-lease=refs/heads/{branch}:{lease}", "origin", branch)
+
+    def remote_tip(self, path: Path, branch: str) -> str | None:
+        listed = self._git("ls-remote", "--heads", "origin", f"refs/heads/{branch}", cwd=path)
+        if not listed:
+            return None
+        observed = listed.split()[0]
+        private = f"refs/agentic/remote-tips/{branch}"
+        self._git("fetch", "origin", f"+refs/heads/{branch}:{private}", cwd=path)
+        fetched = self._git("rev-parse", private, cwd=path)
+        if fetched != observed:
+            raise GitError(
+                f"remote {branch} moved between ls-remote ({observed}) and fetch ({fetched})"
+            )
+        return fetched
 
     def show(self, ref: str, relative: str) -> str | None:
         result = self._run("show", f"{ref}:{relative}")

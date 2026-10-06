@@ -54,6 +54,8 @@ def bounded_body(
     fallback: str,
     pointer: Callable[[tuple[str, ...]], str],
     limit: int = PR_BODY_MAX,
+    *,
+    preface: str = "",
 ) -> BoundedBody:
     """`parts` are `(heading, text)` pairs rendered as `## heading` sections. A body
     within `limit` is exactly their join, or `fallback` when there are none. A longer one
@@ -63,7 +65,15 @@ def bounded_body(
     names what was left out.
 
     Room for the pointer is reserved for the longest list it can be given (every
-    heading), so the real one, shorter or equal, always fits."""
+    heading), so the real one, shorter or equal, always fits.
+
+    A `preface` (what a replace of the remote branch overwrote, GH-204) leads the body as
+    its own block: it counts against `limit` and is never trimmed -- the sections give
+    way to it. With `""` the result is exactly what it was before it existed."""
+    if preface:
+        room = limit - github_length(preface) - len(_SEPARATOR)
+        inner = bounded_body(parts, fallback, pointer, room)
+        return BoundedBody(f"{preface}{_SEPARATOR}{inner.text}", inner.bounded, inner.omitted)
     rendered = [f"## {heading}\n\n{text}" for heading, text in parts]
     full = _SEPARATOR.join(rendered) or fallback
     if github_length(full) <= limit:

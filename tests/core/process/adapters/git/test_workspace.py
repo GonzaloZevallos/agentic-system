@@ -780,3 +780,124 @@ def test_commit_paths_raises_a_git_error_for_a_path_git_cannot_add(product):
     task = ws.task_checkout("GH-12")
     with pytest.raises(GitError, match="git add"):
         ws.commit_paths(task.path, [".agentic/tasks/not-there.md"], "x")
+
+
+# -- push(lease=) and remote_tip against a real bare origin ------------------------------
+
+
+def _remote(product: Path) -> Path:
+    return Path(git("remote", "get-url", "origin", cwd=product))
+
+
+def _commit_on(ws: GitWorkspace, path: Path, name: str) -> str:
+    (path / name).write_text(f"{name}\n")
+    sha = ws.commit_all(path, name)
+    assert sha is not None
+    return git("rev-parse", "HEAD", cwd=path)
+
+
+def _third_clone_pushes(product: Path, branch: str, tmp_path: Path) -> str:
+    """Somebody else's clone commits on top of what `origin` holds for `branch`."""
+    other = tmp_path / "other"
+    git("clone", "-q", "--branch", branch, str(_remote(product)), str(other), cwd=tmp_path)
+    (other / "theirs").write_text("theirs\n")
+    git("add", "-A", cwd=other)
+    git("-c", "user.name=o", "-c", "user.email=o@o", "commit", "-qm", "theirs", cwd=other)
+    git("push", "-q", "origin", branch, cwd=other)
+    return git("rev-parse", "HEAD", cwd=other)
+
+
+def test_remote_tip_of_a_branch_origin_does_not_have_is_none(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    assert ws.remote_tip(task.path, task.branch) is None
+
+
+def test_remote_tip_is_the_full_sha_with_its_object_local_and_the_ref_private(product, tmp_path):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    ws.push(task.branch)
+    theirs = _third_clone_pushes(product, task.branch, tmp_path)
+    tip = ws.remote_tip(task.path, task.branch)
+    assert tip == theirs and len(tip) == 40
+    # The object is here now, and the ref that holds it is not a branch.
+    assert git("cat-file", "-t", tip, cwd=task.path) == "commit"
+    heads = git("for-each-ref", "--format=%(refname)", "refs/heads", cwd=product).splitlines()
+    assert not any("remote-tips" in name for name in heads)
+    assert git("rev-parse", f"refs/agentic/remote-tips/{task.branch}", cwd=product) == tip
+
+
+def test_remote_tip_against_an_unreachable_origin_raises_and_never_reads_absent(product, tmp_path):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    git("remote", "set-url", "origin", str(tmp_path / "nowhere.git"), cwd=product)
+    with pytest.raises(GitError, match="ls-remote"):
+        ws.remote_tip(task.path, task.branch)
+
+
+def test_remote_tip_raises_when_the_remote_moved_between_the_read_and_the_fetch(
+    product, tmp_path, monkeypatch
+):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    ws.push(task.branch)
+    seen = {}
+    real = ws._git
+
+    def moving(*args, cwd=None):
+        out = real(*args, cwd=cwd)
+        if args[0] == "ls-remote":
+            seen["observed"] = out.split()[0]
+            seen["moved"] = _third_clone_pushes(product, task.branch, tmp_path)
+        return out
+
+    monkeypatch.setattr(ws, "_git", moving)
+    with pytest.raises(GitError, match="moved between ls-remote"):
+        ws.remote_tip(task.path, task.branch)
+    assert seen["observed"] != seen["moved"]
+
+
+def test_a_plain_push_fast_forwards_and_a_diverged_one_is_refused(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    first = _commit_on(ws, task.path, "a")
+    ws.push(task.branch)
+    second = _commit_on(ws, task.path, "b")
+    ws.push(task.branch)
+    assert git("rev-parse", task.branch, cwd=_remote(product)) == second
+    git("reset", "-q", "--hard", first, cwd=task.path)
+    _commit_on(ws, task.path, "c")
+    with pytest.raises(GitError, match="rejected"):
+        ws.push(task.branch)
+    assert git("rev-parse", task.branch, cwd=_remote(product)) == second
+
+
+def test_a_lease_push_replaces_a_diverged_remote_that_is_still_the_observed_one(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    _commit_on(ws, task.path, "a")
+    ws.push(task.branch)
+    old = ws.remote_tip(task.path, task.branch)
+    assert old is not None
+    git("reset", "-q", "--hard", "HEAD~1", cwd=task.path)
+    new = _commit_on(ws, task.path, "other")
+    ws.push(task.branch, lease=old)
+    assert git("rev-parse", task.branch, cwd=_remote(product)) == new
+
+
+def test_a_lease_push_is_rejected_when_a_third_clone_pushed_after_the_observation(
+    product, tmp_path
+):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    _commit_on(ws, task.path, "a")
+    ws.push(task.branch)
+    observed = ws.remote_tip(task.path, task.branch)
+    assert observed is not None
+    theirs = _third_clone_pushes(product, task.branch, tmp_path)
+    git("reset", "-q", "--hard", "HEAD~1", cwd=task.path)
+    _commit_on(ws, task.path, "mine")
+    with pytest.raises(GitError, match="stale info|rejected"):
+        ws.push(task.branch, lease=observed)
+    # Git's own refusal text is kept, and what the third clone pushed is still there.
+    assert git("rev-parse", task.branch, cwd=_remote(product)) == theirs

@@ -698,3 +698,79 @@ escalado visible por "already exists" (encontrar el PR existente sigue diferido,
 ADR-0039); la instantánea mergeada conserva un estado viejo, y quién versiona el documento
 final no se resuelve acá; un `OSError` de `documents.save` o `write_into` sigue sin
 atraparse.
+
+## Adenda 2026-10-06: la entrega con una rama remota que divergió (GH-204)
+
+apostrophe GH-59: el PR #95 de la primera corrida se cerró sin mergear y la tarea se relanzó
+con `--fresh`. La corrida nueva integró nueve horas de trabajo sobre un `agentic/GH-59` local
+nuevo, pero `origin/agentic/GH-59` seguía en la historia del PR cerrado, y `git push` murió
+por non-fast-forward. Esta adenda agrega la decisión que corre antes del push; el escalado de
+un push que falla ya existía (GH-203) y se reutiliza.
+
+**La tabla.** `rules.push_plan` es una regla pura sobre hechos y responde `push`, `replace` o
+`refuse`:
+
+| Remoto `agentic/<tarea>` | PRs con esa rama de cabeza | Plan |
+|---|---|---|
+| ausente | no se consultan | `push` |
+| ancestro de HEAD o igual | no se consultan | `push` |
+| divergió | alguno OPEN | `refuse` `open_pull_request` |
+| divergió | alguno MERGED (ninguno OPEN) | `refuse` `merged_pull_request` |
+| divergió | uno o más, todos CLOSED sin mergear | `replace` (sha viejo) |
+| divergió | ninguno, y la punta está en un archivo de esta tarea | `replace` (sha viejo) |
+| divergió | ninguno, y no está en un archivo | `refuse` `unowned_divergence` |
+
+Un PR abierto o mergeado prohíbe el reemplazo en todos los casos.
+
+**El predicado de archivo estrecha, a propósito, el "o la corrida es `--fresh`" del pedido.**
+Nada registra "esta corrida es fresca"; lo que `--fresh` significa de verdad es "el remoto
+tiene historia que el propio sistema archivó", y eso es un hecho de git:
+`is_ancestor(punta_remota, archivo)` sobre `rules.archived_task_branches`, que devuelve solo los
+archivos de la rama de tarea (ambas grafías, cualquier `run<N>-<sha>` incluido `unknown`; nunca
+el de una subtarea ni el de otra tarea, `GH-1` contra `GH-12`). Es más estricto que el pedido:
+un remoto al que alguien empujó después del archivo se rechaza, no se destruye.
+
+**Orden fijo en `deliver`.** (1) `remote_tip` es la única lectura remota (`ls-remote` decide si
+existe, luego `fetch` a una ref privada y `rev-parse` debe dar el mismo sha, o `GitError`); un
+fallo nunca se lee como "ausente". (2) Lecturas locales: `is_ancestor(punta, HEAD)` y, solo si
+es falso, los archivos. (3) `pull_requests_on`, solo si divergió. (4) `push_plan`. (5) Solo
+trabajo local: el registro, el cuerpo, el commit del documento y el guardado. (6) `push` con el
+lease y `gh pr create`. Entre (3) y (6) no corre nada remoto, y el commit del documento agrega un
+commit encima de HEAD, así que "la punta remota es ancestro de HEAD" responde igual antes y
+después: el plan sigue vigente. Ese único sha es el insumo del plan, el lease, el
+`replaced_remote_tip` guardado y el que nombran el cuerpo y el comentario.
+
+**`replaced_remote_tip`.** Clave opcional del documento de tarea, escrita solo cuando existe
+(un documento sin reemplazo sale byte por byte como antes) y leída con `.get`. Se guarda antes
+del push con lease. `rules.replace_record`: un plan `replace` la fija; un plan `push` la
+conserva solo si el remoto observado no contiene el sha registrado (el reemplazo ya aterrizó y
+falló un paso posterior); todo lo demás la limpia, incluido un lease perdido (el remoto sigue
+siendo el sha viejo) y cualquier `refuse`. Todo escalado posterior al reemplazo nombra el sha.
+
+**El prefacio del cuerpo del PR es el registro durable.** `bounded_body(..., preface=...)`
+antepone la nota, la cuenta contra `PR_BODY_MAX` y nunca la recorta: las secciones ceden
+primero. Con `""` el cuerpo es idéntico al de antes. El comentario `Ready for review:` (de mejor
+esfuerzo) repite la línea; si el comentario falla, el cuerpo igual nombra el sha.
+
+**`reflect_run` no pasa por `push_plan`.** Su lease incondicional sobre `agentic/playbook` es de
+una rama que el sistema posee (ADR-0043); no es una decisión de `push_plan`.
+
+**§8: qué se amplía y para quién.** El sistema puede ahora hacer force-push con lease. Solo lo
+hace `deliver`, solo a `agentic/<tarea>`, solo cuando `push_plan` dice `replace` y solo contra el
+sha que observó; `GitWorkspace.push` nunca fuerza sin un `lease` explícito y nunca relee ese sha.
+El sha viejo queda recuperable desde el documento, el cuerpo del PR, el comentario y, en el caso
+de archivo, la rama archivada local. Costo: un `ls-remote` y un `fetch` de una rama por entrega;
+`gh pr list` y el recorrido de archivos solo corren con divergencia, y nada escala con el tamaño
+de los datos.
+
+**Un solo camino de escalado.** Una negativa, una consulta de PRs fallida, una lectura remota
+fallida o un lease perdido escalan por el `_undelivered` / `escalation("failure", ...)` de GH-203;
+no se agrega un segundo camino.
+
+Riesgos que quedan: si alguien borra a mano los archivos de una tarea, un reemplazo legítimo por
+archivo pasa a ser un rechazo (falla seguro, termina en escalado); `gh pr list --head` también
+trae un PR de fork con el mismo nombre de cabeza, lo que solo puede agregar un OPEN o MERGED y
+rechazar; los commits de una persona sobre la rama de un PR cerrado se reemplazan, como pide el
+pedido, y el lease solo cubre un push dentro de la ventana; si alguien resetea el remoto a mano a
+un sha no relacionado, la reanudación limpia la clave tras un lease perdido (correcto), y si lo
+hace tras un reemplazo aterrizado, el plan es `refuse unowned_divergence`.

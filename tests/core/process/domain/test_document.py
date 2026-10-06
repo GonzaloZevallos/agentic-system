@@ -675,3 +675,16 @@ def test_a_state_without_a_settlement_renders_no_key_for_it():
     assert "approval_settled" not in plain
     assert document.render({**state, "approval_settled": []}) == plain
     assert "approval_settled" not in document.parse(plain)
+
+
+def test_replaced_remote_tip_round_trips_and_is_absent_when_unset():
+    """GH-204: the sha a replace overwrote is a `TaskState` field, so a resume restores
+    it through `STATE_FIELDS`; a document without one is byte-identical to today's."""
+    base = {"id": "T-1", "title": "t", "description": "d"}
+    bare = document.render(base)
+    assert "replaced_remote_tip" not in bare
+    assert document.render({**base, "replaced_remote_tip": None}) == bare
+    parsed = document.parse(document.render({**base, "replaced_remote_tip": "abc123"}))
+    assert parsed["replaced_remote_tip"] == "abc123"
+    assert "replaced_remote_tip" in resume.STATE_FIELDS
+    assert "replaced_remote_tip" not in document.parse(bare)

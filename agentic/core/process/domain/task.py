@@ -620,6 +620,10 @@ class TaskState(TaskInput, total=False):
     # The task branch, and the pull request once delivered.
     branch: str
     pull_request: str | None
+    # The sha `origin`'s task branch held before a delivery replaced it with a lease
+    # (GH-204): saved before the push so it stays recoverable, cleared by every plan that
+    # does not replace (`rules.replace_record`).
+    replaced_remote_tip: str | None
     # What an interviewee could not decide (ADR-0014); escalates with the task.
     questions_for_human: list[str]
     # What the ephemeral interviewer proposed for the deliverable that follows

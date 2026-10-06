@@ -126,3 +126,35 @@ def test_the_result_leaves_room_for_the_closes_prefix_even_with_a_long_pointer()
     parts = [("PM", "\n\n".join("a" * 500 for _ in range(200))), ("Tech Lead", "b" * 70_000)]
     result = bounded_body(parts, "T", long_pointer)
     assert github_length("Closes #1234567890\n\n" + result.text) < GITHUB_LIMIT
+
+
+# --- GH-204: a preface that names what a replace overwrote is never trimmed ----------
+
+NOTE = "Replaced remote `agentic/GH-9` at `abc123` (recover with `git push origin abc123:x`)"
+
+
+def test_an_empty_preface_is_byte_identical_for_every_shape_of_body():
+    big = [("PM", "p" * 70_000), ("Tech Lead", "t")]
+    for parts in ([], [("PM", "short")], [("PM", "a"), ("Tech Lead", "b")], big):
+        assert bounded_body(parts, "T", pointer, preface="") == bounded_body(parts, "T", pointer)
+
+
+def test_a_preface_leads_the_body_as_its_own_block():
+    result = bounded_body([("PM", "Six.")], "T", pointer, preface=NOTE)
+    assert result.text == f"{NOTE}\n\n## PM\n\nSix."
+    assert not result.bounded
+    assert bounded_body([], "Title", pointer, preface=NOTE).text == f"{NOTE}\n\nTitle"
+
+
+def test_a_preface_is_counted_against_the_limit_and_never_trimmed():
+    # Fits without the preface, one unit too long with it: the sections give way, not it.
+    text = "w" * (PR_BODY_MAX - len("## PM\n\n"))
+    assert not bounded_body([("PM", text)], "T", pointer).bounded
+    result = bounded_body([("PM", text), ("Tech Lead", "t" * 100)], "T", pointer, preface=NOTE)
+    assert result.bounded
+    assert result.text.startswith(f"{NOTE}\n\n")
+    assert github_length(result.text) <= PR_BODY_MAX
+    dropped = bounded_body([("PM", "x" * 70_000)], "T", pointer, preface=NOTE)
+    assert dropped.text.startswith(f"{NOTE}\n\n")
+    assert github_length(dropped.text) <= PR_BODY_MAX
+    assert dropped.text.endswith(pointer(dropped.omitted))

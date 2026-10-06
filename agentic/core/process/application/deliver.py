@@ -7,6 +7,8 @@ No role runs here; it is the system talking to the human, which ADR-0001 allows.
 
 from __future__ import annotations
 
+from typing import assert_never
+
 from agentic.shared.configuration import Configuration
 
 from ..domain import document, rules
@@ -14,7 +16,7 @@ from ..domain.pull_request import BoundedBody, bounded_body
 from ..domain.roles import DEVELOPER_INTEGRATOR, PJM, PM, TECH_LEAD
 from ..domain.task import WAITING_ON_HUMAN, TaskState
 from .checkouts import SetupFailed, task_checkout
-from .ports import GitError, Ports
+from .ports import BranchPullRequest, GitError, Ports
 from .run_role import finish
 
 # How the delivery comment starts: a resume looks past the system's comments.
@@ -27,36 +29,84 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     except SetupFailed as unprepared:
         return finish(state, unprepared.patch(DEVELOPER_INTEGRATOR), ports)
     relative = document.relative_path(state["id"]).as_posix()
-    body = _bounded(state, task.branch, relative, ignored=False)
+    recorded = state.get("replaced_remote_tip")
+    # The commit point is the pull request: everything up to it is a visible escalation
+    # the human resumes (the branch is integrated, so a resume only delivers again).
+    # What is read of the remote is read here, once and in this order (GH-204): the tip,
+    # then local reads, then the pull requests only when the remote diverged. Nothing
+    # remote runs between the last of these and the push, so the plan stays true.
+    try:
+        step = "remote branch read failed"
+        tip = ports.workspace.remote_tip(task.path, task.branch)
+        in_head = tip is None or ports.workspace.is_ancestor(task.path, tip, "HEAD")
+        in_archive = False
+        prs: list[BranchPullRequest] = []
+        if tip is not None and not in_head:
+            archives = rules.archived_task_branches(
+                ports.workspace.branches("archive/"), state["id"]
+            )
+            in_archive = any(ports.workspace.is_ancestor(task.path, tip, a) for a in archives)
+            prs = ports.tracker.pull_requests_on(task.branch)
+        plan = rules.push_plan(tip, in_head, prs, in_archive)
+        kept = (
+            plan.kind == "push"
+            and tip is not None
+            and recorded is not None
+            and (recorded == tip or ports.workspace.is_ancestor(task.path, recorded, tip))
+        )
+    except (GitError, ValueError) as failed:
+        return finish(state, _undelivered(step, failed, state, recorded), ports)
+    # Exhaustive on purpose, so a new cell of the table cannot reach the push unhandled.
+    match plan.kind:
+        case "refuse":
+            return _refused(state, plan, prs, task.branch, ports)
+        case "push" | "replace":
+            pass
+        case _:
+            assert_never(plan.kind)
+    replaced = rules.replace_record(recorded, plan, kept)
+    # Only the key's own value moves: a state with no replace keeps being the very object
+    # the node received, and is written as it always has been.
+    record: TaskState = {"replaced_remote_tip": replaced} if replaced or recorded else {}
+    if record:
+        state = {**state, **record}
+    preface = rules.replaced_note(replaced, prs, task.branch) if replaced else ""
+    body = _bounded(state, task.branch, relative, ignored=False, preface=preface)
     if body.bounded and ports.workspace.is_ignored(task.path, relative):
-        body = _bounded(state, task.branch, relative, ignored=True)
+        body = _bounded(state, task.branch, relative, ignored=True, preface=preface)
         committing = False
     else:
         committing = body.bounded
-    # The commit point is the pull request: everything up to it is a visible escalation
-    # the human resumes (the branch is integrated, so a resume only delivers again).
     try:
         step = "task document commit failed"
         if committing:
             ports.documents.save(state)
             ports.documents.write_into(state["id"], task.path)
             ports.workspace.commit_paths(task.path, [relative], f"{state['id']}: task document")
+        if replaced and not committing:
+            # The sha is durable before the destructive step, whether or not the branch
+            # carries the document.
+            ports.documents.save(state)
         step = "push failed"
-        ports.workspace.push(task.branch)
+        ports.workspace.push(task.branch, lease=plan.old_sha if plan.kind == "replace" else None)
         step = "gh pr create failed"
         url = ports.tracker.open_pull_request(state["id"], task.branch, state["title"], body.text)
     except (GitError, ValueError) as failed:
-        return finish(state, _undelivered(step, failed), ports)
+        return finish(state, {**_undelivered(step, failed, state, replaced), **record}, ports)
     patch: TaskState = {
         "status": "ready_for_review",
         "pull_request": url,
         "branch": task.branch,
         "current_role": PJM.name,
+        **record,
     }
     # Best effort from here: the pull request exists, so a crash would only make the
     # next attempt hit "already exists".
     try:
-        ports.tracker.comment(state["id"], f"{READY}{url}\n\nTask document: `{relative}`")
+        ready = f"{READY}{url}\n\nTask document: `{relative}`"
+        if replaced:
+            ready += f"\n\n{preface}"
+        ports.tracker.comment(state["id"], ready)
     except ValueError:
         pass
     try:
@@ -66,8 +116,29 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     return finish(state, patch, ports)
 
 
-def _undelivered(step: str, failed: Exception) -> TaskState:
+def _refused(
+    state: TaskState,
+    plan: rules.PushPlan,
+    prs: list[BranchPullRequest],
+    branch: str,
+    ports: Ports,
+) -> TaskState:
+    """Nothing is pushed: the reason names the branch, the remote sha and the pull
+    requests that decided it."""
+    reason = rules.push_refused_reason(plan, prs, branch)
+    patch = _undelivered("push refused", reason, state, None)
+    if state.get("replaced_remote_tip"):
+        # A refusal clears the record (`replace_record`).
+        patch["replaced_remote_tip"] = None
+    return finish(state, patch, ports)
+
+
+def _undelivered(
+    step: str, failed: Exception | str, state: TaskState, replaced: str | None
+) -> TaskState:
     reason = f"{step}: {failed}; the branch is integrated, resume to deliver again"
+    if replaced:
+        reason += f". {rules.replaced_note(replaced, [], rules.task_branch(state['id']))}"
     return rules.logged(
         {
             "current_role": PJM.name,
@@ -77,7 +148,9 @@ def _undelivered(step: str, failed: Exception) -> TaskState:
     )
 
 
-def _bounded(state: TaskState, branch: str, relative: str, *, ignored: bool) -> BoundedBody:
+def _bounded(
+    state: TaskState, branch: str, relative: str, *, ignored: bool, preface: str
+) -> BoundedBody:
     def pointer(omitted: tuple[str, ...]) -> str:
         named = ", ".join(omitted)
         if ignored:
@@ -91,7 +164,7 @@ def _bounded(state: TaskState, branch: str, relative: str, *, ignored: bool) -> 
             f"checkout's copy."
         )
 
-    return bounded_body(_parts(state), state["title"], pointer)
+    return bounded_body(_parts(state), state["title"], pointer, preface=preface)
 
 
 def _parts(state: TaskState) -> list[tuple[str, str]]:
