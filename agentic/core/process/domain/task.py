@@ -184,9 +184,10 @@ class PullRequest:
     `merged_at` is `None` for a pull request that never merged (open or closed
     unmerged); `commits` is every commit on the branch, oldest first;
     `merge_commit` is the sha GitHub says the merge produced on the base branch, `None`
-    when it never merged (ADR-0038); `head_oid` is the sha of the pull request's final
-    head commit, `None` when `gh` did not say -- what `delivery_outcome` compares the
-    document's `auto_merge_head` against (ADR-0045)."""
+    when it never merged (ADR-0038). `head_oid` is the sha of the pull request's final
+    head commit, `None` when `gh` did not say: the exact commit an automatic merge is
+    decided on and `Tracker.merge` is pinned to, and what `delivery_outcome` compares
+    the document's `auto_merge_head` against (ADR-0045)."""
 
     state: Literal["OPEN", "MERGED", "CLOSED"]
     created_at: str

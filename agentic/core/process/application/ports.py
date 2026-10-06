@@ -722,6 +722,13 @@ class Tracker(Protocol):
         when the task has no issue, the same shape `issue_comments` already has."""
         ...
 
+    def merge(self, number: int, head_sha: str) -> str:
+        """Merges pull request `number` only if its head is still `head_sha` (GH-178: the
+        sha the automatic-merge decision was taken on, never "whatever is there now"), and
+        returns the method used. Raises `ValueError` when the tracker refuses -- the head
+        moved, a check or a rule blocks it, the pull request is not open."""
+        ...
+
 
 @dataclass(frozen=True)
 class LockRecord:
