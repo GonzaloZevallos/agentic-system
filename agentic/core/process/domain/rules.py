@@ -2524,10 +2524,10 @@ def same_commit(a: str | None, b: str | None) -> bool:
 
 MergeRefusal = Literal[
     "not_ready",
+    "pr_not_open",
     "not_approved",
     "head_not_reviewed",
     "open_findings",
-    "pr_not_open",
     "eval_set",
     "eval_set_unreadable",
     "guarded_path",
@@ -2539,11 +2539,12 @@ MergeRefusal = Literal[
 """Why `auto_merge_decision` refuses, one reason per condition:
 
 - `not_ready`: the task is not `ready_for_review`.
+- `pr_not_open`: the pull request is merged, closed or unreadable. Second, so that a pull
+  request that is not open is never reported as a review or findings problem.
 - `not_approved`: the reviewed unit (`reviewed_unit`) is not approved.
 - `head_not_reviewed`: the pull request head is not the one Tech Lead reviewed, or either
   is unknown.
 - `open_findings`: a `blocking` or `important` finding is still open.
-- `pr_not_open`: the pull request is merged, closed or unreadable.
 - `eval_set`: the issue is in the evaluation set; its merge is the human's verdict.
 - `eval_set_unreadable`: the evaluation set could not be read, so nothing proves the
   issue is outside it.
@@ -2619,8 +2620,12 @@ def guarded_path(path: str, task_id: str) -> bool:
 
 def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     """The one place the conditions of an automatic merge live (GH-178, ADR-0045); no
-    adapter, CLI or poller re-derives any of them. Checked in the order of `MergeRefusal`'s
-    docstring and refused at the first that fails. The checks last: they are the costly
+    adapter, CLI or poller re-derives any of them. Checked in this order and refused at the
+    first that fails: `not_ready`, `pr_not_open`, `not_approved`, `head_not_reviewed`,
+    `open_findings`, `eval_set_unreadable`, `eval_set`, `guarded_path`, `merge_failed`,
+    `checks_failed` (only when the recorded checks cover this head on this master;
+    otherwise the next check) and `attempts_exhausted`. `master_moved` is not here: the
+    merge verb gives it, after its last fetch. The checks last: they are the costly
     fact, so nothing is run for a pull request that is refused anyway, and a run is asked
     for only when the recorded one does not cover this head on this master. `attempts`
     bounds those runs per head (`MERGE_ATTEMPTS_MAX`), here and nowhere else; `merge_failures`
@@ -2629,14 +2634,14 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     of the last failure (`merge_failure`) is never read."""
     if facts.status != "ready_for_review":
         return MergeDecision("refuse", "not_ready")
+    if facts.pr_state != "OPEN":
+        return MergeDecision("refuse", "pr_not_open")
     if not facts.reviewed_unit_approved:
         return MergeDecision("refuse", "not_approved")
     if not (full_commit_id(facts.pr_head) and same_commit(facts.reviewed_head, facts.pr_head)):
         return MergeDecision("refuse", "head_not_reviewed")
     if facts.open_blocking_or_important > 0:
         return MergeDecision("refuse", "open_findings")
-    if facts.pr_state != "OPEN":
-        return MergeDecision("refuse", "pr_not_open")
     if facts.in_eval_set is None:
         return MergeDecision("refuse", "eval_set_unreadable")
     if facts.in_eval_set:
@@ -2660,6 +2665,14 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     if facts.attempts >= MERGE_ATTEMPTS_MAX:
         return MergeDecision("refuse", "attempts_exhausted")
     return MergeDecision("run_checks", None)
+
+
+def pr_abandoned(state: str | None) -> bool:
+    """The merge-candidacy predicate: whether a pull request read as `state` was closed
+    unmerged, which is the one state `gather_merges` stops reporting a task on. It decides
+    only that, never whether a task is closed: `agentic close` and the poller's close
+    sweep keep their own reads of the pull request. `None` (unreadable) is not abandoned."""
+    return state == "CLOSED"
 
 
 # Entrega con una rama remota que divergió (ADR-0011, addendum GH-204): the one place that

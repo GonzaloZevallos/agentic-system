@@ -350,3 +350,80 @@ completo desde el tracker: ningún PR aprobado pasaba y todos se rechazaban con
   documento ni prompt; `prompts.fingerprint` no cambia. Los rechazos anteriores por
   `head_not_reviewed` de heads sin mover venían del sha abreviado (apostrophe GH-103 / PR
   #108, probablemente también #198).
+
+## Adenda (2026-10-07): un PR cerrado sin mergear no es candidato, y `pr_not_open` va segundo (GH-209)
+
+El poller imprimía cada vuelta `auto-merge #N -> left to the human: open_findings` para una
+tarea entregada cuyo PR se cerró sin mergear. La tarea nunca recibe `closed_at` (el barrido
+de cierres sólo lo escribe para un PR `MERGED`), así que seguía siendo candidata, y la razón
+impresa era engañosa: un PR que no está abierto no dice nada de revisión, aprobación ni
+hallazgos. Esta adenda corrige la razón y corta el bucle.
+
+**Tabla de rechazos.** Reemplaza **sólo en el orden** a la de "La decisión": cada condición
+queda igual. Es el orden real del cuerpo de `auto_merge_decision`, que rechaza en la primera
+que falla:
+
+| `reason` | Se rechaza cuando |
+|---|---|
+| `not_ready` | la tarea no está en `ready_for_review` |
+| `pr_not_open` | el PR no está `OPEN` o no se pudo leer |
+| `not_approved` | la unidad revisada (la subtarea `integration`, o la única) no está aprobada |
+| `head_not_reviewed` | el head del PR no es el que Tech Lead revisó (`reviewed_head`), o alguno se desconoce |
+| `open_findings` | queda un hallazgo `blocking` o `important` abierto (el pliegue `rules.open_findings`) |
+| `eval_set_unreadable` | no se pudo leer el set de evaluación: nada prueba que el issue esté fuera |
+| `eval_set` | el issue está en el set de evaluación |
+| `guarded_path` | el diff toca un camino guardado |
+| `merge_failed` | `Tracker.merge` ya falló `MERGE_CALLS_MAX` veces sobre este head |
+| `checks_failed` | los chequeos grabados cubren este head en este master y fallaron (si no lo cubren, se pasa a la condición siguiente) |
+| `attempts_exhausted` | los chequeos ya corrieron `MERGE_ATTEMPTS_MAX` veces sobre este head y el master volvió a moverse |
+| `master_moved` | lo da sólo el verbo, tras su último fetch: el master se movió entre los chequeos y el merge |
+
+No se agrega `pr_closed`: `pr_not_open` ya cubre mergeado, cerrado e ilegible. El literal
+`MergeRefusal` y su docstring sólo mueven `pr_not_open` a continuación de `not_ready`; el
+resto de su orden (`eval_set` antes de `eval_set_unreadable`, `merge_failed` al final) ya
+discrepaba del cuerpo antes de este cambio y no se toca.
+
+**El salto.** `rules.pr_abandoned(state)` es un predicado puro, verdadero sólo para `"CLOSED"`.
+`poll.gather_merges` lo llama tras leer el PR: una tarea cuyo PR lee `CLOSED` no da candidata
+ni línea, **cualquiera sea su `status`**. El poller **no escribe nada** en el documento: ni
+`closed_at`, ni `delivery_outcome`, ni otra clave. Se rechazó que el barrido de cierres
+escriba `closed_at`: haría que el poller escribiera resultados juzgados, y hoy sólo lo hace
+`agentic close`, que corre un humano. `pr_abandoned` decide sólo la candidatura a merge, nunca
+si una tarea está cerrada. `auto_merge_decision` sigue siendo el único lugar que decide un
+merge automático: el salto sólo puede descartar una tarea, nunca volverla candidata.
+
+Sigue igual: un PR ilegible (`None`, o `ValueError`/`OSError` al leerlo) llega a la decisión
+y se rechaza como `pr_not_open`, con su línea cada vuelta (antes salía `head_not_reviewed`);
+un PR `MERGED` imprime una línea `pr_not_open` en la vuelta anterior a que el hijo de cierre
+escriba `closed_at`; un PR reabierto, o con un head nuevo, vuelve a ser candidato en la
+lectura siguiente, porque no se recuerda nada entre vueltas.
+
+**Segundo cambio de comportamiento.** Una tarea en un estado distinto de `ready_for_review`
+cuyo PR está `CLOSED` ya no imprime `not_ready` cada vuelta. Y para un PR no abierto con una
+falla anterior (aprobación, head, hallazgos) la razón impresa pasa a ser `pr_not_open`.
+
+**Costo que queda por vuelta.** Cada documento cerrado sin mergear sigue costando una llamada
+a `gh` por vuelta, la misma que ya hace `gather_closes`, y `awaiting_merge` sigue forzando un
+fetch del upstream por vuelta. Ambos escalan con la cantidad de esos documentos, no con el
+tamaño de los datos, y terminan cuando un humano corre `agentic close`. El verbo
+(`agentic merge --issue N` a mano) no cambia sus lecturas previas a la decisión (prune,
+quitar el checkout huérfano, `fetch_commit`, `changed_paths`): el nuevo orden sólo cambia la
+razón que informa, nunca su costo.
+
+Riesgos conocidos de esta adenda:
+
+- **Se pierde la última señal automática.** Condición: el PR lee `CLOSED`, el documento tiene
+  `pull_request` y no tiene `closed_at`, sea cual sea su `status`. Incluye un PR cerrado por
+  una persona, por borrar la rama o por una limpieza. Esa tarea queda sin juzgar, fuera del
+  Scorecard e invisible para el poller. Sólo `agentic close --all` o `agentic close --issue N`
+  actúan sobre ella. Seguimiento: reportar estas tareas por una lectura que el humano ya
+  corre, en un issue aparte.
+- **Tres lectores del estado del PR.** Interpretan la misma población por separado: la
+  candidatura a merge (`rules.pr_abandoned`), el barrido de cierres del poller (sólo
+  `MERGED`) y `agentic close`. Unificarlos alcanza al Scorecard, así que es otro issue.
+- **El enum no se verifica en ejecución.** `PullRequest.state` es un `Literal`, pero
+  `GhTracker` pasa el valor de GraphQL sin comprobarlo. Un cambio de ortografía cae en una
+  línea `pr_not_open` visible, nunca en silencio. El test del adaptador lo vigila.
+
+No se agrega ni se mueve ninguna métrica, etiqueta, span, clave del documento ni prompt;
+`prompts.fingerprint` no cambia.

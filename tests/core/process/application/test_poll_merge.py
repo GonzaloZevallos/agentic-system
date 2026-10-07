@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from agentic.core.process.application import poll, resume
+from agentic.core.process.application import merge, poll, resume
 from agentic.core.process.application.ports import (
     IssueComment,
     LockRecord,
@@ -134,20 +134,101 @@ def test_a_task_without_a_pull_request_or_already_closed_is_skipped_without_a_li
     assert _merges(ports) == ([5], [])
 
 
-def test_a_closed_pull_request_is_refused():
+def test_a_merged_pull_request_is_refused_as_not_open():
     ports = _ports(5)
-    ports.tracker.prs[URL.format(5)] = _pr("CLOSED")
+    ports.tracker.prs[URL.format(5)] = _pr("MERGED")
     found, lines = _merges(ports)
     assert found == []
     assert lines == ["agentic: poll: auto-merge #5 -> left to the human: pr_not_open"]
 
 
-def test_an_unreadable_pull_request_is_a_refusal_not_a_crash():
+def test_a_closed_pull_request_is_no_candidate_and_prints_no_line():
+    ports = _ports(5)
+    ports.tracker.prs[URL.format(5)] = _pr("CLOSED")
+    assert _merges(ports) == ([], [])
+
+
+def test_a_closed_pull_request_with_an_open_blocking_finding_prints_no_open_findings():
+    ports = _ports(5)
+    ports.documents.record_closure("GH-5", {"findings": [_finding("blocking")]})
+    ports.tracker.prs[URL.format(5)] = _pr("CLOSED")
+    assert _merges(ports) == ([], [])
+
+
+def test_a_closed_pull_request_is_skipped_whatever_the_status_but_an_open_one_is_not_ready():
+    closed = _ports(5, status="waiting_on_human")
+    closed.tracker.prs[URL.format(5)] = _pr("CLOSED")
+    assert _merges(closed) == ([], [])
+    open_ = _ports(5, status="waiting_on_human")
+    assert _merges(open_) == (
+        [],
+        ["agentic: poll: auto-merge #5 -> left to the human: not_ready"],
+    )
+
+
+def test_a_reopened_pull_request_is_a_candidate_again_on_the_next_read():
+    ports = _ports(5)
+    ports.tracker.prs[URL.format(5)] = _pr("CLOSED")
+    assert _merges(ports) == ([], [])
+    ports.tracker.prs[URL.format(5)] = _pr("OPEN")
+    assert _merges(ports) == ([5], [])
+
+
+def test_the_poller_writes_nothing_to_the_document_of_a_closed_pull_request():
+    ports = _ports(5)
+    ports.tracker.prs[URL.format(5)] = _pr("CLOSED")
+    before = ports.documents.load("GH-5")
+    _merges(ports)
+    assert ports.documents.load("GH-5") == before
+
+
+def test_the_close_sweep_does_not_list_a_task_whose_pull_request_closed_unmerged():
+    ports = _ports(5)
+    ports.tracker.prs[URL.format(5)] = _pr("CLOSED")
+    assert poll.gather_closes(ports) == []
+
+
+def test_an_unreadable_pull_request_is_refused_as_not_open_not_a_crash():
     ports = _ports(5)
     ports.tracker.prs[URL.format(5)] = None
     found, lines = _merges(ports)
     assert found == []
-    assert lines == ["agentic: poll: auto-merge #5 -> left to the human: head_not_reviewed"]
+    assert lines == ["agentic: poll: auto-merge #5 -> left to the human: pr_not_open"]
+
+
+def test_a_pull_request_read_that_raises_oserror_still_prints_the_not_open_line():
+    def raising(reference):
+        raise OSError("gh missing")
+
+    ports = _ports(5)
+    ports.tracker.pull_request = raising
+    assert _merges(ports) == (
+        [],
+        ["agentic: poll: auto-merge #5 -> left to the human: pr_not_open"],
+    )
+
+
+def test_the_verb_on_a_closed_pull_request_with_an_open_blocking_finding_refuses_it_as_not_open(
+    tmp_path,
+):
+    ports = _ports(5)
+    ports.documents.record_closure("GH-5", {"findings": [_finding("blocking")]})
+    ports.tracker.prs[URL.format(5)] = _pr("CLOSED")
+    logged: list[str] = []
+    result = merge.merge_task(
+        "GH-5",
+        5,
+        _cfg(tmp_path),
+        ports,
+        Upstream("origin/master", MASTER, None),
+        frozenset(),
+        logged.append,
+    )
+    assert result == merge.MergeResult("refused", "pr_not_open")
+    assert ports.tracker.comments == []
+    assert ports.workspace.detached == []
+    assert ports.commands.ran == []
+    assert logged == []
 
 
 def test_an_issue_in_the_eval_set_is_never_a_candidate():
@@ -399,7 +480,7 @@ def test_a_tracker_that_raises_reading_the_pull_request_is_a_refusal_with_its_li
     ports.tracker.pull_request = raising
     found, lines = _merges(ports)
     assert found == []
-    assert lines == ["agentic: poll: auto-merge #5 -> left to the human: head_not_reviewed"]
+    assert lines == ["agentic: poll: auto-merge #5 -> left to the human: pr_not_open"]
 
 
 def test_a_short_reviewed_head_against_the_full_head_oid_is_a_merge_candidate():

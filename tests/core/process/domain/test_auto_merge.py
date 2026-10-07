@@ -41,10 +41,10 @@ def _facts(**over) -> MergeFacts:
 
 REFUSALS = [
     ("not_ready", {"status": "developing"}),
+    ("pr_not_open", {"pr_state": "CLOSED"}),
     ("not_approved", {"reviewed_unit_approved": False}),
     ("head_not_reviewed", {"reviewed_head": "c" * 40}),
     ("open_findings", {"open_blocking_or_important": 1}),
-    ("pr_not_open", {"pr_state": "CLOSED"}),
     ("eval_set", {"in_eval_set": True}),
     ("eval_set_unreadable", {"in_eval_set": None}),
     ("guarded_path", {"touched_paths": ("agentic/core/x.py", ".github/workflows/ci.yml")}),
@@ -66,6 +66,42 @@ def test_each_refusal_has_the_input_that_provokes_it(reason, over):
 def test_every_refusal_the_decision_gives_is_in_the_closed_set_and_master_moved_is_the_verbs():
     given = {reason for reason, _ in REFUSALS}
     assert given | {"master_moved"} == set(get_args(rules.MergeRefusal))
+
+
+EARLIER_FAILURES = [
+    {"reviewed_unit_approved": False},
+    {"reviewed_head": "c" * 40},
+    {"open_blocking_or_important": 1},
+]
+
+
+@pytest.mark.parametrize("pr_state", ["CLOSED", None])
+@pytest.mark.parametrize("earlier", EARLIER_FAILURES, ids=lambda over: next(iter(over)))
+def test_a_pull_request_that_is_not_open_is_refused_as_such_before_any_review_reason(
+    earlier, pr_state
+):
+    facts = _facts(pr_state=pr_state, **earlier)
+    assert rules.auto_merge_decision(facts) == MergeDecision("refuse", "pr_not_open")
+
+
+def test_a_task_not_ready_with_a_closed_pull_request_is_refused_as_not_ready():
+    facts = _facts(status="developing", pr_state="CLOSED")
+    assert rules.auto_merge_decision(facts) == MergeDecision("refuse", "not_ready")
+
+
+@pytest.mark.parametrize(
+    ("state", "abandoned"),
+    [
+        ("CLOSED", True),
+        ("OPEN", False),
+        ("MERGED", False),
+        (None, False),
+        ("closed", False),
+        ("Closed", False),
+    ],
+)
+def test_pr_abandoned_is_true_only_for_the_closed_state(state, abandoned):
+    assert rules.pr_abandoned(state) is abandoned
 
 
 def test_a_head_with_no_review_head_on_either_side_is_not_reviewed():
