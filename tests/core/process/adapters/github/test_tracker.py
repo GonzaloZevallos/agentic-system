@@ -9,6 +9,7 @@ import pytest
 from agentic.core.process.adapters.github import GhTracker
 from agentic.core.process.adapters.github.tracker import issue_number
 from agentic.core.process.application.ports import MergeCallFailed
+from agentic.core.process.domain import rules
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
 
 
@@ -284,6 +285,22 @@ def test_pull_request_maps_a_closed_unmerged_and_an_open_pull_request():
     assert open_pr == PullRequest(
         state="OPEN", created_at="2026-09-20T23:00:00Z", merged_at=None, commits=()
     )
+
+
+def test_a_closed_pull_request_as_the_adapter_parses_it_is_abandoned_for_the_poller():
+    tracker = GhTracker(
+        Path("/p"),
+        Recorder(stdout=_graphql_pull_request("CLOSED", None, "2026-09-20T23:00:00Z", [])),
+    )
+    closed = tracker.pull_request("https://github.com/o/r/pull/8")
+    assert closed is not None
+    assert rules.pr_abandoned(closed.state) is True
+    merged = GhTracker(
+        Path("/p"),
+        Recorder(stdout=_graphql_pull_request("MERGED", "2026-09-21", "2026-09-20", [], "abc")),
+    ).pull_request("https://github.com/o/r/pull/7")
+    assert merged is not None
+    assert rules.pr_abandoned(merged.state) is False
 
 
 def test_pull_request_unknown_reference_raises_a_value_error():

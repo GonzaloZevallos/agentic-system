@@ -286,7 +286,11 @@ def gather_merges(
     refuses, naming the reason (GH-178). A task whose run lock reads alive is skipped
     before anything else is read: a merge child already works on it, or a run does. An
     unreadable upstream sha leaves every task alone, since the checks could not be told
-    from stale ones; an unreadable pull request reads as not open. This decides over the
+    from stale ones; an unreadable pull request reads as not open and is refused with its
+    line, every round. A task whose pull request reads closed unmerged
+    (`rules.pr_abandoned`) is skipped like one with no pull request, whatever its status:
+    no candidate, no line, and nothing written to its document (only a human-run
+    `agentic close` records a closure for it). This decides over the
     facts the poller has: the verb decides again, after its checks, with the diff's paths
     too, so a candidate here is a reason to look, never the merge."""
     out = lines if lines is not None else []
@@ -307,6 +311,8 @@ def gather_merges(
             pull_request = ports.tracker.pull_request(reference)
         except (ValueError, OSError):
             pull_request = None  # reads as not open: refused below, with its line
+        if pull_request is not None and rules.pr_abandoned(pull_request.state):
+            continue  # closed unmerged: nothing to merge, nothing to say, nothing written
         facts = _merge_facts(task_id, raw, pull_request, eval_set, number, current_master)
         decision = rules.auto_merge_decision(facts)
         if decision.kind == "refuse":

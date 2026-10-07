@@ -466,6 +466,11 @@ class MemoryWorkspace:
         # so who asks and when is what the fan-in exists to keep serial.
         self.checkouts_made: list[str] = []
         self.pruned = 0
+        self.fetched_commits: list[str] = []
+        self.diff_reads: list[tuple[str, str]] = []
+        self.diff_paths: tuple[str, ...] = ()
+        self.detached: list[str] = []
+        self.removed_checkouts: list[str] = []
 
     def repository_at(self, path: Path) -> Path | None:
         return self.repositories.get(Path(path))
@@ -575,6 +580,23 @@ class MemoryWorkspace:
 
     def prune(self) -> None:
         self.pruned += 1
+
+    # GH-178's merge verb: the pull request's head is always reachable, its diff is
+    # `diff_paths`, and every worktree it asks for or removes is kept by name.
+    def fetch_commit(self, sha: str) -> bool:
+        self.fetched_commits.append(sha)
+        return True
+
+    def changed_paths(self, base: str, head: str) -> tuple[str, ...]:
+        self.diff_reads.append((base, head))
+        return self.diff_paths
+
+    def detached_checkout(self, name: str, sha: str) -> Path:
+        self.detached.append(name)
+        return self.ROOT / name
+
+    def remove_checkout(self, name: str) -> None:
+        self.removed_checkouts.append(name)
 
     def branches(self, prefix: str) -> list[str]:
         return [name for name in self.existing_branches if name.startswith(prefix)]
