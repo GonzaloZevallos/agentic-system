@@ -542,6 +542,9 @@ class MemoryWorkspace:
     def push(self, branch: str, *, lease: str | None = None) -> None:
         self.events.append("push")
         self.leases.append(lease)
+        # The fake leaves `remote_tips` to the test, which moves the tip by hand.
+        if lease is not None and self.remote_tips.get(branch) != lease:
+            raise GitError("git push -u origin failed: stale info (lease)")
         if self.push_failures > 0:
             self.push_failures -= 1
             raise GitError("git push -u origin failed: scripted")
@@ -653,6 +656,9 @@ class MemoryTracker:
         self.on_branch: dict[str, list[BranchPullRequest]] = {}
         self.lookup_error: str | None = None
         self.lookups: list[str] = []
+        # Called with the branch after the lookup answers, so a test can move the remote
+        # between the read and the push.
+        self.on_lookup: Callable[[str], None] | None = None
 
     def pull_request(self, reference: str) -> PullRequest | None:
         self.events.append("pull_request")
@@ -702,6 +708,8 @@ class MemoryTracker:
         self.lookups.append(branch)
         if self.lookup_error is not None:
             raise ValueError(self.lookup_error)
+        if self.on_lookup is not None:
+            self.on_lookup(branch)
         return list(self.on_branch.get(branch, []))
 
     def update_pull_request_body(self, number: int, body: str) -> None:

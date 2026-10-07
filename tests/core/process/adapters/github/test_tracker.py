@@ -596,6 +596,9 @@ def test_pull_requests_on_a_branch_without_any_is_an_empty_list():
         '[{"number": 1, "state": "open", "url": "u"}]',
         '["x"]',
         _rows(*["CLOSED"] * 50),
+        '[{"number": true, "state": "OPEN", "url": "u"}]',
+        '[{"number": 1, "state": "OPEN", "url": 7}]',
+        '[{"number": 1, "url": "u"}]',
     ],
     ids=[
         "not-json",
@@ -606,6 +609,9 @@ def test_pull_requests_on_a_branch_without_any_is_an_empty_list():
         "lowercase-state",
         "row-not-object",
         "exactly-the-limit",
+        "number-is-bool",
+        "url-not-string",
+        "state-missing",
     ],
 )
 def test_pull_requests_on_raises_on_anything_unreadable_never_an_empty_list(stdout):
