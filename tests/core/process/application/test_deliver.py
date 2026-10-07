@@ -204,6 +204,7 @@ async def test_a_failed_push_then_a_second_delivery_commits_a_document_with_no_e
 BRANCH = "agentic/GH-12"
 OLD = "b30329e0000000000000000000000000000000aa"
 NEW = "f00dfeed0000000000000000000000000000bbbb"
+THIRD = "c0ffee00000000000000000000000000000000cc"
 
 
 def _pr(number, state):
@@ -251,10 +252,36 @@ async def test_the_replaced_sha_is_saved_before_the_push_runs(cfg):
 
 async def test_a_lease_the_remote_rejected_escalates_naming_the_sha_that_was_observed(cfg):
     ports = _diverged([_pr(95, "CLOSED")])
-    ports.workspace.push_failures = 1
-    patch = await deliver(TASK, cfg, ports)
-    assert ports.workspace.leases == [OLD] and ports.workspace.pushed == []
-    assert OLD in patch["escalated"] and patch["status"] == "waiting_on_human"
+    ports.tracker.on_lookup = lambda _branch: ports.workspace.remote_tips.__setitem__(BRANCH, THIRD)
+    first = await deliver(TASK, cfg, ports)
+
+    assert ports.workspace.leases == [OLD]
+    assert ports.workspace.pushed == []
+    assert ports.workspace.remote_tips[BRANCH] == THIRD
+    assert ports.workspace.push_failures == 0
+    assert first["escalation_class"] == "failure"
+    assert first["status"] == "waiting_on_human"
+    assert "git push -u origin failed" in first["escalated"]
+    assert "stale info (lease)" in first["escalated"]
+    assert f"`{OLD}`" in first["escalated"]
+    assert first["replaced_remote_tip"] == OLD
+    assert ports.tracker.pull_requests == []
+    assert ports.documents.last["escalated"] == first["escalated"]
+
+    # The resume re-observes the moved tip and leases that one, never pushing blind.
+    ports.tracker.on_lookup = None
+    resumed = {**TASK, **first, **rules.resumed({**TASK, **first}, None)}
+    second = await deliver(resumed, cfg, ports)
+
+    assert ports.workspace.leases == [OLD, THIRD]
+    assert ports.workspace.pushed == [BRANCH]
+    assert ports.tracker.lookups == [BRANCH, BRANCH]
+    assert second["replaced_remote_tip"] == THIRD
+    assert ports.documents.last["replaced_remote_tip"] == THIRD
+    body = ports.tracker.pull_requests[0][2]
+    assert body.startswith(f"Replaced remote `{BRANCH}` at `{THIRD}`")
+    assert f"`{OLD}`" not in body
+    assert f"`{OLD}`" not in ports.tracker.comments[0][1]
 
 
 @pytest.mark.parametrize(
