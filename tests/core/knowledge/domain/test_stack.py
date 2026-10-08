@@ -278,3 +278,117 @@ def test_the_template_keeps_parallel_checks_commented_out():
     data = yaml.safe_load(stack.TEMPLATE.read_text(encoding="utf-8"))
     assert "parallel_checks" not in data
     assert "parallel_checks" in stack.TEMPLATE.read_text(encoding="utf-8")
+
+
+# -- `affected_checks` and `affected_fallback`: the opt-in affected-only form (ADR-0046) --
+
+CHECKS = {"tests": "pytest", "lint": "ruff check ."}
+
+
+def test_a_product_that_declares_no_affected_checks_reads_an_empty_mapping():
+    assert stack.affected_checks({"checks": CHECKS}, "x") == {}
+
+
+def test_affected_checks_reads_the_commands_stripped_in_file_order():
+    declared = {
+        "checks": CHECKS,
+        "affected_checks": {
+            "lint": "  ruff check --diff {base}  ",
+            "tests": "pytest --since {base}",
+        },
+    }
+    found = stack.affected_checks(declared, "x")
+    assert found == {"lint": "ruff check --diff {base}", "tests": "pytest --since {base}"}
+    assert list(found) == ["lint", "tests"]
+
+
+def test_a_product_that_declares_no_fallback_reads_an_empty_tuple():
+    assert stack.affected_fallback({"checks": CHECKS}, "x") == ()
+
+
+def test_affected_fallback_reads_the_globs_stripped_in_file_order():
+    declared = {"checks": CHECKS, "affected_fallback": ["  uv.lock", "tests/conftest.py "]}
+    assert stack.affected_fallback(declared, "x") == ("uv.lock", "tests/conftest.py")
+
+
+@pytest.mark.parametrize(
+    ("value", "why"),
+    [
+        (["pytest {base}"], "list"),
+        ("pytest {base}", "string"),
+        ({}, "empty-map"),
+        (None, "null"),
+        (3, "int"),
+    ],
+)
+def test_affected_checks_that_is_not_a_mapping_is_an_error(value, why):
+    declared = {"checks": CHECKS, "affected_checks": value}
+    with pytest.raises(ValueError, match=r"stack.yaml: expected `affected_checks`.*mapping"):
+        stack.affected_checks(declared, "stack.yaml")
+
+
+def test_an_affected_name_that_is_not_a_declared_check_is_an_error():
+    declared = {"checks": CHECKS, "affected_checks": {"e2e": "playwright --only-changed={base}"}}
+    with pytest.raises(ValueError, match=r"stack.yaml: .*'e2e'.*`affected_checks`.*`checks`"):
+        stack.affected_checks(declared, "stack.yaml")
+
+
+@pytest.mark.parametrize("command", ["", "   ", None, 3, ["pytest {base}"], {"a": "{base}"}])
+def test_an_affected_command_that_is_not_a_non_blank_string_is_an_error(command):
+    declared = {"checks": CHECKS, "affected_checks": {"tests": command}}
+    with pytest.raises(ValueError, match=r"stack.yaml: expected a command for 'tests'.*affected"):
+        stack.affected_checks(declared, "stack.yaml")
+
+
+def test_an_affected_command_without_the_base_token_is_an_error():
+    declared = {"checks": CHECKS, "affected_checks": {"tests": "pytest --lf"}}
+    with pytest.raises(ValueError, match=r"stack.yaml: .*'tests'.*\{base\}"):
+        stack.affected_checks(declared, "stack.yaml")
+
+
+def test_the_base_token_is_literal_not_a_format_field():
+    declared = {"checks": CHECKS, "affected_checks": {"tests": "pytest --since {sha}"}}
+    with pytest.raises(ValueError, match=r"\{base\}"):
+        stack.affected_checks(declared, "stack.yaml")
+
+
+@pytest.mark.parametrize("command", ["{base}", "  {base} pytest", "{base}/run.sh"])
+def test_an_affected_command_that_starts_with_the_base_is_an_error(command):
+    """The reviewer's permission rule is the literal prefix before `{base}`; a command that
+    starts with it has no prefix to allow."""
+    declared = {"checks": CHECKS, "affected_checks": {"tests": command}}
+    with pytest.raises(ValueError, match=r"stack.yaml: .*'tests'.*start"):
+        stack.affected_checks(declared, "stack.yaml")
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["uv.lock", {"a": "uv.lock"}, ["uv.lock", ""], ["  "], ["uv.lock", 3], [None], 3],
+    ids=["string", "map", "blank-entry", "blank-only", "int-entry", "null-entry", "int"],
+)
+def test_an_affected_fallback_that_is_not_a_list_of_non_blank_strings_is_an_error(value):
+    declared = {"checks": CHECKS, "affected_fallback": value}
+    with pytest.raises(ValueError, match=r"stack.yaml: expected `affected_fallback`.*list"):
+        stack.affected_fallback(declared, "stack.yaml")
+
+
+def test_an_empty_affected_fallback_is_a_valid_empty_list():
+    assert stack.affected_fallback({"checks": CHECKS, "affected_fallback": []}, "x") == ()
+
+
+def test_the_two_keys_are_declarable_and_not_taken_for_a_typo():
+    declared = {
+        "checks": CHECKS,
+        "affected_checks": {"tests": "pytest --since {base}"},
+        "affected_fallback": ["uv.lock"],
+    }
+    assert stack.checks(declared, "x") == CHECKS
+
+
+def test_the_template_keeps_both_affected_keys_commented_out_and_explained():
+    text = stack.TEMPLATE.read_text(encoding="utf-8")
+    data = yaml.safe_load(text)
+    assert "affected_checks" not in data and "affected_fallback" not in data
+    assert "# affected_checks:" in text and "# affected_fallback:" in text
+    assert stack.affected_checks(data, stack.TEMPLATE) == {}
+    assert stack.affected_fallback(data, stack.TEMPLATE) == ()
