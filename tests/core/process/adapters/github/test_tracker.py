@@ -464,6 +464,9 @@ class MethodRecorder(Recorder):
         return result
 
 
+PR_URL = "https://github.com/o/r/pull/7"
+
+
 @pytest.mark.parametrize(
     ("allowed", "method"),
     [
@@ -474,7 +477,7 @@ class MethodRecorder(Recorder):
 )
 def test_merge_picks_the_first_allowed_method_and_pins_the_head(allowed, method):
     run = MethodRecorder(*allowed)
-    assert GhTracker(Path("/p"), run).merge(7, "abc123") == method
+    assert GhTracker(Path("/p"), run).merge(PR_URL, "abc123") == method
     assert run.calls[-1] == [
         "gh",
         "pr",
@@ -486,16 +489,33 @@ def test_merge_picks_the_first_allowed_method_and_pins_the_head(allowed, method)
     ]
 
 
+def test_merge_targets_the_number_in_the_reference_and_never_the_url_or_another_number():
+    run = MethodRecorder(True, True, True)
+    GhTracker(Path("/p"), run).merge("https://github.com/o/r/pull/210", "abc123")
+    assert run.calls[-1] == ["gh", "pr", "merge", "210", "--merge", "--match-head-commit", "abc123"]
+    assert all("209" not in part and "github.com" not in part for part in run.calls[-1])
+
+
+@pytest.mark.parametrize("reference", ["not-a-url", "", "209", "https://github.com/o/r/issues/209"])
+def test_merge_with_an_unparsable_reference_raises_gh_unreadable_before_any_gh_call(reference):
+    run = MethodRecorder(True, True, True)
+    with pytest.raises(MergeCallFailed) as raised:
+        GhTracker(Path("/p"), run).merge(reference, "abc123")
+    assert raised.value.failure == "gh_unreadable"
+    assert type(raised.value) is MergeCallFailed
+    assert run.calls == []  # not even `gh repo view`
+
+
 def test_merge_with_no_allowed_method_raises_and_merges_nothing():
     run = MethodRecorder(False, False, False)
     with pytest.raises(ValueError, match="no_merge_method"):
-        GhTracker(Path("/p"), run).merge(7, "abc123")
+        GhTracker(Path("/p"), run).merge(PR_URL, "abc123")
     assert all(call[1:3] != ["pr", "merge"] for call in run.calls)
 
 
 def test_merge_never_asks_for_auto_or_branch_deletion():
     run = MethodRecorder(True, True, True)
-    GhTracker(Path("/p"), run).merge(7, "abc123")
+    GhTracker(Path("/p"), run).merge(PR_URL, "abc123")
     assert "--auto" not in run.calls[-1] and "--delete-branch" not in run.calls[-1]
 
 
@@ -549,7 +569,7 @@ def ids_without_cause(run):
 )
 def test_merge_raises_only_merge_call_failed_with_the_class_of_the_step_that_failed(run, failure):
     with pytest.raises(MergeCallFailed) as raised:
-        GhTracker(Path("/p"), run).merge(7, "abc123")
+        GhTracker(Path("/p"), run).merge(PR_URL, "abc123")
     assert raised.value.failure == failure
     assert type(raised.value) is MergeCallFailed
     assert isinstance(raised.value, ValueError)
@@ -559,7 +579,7 @@ def test_merge_raises_only_merge_call_failed_with_the_class_of_the_step_that_fai
 def test_merge_call_failed_carries_the_raw_error_as_its_message_never_as_its_class():
     run = _Step(("pr", "merge"), _REJECTED)
     with pytest.raises(MergeCallFailed, match="not mergeable") as raised:
-        GhTracker(Path("/p"), run).merge(7, "abc123")
+        GhTracker(Path("/p"), run).merge(PR_URL, "abc123")
     assert raised.value.failure == "gh_rejected"
     assert str(raised.value) == "gh pr merge failed: Pull request is not mergeable: secret"
 

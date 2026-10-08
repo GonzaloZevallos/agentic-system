@@ -299,9 +299,15 @@ class GhTracker:
             commits=commits,
         )
 
-    def merge(self, number: int, head_sha: str) -> str:
+    def merge(self, reference: str, head_sha: str) -> str:
         """Raises only `MergeCallFailed`, its class chosen at the step that failed: never
-        by reading `gh`'s stderr (ADR-0029)."""
+        by reading `gh`'s stderr (ADR-0029). The reference is parsed first, so an
+        unreadable one reaches no `gh` call at all; `gh pr merge` gets the bare number and
+        resolves the repository from `product_dir`, as `pull_request` does."""
+        try:
+            number = pull_request_number(reference)
+        except ValueError as exc:
+            raise MergeCallFailed("gh_unreadable", str(exc)) from exc
         try:
             allowed = json.loads(
                 self._gh(

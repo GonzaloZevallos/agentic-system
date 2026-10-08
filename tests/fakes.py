@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from agentic.core.knowledge.domain import knowledge
+from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.application.ports import (
     BranchPullRequest,
     Checkout,
@@ -656,12 +657,12 @@ class MemoryTracker:
         # its head, so a test moves the head without rebuilding the pull request.
         self.prs: dict[str, PullRequest | None] = {}
         self.head_oid: str | None = None
-        # `merge`'s own record: `(number, head_sha)` of every call, the method it answers,
+        # `merge`'s own record: `(reference, head_sha)` of every call, the method it answers,
         # and `merge_error`, which makes it raise `ValueError` the way a refused `gh pr
         # merge` does. GH-196: `merge_failure` makes that error a `MergeCallFailed` of that
         # class, the adapter's own shape; with it unset the error stays a plain `ValueError`.
         # `events` is every `pull_request`, `merge` and `comment` call in order.
-        self.merge_calls: list[tuple[int, str]] = []
+        self.merge_calls: list[tuple[str, str]] = []
         self.merge_method = "squash"
         self.merge_error: str | None = None
         self.merge_failure: MergeFailure | None = None
@@ -683,15 +684,17 @@ class MemoryTracker:
         self.on_lookup: Callable[[str], None] | None = None
 
     def pull_request(self, reference: str) -> PullRequest | None:
+        pull_request_number(reference)  # the adapter's own strictness: a bad reference raises
         self.events.append("pull_request")
         pr = self.prs.get(reference)
         if pr is not None and self.head_oid is not None:
             return dataclasses.replace(pr, head_oid=self.head_oid)
         return pr
 
-    def merge(self, number: int, head_sha: str) -> str:
+    def merge(self, reference: str, head_sha: str) -> str:
+        pull_request_number(reference)  # rejected before anything is recorded, as the adapter does
         self.events.append("merge")
-        self.merge_calls.append((number, head_sha))
+        self.merge_calls.append((reference, head_sha))
         if self.merge_error is not None:
             if self.merge_failure is not None:
                 raise MergeCallFailed(self.merge_failure, self.merge_error)

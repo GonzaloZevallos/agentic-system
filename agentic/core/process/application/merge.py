@@ -234,7 +234,7 @@ def _merge(
         {"auto_merge_head": head, "auto_merge_master": master, "auto_merge_at": clock()},
     )
     try:
-        method = ports.tracker.merge(number, head)
+        method = ports.tracker.merge(reference, head)
     except MergeCallFailed as exc:
         return _after_failure(task_id, reference, head, facts, exc.failure, str(exc), ports, log)
     except ValueError as exc:
