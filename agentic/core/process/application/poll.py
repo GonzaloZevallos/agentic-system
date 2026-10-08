@@ -392,7 +392,15 @@ def gather_merges(
         if pull_request is not None and rules.pr_abandoned(pull_request.state):
             continue  # closed unmerged: nothing to merge, nothing to say, nothing written
         facts = _merge_facts(task_id, raw, pull_request, eval_set, number, current_master)
-        declared = ports.stack.ci(task_base(raw, ports))
+        try:
+            declared = ports.stack.ci(task_base(raw, ports))
+        except ValueError:
+            # A base the stack cannot be read at (gone, or a malformed key) is this task's
+            # problem, never the round's: every other candidate is still decided (GH-216).
+            out.append(
+                f"agentic: poll: auto-merge #{number} -> left to the human: stack_unreadable"
+            )
+            continue
         decision = rules.auto_merge_decision(replace(facts, ci_required=declared))
         report = None
         if declared and decision.kind != "refuse":

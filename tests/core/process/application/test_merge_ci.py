@@ -264,3 +264,14 @@ def test_a_poll_round_waiting_on_ci_writes_nothing_and_comments_nothing():
     _merges(ports)
 
     assert _doc(ports) == before and ports.tracker.comments == []
+
+
+def test_a_stack_the_poller_cannot_read_leaves_that_task_and_never_aborts_the_round():
+    ports = _world(_report(_check()))
+    ports.stack.ci_error = "no commit 'gone' in product"
+
+    found, lines = _merges(ports)
+
+    assert found == []
+    assert lines == ["agentic: poll: auto-merge #5 -> left to the human: stack_unreadable"]
+    assert ports.tracker.ci_reads == []
