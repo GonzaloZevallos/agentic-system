@@ -124,6 +124,10 @@ def render(
             if (replaced := state.get("replaced_remote_tip"))
             else {}
         ),
+        # Where the CI wait is measured from (GH-216): written only when a delivery set
+        # them, so a document without them is byte-identical to one written before.
+        **({"pushed_head": pushed} if (pushed := state.get("pushed_head")) else {}),
+        **({"pushed_at": pushed_at} if (pushed_at := state.get("pushed_at")) else {}),
         "subtasks": {sid: _recorded(sub) for sid, sub in state.get("subtasks", {}).items()},
         "invariants": state.get("invariants", []),
         "integration_brief": state.get("integration_brief", ""),
