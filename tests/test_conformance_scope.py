@@ -126,7 +126,7 @@ def _probe(tmp_path: Path, *, drift: bool) -> subprocess.CompletedProcess[str]:
     body = _once(inspect.getsource(ProductStack), *_RENAME)
     if drift:
         body = _once(body, *_DRIFT)
-    probe = tmp_path / "probe.py"
+    probe = tmp_path / "drifted.py"
     probe.write_text(_HEADER + body + _ASSERTION, encoding="utf-8")
     return subprocess.run(
         [
@@ -156,7 +156,7 @@ def test_mypy_refuses_a_protocol_whose_method_signature_drifted(tmp_path):
     assert len(errors) == 1, run.stdout + run.stderr
     assert "Incompatible types in assignment" in errors[0]
     assert '"ProductStack"' in errors[0]
-    assert errors[0].startswith(str(tmp_path / "probe.py") + ":")
+    assert errors[0].startswith(str(tmp_path / "drifted.py") + ":")
 
 
 def test_mypy_accepts_the_same_protocol_copied_without_drift(tmp_path):
