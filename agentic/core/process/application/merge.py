@@ -19,11 +19,11 @@ from typing import Literal
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import rules
+from ..domain import presubmit, rules
 from ..domain.task import PullRequest, TaskState
 from .checkouts import task_base
 from .poll import AUTO_MERGE_REFUSED, AUTO_MERGED, _merge_facts
-from .ports import GitError, MergeCallFailed, Ports, Upstream
+from .ports import CommandResult, GitError, MergeCallFailed, Ports, Upstream
 from .presubmit import CheckoutPresubmit
 
 # The refusals a human can act on, and so the only ones commented, once per (head, reason).
@@ -35,6 +35,8 @@ COMMENTED: tuple[str, ...] = (
     "attempts_exhausted",
     "merge_failed",
 )
+
+LEFT_TO_HUMAN = "Left for the human to merge."
 
 # Nothing was committed before the merge worktree existed: every head differs from it, so
 # `CheckoutPresubmit` runs the checks even when the upstream was already in the head.
@@ -144,15 +146,26 @@ def _run_checks(
     checks could not run in all count as the checks failing."""
     ports.documents.record_closure(task_id, {"merge_attempts": {"head": head, "count": attempt}})
     started = time.monotonic()
-    passed = False
     name = _name(task_id)
+    failed_step: presubmit.FailedStep | None = None
+    setup_failure: tuple[str, str] | None = None
+    declared: dict[str, str] = {}
+    gate: CheckoutPresubmit | None = None
     try:
         path = ports.workspace.detached_checkout(name, head)
         conflict = ports.workspace.merge(path, master)
         if conflict is not None:
             log(f"agentic: merge: {task_id}: {head} does not merge with {master}")
-        elif _setup(base, path, cfg, ports):
-            checks = ports.stack.checks(base)
+            failed_step = "conflict"
+        elif (failed := _setup(base, path, cfg, ports)) is not None:
+            step, result = failed
+            setup_failure = (
+                step,
+                presubmit.said(result.output, result.timed_out, cfg.check_timeout_s),
+            )
+            failed_step = "setup"
+        else:
+            checks = declared = ports.stack.checks(base)
             gate = CheckoutPresubmit(
                 ports,
                 path,
@@ -163,25 +176,27 @@ def _run_checks(
                 parallel=ports.stack.parallel_checks(base),
             )
             gate()
-            # No declared check proves nothing: it cannot pass; a witness that says the
-            # checks ran against another checkout makes them prove nothing either.
-            passed = (
-                bool(checks)
-                and gate.results is not None
-                and all(result["passed"] for result in gate.results)
-                and (gate.witness_result is None or gate.witness_result["passed"])
-            )
     except GitError as exc:
         log(f"agentic: merge: {task_id}: could not build the worktree: {exc}")
+        failed_step = "worktree"
     finally:
         ports.workspace.remove_checkout(name)
-    record = {
-        "head": head,
-        "master": master,
-        "passed": passed,
-        "duration_s": round(time.monotonic() - started, 1),
-    }
+    # No declared check proves nothing: it cannot pass; a witness that says the checks ran
+    # against another checkout makes them prove nothing either (`merge_checks_record`).
+    record = presubmit.merge_checks_record(
+        head=head,
+        master=master,
+        duration_s=round(time.monotonic() - started, 1),
+        declared=declared,
+        results=gate.results if gate is not None else None,
+        witness=gate.witness_result if gate is not None else None,
+        failed_step=failed_step,
+        setup_failure=setup_failure,
+    )
     ports.documents.record_closure(task_id, {"merge_checks": record})
+    shown = presubmit.failed_checks_markdown(record, head, neutralise=False)
+    for number, line in enumerate(shown.splitlines()):
+        log(f"agentic: merge: {task_id}: {line}" if number == 0 else f"    {line}")
 
 
 def _spend_attempts(task_id: str, raw: TaskState, head: str, ports: Ports) -> None:
@@ -200,11 +215,16 @@ def _spend_attempts(task_id: str, raw: TaskState, head: str, ports: Ports) -> No
         )
 
 
-def _setup(base: str, path: Path, cfg: Configuration, ports: Ports) -> bool:
-    for command in ports.stack.setup(base).values():
-        if not ports.commands.run(path, command, cfg.check_timeout_s).passed:
-            return False
-    return True
+def _setup(
+    base: str, path: Path, cfg: Configuration, ports: Ports
+) -> tuple[str, CommandResult] | None:
+    """None when every setup step passed, else the first one that did not, with what it
+    said: the steps after it do not run."""
+    for step, command in ports.stack.setup(base).items():
+        result = ports.commands.run(path, command, cfg.check_timeout_s)
+        if not result.passed:
+            return step, result
+    return None
 
 
 def _merge(
@@ -303,6 +323,15 @@ def _after_failure(
     return MergeResult("stopped", "ambiguous")
 
 
+def _summary_line(comment: str) -> str:
+    """The line after the first of an `Auto-merge refused:` comment that names what
+    failed, or "" when there is none (the comment goes straight to its closing sentence)."""
+    for line in comment.splitlines()[1:]:
+        if line.strip():
+            return "" if line == LEFT_TO_HUMAN else line
+    return ""
+
+
 def _refuse(
     task_id: str,
     head: str | None,
@@ -316,7 +345,14 @@ def _refuse(
     fixed advice sentence, never the CLI's own text."""
     if reason in COMMENTED and head is not None:
         first = f"{AUTO_MERGE_REFUSED}{head} {reason}"
-        text = f"{first}\n\nLeft for the human to merge."
+        summary = ""
+        text = f"{first}\n\n{LEFT_TO_HUMAN}"
+        if reason == "checks_failed":
+            recorded = (ports.documents.load(task_id) or {}).get("merge_checks")
+            record = recorded if isinstance(recorded, dict) else {}
+            summary = presubmit.failed_checks_summary(record, head)
+            evidence = presubmit.failed_checks_markdown(record, head)
+            text = "\n\n".join(part for part in (first, evidence, LEFT_TO_HUMAN) if part)
         if reason == "merge_failed":
             advice = (
                 rules.MERGE_FAILURE_ADVICE[failure]
@@ -330,6 +366,10 @@ def _refuse(
             for body in ports.tracker.issue_comments(task_id)
             if body.startswith(AUTO_MERGE_REFUSED)
         ]
-        if not refused or refused[-1].splitlines()[0] != first:
+        if (
+            not refused
+            or refused[-1].splitlines()[0] != first
+            or (reason == "checks_failed" and _summary_line(refused[-1]) != summary)
+        ):
             ports.tracker.comment(task_id, text)
     return MergeResult("refused", reason)
