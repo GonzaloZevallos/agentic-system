@@ -151,5 +151,5 @@ def test_the_poller_line_names_the_failing_checks_only_for_this_head_and_new_doc
         "GH-5", {"merge_checks": {"head": HEAD, "master": MASTER, "passed": False}}
     )
     old = "agentic: poll: auto-merge #5 -> left to the human: checks_failed"
-    assert _merges(other)[1] == [old]
+    assert _merges(other)[1] == []  # another head's record is no refusal: checks run again
     assert _merges(legacy)[1] == [old]
