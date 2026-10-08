@@ -457,3 +457,49 @@ estaba.
 
 No se agrega ni se mueve ninguna métrica, etiqueta, span, clave del documento ni prompt;
 `prompts.fingerprint` no cambia.
+
+## Adenda (2026-10-07): un merge-checks rojo dice qué falló y por qué (GH-212)
+
+Un `merge_checks` con `passed: false` no decía qué check falló ni qué imprimió; un humano
+tuvo que correr los siete de nuevo. Ahora el registro lo dice. La decisión de mergear no
+cambia: `auto_merge_decision` y `MergeRefusal` siguen leyendo solo `passed`.
+
+- **Claves de `merge_checks`.** `head`, `master`, `passed` y `duration_s` conservan nombre y
+  sentido. Se agregan `checks` (una entrada `{name, passed, tail?}` por check declarado, en el
+  orden declarado, y `tail` solo en las que fallaron) y `failed_step` (solo cuando `passed` es
+  falso). Ambas se leen con `.get` (`[]` y `None`). Una entrada del `witness` que discrepa va al
+  final; una que coincide no se registra; un paso de `setup` rojo es una entrada con el nombre de
+  su clave.
+- **`failed_step`** toma un valor del conjunto cerrado `worktree | conflict | setup | no_checks |
+  witness | checks`. Lo arma `presubmit.merge_checks_record`, la única función que construye el
+  registro; `passed` es la misma expresión de antes, movida ahí.
+- **El tail.** Se limpia (secuencias ANSI CSI/OSC fuera, caracteres de control salvo `\n` fuera,
+  tabs a cuatro espacios), luego las últimas `TAIL_LINES = 30` líneas, luego los últimos
+  `MERGE_TAIL_CHARS = 2000` caracteres. Se guarda como lista de líneas: un escalar de varias
+  líneas rompe la cirugía de una línea de `record_closure`. Solo se muestra; nunca se parsea ni
+  se ramifica sobre él.
+- **Tres superficies.** El log del hijo (`log`, con el resumen y cada tail indentado), la línea
+  del poller (`... left to the human: checks_failed (Failed: tests)`, solo para `checks_failed`
+  y solo si el registro es de ese head) y el comentario `Auto-merge refused:` (primera línea
+  idéntica a la de siempre, luego el resumen y los tails, luego `Left for the human to merge.`).
+  Cada tail va en una cerca con un acento grave más que la racha más larga que contiene; solo en
+  el comentario, `@` y `#` seguidos de un carácter de palabra reciben un U+200B. El comentario
+  no pasa de `MERGE_COMMENT_MAX = 60_000`: se sueltan tails desde la última entrada hacia atrás y
+  los nombres siempre quedan.
+- **Dedupe.** `checks_failed` compara (primera línea, línea de resumen): los mismos checks
+  fallando callan aunque el tail cambie; otros checks fallando en el mismo head comentan de
+  nuevo. Toda otra razón compara solo la primera línea, como antes.
+- **Por qué no se reintenta antes de rechazar.** Convertiría un rojo en un merge, en el único
+  camino que mergea sin un humano. Con el check nombrado, un humano puede decidir si fue un
+  flake. Queda como issue de seguimiento.
+- **§7.** No se agrega ni se mueve ninguna métrica, etiqueta ni atributo de span; las claves
+  nuevas del documento son `merge_checks.checks` y `merge_checks.failed_step`, solo agregadas.
+  `prompts.fingerprint` no cambia.
+- **§8.** Se ensancha: la salida de los checks y del `setup` del propio producto, limpia y
+  acotada, llega al comentario del issue y al frontmatter. Quienes la ven son quienes ya leen el
+  documento de tarea, donde `checks_markdown` ya copia los tails rojos. Costo: a lo sumo
+  (checks + witness) × 2 KB por registro rojo, que se parsea en cada ronda del poller.
+- **Riesgos conocidos.** Nada redacta secretos: un check o paso de `setup` que imprima uno lo
+  publica. La salida de instalación ahora puede aparecer en un comentario. Unos 14 KB de
+  frontmatter se parsean por ronda en una tarea roja. Un head cuyo último comentario vino del
+  código anterior recibe un comentario más. Un flake queda nombrado, no reintentado.
