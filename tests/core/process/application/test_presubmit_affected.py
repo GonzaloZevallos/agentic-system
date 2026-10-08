@@ -4,11 +4,22 @@ paths, the instance's stays-full memory, and the byte-identical `None` plan."""
 
 from pathlib import Path
 
+import pytest
+
+from agentic.core.process.application.develop import develop
 from agentic.core.process.application.ports import CommandResult, GitError
 from agentic.core.process.application.presubmit import CheckoutPresubmit
 from agentic.core.process.domain import presubmit
 from agentic.core.process.domain.presubmit import AffectedPlan
-from tests.fakes import MemoryCommands, MemoryWorkspace
+from agentic.shared.configuration import Configuration
+from tests.fakes import (
+    MemoryCommands,
+    MemoryStack,
+    MemoryWorkspace,
+    ScriptedRunner,
+    delivered,
+    memory_ports,
+)
 
 PATH = Path("/memory/worktrees/GH-215.gate")
 CHECKS = {"tests": "pytest", "lint": "ruff check ."}
@@ -194,3 +205,46 @@ def test_a_none_plan_is_the_gate_of_today():
     assert g.results is not None and all("mode" not in r for r in g.results)
     assert g.markdown() is not None and "affected" not in (g.markdown() or "")
     assert workspace.diff_reads == []  # no plan, no lookup
+
+
+def develop_state() -> dict:
+    return {
+        "id": "GH-12",
+        "title": "Dashboard",
+        "description": "How is my gym doing.",
+        "type": "feature",
+        "sections": {"PM": "### Consolidated definition\n\nSix numbers."},
+        "subtasks": {
+            sid: {"id": sid, "title": sid, "brief": "b", "seams": ["s"]}
+            for sid in ("api", "domain")
+        },
+        "subtask_id": "api",
+    }
+
+
+async def run_develop(tmp_path: Path, stack: MemoryStack) -> tuple[MemoryCommands, MemoryWorkspace]:
+    commands = MemoryCommands()
+    ports = memory_ports(ScriptedRunner(developer=[delivered()]), stack=stack, commands=commands)
+    checkout = ports.workspace.subtask_checkout("GH-12", "api")
+    ports.workspace.moved.add(checkout.path)
+    ports.workspace.existing_branches["agentic/GH-12"] = ("head", "base0")
+    ports.workspace.diff_paths = ("src/a.py",)
+    await develop(develop_state(), Configuration(product_dir=tmp_path), ports)
+    return commands, ports.workspace
+
+
+@pytest.mark.anyio
+async def test_develop_builds_the_plan_from_the_stack_at_the_task_base(tmp_path):
+    stack = MemoryStack(
+        CHECKS, affected_checks={"tests": "pytest --since {base}"}, affected_fallback=("*.lock",)
+    )
+    commands, workspace = await run_develop(tmp_path, stack)
+    assert [c for _, c in commands.ran] == ["pytest --since base0", "ruff check ."]
+    assert [base for base, _ in workspace.diff_reads] == ["base0"]
+
+
+@pytest.mark.anyio
+async def test_develop_without_affected_checks_runs_the_gate_of_today(tmp_path):
+    commands, workspace = await run_develop(tmp_path, MemoryStack(CHECKS))
+    assert [c for _, c in commands.ran] == ["pytest", "ruff check ."]
+    assert workspace.diff_reads == []
