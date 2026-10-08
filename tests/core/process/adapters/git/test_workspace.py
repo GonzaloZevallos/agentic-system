@@ -901,3 +901,54 @@ def test_a_lease_push_is_rejected_when_a_third_clone_pushed_after_the_observatio
         ws.push(task.branch, lease=observed)
     # Git's own refusal text is kept, and what the third clone pushed is still there.
     assert git("rev-parse", task.branch, cwd=_remote(product)) == theirs
+
+
+# -- GH-216: whether a head has master's commit among its ancestors ------------------------
+
+
+def _commit_file(repo: Path, name: str) -> str:
+    (repo / name).write_text(name)
+    git("add", "-A", cwd=repo)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", name, cwd=repo)
+    return git("rev-parse", "HEAD", cwd=repo)
+
+
+def test_contains_is_yes_when_the_head_has_masters_commit_behind_it(product):
+    master = git("rev-parse", "HEAD", cwd=product)
+    head = _commit_file(product, "on-top")
+    assert GitWorkspace(product, IDENTITY).contains(head, master) == "yes"
+    assert GitWorkspace(product, IDENTITY).contains(master, master) == "yes"
+
+
+def test_contains_is_no_when_master_moved_past_the_head(product):
+    base = git("rev-parse", "HEAD", cwd=product)
+    git("checkout", "-q", "-b", "task", cwd=product)
+    head = _commit_file(product, "task-work")
+    git("checkout", "-q", "master", cwd=product)
+    master = _commit_file(product, "master-moved")
+    assert base != master
+    assert GitWorkspace(product, IDENTITY).contains(head, master) == "no"
+
+
+def test_contains_is_unknown_for_a_sha_neither_here_nor_fetchable_never_yes(product):
+    head = git("rev-parse", "HEAD", cwd=product)
+    ws = GitWorkspace(product, IDENTITY)
+    assert ws.contains(head, "0" * 40) == "unknown"
+    assert ws.contains("0" * 40, head) == "unknown"
+
+
+@pytest.mark.parametrize("failure", ["exit-128", "git-error", "no-git"])
+def test_contains_is_unknown_for_any_git_failure_never_raised(product, monkeypatch, failure):
+    ws = GitWorkspace(product, IDENTITY)
+    sha = git("rev-parse", "HEAD", cwd=product)
+    real_run = ws._run
+
+    def fake(*args, cwd=None):
+        if args[:2] == ("merge-base", "--is-ancestor"):
+            if failure == "exit-128":
+                return subprocess.CompletedProcess(args, 128, "", "fatal")
+            raise GitError("boom") if failure == "git-error" else FileNotFoundError("git")
+        return real_run(*args, cwd=cwd)
+
+    monkeypatch.setattr(ws, "_run", fake)
+    assert ws.contains(sha, sha) == "unknown"

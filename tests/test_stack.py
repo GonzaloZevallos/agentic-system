@@ -133,6 +133,55 @@ def test_the_declared_parallel_checks_is_a_bool_the_gate_can_read():
     assert "ADR-0044" in STACK_YAML.read_text(encoding="utf-8")
 
 
+def unknown_ci_names(declared: tuple[str, ...], workflow: dict[str, Any]) -> list[str]:
+    """What is wrong with the `ci` names a stack declares, against the jobs of a workflow
+    (GH-216): a name must be exactly a job's `name:` (its id when it has none), and a job
+    with `strategy.matrix` reports one check run per expansion, `name (value, ...)`, so a
+    bare name of it never matches a run. Empty when every name is a real check run."""
+    jobs = workflow.get("jobs", {})
+    reported: dict[str, bool] = {}
+    for job_id, job in jobs.items():
+        reported[str(job.get("name", job_id))] = "matrix" in (job.get("strategy") or {})
+    matrix_jobs = [job for job, is_matrix in reported.items() if is_matrix]
+    violations = []
+    for name in declared:
+        if any(name.startswith(f"{job} (") and name.endswith(")") for job in matrix_jobs):
+            continue  # one expansion of a matrix job, as GitHub reports it
+        if name not in reported:
+            violations.append(f"`ci` declares {name!r}, which is no job `name:` or id")
+        elif reported[name]:
+            violations.append(
+                f"`ci` declares the matrix job {name!r} bare; GitHub reports its runs as "
+                f"`{name} (...)`, one per expansion: declare each expanded name"
+            )
+    return violations
+
+
+def test_every_declared_ci_name_is_a_job_of_ci_yml_that_reports_under_that_name():
+    data = yaml.safe_load(STACK_YAML.read_text(encoding="utf-8"))
+    declared = stack.ci(data, STACK_YAML)
+    assert declared, f"{STACK_YAML} declares no `ci`"
+    workflow = yaml.safe_load(CI_YML.read_text(encoding="utf-8"))
+    assert unknown_ci_names(declared, workflow) == []
+    assert "ADR-0045" in STACK_YAML.read_text(encoding="utf-8")
+
+
+def test_unknown_ci_names_rejects_a_name_that_is_no_job_and_a_prefix_of_one():
+    workflow = {"jobs": {"check": {"steps": []}, "e2e": {"name": "End to end", "steps": []}}}
+    assert unknown_ci_names(("check", "End to end"), workflow) == []
+    assert unknown_ci_names(("e2e",), workflow) != []  # the id of a named job is not reported
+    [violation] = unknown_ci_names(("chec",), workflow)  # never matched by prefix
+    assert "'chec'" in violation
+
+
+def test_unknown_ci_names_rejects_a_matrix_job_declared_bare_and_names_the_expanded_form():
+    workflow = {"jobs": {"web": {"strategy": {"matrix": {"node": [20, 22]}}, "steps": []}}}
+    [violation] = unknown_ci_names(("web",), workflow)
+    assert "matrix" in violation and "web (...)" in violation
+    assert unknown_ci_names(("web (20)", "web (22)"), workflow) == []
+    assert unknown_ci_names(("web (", "webs (20)"), workflow) != []
+
+
 def _mypy_option_names() -> list[str]:
     """Every `[tool.mypy]` key except `files` itself: the registry `CODING_STANDARDS.md`
     is allowed to point at, never one of its options (ADR-0012, adenda `standards`)."""
