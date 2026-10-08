@@ -320,16 +320,21 @@ def with_ci(
     )
 
 
-def ci_wait_line(number: int, facts: rules.MergeFacts) -> str:
+def ci_wait_line(
+    number: int, facts: rules.MergeFacts, report: ci.CiReport | ci.CiUnreadable | None = None
+) -> str:
     """The poller's line for a CI that is not decidable yet: what it waits on and for how
-    long (`?` when the wait has no anchor)."""
+    long (`?` when the wait has no anchor). A pending check is named from `report`."""
     waited = "?" if facts.ci_waited_s is None else str(int(facts.ci_waited_s))
     if facts.ci_unreadable is not None:
         what = f"unreadable {facts.ci_unreadable.cause}"
     elif facts.ci_verdict is not None and facts.ci_verdict.missing:
         what = f"missing {', '.join(facts.ci_verdict.missing)}"
     elif facts.ci_verdict is not None and facts.ci_verdict.state == "pending":
-        what = "pending"
+        names = (
+            ci.pending_names(report, facts.ci_required) if isinstance(report, ci.CiReport) else ()
+        )
+        what = f"pending {', '.join(names)}" if names else "pending"
     else:
         what = "pending head"
     bound = f"{waited}s of {ci.CI_WAIT_MAX_S}"
@@ -389,13 +394,14 @@ def gather_merges(
         facts = _merge_facts(task_id, raw, pull_request, eval_set, number, current_master)
         declared = ports.stack.ci(task_base(raw, ports))
         decision = rules.auto_merge_decision(replace(facts, ci_required=declared))
+        report = None
         if declared and decision.kind != "refuse":
             # Every refusal ahead of the CI's is ruled out: only now is the report read.
             report = ports.tracker.ci_report(str(reference))
             facts = with_ci(facts, raw, declared, report)
             decision = rules.auto_merge_decision(facts)
         if decision.kind == "wait":
-            out.append(ci_wait_line(number, facts))
+            out.append(ci_wait_line(number, facts, report))
         elif decision.kind == "refuse":
             line = f"agentic: poll: auto-merge #{number} -> left to the human: {decision.reason}"
             if decision.reason == "checks_failed":

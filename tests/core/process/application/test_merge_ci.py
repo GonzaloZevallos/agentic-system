@@ -208,8 +208,15 @@ def test_the_poller_names_what_it_waits_on_and_how_long_of_the_bound():
     pending = _world(_report(_check("web", None)))
     assert _merges(pending) == (
         [],
-        ["agentic: poll: auto-merge #5 -> waiting: ci pending (60s of 3600)"],
+        ["agentic: poll: auto-merge #5 -> waiting: ci pending web (60s of 3600)"],
     )
+    two = _world(
+        _report(_check("web", None), _check("api", None, run=2), _check("e2e", run=3)),
+        declared=("web", "api", "e2e"),
+    )
+    assert _merges(two)[1] == [
+        "agentic: poll: auto-merge #5 -> waiting: ci pending web, api (60s of 3600)"
+    ]
     missing = _world(_report(_check("other")), declared=("web",))
     assert _merges(missing)[1] == [
         "agentic: poll: auto-merge #5 -> waiting: ci missing web (60s of 3600)"

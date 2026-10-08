@@ -450,6 +450,8 @@ class GhTracker:
         except ValueError as exc:  # `_gh`'s own failure
             missing = isinstance(exc.__cause__, FileNotFoundError)
             return CiUnreadable("gh_unavailable" if missing else "gh_unreadable")
+        except OSError:  # a `gh` that cannot be run at all (not executable, no permission)
+            return CiUnreadable("gh_unavailable")
         try:
             answer = json.loads(raw)
         except json.JSONDecodeError:

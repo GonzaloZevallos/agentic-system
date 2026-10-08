@@ -218,7 +218,7 @@ class MemoryStack:
         forbidden: list[Forbidden] | None = None,
         design: Design | None = None,
         parallel_checks: bool = False,
-        ci: dict[str, tuple[str, ...]] | None = None,
+        ci: dict[str, tuple[str, ...]] | tuple[str, ...] | None = None,
     ):
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -242,7 +242,14 @@ class MemoryStack:
         # product that declares no `ci`, the local-check path of today. A test sets
         # entries on this mapping, or `ci_error` to make the read raise `ValueError` the
         # way a malformed key does. `ci_revisions` is each revision asked.
-        self.declared_ci: dict[str, tuple[str, ...]] = {} if ci is None else ci
+        # A bare tuple declares the same names at every revision, which is what the
+        # merge and review tests need; a dict declares them per revision.
+        self.declared_ci: dict[str, tuple[str, ...]] = {}
+        self.declared_ci_all: tuple[str, ...] = ()
+        if isinstance(ci, tuple):
+            self.declared_ci_all = ci
+        elif ci is not None:
+            self.declared_ci = ci
         self.ci_error: str | None = None
         self.ci_revisions: list[str] = []
         self.revisions: list[str] = []
@@ -274,7 +281,7 @@ class MemoryStack:
         self.ci_revisions.append(revision)
         if self.ci_error is not None:
             raise ValueError(self.ci_error)
-        return self.declared_ci.get(revision, ())
+        return self.declared_ci.get(revision, self.declared_ci_all)
 
     def product(self, revision: str = "HEAD") -> str:
         if self.declared_product is None:
@@ -434,6 +441,8 @@ class MemoryWorkspace:
         # GH-216: `contains`'s answer per `(head, master)` -- absent is `unknown`, which
         # the caller counts as stale -- and each ask, in order.
         self.containment: dict[tuple[str, str], Containment] = {}
+        # What every pair not in `containment` answers: the merge tests script one answer.
+        self.contains_answer: Containment = "unknown"
         self.contains_calls: list[tuple[str, str]] = []
         # The `lease` every `push` received, in order (the failed ones too); `remote_tips`
         # is what `remote_tip` answers per branch (absent is `None`, the remote has none),
@@ -641,7 +650,7 @@ class MemoryWorkspace:
 
     def contains(self, head: str, master: str) -> Containment:
         self.contains_calls.append((head, master))
-        return self.containment.get((head, master), "unknown")
+        return self.containment.get((head, master), self.contains_answer)
 
     def upstream(self) -> Upstream:
         self.upstream_calls += 1
@@ -709,13 +718,19 @@ class MemoryTracker:
         # GH-216: `ci_report`'s answer per reference (the PR URL) and `branch_ci`'s per
         # branch. A key that is absent answers `CiUnreadable("gh_unreadable")`, never a
         # green report; `ci_reads` and `branch_reads` are each ask, in order.
-        self.ci_reports: dict[str, CiReport | CiUnreadable] = {}
+        # A list is the answer per round instead: each ask pops the first, the last one
+        # stays, and an empty list is unreadable.
+        self.ci_reports: dict[str, CiReport | CiUnreadable] | list[CiReport | CiUnreadable] = {}
         self.branch_reports: dict[str, CiReport | CiUnreadable] = {}
         self.ci_reads: list[str] = []
         self.branch_reads: list[str] = []
 
     def ci_report(self, reference: str) -> CiReport | CiUnreadable:
         self.ci_reads.append(reference)
+        if isinstance(self.ci_reports, list):
+            if not self.ci_reports:
+                return CiUnreadable("gh_unreadable")
+            return self.ci_reports.pop(0) if len(self.ci_reports) > 1 else self.ci_reports[0]
         return self.ci_reports.get(reference, CiUnreadable("gh_unreadable"))
 
     def branch_ci(self, branch: str) -> CiReport | CiUnreadable:

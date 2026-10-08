@@ -187,3 +187,19 @@ def test_a_matching_push_without_a_time_falls_back_to_the_pr_creation() -> None:
 
 def test_the_wait_bound_is_an_hour() -> None:
     assert ci.CI_WAIT_MAX_S == 3600
+
+
+def test_pending_names_lists_only_declared_names_with_a_run_still_waiting():
+    report = CiReport(
+        "a" * 40,
+        None,
+        None,
+        None,
+        (
+            CiCheck("web", "IN_PROGRESS", None, "l1"),
+            CiCheck("e2e", "COMPLETED", "SUCCESS", "l2"),
+            CiCheck("other", "QUEUED", None, "l3"),
+        ),
+    )
+    assert ci.pending_names(report, ("web", "e2e", "gone")) == ("web",)
+    assert ci.pending_names(report, ("e2e",)) == ()

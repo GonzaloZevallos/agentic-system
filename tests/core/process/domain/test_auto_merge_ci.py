@@ -17,6 +17,10 @@ RED = CiCheck("web", "COMPLETED", "FAILURE", "https://github.com/o/r/actions/run
 WAIT = MergeDecision("wait", None)
 
 
+def _verdict(state, failing=(), missing=()) -> CiVerdict:
+    return CiVerdict(state, tuple(failing), tuple(missing))
+
+
 def _facts(**over) -> MergeFacts:
     """A pull request whose CI is declared, green on this head and fresh: it merges."""
     base = MergeFacts(
@@ -36,7 +40,7 @@ def _facts(**over) -> MergeFacts:
         current_master=MASTER,
         ci_required=("web",),
         ci_head=HEAD,
-        ci_verdict=CiVerdict("green"),
+        ci_verdict=_verdict("green"),
         ci_fresh=True,
         ci_waited_s=10.0,
     )
@@ -44,11 +48,11 @@ def _facts(**over) -> MergeFacts:
 
 
 REFUSALS = [
-    ("ci_failed", {"ci_verdict": CiVerdict("red", failing=(RED,))}),
+    ("ci_failed", {"ci_verdict": _verdict("red", failing=(RED,))}),
     (
         "ci_missing",
         {
-            "ci_verdict": CiVerdict("pending", missing=("web",)),
+            "ci_verdict": _verdict("pending", missing=("web",)),
             "ci_waited_s": ci.CI_WAIT_MAX_S,
         },
     ),
@@ -64,7 +68,7 @@ REFUSALS = [
 ]
 
 WAITS = [
-    ("pending", {"ci_verdict": CiVerdict("pending", missing=("web",))}),
+    ("pending", {"ci_verdict": _verdict("pending", missing=("web",))}),
     (
         "unreadable",
         {"ci_verdict": None, "ci_head": None, "ci_unreadable": CiUnreadable("gh_unavailable")},
@@ -91,17 +95,17 @@ def test_each_cause_of_a_wait_waits_and_never_refuses(cause, over):
 
 
 def test_an_unknown_anchor_waits_on_a_pending_report_too():
-    facts = _facts(ci_verdict=CiVerdict("pending"), ci_waited_s=None)
+    facts = _facts(ci_verdict=_verdict("pending"), ci_waited_s=None)
     assert rules.auto_merge_decision(facts) == WAIT
 
 
 def test_a_head_that_is_not_the_reviewed_one_waits_even_over_a_red_report():
-    facts = _facts(ci_head="c" * 40, ci_verdict=CiVerdict("red", failing=(RED,)))
+    facts = _facts(ci_head="c" * 40, ci_verdict=_verdict("red", failing=(RED,)))
     assert rules.auto_merge_decision(facts) == WAIT
 
 
 def test_the_wait_bound_is_inclusive_of_the_refusal():
-    pending = CiVerdict("pending", missing=("web",))
+    pending = _verdict("pending", missing=("web",))
     under = _facts(ci_verdict=pending, ci_waited_s=ci.CI_WAIT_MAX_S - 1)
     assert rules.auto_merge_decision(under) == WAIT
     spent = _facts(ci_verdict=pending, ci_waited_s=ci.CI_WAIT_MAX_S)
@@ -109,7 +113,7 @@ def test_the_wait_bound_is_inclusive_of_the_refusal():
 
 
 def test_a_ci_reason_never_hides_an_earlier_one():
-    red = CiVerdict("red", failing=(RED,))
+    red = _verdict("red", failing=(RED,))
     assert rules.auto_merge_decision(_facts(ci_verdict=red, in_eval_set=True)) == MergeDecision(
         "refuse", "eval_set"
     )
@@ -147,7 +151,7 @@ def test_default_facts_decide_as_before_whatever_the_ci_fields_say_nothing_of():
     )
     assert rules.auto_merge_decision(plain) == MergeDecision("merge", None)
     for over in (
-        {"ci_verdict": CiVerdict("red", failing=(RED,))},
+        {"ci_verdict": _verdict("red", failing=(RED,))},
         {"ci_unreadable": CiUnreadable("gh_unreadable")},
         {"ci_head": "c" * 40},
     ):

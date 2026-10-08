@@ -106,6 +106,16 @@ def ci_state(report: CiReport, declared: tuple[str, ...]) -> CiVerdict:
     return CiVerdict(state, tuple(failing), tuple(missing))
 
 
+def pending_names(report: CiReport, declared: tuple[str, ...]) -> tuple[str, ...]:
+    """The declared names that have a run and are still waiting on it (a name the report
+    never mentions is in `CiVerdict.missing`, not here), in declared order."""
+    return tuple(
+        name
+        for name in dict.fromkeys(declared)
+        if any(check.name == name and _pending(check) for check in report.checks)
+    )
+
+
 def ci_fresh(
     base_sha: str | None, current_master: str | None, contains: Containment | None
 ) -> bool | None:

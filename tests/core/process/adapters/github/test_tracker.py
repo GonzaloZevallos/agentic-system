@@ -763,6 +763,20 @@ def test_a_missing_gh_is_unreadable_as_unavailable_never_raised(read):
     assert answer == CiUnreadable("gh_unavailable")
 
 
+class NotExecutable(Recorder):
+    def __call__(self, args, cwd, capture_output, text, check):
+        self.calls.append(args)
+        raise PermissionError("gh")
+
+
+@pytest.mark.parametrize("read", ["ci_report", "branch_ci"])
+def test_a_gh_that_cannot_be_run_is_unreadable_as_unavailable_never_raised(read):
+    answer = getattr(GhTracker(Path("/p"), NotExecutable()), read)(
+        PR if read == "ci_report" else "x"
+    )
+    assert answer == CiUnreadable("gh_unavailable")
+
+
 @pytest.mark.parametrize("read", ["ci_report", "branch_ci"])
 def test_a_failing_gh_or_unparsable_json_is_unreadable_as_unreadable_never_raised(read):
     ref = PR if read == "ci_report" else "master"
