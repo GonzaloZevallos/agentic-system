@@ -89,3 +89,17 @@ def test_the_first_red_run_of_a_name_supplies_the_link():
     )
     [added] = ci_findings(head, None, ("e2e",), [])
     assert added["evidence"] == "https://x/first-red"
+
+
+def test_a_longer_job_id_that_starts_with_the_head_link_does_not_hide_it():
+    head = report(run("e2e", "FAILURE", HEAD_LINK))
+    [kept, added] = ci_findings(head, None, ("e2e",), [quoted(HEAD_LINK + "0")])
+    assert added["severity"] == "blocking" and added["evidence"] == HEAD_LINK
+
+
+def test_a_base_branch_link_the_reviewer_quoted_is_not_repeated_in_the_observation():
+    head = report(run("e2e", "FAILURE", HEAD_LINK))
+    master = report(run("e2e", "FAILURE", MASTER_LINK))
+    [_, added] = ci_findings(head, master, ("e2e",), [quoted(MASTER_LINK)])
+    assert added["severity"] == "observation"
+    assert HEAD_LINK in added["evidence"] and MASTER_LINK not in added["evidence"]

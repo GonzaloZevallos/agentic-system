@@ -23,6 +23,15 @@ PR = "https://github.com/o/r/pull/7"
 HEAD_LINK = "https://github.com/o/r/actions/runs/1/job/10"
 MASTER_LINK = "https://github.com/o/r/actions/runs/2/job/20"
 SECTION = "Tech Lead: review api"
+HEAD = "a" * 40
+
+
+class FullIdWorkspace(MemoryWorkspace):
+    """Answers a full commit id as the head, as a real checkout does."""
+
+    def full_head(self, path):
+        return HEAD
+
 
 STATE = {
     "id": "GH-216",
@@ -60,8 +69,7 @@ def check(name, conclusion, link, status="COMPLETED"):
     return CiCheck(name=name, status=status, conclusion=conclusion, link=link)
 
 
-def report(*checks, sha="base"):
-    # "base" is what `MemoryWorkspace.full_head` answers for a path nobody moved.
+def report(*checks, sha=HEAD):
     return CiReport(
         head_sha=sha, base_ref="master", base_sha="b" * 40, opened_at=None, checks=tuple(checks)
     )
@@ -77,7 +85,9 @@ def setup(
         tracker.branch_reports["master"] = master
     runner = ScriptedRunner(tech_lead_review=[reviewed("approved")])
     state = {**STATE, "pull_request": PR}
-    ports = memory_ports(runner, tracker=tracker, stack=MemoryStack(ci=ci))
+    ports = memory_ports(
+        runner, tracker=tracker, stack=MemoryStack(ci=ci), workspace=FullIdWorkspace()
+    )
     return state, runner, tracker, ports
 
 
@@ -171,3 +181,15 @@ async def test_a_link_the_reviewer_already_quoted_is_not_recorded_twice():
     ports.runner.queues["tech_lead_review"] = [reviewed("returned", findings=[quoted])]
     patch = await run(state, ports)
     assert [row["location"] for row in patch["findings"]] == ["web/x.ts:3"]
+
+
+async def test_a_report_whose_head_is_only_a_prefix_of_the_head_is_not_counted():
+    # Invariant 2: CI counts only when the report's oid is a full id.
+    state, runner, tracker, ports = setup(
+        report(check("e2e", "FAILURE", HEAD_LINK), sha=HEAD[:12]), None
+    )
+    patch = await run(state, ports)
+    assert patch["subtasks"]["api"]["status"] == "approved"
+    assert patch["findings"] == []
+    assert tracker.ci_reads == [PR]
+    assert "not read" in runner.prompts("tech_lead_review")[0]

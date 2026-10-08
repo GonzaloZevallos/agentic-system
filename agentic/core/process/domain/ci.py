@@ -5,6 +5,7 @@ GraphQL enum values, never of stderr or prose. The adapters read; this decides."
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -99,6 +100,15 @@ def _reference(check: CiCheck) -> str:
     return check.link or f"{check.name}: {check.status}/{check.conclusion}"
 
 
+def _quoted(link: str | None, findings: list[dict[str, Any]]) -> bool:
+    """Whether a finding's evidence already holds `link` as a whole link: `.../job/100`
+    does not quote `.../job/10`."""
+    if not link:
+        return False
+    pattern = re.compile(re.escape(link) + r"(?![\w/-])")
+    return any(pattern.search(item.get("evidence", "")) for item in findings)
+
+
 def ci_findings(
     head: CiReport,
     master: CiReport | CiUnreadable | None,
@@ -117,7 +127,7 @@ def ci_findings(
         if red is None:
             continue
         evidence = _reference(red)
-        if red.link and any(red.link in item.get("evidence", "") for item in extended):
+        if _quoted(red.link, extended):
             continue
         red_on_master = None if on_master is None else _first_red(on_master, name)
         if red_on_master is not None:
@@ -125,7 +135,9 @@ def ci_findings(
                 f"the declared CI check `{name}` is also red on the base branch's latest "
                 "commit, so it is pre-existing"
             )
-            evidence = f"{evidence} (head), {_reference(red_on_master)} (base branch)"
+            # Never a second finding that quotes a run link another one already holds.
+            if not _quoted(red_on_master.link, extended):
+                evidence = f"{evidence} (head), {_reference(red_on_master)} (base branch)"
             severity = "observation"
         else:
             claim = f"the declared CI check `{name}` is red on the head under review"

@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..domain import ci
-from ..domain.rules import same_commit
+from ..domain.rules import full_commit_id, same_commit
 from ..domain.task import TaskState
 from .ports import Ports
 
@@ -52,6 +52,8 @@ def read_ci(state: TaskState, declared: tuple[str, ...], head: str, ports: Ports
     report = ports.tracker.ci_report(reference)
     if isinstance(report, ci.CiUnreadable):
         return _unread(f"`gh` could not be read ({report.cause})")
+    if not full_commit_id(report.head_sha):
+        return _unread("the report's commit is not a full id")
     if not same_commit(report.head_sha, head):
         return _unread("the pull request's head is not the head under review")
     master = ports.tracker.branch_ci(report.base_ref) if report.base_ref else None
