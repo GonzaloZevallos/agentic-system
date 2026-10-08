@@ -301,7 +301,7 @@ def test_a_doc_selects_no_walker_it_is_refused_as_unmapped():
 def test_a_test_that_loads_code_by_a_computed_name_joins_the_agentic_trigger():
     sources = {
         "agentic/x/y.py": "",
-        "tests/test_loader.py": "import importlib.util\nf(importlib.util.spec_from_file_location(a, b))\n",
+        "tests/test_loader.py": "import importlib.util as u\nu.spec_from_file_location(a, b)\n",
         "tests/test_plain.py": "",
     }
     assert _files(_select(["agentic/x/y.py"], sources)) == ("tests/test_loader.py",)
