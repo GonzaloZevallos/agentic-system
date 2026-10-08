@@ -37,6 +37,7 @@ from agentic.shared.configuration import LOGS_DIR, STATE_DIR, STATE_FILE
 from ...application.ports import Checkout, Upstream
 from ...application.ports import GitError as GitError  # re-exported: see ports.py
 from ...domain import rules
+from ...domain.ci import Containment
 from ...domain.task import DependencyState, MergeOutcome
 
 WORKTREES = Path(".agentic/worktrees")
@@ -278,6 +279,18 @@ class GitWorkspace:
                 f"git merge-base --is-ancestor {sha} {ref} failed: {result.stderr.strip()}"
             )
         return result.returncode == 0
+
+    def contains(self, head: str, master: str) -> Containment:
+        """See `Workspace.contains`: both shas are fetched first, and only `merge-base
+        --is-ancestor`'s own two exits mean something -- 0 is `yes`, 1 is `no`. Anything
+        else is `unknown`, which the caller counts as stale, never as fresh."""
+        try:
+            if not (self.fetch_commit(head) and self.fetch_commit(master)):
+                return "unknown"
+            result = self._run("merge-base", "--is-ancestor", master, head)
+        except (GitError, OSError, subprocess.SubprocessError):
+            return "unknown"
+        return {0: "yes", 1: "no"}.get(result.returncode, "unknown")
 
     def changed_paths(self, base: str, head: str) -> tuple[str, ...]:
         out = self._git("diff", "--name-only", f"{base}...{head}")
