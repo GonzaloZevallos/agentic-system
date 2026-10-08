@@ -117,3 +117,132 @@ def test_the_witness_line_shows_a_disagreement_too_beside_the_checks_commands():
 def test_no_witness_leaves_the_markdown_exactly_as_before():
     text = presubmit.checks_markdown("abc123", [result()])
     assert "witness" not in text.lower()
+
+
+PLAN = presubmit.AffectedPlan(
+    base="abc123",
+    commands={"tests": "pytest --picked={base}", "lint": "ruff check --since {base}"},
+    fallback=("pyproject.toml", "tests/conftest.py", "*.lock"),
+)
+NAMES = ["tests", "lint", "types"]
+
+
+def test_a_change_that_touches_no_fallback_runs_affected_only_where_a_form_exists():
+    modes = presubmit.check_modes(NAMES, PLAN, ["src/a.py"])
+    assert modes == {"tests": "affected-only", "lint": "affected-only", "types": "full"}
+
+
+def test_a_name_without_an_affected_form_stays_full_even_on_a_small_change():
+    assert presubmit.check_modes(["types"], PLAN, ["src/a.py"]) == {"types": "full"}
+
+
+def test_a_failed_changed_paths_lookup_runs_everything_full():
+    assert set(presubmit.check_modes(NAMES, PLAN, None).values()) == {"full"}
+
+
+def test_an_empty_change_set_runs_everything_full():
+    assert set(presubmit.check_modes(NAMES, PLAN, []).values()) == {"full"}
+
+
+def test_a_fallback_match_anywhere_in_the_change_forces_every_check_full():
+    modes = presubmit.check_modes(NAMES, PLAN, ["src/a.py", "pyproject.toml", "src/b.py"])
+    assert set(modes.values()) == {"full"}
+
+
+def test_the_stack_file_is_an_implicit_fallback_even_when_not_declared():
+    plan = presubmit.AffectedPlan(base="b", commands={"tests": "t {base}"}, fallback=())
+    assert presubmit.check_modes(["tests"], plan, [".agentic/stack.yaml"]) == {"tests": "full"}
+    assert presubmit.check_modes(["tests"], plan, ["src/a.py"]) == {"tests": "affected-only"}
+
+
+def test_a_star_crosses_slashes_so_a_broad_glob_falls_back_to_full():
+    modes = presubmit.check_modes(NAMES, PLAN, ["deep/nested/path/poetry.lock"])
+    assert set(modes.values()) == {"full"}
+
+
+def test_a_glob_is_case_sensitive_and_matches_the_whole_path():
+    modes = presubmit.check_modes(["tests"], PLAN, ["src/Pyproject.toml", "src/pyproject.toml.bak"])
+    assert modes == {"tests": "affected-only"}
+
+
+def test_the_base_is_substituted_by_replace_leaving_other_braces_intact():
+    command = "jest --changedSince={base} --json='{\"a\": {}}' {x}"
+    assert presubmit.affected_command(command, "abc") == (
+        "jest --changedSince=abc --json='{\"a\": {}}' {x}"
+    )
+
+
+def test_the_prefix_is_the_literal_text_before_the_base_token_right_stripped():
+    assert presubmit.affected_prefix("vitest run --changed {base} --reporter=dot") == (
+        "vitest run --changed"
+    )
+    assert presubmit.affected_prefix("pytest --base={base}") == "pytest --base="
+
+
+def test_a_red_affected_row_then_a_green_full_row_leaves_a_passing_final_row():
+    rows = [
+        result("tests", "pytest -k x", False, "boom"),
+        result("lint"),
+        result("tests", "pytest", True),
+    ]
+    final = presubmit.final_results(rows)
+    assert [r["name"] for r in final] == ["tests", "lint"]
+    assert final[0]["passed"] is True and final[0]["command"] == "pytest"
+    assert presubmit.refusal(True, True, final) is None
+
+
+def test_a_green_affected_row_then_a_red_full_row_leaves_a_failing_final_row():
+    rows = [result("tests", "a", True), result("tests", "b", False, "boom")]
+    final = presubmit.final_results(rows)
+    assert presubmit.refusal(True, True, final) is not None
+
+
+def test_final_results_keeps_first_seen_order_whatever_the_rerun_order():
+    rows = [result("a"), result("b"), result("c"), result("b", "again"), result("a", "again")]
+    final = presubmit.final_results(rows)
+    assert [(r["name"], r["command"]) for r in final] == [
+        ("a", "again"),
+        ("b", "again"),
+        ("c", "pytest"),
+    ]
+
+
+def test_durations_are_summed_per_name_and_a_row_without_one_counts_zero():
+    rows = [
+        {**result("tests"), "duration_s": 1.5},
+        {**result("lint"), "duration_s": 2.0},
+        {**result("tests"), "duration_s": 4.0},
+        result("types"),
+    ]
+    assert presubmit.check_durations(rows) == {"tests": 5.5, "lint": 2.0, "types": 0.0}
+
+
+def test_the_markdown_shows_every_row_with_a_mode_column_and_the_system_line():
+    rows = [
+        {**result("tests", "pytest -k x", False, "boom"), "mode": "affected-only"},
+        {**result("tests", "pytest"), "mode": "full"},
+    ]
+    text = presubmit.checks_markdown("abc123", rows, base="b4s3")
+    assert "| Check | Command | Mode | Result |" in text
+    assert "| `tests` | `pytest -k x` | affected-only | **failed** |" in text
+    assert "| `tests` | `pytest` | full | passed |" in text
+    assert "`b4s3`" in text and "task_base..head" in text and "ADR-0045" in text
+    assert "boom" in text
+
+
+def test_the_markdown_without_any_mode_has_neither_column_nor_line():
+    text = presubmit.checks_markdown("abc123", [result()], base="b4s3")
+    assert "Mode" not in text and "task_base" not in text and "b4s3" not in text
+    assert text == presubmit.checks_markdown("abc123", [result()])
+
+
+def test_describe_checks_with_a_plan_lists_the_substituted_form_beside_the_full_one():
+    checks = {"tests": "pytest", "lint": "ruff check .", "types": "mypy"}
+    text = presubmit.describe_checks(checks, affected=PLAN)
+    assert "- `tests`: `pytest`" in text and "pytest --picked=abc123" in text
+    assert "ruff check --since abc123" in text and "{base}" not in text
+    assert "- `types`: `mypy`" in text
+    assert "not evidence for the whole suite" in text
+    plain = presubmit.describe_checks(checks)
+    assert plain == presubmit.describe_checks(checks, affected=None)
+    assert "affected" not in plain

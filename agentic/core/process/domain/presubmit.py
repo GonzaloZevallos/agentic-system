@@ -13,11 +13,19 @@ from __future__ import annotations
 
 import posixpath
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from fnmatch import fnmatchcase
 from pathlib import Path
-from typing import NotRequired, TypedDict
+from typing import Literal, NotRequired, TypedDict
+
+Mode = Literal["affected-only", "full"]
 
 REFUSALS = 2
 TAIL_LINES = 30
+# The stack file always forces the full form (ADR-0046): a change to what the checks are
+# can never be measured by the selection that file declares.
+STACK_FILE = ".agentic/stack.yaml"
+BASE_TOKEN = "{base}"
 # The checkout witness's own budget (glossary: Testigo del checkout), separate from
 # `REFUSALS`: a misdeclared witness must never spend the budget the checks need.
 WITNESS_REFUSALS = 1
@@ -62,6 +70,19 @@ class CheckResult(TypedDict):
     # How long the command took, for `agentic.presubmit.duration`. Absent on a result
     # built before this field existed (none are, today: nothing persists a `CheckResult`).
     duration_s: NotRequired[float]
+    # Which form ran, set by the system under an `AffectedPlan` and never by the model;
+    # absent when the product declares no affected form.
+    mode: NotRequired[Mode]
+
+
+@dataclass(frozen=True)
+class AffectedPlan:
+    """The affected-only forms a product declares, with the base they are measured
+    against. `base` arrives computed (`task_base`); this domain never derives it."""
+
+    base: str
+    commands: Mapping[str, str]
+    fallback: tuple[str, ...]
 
 
 class WitnessResult(TypedDict):
@@ -88,6 +109,50 @@ def refusal(moved: bool, clean: bool, results: Sequence[CheckResult]) -> str | N
     for r in failed:
         parts.append(f"`{r['name']}` failed: `{r['command']}`\n\n```text\n{tail(r['output'])}\n```")
     return "\n\n".join(parts)
+
+
+def affected_command(command: str, base: str) -> str:
+    """The affected form with the base in it. `replace`, never `format`: a command is
+    shell text and may carry braces of its own."""
+    return command.replace(BASE_TOKEN, base)
+
+
+def affected_prefix(command: str) -> str:
+    """The literal text before the base token, for the reviewer's `Bash(prefix:*)` rule."""
+    return command.split(BASE_TOKEN, 1)[0].rstrip()
+
+
+def check_modes(
+    names: Sequence[str], plan: AffectedPlan, changed_paths: Sequence[str] | None
+) -> dict[str, Mode]:
+    """Which form each check runs. Everything runs full when the changed paths are unknown
+    (`None`, the lookup failed) or empty, or when any path matches a fallback glob or the
+    stack file; a check with no affected form always runs full. Globs match the whole
+    POSIX path, so `*` crosses `/`: that errs toward running full."""
+    everything_full = not changed_paths or any(
+        fnmatchcase(path, glob) for path in changed_paths for glob in (*plan.fallback, STACK_FILE)
+    )
+    return {
+        name: "affected-only" if name in plan.commands and not everything_full else "full"
+        for name in names
+    }
+
+
+def final_results(rows: Sequence[CheckResult]) -> list[CheckResult]:
+    """The last row per check name, in first-seen order: a check that ran twice (affected
+    then full) is decided by its later row. The only reader that decides passed or failed."""
+    last: dict[str, CheckResult] = {}
+    for row in rows:
+        last[row["name"]] = row
+    return list(last.values())
+
+
+def check_durations(rows: Sequence[CheckResult]) -> dict[str, float]:
+    """Seconds spent per check name, summed over its rows; a row without one counts zero."""
+    totals: dict[str, float] = {}
+    for row in rows:
+        totals[row["name"]] = totals.get(row["name"], 0.0) + row.get("duration_s", 0.0)
+    return totals
 
 
 def refused(reason: str, count: int) -> str:
@@ -153,23 +218,46 @@ def tail(output: str, lines: int = TAIL_LINES) -> str:
 
 
 def checks_markdown(
-    head: str, results: Sequence[CheckResult], witness: WitnessResult | None = None
+    head: str,
+    results: Sequence[CheckResult],
+    witness: WitnessResult | None = None,
+    *,
+    base: str | None = None,
 ) -> str:
     """The checks as the Developer's section opens with them: written by the system, so
     the reviewer reads what ran, not what the Developer says ran (ADR-0016, addendum).
+    Every row shows, a superseded one too.
 
     `witness`, when a checkout witness ran, gets its own line in this same block,
     printing the declared command verbatim beside the checks' own commands, agreed or
     not (glossary: Testigo del checkout) -- never a table row, so it is never read as a
-    fourth check: it carries no `agentic.presubmit.checks` label of its own."""
-    rows = [
-        f"| `{r['name']}` | `{r['command']}` | {'passed' if r['passed'] else '**failed**'} |"
-        for r in results
-    ]
+    fourth check: it carries no `agentic.presubmit.checks` label of its own.
+
+    A mode column and one line on what `affected-only` means appear only when some row
+    carries a `mode`; `base` names what that selection was measured against."""
+    moded = any("mode" in r for r in results)
+    if moded:
+        header = "| Check | Command | Mode | Result |\n|---|---|---|---|\n"
+    else:
+        header = "| Check | Command | Result |\n|---|---|---|\n"
+    rows = []
+    for r in results:
+        outcome = "passed" if r["passed"] else "**failed**"
+        cells = [f"`{r['name']}`", f"`{r['command']}`"]
+        if moded:
+            cells.append(r.get("mode", "-"))
+        rows.append("| " + " | ".join([*cells, outcome]) + " |")
     parts = [
         f"### Checks\n\nRun by the system on `{head}` when the Developer delivered.",
-        "| Check | Command | Result |\n|---|---|---|\n" + "\n".join(rows),
+        header + "\n".join(rows),
     ]
+    if moded:
+        against = f"`{base}`" if base else "the task base"
+        parts.append(
+            f"`affected-only` rows ran the tests selected against {against} (the whole "
+            "branch, `task_base..head`, not the increment under review); the full suite "
+            "runs at merge (ADR-0045)."
+        )
     if witness is not None:
         verdict = "agreed" if witness["passed"] else "**disagreed**"
         parts.append(
@@ -182,6 +270,21 @@ def checks_markdown(
     return "\n\n".join(parts)
 
 
-def describe_checks(checks: Mapping[str, str]) -> str:
-    """The declared checks as a prompt lists them."""
-    return "\n".join(f"- `{name}`: `{command}`" for name, command in checks.items())
+def describe_checks(checks: Mapping[str, str], *, affected: AffectedPlan | None = None) -> str:
+    """The declared checks as a prompt lists them. With an `affected` plan, each check
+    that has an affected form also lists it, the base already in it, and the text says
+    such a row is not evidence for the whole suite."""
+    if affected is None:
+        return "\n".join(f"- `{name}`: `{command}`" for name, command in checks.items())
+    lines: list[str] = []
+    for name, command in checks.items():
+        lines.append(f"- `{name}`: `{command}`")
+        if name in affected.commands:
+            form = affected_command(affected.commands[name], affected.base)
+            lines.append(f"  - affected-only form: `{form}`")
+    lines.append(
+        f"An `affected-only` row selected against `{affected.base}` (the whole branch, "
+        "`task_base..head`, not the increment under review) is not evidence for the whole "
+        "suite; the full suite runs at merge (ADR-0045)."
+    )
+    return "\n".join(lines)
