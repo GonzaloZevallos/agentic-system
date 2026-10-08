@@ -64,3 +64,11 @@ checks:
 #                                                      # prints its address and user
 #   compare: npm run compare                          # optional: renders this task's
 #                                                      # comparisons, prints the paths
+#
+# `ci`: optional. The exact check-run names of the product's GitHub CI that gate a merge
+# (ADR-0045). With it, `agentic merge` decides from those checks on the reviewed head and
+# reruns nothing locally unless master moved since the run. A name is matched whole, never
+# by prefix: write it as GitHub reports it. Never list a conditional job, which a skipped
+# run reads as red; list a matrix job by each of its expanded names, `name (value)`.
+#
+# ci: [check]

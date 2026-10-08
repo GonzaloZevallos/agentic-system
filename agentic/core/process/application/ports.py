@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
+from ..domain.ci import CiReport, CiUnreadable, Containment
 from ..domain.design import Design
 from ..domain.playbook import Playbook
 from ..domain.roles import Role
@@ -360,6 +361,13 @@ class ProductStack(Protocol):
         `setup`'s absence already has."""
         ...
 
+    def ci(self, revision: str) -> tuple[str, ...]:
+        """The check-run names the product declares as its GitHub CI merge gate
+        (`core.knowledge`, GH-216, ADR-0045), as the commit `revision` declares them.
+        Opt-in: empty when the key is absent, which is the local-check path of today
+        byte for byte. Raises `ValueError` when the key is malformed."""
+        ...
+
     def product(self, revision: str = "HEAD") -> str:
         """The name the product goes by, the label every span and metric of a run over it
         carries (issue #47)."""
@@ -664,6 +672,13 @@ class Workspace(Protocol):
         not, there or not. Never raises for one that is absent."""
         ...
 
+    def contains(self, head: str, master: str) -> Containment:
+        """Whether the commit `head` has the commit `master` among its ancestors (GH-216),
+        after fetching both shas: `yes` or `no`, and `unknown` for anything that could not
+        be read -- a sha that cannot be fetched, a git failure, a missing git. Never
+        raises, and `unknown` is never `yes`: the caller counts it as stale."""
+        ...
+
     def upstream(self) -> Upstream:
         """The fetched upstream of the checkout's current branch (GH-180). Never returns
         None and never raises for a git failure or a missing git: every failure is an
@@ -780,6 +795,20 @@ class Tracker(Protocol):
         with `--fresh` has two pull requests with only the document knowing which is
         this run's. Its own `.state` is the pull request's state -- no separate
         `pull_request_state` verb exists, since this already answers it."""
+        ...
+
+    def ci_report(self, reference: str) -> CiReport | CiUnreadable:
+        """The CI of a task's own pull request (GH-216): `reference` is the URL `deliver`
+        stored in the document, explicit like `pull_request`'s. The head oid, its checks
+        (check runs and commit statuses), the base ref and the creation time come from one
+        query, so the checks always belong to the head the report names. Never raises:
+        what cannot be read is a `CiUnreadable` with its cause class."""
+        ...
+
+    def branch_ci(self, branch: str) -> CiReport | CiUnreadable:
+        """The CI of the latest commit of `branch` (GH-216), the master side of a red
+        check's comparison. `base_ref`, `base_sha` and `opened_at` are None. Never raises:
+        what cannot be read is a `CiUnreadable`."""
         ...
 
     def queue(self) -> list[int]:

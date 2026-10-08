@@ -106,6 +106,9 @@ la del revisor son intermedias; la completa es la última, y es la que decide el
 diagnóstico de bugs (`diagnoser_for`, `diagnose.py`) también se queda en los chequeos
 completos.
 
+Un producto que declara `ci` (ADR-0045, adenda GH-216) mergea sobre su CI verde y fresco sin
+correr chequeos locales: ahí la corrida completa es la del CI, que debe correr la suite entera.
+
 ## El revisor
 
 `describe_checks` gana una descripción affected opcional: cada comando affected con el base

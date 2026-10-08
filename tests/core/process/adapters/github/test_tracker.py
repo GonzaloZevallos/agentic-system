@@ -10,6 +10,7 @@ from agentic.core.process.adapters.github import GhTracker
 from agentic.core.process.adapters.github.tracker import issue_number
 from agentic.core.process.application.ports import MergeCallFailed
 from agentic.core.process.domain import rules
+from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
 
 
@@ -665,4 +666,179 @@ def test_pull_requests_on_just_under_the_limit_is_returned_whole():
     assert (
         len(GhTracker(Path("/p"), Recorder(stdout=_rows(*["OPEN"] * 49))).pull_requests_on("b"))
         == 49
+    )
+
+
+# -- GH-216: the CI of a pull request and of a branch, read in one GraphQL query ---------
+
+
+def _graphql(nodes, *, oid="a" * 40, rollup=True, more=False, created="2026-10-07T10:00:00Z"):
+    contexts = {"nodes": nodes, "pageInfo": {"hasNextPage": more}}
+    commit = {"oid": oid, "statusCheckRollup": {"contexts": contexts} if rollup else None}
+    pull_request = {
+        "createdAt": created,
+        "baseRefName": "master",
+        "headRefOid": oid,
+        "commits": {"nodes": [{"commit": commit}]},
+    }
+    return json.dumps({"data": {"repository": {"pullRequest": pull_request}}})
+
+
+def _branch_graphql(nodes, *, oid="b" * 40):
+    contexts = {"nodes": nodes, "pageInfo": {"hasNextPage": False}}
+    target = {"oid": oid, "statusCheckRollup": {"contexts": {**contexts}}}
+    return json.dumps({"data": {"repository": {"ref": {"target": target}}}})
+
+
+def _run_node(name, status, conclusion, url="https://github.com/o/r/actions/runs/1/job/2"):
+    return {
+        "__typename": "CheckRun",
+        "name": name,
+        "status": status,
+        "conclusion": conclusion,
+        "detailsUrl": url,
+    }
+
+
+PR = "https://github.com/o/r/pull/7"
+
+
+def test_ci_report_reads_the_head_and_its_checks_from_one_query_in_the_product_checkout():
+    nodes = [
+        _run_node("check", "COMPLETED", "SUCCESS"),
+        _run_node("e2e", "IN_PROGRESS", None, url=None),
+        {
+            "__typename": "StatusContext",
+            "context": "ci/legacy",
+            "state": "FAILURE",
+            "targetUrl": "u",
+        },
+        {
+            "__typename": "StatusContext",
+            "context": "ci/wait",
+            "state": "PENDING",
+            "targetUrl": None,
+        },
+    ]
+    run = Recorder(stdout=_graphql(nodes, oid="c" * 40))
+    report = GhTracker(Path("/p"), run).ci_report(PR)
+    assert report == CiReport(
+        head_sha="c" * 40,
+        base_ref="master",
+        base_sha=None,
+        opened_at="2026-10-07T10:00:00Z",
+        checks=(
+            CiCheck("check", "COMPLETED", "SUCCESS", "https://github.com/o/r/actions/runs/1/job/2"),
+            CiCheck("e2e", "IN_PROGRESS", None, ""),
+            CiCheck("ci/legacy", "COMPLETED", "FAILURE", "u"),
+            CiCheck("ci/wait", "PENDING", "PENDING", ""),
+        ),
+    )
+    [call] = run.calls
+    assert call[:3] == ["gh", "api", "graphql"] and "number=7" in call
+    assert any("statusCheckRollup" in arg for arg in call)
+
+
+def test_ci_report_keeps_a_red_run_as_the_raw_enums_it_was_reported_with():
+    run = Recorder(stdout=_graphql([_run_node("web", "COMPLETED", "TIMED_OUT")]))
+    report = GhTracker(Path("/p"), run).ci_report(PR)
+    assert isinstance(report, CiReport)
+    assert (report.checks[0].status, report.checks[0].conclusion) == ("COMPLETED", "TIMED_OUT")
+
+
+def test_ci_report_of_a_head_with_no_checks_at_all_is_a_readable_empty_report():
+    report = GhTracker(Path("/p"), Recorder(stdout=_graphql([], rollup=False))).ci_report(PR)
+    assert isinstance(report, CiReport) and report.checks == ()
+
+
+class Missing(Recorder):
+    def __call__(self, args, cwd, capture_output, text, check):
+        self.calls.append(args)
+        raise FileNotFoundError("gh")
+
+
+@pytest.mark.parametrize("read", ["ci_report", "branch_ci"])
+def test_a_missing_gh_is_unreadable_as_unavailable_never_raised(read):
+    answer = getattr(GhTracker(Path("/p"), Missing()), read)(PR if read == "ci_report" else "x")
+    assert answer == CiUnreadable("gh_unavailable")
+
+
+class NotExecutable(Recorder):
+    def __call__(self, args, cwd, capture_output, text, check):
+        self.calls.append(args)
+        raise PermissionError("gh")
+
+
+@pytest.mark.parametrize("read", ["ci_report", "branch_ci"])
+def test_a_gh_that_cannot_be_run_is_unreadable_as_unavailable_never_raised(read):
+    answer = getattr(GhTracker(Path("/p"), NotExecutable()), read)(
+        PR if read == "ci_report" else "x"
+    )
+    assert answer == CiUnreadable("gh_unavailable")
+
+
+@pytest.mark.parametrize("read", ["ci_report", "branch_ci"])
+def test_a_failing_gh_or_unparsable_json_is_unreadable_as_unreadable_never_raised(read):
+    ref = PR if read == "ci_report" else "master"
+    assert getattr(GhTracker(Path("/p"), Recorder(fail=True)), read)(ref) == CiUnreadable(
+        "gh_unreadable"
+    )
+    assert getattr(GhTracker(Path("/p"), Recorder(stdout="not json")), read)(ref) == CiUnreadable(
+        "gh_unreadable"
+    )
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        json.dumps({"data": {"repository": {"pullRequest": None}}}),
+        json.dumps({"data": None}),
+        json.dumps([]),
+        json.dumps({"data": {"repository": {"pullRequest": {"createdAt": "t"}}}}),
+        _graphql([{"__typename": "CheckRun", "status": "COMPLETED"}]),
+        _graphql([_run_node("check", "COMPLETED", "SUCCESS")], more=True),
+        _graphql([_run_node("check", "COMPLETED", "SUCCESS")], oid=""),
+    ],
+    ids=["no-pr", "null-data", "list", "missing-field", "run-without-name", "truncated", "no-oid"],
+)
+def test_ci_report_never_reads_what_it_cannot_whole_as_a_report(stdout):
+    assert GhTracker(Path("/p"), Recorder(stdout=stdout)).ci_report(PR) == CiUnreadable(
+        "gh_unreadable"
+    )
+
+
+def test_ci_report_with_a_bad_reference_reaches_no_gh_call():
+    run = Recorder(stdout=_graphql([]))
+    assert GhTracker(Path("/p"), run).ci_report("not-a-url") == CiUnreadable("gh_unreadable")
+    assert run.calls == []
+
+
+def test_ci_report_never_asks_where_the_base_was_because_actions_do_not_say():
+    """The base_sha gate (GH-216) failed: `pull_requests` is `[]` on every run of this
+    repo's CI, so no `actions/runs` read is made and `base_sha` stays None."""
+    run = Recorder(stdout=_graphql([_run_node("check", "COMPLETED", "SUCCESS")]))
+    GhTracker(Path("/p"), run).ci_report(PR)
+    assert len(run.calls) == 1
+
+
+def test_branch_ci_reads_the_latest_commit_of_a_branch_with_no_pull_request_facts():
+    run = Recorder(stdout=_branch_graphql([_run_node("check", "COMPLETED", "FAILURE")]))
+    report = GhTracker(Path("/p"), run).branch_ci("master")
+    assert report == CiReport(
+        head_sha="b" * 40,
+        base_ref=None,
+        base_sha=None,
+        opened_at=None,
+        checks=(
+            CiCheck("check", "COMPLETED", "FAILURE", "https://github.com/o/r/actions/runs/1/job/2"),
+        ),
+    )
+    [call] = run.calls
+    assert "ref=refs/heads/master" in call
+
+
+def test_branch_ci_of_a_branch_that_does_not_exist_is_unreadable():
+    stdout = json.dumps({"data": {"repository": {"ref": None}}})
+    assert GhTracker(Path("/p"), Recorder(stdout=stdout)).branch_ci("gone") == CiUnreadable(
+        "gh_unreadable"
     )

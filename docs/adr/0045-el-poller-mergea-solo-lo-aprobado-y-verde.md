@@ -495,6 +495,10 @@ cambia: `auto_merge_decision` y `MergeRefusal` siguen leyendo solo `passed`.
 - **§7.** No se agrega ni se mueve ninguna métrica, etiqueta ni atributo de span; las claves
   nuevas del documento son `merge_checks.checks` y `merge_checks.failed_step`, solo agregadas.
   `prompts.fingerprint` no cambia.
+- **Con ADR-0046.** El merge sigue sin correr nunca una forma affected-only: un CI verde y fresco
+  ocupa el lugar de la corrida completa del merge, así que el producto que declara `ci` y
+  `affected_checks` debe correr la suite completa en ese CI. El camino local (sin `ci`, o con el
+  CI verde pero viejo) corre las formas completas como dice ADR-0046.
 - **§8.** Se ensancha: la salida de los checks y del `setup` del propio producto, limpia y
   acotada, llega al comentario del issue y al frontmatter. Quienes la ven son quienes ya leen el
   documento de tarea, donde `checks_markdown` ya copia los tails rojos. Costo: a lo sumo
@@ -503,3 +507,91 @@ cambia: `auto_merge_decision` y `MergeRefusal` siguen leyendo solo `passed`.
   publica. La salida de instalación ahora puede aparecer en un comentario. Unos 14 KB de
   frontmatter se parsean por ronda en una tarea roja. Un head cuyo último comentario vino del
   código anterior recibe un comentario más. Un flake queda nombrado, no reintentado.
+
+## Adenda (2026-10-07): un producto que declara su CI lo usa como puerta de merge (GH-216)
+
+Un producto con CI de GitHub en cada pull request ya corría ese CI antes de que el sistema
+llegara al merge, y el sistema lo ignoraba: repetía todos los checks en la máquina compartida.
+El resultado fueron dos casos del 2026-10-07: un PR aprobado con el CI rojo (apostrophe#146) y un
+PR con el CI verde que la puerta local rechazó por carga (apostrophe#147). Esta adenda cambia la
+puerta solo para el producto que lo pide.
+
+- **Opt-in, sin detección.** `.agentic/stack.yaml` gana la clave `ci`: la lista de nombres exactos
+  de check-run que gobiernan el merge (lista no vacía de textos no vacíos, sin duplicados; una
+  clave mal formada es un `ValueError` que nombra la clave y la fuente). Se lee en la base de la
+  tarea, como `checks` (ADR-0016, ADR-0044). Sin la clave el producto sigue el camino local de
+  esta ADR sin ningún cambio, y no hay un fallback por detección de "no hay checks": un CI que no
+  reporta nada sería leído como verde por quien no lo declaró. Un job condicional o una matriz se
+  declaran con los nombres que GitHub reporta (`check (3.12)`, nunca `check`); `SKIPPED` cuenta
+  como rojo, así que un job condicional no se declara.
+- **Un solo veredicto.** `ci.ci_state` (dominio) es el único lugar donde el CI se clasifica
+  verde, rojo o pendiente, desde los valores enum crudos de GraphQL; nada lee stderr ni prosa. El
+  nombre se compara exacto, nunca por prefijo. Un nombre declarado que nunca se reporta es
+  pendiente y queda en `missing`. Un valor desconocido es rojo, nunca verde.
+- **El head debe ser el revisado.** El reporte se lee en una sola consulta GraphQL junto con su
+  oid de commit; cuenta solo si ese oid es completo y `same_commit` con el head del PR y con el
+  head revisado. Otro head es `wait`, nunca verde. Un reporte ilegible (`CiUnreadable`, causa
+  `gh_unavailable` o `gh_unreadable`) es distinto de un reporte legible al que le falta un check.
+- **`wait`, una decisión nueva.** `auto_merge_decision` gana el tipo `wait` y las razones
+  `ci_failed`, `ci_missing` y `ci_unreadable`. El CI pendiente, un head distinto y un reporte
+  ilegible esperan: el verbo sale sin escribir el documento, sin comentar y sin mover
+  `merge_attempts` ni `merge_failures`, y la siguiente ronda lo reintenta. La espera tiene un tope
+  declarado (`CI_WAIT_MAX_S = 3600`, un valor declarado, no medido), medido desde `pushed_at`
+  (solo si `pushed_head` es el head del PR) o desde el `createdAt` del PR; nunca desde la fecha de
+  un commit. Pasado el tope, un pendiente se rechaza como `ci_missing` y un ilegible como
+  `ci_unreadable`. El CI rojo se rechaza como `ci_failed`, con una línea por check (nombre,
+  conclusión, enlace) y sin tails. `ci_missing` nombra los checks declarados que nunca se
+  reportaron; `ci_unreadable` nombra `gh` y la clase de causa, nunca un check del producto. El
+  dedupe de GH-212 aplica sin cambios.
+- **Frescura: se vuelve a los checks locales, no se reejecuta el CI.** El CI corre sobre el PR
+  mergeado con su base; si master se movió desde entonces el resultado puede no valer. Se eligió
+  no reejecutar el CI (`gh run rerun`) ni empujar un commit vacío: ambos mueven o repiten un head
+  que el Tech Lead ya revisó. El CI verde cuenta como fresco solo si la base con la que corrió es
+  el master actual, o si `Workspace.contains` responde `yes` (el head contiene a master, tras
+  traer ambos shas). Un `contains` que no se puede leer cuenta como viejo, nunca como fresco.
+  Verde y fresco: `agentic merge` no crea worktree, no corre `setup` ni checks, y mergea. Verde y
+  viejo: sigue el camino local de esta ADR, sin cambios, y un check local rojo es `checks_failed`
+  con los nombres, para el humano.
+- **La puerta de `base_sha` falló.** Saber la base del CI exigía `pull_requests[0].base.sha` de
+  las corridas de Actions; en este repositorio `pull_requests` viene vacío en cada corrida, así
+  que `base_sha` queda siempre `None` y la frescura sale solo de `contains`. El poller nunca llama
+  a git: lee con `ci_fresh=None` y solo decide si lanzar el verbo. Consecuencia: un head que no
+  contiene a master cae al camino local, y el timeout por carga de apostrophe#147 puede repetirse
+  en ese camino más angosto.
+- **Claves del documento.** `auto_merge_via` (`ci` o `local`) se escribe solo si el producto
+  declara `ci`; una clave ausente se lee como `local`. `auto_merge_ci` lista `{name, link}` de las
+  corridas en que se apoyó y se escribe en el mismo `record_closure` que la intención; un merge por
+  CI no escribe `merge_checks`. El comentario `Auto-merged:` nombra los enlaces. `deliver` guarda
+  `pushed_head` y `pushed_at` en el documento del checkout del producto, sin hacer ningún commit
+  después del push. Todas son claves nuevas, solo agregadas y leídas con `.get`.
+- **El poller.** Ante un `wait` agrega una línea
+  `auto-merge #N -> waiting: ci <pending|missing|unreadable> <nombres o causa> (<n>s of 3600)`,
+  con `?` si no hay ancla; no imprime la línea de rechazo antes del tope. Lanza el verbo solo para
+  `merge` o `run_checks`.
+- **Lado de la revisión.** Si la base de la tarea declara `ci`, el Tech Lead recibe una sección
+  `### CI` escrita por el sistema, con cada check declarado en el head revisado (estado y enlace)
+  y el mismo check en el último commit de la rama base. Un check declarado rojo en el head lo
+  registra el código, no el revisor: un hallazgo `blocking` (`process-suite-red`, ubicación
+  `CI: <nombre>`, con el enlace de la corrida como evidencia), o una `observation` con ambos
+  enlaces si el mismo check también está rojo en la rama base (ya era un rojo previo). No se
+  duplica un enlace que ya aparece en la evidencia de otro hallazgo de la misma salida, y el
+  veredicto se deriva de los hallazgos como siempre, así que una aprobación sobre un CI rojo sale
+  `returned`. Los dos prompts de revisión ganan una línea que lo dice, por lo que
+  `prompts.fingerprint` cambia para `tech_lead_review` y `tech_lead_review_light`.
+- **Límite conocido de la revisión.** `deliver` empuja y abre el PR después de la revisión de
+  integración, así que en una corrida nueva la revisión suele no tener CI que leer; la guarda de
+  revisión solo dispara al reanudar o revisar de nuevo un head ya empujado. La guarda que siempre
+  aplica es la puerta de merge. Mover el push antes de la revisión de integración queda como
+  issue de seguimiento.
+- **§7.** No se agrega, mueve ni renombra ninguna métrica, etiqueta ni atributo de span. Las
+  claves nuevas del documento son las de arriba. Hace falta un `bl-*` nuevo al mergear por el
+  `prompts.fingerprint` movido.
+- **§8.** Se ensancha: el sistema lee check-runs, estados y corridas de workflow por `gh` con las
+  credenciales del usuario; no escribe nada nuevo en GitHub. Costo: una llamada GraphQL por
+  candidato por ronda del poller, una por pasada de revisión y una llamada `gh api` en el verbo,
+  solo para productos que declaran `ci`; crece con los candidatos abiertos, no con el tamaño de los
+  datos. La carga local baja: los checks locales corren solo cuando el CI es verde pero viejo.
+- **Riesgos conocidos.** Un `gh` ausente o ilegible espera hasta el tope y luego se rechaza. La
+  declaración rige desde la tarea posterior al merge, porque el stack se lee en la base. Si
+  `deliver` muere entre el push y `finish`, el reloj cae al `createdAt` del PR. El dedupe de
+  enlaces depende de que el revisor no cite uno literalmente.

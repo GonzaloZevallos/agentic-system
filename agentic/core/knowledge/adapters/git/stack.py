@@ -32,6 +32,10 @@ class GitStack:
         data, source = self._declaration(revision)
         return stack.parallel_checks(data, source)
 
+    def ci(self, revision: str) -> tuple[str, ...]:
+        data, source = self._declaration(revision)
+        return stack.ci(data, source)
+
     def affected_checks(self, revision: str) -> dict[str, str]:
         data, source = self._declaration(revision)
         return stack.affected_checks(data, source)

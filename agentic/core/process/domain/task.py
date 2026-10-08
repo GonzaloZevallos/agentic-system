@@ -624,6 +624,10 @@ class TaskState(TaskInput, total=False):
     # (GH-204): saved before the push so it stays recoverable, cleared by every plan that
     # does not replace (`rules.replace_record`).
     replaced_remote_tip: str | None
+    # The full sha `deliver` pushed and when (GH-216): the anchor of the CI wait, read with
+    # `.get`, written only to the product checkout's document and only by a delivery.
+    pushed_head: str
+    pushed_at: str
     # What an interviewee could not decide (ADR-0014); escalates with the task.
     questions_for_human: list[str]
     # What the ephemeral interviewer proposed for the deliverable that follows

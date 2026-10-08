@@ -70,6 +70,7 @@ def declared_stack(ports: Ports, revision: str = "HEAD") -> dict[str, str]:
     ports.stack.affected_fallback(revision)
     ports.stack.forbidden(revision)
     ports.stack.design(revision)
+    ports.stack.ci(revision)
     return ports.stack.setup(revision)
 
 

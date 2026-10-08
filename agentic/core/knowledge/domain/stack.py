@@ -67,6 +67,7 @@ KEYS = (
     "affected_fallback",
     "forbidden",
     "design",
+    "ci",
 )
 # The token an affected-only command carries where the task's base sha goes (ADR-0046).
 BASE_TOKEN = "{base}"
@@ -156,6 +157,30 @@ def parallel_checks(data: object, source: object) -> bool:
     if not isinstance(value, bool):
         raise ValueError(f"{source}: expected `parallel_checks` to be true or false, a boolean")
     return value
+
+
+def ci(data: object, source: object) -> tuple[str, ...]:
+    """The check-run names that gate a merge when the product trusts its GitHub CI
+    (ADR-0045, GH-216 amendment), in the file's order.
+
+    Opt-in: a key absent is `()`, a product that keeps the local merge gate as it is.
+    Present, it is a non-empty list of distinct non-empty strings: a declared name that
+    can never match, or that matches twice, is a gate that quietly waits forever or counts
+    one run twice, so every shape that is not that fails at load, naming the key."""
+    declared = _declared(data, source)
+    if "ci" not in declared:
+        return ()
+    found = declared["ci"]
+    if not isinstance(found, list) or not found:
+        raise ValueError(f"{source}: expected `ci`, a non-empty list of check-run names")
+    names: list[str] = []
+    for item in found:
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError(f"{source}: expected non-empty check-run names under `ci`")
+        names.append(item.strip())
+    if len(set(names)) != len(names):
+        raise ValueError(f"{source}: `ci` declares the same check-run name twice")
+    return tuple(names)
 
 
 def affected_checks(data: object, source: object) -> dict[str, str]:

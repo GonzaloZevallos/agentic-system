@@ -2,6 +2,8 @@
 "Observations on the design" section (ADR-0040): present only when at least one
 `observation` design item exists, absent otherwise, byte for byte as today."""
 
+from datetime import datetime
+
 import pytest
 
 from agentic.core.process.application.deliver import deliver
@@ -440,3 +442,30 @@ async def test_a_bounded_body_keeps_the_note_and_commits_the_document_with_the_s
     assert ports.workspace.events == ["commit_paths", "push"]
     assert ports.documents.saved[0]["replaced_remote_tip"] == OLD
     assert ports.workspace.leases == [OLD]
+
+
+async def test_the_pushed_head_and_time_are_saved_and_nothing_is_committed_after_the_push(cfg):
+    ports = memory_ports()
+    ports.workspace.moved.add(ports.workspace.ROOT / "GH-12")
+    state = _big_state()  # a body that commits the document before the push
+
+    patch = await deliver(state, cfg, ports)
+
+    assert ports.workspace.events == ["commit_paths", "push"]  # no commit after the push
+    assert ports.workspace.commits == []
+    # The first look at the task checkout after the last commit, taken before the push.
+    assert patch["pushed_head"] == "head1"
+    assert datetime.fromisoformat(patch["pushed_at"]).tzinfo is not None
+    saved = ports.documents.load("GH-12") or {}
+    assert (saved["pushed_head"], saved["pushed_at"]) == (patch["pushed_head"], patch["pushed_at"])
+
+
+async def test_a_failed_push_saves_neither_key(cfg):
+    ports = memory_ports()
+    ports.workspace.push_failures = 1
+
+    patch = await deliver(TASK, cfg, ports)
+
+    assert "pushed_head" not in patch and "pushed_at" not in patch
+    saved = ports.documents.load("GH-12") or {}
+    assert "pushed_head" not in saved and "pushed_at" not in saved

@@ -28,6 +28,7 @@ from agentic.core.process.application.ports import (
     Upstream,
 )
 from agentic.core.process.domain import rules
+from agentic.core.process.domain.ci import CiReport, CiUnreadable, Containment
 from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.playbook import Playbook
 from agentic.core.process.domain.roles import PROMPTS_DIR, Role
@@ -217,6 +218,7 @@ class MemoryStack:
         forbidden: list[Forbidden] | None = None,
         design: Design | None = None,
         parallel_checks: bool = False,
+        ci: dict[str, tuple[str, ...]] | tuple[str, ...] | None = None,
         affected_checks: dict[str, str] | None = None,
         affected_fallback: tuple[str, ...] = (),
     ):
@@ -238,6 +240,20 @@ class MemoryStack:
         # False is a product that does not opt in to concurrent checks (ADR-0044), which
         # is every product until its own file says otherwise.
         self.declared_parallel_checks = parallel_checks
+        # GH-216: the declared CI check names per revision; a revision with none is a
+        # product that declares no `ci`, the local-check path of today. A test sets
+        # entries on this mapping, or `ci_error` to make the read raise `ValueError` the
+        # way a malformed key does. `ci_revisions` is each revision asked.
+        # A bare tuple declares the same names at every revision, which is what the
+        # merge and review tests need; a dict declares them per revision.
+        self.declared_ci: dict[str, tuple[str, ...]] = {}
+        self.declared_ci_all: tuple[str, ...] = ()
+        if isinstance(ci, tuple):
+            self.declared_ci_all = ci
+        elif ci is not None:
+            self.declared_ci = ci
+        self.ci_error: str | None = None
+        self.ci_revisions: list[str] = []
         # Empty is a product with no affected-only form (ADR-0046), every product until
         # its own file says otherwise.
         self.declared_affected_checks = {} if affected_checks is None else affected_checks
@@ -273,6 +289,13 @@ class MemoryStack:
     def forbidden(self, revision: str) -> list[Forbidden]:
         # Not tracked in `revisions` either, `witness`'s own reason.
         return self.declared_forbidden
+
+    def ci(self, revision: str) -> tuple[str, ...]:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        self.ci_revisions.append(revision)
+        if self.ci_error is not None:
+            raise ValueError(self.ci_error)
+        return self.declared_ci.get(revision, self.declared_ci_all)
 
     def product(self, revision: str = "HEAD") -> str:
         if self.declared_product is None:
@@ -429,6 +452,12 @@ class MemoryWorkspace:
         self.dependency_state_calls: list[tuple[Path, str, tuple[str, ...]]] = []
         self.dependency_states: dict[str, list[DependencyState]] = {}
         self.pushed: list[str] = []
+        # GH-216: `contains`'s answer per `(head, master)` -- absent is `unknown`, which
+        # the caller counts as stale -- and each ask, in order.
+        self.containment: dict[tuple[str, str], Containment] = {}
+        # What every pair not in `containment` answers: the merge tests script one answer.
+        self.contains_answer: Containment = "unknown"
+        self.contains_calls: list[tuple[str, str]] = []
         # The `lease` every `push` received, in order (the failed ones too); `remote_tips`
         # is what `remote_tip` answers per branch (absent is `None`, the remote has none),
         # `remote_tip_error` makes it raise `GitError`, and `remote_tip_calls` is each ask.
@@ -633,6 +662,10 @@ class MemoryWorkspace:
             return sha in self.ancestors_by_ref[ref]
         return sha in self.ancestors
 
+    def contains(self, head: str, master: str) -> Containment:
+        self.contains_calls.append((head, master))
+        return self.containment.get((head, master), self.contains_answer)
+
     def upstream(self) -> Upstream:
         self.upstream_calls += 1
         return self.upstream_answer
@@ -696,6 +729,27 @@ class MemoryTracker:
         # Called with the branch after the lookup answers, so a test can move the remote
         # between the read and the push.
         self.on_lookup: Callable[[str], None] | None = None
+        # GH-216: `ci_report`'s answer per reference (the PR URL) and `branch_ci`'s per
+        # branch. A key that is absent answers `CiUnreadable("gh_unreadable")`, never a
+        # green report; `ci_reads` and `branch_reads` are each ask, in order.
+        # A list is the answer per round instead: each ask pops the first, the last one
+        # stays, and an empty list is unreadable.
+        self.ci_reports: dict[str, CiReport | CiUnreadable] | list[CiReport | CiUnreadable] = {}
+        self.branch_reports: dict[str, CiReport | CiUnreadable] = {}
+        self.ci_reads: list[str] = []
+        self.branch_reads: list[str] = []
+
+    def ci_report(self, reference: str) -> CiReport | CiUnreadable:
+        self.ci_reads.append(reference)
+        if isinstance(self.ci_reports, list):
+            if not self.ci_reports:
+                return CiUnreadable("gh_unreadable")
+            return self.ci_reports.pop(0) if len(self.ci_reports) > 1 else self.ci_reports[0]
+        return self.ci_reports.get(reference, CiUnreadable("gh_unreadable"))
+
+    def branch_ci(self, branch: str) -> CiReport | CiUnreadable:
+        self.branch_reads.append(branch)
+        return self.branch_reports.get(branch, CiUnreadable("gh_unreadable"))
 
     def pull_request(self, reference: str) -> PullRequest | None:
         pull_request_number(reference)  # the adapter's own strictness: a bad reference raises

@@ -200,6 +200,8 @@ Record each finding with:
   - `integration-crosscut`: a problem that spans subtasks, e.g. two subtasks computing
     the same figure differently.
 
+A `### CI` section lists the declared CI checks on this head; a red one is recorded by the system with its run link: do not write a finding for it.
+
 The verdict is not yours to write: the subtask goes back to the Developer if and only
 if there is at least one `blocking` finding, and the system writes the verdict at the
 head of your section.
