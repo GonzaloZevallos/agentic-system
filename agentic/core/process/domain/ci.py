@@ -4,8 +4,9 @@ stderr or a prose; the adapters fetch, the application decides what to do with t
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 # The module, not the name: `rules` imports this one too, and reads it at call time.
 from . import rules
@@ -131,3 +132,74 @@ def ci_wait_anchor(
     if pushed_at is not None and rules.same_commit(pushed_head, pr_head):
         return pushed_at
     return opened_at
+
+
+CI_CATEGORY = "process-suite-red"
+
+
+def _first_red(report: CiReport, name: str) -> CiCheck | None:
+    for check in report.checks:
+        if check.name == name and not _pending(check) and not _green(check):
+            return check
+    return None
+
+
+def _reference(check: CiCheck) -> str:
+    """What backs a finding about `check`: its run link, or, when GitHub gave none, what
+    it reported, so a blocking finding never lacks evidence."""
+    return check.link or f"{check.name}: {check.status}/{check.conclusion}"
+
+
+def _quoted(link: str | None, findings: list[dict[str, Any]]) -> bool:
+    """Whether a finding's evidence already holds `link` as a whole link: `.../job/100`
+    does not quote `.../job/10`."""
+    if not link:
+        return False
+    pattern = re.compile(re.escape(link) + r"(?![\w/-])")
+    return any(pattern.search(item.get("evidence", "")) for item in findings)
+
+
+def ci_findings(
+    head: CiReport,
+    master: CiReport | CiUnreadable | None,
+    declared: tuple[str, ...],
+    findings: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """`findings` plus one finding per declared check that is red on the head under
+    review, written by the system so an approval cannot sit over red CI. Blocking, unless
+    the same name is red on the base branch's latest commit: then it is pre-existing, an
+    observation with both links. A check whose run link a finding already quotes in its
+    evidence adds nothing."""
+    on_master = master if isinstance(master, CiReport) else None
+    extended = list(findings)
+    for name in dict.fromkeys(check.name for check in ci_state(head, declared).failing):
+        red = _first_red(head, name)
+        if red is None:
+            continue
+        evidence = _reference(red)
+        if _quoted(red.link, extended):
+            continue
+        red_on_master = None if on_master is None else _first_red(on_master, name)
+        if red_on_master is not None:
+            claim = (
+                f"the declared CI check `{name}` is also red on the base branch's latest "
+                "commit, so it is pre-existing"
+            )
+            # Never a second finding that quotes a run link another one already holds.
+            if not _quoted(red_on_master.link, extended):
+                evidence = f"{evidence} (head), {_reference(red_on_master)} (base branch)"
+            severity = "observation"
+        else:
+            claim = f"the declared CI check `{name}` is red on the head under review"
+            severity = "blocking"
+        extended.append(
+            {
+                "location": f"CI: {name}",
+                "claim": claim,
+                "evidence": evidence,
+                "severity": severity,
+                "scope": "subtask",
+                "category": CI_CATEGORY,
+            }
+        )
+    return extended
