@@ -204,3 +204,37 @@ algo.
   el test. Queda como umbral de reporte.
 - **`strict` completo de una**: dos diales a la vez, y el que cuesta cambios de runtime es
   justamente el que se posterga.
+
+## Adenda (2026-10-08): los dobles de los puertos entran al alcance (GH-227)
+
+mypy no veía `tests/fakes.py`, así que un doble (`MemoryStack`, `MemoryTracker`,
+`MemoryWorkspace`...) podía dejar de cumplir su puerto de `ports.py` sin que nadie lo notara
+hasta que un test llamara el método. El alcance gana dos rutas bajo `tests/`, no una carpeta:
+
+- **El conjunto de excepción es de dos rutas**: `tests/fakes.py` (los dobles) y
+  `tests/conformance.py` (el módulo que los asigna a sus puertos). El resto de `tests/` sigue
+  fuera: es código sin tipar a propósito y abrirlo entero sería el dial de estrictez movido sin
+  decirlo. `tests/conformance.py` no empieza con `test_` para que pytest no lo recoja.
+- **La guarda se enmienda**: `test_every_mypy_file_is_inside_agentic` en `tests/test_stack.py`
+  admite una entrada si es `agentic`, está bajo `agentic/` o está en la constante
+  `MYPY_TEST_ENTRIES`, y otro test exige que las entradas de `tests/` en `[tool.mypy] files`
+  sean exactamente ese conjunto: el registro y la guarda se amplían en el mismo diff. La
+  exclusión del submódulo de plugins no cambia.
+- **La clausura de `follow_imports` también se chequea**: los módulos que `fakes.py` importa
+  (por ejemplo `adapters/github/tracker.py`) entran al chequeo. Bajo `agentic/` sólo se permiten
+  ediciones de anotación que esa clausura exija; ninguna rama, valor por defecto u orden de
+  llamadas se mueve. Cuando un doble y su puerto divergen, se corrige el doble, nunca
+  `ports.py`.
+- **La conformidad**: `ports_of_doubles()` construye `Ports(...)` con cada campo como argumento
+  con nombre y una clase doble real, de modo que un campo nuevo sin doble es un error de mypy;
+  `RunRegistry` y `Launcher` se asignan en una función que nunca se llama. El inventario de
+  protocolos de `ports.py` lo vigila `tests/test_conformance_scope.py` (cada uno es campo de
+  `Ports`, está en `COVERED` o en `UNCOVERED` con la razón y el `archivo:línea` de sus dobles
+  en línea), y una sonda de deriva (ADR-0023) prueba que el chequeo muerde: una copia de
+  `ProductStack` con una firma alterada es rechazada por mypy, y la copia sin alterar no.
+- **Riesgo conocido y sin chequear**: los once dobles en línea de `Presubmit` (6), `SchemaGuard`
+  (2) y `RunLock` (3), listados en `UNCOVERED`, más las dos subclases de
+  `MemoryWorkspace` en `tests/core/process/application/test_presubmit_affected.py:32,121`, viven
+  dentro de módulos de test fuera del alcance: pueden divergir de su puerto sin que mypy lo
+  diga.
+- **Seguimiento**: una tarea que mueva esos dobles a un módulo chequeado y vacíe `UNCOVERED`.
