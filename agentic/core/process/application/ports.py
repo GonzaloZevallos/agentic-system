@@ -341,6 +341,17 @@ class ProductStack(Protocol):
         which is the serial presubmit of today."""
         ...
 
+    def affected_checks(self, revision: str) -> dict[str, str]:
+        """Check name -> its affected-only command (`core.knowledge`, ADR-0046), carrying
+        the literal `{base}` token. Empty when the product declares none, which is the
+        gate of today, byte for byte. Never read by the merge."""
+        ...
+
+    def affected_fallback(self, revision: str) -> tuple[str, ...]:
+        """The globs whose change forces the full form of every check (ADR-0046). Empty
+        when the product declares none."""
+        ...
+
     def forbidden(self, revision: str) -> Sequence[Forbidden]:
         """The suppressions this product forbids a Developer's Edit or Write from
         adding (`core.knowledge`, issue #38), in file order: first declared rule wins.

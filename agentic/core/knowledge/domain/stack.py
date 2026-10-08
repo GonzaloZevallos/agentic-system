@@ -27,6 +27,13 @@ cache, so the delivery gate may run them concurrently; without it the gate runs 
 after the other, as it always has. Anything that is not a bool (`"true"`, `1`, `null`) is a
 declaration that is there but broken, and fails at load instead of being read as a no.
 
+**`affected_checks`** and **`affected_fallback`**: optional (ADR-0046). The first maps a
+check's name, which must also be under `checks`, to its affected-only command: it carries the
+literal token `{base}`, never at its start, and the delivery gate and the reviewer -- never
+the merge -- run it in place of the full one. The second lists the globs of the paths whose
+change forces the full form. Absent they read as `{}` and `()`; present and broken they fail
+at load.
+
 The name is the one part that is not read at the task's base. It says *who* the repository
 is, not what held at a commit: read at the base, a task older than the key would resume
 into a run with no name, and a rename mid-task would split one task's samples across two
@@ -50,7 +57,19 @@ TEMPLATE = Path(__file__).resolve().parent / "stack.yaml"
 OVERLAY = Path(".agentic/stack.yaml")
 # Every key the file may declare. An unknown one is a typo, not an extension: a product
 # that misspells `checks` would otherwise run with half a stack and never know.
-KEYS = ("product", "setup", "checks", "witness", "parallel_checks", "forbidden", "design")
+KEYS = (
+    "product",
+    "setup",
+    "checks",
+    "witness",
+    "parallel_checks",
+    "affected_checks",
+    "affected_fallback",
+    "forbidden",
+    "design",
+)
+# The token an affected-only command carries where the task's base sha goes (ADR-0046).
+BASE_TOKEN = "{base}"
 # Every sub-key `design` may declare (ADR-0040): the same "unknown is a typo" rule,
 # one level down.
 DESIGN_KEYS = ("prototype", "entry", "sample_app", "compare")
@@ -137,6 +156,55 @@ def parallel_checks(data: object, source: object) -> bool:
     if not isinstance(value, bool):
         raise ValueError(f"{source}: expected `parallel_checks` to be true or false, a boolean")
     return value
+
+
+def affected_checks(data: object, source: object) -> dict[str, str]:
+    """Check name -> its affected-only command, in the file's order (ADR-0046).
+
+    Empty when the product declares none: the gate of today, byte for byte. Present, every
+    entry is a command that the gate can substitute `{base}` into and the reviewer's
+    permission rule can prefix: it carries the literal token and does not start with it.
+    A name that is not a declared check is refused, because it would never run and the
+    product would believe it did."""
+    declared = _declared(data, source)
+    if "affected_checks" not in declared:
+        return {}
+    found = _commands(declared, source, "affected_checks")
+    known = _commands(declared, source, "checks")
+    for name, command in found.items():
+        if name not in known:
+            raise ValueError(
+                f"{source}: {name!r} under `affected_checks` is not a check declared under "
+                f"`checks`; expected one of {', '.join(known)}"
+            )
+        if BASE_TOKEN not in command:
+            raise ValueError(
+                f"{source}: the command for {name!r} under `affected_checks` has no "
+                f"{BASE_TOKEN} token to carry the task's base"
+            )
+        if command.startswith(BASE_TOKEN):
+            raise ValueError(
+                f"{source}: the command for {name!r} under `affected_checks` must not "
+                f"start with {BASE_TOKEN}: the reviewer is allowed the prefix before it"
+            )
+    return found
+
+
+def affected_fallback(data: object, source: object) -> tuple[str, ...]:
+    """The globs whose change forces the full form of every check (ADR-0046), in file
+    order. Absent is `()`; an empty list is the same answer, spelled out. Anything that is
+    not a list of non-blank strings is declared but broken, and fails here."""
+    declared = _declared(data, source)
+    if "affected_fallback" not in declared:
+        return ()
+    found = declared["affected_fallback"]
+    if not isinstance(found, list) or not all(
+        isinstance(glob, str) and glob.strip() for glob in found
+    ):
+        raise ValueError(
+            f"{source}: expected `affected_fallback` to be a list of non-blank glob strings"
+        )
+    return tuple(glob.strip() for glob in found)
 
 
 def forbidden(data: object, source: object) -> tuple[Forbidden, ...]:
