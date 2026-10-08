@@ -12,7 +12,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, NamedTuple, Protocol
 
-from . import presubmit
+from . import ci, presubmit
 from .denials import denial_for
 from .document import HUMAN, demote
 from .roles import (
@@ -2535,6 +2535,9 @@ MergeRefusal = Literal[
     "checks_failed",
     "master_moved",
     "merge_failed",
+    "ci_failed",
+    "ci_missing",
+    "ci_unreadable",
 ]
 """Why `auto_merge_decision` refuses, one reason per condition:
 
@@ -2556,6 +2559,11 @@ MergeRefusal = Literal[
 - `master_moved`: master moved between the checks and the merge. Only the merge verb
   gives it, after its last fetch; the decision cannot see a fact that did not exist yet.
 - `merge_failed`: `Tracker.merge` already failed `MERGE_CALLS_MAX` times on this head.
+- `ci_failed`: the product declares its CI and a declared check is red on this head.
+- `ci_missing`: a declared check was still pending, or never reported, `ci.CI_WAIT_MAX_S`
+  after the push.
+- `ci_unreadable`: the CI report could not be read for `ci.CI_WAIT_MAX_S` after the push
+  (`gh` missing or its answer unreadable), which says nothing about any product check.
 """
 
 
@@ -2568,7 +2576,12 @@ class MergeFacts:
     before any worktree exists, the verb after); `current_master` is `None` when the
     upstream sha could not be read. `merge_failures` counts the failed merge calls on this
     head and `merge_failure` is the last one's class, which only the refusal comment reads
-    (GH-196)."""
+    (GH-196). The `ci_*` facts (GH-216) are read only when `ci_required`, the check names
+    the product declares as its merge gate, is not empty: `ci_head` is the commit the CI
+    report was read for, `ci_verdict` its classification (`ci.ci_state`), `ci_unreadable`
+    the closed cause when it could not be read, `ci_fresh` whether it ran on a tree holding
+    the current master (None: not known) and `ci_waited_s` the seconds since the wait's
+    anchor (None: no anchor)."""
 
     task_id: str
     status: str | None
@@ -2586,14 +2599,22 @@ class MergeFacts:
     current_master: str | None
     merge_failures: int = 0
     merge_failure: MergeFailure | None = None
+    ci_required: tuple[str, ...] = ()
+    ci_head: str | None = None
+    ci_verdict: ci.CiVerdict | None = None
+    ci_unreadable: ci.CiUnreadable | None = None
+    ci_fresh: bool | None = None
+    ci_waited_s: float | None = None
 
 
 @dataclass(frozen=True)
 class MergeDecision:
     """`merge`: call `Tracker.merge`. `run_checks`: the recorded checks do not cover this
-    head on this master and attempts remain. `refuse`: leave it, `reason` says why."""
+    head on this master and attempts remain. `wait`: the CI is not decidable yet; nothing
+    is refused, counted or written, and the next round asks again. `refuse`: leave it,
+    `reason` says why."""
 
-    kind: Literal["merge", "run_checks", "refuse"]
+    kind: Literal["merge", "run_checks", "wait", "refuse"]
     reason: MergeRefusal | None
 
 
@@ -2623,8 +2644,12 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     adapter, CLI or poller re-derives any of them. Checked in this order and refused at the
     first that fails: `not_ready`, `pr_not_open`, `not_approved`, `head_not_reviewed`,
     `open_findings`, `eval_set_unreadable`, `eval_set`, `guarded_path`, `merge_failed`,
-    `checks_failed` (only when the recorded checks cover this head on this master;
-    otherwise the next check) and `attempts_exhausted`. `master_moved` is not here: the
+    then, only when the product declares its CI (`ci_required`): `ci_unreadable`, a `wait`
+    for a head that is not the reviewed one, `ci_failed` and `ci_missing`, a green and fresh
+    CI being the `merge` itself (a green stale one goes on); then `checks_failed` (only when
+    the recorded checks cover this head on this master; otherwise the next check) and
+    `attempts_exhausted`. A CI that cannot be decided yet is a `wait` until
+    `ci.CI_WAIT_MAX_S` have passed since its anchor, a refusal after. `master_moved` is not here: the
     merge verb gives it, after its last fetch. The checks last: they are the costly
     fact, so nothing is run for a pull request that is refused anyway, and a run is asked
     for only when the recorded one does not cover this head on this master. `attempts`
@@ -2652,6 +2677,10 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
         return MergeDecision("refuse", "guarded_path")
     if facts.merge_failures >= MERGE_CALLS_MAX:
         return MergeDecision("refuse", "merge_failed")
+    if facts.ci_required:
+        gate = _ci_gate(facts)
+        if gate is not None:
+            return gate
     covers = (
         facts.checks_passed is not None
         and facts.checks_head == facts.pr_head
@@ -2665,6 +2694,24 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     if facts.attempts >= MERGE_ATTEMPTS_MAX:
         return MergeDecision("refuse", "attempts_exhausted")
     return MergeDecision("run_checks", None)
+
+
+def _ci_gate(facts: MergeFacts) -> MergeDecision | None:
+    """The CI's part of `auto_merge_decision`: `None` means a green CI that is not fresh,
+    which goes on to the local checks."""
+    spent = facts.ci_waited_s is not None and facts.ci_waited_s >= ci.CI_WAIT_MAX_S
+    if facts.ci_unreadable is not None:
+        return MergeDecision("refuse", "ci_unreadable") if spent else MergeDecision("wait", None)
+    verdict = facts.ci_verdict
+    if verdict is None or not (
+        full_commit_id(facts.ci_head) and same_commit(facts.ci_head, facts.pr_head)
+    ):
+        return MergeDecision("wait", None)
+    if verdict.state == "red":
+        return MergeDecision("refuse", "ci_failed")
+    if verdict.state == "pending":
+        return MergeDecision("refuse", "ci_missing") if spent else MergeDecision("wait", None)
+    return MergeDecision("merge", None) if facts.ci_fresh is True else None
 
 
 def pr_abandoned(state: str | None) -> bool:
