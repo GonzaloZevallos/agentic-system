@@ -7,7 +7,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from .rules import same_commit
+# The module, not the name: `rules` imports this one too, and reads it at call time.
+from . import rules
 
 # How long a pending, missing or unreadable CI is waited for before the merge gate refuses.
 # A declared value, not a measured one: nobody has measured a product's CI duration yet.
@@ -111,7 +112,7 @@ def ci_fresh(
     and name the same commit, or when `contains` says the head already has master. False
     when `contains` is `no` or `unknown`: a containment that cannot be read counts as
     stale, never fresh. None when nothing is known yet, the poller's case."""
-    if same_commit(base_sha, current_master) or contains == "yes":
+    if rules.same_commit(base_sha, current_master) or contains == "yes":
         return True
     if contains in ("no", "unknown"):
         return False
@@ -127,6 +128,6 @@ def ci_wait_anchor(
     """The instant the CI wait bound is counted from: the push time when the head pushed
     is the pull request's head, else the pull request's creation. Never a commit
     timestamp, which says when the code was written and not when CI could have started."""
-    if pushed_at is not None and same_commit(pushed_head, pr_head):
+    if pushed_at is not None and rules.same_commit(pushed_head, pr_head):
         return pushed_at
     return opened_at
