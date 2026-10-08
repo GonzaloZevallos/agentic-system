@@ -217,6 +217,7 @@ class MemoryStack:
         forbidden: list[Forbidden] | None = None,
         design: Design | None = None,
         parallel_checks: bool = False,
+        ci: dict[str, tuple[str, ...]] | None = None,
     ):
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -236,6 +237,13 @@ class MemoryStack:
         # False is a product that does not opt in to concurrent checks (ADR-0044), which
         # is every product until its own file says otherwise.
         self.declared_parallel_checks = parallel_checks
+        # GH-216: the declared CI check names per revision; a revision with none is a
+        # product that declares no `ci`, the local-check path of today. A test sets
+        # entries on this mapping, or `ci_error` to make the read raise `ValueError` the
+        # way a malformed key does. `ci_revisions` is each revision asked.
+        self.declared_ci: dict[str, tuple[str, ...]] = {} if ci is None else ci
+        self.ci_error: str | None = None
+        self.ci_revisions: list[str] = []
         self.revisions: list[str] = []
 
     def checks(self, revision: str) -> dict[str, str]:
@@ -259,6 +267,13 @@ class MemoryStack:
     def forbidden(self, revision: str) -> list[Forbidden]:
         # Not tracked in `revisions` either, `witness`'s own reason.
         return self.declared_forbidden
+
+    def ci(self, revision: str) -> tuple[str, ...]:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        self.ci_revisions.append(revision)
+        if self.ci_error is not None:
+            raise ValueError(self.ci_error)
+        return self.declared_ci.get(revision, ())
 
     def product(self, revision: str = "HEAD") -> str:
         if self.declared_product is None:

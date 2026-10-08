@@ -32,6 +32,10 @@ class GitStack:
         data, source = self._declaration(revision)
         return stack.parallel_checks(data, source)
 
+    def ci(self, revision: str) -> tuple[str, ...]:
+        data, source = self._declaration(revision)
+        return stack.ci(data, source)
+
     def forbidden(self, revision: str) -> tuple[Forbidden, ...]:
         data, source = self._declaration(revision)
         return stack.forbidden(data, source)

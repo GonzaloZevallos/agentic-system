@@ -45,3 +45,8 @@ forbidden:
       this adds a type-checker or linter suppression. ADR-0021 is this repo's dial:
       fix the type, or take the unit out of `[tool.mypy] files` in `pyproject.toml`
       and say so in the pull request.
+# `ci`: the check-run names of ci.yml that gate a merge (ADR-0045, GH-216 amendment): with
+# it, `agentic merge` decides from GitHub's CI on the reviewed head. `check` is the one
+# job of `.github/workflows/ci.yml`, unconditional and without a matrix. Read at a task's
+# base, like every key here: it governs from the task after the merge.
+ci: [check]

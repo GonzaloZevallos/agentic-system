@@ -278,3 +278,32 @@ def test_the_template_keeps_parallel_checks_commented_out():
     data = yaml.safe_load(stack.TEMPLATE.read_text(encoding="utf-8"))
     assert "parallel_checks" not in data
     assert "parallel_checks" in stack.TEMPLATE.read_text(encoding="utf-8")
+
+
+# -- `ci`: the check-run names that gate a merge when GitHub's CI is trusted (ADR-0045) --
+
+
+def test_a_product_that_does_not_declare_ci_gates_nothing_on_it():
+    assert stack.ci({"checks": {"tests": "pytest"}}, "x") == ()
+
+
+def test_ci_reads_the_declared_names_in_the_files_order():
+    declared = {"checks": {"tests": "pytest"}, "ci": ["web", "e2e (chromium)"]}
+    assert stack.ci(declared, "x") == ("web", "e2e (chromium)")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [[], None, "check", {"check": 1}, [1], ["check", ""], ["  "], ["check", None], ["a", "a"]],
+    ids=["empty", "null", "str", "mapping", "int", "blank", "spaces", "null-item", "duplicate"],
+)
+def test_a_ci_that_is_not_a_list_of_distinct_names_is_an_error_naming_key_and_source(value):
+    declared = {"checks": {"tests": "pytest"}, "ci": value}
+    with pytest.raises(ValueError, match=r"stack.yaml: .*`ci`"):
+        stack.ci(declared, "stack.yaml")
+
+
+def test_the_template_keeps_ci_commented_out_and_says_what_a_name_is():
+    text = stack.TEMPLATE.read_text(encoding="utf-8")
+    assert "ci" not in yaml.safe_load(text)
+    assert "# ci:" in text and "conditional" in text and "matrix" in text
