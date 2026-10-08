@@ -21,6 +21,7 @@ from ...application.ports import (
     ListedPullRequest,
     MergeCallFailed,
 )
+from ...domain.ci import CiCheck, CiReport, CiUnreadable
 from ...domain.task import PullRequest, PullRequestCommit
 
 _ISSUE = re.compile(r"^GH-(\d+)$")
@@ -72,6 +73,103 @@ query($owner: String!, $repo: String!, $number: Int!) {
   }
 }
 """
+
+# The CI of a commit, read with its checks in the one query so the report's oid is the
+# commit its checks belong to (GH-216, invariant 2). Check runs and commit statuses are
+# both read; `__typename` tells them apart, and `pageInfo` says when the first hundred are
+# not all of them. `{owner}`/`{repo}` are `gh`'s own magic fields, as in the query above.
+_ROLLUP = """
+statusCheckRollup {
+  contexts(first: 100) {
+    pageInfo { hasNextPage }
+    nodes {
+      __typename
+      ... on CheckRun { name status conclusion detailsUrl }
+      ... on StatusContext { context state targetUrl }
+    }
+  }
+}
+"""
+
+_PULL_REQUEST_CI_QUERY = (
+    """
+query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      createdAt
+      baseRefName
+      headRefOid
+      commits(last: 1) { nodes { commit { oid """
+    + _ROLLUP
+    + """ } } }
+    }
+  }
+}
+"""
+)
+
+_BRANCH_CI_QUERY = (
+    """
+query($owner: String!, $repo: String!, $ref: String!) {
+  repository(owner: $owner, name: $repo) {
+    ref(qualifiedName: $ref) { target { ... on Commit { oid """
+    + _ROLLUP
+    + """ } } }
+  }
+}
+"""
+)
+
+# A `StatusContext` has no `status`: a state that has not decided is `PENDING` and the rest
+# are `COMPLETED`, so a consumer reads both kinds of check the same way.
+_UNDECIDED_STATES = ("PENDING", "EXPECTED")
+
+
+class _Unreadable(Exception):
+    """Inside this module only: a CI answer that is not whole. Never leaves it."""
+
+
+def _commit_ci(commit: object) -> tuple[str, tuple[CiCheck, ...]]:
+    """The oid of a GraphQL `Commit` and its checks; `_Unreadable` for anything missing,
+    mistyped or cut short (a commit that carries no rollup is a readable, empty one)."""
+    if not isinstance(commit, dict):
+        raise _Unreadable("no commit")
+    oid = commit.get("oid")
+    if not isinstance(oid, str) or not oid:
+        raise _Unreadable("no commit oid")
+    rollup = commit.get("statusCheckRollup")
+    if rollup is None:
+        return oid, ()
+    contexts = rollup["contexts"]
+    if contexts["pageInfo"]["hasNextPage"]:
+        raise _Unreadable("more checks than one page")
+    return oid, tuple(check for node in contexts["nodes"] if (check := _ci_check(node)) is not None)
+
+
+def _ci_check(node: dict) -> CiCheck | None:
+    kind = node["__typename"]
+    if kind == "CheckRun":
+        return CiCheck(
+            name=_text(node["name"]),
+            status=_text(node["status"]),
+            conclusion=node.get("conclusion"),
+            link=node.get("detailsUrl") or "",
+        )
+    if kind == "StatusContext":
+        state = _text(node["state"])
+        return CiCheck(
+            name=_text(node["context"]),
+            status="PENDING" if state in _UNDECIDED_STATES else "COMPLETED",
+            conclusion=state,
+            link=node.get("targetUrl") or "",
+        )
+    return None
+
+
+def _text(value: object) -> str:
+    if not isinstance(value, str) or not value:
+        raise _Unreadable("a check field is not a non-empty string")
+    return value
 
 
 def issue_number(task_id: str) -> int | None:
@@ -298,6 +396,65 @@ class GhTracker:
             head_oid=pull_request.get("headRefOid") or None,
             commits=commits,
         )
+
+    def ci_report(self, reference: str) -> CiReport | CiUnreadable:
+        """See `Tracker.ci_report`. `gh` resolves the repository from `product_dir`. Never
+        raises and never reads stderr: the class of an unreadable answer is the step that
+        failed. `base_sha` is always None: the gate that would have filled it from the
+        Actions runs failed (ADR-0045, GH-216 amendment), `pull_requests` being empty on
+        every run of this product's CI."""
+        try:
+            number = pull_request_number(reference)
+        except ValueError:
+            return CiUnreadable("gh_unreadable")
+        answer = self._graphql(
+            _PULL_REQUEST_CI_QUERY,
+            ("-F", "owner={owner}", "-F", "repo={repo}", "-F", f"number={number}"),
+        )
+        if isinstance(answer, CiUnreadable):
+            return answer
+        try:
+            pull_request = answer["data"]["repository"]["pullRequest"]
+            commit = pull_request["commits"]["nodes"][0]["commit"]
+            head_sha, checks = _commit_ci(commit)
+            return CiReport(
+                head_sha=head_sha,
+                base_ref=_text(pull_request["baseRefName"]),
+                base_sha=None,
+                opened_at=_text(pull_request["createdAt"]),
+                checks=checks,
+            )
+        except (_Unreadable, KeyError, IndexError, TypeError):
+            return CiUnreadable("gh_unreadable")
+
+    def branch_ci(self, branch: str) -> CiReport | CiUnreadable:
+        """See `Tracker.ci_report`: the latest commit of `branch`, and no pull request."""
+        answer = self._graphql(
+            _BRANCH_CI_QUERY,
+            ("-F", "owner={owner}", "-F", "repo={repo}", "-f", f"ref=refs/heads/{branch}"),
+        )
+        if isinstance(answer, CiUnreadable):
+            return answer
+        try:
+            head_sha, checks = _commit_ci(answer["data"]["repository"]["ref"]["target"])
+        except (_Unreadable, KeyError, TypeError):
+            return CiUnreadable("gh_unreadable")
+        return CiReport(
+            head_sha=head_sha, base_ref=None, base_sha=None, opened_at=None, checks=checks
+        )
+
+    def _graphql(self, query: str, fields: tuple[str, ...]) -> dict | CiUnreadable:
+        """One `gh api graphql` call, its JSON object or the class of its failure."""
+        try:
+            raw = self._gh("api", "graphql", "-f", f"query={query}", *fields)
+        except ValueError as exc:  # `_gh`'s own failure
+            missing = isinstance(exc.__cause__, FileNotFoundError)
+            return CiUnreadable("gh_unavailable" if missing else "gh_unreadable")
+        try:
+            answer = json.loads(raw)
+        except json.JSONDecodeError:
+            return CiUnreadable("gh_unreadable")
+        return answer if isinstance(answer, dict) else CiUnreadable("gh_unreadable")
 
     def merge(self, reference: str, head_sha: str) -> str:
         """Raises only `MergeCallFailed`, its class chosen at the step that failed: never
