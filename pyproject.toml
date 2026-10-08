@@ -61,6 +61,8 @@ files = [
     "agentic/core/knowledge/adapters",
     "agentic/core/measurement/adapters",
     "agentic/core/process/adapters/shell/inhibitor.py",
+    "tests/fakes.py",
+    "tests/conformance.py",
 ]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
