@@ -32,6 +32,27 @@ commits: la única ruta no `.py` frecuente que ningún test lee es `docs/**`
 (ADR, `docs/agents`, `docs/product`); `.agentic/tasks/` y `.agentic/playbooks/` no están
 versionados en este repo y se ignoran por previsión (el documento de tarea, ADR-0001).
 
+### Derivación de la lista de ignorados
+
+`git log --name-only --format= -n 400 | grep -v '\.py$'`, con las rutas distintas
+agrupadas y la fila que recibió cada una (F = `affected_fallback`, T = fila de `TABLE`,
+I = `IGNORE`, R = sin fila: la corrida suelta la rechaza con 9):
+
+| Ruta (apariciones en 400 commits) | Fila |
+|---|---|
+| `README.md` (19), `BRIEF.md`, `.gitignore`, `.gitmodules`, `langgraph.json`, `untitled.md`, `CLAUDE.md` | R |
+| `agentic/core/*/CONTEXT.md` (≈30), `CONTEXT-MAP.md` | F (`*CONTEXT*.md`) |
+| `agentic/core/process/domain/prompts/*.md` (≈60) | F (`agentic/*/prompts/*`) |
+| `agentic/core/knowledge/domain/{CODING_STANDARDS,brief}.md`, `stack.yaml`, `flags.yaml` | T (`module:` de `knowledge`, `stack`, `flags`) |
+| `CODING_STANDARDS.md` (2) | T (`tests/test_stack.py`) |
+| `observability/README.md` (11) | T (`module:tests.readme_metrics`) |
+| `observability/collector/otel-collector.yaml` (2) | T (`tests/test_observability_config.py`) |
+| `observability/grafana/*`, `observability/langfuse/*` (≈14) | R |
+| `pyproject.toml` (8), `uv.lock` (2), `.env.example` (7) | F |
+| `.agentic/stack.yaml` (4), `.github/**` (5), `scripts/*` (5) | F (el dominio agrega `.agentic/stack.yaml`) |
+| `docs/adr/*.md` (≈90), `docs/agents/*`, `docs/product/*` | I (`docs/*`; el guardia no halla ninguna lectura) |
+| `.agentic/tasks/*`, `.agentic/playbooks/*` | I (sin apariciones en el historial: se ignoran por previsión) |
+
 ## Códigos de salida
 
 | Resultado | Código | Línea única en stderr |
@@ -57,9 +78,11 @@ recorridos anclados en `__file__` o en un `ROOT`/`REPO`/`CORE`/`PACKAGE`. Cada a
 árbol que esas lecturas alcanzan debe estar cubierto por una fila de `TABLE` que incluya al
 test, por un glob de `affected_fallback` (leído con `agentic.core.knowledge.domain.stack`),
 por la clausura de imports o por una excepción nombrada con razón (`ALLOWANCES`, falsos
-positivos de repos creados bajo `tmp_path`). También afirma que tabla, ignorados y
-excepciones no repiten un glob del fallback, que ningún ignorado es leído por un test y que
-todo glob del fallback calza con una ruta real. Es heurístico: una ruta armada en el helper de
+positivos de repos creados bajo `tmp_path`). También afirma, con una comprobación que recibe sus entradas y
+tiene un caso negativo, que ningún glob de la tabla, de los ignorados ni de las excepciones
+calza una ruta que el fallback también calza (salvo `agentic/*.py` y `tests/*.py`, exentos por
+nombre y con razón), que ningún ignorado es leído por un test y que todo glob del fallback
+calza con una ruta real. Es heurístico: una ruta armada en el helper de
 otro módulo, o leída por una constante de módulo de `agentic/` (`stack.TEMPLATE`), no se ve;
 esas tres últimas están cubiertas a mano en `TABLE` con `module:`. `docs/*` quedó fuera del
 fallback porque el guardia no encuentra ninguna lectura de `docs/`.

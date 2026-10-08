@@ -323,6 +323,13 @@ def test_a_loader_with_constant_arguments_does_not_join_the_trigger():
     assert found.loaders == frozenset()
 
 
+def test_a_source_that_is_not_utf8_refuses_with_9_not_a_traceback(repo: Path, capfd):
+    (repo / "agentic" / "x" / "bin.py").write_bytes(b"x = '\xff'\n")
+    code, out, err = _main(repo, "HEAD", capfd, _never_runs)
+    assert (code, out) == (9, "")
+    assert err.startswith("affected-tests: refused:") and err.count("\n") == 1
+
+
 def test_a_syntax_error_in_the_tree_cannot_be_decided():
     with pytest.raises(script.Undecided):
         script.graph({"agentic/x/bad.py": "def (:\n"})
@@ -354,8 +361,13 @@ class Allowance(NamedTuple):
 ALLOWANCES: tuple[Allowance, ...] = (
     Allowance(
         "tests/core/knowledge/adapters/filesystem/test_knowledge.py",
-        "*",
-        "builds BRIEF.md and CODING_STANDARDS.md under tmp_path, same names as the repo's",
+        "BRIEF.md",
+        "builds BRIEF.md under tmp_path, the same name as the repo's",
+    ),
+    Allowance(
+        "tests/core/knowledge/adapters/filesystem/test_knowledge.py",
+        "*CODING_STANDARDS.md",
+        "builds CODING_STANDARDS.md under tmp_path, the same name as the repo's",
     ),
     Allowance(
         "tests/core/knowledge/adapters/git/test_stack.py",
@@ -364,8 +376,13 @@ ALLOWANCES: tuple[Allowance, ...] = (
     ),
     Allowance(
         "tests/core/process/adapters/git/test_workspace.py",
-        "*",
-        "makes its own repos under tmp_path with README.md and .gitignore",
+        "*README.md",
+        "makes its own repos under tmp_path with a README.md",
+    ),
+    Allowance(
+        "tests/core/process/adapters/git/test_workspace.py",
+        ".gitignore",
+        "makes its own repos under tmp_path with a .gitignore",
     ),
     Allowance(
         "tests/core/process/application/test_merge_for_real.py",
@@ -395,7 +412,7 @@ ALLOWANCES: tuple[Allowance, ...] = (
     ),
     Allowance(
         "tests/test_language.py",
-        "tests/*",
+        "tests/*__init__.py",
         "checks `agentic/core/*/__init__.py` exist; the same name under tests/ is not read",
     ),
 )
@@ -692,26 +709,81 @@ def test_the_evidence_finds_a_read_through_an_anchor_a_literal_and_a_walk():
     assert ("agentic", "*.py") in found
 
 
-def test_table_ignore_and_allowances_do_not_repeat_a_fallback_glob_and_no_ignore_is_read(real):
-    tracked, reads, _ = real
-    fallback = set(_declared_fallback())
-    assert not {row.glob for row in script.TABLE} & fallback
-    assert not set(script.IGNORE) & fallback
-    assert not {a.path for a in ALLOWANCES} & fallback
-    for glob in script.IGNORE:
-        read = [(t, p) for t, p, _ in reads if script.matches(glob, p)]
-        assert read == [], f"{glob} is ignored but a test reads {read}"
-        assert not [
-            p
-            for p in tracked
-            if script.matches(glob, p) and any(script.matches(f, p) for f in fallback)
-        ]
+# Rows whose glob legitimately reaches paths the fallback also matches: a `.py` under the
+# fallback still has to select the walkers, and the closure decides it in a standalone run.
+OVERLAPS = {
+    "agentic/*.py": "walkers and the guard read every source file, fallback ones included",
+    "tests/*.py": "the guard parses every test file, `conftest.py` included",
+}
+
+
+def _overlaps(
+    globs: dict[str, str], fallback: tuple[str, ...], tracked: list[str], exempt: dict[str, str]
+) -> list[tuple[str, str]]:
+    """(glob, path) for every tracked path that a glob and a fallback glob both match, and
+    every glob that repeats a fallback glob, unless the glob is a named exemption."""
+    found = []
+    for glob in globs:
+        if glob in exempt:
+            continue
+        if glob in fallback:
+            found.append((glob, "<same glob>"))
+        found.extend(
+            (glob, path)
+            for path in tracked
+            if script.matches(glob, path) and any(script.matches(f, path) for f in fallback)
+        )
+    return found
+
+
+def _ignored_but_read(ignore: tuple[str, ...], reads: list[tuple[str, str, str]]):
+    return [(g, t, p) for g in ignore for t, p, _ in reads if script.matches(g, p)]
+
+
+def _dead_globs(fallback: tuple[str, ...], tracked: list[str]) -> list[str]:
+    return [g for g in fallback if not any(script.matches(g, p) for p in tracked)]
+
+
+def _sharing() -> dict[str, str]:
+    return (
+        {row.glob: row.reason for row in script.TABLE}
+        | {glob: "ignored" for glob in script.IGNORE}
+        | {a.path: a.reason for a in ALLOWANCES}
+    )
+
+
+def test_table_ignore_and_allowances_match_nothing_the_fallback_matches(real):
+    tracked, _, _ = real
+    assert _overlaps(_sharing(), _declared_fallback(), tracked, OVERLAPS) == []
+
+
+def test_the_overlap_check_rejects_a_row_inside_a_fallback_glob_and_a_repeated_glob():
+    tracked = ["CONTEXT-MAP.md", "README.md", "agentic/core/process/CONTEXT.md"]
+    fallback = ("*CONTEXT*.md",)
+    found = _overlaps({"CONTEXT-MAP.md": "x", "README.md": "y"}, fallback, tracked, {})
+    assert found == [("CONTEXT-MAP.md", "CONTEXT-MAP.md")]
+    assert _overlaps({"*CONTEXT*.md": "x"}, fallback, tracked, {}) != []
+    assert _overlaps({"*.md": "x"}, fallback, tracked, {"*.md": "named"}) == []
+
+
+def test_no_ignore_entry_is_read_by_a_test(real):
+    _, reads, _ = real
+    assert _ignored_but_read(script.IGNORE, reads) == []
+
+
+def test_the_ignore_check_rejects_an_entry_a_test_reads():
+    reads = [("tests/test_x.py", "docs/x.md", "docs/x.md")]
+    assert _ignored_but_read(("docs/*",), reads) == [("docs/*", "tests/test_x.py", "docs/x.md")]
+    assert _ignored_but_read((".agentic/tasks/*",), reads) == []
 
 
 def test_every_fallback_glob_matches_a_real_path(real):
     tracked, _, _ = real
-    for glob in _declared_fallback():
-        assert any(script.matches(glob, p) for p in tracked), f"{glob} matches nothing"
+    assert _dead_globs(_declared_fallback(), tracked) == []
+
+
+def test_the_fallback_check_rejects_a_glob_that_matches_no_path():
+    assert _dead_globs(("pyproject.toml", "nothing/*"), ["pyproject.toml"]) == ["nothing/*"]
 
 
 def test_every_table_row_names_targets_that_exist_and_a_reason(real):

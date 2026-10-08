@@ -86,11 +86,6 @@ TABLE: tuple[Row, ...] = (
         "the pin guard reads this repo's own standards",
     ),
     Row(
-        "CONTEXT-MAP.md",
-        ("tests/test_language.py",),
-        "it lists the contexts the glossary check walks",
-    ),
-    Row(
         "observability/README.md",
         ("module:tests.readme_metrics",),
         "the metrics table is parsed by `readme_metrics`",
@@ -356,7 +351,7 @@ def main(
     except GitFailure:
         _say("refused", "git")
         return REFUSED
-    except (Undecided, OSError) as error:
+    except (Undecided, OSError, ValueError) as error:
         _say("refused", str(error))
         return REFUSED
     result = select(paths, found, TABLE, IGNORE)
