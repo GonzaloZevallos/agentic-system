@@ -52,14 +52,60 @@ WALKERS = (
     "tests/core/measurement/adapters/otel/test_semconv.py",
     "tests/core/process/application/test_pause_log_guard.py",
 )
+KNOWLEDGE = "agentic.core.knowledge.domain"
 TABLE: tuple[Row, ...] = (
     Row("agentic/*.py", WALKERS, "these walk every source file of the package with ast"),
+    Row(
+        "agentic/*.py",
+        ("tests/test_affected_tests.py",),
+        "its guard builds the import graph of the whole package",
+    ),
+    Row(
+        "tests/*.py",
+        ("tests/test_affected_tests.py",),
+        "its guard parses every test file for the repo paths it reads",
+    ),
+    Row(
+        "agentic/core/knowledge/domain/*.md",
+        (f"module:{KNOWLEDGE}.knowledge",),
+        "the default standards and brief template are read through `knowledge`",
+    ),
+    Row(
+        "agentic/core/knowledge/domain/stack.yaml",
+        (f"module:{KNOWLEDGE}.stack",),
+        "the stack template is read through `stack.TEMPLATE`",
+    ),
+    Row(
+        "agentic/core/knowledge/domain/flags.yaml",
+        (f"module:{KNOWLEDGE}.flags",),
+        "the default flag vocabulary is read through `flags.DEFAULT`",
+    ),
+    Row(
+        "CODING_STANDARDS.md",
+        ("tests/test_stack.py",),
+        "the pin guard reads this repo's own standards",
+    ),
+    Row(
+        "CONTEXT-MAP.md",
+        ("tests/test_language.py",),
+        "it lists the contexts the glossary check walks",
+    ),
+    Row(
+        "observability/README.md",
+        ("module:tests.readme_metrics",),
+        "the metrics table is parsed by `readme_metrics`",
+    ),
+    Row(
+        "observability/collector/otel-collector.yaml",
+        ("tests/test_observability_config.py",),
+        "that test parses the collector config",
+    ),
 )
 # Paths no test reads (the guard asserts it); a change to them selects nothing.
 IGNORE: tuple[str, ...] = (
     ".agentic/tasks/*",
     ".agentic/playbooks/*",
-    "tests/llm/*",
+    "docs/*",
 )
 
 

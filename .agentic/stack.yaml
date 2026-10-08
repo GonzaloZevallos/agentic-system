@@ -37,6 +37,28 @@ checks:
 # them gave no red that the serial run did not give (ADR-0044, "Evidencia para este repo").
 # Read at a task's base, like every key here: it governs from the task after the merge.
 parallel_checks: true
+# The affected-only form of the pytest check (ADR-0046), selected by `scripts/affected_tests.py`
+# (ADR-0047): the tests whose import closure reaches the change, an explicit table for what
+# tests read without importing it, and exit 8/9 when it selects nothing or cannot decide.
+# `lint`, `format` and `types` stay full: they are fast. A path matching a glob below runs
+# the full suite (ADR-0046); `tests/test_affected_tests.py` reads this list through the
+# stack parser and fails when a test reads a repo path that nothing here or in the script's
+# table covers. This list lives only here.
+affected_checks:
+  tests: uv run python scripts/affected_tests.py {base}
+affected_fallback:
+  - pyproject.toml
+  - uv.lock
+  - "*conftest.py"
+  - "agentic/shared/*"
+  - agentic/composition.py
+  - agentic/cli.py
+  - "agentic/*/prompts/*"
+  - "agentic/plugins/*"
+  - "*CONTEXT*.md"
+  - ".github/*"
+  - "scripts/*"
+  - .env.example
 witness: uv run python -c "import agentic, pathlib; print(pathlib.Path(agentic.__file__).resolve().parent)"
 forbidden:
   - pattern: '#\s*(type:\s*ignore|noqa)\b'

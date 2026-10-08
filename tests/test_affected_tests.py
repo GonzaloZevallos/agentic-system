@@ -3,16 +3,23 @@ exit contract) and the guard that keeps its input table honest on the real tree.
 
 from __future__ import annotations
 
+import ast
+import fnmatch
 import importlib.util
 import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 from types import ModuleType
+from typing import NamedTuple
 
 import pytest
+import yaml
+
+from agentic.core.knowledge.domain import stack
 
 REPO = Path(__file__).resolve().parent.parent
+STACK_YAML = REPO / ".agentic" / "stack.yaml"
 SCRIPT = REPO / "scripts" / "affected_tests.py"
 
 
@@ -293,9 +300,9 @@ def test_adding_a_test_selects_that_test_and_not_the_walkers():
     )
 
 
-def test_a_doc_selects_no_walker_it_is_refused_as_unmapped():
+def test_a_doc_selects_no_walker_it_is_ignored_and_selects_nothing():
     result = _select(["docs/x.md"], _walker_sources(), script.TABLE, script.IGNORE)
-    assert isinstance(result, script.Refusal) and "docs/x.md" in result.reason
+    assert isinstance(result, script.Empty)
 
 
 def test_a_test_that_loads_code_by_a_computed_name_joins_the_agentic_trigger():
@@ -319,3 +326,406 @@ def test_a_loader_with_constant_arguments_does_not_join_the_trigger():
 def test_a_syntax_error_in_the_tree_cannot_be_decided():
     with pytest.raises(script.Undecided):
         script.graph({"agentic/x/bad.py": "def (:\n"})
+
+
+# -- the guard: on the real tree, not on fixtures ---------------------------------------------
+#
+# The selection follows imports, so it cannot see a test that reads a repo file. This
+# guard finds those reads in every `tests/**/*.py` (but `tests/llm`, deselected anyway) and
+# fails unless each file read is covered: by a row of the script's input table whose
+# targets include the test, by an `affected_fallback` glob (the gate runs full), by the
+# import closure, or by a named allowance below.
+
+PATH_PREFIXES = ("docs/", ".agentic/", ".github/", "observability/", "scripts/", "agentic/")
+PATH_SUFFIXES = (".md", ".yaml", ".yml", ".json", ".toml", ".example")
+PATH_CALLS = frozenset({"Path", "open", "read_text", "read_bytes", "glob", "rglob", "iterdir"})
+ANCHORS = frozenset({"ROOT", "REPO", "CORE", "PACKAGE"})
+
+
+class Allowance(NamedTuple):
+    """`test` (a glob) names a repo file in `path` (a glob) without reading the real one:
+    it builds that name under `tmp_path`, or only mentions it in a message."""
+
+    test: str
+    path: str
+    reason: str
+
+
+ALLOWANCES: tuple[Allowance, ...] = (
+    Allowance(
+        "tests/core/knowledge/adapters/filesystem/test_knowledge.py",
+        "*",
+        "builds BRIEF.md and CODING_STANDARDS.md under tmp_path, same names as the repo's",
+    ),
+    Allowance(
+        "tests/core/knowledge/adapters/git/test_stack.py",
+        "*README.md",
+        "commits a README.md into a throwaway repo",
+    ),
+    Allowance(
+        "tests/core/process/adapters/git/test_workspace.py",
+        "*",
+        "makes its own repos under tmp_path with README.md and .gitignore",
+    ),
+    Allowance(
+        "tests/core/process/application/test_merge_for_real.py",
+        "*CODING_STANDARDS.md",
+        "writes CODING_STANDARDS.md into a throwaway product",
+    ),
+    Allowance("tests/test_cli.py", "BRIEF.md", "writes BRIEF.md into a tmp_path product"),
+    Allowance(
+        "tests/test_affected_tests.py",
+        "langgraph.json",
+        "writes a langgraph.json into a throwaway repo to provoke a refusal",
+    ),
+    Allowance(
+        "tests/test_affected_tests.py",
+        "agentic/core/knowledge/domain/*",
+        "names these paths in the allowances and assertions above; it never opens them",
+    ),
+    Allowance(
+        "tests/test_affected_tests.py",
+        "observability/collector/otel-collector.yaml",
+        "names the path in the assertion that the guard rejects an uncovered read",
+    ),
+    Allowance(
+        "tests/test_stack.py",
+        "agentic/core/knowledge/domain/*",
+        "reads the repo-root CODING_STANDARDS.md, not the package default of the same name",
+    ),
+    Allowance(
+        "tests/test_language.py",
+        "tests/*",
+        "checks `agentic/core/*/__init__.py` exist; the same name under tests/ is not read",
+    ),
+)
+
+
+class Evidence(NamedTuple):
+    test: str
+    parts: str  # the constant components of the path expression, joined with "/"
+    scan: str | None  # the glob pattern when the expression is the root of a tree walk
+    recursive: bool
+
+
+def _chain(node: ast.AST, names: dict[str, list[str]]) -> list[str]:
+    """The path components of an expression, `*` for a computed one, in order."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return [part for part in node.value.split("/") if part]
+    if isinstance(node, ast.JoinedStr):
+        return ["*"]
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        return _chain(node.left, names) + _chain(node.right, names)
+    if isinstance(node, ast.Name):
+        return names.get(node.id, ["*"])
+    if isinstance(node, ast.Attribute):
+        if node.attr == "__file__" and isinstance(node.value, ast.Name):
+            return ["agentic"] if node.value.id == "agentic" else []
+        return _chain(node.value, names) if node.attr in {"parent", "parents"} else ["*"]
+    if isinstance(node, ast.Subscript):
+        return _chain(node.value, names)
+    if isinstance(node, ast.Call):
+        func = node.func
+        if isinstance(func, ast.Name) and func.id == "Path":
+            return [part for arg in node.args for part in _chain(arg, names)]
+        if isinstance(func, ast.Attribute) and func.attr in {"resolve", "absolute", "expanduser"}:
+            return _chain(func.value, names)
+        if isinstance(func, ast.Attribute) and func.attr == "joinpath":
+            return _chain(func.value, names) + [p for a in node.args for p in _chain(a, names)]
+    return ["*"]
+
+
+def _anchored(chain: list[str]) -> list[str]:
+    """A leading computed component is the anchor, unknown: the match is by suffix."""
+    while chain and chain[0] == "*":
+        chain = chain[1:]
+    return chain
+
+
+def _rooted(node: ast.AST, rooted: set[str]) -> bool:
+    """Whether the expression starts from this file's own location or from an anchor."""
+    return any(
+        (isinstance(n, ast.Name) and (n.id == "__file__" or n.id in rooted))
+        or (isinstance(n, ast.Attribute) and n.attr == "__file__")
+        for n in ast.walk(node)
+    )
+
+
+def _assignments(tree: ast.Module) -> tuple[dict[str, list[str]], set[str]]:
+    """Simple `NAME = <path expression>` anywhere in the file (the last one wins), and
+    which names start from the file's own location."""
+    names: dict[str, list[str]] = {}
+    rooted: set[str] = set()
+    assigns = [n for n in ast.walk(tree) if isinstance(n, ast.Assign) and len(n.targets) == 1]
+    for node in sorted(assigns, key=lambda n: n.lineno):
+        target = node.targets[0]
+        if isinstance(target, ast.Name):
+            names[target.id] = _anchored(_chain(node.value, names))
+            if _rooted(node.value, rooted):
+                rooted.add(target.id)
+    return names, rooted
+
+
+def _evidence(test: str, tree: ast.Module) -> set[Evidence]:
+    names, rooted = _assignments(tree)
+    found: set[Evidence] = set()
+    inner_divs = {
+        id(child)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)
+        for child in (node.left, node.right)
+        if isinstance(child, ast.BinOp)
+    }
+
+    def add(chain: list[str], scan: str | None = None, recursive: bool = False) -> None:
+        chain = _anchored(chain)
+        if scan is not None or (chain and chain[-1] != "*"):
+            found.add(Evidence(test, "/".join(chain), scan, recursive))
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            text = node.value
+            plain = not any(c in text for c in " \n{}")
+            if plain and (
+                text.startswith(PATH_PREFIXES) or ("/" in text and text.endswith(PATH_SUFFIXES))
+            ):
+                add([text])
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+            if id(node) not in inner_divs:
+                add(_chain(node, names))
+        elif isinstance(node, ast.Call):
+            func = node.func
+            called = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
+            if called not in PATH_CALLS:
+                continue
+            if called in {"glob", "rglob", "iterdir"} and isinstance(func, ast.Attribute):
+                pattern = "*"
+                if node.args and isinstance(node.args[0], ast.Constant):
+                    pattern = str(node.args[0].value)
+                receiver = _anchored(_chain(func.value, names))
+                if receiver or _rooted(func.value, rooted):
+                    add(receiver, pattern, called == "rglob")
+            elif called == "Path":
+                add(_chain(node, names))
+    return found
+
+
+def _remainder(parts: str, tracked: str) -> str | None:
+    """What of `tracked` lies under `parts`, wherever `parts` sits in the path; `*` in
+    `parts` is a computed component. None when it does not."""
+    hay = "/" + tracked + "/"
+    needle = "/" + parts + "/" if parts else "/"
+    for start in range(len(hay)):
+        if hay[start] != "/":
+            continue
+        pattern_len = needle.count("/")
+        pieces = hay[start:].split("/")
+        head = "/".join(pieces[:pattern_len]) + "/"
+        if fnmatch.fnmatchcase(head, needle):
+            return "/".join(pieces[pattern_len:]).strip("/")
+    return None
+
+
+def _files_read(item: Evidence, tracked: list[str]) -> list[str]:
+    found: list[str] = []
+    for path in tracked:
+        rest = _remainder(item.parts, path)
+        if rest is None:
+            continue
+        if item.scan is None:
+            if rest == "":
+                found.append(path)
+        elif rest:
+            base = rest if item.recursive is False else rest.rsplit("/", 1)[-1]
+            deep = "/" in rest and not item.recursive and "/" not in item.scan
+            if not deep and fnmatch.fnmatchcase(base, item.scan):
+                found.append(path)
+    return found
+
+
+def _tracked() -> list[str]:
+    out = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return sorted(p for p in out.split("\0") if p and (REPO / p).exists())
+
+
+def _test_files() -> list[str]:
+    return sorted(
+        p.relative_to(REPO).as_posix()
+        for p in (REPO / "tests").rglob("*.py")
+        if not p.relative_to(REPO).as_posix().startswith("tests/llm/")
+    )
+
+
+def _real_graph():
+    return script.graph(script.read_sources(REPO))
+
+
+def _readers(test: str, found) -> set[str]:
+    """The tests a file's reads belong to: itself, or the tests that import a helper."""
+    if script.is_test(test):
+        return {test}
+    return script.reaching([script.module_name(test)], found)
+
+
+def _reads(tracked: list[str]) -> list[tuple[str, str, str]]:
+    """(file that reads, repo file read, expression) over the real tests."""
+    found: list[tuple[str, str, str]] = []
+    for test in _test_files():
+        tree = ast.parse((REPO / test).read_text(encoding="utf-8"))
+        for item in sorted(_evidence(test, tree), key=str):
+            found.extend((test, path, item.parts) for path in _files_read(item, tracked))
+    return found
+
+
+def _uncovered(
+    reads: list[tuple[str, str, str]],
+    fallback: tuple[str, ...],
+    table: tuple,
+    allowances: tuple,
+    found,
+) -> list[tuple[str, str]]:
+    """(test, file read) for every repo file a test reads that nothing covers: not a
+    fallback glob, not a table row listing the test, not the import closure, not a named
+    allowance."""
+    missing: set[tuple[str, str]] = set()
+    for source, path, _ in reads:
+        for test in _readers(source, found):
+            rows = [row for row in table if script.matches(row.glob, path)]
+            module = script.module_name(path)
+            covered = (
+                any(script.matches(glob, path) for glob in fallback)
+                or any(test in script.targets_of(row, found) for row in rows)
+                or (script.in_graph(path) and test in script.reaching([module], found))
+                or any(
+                    script.matches(a.test, source) and script.matches(a.path, path)
+                    for a in allowances
+                )
+            )
+            if not covered:
+                missing.add((test, path))
+    return sorted(missing)
+
+
+def _declared_fallback() -> tuple[str, ...]:
+    data = yaml.safe_load(STACK_YAML.read_text(encoding="utf-8"))
+    return stack.affected_fallback(data, STACK_YAML)
+
+
+def _fallback() -> tuple[str, ...]:
+    """What the gate treats as fallback: the declared globs and, always, the stack file
+    itself, which the domain adds (ADR-0046)."""
+    return (*_declared_fallback(), ".agentic/stack.yaml")
+
+
+@pytest.fixture(scope="module")
+def real():
+    tracked = _tracked()
+    return tracked, _reads(tracked), _real_graph()
+
+
+def test_the_stack_declares_the_affected_form_and_keeps_the_other_checks_full():
+    data = yaml.safe_load(STACK_YAML.read_text(encoding="utf-8"))
+    forms = stack.affected_checks(data, STACK_YAML)
+    assert list(forms) == ["tests"]
+    assert forms["tests"].startswith("uv run python scripts/affected_tests.py {base}")
+    assert set(stack.checks(data, STACK_YAML)) == {"tests", "lint", "format", "types"}
+    assert _declared_fallback() == (
+        "pyproject.toml",
+        "uv.lock",
+        "*conftest.py",
+        "agentic/shared/*",
+        "agentic/composition.py",
+        "agentic/cli.py",
+        "agentic/*/prompts/*",
+        "agentic/plugins/*",
+        "*CONTEXT*.md",
+        ".github/*",
+        "scripts/*",
+        ".env.example",
+    )
+
+
+def test_every_repo_file_a_test_reads_is_covered_on_the_real_tree(real):
+    tracked, reads, found = real
+    assert reads, "the guard found no read at all: its evidence collector is broken"
+    missing = _uncovered(reads, _fallback(), script.TABLE, ALLOWANCES, found)
+    assert missing == [], (
+        "a test reads these repo files and neither `TABLE` in scripts/affected_tests.py, "
+        "`affected_fallback` in .agentic/stack.yaml nor ALLOWANCES covers them"
+    )
+
+
+def test_the_guard_rejects_a_read_nothing_covers(real):
+    _, reads, found = real
+    uncovered = _uncovered(reads, _fallback(), (), (), found)
+    assert ("tests/test_stack.py", "CODING_STANDARDS.md") in uncovered
+    assert (
+        "tests/test_observability_config.py",
+        "observability/collector/otel-collector.yaml",
+    ) in (uncovered)
+
+
+def test_the_guard_rejects_a_fallback_that_lost_a_glob_a_read_relied_on(real):
+    _, reads, found = real
+    narrowed = tuple(g for g in _fallback() if g != "pyproject.toml")
+    missing = _uncovered(reads, narrowed, script.TABLE, ALLOWANCES, found)
+    assert ("tests/test_stack.py", "pyproject.toml") in missing
+
+
+def test_the_evidence_finds_a_read_through_an_anchor_a_literal_and_a_walk():
+    source = (
+        "from pathlib import Path\n"
+        "ROOT = Path(__file__).resolve().parents[1]\n"
+        "A = ROOT / 'docs' / 'x.md'\n"
+        "B = 'observability/y.yaml'\n"
+        "def f():\n    return list((ROOT / 'agentic').rglob('*.py'))\n"
+    )
+    found = {(e.parts, e.scan) for e in _evidence("tests/test_x.py", ast.parse(source))}
+    assert ("docs/x.md", None) in found
+    assert ("observability/y.yaml", None) in found
+    assert ("agentic", "*.py") in found
+
+
+def test_table_ignore_and_allowances_do_not_repeat_a_fallback_glob_and_no_ignore_is_read(real):
+    tracked, reads, _ = real
+    fallback = set(_declared_fallback())
+    assert not {row.glob for row in script.TABLE} & fallback
+    assert not set(script.IGNORE) & fallback
+    assert not {a.path for a in ALLOWANCES} & fallback
+    for glob in script.IGNORE:
+        read = [(t, p) for t, p, _ in reads if script.matches(glob, p)]
+        assert read == [], f"{glob} is ignored but a test reads {read}"
+        assert not [
+            p
+            for p in tracked
+            if script.matches(glob, p) and any(script.matches(f, p) for f in fallback)
+        ]
+
+
+def test_every_fallback_glob_matches_a_real_path(real):
+    tracked, _, _ = real
+    for glob in _declared_fallback():
+        assert any(script.matches(glob, p) for p in tracked), f"{glob} matches nothing"
+
+
+def test_every_table_row_names_targets_that_exist_and_a_reason(real):
+    _, _, found = real
+    for row in script.TABLE:
+        assert row.reason.strip() and "\n" not in row.reason
+        assert script.targets_of(row, found), f"{row.glob} -> {row.targets} reaches no test"
+
+
+def test_the_real_tree_selects_a_subset_for_a_leaf_and_nearly_all_for_the_core(real):
+    _, _, found = real
+    every = {p for p in found.paths.values() if script.is_test(p)}
+    leaf = script.select(
+        ["agentic/core/process/adapters/shell/inhibitor.py"], found, script.TABLE, script.IGNORE
+    )
+    assert isinstance(leaf, script.Selection) and set(leaf.files) < every
+    assert len(leaf.files) < len(every) / 2
