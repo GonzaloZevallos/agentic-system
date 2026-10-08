@@ -29,10 +29,11 @@ from __future__ import annotations
 
 from agentic.shared.configuration import Configuration, experiment_snapshot
 
-from ..domain import presubmit, rules
+from ..domain import ci, presubmit, rules
 from ..domain.roles import TECH_LEAD, pair_for, reviewer_for
 from ..domain.task import WAITING_ON_HUMAN, TaskState, apply
-from .checkouts import SetupFailed, subtask_checkout
+from .checkouts import SetupFailed, subtask_checkout, task_base
+from .ci_review import CI_SECTION, CiEvidence, read_ci
 from .ports import Ports
 from .presubmit import declared_checks
 from .run_role import finish, run_role
@@ -53,8 +54,18 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
     section = rules.review_section(subtask_id)
     version = rules.next_version(state, section)
     head = ports.workspace.full_head(checkout.path)
+    # A product that declares `ci` has the system's own CI section in front of the
+    # reviewer and its red checks recorded as findings; one that does not is reviewed
+    # exactly as before, with no read of the tracker at all (GH-216).
+    declared = ports.stack.ci(task_base(state, ports))
+    evidence: CiEvidence | None = read_ci(state, declared, head, ports) if declared else None
+    reading = state
+    extra_ci: tuple[str, ...] = ()
+    if evidence is not None:
+        reading = {**state, "sections": {**state.get("sections", {}), CI_SECTION: evidence.section}}
+        extra_ci = (CI_SECTION,)
     output, patch = await run_role(
-        state,
+        reading,
         reviewer,
         cfg,
         ports,
@@ -62,6 +73,7 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
         extra_sections=(
             rules.developer_section(subtask_id),
             rules.return_section(state, subtask_id),
+            *extra_ci,
         ),
         cwd=checkout.path,
         subtask=subtask_id,
@@ -77,6 +89,10 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
     subtask = {**subtask, "reviewed_head": head}
     reason = output.data["reason"]
     findings, lowered = rules.lower_unbacked_blocks(output.data["findings"])
+    if evidence is not None and evidence.head is not None:
+        # After the lowering, so the system's own blocking finding, which always carries
+        # its run link, is never lowered; the verdict below is derived from the whole list.
+        findings = ci.ci_findings(evidence.head, evidence.master, declared, findings)
     category = rules.change_category(findings)
     markdown = rules.review_markdown(category, reason, output.text, lowered)
     patch = apply(patch, {"sections": {section: markdown}})

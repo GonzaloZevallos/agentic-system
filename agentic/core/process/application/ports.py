@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
+from ..domain.ci import CiReport, CiUnreadable
 from ..domain.design import Design
 from ..domain.playbook import Playbook
 from ..domain.roles import Role
@@ -339,6 +340,11 @@ class ProductStack(Protocol):
         """Whether the product lets the presubmit run its declared checks concurrently
         (`core.knowledge`, ADR-0044). Opt-in: `False` when the product declares nothing,
         which is the serial presubmit of today."""
+        ...
+
+    def ci(self, revision: str) -> tuple[str, ...]:
+        """The GitHub check-run names that gate a merge (GH-216). Empty when the product
+        declares no `ci`, which is the local-check path of today, unchanged."""
         ...
 
     def forbidden(self, revision: str) -> Sequence[Forbidden]:
@@ -753,6 +759,15 @@ class Tracker(Protocol):
         """Every pull request, any state, whose head branch is `branch`. Raises
         `ValueError` when the platform cannot answer, answers something unreadable, or
         may have answered a truncated page: a failed lookup is never an empty list."""
+        ...
+
+    def ci_report(self, reference: str) -> CiReport | CiUnreadable:
+        """The CI checks on the pull request's head, read with the head's own oid in one
+        query. An unreadable answer is a value, never an exception (GH-216)."""
+        ...
+
+    def branch_ci(self, branch: str) -> CiReport | CiUnreadable:
+        """The same, for the latest commit of `branch`."""
         ...
 
     def update_pull_request_body(self, number: int, body: str) -> None: ...

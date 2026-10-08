@@ -28,6 +28,7 @@ from agentic.core.process.application.ports import (
     Upstream,
 )
 from agentic.core.process.domain import rules
+from agentic.core.process.domain.ci import CiReport, CiUnreadable
 from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.playbook import Playbook
 from agentic.core.process.domain.roles import PROMPTS_DIR, Role
@@ -217,6 +218,7 @@ class MemoryStack:
         forbidden: list[Forbidden] | None = None,
         design: Design | None = None,
         parallel_checks: bool = False,
+        ci: tuple[str, ...] = (),
     ):
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -236,6 +238,8 @@ class MemoryStack:
         # False is a product that does not opt in to concurrent checks (ADR-0044), which
         # is every product until its own file says otherwise.
         self.declared_parallel_checks = parallel_checks
+        # Empty is a product that declares no `ci` (GH-216): the local-check path, as today.
+        self.declared_ci = ci
         self.revisions: list[str] = []
 
     def checks(self, revision: str) -> dict[str, str]:
@@ -255,6 +259,10 @@ class MemoryStack:
     def parallel_checks(self, revision: str) -> bool:
         # Not tracked in `revisions` either, `witness`'s own reason.
         return self.declared_parallel_checks
+
+    def ci(self, revision: str) -> tuple[str, ...]:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_ci
 
     def forbidden(self, revision: str) -> list[Forbidden]:
         # Not tracked in `revisions` either, `witness`'s own reason.
@@ -682,6 +690,19 @@ class MemoryTracker:
         # Called with the branch after the lookup answers, so a test can move the remote
         # between the read and the push.
         self.on_lookup: Callable[[str], None] | None = None
+        # GH-216: `ci_report`'s canned answer by reference and `branch_ci`'s by branch;
+        # a reference or branch not scripted is unreadable, never an invented report.
+        self.ci_reports: dict[str, CiReport | CiUnreadable] = {}
+        self.branch_reports: dict[str, CiReport | CiUnreadable] = {}
+        self.ci_reads: list[str] = []
+
+    def ci_report(self, reference: str) -> CiReport | CiUnreadable:
+        self.ci_reads.append(reference)
+        return self.ci_reports.get(reference, CiUnreadable("gh_unavailable"))
+
+    def branch_ci(self, branch: str) -> CiReport | CiUnreadable:
+        self.ci_reads.append(branch)
+        return self.branch_reports.get(branch, CiUnreadable("gh_unavailable"))
 
     def pull_request(self, reference: str) -> PullRequest | None:
         pull_request_number(reference)  # the adapter's own strictness: a bad reference raises
