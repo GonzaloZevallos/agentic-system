@@ -117,3 +117,71 @@ def test_reviewer_for_light_mode_cannot_be_reached_by_a_bad_subtask_id_alone():
 
     reviewer = reviewer_for({}, "not-actually-integration", mode="light")
     assert reviewer.slug != TECH_LEAD_REVIEWER.slug
+
+
+# -- the affected-only form, shown to the reviewer (ADR-0046) ---------------------------
+
+
+def _with_stack(**declared) -> tuple[dict, MemoryWorkspace, object]:
+    from agentic.core.process.domain.rules import task_branch
+    from tests.fakes import MemoryStack
+
+    workspace = MemoryWorkspace()
+    workspace.existing_branches[task_branch("GH-28")] = ("head0", "taskbase1")
+    return {**two_delivered(), "subtask_id": "api"}, workspace, MemoryStack(**declared)
+
+
+async def test_the_reviewer_is_shown_the_affected_form_with_the_task_base_and_may_run_it():
+    state, workspace, stack = _with_stack(
+        checks={"tests": "pytest"},
+        affected_checks={"tests": "pytest --since {base}"},
+        affected_fallback=("uv.lock",),
+    )
+    cfg = Configuration(product_dir=MemoryWorkspace.ROOT)
+    runner = ScriptedRunner(tech_lead_review=[reviewed("approved")])
+    await review(state, cfg, memory_ports(runner, workspace=workspace, stack=stack))
+    call = runner.calls[0]
+    assert "affected-only form: `pytest --since taskbase1`" in call["system_prompt"]
+    assert "{base}" not in call["system_prompt"]
+    assert "Bash(pytest --since:*)" in call["role"].allowed
+    assert "Bash(pytest:*)" in call["role"].allowed
+
+
+async def test_a_product_with_no_affected_form_gives_the_reviewer_today_s_checks_and_rules():
+    from agentic.core.process.domain import presubmit
+    from agentic.core.process.domain.roles import reviewer_for
+
+    state, workspace, stack = _with_stack(checks={"tests": "pytest"})
+    cfg = Configuration(product_dir=MemoryWorkspace.ROOT)
+    runner = ScriptedRunner(tech_lead_review=[reviewed("approved")])
+    await review(state, cfg, memory_ports(runner, workspace=workspace, stack=stack))
+    call = runner.calls[0]
+    assert presubmit.describe_checks({"tests": "pytest"}) in call["system_prompt"]
+    assert "affected-only" not in call["system_prompt"]
+    assert call["role"].allowed == reviewer_for({"tests": "pytest"}, "api").allowed
+
+
+async def test_the_light_reviewer_gets_the_affected_rule_too():
+    state, workspace, stack = _with_stack(
+        checks={"tests": "pytest"}, affected_checks={"tests": "pytest --since {base}"}
+    )
+    cfg = Configuration(product_dir=MemoryWorkspace.ROOT, review_mode="light")
+    runner = ScriptedRunner(tech_lead_review_light=[reviewed("approved")])
+    await review(state, cfg, memory_ports(runner, workspace=workspace, stack=stack))
+    assert "Bash(pytest --since:*)" in runner.calls[0]["role"].allowed
+    assert "affected-only form: `pytest --since taskbase1`" in runner.calls[0]["system_prompt"]
+
+
+async def test_the_diff_base_stays_the_reviewed_head_while_the_affected_base_is_the_tasks():
+    # The increment under review and the base the affected form selects against are two
+    # different things: the second is the whole branch, whatever head was reviewed last.
+    state, workspace, stack = _with_stack(
+        checks={"tests": "pytest"}, affected_checks={"tests": "pytest --since {base}"}
+    )
+    state["subtasks"]["api"]["reviewed_head"] = "reviewed9"
+    cfg = Configuration(product_dir=MemoryWorkspace.ROOT)
+    runner = ScriptedRunner(tech_lead_review=[reviewed("approved")])
+    await review(state, cfg, memory_ports(runner, workspace=workspace, stack=stack))
+    prompt = runner.calls[0]["system_prompt"]
+    assert "pytest --since taskbase1" in prompt
+    assert "pytest --since reviewed9" not in prompt

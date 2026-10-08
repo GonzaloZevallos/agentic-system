@@ -19,6 +19,7 @@ from typing import Literal
 
 from agentic.shared.configuration import RoleKind
 
+from . import presubmit
 from .document import ORIGINAL  # pseudo-section every role may declare: the task as it entered
 from .schemas import (
     PRD,
@@ -589,10 +590,18 @@ def check_rules(checks: Mapping[str, str]) -> tuple[str, ...]:
     return tuple(f"Bash({command}:*)" for command in checks.values())
 
 
+def affected_check_rules(commands: Mapping[str, str]) -> tuple[str, ...]:
+    """A permission rule per affected-only form (ADR-0046): the literal text before the
+    base token, so the reviewer can run the form only with a base appended to it."""
+    return tuple(f"Bash({presubmit.affected_prefix(command)}:*)" for command in commands.values())
+
+
 def reviewer_for(
     checks: Mapping[str, str],
     subtask_id: str = INTEGRATION,
     mode: Literal["full", "light"] = "full",
+    *,
+    affected: Mapping[str, str] | None = None,
 ) -> Role:
     """The reviewer of a task whose product declares `checks` (ADR-0016, addendum).
 
@@ -602,13 +611,17 @@ def reviewer_for(
     what it returns today, whatever `mode` a caller elsewhere might type. Under
     `light`, every subtask but the integration gets `TECH_LEAD_REVIEWER_LIGHT`; the
     integration always gets the full reviewer, in every mode, because its branch holds
-    every subtask and arm B needs one expensive pass to test the hypothesis at all."""
+    every subtask and arm B needs one expensive pass to test the hypothesis at all.
+
+    `affected` is the product's affected-only forms (ADR-0046): each adds one prefix rule
+    after the full checks'. `None` is today's reviewer, byte for byte."""
     base = (
         TECH_LEAD_REVIEWER
         if mode == "full" or subtask_id == INTEGRATION
         else TECH_LEAD_REVIEWER_LIGHT
     )
-    return replace(base, allowed=base.allowed + check_rules(checks))
+    rules = check_rules(checks) + (affected_check_rules(affected) if affected else ())
+    return replace(base, allowed=base.allowed + rules)
 
 
 def diagnoser_for(checks: Mapping[str, str]) -> Role:

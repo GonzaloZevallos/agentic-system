@@ -32,7 +32,7 @@ from agentic.shared.configuration import Configuration, experiment_snapshot
 from ..domain import presubmit, rules
 from ..domain.roles import TECH_LEAD, pair_for, reviewer_for
 from ..domain.task import WAITING_ON_HUMAN, TaskState, apply
-from .checkouts import SetupFailed, subtask_checkout
+from .checkouts import SetupFailed, subtask_checkout, task_base
 from .ports import Ports
 from .presubmit import declared_checks
 from .run_role import finish, run_role
@@ -43,7 +43,14 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
     subtask = state["subtasks"][subtask_id]
     reviewed_before = bool(subtask.get("reviewed_head"))
     checks = declared_checks(state, ports)
-    reviewer = reviewer_for(checks, subtask_id, mode=cfg.review_mode)
+    # The affected-only forms (ADR-0046) are read at the same base as `checks`, and the
+    # `{base}` they carry is the task's start, never the increment under review.
+    base = task_base(state, ports)
+    forms = ports.stack.affected_checks(base)
+    plan = (
+        presubmit.AffectedPlan(base, forms, ports.stack.affected_fallback(base)) if forms else None
+    )
+    reviewer = reviewer_for(checks, subtask_id, mode=cfg.review_mode, affected=forms or None)
     try:
         checkout = subtask_checkout(state, subtask_id, cfg, ports)
     except SetupFailed as unprepared:
@@ -69,7 +76,7 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
         review="an incremental review" if subtask.get("reviewed_head") else "a first review",
         remaining_changes=remaining,
         invariants=rules.invariants_markdown(state),
-        checks=presubmit.describe_checks(checks),
+        checks=presubmit.describe_checks(checks, affected=plan),
     )
     if output is None:
         return finish(state, patch, ports)
