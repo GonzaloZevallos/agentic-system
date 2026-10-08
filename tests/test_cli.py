@@ -18,6 +18,7 @@ from agentic import cli, composition
 from agentic.core.measurement.domain import evaluation
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.adapters.github import inbox
+from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.application.ports import LockHeld, LockRecord
 from agentic.core.process.domain import legacy_names
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
@@ -2156,6 +2157,7 @@ class FakePullRequestTracker(MemoryTracker):
         self.pull_request_refs: list[str] = []
 
     def pull_request(self, reference: str) -> PullRequest | None:
+        pull_request_number(reference)  # the real adapter's parse, before anything else
         self.pull_request_refs.append(reference)
         if self.raises is not None:
             raise self.raises
@@ -2680,6 +2682,7 @@ class _FlakyPullRequestTracker(FakePullRequestTracker):
         self.fails_at = fails_at
 
     def pull_request(self, reference: str) -> PullRequest | None:
+        pull_request_number(reference)  # the real adapter's parse, before anything else
         self.pull_request_refs.append(reference)
         if len(self.pull_request_refs) == self.fails_at:
             raise ValueError("gh: pull request could not be read")
