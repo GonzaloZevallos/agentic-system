@@ -152,6 +152,22 @@ def test_a_check_that_failed_in_full_never_runs_affected_again_on_that_instance(
     assert g.refusals == 1
 
 
+def test_a_check_that_failed_in_full_runs_full_only_on_the_next_parallel_call():
+    commands = MemoryCommands(
+        **{
+            AFFECTED: [CommandResult(1, "stale")],
+            "pytest": [CommandResult(1, "real"), CommandResult(0, "ok")],
+        }
+    )
+    g = gate(commands, parallel=True)
+    assert g() is not None  # affected red, full red
+    assert g() is None  # now full only
+    assert g.results is not None
+    assert [(r["name"], r["mode"]) for r in g.results] == [("tests", "full"), ("lint", "full")]
+    assert ran(commands).count(AFFECTED) == 1
+    assert ran(commands).count("pytest") == 2
+
+
 def test_a_fresh_instance_starts_on_affected_only_again():
     commands = MemoryCommands(
         **{AFFECTED: [CommandResult(1, "x")], "pytest": [CommandResult(1, "y")]}
