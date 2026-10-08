@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import ast
 import inspect
-from collections.abc import Callable
 
 import pytest
 
@@ -187,6 +186,12 @@ def _presubmit_offences(source: str) -> list[tuple[str, int]]:
         elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
             if node.name == GATE:
                 flag("name", node)
+        elif isinstance(node, ast.arg):
+            if node.arg == GATE:
+                flag("name", node)
+        elif isinstance(node, ast.ExceptHandler):
+            if node.name == GATE:
+                flag("name", node)
         elif isinstance(node, ast.Call):
             if isinstance(node.func, ast.Name) and node.func.id == GATE:
                 if any(isinstance(a, ast.Starred) for a in node.args) or any(
@@ -198,7 +203,8 @@ def _presubmit_offences(source: str) -> list[tuple[str, int]]:
                     flag("affected-keyword", keyword)
         elif isinstance(node, ast.Import):
             for alias in node.names:
-                _flag_alias(alias, node, flag)
+                for rule in _alias_rules(alias):
+                    flag(rule, node)
                 if alias.name == "importlib" or alias.name.startswith("importlib."):
                     flag("dynamic", node)
                 if alias.name == GATE:
@@ -210,18 +216,30 @@ def _presubmit_offences(source: str) -> list[tuple[str, int]]:
             if from_importlib:
                 flag("dynamic", node)
             for alias in node.names:
-                _flag_alias(alias, node, flag)
+                for rule in _alias_rules(alias):
+                    flag(rule, node)
                 pinned = node.module == "presubmit" and node.level == 1
                 if alias.name == GATE and not pinned:
                     flag("import-origin", node)
     return sorted(found, key=lambda pair: pair[1])
 
 
-def _flag_alias(alias: ast.alias, node: ast.stmt, flag: Callable[[str, ast.AST], None]) -> None:
+def _alias_rules(alias: ast.alias) -> list[str]:
+    rules: list[str] = []
     if alias.name == GATE and alias.asname is not None:
-        flag("alias", node)
+        rules.append("alias")
+    if alias.asname == GATE:
+        rules.append("name")  # another class bound to the gate's name
     if alias.name in PLAN_NAMES or alias.asname in PLAN_NAMES:
-        flag("plan-name", node)
+        rules.append("plan-name")
+    return rules
+
+
+UNPACK_NOTE = (
+    "`unpack` is deliberate: `affected` is keyword-only, so only `**` could smuggle a plan "
+    "into CheckoutPresubmit, and the guard does not trace dicts (GH-223), so any `*` or `**` "
+    "in a gate call is refused rather than followed."
+)
 
 
 def _rules(source: str) -> frozenset[str]:
@@ -288,6 +306,21 @@ REJECTED: dict[str, tuple[str, frozenset[str], frozenset[str]]] = {
         GATE_IMPORT + "CheckoutPresubmit(*args)",
         frozenset({"unpack", "name"}),
         frozenset({"affected-keyword"}),
+    ),
+    "another class bound to the name by an alias": (
+        "from .develop import Other as CheckoutPresubmit",
+        frozenset({"name"}),
+        frozenset(),
+    ),
+    "a parameter named like the gate": (
+        "def f(CheckoutPresubmit): ...",
+        frozenset({"name"}),
+        frozenset(),
+    ),
+    "an except handler named like the gate": (
+        "try:\n    pass\nexcept E as CheckoutPresubmit:\n    pass",
+        frozenset({"name"}),
+        frozenset(),
     ),
     "aliased import": (
         "from .presubmit import CheckoutPresubmit as Gate",
@@ -397,10 +430,8 @@ def test_the_guard_rejects_by_the_rules_each_row_targets(
     source: str, expected: frozenset[str], absent: frozenset[str]
 ):
     found = _rules(source)
-    # `unpack` is deliberate: `affected` is keyword-only, so only `**` could smuggle a plan
-    # in, and the guard does not trace dicts (GH-223); any `*` or `**` in a gate call is
-    # refused rather than followed.
-    assert expected <= found, f"expected {sorted(expected)} to fire, found {sorted(found)}"
+    note = f" {UNPACK_NOTE}" if "unpack" in expected else ""
+    assert expected <= found, f"expected {sorted(expected)} to fire, found {sorted(found)}.{note}"
     assert not absent & found, f"{sorted(absent & found)} must not fire, found {sorted(found)}"
 
 
@@ -434,7 +465,7 @@ def test_a_plan_inserted_into_the_real_gate_call_is_an_affected_keyword_offence(
 
 def test_a_double_star_inserted_into_the_real_gate_call_is_an_unpack_offence():
     _, mutated, _ = _insert_after_parallel("**opts,")
-    assert "unpack" in _rules(mutated)
+    assert "unpack" in _rules(mutated), UNPACK_NOTE
 
 
 def test_affected_is_keyword_only_so_double_star_is_the_only_route_for_a_plan():
