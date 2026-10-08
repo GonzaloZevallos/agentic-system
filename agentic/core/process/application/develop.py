@@ -16,6 +16,7 @@ from __future__ import annotations
 from agentic.shared.configuration import Configuration
 
 from ..domain import coverage, presubmit, rules
+from ..domain.presubmit import AffectedPlan
 from ..domain.roles import DEVELOPER, DEVELOPER_INTEGRATOR
 from ..domain.task import INTEGRATION, TaskState
 from .checkouts import SetupFailed, subtask_checkout, task_base
@@ -78,6 +79,16 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     notice_text = "\n\n".join(notices)
     before = ports.workspace.head(checkout.path)
     checks = declared_checks(state, ports)
+    # The affected-only forms (ADR-0046), read at the task's base like every other key
+    # and measured against that same base, which only `task_base` computes. A product
+    # that declares none gets no plan: the gate of before, byte for byte.
+    base = task_base(state, ports)
+    affected_commands = ports.stack.affected_checks(base)
+    plan = (
+        AffectedPlan(base, affected_commands, ports.stack.affected_fallback(base))
+        if affected_commands
+        else None
+    )
     delivery_presubmit = CheckoutPresubmit(
         ports,
         checkout.path,
@@ -86,6 +97,7 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         cfg.check_timeout_s,
         witness=ports.stack.witness(task_base(state, ports)),
         parallel=ports.stack.parallel_checks(task_base(state, ports)),
+        affected=plan,
     )
     # The product's own declared suppression cage (issue #38), at the task's base like
     # every other key here, never the branch's own: keyword-only through `run_role`, so

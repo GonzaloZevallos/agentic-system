@@ -31,6 +31,22 @@ checks:
 #
 # parallel_checks: true
 #
+# `affected_checks` and `affected_fallback`: optional (ADR-0046). `affected_checks` gives a
+# check, by the name it has under `checks`, a second command that runs only what the change
+# can affect. Only the Developer's delivery gate and the reviewer use it; the merge never
+# does, and always runs the full `checks`. `{base}` is replaced with the sha of the task's
+# base, so the command measures the whole branch. It must appear in the command and not at
+# its start. The command must exit non-zero when it selects nothing: do not add
+# `--passWithNoTests` or an equivalent. When it fails the gate runs the full command. A
+# change to any path matching `affected_fallback` runs the full commands too, and so does a
+# change to `.agentic/stack.yaml`, always. In these globs `*` crosses `/`.
+#
+# affected_checks:
+#   tests: npx vitest run --changed {base}
+# affected_fallback:
+#   - uv.lock
+#   - tests/conftest.py
+#
 # `forbidden`: optional. A list of rules the Edit/Write hook denies a Developer from
 # adding: each names a `pattern`, the `extensions` it applies to, and the `reason` a
 # denial carries verbatim. One that was already in the file is not the task's. What a

@@ -237,8 +237,8 @@ PIN_ORACLE: dict[str, str] = {"astral-sh/setup-uv": "uv --version"}
 # is what keeps this table honest, the same discipline `_mypy_option_names`
 # already applies to the mypy registry.
 PINNED_REFS: dict[str, str] = {
-    "actions/checkout": "v4",
-    "astral-sh/setup-uv": "v5",
+    "actions/checkout": "v7",
+    "astral-sh/setup-uv": "v10.2.0",
 }
 
 _VERSION_KEY = re.compile(r"^version$|(-|_)version$")
@@ -435,51 +435,51 @@ def test_unknown_pins_rejects_a_with_key_absent_from_the_oracle_table():
 
 
 def test_unknown_pins_accepts_a_step_whose_uses_is_in_the_table():
-    step = {"uses": "astral-sh/setup-uv@v5", "with": {"enable-cache": True}}
+    step = {"uses": "astral-sh/setup-uv@v10.2.0", "with": {"enable-cache": True}}
     assert unknown_pins([step], PIN_ORACLE) == []
 
 
 def test_unknown_pins_rejects_the_historical_setup_uv_major_mismatch():
     """GH-74: `version: "10.2.0"` was the action's own major, not a uv release;
     uv on `PATH` was 0.12.x and the tarball 404'd in CI."""
-    step = {"uses": "astral-sh/setup-uv@v5", "with": {"version": "10.2.0"}}
+    step = {"uses": "astral-sh/setup-uv@v10.2.0", "with": {"version": "10.2.0"}}
     observed = {"uv --version": "uv 0.12.13 (deadbeef 2026-08-01)"}
     violations = unknown_pins([step], PIN_ORACLE, observed=observed)
     assert violations and "10.2.0" in violations[0] and "0.12.13" in violations[0]
 
 
 def test_unknown_pins_accepts_a_patch_only_drift():
-    step = {"uses": "astral-sh/setup-uv@v5", "with": {"version": "0.12.13"}}
+    step = {"uses": "astral-sh/setup-uv@v10.2.0", "with": {"version": "0.12.13"}}
     observed = {"uv --version": "uv 0.12.14 (deadbeef 2026-08-01)"}
     assert unknown_pins([step], PIN_ORACLE, observed=observed) == []
 
 
 def test_unknown_pins_rejects_latest():
-    step = {"uses": "astral-sh/setup-uv@v5", "with": {"version": "latest"}}
+    step = {"uses": "astral-sh/setup-uv@v10.2.0", "with": {"version": "latest"}}
     violations = unknown_pins([step], PIN_ORACLE)
     assert violations and "literal" in violations[0]
 
 
 def test_unknown_pins_rejects_a_range():
-    step = {"uses": "astral-sh/setup-uv@v5", "with": {"version": ">=0.12,<1"}}
+    step = {"uses": "astral-sh/setup-uv@v10.2.0", "with": {"version": ">=0.12,<1"}}
     violations = unknown_pins([step], PIN_ORACLE)
     assert violations and "literal" in violations[0]
 
 
 def test_unknown_pins_rejects_an_expression():
-    step = {"uses": "astral-sh/setup-uv@v5", "with": {"version": "${{ vars.UV_VERSION }}"}}
+    step = {"uses": "astral-sh/setup-uv@v10.2.0", "with": {"version": "${{ vars.UV_VERSION }}"}}
     violations = unknown_pins([step], PIN_ORACLE)
     assert violations and "literal" in violations[0]
 
 
 def test_unknown_pins_rejects_an_empty_string():
-    step = {"uses": "astral-sh/setup-uv@v5", "with": {"version": ""}}
+    step = {"uses": "astral-sh/setup-uv@v10.2.0", "with": {"version": ""}}
     violations = unknown_pins([step], PIN_ORACLE)
     assert violations and "literal" in violations[0]
 
 
 def test_unknown_pins_rejects_a_malformed_uv_version_line():
-    step = {"uses": "astral-sh/setup-uv@v5", "with": {"version": "0.12.13"}}
+    step = {"uses": "astral-sh/setup-uv@v10.2.0", "with": {"version": "0.12.13"}}
     observed = {"uv --version": "command not found: uv"}
     violations = unknown_pins([step], PIN_ORACLE, observed=observed)
     assert violations and "not a parseable version" in violations[0]

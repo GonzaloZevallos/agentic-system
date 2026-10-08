@@ -877,6 +877,56 @@ def test_presubmit_checks_leave_one_array_entry_per_invocation_only_the_last_fin
     ]
 
 
+def test_a_check_with_two_rows_counts_its_final_status_and_sums_its_duration(spans):
+    """An affected run that was red and the full rerun that was green: one green cell and
+    one duration of both runs, never a red and a green for the same check."""
+    invocations = [
+        [
+            {**_check(passed=False, duration_s=2.0), "mode": "affected-only"},
+            {**_check(passed=True, duration_s=3.0), "mode": "full"},
+            _check(name="lint", command="ruff check .", passed=True, duration_s=0.5),
+        ]
+    ]
+    with telemetry.role_span("Developer", "developer", "gym-saas", arm="default") as run:
+        run.finish({"presubmit_checks": invocations, "cost_usd": 0.3})
+    span = spans.get_finished_spans()[-1]
+    assert sorted(span.attributes["agentic.presubmit.checks"]) == [
+        "lint/green/True=1",
+        "tests/green/True=1",
+    ]
+    assert list(span.attributes["agentic.presubmit.duration"]) == ["tests=5.0", "lint=0.5"]
+
+
+def test_a_check_red_in_its_final_row_counts_red(spans):
+    invocations = [
+        [
+            {**_check(passed=True, duration_s=1.0), "mode": "affected-only"},
+            {**_check(passed=False, duration_s=1.0), "mode": "full"},
+        ]
+    ]
+    with telemetry.role_span("Developer", "developer", "gym-saas", arm="default") as run:
+        run.finish({"presubmit_checks": invocations, "cost_usd": 0.3})
+    span = spans.get_finished_spans()[-1]
+    assert list(span.attributes["agentic.presubmit.checks"]) == ["tests/red/True=1"]
+
+
+def test_a_mode_on_a_row_changes_neither_the_cells_nor_the_durations(spans):
+    plain = [[_check(duration_s=1.0), _check(name="lint", duration_s=2.0)]]
+    moded = [[{**row, "mode": "full"} for row in plain[0]]]
+    seen = []
+    for invocations in (plain, moded):
+        with telemetry.role_span("Developer", "developer", "gym-saas", arm="default") as run:
+            run.finish({"presubmit_checks": invocations, "cost_usd": 0.3})
+        attributes = spans.get_finished_spans()[-1].attributes
+        seen.append(
+            (
+                list(attributes["agentic.presubmit.checks"]),
+                list(attributes["agentic.presubmit.duration"]),
+            )
+        )
+    assert seen[0] == seen[1]
+
+
 def test_a_patch_with_no_presubmit_invocations_emits_no_presubmit_attribute(spans):
     with telemetry.role_span("Developer", "developer", "gym-saas", arm="default") as run:
         run.finish({"cost_usd": 0.1})

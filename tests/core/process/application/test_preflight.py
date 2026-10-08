@@ -319,3 +319,55 @@ def test_a_playbook_for_a_role_the_table_does_not_name_refuses(stage0, tmp_path)
 def test_the_delivery_records_are_not_mistaken_for_playbooks(stage0, tmp_path):
     ports = overlay_ports(tmp_path, reflected="tasks: []", rejected="adds: []")
     preflight(Configuration(product_dir=tmp_path), ports)
+
+
+# -- the optional affected-only form (ADR-0046) ---------------------------------------
+
+
+class BrokenAffectedChecksStack(MemoryStack):
+    """A stack whose `affected_checks` has a command with no `{base}`: `declared_stack`
+    must surface it at load, before a gate would run it."""
+
+    def affected_checks(self, revision: str) -> dict[str, str]:
+        raise ValueError(
+            "stack.yaml: the command for 'tests' under `affected_checks` has no {base}"
+        )
+
+
+class BrokenAffectedFallbackStack(MemoryStack):
+    def affected_fallback(self, revision: str) -> tuple[str, ...]:
+        raise ValueError("stack.yaml: expected `affected_fallback` to be a list")
+
+
+def test_a_broken_affected_checks_refuses_before_spending(stage0):
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    with pytest.raises(ValueError, match="under `affected_checks`"):
+        preflight(
+            Configuration(product_dir=PRODUCT), replace(ports, stack=BrokenAffectedChecksStack())
+        )
+
+
+def test_a_broken_affected_fallback_refuses_before_spending(stage0):
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    with pytest.raises(ValueError, match="expected `affected_fallback`"):
+        preflight(
+            Configuration(product_dir=PRODUCT), replace(ports, stack=BrokenAffectedFallbackStack())
+        )
+
+
+def test_a_broken_affected_checks_also_refuses_at_a_tasks_base(stage0):
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    with pytest.raises(ValueError, match="under `affected_checks`"):
+        declared_stack(replace(ports, stack=BrokenAffectedChecksStack()), "abc123")
+
+
+def test_a_stack_with_the_affected_keys_passes_and_keeps_its_setup_as_the_answer(stage0):
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    stack = MemoryStack(
+        setup={"deps": "uv sync"},
+        affected_checks={"tests": "pytest --since {base}"},
+        affected_fallback=("uv.lock",),
+    )
+    preflight(Configuration(product_dir=PRODUCT), replace(ports, stack=stack))
+    assert declared_stack(replace(ports, stack=stack)) == {"deps": "uv sync"}
+    assert stack.revisions == ["HEAD", "HEAD", "HEAD", "HEAD"]

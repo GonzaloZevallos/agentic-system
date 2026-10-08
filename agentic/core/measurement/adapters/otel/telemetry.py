@@ -40,7 +40,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
-from agentic.core.process.domain.presubmit import CheckResult
+from agentic.core.process.domain.presubmit import CheckResult, check_durations, final_results
 from agentic.core.process.domain.task import FindingRecord, TaskState, delta
 from agentic.core.process.domain.task import RoleRun as RoleRunRecord
 from agentic.shared.stage0 import CHECKOUT
@@ -279,18 +279,23 @@ def _presubmit_arrays(
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """`agentic.presubmit.checks` (one `"check/result/final=count"` cell per invocation
     of the delivery gate that ran the checks) and `agentic.presubmit.duration` (one
-    `"check=seconds"` entry per check occurrence, unaggregated since a duration cannot
-    be summed into a count without losing the figure a panel would want)."""
+    `"check=seconds"` entry per check per invocation, unaggregated across invocations
+    since a duration cannot be summed into a count without losing the figure a panel
+    would want). A check that ran twice in one invocation (an affected-only run and the
+    full rerun, ADR-0046) is its final row's status and the sum of its rows' seconds;
+    with one row per check, which is every product that declares no affected form, this
+    is what it always was."""
     last = len(invocations) - 1
     counts: dict[str, int] = {}
     durations: list[str] = []
     for index, results in enumerate(invocations):
         final = index == last
-        for check in results:
+        seconds = check_durations(results)
+        for check in final_results(results):
             result = "green" if check["passed"] else "red"
             cell = f"{check['name']}/{result}/{final}"
             counts[cell] = counts.get(cell, 0) + 1
-            durations.append(f"{check['name']}={check.get('duration_s', 0.0)}")
+            durations.append(f"{check['name']}={seconds[check['name']]}")
     return _counts(counts), tuple(durations)
 
 

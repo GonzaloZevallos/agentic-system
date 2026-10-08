@@ -13,10 +13,10 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from ..domain import presubmit
-from ..domain.presubmit import CheckResult, WitnessResult
+from ..domain.presubmit import AffectedPlan, CheckResult, Mode, WitnessResult
 from ..domain.task import TaskState
 from .checkouts import task_base
-from .ports import Ports
+from .ports import GitError, Ports
 
 
 def declared_checks(state: TaskState, ports: Ports) -> dict[str, str]:
@@ -39,6 +39,7 @@ class CheckoutPresubmit:
         *,
         witness: str | None = None,
         parallel: bool = False,
+        affected: AffectedPlan | None = None,
     ):
         self.ports = ports
         self.path = path
@@ -54,6 +55,15 @@ class CheckoutPresubmit:
         # (the default) is the serial gate of before, byte for byte; keyword-only so
         # every existing construction site compiles untouched.
         self.parallel = parallel
+        # The product's affected-only forms, with the base they are measured against
+        # (ADR-0046), or None: the gate of before, byte for byte. Keyword-only with this
+        # default so every existing construction site, `merge.py`'s included, compiles
+        # and behaves untouched.
+        self.affected = affected
+        # The checks that failed in their full form on this instance: they never run
+        # their affected form again, even after they later pass in full. A new Developer
+        # run builds a new instance and starts on affected-only again.
+        self.stuck_full: set[str] = set()
         self.refusals = 0
         # The witness's own budget, separate from `refusals`/`REFUSALS`: a misdeclared
         # witness must never spend the budget the checks need.
@@ -72,10 +82,17 @@ class CheckoutPresubmit:
 
     @property
     def timeout_s(self) -> float:
+        witness = self.check_timeout_s if self.witness else 0
         if self.parallel:
             # Every check runs at once, each under its own `check_timeout_s`: the
-            # slowest one bounds the call, and the witness runs before them, alone.
-            return self.check_timeout_s + (self.check_timeout_s if self.witness else 0)
+            # slowest one bounds the call, and the witness runs before them, alone. With
+            # an affected plan that one worker may run its affected form and then the
+            # full one, one after the other.
+            runs = 2 if self.affected is not None else 1
+            return self.check_timeout_s * runs + witness
+        if self.affected is not None:
+            runs = len(self.checks) + len(self.affected.commands)
+            return self.check_timeout_s * max(runs, 1) + witness
         base = self.check_timeout_s * max(len(self.checks), 1)
         return base + (self.check_timeout_s if self.witness else 0)
 
@@ -91,7 +108,7 @@ class CheckoutPresubmit:
         if moved and clean:
             if self.witness is not None:
                 witness_reason = self._run_witness(self.witness)
-            results = self._run_all()
+            results = self._run_all(self._modes(head))
             self.head, self.results = head, results
             self.invocations.append(self.results)
         # A witness disagreement leads, on its own capped budget: `refusals`/`REFUSALS`
@@ -100,20 +117,68 @@ class CheckoutPresubmit:
         if witness_reason is not None and self.witness_refusals < presubmit.WITNESS_REFUSALS:
             self.witness_refusals += 1
             return presubmit.witness_refused(witness_reason)
-        reason = presubmit.refusal(moved, clean, self.results or [])
+        # A check that ran twice is decided by its last row, never by the affected one
+        # the full rerun superseded.
+        reason = presubmit.refusal(moved, clean, presubmit.final_results(self.results or []))
         if reason is None or self.refusals >= presubmit.REFUSALS:
             return None
         self.refusals += 1
         return presubmit.refused(reason, self.refusals)
 
-    def _run_all(self) -> list[CheckResult]:
+    def _modes(self, head: str) -> dict[str, Mode] | None:
+        """Which form each check runs, or None without a plan. A changed-paths lookup
+        that fails is `None` for the domain, which runs everything full."""
+        if self.affected is None:
+            return None
+        try:
+            paths: tuple[str, ...] | None = self.ports.workspace.changed_paths(
+                self.affected.base, head
+            )
+        except (GitError, OSError):
+            paths = None
+        return presubmit.check_modes(list(self.checks), self.affected, paths)
+
+    def _run_all(self, modes: dict[str, Mode] | None) -> list[CheckResult]:
+        if modes is None:
+            if not self.parallel:
+                return [self._run(n, c) for n, c in self.checks.items()]
+            # `map` keeps declared order. If a `_run` raises, leaving the `with` waits for
+            # the other started checks before the error propagates, so no check outlives
+            # the call; nothing is recorded for it, the same as serial.
+            with ThreadPoolExecutor(max_workers=max(len(self.checks), 1)) as pool:
+                return list(pool.map(lambda item: self._run(*item), self.checks.items()))
+        plan = self.affected
+        assert plan is not None  # modes exist only under a plan
         if not self.parallel:
-            return [self._run(n, c) for n, c in self.checks.items()]
-        # `map` keeps declared order. If a `_run` raises, leaving the `with` waits for
-        # the other started checks before the error propagates, so no check outlives
-        # the call; nothing is recorded for it, the same as serial.
+            return [
+                row
+                for name, command in self.checks.items()
+                for row in self._run_planned(name, command, modes[name], plan)
+            ]
         with ThreadPoolExecutor(max_workers=max(len(self.checks), 1)) as pool:
-            return list(pool.map(lambda item: self._run(*item), self.checks.items()))
+            per_check = pool.map(
+                lambda item: self._run_planned(*item, modes[item[0]], plan), self.checks.items()
+            )
+            return [row for rows in per_check for row in rows]
+
+    def _run_planned(
+        self, name: str, command: str, mode: Mode, plan: AffectedPlan
+    ) -> list[CheckResult]:
+        """One check under a plan: its affected form, then the full one when the
+        affected one did not pass; the full form alone when the mode says so or the
+        check already failed in full on this instance."""
+        rows: list[CheckResult] = []
+        if mode == "affected-only" and name not in self.stuck_full:
+            form = presubmit.affected_command(plan.commands[name], plan.base)
+            first = self._run(name, form, "affected-only")
+            rows.append(first)
+            if first["passed"]:
+                return rows
+        full = self._run(name, command, "full")
+        rows.append(full)
+        if not full["passed"]:
+            self.stuck_full.add(name)
+        return rows
 
     def markdown(self) -> str | None:
         """The checks as the Developer's section opens with them; None if none ran. The
@@ -122,7 +187,8 @@ class CheckoutPresubmit:
         the checks') were spent."""
         if self.results is None or self.head is None:
             return None
-        return presubmit.checks_markdown(self.head, self.results, self.witness_result)
+        base = self.affected.base if self.affected is not None else None
+        return presubmit.checks_markdown(self.head, self.results, self.witness_result, base=base)
 
     def _run_witness(self, command: str) -> str | None:
         checkout = self.path.resolve()
@@ -137,15 +203,18 @@ class CheckoutPresubmit:
         }
         return reason
 
-    def _run(self, name: str, command: str) -> CheckResult:
+    def _run(self, name: str, command: str, mode: Mode | None = None) -> CheckResult:
         started = time.monotonic()
         result = self.ports.commands.run(self.path, command, self.check_timeout_s)
         duration_s = time.monotonic() - started
         output = presubmit.said(result.output, result.timed_out, self.check_timeout_s)
-        return {
+        row: CheckResult = {
             "name": name,
             "command": command,
             "passed": result.passed,
             "output": output,
             "duration_s": duration_s,
         }
+        if mode is not None:
+            row["mode"] = mode
+        return row

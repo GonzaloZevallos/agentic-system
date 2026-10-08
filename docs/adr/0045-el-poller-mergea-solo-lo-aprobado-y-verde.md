@@ -495,6 +495,10 @@ cambia: `auto_merge_decision` y `MergeRefusal` siguen leyendo solo `passed`.
 - **§7.** No se agrega ni se mueve ninguna métrica, etiqueta ni atributo de span; las claves
   nuevas del documento son `merge_checks.checks` y `merge_checks.failed_step`, solo agregadas.
   `prompts.fingerprint` no cambia.
+- **Con ADR-0046.** El merge sigue sin correr nunca una forma affected-only: un CI verde y fresco
+  ocupa el lugar de la corrida completa del merge, así que el producto que declara `ci` y
+  `affected_checks` debe correr la suite completa en ese CI. El camino local (sin `ci`, o con el
+  CI verde pero viejo) corre las formas completas como dice ADR-0046.
 - **§8.** Se ensancha: la salida de los checks y del `setup` del propio producto, limpia y
   acotada, llega al comentario del issue y al frontmatter. Quienes la ven son quienes ya leen el
   documento de tarea, donde `checks_markdown` ya copia los tails rojos. Costo: a lo sumo

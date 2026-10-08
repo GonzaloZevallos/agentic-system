@@ -219,6 +219,8 @@ class MemoryStack:
         design: Design | None = None,
         parallel_checks: bool = False,
         ci: dict[str, tuple[str, ...]] | tuple[str, ...] | None = None,
+        affected_checks: dict[str, str] | None = None,
+        affected_fallback: tuple[str, ...] = (),
     ):
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -252,6 +254,10 @@ class MemoryStack:
             self.declared_ci = ci
         self.ci_error: str | None = None
         self.ci_revisions: list[str] = []
+        # Empty is a product with no affected-only form (ADR-0046), every product until
+        # its own file says otherwise.
+        self.declared_affected_checks = {} if affected_checks is None else affected_checks
+        self.declared_affected_fallback = affected_fallback
         self.revisions: list[str] = []
 
     def checks(self, revision: str) -> dict[str, str]:
@@ -271,6 +277,14 @@ class MemoryStack:
     def parallel_checks(self, revision: str) -> bool:
         # Not tracked in `revisions` either, `witness`'s own reason.
         return self.declared_parallel_checks
+
+    def affected_checks(self, revision: str) -> dict[str, str]:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_affected_checks
+
+    def affected_fallback(self, revision: str) -> tuple[str, ...]:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_affected_fallback
 
     def forbidden(self, revision: str) -> list[Forbidden]:
         # Not tracked in `revisions` either, `witness`'s own reason.

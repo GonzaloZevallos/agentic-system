@@ -44,7 +44,14 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
     subtask = state["subtasks"][subtask_id]
     reviewed_before = bool(subtask.get("reviewed_head"))
     checks = declared_checks(state, ports)
-    reviewer = reviewer_for(checks, subtask_id, mode=cfg.review_mode)
+    # The affected-only forms (ADR-0046) are read at the same base as `checks`, and the
+    # `{base}` they carry is the task's start, never the increment under review.
+    base = task_base(state, ports)
+    forms = ports.stack.affected_checks(base)
+    plan = (
+        presubmit.AffectedPlan(base, forms, ports.stack.affected_fallback(base)) if forms else None
+    )
+    reviewer = reviewer_for(checks, subtask_id, mode=cfg.review_mode, affected=forms or None)
     try:
         checkout = subtask_checkout(state, subtask_id, cfg, ports)
     except SetupFailed as unprepared:
@@ -57,7 +64,7 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
     # A product that declares `ci` has the system's own CI section in front of the
     # reviewer and its red checks recorded as findings; one that does not is reviewed
     # exactly as before, with no read of the tracker at all (GH-216).
-    declared = ports.stack.ci(task_base(state, ports))
+    declared = ports.stack.ci(base)
     evidence: CiEvidence | None = read_ci(state, declared, head, ports) if declared else None
     reading = state
     extra_ci: tuple[str, ...] = ()
@@ -81,7 +88,7 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
         review="an incremental review" if subtask.get("reviewed_head") else "a first review",
         remaining_changes=remaining,
         invariants=rules.invariants_markdown(state),
-        checks=presubmit.describe_checks(checks),
+        checks=presubmit.describe_checks(checks, affected=plan),
     )
     if output is None:
         return finish(state, patch, ports)

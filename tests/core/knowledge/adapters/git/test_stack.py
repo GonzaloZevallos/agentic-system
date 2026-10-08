@@ -113,3 +113,39 @@ def test_a_parallel_checks_that_is_not_a_bool_at_the_base_is_an_error(product):
     base = commit_stack(product, 'checks:\n  tests: pytest\nparallel_checks: "true"\n')
     with pytest.raises(ValueError, match="expected `parallel_checks`"):
         GitStack(product).parallel_checks(base)
+
+
+def test_the_affected_keys_are_read_from_the_base_commit(product):
+    base = commit_stack(
+        product,
+        "checks:\n  tests: pytest\n"
+        "affected_checks:\n  tests: pytest --since {base}\n"
+        "affected_fallback:\n  - uv.lock\n",
+    )
+    commit_stack(product, "checks:\n  tests: pytest\n")
+    assert GitStack(product).affected_checks(base) == {"tests": "pytest --since {base}"}
+    assert GitStack(product).affected_fallback(base) == ("uv.lock",)
+    assert GitStack(product).affected_checks("HEAD") == {}
+    assert GitStack(product).affected_fallback("HEAD") == ()
+
+
+def test_a_product_that_declares_no_affected_keys_reads_them_empty(product):
+    base = commit_stack(product, "checks:\n  tests: pytest\n")
+    assert GitStack(product).affected_checks(base) == {}
+    assert GitStack(product).affected_fallback(base) == ()
+
+
+def test_a_broken_affected_checks_at_the_base_is_an_error_naming_key_and_source(product):
+    base = commit_stack(
+        product, "checks:\n  tests: pytest\naffected_checks:\n  tests: pytest --lf\n"
+    )
+    with pytest.raises(
+        ValueError, match=rf"{base}:.agentic/stack.yaml.*'tests'.*affected_checks.*base"
+    ):
+        GitStack(product).affected_checks(base)
+
+
+def test_a_broken_affected_fallback_at_the_base_is_an_error_naming_key_and_source(product):
+    base = commit_stack(product, "checks:\n  tests: pytest\naffected_fallback: uv.lock\n")
+    with pytest.raises(ValueError, match=r"expected `affected_fallback`"):
+        GitStack(product).affected_fallback(base)
