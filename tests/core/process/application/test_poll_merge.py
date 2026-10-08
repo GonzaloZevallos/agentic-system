@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Literal
 
+from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.application import merge, poll, resume
 from agentic.core.process.application.ports import (
     IssueComment,
@@ -198,6 +199,7 @@ def test_an_unreadable_pull_request_is_refused_as_not_open_not_a_crash():
 
 def test_a_pull_request_read_that_raises_oserror_still_prints_the_not_open_line():
     def raising(reference):
+        pull_request_number(reference)
         raise OSError("gh missing")
 
     ports = _ports(5)
@@ -474,6 +476,7 @@ def test_a_task_not_ready_still_reaches_the_decision_which_refuses_it_by_name(tm
 
 def test_a_tracker_that_raises_reading_the_pull_request_is_a_refusal_with_its_line():
     def raising(reference):
+        pull_request_number(reference)
         raise ValueError("gh failed")
 
     ports = _ports(5)

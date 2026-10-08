@@ -427,3 +427,33 @@ Riesgos conocidos de esta adenda:
 
 No se agrega ni se mueve ninguna métrica, etiqueta, span, clave del documento ni prompt;
 `prompts.fingerprint` no cambia.
+
+## Adenda (2026-10-07): el merge apunta al pull request guardado, nunca al número del issue (GH-211)
+
+El paso 9 llamaba `Tracker.merge(number, head_sha)` con el número del **issue**, y el adaptador
+corría `gh pr merge <número>`. Cuando el issue y su pull request tienen números distintos
+(GH-209 y el PR #210), `gh` rechazaba el merge; cuando el número del issue es el de otro PR
+abierto, sólo `--match-head-commit` impedía mergear el PR equivocado. Esta adenda reemplaza,
+por nombre, `Tracker.merge(number, head_sha)` del paso 9; el texto de ese paso queda como
+estaba.
+
+- **La llave.** `Tracker.merge(reference, head_sha)` recibe la referencia al pull request que
+  `deliver` guardó en el documento (la URL), la misma llave que ya usa
+  `Tracker.pull_request(reference)`. Nunca recibe un número de issue. El caso de uso pasa la
+  referencia como un `str` opaco.
+- **Quién la lee.** Sólo el adaptador la interpreta, con el mismo `pull_request_number` que
+  usa `pull_request(reference)`.
+- **Qué recibe `gh`.** `gh pr merge` recibe el número ya extraído, no la URL, y resuelve el
+  repositorio desde `product_dir`, exactamente como `pull_request`: toda llamada a `gh` corre
+  con `cwd=product_dir`. Así la lectura y el merge ven el mismo repositorio. Por eso la URL no
+  se pasa a `gh`: podría llegar a un repositorio que la lectura nunca miró.
+- **Una referencia ilegible.** El verbo se detiene en su primera lectura de `pull_request`,
+  con `tracker_error`, antes de escribir la intención y antes de correr los checks. Dentro del
+  adaptador, `merge` la lee antes de cualquier llamada a `gh` y un fallo es
+  `MergeCallFailed("gh_unreadable")`, nunca un `ValueError` pelado. No hay clase nueva de
+  `MergeFailure`.
+- **Lo que no cambia.** El orden de la intención y del método, `_after_failure`, la elección
+  del método y las clases de fallo por paso siguen igual.
+
+No se agrega ni se mueve ninguna métrica, etiqueta, span, clave del documento ni prompt;
+`prompts.fingerprint` no cambia.

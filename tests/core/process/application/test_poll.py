@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.application import poll
 from agentic.core.process.application.ports import (
     IssueComment,
@@ -34,6 +35,7 @@ class _TrackerWithPullRequest(MemoryTracker):
         self.prs = prs or {}
 
     def pull_request(self, reference: str) -> PullRequest | None:
+        pull_request_number(reference)  # the real adapter's parse, before anything else
         return self.prs.get(reference)
 
 

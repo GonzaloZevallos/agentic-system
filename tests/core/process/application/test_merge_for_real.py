@@ -18,6 +18,7 @@ from agentic.core.knowledge.adapters.git import GitStack
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.adapters.git.workspace import GitWorkspace
 from agentic.core.process.adapters.shell.commands import ShellCommands
+from agentic.core.process.application.merge import merge_task
 from agentic.core.process.application.ports import Upstream
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
@@ -25,7 +26,7 @@ from agentic.shared.configuration import Configuration
 from tests.fakes import MemoryTracker, memory_ports
 
 GREEN = "test -f feature.txt && test -f upstream.txt"
-URL = "https://github.com/o/r/pull/9"
+URL = "https://github.com/o/r/pull/210"
 
 
 def git(*args: str, cwd: Path) -> str:
@@ -41,10 +42,10 @@ def git(*args: str, cwd: Path) -> str:
 class MergingTracker(MemoryTracker):
     """`gh pr merge` for real enough: once merged, the pull request reads MERGED."""
 
-    def merge(self, number: int, head_sha: str) -> str:
-        method = super().merge(number, head_sha)
-        self.prs[URL] = dataclasses.replace(
-            self.prs[URL], state="MERGED", merged_at="2026-10-06T00:00:00Z"
+    def merge(self, reference: str, head_sha: str) -> str:
+        method = super().merge(reference, head_sha)
+        self.prs[reference] = dataclasses.replace(
+            self.prs[reference], state="MERGED", merged_at="2026-10-06T00:00:00Z"
         )
         return method
 
@@ -74,7 +75,7 @@ class World:
             documents=FilesystemTaskDocuments(self.product),
             tracker=self.tracker,
         )
-        checkout = self.ports.workspace.task_checkout("GH-9")
+        checkout = self.ports.workspace.task_checkout("GH-209")
         (checkout.path / "feature.txt").write_text("feature\n")
         git("add", "-A", cwd=checkout.path)
         git("commit", "-q", "-m", "feature", cwd=checkout.path)
@@ -100,7 +101,7 @@ class World:
         )
         self.ports.documents.save(
             {
-                "id": "GH-9",
+                "id": "GH-209",
                 "title": "t",
                 "description": "d",
                 "status": "ready_for_review",
@@ -113,10 +114,10 @@ class World:
         )
 
     def merge(self) -> None:
-        anyio.run(cli._merge, "GH-9", 9, self.cfg, self.ports)
+        anyio.run(cli._merge, "GH-209", 209, self.cfg, self.ports)
 
     def doc(self) -> dict:
-        return self.ports.documents.load("GH-9") or {}
+        return self.ports.documents.load("GH-209") or {}
 
 
 @pytest.fixture
@@ -131,14 +132,50 @@ def test_a_green_head_merged_with_master_is_merged_and_closed_as_auto_merged(wor
     master = git("rev-parse", "origin/master", cwd=world.product)
     assert doc["merge_checks"]["passed"] is True
     assert doc["merge_checks"]["head"] == world.head and doc["merge_checks"]["master"] == master
-    assert world.tracker.merge_calls == [(9, world.head)]
+    assert world.tracker.merge_calls == [(URL, world.head)]
     assert doc["auto_merge_head"] == world.head and doc["auto_merge_master"] == master
     assert doc["auto_merge_method"] == "squash" and doc["auto_merged_at"]
     assert doc["delivery_outcome"] == "auto_merged"
     assert [text for _, text in world.tracker.comments] == [f"Auto-merged: {world.head} via squash"]
     # The checks ran in the throwaway worktree: gone now, and the product tree untouched.
-    assert not (world.product / ".agentic/worktrees/merge-GH-9").exists()
+    assert not (world.product / ".agentic/worktrees/merge-GH-209").exists()
     assert not (world.product / "feature.txt").exists()
+
+
+def test_the_merge_targets_the_pull_request_never_the_issue_number(world):
+    world.merge()
+
+    assert world.tracker.merge_calls == [(URL, world.head)]
+    assert "209" not in repr(world.tracker.merge_calls)
+    assert world.doc()["delivery_outcome"] == "auto_merged"
+
+
+def test_a_document_with_an_unparsable_pull_request_stops_before_any_intent(world):
+    world.deliver(pull_request="not-a-url")
+
+    result = merge_task(
+        "GH-209",
+        209,
+        world.cfg,
+        world.ports,
+        world.ports.workspace.upstream(),
+        frozenset(),
+        lambda line: None,
+    )
+
+    assert result.kind == "stopped" and (result.reason or "").startswith("tracker_error")
+    doc = world.doc()
+    assert "auto_merge_head" not in doc and world.tracker.merge_calls == []
+    assert world.tracker.comments == []
+
+
+def test_the_merge_tracker_double_rejects_a_bad_reference_and_records_nothing():
+    tracker = MemoryTracker()
+    with pytest.raises(ValueError, match="not a pull request URL"):
+        tracker.merge("209", "abc")
+    with pytest.raises(ValueError, match="not a pull request URL"):
+        tracker.pull_request("209")
+    assert tracker.merge_calls == [] and tracker.events == []
 
 
 def test_a_red_head_is_refused_once_and_writes_no_intent(tmp_path):
@@ -157,13 +194,13 @@ def test_a_red_head_is_refused_once_and_writes_no_intent(tmp_path):
 
 
 def test_a_leftover_merge_worktree_does_not_break_entry(world):
-    leftover = world.product / ".agentic/worktrees/merge-GH-9"
+    leftover = world.product / ".agentic/worktrees/merge-GH-209"
     leftover.mkdir(parents=True)
     (leftover / "stale.txt").write_text("from a crashed run")
 
     world.merge()
 
-    assert world.tracker.merge_calls == [(9, world.head)]
+    assert world.tracker.merge_calls == [(URL, world.head)]
     assert not leftover.exists()
 
 
@@ -192,7 +229,7 @@ def test_master_moving_after_the_checks_refuses_and_writes_nothing(world, monkey
     world.tracker.prs[URL] = dataclasses.replace(
         world.tracker.prs[URL], state="MERGED", merged_at="2026-10-06T01:00:00Z"
     )
-    assert cli._close_document("GH-9", world.cfg, world.ports).outcome == "merged"
+    assert cli._close_document("GH-209", world.cfg, world.ports).outcome == "merged"
 
 
 def test_a_merge_that_fails_with_the_pull_request_open_withdraws_the_intent(world):
@@ -210,12 +247,12 @@ def test_a_merge_that_fails_with_the_pull_request_open_withdraws_the_intent(worl
     world.tracker.prs[URL] = dataclasses.replace(
         world.tracker.prs[URL], state="MERGED", merged_at="2026-10-06T01:00:00Z"
     )
-    result = cli._close_document("GH-9", world.cfg, world.ports)
+    result = cli._close_document("GH-209", world.cfg, world.ports)
     assert result.outcome == "merged"
 
 
 def test_a_merge_that_fails_but_landed_keeps_the_intent_and_closes_as_auto_merged(world):
-    def landed(number: int, head: str) -> str:
+    def landed(reference: str, head: str) -> str:
         world.tracker.prs[URL] = dataclasses.replace(
             world.tracker.prs[URL], state="MERGED", merged_at="2026-10-06T00:00:00Z"
         )
@@ -232,7 +269,7 @@ def test_a_merge_that_fails_but_landed_keeps_the_intent_and_closes_as_auto_merge
 
 
 def test_an_issue_in_the_eval_set_on_upstream_alone_is_never_merged(world):
-    (world.product / ".agentic/eval-set.yaml").write_text("issues: [9, 10]\nsmoke: 9\n")
+    (world.product / ".agentic/eval-set.yaml").write_text("issues: [209, 10]\nsmoke: 209\n")
     git("add", ".agentic/eval-set.yaml", cwd=world.product)
     git("commit", "-q", "-m", "eval set", cwd=world.product)
     git("push", "-q", "origin", "HEAD:master", cwd=world.product)
@@ -263,7 +300,7 @@ def test_a_guarded_path_is_refused_once_and_the_poller_stops_spawning_for_the_he
     from agentic.core.process.application import poll
     from tests.core.process.application.test_poll import _Locks
 
-    checkout = world.ports.workspace.task_checkout("GH-9")
+    checkout = world.ports.workspace.task_checkout("GH-209")
     (checkout.path / "CODING_STANDARDS.md").write_text("weaker\n")
     git("add", "-A", cwd=checkout.path)
     git("commit", "-q", "-m", "standards", cwd=checkout.path)
@@ -408,7 +445,7 @@ def test_nothing_is_fetched_or_diffed_after_the_merge_call_and_no_stderr_is_reco
 
 def test_a_spent_document_with_no_comment_gets_exactly_one_comment(world):
     world.ports.documents.record_closure(
-        "GH-9",
+        "GH-209",
         {
             "merge_failures": {
                 "head": world.head,
@@ -428,7 +465,7 @@ def test_a_spent_document_with_no_comment_gets_exactly_one_comment(world):
 
 def test_a_spent_document_without_a_valid_class_comments_with_the_unknown_advice(world):
     world.ports.documents.record_closure(
-        "GH-9",
+        "GH-209",
         {"merge_failures": {"head": world.head, "count": rules.MERGE_CALLS_MAX, "failure": SECRET}},
     )
     world.merge()
@@ -439,7 +476,7 @@ def test_a_spent_document_without_a_valid_class_comments_with_the_unknown_advice
 
 def test_a_new_head_resets_the_failure_count_and_the_merge_goes_ahead(world):
     world.ports.documents.record_closure(
-        "GH-9",
+        "GH-209",
         {
             "merge_failures": {
                 "head": "c" * 40,
@@ -449,5 +486,5 @@ def test_a_new_head_resets_the_failure_count_and_the_merge_goes_ahead(world):
         },
     )
     world.merge()
-    assert world.tracker.merge_calls == [(9, world.head)]
+    assert world.tracker.merge_calls == [(URL, world.head)]
     assert world.doc()["delivery_outcome"] == "auto_merged"
