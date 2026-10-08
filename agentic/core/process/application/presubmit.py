@@ -187,7 +187,8 @@ class CheckoutPresubmit:
         the checks') were spent."""
         if self.results is None or self.head is None:
             return None
-        return presubmit.checks_markdown(self.head, self.results, self.witness_result)
+        base = self.affected.base if self.affected is not None else None
+        return presubmit.checks_markdown(self.head, self.results, self.witness_result, base=base)
 
     def _run_witness(self, command: str) -> str | None:
         checkout = self.path.resolve()

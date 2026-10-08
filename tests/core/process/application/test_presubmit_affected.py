@@ -68,6 +68,7 @@ def test_a_green_affected_run_records_one_affected_only_row_and_the_full_form_fo
     ]
     markdown = g.markdown()
     assert markdown is not None and "affected-only" in markdown
+    assert "selected against `abc123`" in markdown
 
 
 def test_the_changed_paths_are_read_against_the_plan_base():
