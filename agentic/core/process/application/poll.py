@@ -24,7 +24,7 @@ from typing import assert_never, get_args
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import document, rules
+from ..domain import document, presubmit, rules
 from ..domain.boot import boot_verdict
 from ..domain.task import PullRequest, TaskState
 from . import reflect_run
@@ -210,7 +210,8 @@ def gather_closes(ports: Ports) -> list[int]:
 def _recorded(raw: TaskState, key: str) -> dict[str, object]:
     """A record the merge verb wrote (`merge_checks`, `merge_attempts`, `merge_failures`),
     read with `.get`: absent on every document that never saw one, and anything that is not
-    a mapping reads as absent too."""
+    a mapping reads as absent too. `merge_checks` also holds `checks` (default `[]`) and
+    `failed_step` (default None) since GH-212, read with `.get` and absent on older ones."""
     value = raw.get(key)
     return value if isinstance(value, dict) else {}
 
@@ -316,9 +317,12 @@ def gather_merges(
         facts = _merge_facts(task_id, raw, pull_request, eval_set, number, current_master)
         decision = rules.auto_merge_decision(facts)
         if decision.kind == "refuse":
-            out.append(
-                f"agentic: poll: auto-merge #{number} -> left to the human: {decision.reason}"
-            )
+            line = f"agentic: poll: auto-merge #{number} -> left to the human: {decision.reason}"
+            if decision.reason == "checks_failed":
+                pr_head = pull_request.head_oid if pull_request is not None else None
+                summary = presubmit.failed_checks_summary(_recorded(raw, "merge_checks"), pr_head)
+                line += f" ({summary})" if summary else ""
+            out.append(line)
         else:
             found.append(number)
     return found
