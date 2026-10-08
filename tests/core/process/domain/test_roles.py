@@ -280,3 +280,65 @@ def test_in_the_integration_review_a_problem_between_subtasks_is_the_subtasks():
     assert "In the integration review" in prompt
     # The schema reaches the model too: both must say the same.
     assert "On the integration branch" in Finding.model_fields["scope"].description
+
+
+# -- the reviewer's rule for an affected-only form (ADR-0046) ---------------------------
+
+
+def test_affected_check_rules_is_one_prefix_rule_per_command_before_the_base_token():
+    from agentic.core.process.domain.roles import affected_check_rules
+
+    rules = affected_check_rules(
+        {
+            "tests": "uv run pytest --since {base}",
+            "e2e": "npx playwright test --only-changed={base}",
+        }
+    )
+    assert rules == (
+        "Bash(uv run pytest --since:*)",
+        "Bash(npx playwright test --only-changed=:*)",
+    )
+
+
+def test_affected_check_rules_of_nothing_is_nothing():
+    from agentic.core.process.domain.roles import affected_check_rules
+
+    assert affected_check_rules({}) == ()
+
+
+def test_affected_check_rules_never_grants_the_full_command_or_a_wider_prefix():
+    # The reject case: a rule is the literal text before `{base}`, nothing broader, so a
+    # command that merely shares a first word is not allowed by it.
+    from agentic.core.process.domain.roles import affected_check_rules
+
+    (rule,) = affected_check_rules({"tests": "pytest -q --since {base}"})
+    assert rule == "Bash(pytest -q --since:*)"
+    assert "{base}" not in rule
+    assert rule != "Bash(pytest:*)"
+
+
+def test_reviewer_for_adds_the_affected_rules_after_the_check_rules_in_either_mode():
+    from agentic.core.process.domain.roles import (
+        TECH_LEAD_REVIEWER,
+        TECH_LEAD_REVIEWER_LIGHT,
+        reviewer_for,
+    )
+
+    checks = {"tests": "pytest"}
+    affected = {"tests": "pytest --since {base}"}
+    full = reviewer_for(checks, affected=affected)
+    assert full.allowed == (*TECH_LEAD_REVIEWER.allowed, "Bash(pytest:*)", "Bash(pytest --since:*)")
+    light = reviewer_for(checks, "api", mode="light", affected=affected)
+    assert light.allowed == (
+        *TECH_LEAD_REVIEWER_LIGHT.allowed,
+        "Bash(pytest:*)",
+        "Bash(pytest --since:*)",
+    )
+
+
+def test_reviewer_for_without_affected_is_byte_identical_to_today():
+    from agentic.core.process.domain.roles import reviewer_for
+
+    checks = {"tests": "pytest"}
+    assert reviewer_for(checks, affected=None) == reviewer_for(checks)
+    assert reviewer_for(checks, affected={}) == reviewer_for(checks)
