@@ -7,6 +7,7 @@ No role runs here; it is the system talking to the human, which ADR-0001 allows.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import assert_never
 
 from agentic.shared.configuration import Configuration
@@ -87,8 +88,13 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             # The sha is durable before the destructive step, whether or not the branch
             # carries the document.
             ports.documents.save(state)
+        # The head the push carries, read after the last commit and before the push:
+        # nothing is committed after it (GH-216), so the CI the push starts is of this sha.
+        step = "head read failed"
+        pushed_head = ports.workspace.full_head(task.path)
         step = "push failed"
         ports.workspace.push(task.branch, lease=plan.old_sha if plan.kind == "replace" else None)
+        pushed_at = datetime.now(UTC).isoformat(timespec="seconds")
         step = "gh pr create failed"
         url = ports.tracker.open_pull_request(state["id"], task.branch, state["title"], body.text)
     except (GitError, ValueError) as failed:
@@ -98,6 +104,8 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         "pull_request": url,
         "branch": task.branch,
         "current_role": PJM.name,
+        "pushed_head": pushed_head,
+        "pushed_at": pushed_at,
         **record,
     }
     # Best effort from here: the pull request exists, so a crash would only make the
