@@ -8,6 +8,7 @@ import threading
 from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 from agentic.core.knowledge.domain import knowledge
 from agentic.core.process.adapters.github.tracker import pull_request_number
@@ -28,6 +29,7 @@ from agentic.core.process.application.ports import (
     Upstream,
 )
 from agentic.core.process.domain import rules
+from agentic.core.process.domain.ci import CiReport, CiUnreadable
 from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.playbook import Playbook
 from agentic.core.process.domain.roles import PROMPTS_DIR, Role
@@ -217,6 +219,7 @@ class MemoryStack:
         forbidden: list[Forbidden] | None = None,
         design: Design | None = None,
         parallel_checks: bool = False,
+        ci: tuple[str, ...] = (),
     ):
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -236,6 +239,9 @@ class MemoryStack:
         # False is a product that does not opt in to concurrent checks (ADR-0044), which
         # is every product until its own file says otherwise.
         self.declared_parallel_checks = parallel_checks
+        # Empty is a product that declares no CI (GH-216): every product until its own
+        # file says otherwise.
+        self.declared_ci = ci
         self.revisions: list[str] = []
 
     def checks(self, revision: str) -> dict[str, str]:
@@ -255,6 +261,10 @@ class MemoryStack:
     def parallel_checks(self, revision: str) -> bool:
         # Not tracked in `revisions` either, `witness`'s own reason.
         return self.declared_parallel_checks
+
+    def ci(self, revision: str) -> tuple[str, ...]:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_ci
 
     def forbidden(self, revision: str) -> list[Forbidden]:
         # Not tracked in `revisions` either, `witness`'s own reason.
@@ -470,6 +480,9 @@ class MemoryWorkspace:
         self.fetched_commits: list[str] = []
         self.diff_reads: list[tuple[str, str]] = []
         self.diff_paths: tuple[str, ...] = ()
+        # GH-216: what `contains` answers, and each `(head, master)` it was asked.
+        self.contains_answer: Literal["yes", "no", "unknown"] = "unknown"
+        self.contains_calls: list[tuple[str, str]] = []
         self.detached: list[str] = []
         self.removed_checkouts: list[str] = []
 
@@ -588,6 +601,10 @@ class MemoryWorkspace:
         self.fetched_commits.append(sha)
         return True
 
+    def contains(self, head: str, master: str) -> Literal["yes", "no", "unknown"]:
+        self.contains_calls.append((head, master))
+        return self.contains_answer
+
     def changed_paths(self, base: str, head: str) -> tuple[str, ...]:
         self.diff_reads.append((base, head))
         return self.diff_paths
@@ -682,6 +699,25 @@ class MemoryTracker:
         # Called with the branch after the lookup answers, so a test can move the remote
         # between the read and the push.
         self.on_lookup: Callable[[str], None] | None = None
+        # GH-216: the CI reports the pull request's reads answer, one per call, the last
+        # repeating once it is the only one left (several unreadable rounds, then green);
+        # empty is a tracker with no CI report at all, which reads as unreadable.
+        # `ci_reads` is each reference asked, `branch_ci_reports` the report per branch.
+        self.ci_reports: list[CiReport | CiUnreadable] = []
+        self.ci_reads: list[str] = []
+        self.branch_ci_reports: dict[str, CiReport | CiUnreadable] = {}
+        self.branch_ci_reads: list[str] = []
+
+    def ci_report(self, reference: str) -> CiReport | CiUnreadable:
+        self.events.append("ci_report")
+        self.ci_reads.append(reference)
+        if not self.ci_reports:
+            return CiUnreadable("gh_unavailable")
+        return self.ci_reports.pop(0) if len(self.ci_reports) > 1 else self.ci_reports[0]
+
+    def branch_ci(self, branch: str) -> CiReport | CiUnreadable:
+        self.branch_ci_reads.append(branch)
+        return self.branch_ci_reports.get(branch, CiUnreadable("gh_unavailable"))
 
     def pull_request(self, reference: str) -> PullRequest | None:
         pull_request_number(reference)  # the adapter's own strictness: a bad reference raises

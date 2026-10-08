@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
+from ..domain.ci import CiReport, CiUnreadable
 from ..domain.design import Design
 from ..domain.playbook import Playbook
 from ..domain.roles import Role
@@ -341,6 +342,12 @@ class ProductStack(Protocol):
         which is the serial presubmit of today."""
         ...
 
+    def ci(self, revision: str) -> tuple[str, ...]:
+        """The check-run names the product declares as its merge gate (GH-216), as its
+        commit `revision` declares them. Empty when it declares none, which is a product
+        that merges on its local checks, byte for byte as before."""
+        ...
+
     def forbidden(self, revision: str) -> Sequence[Forbidden]:
         """The suppressions this product forbids a Developer's Edit or Write from
         adding (`core.knowledge`, issue #38), in file order: first declared rule wins.
@@ -633,6 +640,12 @@ class Workspace(Protocol):
         failure, not an unresolved blocker, and must not read as "launch anyway"."""
         ...
 
+    def contains(self, head: str, master: str) -> Literal["yes", "no", "unknown"]:
+        """Whether `head` has `master` in its history (GH-216), fetching both shas first.
+        `unknown` when either is unreachable or git fails: a caller must read it as stale,
+        never as fresh. Never raises."""
+        ...
+
     def changed_paths(self, base: str, head: str) -> tuple[str, ...]:
         """The paths `git diff --name-only <base>...<head>` names (GH-178): what the
         pull request changes against the commit it branched from. Raises `GitError`."""
@@ -791,6 +804,16 @@ class Tracker(Protocol):
         carries a `comments` attribute of its own (every posted comment, the fixture's
         long-standing test-inspection surface), and the two must never collide. Empty
         when the task has no issue, the same shape `issue_comments` already has."""
+        ...
+
+    def ci_report(self, reference: str) -> CiReport | CiUnreadable:
+        """The CI checks of the pull request at `reference` and the oid of the commit they
+        ran on, read in one query (GH-216). `CiUnreadable` when `gh` is missing or its
+        answer cannot be read: never an exception, never prose."""
+        ...
+
+    def branch_ci(self, branch: str) -> CiReport | CiUnreadable:
+        """The same for the latest commit of `branch`."""
         ...
 
     def merge(self, reference: str, head_sha: str) -> str:
