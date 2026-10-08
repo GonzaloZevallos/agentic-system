@@ -188,8 +188,8 @@ PIN_ORACLE: dict[str, str] = {"astral-sh/setup-uv": "uv --version"}
 # is what keeps this table honest, the same discipline `_mypy_option_names`
 # already applies to the mypy registry.
 PINNED_REFS: dict[str, str] = {
-    "actions/checkout": "v4",
-    "astral-sh/setup-uv": "v5",
+    "actions/checkout": "v7",
+    "astral-sh/setup-uv": "v10.2.0",
 }
 
 _VERSION_KEY = re.compile(r"^version$|(-|_)version$")
