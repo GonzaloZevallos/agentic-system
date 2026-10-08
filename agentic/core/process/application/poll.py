@@ -19,15 +19,17 @@ from __future__ import annotations
 import functools
 import time
 from collections.abc import Callable, Sequence
-from datetime import datetime
+from dataclasses import replace
+from datetime import UTC, datetime
 from typing import assert_never, get_args
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import document, presubmit, rules
+from ..domain import ci, document, presubmit, rules
 from ..domain.boot import boot_verdict
 from ..domain.task import PullRequest, TaskState
 from . import reflect_run
+from .checkouts import task_base
 from .ports import (
     GitError,
     IssueComment,
@@ -264,6 +266,76 @@ def _text(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _seconds_since(anchor: str | None, now: datetime) -> float | None:
+    """Seconds from an ISO timestamp to `now`; None for no anchor or one that does not
+    parse, which the decision reads as an unknown wait, never a crash."""
+    if not anchor:
+        return None
+    try:
+        then = datetime.fromisoformat(anchor)
+    except ValueError:
+        return None
+    if then.tzinfo is None:
+        then = then.replace(tzinfo=UTC)
+    return (now - then).total_seconds()
+
+
+def with_ci(
+    facts: rules.MergeFacts,
+    raw: TaskState,
+    declared: tuple[str, ...],
+    report: ci.CiReport | ci.CiUnreadable | None,
+    fresh: bool | None = None,
+    now: datetime | None = None,
+) -> rules.MergeFacts:
+    """`facts` plus the CI ones (GH-216), for the product that declares `declared` as its
+    merge gate. `report` is None when none was read: the decision then waits, which is only
+    ever asked after every earlier refusal has been ruled out. The classification is
+    `ci.ci_state`'s and the freshness `ci.ci_fresh`'s: nothing here reads a check."""
+    if not declared:
+        return facts
+    now = now or datetime.now(UTC)
+    if report is None:
+        return replace(facts, ci_required=declared)
+    if isinstance(report, ci.CiUnreadable):
+        anchor = ci.ci_wait_anchor(
+            raw.get("pushed_head"), raw.get("pushed_at"), facts.pr_head, None
+        )
+        return replace(
+            facts,
+            ci_required=declared,
+            ci_unreadable=report,
+            ci_waited_s=_seconds_since(anchor, now),
+        )
+    anchor = ci.ci_wait_anchor(
+        raw.get("pushed_head"), raw.get("pushed_at"), facts.pr_head, report.opened_at
+    )
+    return replace(
+        facts,
+        ci_required=declared,
+        ci_head=report.head_sha,
+        ci_verdict=ci.ci_state(report, declared),
+        ci_fresh=fresh,
+        ci_waited_s=_seconds_since(anchor, now),
+    )
+
+
+def ci_wait_line(number: int, facts: rules.MergeFacts) -> str:
+    """The poller's line for a CI that is not decidable yet: what it waits on and for how
+    long (`?` when the wait has no anchor)."""
+    waited = "?" if facts.ci_waited_s is None else str(int(facts.ci_waited_s))
+    if facts.ci_unreadable is not None:
+        what = f"unreadable {facts.ci_unreadable.cause}"
+    elif facts.ci_verdict is not None and facts.ci_verdict.missing:
+        what = f"missing {', '.join(facts.ci_verdict.missing)}"
+    elif facts.ci_verdict is not None and facts.ci_verdict.state == "pending":
+        what = "pending"
+    else:
+        what = "pending head"
+    bound = f"{waited}s of {ci.CI_WAIT_MAX_S}"
+    return f"agentic: poll: auto-merge #{number} -> waiting: ci {what} ({bound})"
+
+
 def awaiting_merge(ports: Ports) -> bool:
     """Whether any task has a pull request and no closure: the one cheap read, on exactly
     what `gather_merges` itself filters on, that decides if the round needs the upstream
@@ -315,13 +387,24 @@ def gather_merges(
         if pull_request is not None and rules.pr_abandoned(pull_request.state):
             continue  # closed unmerged: nothing to merge, nothing to say, nothing written
         facts = _merge_facts(task_id, raw, pull_request, eval_set, number, current_master)
-        decision = rules.auto_merge_decision(facts)
-        if decision.kind == "refuse":
+        declared = ports.stack.ci(task_base(raw, ports))
+        decision = rules.auto_merge_decision(replace(facts, ci_required=declared))
+        if declared and decision.kind != "refuse":
+            # Every refusal ahead of the CI's is ruled out: only now is the report read.
+            report = ports.tracker.ci_report(str(reference))
+            facts = with_ci(facts, raw, declared, report)
+            decision = rules.auto_merge_decision(facts)
+        if decision.kind == "wait":
+            out.append(ci_wait_line(number, facts))
+        elif decision.kind == "refuse":
             line = f"agentic: poll: auto-merge #{number} -> left to the human: {decision.reason}"
             if decision.reason == "checks_failed":
                 pr_head = pull_request.head_oid if pull_request is not None else None
                 summary = presubmit.failed_checks_summary(_recorded(raw, "merge_checks"), pr_head)
                 line += f" ({summary})" if summary else ""
+            if decision.reason == "ci_failed" and facts.ci_verdict is not None:
+                names = ", ".join(check.name for check in facts.ci_verdict.failing)
+                line += f" ({names})"
             out.append(line)
         else:
             found.append(number)

@@ -19,10 +19,10 @@ from typing import Literal
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import presubmit, rules
+from ..domain import ci, presubmit, rules
 from ..domain.task import PullRequest, TaskState
 from .checkouts import task_base
-from .poll import AUTO_MERGE_REFUSED, AUTO_MERGED, _merge_facts
+from .poll import AUTO_MERGE_REFUSED, AUTO_MERGED, _merge_facts, with_ci
 from .ports import CommandResult, GitError, MergeCallFailed, Ports, Upstream
 from .presubmit import CheckoutPresubmit
 
@@ -34,6 +34,9 @@ COMMENTED: tuple[str, ...] = (
     "eval_set_unreadable",
     "attempts_exhausted",
     "merge_failed",
+    "ci_failed",
+    "ci_missing",
+    "ci_unreadable",
 )
 
 LEFT_TO_HUMAN = "Left for the human to merge."
@@ -91,23 +94,65 @@ def merge_task(
             return MergeResult("stopped", f"diff_unreadable: {exc}")
     elif head is not None:
         return MergeResult("stopped", f"head_unreachable: {head}")
-    facts = _facts(task_id, raw, pull_request, eval_set, number, master, touched)
+    declared = ports.stack.ci(base)
+    report: ci.CiReport | ci.CiUnreadable | None = None
+    fresh: bool | None = None
+    if declared:
+        report = ports.tracker.ci_report(str(reference))
+        if isinstance(report, ci.CiReport) and head is not None:
+            fresh = ci.ci_fresh(report.base_sha, master, ports.workspace.contains(head, master))
+
+    def decide(document: TaskState) -> rules.MergeFacts:
+        base_facts = _facts(task_id, document, pull_request, eval_set, number, master, touched)
+        return with_ci(base_facts, document, declared, report, fresh)
+
+    facts = decide(raw)
     decision = rules.auto_merge_decision(facts)
+    if decision.kind == "wait":
+        return MergeResult("stopped", "ci_wait")
     if decision.kind == "run_checks":
         assert head is not None  # a decision never asks for checks without a head
         _run_checks(task_id, raw, head, master, base, cfg, ports, facts.attempts + 1, log)
         raw = ports.documents.load(task_id) or raw
-        facts = _facts(task_id, raw, pull_request, eval_set, number, master, touched)
+        facts = decide(raw)
         decision = rules.auto_merge_decision(facts)
     if decision.kind == "refuse":
         assert decision.reason is not None
         if decision.reason == "guarded_path" and head is not None:
             _spend_attempts(task_id, raw, head, ports)
         failure = facts.merge_failure if decision.reason == "merge_failed" else None
-        return _refuse(task_id, head, decision.reason, ports, failure=failure)
+        return _refuse(task_id, head, decision.reason, ports, failure=failure, facts=facts)
     if decision.kind != "merge" or head is None:
         return MergeResult("stopped", "no_decision")
-    return _merge(task_id, number, str(reference), head, ports, facts, clock, log)
+    relied = _ci_links(report, declared) if _merges_on_ci(facts) else None
+    return _merge(
+        task_id, number, str(reference), head, ports, facts, clock, log, relied, bool(declared)
+    )
+
+
+def _merges_on_ci(facts: rules.MergeFacts) -> bool:
+    """The `merge` rested on the CI alone: declared, green on this head and fresh. The
+    same three facts `rules.auto_merge_decision` merges on before it looks at any local
+    check."""
+    return (
+        bool(facts.ci_required)
+        and facts.ci_verdict is not None
+        and facts.ci_verdict.state == "green"
+        and facts.ci_fresh is True
+    )
+
+
+def _ci_links(
+    report: ci.CiReport | ci.CiUnreadable | None, declared: tuple[str, ...]
+) -> list[dict[str, str]]:
+    """The declared checks the merge relied on, each with the run link it was read at."""
+    if not isinstance(report, ci.CiReport):
+        return []
+    return [
+        {"name": check.name, "link": check.link}
+        for check in report.checks
+        if check.name in declared
+    ]
 
 
 def _name(task_id: str) -> str:
@@ -236,9 +281,15 @@ def _merge(
     facts: rules.MergeFacts,
     clock: Callable[[], str],
     log: Callable[[str], None],
+    relied: list[dict[str, str]] | None = None,
+    ci_declared: bool = False,
 ) -> MergeResult:
-    master = facts.checks_master
-    assert master is not None  # a `merge` decision rests on recorded checks
+    """`relied` is the CI links a merge on the CI rested on (None: it rested on the local
+    checks); `ci_declared` says the product declares its CI, which is the only case that
+    records how the merge was decided (`auto_merge_via`)."""
+    # A `merge` rests on recorded checks, or on a fresh CI: either way on this master.
+    master = facts.current_master
+    assert master is not None
     # The last look at master: a push since the checks makes them stale, and nothing is
     # written (the next round decides again).
     again = ports.workspace.upstream()
@@ -249,10 +300,17 @@ def _merge(
     # shows the system meant to merge this head (`delivery_outcome` reads it). The method
     # is not part of it: it is written only after the merge returned (ADR-0045, addendum
     # 2026-10-06).
-    ports.documents.record_closure(
-        task_id,
-        {"auto_merge_head": head, "auto_merge_master": master, "auto_merge_at": clock()},
-    )
+    intent: TaskState = {
+        "auto_merge_head": head,
+        "auto_merge_master": master,
+        "auto_merge_at": clock(),
+    }
+    if relied is not None:
+        intent["auto_merge_via"] = "ci"
+        intent["auto_merge_ci"] = relied
+    elif ci_declared:
+        intent["auto_merge_via"] = "local"
+    ports.documents.record_closure(task_id, intent)
     try:
         method = ports.tracker.merge(reference, head)
     except MergeCallFailed as exc:
@@ -264,7 +322,12 @@ def _merge(
     ports.documents.record_closure(
         task_id, {"auto_merged_at": clock(), "auto_merge_method": method}
     )
-    ports.tracker.comment(task_id, f"{AUTO_MERGED}{head} via {method}")
+    text = f"{AUTO_MERGED}{head} via {method}"
+    if relied is not None:
+        text += "\n\nCI relied on:\n" + "\n".join(
+            f"- {row['name']}: {row['link']}" for row in relied
+        )
+    ports.tracker.comment(task_id, text)
     return MergeResult("merged", method=method)
 
 
@@ -323,6 +386,24 @@ def _after_failure(
     return MergeResult("stopped", "ambiguous")
 
 
+def _ci_evidence(reason: str, facts: rules.MergeFacts) -> str:
+    """What a CI refusal says, from structured facts only: one line per failing check
+    (name, conclusion, link) with no tail, the declared names never reported, or `gh` and
+    the cause class of an unreadable report."""
+    verdict = facts.ci_verdict
+    if reason == "ci_failed" and verdict is not None:
+        return "\n".join(
+            f"- {check.name} {check.conclusion or check.status} {check.link}"
+            for check in verdict.failing
+        )
+    if reason == "ci_missing" and verdict is not None:
+        if verdict.missing:
+            return f"CI did not report: {', '.join(verdict.missing)}"
+        return f"CI checks still pending: {', '.join(facts.ci_required)}"
+    cause = facts.ci_unreadable.cause if facts.ci_unreadable is not None else "gh_unreadable"
+    return f"`gh` could not read the CI report ({cause})"
+
+
 def _summary_line(comment: str) -> str:
     """The line after the first of an `Auto-merge refused:` comment that names what
     failed, or "" when there is none (the comment goes straight to its closing sentence)."""
@@ -338,6 +419,7 @@ def _refuse(
     reason: str,
     ports: Ports,
     failure: rules.MergeFailure | None = None,
+    facts: rules.MergeFacts | None = None,
 ) -> MergeResult:
     """Comments a refusal the human can act on, once per (head, reason): the last
     `Auto-merge refused:` comment naming the same head and reason is enough. A
@@ -353,6 +435,8 @@ def _refuse(
             summary = presubmit.failed_checks_summary(record, head)
             evidence = presubmit.failed_checks_markdown(record, head)
             text = "\n\n".join(part for part in (first, evidence, LEFT_TO_HUMAN) if part)
+        if facts is not None and reason in ("ci_failed", "ci_missing", "ci_unreadable"):
+            text = f"{first}\n\n{_ci_evidence(reason, facts)}\n\n{LEFT_TO_HUMAN}"
         if reason == "merge_failed":
             advice = (
                 rules.MERGE_FAILURE_ADVICE[failure]

@@ -32,6 +32,12 @@ class GitStack:
         data, source = self._declaration(revision)
         return stack.parallel_checks(data, source)
 
+    def ci(self, revision: str) -> tuple[str, ...]:
+        """The `ci` key (GH-216). Declared by no product yet: the `ci-adapters` subtask
+        reads it from `data` (`domain/stack.py`); until it lands this is the product that
+        merges on its local checks."""
+        return ()
+
     def forbidden(self, revision: str) -> tuple[Forbidden, ...]:
         data, source = self._declaration(revision)
         return stack.forbidden(data, source)

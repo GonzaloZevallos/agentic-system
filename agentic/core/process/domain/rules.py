@@ -2649,8 +2649,8 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     CI being the `merge` itself (a green stale one goes on); then `checks_failed` (only when
     the recorded checks cover this head on this master; otherwise the next check) and
     `attempts_exhausted`. A CI that cannot be decided yet is a `wait` until
-    `ci.CI_WAIT_MAX_S` have passed since its anchor, a refusal after. `master_moved` is not here: the
-    merge verb gives it, after its last fetch. The checks last: they are the costly
+    `ci.CI_WAIT_MAX_S` have passed since its anchor, a refusal after. `master_moved` is not
+    here: the merge verb gives it, after its last fetch. The checks last: they are the costly
     fact, so nothing is run for a pull request that is refused anyway, and a run is asked
     for only when the recorded one does not cover this head on this master. `attempts`
     bounds those runs per head (`MERGE_ATTEMPTS_MAX`), here and nowhere else; `merge_failures`
