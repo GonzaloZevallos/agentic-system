@@ -10,9 +10,9 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, NamedTuple, Protocol
+from typing import Any, Literal, NamedTuple, Protocol, TypedDict
 
-from . import ci, presubmit
+from . import adr_numbers, ci, presubmit
 from .denials import denial_for
 from .document import HUMAN, demote
 from .roles import (
@@ -2459,6 +2459,11 @@ MERGE_ATTEMPTS_MAX = 3
 # round would call `gh pr merge` again.
 MERGE_CALLS_MAX = 3
 
+# How many renumbers of the branch's ADRs one task may cost (GH-229, ADR-0048): each one is
+# a push and a fresh round of checks, and master taking the same number again and again is
+# a race a human should look at.
+ADR_RENUMBERS_MAX = 2
+
 MergeFailure = Literal["no_merge_method", "gh_unavailable", "gh_unreadable", "gh_rejected"]
 """Why a `Tracker.merge` call failed, a closed set decided where the error is raised (the
 adapter, never by reading `gh`'s stderr): `no_merge_method` the repository allows none,
@@ -2531,6 +2536,7 @@ MergeRefusal = Literal[
     "eval_set",
     "eval_set_unreadable",
     "guarded_path",
+    "adr_number_taken",
     "attempts_exhausted",
     "checks_failed",
     "master_moved",
@@ -2553,6 +2559,9 @@ MergeRefusal = Literal[
   issue is outside it.
 - `guarded_path`: the diff touches `.agentic/**` (but the task's own document),
   `CODING_STANDARDS.md` or `.github/**`.
+- `adr_number_taken`: two ADRs at head share a number, or the branch's ADRs collided with
+  master's `ADR_RENUMBERS_MAX` times already; a renumber would not settle it (GH-229,
+  ADR-0048).
 - `attempts_exhausted`: the checks already ran `MERGE_ATTEMPTS_MAX` times on this head
   and the master moved again.
 - `checks_failed`: the checks ran on this head merged with the current master and failed.
@@ -2565,6 +2574,18 @@ MergeRefusal = Literal[
 - `ci_unreadable`: the CI report could not be read for `ci.CI_WAIT_MAX_S` after the push
   (`gh` missing or its answer unreadable), which says nothing about any product check.
 """
+
+
+class RenumberRecord(TypedDict):
+    """One completed ADR renumber of a task (GH-229, ADR-0048), as the merge verb records it
+    in the task document under `adr_renumber`: the pull request head it started from, the
+    head it pushed, old path -> new path, and the `path:line` of the added lines that still
+    name an old number."""
+
+    from_head: str
+    to_head: str
+    map: dict[str, str]
+    unrewritten: list[str]
 
 
 @dataclass(frozen=True)
@@ -2581,7 +2602,11 @@ class MergeFacts:
     report was read for, `ci_verdict` its classification (`ci.ci_state`), `ci_unreadable`
     the closed cause when it could not be read, `ci_fresh` whether it ran on a tree holding
     the current master (None: not known) and `ci_waited_s` the seconds since the wait's
-    anchor (None: no anchor)."""
+    anchor (None: no anchor). The `adr_*` facts (GH-229) are what `agentic merge` read of the
+    ADR directory at the merge-base, the head and the upstream sha it holds: `adr_collision`
+    (`adr_numbers.collision`), `adr_plan` (`adr_numbers.renumber_plan`) and `adr_renumbers`,
+    the renumbers already recorded for this task in the product checkout's document, oldest
+    first. All empty for a branch that added no ADR, which decides as before."""
 
     task_id: str
     status: str | None
@@ -2605,6 +2630,9 @@ class MergeFacts:
     ci_unreadable: ci.CiUnreadable | None = None
     ci_fresh: bool | None = None
     ci_waited_s: float | None = None
+    adr_collision: adr_numbers.Collision = adr_numbers.Collision()
+    adr_plan: Mapping[str, str] = field(default_factory=dict)
+    adr_renumbers: tuple[RenumberRecord, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -2612,9 +2640,10 @@ class MergeDecision:
     """`merge`: call `Tracker.merge`. `run_checks`: the recorded checks do not cover this
     head on this master and attempts remain. `wait`: the CI is not decidable yet; nothing
     is refused, counted or written, and the next round asks again. `refuse`: leave it,
-    `reason` says why."""
+    `reason` says why. `renumber`: the branch added an ADR whose number master took; the verb
+    moves it (`adr_numbers.renumber_plan`) and leaves the new head to the next round."""
 
-    kind: Literal["merge", "run_checks", "wait", "refuse"]
+    kind: Literal["merge", "run_checks", "wait", "refuse", "renumber"]
     reason: MergeRefusal | None
 
 
@@ -2643,8 +2672,9 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     """The one place the conditions of an automatic merge live (GH-178, ADR-0045); no
     adapter, CLI or poller re-derives any of them. Checked in this order and refused at the
     first that fails: `not_ready`, `pr_not_open`, `not_approved`, `head_not_reviewed`,
-    `open_findings`, `eval_set_unreadable`, `eval_set`, `guarded_path`, `merge_failed`,
-    then, only when the product declares its CI (`ci_required`): `ci_unreadable`, a `wait`
+    `open_findings`, `eval_set_unreadable`, `eval_set`, `guarded_path`, then the ADR check
+    (GH-229, ADR-0048: `adr_number_taken` for a duplicate or a spent `ADR_RENUMBERS_MAX`,
+    else a `renumber`), `merge_failed`, then, only when the product declares its CI (`ci_required`): `ci_unreadable`, a `wait`
     for a head that is not the reviewed one, `ci_failed` and `ci_missing`, a green and fresh
     CI being the `merge` itself (a green stale one goes on); then `checks_failed` (only when
     the recorded checks cover this head on this master; otherwise the next check) and
@@ -2663,7 +2693,7 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
         return MergeDecision("refuse", "pr_not_open")
     if not facts.reviewed_unit_approved:
         return MergeDecision("refuse", "not_approved")
-    if not (full_commit_id(facts.pr_head) and same_commit(facts.reviewed_head, facts.pr_head)):
+    if not _head_reviewed(facts):
         return MergeDecision("refuse", "head_not_reviewed")
     if facts.open_blocking_or_important > 0:
         return MergeDecision("refuse", "open_findings")
@@ -2675,6 +2705,12 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
         guarded_path(path, facts.task_id) for path in facts.touched_paths
     ):
         return MergeDecision("refuse", "guarded_path")
+    if facts.adr_collision.duplicate:
+        return MergeDecision("refuse", "adr_number_taken")
+    if facts.adr_collision.colliding:
+        if len(facts.adr_renumbers) >= ADR_RENUMBERS_MAX:
+            return MergeDecision("refuse", "adr_number_taken")
+        return MergeDecision("renumber", None)
     if facts.merge_failures >= MERGE_CALLS_MAX:
         return MergeDecision("refuse", "merge_failed")
     if facts.ci_required:
@@ -2694,6 +2730,33 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     if facts.attempts >= MERGE_ATTEMPTS_MAX:
         return MergeDecision("refuse", "attempts_exhausted")
     return MergeDecision("run_checks", None)
+
+
+def _head_reviewed(facts: MergeFacts) -> bool:
+    """Whether the pull request head is the one Tech Lead reviewed: the same commit, or a
+    head the system itself produced from it by renumbering ADRs (GH-229, ADR-0048). The
+    second needs the chain recorded in the product checkout's document -- `from_head` of a
+    record the reviewed head, each `to_head` the next `from_head`, the last `to_head` the
+    pull request head -- and starts at the last record whose `from_head` is the reviewed
+    head, so an older link before a fresh review is history. It never replaces the
+    approval, which `auto_merge_decision` checks before."""
+    if not full_commit_id(facts.pr_head):
+        return False
+    if same_commit(facts.reviewed_head, facts.pr_head):
+        return True
+    records = facts.adr_renumbers
+    for start in range(len(records) - 1, -1, -1):
+        if not same_commit(facts.reviewed_head, records[start].get("from_head")):
+            continue
+        current = records[start].get("to_head")
+        for record in records[start + 1 :]:
+            if not same_commit(current, record.get("from_head")):
+                break
+            current = record.get("to_head")
+        else:
+            if same_commit(current, facts.pr_head):
+                return True
+    return False
 
 
 def _ci_gate(facts: MergeFacts) -> MergeDecision | None:
