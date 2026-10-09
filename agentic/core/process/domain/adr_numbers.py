@@ -13,7 +13,7 @@ decides *when*) are the only places an ADR number is parsed or the next one is c
 from __future__ import annotations
 
 import re
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 ADR_DIR = "docs/adr"
@@ -127,8 +127,13 @@ def _names_slug(line: str, slug: str) -> bool:
     return re.search(rf"(?<![A-Za-z0-9]){re.escape(slug)}(?![A-Za-z0-9])", line) is not None
 
 
-def _padded(old_text: str, number: int) -> str:
-    return f"{number:04d}" if len(old_text) == 4 else str(number)
+def _swap(number: int) -> Callable[[re.Match[str]], str]:
+    """The replacement that writes `number` in the form (padded or not) it replaces."""
+
+    def replacement(match: re.Match[str]) -> str:
+        return f"{number:04d}" if len(match.group(0)) == 4 else str(number)
+
+    return replacement
 
 
 def rewrite_line(
@@ -166,11 +171,7 @@ def rewrite_line(
         if old == own_old and (line.lstrip().startswith("#") or _NUMBER_KEY.match(line)):
             # A heading carries the padded number only; a number key may be unpadded too.
             forms = f"{old_s}|{old_n}" if _NUMBER_KEY.match(line) else old_s
-            line = re.sub(
-                rf"(?<![\w-])(?:{forms})(?![\w-])",
-                lambda m, n=new_n: _padded(m.group(0), n),
-                line,
-            )
+            line = re.sub(rf"(?<![\w-])(?:{forms})(?![\w-])", _swap(new_n), line)
     return line
 
 
