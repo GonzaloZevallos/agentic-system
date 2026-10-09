@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
+from ..domain.added_lines import AddedLines
 from ..domain.ci import CiReport, CiUnreadable, Containment
 from ..domain.design import Design
 from ..domain.playbook import Playbook
@@ -489,6 +490,12 @@ class GitError(RuntimeError):
     import it from `adapters.git.workspace` keep working unchanged."""
 
 
+class LeaseLost(GitError):
+    """`push_commit`'s lease was rejected: the remote branch is no longer at the sha the
+    caller observed (GH-229). A `GitError`, so a caller that does not care catches one
+    type; a caller that retries from fresh facts tells it from any other push failure."""
+
+
 @dataclass(frozen=True)
 class Upstream:
     """Where new work starts from and what the poller judges a merge against (GH-180):
@@ -580,6 +587,15 @@ class Workspace(Protocol):
         sha, and it never decides whether a replace is warranted: its caller does."""
         ...
 
+    def push_commit(self, checkout: Path, sha: str, branch: str, *, lease: str) -> None:
+        """Publish the commit `sha` (made in the throwaway worktree `checkout`, on no
+        branch) as `refs/heads/<branch>` on `origin`, a force push leased on exactly
+        `lease`, the sha the caller observed there (GH-229). `push` cannot do it: it
+        publishes a local branch by name. The adapter never reads the remote to pick the
+        lease. Raises `LeaseLost` when the remote moved off `lease`, `GitError` for any
+        other failure."""
+        ...
+
     def remote_tip(self, path: Path, branch: str) -> str | None:
         """The full sha `origin` holds for `branch`, whose object is local afterwards (it
         is fetched into a private ref, never under `refs/heads/`); `None` only when the
@@ -655,6 +671,24 @@ class Workspace(Protocol):
     def changed_paths(self, base: str, head: str) -> tuple[str, ...]:
         """The paths `git diff --name-only <base>...<head>` names (GH-178): what the
         pull request changes against the commit it branched from. Raises `GitError`."""
+        ...
+
+    def merge_base(self, a: str, b: str) -> str:
+        """The full sha of the best common ancestor of the commits `a` and `b` (GH-229).
+        Raises `GitError` when there is none or either cannot be read."""
+        ...
+
+    def paths_at(self, revision: str, directory: str) -> tuple[str, ...]:
+        """The repo-relative POSIX paths of the blobs directly under `directory` at
+        `revision`, sorted; `()` when the directory is absent there (GH-229). Raises
+        `GitError` for a revision git cannot read."""
+        ...
+
+    def added_lines(self, base: str, head: str) -> AddedLines:
+        """The lines `head` added over `base`, per path, and the paths absent at `base`
+        (GH-229): a direct `base head` diff with no rename detection, so a rename reads
+        as a deleted file and a whole new one. Binary files are left out. Raises
+        `GitError`."""
         ...
 
     def fetch_commit(self, sha: str) -> bool:

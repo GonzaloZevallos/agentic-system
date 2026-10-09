@@ -19,6 +19,7 @@ from agentic.core.process.application.ports import (
     IssueComment,
     IssueState,
     LaunchAttempt,
+    LeaseLost,
     ListedPullRequest,
     MergeCallFailed,
     Ports,
@@ -28,6 +29,7 @@ from agentic.core.process.application.ports import (
     Upstream,
 )
 from agentic.core.process.domain import rules
+from agentic.core.process.domain.added_lines import AddedLines
 from agentic.core.process.domain.ci import CiReport, CiUnreadable, Containment
 from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.playbook import Playbook
@@ -515,6 +517,20 @@ class MemoryWorkspace:
         self.diff_paths: tuple[str, ...] = ()
         self.detached: list[str] = []
         self.removed_checkouts: list[str] = []
+        # GH-229's revision verbs. `merge_bases` is the answer per `(a, b)` (absent raises
+        # `GitError`, as git does for histories with nothing in common); `tree_paths` is
+        # `paths_at` per `(revision, directory)` (absent is the directory missing);
+        # `added` is `added_lines` per `(base, head)` (absent adds nothing). Each ask is
+        # kept. `commit_pushes` is every `push_commit` as `(checkout, sha, branch, lease)`,
+        # the failed ones too; a lease that is not `remote_tips[branch]` raises `LeaseLost`,
+        # and a success moves that tip to the pushed sha, as the real remote does.
+        self.merge_bases: dict[tuple[str, str], str] = {}
+        self.merge_base_calls: list[tuple[str, str]] = []
+        self.tree_paths: dict[tuple[str, str], tuple[str, ...]] = {}
+        self.paths_at_calls: list[tuple[str, str]] = []
+        self.added: dict[tuple[str, str], AddedLines] = {}
+        self.added_lines_calls: list[tuple[str, str]] = []
+        self.commit_pushes: list[tuple[Path, str, str, str]] = []
 
     def repository_at(self, path: Path) -> Path | None:
         return self.repositories.get(Path(path))
@@ -599,6 +615,16 @@ class MemoryWorkspace:
             raise GitError("git push -u origin failed: scripted")
         self.pushed.append(branch)
 
+    def push_commit(self, checkout: Path, sha: str, branch: str, *, lease: str) -> None:
+        self.events.append("push_commit")
+        self.commit_pushes.append((checkout, sha, branch, lease))
+        if self.remote_tips.get(branch) != lease:
+            raise LeaseLost("git push failed: stale info (lease)")
+        if self.push_failures > 0:
+            self.push_failures -= 1
+            raise GitError("git push failed: scripted")
+        self.remote_tips[branch] = sha
+
     def remote_tip(self, path: Path, branch: str) -> str | None:
         self.remote_tip_calls.append((path, branch))
         if self.remote_tip_error is not None:
@@ -630,6 +656,20 @@ class MemoryWorkspace:
     def fetch_commit(self, sha: str) -> bool:
         self.fetched_commits.append(sha)
         return True
+
+    def merge_base(self, a: str, b: str) -> str:
+        self.merge_base_calls.append((a, b))
+        if (a, b) not in self.merge_bases:
+            raise GitError(f"git merge-base {a} {b} failed: scripted")
+        return self.merge_bases[(a, b)]
+
+    def paths_at(self, revision: str, directory: str) -> tuple[str, ...]:
+        self.paths_at_calls.append((revision, directory))
+        return self.tree_paths.get((revision, directory), ())
+
+    def added_lines(self, base: str, head: str) -> AddedLines:
+        self.added_lines_calls.append((base, head))
+        return self.added.get((base, head), AddedLines({}, frozenset()))
 
     def changed_paths(self, base: str, head: str) -> tuple[str, ...]:
         self.diff_reads.append((base, head))
