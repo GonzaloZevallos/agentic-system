@@ -62,8 +62,10 @@ TABLE: tuple[Row, ...] = (
     ),
     Row(
         "tests/*.py",
-        ("tests/test_affected_tests.py",),
-        "its guard parses every test file for the repo paths it reads",
+        ("tests/test_affected_tests.py", "tests/test_tracker_doubles.py"),
+        "ADR-0047's guard parses every test file for the repo paths it reads, and the "
+        "Tracker-doubles guard parses every test file for doubles installed as "
+        "`pull_request` or `merge`",
     ),
     Row(
         "agentic/core/knowledge/domain/*.md",
