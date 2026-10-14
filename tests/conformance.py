@@ -81,7 +81,7 @@ UNCOVERED: Mapping[type, str] = {
         f"tests/core/process/adapters/claude_sdk/test_runner.py:1083 {_INLINE}"
     ),
     RunLock: (
-        "stand-ins at tests/test_cli.py:767, tests/test_cli.py:2765 and "
-        f"tests/core/process/application/test_poll.py:50 {_INLINE}"
+        "stand-ins at tests/test_cli.py:767, tests/test_cli.py:2781 and "
+        f"tests/core/process/application/test_poll.py:59 {_INLINE}"
     ),
 }

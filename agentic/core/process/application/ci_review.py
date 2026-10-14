@@ -42,7 +42,7 @@ def _master_line(master: ci.CiReport | ci.CiUnreadable | None, name: str) -> str
 
 
 def _unread(why: str) -> CiEvidence:
-    return CiEvidence(f"### CI\n\nCI was not read: {why}.")
+    return CiEvidence(f"CI was not read: {why}.")
 
 
 def read_ci(state: TaskState, declared: tuple[str, ...], head: str, ports: Ports) -> CiEvidence:
@@ -58,4 +58,4 @@ def read_ci(state: TaskState, declared: tuple[str, ...], head: str, ports: Ports
         return _unread("the pull request's head is not the head under review")
     master = ports.tracker.branch_ci(report.base_ref) if report.base_ref else None
     lines = [f"- `{name}`: {_line(report, name)}{_master_line(master, name)}" for name in declared]
-    return CiEvidence("### CI\n\n" + "\n".join(lines), report, master)
+    return CiEvidence("\n".join(lines), report, master)

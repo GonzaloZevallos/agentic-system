@@ -3,6 +3,8 @@ review, and the findings it writes itself for a declared check that is red on th
 Run with the fake tracker; the reviewer here approves in every case, so what changes the
 verdict is the code, never the reviewer."""
 
+import re
+
 import pytest
 
 from agentic.core.process.application.review import review
@@ -193,3 +195,22 @@ async def test_a_report_whose_head_is_only_a_prefix_of_the_head_is_not_counted()
     assert patch["findings"] == []
     assert tracker.ci_reads == [PR]
     assert "not read" in runner.prompts("tech_lead_review")[0]
+
+
+def ci_headings(prompt: str) -> list[str]:
+    return re.findall(r"^#{1,6} CI$", prompt, flags=re.MULTILINE)
+
+
+async def test_a_read_report_reaches_the_reviewer_under_one_ci_heading():
+    state, runner, _, ports = setup(
+        report(check("e2e", "SUCCESS", HEAD_LINK)), report(check("e2e", "SUCCESS", MASTER_LINK))
+    )
+    await run(state, ports)
+    assert ci_headings(runner.prompts("tech_lead_review")[0]) == ["## CI"]
+
+
+async def test_the_unread_section_reaches_the_reviewer_under_one_ci_heading():
+    state, runner, _, ports = setup(None, None)
+    del state["pull_request"]
+    await run(state, ports)
+    assert ci_headings(runner.prompts("tech_lead_review")[0]) == ["## CI"]

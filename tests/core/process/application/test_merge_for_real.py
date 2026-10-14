@@ -17,6 +17,7 @@ from agentic import cli
 from agentic.core.knowledge.adapters.git import GitStack
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.adapters.git.workspace import GitWorkspace
+from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.adapters.shell.commands import ShellCommands
 from agentic.core.process.application.merge import merge_task
 from agentic.core.process.application.ports import Upstream
@@ -26,6 +27,10 @@ from agentic.shared.configuration import Configuration
 from tests.fakes import MemoryTracker, memory_ports
 
 GREEN = "test -f feature.txt && test -f upstream.txt"
+# stderr carries one CSI escape and one tab. No single quote, so `World`'s `{checks!r}`
+# stays a YAML single-quoted scalar, which reads literally: the file holds each backslash
+# doubled, `sh` undoes that inside the double quotes and `printf` gets `\033` and `\t`.
+FAILING = 'printf "\\033[31mboom\\t!\\033[0m\\n" >&2; exit 3'
 URL = "https://github.com/o/r/pull/210"
 
 
@@ -193,6 +198,31 @@ def test_a_red_head_is_refused_once_and_writes_no_intent(tmp_path):
     assert doc["merge_attempts"] == {"head": world.head, "count": 1}  # the second ran nothing
 
 
+def test_a_really_failing_check_reaches_the_record_and_the_log_with_its_sanitized_tail(
+    tmp_path, capsys
+):
+    world = World(tmp_path, FAILING)
+    assert "'" not in FAILING
+    # The declaration reached the commit the task is based on as `World` writes it: the
+    # repr of the command, backslashes doubled.
+    assert GitStack(world.product).checks("HEAD") == {"tests": repr(FAILING)[1:-1]}
+
+    world.merge()
+
+    doc = world.doc()
+    assert doc["merge_checks"]["failed_step"] == "checks"
+    # The fixture declares a single check; the tail is a list of lines, tab expanded.
+    assert doc["merge_checks"]["checks"] == [
+        {"name": "tests", "passed": False, "tail": ["boom    !"]}
+    ]
+    assert not any("\x1b" in line for line in doc["merge_checks"]["checks"][0]["tail"])
+    assert doc["merge_checks"]["passed"] is False
+    assert "auto_merge_head" not in doc and world.tracker.merge_calls == []
+    out = capsys.readouterr().out.splitlines()
+    assert "agentic: merge: GH-209: Failed: tests" in out
+    assert "    boom    !" in out
+
+
 def test_a_leftover_merge_worktree_does_not_break_entry(world):
     leftover = world.product / ".agentic/worktrees/merge-GH-209"
     leftover.mkdir(parents=True)
@@ -253,6 +283,7 @@ def test_a_merge_that_fails_with_the_pull_request_open_withdraws_the_intent(worl
 
 def test_a_merge_that_fails_but_landed_keeps_the_intent_and_closes_as_auto_merged(world):
     def landed(reference: str, head: str) -> str:
+        pull_request_number(reference)
         world.tracker.prs[URL] = dataclasses.replace(
             world.tracker.prs[URL], state="MERGED", merged_at="2026-10-06T00:00:00Z"
         )
@@ -404,6 +435,7 @@ def test_the_failure_is_recorded_before_the_pull_request_is_read_again(world, mo
     real = world.tracker.pull_request
 
     def spy(reference):
+        pull_request_number(reference)
         if world.tracker.merge_calls:  # a read after the merge call
             recorded_at_read.append(world.doc().get("merge_failures"))
         return real(reference)
