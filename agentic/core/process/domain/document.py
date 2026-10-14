@@ -267,10 +267,18 @@ def _is_continuation(line: str) -> bool:
 def _scalar_line(key: str, value: object) -> str:
     if isinstance(value, Mapping | list | tuple):
         # A record the system keeps about itself (`merge_checks`, GH-178; `landing`,
-        # GH-239, a list of them): one flow-style line, so it replaces in place like any
-        # scalar and parses back as a mapping or a list.
+        # GH-239, and `adr_renumber`, GH-229, lists of them): one flow-style line, so it
+        # replaces in place like any scalar and parses back as a mapping or a list.
         plain = dict(value) if isinstance(value, Mapping) else list(value)
         flow = yaml.safe_dump(plain, default_flow_style=True, width=10**6).strip()
+        if "\n" in flow:
+            # A string with a `\n` (a file name in `adr_renumber`) is emitted by a plain
+            # dump as a quoted scalar that spans lines. Dumped again with every scalar
+            # double-quoted, the `\n` is escaped and the line stays one; only a line that
+            # would have been split changes, and the branch never raises (GH-243).
+            flow = yaml.safe_dump(
+                plain, default_flow_style=True, width=10**6, default_style='"'
+            ).strip()
         return f"{key}: {flow}"
     dumped: str = yaml.safe_dump({key: value}, default_flow_style=False, sort_keys=False)
     line, _, rest = dumped.partition("\n")

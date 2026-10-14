@@ -747,3 +747,66 @@ def test_reviewed_head_carried_from_renders_and_parses_back_on_its_subtask():
     del plain["reviewed_head_carried_from"]
     without = document.render(_bare(subtasks={"only": plain}))
     assert "reviewed_head_carried_from" not in without
+
+
+def _closed_doc() -> str:
+    return document.render(
+        {
+            "id": "T-1",
+            "title": "t",
+            "description": "d",
+            "status": "ready_for_review",
+            "sections": {"Developer": "Built it."},
+        },
+        "abc123",
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        [{"from_head": "a" * 40, "map": {"docs/adr/0048-x.md": "docs/adr/0050-x.md"}}],
+        ["a", "b: c", "- d", "#e"],
+        [],
+        ({"k": 1},),
+        {"x": ["y", "z"]},
+        [{"unrewritten": ["docs/a b.md:3"]}],
+    ],
+)
+def test_a_list_or_mapping_is_written_on_one_line_and_parses_back_equal(value):
+    raw = _closed_doc()
+    once = document.record_closure(raw, {"adr_renumber": value})
+    twice = document.record_closure(once, {"adr_renumber": value})
+
+    expected = list(value) if isinstance(value, tuple) else value
+    assert document.parse(once)["adr_renumber"] == expected
+    assert sum(line.startswith("adr_renumber:") for line in once.splitlines()) == 1
+    assert twice == once  # replaced in place, no other line moved
+
+
+def test_replacing_a_list_in_place_changes_no_other_frontmatter_line():
+    raw = document.record_closure(_closed_doc(), {"adr_renumber": ["a"], "closed_at": "x"})
+    changed = document.record_closure(raw, {"adr_renumber": ["b", "c"]})
+
+    before, after = raw.splitlines(), changed.splitlines()
+    diff = [i for i, (x, y) in enumerate(zip(before, after, strict=True)) if x != y]
+    assert len(before) == len(after) and len(diff) == 1
+    assert after[diff[0]].startswith("adr_renumber:")
+
+
+def test_a_newline_in_a_list_is_escaped_in_one_line_instead_of_splitting_it():
+    name = "docs/adr/0048-a\nb.md"
+    value = [{"map": {name: "docs/adr/0050-a\nb.md"}, "other": "plain"}]
+    raw = _closed_doc()
+    closed = document.record_closure(raw, {"adr_renumber": value})
+
+    [line] = [x for x in closed.splitlines() if x.startswith("adr_renumber:")]
+    assert "\\n" in line
+    assert document.parse(closed)["adr_renumber"] == value
+    before, after = raw.splitlines(), closed.splitlines()
+    assert [x for x in after if x not in before] == [line]
+
+
+def test_a_list_without_a_newline_is_written_as_before():
+    line = document._scalar_line("k", ["a", {"b": "c d"}])
+    assert line == "k: [a, {b: c d}]"

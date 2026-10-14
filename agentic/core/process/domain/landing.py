@@ -110,7 +110,7 @@ def landing_step(
             return step("rerun") if spent.reruns_on_head == 0 else pass_("fix", blocking_owners)
         case "attempts_exhausted":
             return _sync(step, spent, conflicting=False)
-        case "merge_failed":
+        case "merge_failed" | "adr_number_taken":
             return step("diagnose")
         case "master_moved":
             return step("wait")

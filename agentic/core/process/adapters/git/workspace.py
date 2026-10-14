@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -36,7 +37,10 @@ from agentic.shared.configuration import LOGS_DIR, STATE_DIR, STATE_FILE
 
 from ...application.ports import Checkout, Upstream, UpstreamMerge
 from ...application.ports import GitError as GitError  # re-exported: see ports.py
+from ...application.ports import LeaseLost as LeaseLost  # re-exported: see ports.py
 from ...domain import rules
+from ...domain.added_lines import AddedLines
+from ...domain.changes import ChangedPath, ChangeStatus
 from ...domain.ci import Containment
 from ...domain.task import DependencyState, MergeOutcome
 
@@ -206,6 +210,30 @@ class GitWorkspace:
         # the lease to whatever the remote holds now and defeat it.
         self._git("push", "-u", f"--force-with-lease=refs/heads/{branch}:{lease}", "origin", branch)
 
+    def push_commit(self, checkout: Path, sha: str, branch: str, *, lease: str) -> None:
+        # Always leased, on the caller's sha, never one read here. `LC_ALL=C` so the one
+        # sentence that tells a lost lease from any other refusal is git's own English.
+        result = subprocess.run(
+            [
+                "git",
+                "push",
+                f"--force-with-lease=refs/heads/{branch}:{lease}",
+                "origin",
+                f"{sha}:refs/heads/{branch}",
+            ],
+            cwd=checkout,
+            env={**os.environ, **self.identity, "LC_ALL": "C", "GIT_TERMINAL_PROMPT": "0"},
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            return
+        message = f"git push {sha} to {branch} failed: {result.stderr.strip()}"
+        if "(stale info)" in result.stderr:
+            raise LeaseLost(message)
+        raise GitError(message)
+
     def remote_tip(self, path: Path, branch: str) -> str | None:
         listed = self._git("ls-remote", "--heads", "origin", f"refs/heads/{branch}", cwd=path)
         if not listed:
@@ -303,8 +331,70 @@ class GitWorkspace:
         return {0: "yes", 1: "no"}.get(result.returncode, "unknown")
 
     def changed_paths(self, base: str, head: str) -> tuple[str, ...]:
-        out = self._git("diff", "--name-only", f"{base}...{head}")
+        # `-M` explicit: the list of a rename (the new path) does not depend on `diff.renames`.
+        out = self._git("diff", "--name-only", "-M", f"{base}...{head}")
         return tuple(line for line in out.splitlines() if line)
+
+    def changed_entries(self, base: str, head: str) -> tuple[ChangedPath, ...]:
+        # No `-z`, as `changed_paths`: both quote an unusual name the same way, so the two
+        # lists name the same paths. A rename has `old` and `new`; the new one is last.
+        out = self._git("diff", "--name-status", "-M", f"{base}...{head}")
+        entries = []
+        for line in out.splitlines():
+            if not line:
+                continue
+            fields = line.split("\t")
+            code = fields[0]
+            letter = code[:1]
+            status = _CHANGE_STATUS.get(letter)
+            scored = letter in ("R", "C") and code[1:].isdigit()
+            if len(fields) < 2 or status is None or (code != letter and not scored):
+                raise GitError(f"git diff {base}...{head}: unexpected status {line!r}")
+            entries.append(ChangedPath(fields[-1], status))
+        return tuple(entries)
+
+    def merge_base(self, a: str, b: str) -> str:
+        return self._git("merge-base", a, b)
+
+    def paths_at(self, revision: str, directory: str) -> tuple[str, ...]:
+        # `-z` so a name is never quoted; the entries are `<mode> <type> <sha>\t<path>`, and
+        # a sub-directory is a `tree` entry, not one of the blobs asked for.
+        out = self._git_bytes("ls-tree", "-z", revision, "--", f"{directory.rstrip('/')}/")
+        found = []
+        for entry in out.split(b"\0"):
+            meta, _, name = entry.partition(b"\t")
+            if name and meta.split(b" ")[1:2] == [b"blob"]:
+                found.append(name.decode("utf-8", errors="replace"))
+        return tuple(sorted(found))
+
+    def added_lines(self, base: str, head: str) -> AddedLines:
+        # The names come from `--name-status -z` (never quoted) and the lines from one
+        # patch; with no rename detection and no pathspec both list the same files in the
+        # same order, so the k-th `diff --git` section of the patch is the k-th name.
+        listed = self._git_bytes("diff", "--name-status", "--no-renames", "-z", base, head)
+        fields = [f.decode("utf-8", errors="replace") for f in listed.split(b"\0") if f]
+        entries = list(zip(fields[0::2], fields[1::2], strict=True))
+        patch = self._git_bytes(
+            "diff", "--unified=0", "--no-renames", "--no-color", "--no-ext-diff", base, head
+        ).decode("utf-8", errors="replace")
+        sections = _patch_sections(patch)
+        if len(sections) != len(entries):
+            raise GitError(
+                f"git diff {base} {head}: {len(sections)} patches for {len(entries)} paths"
+            )
+        lines: dict[str, tuple[tuple[int, str], ...]] = {}
+        whole: set[str] = set()
+        for (status, path), section in zip(entries, sections, strict=True):
+            if any(row.startswith(("Binary files ", "GIT binary patch")) for row in section):
+                continue
+            if status.startswith("D"):
+                continue
+            if status.startswith("A"):
+                whole.add(path)
+            added = _added_in(section)
+            if added:
+                lines[path] = added
+        return AddedLines(lines, frozenset(whole))
 
     def fetch_commit(self, sha: str) -> bool:
         if self._run("cat-file", "-e", f"{sha}^{{commit}}").returncode == 0:
@@ -470,6 +560,20 @@ class GitWorkspace:
             text=True,
         )
 
+    def _git_bytes(self, *args: str) -> bytes:
+        """The raw stdout: the verbs that read file names and file text decode it themselves,
+        as UTF-8 with replacement, never as the machine's locale."""
+        result = subprocess.run(
+            ["git", *args],
+            cwd=self.product_dir,
+            env={**os.environ, **self.identity},
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.decode("utf-8", errors="replace").strip()
+            raise GitError(f"git {' '.join(args)} failed: {stderr}")
+        return result.stdout
+
     def _git(self, *args: str, cwd: Path | None = None) -> str:
         result = self._run(*args, cwd=cwd)
         if result.returncode != 0:
@@ -487,6 +591,45 @@ def _left_out_note(left_out: list[str], failure: str | None) -> str | None:
         extra = f" and {more} more" if more > 0 else ""
         parts.append(f"local commits not on the upstream are left out of the base: {shown}{extra}")
     return "; ".join(parts) or None
+
+
+_CHANGE_STATUS: dict[str, ChangeStatus] = {
+    "A": "A",
+    "M": "M",
+    "D": "D",
+    "R": "R",
+    "C": "C",
+    "T": "T",
+}
+
+
+def _patch_sections(patch: str) -> list[list[str]]:
+    """The rows of each file's part of a `--unified=0` patch. A row that starts with
+    `diff --git ` is always a header: every row of content starts with `+`, `-` or `\\`.
+    Split on `\\n` only, never `splitlines`, which also breaks on separators inside a line."""
+    sections: list[list[str]] = []
+    for row in patch.split("\n"):
+        if row.startswith("diff --git "):
+            sections.append([])
+        elif sections:
+            sections[-1].append(row)
+    return sections
+
+
+_HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+
+
+def _added_in(section: list[str]) -> tuple[tuple[int, str], ...]:
+    added: list[tuple[int, str]] = []
+    number = 0
+    for row in section:
+        hunk = _HUNK.match(row)
+        if hunk:
+            number = int(hunk.group(1))
+        elif number and row.startswith("+"):
+            added.append((number, row[1:]))
+            number += 1
+    return tuple(added)
 
 
 def _key(branch: str) -> str:

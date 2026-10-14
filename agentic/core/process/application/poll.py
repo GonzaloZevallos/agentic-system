@@ -226,6 +226,35 @@ def _recorded(raw: TaskState, key: str) -> dict[str, object]:
     return value if isinstance(value, dict) else {}
 
 
+def renumber_records(raw: TaskState) -> tuple[rules.RenumberRecord, ...]:
+    """The ADR renumbers `agentic merge` recorded in this task's `adr_renumber` (GH-229),
+    oldest first, read with `.get` off the product checkout's document. A document without
+    the key, or an entry that is not the shape the verb writes, gives nothing for it: a
+    chain with a hole never reaches the pull request head (`rules.auto_merge_decision`)."""
+    recorded = raw.get("adr_renumber")
+    if not isinstance(recorded, list):
+        return ()
+    found: list[rules.RenumberRecord] = []
+    for entry in recorded:
+        if not (
+            isinstance(entry, dict)
+            and isinstance(entry.get("from_head"), str)
+            and isinstance(entry.get("to_head"), str)
+            and isinstance(entry.get("map"), dict)
+            and isinstance(entry.get("unrewritten"), list)
+        ):
+            continue
+        found.append(
+            rules.RenumberRecord(
+                from_head=entry["from_head"],
+                to_head=entry["to_head"],
+                map={str(old): str(new) for old, new in entry["map"].items()},
+                unrewritten=[str(item) for item in entry["unrewritten"]],
+            )
+        )
+    return tuple(found)
+
+
 def _merge_facts(
     task_id: str,
     raw: TaskState,
@@ -274,6 +303,7 @@ def _merge_facts(
             if checks.get("head") == pr_head and step in get_args(presubmit.FailedStep)
             else None
         ),
+        adr_renumbers=renumber_records(raw),
     )
 
 
