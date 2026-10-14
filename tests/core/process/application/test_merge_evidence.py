@@ -59,7 +59,8 @@ def test_one_failing_check_is_named_with_its_tail_in_the_record_the_log_and_the_
     [(_, comment)] = ports.tracker.comments
     assert comment.splitlines()[0] == f"Auto-merge refused: {HEAD} checks_failed"
     assert "Failed: tests" in comment and "```text\nran\nFAILED x\n```" in comment
-    assert comment.endswith("Left for the human to merge.")
+    # GH-239: a `rerun` is the system's next step, so the human is not told it is theirs.
+    assert "Left for the human to merge." not in comment
 
 
 def test_two_runs_with_different_failing_checks_comment_twice_and_other_tails_once(tmp_path):
