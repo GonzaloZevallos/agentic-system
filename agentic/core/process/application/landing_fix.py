@@ -14,7 +14,8 @@ from ..domain import landing as landing_rules
 from ..domain import presubmit, rules
 from ..domain.roles import LANDING_DIAGNOSER
 from ..domain.task import ChangeCategory, TaskState, apply, from_document
-from . import landing_sync
+from . import landing_plan, landing_sync, merge
+from .checkouts import task_base
 from .landing_plan import LandingContext
 from .run_role import run_role
 
@@ -82,20 +83,60 @@ def fix(context: LandingContext) -> None:
     _resume(context)
 
 
+def _remember_rerun(context: LandingContext, checks: list[str]) -> None:
+    """Writes the names of the checks this rerun covers into its own `landing` entry, so
+    the merge that follows a green can file one flake issue per name."""
+    raw = context.ports.documents.load(context.task_id) or {}
+    entries = [dict(entry) for entry in landing_plan.entries(raw)]
+    for entry in entries:
+        if entry.get("step") == "rerun" and entry.get("head") == context.head:
+            entry["checks"] = checks
+    context.ports.documents.record_closure(context.task_id, {"landing": entries})
+
+
 def rerun(context: LandingContext) -> None:
-    """`ci_failed`: asks the platform to rerun the failed runs of this head, once (the
-    landing list's `rerun` entry for the head is what `landing_step` counts). The next tick
-    reads the CI again; a red one is then a `fix`."""
-    reference = (context.ports.documents.load(context.task_id) or {}).get("pull_request")
-    if context.step.refusal != "ci_failed" or not reference:
-        context.log(f"agentic: land: {context.task_id}: rerun of local checks is not built yet")
+    """Runs the red checks of this head again, once (the landing list's `rerun` entry for
+    the head is what `landing_step` counts). `ci_failed` asks the platform to rerun the
+    failed runs; `checks_failed` runs only the failed declared checks again in the verb's
+    throwaway worktree, through `CheckoutPresubmit`, and updates `merge_checks`. The next
+    tick decides again: green merges (and files the flake issues), red is a `fix`."""
+    loaded = context.ports.documents.load(context.task_id) or {}
+    reference = loaded.get("pull_request")
+    if not reference:
+        context.log(f"agentic: land: {context.task_id}: rerun: no pull request")
         return
-    try:
-        runs = context.ports.tracker.rerun_failed_ci(str(reference), context.head)
-    except ValueError as exc:
-        context.log(f"agentic: land: {context.task_id}: rerun failed: {exc}")
+    if context.step.refusal == "ci_failed":
+        verdict = context.facts.ci_verdict
+        failing = [check.name for check in verdict.failing] if verdict is not None else []
+        try:
+            runs = context.ports.tracker.rerun_failed_ci(str(reference), context.head)
+        except ValueError as exc:
+            context.log(f"agentic: land: {context.task_id}: rerun failed: {exc}")
+            return
+        _remember_rerun(context, failing)
+        context.log(f"agentic: land: {context.task_id}: reran {len(runs)} run(s) on {context.head}")
         return
-    context.log(f"agentic: land: {context.task_id}: reran {len(runs)} run(s) on {context.head}")
+    recorded = loaded.get("merge_checks")
+    names = presubmit.failed_names(recorded) if isinstance(recorded, Mapping) else []
+    master = context.upstream.sha
+    if master is None:
+        context.log(f"agentic: land: {context.task_id}: rerun: no upstream")
+        return
+    raw = from_document(loaded)
+    base = task_base(raw, context.ports)
+    _remember_rerun(context, names)
+    merge.run_checks(
+        context.task_id,
+        raw,
+        context.head,
+        master,
+        base,
+        context.cfg,
+        context.ports,
+        None,
+        context.log,
+        only=names or None,
+    )
 
 
 def _followup_body(raw: TaskState, task_id: str, lineage: int) -> str:

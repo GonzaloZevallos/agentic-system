@@ -591,6 +591,7 @@ class LandingEntry(TypedDict, total=False):
     at: str
     cost_usd: float
     resolved_at: str
+    checks: list[str]
 
 
 class TaskState(TaskInput, total=False):
