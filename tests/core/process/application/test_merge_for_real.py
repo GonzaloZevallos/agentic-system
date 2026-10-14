@@ -17,6 +17,7 @@ from agentic import cli
 from agentic.core.knowledge.adapters.git import GitStack
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.adapters.git.workspace import GitWorkspace
+from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.adapters.shell.commands import ShellCommands
 from agentic.core.process.application.merge import merge_task
 from agentic.core.process.application.ports import Upstream
@@ -282,6 +283,7 @@ def test_a_merge_that_fails_with_the_pull_request_open_withdraws_the_intent(worl
 
 def test_a_merge_that_fails_but_landed_keeps_the_intent_and_closes_as_auto_merged(world):
     def landed(reference: str, head: str) -> str:
+        pull_request_number(reference)
         world.tracker.prs[URL] = dataclasses.replace(
             world.tracker.prs[URL], state="MERGED", merged_at="2026-10-06T00:00:00Z"
         )
@@ -433,6 +435,7 @@ def test_the_failure_is_recorded_before_the_pull_request_is_read_again(world, mo
     real = world.tracker.pull_request
 
     def spy(reference):
+        pull_request_number(reference)
         if world.tracker.merge_calls:  # a read after the merge call
             recorded_at_read.append(world.doc().get("merge_failures"))
         return real(reference)
