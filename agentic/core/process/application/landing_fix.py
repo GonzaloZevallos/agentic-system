@@ -14,7 +14,7 @@ from ..domain import landing as landing_rules
 from ..domain import presubmit, rules
 from ..domain.roles import LANDING_DIAGNOSER
 from ..domain.task import ChangeCategory, TaskState, apply, from_document
-from . import landing_plan, landing_sync, merge
+from . import escalate, landing_plan, landing_sync, merge
 from .checkouts import task_base
 from .landing_plan import LandingContext
 from .run_role import run_role
@@ -203,20 +203,26 @@ def diagnose(context: LandingContext) -> None:
     reason = str(output.data.get("reason", ""))
     if landing_rules.restart_depth(raw) >= landing_rules.RESTART_DEPTH_MAX:
         escalated = rules.logged(dict(rules.escalation("failure", reason)))
-        context.ports.documents.save(apply(raw, from_document({**patch, **escalated})))
+        escalated_state = apply(raw, from_document({**patch, **escalated}))
+        context.ports.documents.save(escalated_state)
+        context.ports.tracker.label(context.task_id, escalate.NEEDS_HUMAN)
+        context.ports.tracker.comment(
+            context.task_id, escalate.comment(escalated_state, context.cfg, context.ports)
+        )
         context.log(f"agentic: land: {context.task_id}: diagnose: escalated, {reason}")
         return
     saved = apply(raw, patch)
     context.ports.documents.save(saved)
-    carried = saved.get("cost_usd", 0.0) + saved.get("landing_cost_carried", 0.0)
-    context.ports.documents.record_closure(
-        context.task_id, {"landing_restarts": 1, "landing_cost_carried": carried}
-    )
     try:
         context.ports.tracker.close_pull_request(str(reference))
     except ValueError as exc:
         context.log(f"agentic: land: {context.task_id}: diagnose: close failed: {exc}")
         return
+    # Only after the close: a close that failed leaves the task as it was, not marked restarted.
+    carried = saved.get("cost_usd", 0.0) + saved.get("landing_cost_carried", 0.0)
+    context.ports.documents.record_closure(
+        context.task_id, {"landing_restarts": 1, "landing_cost_carried": carried}
+    )
     context.ports.tracker.comment(context.task_id, f"Restarted by landing: {reason}")
     if context.launcher is None:
         context.log(f"agentic: land: {context.task_id}: no way to spawn the restart")
