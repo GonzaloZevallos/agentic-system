@@ -246,3 +246,39 @@ def test_describe_checks_with_a_plan_lists_the_substituted_form_beside_the_full_
     plain = presubmit.describe_checks(checks)
     assert plain == presubmit.describe_checks(checks, affected=None)
     assert "affected" not in plain
+
+
+def _entry(name, passed):
+    return {"name": name, "passed": passed, "output": "" if passed else "boom"}
+
+
+def test_a_rerun_that_turns_the_failed_check_green_makes_the_whole_record_pass():
+    previous = {
+        "passed": False,
+        "failed_step": "checks",
+        "checks": [_entry("lint", True), _entry("tests", False)],
+    }
+    rerun = {"passed": True, "checks": [_entry("tests", True)]}
+    record = presubmit.rerun_record(previous, rerun)
+    assert record["passed"] is True
+    assert "failed_step" not in record
+    assert [(e["name"], e["passed"]) for e in record["checks"]] == [("lint", True), ("tests", True)]
+
+
+def test_a_rerun_that_stays_red_keeps_the_record_failed():
+    previous = {
+        "passed": False,
+        "failed_step": "checks",
+        "checks": [_entry("lint", True), _entry("tests", False)],
+    }
+    rerun = {"passed": False, "failed_step": "checks", "checks": [_entry("tests", False)]}
+    record = presubmit.rerun_record(previous, rerun)
+    assert record["passed"] is False
+    assert record["failed_step"] == "checks"
+    assert presubmit.failed_names(record) == ["tests"]
+
+
+def test_a_rerun_that_stopped_before_the_checks_ran_stands_as_it_is():
+    previous = {"passed": False, "failed_step": "checks", "checks": [_entry("tests", False)]}
+    rerun = {"passed": False, "failed_step": "conflict", "checks": []}
+    assert presubmit.rerun_record(previous, rerun) == rerun

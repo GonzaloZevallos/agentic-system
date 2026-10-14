@@ -251,3 +251,10 @@ def test_blocking_owners_are_the_subtasks_of_open_blocking_records_only():
     }
     assert landing.blocking_owners(state) == ("api",)
     assert landing.blocking_owners({}) == ()
+
+
+def test_marker_parent_names_the_task_that_wrote_the_follow_up_and_rejects_anything_else():
+    marker = landing.followup_marker("GH-5", 2)
+    assert landing.marker_parent(f"{marker}\nbody") == ("GH-5", 2)
+    assert landing.marker_parent("no marker here") is None
+    assert landing.marker_parent("<!-- agentic:followup task=GH-5 -->") is None

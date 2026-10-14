@@ -101,6 +101,21 @@ def test_a_task_that_is_itself_a_follow_up_files_nothing_and_writes_the_rows_in_
     assert "a.py:1" in comment
 
 
+def test_a_follow_up_whose_marker_names_its_parent_files_nothing_and_comments_the_next_lineage(
+    tmp_path,
+):
+    ports = _ports(5, description=landing_rules.followup_marker("GH-3", 1) + "\nfrom GH-3")
+    ports.documents.record_closure(
+        "GH-5", {"findings": [{**_finding("important"), "category": "standard-other"}]}
+    )
+
+    _land(ports, tmp_path)
+
+    assert ports.tracker.opened_issues == []
+    [(_, comment)] = ports.tracker.comments
+    assert landing_rules.marker_lineage(comment, "GH-5") == 2
+
+
 def _sibling(ports) -> None:
     """Two subtasks and the integration: `a` owns the blocking finding, the integration
     carries the approval."""

@@ -111,3 +111,22 @@ def test_open_issue_bodies_is_the_same_unfiltered_read_as_open_issues(tmp_path):
 def test_open_issue_bodies_failure_is_a_value_error(tmp_path):
     with pytest.raises(ValueError, match="gh issue list failed: no auth"):
         GhInbox(tmp_path, run=_Recorder(fail=True, stderr="no auth")).open_issue_bodies()
+
+
+def test_a_follow_up_is_found_locally_from_the_marker_in_the_open_issue_bodies(tmp_path):
+    from agentic.core.process.domain import landing
+
+    marker = landing.followup_marker("GH-5", 1)
+    run = _Recorder(
+        stdout=json.dumps(
+            [
+                {"url": "https://x/1", "body": "unrelated"},
+                {"url": "https://x/2", "body": f"{marker}\nOpen `important` findings"},
+                {"url": "https://x/3", "body": landing.followup_marker("GH-6", 1)},
+            ]
+        )
+    )
+    bodies = GhInbox(tmp_path, run=run).open_issue_bodies()
+    found = [landing.marker_lineage(body, "GH-5") for _, body in bodies]
+    assert found == [None, 1, None]  # only the issue naming GH-5 matches, byte for byte
+    assert all("--search" not in call for call in run.calls)
