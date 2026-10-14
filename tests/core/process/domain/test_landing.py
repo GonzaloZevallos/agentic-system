@@ -3,13 +3,15 @@ closed step, the predicates around it say when a step may be taken, and the reco
 are the ones a poller tick reads back. Pure: facts in, a step out."""
 
 from dataclasses import replace
-from typing import get_args
+from datetime import UTC, datetime, timedelta, timezone
+from typing import get_args, get_type_hints
 
 import pytest
 
 from agentic.core.process.domain import ci, landing, rules
 from agentic.core.process.domain.landing import LandingSpent, LandingStep
 from agentic.core.process.domain.rules import MergeFacts
+from agentic.core.process.domain.task import LandingEntry
 
 HEAD = "a" * 40
 MASTER = "b" * 40
@@ -268,3 +270,154 @@ def test_marker_parent_names_the_task_that_wrote_the_follow_up_and_rejects_anyth
     assert landing.marker_parent(f"{marker}\nbody") == ("GH-5", 2)
     assert landing.marker_parent("no marker here") is None
     assert landing.marker_parent("<!-- agentic:followup task=GH-5 -->") is None
+
+
+NOW = datetime(2026, 10, 14, 12, 30, 0, tzinfo=UTC)
+
+
+def _owed_raw(spawned_ago=None, *, spawns=None, runs=(), **over):
+    """A document with a reopened landing; `spawned_ago` seconds since the last spawn."""
+    entry: dict = {"head": HEAD, "step": "re_review", "refusal": "head_not_reviewed"}
+    if spawned_ago is not None:
+        entry["resume_spawned_at"] = (NOW - timedelta(seconds=spawned_ago)).isoformat()
+    if spawns is not None:
+        entry["resume_spawns"] = spawns
+    raw = _state([entry], "approved", "returned")
+    raw["runs"] = list(runs)
+    raw.update(over)
+    return raw
+
+
+def _spawn_at(raw):
+    return datetime.fromisoformat(raw["landing"][-1]["resume_spawned_at"])
+
+
+def test_the_resume_constants_are_the_plans():
+    assert landing.LANDING_RESUME_SPAWNS_MAX == 2
+    assert landing.LANDING_RESUME_GRACE_S == 300
+
+
+def test_a_reopened_landing_that_never_spawned_owes_a_resume():
+    assert landing.resume_owed(_owed_raw(), NOW) is True
+
+
+def test_the_gh_227_shape_owes_a_resume():
+    raw = _state(
+        [{"head": HEAD, "step": "re_review", "refusal": "head_not_reviewed", "cost_base": 27.9}],
+        "approved",
+        "returned",
+    )
+    assert landing.resume_owed(raw, NOW) is True
+
+
+@pytest.mark.parametrize(("ago", "owed"), [(299, False), (301, True)])
+def test_a_resume_is_owed_again_only_after_the_grace_period(ago, owed):
+    assert landing.resume_owed(_owed_raw(ago, spawns=1), NOW) is owed
+
+
+def test_a_run_started_after_the_spawn_in_the_same_second_means_the_child_is_alive():
+    raw = _owed_raw(400, spawns=1)
+    started = _spawn_at(raw).replace(microsecond=500_000)
+    raw["runs"] = [{"started_at": started.isoformat(timespec="milliseconds")}]
+    assert landing.resume_owed(raw, NOW) is False
+
+
+def test_a_run_from_before_the_spawn_does_not_count():
+    raw = _owed_raw(400, spawns=1)
+    before = _spawn_at(raw) - timedelta(seconds=1)
+    raw["runs"] = [{"started_at": before.isoformat()}]
+    assert landing.resume_owed(raw, NOW) is True
+
+
+def test_runs_without_a_start_are_skipped():
+    raw = _owed_raw(400, spawns=1, runs=[{"role": "developer"}, {"started_at": None}])
+    assert landing.resume_owed(raw, NOW) is True
+
+
+def test_a_run_started_in_another_offset_is_compared_as_an_instant():
+    raw = _owed_raw(400, spawns=1)
+    after = (_spawn_at(raw) + timedelta(seconds=1)).astimezone(timezone(timedelta(hours=2)))
+    raw["runs"] = [{"started_at": after.isoformat()}]
+    assert landing.resume_owed(raw, NOW) is False
+
+
+def test_an_unparseable_spawn_time_owes_nothing():
+    raw = _owed_raw(400, spawns=1)
+    raw["landing"][-1]["resume_spawned_at"] = "yesterday-ish"
+    assert landing.resume_owed(raw, NOW) is False
+
+
+def test_a_naive_spawn_time_owes_nothing():
+    raw = _owed_raw(400, spawns=1)
+    raw["landing"][-1]["resume_spawned_at"] = "2026-10-14T12:00:00"
+    assert landing.resume_owed(raw, NOW) is False
+
+
+@pytest.mark.parametrize("started", ["2026-10-14T13:00:00", "not a time", 12])
+def test_a_naive_or_unparseable_run_start_owes_nothing(started):
+    raw = _owed_raw(400, spawns=1, runs=[{"started_at": started}])
+    assert landing.resume_owed(raw, NOW) is False
+
+
+def test_an_escalated_task_owes_nothing():
+    assert landing.resume_owed(_owed_raw(escalated=True), NOW) is False
+
+
+def test_a_spent_resume_budget_owes_nothing():
+    assert landing.resume_owed(_owed_raw(400, spawns=2), NOW) is False
+    assert landing.resume_owed(_owed_raw(400, spawns=1), NOW) is True
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        _state([{"head": HEAD, "step": "fix", "resolved_at": "t"}], "returned"),
+        _state([{"head": HEAD, "step": "fix"}], "approved", "approved"),
+        _state([], "returned"),
+    ],
+    ids=["resolved", "no_reopened_subtask", "no_entries"],
+)
+def test_a_landing_that_is_not_open_owes_nothing(raw):
+    assert landing.resume_owed(raw, NOW) is False
+
+
+_SAMPLE: dict[type, object] = {
+    str: "x",
+    int: 1,
+    float: 1.5,
+    list[str]: ["a"],
+}
+
+
+def test_entry_of_keeps_every_key_landing_entry_declares():
+    hints = get_type_hints(LandingEntry)
+    assert {"resume_spawns", "resume_spawned_at"} <= hints.keys()
+    full = {key: _SAMPLE[hint] for key, hint in hints.items()}
+    kept = landing.entry_of(full)
+    assert set(kept) == set(hints)
+
+
+def test_entry_of_does_not_take_a_bool_for_the_spawn_count():
+    assert "resume_spawns" not in landing.entry_of({"resume_spawns": True})
+    assert "resume_spawned_at" not in landing.entry_of({"resume_spawned_at": 3})
+    assert landing.entry_of({"resume_spawns": 2})["resume_spawns"] == 2
+
+
+_RESUME = {"resume_spawns": 1, "resume_spawned_at": "2026-10-14T12:00:00+00:00"}
+
+
+def test_with_cost_base_preserves_the_resume_keys():
+    entries = [{"head": HEAD, "step": "re_review", **_RESUME, "cost_base": 1.0}]
+    (out,) = landing.with_cost_base(entries, HEAD, "re_review", 2.5)
+    assert out["cost_base"] == 2.5
+    assert out["resume_spawns"] == 1
+    assert out["resume_spawned_at"] == _RESUME["resume_spawned_at"]
+
+
+def test_resolve_open_preserves_the_resume_keys_and_the_cost_base():
+    entries = [{"head": HEAD, "step": "re_review", **_RESUME, "cost_base": 1.0}]
+    (out,) = landing.resolve_open(entries, "2026-10-14T13:00:00+00:00", 3.0)
+    assert out["resume_spawns"] == 1
+    assert out["resume_spawned_at"] == _RESUME["resume_spawned_at"]
+    assert out["cost_base"] == 1.0
+    assert out["cost_usd"] == 2.0

@@ -583,7 +583,9 @@ class SettledRow(TypedDict):
 class LandingEntry(TypedDict, total=False):
     """One landing step of the task document's `landing` list (GH-239): the idempotency
     key is `(head, step)`; `refusal` is the `MergeRefusal` it answered, `at` when it was
-    written, `cost_usd` what it spent and `resolved_at` when the re-delivery closed it."""
+    written, `cost_usd` what it spent and `resolved_at` when the re-delivery closed it.
+    `resume_spawns` counts the resume children spawned for the entry and `resume_spawned_at`
+    says when the last one was (`landing.resume_owed` reads both)."""
 
     head: str
     step: str
@@ -595,6 +597,9 @@ class LandingEntry(TypedDict, total=False):
     # from its own to get this entry's `cost_usd`.
     cost_base: float
     checks: list[str]
+    # Resume children actually spawned for this entry, and when the last one was.
+    resume_spawns: int
+    resume_spawned_at: str
 
 
 class TaskState(TaskInput, total=False):
