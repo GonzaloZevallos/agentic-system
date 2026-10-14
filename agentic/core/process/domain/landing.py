@@ -228,3 +228,17 @@ def restart_depth(raw: Mapping[str, object]) -> int:
     """How many times the landing restarted this issue, from the task document."""
     value = raw.get("landing_restarts", 0)
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def marker_parent(body: str) -> tuple[str, int] | None:
+    """`(task id, lineage)` of the follow-up marker in `body`, whichever task wrote it: a
+    follow-up issue carries its parent's id, so a task whose own request holds one is
+    itself a follow-up, and files nothing further (GH-239). `None` without a marker."""
+    found = re.search(r"<!-- agentic:followup task=(\S+) lineage=([0-9]+) -->", body)
+    return (found.group(1), int(found.group(2))) if found else None
+
+
+def flake_marker(check: str) -> str:
+    """The first line of a flake issue body, which the deduplication reads back: one open
+    issue per check name, whichever task saw it flake."""
+    return f"<!-- agentic:flake check={check} -->"

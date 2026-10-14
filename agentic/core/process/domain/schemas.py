@@ -422,6 +422,17 @@ class Review(RoleOutput):
     )
 
 
+class LandingDiagnosis(RoleOutput):
+    """The landing diagnoser's one run per task (GH-239): why the pull request keeps being
+    refused after every cheaper step, written for the fresh run that will start over (or
+    for the human, when it is already the second one)."""
+
+    reason: str = Field(
+        description="One line, why this pull request cannot land, in terms a fresh run "
+        "can act on: what to do differently, not what went wrong in general"
+    )
+
+
 class LessonDelta(BaseModel):
     """One change the reflector proposes to a role's playbook (ADR-0043). The curator,
     which is code (`playbook.apply`), decides whether it applies: a field a delta does not

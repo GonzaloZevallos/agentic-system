@@ -11,7 +11,7 @@ nothing here writes in stage0. The merge call runs only after that subprocess ex
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,7 +22,7 @@ from agentic.shared.configuration import Configuration
 from ..domain import ci, presubmit, rules
 from ..domain import landing as landing_rules
 from ..domain.task import PullRequest, TaskState
-from . import landing_plan
+from . import landing_flakes, landing_plan
 from .checkouts import task_base
 from .poll import AUTO_MERGE_REFUSED, AUTO_MERGED, LANDING, _merge_facts, with_ci
 from .ports import CommandResult, GitError, MergeCallFailed, Ports, Upstream
@@ -113,7 +113,7 @@ def merge_task(
         return MergeResult("stopped", "ci_wait")
     if decision.kind == "run_checks":
         assert head is not None  # a decision never asks for checks without a head
-        _run_checks(task_id, raw, head, master, base, cfg, ports, facts.attempts + 1, log)
+        run_checks(task_id, raw, head, master, base, cfg, ports, facts.attempts + 1, log)
         raw = ports.documents.load(task_id) or raw
         facts = decide(raw)
         decision = rules.auto_merge_decision(facts)
@@ -123,6 +123,8 @@ def merge_task(
         return _refuse(task_id, head, decision.reason, ports, failure=failure, facts=facts)
     if decision.kind != "merge" or head is None:
         return MergeResult("stopped", "no_decision")
+    # A check that failed on this head, was rerun by the landing and now passes is flaky.
+    landing_flakes.file_flakes(ports, task_id, head, landing_flakes.rerun_checks_on(raw, head), log)
     relied = _ci_links(report, declared) if _merges_on_ci(facts) else None
     return _merge(
         task_id, number, str(reference), head, ports, facts, clock, log, relied, bool(declared)
@@ -175,7 +177,7 @@ def _facts(
     )
 
 
-def _run_checks(
+def run_checks(
     task_id: str,
     raw: TaskState,
     head: str,
@@ -183,14 +185,18 @@ def _run_checks(
     base: str,
     cfg: Configuration,
     ports: Ports,
-    attempt: int,
+    attempt: int | None,
     log: Callable[[str], None],
+    only: Collection[str] | None = None,
 ) -> None:
     """The checks at the task's base, on the pull request's head merged with `master`,
     and the record of both (`merge_attempts`, `merge_checks`). The worktree is removed
     whatever happens; a merge that conflicts, a setup step that fails or a tree the
     checks could not run in all count as the checks failing."""
-    ports.documents.record_closure(task_id, {"merge_attempts": {"head": head, "count": attempt}})
+    if attempt is not None:
+        ports.documents.record_closure(
+            task_id, {"merge_attempts": {"head": head, "count": attempt}}
+        )
     started = time.monotonic()
     name = _name(task_id)
     failed_step: presubmit.FailedStep | None = None
@@ -211,7 +217,11 @@ def _run_checks(
             )
             failed_step = "setup"
         else:
-            checks = declared = ports.stack.checks(base)
+            checks = declared = {
+                name: command
+                for name, command in ports.stack.checks(base).items()
+                if only is None or name in only
+            }
             gate = CheckoutPresubmit(
                 ports,
                 path,
@@ -239,6 +249,10 @@ def _run_checks(
         failed_step=failed_step,
         setup_failure=setup_failure,
     )
+    previous = raw.get("merge_checks")
+    if only is not None and isinstance(previous, Mapping):
+        # Only the failed checks ran: the rest stay as the earlier run recorded them.
+        record = presubmit.rerun_record(previous, record)
     ports.documents.record_closure(task_id, {"merge_checks": record})
     shown = presubmit.failed_checks_markdown(record, head, neutralise=False)
     for number, line in enumerate(shown.splitlines()):

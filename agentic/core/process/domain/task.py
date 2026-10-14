@@ -18,6 +18,7 @@ several nodes over a copy of the state and has to hand the parent what it added.
 from __future__ import annotations
 
 import operator
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import (
     Annotated,
@@ -228,6 +229,11 @@ class TaskInput(TypedDict):
     # (`rules.interview_cap`; ADR-0014, addendum of 2026-10-06). Declared here because the
     # graph's `input_schema` keeps only declared keys. Absent reads as not decided.
     decided: NotRequired[bool]
+    # What a landing restart carries over (GH-239, ADR-0048): `rules.entering` sets them from
+    # the archived run, read before `archive_previous_run` moved it. Declared here for the
+    # same reason as `decided`. Absent reads as a first run: depth 0, nothing carried.
+    landing_restarts: NotRequired[int]
+    landing_cost_carried: NotRequired[float]
 
 
 class Failure(TypedDict):
@@ -589,6 +595,7 @@ class LandingEntry(TypedDict, total=False):
     # The task's `cost_usd` when a reopening step was written: the re-delivery subtracts it
     # from its own to get this entry's `cost_usd`.
     cost_base: float
+    checks: list[str]
 
 
 class TaskState(TaskInput, total=False):
@@ -658,6 +665,8 @@ class TaskState(TaskInput, total=False):
     # and `landing_cost_carried` the depth and the cost a `--fresh` restart carries over.
     landing: list[LandingEntry]
     auto_merge_guarded: list[str]
+    # Set by the landing once it filed the follow-up for the open important findings.
+    followups_filed: bool
     landing_restarts: int
     landing_cost_carried: float
     # What an interviewee could not decide (ADR-0014); escalates with the task.
@@ -715,6 +724,13 @@ def _reducers() -> dict[str, object]:
 
 
 REDUCERS = _reducers()
+
+
+def from_document(document: Mapping[str, Any]) -> TaskState:
+    """The loaded document as a state: the port answers a bare mapping (it carries keys
+    beyond the state), and every reader of a state takes it as one. The same single,
+    coded exception `apply` makes for the same reason."""
+    return dict(document)  # type: ignore[return-value]
 
 
 def apply(state: TaskState, patch: TaskState) -> TaskState:

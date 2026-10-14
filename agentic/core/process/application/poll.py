@@ -266,6 +266,7 @@ def _merge_facts(
         checks_master=_text(checks.get("master")),
         checks_passed=passed if isinstance(passed, bool) else None,
         current_master=current_master,
+        followups_filed=raw.get("followups_filed") is True,
         merge_failures=failed_count if isinstance(failed_count, int) and failed_here else 0,
         merge_failure=failure if failed_here and failure in get_args(rules.MergeFailure) else None,
         failed_step=(

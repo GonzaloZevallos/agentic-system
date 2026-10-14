@@ -8,18 +8,24 @@ ask the same question the same way. It imports nothing from them."""
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from typing import Protocol
 
 from agentic.shared.configuration import Configuration
 
 from ..domain import landing, rules
 from ..domain.landing import LandingStep, LandingStepKind
+from ..domain.roles import Role
 from ..domain.task import TaskState
-from .ports import Ports, Upstream
+from .ports import Launcher, Ports, Upstream
 
-LIVE_STEPS: frozenset[LandingStepKind] = frozenset({"sync_master", "re_review"})
-"""The steps whose executors are built: `landing_sync`'s. An inert step (`landing_fix`'s,
-until it is built) is neither recorded nor spawned, so its refusal logs stay as they were."""
+LIVE_STEPS: frozenset[LandingStepKind] = frozenset(
+    {"sync_master", "re_review", "fix", "rerun", "file_followups_and_land", "diagnose"}
+)
+"""Every step has its executor: `landing_sync`'s (`sync_master`, `re_review`) and
+`landing_fix`'s (`fix`, `rerun`, `file_followups_and_land`, `diagnose`). A step outside the set
+is neither recorded nor spawned, so a refusal whose step is inert logs as it always did."""
 
 
 def takes_action(kind: LandingStepKind, live: frozenset[LandingStepKind]) -> bool:
@@ -86,6 +92,18 @@ def pending(
     return step
 
 
+class RoleRun(Protocol):
+    """What the diagnoser's span needs: `finish` is called once, with the patch the role
+    produced, so the span carries the step and the refusal it ran for."""
+
+    def finish(self, patch: TaskState) -> None: ...
+
+
+RoleSpanOpener = Callable[[Role], AbstractContextManager[RoleRun]]
+"""Opens the span a role runs under. Injected by the composition root: the application
+does not import the telemetry adapter."""
+
+
 @dataclass(frozen=True)
 class LandingContext:
     """What an executor is handed: the step already recorded for `head`, never decided again."""
@@ -101,3 +119,6 @@ class LandingContext:
     # Spawns `agentic resume` for an issue number and answers its pid: how a step that
     # reopened the technical stage hands the task to it. `None` where nothing can spawn.
     resume: Callable[[int], int | None] | None = None
+    launcher: Launcher | None = None
+    argv0: str = "agentic"
+    role_span: RoleSpanOpener | None = None

@@ -47,6 +47,13 @@ def reopen(
     marked `by: "landing"`. `changes_requested`, the pair's limit, is never in the patch:
     the landing is bounded by its own budgets. `pull_request` is kept."""
     subtasks = state.get("subtasks", {})
+    # A name that is not a subtask of the document (a blocking record owned by nothing the
+    # document knows) reopens the reviewed unit instead.
+    names = [unit for unit in units if unit in subtasks]
+    if not names:
+        reviewed = _unit(state)
+        names = [reviewed] if reviewed is not None else []
+    units = names
     reopened: dict[str, Subtask] = {}
     for unit in units:
         sub = subtasks[unit]
@@ -77,7 +84,7 @@ def _state(context: LandingContext) -> TaskState | None:
     return resuming.state_from(raw) if raw is not None else None
 
 
-def _spawn(context: LandingContext) -> None:
+def spawn_resume(context: LandingContext) -> None:
     number = context.ports.inbox.issue_of(context.task_id)
     if context.resume is None or number is None:
         context.log(f"agentic: land: {context.task_id}: reopened, nothing to resume it with")
@@ -86,7 +93,7 @@ def _spawn(context: LandingContext) -> None:
     context.log(f"agentic: land: {context.task_id}: reopened, resume -> pid {pid}")
 
 
-def _record(context: LandingContext, written: Sequence[Mapping[str, object]]) -> None:
+def record_landing(context: LandingContext, written: Sequence[Mapping[str, object]]) -> None:
     """The `landing` list as the closure key `land` first wrote it: whatever re-renders the
     document, the list that stands is this one."""
     context.ports.documents.record_closure(context.task_id, {"landing": list(written)})
@@ -106,8 +113,8 @@ def _reopened(
         entries(state), context.head, context.step.kind, state.get("cost_usd", 0.0)
     )
     context.ports.documents.save({**reopened, "landing": marked})
-    _record(context, marked)
-    _spawn(context)
+    record_landing(context, marked)
+    spawn_resume(context)
 
 
 def _unit(state: TaskState) -> str | None:
@@ -201,7 +208,7 @@ def sync_master(context: LandingContext) -> None:
     resolved = landing.resolve_open(entries(state), _now(), state.get("cost_usd", 0.0))
     subtasks = {**state["subtasks"], unit: advanced}
     ports.documents.save({**state, "subtasks": subtasks, "landing": resolved})
-    _record(context, resolved)
+    record_landing(context, resolved)
     context.log(
         f"agentic: land: {context.task_id}: master synced, verdict carried to {merged.head}"
     )

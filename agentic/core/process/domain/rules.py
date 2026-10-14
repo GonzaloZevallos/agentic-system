@@ -970,13 +970,20 @@ def decided(text: str, level: int = 2) -> bool:
     return False
 
 
-def entering(task: TaskInput, *, cap: bool) -> TaskInput:
+def entering(task: TaskInput, *, cap: bool, carried: tuple[int, float] | None = None) -> TaskInput:
     """`task` as it enters the graph: with `decided: True` when `cap` is on and its
     request carries the heading, and otherwise unchanged, with no key added. Called
-    once, from `cli._run`; nothing else sets `decided`."""
+    once, from `cli._run`; nothing else sets `decided`.
+
+    `carried` is `(landing_restarts, landing_cost_carried)` of the run a landing restart
+    replaces (GH-239, ADR-0048), read from its task document and never counted from issue
+    comments; `None`, or a restart that carries nothing, adds neither key."""
+    entered = task
     if cap and decided(task["description"]):
-        return {**task, "decided": True}
-    return task
+        entered = {**entered, "decided": True}
+    if carried is not None and (carried[0] > 0 or carried[1] > 0):
+        entered = {**entered, "landing_restarts": carried[0], "landing_cost_carried": carried[1]}
+    return entered
 
 
 def interview_cap(state: TaskState, spec: Interview, configured: int) -> int:

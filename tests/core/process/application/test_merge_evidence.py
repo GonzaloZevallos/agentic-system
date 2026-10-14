@@ -17,6 +17,13 @@ from tests.fakes import MemoryCommands, MemoryStack
 CHECKS = {"lint": "run lint", "tests": "run tests"}
 
 
+@pytest.fixture(autouse=True)
+def _no_live_landing_step(monkeypatch):
+    """These tests pin the merge verb's refusal evidence, not the landing: no step is live,
+    so a refusal stays the single comment it was. A test that wants one patches it itself."""
+    monkeypatch.setattr(landing_plan, "LIVE_STEPS", frozenset())
+
+
 def _world(tmp_path, commands=None, stack=None):
     ports = _ports(5, checks=False)
     return dataclasses.replace(
