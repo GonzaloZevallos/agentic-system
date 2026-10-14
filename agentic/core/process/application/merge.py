@@ -11,7 +11,7 @@ nothing here writes in stage0. The merge call runs only after that subprocess ex
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -458,6 +458,11 @@ def _merge(
         text += "\n\nCI relied on:\n" + "\n".join(
             f"- {row['name']}: {row['link']}" for row in relied
         )
+    left = [row for record in facts.adr_renumbers for row in record["unrewritten"]]
+    if left:
+        text += "\n\nStill naming a renumbered ADR (left for the human to read):\n" + "\n".join(
+            f"- {row}" for row in left
+        )
     ports.tracker.comment(task_id, text)
     return MergeResult("merged", method=method)
 
@@ -535,6 +540,41 @@ def _ci_evidence(reason: str, facts: rules.MergeFacts) -> str:
     return f"`gh` could not read the CI report ({cause})"
 
 
+def _chains(records: Sequence[rules.RenumberRecord]) -> list[list[int]]:
+    """The numbers each renumbered ADR went through, oldest first: one chain per ADR, a
+    record extending the chain that ends at the number it moved from."""
+    chains: list[list[int]] = []
+    for record in records:
+        for old, new in record["map"].items():
+            before, after = adr_numbers.adr_number(old), adr_numbers.adr_number(new)
+            if before is None or after is None:
+                continue
+            extended = next((chain for chain in chains if chain[-1] == before), None)
+            if extended is None:
+                chains.append([before, after])
+            else:
+                extended.append(after)
+    return chains
+
+
+def _adr_evidence(facts: rules.MergeFacts) -> str:
+    """What an `adr_number_taken` refusal says, from structured facts only: the numbers
+    each renumbered ADR went through and the ones master still holds."""
+    if facts.adr_collision.duplicate:
+        return "Two ADR files at the head share a number; renumbering does not settle that."
+    chains = _chains(facts.adr_renumbers)
+    rows = []
+    for path in facts.adr_collision.colliding:
+        number = adr_numbers.adr_number(path)
+        chain = next((c for c in chains if c[-1] == number), [number])
+        steps = " → ".join(f"{n:04d}" for n in chain if n is not None)
+        rows.append(f"{path}: {steps}, and {number:04d} is taken on master again")
+    return (
+        f"The ADR was renumbered {len(facts.adr_renumbers)} times already "
+        f"(at most {rules.ADR_RENUMBERS_MAX}):\n" + "\n".join(f"- {row}" for row in rows)
+    )
+
+
 def _summary_line(comment: str) -> str:
     """The line after the first of an `Auto-merge refused:` comment that names what
     failed, or "" when there is none (the comment goes straight to its closing sentence)."""
@@ -568,6 +608,8 @@ def _refuse(
             text = "\n\n".join(part for part in (first, evidence, LEFT_TO_HUMAN) if part)
         if facts is not None and reason in ("ci_failed", "ci_missing", "ci_unreadable"):
             text = f"{first}\n\n{_ci_evidence(reason, facts)}\n\n{LEFT_TO_HUMAN}"
+        if reason == "adr_number_taken" and facts is not None:
+            text = f"{first}\n\n{_adr_evidence(facts)}\n\n{LEFT_TO_HUMAN}"
         if reason == "merge_failed":
             advice = (
                 rules.MERGE_FAILURE_ADVICE[failure]

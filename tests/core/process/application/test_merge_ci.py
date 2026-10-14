@@ -275,3 +275,17 @@ def test_a_stack_the_poller_cannot_read_leaves_that_task_and_never_aborts_the_ro
     assert found == []
     assert lines == ["agentic: poll: auto-merge #5 -> left to the human: stack_unreadable"]
     assert ports.tracker.ci_reads == []
+
+
+def test_a_green_fresh_ci_is_not_merged_when_master_moved_at_the_last_look(tmp_path):
+    # GH-229: the merge on the CI refetches the upstream right before `Tracker.merge`, as the
+    # merge on the local checks does, so a master that took another ADR number is not merged over.
+    ports = _world(_report(_check()))
+    ports.workspace.upstream_answer = Upstream("origin/master", "f" * 40, None)
+
+    result, logged = _run(ports, tmp_path)
+
+    assert result == merge.MergeResult("refused", "master_moved")
+    assert ports.tracker.merge_calls == [] and ports.tracker.comments == []
+    assert "auto_merge_head" not in _doc(ports)
+    assert any("master moved" in line for line in logged)
