@@ -59,11 +59,11 @@ async def test_run_role_logs_each_failure_then_the_escalation(cfg):
     ]
 
 
-async def test_classify_logs_its_own_classification_escalation_with_no_failure(cfg):
+async def test_classify_on_low_confidence_logs_no_escalation(cfg):
+    # GH-239 edits the case that asserted a `classification` entry: it continues now.
     ports = memory_ports(ScriptedRunner(pjm=[classified(confidence="low")]))
     patch = await classify(TASK, cfg, ports)
-    assert patch["escalation_class"] == "classification"
-    assert patch["pause_log"] == [{"kind": "escalation", "value": "classification"}]
+    assert "escalation_class" not in patch and "pause_log" not in patch
 
 
 async def test_interview_logs_its_own_questions_escalation_with_no_failure(cfg):

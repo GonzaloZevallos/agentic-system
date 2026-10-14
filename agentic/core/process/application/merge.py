@@ -11,7 +11,7 @@ nothing here writes in stage0. The merge call runs only after that subprocess ex
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,16 +20,17 @@ from typing import Literal
 from agentic.shared.configuration import Configuration
 
 from ..domain import ci, presubmit, rules
+from ..domain import landing as landing_rules
 from ..domain.task import PullRequest, TaskState
+from . import landing_flakes, landing_plan
 from .checkouts import task_base
-from .poll import AUTO_MERGE_REFUSED, AUTO_MERGED, _merge_facts, with_ci
+from .poll import AUTO_MERGE_REFUSED, AUTO_MERGED, LANDING, _merge_facts, with_ci
 from .ports import CommandResult, GitError, MergeCallFailed, Ports, Upstream
 from .presubmit import CheckoutPresubmit
 
 # The refusals a human can act on, and so the only ones commented, once per (head, reason).
 COMMENTED: tuple[str, ...] = (
     "checks_failed",
-    "guarded_path",
     "no_merge_method",
     "eval_set_unreadable",
     "attempts_exhausted",
@@ -112,18 +113,18 @@ def merge_task(
         return MergeResult("stopped", "ci_wait")
     if decision.kind == "run_checks":
         assert head is not None  # a decision never asks for checks without a head
-        _run_checks(task_id, raw, head, master, base, cfg, ports, facts.attempts + 1, log)
+        run_checks(task_id, raw, head, master, base, cfg, ports, facts.attempts + 1, log)
         raw = ports.documents.load(task_id) or raw
         facts = decide(raw)
         decision = rules.auto_merge_decision(facts)
     if decision.kind == "refuse":
         assert decision.reason is not None
-        if decision.reason == "guarded_path" and head is not None:
-            _spend_attempts(task_id, raw, head, ports)
         failure = facts.merge_failure if decision.reason == "merge_failed" else None
         return _refuse(task_id, head, decision.reason, ports, failure=failure, facts=facts)
     if decision.kind != "merge" or head is None:
         return MergeResult("stopped", "no_decision")
+    # A check that failed on this head, was rerun by the landing and now passes is flaky.
+    landing_flakes.file_flakes(ports, task_id, head, landing_flakes.rerun_checks_on(raw, head), log)
     relied = _ci_links(report, declared) if _merges_on_ci(facts) else None
     return _merge(
         task_id, number, str(reference), head, ports, facts, clock, log, relied, bool(declared)
@@ -132,13 +133,14 @@ def merge_task(
 
 def _merges_on_ci(facts: rules.MergeFacts) -> bool:
     """The `merge` rested on the CI alone: declared, green on this head and fresh. The
-    same three facts `rules.auto_merge_decision` merges on before it looks at any local
+    same four facts `rules.auto_merge_decision` merges on before it looks at any local
     check."""
     return (
         bool(facts.ci_required)
         and facts.ci_verdict is not None
         and facts.ci_verdict.state == "green"
         and facts.ci_fresh is True
+        and facts.ci_untrusted is False
     )
 
 
@@ -171,10 +173,11 @@ def _facts(
     return replace(
         _merge_facts(task_id, raw, pull_request, eval_set, number, master),
         touched_paths=touched,
+        ci_untrusted=rules.ci_untrusted(touched),
     )
 
 
-def _run_checks(
+def run_checks(
     task_id: str,
     raw: TaskState,
     head: str,
@@ -182,14 +185,18 @@ def _run_checks(
     base: str,
     cfg: Configuration,
     ports: Ports,
-    attempt: int,
+    attempt: int | None,
     log: Callable[[str], None],
+    only: Collection[str] | None = None,
 ) -> None:
     """The checks at the task's base, on the pull request's head merged with `master`,
     and the record of both (`merge_attempts`, `merge_checks`). The worktree is removed
     whatever happens; a merge that conflicts, a setup step that fails or a tree the
     checks could not run in all count as the checks failing."""
-    ports.documents.record_closure(task_id, {"merge_attempts": {"head": head, "count": attempt}})
+    if attempt is not None:
+        ports.documents.record_closure(
+            task_id, {"merge_attempts": {"head": head, "count": attempt}}
+        )
     started = time.monotonic()
     name = _name(task_id)
     failed_step: presubmit.FailedStep | None = None
@@ -210,7 +217,11 @@ def _run_checks(
             )
             failed_step = "setup"
         else:
-            checks = declared = ports.stack.checks(base)
+            checks = declared = {
+                name: command
+                for name, command in ports.stack.checks(base).items()
+                if only is None or name in only
+            }
             gate = CheckoutPresubmit(
                 ports,
                 path,
@@ -238,26 +249,14 @@ def _run_checks(
         failed_step=failed_step,
         setup_failure=setup_failure,
     )
+    previous = raw.get("merge_checks")
+    if only is not None and isinstance(previous, Mapping):
+        # Only the failed checks ran: the rest stay as the earlier run recorded them.
+        record = presubmit.rerun_record(previous, record)
     ports.documents.record_closure(task_id, {"merge_checks": record})
     shown = presubmit.failed_checks_markdown(record, head, neutralise=False)
     for number, line in enumerate(shown.splitlines()):
         log(f"agentic: merge: {task_id}: {line}" if number == 0 else f"    {line}")
-
-
-def _spend_attempts(task_id: str, raw: TaskState, head: str, ports: Ports) -> None:
-    """The poller cannot see a diff, so it would spawn this child for a guarded-path head
-    every round. Spending the head's attempts makes `auto_merge_decision` itself leave the
-    pull request alone (`attempts_exhausted`, a log line) until a push gives a new head."""
-    recorded = raw.get("merge_attempts")
-    count = (
-        recorded.get("count", 0)
-        if isinstance(recorded, dict) and recorded.get("head") == head
-        else 0
-    )
-    if count < rules.MERGE_ATTEMPTS_MAX:
-        ports.documents.record_closure(
-            task_id, {"merge_attempts": {"head": head, "count": rules.MERGE_ATTEMPTS_MAX}}
-        )
 
 
 def _setup(
@@ -310,6 +309,11 @@ def _merge(
         intent["auto_merge_ci"] = relied
     elif ci_declared:
         intent["auto_merge_via"] = "local"
+    # The system's own record and configuration the change touches (GH-239): no longer a
+    # reason to refuse, so the merge says so instead, in the document and the comment.
+    guarded = [path for path in facts.touched_paths or () if rules.guarded_path(path, task_id)]
+    if guarded:
+        intent["auto_merge_guarded"] = guarded
     ports.documents.record_closure(task_id, intent)
     try:
         method = ports.tracker.merge(reference, head)
@@ -323,6 +327,8 @@ def _merge(
         task_id, {"auto_merged_at": clock(), "auto_merge_method": method}
     )
     text = f"{AUTO_MERGED}{head} via {method}"
+    if guarded:
+        text += "\n\nGuarded paths changed:\n" + "\n".join(f"- {path}" for path in guarded)
     if relied is not None:
         text += "\n\nCI relied on:\n" + "\n".join(
             f"- {row['name']}: {row['link']}" for row in relied
@@ -371,7 +377,7 @@ def _after_failure(
         )
         if decision.kind == "refuse" and decision.reason == "merge_failed":
             log(f"agentic: merge: {task_id}: merge failed ({failure}: {error}), budget spent")
-            return _refuse(task_id, head, "merge_failed", ports, failure=failure)
+            return _refuse(task_id, head, "merge_failed", ports, failure=failure, facts=facts)
         log(
             f"agentic: merge: {task_id}: merge failed ({failure}: {error}), "
             f"{count} of {rules.MERGE_CALLS_MAX}"
@@ -416,7 +422,7 @@ def _summary_line(comment: str) -> str:
 def _refuse(
     task_id: str,
     head: str | None,
-    reason: str,
+    reason: rules.MergeRefusal,
     ports: Ports,
     failure: rules.MergeFailure | None = None,
     facts: rules.MergeFacts | None = None,
@@ -426,17 +432,27 @@ def _refuse(
     `merge_failed` one names the closed class of the last failure (or `unknown`) and a
     fixed advice sentence, never the CLI's own text."""
     if reason in COMMENTED and head is not None:
+        # Only a refusal the landing has nothing to do about is left to the human
+        # (GH-239); any other names the step it takes (`Landing:` below).
+        step = (
+            landing_plan.step_for(ports.documents.load(task_id) or {}, reason, facts)
+            if facts is not None
+            else None
+        )
+        closing = LEFT_TO_HUMAN if step is None or step.kind == "none" else ""
         first = f"{AUTO_MERGE_REFUSED}{head} {reason}"
         summary = ""
-        text = f"{first}\n\n{LEFT_TO_HUMAN}"
+        text = "\n\n".join(part for part in (first, closing) if part)
         if reason == "checks_failed":
             recorded = (ports.documents.load(task_id) or {}).get("merge_checks")
             record = recorded if isinstance(recorded, dict) else {}
             summary = presubmit.failed_checks_summary(record, head)
             evidence = presubmit.failed_checks_markdown(record, head)
-            text = "\n\n".join(part for part in (first, evidence, LEFT_TO_HUMAN) if part)
+            text = "\n\n".join(part for part in (first, evidence, closing) if part)
         if facts is not None and reason in ("ci_failed", "ci_missing", "ci_unreadable"):
-            text = f"{first}\n\n{_ci_evidence(reason, facts)}\n\n{LEFT_TO_HUMAN}"
+            text = "\n\n".join(
+                part for part in (first, _ci_evidence(reason, facts), closing) if part
+            )
         if reason == "merge_failed":
             advice = (
                 rules.MERGE_FAILURE_ADVICE[failure]
@@ -444,7 +460,7 @@ def _refuse(
                 else rules.MERGE_FAILURE_UNKNOWN_ADVICE
             )
             first = f"{AUTO_MERGE_REFUSED}{head} gh pr merge failed: {failure or 'unknown'}"
-            text = f"{first}\n\n{advice}\n\nLeft for the human to merge."
+            text = "\n\n".join(part for part in (first, advice, closing) if part)
         refused = [
             body
             for body in ports.tracker.issue_comments(task_id)
@@ -456,4 +472,17 @@ def _refuse(
             or (reason == "checks_failed" and _summary_line(refused[-1]) != summary)
         ):
             ports.tracker.comment(task_id, text)
+        # Announced only when the system will take it: an inert step says nothing.
+        if step is not None and landing_plan.takes_action(step.kind, landing_plan.LIVE_STEPS):
+            line = f"{LANDING}{head} {step.kind}"
+            # Once per (head, step): not when the document's `landing` list already holds
+            # the key, and not when the comment is already on the issue (the step may not
+            # have been recorded yet).
+            taken = landing_rules.already_dispatched(
+                landing_plan.entries(ports.documents.load(task_id) or {}), head, step.kind
+            )
+            if not taken and not any(
+                body.splitlines()[:1] == [line] for body in ports.tracker.issue_comments(task_id)
+            ):
+                ports.tracker.comment(task_id, line)
     return MergeResult("refused", reason)

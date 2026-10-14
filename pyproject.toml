@@ -62,6 +62,11 @@ files = [
     "agentic/core/measurement/adapters",
     "agentic/core/process/adapters/shell/inhibitor.py",
     "agentic/core/process/application/presubmit.py",
+    "agentic/core/process/application/landing.py",
+    "agentic/core/process/application/landing_plan.py",
+    "agentic/core/process/application/landing_sync.py",
+    "agentic/core/process/application/landing_fix.py",
+    "agentic/core/process/application/landing_flakes.py",
 ]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true

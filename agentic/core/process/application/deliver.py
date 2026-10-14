@@ -12,11 +12,11 @@ from typing import assert_never
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import document, rules
+from ..domain import document, landing, rules
 from ..domain.pull_request import BoundedBody, bounded_body
 from ..domain.roles import DEVELOPER_INTEGRATOR, PJM, PM, TECH_LEAD
 from ..domain.task import WAITING_ON_HUMAN, TaskState
-from .checkouts import SetupFailed, task_checkout
+from .checkouts import SetupFailed, task_base, task_checkout
 from .ports import BranchPullRequest, GitError, Ports
 from .run_role import finish
 
@@ -71,7 +71,21 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     record: TaskState = {"replaced_remote_tip": replaced} if replaced or recorded else {}
     if record:
         state = {**state, **record}
-    preface = rules.replaced_note(replaced, prs, task.branch) if replaced else ""
+    replaced_note = rules.replaced_note(replaced, prs, task.branch) if replaced else ""
+    preface = "\n\n".join(
+        part for part in (replaced_note, _guarded_preface(state, task.branch, ports)) if part
+    )
+    # A re-delivery under a landing pass closes its entry with what the pass cost.
+    reopened = state.get("landing")
+    if reopened:
+        state = {
+            **state,
+            "landing": landing.resolve_open(
+                reopened,
+                datetime.now(UTC).isoformat(timespec="seconds"),
+                state.get("cost_usd", 0.0),
+            ),
+        }
     body = _bounded(state, task.branch, relative, ignored=False, preface=preface)
     if body.bounded and ports.workspace.is_ignored(task.path, relative):
         body = _bounded(state, task.branch, relative, ignored=True, preface=preface)
@@ -96,7 +110,10 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         ports.workspace.push(task.branch, lease=plan.old_sha if plan.kind == "replace" else None)
         pushed_at = datetime.now(UTC).isoformat(timespec="seconds")
         step = "gh pr create failed"
-        url = ports.tracker.open_pull_request(state["id"], task.branch, state["title"], body.text)
+        # A pull request the task already has is kept: the push alone re-delivers it.
+        url = state.get("pull_request") or ports.tracker.open_pull_request(
+            state["id"], task.branch, state["title"], body.text
+        )
     except (GitError, ValueError) as failed:
         return finish(state, {**_undelivered(step, failed, state, replaced), **record}, ports)
     patch: TaskState = {
@@ -107,13 +124,14 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         "pushed_head": pushed_head,
         "pushed_at": pushed_at,
         **record,
+        **({"landing": state["landing"]} if state.get("landing") else {}),
     }
     # Best effort from here: the pull request exists, so a crash would only make the
     # next attempt hit "already exists".
     try:
         ready = f"{READY}{url}\n\nTask document: `{relative}`"
         if replaced:
-            ready += f"\n\n{preface}"
+            ready += f"\n\n{replaced_note}"
         ports.tracker.comment(state["id"], ready)
     except ValueError:
         pass
@@ -121,7 +139,30 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         ports.workspace.cleanup(state["id"])
     except GitError:
         pass
-    return finish(state, patch, ports)
+    done = finish(state, patch, ports)
+    if state.get("landing"):
+        ports.documents.record_closure(state["id"], {"landing": state["landing"]})
+    return done
+
+
+def _guarded_preface(state: TaskState, branch: str, ports: Ports) -> str:
+    """The `Guarded changes` block that leads the pull request body (GH-239, ADR-0048): the
+    system's own record, standards or workflows are in the diff and nobody gates them, so
+    the body says so. Empty when the diff holds none -- or cannot be read, which the merge
+    reads again from the same diff before it lands anything."""
+    try:
+        paths = ports.workspace.changed_paths(task_base(state, ports), branch)
+    except GitError:
+        return ""
+    guarded = [path for path in paths if rules.guarded_path(path, state["id"])]
+    if not guarded:
+        return ""
+    listed = "\n".join(f"- `{path}`" for path in guarded)
+    return (
+        "## Guarded changes\n\nThis pull request changes paths the system guards (its own "
+        "record, the standards or the workflows). The landing merges it without a human "
+        f"gate (ADR-0048):\n\n{listed}"
+    )
 
 
 def _refused(

@@ -594,12 +594,14 @@ async def test_models_follow_kind(config):
     assert models["tech_lead_review"] == verifier_model
 
 
-async def test_low_confidence_escalates_before_defining(config):
-    script = ScriptedRunner(pjm=[classified(confidence="low")])
-    final = await run_graph(script, config)
-    assert final["status"] == WAITING_ON_HUMAN
-    assert "PjM could not classify" in final["escalated"]
-    assert len(script.calls) == 1
+async def test_low_confidence_continues_on_the_feature_path_instead_of_escalating(config):
+    # GH-239 edits the case that asserted a low confidence stopped at PjM: the platform
+    # guess now routes as a feature, so the next role asked is the Product Analyst's
+    # interview. The script holds nothing for it, which is how the test stops there.
+    script = ScriptedRunner(pjm=[classified(type_="platform_enhancement", confidence="low")])
+    with pytest.raises(AssertionError, match="no scripted result left for product_analyst"):
+        await run_graph(script, config)
+    assert len(script.calls) == 2  # PjM, then the Product Analyst's interview was asked for
 
 
 def bug(**queues) -> ScriptedRunner:
@@ -1092,7 +1094,7 @@ async def test_composition_wires_the_real_telemetry(config, tmp_path):
     try:
         # The nodes call `default_ports` for real; only the runner and the tracker are
         # swapped, via the module, because `composition.graph` is wired at import time.
-        script = ScriptedRunner(pjm=[classified(confidence="low")])
+        script = ScriptedRunner(pjm=[AttemptFailed("429", reason="account_limit")] * 2)
         real = composition.ClaudeSdkRunner, composition.GhTracker
         composition.ClaudeSdkRunner = lambda **_: script
         composition.GhTracker = lambda *_: MemoryTracker()
@@ -1102,11 +1104,9 @@ async def test_composition_wires_the_real_telemetry(config, tmp_path):
             composition.ClaudeSdkRunner, composition.GhTracker = real
     finally:
         telemetry.configure()
-    # The role span, plus its one run record's own child span (both named for PjM).
-    assert [s.name for s in exporter.get_finished_spans()] == [
-        "invoke_agent PjM",
-        "invoke_agent PjM",
-    ]
+    # PjM stops the run by failing twice (a low confidence now continues, GH-239), so
+    # the role span closes with no delivered run record under it.
+    assert [s.name for s in exporter.get_finished_spans()] == ["invoke_agent PjM"]
 
 
 async def test_a_crash_in_a_node_still_finishes_the_roles_span(config):
@@ -1395,7 +1395,7 @@ async def test_a_node_whose_product_declares_no_name_still_runs(config):
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     telemetry.configure(tracer_provider=provider)
     try:
-        script = script_for(pjm=[classified(confidence="low")])
+        script = script_for(pjm=[AttemptFailed("429", reason="account_limit")] * 2)
         graph = compiled(script, telemetry, stack=MemoryStack(product=None))
         await graph.ainvoke(TASK, config=config)
     finally:

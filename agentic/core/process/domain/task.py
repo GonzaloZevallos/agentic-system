@@ -228,6 +228,11 @@ class TaskInput(TypedDict):
     # (`rules.interview_cap`; ADR-0014, addendum of 2026-10-06). Declared here because the
     # graph's `input_schema` keeps only declared keys. Absent reads as not decided.
     decided: NotRequired[bool]
+    # What a landing restart carries over (GH-239, ADR-0048): `rules.entering` sets them from
+    # the archived run, read before `archive_previous_run` moved it. Declared here for the
+    # same reason as `decided`. Absent reads as a first run: depth 0, nothing carried.
+    landing_restarts: NotRequired[int]
+    landing_cost_carried: NotRequired[float]
 
 
 class Failure(TypedDict):
@@ -430,6 +435,10 @@ class ChangesRequested(TypedDict):
     pair: str
     category: ChangeCategory
     reason: str
+    # `"landing"` on a return the landing made to reopen a delivered pull request (GH-239):
+    # absent on every return a review made, so a document written before it reads the same.
+    # It never enters `changes_requested`, which counts the pair's limit.
+    by: NotRequired[Literal["landing"]]
 
 
 class EscalationPatch(TypedDict):
@@ -499,6 +508,10 @@ class Subtask(TypedDict, total=False):
     # Head the last review reached: the next one diffs from it, not from `base`
     # (ADR-0015). Absent until the subtask has been reviewed once.
     reviewed_head: str
+    # Where a carried verdict came from (GH-239, `landing.review_carries`): the head the
+    # Tech Lead really reviewed, when `reviewed_head` advanced over a clean sync of master
+    # without a new review. Absent on every subtask reviewed on the head it names.
+    reviewed_head_carried_from: str
     # The last review's reason, what the Developer fixes on a return, and its
     # category (ADR-0016).
     reason: str
@@ -567,6 +580,23 @@ class SettledRow(TypedDict):
     version: int
 
 
+class LandingEntry(TypedDict, total=False):
+    """One landing step of the task document's `landing` list (GH-239): the idempotency
+    key is `(head, step)`; `refusal` is the `MergeRefusal` it answered, `at` when it was
+    written, `cost_usd` what it spent and `resolved_at` when the re-delivery closed it."""
+
+    head: str
+    step: str
+    refusal: str
+    at: str
+    cost_usd: float
+    resolved_at: str
+    # The task's `cost_usd` when a reopening step was written: the re-delivery subtracts it
+    # from its own to get this entry's `cost_usd`.
+    cost_base: float
+    checks: list[str]
+
+
 class TaskState(TaskInput, total=False):
     type: str
     status: Annotated[Status, last]
@@ -628,6 +658,16 @@ class TaskState(TaskInput, total=False):
     # `.get`, written only to the product checkout's document and only by a delivery.
     pushed_head: str
     pushed_at: str
+    # The landing's own record (GH-239, ADR-0048), every key optional and read with `.get`:
+    # `landing` is append-only, one entry per `(head, step)` written before it dispatches;
+    # `auto_merge_guarded` the guarded paths an automatic merge landed; `landing_restarts`
+    # and `landing_cost_carried` the depth and the cost a `--fresh` restart carries over.
+    landing: list[LandingEntry]
+    auto_merge_guarded: list[str]
+    # Set by the landing once it filed the follow-up for the open important findings.
+    followups_filed: bool
+    landing_restarts: int
+    landing_cost_carried: float
     # What an interviewee could not decide (ADR-0014); escalates with the task.
     questions_for_human: list[str]
     # What the ephemeral interviewer proposed for the deliverable that follows

@@ -818,7 +818,8 @@ async def run_role(
             check=check,
             resume=resume,
             max_budget_usd=cfg.max_budget_usd,
-            spent_usd=state.get("cost_usd", 0.0),
+            # A landing restart carries the cost of the run it replaces (GH-239): the cap sees both.
+            spent_usd=state.get("cost_usd", 0.0) + state.get("landing_cost_carried", 0.0),
             task_cap_usd=task_cap(cfg),
             presubmit=presubmit,
             delivery_check=delivery_check,
