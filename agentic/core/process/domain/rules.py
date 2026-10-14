@@ -2314,7 +2314,7 @@ class SpendPace:
     pace_usd_per_h: float
 
 
-PollActionKind = Literal["close", "retake", "resume", "launch", "merge"]
+PollActionKind = Literal["close", "retake", "resume", "launch", "merge", "land"]
 
 
 @dataclass(frozen=True)
@@ -2422,6 +2422,7 @@ def poll_plan(
     retakes: Sequence[int] = (),
     merges: Sequence[int] = (),
     pace: SpendPace | None = None,
+    lands: Sequence[int] = (),
 ) -> list[PollAction]:
     """This round's actions, in the order the Tech Lead plan fixes: every close first
     (merging freed the slot it used, if any, so closing never spends one); then every
@@ -2444,6 +2445,10 @@ def poll_plan(
     the retakes, the resumes and the launch -- the merge child registers in the machine
     registry like any run, so it counts against the cap, and it never takes a slot a task
     waiting for a role could use.
+
+    `lands` (GH-239) are the issues whose refusal has a built landing step not yet taken on
+    their head (`landing_step`; `wait` and `none` are never among them): at most one, the
+    lowest, goes after the merge and only into a slot still spare -- it registers like any run.
 
     `pace` (GH-177, `None` is today's behaviour) gates only the launch: it goes out only
     if `paced_launch_fits` says so, counting this round's retakes and resumes as live
@@ -2496,6 +2501,9 @@ def poll_plan(
             slots_left -= 1
     if merges and slots_left > 0:
         actions.append(PollAction("merge", min(merges)))
+        slots_left -= 1
+    if lands and slots_left > 0:
+        actions.append(PollAction("land", min(lands)))
     return actions
 
 

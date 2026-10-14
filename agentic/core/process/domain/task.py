@@ -499,6 +499,10 @@ class Subtask(TypedDict, total=False):
     # Head the last review reached: the next one diffs from it, not from `base`
     # (ADR-0015). Absent until the subtask has been reviewed once.
     reviewed_head: str
+    # Where a carried verdict came from (GH-239, `landing.review_carries`): the head the
+    # Tech Lead really reviewed, when `reviewed_head` advanced over a clean sync of master
+    # without a new review. Absent on every subtask reviewed on the head it names.
+    reviewed_head_carried_from: str
     # The last review's reason, what the Developer fixes on a return, and its
     # category (ADR-0016).
     reason: str
@@ -567,6 +571,19 @@ class SettledRow(TypedDict):
     version: int
 
 
+class LandingEntry(TypedDict, total=False):
+    """One landing step of the task document's `landing` list (GH-239): the idempotency
+    key is `(head, step)`; `refusal` is the `MergeRefusal` it answered, `at` when it was
+    written, `cost_usd` what it spent and `resolved_at` when the re-delivery closed it."""
+
+    head: str
+    step: str
+    refusal: str
+    at: str
+    cost_usd: float
+    resolved_at: str
+
+
 class TaskState(TaskInput, total=False):
     type: str
     status: Annotated[Status, last]
@@ -628,6 +645,14 @@ class TaskState(TaskInput, total=False):
     # `.get`, written only to the product checkout's document and only by a delivery.
     pushed_head: str
     pushed_at: str
+    # The landing's own record (GH-239, ADR-0048), every key optional and read with `.get`:
+    # `landing` is append-only, one entry per `(head, step)` written before it dispatches;
+    # `auto_merge_guarded` the guarded paths an automatic merge landed; `landing_restarts`
+    # and `landing_cost_carried` the depth and the cost a `--fresh` restart carries over.
+    landing: list[LandingEntry]
+    auto_merge_guarded: list[str]
+    landing_restarts: int
+    landing_cost_carried: float
     # What an interviewee could not decide (ADR-0014); escalates with the task.
     questions_for_human: list[str]
     # What the ephemeral interviewer proposed for the deliverable that follows

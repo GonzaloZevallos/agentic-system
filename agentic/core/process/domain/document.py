@@ -128,6 +128,12 @@ def render(
         # them, so a document without them is byte-identical to one written before.
         **({"pushed_head": pushed} if (pushed := state.get("pushed_head")) else {}),
         **({"pushed_at": pushed_at} if (pushed_at := state.get("pushed_at")) else {}),
+        # The landing's record (GH-239), written only when set so a document without one is
+        # byte-identical to one written before.
+        **({"landing": landing} if (landing := state.get("landing")) else {}),
+        **({"auto_merge_guarded": g} if (g := state.get("auto_merge_guarded")) else {}),
+        **({"landing_restarts": n} if (n := state.get("landing_restarts")) else {}),
+        **({"landing_cost_carried": c} if (c := state.get("landing_cost_carried")) else {}),
         "subtasks": {sid: _recorded(sub) for sid, sub in state.get("subtasks", {}).items()},
         "invariants": state.get("invariants", []),
         "integration_brief": state.get("integration_brief", ""),
@@ -258,10 +264,12 @@ def _is_continuation(line: str) -> bool:
 
 
 def _scalar_line(key: str, value: object) -> str:
-    if isinstance(value, Mapping):
-        # A record the system keeps about itself (`merge_checks`, GH-178): one flow-style
-        # line, so it replaces in place like any scalar and parses back as a mapping.
-        flow = yaml.safe_dump(dict(value), default_flow_style=True, width=10**6).strip()
+    if isinstance(value, Mapping | list | tuple):
+        # A record the system keeps about itself (`merge_checks`, GH-178; `landing`,
+        # GH-239, a list of them): one flow-style line, so it replaces in place like any
+        # scalar and parses back as a mapping or a list.
+        plain = dict(value) if isinstance(value, Mapping) else list(value)
+        flow = yaml.safe_dump(plain, default_flow_style=True, width=10**6).strip()
         return f"{key}: {flow}"
     dumped: str = yaml.safe_dump({key: value}, default_flow_style=False, sort_keys=False)
     line, _, rest = dumped.partition("\n")

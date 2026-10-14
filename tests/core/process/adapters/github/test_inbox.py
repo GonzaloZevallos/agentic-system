@@ -99,3 +99,15 @@ def test_task_still_uses_the_bare_subprocess_call_when_run_is_injected(monkeypat
     task = GhInbox(tmp_path, run=never_called).task(1)
     assert task == {"id": "GH-1", "title": "T", "description": "d"}
     assert calls and never_called.calls == []
+
+
+def test_open_issue_bodies_is_the_same_unfiltered_read_as_open_issues(tmp_path):
+    run = _Recorder(stdout=json.dumps([{"url": "https://x/1", "body": "b1"}]))
+    assert GhInbox(tmp_path, run=run).open_issue_bodies() == [("https://x/1", "b1")]
+    [call] = run.calls
+    assert "--search" not in call
+
+
+def test_open_issue_bodies_failure_is_a_value_error(tmp_path):
+    with pytest.raises(ValueError, match="gh issue list failed: no auth"):
+        GhInbox(tmp_path, run=_Recorder(fail=True, stderr="no auth")).open_issue_bodies()
