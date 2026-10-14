@@ -132,6 +132,7 @@ def render(
         # byte-identical to one written before.
         **({"landing": landing} if (landing := state.get("landing")) else {}),
         **({"auto_merge_guarded": g} if (g := state.get("auto_merge_guarded")) else {}),
+        **({"followups_filed": True} if state.get("followups_filed") else {}),
         **({"landing_restarts": n} if (n := state.get("landing_restarts")) else {}),
         **({"landing_cost_carried": c} if (c := state.get("landing_cost_carried")) else {}),
         "subtasks": {sid: _recorded(sub) for sid, sub in state.get("subtasks", {}).items()},

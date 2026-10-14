@@ -18,6 +18,7 @@ several nodes over a copy of the state and has to hand the parent what it added.
 from __future__ import annotations
 
 import operator
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import (
     Annotated,
@@ -430,6 +431,9 @@ class ChangesRequested(TypedDict):
     pair: str
     category: ChangeCategory
     reason: str
+    # Who opened the return when it was not a review (GH-239): `landing` for a reopen by
+    # the landing, which never counts against the pair's limit. Absent on every other entry.
+    by: NotRequired[Literal["landing"]]
 
 
 class EscalationPatch(TypedDict):
@@ -651,6 +655,8 @@ class TaskState(TaskInput, total=False):
     # and `landing_cost_carried` the depth and the cost a `--fresh` restart carries over.
     landing: list[LandingEntry]
     auto_merge_guarded: list[str]
+    # Set by the landing once it filed the follow-up for the open important findings.
+    followups_filed: bool
     landing_restarts: int
     landing_cost_carried: float
     # What an interviewee could not decide (ADR-0014); escalates with the task.
@@ -708,6 +714,13 @@ def _reducers() -> dict[str, object]:
 
 
 REDUCERS = _reducers()
+
+
+def from_document(document: Mapping[str, Any]) -> TaskState:
+    """The loaded document as a state: the port answers a bare mapping (it carries keys
+    beyond the state), and every reader of a state takes it as one. The same single,
+    coded exception `apply` makes for the same reason."""
+    return dict(document)  # type: ignore[return-value]
 
 
 def apply(state: TaskState, patch: TaskState) -> TaskState:

@@ -1381,6 +1381,8 @@ async def _land(task_id: str, cfg: Configuration, ports: Ports) -> None:
                 upstream,
                 _upstream_eval_set(ports, upstream),
                 lambda line: print(line, flush=True),
+                launcher=SpawnLauncher(cfg),
+                argv0=_self_executable(),
             )
         except LockHeld as exc:
             raise CannotStart(f"{exc}: {LOCK_SCOPE}") from exc

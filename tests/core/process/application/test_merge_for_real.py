@@ -19,6 +19,7 @@ from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.adapters.git.workspace import GitWorkspace
 from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.adapters.shell.commands import ShellCommands
+from agentic.core.process.application import landing_plan
 from agentic.core.process.application.merge import merge_task
 from agentic.core.process.application.ports import Upstream
 from agentic.core.process.domain import rules
@@ -32,6 +33,13 @@ GREEN = "test -f feature.txt && test -f upstream.txt"
 # doubled, `sh` undoes that inside the double quotes and `printf` gets `\033` and `\t`.
 FAILING = 'printf "\\033[31mboom\\t!\\033[0m\\n" >&2; exit 3'
 URL = "https://github.com/o/r/pull/210"
+
+
+@pytest.fixture(autouse=True)
+def _no_live_landing_step(monkeypatch):
+    """These tests pin the merge verb's refusal evidence, not the landing: no step is live,
+    so a refusal stays the single comment it was. A test that wants one patches it itself."""
+    monkeypatch.setattr(landing_plan, "LIVE_STEPS", frozenset())
 
 
 def git(*args: str, cwd: Path) -> str:

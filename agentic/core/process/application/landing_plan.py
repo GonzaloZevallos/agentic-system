@@ -15,12 +15,13 @@ from agentic.shared.configuration import Configuration
 from ..domain import landing, rules
 from ..domain.landing import LandingStep, LandingStepKind
 from ..domain.task import TaskState
-from .ports import Ports, Upstream
+from .ports import Launcher, Ports, Upstream
 
-LIVE_STEPS: frozenset[LandingStepKind] = frozenset()
+LIVE_STEPS: frozenset[LandingStepKind] = frozenset({"fix", "rerun", "file_followups_and_land"})
 """The steps whose executors are built. Empty while `landing_sync` and `landing_fix` are
 inert: an inert step is neither recorded nor spawned, so the refusal logs stay as they
-were. Wave 2 fills it in, one executor at a time."""
+were. `landing_fix` built `fix`, `rerun` and `file_followups_and_land`; `sync_master`,
+`re_review` and `diagnose` are not live yet."""
 
 
 def takes_action(kind: LandingStepKind, live: frozenset[LandingStepKind]) -> bool:
@@ -99,3 +100,5 @@ class LandingContext:
     upstream: Upstream
     facts: rules.MergeFacts
     log: Callable[[str], None]
+    launcher: Launcher | None = None
+    argv0: str = "agentic"
