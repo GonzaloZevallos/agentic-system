@@ -591,7 +591,14 @@ def test_an_inert_step_is_neither_recorded_nor_spawned_and_the_log_is_unchanged(
     ports = _ports()
     _unapproved(ports, 5)
     launcher = FakeLauncher()
-    lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(), launcher, ESCALATED_AT)
+    lines = _round(
+        _cfg(tmp_path),
+        ports,
+        MemoryRunRegistry(),
+        launcher,
+        ESCALATED_AT,
+        live_steps=frozenset(),
+    )
     assert launcher.spawned == []
     assert lines == ["agentic: poll: auto-merge #5 -> left to the human: not_approved"]
     assert "landing" not in (ports.documents.load("GH-5") or {})

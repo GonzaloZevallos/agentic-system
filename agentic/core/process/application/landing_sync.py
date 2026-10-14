@@ -12,7 +12,7 @@ to run it. `deliver` re-delivers to the same pull request and closes the landing
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -86,6 +86,12 @@ def _spawn(context: LandingContext) -> None:
     context.log(f"agentic: land: {context.task_id}: reopened, resume -> pid {pid}")
 
 
+def _record(context: LandingContext, written: Sequence[Mapping[str, object]]) -> None:
+    """The `landing` list as the closure key `land` first wrote it: whatever re-renders the
+    document, the list that stands is this one."""
+    context.ports.documents.record_closure(context.task_id, {"landing": list(written)})
+
+
 def _reopened(
     context: LandingContext,
     state: TaskState,
@@ -100,6 +106,7 @@ def _reopened(
         entries(state), context.head, context.step.kind, state.get("cost_usd", 0.0)
     )
     context.ports.documents.save({**reopened, "landing": marked})
+    _record(context, marked)
     _spawn(context)
 
 
@@ -194,6 +201,7 @@ def sync_master(context: LandingContext) -> None:
     resolved = landing.resolve_open(entries(state), _now(), state.get("cost_usd", 0.0))
     subtasks = {**state["subtasks"], unit: advanced}
     ports.documents.save({**state, "subtasks": subtasks, "landing": resolved})
+    _record(context, resolved)
     context.log(
         f"agentic: land: {context.task_id}: master synced, verdict carried to {merged.head}"
     )

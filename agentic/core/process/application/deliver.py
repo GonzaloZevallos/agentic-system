@@ -139,7 +139,10 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         ports.workspace.cleanup(state["id"])
     except GitError:
         pass
-    return finish(state, patch, ports)
+    done = finish(state, patch, ports)
+    if state.get("landing"):
+        ports.documents.record_closure(state["id"], {"landing": state["landing"]})
+    return done
 
 
 def _guarded_preface(state: TaskState, branch: str, ports: Ports) -> str:
