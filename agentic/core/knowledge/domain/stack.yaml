@@ -39,8 +39,9 @@ checks:
 # its start. The command must exit non-zero when it selects nothing: do not add
 # `--passWithNoTests` or an equivalent. When it fails the gate runs the full command. A
 # change to any path matching `affected_fallback` runs the full commands too, and so does a
-# change to `.agentic/stack.yaml`, always. In these globs `*` crosses `/`. Either key is
-# declared empty; leave the key out to declare none, or it fails at load.
+# change to `.agentic/stack.yaml`, always. In these globs `*` crosses `/`. If either key is
+# present but empty (`{}`, `[]` or null), the stack fails to load and says the key is
+# declared empty; leave the key out to declare none.
 #
 # affected_checks:
 #   tests: npx vitest run --changed {base}
