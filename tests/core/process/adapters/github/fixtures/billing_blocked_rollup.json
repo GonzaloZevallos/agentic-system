@@ -1,0 +1,62 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "createdAt": "2026-10-14T17:08:01Z",
+        "baseRefName": "master",
+        "headRefOid": "a2a9907bdc6b94ed1249b04d857e4a14acc1232e",
+        "commits": {
+          "nodes": [
+            {
+              "commit": {
+                "oid": "a2a9907bdc6b94ed1249b04d857e4a14acc1232e",
+                "statusCheckRollup": {
+                  "contexts": {
+                    "pageInfo": {
+                      "hasNextPage": false
+                    },
+                    "nodes": [
+                      {
+                        "__typename": "CheckRun",
+                        "name": "test",
+                        "status": "COMPLETED",
+                        "conclusion": "FAILURE",
+                        "detailsUrl": "https://github.com/OWNER/REPO/actions/runs/RUN/job/JOB-1",
+                        "startedAt": "2026-10-14T17:08:06Z",
+                        "steps": {
+                          "totalCount": 0
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "web",
+                        "status": "COMPLETED",
+                        "conclusion": "FAILURE",
+                        "detailsUrl": "https://github.com/OWNER/REPO/actions/runs/RUN/job/JOB-2",
+                        "startedAt": "2026-10-14T17:08:06Z",
+                        "steps": {
+                          "totalCount": 0
+                        }
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "e2e",
+                        "status": "COMPLETED",
+                        "conclusion": "FAILURE",
+                        "detailsUrl": "https://github.com/OWNER/REPO/actions/runs/RUN/job/JOB-3",
+                        "startedAt": "2026-10-14T17:08:06Z",
+                        "steps": {
+                          "totalCount": 0
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}
