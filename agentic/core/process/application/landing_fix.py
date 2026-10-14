@@ -161,8 +161,8 @@ def diagnose(context: LandingContext) -> None:
         return
     reason = str(output.data.get("reason", ""))
     if landing_rules.restart_depth(raw) >= landing_rules.RESTART_DEPTH_MAX:
-        patch |= rules.escalation("failure", reason)
-        context.ports.documents.save(apply(raw, patch))
+        escalated = rules.logged(dict(rules.escalation("failure", reason)))
+        context.ports.documents.save(apply(raw, from_document({**patch, **escalated})))
         context.log(f"agentic: land: {context.task_id}: diagnose: escalated, {reason}")
         return
     saved = apply(raw, patch)
