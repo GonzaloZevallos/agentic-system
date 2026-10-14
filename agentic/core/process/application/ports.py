@@ -423,6 +423,13 @@ class Inbox(Protocol):
         literal."""
         ...
 
+    def open_issue_bodies(self) -> list[tuple[str, str]]:
+        """Every open issue as `(url, body)` (GH-239): the landing's own name for the read
+        `open_issues` makes, kept apart so the deduplication of its follow-up and flake
+        issues does not depend on the stack review's verb. The caller matches its marker
+        locally, as a plain substring."""
+        ...
+
 
 @dataclass(frozen=True)
 class SampleAppHandle:
@@ -504,6 +511,19 @@ class Upstream:
     note: str | None
 
 
+@dataclass(frozen=True)
+class UpstreamMerge:
+    """What `Workspace.merge_upstream_into` reports (GH-239, the landing's sync): `clean`
+    says the upstream is now in the checkout's history and committed; otherwise
+    `conflicted` names the paths git left unmerged, for a Developer to resolve. `head` is
+    the checkout's full HEAD after the attempt (unchanged when the merge conflicted).
+    Not `domain.task.MergeOutcome`, which is the dependency merge's own shape."""
+
+    clean: bool
+    conflicted: tuple[str, ...]
+    head: str
+
+
 class Workspace(Protocol):
     """The product repository as git sees it (ADR-0011): one branch and worktree per
     task, one per subtask, all idempotent so a use case can ask again."""
@@ -552,6 +572,13 @@ class Workspace(Protocol):
         worktree to a Developer to resolve, never to a use case that assumes a clean
         tree back. `merge`'s own abort-on-conflict is untouched; this is a separately
         named operation (ADR-0004)."""
+        ...
+
+    def merge_upstream_into(self, checkout: Path, upstream_sha: str) -> UpstreamMerge:
+        """Merge the commit `upstream_sha` (fetched already, `fetch_commit`) into the checkout,
+        a conflict left in the tree like `merge_keeping_conflicts` does (GH-239). Raises
+        `GitError` when git refused for any other reason than a conflict -- an unknown sha,
+        a dirty tree -- since there is then nothing for a Developer to resolve."""
         ...
 
     def dependency_state(self, path: Path, branch: str, paths: Sequence[str]) -> DependencyState:
@@ -753,14 +780,29 @@ class Tracker(Protocol):
         is one, is the adapter's: only it knows what a task id says about the tracker."""
         ...
 
-    def open_issue(self, title: str, body: str) -> str:
+    def open_issue(self, title: str, body: str, *, label: str | None = None) -> str:
         """Open a new issue and return its URL (ADR-0034): the stack review's own way
-        of telling the human, with no task id to key off of. No `labels` parameter --
-        its one caller always passes none, since the absence of the `agentic` label
-        (README.md, 5) is what keeps a proposal from starting a run on its own, and
-        `gh issue create --label` exits non-zero on a label the product repo does not
-        have, which would throw away a paid interview for one word. Any state a reader
-        needs goes in `title` instead."""
+        of telling the human, with no task id to key off of. It passes no `label`: the
+        absence of the `agentic` label (README.md, 5) is what keeps a proposal from
+        starting a run on its own, and `gh issue create --label` exits non-zero on a label
+        the product repo does not have, which would throw away a paid interview for one
+        word. The landing (GH-239, ADR-0048) is the caller that passes one, `agentic`, for
+        the follow-ups and flakes it files, which the product repo always has: it is the
+        queue's own label. Any state a reader needs goes in `title` instead."""
+        ...
+
+    def rerun_failed_ci(self, reference: str, head: str) -> list[str]:
+        """Re-runs the failed CI runs of commit `head` of the pull request at `reference`
+        (GH-239) and returns the URL of each run it asked to re-run, none when no run on
+        that head failed. Raises `ValueError` for a reference that is not a pull request
+        URL, before any call, and when the platform cannot answer."""
+        ...
+
+    def close_pull_request(self, reference: str) -> None:
+        """Closes the pull request at `reference` unmerged (GH-239): the terminal path
+        replaces the system's own pull request with a fresh one. Raises `ValueError` for
+        a reference that is not a pull request URL, before any call, and when the
+        platform refuses."""
         ...
 
     def comment(self, task_id: str, text: str) -> None: ...
