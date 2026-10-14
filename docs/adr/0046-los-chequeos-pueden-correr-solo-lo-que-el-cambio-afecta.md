@@ -159,3 +159,25 @@ vacía paga una corrida completa extra por chequeo.
   de lo que un producto esperaría.
 - En paralelo, el tiempo de pared de un chequeo es la suma de sus propias filas; el de la
   puerta es la mayor de esas sumas, y sumarlas todas lo sobrestima.
+
+## Adenda (2026-10-08): una llave declarada vacía se rechaza (GH-221)
+
+Esta adenda reemplaza la frase "la lista vacía es válida y equivale a ausente", de la
+sección sobre `affected_fallback`. El cuerpo del ADR no se edita.
+
+- **La regla.** Ausente es `{}` / `()`. `{}`, `[]` o una llave sin valor (`None`) fallan al
+  cargar y otra vez en `preflight.declared_stack`, con un mensaje que nombra la fuente y la
+  llave. Para no declarar nada se omite la llave. Rige para `affected_checks` y para
+  `affected_fallback`, a través de un solo auxiliar, `_declared_nonempty`, y el mensaje sale
+  de una sola constante, `EMPTY_DECLARATION`, en `domain/stack.py`.
+- **La razón.** Es la misma regla que ya aplican `ci`, `forbidden`, `setup` y `checks`: una
+  llave presente pero vacía es un archivo a medio escribir, no una decisión.
+- **A quién afecta.** Solo `affected_fallback: []` cambia de resultado (antes se aceptaba,
+  ahora se rechaza). `affected_checks: {}` ya se rechazaba, pero por accidente, a través de
+  `_mapping`; ahora tiene un mensaje deliberado, igual que `None` en ambas llaves. Los
+  stacks de este repo y de apostrophe declaran las dos llaves no vacías; las bases
+  anteriores a este ADR no tienen las llaves.
+- **Cómo se verifica.** Este texto es una traducción que se revisa en la revisión; la prueba
+  solo compara la plantilla `stack.yaml` con `EMPTY_DECLARATION`.
+- **Lo que no se mueve.** Ninguna señal, etiqueta, atributo de span, llave de documento ni
+  prompt cambia, así que `prompts.fingerprint` no se mueve.

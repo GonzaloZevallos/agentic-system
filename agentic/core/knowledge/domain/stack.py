@@ -31,8 +31,9 @@ declaration that is there but broken, and fails at load instead of being read as
 check's name, which must also be under `checks`, to its affected-only command: it carries the
 literal token `{base}`, never at its start, and the delivery gate and the reviewer -- never
 the merge -- run it in place of the full one. The second lists the globs of the paths whose
-change forces the full form. Absent they read as `{}` and `()`; present and broken they fail
-at load.
+change forces the full form. Absent they read as `{}` and `()`. Present and empty (`{}`,
+`[]`, or a key with no value) is a half-written declaration and fails at load, so leave the
+key out to declare none; a wrong shape fails too.
 
 The name is the one part that is not read at the task's base. It says *who* the repository
 is, not what held at a commit: read at the base, a task older than the key would resume
@@ -71,6 +72,9 @@ KEYS = (
 )
 # The token an affected-only command carries where the task's base sha goes (ADR-0046).
 BASE_TOKEN = "{base}"
+# What a key that is declared but empty is told, after its source and its key (ADR-0046,
+# addendum): the one wording, so the docs and the template can be checked against it.
+EMPTY_DECLARATION = "is declared empty; leave the key out to declare none"
 # Every sub-key `design` may declare (ADR-0040): the same "unknown is a typo" rule,
 # one level down.
 DESIGN_KEYS = ("prototype", "entry", "sample_app", "compare")
@@ -194,6 +198,7 @@ def affected_checks(data: object, source: object) -> dict[str, str]:
     declared = _declared(data, source)
     if "affected_checks" not in declared:
         return {}
+    _declared_nonempty(declared, source, "affected_checks")
     found = _commands(declared, source, "affected_checks")
     known = _commands(declared, source, "checks")
     for name, command in found.items():
@@ -217,12 +222,13 @@ def affected_checks(data: object, source: object) -> dict[str, str]:
 
 def affected_fallback(data: object, source: object) -> tuple[str, ...]:
     """The globs whose change forces the full form of every check (ADR-0046), in file
-    order. Absent is `()`; an empty list is the same answer, spelled out. Anything that is
-    not a list of non-blank strings is declared but broken, and fails here."""
+    order. Absent is `()`. Present and empty (`[]`, or a key with no value) is a
+    half-written declaration and fails here, like `ci`, `forbidden` and `setup`: leave the
+    key out to declare none. Anything that is not a list of non-blank strings fails too."""
     declared = _declared(data, source)
     if "affected_fallback" not in declared:
         return ()
-    found = declared["affected_fallback"]
+    found = _declared_nonempty(declared, source, "affected_fallback")
     if not isinstance(found, list) or not all(
         isinstance(glob, str) and glob.strip() for glob in found
     ):
@@ -324,6 +330,14 @@ def _declared(data: object, source: object) -> dict[str, Any]:
     if unknown := [key for key in declared if key not in KEYS]:
         raise ValueError(f"{source}: unknown key(s) {', '.join(sorted(unknown))}; expected {KEYS}")
     return declared
+
+
+def _declared_nonempty(declared: dict[str, Any], source: object, key: str) -> object:
+    """`declared[key]`, refusing a value that is there but empty (`None`, `{}`, `[]`)."""
+    value = declared[key]
+    if value is None or (isinstance(value, dict | list) and not value):
+        raise ValueError(f"{source}: `{key}` {EMPTY_DECLARATION}")
+    return value
 
 
 def _commands(declared: dict[str, Any], source: object, key: str) -> dict[str, str]:

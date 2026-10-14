@@ -328,8 +328,6 @@ def test_affected_fallback_reads_the_globs_stripped_in_file_order():
     [
         (["pytest {base}"], "list"),
         ("pytest {base}", "string"),
-        ({}, "empty-map"),
-        (None, "null"),
         (3, "int"),
     ],
 )
@@ -401,8 +399,52 @@ def test_an_affected_fallback_that_is_not_a_list_of_non_blank_strings_is_an_erro
         stack.affected_fallback(declared, "stack.yaml")
 
 
-def test_an_empty_affected_fallback_is_a_valid_empty_list():
-    assert stack.affected_fallback({"checks": CHECKS, "affected_fallback": []}, "x") == ()
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("affected_checks", {}),
+        ("affected_checks", None),
+        ("affected_fallback", None),
+        ("affected_fallback", []),
+        ("affected_checks", []),
+    ],
+    ids=[
+        "checks-empty-map-same-outcome-new-message",
+        "checks-null-same-outcome-new-message",
+        "fallback-null-same-outcome-new-message",
+        "fallback-empty-list-outcome-changes-now-refused",
+        "checks-empty-list",
+    ],
+)
+def test_an_explicitly_empty_affected_declaration_is_refused_naming_key_and_source(key, value):
+    declared = {"checks": CHECKS, key: value}
+    read = stack.affected_checks if key == "affected_checks" else stack.affected_fallback
+    with pytest.raises(ValueError) as refused:
+        read(declared, "stack.yaml")
+    message = str(refused.value)
+    assert "stack.yaml" in message and f"`{key}`" in message
+    assert stack.EMPTY_DECLARATION in message
+
+
+def _normalised(text: str) -> str:
+    stripped = (line.lstrip().removeprefix("#") for line in text.splitlines())
+    return " ".join(" ".join(stripped).split())
+
+
+def _clause_in(template: str) -> bool:
+    return _normalised(stack.EMPTY_DECLARATION) in _normalised(template)
+
+
+def test_the_template_states_the_empty_declaration_rule_in_the_codes_words():
+    assert _clause_in(stack.TEMPLATE.read_text(encoding="utf-8"))
+
+
+def test_a_template_without_the_empty_declaration_clause_fails_the_comparison():
+    stale = (
+        "# `affected_checks` and `affected_fallback`: optional (ADR-0046).\n# affected_fallback:\n"
+    )
+    assert not _clause_in(stale)
+    assert _clause_in(f"# a key that {stack.EMPTY_DECLARATION.replace('; ', ';\n#   ')} \n")
 
 
 def test_the_two_keys_are_declarable_and_not_taken_for_a_typo():

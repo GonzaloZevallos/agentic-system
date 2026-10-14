@@ -100,7 +100,7 @@ Record each finding with:
   `spec-missing-test`, `spec-scope`, `process-uncommitted`, `process-suite-red`,
   `plan-calibration`, `plan-invariant`, `integration-crosscut`.
 
-A `### CI` section lists the declared CI checks on this head; a red one is recorded by the system with its run link: do not write a finding for it.
+A `## CI` section lists the declared CI checks on this head; a red one is recorded by the system with its run link: do not write a finding for it.
 
 The verdict is not yours to write: the subtask goes back to the Developer if and only
 if there is at least one `blocking` finding, and the system writes the verdict at the

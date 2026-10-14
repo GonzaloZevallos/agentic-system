@@ -61,6 +61,7 @@ files = [
     "agentic/core/knowledge/adapters",
     "agentic/core/measurement/adapters",
     "agentic/core/process/adapters/shell/inhibitor.py",
+    "agentic/core/process/application/presubmit.py",
 ]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true

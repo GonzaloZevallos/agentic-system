@@ -595,3 +595,13 @@ puerta solo para el producto que lo pide.
   declaración rige desde la tarea posterior al merge, porque el stack se lee en la base. Si
   `deliver` muere entre el push y `finish`, el reloj cae al `createdAt` del PR. El dedupe de
   enlaces depende de que el revisor no cite uno literalmente.
+
+## Adenda (2026-10-08): la sección CI llega bajo un solo encabezado (GH-226)
+
+- El revisor lee `## CI`, escrito por `context_for`; `ci_review.py` no escribe ningún encabezado
+  propio en el cuerpo de la sección (antes lo empezaba con `### CI` y el revisor veía los dos).
+- Esto reemplaza, por nombre, la `### CI` que la adenda de GH-216 dio como nombre de la sección que
+  mencionan los prompts de revisión; los dos prompts ahora nombran `## CI`.
+- `prompts.fingerprint` cambia solo para `tech_lead_review` y `tech_lead_review_light`, y se pide un
+  `bl-*` nuevo al mergear.
+- No se mueve ninguna métrica, etiqueta, atributo de span ni clave del documento.
