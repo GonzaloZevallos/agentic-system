@@ -253,9 +253,10 @@ def resume_owed(raw: Mapping[str, object], now: datetime) -> bool:
     last = state["landing"][-1]
     if last.get("resume_spawns", 0) >= LANDING_RESUME_SPAWNS_MAX:
         return False
-    if "resume_spawned_at" not in last:
+    spawned_at = last.get("resume_spawned_at")
+    if spawned_at is None:
         return True
-    spawned = _aware(last["resume_spawned_at"])
+    spawned = _aware(spawned_at)
     if spawned is None or now - spawned < timedelta(seconds=LANDING_RESUME_GRACE_S):
         return False
     runs = raw.get("runs")
