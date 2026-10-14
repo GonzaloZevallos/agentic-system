@@ -258,10 +258,12 @@ def _is_continuation(line: str) -> bool:
 
 
 def _scalar_line(key: str, value: object) -> str:
-    if isinstance(value, Mapping):
-        # A record the system keeps about itself (`merge_checks`, GH-178): one flow-style
-        # line, so it replaces in place like any scalar and parses back as a mapping.
-        flow = yaml.safe_dump(dict(value), default_flow_style=True, width=10**6).strip()
+    if isinstance(value, Mapping | list):
+        # A record the system keeps about itself (`merge_checks`, GH-178; the list
+        # `adr_renumber`, GH-229): one flow-style line, so it replaces in place like any
+        # scalar and parses back as a mapping or a list.
+        shown = dict(value) if isinstance(value, Mapping) else value
+        flow = yaml.safe_dump(shown, default_flow_style=True, width=10**6).strip()
         return f"{key}: {flow}"
     dumped: str = yaml.safe_dump({key: value}, default_flow_style=False, sort_keys=False)
     line, _, rest = dumped.partition("\n")

@@ -11,19 +11,20 @@ nothing here writes in stage0. The merge call runs only after that subprocess ex
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import ci, presubmit, rules
+from ..domain import adr_numbers, ci, presubmit, rules
+from ..domain.added_lines import AddedLines
 from ..domain.task import PullRequest, TaskState
 from .checkouts import task_base
-from .poll import AUTO_MERGE_REFUSED, AUTO_MERGED, _merge_facts, with_ci
-from .ports import CommandResult, GitError, MergeCallFailed, Ports, Upstream
+from .poll import AUTO_MERGE_REFUSED, AUTO_MERGED, _merge_facts, renumber_records, with_ci
+from .ports import CommandResult, GitError, LeaseLost, MergeCallFailed, Ports, Upstream
 from .presubmit import CheckoutPresubmit
 
 # The refusals a human can act on, and so the only ones commented, once per (head, reason).
@@ -37,6 +38,7 @@ COMMENTED: tuple[str, ...] = (
     "ci_failed",
     "ci_missing",
     "ci_unreadable",
+    "adr_number_taken",
 )
 
 LEFT_TO_HUMAN = "Left for the human to merge."
@@ -94,6 +96,10 @@ def merge_task(
             return MergeResult("stopped", f"diff_unreadable: {exc}")
     elif head is not None:
         return MergeResult("stopped", f"head_unreachable: {head}")
+    try:
+        adr = _adr_facts(ports, touched, head, master)
+    except GitError as exc:
+        return MergeResult("stopped", f"adr_unreadable: {exc}")
     declared = ports.stack.ci(base)
     report: ci.CiReport | ci.CiUnreadable | None = None
     fresh: bool | None = None
@@ -104,12 +110,16 @@ def merge_task(
 
     def decide(document: TaskState) -> rules.MergeFacts:
         base_facts = _facts(task_id, document, pull_request, eval_set, number, master, touched)
+        base_facts = replace(base_facts, adr_collision=adr.collision, adr_plan=adr.plan)
         return with_ci(base_facts, document, declared, report, fresh)
 
     facts = decide(raw)
     decision = rules.auto_merge_decision(facts)
     if decision.kind == "wait":
         return MergeResult("stopped", "ci_wait")
+    if decision.kind == "renumber":
+        assert head is not None and adr.merge_base is not None  # a collision needs both
+        return _renumber(task_id, head, adr.merge_base, facts.adr_plan, ports, log)
     if decision.kind == "run_checks":
         assert head is not None  # a decision never asks for checks without a head
         _run_checks(task_id, raw, head, master, base, cfg, ports, facts.attempts + 1, log)
@@ -118,7 +128,7 @@ def merge_task(
         decision = rules.auto_merge_decision(facts)
     if decision.kind == "refuse":
         assert decision.reason is not None
-        if decision.reason == "guarded_path" and head is not None:
+        if decision.reason in ("guarded_path", "adr_number_taken") and head is not None:
             _spend_attempts(task_id, raw, head, ports)
         failure = facts.merge_failure if decision.reason == "merge_failed" else None
         return _refuse(task_id, head, decision.reason, ports, failure=failure, facts=facts)
@@ -128,6 +138,127 @@ def merge_task(
     return _merge(
         task_id, number, str(reference), head, ports, facts, clock, log, relied, bool(declared)
     )
+
+
+@dataclass(frozen=True)
+class _AdrFacts:
+    """What the ADR directory says of this pull request against the upstream sha the verb
+    holds (GH-229): the collision, the renumber it would make, and the merge-base it was
+    measured from (None when the branch touches no ADR path and nothing was read)."""
+
+    collision: adr_numbers.Collision = adr_numbers.Collision()
+    plan: Mapping[str, str] = field(default_factory=dict)
+    merge_base: str | None = None
+
+
+def _adr_facts(
+    ports: Ports, touched: tuple[str, ...] | None, head: str | None, master: str
+) -> _AdrFacts:
+    """Nothing but the diff already read decides whether to look: a branch that touches no
+    `docs/adr/NNNN-*.md` path costs no further git call. Raises `GitError`."""
+    if head is None or touched is None:
+        return _AdrFacts()
+    if not any(adr_numbers.adr_number(path) is not None for path in touched):
+        return _AdrFacts()
+    workspace = ports.workspace
+    mb = workspace.merge_base(master, head)
+    at_mb = workspace.paths_at(mb, adr_numbers.ADR_DIR)
+    at_head = workspace.paths_at(head, adr_numbers.ADR_DIR)
+    at_master = workspace.paths_at(master, adr_numbers.ADR_DIR)
+    own = adr_numbers.own_adrs(at_mb, at_head)
+    found = adr_numbers.collision(own, at_head, at_mb, at_master)
+    plan = adr_numbers.renumber_plan(found.colliding, own, at_master) if found.colliding else {}
+    return _AdrFacts(found, plan, mb)
+
+
+def _renumber(
+    task_id: str,
+    head: str,
+    merge_base: str,
+    plan: Mapping[str, str],
+    ports: Ports,
+    log: Callable[[str], None],
+) -> MergeResult:
+    """Moves the ADRs of `plan` in a throwaway worktree at `head`, commits as the system and
+    pushes to the task branch with a lease on `head` (GH-229, ADR-0048). Only a push that
+    was accepted is recorded; a lost lease or any other failure writes nothing, comments
+    nothing and spends no counter, and the next round decides again from fresh facts. No
+    check and no merge in this call: the new head is the next round's."""
+    name = _name(task_id)
+    try:
+        path = ports.workspace.detached_checkout(name, head)
+        added = ports.workspace.added_lines(merge_base, head)
+        changed, unrewritten = _apply_plan(path, plan, added)
+        message = f"Renumber {_numbers(plan)} after master took the numbers (GH-229)"
+        if ports.workspace.commit_paths(path, changed, message) is None:
+            log(f"agentic: merge: {task_id}: renumber changed nothing")
+            return MergeResult("stopped", "renumber_empty")
+        pushed = ports.workspace.full_head(path)
+        ports.workspace.push_commit(path, pushed, rules.task_branch(task_id), lease=head)
+    except LeaseLost:
+        log(f"agentic: merge: {task_id}: renumber not pushed, {head} is no longer the branch tip")
+        return MergeResult("stopped", "renumber_lease_lost")
+    except (GitError, OSError) as exc:
+        log(f"agentic: merge: {task_id}: renumber not pushed: {exc}")
+        return MergeResult("stopped", "renumber_failed")
+    finally:
+        ports.workspace.remove_checkout(name)
+    record = {"from_head": head, "to_head": pushed, "map": dict(plan), "unrewritten": unrewritten}
+    prior = [dict(row) for row in renumber_records(ports.documents.load(task_id) or {})]
+    ports.documents.record_closure(task_id, {"adr_renumber": [*prior, record]})
+    log(f"agentic: merge: {task_id}: renumbered {_numbers(plan)}, pushed {pushed}")
+    return MergeResult("stopped", "renumbered")
+
+
+def _numbers(plan: Mapping[str, str]) -> str:
+    return ", ".join(
+        f"{adr_numbers.adr_number(old):04d} -> {adr_numbers.adr_number(new):04d}"
+        for old, new in plan.items()
+    )
+
+
+def _apply_plan(
+    root: Path, plan: Mapping[str, str], added: AddedLines
+) -> tuple[list[str], list[str]]:
+    """Renames the planned files under `root` and rewrites, byte for byte elsewhere, only
+    the lines in `added` that `adr_numbers.rewrite_line` changes. Returns the paths to commit
+    and the `path:line` of the added lines that still name an old number."""
+    changed: list[str] = []
+    for old, new in plan.items():
+        (root / new).parent.mkdir(parents=True, exist_ok=True)
+        (root / old).rename(root / new)
+        changed += [old, new]
+    seen: list[tuple[str, int, str]] = []
+    for file, rows in added.lines.items():
+        target = plan.get(file, file)
+        full = root / target
+        if not full.is_file():
+            continue
+        data = full.read_bytes().split(b"\n")
+        edited = False
+        for number, text in rows:
+            if number > len(data):
+                continue
+            try:
+                current = data[number - 1].decode("utf-8")
+            except UnicodeDecodeError:
+                seen.append((target, number, text))
+                continue
+            now = adr_numbers.rewrite_line(
+                file,
+                current,
+                plan,
+                added_whole=file in added.whole,
+                is_renamed_file=file in plan,
+            )
+            if now != current:
+                data[number - 1] = now.encode("utf-8")
+                edited = True
+            seen.append((target, number, now))
+        if edited:
+            full.write_bytes(b"\n".join(data))
+            changed.append(target)
+    return list(dict.fromkeys(changed)), adr_numbers.unrewritten(seen, plan)
 
 
 def _merges_on_ci(facts: rules.MergeFacts) -> bool:
