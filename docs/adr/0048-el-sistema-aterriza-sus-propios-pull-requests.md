@@ -97,3 +97,50 @@ en una semana.
 exhaustividad; las claves de span nuevas usan el prefijo `agentic.landing.` y no se agrega,
 mueve ni renombra ninguna familia de métricas. Toda clave nueva del documento es opcional y se
 lee con `.get`: un documento sin ella se renderiza idéntico.
+
+## Adenda (2026-10-14, GH-242): `landing` tiene una sola forma en disco y un aterrizaje reabierto se recupera
+
+**Diagnóstico.** `agentic land --issue 227` no fallaba al registrar el paso. Cuando el
+documento no tenía la línea `landing:`, `record_closure` agregaba una línea de flujo y la
+escritura funcionaba. Luego el paso `re_review` corría `landing_sync._reopened`, que llama a
+`documents.save({**reopened, "landing": marked})`; `document.render` reescribía `landing` como
+**bloque** YAML, y la siguiente llamada, `record_landing` (`record_closure`), se negaba porque
+veía líneas de continuación. La reapertura y el `cost_base` ya estaban en disco, pero
+`spawn_resume` nunca corría: la tarea quedaba en `developing` y un segundo `land` devolvía
+`none`/`not_live`. `deliver.finish` y el camino `save` + `record_landing` de `landing_sync`
+hacen la misma secuencia.
+
+**Una sola forma.** `landing` se escribe siempre como una línea de flujo, y sólo
+`agentic/core/process/domain/document.py` elige esa forma (un ayudante privado que usan
+`render` y `record_closure`). Ningún módulo fuera de `document.py` la formatea.
+
+**`RECORD_KEYS` y migración por reescritura.** `RECORD_KEYS = frozenset({"landing"})` es una
+lista de permitidos junto a `RECORDED_AS`: sólo una clave de ese conjunto puede tener su valor
+en bloque reemplazado por `record_closure`, y la línea de la clave más todas sus líneas de
+continuación pasan a ser la línea de flujo. Esa sustitución es también la migración: un
+documento que ya tiene `landing` en bloque (GH-227) se reescribe en flujo en su próxima
+escritura, por `save` o por `record_closure`. Toda otra clave sigue levantando `ValueError`
+(`runs` y `failures` incluidos), un documento sin `landing` queda byte a byte igual, y `parse`
+lee ambas formas como la misma lista. El puerto, el adaptador de filesystem y el fake no
+cambian.
+
+**Regla de recuperación** (la construyen las subtareas `entry` y `wiring`, con estos nombres):
+`LandingEntry` gana `resume_spawns` y `resume_spawned_at`; `landing.resume_owed(raw, now)` es el
+único predicado que decide si hay que volver a lanzar el `resume` de un aterrizaje reabierto
+(`LANDING_RESUME_SPAWNS_MAX = 2`, `LANDING_RESUME_GRACE_S = 300`; compara fechas con zona,
+nunca cadenas, y es falso ante una marca presente que no se puede leer o no tiene zona).
+`landing_sync.spawn_and_mark` lanza el `resume` y sólo escribe el contador si devolvió un pid.
+Si sólo el tope de 2 está agotado, `land` devuelve `skipped/resume_spent`, la única razón
+nueva de `LandResult`. El poller ofrece `land` para un candidato `not_ready` con `resume_owed`.
+
+**Riesgos conocidos.** Un hijo muerto en su primer rol no deja `RoleRun` y puede relanzarse; el
+costo está acotado por 2 lanzamientos × el tope por intento, no entra en `cost_base`/`cost_usd`
+de la entrada ni de la tarea, y es el mismo hueco que nombra la segunda adenda de ADR-0008 del
+2026-09-18 para el dinero que un nodo pierde antes de devolver un parche. Los pasos que no
+reabren (`rerun`, `file_followups_and_land`, `diagnose`) conservan la idempotencia por
+`(head, step)`: una caída entre registrar y actuar parece un éxito y ese paso no se reintenta;
+los presupuestos mueven al paso siguiente en lugar de bloquear. Los 300 s de gracia están
+declarados, no medidos.
+
+**Sin cambios de observabilidad.** No cambia ninguna métrica, etiqueta, atributo de span ni
+archivo de prompt.

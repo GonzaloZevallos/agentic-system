@@ -56,6 +56,21 @@ def test_record_closure_writes_the_values_and_leaves_the_rest_of_the_document_un
     assert loaded["id"] == "T-1" and loaded["sections"] == {"Developer": "Built."}
 
 
+def test_record_closure_after_save_can_rewrite_the_landing_list(tmp_path):
+    """GH-242, the literal `_reopened` crash sequence: `save` a state that carries a
+    `landing` list, then `record_closure` a longer one."""
+    documents = FilesystemTaskDocuments(tmp_path)
+    entry = {"head": "a" * 40, "step": "re_review", "refusal": "head_not_reviewed", "at": "t"}
+    state = {"id": "T-1", "title": "t", "description": "d", "landing": [entry]}
+    documents.save(state)
+    longer = [{**entry, "cost_base": 2.5}, {**entry, "step": "rerun"}]
+
+    documents.record_closure("T-1", {"landing": longer})
+
+    loaded = documents.load("T-1")
+    assert loaded["landing"] == longer
+
+
 def test_save_writes_system_version_when_a_producer_is_given(tmp_path):
     documents = FilesystemTaskDocuments(tmp_path, system_version=lambda: "abc123+dirty")
     state = {"id": "T-1", "title": "t", "description": "d", "sections": {}}

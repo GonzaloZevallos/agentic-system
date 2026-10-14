@@ -12,9 +12,9 @@ to run it. `deliver` re-delivers to the same pull request and closes the landing
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Literal, Protocol
 
 from ..domain import landing, rules
 from ..domain.roles import pair_for
@@ -22,7 +22,7 @@ from ..domain.task import INTEGRATION, ChangeCategory, ChangesRequested, Subtask
 from . import resume as resuming
 from .checkouts import SetupFailed, task_base, task_checkout
 from .landing_plan import LandingContext, entries
-from .ports import GitError
+from .ports import GitError, Ports
 
 CROSSCUT: ChangeCategory = "integration-crosscut"
 
@@ -84,16 +84,56 @@ def _state(context: LandingContext) -> TaskState | None:
     return resuming.state_from(raw) if raw is not None else None
 
 
-def spawn_resume(context: LandingContext) -> None:
+class ResumeContext(Protocol):
+    """The part of a `LandingContext` that spawning a resume reads: `land`'s recovery branch
+    has no step to hand, only the task, its ports and the spawner."""
+
+    @property
+    def task_id(self) -> str: ...
+
+    @property
+    def ports(self) -> Ports: ...
+
+    @property
+    def resume(self) -> Callable[[int], int | None] | None: ...
+
+    @property
+    def log(self) -> Callable[[str], None]: ...
+
+
+def spawn_resume(context: ResumeContext) -> int | None:
+    """The pid `agentic resume` was spawned with; `None` when nothing could spawn it (no
+    resumer, no issue number) or the launcher answered no pid."""
     number = context.ports.inbox.issue_of(context.task_id)
     if context.resume is None or number is None:
         context.log(f"agentic: land: {context.task_id}: reopened, nothing to resume it with")
-        return
+        return None
     pid = context.resume(number)
     context.log(f"agentic: land: {context.task_id}: reopened, resume -> pid {pid}")
+    return pid
 
 
-def record_landing(context: LandingContext, written: Sequence[Mapping[str, object]]) -> None:
+def spawn_and_mark(context: ResumeContext, clock: Callable[[], str] = _now) -> int | None:
+    """Spawns the resume and, only when it answered a pid, counts it on the last `landing`
+    entry (`resume_spawns`, `resume_spawned_at`): a spawn that never happened is not counted,
+    so a later `land` still owes it (`landing.resume_owed`)."""
+    pid = spawn_resume(context)
+    if pid is None:
+        return None
+    written = [
+        dict(entry) for entry in entries(context.ports.documents.load(context.task_id) or {})
+    ]
+    if not written:
+        return pid
+    last = written[-1]
+    spawns = last.get("resume_spawns", 0)
+    last["resume_spawns"] = (spawns if isinstance(spawns, int) else 0) + 1
+    last["resume_spawned_at"] = clock()
+    record_landing(context, [landing.entry_of(entry) for entry in written])
+    return pid
+
+
+def record_landing(context: ResumeContext, written: Sequence[Mapping[str, object]]) -> None:
     """The `landing` list as the closure key `land` first wrote it: whatever re-renders the
     document, the list that stands is this one."""
     context.ports.documents.record_closure(context.task_id, {"landing": list(written)})
@@ -114,7 +154,7 @@ def _reopened(
     )
     context.ports.documents.save({**reopened, "landing": marked})
     record_landing(context, marked)
-    spawn_resume(context)
+    spawn_and_mark(context)
 
 
 def _unit(state: TaskState) -> str | None:

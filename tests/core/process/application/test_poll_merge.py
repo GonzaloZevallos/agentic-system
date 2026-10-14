@@ -5,6 +5,7 @@ in-memory ports and the `Launcher` fake: no `gh`, no `Popen`, no worktree."""
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Literal, get_args
 
 from agentic.core.process.adapters.github.tracker import pull_request_number
@@ -564,7 +565,12 @@ def test_two_ticks_with_a_non_inert_dispatcher_spawn_land_once_and_record_one_en
     tmp_path, monkeypatch
 ):
     dispatched = []
-    monkeypatch.setattr(landing_sync, "re_review", dispatched.append)
+
+    def re_review(context):
+        dispatched.append(context)
+        landing_sync.spawn_and_mark(context)  # what the real step does once it reopened
+
+    monkeypatch.setattr(landing_sync, "re_review", re_review)
     live = frozenset({"re_review"})
     ports = _ports()
     _unapproved(ports, 5)
@@ -619,7 +625,12 @@ def test_a_head_that_moved_between_the_decision_and_the_dispatch_writes_nothing(
     tmp_path, monkeypatch
 ):
     dispatched = []
-    monkeypatch.setattr(landing_sync, "re_review", dispatched.append)
+
+    def re_review(context):
+        dispatched.append(context)
+        landing_sync.spawn_and_mark(context)  # what the real step does once it reopened
+
+    monkeypatch.setattr(landing_sync, "re_review", re_review)
 
     class Moving(MemoryTracker):
         reads = 0
@@ -665,7 +676,12 @@ def test_land_takes_the_run_lock_and_releases_it_even_when_it_stops(tmp_path):
 
 def test_a_second_land_of_the_same_head_and_step_is_skipped_without_a_write(tmp_path, monkeypatch):
     dispatched = []
-    monkeypatch.setattr(landing_sync, "re_review", dispatched.append)
+
+    def re_review(context):
+        dispatched.append(context)
+        landing_sync.spawn_and_mark(context)  # what the real step does once it reopened
+
+    monkeypatch.setattr(landing_sync, "re_review", re_review)
     ports = _ports()
     _unapproved(ports, 5)
     args = (
@@ -678,8 +694,8 @@ def test_a_second_land_of_the_same_head_and_step_is_skipped_without_a_write(tmp_
         lambda line: None,
     )
     live = frozenset({"re_review"})
-    assert landing.land(*args, live=live).kind == "dispatched"
-    again = landing.land(*args, live=live)
+    assert landing.land(*args, live=live, resume=lambda number: 4242).kind == "dispatched"
+    again = landing.land(*args, live=live, resume=lambda number: 4242)
     assert again == landing.LandResult("skipped", "already_dispatched", "re_review")
     assert len(dispatched) == 1 and len((ports.documents.load("GH-5") or {})["landing"]) == 1
 
@@ -698,3 +714,46 @@ def test_poll_plan_orders_at_most_one_land_into_a_spare_slot_after_the_merge():
         closes=[], resumes=[], launches=[], available_slots=0, now=now, lands=[4]
     )
     assert none == []
+
+
+# ---- a reopened landing that lost its resume child (GH-242) ---------------------------------
+
+REOPENED = {"head": HEAD, "step": "re_review", "refusal": "head_not_reviewed", "at": "t"}
+
+
+def _stuck(**entry):
+    """Task 5 as GH-227 left it: `developing`, its unit back at its review, the landing
+    entry on disk and no child running."""
+    return _ports(
+        5,
+        status="developing",
+        landing=[{**REOPENED, **entry}],
+        subtasks={"only": {"id": "only", "status": "delivered", "reviewed_head": HEAD}},
+    )
+
+
+def _lands(ports, now):
+    lands: list[int] = []
+    poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [], lands, now=now)
+    return lands
+
+
+def test_a_not_ready_task_whose_reopened_landing_owes_a_resume_is_a_land_candidate():
+    assert _lands(_stuck(), datetime(2026, 10, 14, tzinfo=UTC)) == [5]
+
+
+def test_a_not_ready_task_whose_resume_was_spawned_a_moment_ago_is_not_a_land_candidate():
+    ports = _stuck(resume_spawns=1, resume_spawned_at="2026-10-14T00:00:00+00:00")
+    assert _lands(ports, datetime(2026, 10, 14, 0, 1, tzinfo=UTC)) == []
+    assert _lands(ports, datetime(2026, 10, 14, 0, 6, tzinfo=UTC)) == [5]
+
+
+def test_a_not_ready_task_with_no_open_landing_is_not_a_land_candidate():
+    ports = _ports(5, status="developing")
+    assert _lands(ports, datetime(2026, 10, 14, tzinfo=UTC)) == []
+
+
+def test_a_closed_pull_request_with_an_owed_resume_is_skipped_before_the_candidate_check():
+    ports = _stuck()
+    ports.tracker.prs[URL.format(5)] = _pr("CLOSED")
+    assert _lands(ports, datetime(2026, 10, 14, tzinfo=UTC)) == []

@@ -101,6 +101,9 @@ def _land(
         return LandResult("stopped", "no_pull_request")
     raw: TaskState = loaded
     reference = loaded["pull_request"]
+    recovered = _recover(task_id, raw, str(reference), ports, log, clock, resume)
+    if recovered is not None:
+        return recovered
     master = upstream.sha
     if master is None:
         return LandResult("stopped", "no_upstream")
@@ -155,6 +158,64 @@ def _land(
     )
     _dispatch(context)
     return LandResult("dispatched", step=step.kind)
+
+
+@dataclass(frozen=True)
+class _Recovery:
+    """What `landing_sync.spawn_and_mark` reads: the recovery branch has no step to hand."""
+
+    task_id: str
+    ports: Ports
+    resume: Callable[[int], int | None] | None
+    log: Callable[[str], None]
+
+
+def _recover(
+    task_id: str,
+    raw: TaskState,
+    reference: str,
+    ports: Ports,
+    log: Callable[[str], None],
+    clock: Callable[[], str],
+    resume: Callable[[int], int | None] | None,
+) -> LandResult | None:
+    """A reopened landing whose resume child is gone (`landing_rules.resume_owed`) is
+    respawned, whatever the merge decision would say: its entry is already written, so the
+    path below would only answer `already_dispatched` or `not_live` forever. `None` when
+    nothing is owed and the ordinary path goes on."""
+    written = landing_plan.entries(raw)
+    last = written[-1] if written else {}
+    try:
+        now = datetime.fromisoformat(clock())
+    except ValueError:
+        now = None
+    if now is not None and now.tzinfo is not None and landing_rules.resume_owed(raw, now):
+        try:
+            pull_request = ports.tracker.pull_request(reference)
+        except (ValueError, OSError) as exc:
+            return LandResult("stopped", f"tracker_error: {exc}")
+        if pull_request is None or pull_request.state != "OPEN":
+            return LandResult("skipped", "pr_abandoned")
+        pid = landing_sync.spawn_and_mark(_Recovery(task_id, ports, resume, log), clock)
+        if pid is not None:
+            spawned = last.get("resume_spawns", 0)
+            k = (spawned if isinstance(spawned, int) else 0) + 1
+            log(
+                f"agentic: land: {task_id}: reopened pass not running, resume -> pid {pid} "
+                f"({k} of {landing_rules.LANDING_RESUME_SPAWNS_MAX})"
+            )
+        step = next((kind for kind in landing_plan.LIVE_STEPS if kind == last.get("step")), None)
+        return LandResult("dispatched", step=step)
+    spent = last.get("resume_spawns", 0)
+    if (
+        landing_rules.landing_open(raw)
+        and not raw.get("escalated")
+        and isinstance(spent, int)
+        and spent >= landing_rules.LANDING_RESUME_SPAWNS_MAX
+    ):
+        log(f"agentic: land: {task_id}: reopened pass not running, resume spawns spent")
+        return LandResult("skipped", "resume_spent")
+    return None
 
 
 def _dispatch(context: LandingContext) -> None:

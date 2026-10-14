@@ -6,6 +6,7 @@ from datetime import datetime
 
 import pytest
 
+from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.application.deliver import deliver
 from agentic.core.process.application.ports import BranchPullRequest
 from agentic.core.process.domain import document, rules
@@ -469,3 +470,36 @@ async def test_a_failed_push_saves_neither_key(cfg):
     assert "pushed_head" not in patch and "pushed_at" not in patch
     saved = ports.documents.load("GH-12") or {}
     assert "pushed_head" not in saved and "pushed_at" not in saved
+
+
+async def test_a_redelivery_with_a_landing_list_survives_the_record_closure_after_finish(
+    cfg, tmp_path
+):
+    """GH-242: `finish` saves the document -- `landing` rendered by the writer -- and the
+    `record_closure` that follows rewrites it; on the real adapter neither raises and the
+    entry keeps its resume keys and cost base."""
+    ports = memory_ports(documents=FilesystemTaskDocuments(tmp_path))
+    entry = {
+        "head": "a" * 40,
+        "step": "re_review",
+        "refusal": "head_not_reviewed",
+        "at": "t",
+        "cost_base": 1.0,
+        "resume_spawns": 1,
+        "resume_spawned_at": "2026-10-14T12:00:00+00:00",
+    }
+    state = {
+        **TASK,
+        "pull_request": "https://github.com/o/r/pull/12",
+        "landing": [entry],
+        "cost_usd": 3.5,
+    }
+
+    await deliver(state, cfg, ports)
+
+    [closed] = ports.documents.load("GH-12")["landing"]
+    assert closed["resolved_at"]
+    assert closed["cost_usd"] == pytest.approx(2.5)
+    assert closed["cost_base"] == 1.0
+    assert closed["resume_spawns"] == 1
+    assert closed["resume_spawned_at"] == "2026-10-14T12:00:00+00:00"

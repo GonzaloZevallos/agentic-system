@@ -26,6 +26,7 @@ from typing import assert_never, get_args
 from agentic.shared.configuration import Configuration
 
 from ..domain import ci, document, presubmit, rules
+from ..domain import landing as landing_rules
 from ..domain.boot import boot_verdict
 from ..domain.landing import LandingStepKind
 from ..domain.task import PullRequest, TaskState, apply
@@ -424,6 +425,7 @@ def gather_merges(
     lines: list[str] | None = None,
     lands: list[int] | None = None,
     live: frozenset[LandingStepKind] = landing_plan.LIVE_STEPS,
+    now: datetime | None = None,
 ) -> list[int]:
     """Every delivered, unclosed task `rules.auto_merge_decision` finds worth a merge
     child -- `merge` or `run_checks` -- and a line appended to `lines` for each one it
@@ -439,8 +441,11 @@ def gather_merges(
     too, so a candidate here is a reason to look, never the merge. Every refusal it logs also
     asks `landing_step` (GH-239) what the system does instead; `lands`, when given, collects
     the issues whose step is in `live` and not yet in the document's `landing` list for this
-    head. `wait` and `none` are never in `live`: they spawn nothing."""
+    head. `wait` and `none` are never in `live`: they spawn nothing. A `not_ready` task whose
+    reopened landing lost its resume child (`landing.resume_owed` at `now`, the round's time)
+    is a `lands` candidate too (GH-242)."""
     out = lines if lines is not None else []
+    now = now or datetime.now(UTC)
     if current_master is None:
         return []  # the round's own upstream note already says why
     found: list[int] = []
@@ -486,7 +491,11 @@ def gather_merges(
             if lands is not None and decision.reason is not None:
                 # Every refusal logged above asks `landing_step` what to do instead; only a
                 # built step not yet dispatched on this head is worth a `land` child.
-                if landing_plan.pending(raw, decision.reason, facts, live) is not None:
+                if landing_plan.pending(raw, decision.reason, facts, live) is not None or (
+                    decision.reason == "not_ready" and landing_rules.resume_owed(raw, now)
+                ):
+                    # A `not_ready` task whose reopened pass lost its resume child owes
+                    # one: `land` respawns it (GH-242).
                     lands.append(number)
         else:
             found.append(number)
@@ -965,7 +974,7 @@ def run_once(
         lands: list[int] = []
         if awaiting_merge(ports):
             merges = gather_merges(
-                ports, eval_set, upstream().sha, lock, merge_lines, lands, live_steps
+                ports, eval_set, upstream().sha, lock, merge_lines, lands, live_steps, now
             )
         notes = [*spend_notes, *_upstream_notes(upstream.cache_info().currsize > 0, upstream)]
         actions = rules.poll_plan(
