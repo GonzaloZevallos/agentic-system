@@ -17,6 +17,7 @@ from agentic.core.process.domain.roles import (
     PRODUCT_ANALYST_BUG,
     TECH_LEAD_EPHEMERAL,
 )
+from agentic.core.process.domain.schemas import TaskType
 from agentic.core.process.domain.task import INTEGRATION
 
 PAIR = PAIR_PM_PA
@@ -1774,6 +1775,64 @@ def test_a_mixed_epoch_takes_the_calendar_of_its_last_failure():
     assert reason is not None and rules.schedule_for(reason) == rules.ACCOUNT_LIMIT_SCHEDULE
 
 
+def test_account_limit_hourly_covers_a_week_of_sixty_minute_slots():
+    assert rules.ACCOUNT_LIMIT_HOURLY == (60,) * 168
+    assert sum(rules.ACCOUNT_LIMIT_HOURLY) == 7 * 24 * 60
+
+
+def test_schedule_for_follows_the_hourly_calendar_only_for_an_account_limit_past_the_chase_max():
+    past = rules.ACCOUNT_LIMIT_CHASE_MAX
+    assert rules.schedule_for("account_limit", past - 1) == rules.ACCOUNT_LIMIT_SCHEDULE
+    assert rules.schedule_for("account_limit", past) == rules.ACCOUNT_LIMIT_HOURLY
+    # Rejected input: no other reason ever gets the hourly calendar, however long the chase.
+    for reason in ("upstream", "network"):
+        assert rules.schedule_for(reason, past + 50) == rules.RETAKE_SCHEDULE
+
+
+def test_the_hourly_calendar_is_indexed_from_the_chase_max_and_spent_after_168_slots():
+    past = rules.ACCOUNT_LIMIT_CHASE_MAX
+    base = rules.ResumeCandidate(5, "account_limit", T0, prior=3, limit=24, chase_prior=past)
+    assert not rules.resume_exhausted(base)
+    # Slot 0 of the hourly calendar is 60 minutes after the pause, not 15.
+    assert rules.retake_due(base, T0 + timedelta(minutes=59)) is None
+    assert rules.retake_due(base, T0 + timedelta(minutes=60)) == T0 + timedelta(minutes=60)
+    last = replace(base, chase_prior=past + 167)
+    assert not rules.resume_exhausted(last)
+    assert rules.retake_due(last, T0 + timedelta(minutes=60)) is not None
+    spent = replace(base, chase_prior=past + 168)
+    assert rules.resume_exhausted(spent)
+    assert rules.retake_due(spent, T0 + timedelta(days=30)) is None
+
+
+def test_only_an_account_limit_that_spent_the_hourly_calendar_persisted():
+    past = rules.ACCOUNT_LIMIT_CHASE_MAX
+    spent = rules.ResumeCandidate(5, "account_limit", T0, 0, 24, chase_prior=past + 168)
+    assert rules.account_limit_persisted(spent)
+    assert not rules.account_limit_persisted(replace(spent, chase_prior=past + 167))
+    # Rejected input: an upstream chase this long is exhausted, but is not this escalation.
+    assert not rules.account_limit_persisted(replace(spent, reason="upstream"))
+
+
+def test_the_persisted_escalation_is_a_failure_class_pause_auto_resumable_does_not_retake():
+    patch = rules.account_limit_persisted_patch()
+    assert patch["escalated"] == "account limit persisted 7 days"
+    assert patch["escalation_class"] == "failure"
+    state = {
+        "pause_log": [_failure_entry("account_limit"), {"kind": "escalation", "value": "failure"}]
+    }
+    assert rules.auto_resumable(state) == "account_limit"
+    assert rules.auto_resumable(task.apply(state, patch)) is None
+
+
+def test_low_confidence_type_resolves_every_task_type():
+    # `platform_enhancement` has no path of its own to guess into: it is a feature.
+    assert rules.low_confidence_type("platform_enhancement") == "feature"
+    assert rules.low_confidence_type("bug") == "bug"
+    assert rules.low_confidence_type("feature") == "feature"
+    for guess in get_args(TaskType):
+        assert rules.low_confidence_type(guess) in get_args(TaskType)
+
+
 def test_the_chase_backstop_is_inert_for_an_upstream_whose_schedule_is_spent():
     spent = rules.ResumeCandidate(5, "upstream", T0, prior=6, limit=6, chase_prior=6)
     assert rules.resume_exhausted(spent)
@@ -1781,10 +1840,12 @@ def test_the_chase_backstop_is_inert_for_an_upstream_whose_schedule_is_spent():
     assert not rules.resume_exhausted(live)
 
 
-def test_resume_exhausted_by_the_chase_backstop_or_the_interview_ceiling():
+def test_resume_exhausted_by_the_interview_ceiling_but_no_longer_by_the_chase_max():
+    # GH-239 edits the case that asserted `chase_prior=96` handed the task to the human:
+    # past `ACCOUNT_LIMIT_CHASE_MAX` the hourly calendar takes over.
     base = rules.ResumeCandidate(5, "account_limit", T0, prior=2, limit=24, chase_prior=95)
     assert not rules.resume_exhausted(base)
-    assert rules.resume_exhausted(replace(base, chase_prior=96))
+    assert not rules.resume_exhausted(replace(base, chase_prior=96))
     assert rules.resume_exhausted(replace(base, ceiling_spent=True))
 
 
@@ -2072,18 +2133,26 @@ def test_poll_plan_retakes_an_account_limit_pause_on_the_flat_calendar():
     assert actions == [rules.PollAction("resume", 5)]
 
 
-def test_poll_plan_does_not_retake_nor_block_when_the_chase_backstop_is_reached():
+def test_poll_plan_retakes_hourly_once_the_chase_max_is_reached():
+    # GH-239 edits the case that asserted nothing was retaken at `chase_prior=96`.
     since = NOW - timedelta(minutes=16)
     over = rules.ResumeCandidate(
         issue=5, reason="account_limit", since=since, prior=2, limit=24, chase_prior=96
     )
+    # The hourly slot is 60 minutes after the pause: at 16 it is not due, and the
+    # waiting pause still blocks the launch.
     actions = rules.poll_plan(
         closes=[], resumes=[over], launches=[_ready_launch()], available_slots=1, now=NOW
     )
-    assert actions == [rules.PollAction("launch", 9)]
-    under = replace(over, chase_prior=95)
-    actions = rules.poll_plan(closes=[], resumes=[under], launches=[], available_slots=1, now=NOW)
+    assert actions == []
+    due = replace(over, since=NOW - timedelta(minutes=61))
+    actions = rules.poll_plan(closes=[], resumes=[due], launches=[], available_slots=1, now=NOW)
     assert actions == [rules.PollAction("resume", 5)]
+    spent = replace(over, chase_prior=rules.ACCOUNT_LIMIT_CHASE_MAX + 168)
+    actions = rules.poll_plan(
+        closes=[], resumes=[spent], launches=[_ready_launch()], available_slots=1, now=NOW
+    )
+    assert actions == [rules.PollAction("launch", 9)]
 
 
 def test_poll_plan_does_not_retake_nor_block_once_the_interview_ceiling_is_spent():

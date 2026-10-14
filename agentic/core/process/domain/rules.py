@@ -39,6 +39,7 @@ from .roles import (
     Pair,
     Role,
 )
+from .schemas import TaskType
 from .task import (
     INTEGRATION,
     WAITING_ON_HUMAN,
@@ -1837,6 +1838,13 @@ ACCOUNT_LIMIT_SCHEDULE: tuple[int, ...] = (15,) * 24
 # human comment does: four windows of 24.
 ACCOUNT_LIMIT_CHASE_MAX = 96
 
+# Past the chase max the account is not coming back within a window: the task follows an
+# hourly calendar for a week instead of waiting for a human (ADR-0048, amending ADR-0039).
+# Indexed by the retakes made since the chase max; spent, the task escalates as a failure.
+# Never read off the API's "resets at" prose (ADR-0029).
+ACCOUNT_LIMIT_HOURLY: tuple[int, ...] = (60,) * 168
+ACCOUNT_LIMIT_PERSISTED = "account limit persisted 7 days"
+
 
 def logged(patch: dict[str, Any], failures: Sequence[Failure] = ()) -> dict[str, Any]:
     """Every escalation composes with this (issue #137): the one place a `pause_log`
@@ -1900,11 +1908,24 @@ def auto_resumable(state: TaskState) -> FailureReason | None:
     return failures[-1]["value"]
 
 
-def schedule_for(reason: FailureReason) -> tuple[int, ...]:
+def schedule_for(reason: FailureReason, chase_prior: int = 0) -> tuple[int, ...]:
     """The calendar a retake of `reason` follows: the flat `ACCOUNT_LIMIT_SCHEDULE` for
-    a 429, the growing `RETAKE_SCHEDULE` for everything else. The only place a reason
-    maps to a calendar."""
-    return ACCOUNT_LIMIT_SCHEDULE if reason == "account_limit" else RETAKE_SCHEDULE
+    a 429, the hourly `ACCOUNT_LIMIT_HOURLY` for a 429 whose whole chase (`chase_prior`)
+    reached `ACCOUNT_LIMIT_CHASE_MAX`, the growing `RETAKE_SCHEDULE` for everything
+    else. The only place a reason maps to a calendar; no other reason is ever hourly."""
+    if reason != "account_limit":
+        return RETAKE_SCHEDULE
+    return (
+        ACCOUNT_LIMIT_HOURLY if chase_prior >= ACCOUNT_LIMIT_CHASE_MAX else ACCOUNT_LIMIT_SCHEDULE
+    )
+
+
+def low_confidence_type(guess: TaskType) -> TaskType:
+    """The type a low-confidence classification continues with instead of escalating:
+    the PjM's guess, except `platform_enhancement`, which the feature path takes (a
+    wrong `bug` or `feature` guess costs a review pass; a wrong platform one would skip
+    the PM's definition). The only place that resolution is written."""
+    return "feature" if guess == "platform_enhancement" else guess
 
 
 def interview_for_section(section: str) -> Interview | None:
@@ -2326,16 +2347,54 @@ class ResumeCandidate:
     ceiling_spent: bool = False
 
 
+def _calendar(r: ResumeCandidate) -> tuple[tuple[int, ...], int, int]:
+    """`(schedule, prior, limit)` a resume candidate is measured on: its reason's own
+    calendar, and for an `account_limit` past the chase max the hourly one, indexed by
+    the retakes made since that max with all of it as the limit."""
+    schedule = schedule_for(r.reason, r.chase_prior)
+    if schedule is ACCOUNT_LIMIT_HOURLY:
+        return schedule, r.chase_prior - ACCOUNT_LIMIT_CHASE_MAX, len(schedule)
+    return schedule, r.prior, r.limit
+
+
+def retake_due(r: ResumeCandidate, now: datetime) -> datetime | None:
+    """The candidate's next automatic attempt, only once due (`next_attempt_at` on the
+    calendar `_calendar` names)."""
+    schedule, prior, limit = _calendar(r)
+    return next_attempt_at(r.since, prior, limit, now, schedule=schedule)
+
+
 def resume_exhausted(r: ResumeCandidate) -> bool:
     """Whether a resume candidate needs a human now: its own calendar is spent
-    (`limit` counts window slots only, `0` is just an empty calendar), the whole chase
-    reached `ACCOUNT_LIMIT_CHASE_MAX`, or an interview's ceiling is spent. The one
-    exhaustion decision `poll_plan` takes over a resume."""
-    return (
-        _schedule_exhausted(r.prior, r.limit, schedule=schedule_for(r.reason))
-        or r.chase_prior >= ACCOUNT_LIMIT_CHASE_MAX
-        or r.ceiling_spent
+    (`limit` counts window slots only, `0` is just an empty calendar; an `account_limit`
+    past `ACCOUNT_LIMIT_CHASE_MAX` has the hourly week) or an interview's ceiling is
+    spent. The one exhaustion decision `poll_plan` takes over a resume."""
+    schedule, prior, limit = _calendar(r)
+    return _schedule_exhausted(prior, limit, schedule=schedule) or r.ceiling_spent
+
+
+def account_limit_persisted(r: ResumeCandidate) -> bool:
+    """Whether `r` is an `account_limit` pause that spent the whole hourly week: the
+    one exhaustion the system escalates itself (`account_limit_persisted_patch`)."""
+    return r.reason == "account_limit" and r.chase_prior >= ACCOUNT_LIMIT_CHASE_MAX + len(
+        ACCOUNT_LIMIT_HOURLY
     )
+
+
+def account_limit_persisted_patch() -> dict[str, Any]:
+    """The escalation of an account limit that outlasted the hourly week: class
+    `failure`, with a failure entry of reason `other` in the log so `auto_resumable`
+    (every failure external) no longer finds the pause eligible -- the escalation is
+    written once, not each tick."""
+    failure = Failure(
+        role="Poller",
+        attempt=0,
+        error=ACCOUNT_LIMIT_PERSISTED,
+        cost_usd=0.0,
+        session_id="",
+        reason="other",
+    )
+    return logged(escalation("failure", ACCOUNT_LIMIT_PERSISTED), [failure])
 
 
 @dataclass(frozen=True)
@@ -2399,13 +2458,7 @@ def poll_plan(
     available_slots = max(available_slots - len(retaken), 0)
 
     due_resumes = sorted(
-        (
-            r
-            for r in resumes
-            if not resume_exhausted(r)
-            and next_attempt_at(r.since, r.prior, r.limit, now, schedule=schedule_for(r.reason))
-            is not None
-        ),
+        (r for r in resumes if not resume_exhausted(r) and retake_due(r, now) is not None),
         key=lambda r: r.issue,
     )
     taken = due_resumes[: max(available_slots, 0)]
@@ -2413,9 +2466,7 @@ def poll_plan(
 
     slots_left = max(available_slots - len(taken), 0)
     some_resume_still_waiting = any(
-        not resume_exhausted(r)
-        and next_attempt_at(r.since, r.prior, r.limit, now, schedule=schedule_for(r.reason)) is None
-        for r in resumes
+        not resume_exhausted(r) and retake_due(r, now) is None for r in resumes
     )
     if slots_left > 0 and not some_resume_still_waiting:
         ready = sorted(
