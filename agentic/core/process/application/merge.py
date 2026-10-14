@@ -458,7 +458,7 @@ def _refuse(
         ):
             ports.tracker.comment(task_id, text)
         # Announced only when the system will take it: an inert step says nothing.
-        if step is not None and step.kind in landing_plan.LIVE_STEPS:
+        if step is not None and landing_plan.takes_action(step.kind, landing_plan.LIVE_STEPS):
             line = f"{LANDING}{head} {step.kind}"
             if not any(
                 body.splitlines()[:1] == [line] for body in ports.tracker.issue_comments(task_id)

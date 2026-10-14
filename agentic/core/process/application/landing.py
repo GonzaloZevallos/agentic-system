@@ -92,7 +92,7 @@ def _land(
     if head is None:
         return LandResult("skipped", "no_head")
     step = landing_plan.step_for(raw, decision.reason, facts)
-    if step.kind not in live:
+    if not landing_plan.takes_action(step.kind, live):
         log(f"agentic: land: {task_id}: {head} {step.kind}: nothing to do")
         return LandResult("skipped", "not_live", step.kind)
     if landing_rules.already_dispatched(landing_plan.entries(raw), head, step.kind):

@@ -732,3 +732,18 @@ def test_record_closure_still_refuses_to_overwrite_a_block_key_with_a_list():
     raw = document.render(_bare(changes_requested={"PM→Product Analyst": 1}))
     with pytest.raises(ValueError, match="returns"):
         document.record_closure(raw, {"returns": ["x"]})
+
+
+def test_reviewed_head_carried_from_renders_and_parses_back_on_its_subtask():
+    unit = {
+        "id": "only",
+        "status": "approved",
+        "reviewed_head": "bbb",
+        "reviewed_head_carried_from": "aaa",
+    }
+    state = document.parse(document.render(_bare(subtasks={"only": unit})))
+    assert state["subtasks"]["only"]["reviewed_head_carried_from"] == "aaa"
+    plain = dict(unit)
+    del plain["reviewed_head_carried_from"]
+    without = document.render(_bare(subtasks={"only": plain}))
+    assert "reviewed_head_carried_from" not in without

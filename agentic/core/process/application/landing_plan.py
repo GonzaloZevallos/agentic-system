@@ -23,6 +23,13 @@ inert: an inert step is neither recorded nor spawned, so the refusal logs stay a
 were. Wave 2 fills it in, one executor at a time."""
 
 
+def takes_action(kind: LandingStepKind, live: frozenset[LandingStepKind]) -> bool:
+    """Whether `kind` is a step the system takes now: built (`live`) and not `wait` (the
+    next tick decides again) or `none` (the human's), which are never recorded or spawned
+    whatever `live` says."""
+    return kind in live and kind not in ("wait", "none")
+
+
 def entries(raw: Mapping[str, object]) -> list[dict[str, object]]:
     """The document's `landing` list, tolerant of its absence or a malformed value."""
     value = raw.get("landing")
@@ -73,7 +80,7 @@ def pending(
 ) -> LandingStep | None:
     """The step worth a `land` child: built (`live`) and not yet dispatched on this head."""
     step = step_for(raw, refusal, facts)
-    if step.kind not in live or facts.pr_head is None:
+    if not takes_action(step.kind, live) or facts.pr_head is None:
         return None
     if landing.already_dispatched(entries(raw), facts.pr_head, step.kind):
         return None
