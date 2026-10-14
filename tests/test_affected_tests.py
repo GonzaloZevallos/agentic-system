@@ -293,6 +293,14 @@ def test_deleting_an_agentic_module_selects_the_walkers():
     assert set(script.WALKERS) <= set(_files(result))
 
 
+def test_a_new_test_file_under_tests_selects_both_guards_that_parse_every_test_file(real):
+    _, _, found = real
+    result = script.select(
+        ["tests/core/process/application/test_new_thing.py"], found, script.TABLE, script.IGNORE
+    )
+    assert {"tests/test_tracker_doubles.py", "tests/test_affected_tests.py"} <= set(_files(result))
+
+
 def test_adding_a_test_selects_that_test_and_not_the_walkers():
     sources = _walker_sources() | {"tests/test_new.py": ""}
     assert _files(_select(["tests/test_new.py"], sources, script.TABLE, script.IGNORE)) == (

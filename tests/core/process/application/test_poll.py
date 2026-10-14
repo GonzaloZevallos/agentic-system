@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.application import poll
 from agentic.core.process.application.ports import (
@@ -37,6 +39,13 @@ class _TrackerWithPullRequest(MemoryTracker):
     def pull_request(self, reference: str) -> PullRequest | None:
         pull_request_number(reference)  # the real adapter's parse, before anything else
         return self.prs.get(reference)
+
+
+def test_a_bare_issue_number_fails_through_the_tracker_with_a_pull_request_map():
+    tracker = _TrackerWithPullRequest({"9": None})
+    for reference in ("9", "GH-9"):
+        with pytest.raises(ValueError, match="not a pull request URL"):
+            tracker.pull_request(reference)
 
 
 def _cfg(tmp_path, **over):
