@@ -13,9 +13,11 @@ import anyio
 import pytest
 
 from agentic.core.measurement.domain import metrics
+from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.application import landing, landing_sync, merge
 from agentic.core.process.application.deliver import deliver
 from agentic.core.process.application.ports import GitError, Upstream, UpstreamMerge
+from agentic.core.process.domain import landing as landing_rules
 from agentic.core.process.domain import playbook, rules
 from agentic.core.process.domain.task import TaskState
 from tests.core.process.application.test_poll import ESCALATED_AT, _cfg, _round
@@ -423,3 +425,90 @@ def test_the_same_entry_without_the_landing_mark_is_still_a_return_somebody_made
     entry = {"pair": "Tech Lead→Developer:a", "category": "integration-crosscut", "reason": "r"}
     assert metrics.changes_by_category({"change_history": [entry]}) == {"integration-crosscut": 1}
     assert playbook.accountable(entry, "feature") == "tech_lead"
+
+
+# ---- spawn_and_mark (GH-242) ---------------------------------------------------------------
+
+
+class _Resumer:
+    def __init__(self, pid: int | None) -> None:
+        self.pid, self.numbers = pid, []
+
+    def __call__(self, number: int) -> int | None:
+        self.numbers.append(number)
+        return self.pid
+
+
+class _Spawning:
+    """The part of a landing context `spawn_and_mark` reads."""
+
+    def __init__(self, ports, resume, log=lambda line: None) -> None:
+        self.task_id, self.ports, self.resume, self.log = "GH-5", ports, resume, log
+
+
+def _on_disk(tmp_path):
+    """Task 5 saved the way `_reopened` saves it, on the real filesystem adapter: a block
+    `landing` the writer re-rendered, with the entry's cost base."""
+    ports = memory_ports(documents=FilesystemTaskDocuments(tmp_path))
+    entry = {"head": HEAD, "step": "re_review", "refusal": "head_not_reviewed", "at": "t"}
+    marked = landing_rules.with_cost_base([entry], HEAD, "re_review", 3.5)
+    ports.documents.save({"id": "GH-5", "title": "t", "description": "d", "landing": marked})
+    return ports
+
+
+def test_a_spawn_that_answers_a_pid_is_counted_on_the_last_entry_and_keeps_the_cost_base(
+    tmp_path,
+):
+    ports = _on_disk(tmp_path)
+    resumer = _Resumer(4242)
+
+    pid = landing_sync.spawn_and_mark(
+        _Spawning(ports, resumer), lambda: "2026-10-14T12:00:00+00:00"
+    )
+
+    assert (pid, resumer.numbers) == (4242, [5])
+    [entry] = ports.documents.load("GH-5")["landing"]
+    assert entry["resume_spawns"] == 1
+    assert entry["resume_spawned_at"] == "2026-10-14T12:00:00+00:00"
+    assert entry["cost_base"] == 3.5
+
+    landing_sync.spawn_and_mark(_Spawning(ports, resumer), lambda: "2026-10-14T12:10:00+00:00")
+    [entry] = ports.documents.load("GH-5")["landing"]
+    assert entry["resume_spawns"] == 2
+    assert entry["resume_spawned_at"] == "2026-10-14T12:10:00+00:00"
+
+
+@pytest.mark.parametrize("resume", [None, _Resumer(None)], ids=["no_resumer", "no_pid"])
+def test_a_spawn_that_answers_no_pid_writes_no_counter(tmp_path, resume):
+    ports = _on_disk(tmp_path)
+    before = ports.documents.load("GH-5")
+
+    assert landing_sync.spawn_and_mark(_Spawning(ports, resume)) is None
+
+    assert ports.documents.load("GH-5") == before
+
+
+def test_a_reopened_landing_is_resumed_through_spawn_and_mark(tmp_path):
+    ports = _ports(5)
+    ports.tracker.head_oid = FOREIGN
+    world = _World(ports, tmp_path)
+
+    world.tick()
+
+    assert world.resumed == [5]
+    entry = _document(ports)["landing"][-1]
+    assert entry["resume_spawns"] == 1 and entry["resume_spawned_at"]
+    assert "cost_base" in entry
+
+
+def test_a_reopened_landing_whose_resume_answers_no_pid_counts_nothing(tmp_path):
+    ports = _ports(5)
+    ports.tracker.head_oid = FOREIGN
+    world = _World(ports, tmp_path)
+    world.resume = lambda number: None
+
+    world.tick()
+
+    entry = _document(ports)["landing"][-1]
+    assert "resume_spawns" not in entry and "resume_spawned_at" not in entry
+    assert "cost_base" in entry

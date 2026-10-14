@@ -16,8 +16,8 @@ from tests.core.process.application.test_poll_merge import (
     MASTER,
     URL,
     _HeldLocks,
-    _pr,
     _ports,
+    _pr,
 )
 
 T0 = datetime(2026, 10, 14, 12, 30, tzinfo=UTC)
