@@ -29,7 +29,6 @@ from .presubmit import CheckoutPresubmit
 # The refusals a human can act on, and so the only ones commented, once per (head, reason).
 COMMENTED: tuple[str, ...] = (
     "checks_failed",
-    "guarded_path",
     "no_merge_method",
     "eval_set_unreadable",
     "attempts_exhausted",
@@ -118,8 +117,6 @@ def merge_task(
         decision = rules.auto_merge_decision(facts)
     if decision.kind == "refuse":
         assert decision.reason is not None
-        if decision.reason == "guarded_path" and head is not None:
-            _spend_attempts(task_id, raw, head, ports)
         failure = facts.merge_failure if decision.reason == "merge_failed" else None
         return _refuse(task_id, head, decision.reason, ports, failure=failure, facts=facts)
     if decision.kind != "merge" or head is None:
@@ -132,13 +129,14 @@ def merge_task(
 
 def _merges_on_ci(facts: rules.MergeFacts) -> bool:
     """The `merge` rested on the CI alone: declared, green on this head and fresh. The
-    same three facts `rules.auto_merge_decision` merges on before it looks at any local
+    same four facts `rules.auto_merge_decision` merges on before it looks at any local
     check."""
     return (
         bool(facts.ci_required)
         and facts.ci_verdict is not None
         and facts.ci_verdict.state == "green"
         and facts.ci_fresh is True
+        and facts.ci_untrusted is False
     )
 
 
@@ -171,6 +169,7 @@ def _facts(
     return replace(
         _merge_facts(task_id, raw, pull_request, eval_set, number, master),
         touched_paths=touched,
+        ci_untrusted=rules.ci_untrusted(touched),
     )
 
 
@@ -242,22 +241,6 @@ def _run_checks(
     shown = presubmit.failed_checks_markdown(record, head, neutralise=False)
     for number, line in enumerate(shown.splitlines()):
         log(f"agentic: merge: {task_id}: {line}" if number == 0 else f"    {line}")
-
-
-def _spend_attempts(task_id: str, raw: TaskState, head: str, ports: Ports) -> None:
-    """The poller cannot see a diff, so it would spawn this child for a guarded-path head
-    every round. Spending the head's attempts makes `auto_merge_decision` itself leave the
-    pull request alone (`attempts_exhausted`, a log line) until a push gives a new head."""
-    recorded = raw.get("merge_attempts")
-    count = (
-        recorded.get("count", 0)
-        if isinstance(recorded, dict) and recorded.get("head") == head
-        else 0
-    )
-    if count < rules.MERGE_ATTEMPTS_MAX:
-        ports.documents.record_closure(
-            task_id, {"merge_attempts": {"head": head, "count": rules.MERGE_ATTEMPTS_MAX}}
-        )
 
 
 def _setup(

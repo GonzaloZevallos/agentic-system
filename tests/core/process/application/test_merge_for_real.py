@@ -327,10 +327,10 @@ def test_the_eval_set_helper_reads_upstream_and_refuses_what_it_cannot_read(worl
     assert cli._upstream_eval_set(world.ports, Upstream("HEAD", "a" * 40, "fell back")) is None
 
 
-def test_a_guarded_path_is_refused_once_and_the_poller_stops_spawning_for_the_head(world):
-    from agentic.core.process.application import poll
-    from tests.core.process.application.test_poll import _Locks
-
+def test_a_guarded_path_is_no_longer_refused_it_merges_on_the_local_checks(world):
+    """GH-239: `guarded_path` left `MergeRefusal`. The change to the standards merges, and
+    the decision was the local checks' (`ci_untrusted` is False for it, but no CI is declared
+    here)."""
     checkout = world.ports.workspace.task_checkout("GH-209")
     (checkout.path / "CODING_STANDARDS.md").write_text("weaker\n")
     git("add", "-A", cwd=checkout.path)
@@ -341,15 +341,9 @@ def test_a_guarded_path_is_refused_once_and_the_poller_stops_spawning_for_the_he
     world.deliver()
 
     world.merge()
-    world.merge()
 
-    doc = world.doc()
-    assert world.tracker.merge_calls == [] and "auto_merge_head" not in doc
-    assert [text.splitlines()[0] for _, text in world.tracker.comments] == [
-        f"Auto-merge refused: {head} guarded_path"
-    ]
-    master = world.ports.workspace.upstream().sha
-    assert poll.gather_merges(world.ports, frozenset(), master, _Locks()) == []
+    assert world.tracker.merge_calls == [("https://github.com/o/r/pull/210", head)]
+    assert all("guarded_path" not in text for _, text in world.tracker.comments)
 
 
 @pytest.mark.parametrize(

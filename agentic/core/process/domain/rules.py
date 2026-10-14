@@ -2527,10 +2527,10 @@ MergeRefusal = Literal[
     "pr_not_open",
     "not_approved",
     "head_not_reviewed",
+    "open_findings_blocking",
     "open_findings",
     "eval_set",
     "eval_set_unreadable",
-    "guarded_path",
     "attempts_exhausted",
     "checks_failed",
     "master_moved",
@@ -2547,12 +2547,13 @@ MergeRefusal = Literal[
 - `not_approved`: the reviewed unit (`reviewed_unit`) is not approved.
 - `head_not_reviewed`: the pull request head is not the one Tech Lead reviewed, or either
   is unknown.
-- `open_findings`: a `blocking` or `important` finding is still open.
+- `open_findings_blocking`: a `blocking` finding is still open. Checked before
+  `open_findings`: a blocking one is never filed as a follow-up (GH-239).
+- `open_findings`: an `important` finding is still open and no follow-up was filed for it
+  (`followups_filed`); the landing files it and lands the pull request (GH-239).
 - `eval_set`: the issue is in the evaluation set; its merge is the human's verdict.
 - `eval_set_unreadable`: the evaluation set could not be read, so nothing proves the
   issue is outside it.
-- `guarded_path`: the diff touches `.agentic/**` (but the task's own document),
-  `CODING_STANDARDS.md` or `.github/**`.
 - `attempts_exhausted`: the checks already ran `MERGE_ATTEMPTS_MAX` times on this head
   and the master moved again.
 - `checks_failed`: the checks ran on this head merged with the current master and failed.
@@ -2581,13 +2582,20 @@ class MergeFacts:
     report was read for, `ci_verdict` its classification (`ci.ci_state`), `ci_unreadable`
     the closed cause when it could not be read, `ci_fresh` whether it ran on a tree holding
     the current master (None: not known) and `ci_waited_s` the seconds since the wait's
-    anchor (None: no anchor)."""
+    anchor (None: no anchor). `open_blocking` and `open_important` split the open findings
+    by severity (GH-239); `followups_filed` says the landing already filed the follow-up for
+    the important ones. `ci_untrusted` (GH-239) is `None` when `touched_paths` is unknown and
+    `True` when the diff touches the CI's own definition (`CI_DEFINITION_PREFIX`): a CI whose
+    definition the change itself could have edited proves nothing, so it never decides
+    `merge`. `failed_step` is the step of the recorded `merge_checks` that failed, which only
+    the landing reads."""
 
     task_id: str
     status: str | None
     reviewed_unit_approved: bool
     reviewed_head: str | None
-    open_blocking_or_important: int
+    open_blocking: int
+    open_important: int
     pr_state: str | None
     pr_head: str | None
     in_eval_set: bool | None
@@ -2605,6 +2613,9 @@ class MergeFacts:
     ci_unreadable: ci.CiUnreadable | None = None
     ci_fresh: bool | None = None
     ci_waited_s: float | None = None
+    ci_untrusted: bool | None = None
+    followups_filed: bool = False
+    failed_step: presubmit.FailedStep | None = None
 
 
 @dataclass(frozen=True)
@@ -2630,20 +2641,33 @@ def reviewed_unit(state: TaskState) -> Subtask | None:
     return None
 
 
+CI_DEFINITION_PREFIX = ".github/"
+
+
 def guarded_path(path: str, task_id: str) -> bool:
-    """Whether a diff touching `path` keeps the pull request from merging itself: the
-    system's own record and configuration (`.agentic/**`, but the task's own document,
-    which every delivery writes), the standards and the workflows."""
+    """Whether `path` is the system's own record and configuration (`.agentic/**`, but the
+    task's own document, which every delivery writes), the standards or the workflows.
+    Since GH-239 it no longer keeps a pull request from merging: the landing records the
+    guarded change in the pull request body instead."""
     if path == f".agentic/tasks/{task_id}.md":
         return False
-    return path.startswith((".agentic/", ".github/")) or path == "CODING_STANDARDS.md"
+    return path.startswith((".agentic/", CI_DEFINITION_PREFIX)) or path == "CODING_STANDARDS.md"
+
+
+def ci_untrusted(touched_paths: Sequence[str] | None) -> bool | None:
+    """Whether the CI's verdict may be a product of the change itself: `None` when the
+    paths are unknown, `True` when any is under `CI_DEFINITION_PREFIX`. Fail closed: only
+    `False` lets a green CI decide a `merge`."""
+    if touched_paths is None:
+        return None
+    return any(path.startswith(CI_DEFINITION_PREFIX) for path in touched_paths)
 
 
 def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     """The one place the conditions of an automatic merge live (GH-178, ADR-0045); no
     adapter, CLI or poller re-derives any of them. Checked in this order and refused at the
     first that fails: `not_ready`, `pr_not_open`, `not_approved`, `head_not_reviewed`,
-    `open_findings`, `eval_set_unreadable`, `eval_set`, `guarded_path`, `merge_failed`,
+    `open_findings_blocking`, `open_findings`, `eval_set_unreadable`, `eval_set`, `merge_failed`,
     then, only when the product declares its CI (`ci_required`): `ci_unreadable`, a `wait`
     for a head that is not the reviewed one, `ci_failed` and `ci_missing`, a green and fresh
     CI being the `merge` itself (a green stale one goes on); then `checks_failed` (only when
@@ -2665,16 +2689,14 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
         return MergeDecision("refuse", "not_approved")
     if not (full_commit_id(facts.pr_head) and same_commit(facts.reviewed_head, facts.pr_head)):
         return MergeDecision("refuse", "head_not_reviewed")
-    if facts.open_blocking_or_important > 0:
+    if facts.open_blocking > 0:
+        return MergeDecision("refuse", "open_findings_blocking")
+    if facts.open_important > 0 and not facts.followups_filed:
         return MergeDecision("refuse", "open_findings")
     if facts.in_eval_set is None:
         return MergeDecision("refuse", "eval_set_unreadable")
     if facts.in_eval_set:
         return MergeDecision("refuse", "eval_set")
-    if facts.touched_paths is not None and any(
-        guarded_path(path, facts.task_id) for path in facts.touched_paths
-    ):
-        return MergeDecision("refuse", "guarded_path")
     if facts.merge_failures >= MERGE_CALLS_MAX:
         return MergeDecision("refuse", "merge_failed")
     if facts.ci_required:
@@ -2698,7 +2720,7 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
 
 def _ci_gate(facts: MergeFacts) -> MergeDecision | None:
     """The CI's part of `auto_merge_decision`: `None` means a green CI that is not fresh,
-    which goes on to the local checks."""
+    which goes on to the local checks, as does any green CI whose definition is untrusted."""
     spent = facts.ci_waited_s is not None and facts.ci_waited_s >= ci.CI_WAIT_MAX_S
     if facts.ci_unreadable is not None:
         return MergeDecision("refuse", "ci_unreadable") if spent else MergeDecision("wait", None)
@@ -2711,7 +2733,9 @@ def _ci_gate(facts: MergeFacts) -> MergeDecision | None:
         return MergeDecision("refuse", "ci_failed")
     if verdict.state == "pending":
         return MergeDecision("refuse", "ci_missing") if spent else MergeDecision("wait", None)
-    return MergeDecision("merge", None) if facts.ci_fresh is True else None
+    if facts.ci_fresh is True and facts.ci_untrusted is False:
+        return MergeDecision("merge", None)
+    return None
 
 
 def pr_abandoned(state: str | None) -> bool:

@@ -28,7 +28,8 @@ def _facts(**over) -> MergeFacts:
         status="ready_for_review",
         reviewed_unit_approved=True,
         reviewed_head=HEAD,
-        open_blocking_or_important=0,
+        open_blocking=0,
+        open_important=0,
         pr_state="OPEN",
         pr_head=HEAD,
         in_eval_set=False,
@@ -39,6 +40,7 @@ def _facts(**over) -> MergeFacts:
         checks_passed=None,
         current_master=MASTER,
         ci_required=("web",),
+        ci_untrusted=False,
         ci_head=HEAD,
         ci_verdict=_verdict("green"),
         ci_fresh=True,
@@ -162,3 +164,22 @@ def test_default_facts_decide_as_before_whatever_the_ci_fields_say_nothing_of():
     assert rules.auto_merge_decision(replace(plain, checks_passed=None)) == MergeDecision(
         "run_checks", None
     )
+
+
+@pytest.mark.parametrize("untrusted", [None, True], ids=["unknown_paths", "ci_definition_touched"])
+def test_a_green_fresh_ci_never_decides_merge_when_its_definition_is_untrusted(untrusted):
+    facts = _facts(ci_untrusted=untrusted)
+    assert rules.auto_merge_decision(facts) == MergeDecision("run_checks", None)
+    covered = replace(facts, checks_head=HEAD, checks_master=MASTER, checks_passed=True)
+    assert rules.auto_merge_decision(covered) == MergeDecision("merge", None)
+    assert rules.auto_merge_decision(replace(covered, checks_passed=False)) == MergeDecision(
+        "refuse", "checks_failed"
+    )
+
+
+def test_an_untrusted_ci_still_refuses_and_waits_as_before():
+    red = _verdict("red", failing=(RED,))
+    assert rules.auto_merge_decision(_facts(ci_untrusted=True, ci_verdict=red)) == MergeDecision(
+        "refuse", "ci_failed"
+    )
+    assert rules.auto_merge_decision(_facts(ci_untrusted=None, ci_head=None)) == WAIT
