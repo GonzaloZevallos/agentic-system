@@ -13,12 +13,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal, assert_never
+from typing import Any, Literal, assert_never
 
 from agentic.shared.configuration import Configuration
 
 from ..domain import landing as landing_rules
 from ..domain.landing import LandingStepKind
+from ..domain.task import TaskState
 from . import landing_fix, landing_plan, landing_sync
 from .landing_plan import LandingContext
 from .poll import StackUnreadable, assess_merge
@@ -71,11 +72,14 @@ def _land(
     clock: Callable[[], str],
     live: frozenset[LandingStepKind],
 ) -> LandResult:
-    raw = ports.documents.load(task_id)
-    reference = raw.get("pull_request") if raw else None
+    # The port answers a bare `dict`: the document carries keys beyond the state, and every
+    # reader below takes it as the state (`.get` for the keys that may be absent).
+    loaded: Any = ports.documents.load(task_id)
     number = ports.inbox.issue_of(task_id)
-    if raw is None or not reference or number is None:
+    if loaded is None or not loaded.get("pull_request") or number is None:
         return LandResult("stopped", "no_pull_request")
+    raw: TaskState = loaded
+    reference = loaded["pull_request"]
     master = upstream.sha
     if master is None:
         return LandResult("stopped", "no_upstream")

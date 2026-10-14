@@ -217,3 +217,13 @@ def test_a_merge_touching_nothing_guarded_records_no_guarded_key(tmp_path):
     result, _ = _run(ports, tmp_path)
     assert result.kind == "merged"
     assert "auto_merge_guarded" not in (ports.documents.load("GH-5") or {})
+
+
+def test_the_landing_comment_is_not_posted_for_a_key_the_landing_list_already_holds(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(landing_plan, "LIVE_STEPS", frozenset({"rerun"}))
+    taken = [{"head": HEAD, "step": "rerun", "refusal": "checks_failed", "at": "t"}]
+    ports = _failing_world(tmp_path, taken)
+    _run(ports, tmp_path)
+    assert not any(text.startswith("Landing: ") for _, text in ports.tracker.comments)

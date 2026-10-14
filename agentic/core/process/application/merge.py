@@ -20,6 +20,7 @@ from typing import Literal
 from agentic.shared.configuration import Configuration
 
 from ..domain import ci, presubmit, rules
+from ..domain import landing as landing_rules
 from ..domain.task import PullRequest, TaskState
 from . import landing_plan
 from .checkouts import task_base
@@ -460,7 +461,13 @@ def _refuse(
         # Announced only when the system will take it: an inert step says nothing.
         if step is not None and landing_plan.takes_action(step.kind, landing_plan.LIVE_STEPS):
             line = f"{LANDING}{head} {step.kind}"
-            if not any(
+            # Once per (head, step): not when the document's `landing` list already holds
+            # the key, and not when the comment is already on the issue (the step may not
+            # have been recorded yet).
+            taken = landing_rules.already_dispatched(
+                landing_plan.entries(ports.documents.load(task_id) or {}), head, step.kind
+            )
+            if not taken and not any(
                 body.splitlines()[:1] == [line] for body in ports.tracker.issue_comments(task_id)
             ):
                 ports.tracker.comment(task_id, line)
