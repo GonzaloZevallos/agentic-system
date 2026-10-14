@@ -1,4 +1,5 @@
 import pytest
+import yaml
 
 from agentic.core.process.application import resume
 from agentic.core.process.domain import document, legacy_names, roles, rules
@@ -752,29 +753,52 @@ def test_render_writes_landing_as_one_flow_line_that_record_closure_replaces():
     assert after.count("\nlanding:") == 1
 
 
-def test_a_block_landing_in_the_gh_227_shape_is_replaced_by_one_flow_line():
-    head = "e6a9fbde" + "0" * 32
-    block_text = (
-        "landing:\n"
-        f"- head: {head}\n"
-        "  step: re_review\n"
-        "  refusal: head_not_reviewed\n"
-        "  at: '2026-10-14T12:23:27+00:00'\n"
-        "  cost_base: 27.9541\n"
-    )
-    raw = document.render(_bare()).replace("\nsubtasks:", f"\n{block_text}subtasks:", 1)
+_BLOCK_LANDING = (
+    "landing:\n"
+    f"- head: {'e6a9fbde' + '0' * 32}\n"
+    "  step: re_review\n"
+    "  refusal: head_not_reviewed\n"
+    "  at: '2026-10-14T12:23:27+00:00'\n"
+    "  cost_base: 27.9541\n"
+)
+_BODY_LOOKALIKES = "intro\n\n- landing: a bullet\n\n    indented: code\nlanding: a body line\n"
+
+
+@pytest.mark.parametrize(
+    ("anchor", "injected", "next_line"),
+    [
+        ("\nsubtasks:", "\n{block}subtasks:", "subtasks:"),
+        ("\nruns:", "\n{block}runs:", "runs:"),
+        ("\n---\n", "\n{block}---\n", "---"),
+    ],
+    ids=["before_subtasks", "before_runs", "last_frontmatter_key"],
+)
+def test_a_block_landing_in_the_gh_227_shape_is_replaced_by_one_flow_line(
+    anchor, injected, next_line
+):
+    run = {"role": "PjM", "section": "PjM", "version": 1, "session_id": "", "model": "m"}
+    run.update(cost_usd=0.1, turns=1)
+    failure = {"role": "PjM", "cost_usd": 0.1, "reason": "x"}
+    sections = {"PM": _BODY_LOOKALIKES}
+    rendered = document.render(_bare(runs=[run], failures=[failure], sections=sections))
+    assert "\nlanding:" not in rendered.split("\n---\n")[0]
+    raw = rendered.replace(anchor, injected.format(block=_BLOCK_LANDING), 1)
+    assert raw.count(_BLOCK_LANDING) == 1
+    after_block = raw.split(_BLOCK_LANDING)[1].split("\n")[0]
+    assert after_block.startswith(next_line)
     block = document.parse(raw)["landing"]
     assert block[0]["step"] == "re_review" and block[0]["cost_base"] == 27.9541
     marked = [{**block[0], "resume_spawns": 1}]
 
     after = document.record_closure(raw, {"landing": marked})
 
+    flow = document._scalar_line("landing", marked)
+    assert after == raw.replace(_BLOCK_LANDING, flow + "\n")
+    frontmatter = after.split("\n---\n")[0].split("\n")
+    landing_lines = [ln for ln in frontmatter if ln.startswith("landing:")]
+    assert len(landing_lines) == 1
+    assert yaml.safe_load(landing_lines[0]) == {"landing": marked}
     assert document.parse(after)["landing"] == marked
-    assert after.count("\nlanding:") == 1
-    assert "\n- head:" not in after
-    before_rest = [ln for ln in raw.split("\n") if not ln.startswith(("landing:", "- ", "  "))]
-    after_rest = [ln for ln in after.split("\n") if not ln.startswith(("landing:", "- ", "  "))]
-    assert after_rest == before_rest
 
 
 def test_a_flow_and_a_block_landing_parse_to_the_same_list():
