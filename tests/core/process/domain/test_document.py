@@ -688,3 +688,30 @@ def test_replaced_remote_tip_round_trips_and_is_absent_when_unset():
     assert parsed["replaced_remote_tip"] == "abc123"
     assert "replaced_remote_tip" in resume.STATE_FIELDS
     assert "replaced_remote_tip" not in document.parse(bare)
+
+
+def test_record_closure_writes_a_list_on_one_line_replaces_it_in_place_and_parses_it_back():
+    raw = document.render({"id": "T-1", "title": "t", "description": "d", "sections": {}})
+    first = [{"from_head": "a1", "to_head": "b2", "map": {"x: y.md": "z.md"}, "unrewritten": []}]
+    once = document.record_closure(raw, {"adr_renumber": first})
+    assert document.parse(once)["adr_renumber"] == first
+    assert once.count("adr_renumber:") == 1
+    assert next(line for line in once.splitlines() if line.startswith("adr_renumber:"))
+
+    second = [*first, {"from_head": "b2", "to_head": "c3", "map": {}, "unrewritten": ["p:1"]}]
+    twice = document.record_closure(once, {"adr_renumber": second})
+    assert twice.count("adr_renumber:") == 1
+    assert document.parse(twice)["adr_renumber"] == second
+    # Everything but the one line is byte-identical.
+    assert [x for x in twice.splitlines() if not x.startswith("adr_renumber:")] == [
+        x for x in once.splitlines() if not x.startswith("adr_renumber:")
+    ]
+
+
+def test_record_closure_refuses_to_replace_a_list_kept_as_a_block_sequence():
+    raw = (
+        "---\nid: T-1\ntitle: t\nadr_renumber:\n- from_head: a\n  to_head: b\n---\n"
+        "\n# t\n\n## Original request\n\nd\n"
+    )
+    with pytest.raises(ValueError, match="adr_renumber"):
+        document.record_closure(raw, {"adr_renumber": []})

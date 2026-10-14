@@ -155,7 +155,9 @@ def _adr_facts(
     ports: Ports, touched: tuple[str, ...] | None, head: str | None, master: str
 ) -> _AdrFacts:
     """Nothing but the diff already read decides whether to look: a branch that touches no
-    `docs/adr/NNNN-*.md` path costs no further git call. Raises `GitError`."""
+    `docs/adr/NNNN-*.md` path costs no further git call. A branch that only edits one pays
+    the merge-base and two listings, not the third (the diff names no added or modified
+    status, so the edit cannot be told from an addition without them). Raises `GitError`."""
     if head is None or touched is None:
         return _AdrFacts()
     if not any(adr_numbers.adr_number(path) is not None for path in touched):
@@ -164,8 +166,10 @@ def _adr_facts(
     mb = workspace.merge_base(master, head)
     at_mb = workspace.paths_at(mb, adr_numbers.ADR_DIR)
     at_head = workspace.paths_at(head, adr_numbers.ADR_DIR)
-    at_master = workspace.paths_at(master, adr_numbers.ADR_DIR)
     own = adr_numbers.own_adrs(at_mb, at_head)
+    if not own:  # the diff only edited an ADR that was already there: nothing to number
+        return _AdrFacts(merge_base=mb)
+    at_master = workspace.paths_at(master, adr_numbers.ADR_DIR)
     found = adr_numbers.collision(own, at_head, at_mb, at_master)
     plan = adr_numbers.renumber_plan(found.colliding, own, at_master) if found.colliding else {}
     return _AdrFacts(found, plan, mb)

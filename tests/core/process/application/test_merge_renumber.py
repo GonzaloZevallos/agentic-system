@@ -447,3 +447,29 @@ def test_a_branch_with_no_adr_makes_no_adr_call_and_merges_as_before(repo):
     [(_, comment)] = repo.tracker.comments
     assert comment == f"Auto-merged: {repo.heads['GH-2']} via squash"
     assert "adr_renumber" not in repo.doc("GH-2")
+
+
+def test_a_branch_that_only_edits_an_existing_adr_never_reads_masters_listing(repo):
+    repo.branch("GH-2", {"docs/adr/0047-base.md": "# ADR-0047: base\n\nAddendum.\n"})
+    repo.deliver("GH-2")
+    real = repo.ports.workspace
+    asked: list[tuple[str, tuple]] = []
+
+    class Watching:
+        def __getattr__(self, name):
+            def call(*args, **kwargs):
+                asked.append((name, args))
+                return getattr(real, name)(*args, **kwargs)
+
+            return (
+                call if name in {"merge_base", "paths_at", "added_lines"} else getattr(real, name)
+            )
+
+    repo.ports = dataclasses.replace(repo.ports, workspace=Watching())
+    result, _ = repo.verb("GH-2")
+
+    assert result.kind == "merged"
+    revisions = [args[0] for name, args in asked if name == "paths_at"]
+    assert len(revisions) == 2 and repo.ports.workspace.upstream() not in revisions
+    assert "added_lines" not in {name for name, _ in asked}
+    assert "adr_renumber" not in repo.doc("GH-2")
