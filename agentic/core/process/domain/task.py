@@ -18,7 +18,6 @@ several nodes over a copy of the state and has to hand the parent what it added.
 from __future__ import annotations
 
 import operator
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import (
     Annotated,
@@ -724,13 +723,6 @@ def _reducers() -> dict[str, object]:
 
 
 REDUCERS = _reducers()
-
-
-def from_document(document: Mapping[str, Any]) -> TaskState:
-    """The loaded document as a state: the port answers a bare mapping (it carries keys
-    beyond the state), and every reader of a state takes it as one. The same single,
-    coded exception `apply` makes for the same reason."""
-    return dict(document)  # type: ignore[return-value]
 
 
 def apply(state: TaskState, patch: TaskState) -> TaskState:

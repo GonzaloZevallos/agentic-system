@@ -13,10 +13,11 @@ from contextlib import nullcontext
 from ..domain import landing as landing_rules
 from ..domain import presubmit, rules
 from ..domain.roles import LANDING_DIAGNOSER
-from ..domain.task import ChangeCategory, TaskState, apply, from_document
+from ..domain.task import ChangeCategory, TaskState, apply
 from . import escalate, landing_plan, landing_sync, merge
 from .checkouts import task_base
 from .landing_plan import LandingContext
+from .resume import state_from
 from .run_role import run_role
 
 FOLLOWUP_LABEL = "agentic"
@@ -25,7 +26,7 @@ FOLLOWUP_LABEL = "agentic"
 def _state(context: LandingContext) -> TaskState | None:
     """The task document as a state, or `None` when there is none."""
     loaded = context.ports.documents.load(context.task_id)
-    return from_document(loaded) if loaded is not None else None
+    return state_from(loaded) if loaded is not None else None
 
 
 def _blocking_reason(raw: TaskState) -> tuple[str, ChangeCategory]:
@@ -35,9 +36,10 @@ def _blocking_reason(raw: TaskState) -> tuple[str, ChangeCategory]:
     return "Open blocking findings:\n" + "\n".join(lines), category
 
 
-def _red_reason(context: LandingContext, raw: TaskState) -> str:
-    """The failing check names with their tails: the recorded local checks, or the CI runs."""
-    recorded = raw.get("merge_checks")
+def _red_reason(context: LandingContext, document: Mapping[str, object]) -> str:
+    """The failing check names with their tails: the recorded local checks, or the CI runs.
+    Read from the document: `merge_checks` is a key of it, not of the state."""
+    recorded = document.get("merge_checks")
     record: Mapping[str, object] = recorded if isinstance(recorded, Mapping) else {}
     if context.step.refusal == "checks_failed" and record:
         return presubmit.failed_checks_markdown(record, context.head, neutralise=False)
@@ -74,14 +76,15 @@ def fix(context: LandingContext) -> None:
     """Reopens the step's units as `returned` with the open blocking rows, or the failing
     checks, as the reason, and resumes the task. Counts as a model pass in the `landing`
     list the step was recorded in, never against the pair's return limit."""
-    raw = _state(context)
-    if raw is None:
+    document = context.ports.documents.load(context.task_id)
+    if document is None:
         context.log(f"agentic: land: {context.task_id}: fix: no document")
         return
+    raw = state_from(document)
     if context.step.refusal == "open_findings_blocking":
         reason, category = _blocking_reason(raw)
     else:
-        reason, category = _red_reason(context, raw), "process-suite-red"
+        reason, category = _red_reason(context, document), "process-suite-red"
     reopened = landing_sync.reopen(raw, context.step.units, reason, category, "returned")
     marked = landing_rules.with_cost_base(
         landing_plan.entries(raw), context.head, context.step.kind, raw.get("cost_usd", 0.0)
@@ -130,7 +133,7 @@ def rerun(context: LandingContext) -> None:
     if master is None:
         context.log(f"agentic: land: {context.task_id}: rerun: no upstream")
         return
-    raw = from_document(loaded)
+    raw = state_from(loaded)
     base = task_base(raw, context.ports)
     _remember_rerun(context, names)
     merge.run_checks(
@@ -211,7 +214,7 @@ def diagnose(context: LandingContext) -> None:
     reason = str(output.data.get("reason", ""))
     if landing_rules.restart_depth(raw) >= landing_rules.RESTART_DEPTH_MAX:
         escalated = rules.logged(dict(rules.escalation("failure", reason)))
-        escalated_state = apply(raw, from_document({**patch, **escalated}))
+        escalated_state = apply(raw, state_from({**patch, **escalated}))
         context.ports.documents.save(escalated_state)
         context.ports.tracker.label(context.task_id, escalate.NEEDS_HUMAN)
         context.ports.tracker.comment(
