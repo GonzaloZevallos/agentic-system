@@ -34,7 +34,7 @@ from pathlib import Path
 
 from agentic.shared.configuration import LOGS_DIR, STATE_DIR, STATE_FILE
 
-from ...application.ports import Checkout, Upstream
+from ...application.ports import Checkout, Upstream, UpstreamMerge
 from ...application.ports import GitError as GitError  # re-exported: see ports.py
 from ...domain import rules
 from ...domain.ci import Containment
@@ -151,6 +151,16 @@ class GitWorkspace:
         )
         reason = (result.stdout + result.stderr).strip() or f"`git merge {branch}` failed"
         return MergeOutcome(reason=reason, conflicted_paths=conflicted)
+
+    def merge_upstream_into(self, checkout: Path, upstream_sha: str) -> UpstreamMerge:
+        outcome = self.merge_keeping_conflicts(checkout, upstream_sha)
+        if outcome.reason is not None and not outcome.conflicted_paths:
+            raise GitError(f"git merge {upstream_sha} was refused: {outcome.reason}")
+        return UpstreamMerge(
+            clean=outcome.reason is None,
+            conflicted=outcome.conflicted_paths,
+            head=self.full_head(checkout),
+        )
 
     def dependency_state(self, path: Path, branch: str, paths: Sequence[str]) -> DependencyState:
         ancestor = self._run("merge-base", "--is-ancestor", branch, "HEAD", cwd=path)

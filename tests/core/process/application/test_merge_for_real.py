@@ -391,7 +391,8 @@ def test_a_merge_that_keeps_failing_stops_at_the_budget_and_comments_once_on_the
     ]
     body = world.tracker.comments[0][1]
     assert rules.MERGE_FAILURE_ADVICE["gh_rejected"] in body
-    assert body.endswith("Left for the human to merge.")
+    # GH-239: the landing diagnoses an exhausted merge, so it is not left to the human.
+    assert "Left for the human to merge." not in body
     assert world.doc()["merge_failures"] == {
         "head": world.head,
         "count": rules.MERGE_CALLS_MAX,

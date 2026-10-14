@@ -842,3 +842,80 @@ def test_branch_ci_of_a_branch_that_does_not_exist_is_unreadable():
     assert GhTracker(Path("/p"), Recorder(stdout=stdout)).branch_ci("gone") == CiUnreadable(
         "gh_unreadable"
     )
+
+
+# -- the landing's verbs (GH-239) ----------------------------------------------------
+
+
+class Scripted(Recorder):
+    """Answers each `gh` call from `answers` by its second word (`list`, `rerun`...)."""
+
+    def __init__(self, answers):
+        super().__init__()
+        self.answers = answers
+
+    def __call__(self, args, cwd, capture_output, text, check):
+        self.calls.append(args)
+        return subprocess.CompletedProcess(args, 0, self.answers.get(args[2], ""), "")
+
+
+def test_rerun_failed_ci_reruns_only_the_failed_runs_of_the_head_and_returns_their_links():
+    runs = [
+        {"url": "https://github.com/o/r/actions/runs/11", "conclusion": "failure"},
+        {"url": "https://github.com/o/r/actions/runs/12", "conclusion": "success"},
+        {"url": "https://github.com/o/r/actions/runs/13", "conclusion": "timed_out"},
+    ]
+    run = Scripted({"list": json.dumps(runs)})
+    links = GhTracker(Path("/p"), run).rerun_failed_ci("https://github.com/o/r/pull/7", "abc")
+    assert links == [
+        "https://github.com/o/r/actions/runs/11",
+        "https://github.com/o/r/actions/runs/13",
+    ]
+    assert run.calls[0][:5] == ["gh", "run", "list", "--commit", "abc"]
+    assert run.calls[1:] == [
+        ["gh", "run", "rerun", "11", "--failed"],
+        ["gh", "run", "rerun", "13", "--failed"],
+    ]
+
+
+def test_rerun_failed_ci_rejects_a_reference_that_is_not_a_pull_request_before_any_gh_call():
+    run = Recorder()
+    with pytest.raises(ValueError):
+        GhTracker(Path("/p"), run).rerun_failed_ci("https://github.com/o/r/issues/7", "abc")
+    assert run.calls == []
+
+
+@pytest.mark.parametrize("stdout", ["not json", '{"url": "x"}'])
+def test_rerun_failed_ci_rejects_a_run_list_it_cannot_read_and_reruns_nothing(stdout):
+    run = Scripted({"list": stdout})
+    with pytest.raises(ValueError, match="gh run list"):
+        GhTracker(Path("/p"), run).rerun_failed_ci("https://github.com/o/r/pull/7", "abc")
+    assert [call[2] for call in run.calls] == ["list"]
+
+
+def test_rerun_failed_ci_with_nothing_failed_reruns_nothing():
+    run = Scripted({"list": json.dumps([{"url": "u/1", "conclusion": "success"}])})
+    assert GhTracker(Path("/p"), run).rerun_failed_ci("https://github.com/o/r/pull/7", "a") == []
+    assert len(run.calls) == 1
+
+
+def test_close_pull_request_closes_by_number():
+    run = Recorder()
+    GhTracker(Path("/p"), run).close_pull_request("https://github.com/o/r/pull/7")
+    assert run.calls == [["gh", "pr", "close", "7"]]
+
+
+def test_close_pull_request_rejects_a_non_pull_request_reference_before_any_gh_call():
+    run = Recorder()
+    with pytest.raises(ValueError):
+        GhTracker(Path("/p"), run).close_pull_request("https://github.com/o/r/issues/7")
+    assert run.calls == []
+
+
+def test_open_issue_sends_the_label_only_when_one_is_given():
+    run = Recorder()
+    GhTracker(Path("/p"), run).open_issue("t", "b", label="agentic")
+    GhTracker(Path("/p"), run).open_issue("t", "b", label=None)
+    labelled, plain = run.calls
+    assert labelled[labelled.index("--label") + 1] == "agentic"
+    assert "--label" not in plain

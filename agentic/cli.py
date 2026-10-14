@@ -56,6 +56,7 @@ from .core.process.application import archive, reflect_run
 from .core.process.application import poll as pollmod
 from .core.process.application import resume as resuming
 from .core.process.application.escalate import NEEDS_HUMAN
+from .core.process.application.landing import land
 from .core.process.application.merge import merge_task
 from .core.process.application.ports import (
     Launcher,
@@ -256,6 +257,13 @@ def main() -> None:
     )
     merge.add_argument("--issue", type=int, metavar="N", required=True)
     merge.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
+    land = sub.add_parser(
+        "land",
+        help="take the landing step for a task's approved pull request that the automatic "
+        "merge refused (GH-239, ADR-0048); the poller spawns it, nobody else needs to",
+    )
+    land.add_argument("--issue", type=int, metavar="N", required=True)
+    land.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
     eval_parser = sub.add_parser(
         "eval", help="drive or score README.md 9's fixed five-task evaluation set"
     )
@@ -428,7 +436,15 @@ def main() -> None:
         if args.command != "stack" and not cfg.agentic_dir.is_dir():
             raise ValueError(f"{cfg.product_dir} is not a product repo: no .agentic/ directory")
         ports = default_ports(cfg)
-        if args.command not in ("close", "eval", "stack", "poll", "reflect", "merge"):
+        if args.command not in (
+            "close",
+            "eval",
+            "stack",
+            "poll",
+            "reflect",
+            "merge",
+            "land",
+        ):
             # `close` runs no role and spends nothing, so the gate that renders every
             # role's prompt and checks the product's stack before a run spends money
             # does not apply to it (Tech Lead plan, subtask `close-command`): only
@@ -497,6 +513,8 @@ def main() -> None:
                 work = partial(_close, task_id, cfg, ports)
         elif args.command == "merge":
             work = partial(_merge, ports.inbox.task_id(args.issue), args.issue, cfg, ports)
+        elif args.command == "land":
+            work = partial(_land, ports.inbox.task_id(args.issue), cfg, ports)
         elif args.command == "eval":
             if args.eval_command == "run":
                 log_file = _log_file_for(cfg, "eval")
@@ -1345,6 +1363,29 @@ async def _merge(task_id: str, issue: int, cfg: Configuration, ports: Ports) -> 
     print(f"agentic: merge: {task_id} -> {result.kind}{suffix}", flush=True)
     if closed is not None and closed.status != "closed":
         print(f"agentic: merge: {task_id}: not closed yet: {closed.message}", flush=True)
+
+
+async def _land(task_id: str, cfg: Configuration, ports: Ports) -> None:
+    """`agentic land --issue N` (GH-239, ADR-0048): the step `landing_step` names for the
+    refusal of the task's pull request, recorded under the task's run lock and then
+    dispatched. Registered like any run; spends no model money itself and opens no span."""
+    lock = _lock_for(cfg)
+    with _registered(_registry_for(cfg), product_name(ports), task_id):
+        upstream = ports.workspace.upstream()
+        try:
+            result = land(
+                task_id,
+                cfg,
+                ports,
+                lock,
+                upstream,
+                _upstream_eval_set(ports, upstream),
+                lambda line: print(line, flush=True),
+            )
+        except LockHeld as exc:
+            raise CannotStart(f"{exc}: {LOCK_SCOPE}") from exc
+    suffix = f": {result.reason}" if result.reason else ""
+    print(f"agentic: land: {task_id} -> {result.kind}{suffix}", flush=True)
 
 
 async def _close(task_id: str, cfg: Configuration, ports: Ports) -> None:

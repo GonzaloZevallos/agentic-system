@@ -38,6 +38,9 @@ _MERGE_METHODS = (
 _BRANCH_PAGE = 50
 _PR_STATES = ("OPEN", "CLOSED", "MERGED")
 
+# The conclusions of a workflow run `rerun_failed_ci` asks `gh` to re-run.
+_FAILED_RUNS = ("failure", "timed_out", "startup_failure")
+
 Run = Callable[..., subprocess.CompletedProcess[str]]
 
 # `gh pr view --json commits` carries no `additions`/`deletions` per commit (the gate
@@ -213,17 +216,46 @@ class GhTracker:
         finally:
             Path(path).unlink(missing_ok=True)
 
-    def open_issue(self, title: str, body: str) -> str:
+    def open_issue(self, title: str, body: str, *, label: str | None = None) -> str:
         # `--body-file`, never `--body`: the one limit that can bite is GitHub's own,
         # never argv's (ADR-0034). The temp file is this call's alone; nothing reads it
         # back.
         with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as handle:
             handle.write(body)
             path = handle.name
+        extra = ("--label", label) if label else ()
         try:
-            return self._gh("issue", "create", "--title", title, "--body-file", path)
+            return self._gh("issue", "create", "--title", title, "--body-file", path, *extra)
         finally:
             Path(path).unlink(missing_ok=True)
+
+    def rerun_failed_ci(self, reference: str, head: str) -> list[str]:
+        pull_request_number(reference)  # rejected before any `gh` call, as `merge` does
+        runs = self._json_list(
+            self._gh("run", "list", "--commit", head, "--json", "url,conclusion", "--limit", "100"),
+            "gh run list",
+        )
+        failed = [
+            str(run["url"])
+            for run in runs
+            if isinstance(run, dict) and run.get("conclusion") in _FAILED_RUNS and run.get("url")
+        ]
+        for url in failed:
+            self._gh("run", "rerun", url.rsplit("/", 1)[-1], "--failed")
+        return failed
+
+    def close_pull_request(self, reference: str) -> None:
+        self._gh("pr", "close", str(pull_request_number(reference)))
+
+    @staticmethod
+    def _json_list(raw: str, what: str) -> list[object]:
+        try:
+            items = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{what} answered unreadable JSON") from exc
+        if not isinstance(items, list):
+            raise ValueError(f"{what} did not answer a list")
+        return items
 
     def comment(self, task_id: str, text: str) -> None:
         if (number := issue_number(task_id)) is not None:

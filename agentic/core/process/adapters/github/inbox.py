@@ -82,3 +82,7 @@ class GhInbox:
         except subprocess.CalledProcessError as exc:
             raise ValueError(f"gh issue list failed: {exc.stderr.strip()}") from exc
         return [(i["url"], i.get("body") or "") for i in json.loads(result.stdout)]
+
+    def open_issue_bodies(self) -> list[tuple[str, str]]:
+        """The landing's read of the same list as `open_issues` (GH-239)."""
+        return self.open_issues()

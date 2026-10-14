@@ -20,9 +20,11 @@ from typing import Literal
 from agentic.shared.configuration import Configuration
 
 from ..domain import ci, presubmit, rules
+from ..domain import landing as landing_rules
 from ..domain.task import PullRequest, TaskState
+from . import landing_plan
 from .checkouts import task_base
-from .poll import AUTO_MERGE_REFUSED, AUTO_MERGED, _merge_facts, with_ci
+from .poll import AUTO_MERGE_REFUSED, AUTO_MERGED, LANDING, _merge_facts, with_ci
 from .ports import CommandResult, GitError, MergeCallFailed, Ports, Upstream
 from .presubmit import CheckoutPresubmit
 
@@ -293,6 +295,11 @@ def _merge(
         intent["auto_merge_ci"] = relied
     elif ci_declared:
         intent["auto_merge_via"] = "local"
+    # The system's own record and configuration the change touches (GH-239): no longer a
+    # reason to refuse, so the merge says so instead, in the document and the comment.
+    guarded = [path for path in facts.touched_paths or () if rules.guarded_path(path, task_id)]
+    if guarded:
+        intent["auto_merge_guarded"] = guarded
     ports.documents.record_closure(task_id, intent)
     try:
         method = ports.tracker.merge(reference, head)
@@ -306,6 +313,8 @@ def _merge(
         task_id, {"auto_merged_at": clock(), "auto_merge_method": method}
     )
     text = f"{AUTO_MERGED}{head} via {method}"
+    if guarded:
+        text += "\n\nGuarded paths changed:\n" + "\n".join(f"- {path}" for path in guarded)
     if relied is not None:
         text += "\n\nCI relied on:\n" + "\n".join(
             f"- {row['name']}: {row['link']}" for row in relied
@@ -354,7 +363,7 @@ def _after_failure(
         )
         if decision.kind == "refuse" and decision.reason == "merge_failed":
             log(f"agentic: merge: {task_id}: merge failed ({failure}: {error}), budget spent")
-            return _refuse(task_id, head, "merge_failed", ports, failure=failure)
+            return _refuse(task_id, head, "merge_failed", ports, failure=failure, facts=facts)
         log(
             f"agentic: merge: {task_id}: merge failed ({failure}: {error}), "
             f"{count} of {rules.MERGE_CALLS_MAX}"
@@ -399,7 +408,7 @@ def _summary_line(comment: str) -> str:
 def _refuse(
     task_id: str,
     head: str | None,
-    reason: str,
+    reason: rules.MergeRefusal,
     ports: Ports,
     failure: rules.MergeFailure | None = None,
     facts: rules.MergeFacts | None = None,
@@ -409,17 +418,27 @@ def _refuse(
     `merge_failed` one names the closed class of the last failure (or `unknown`) and a
     fixed advice sentence, never the CLI's own text."""
     if reason in COMMENTED and head is not None:
+        # Only a refusal the landing has nothing to do about is left to the human
+        # (GH-239); any other names the step it takes (`Landing:` below).
+        step = (
+            landing_plan.step_for(ports.documents.load(task_id) or {}, reason, facts)
+            if facts is not None
+            else None
+        )
+        closing = LEFT_TO_HUMAN if step is None or step.kind == "none" else ""
         first = f"{AUTO_MERGE_REFUSED}{head} {reason}"
         summary = ""
-        text = f"{first}\n\n{LEFT_TO_HUMAN}"
+        text = "\n\n".join(part for part in (first, closing) if part)
         if reason == "checks_failed":
             recorded = (ports.documents.load(task_id) or {}).get("merge_checks")
             record = recorded if isinstance(recorded, dict) else {}
             summary = presubmit.failed_checks_summary(record, head)
             evidence = presubmit.failed_checks_markdown(record, head)
-            text = "\n\n".join(part for part in (first, evidence, LEFT_TO_HUMAN) if part)
+            text = "\n\n".join(part for part in (first, evidence, closing) if part)
         if facts is not None and reason in ("ci_failed", "ci_missing", "ci_unreadable"):
-            text = f"{first}\n\n{_ci_evidence(reason, facts)}\n\n{LEFT_TO_HUMAN}"
+            text = "\n\n".join(
+                part for part in (first, _ci_evidence(reason, facts), closing) if part
+            )
         if reason == "merge_failed":
             advice = (
                 rules.MERGE_FAILURE_ADVICE[failure]
@@ -427,7 +446,7 @@ def _refuse(
                 else rules.MERGE_FAILURE_UNKNOWN_ADVICE
             )
             first = f"{AUTO_MERGE_REFUSED}{head} gh pr merge failed: {failure or 'unknown'}"
-            text = f"{first}\n\n{advice}\n\nLeft for the human to merge."
+            text = "\n\n".join(part for part in (first, advice, closing) if part)
         refused = [
             body
             for body in ports.tracker.issue_comments(task_id)
@@ -439,4 +458,17 @@ def _refuse(
             or (reason == "checks_failed" and _summary_line(refused[-1]) != summary)
         ):
             ports.tracker.comment(task_id, text)
+        # Announced only when the system will take it: an inert step says nothing.
+        if step is not None and landing_plan.takes_action(step.kind, landing_plan.LIVE_STEPS):
+            line = f"{LANDING}{head} {step.kind}"
+            # Once per (head, step): not when the document's `landing` list already holds
+            # the key, and not when the comment is already on the issue (the step may not
+            # have been recorded yet).
+            taken = landing_rules.already_dispatched(
+                landing_plan.entries(ports.documents.load(task_id) or {}), head, step.kind
+            )
+            if not taken and not any(
+                body.splitlines()[:1] == [line] for body in ports.tracker.issue_comments(task_id)
+            ):
+                ports.tracker.comment(task_id, line)
     return MergeResult("refused", reason)
