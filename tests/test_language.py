@@ -12,6 +12,7 @@ from agentic.core.measurement.domain import metrics, scorecard
 from agentic.core.process.domain import (
     boot,
     document,
+    landing,
     playbook,
     presubmit,
     roles,
@@ -56,6 +57,7 @@ TYPES = {
     "Playbook": playbook.Playbook,
     "Lección": playbook.Item,
     "Arranque": boot,
+    "Aterrizaje": landing,
 }
 
 # Glossary term -> the field of the task state that holds it.

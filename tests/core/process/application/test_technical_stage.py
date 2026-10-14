@@ -720,8 +720,9 @@ def _open_findings_refusal(saved):
         status="ready_for_review",
         reviewed_unit_approved=unit["status"] == "approved",
         reviewed_head="a" * 40,
-        open_blocking_or_important=sum(
-            1 for row in rules.open_findings(saved) if row["severity"] in ("blocking", "important")
+        open_blocking=sum(1 for row in rules.open_findings(saved) if row["severity"] == "blocking"),
+        open_important=sum(
+            1 for row in rules.open_findings(saved) if row["severity"] == "important"
         ),
         pr_state="OPEN",
         pr_head="a" * 40,
@@ -734,7 +735,9 @@ def _open_findings_refusal(saved):
         current_master=None,
     )
     decision = rules.auto_merge_decision(facts)
-    return decision.reason if decision.reason == "open_findings" else None
+    # Either findings refusal is "the findings refuse the merge" (GH-239 split them).
+    findings = ("open_findings", "open_findings_blocking")
+    return "open_findings" if decision.reason in findings else None
 
 
 async def test_review_reaches_its_own_brief_not_its_sisters_under_tech_lead(cfg):

@@ -21,6 +21,7 @@ from typing import Literal
 
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.task import (
+    ChangesRequested,
     Failure,
     InterviewStats,
     PullRequest,
@@ -81,13 +82,20 @@ def changes_requested_total(state: TaskState) -> int:
     return sum(state.get("changes_requested", {}).values())
 
 
+def _returned(state: TaskState) -> list[ChangesRequested]:
+    """The return history without the landing's own reopens (`by: "landing"`, GH-239): a
+    sync or a re-review is the system moving a pull request, not a role returning work, and
+    `returns` does not count it either."""
+    return [e for e in state.get("change_history", []) if e.get("by") != "landing"]
+
+
 def changes_by_category(state: TaskState) -> dict[str, int]:
     """Returns of the task by their category (ADR-0016). A task without returns still
     leaves one sample, `none` at 0;
     returns the count has but the history lacks (a task recorded before it) are
     `unknown`."""
     counts: dict[str, int] = {}
-    history = state.get("change_history", [])
+    history = _returned(state)
     for entry in history:
         counts[entry["category"]] = counts.get(entry["category"], 0) + 1
     missing = changes_requested_total(state) - len(history)
@@ -99,7 +107,7 @@ def changes_by_category(state: TaskState) -> dict[str, int]:
 def change_categories(patch: TaskState) -> list[str]:
     """The categories of the returns one role run made, in order: a review node may
     return several subtasks in one run."""
-    return [entry["category"] for entry in patch.get("change_history", [])]
+    return [entry["category"] for entry in _returned(patch)]
 
 
 def role_slug(run: RoleRun) -> str:
@@ -237,7 +245,7 @@ def invocation_returns_by_category(patch: TaskState) -> dict[str, int]:
     placeholder — unlike `changes_by_category`, this reads exact entries, one
     invocation's own, never a counter without the history to explain it."""
     counts: dict[str, int] = {}
-    for entry in patch.get("change_history", []):
+    for entry in _returned(patch):
         counts[entry["category"]] = counts.get(entry["category"], 0) + 1
     return counts
 

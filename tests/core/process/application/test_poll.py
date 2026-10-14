@@ -829,32 +829,84 @@ def test_an_account_limit_pause_whose_run_ends_are_unreadable_counts_the_whole_c
     assert not _retaken(_account_limit_ports("Developer", comments, runs), now, tmp_path)
 
 
-def test_the_chase_backstop_hands_a_looping_account_limit_pause_to_a_human(tmp_path):
+def _delivered_at(moment: datetime) -> list[dict]:
+    return [
+        {
+            "role": "Developer",
+            "section": "Developer",
+            "started_at": _run_time(moment),
+            "ended_at": _run_time(moment + timedelta(seconds=30)),
+        }
+    ]
+
+
+def test_past_the_chase_max_an_account_limit_pause_is_retaken_hourly_not_left_to_a_human(tmp_path):
+    # GH-239 edits the case that asserted the chase backstop handed the pause to a human.
     # A cheap role keeps delivering (a fresh window each time) while another keeps
-    # hitting a 429: the whole-chase count, which a delivered run never resets, stops it.
+    # hitting a 429: the whole-chase count, which a delivered run never resets, moves the
+    # pause from the 15-minute calendar to the hourly one.
     last_probe_at = ESCALATED_AT + timedelta(minutes=16 * 96)
-    delivered = [
-        {
-            "role": "Developer",
-            "section": "Developer",
-            "started_at": _run_time(last_probe_at),
-            "ended_at": _run_time(last_probe_at + timedelta(seconds=30)),
-        }
-    ]
-    now = last_probe_at + timedelta(minutes=1 + 16)
-    over = _account_limit_ports("Developer", _chase_comments(probes=96), delivered)
-    assert not _retaken(over, now, tmp_path)
+    escalated_at = last_probe_at + timedelta(minutes=1)
+    over = _account_limit_ports(
+        "Developer", _chase_comments(probes=96), _delivered_at(last_probe_at)
+    )
+    assert not _retaken(over, escalated_at + timedelta(minutes=59), tmp_path)
+    assert _retaken(over, escalated_at + timedelta(minutes=61), tmp_path)
     under_at = ESCALATED_AT + timedelta(minutes=16 * 95)
-    under_runs = [
-        {
-            "role": "Developer",
-            "section": "Developer",
-            "started_at": _run_time(under_at),
-            "ended_at": _run_time(under_at + timedelta(seconds=30)),
-        }
-    ]
-    under = _account_limit_ports("Developer", _chase_comments(probes=95), under_runs)
+    under = _account_limit_ports("Developer", _chase_comments(probes=95), _delivered_at(under_at))
     assert _retaken(under, under_at + timedelta(minutes=1 + 16), tmp_path)
+    # Rejected input: the same 96 probes of an upstream pause never get the hourly slot.
+    assert not _retaken(
+        _upstream_ports(_chase_comments(probes=96)), escalated_at + timedelta(minutes=61), tmp_path
+    )
+
+
+def _upstream_ports(comments: list[IssueComment]):
+    ports = memory_ports()
+    ports.documents.save(
+        _paused(
+            "GH-19",
+            "Developer failed 2 times: 503",
+            [
+                {"kind": "failure", "value": "upstream", "section": "Developer"},
+                {"kind": "escalation", "value": "failure"},
+            ],
+        )
+    )
+    ports.tracker.timestamped["GH-19"] = comments
+    return ports
+
+
+def test_a_spent_hourly_week_escalates_the_pause_as_a_failure_once(tmp_path):
+    probes = 96 + 168
+    comments = _chase_comments(probes=probes, period_min=60)
+    now = ESCALATED_AT + timedelta(minutes=60 * probes + 90)
+    ports = _account_limit_ports("Developer", comments, runs=[])
+    lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(), FakeLauncher(), now)
+    assert lines == ["agentic: poll: #19 account limit persisted 7 days -> left to the human"]
+    saved = ports.documents.load("GH-19")
+    assert saved["escalated"] == "account limit persisted 7 days"
+    assert saved["escalation_class"] == "failure"
+    assert saved["pause_log"][-2:] == [
+        {"kind": "failure", "value": "other", "section": ""},
+        {"kind": "escalation", "value": "failure"},
+    ]
+    assert ("GH-19", "needs-human") in ports.tracker.labels
+    ((_, body),) = ports.tracker.comments
+    assert body.startswith("Escalated: account limit persisted 7 days")
+    # Written once: the next round finds nothing to retake and nothing to say.
+    again = _round(
+        _cfg(tmp_path), ports, MemoryRunRegistry(), FakeLauncher(), now + timedelta(hours=2)
+    )
+    assert again == ["agentic: poll: nothing to do this round"]
+    assert len(ports.tracker.comments) == 1
+
+
+def test_a_hundred_and_sixty_seven_hourly_probes_still_retake(tmp_path):
+    probes = 96 + 167
+    comments = _chase_comments(probes=probes, period_min=60)
+    now = ESCALATED_AT + timedelta(minutes=60 * probes + 1 + 61)
+    assert _retaken(_account_limit_ports("Developer", comments, runs=[]), now, tmp_path)
 
 
 def test_an_account_limit_interview_pause_with_a_productive_retake_goes_to_a_human(tmp_path):

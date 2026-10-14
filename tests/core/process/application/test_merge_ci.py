@@ -6,12 +6,22 @@ from __future__ import annotations
 import dataclasses
 from datetime import UTC, datetime, timedelta
 
-from agentic.core.process.application import merge
+import pytest
+
+from agentic.core.process.application import landing_plan, merge
 from agentic.core.process.application.ports import Upstream
 from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable
 from tests.core.process.application.test_poll import _cfg
 from tests.core.process.application.test_poll_merge import HEAD, MASTER, _merges, _ports
 from tests.fakes import MemoryStack
+
+
+@pytest.fixture(autouse=True)
+def _no_live_landing_step(monkeypatch):
+    """These tests pin the merge verb's refusal evidence, not the landing: no step is live,
+    so a refusal stays the single comment it was. A test that wants one patches it itself."""
+    monkeypatch.setattr(landing_plan, "LIVE_STEPS", frozenset())
+
 
 RUN = "https://github.com/o/r/actions/runs/{}"
 

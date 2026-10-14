@@ -76,6 +76,8 @@ def attributable_returns(document: Mapping[str, Any]) -> list[Attributed]:
     for entry in document.get("change_history") or []:
         if not isinstance(entry, Mapping):
             continue
+        if entry.get("by") == "landing":
+            continue  # not a Tech Lead return: it has no review delivery of its own
         pair = str(entry.get("pair") or "")
         seen[pair] = seen.get(pair, 0) + 1
         slug = pb.accountable(entry, task_type)

@@ -56,6 +56,12 @@ def relative_path(task_id: str, *, subdir: Path = TASKS_SUBDIR) -> Path:
 # metrics follow (ADR-0008, addendum; ADR-0018, and issue #53). State field -> key.
 RECORDED_AS = {"changes_requested": "returns", "change_history": "return_history"}
 SUBTASK_RECORDED_AS = {"change_category": "return_category"}
+# The keys whose block value `record_closure` may replace: the system's own record of a
+# landing (GH-239), which `render` and `record_closure` both write as the one flow line
+# `_flow_line` builds (GH-242). A document that still carries it as a block is migrated by
+# the next write; every other key keeps the surgery guarantee.
+RECORD_KEYS: frozenset[str] = frozenset({"landing"})
+_LANDING_PLACEHOLDER = "<landing-flow-line>"
 
 
 def _recorded(subtask: dict[str, Any]) -> dict[str, Any]:
@@ -128,6 +134,14 @@ def render(
         # them, so a document without them is byte-identical to one written before.
         **({"pushed_head": pushed} if (pushed := state.get("pushed_head")) else {}),
         **({"pushed_at": pushed_at} if (pushed_at := state.get("pushed_at")) else {}),
+        # The landing's record (GH-239), written only when set so a document without one is
+        # byte-identical to one written before.
+        # A placeholder here, swapped for the flow line below (`_flow_line`).
+        **({"landing": _LANDING_PLACEHOLDER} if state.get("landing") else {}),
+        **({"auto_merge_guarded": g} if (g := state.get("auto_merge_guarded")) else {}),
+        **({"followups_filed": True} if state.get("followups_filed") else {}),
+        **({"landing_restarts": n} if (n := state.get("landing_restarts")) else {}),
+        **({"landing_cost_carried": c} if (c := state.get("landing_cost_carried")) else {}),
         "subtasks": {sid: _recorded(sub) for sid, sub in state.get("subtasks", {}).items()},
         "invariants": state.get("invariants", []),
         "integration_brief": state.get("integration_brief", ""),
@@ -173,9 +187,13 @@ def render(
         "design_items": state.get("design_items", []),
     }
 
+    dumped = yaml.safe_dump(frontmatter, allow_unicode=True, sort_keys=False).strip()
+    if landing := state.get("landing"):
+        placeholder = yaml.safe_dump({"landing": _LANDING_PLACEHOLDER}).strip()
+        dumped = dumped.replace(placeholder, _flow_line("landing", landing), 1)
     parts = [
         "---",
-        yaml.safe_dump(frontmatter, allow_unicode=True, sort_keys=False).strip(),
+        dumped,
         "---",
         "",
         f"# {state['title']}\n",
@@ -229,20 +247,26 @@ def record_closure(raw: str, values: Mapping[str, object]) -> str:
 
     Raises `ValueError` when the frontmatter block cannot be found, or when a key
     `values` must replace is not written as a single scalar line (a block value, which
-    this surgery cannot safely overwrite in place)."""
+    this surgery cannot safely overwrite in place). The one exception is a key in
+    `RECORD_KEYS`: its key line and every continuation line become the one flow line."""
     match = _FRONTMATTER.match(raw)
     if not match:
         raise ValueError("record_closure: missing frontmatter")
     lines = match.group(1).split("\n")
     pending = dict(values)
-    for i, line in enumerate(lines):
+    i = 0
+    while i < len(lines):
         for key in list(pending):
-            if not line.startswith(f"{key}:"):
+            if not lines[i].startswith(f"{key}:"):
                 continue
-            if i + 1 < len(lines) and _is_continuation(lines[i + 1]):
+            end = i + 1
+            while end < len(lines) and _is_continuation(lines[end]):
+                end += 1
+            if end > i + 1 and key not in RECORD_KEYS:
                 raise ValueError(f"record_closure: {key!r} is not a single scalar line")
-            lines[i] = _scalar_line(key, pending.pop(key))
+            lines[i:end] = [_scalar_line(key, pending.pop(key))]
             break
+        i += 1
     lines.extend(_scalar_line(key, value) for key, value in pending.items())
     block = "\n".join(lines)
     return raw[: match.start(1)] + block + raw[match.end(1) :]
@@ -257,12 +281,19 @@ def _is_continuation(line: str) -> bool:
     return line[:1] in (" ", "\t") or line.startswith("-")
 
 
+def _flow_line(key: str, value: Mapping[str, Any] | list[Any] | tuple[Any, ...]) -> str:
+    """A record the system keeps about itself (`merge_checks`, GH-178; `landing`, GH-239,
+    a list of them) as one flow-style line, so it replaces in place like any scalar and
+    parses back as a mapping or a list. The only place that chooses the shape, for
+    `render` and `record_closure` alike (GH-242)."""
+    plain = dict(value) if isinstance(value, Mapping) else list(value)
+    flow = yaml.safe_dump(plain, default_flow_style=True, width=10**6).strip()
+    return f"{key}: {flow}"
+
+
 def _scalar_line(key: str, value: object) -> str:
-    if isinstance(value, Mapping):
-        # A record the system keeps about itself (`merge_checks`, GH-178): one flow-style
-        # line, so it replaces in place like any scalar and parses back as a mapping.
-        flow = yaml.safe_dump(dict(value), default_flow_style=True, width=10**6).strip()
-        return f"{key}: {flow}"
+    if isinstance(value, Mapping | list | tuple):
+        return _flow_line(key, value)
     dumped: str = yaml.safe_dump({key: value}, default_flow_style=False, sort_keys=False)
     line, _, rest = dumped.partition("\n")
     if rest.strip():

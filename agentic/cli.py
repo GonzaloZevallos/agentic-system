@@ -14,6 +14,7 @@ the checkpointer and invokes the graph. What a resume does is decided in
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import signal
@@ -56,6 +57,7 @@ from .core.process.application import archive, reflect_run
 from .core.process.application import poll as pollmod
 from .core.process.application import resume as resuming
 from .core.process.application.escalate import NEEDS_HUMAN
+from .core.process.application.landing import land
 from .core.process.application.merge import merge_task
 from .core.process.application.ports import (
     Launcher,
@@ -80,10 +82,11 @@ from .core.process.application.preflight import (
 from .core.process.application.run_role import load_prompt
 from .core.process.application.stack_review import stack_review as run_stack_review
 from .core.process.domain import document as task_document
+from .core.process.domain import landing as landing_rules
 from .core.process.domain import legacy_names, rules, stack_signals
 from .core.process.domain import stack_review as stack_review_texts
 from .core.process.domain.playbook import Delta, Playbook
-from .core.process.domain.roles import ROLES
+from .core.process.domain.roles import LANDING_DIAGNOSER, ROLES
 from .core.process.domain.task import PullRequest, TaskInput, TaskState
 from .shared.configuration import ENV_PREFIX, LOGS_DIR, Configuration, MissingProductDir
 from .shared.environment import without_own_toolchain
@@ -256,6 +259,13 @@ def main() -> None:
     )
     merge.add_argument("--issue", type=int, metavar="N", required=True)
     merge.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
+    land = sub.add_parser(
+        "land",
+        help="take the landing step for a task's approved pull request that the automatic "
+        "merge refused (GH-239, ADR-0048); the poller spawns it, nobody else needs to",
+    )
+    land.add_argument("--issue", type=int, metavar="N", required=True)
+    land.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
     eval_parser = sub.add_parser(
         "eval", help="drive or score README.md 9's fixed five-task evaluation set"
     )
@@ -428,7 +438,15 @@ def main() -> None:
         if args.command != "stack" and not cfg.agentic_dir.is_dir():
             raise ValueError(f"{cfg.product_dir} is not a product repo: no .agentic/ directory")
         ports = default_ports(cfg)
-        if args.command not in ("close", "eval", "stack", "poll", "reflect", "merge"):
+        if args.command not in (
+            "close",
+            "eval",
+            "stack",
+            "poll",
+            "reflect",
+            "merge",
+            "land",
+        ):
             # `close` runs no role and spends nothing, so the gate that renders every
             # role's prompt and checks the product's stack before a run spends money
             # does not apply to it (Tech Lead plan, subtask `close-command`): only
@@ -497,6 +515,8 @@ def main() -> None:
                 work = partial(_close, task_id, cfg, ports)
         elif args.command == "merge":
             work = partial(_merge, ports.inbox.task_id(args.issue), args.issue, cfg, ports)
+        elif args.command == "land":
+            work = partial(_land, ports.inbox.task_id(args.issue), cfg, ports)
         elif args.command == "eval":
             if args.eval_command == "run":
                 log_file = _log_file_for(cfg, "eval")
@@ -978,6 +998,11 @@ async def _run(
             _registered(registry, product_name(ports), task["id"]),
             _inhibited(f"{task['id']}: run"),
         ):
+            # Read before the archive moves the document: a landing restart (GH-239) carries its
+            # depth, its cost and the diagnoser's section into the run that replaces it.
+            carried, diagnosis = _landing_carry(task["id"], ports) if fresh else (None, "")
+            if diagnosis:
+                task = {**task, "description": f"{task['description']}\n\n{diagnosis}"}
             _archive_previous_run(task["id"], ports)
             # A thread keeps its channels: a new run over it would add to the old cost.
             await saver.adelete_thread(task["id"])
@@ -989,9 +1014,29 @@ async def _run(
                 migrated_app = graph.compile(checkpointer=migrated_saver)
                 # The one place `decided` is set (`rules.entering`): before any node
                 # runs, so `--fresh`, the poller and `eval run` all reach it.
-                entered = rules.entering(task, cap=cfg.decided_cap)
+                entered = rules.entering(task, cap=cfg.decided_cap, carried=carried)
                 final = await _invoke(migrated_app, entered, config, entered, ports, cfg, "run")
     _report(final, task["id"], ports)
+
+
+def _landing_carry(task_id: str, ports: Ports) -> tuple[tuple[int, float] | None, str]:
+    """What the document a `--fresh` run is about to archive carries for the run that
+    replaces it (GH-239, ADR-0048): `(landing_restarts, landing_cost_carried)` and the
+    landing diagnoser's section, as a `## ` section for the request. Read from the document,
+    never counted from issue comments; `(None, "")` for a task that was never restarted by
+    the landing or whose document cannot be read."""
+    try:
+        raw = ports.documents.load(task_id)
+    except (ValueError, OSError):
+        return None, ""
+    if not raw:
+        return None, ""
+    restarts = landing_rules.restart_depth(raw)
+    cost = raw.get("landing_cost_carried", 0.0)
+    carried = float(cost) if isinstance(cost, int | float) and not isinstance(cost, bool) else 0.0
+    text = (raw.get("sections") or {}).get(LANDING_DIAGNOSER.name, "") if restarts else ""
+    section = f"## {LANDING_DIAGNOSER.name}\n\n{text}" if text else ""
+    return (restarts, carried) if restarts else None, section
 
 
 def _archive_previous_run(task_id: str, ports: Ports) -> None:
@@ -1345,6 +1390,65 @@ async def _merge(task_id: str, issue: int, cfg: Configuration, ports: Ports) -> 
     print(f"agentic: merge: {task_id} -> {result.kind}{suffix}", flush=True)
     if closed is not None and closed.status != "closed":
         print(f"agentic: merge: {task_id}: not closed yet: {closed.message}", flush=True)
+
+
+def _resume_spawner(cfg: Configuration) -> Callable[[int], int | None]:
+    """How a landing step that reopened the technical stage resumes the task: a detached
+    `agentic resume --issue N --from-document` child, since the run that delivered ended
+    and its thread holds nothing to resume."""
+    launcher = SpawnLauncher(cfg)
+    executable = _self_executable()
+
+    def spawn(number: int) -> int | None:
+        return launcher.spawn(
+            [
+                executable,
+                "resume",
+                "--issue",
+                str(number),
+                "--from-document",
+                "--yes",
+                "--detach",
+                "--product-dir",
+                str(cfg.product_dir),
+            ]
+        )
+
+    return spawn
+
+
+async def _land(task_id: str, cfg: Configuration, ports: Ports) -> None:
+    """`agentic land --issue N` (GH-239, ADR-0048): the step `landing_step` names for the
+    refusal of the task's pull request, recorded under the task's run lock and then
+    dispatched. Registered like any run; spends no model money itself and opens no span."""
+    lock = _lock_for(cfg)
+    with _registered(_registry_for(cfg), product_name(ports), task_id):
+        upstream = ports.workspace.upstream()
+        arm = delivery_metrics.arm_label(
+            {"review_mode": cfg.review_mode, "skip_ephemeral": str(cfg.skip_ephemeral)}
+        )
+        product = product_name(ports)
+        try:
+            # In a worker thread: the diagnoser runs a role, and `asyncio.run` cannot nest in
+            # this loop. The context (the trace) travels with it.
+            result = await asyncio.to_thread(
+                land,
+                task_id,
+                cfg,
+                ports,
+                lock,
+                upstream,
+                _upstream_eval_set(ports, upstream),
+                lambda line: print(line, flush=True),
+                resume=_resume_spawner(cfg),
+                launcher=SpawnLauncher(cfg),
+                argv0=_self_executable(),
+                role_span=lambda role: telemetry.role_span(role.name, role.slug, product, arm=arm),
+            )
+        except LockHeld as exc:
+            raise CannotStart(f"{exc}: {LOCK_SCOPE}") from exc
+    suffix = f": {result.reason}" if result.reason else ""
+    print(f"agentic: land: {task_id} -> {result.kind}{suffix}", flush=True)
 
 
 async def _close(task_id: str, cfg: Configuration, ports: Ports) -> None:

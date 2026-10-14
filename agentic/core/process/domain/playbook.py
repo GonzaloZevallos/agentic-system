@@ -56,6 +56,8 @@ PLAYBOOK_ROLES = frozenset(ACCOUNTABLE.values())
 def accountable(entry: Mapping[str, Any], task_type: str) -> str | None:
     """The slug of the role a `return_history` entry is attributable to, or `None`: a
     `definition` return, a task type or a pair the table does not name."""
+    if entry.get("by") == "landing":
+        return None  # the landing reopened the stage; no role returned it
     pair = entry.get("pair")
     category = entry.get("category")
     if not isinstance(pair, str) or not isinstance(category, str):

@@ -19,16 +19,19 @@ from __future__ import annotations
 import functools
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import assert_never, get_args
 
 from agentic.shared.configuration import Configuration
 
 from ..domain import ci, document, presubmit, rules
+from ..domain import landing as landing_rules
 from ..domain.boot import boot_verdict
-from ..domain.task import PullRequest, TaskState
-from . import reflect_run
+from ..domain.landing import LandingStepKind
+from ..domain.task import PullRequest, TaskState, apply
+from . import escalate as escalate_module
+from . import landing_plan, reflect_run
 from .checkouts import task_base
 from .ports import (
     GitError,
@@ -64,6 +67,12 @@ RETAKEN = "Retaken after reboot: "
 # itself. Defined here, imported by `resume.py`, so neither is ever read as a human's answer.
 AUTO_MERGE_REFUSED = "Auto-merge refused: "
 AUTO_MERGED = "Auto-merged: "
+
+# The two comments the landing posts (GH-239, ADR-0048), registered into
+# `resume.SYSTEM_COMMENTS` the same way: the step it takes for a head, and the restart of
+# an issue it gave up on.
+LANDING = "Landing: "
+RESTARTED_BY_LANDING = "Restarted by landing: "
 
 # The per-product lock key `agentic poll` takes (Tech Lead plan): one poller per
 # product, the same `FilesystemRunLock` under the product's own `.agentic/runs`
@@ -240,25 +249,32 @@ def _merge_facts(
     failed_count = failures.get("count")
     failed_here = failures.get("head") == pr_head
     failure = failures.get("failure")
+    step = checks.get("failed_step")
     return rules.MergeFacts(
         task_id=task_id,
         status=raw.get("status"),
         reviewed_unit_approved=unit is not None and unit.get("status") == "approved",
         reviewed_head=unit.get("reviewed_head") if unit is not None else None,
-        open_blocking_or_important=sum(
-            1 for row in rules.open_findings(raw) if row["severity"] in ("blocking", "important")
-        ),
+        open_blocking=sum(1 for row in rules.open_findings(raw) if row["severity"] == "blocking"),
+        open_important=sum(1 for row in rules.open_findings(raw) if row["severity"] == "important"),
         pr_state=pull_request.state if pull_request is not None else None,
         pr_head=pr_head,
         in_eval_set=None if eval_set is None else number in eval_set,
         touched_paths=None,
+        ci_untrusted=None,
         attempts=count if isinstance(count, int) and attempts.get("head") == pr_head else 0,
         checks_head=_text(checks.get("head")),
         checks_master=_text(checks.get("master")),
         checks_passed=passed if isinstance(passed, bool) else None,
         current_master=current_master,
+        followups_filed=raw.get("followups_filed") is True,
         merge_failures=failed_count if isinstance(failed_count, int) and failed_here else 0,
         merge_failure=failure if failed_here and failure in get_args(rules.MergeFailure) else None,
+        failed_step=(
+            step
+            if checks.get("head") == pr_head and step in get_args(presubmit.FailedStep)
+            else None
+        ),
     )
 
 
@@ -341,6 +357,55 @@ def ci_wait_line(
     return f"agentic: poll: auto-merge #{number} -> waiting: ci {what} ({bound})"
 
 
+class StackUnreadable(Exception):
+    """The task's base has no readable stack: this task's problem, never the round's."""
+
+
+@dataclass(frozen=True)
+class MergeAssessment:
+    """What the poller can decide about one delivered task: the facts, the decision over
+    them, the CI report it read (if any) and the pull request it read."""
+
+    facts: rules.MergeFacts
+    decision: rules.MergeDecision
+    report: ci.CiReport | ci.CiUnreadable | None
+    pull_request: PullRequest | None
+
+
+def assess_merge(
+    ports: Ports,
+    task_id: str,
+    raw: TaskState,
+    number: int,
+    eval_set: frozenset[int] | None,
+    current_master: str,
+) -> MergeAssessment | None:
+    """`rules.auto_merge_decision` over the facts the poller has, shared by `gather_merges`
+    and `landing.land` so both decide the same way. `None` for a pull request closed
+    unmerged; an unreadable one reads as not open; `StackUnreadable` for a base the stack
+    cannot be read at. The pull request is read here, once."""
+    reference = raw.get("pull_request")
+    try:
+        pull_request = ports.tracker.pull_request(reference) if reference else None
+    except (ValueError, OSError):
+        pull_request = None  # reads as not open: refused by the decision, with its line
+    if pull_request is not None and rules.pr_abandoned(pull_request.state):
+        return None
+    facts = _merge_facts(task_id, raw, pull_request, eval_set, number, current_master)
+    try:
+        declared = ports.stack.ci(task_base(raw, ports))
+    except ValueError as exc:
+        raise StackUnreadable(str(exc)) from exc
+    decision = rules.auto_merge_decision(replace(facts, ci_required=declared))
+    report = None
+    if declared and decision.kind != "refuse":
+        # Every refusal ahead of the CI's is ruled out: only now is the report read.
+        report = ports.tracker.ci_report(str(reference))
+        facts = with_ci(facts, raw, declared, report)
+        decision = rules.auto_merge_decision(facts)
+    return MergeAssessment(facts, decision, report, pull_request)
+
+
 def awaiting_merge(ports: Ports) -> bool:
     """Whether any task has a pull request and no closure: the one cheap read, on exactly
     what `gather_merges` itself filters on, that decides if the round needs the upstream
@@ -358,6 +423,9 @@ def gather_merges(
     current_master: str | None,
     lock: RunLock,
     lines: list[str] | None = None,
+    lands: list[int] | None = None,
+    live: frozenset[LandingStepKind] = landing_plan.LIVE_STEPS,
+    now: datetime | None = None,
 ) -> list[int]:
     """Every delivered, unclosed task `rules.auto_merge_decision` finds worth a merge
     child -- `merge` or `run_checks` -- and a line appended to `lines` for each one it
@@ -370,8 +438,14 @@ def gather_merges(
     no candidate, no line, and nothing written to its document (only a human-run
     `agentic close` records a closure for it). This decides over the
     facts the poller has: the verb decides again, after its checks, with the diff's paths
-    too, so a candidate here is a reason to look, never the merge."""
+    too, so a candidate here is a reason to look, never the merge. Every refusal it logs also
+    asks `landing_step` (GH-239) what the system does instead; `lands`, when given, collects
+    the issues whose step is in `live` and not yet in the document's `landing` list for this
+    head. `wait` and `none` are never in `live`: they spawn nothing. A `not_ready` task whose
+    reopened landing lost its resume child (`landing.resume_owed` at `now`, the round's time)
+    is a `lands` candidate too (GH-242)."""
     out = lines if lines is not None else []
+    now = now or datetime.now(UTC)
     if current_master is None:
         return []  # the round's own upstream note already says why
     found: list[int] = []
@@ -386,28 +460,22 @@ def gather_merges(
         if lock.refusal(task_id) is not None:
             continue
         try:
-            pull_request = ports.tracker.pull_request(reference)
-        except (ValueError, OSError):
-            pull_request = None  # reads as not open: refused below, with its line
-        if pull_request is not None and rules.pr_abandoned(pull_request.state):
-            continue  # closed unmerged: nothing to merge, nothing to say, nothing written
-        facts = _merge_facts(task_id, raw, pull_request, eval_set, number, current_master)
-        try:
-            declared = ports.stack.ci(task_base(raw, ports))
-        except ValueError:
+            assessed = assess_merge(ports, task_id, raw, number, eval_set, current_master)
+        except StackUnreadable:
             # A base the stack cannot be read at (gone, or a malformed key) is this task's
             # problem, never the round's: every other candidate is still decided (GH-216).
             out.append(
                 f"agentic: poll: auto-merge #{number} -> left to the human: stack_unreadable"
             )
             continue
-        decision = rules.auto_merge_decision(replace(facts, ci_required=declared))
-        report = None
-        if declared and decision.kind != "refuse":
-            # Every refusal ahead of the CI's is ruled out: only now is the report read.
-            report = ports.tracker.ci_report(str(reference))
-            facts = with_ci(facts, raw, declared, report)
-            decision = rules.auto_merge_decision(facts)
+        if assessed is None:
+            continue  # closed unmerged: nothing to merge, nothing to say, nothing written
+        facts, decision, report, pull_request = (
+            assessed.facts,
+            assessed.decision,
+            assessed.report,
+            assessed.pull_request,
+        )
         if decision.kind == "wait":
             out.append(ci_wait_line(number, facts, report))
         elif decision.kind == "refuse":
@@ -420,6 +488,15 @@ def gather_merges(
                 names = ", ".join(check.name for check in facts.ci_verdict.failing)
                 line += f" ({names})"
             out.append(line)
+            if lands is not None and decision.reason is not None:
+                # Every refusal logged above asks `landing_step` what to do instead; only a
+                # built step not yet dispatched on this head is worth a `land` child.
+                if landing_plan.pending(raw, decision.reason, facts, live) is not None or (
+                    decision.reason == "not_ready" and landing_rules.resume_owed(raw, now)
+                ):
+                    # A `not_ready` task whose reopened pass lost its resume child owes
+                    # one: `land` respawns it (GH-242).
+                    lands.append(number)
         else:
             found.append(number)
     return found
@@ -461,6 +538,31 @@ def gather_resumes(ports: Ports, now: datetime) -> list[rules.ResumeCandidate]:
             rules.ResumeCandidate(number, reason, since, prior, limit, chase, ceiling_spent)
         )
     return resumes
+
+
+def escalate_persisted_limits(
+    cfg: Configuration, ports: Ports, resumes: Sequence[rules.ResumeCandidate]
+) -> list[str]:
+    """The week of hourly retakes is spent (`rules.account_limit_persisted`): the task
+    escalates as a failure, once -- the patch leaves a failure entry that `rules.
+    auto_resumable` no longer retakes, so the next round does not find it again. The one
+    place the poller writes a task document, and only for this escalation."""
+    lines: list[str] = []
+    for r in resumes:
+        if not rules.account_limit_persisted(r):
+            continue
+        task_id = ports.inbox.task_id(r.issue)
+        raw = ports.documents.load(task_id)
+        if raw is None:
+            continue
+        state = apply(raw, rules.account_limit_persisted_patch())
+        ports.documents.save(state)
+        ports.tracker.label(task_id, escalate_module.NEEDS_HUMAN)
+        ports.tracker.comment(task_id, escalate_module.comment(state, cfg, ports))
+        lines.append(
+            f"agentic: poll: #{r.issue} {rules.ACCOUNT_LIMIT_PERSISTED} -> left to the human"
+        )
+    return lines
 
 
 def _human_line(
@@ -762,6 +864,15 @@ def execute(
                 continue
             _await_registration(registry, task_id, register_timeout_s, sleep)
             lines.append(f"agentic: poll: merge #{action.issue} -> pid {pid}")
+        elif action.kind == "land":
+            argv = _argv(argv0, "land", action.issue, product_dir)
+            try:
+                pid = launcher.spawn(argv)
+            except OSError as exc:
+                lines.append(f"agentic: poll: land #{action.issue} -> not launched: {exc}")
+                continue
+            _await_registration(registry, task_id, register_timeout_s, sleep)
+            lines.append(f"agentic: poll: land #{action.issue} -> pid {pid}")
         elif action.kind == "launch":
             registry.record_launch(product, action.issue, now)
             argv = _argv(argv0, "run", action.issue, product_dir, "--detach")
@@ -821,6 +932,7 @@ def run_once(
     lock: RunLock,
     current_boot: str | None,
     eval_set: frozenset[int] | None = frozenset(),
+    live_steps: frozenset[LandingStepKind] = landing_plan.LIVE_STEPS,
 ) -> list[str]:
     """One round: gather, decide (`rules.poll_plan`), carry out. The slot count and the
     launch candidates are read under `registry.exclusive()` together (Tech Lead plan):
@@ -837,6 +949,7 @@ def run_once(
     closes = gather_closes(ports)
     resumes = gather_resumes(ports, now)
     retakes, human_lines = gather_retakes(ports, lock, current_boot)
+    human_lines += escalate_persisted_limits(cfg, ports, resumes)
     # Outside the lock, and only with pacing on: pacing off reads and writes nothing.
     fresh, skipped = _recent_spend(ports, now) if cfg.spend_pacing else ([], 0)
     with registry.exclusive():
@@ -858,8 +971,11 @@ def run_once(
         launches = gather_launches(cfg, ports, registry, upstream)
         merges: list[int] = []
         merge_lines: list[str] = []
+        lands: list[int] = []
         if awaiting_merge(ports):
-            merges = gather_merges(ports, eval_set, upstream().sha, lock, merge_lines)
+            merges = gather_merges(
+                ports, eval_set, upstream().sha, lock, merge_lines, lands, live_steps, now
+            )
         notes = [*spend_notes, *_upstream_notes(upstream.cache_info().currsize > 0, upstream)]
         actions = rules.poll_plan(
             closes=closes,
@@ -869,6 +985,7 @@ def run_once(
             now=now,
             retakes=retakes,
             merges=merges,
+            lands=lands,
             pace=pace,
         )
         lines = execute(

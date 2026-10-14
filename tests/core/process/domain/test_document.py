@@ -688,3 +688,126 @@ def test_replaced_remote_tip_round_trips_and_is_absent_when_unset():
     assert parsed["replaced_remote_tip"] == "abc123"
     assert "replaced_remote_tip" in resume.STATE_FIELDS
     assert "replaced_remote_tip" not in document.parse(bare)
+
+
+_LANDED = [{"head": "a" * 40, "step": "fix", "refusal": "open_findings_blocking", "at": "t"}]
+
+
+def _bare(**more):
+    return {"id": "T-1", "title": "t", "description": "d", "sections": {}, **more}
+
+
+def test_a_document_without_the_landing_keys_renders_byte_identical():
+    assert document.render(_bare()) == document.render(
+        _bare(landing=[], auto_merge_guarded=[], landing_restarts=0, landing_cost_carried=0.0)
+    )
+    assert "landing" not in document.render(_bare())
+
+
+def test_the_landing_keys_render_and_parse_back_under_their_own_names():
+    text = document.render(
+        _bare(
+            landing=_LANDED,
+            auto_merge_guarded=[".agentic/stack.yaml"],
+            landing_restarts=1,
+            landing_cost_carried=2.5,
+        )
+    )
+    state = document.parse(text)
+    assert state["landing"] == _LANDED
+    assert state["auto_merge_guarded"] == [".agentic/stack.yaml"]
+    assert (state["landing_restarts"], state["landing_cost_carried"]) == (1, 2.5)
+
+
+def test_record_closure_writes_a_list_on_one_line_and_replaces_it_in_place():
+    raw = document.render(_bare())
+    once = document.record_closure(raw, {"landing": _LANDED})
+    twice = document.record_closure(once, {"landing": [*_LANDED, {**_LANDED[0], "step": "rerun"}]})
+    assert document.parse(once)["landing"] == _LANDED
+    assert [e["step"] for e in document.parse(twice)["landing"]] == ["fix", "rerun"]
+    assert twice.count("\nlanding:") == 1
+
+
+def test_record_closure_still_refuses_to_overwrite_a_block_key_with_a_list():
+    raw = document.render(_bare(changes_requested={"PM→Product Analyst": 1}))
+    with pytest.raises(ValueError, match="returns"):
+        document.record_closure(raw, {"returns": ["x"]})
+
+
+def _lines_but(text, key):
+    return [ln for ln in text.split("\n") if not ln.startswith(f"{key}:")]
+
+
+def test_render_writes_landing_as_one_flow_line_that_record_closure_replaces():
+    """GH-242: `render` and `record_closure` write `landing` in one shape, so the one
+    writes what the other can replace."""
+    longer = [*_LANDED, {**_LANDED[0], "step": "rerun", "cost_base": 1.5}]
+    raw = document.render(_bare(landing=_LANDED))
+    assert [ln for ln in raw.split("\n") if ln.startswith("landing:")] == [
+        document._scalar_line("landing", _LANDED)
+    ]
+    after = document.record_closure(raw, {"landing": longer})
+    assert document.parse(after)["landing"] == longer
+    assert _lines_but(after, "landing") == _lines_but(raw, "landing")
+    assert after.count("\nlanding:") == 1
+
+
+def test_a_block_landing_in_the_gh_227_shape_is_replaced_by_one_flow_line():
+    head = "e6a9fbde" + "0" * 32
+    block_text = (
+        "landing:\n"
+        f"- head: {head}\n"
+        "  step: re_review\n"
+        "  refusal: head_not_reviewed\n"
+        "  at: '2026-10-14T12:23:27+00:00'\n"
+        "  cost_base: 27.9541\n"
+    )
+    raw = document.render(_bare()).replace("\nsubtasks:", f"\n{block_text}subtasks:", 1)
+    block = document.parse(raw)["landing"]
+    assert block[0]["step"] == "re_review" and block[0]["cost_base"] == 27.9541
+    marked = [{**block[0], "resume_spawns": 1}]
+
+    after = document.record_closure(raw, {"landing": marked})
+
+    assert document.parse(after)["landing"] == marked
+    assert after.count("\nlanding:") == 1
+    assert "\n- head:" not in after
+    before_rest = [ln for ln in raw.split("\n") if not ln.startswith(("landing:", "- ", "  "))]
+    after_rest = [ln for ln in after.split("\n") if not ln.startswith(("landing:", "- ", "  "))]
+    assert after_rest == before_rest
+
+
+def test_a_flow_and_a_block_landing_parse_to_the_same_list():
+    flow = document.render(_bare(landing=_LANDED))
+    block = flow.replace(
+        document._scalar_line("landing", _LANDED),
+        "landing:\n- {head: " + "a" * 40 + ", step: fix, refusal: open_findings_blocking, at: t}",
+    )
+    assert block != flow
+    assert document.parse(block)["landing"] == document.parse(flow)["landing"] == _LANDED
+
+
+@pytest.mark.parametrize("key", ["runs", "failures"])
+def test_record_closure_still_refuses_to_replace_the_runs_and_failures_blocks(key):
+    run = {"role": "PjM", "section": "PjM", "version": 1, "session_id": "", "model": "m"}
+    run.update(cost_usd=0.1, turns=1)
+    failure = {"role": "PjM", "cost_usd": 0.1, "reason": "x"}
+    raw = document.render(_bare(runs=[run], failures=[failure]))
+    assert f"\n{key}:\n- " in raw
+    with pytest.raises(ValueError, match=key):
+        document.record_closure(raw, {key: [{"x": 1}]})
+
+
+def test_reviewed_head_carried_from_renders_and_parses_back_on_its_subtask():
+    unit = {
+        "id": "only",
+        "status": "approved",
+        "reviewed_head": "bbb",
+        "reviewed_head_carried_from": "aaa",
+    }
+    state = document.parse(document.render(_bare(subtasks={"only": unit})))
+    assert state["subtasks"]["only"]["reviewed_head_carried_from"] == "aaa"
+    plain = dict(unit)
+    del plain["reviewed_head_carried_from"]
+    without = document.render(_bare(subtasks={"only": plain}))
+    assert "reviewed_head_carried_from" not in without

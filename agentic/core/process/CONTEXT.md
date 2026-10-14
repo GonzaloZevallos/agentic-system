@@ -415,3 +415,8 @@ _Campo_: sin término de arte
 **Clasificación**:
 La decisión de PjM sobre de qué tipo es una tarea —bug, feature o platform enhancement— y, con eso, qué camino recorre. Es una decisión de tipo y de ruteo: qué cede ante una discrepancia entre la definición y el comportamiento lo decide PM dentro del camino de bug, y no entra en la confianza con que PjM clasifica.
 _Avoid_: triage, dictamen (el dictamen es de Product Analyst sobre un bug ya clasificado)
+
+**Aterrizaje**:
+Lo que el sistema hace con un pull request aprobado cuyo merge `auto_merge_decision` rechazó, en vez de dejarlo al humano (ADR-0048): esperar, traer el upstream a la rama, volver a revisar, corregir, repetir el CI o los chequeos, archivar los hallazgos `important` como seguimiento y mergear, o diagnosticar y reiniciar. Cada paso lo elige una sola tabla (`landing_step`), está acotado por presupuestos por tarea y queda en la lista `landing` del documento antes de ejecutarse. Distinta de Reanudación: una reanudación retoma una corrida cortada; un aterrizaje trabaja sobre un pull request ya entregado.
+_Avoid_: rescate, merge manual
+_Campo_: sin término de arte

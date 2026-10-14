@@ -3942,3 +3942,73 @@ async def test_run_with_the_cap_switched_off_hands_the_graph_no_decided_key(monk
         monkeypatch, tmp_path, "Body\n\n## Decided\n- a\n", decided_cap=False
     )
     assert "decided" not in entered
+
+
+class RecordsEntry(Delivers):
+    """A graph double that remembers the state the run was entered with."""
+
+    entered: dict | None = None
+
+    async def ainvoke(self, task, config):
+        self.entered = dict(task)
+        return self.final
+
+
+@pytest.mark.anyio
+async def test_fresh_reads_the_landing_keys_before_the_archive_and_carries_them_into_the_run(
+    monkeypatch, tmp_path
+):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    graph = RecordsEntry({"id": "GH-1", "title": "t", "status": "open"})
+    monkeypatch.setattr(cli, "graph", graph)
+    ports = memory_ports()
+    ports.documents.save(
+        {
+            "id": "GH-1",
+            "system_commit": "abc1234",
+            "landing_restarts": 1,
+            "landing_cost_carried": 3.25,
+            "cost_usd": 3.25,
+            "sections": {"Landing Diagnoser": "The merge keeps failing on the same lock."},
+        }
+    )
+    seen: list[object] = []
+    real = cli._archive_previous_run
+    monkeypatch.setattr(
+        cli,
+        "_archive_previous_run",
+        lambda task_id, ports: (seen.append(ports.documents.load(task_id)), real(task_id, ports)),
+    )
+    task = {"id": "GH-1", "title": "t", "description": "d"}
+    await cli._run(
+        task, Configuration(product_dir=tmp_path), ports, fresh=True, checkpointer=in_memory
+    )
+    assert graph.entered is not None
+    assert graph.entered["landing_restarts"] == 1
+    assert graph.entered["landing_cost_carried"] == 3.25
+    assert (
+        "## Landing Diagnoser\n\nThe merge keeps failing on the same lock."
+        in (graph.entered["description"])
+    )
+    assert seen  # the archive ran after the carry was read
+
+
+@pytest.mark.anyio
+async def test_fresh_of_a_task_the_landing_never_restarted_carries_nothing(monkeypatch, tmp_path):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    graph = RecordsEntry({"id": "GH-1", "title": "t", "status": "open"})
+    monkeypatch.setattr(cli, "graph", graph)
+    ports = memory_ports()
+    ports.documents.save({"id": "GH-1", "system_commit": "abc1234", "cost_usd": 4.0})
+    task = {"id": "GH-1", "title": "t", "description": "d"}
+    await cli._run(
+        task, Configuration(product_dir=tmp_path), ports, fresh=True, checkpointer=in_memory
+    )
+    assert graph.entered is not None
+    assert "landing_restarts" not in graph.entered
+    assert "landing_cost_carried" not in graph.entered
+    assert graph.entered["description"] == "d"

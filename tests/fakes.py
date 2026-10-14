@@ -37,6 +37,7 @@ from agentic.core.process.application.ports import (
     TaskDocuments,
     Tracker,
     Upstream,
+    UpstreamMerge,
     Workspace,
 )
 from agentic.core.process.domain import rules
@@ -428,6 +429,9 @@ class MemoryInbox:
     def open_issues(self) -> list[tuple[str, str]]:
         return self._open_issues
 
+    def open_issue_bodies(self) -> list[tuple[str, str]]:
+        return self._open_issues
+
 
 class MemoryWorkspace:
     """Branches and worktrees as names. A Developer's commit is simulated by adding
@@ -454,6 +458,11 @@ class MemoryWorkspace:
         # `refused_branches` conflicts with nothing to resolve: a refusal with no
         # conflicted path at all, the `unmergeable`-immediately case.
         self.kept_merges: list[tuple[Path, str]] = []
+        # GH-239: `merge_upstream_into`'s answer per upstream sha, its `GitError` text and
+        # each call.
+        self.upstream_merges: dict[str, UpstreamMerge] = {}
+        self.upstream_merge_error: str | None = None
+        self.upstream_merge_calls: list[tuple[Path, str]] = []
         self.conflict_paths: dict[str, tuple[str, ...]] = {}
         self.refused_branches: set[str] = set()
         # `dependency_state` calls, and the states scripted per branch, one queue each:
@@ -573,6 +582,18 @@ class MemoryWorkspace:
     def merge(self, path: Path, branch: str) -> str | None:
         self.merges.append((path, branch))
         return f"CONFLICT in {branch}" if branch in self.conflicts else None
+
+    def merge_upstream_into(self, checkout: Path, upstream_sha: str) -> UpstreamMerge:
+        """GH-239: a scripted answer per `upstream_sha` in `upstream_merges`, a clean merge
+        otherwise; `upstream_merge_error` makes it raise `GitError` the way a refusal that
+        is not a conflict does. Every call is in `upstream_merge_calls`."""
+        self.upstream_merge_calls.append((checkout, upstream_sha))
+        if self.upstream_merge_error is not None:
+            raise GitError(self.upstream_merge_error)
+        scripted = self.upstream_merges.get(upstream_sha)
+        if scripted is not None:
+            return scripted
+        return UpstreamMerge(clean=True, conflicted=(), head=self.full_head(checkout))
 
     def merge_keeping_conflicts(self, path: Path, branch: str) -> MergeOutcome:
         self.kept_merges.append((path, branch))
@@ -695,6 +716,14 @@ class MemoryTracker:
         self.earlier: list[str] = []
         # `(title, body)` of every issue `open_issue` opened, in order.
         self.opened_issues: list[tuple[str, str]] = []
+        # GH-239: the `label` of each of them (None: unlabelled), the `(reference, head)` of
+        # every `rerun_failed_ci` and the run links it answers, its `ValueError` text and
+        # every reference `close_pull_request` closed.
+        self.opened_labels: list[str | None] = []
+        self.rerun_calls: list[tuple[str, str]] = []
+        self.failed_runs: list[str] = []
+        self.rerun_error: str | None = None
+        self.closed_pull_requests: list[str] = []
         # GH-137: the poller's own candidate pool, and the structured facts per issue
         # number a test scripts with `states`.
         self._queue: list[int] = []
@@ -790,9 +819,26 @@ class MemoryTracker:
         self.pull_requests.append((branch, title, body))
         return self.url
 
-    def open_issue(self, title: str, body: str) -> str:
+    def open_issue(self, title: str, body: str, *, label: str | None = None) -> str:
         self.opened_issues.append((title, body))
+        self.opened_labels.append(label)
         return self.url
+
+    def rerun_failed_ci(self, reference: str, head: str) -> list[str]:
+        """GH-239: the runs of `head` that failed, rerun. Scripted by `failed_runs`; a bad
+        reference raises before anything is recorded, as the adapter does, and
+        `rerun_error` makes it raise `ValueError` (`gh`'s own failure shape)."""
+        pull_request_number(reference)
+        self.events.append("rerun_failed_ci")
+        self.rerun_calls.append((reference, head))
+        if self.rerun_error is not None:
+            raise ValueError(self.rerun_error)
+        return list(self.failed_runs)
+
+    def close_pull_request(self, reference: str) -> None:
+        pull_request_number(reference)
+        self.events.append("close_pull_request")
+        self.closed_pull_requests.append(reference)
 
     def comment(self, task_id: str, text: str) -> None:
         self.events.append("comment")

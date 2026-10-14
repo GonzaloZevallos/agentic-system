@@ -460,6 +460,11 @@ class RoleRun(Run):
             if (adopted := patch.get("invariants")) is not None:
                 invariant_counts["adopted"] = len(adopted)
             attributes["agentic.interview.invariants"] = _counts(invariant_counts)
+        if entries := patch.get("landing"):
+            # The diagnoser's run (GH-239): the step and the refusal it ran for, the last entry
+            # of the document's `landing` list.
+            attributes["agentic.landing.step"] = str(entries[-1].get("step", ""))
+            attributes["agentic.landing.refusal"] = str(entries[-1].get("refusal", ""))
         self.span.set_attributes(attributes)
         for one_run in runs:
             self._child_span(patch, one_run)

@@ -454,3 +454,35 @@ def _fenced(tail_text: str, neutralise: bool) -> str:
     fence = "`" * max(3, longest + 1)
     body = _MENTION.sub(rf"\1{_ZERO_WIDTH_SPACE}", tail_text) if neutralise else tail_text
     return f"{fence}text\n{body}\n{fence}"
+
+
+def failed_names(record: Mapping[str, object]) -> list[str]:
+    """The names of the failing entries of a recorded `checks`, in recorded order: what a
+    landing rerun runs again (GH-239)."""
+    return [name for name, _ in _failures(record)]
+
+
+def _entries(record: Mapping[str, object]) -> list[dict[str, object]]:
+    checks = record.get("checks")
+    return (
+        [entry for entry in checks if isinstance(entry, dict)] if isinstance(checks, list) else []
+    )
+
+
+def rerun_record(previous: Mapping[str, object], rerun: Mapping[str, object]) -> dict[str, object]:
+    """The `merge_checks` mapping after only the failed checks ran again (GH-239): the
+    rerun's entries replace the previous ones of the same name, the rest stay as recorded,
+    and `passed` is every entry passing. A rerun that stopped early (worktree, conflict,
+    setup) proved nothing about the checks: its record stands as it is."""
+    if rerun.get("failed_step") in _EARLY_STEPS:
+        return dict(rerun)
+    again = {entry.get("name"): entry for entry in _entries(rerun)}
+    kept = [again.pop(entry.get("name"), entry) for entry in _entries(previous)]
+    entries = [*kept, *again.values()]
+    passed = bool(entries) and all(entry.get("passed") is True for entry in entries)
+    record: dict[str, object] = {**rerun, "checks": entries, "passed": passed}
+    if passed:
+        record.pop("failed_step", None)
+    else:
+        record["failed_step"] = rerun.get("failed_step") or previous.get("failed_step") or "checks"
+    return record

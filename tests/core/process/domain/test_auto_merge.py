@@ -25,7 +25,8 @@ def _facts(**over) -> MergeFacts:
         status="ready_for_review",
         reviewed_unit_approved=True,
         reviewed_head=HEAD,
-        open_blocking_or_important=0,
+        open_blocking=0,
+        open_important=0,
         pr_state="OPEN",
         pr_head=HEAD,
         in_eval_set=False,
@@ -44,10 +45,10 @@ REFUSALS = [
     ("pr_not_open", {"pr_state": "CLOSED"}),
     ("not_approved", {"reviewed_unit_approved": False}),
     ("head_not_reviewed", {"reviewed_head": "c" * 40}),
-    ("open_findings", {"open_blocking_or_important": 1}),
+    ("open_findings_blocking", {"open_blocking": 1}),
+    ("open_findings", {"open_important": 1}),
     ("eval_set", {"in_eval_set": True}),
     ("eval_set_unreadable", {"in_eval_set": None}),
-    ("guarded_path", {"touched_paths": ("agentic/core/x.py", ".github/workflows/ci.yml")}),
     (
         "attempts_exhausted",
         {"checks_master": "d" * 40, "attempts": rules.MERGE_ATTEMPTS_MAX},
@@ -73,7 +74,8 @@ def test_every_refusal_the_decision_gives_is_in_the_closed_set_and_master_moved_
 EARLIER_FAILURES = [
     {"reviewed_unit_approved": False},
     {"reviewed_head": "c" * 40},
-    {"open_blocking_or_important": 1},
+    {"open_blocking": 1},
+    {"open_important": 1},
 ]
 
 
@@ -255,8 +257,8 @@ def test_a_spent_merge_budget_is_not_sent_back_to_run_checks_when_master_moved()
 def test_an_earlier_refusal_wins_over_a_spent_merge_budget():
     facts = _facts(merge_failures=rules.MERGE_CALLS_MAX, pr_state="MERGED")
     assert rules.auto_merge_decision(facts) == MergeDecision("refuse", "pr_not_open")
-    guarded = _facts(merge_failures=rules.MERGE_CALLS_MAX, touched_paths=(".github/x.yml",))
-    assert rules.auto_merge_decision(guarded).reason == "guarded_path"
+    findings = _facts(merge_failures=rules.MERGE_CALLS_MAX, open_blocking=1)
+    assert rules.auto_merge_decision(findings).reason == "open_findings_blocking"
 
 
 def test_the_decision_never_reads_the_failure_class():
@@ -309,3 +311,49 @@ def test_a_short_pr_head_is_not_reviewed_even_when_the_reviewed_head_is_full_and
 def test_an_empty_reviewed_head_is_not_reviewed(reviewed):
     facts = _facts(reviewed_head=reviewed)
     assert rules.auto_merge_decision(facts) == MergeDecision("refuse", "head_not_reviewed")
+
+
+def test_blocking_findings_refuse_before_important_ones_and_a_filed_followup_skips_only_those():
+    both = _facts(open_blocking=1, open_important=2)
+    assert rules.auto_merge_decision(both) == MergeDecision("refuse", "open_findings_blocking")
+    filed = replace(both, followups_filed=True)
+    assert rules.auto_merge_decision(filed) == MergeDecision("refuse", "open_findings_blocking")
+    important = _facts(open_important=2, followups_filed=True)
+    assert rules.auto_merge_decision(important) == MergeDecision("merge", None)
+    assert rules.auto_merge_decision(replace(important, followups_filed=False)) == MergeDecision(
+        "refuse", "open_findings"
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [".github/workflows/ci.yml", ".agentic/stack.yaml", "CODING_STANDARDS.md"],
+)
+def test_a_guarded_path_no_longer_refuses_it_is_recorded_instead(path):
+    facts = _facts(touched_paths=("agentic/core/x.py", path))
+    assert rules.auto_merge_decision(facts) == MergeDecision("merge", None)
+    assert "guarded_path" not in get_args(rules.MergeRefusal)
+
+
+@pytest.mark.parametrize(
+    ("paths", "untrusted"),
+    [
+        (None, None),
+        ((), False),
+        (("agentic/core/x.py",), False),
+        ((".agentic/stack.yaml",), False),
+        (("agentic/x.py", ".github/workflows/ci.yml"), True),
+        ((".github/actions/setup/action.yml",), True),
+        (("docs/.github/x.md",), False),
+    ],
+)
+def test_ci_untrusted_is_unknown_for_unknown_paths_and_true_under_the_ci_definition(
+    paths, untrusted
+):
+    assert rules.ci_untrusted(paths) is untrusted
+
+
+def test_the_ci_definition_prefix_is_the_one_both_predicates_read():
+    assert rules.CI_DEFINITION_PREFIX == ".github/"
+    assert rules.guarded_path(".github/x.yml", "GH-9") is True
+    assert rules.ci_untrusted((".github/x.yml",)) is True

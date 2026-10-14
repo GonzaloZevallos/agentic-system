@@ -952,3 +952,65 @@ def test_contains_is_unknown_for_any_git_failure_never_raised(product, monkeypat
 
     monkeypatch.setattr(ws, "_run", fake)
     assert ws.contains(sha, sha) == "unknown"
+
+
+# -- merge_upstream_into (GH-239) ----------------------------------------------------
+
+
+def _task_with_a_moved_master(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-239")
+    (task.path / "mine.py").write_text("mine = 1\n")
+    ws.commit_all(task.path, "task work")
+    (product / "theirs.py").write_text("theirs = 1\n")
+    git("add", "-A", cwd=product)
+    git(
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "-m",
+        "master moves",
+        cwd=product,
+    )
+    return ws, task, git("rev-parse", "HEAD", cwd=product)
+
+
+def test_merge_upstream_into_a_disjoint_master_is_clean_and_reports_the_new_head(product):
+    ws, task, master = _task_with_a_moved_master(product)
+    merged = ws.merge_upstream_into(task.path, master)
+    assert merged.clean and merged.conflicted == ()
+    assert merged.head == git("rev-parse", "HEAD", cwd=task.path)
+    assert (task.path / "theirs.py").exists()
+
+
+def test_merge_upstream_into_names_the_conflicted_paths_and_leaves_them_for_a_role(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-240")
+    (task.path / "x.py").write_text("a = 2\n")
+    ws.commit_all(task.path, "task edits x")
+    (product / "x.py").write_text("a = 3\n")
+    git("add", "-A", cwd=product)
+    git(
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "-m",
+        "master edits x",
+        cwd=product,
+    )
+    merged = ws.merge_upstream_into(task.path, git("rev-parse", "HEAD", cwd=product))
+    assert not merged.clean and merged.conflicted == ("x.py",)
+    assert not ws.is_clean(task.path)
+
+
+def test_merge_upstream_into_a_refusal_that_is_not_a_conflict_raises_git_error(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-241")
+    with pytest.raises(GitError):
+        ws.merge_upstream_into(task.path, "0" * 40)

@@ -5,10 +5,11 @@ in-memory ports and the `Launcher` fake: no `gh`, no `Popen`, no worktree."""
 
 from __future__ import annotations
 
-from typing import Literal
+from datetime import UTC, datetime
+from typing import Literal, get_args
 
 from agentic.core.process.adapters.github.tracker import pull_request_number
-from agentic.core.process.application import merge, poll, resume
+from agentic.core.process.application import landing, landing_sync, merge, poll, resume
 from agentic.core.process.application.ports import (
     IssueComment,
     LockRecord,
@@ -16,6 +17,7 @@ from agentic.core.process.application.ports import (
     Upstream,
 )
 from agentic.core.process.domain import rules
+from agentic.core.process.domain.landing import LandingStepKind
 from agentic.core.process.domain.task import PullRequest
 from tests.core.process.application.test_poll import (
     ESCALATED_AT,
@@ -502,3 +504,256 @@ def test_a_reviewed_head_of_another_commit_is_not_a_merge_candidate():
     found, lines = _merges(ports)
     assert found == []
     assert any("head_not_reviewed" in line for line in lines)
+
+
+# -- the landing (GH-239): `land` and the poller's `land` action ---------------------
+
+
+class _HeldLocks:
+    """The `RunLock` `land` takes: acquire and release are recorded, nothing is alive."""
+
+    def __init__(self):
+        self.taken: list[str] = []
+        self.released: list[str] = []
+
+    def acquire(self, task_id, command):
+        self.taken.append(task_id)
+
+    def release(self, task_id):
+        self.released.append(task_id)
+
+
+def _unapproved(ports, number: int) -> None:
+    """A delivered task whose reviewed unit is not approved: `not_approved`, whose step is
+    `re_review`."""
+    _ready(
+        ports,
+        number,
+        subtasks={"only": {"id": "only", "status": "delivered", "reviewed_head": HEAD}},
+    )
+
+
+class _LandingLauncher(FakeLauncher):
+    """Runs `land` in-process for each `agentic land` argv it is asked to spawn, with a
+    stub in place of the executor, so a second tick sees what the first one wrote."""
+
+    def __init__(self, ports, tmp_path, live):
+        super().__init__()
+        self.ports, self.tmp_path, self.live = ports, tmp_path, live
+        self.results = []
+
+    def spawn(self, argv):
+        pid = super().spawn(argv)
+        if argv[1] == "land":
+            self.results.append(
+                landing.land(
+                    f"GH-{argv[3]}",
+                    _cfg(self.tmp_path),
+                    self.ports,
+                    _HeldLocks(),
+                    Upstream("origin/master", MASTER, None),
+                    frozenset(),
+                    lambda line: None,
+                    clock=lambda: "2026-10-14T00:00:00+00:00",
+                    live=self.live,
+                )
+            )
+        return pid
+
+
+def test_two_ticks_with_a_non_inert_dispatcher_spawn_land_once_and_record_one_entry(
+    tmp_path, monkeypatch
+):
+    dispatched = []
+
+    def re_review(context):
+        dispatched.append(context)
+        landing_sync.spawn_and_mark(context)  # what the real step does once it reopened
+
+    monkeypatch.setattr(landing_sync, "re_review", re_review)
+    live = frozenset({"re_review"})
+    ports = _ports()
+    _unapproved(ports, 5)
+    launcher = _LandingLauncher(ports, tmp_path, live)
+    registry = MemoryRunRegistry()
+
+    first = _round(_cfg(tmp_path), ports, registry, launcher, ESCALATED_AT, live_steps=live)
+    second = _round(_cfg(tmp_path), ports, registry, launcher, ESCALATED_AT, live_steps=live)
+
+    assert first[-1] == "agentic: poll: land #5 -> pid 4242"
+    assert "land #5" not in "".join(second)
+    assert [argv[1] for argv in launcher.spawned] == ["land"]
+    [entry] = (ports.documents.load("GH-5") or {})["landing"]
+    assert entry == {
+        "head": HEAD,
+        "step": "re_review",
+        "refusal": "not_approved",
+        "at": "2026-10-14T00:00:00+00:00",
+    }
+    assert len(dispatched) == 1 and dispatched[0].step.kind == "re_review"
+
+
+def test_an_inert_step_is_neither_recorded_nor_spawned_and_the_log_is_unchanged(tmp_path):
+    ports = _ports()
+    _unapproved(ports, 5)
+    launcher = FakeLauncher()
+    lines = _round(
+        _cfg(tmp_path),
+        ports,
+        MemoryRunRegistry(),
+        launcher,
+        ESCALATED_AT,
+        live_steps=frozenset(),
+    )
+    assert launcher.spawned == []
+    assert lines == ["agentic: poll: auto-merge #5 -> left to the human: not_approved"]
+    assert "landing" not in (ports.documents.load("GH-5") or {})
+
+
+def test_wait_and_none_spawn_nothing_even_when_every_kind_is_live(tmp_path):
+    ports = _ports()
+    _ready(ports, 5, status="merged")  # not_ready: step none
+    launcher = FakeLauncher()
+    everything = frozenset(get_args(LandingStepKind))
+    _round(
+        _cfg(tmp_path), ports, MemoryRunRegistry(), launcher, ESCALATED_AT, live_steps=everything
+    )
+    assert launcher.spawned == []
+
+
+def test_a_head_that_moved_between_the_decision_and_the_dispatch_writes_nothing(
+    tmp_path, monkeypatch
+):
+    dispatched = []
+
+    def re_review(context):
+        dispatched.append(context)
+        landing_sync.spawn_and_mark(context)  # what the real step does once it reopened
+
+    monkeypatch.setattr(landing_sync, "re_review", re_review)
+
+    class Moving(MemoryTracker):
+        reads = 0
+
+        def pull_request(self, reference):
+            pull_request_number(reference)
+            self.reads += 1
+            if self.reads > 1:
+                self.head_oid = "c" * 40  # pushed after the first read
+            return super().pull_request(reference)
+
+    ports = memory_ports(tracker=Moving())
+    ports.workspace.upstream_answer = Upstream("origin/master", MASTER, None)
+    _unapproved(ports, 5)
+    before = dict(ports.documents.load("GH-5") or {})
+    logged: list[str] = []
+
+    result = landing.land(
+        "GH-5",
+        _cfg(tmp_path),
+        ports,
+        _HeldLocks(),
+        Upstream("origin/master", MASTER, None),
+        frozenset(),
+        logged.append,
+        live=frozenset({"re_review"}),
+    )
+
+    assert result == landing.LandResult("skipped", "head_moved", "re_review")
+    assert ports.documents.load("GH-5") == before
+    assert dispatched == [] and any("head moved" in line for line in logged)
+
+
+def test_land_takes_the_run_lock_and_releases_it_even_when_it_stops(tmp_path):
+    ports = _ports()
+    locks = _HeldLocks()
+    result = landing.land(
+        "GH-9", _cfg(tmp_path), ports, locks, Upstream("o", MASTER, None), frozenset(), print
+    )
+    assert result.kind == "stopped" and result.reason == "no_pull_request"
+    assert locks.taken == ["GH-9"] and locks.released == ["GH-9"]
+
+
+def test_a_second_land_of_the_same_head_and_step_is_skipped_without_a_write(tmp_path, monkeypatch):
+    dispatched = []
+
+    def re_review(context):
+        dispatched.append(context)
+        landing_sync.spawn_and_mark(context)  # what the real step does once it reopened
+
+    monkeypatch.setattr(landing_sync, "re_review", re_review)
+    ports = _ports()
+    _unapproved(ports, 5)
+    args = (
+        "GH-5",
+        _cfg(tmp_path),
+        ports,
+        _HeldLocks(),
+        Upstream("o", MASTER, None),
+        frozenset(),
+        lambda line: None,
+    )
+    live = frozenset({"re_review"})
+    assert landing.land(*args, live=live, resume=lambda number: 4242).kind == "dispatched"
+    again = landing.land(*args, live=live, resume=lambda number: 4242)
+    assert again == landing.LandResult("skipped", "already_dispatched", "re_review")
+    assert len(dispatched) == 1 and len((ports.documents.load("GH-5") or {})["landing"]) == 1
+
+
+def test_poll_plan_orders_at_most_one_land_into_a_spare_slot_after_the_merge():
+    now = ESCALATED_AT
+    plan = rules.poll_plan(
+        closes=[], resumes=[], launches=[], available_slots=2, now=now, merges=[7], lands=[9, 4]
+    )
+    assert plan == [rules.PollAction("merge", 7), rules.PollAction("land", 4)]
+    tight = rules.poll_plan(
+        closes=[], resumes=[], launches=[], available_slots=1, now=now, merges=[7], lands=[4]
+    )
+    assert tight == [rules.PollAction("merge", 7)]
+    none = rules.poll_plan(
+        closes=[], resumes=[], launches=[], available_slots=0, now=now, lands=[4]
+    )
+    assert none == []
+
+
+# ---- a reopened landing that lost its resume child (GH-242) ---------------------------------
+
+REOPENED = {"head": HEAD, "step": "re_review", "refusal": "head_not_reviewed", "at": "t"}
+
+
+def _stuck(**entry):
+    """Task 5 as GH-227 left it: `developing`, its unit back at its review, the landing
+    entry on disk and no child running."""
+    return _ports(
+        5,
+        status="developing",
+        landing=[{**REOPENED, **entry}],
+        subtasks={"only": {"id": "only", "status": "delivered", "reviewed_head": HEAD}},
+    )
+
+
+def _lands(ports, now):
+    lands: list[int] = []
+    poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [], lands, now=now)
+    return lands
+
+
+def test_a_not_ready_task_whose_reopened_landing_owes_a_resume_is_a_land_candidate():
+    assert _lands(_stuck(), datetime(2026, 10, 14, tzinfo=UTC)) == [5]
+
+
+def test_a_not_ready_task_whose_resume_was_spawned_a_moment_ago_is_not_a_land_candidate():
+    ports = _stuck(resume_spawns=1, resume_spawned_at="2026-10-14T00:00:00+00:00")
+    assert _lands(ports, datetime(2026, 10, 14, 0, 1, tzinfo=UTC)) == []
+    assert _lands(ports, datetime(2026, 10, 14, 0, 6, tzinfo=UTC)) == [5]
+
+
+def test_a_not_ready_task_with_no_open_landing_is_not_a_land_candidate():
+    ports = _ports(5, status="developing")
+    assert _lands(ports, datetime(2026, 10, 14, tzinfo=UTC)) == []
+
+
+def test_a_closed_pull_request_with_an_owed_resume_is_skipped_before_the_candidate_check():
+    ports = _stuck()
+    ports.tracker.prs[URL.format(5)] = _pr("CLOSED")
+    assert _lands(ports, datetime(2026, 10, 14, tzinfo=UTC)) == []
