@@ -688,3 +688,47 @@ def test_replaced_remote_tip_round_trips_and_is_absent_when_unset():
     assert parsed["replaced_remote_tip"] == "abc123"
     assert "replaced_remote_tip" in resume.STATE_FIELDS
     assert "replaced_remote_tip" not in document.parse(bare)
+
+
+_LANDED = [{"head": "a" * 40, "step": "fix", "refusal": "open_findings_blocking", "at": "t"}]
+
+
+def _bare(**more):
+    return {"id": "T-1", "title": "t", "description": "d", "sections": {}, **more}
+
+
+def test_a_document_without_the_landing_keys_renders_byte_identical():
+    assert document.render(_bare()) == document.render(
+        _bare(landing=[], auto_merge_guarded=[], landing_restarts=0, landing_cost_carried=0.0)
+    )
+    assert "landing" not in document.render(_bare())
+
+
+def test_the_landing_keys_render_and_parse_back_under_their_own_names():
+    text = document.render(
+        _bare(
+            landing=_LANDED,
+            auto_merge_guarded=[".agentic/stack.yaml"],
+            landing_restarts=1,
+            landing_cost_carried=2.5,
+        )
+    )
+    state = document.parse(text)
+    assert state["landing"] == _LANDED
+    assert state["auto_merge_guarded"] == [".agentic/stack.yaml"]
+    assert (state["landing_restarts"], state["landing_cost_carried"]) == (1, 2.5)
+
+
+def test_record_closure_writes_a_list_on_one_line_and_replaces_it_in_place():
+    raw = document.render(_bare())
+    once = document.record_closure(raw, {"landing": _LANDED})
+    twice = document.record_closure(once, {"landing": [*_LANDED, {**_LANDED[0], "step": "rerun"}]})
+    assert document.parse(once)["landing"] == _LANDED
+    assert [e["step"] for e in document.parse(twice)["landing"]] == ["fix", "rerun"]
+    assert twice.count("\nlanding:") == 1
+
+
+def test_record_closure_still_refuses_to_overwrite_a_block_key_with_a_list():
+    raw = document.render(_bare(changes_requested={"PM→Product Analyst": 1}))
+    with pytest.raises(ValueError, match="returns"):
+        document.record_closure(raw, {"returns": ["x"]})
