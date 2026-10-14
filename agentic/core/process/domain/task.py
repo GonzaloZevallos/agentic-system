@@ -229,6 +229,11 @@ class TaskInput(TypedDict):
     # (`rules.interview_cap`; ADR-0014, addendum of 2026-10-06). Declared here because the
     # graph's `input_schema` keeps only declared keys. Absent reads as not decided.
     decided: NotRequired[bool]
+    # What a landing restart carries over (GH-239, ADR-0048): `rules.entering` sets them from
+    # the archived run, read before `archive_previous_run` moved it. Declared here for the
+    # same reason as `decided`. Absent reads as a first run: depth 0, nothing carried.
+    landing_restarts: NotRequired[int]
+    landing_cost_carried: NotRequired[float]
 
 
 class Failure(TypedDict):

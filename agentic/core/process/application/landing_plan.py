@@ -8,20 +8,25 @@ ask the same question the same way. It imports nothing from them."""
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from typing import Protocol
 
 from agentic.shared.configuration import Configuration
 
 from ..domain import landing, rules
 from ..domain.landing import LandingStep, LandingStepKind
+from ..domain.roles import Role
 from ..domain.task import TaskState
 from .ports import Launcher, Ports, Upstream
 
-LIVE_STEPS: frozenset[LandingStepKind] = frozenset({"fix", "rerun", "file_followups_and_land"})
+LIVE_STEPS: frozenset[LandingStepKind] = frozenset(
+    {"fix", "rerun", "file_followups_and_land", "diagnose"}
+)
 """The steps whose executors are built. Empty while `landing_sync` and `landing_fix` are
 inert: an inert step is neither recorded nor spawned, so the refusal logs stay as they
-were. `landing_fix` built `fix`, `rerun` and `file_followups_and_land`; `sync_master`,
-`re_review` and `diagnose` are not live yet."""
+were. `landing_fix` built `fix`, `rerun`, `file_followups_and_land` and `diagnose`;
+`sync_master` and `re_review` are not live yet."""
 
 
 def takes_action(kind: LandingStepKind, live: frozenset[LandingStepKind]) -> bool:
@@ -88,6 +93,18 @@ def pending(
     return step
 
 
+class RoleRun(Protocol):
+    """What the diagnoser's span needs: `finish` is called once, with the patch the role
+    produced, so the span carries the step and the refusal it ran for."""
+
+    def finish(self, patch: TaskState) -> None: ...
+
+
+RoleSpanOpener = Callable[[Role], AbstractContextManager[RoleRun]]
+"""Opens the span a role runs under. Injected by the composition root: the application
+does not import the telemetry adapter."""
+
+
 @dataclass(frozen=True)
 class LandingContext:
     """What an executor is handed: the step already recorded for `head`, never decided again."""
@@ -102,3 +119,4 @@ class LandingContext:
     log: Callable[[str], None]
     launcher: Launcher | None = None
     argv0: str = "agentic"
+    role_span: RoleSpanOpener | None = None

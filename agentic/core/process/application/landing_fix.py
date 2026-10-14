@@ -1,19 +1,22 @@
 """The landing steps that act without moving the head by themselves (GH-239, ADR-0048):
-`fix`, `rerun` and `file_followups_and_land`. `diagnose` is still inert (no restart path
-yet): it is not in `landing_plan.LIVE_STEPS`.
+`fix`, `rerun`, `file_followups_and_land` and `diagnose`.
 
 Each executor receives the step `landing.land` already recorded for the head, so none of
 them decides again what to do about the refusal."""
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
+from contextlib import nullcontext
 
 from ..domain import landing as landing_rules
 from ..domain import presubmit, rules
+from ..domain.roles import LANDING_DIAGNOSER
 from ..domain.task import ChangeCategory, TaskState, apply, from_document
 from . import landing_sync
 from .landing_plan import LandingContext
+from .run_role import run_role
 
 FOLLOWUP_LABEL = "agentic"
 
@@ -120,13 +123,12 @@ def file_followups_and_land(context: LandingContext) -> None:
     bodies = context.ports.inbox.open_issue_bodies()
     own = [landing_rules.marker_lineage(body, context.task_id) for _, body in bodies]
     description = raw.get("description", "")
-    lineage = (landing_rules.marker_lineage(description, context.task_id) or 0) + 1
+    parent = landing_rules.marker_parent(description)
+    lineage = (parent[1] if parent else 0) + 1
     body = _followup_body(raw, context.task_id, lineage)
     if any(found is not None for found in own):
         context.log(f"agentic: land: {context.task_id}: follow-up already open")
-    elif landing_rules.marker_lineage(description, context.task_id) is not None or any(
-        "agentic:followup" in description for _ in (0,)
-    ):
+    elif parent is not None:
         context.ports.tracker.comment(context.task_id, body)
     else:
         context.ports.tracker.open_issue(
@@ -136,4 +138,58 @@ def file_followups_and_land(context: LandingContext) -> None:
 
 
 def diagnose(context: LandingContext) -> None:
-    context.log(f"agentic: land: {context.task_id}: diagnose is not built yet")
+    """The landing's last step, once per task: the diagnoser reads why the merge keeps being
+    refused. At restart depth 0 the pull request is closed and the issue starts over with
+    `run --fresh`, carrying the depth and the cost the document records; from depth 1 the
+    task escalates as `failure` and nothing is filed."""
+    raw = _state(context)
+    number = context.ports.inbox.issue_of(context.task_id)
+    reference = raw.get("pull_request") if raw is not None else None
+    if raw is None or not reference or number is None:
+        context.log(f"agentic: land: {context.task_id}: diagnose: no document")
+        return
+    span = context.role_span(LANDING_DIAGNOSER) if context.role_span else nullcontext(None)
+    with span as run:
+        output, patch = asyncio.run(run_role(raw, LANDING_DIAGNOSER, context.cfg, context.ports))
+        # The span stamps the step and the refusal this run was dispatched for.
+        patch["landing"] = raw.get("landing", [])
+        if run is not None:
+            run.finish(patch)
+    if output is None:
+        context.ports.documents.save(apply(raw, patch))
+        context.log(f"agentic: land: {context.task_id}: diagnose: the role did not deliver")
+        return
+    reason = str(output.data.get("reason", ""))
+    if landing_rules.restart_depth(raw) >= landing_rules.RESTART_DEPTH_MAX:
+        patch |= rules.escalation("failure", reason)
+        context.ports.documents.save(apply(raw, patch))
+        context.log(f"agentic: land: {context.task_id}: diagnose: escalated, {reason}")
+        return
+    saved = apply(raw, patch)
+    context.ports.documents.save(saved)
+    carried = saved.get("cost_usd", 0.0) + saved.get("landing_cost_carried", 0.0)
+    context.ports.documents.record_closure(
+        context.task_id, {"landing_restarts": 1, "landing_cost_carried": carried}
+    )
+    try:
+        context.ports.tracker.close_pull_request(str(reference))
+    except ValueError as exc:
+        context.log(f"agentic: land: {context.task_id}: diagnose: close failed: {exc}")
+        return
+    context.ports.tracker.comment(context.task_id, f"Restarted by landing: {reason}")
+    if context.launcher is None:
+        context.log(f"agentic: land: {context.task_id}: no way to spawn the restart")
+        return
+    pid = context.launcher.spawn(
+        [
+            context.argv0,
+            "run",
+            "--issue",
+            str(number),
+            "--fresh",
+            "--detach",
+            "--product-dir",
+            str(context.cfg.product_dir),
+        ]
+    )
+    context.log(f"agentic: land: {context.task_id}: restart -> pid {pid}")

@@ -192,8 +192,8 @@ def test_a_local_check_that_failed_after_a_rerun_is_a_fix_with_its_tail(tmp_path
     assert _doc(ports)["subtasks"]["only"]["status"] == "returned"
 
 
-def test_the_executors_that_are_built_are_the_live_steps_and_diagnose_is_not():
-    assert landing_plan.LIVE_STEPS == {"fix", "rerun", "file_followups_and_land"}
+def test_the_executors_that_are_built_are_the_live_steps():
+    assert landing_plan.LIVE_STEPS == {"fix", "rerun", "file_followups_and_land", "diagnose"}
 
 
 def test_reopen_rejects_a_name_that_is_not_a_subtask_by_reopening_the_reviewed_unit():
@@ -220,11 +220,101 @@ def test_land_without_a_launcher_logs_it_and_still_reopens(tmp_path):
     assert _doc(ports)["subtasks"]["a"]["status"] == "returned"
 
 
-def test_diagnose_stays_inert_so_a_merge_failure_is_not_recorded_by_the_landing():
-    assert "diagnose" not in landing_plan.LIVE_STEPS
-    assert landing_fix.diagnose is not None
-
-
-@pytest.mark.parametrize("kind", ["fix", "rerun", "file_followups_and_land"])
+@pytest.mark.parametrize("kind", ["fix", "rerun", "file_followups_and_land", "diagnose"])
 def test_every_live_step_has_an_executor(kind):
     assert callable(getattr(landing_fix, kind))
+
+
+# --- diagnose: the terminal path (restart at depth 0, escalation from depth 1) -------------
+
+
+def _diagnosed(ports, tmp_path, launcher, **document):
+    from agentic.core.process.application.ports import RawResult
+    from tests.fakes import ScriptedRunner
+
+    spent = {"head": HEAD, "count": 3, "failure": "gh_rejected"}
+    ports.documents.record_closure(
+        "GH-5", {"merge_failures": spent, "title": "t", "description": "d", **document}
+    )
+    ports = dataclasses.replace(
+        ports,
+        runner=ScriptedRunner(
+            landing_diagnoser=[
+                RawResult(
+                    {"markdown": "### Why it does not land\n\nstale premise", "reason": "stale"},
+                    0.4,
+                    3,
+                    "s",
+                )
+            ]
+        ),
+    )
+    return ports, _land(ports, tmp_path, launcher)
+
+
+def test_merge_failed_diagnoses_once_closes_the_pull_request_and_restarts_fresh(tmp_path):
+    spans: list[dict] = []
+
+    class _Span:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+        def finish(self, patch):
+            spans.append(patch)
+
+    launcher = FakeLauncher()
+    ports = _ports(5)
+    ports.documents.record_closure("GH-5", {"cost_usd": 1.5, "title": "t", "description": "d"})
+    from agentic.core.process.application.ports import RawResult
+    from tests.fakes import ScriptedRunner
+
+    spent = {"head": HEAD, "count": 3, "failure": "gh_rejected"}
+    ports.documents.record_closure("GH-5", {"merge_failures": spent})
+    ports = dataclasses.replace(
+        ports,
+        runner=ScriptedRunner(
+            landing_diagnoser=[
+                RawResult({"markdown": "### Why\n\nstale", "reason": "stale premise"}, 0.4, 3, "s")
+            ]
+        ),
+    )
+    lines: list[str] = []
+    result = landing.land(
+        "GH-5",
+        _cfg(tmp_path),
+        ports,
+        _HeldLocks(),
+        Upstream("origin/master", MASTER, None),
+        frozenset(),
+        lines.append,
+        clock=lambda: NOW,
+        launcher=launcher,
+        argv0="agentic",
+        role_span=lambda role: _Span(),
+    )
+
+    assert result.step == "diagnose"
+    assert ports.tracker.closed_pull_requests == [URL.format(5)]
+    assert ports.tracker.comments == [("GH-5", "Restarted by landing: stale premise")]
+    assert launcher.spawned[0][:6] == ["agentic", "run", "--issue", "5", "--fresh", "--detach"]
+    closure = ports.documents.closures["GH-5"]
+    assert closure["landing_restarts"] == 1
+    assert closure["landing_cost_carried"] == pytest.approx(1.9)
+    assert [e["step"] for e in spans[0]["landing"]] == ["diagnose"]
+    assert spans[0]["landing"][-1]["refusal"] == "merge_failed"
+    assert ports.tracker.opened_issues == []
+
+
+def test_a_second_diagnosis_escalates_as_failure_and_files_nothing(tmp_path):
+    launcher = FakeLauncher()
+    ports, (result, _) = _diagnosed(_ports(5), tmp_path, launcher, landing_restarts=1)
+
+    assert result.step == "diagnose"
+    assert launcher.spawned == []
+    assert ports.tracker.closed_pull_requests == []
+    assert ports.tracker.opened_issues == [] and ports.tracker.comments == []
+    saved = ports.documents.saved[-1]
+    assert saved["escalation_class"] == "failure" and saved["escalated"] == "stale"

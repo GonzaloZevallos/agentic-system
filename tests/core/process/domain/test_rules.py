@@ -2604,3 +2604,14 @@ def test_replaced_note_names_the_sha_and_how_to_recover_it():
     assert "git push origin abc123:refs/heads/" in note
     bare = rules.replaced_note("abc123", [], "agentic/GH-9")
     assert "`abc123`" in bare and "#" not in bare
+
+
+def test_entering_carries_the_landing_restart_and_adds_nothing_when_there_is_nothing():
+    task = {"id": "GH-1", "title": "t", "description": "plain"}
+    assert rules.entering(task, cap=False, carried=(1, 2.5)) == {
+        **task,
+        "landing_restarts": 1,
+        "landing_cost_carried": 2.5,
+    }
+    assert rules.entering(task, cap=False, carried=(0, 0.0)) == task
+    assert rules.entering(task, cap=False, carried=None) == task

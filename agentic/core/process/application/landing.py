@@ -54,12 +54,15 @@ def land(
     live: frozenset[LandingStepKind] = landing_plan.LIVE_STEPS,
     launcher: Launcher | None = None,
     argv0: str = "agentic",
+    role_span: landing_plan.RoleSpanOpener | None = None,
 ) -> LandResult:
     """Takes `task_id`'s run lock (`LockHeld` if another process holds it) and releases it
     on the way out, whatever happens."""
     lock.acquire(task_id, "land")
     try:
-        return _land(task_id, cfg, ports, upstream, eval_set, log, clock, live, launcher, argv0)
+        return _land(
+            task_id, cfg, ports, upstream, eval_set, log, clock, live, launcher, argv0, role_span
+        )
     finally:
         lock.release(task_id)
 
@@ -75,6 +78,7 @@ def _land(
     live: frozenset[LandingStepKind],
     launcher: Launcher | None,
     argv0: str,
+    role_span: landing_plan.RoleSpanOpener | None,
 ) -> LandResult:
     # The port answers a bare `dict`: the document carries keys beyond the state, and every
     # reader below takes it as the state (`.get` for the keys that may be absent).
@@ -122,7 +126,9 @@ def _land(
         "at": clock(),
     }
     ports.documents.record_closure(task_id, {"landing": [*landing_plan.entries(raw), entry]})
-    context = LandingContext(task_id, cfg, ports, step, head, upstream, facts, log, launcher, argv0)
+    context = LandingContext(
+        task_id, cfg, ports, step, head, upstream, facts, log, launcher, argv0, role_span
+    )
     _dispatch(context)
     return LandResult("dispatched", step=step.kind)
 

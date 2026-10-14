@@ -33,6 +33,7 @@ from .schemas import (
     Diagnosis,
     FinalValidation,
     InterviewTurn,
+    LandingDiagnosis,
     PlatformAnswers,
     Reflection,
     Review,
@@ -534,6 +535,21 @@ TECH_LEAD_REVIEWER_LIGHT = replace(
     reads=("Tech Lead", FINDINGS),
 )
 
+# The landing's diagnoser (GH-239, ADR-0048): the last step before the system gives a
+# pull request up, once per task. It reads the code and the findings the reviews left
+# and writes what a fresh run must do differently. Never writes.
+LANDING_DIAGNOSER = replace(
+    TECH_LEAD_REVIEWER,
+    name="Landing Diagnoser",
+    slug="landing_diagnoser",
+    schema=LandingDiagnosis,
+    skills=(),
+    tools=READ_CODE,
+    allowed=READ_CODE_RULES,
+    reads=(ORIGINAL, "Tech Lead", FINDINGS),
+    max_turns=12,
+)
+
 DEVELOPER = Role(
     name="Developer",
     slug="developer",
@@ -658,6 +674,7 @@ ROLES = (
     TECH_LEAD_STACK,
     TECH_LEAD_REVIEWER,
     TECH_LEAD_REVIEWER_LIGHT,
+    LANDING_DIAGNOSER,
     DEVELOPER,
     DEVELOPER_INTEGRATOR,
     REFLECTOR,
