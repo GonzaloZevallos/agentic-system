@@ -28,7 +28,6 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-import pytest
 import yaml
 
 from agentic.core.knowledge.domain import stack
@@ -185,24 +184,9 @@ def unknown_ci_names(declared: tuple[str, ...], workflow: dict[str, Any]) -> lis
     return violations
 
 
-def ci_switched_off(stack_text: str) -> bool:
-    """A stack that declares no `ci` is switched off on purpose only when it keeps the
-    key as a comment (`# ci: [...]`), so turning CI back on is an uncomment; a file that
-    simply lost the key is not."""
-    return any(line.startswith("# ci:") for line in stack_text.splitlines())
-
-
-def test_ci_switched_off_needs_the_commented_key_and_refuses_a_lost_one():
-    assert ci_switched_off("checks: {}\n# ci: [check]\n")
-    assert not ci_switched_off("checks: {}\n")
-    assert not ci_switched_off("checks: {}\nci: [check]\n")
-
-
 def test_every_declared_ci_name_is_a_job_of_ci_yml_that_reports_under_that_name():
     data = yaml.safe_load(STACK_YAML.read_text(encoding="utf-8"))
     declared = stack.ci(data, STACK_YAML)
-    if not declared and ci_switched_off(STACK_YAML.read_text(encoding="utf-8")):
-        pytest.skip("`ci` is switched off in stack.yaml while GitHub Actions is blocked")
     assert declared, f"{STACK_YAML} declares no `ci`"
     workflow = yaml.safe_load(CI_YML.read_text(encoding="utf-8"))
     assert unknown_ci_names(declared, workflow) == []
