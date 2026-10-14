@@ -8,6 +8,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.application import landing
 from agentic.core.process.application.ports import Upstream
 from tests.core.process.application.test_poll import _cfg
@@ -168,6 +169,7 @@ def test_an_unreadable_pull_request_stops_the_recovery_with_the_tracker_error():
     ports, spawner = _stuck(), _Spawner()
 
     def broken(reference):
+        pull_request_number(reference)
         raise OSError("gh is down")
 
     ports.tracker.pull_request = broken
