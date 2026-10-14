@@ -27,7 +27,14 @@ from .archive import STARTED_OVER
 from .deliver import READY
 from .discard import DISCARDED
 from .escalate import ESCALATED, NEEDS_HUMAN
-from .poll import AUTO_MERGE_REFUSED, AUTO_MERGED, AUTO_RESUMED, RETAKEN
+from .poll import (
+    AUTO_MERGE_REFUSED,
+    AUTO_MERGED,
+    AUTO_RESUMED,
+    LANDING,
+    RESTARTED_BY_LANDING,
+    RETAKEN,
+)
 from .ports import Ports, Workspace
 from .run_role import task_cap
 
@@ -47,6 +54,8 @@ SYSTEM_COMMENTS = (
     RETAKEN,
     AUTO_MERGE_REFUSED,
     AUTO_MERGED,
+    LANDING,
+    RESTARTED_BY_LANDING,
 )
 # What the document's frontmatter carries that is not state: the version record.
 STATE_FIELDS = frozenset(get_type_hints(TaskState)) - {"subtask_id"}
