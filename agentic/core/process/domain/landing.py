@@ -12,10 +12,11 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Literal
 
 from . import ci, rules
-from .task import LandingEntry, TaskState
+from .task import LandingEntry, Subtask, SubtaskStatus, TaskState
 
 LandingStepKind = Literal[
     "wait",
@@ -42,6 +43,13 @@ LANDING_SYNCS_MAX = 6
 
 RESTART_DEPTH_MAX = 1
 """Restarts of one issue by the landing; a second exhaustion escalates."""
+
+LANDING_RESUME_SPAWNS_MAX = 2
+"""Resume children spawned per landing entry; a third look at one reopening is the human's."""
+
+LANDING_RESUME_GRACE_S = 300
+"""Seconds a spawned resume has to record its first run before it is presumed dead; declared,
+not measured."""
 
 
 @dataclass(frozen=True)
@@ -181,7 +189,84 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
         out["cost_usd"] = float(cost)
     if isinstance(base := raw.get("cost_base"), int | float) and not isinstance(base, bool):
         out["cost_base"] = float(base)
+    if isinstance(checks := raw.get("checks"), list) and all(isinstance(c, str) for c in checks):
+        out["checks"] = [c for c in checks if isinstance(c, str)]
+    if isinstance(spawns := raw.get("resume_spawns"), int) and not isinstance(spawns, bool):
+        out["resume_spawns"] = spawns
+    if isinstance(spawned := raw.get("resume_spawned_at"), str):
+        out["resume_spawned_at"] = spawned
     return out
+
+
+def _aware(value: object) -> datetime | None:
+    """`value` as an aware datetime, or `None` when it is not an ISO string with an offset."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None and parsed.utcoffset() is not None else None
+
+
+def _status_of(value: object) -> SubtaskStatus | None:
+    match value:
+        case "pending":
+            return "pending"
+        case "delivered":
+            return "delivered"
+        case "approved":
+            return "approved"
+        case "returned":
+            return "returned"
+    return None
+
+
+def _landing_view(raw: Mapping[str, object]) -> TaskState:
+    """The part of the document `rules.landing_open` reads -- the `landing` entries and each
+    subtask's status -- as a `TaskState`, so the one definition of an open landing is reused."""
+    state: TaskState = {"id": "", "title": "", "description": ""}
+    entries = raw.get("landing")
+    state["landing"] = (
+        [entry_of(entry) for entry in entries if isinstance(entry, Mapping)]
+        if isinstance(entries, list)
+        else []
+    )
+    units = raw.get("subtasks")
+    subtasks: dict[str, Subtask] = {}
+    for name, unit in units.items() if isinstance(units, Mapping) else []:
+        if isinstance(unit, Mapping) and (status := _status_of(unit.get("status"))):
+            subtasks[str(name)] = {"status": status}
+    state["subtasks"] = subtasks
+    return state
+
+
+def resume_owed(raw: Mapping[str, object], now: datetime) -> bool:
+    """A reopened landing whose resume child is owed: the pass is open, the task is not
+    escalated, fewer than `LANDING_RESUME_SPAWNS_MAX` children were spawned for the last entry,
+    the last one is older than `LANDING_RESUME_GRACE_S` and no run started since it. A timestamp
+    that is present but unparseable or naive gives False: it cannot be shown that the child
+    is gone. Timestamps are compared as aware datetimes, never as strings."""
+    state = _landing_view(raw)
+    if not rules.landing_open(state) or raw.get("escalated"):
+        return False
+    last = state["landing"][-1]
+    if last.get("resume_spawns", 0) >= LANDING_RESUME_SPAWNS_MAX:
+        return False
+    spawned_at = last.get("resume_spawned_at")
+    if spawned_at is None:
+        return True
+    spawned = _aware(spawned_at)
+    if spawned is None or now - spawned < timedelta(seconds=LANDING_RESUME_GRACE_S):
+        return False
+    runs = raw.get("runs")
+    for run in runs if isinstance(runs, list) else []:
+        if not isinstance(run, Mapping) or run.get("started_at") is None:
+            continue
+        started = _aware(run["started_at"])
+        if started is None or started >= spawned:
+            return False
+    return True
 
 
 def with_cost_base(
