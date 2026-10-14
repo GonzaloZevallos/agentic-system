@@ -108,7 +108,11 @@ class CheckoutPresubmit:
         if moved and clean:
             if self.witness is not None:
                 witness_reason = self._run_witness(self.witness)
-            results = self._run_all(self._modes(head))
+            plan = self.affected
+            if plan is None:
+                results = self._run_unplanned()
+            else:
+                results = self._run_under_plan(plan, self._modes(plan, head))
             self.head, self.results = head, results
             self.invocations.append(self.results)
         # A witness disagreement leads, on its own capped budget: `refusals`/`REFUSALS`
@@ -125,30 +129,25 @@ class CheckoutPresubmit:
         self.refusals += 1
         return presubmit.refused(reason, self.refusals)
 
-    def _modes(self, head: str) -> dict[str, Mode] | None:
-        """Which form each check runs, or None without a plan. A changed-paths lookup
-        that fails is `None` for the domain, which runs everything full."""
-        if self.affected is None:
-            return None
+    def _modes(self, plan: AffectedPlan, head: str) -> dict[str, Mode]:
+        """Which form each check runs under the plan. A changed-paths lookup that fails
+        is `None` for the domain, which runs everything full."""
         try:
-            paths: tuple[str, ...] | None = self.ports.workspace.changed_paths(
-                self.affected.base, head
-            )
+            paths: tuple[str, ...] | None = self.ports.workspace.changed_paths(plan.base, head)
         except (GitError, OSError):
             paths = None
-        return presubmit.check_modes(list(self.checks), self.affected, paths)
+        return presubmit.check_modes(list(self.checks), plan, paths)
 
-    def _run_all(self, modes: dict[str, Mode] | None) -> list[CheckResult]:
-        if modes is None:
-            if not self.parallel:
-                return [self._run(n, c) for n, c in self.checks.items()]
-            # `map` keeps declared order. If a `_run` raises, leaving the `with` waits for
-            # the other started checks before the error propagates, so no check outlives
-            # the call; nothing is recorded for it, the same as serial.
-            with ThreadPoolExecutor(max_workers=max(len(self.checks), 1)) as pool:
-                return list(pool.map(lambda item: self._run(*item), self.checks.items()))
-        plan = self.affected
-        assert plan is not None  # modes exist only under a plan
+    def _run_unplanned(self) -> list[CheckResult]:
+        if not self.parallel:
+            return [self._run(n, c) for n, c in self.checks.items()]
+        # `map` keeps declared order. If a `_run` raises, leaving the `with` waits for
+        # the other started checks before the error propagates, so no check outlives
+        # the call; nothing is recorded for it, the same as serial.
+        with ThreadPoolExecutor(max_workers=max(len(self.checks), 1)) as pool:
+            return list(pool.map(lambda item: self._run(*item), self.checks.items()))
+
+    def _run_under_plan(self, plan: AffectedPlan, modes: dict[str, Mode]) -> list[CheckResult]:
         if not self.parallel:
             return [
                 row
@@ -157,7 +156,8 @@ class CheckoutPresubmit:
             ]
         with ThreadPoolExecutor(max_workers=max(len(self.checks), 1)) as pool:
             per_check = pool.map(
-                lambda item: self._run_planned(*item, modes[item[0]], plan), self.checks.items()
+                lambda item: self._run_planned(item[0], item[1], modes[item[0]], plan),
+                self.checks.items(),
             )
             return [row for rows in per_check for row in rows]
 

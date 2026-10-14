@@ -339,6 +339,22 @@ class BrokenAffectedFallbackStack(MemoryStack):
         raise ValueError("stack.yaml: expected `affected_fallback` to be a list")
 
 
+class EmptyAffectedFallbackStack(MemoryStack):
+    """A stack whose base declares `affected_fallback: []`, read by the real domain
+    function, so the message is the one a product would see."""
+
+    def affected_fallback(self, revision: str) -> tuple[str, ...]:
+        return stack.affected_fallback(
+            {"checks": {"tests": "pytest"}, "affected_fallback": []}, "stack.yaml"
+        )
+
+
+def test_an_explicitly_empty_affected_fallback_is_refused_by_declared_stack(stage0):
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    with pytest.raises(ValueError, match=r"stack.yaml: `affected_fallback` is declared empty"):
+        declared_stack(replace(ports, stack=EmptyAffectedFallbackStack()))
+
+
 def test_a_broken_affected_checks_refuses_before_spending(stage0):
     ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
     with pytest.raises(ValueError, match="under `affected_checks`"):
