@@ -71,4 +71,6 @@ forbidden:
 # it, `agentic merge` decides from GitHub's CI on the reviewed head. `check` is the one
 # job of `.github/workflows/ci.yml`, unconditional and without a matrix. Read at a task's
 # base, like every key here: it governs from the task after the merge.
-ci: [check]
+# Off while GitHub Actions is blocked by billing (Zeta, 2026-10-14): merges decide from the
+# local checks above. Uncomment when CI runs again.
+# ci: [check]
