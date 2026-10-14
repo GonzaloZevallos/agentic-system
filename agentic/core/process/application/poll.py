@@ -27,9 +27,10 @@ from agentic.shared.configuration import Configuration
 
 from ..domain import ci, document, presubmit, rules
 from ..domain.boot import boot_verdict
-from ..domain.task import PullRequest, TaskState
+from ..domain.task import PullRequest, TaskState, apply
 from . import reflect_run
 from .checkouts import task_base
+from . import escalate as escalate_module
 from .ports import (
     GitError,
     IssueComment,
@@ -469,6 +470,31 @@ def gather_resumes(ports: Ports, now: datetime) -> list[rules.ResumeCandidate]:
     return resumes
 
 
+def escalate_persisted_limits(
+    cfg: Configuration, ports: Ports, resumes: Sequence[rules.ResumeCandidate]
+) -> list[str]:
+    """The week of hourly retakes is spent (`rules.account_limit_persisted`): the task
+    escalates as a failure, once -- the patch leaves a failure entry that `rules.
+    auto_resumable` no longer retakes, so the next round does not find it again. The one
+    place the poller writes a task document, and only for this escalation."""
+    lines: list[str] = []
+    for r in resumes:
+        if not rules.account_limit_persisted(r):
+            continue
+        task_id = ports.inbox.task_id(r.issue)
+        raw = ports.documents.load(task_id)
+        if raw is None:
+            continue
+        state = apply(raw, rules.account_limit_persisted_patch())
+        ports.documents.save(state)
+        ports.tracker.label(task_id, escalate_module.NEEDS_HUMAN)
+        ports.tracker.comment(task_id, escalate_module.comment(state, cfg, ports))
+        lines.append(
+            f"agentic: poll: #{r.issue} {rules.ACCOUNT_LIMIT_PERSISTED} -> left to the human"
+        )
+    return lines
+
+
 def _human_line(
     number: int, record: LockRecord, other_boot: bool | None, verdict_cap_spent: bool
 ) -> str:
@@ -843,6 +869,7 @@ def run_once(
     closes = gather_closes(ports)
     resumes = gather_resumes(ports, now)
     retakes, human_lines = gather_retakes(ports, lock, current_boot)
+    human_lines += escalate_persisted_limits(cfg, ports, resumes)
     # Outside the lock, and only with pacing on: pacing off reads and writes nothing.
     fresh, skipped = _recent_spend(ports, now) if cfg.spend_pacing else ([], 0)
     with registry.exclusive():
