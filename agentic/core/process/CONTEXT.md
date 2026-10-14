@@ -371,6 +371,11 @@ _Campo_: sin término de arte
 El pull request del producto que abre el sistema desde la rama de tarea, con el PRD y el plan de Tech Lead en el cuerpo. Es la entrega al humano; el issue recibe el link al pull request y al documento de tarea. Nada más se escribe en el issue: los roles se hablan por el documento.
 _Campo_: pull request — GitHub; merge request en GitLab
 
+**Renumeración de ADR**:
+Lo que hace `agentic merge` cuando una rama agregó un ADR cuyo número el master upstream ya tomó: mueve ese ADR (y solo los que la rama agregó) al siguiente número libre, reescribe las referencias en las líneas que la rama agregó, lo empuja como un commit del sistema a la rama de tarea y deja la cabeza nueva para la ronda siguiente. Nunca toca un archivo ni una línea que el master ya tenía, ni nada bajo `tests/`; lo que no puede reescribir con seguridad lo lista para el humano. Dos ADR de la rama con el mismo número, o más de dos renumeraciones en una tarea, no se renumeran: se devuelven al humano (ADR-0048).
+_Avoid_: renombrar (el nombre del archivo es solo una parte), reordenar, fix de numeración
+_Campo_: sin término de arte
+
 **Override de prompt**:
 Un prompt de rol que vive en el repo del producto y pisa el default del sistema.
 _Campo_: sin término de arte
