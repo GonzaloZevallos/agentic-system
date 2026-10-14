@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from . import ci, rules
-from .task import TaskState
+from .task import LandingEntry, TaskState
 
 LandingStepKind = Literal[
     "wait",
@@ -160,14 +160,54 @@ def already_dispatched(landing: Sequence[Mapping[str, object]], head: str, step:
 
 def landing_open(state: TaskState) -> bool:
     """A landing pass is in flight: the last `landing` entry is not resolved and some
-    subtask is `returned` or `pending` (reopened for it)."""
-    document: Mapping[str, object] = state  # `landing` is a document key, not a state field
-    entries = document.get("landing")
-    if not isinstance(entries, list) or not entries or entries[-1].get("resolved_at"):
-        return False
-    return any(
-        unit.get("status") in ("returned", "pending") for unit in state.get("subtasks", {}).values()
-    )
+    subtask is reopened for it (`rules.landing_open`, where `resume_target` reads it)."""
+    return rules.landing_open(state)
+
+
+def entry_of(raw: Mapping[str, object]) -> LandingEntry:
+    """The `landing` entry `raw` says, each known key kept when it has its type."""
+    out: LandingEntry = {}
+    if isinstance(head := raw.get("head"), str):
+        out["head"] = head
+    if isinstance(step := raw.get("step"), str):
+        out["step"] = step
+    if isinstance(refusal := raw.get("refusal"), str):
+        out["refusal"] = refusal
+    if isinstance(at := raw.get("at"), str):
+        out["at"] = at
+    if isinstance(resolved := raw.get("resolved_at"), str):
+        out["resolved_at"] = resolved
+    if isinstance(cost := raw.get("cost_usd"), int | float) and not isinstance(cost, bool):
+        out["cost_usd"] = float(cost)
+    if isinstance(base := raw.get("cost_base"), int | float) and not isinstance(base, bool):
+        out["cost_base"] = float(base)
+    return out
+
+
+def with_cost_base(
+    entries: Sequence[Mapping[str, object]], head: str, step: str, cost_base: float
+) -> list[LandingEntry]:
+    """`entries` with `cost_base` set on the entry keyed `(head, step)`."""
+    out = [entry_of(entry) for entry in entries]
+    for entry in out:
+        if entry.get("head") == head and entry.get("step") == step:
+            entry["cost_base"] = cost_base
+    return out
+
+
+def resolve_open(
+    entries: Sequence[Mapping[str, object]], at: str, cost_now: float
+) -> list[LandingEntry]:
+    """`entries` with the last one, when unresolved, closed at `at`: its `cost_usd` is
+    `cost_now` less the `cost_base` it was written with. An already resolved last entry,
+    or none, leaves the list as it was."""
+    out = [entry_of(entry) for entry in entries]
+    if not out or "resolved_at" in out[-1]:
+        return out
+    spent = cost_now - out[-1].get("cost_base", cost_now)
+    out[-1]["resolved_at"] = at
+    out[-1]["cost_usd"] = round(max(spent, 0.0), 4)
+    return out
 
 
 def followup_marker(task_id: str, lineage: int) -> str:

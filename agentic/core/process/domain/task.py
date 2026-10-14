@@ -430,6 +430,10 @@ class ChangesRequested(TypedDict):
     pair: str
     category: ChangeCategory
     reason: str
+    # `"landing"` on a return the landing made to reopen a delivered pull request (GH-239):
+    # absent on every return a review made, so a document written before it reads the same.
+    # It never enters `changes_requested`, which counts the pair's limit.
+    by: NotRequired[Literal["landing"]]
 
 
 class EscalationPatch(TypedDict):
@@ -582,6 +586,9 @@ class LandingEntry(TypedDict, total=False):
     at: str
     cost_usd: float
     resolved_at: str
+    # The task's `cost_usd` when a reopening step was written: the re-delivery subtracts it
+    # from its own to get this entry's `cost_usd`.
+    cost_base: float
 
 
 class TaskState(TaskInput, total=False):

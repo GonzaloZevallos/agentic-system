@@ -90,12 +90,17 @@ class Resumption:
     interrupted: bool = False
 
 
+def state_from(raw: dict) -> TaskState:
+    """The state a raw document record says: only the keys the state has."""
+    return cast(TaskState, {k: v for k, v in raw.items() if k in STATE_FIELDS and v is not None})
+
+
 def from_document(task_id: str, ports: Ports) -> TaskState:
     """The state the document records, checked against git."""
     raw = ports.documents.load(task_id)
     if raw is None:
         raise ValueError(f"{task_id} has no task document to resume from")
-    state = cast(TaskState, {k: v for k, v in raw.items() if k in STATE_FIELDS and v is not None})
+    state = state_from(raw)
     if problems := disagreements(state, ports.workspace):
         listed = "\n".join(f"- {p}" for p in problems)
         raise ValueError(f"the document of {task_id} and git disagree:\n{listed}")

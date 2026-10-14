@@ -17,10 +17,9 @@ from ..domain.landing import LandingStep, LandingStepKind
 from ..domain.task import TaskState
 from .ports import Ports, Upstream
 
-LIVE_STEPS: frozenset[LandingStepKind] = frozenset()
-"""The steps whose executors are built. Empty while `landing_sync` and `landing_fix` are
-inert: an inert step is neither recorded nor spawned, so the refusal logs stay as they
-were. Wave 2 fills it in, one executor at a time."""
+LIVE_STEPS: frozenset[LandingStepKind] = frozenset({"sync_master", "re_review"})
+"""The steps whose executors are built: `landing_sync`'s. An inert step (`landing_fix`'s,
+until it is built) is neither recorded nor spawned, so its refusal logs stay as they were."""
 
 
 def takes_action(kind: LandingStepKind, live: frozenset[LandingStepKind]) -> bool:
@@ -99,3 +98,6 @@ class LandingContext:
     upstream: Upstream
     facts: rules.MergeFacts
     log: Callable[[str], None]
+    # Spawns `agentic resume` for an issue number and answers its pid: how a step that
+    # reopened the technical stage hands the task to it. `None` where nothing can spawn.
+    resume: Callable[[int], int | None] | None = None

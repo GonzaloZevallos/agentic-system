@@ -1689,7 +1689,7 @@ def run_ended(status: Status) -> bool:
 def resumed_status(state: TaskState) -> Status:
     """The status the task had before the escalation overwrote it, derived from what the
     state holds, since the document keeps only `waiting_on_human` too."""
-    if state.get("pull_request"):
+    if state.get("pull_request") and not landing_open(state):
         return "ready_for_review"
     if state.get("status") == "discarded":
         # Nothing overwrote it: a discard is an end, not a pause, and the runs it holds
@@ -1772,9 +1772,24 @@ def resumed(state: TaskState, decision: str | None) -> dict[str, Any]:
     return patch
 
 
+def landing_open(state: TaskState) -> bool:
+    """A landing pass is in flight (GH-239): the last `landing` entry is not resolved and
+    some subtask is reopened for it -- `returned`, `pending` or `delivered` awaiting its
+    review. `domain.landing.landing_open` is this, under the landing's own name."""
+    document: Mapping[str, object] = state  # `landing` is a document key, not a state field
+    entries = document.get("landing")
+    if not isinstance(entries, list) or not entries or entries[-1].get("resolved_at"):
+        return False
+    return any(
+        unit.get("status") in ("returned", "pending", "delivered")
+        for unit in state.get("subtasks", {}).values()
+    )
+
+
 def resume_target(state: TaskState) -> str | None:
-    """Where a resumed task goes next, from the same facts the routing reads."""
-    if state.get("escalated") or state.get("pull_request"):
+    """Where a resumed task goes next, from the same facts the routing reads. A pull
+    request ends the road unless the landing reopened the stage under it."""
+    if state.get("escalated") or (state.get("pull_request") and not landing_open(state)):
         return None
     if state.get("subtasks"):
         # Once there is a plan every road goes through the fan-in, which decides the

@@ -183,7 +183,8 @@ def _state(entries, *statuses):
         (_state([{"head": HEAD, "step": "fix"}], "approved", "returned"), True),
         (_state([{"head": HEAD, "step": "fix"}], "approved", "pending"), True),
         (_state([{"head": HEAD, "step": "fix", "resolved_at": "t"}], "returned"), False),
-        (_state([{"head": HEAD, "step": "fix"}], "approved", "delivered"), False),
+        (_state([{"head": HEAD, "step": "re_review"}], "approved", "delivered"), True),
+        (_state([{"head": HEAD, "step": "fix"}], "approved", "approved"), False),
         (_state([], "returned"), False),
         ({"subtasks": {"a": {"id": "a", "status": "returned"}}}, False),
         (
@@ -194,7 +195,16 @@ def _state(entries, *statuses):
             True,
         ),
     ],
-    ids=["returned", "pending", "resolved", "all_delivered", "no_entries", "no_key", "last_wins"],
+    ids=[
+        "returned",
+        "pending",
+        "resolved",
+        "reopened_for_review",
+        "all_approved",
+        "no_entries",
+        "no_key",
+        "last_wins",
+    ],
 )
 def test_landing_is_open_while_the_last_entry_is_unresolved_and_a_unit_is_reopened(state, is_open):
     assert landing.landing_open(state) is is_open

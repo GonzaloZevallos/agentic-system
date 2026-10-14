@@ -1365,6 +1365,31 @@ async def _merge(task_id: str, issue: int, cfg: Configuration, ports: Ports) -> 
         print(f"agentic: merge: {task_id}: not closed yet: {closed.message}", flush=True)
 
 
+def _resume_spawner(cfg: Configuration) -> Callable[[int], int | None]:
+    """How a landing step that reopened the technical stage resumes the task: a detached
+    `agentic resume --issue N --from-document` child, since the run that delivered ended
+    and its thread holds nothing to resume."""
+    launcher = SpawnLauncher(cfg)
+    executable = _self_executable()
+
+    def spawn(number: int) -> int | None:
+        return launcher.spawn(
+            [
+                executable,
+                "resume",
+                "--issue",
+                str(number),
+                "--from-document",
+                "--yes",
+                "--detach",
+                "--product-dir",
+                str(cfg.product_dir),
+            ]
+        )
+
+    return spawn
+
+
 async def _land(task_id: str, cfg: Configuration, ports: Ports) -> None:
     """`agentic land --issue N` (GH-239, ADR-0048): the step `landing_step` names for the
     refusal of the task's pull request, recorded under the task's run lock and then
@@ -1381,6 +1406,7 @@ async def _land(task_id: str, cfg: Configuration, ports: Ports) -> None:
                 upstream,
                 _upstream_eval_set(ports, upstream),
                 lambda line: print(line, flush=True),
+                resume=_resume_spawner(cfg),
             )
         except LockHeld as exc:
             raise CannotStart(f"{exc}: {LOCK_SCOPE}") from exc
