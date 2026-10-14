@@ -2689,6 +2689,22 @@ class _FlakyPullRequestTracker(FakePullRequestTracker):
         return self.prs.get(reference)
 
 
+def test_a_bare_issue_number_fails_through_fake_pull_request_tracker_before_anything_is_recorded():
+    tracker = FakePullRequestTracker({"9": close_pull_request()})
+    for reference in ("9", "GH-9"):
+        with pytest.raises(ValueError, match="not a pull request URL"):
+            tracker.pull_request(reference)
+    assert tracker.pull_request_refs == []
+
+
+def test_a_bare_issue_number_fails_through_the_flaky_tracker_with_the_parse_error_not_its_own():
+    tracker = _FlakyPullRequestTracker({"9": close_pull_request()}, fails_at=1)
+    for reference in ("9", "GH-9"):
+        with pytest.raises(ValueError, match="not a pull request URL"):
+            tracker.pull_request(reference)
+    assert tracker.pull_request_refs == []
+
+
 def test_close_all_stops_the_sweep_on_the_first_gh_failure_printing_both_lists(
     monkeypatch, tmp_path, capsys
 ):
