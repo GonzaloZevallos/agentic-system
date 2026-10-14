@@ -28,9 +28,9 @@ from agentic.shared.configuration import Configuration
 from ..domain import ci, document, presubmit, rules
 from ..domain.boot import boot_verdict
 from ..domain.task import PullRequest, TaskState, apply
+from . import escalate as escalate_module
 from . import reflect_run
 from .checkouts import task_base
-from . import escalate as escalate_module
 from .ports import (
     GitError,
     IssueComment,

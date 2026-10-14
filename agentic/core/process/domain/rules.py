@@ -2394,7 +2394,7 @@ def account_limit_persisted_patch() -> dict[str, Any]:
         session_id="",
         reason="other",
     )
-    return logged(escalation("failure", ACCOUNT_LIMIT_PERSISTED), [failure])
+    return logged({**escalation("failure", ACCOUNT_LIMIT_PERSISTED)}, [failure])
 
 
 @dataclass(frozen=True)

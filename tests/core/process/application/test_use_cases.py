@@ -46,12 +46,28 @@ async def test_classify_sets_the_type_and_saves_the_document(cfg):
     assert "## Product knowledge" not in ports.runner.calls[0]["prompt"]  # PjM does not read it
 
 
-async def test_classify_escalates_on_low_confidence(cfg):
-    ports = memory_ports(ScriptedRunner(pjm=[classified(confidence="low")]))
+async def test_classify_continues_a_low_confidence_platform_guess_as_a_feature(cfg):
+    # GH-239 edits the case that asserted a low confidence escalated as `classification`.
+    ports = memory_ports(
+        ScriptedRunner(pjm=[classified(type_="platform_enhancement", confidence="low")])
+    )
     patch = await classify(TASK, cfg, ports)
-    assert patch["status"] == "waiting_on_human"
-    assert "PjM could not classify" in patch["escalated"]
-    assert patch["escalation_class"] == "classification"
+    assert patch["type"] == "feature"
+    assert "escalated" not in patch and "status" not in patch and "escalation_class" not in patch
+    section = patch["sections"]["PjM"]
+    assert section.startswith("Clear.")
+    assert "guessed `platform_enhancement`" in section and "continues as `feature`" in section
+    assert ports.documents.last["type"] == "feature"
+
+
+async def test_classify_keeps_a_low_confidence_bug_a_bug_and_a_confident_guess_unannotated(cfg):
+    low = memory_ports(ScriptedRunner(pjm=[classified(type_="bug", confidence="low")]))
+    patch = await classify(TASK, cfg, low)
+    assert patch["type"] == "bug" and "continues as `bug`" in patch["sections"]["PjM"]
+    # Rejected input: a confident guess is neither re-typed nor annotated.
+    sure = memory_ports(ScriptedRunner(pjm=[classified(type_="platform_enhancement")]))
+    patch = await classify(TASK, cfg, sure)
+    assert patch["type"] == "platform_enhancement" and patch["sections"] == {"PjM": "Clear."}
 
 
 async def test_classify_lets_a_bug_through(cfg):
