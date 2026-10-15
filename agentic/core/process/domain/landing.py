@@ -35,6 +35,9 @@ LandingStepKind = Literal[
 terminal path: the landing diagnoser, then a restart) and `none` (nothing the system can
 do: the human's)."""
 
+CONFLICTING_SYNC_REFUSALS: tuple[rules.MergeRefusal, ...] = ("checks_failed", "merge_conflict")
+"""The refusals under which a recorded `sync_master` was a conflicting one, hence a model pass."""
+
 LANDING_PASSES_MAX = 3
 """Model passes (`re_review`, `fix`, a conflicting `sync_master`) per task."""
 
@@ -116,6 +119,8 @@ def landing_step(
             if facts.failed_step == "conflict":
                 return _sync(step, spent, conflicting=True)
             return step("rerun") if spent.reruns_on_head == 0 else pass_("fix", blocking_owners)
+        case "merge_conflict":
+            return _sync(step, spent, conflicting=True)
         case "attempts_exhausted":
             return _sync(step, spent, conflicting=False)
         case "merge_failed":

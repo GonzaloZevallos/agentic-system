@@ -9,7 +9,7 @@ from typing import get_args
 
 import pytest
 
-from agentic.core.process.domain import rules
+from agentic.core.process.domain import ci, rules
 from agentic.core.process.domain.rules import MergeDecision, MergeFacts
 
 HEAD = "a" * 40
@@ -58,17 +58,22 @@ REFUSALS = [
 ]
 
 
+@pytest.mark.parametrize("conflicts", [None, False], ids=["unread", "clean"])
 @pytest.mark.parametrize(("reason", "over"), REFUSALS, ids=[r for r, _ in REFUSALS])
-def test_each_refusal_has_the_input_that_provokes_it(reason, over):
-    assert rules.auto_merge_decision(_facts(**over)) == MergeDecision("refuse", reason)
-    assert rules.auto_merge_decision(_facts()) == MergeDecision("merge", None)
+def test_each_refusal_has_the_input_that_provokes_it(reason, over, conflicts):
+    assert rules.auto_merge_decision(_facts(conflicts=conflicts, **over)) == MergeDecision(
+        "refuse", reason
+    )
+    assert rules.auto_merge_decision(_facts(conflicts=conflicts)) == MergeDecision("merge", None)
 
 
 def test_every_refusal_the_decision_gives_is_in_the_closed_set_and_master_moved_is_the_verbs():
     given = {reason for reason, _ in REFUSALS}
     # The CI's own reasons are given, one row each, by `test_auto_merge_ci.py`.
     ci_reasons = {"ci_failed", "ci_missing", "ci_unreadable"}
-    assert given | ci_reasons | {"master_moved"} == set(get_args(rules.MergeRefusal))
+    # `merge_conflict` has its own table below: it needs `conflicts=True`, no `over` row.
+    others = {"master_moved", "merge_conflict"}
+    assert given | ci_reasons | others == set(get_args(rules.MergeRefusal))
 
 
 EARLIER_FAILURES = [
@@ -357,3 +362,91 @@ def test_the_ci_definition_prefix_is_the_one_both_predicates_read():
     assert rules.CI_DEFINITION_PREFIX == ".github/"
     assert rules.guarded_path(".github/x.yml", "GH-9") is True
     assert rules.ci_untrusted((".github/x.yml",)) is True
+
+
+# A definite conflict of the head with the current master (GH-255): refused ahead of the CI
+# facts and the checks, behind every review and eval-set reason.
+
+CI_RED = ci.CiCheck("web", "COMPLETED", "FAILURE", "https://github.com/o/r/actions/runs/1")
+CI_DECLARED = {"ci_required": ("web",), "ci_untrusted": False, "ci_head": HEAD, "ci_waited_s": 10.0}
+
+
+def _ci(state, **kw) -> dict:
+    return {**CI_DECLARED, "ci_verdict": ci.CiVerdict(state, (), ()), **kw}
+
+
+CONFLICT_BEATS = [
+    (
+        "ci_unreadable",
+        {
+            **CI_DECLARED,
+            "ci_unreadable": ci.CiUnreadable("gh_unreadable"),
+            "ci_verdict": None,
+            "ci_head": None,
+            "ci_waited_s": ci.CI_WAIT_MAX_S + 1,
+        },
+    ),
+    ("ci_wait", _ci("pending")),
+    ("ci_failed", {**_ci("red"), "ci_verdict": ci.CiVerdict("red", (CI_RED,), ())}),
+    ("ci_missing", _ci("pending", ci_waited_s=ci.CI_WAIT_MAX_S)),
+    ("ci_green_fresh_merge", _ci("green", ci_fresh=True)),
+    ("checks_failed", {"checks_passed": False}),
+    ("attempts_exhausted", {"checks_master": "d" * 40, "attempts": rules.MERGE_ATTEMPTS_MAX}),
+    ("run_checks", {"checks_head": None, "checks_master": None, "checks_passed": None}),
+    ("merge", {}),
+    ("merge_failed", {"merge_failures": rules.MERGE_CALLS_MAX}),
+]
+
+
+@pytest.mark.parametrize(("name", "over"), CONFLICT_BEATS, ids=[n for n, _ in CONFLICT_BEATS])
+def test_a_definite_conflict_is_refused_ahead_of_everything_from_merge_failed_down(name, over):
+    facts = _facts(**over)
+    assert rules.auto_merge_decision(facts) != MergeDecision("refuse", "merge_conflict")
+    assert rules.auto_merge_decision(replace(facts, conflicts=True)) == MergeDecision(
+        "refuse", "merge_conflict"
+    )
+
+
+@pytest.mark.parametrize(("reason", "over"), REFUSALS[:8], ids=[r for r, _ in REFUSALS[:8]])
+def test_every_review_and_eval_set_reason_still_beats_a_definite_conflict(reason, over):
+    facts = _facts(conflicts=True, **over)
+    assert rules.auto_merge_decision(facts) == MergeDecision("refuse", reason)
+
+
+def test_the_first_eight_rows_are_the_reasons_ahead_of_the_conflict():
+    assert [r for r, _ in REFUSALS[:8]] == [
+        "not_ready",
+        "pr_not_open",
+        "not_approved",
+        "head_not_reviewed",
+        "open_findings_blocking",
+        "open_findings",
+        "eval_set",
+        "eval_set_unreadable",
+    ]
+
+
+# `conflict_probe_wanted` is the one answer to "should the probe run", derived from the order.
+
+PROBE_NOT_WANTED = REFUSALS[:8]
+PROBE_WANTED = CONFLICT_BEATS
+
+
+@pytest.mark.parametrize(("reason", "over"), PROBE_NOT_WANTED, ids=[r for r, _ in PROBE_NOT_WANTED])
+def test_the_probe_is_not_wanted_for_a_pull_request_a_git_free_refusal_already_rules_out(
+    reason, over
+):
+    facts = _facts(**over)
+    assert rules.auto_merge_decision(facts) == MergeDecision("refuse", reason)
+    assert rules.conflict_probe_wanted(facts) is False
+
+
+@pytest.mark.parametrize(("name", "over"), PROBE_WANTED, ids=[n for n, _ in PROBE_WANTED])
+def test_the_probe_is_wanted_when_the_first_decision_is_one_a_conflict_would_overrule(name, over):
+    assert rules.conflict_probe_wanted(_facts(**over)) is True
+
+
+def test_the_probe_gate_ignores_the_conflict_fact_it_is_asked_to_derive():
+    facts = _facts(checks_passed=False)
+    for known in (None, False, True):
+        assert rules.conflict_probe_wanted(replace(facts, conflicts=known)) is True
