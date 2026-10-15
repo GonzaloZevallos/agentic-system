@@ -2,7 +2,7 @@ import pytest
 import yaml
 
 from agentic.core.process.application import resume
-from agentic.core.process.domain import document, legacy_names, roles, rules
+from agentic.core.process.domain import document, legacy_names, presubmit, roles, rules
 
 
 def test_render_then_parse_roundtrip():
@@ -835,3 +835,109 @@ def test_reviewed_head_carried_from_renders_and_parses_back_on_its_subtask():
     del plain["reviewed_head_carried_from"]
     without = document.render(_bare(subtasks={"only": plain}))
     assert "reviewed_head_carried_from" not in without
+
+
+def _one_flow_line(text, key):
+    """The frontmatter line of `key`, after asserting there is exactly one, that it holds
+    no newline and that it is in flow shape (`key: [` or `key: {`)."""
+    frontmatter = text.split("\n---\n", 1)[0]
+    found = [ln for ln in frontmatter.split("\n") if ln.startswith(f"{key}:")]
+    assert len(found) == 1, found
+    (line,) = found
+    assert "\n" not in line
+    assert line.startswith((f"{key}: [", f"{key}: {{")), line
+    return line
+
+
+def _assert_roundtrip_and_replace(key, value, other):
+    """First write onto a document without `key`, then a replace with a value of a
+    different length: the parsed value, the one flow line and every other line."""
+    raw = document.render(_bare())
+    assert not any(ln.startswith(f"{key}:") for ln in raw.split("\n"))
+    once = document.record_closure(raw, {key: value})
+    assert document.parse(once)[key] == value
+    _one_flow_line(once, key)
+    assert _lines_but(once, key) == _lines_but(raw, key)
+    twice = document.record_closure(once, {key: other})
+    assert len(repr(other)) != len(repr(value))
+    assert document.parse(twice)[key] == other
+    _one_flow_line(twice, key)
+    assert _lines_but(twice, key) == _lines_but(raw, key)
+
+
+_NEWLINE_DEFECT = (
+    "production defect in document._flow_line: the input ['first\\nsecond'] is written as "
+    "three lines, `auto_merge_guarded: ['first`, an empty one and `    second']` (yaml folds "
+    "a plain flow scalar holding a newline), so the frontmatter is not one line per key"
+)
+
+
+@pytest.mark.parametrize(
+    ("value", "other"),
+    [
+        pytest.param([], ["x"], id="empty"),
+        pytest.param(["only"], ["only", "two"], id="one_item"),
+        pytest.param(
+            ["a, b", "k: v", "it's", 'say "hi"', "- dash", "# not a comment", "]}", "{["],
+            ["a, b"],
+            id="yaml_punctuation",
+        ),
+        pytest.param(["año → mañana"], ["año", "→"], id="non_ascii"),
+        pytest.param(
+            ["first\nsecond"],
+            ["first\nsecond", "third"],
+            id="embedded_newline",
+            marks=pytest.mark.xfail(strict=True, reason=_NEWLINE_DEFECT),
+        ),
+        pytest.param(["col\tcol"], [], id="tab"),
+        pytest.param(["\x1b[31mred\x1b[0m"], ["\x1b[31mred\x1b[0m", "plain"], id="escape_sequence"),
+        pytest.param(["x" * 5000], ["x" * 5000, "y" * 4000], id="five_thousand_characters"),
+    ],
+)
+def test_record_closure_round_trips_a_list_of_strings_on_one_flow_line(value, other):
+    _assert_roundtrip_and_replace("auto_merge_guarded", value, other)
+
+
+def test_one_flow_line_rejects_a_block_a_scalar_a_duplicate_and_a_missing_key():
+    """The helper the round-trip tests lean on must refuse the shapes it exists to catch."""
+    for text in (
+        "k:\n- a\n- b\n---\nbody",
+        "k: plain\n---\nbody",
+        "k: [a]\nk: [b]\n---\nbody",
+        "id: 1\n---\nbody",
+    ):
+        with pytest.raises(AssertionError):
+            _one_flow_line(text, "k")
+    assert _one_flow_line("id: 1\nk: {a: 1}\n---\nbody", "k") == "k: {a: 1}"
+
+
+def _failing(output):
+    return {"name": "tests", "command": "pytest", "passed": False, "output": output}
+
+
+def _merge_checks(output, *, duration_s):
+    return presubmit.merge_checks_record(
+        head="a" * 40,
+        master="b" * 40,
+        duration_s=duration_s,
+        declared={"tests": "pytest"},
+        results=[_failing(output)],
+        witness=None,
+    )
+
+
+def test_record_closure_round_trips_a_merge_checks_record_on_one_flow_line():
+    long_line = "E   " + "assert " * 60 + "]} {["
+    noisy = f"\x1b[31mFAILED\x1b[0m\tx ]}} {{[\n{long_line}\n" + "\n".join(
+        f"l{i}" for i in range(5)
+    )
+    # `merge_checks_record` builds the whole record from a `CheckResult`; the tail is its own.
+    record = _merge_checks(noisy, duration_s=1.5)
+    stored = record["checks"][0]["tail"]
+    assert max(len(ln) for ln in stored) >= 81
+    assert all("\x1b" not in ln and "\t" not in ln for ln in stored)
+    huge = _merge_checks("z" * (presubmit.MERGE_TAIL_CHARS * 2), duration_s=2.25)
+    assert len(huge["checks"][0]["tail"][0]) == presubmit.MERGE_TAIL_CHARS
+    other = _merge_checks("short", duration_s=0.5)
+    _assert_roundtrip_and_replace("merge_checks", record, other)
+    _assert_roundtrip_and_replace("merge_checks", other, huge)
