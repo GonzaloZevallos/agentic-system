@@ -202,3 +202,67 @@ discrepar: un `True` falso gasta una pasada y un `False` falso lo atrapa la vía
 `checks_failed`/`conflict`; ambos los acota `LANDING_PASSES_MAX` y se ven en `landing`. Los
 presupuestos se comparten entre todos los rechazos: un PR que ya gastó sus pasadas va a
 `diagnose` en su primer conflicto.
+
+## Adenda (2026-10-15, GH-257): un diagnóstico que falla no es una escalación
+
+**Causa.** El Landing Diagnoser corre fuera del grafo, en `landing_fix.diagnose`. Cuando su
+`run_role` fallaba dos veces (típicamente HTTP 429), `diagnose` guardaba el parche de escalación
+de `run_role`: `waiting_on_human`, `escalated`, `escalation_class` y entradas `failure` en
+`pause_log`, sin etiquetar ni comentar el issue. El checkpoint del grafo estaba bien (la corrida
+terminó en `ready_for_review`), así que `resume` rechazaba con `is not paused` (correcto, y
+sin tocar), el poller leía `not_ready` y `land` devolvía `none` porque `diagnosed` ya era cierto.
+La tarea quedaba varada sin dueño.
+
+**Decisión.** Un diagnóstico que no entrega es un intento, no una escalación.
+
+- `diagnose` guarda solo la contabilidad del parche (`cost_usd`, `runs`, `current_role`) y deja la
+  tarea en `ready_for_review`; el motivo (`FailureReason`) se escribe en su propia entrada de
+  `landing` con `record_closure`.
+- Dos claves opcionales nuevas en la entrada `landing`: `delivered` (el rol entregó; se escribe
+  con `record_closure` antes de escalar, cerrar el PR o lanzar nada, y ningún `save` posterior
+  reescribe la instantánea vieja de `landing`) y `failure`. Se leen con `.get`: un documento
+  sin ellas se lee y se muestra como antes. `spent.diagnosed` cuenta solo entradas `delivered` y
+  `already_dispatched` ignora las entradas `diagnose` sin entregar.
+- Los reintentos siguen el calendario compartido de los reintentos 429: `rules.retake_calendar`
+  (el cuerpo de `_calendar`, extraído sin cambios), `rules.next_attempt_at` y
+  `rules.auto_resume_limit`; no hay constante ni tope nuevos. `domain.landing.diagnose_retry`
+  devuelve `none`, `due`, `waiting` o `escalate`. `since` es la hora de despacho del último intento
+  (`at` de la entrada), unos segundos antes de que fallara: aceptado. Como ninguna corrida entrega
+  entre dos intentos, la cadena del diagnóstico es el calendario plano `ACCOUNT_LIMIT_SCHEDULE` y
+  nunca llega a la semana horaria. Con `prior = chase_prior =` cantidad de intentos, la cadena
+  entera tiene `len(ACCOUNT_LIMIT_SCHEDULE)` intentos.
+- Un motivo que ninguna espera cura, o un calendario agotado, escalan de verdad por un solo
+  ayudante (`landing_fix._escalate`): etiqueta `needs-human`, comenta `Escalated:` y escribe
+  `rules.logged(rules.escalation("failure", …))` sin `failure` en el registro, así que
+  `auto_resumable` queda falso. La rama de profundidad >= 1 usa el mismo ayudante.
+  `domain.landing.unescalated` es el único parche que limpia la escalación de un paso de landing.
+
+**§7.** Ninguna métrica, etiqueta, atributo de span, prompt ni `prompts.fingerprint` cambia.
+
+**§8.** Un reintento cuesta como máximo el tope por intento (10 USD) por la longitud del calendario;
+un 429 falla antes del primer turno y cuesta ~0 USD. Un fallo externo no 429 (`upstream`,
+`network`) puede gastar dinero real por reintento, acotado por ese tope y por `RETAKE_SCHEDULE`.
+
+**Fuera de alcance.** Una escalación deliberada de profundidad >= 1 sigue dejando una tarea que
+`resume` rechaza (`is not paused`): es el comportamiento de un alto humano deliberado.
+`agentic/cli.py::_resume` y su texto de rechazo no cambian.
+
+**Migración de los documentos varados.** Los documentos que el diagnóstico dejó escalados antes de
+este cambio (apostrophe GH-121, #132, #135, #144, #150) los libera `agentic land`, con una sola
+escritura. El discriminador es `domain.landing.stranded_diagnose(raw, escalated_after)`: `waiting_on_human`
+con clase `failure`, `pull_request`, el diagnóstico como rol actual, la última entrada `diagnose`
+sin `delivered` ni `failure`, y una época del `pause_log` (después del último `resumed`) con al menos
+un `failure`, todos del propio diagnóstico y con motivo en `rules.EXTERNAL_REASONS`, más la entrada
+`escalation`. `escalated_after` lee los comentarios solo cuando el documento ya tiene esa forma: un
+`Escalated:` creado después del `at` de la entrada dice que un humano fue avisado y la parada es
+suya; una hora ingenua o ilegible también lo deja escalado. La escritura es un solo
+`record_closure` con `domain.landing.migration`: el parche de `unescalated` más el `failure` de la
+época que cierra, puesto en la última entrada `diagnose`; después rige el reintento ordinario.
+Nunca escribe `cost_usd` ni borra historia: `record_closure` reemplaza una clave entera, así que
+`pause_log` se escribe completo con `resumed` al final (`document.RECORD_KEYS` suma `pause_log` y
+`escalated`, que el YAML parte en varias líneas). El poller ofrece `land` para estas tareas y
+`gather_resumes` las salta, de modo que un solo camino es dueño de cada documento.
+
+**Riesgo conocido.** La migración escribe documentos vivos: un error del discriminador desescalaría
+una parada humana real. Los casos contrarios (escalación real con y sin comentario, `sdk`, rol del
+grafo, `questions`, sin pull request) quedan fijados por tests.

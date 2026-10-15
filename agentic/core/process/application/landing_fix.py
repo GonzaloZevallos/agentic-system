@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 from contextlib import nullcontext
+from datetime import UTC, datetime
 
 from ..domain import landing as landing_rules
 from ..domain import presubmit, rules
@@ -189,11 +190,64 @@ def file_followups_and_land(context: LandingContext) -> None:
     context.ports.documents.record_closure(context.task_id, {"followups_filed": True})
 
 
+def _stamp(context: LandingContext, **keys: object) -> None:
+    """Writes `keys` on the last diagnose entry recorded for this head, through
+    `record_closure` only, from the document as it is now: never a `save` of an earlier
+    snapshot of the `landing` list."""
+    loaded = context.ports.documents.load(context.task_id) or {}
+    entries = [dict(entry) for entry in landing_plan.entries(loaded)]
+    marked = [e for e in entries if e.get("step") == "diagnose" and e.get("head") == context.head]
+    if not marked:
+        return
+    marked[-1].update(keys)
+    context.ports.documents.record_closure(context.task_id, {"landing": entries})
+
+
+def _escalate(context: LandingContext, reason: str) -> None:
+    """The one way the landing escalates a task: `failure`, with no failure entries in the
+    log (so `rules.auto_resumable` stays false), `needs-human` and the comment."""
+    current = _state(context)
+    if current is None:
+        return
+    escalated = apply(current, state_from(rules.logged(dict(rules.escalation("failure", reason)))))
+    context.ports.documents.save(escalated)
+    context.ports.tracker.label(context.task_id, escalate.NEEDS_HUMAN)
+    context.ports.tracker.comment(
+        context.task_id, escalate.comment(escalated, context.cfg, context.ports)
+    )
+    context.log(f"agentic: land: {context.task_id}: diagnose: escalated, {reason}")
+
+
+def escalate_failed_diagnosis(context: LandingContext) -> None:
+    """Escalates a task whose diagnosis never delivered and cannot be retried (a reason no
+    wait cures, or the calendar spent), without running the role."""
+    loaded = context.ports.documents.load(context.task_id) or {}
+    attempts = landing_rules.diagnose_attempts(loaded)
+    reason = attempts[-1].get("failure", "other") if attempts else "other"
+    noun = "attempt" if len(attempts) == 1 else "attempts"
+    _escalate(context, f"Landing Diagnoser did not deliver after {len(attempts)} {noun}: {reason}")
+
+
+def _accounting(patch: TaskState) -> dict[str, object]:
+    """What a failed run still owes the document: its cost, its runs and who ran. Never the
+    failures, the pause log, the escalation or the status."""
+    kept: dict[str, object] = {}
+    if "cost_usd" in patch:
+        kept["cost_usd"] = patch["cost_usd"]
+    if "runs" in patch:
+        kept["runs"] = patch["runs"]
+    if "current_role" in patch:
+        kept["current_role"] = patch["current_role"]
+    return kept
+
+
 def diagnose(context: LandingContext) -> None:
     """The landing's last step, once per task: the diagnoser reads why the merge keeps being
     refused. At restart depth 0 the pull request is closed and the issue starts over with
     `run --fresh`, carrying the depth and the cost the document records; from depth 1 the
-    task escalates as `failure` and nothing is filed."""
+    task escalates as `failure` and nothing is filed. A run that does not deliver is an
+    attempt (GH-257): its reason goes on the entry and `land` retries on the shared calendar;
+    only a reason no wait cures, or a spent calendar, escalates."""
     raw = _state(context)
     number = context.ports.inbox.issue_of(context.task_id)
     reference = raw.get("pull_request") if raw is not None else None
@@ -203,27 +257,27 @@ def diagnose(context: LandingContext) -> None:
     span = context.role_span(LANDING_DIAGNOSER) if context.role_span else nullcontext(None)
     with span as run:
         output, patch = asyncio.run(run_role(raw, LANDING_DIAGNOSER, context.cfg, context.ports))
-        # The span stamps the step and the refusal this run was dispatched for.
-        patch["landing"] = raw.get("landing", [])
         if run is not None:
-            run.finish(patch)
+            # The span stamps the step and the refusal this run was dispatched for.
+            run.finish({**patch, "landing": raw.get("landing", [])})
     if output is None:
-        context.ports.documents.save(apply(raw, patch))
+        context.ports.documents.save(apply(raw, state_from(_accounting(patch))))
+        failures = patch.get("failures", [])
+        last = failures[-1].get("reason", "other") if failures else "other"
+        _stamp(context, failure=landing_rules.entry_of({"failure": last}).get("failure", "other"))
         context.log(f"agentic: land: {context.task_id}: diagnose: the role did not deliver")
-        return
-    reason = str(output.data.get("reason", ""))
-    if landing_rules.restart_depth(raw) >= landing_rules.RESTART_DEPTH_MAX:
-        escalated = rules.logged(dict(rules.escalation("failure", reason)))
-        escalated_state = apply(raw, state_from({**patch, **escalated}))
-        context.ports.documents.save(escalated_state)
-        context.ports.tracker.label(context.task_id, escalate.NEEDS_HUMAN)
-        context.ports.tracker.comment(
-            context.task_id, escalate.comment(escalated_state, context.cfg, context.ports)
-        )
-        context.log(f"agentic: land: {context.task_id}: diagnose: escalated, {reason}")
+        loaded = context.ports.documents.load(context.task_id) or {}
+        if landing_rules.diagnose_retry(loaded, datetime.now(UTC)) == "escalate":
+            escalate_failed_diagnosis(context)
         return
     saved = apply(raw, patch)
     context.ports.documents.save(saved)
+    # Before anything else happens: a close or a spawn that fails must not read as undone.
+    _stamp(context, delivered=True)
+    reason = str(output.data.get("reason", ""))
+    if landing_rules.restart_depth(raw) >= landing_rules.RESTART_DEPTH_MAX:
+        _escalate(context, reason)
+        return
     try:
         context.ports.tracker.close_pull_request(str(reference))
     except ValueError as exc:

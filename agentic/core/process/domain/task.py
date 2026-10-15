@@ -600,6 +600,12 @@ class LandingEntry(TypedDict, total=False):
     # Resume children actually spawned for this entry, and when the last one was.
     resume_spawns: int
     resume_spawned_at: str
+    # Diagnose entries only (GH-257): `delivered` is written before anything else once the
+    # Landing Diagnoser delivered; `failure` is the reason an attempt that did not deliver
+    # failed with, which the retry calendar reads. Both optional: a document without them
+    # reads and renders as before.
+    delivered: bool
+    failure: FailureReason
 
 
 class TaskState(TaskInput, total=False):

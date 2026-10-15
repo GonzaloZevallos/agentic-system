@@ -941,3 +941,61 @@ def test_record_closure_round_trips_a_merge_checks_record_on_one_flow_line():
     other = _merge_checks("short", duration_s=0.5)
     _assert_roundtrip_and_replace("merge_checks", record, other)
     _assert_roundtrip_and_replace("merge_checks", other, huge)
+
+
+_STRANDED = (
+    "---\n"
+    "id: GH-150\n"
+    "title: t\n"
+    "status: waiting_on_human\n"
+    "current_role: Landing Diagnoser\n"
+    "escalated: 'Landing Diagnoser failed 2 times: You''ve hit your session limit · resets\n"
+    "  8:50am (America/Argentina/Buenos_Aires) (terminal reason: api_error, HTTP 429, exit\n"
+    "  code 1)'\n"
+    "escalation_class: failure\n"
+    "cost_usd: 61.5\n"
+    "pull_request: https://example.test/pull/210\n"
+    "landing: [{at: '2026-10-15T09:20:25+00:00', head: aaa, refusal: ci_missing, step: diagnose}]\n"
+    "pause_log:\n"
+    "- kind: failure\n"
+    "  value: account_limit\n"
+    "  section: Landing Diagnoser\n"
+    "- kind: escalation\n"
+    "  value: failure\n"
+    "design_items: []\n"
+    "---\n"
+    "\n# t\n\n## Original request\n\nd\n"
+)
+
+
+def test_record_closure_clears_a_wrapped_escalation_and_replaces_the_pause_log_whole():
+    """GH-257: freeing a stranded diagnose rewrites the two keys a block or a wrapped line
+    holds, and only them: everything else stays byte for byte."""
+    log = [
+        {"kind": "failure", "value": "account_limit", "section": "Landing Diagnoser"},
+        {"kind": "escalation", "value": "failure"},
+        {"kind": "resumed"},
+    ]
+    closed = document.record_closure(
+        _STRANDED,
+        {
+            "escalated": None,
+            "escalation_class": None,
+            "status": "ready_for_review",
+            "pause_log": log,
+        },
+    )
+    parsed = document.parse(closed)
+    assert parsed["escalated"] is None and parsed["escalation_class"] is None
+    assert parsed["status"] == "ready_for_review"
+    assert parsed["pause_log"] == log
+    assert parsed["cost_usd"] == 61.5
+    assert closed.count("\n") < _STRANDED.count("\n")
+    assert "design_items: []\n---" in closed
+    assert "8:50am" not in closed
+
+
+def test_record_closure_still_refuses_to_replace_a_wrapped_value_of_any_other_key():
+    raw = _STRANDED.replace("escalation_class: failure", "note: 'a\n  b'")
+    with pytest.raises(ValueError, match="note"):
+        document.record_closure(raw, {"note": "x"})

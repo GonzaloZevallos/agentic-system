@@ -52,3 +52,41 @@ def test_the_loop_of_three_conflicting_syncs_reaches_the_diagnose():
         {"id": "GH-9", "title": "", "description": "", **raw}, "merge_conflict", facts
     )
     assert step.kind == "diagnose"
+
+
+def _diagnose(**more) -> dict:
+    return {"head": HEAD, "step": "diagnose", "refusal": "merge_failed", **more}
+
+
+def test_only_a_delivered_diagnosis_counts_as_diagnosed():
+    attempt = _diagnose(failure="account_limit")
+    assert not landing_plan.spent({"landing": [attempt]}, HEAD, None).diagnosed
+    assert landing_plan.spent(
+        {"landing": [attempt, _diagnose(delivered=True)]}, HEAD, None
+    ).diagnosed
+
+
+def test_a_redelivery_keeps_the_diagnosis_counted():
+    resolved = landing.resolve_open([_diagnose(delivered=True)], "2026-10-15T13:00:00+00:00", 3.0)
+    assert landing_plan.spent({"landing": resolved}, HEAD, None).diagnosed
+
+
+def test_an_undelivered_diagnose_entry_is_not_a_dispatched_step():
+    assert not landing.already_dispatched([_diagnose(failure="sdk")], HEAD, "diagnose")
+    assert landing.already_dispatched([_diagnose(delivered=True)], HEAD, "diagnose")
+    assert landing.already_dispatched([{**_sync("x"), "step": "fix"}], HEAD, "fix")
+
+
+def test_the_gate_skips_a_retry_that_is_not_due_and_an_escalation_already_made():
+    from datetime import UTC, datetime, timedelta
+
+    at = datetime(2026, 10, 15, 12, tzinfo=UTC)
+    raw = {"landing": [_diagnose(failure="account_limit", at=at.isoformat())]}
+    wait = timedelta(minutes=rules.ACCOUNT_LIMIT_SCHEDULE[0])
+    assert landing_plan.diagnose_gate(raw, "diagnose", at + wait - timedelta(seconds=1)) == "skip"
+    assert landing_plan.diagnose_gate(raw, "diagnose", at + wait) == "go"
+    assert landing_plan.diagnose_gate(raw, "diagnose", None) == "skip"
+    assert landing_plan.diagnose_gate(raw, "fix", None) == "go"
+    sdk = {"landing": [_diagnose(failure="sdk", at=at.isoformat())]}
+    assert landing_plan.diagnose_gate(sdk, "diagnose", at) == "escalate"
+    assert landing_plan.diagnose_gate({**sdk, "escalated": "x"}, "diagnose", at) == "skip"

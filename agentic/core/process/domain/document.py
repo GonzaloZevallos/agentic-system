@@ -59,8 +59,10 @@ SUBTASK_RECORDED_AS = {"change_category": "return_category"}
 # The keys whose block value `record_closure` may replace: the system's own record of a
 # landing (GH-239), which `render` and `record_closure` both write as the one flow line
 # `_flow_line` builds (GH-242). A document that still carries it as a block is migrated by
-# the next write; every other key keeps the surgery guarantee.
-RECORD_KEYS: frozenset[str] = frozenset({"landing"})
+# the next write; every other key keeps the surgery guarantee. `pause_log` (a block) and
+# `escalated` (a string yaml wrapped over lines) are the two the migration of a stranded
+# diagnose rewrites in place (GH-257): the log whole, the escalation cleared.
+RECORD_KEYS: frozenset[str] = frozenset({"landing", "pause_log", "escalated"})
 _LANDING_PLACEHOLDER = "<landing-flow-line>"
 
 

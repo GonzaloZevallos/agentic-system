@@ -2,6 +2,8 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import get_args
 
+import pytest
+
 from agentic.core.process.application.ports import BranchPullRequest
 from agentic.core.process.domain import document, roles, rules, task
 from agentic.core.process.domain.denials import denial_for
@@ -2615,3 +2617,38 @@ def test_entering_carries_the_landing_restart_and_adds_nothing_when_there_is_not
     }
     assert rules.entering(task, cap=False, carried=(0, 0.0)) == task
     assert rules.entering(task, cap=False, carried=None) == task
+
+
+# --- GH-257: `retake_calendar` is `_calendar`'s body, asked by the landing too ----------------
+
+
+@pytest.mark.parametrize(
+    ("reason", "prior", "chase_prior"),
+    [
+        ("account_limit", 3, 3),
+        ("account_limit", 0, rules.ACCOUNT_LIMIT_CHASE_MAX),
+        ("account_limit", 5, rules.ACCOUNT_LIMIT_CHASE_MAX + 4),
+        ("upstream", 2, 2),
+        ("network", 1, rules.ACCOUNT_LIMIT_CHASE_MAX + 4),
+    ],
+)
+def test_retake_calendar_is_what_calendar_gives_for_the_same_fields(reason, prior, chase_prior):
+    candidate = rules.ResumeCandidate(
+        7, reason, NOW, prior, len(rules.RETAKE_SCHEDULE), chase_prior
+    )
+    assert rules.retake_calendar(reason, prior, chase_prior, len(rules.RETAKE_SCHEDULE)) == (
+        rules._calendar(candidate)
+    )
+
+
+def test_retake_calendar_names_the_flat_hourly_and_growing_calendars():
+    limit = len(rules.RETAKE_SCHEDULE)
+    flat = rules.retake_calendar("account_limit", 2, 2, limit)
+    assert flat == (rules.ACCOUNT_LIMIT_SCHEDULE, 2, limit)
+    past = rules.ACCOUNT_LIMIT_CHASE_MAX
+    assert rules.retake_calendar("account_limit", 2, past + 3, limit) == (
+        rules.ACCOUNT_LIMIT_HOURLY,
+        3,
+        len(rules.ACCOUNT_LIMIT_HOURLY),
+    )
+    assert rules.retake_calendar("upstream", 2, past, limit) == (rules.RETAKE_SCHEDULE, 2, limit)

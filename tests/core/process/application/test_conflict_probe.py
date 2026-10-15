@@ -93,7 +93,13 @@ def test_a_refusal_ahead_of_the_conflict_makes_no_probe_in_the_poller_or_land(re
 
 
 def test_a_diagnosed_task_is_not_probed_in_the_poller_or_land(tmp_path):
-    diagnosed = {"head": HEAD, "step": "diagnose", "refusal": "ci_failed", "at": "t"}
+    diagnosed = {
+        "head": HEAD,
+        "step": "diagnose",
+        "refusal": "ci_failed",
+        "at": "t",
+        "delivered": True,
+    }
     ports = _declaring(_ports(5, checks=False, landing=[diagnosed]))
     ports.tracker.ci_reports = [_red()]
     ports.workspace.conflict_answers[(HEAD, MASTER)] = True

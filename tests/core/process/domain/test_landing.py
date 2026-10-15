@@ -2,7 +2,7 @@
 closed step, the predicates around it say when a step may be taken, and the record keys
 are the ones a poller tick reads back. Pure: facts in, a step out."""
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta, timezone
 from typing import get_args, get_type_hints
 
@@ -11,7 +11,7 @@ import pytest
 from agentic.core.process.domain import ci, landing, rules
 from agentic.core.process.domain.landing import LandingSpent, LandingStep
 from agentic.core.process.domain.rules import MergeFacts
-from agentic.core.process.domain.task import LandingEntry
+from agentic.core.process.domain.task import FailureReason, LandingEntry
 
 HEAD = "a" * 40
 MASTER = "b" * 40
@@ -398,11 +398,13 @@ def test_a_landing_that_is_not_open_owes_nothing(raw):
     assert landing.resume_owed(raw, NOW) is False
 
 
-_SAMPLE: dict[type, object] = {
+_SAMPLE: dict[object, object] = {
     str: "x",
     int: 1,
     float: 1.5,
+    bool: True,
     list[str]: ["a"],
+    FailureReason: "account_limit",
 }
 
 
@@ -438,3 +440,324 @@ def test_resolve_open_preserves_the_resume_keys_and_the_cost_base():
     assert out["resume_spawned_at"] == _RESUME["resume_spawned_at"]
     assert out["cost_base"] == 1.0
     assert out["cost_usd"] == 2.0
+
+
+# --- GH-257: a failed diagnosis is an attempt on the entry, retried on the shared calendar ----
+
+AT = datetime(2026, 10, 15, 12, 0, tzinfo=UTC)
+
+
+def _attempt(failure=None, at=AT, **more):
+    entry = {"head": HEAD, "step": "diagnose", "refusal": "merge_failed", "at": at.isoformat()}
+    if failure is not None:
+        entry["failure"] = failure
+    return {**entry, **more}
+
+
+def _minutes(schedule, index):
+    return timedelta(minutes=schedule[index])
+
+
+def test_entry_of_keeps_delivered_only_as_a_bool_and_failure_only_as_a_reason():
+    assert landing.entry_of({"delivered": True, "failure": "account_limit"}) == {
+        "delivered": True,
+        "failure": "account_limit",
+    }
+    assert "delivered" not in landing.entry_of({"delivered": 1})
+    assert "delivered" not in landing.entry_of({"delivered": "true"})
+    assert "failure" not in landing.entry_of({"failure": "gh_rejected"})
+    assert "failure" not in landing.entry_of({"failure": 429})
+
+
+def test_every_failure_reason_the_type_names_is_kept_by_entry_of():
+    for reason in get_args(FailureReason):
+        assert landing.entry_of({"failure": reason}) == {"failure": reason}
+
+
+def test_resolve_open_returns_delivered_and_failure_unchanged():
+    entries = [_attempt("account_limit", delivered=True, cost_base=1.0)]
+    (out,) = landing.resolve_open(entries, "2026-10-15T13:00:00+00:00", 3.0)
+    assert out["delivered"] is True and out["failure"] == "account_limit"
+
+
+def test_unescalated_is_the_one_patch_that_clears_the_escalation():
+    raw = {
+        "id": "GH-5",
+        "status": "waiting_on_human",
+        "escalated": "x",
+        "escalation_class": "failure",
+        "pull_request": "https://example.test/pull/5",
+        "landing": [_attempt()],
+        "cost_usd": 4.0,
+    }
+    patch = landing.unescalated(raw)
+    assert patch == {
+        "escalated": None,
+        "escalation_class": None,
+        "status": "ready_for_review",
+        "pause_log": [{"kind": "resumed"}],
+    }
+    assert "cost_usd" not in patch
+
+
+def test_diagnose_retry_is_none_without_an_undelivered_attempt():
+    assert landing.diagnose_retry({}, AT) == "none"
+    assert landing.diagnose_retry({"landing": [{"step": "fix", "head": HEAD}]}, AT) == "none"
+    delivered = {"landing": [_attempt("account_limit"), _attempt(delivered=True)]}
+    assert landing.diagnose_retry(delivered, AT) == "none"
+
+
+def test_diagnose_retry_escalates_an_entry_with_no_failure_or_a_non_external_one():
+    assert landing.diagnose_retry({"landing": [_attempt()]}, AT) == "escalate"
+    assert landing.diagnose_retry({"landing": [_attempt("sdk")]}, AT) == "escalate"
+    assert landing.diagnose_retry({"landing": [_attempt("schema")]}, AT) == "escalate"
+
+
+def test_diagnose_retry_first_slot_is_due_at_exactly_its_minutes_and_not_a_second_before():
+    raw = {"landing": [_attempt("account_limit")]}
+    wait = _minutes(rules.ACCOUNT_LIMIT_SCHEDULE, 0)
+    assert landing.diagnose_retry(raw, AT + wait - timedelta(seconds=1)) == "waiting"
+    assert landing.diagnose_retry(raw, AT + wait) == "due"
+
+
+def test_diagnose_retry_runs_the_flat_calendar_to_its_last_slot_then_escalates():
+    schedule = rules.ACCOUNT_LIMIT_SCHEDULE
+    last = len(schedule) - 1
+    late = AT + timedelta(days=30)
+    still = {"landing": [_attempt("account_limit") for _ in range(last)]}
+    assert landing.diagnose_retry(still, late) == "due"
+    spent = {"landing": [_attempt("account_limit") for _ in range(len(schedule))]}
+    assert landing.diagnose_retry(spent, late) == "escalate"
+
+
+def test_diagnose_retry_counts_only_the_attempts_after_the_last_delivered_one():
+    spent = [_attempt("account_limit") for _ in range(len(rules.ACCOUNT_LIMIT_SCHEDULE))]
+    raw = {"landing": [*spent, _attempt(delivered=True), _attempt("account_limit")]}
+    assert landing.diagnose_retry(raw, AT + timedelta(days=30)) == "due"
+
+
+def test_diagnose_retry_measures_from_the_last_attempt():
+    first, second = AT, AT + timedelta(hours=3)
+    raw = {"landing": [_attempt("account_limit", first), _attempt("account_limit", second)]}
+    wait = _minutes(rules.ACCOUNT_LIMIT_SCHEDULE, 2 - 1)
+    assert landing.diagnose_retry(raw, second + wait - timedelta(seconds=1)) == "waiting"
+    assert landing.diagnose_retry(raw, second + wait) == "due"
+
+
+def test_diagnose_retry_of_an_upstream_failure_follows_the_growing_calendar():
+    schedule = rules.RETAKE_SCHEDULE
+    raw = {"landing": [_attempt("upstream")]}
+    wait = _minutes(schedule, 1)
+    assert landing.diagnose_retry(raw, AT + wait - timedelta(seconds=1)) == "waiting"
+    assert landing.diagnose_retry(raw, AT + wait) == "due"
+    spent = {"landing": [_attempt("upstream") for _ in range(len(schedule))]}
+    assert landing.diagnose_retry(spent, AT + timedelta(days=30)) == "escalate"
+
+
+def test_diagnose_retry_never_reaches_the_hourly_week():
+    hourly = len(rules.ACCOUNT_LIMIT_SCHEDULE) + 1
+    assert hourly <= rules.ACCOUNT_LIMIT_CHASE_MAX
+    raw = {"landing": [_attempt("account_limit") for _ in range(hourly)]}
+    assert landing.diagnose_retry(raw, AT + timedelta(days=30)) == "escalate"
+
+
+@pytest.mark.parametrize("at", ["not a time", "2026-10-15T12:00:00", 5, None])
+def test_diagnose_retry_waits_when_the_attempt_time_is_unreadable_or_naive(at):
+    entry = _attempt("account_limit")
+    entry["at"] = at
+    assert landing.diagnose_retry({"landing": [entry]}, AT + timedelta(days=30)) == "waiting"
+
+
+def test_diagnose_retry_waits_when_now_is_naive():
+    raw = {"landing": [_attempt("account_limit")]}
+    assert landing.diagnose_retry(raw, datetime(2030, 1, 1)) == "waiting"
+
+
+# --- GH-257: the stranded legacy diagnose document and its one migration ------------------
+
+ESCALATED_PREFIX = "Escalated: "
+DIAGNOSER = "Landing Diagnoser"
+
+
+def _stranded(**over):
+    """GH-150's shape, trimmed: a failed Landing Diagnoser that escalated through the
+    run_role patch, leaving its entry with no `delivered` and no `failure`."""
+    raw = {
+        "id": "GH-150",
+        "status": "waiting_on_human",
+        "current_role": DIAGNOSER,
+        "escalated": "Landing Diagnoser failed 2 times: You've hit your session limit",
+        "escalation_class": "failure",
+        "pull_request": "https://example.test/pull/210",
+        "cost_usd": 61.5,
+        "landing": [
+            {"head": "c" * 40, "step": "fix", "refusal": "ci_failed", "at": AT.isoformat()},
+            _attempt(at=AT + timedelta(hours=1)),
+        ],
+        "pause_log": [
+            {"kind": "failure", "value": "account_limit", "section": "Developer: land-101"},
+            {"kind": "escalation", "value": "failure"},
+            {"kind": "resumed"},
+            {"kind": "failure", "value": "account_limit", "section": DIAGNOSER},
+            {"kind": "failure", "value": "account_limit", "section": DIAGNOSER},
+            {"kind": "escalation", "value": "failure"},
+        ],
+    }
+    return {**raw, **over}
+
+
+@dataclass(frozen=True)
+class _Comment:
+    body: str
+    created_at: str
+
+
+def _comment(body, at):
+    return _Comment(body=body, created_at=at.isoformat())
+
+
+def test_stranded_diagnose_recognises_the_legacy_document():
+    assert landing.stranded_diagnose(_stranded(), False) is True
+
+
+def test_stranded_diagnose_is_false_when_an_escalation_comment_came_after():
+    assert landing.stranded_diagnose(_stranded(), True) is False
+
+
+def _without(key):
+    raw = _stranded()
+    del raw[key]
+    return raw
+
+
+def _epoch(*entries):
+    return {"pause_log": [{"kind": "resumed"}, *entries]}
+
+
+_FAILED = {"kind": "failure", "value": "account_limit", "section": DIAGNOSER}
+_ESCALATION = {"kind": "escalation", "value": "failure"}
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        pytest.param({"status": "ready_for_review"}, id="not-waiting"),
+        pytest.param({"escalation_class": "questions"}, id="questions"),
+        pytest.param({"escalation_class": "cap"}, id="cap"),
+        pytest.param({"escalation_class": None}, id="no-class"),
+        pytest.param({"current_role": "Developer"}, id="graph-role"),
+        pytest.param({"pull_request": None}, id="no-pull-request"),
+        pytest.param({"pull_request": ""}, id="empty-pull-request"),
+        pytest.param(_epoch(_ESCALATION), id="depth-one-escalation-without-failures"),
+        pytest.param(_epoch(_FAILED), id="no-escalation-entry"),
+        pytest.param(_epoch(_FAILED, {**_FAILED, "value": "sdk"}, _ESCALATION), id="sdk"),
+        pytest.param(_epoch(_FAILED, {**_FAILED, "value": "other"}, _ESCALATION), id="other"),
+        pytest.param(
+            _epoch({**_FAILED, "section": "Developer: land-101"}, _ESCALATION),
+            id="failure-of-a-graph-role",
+        ),
+        pytest.param(
+            _epoch(_FAILED, {"kind": "escalation", "value": "cap"}, _ESCALATION), id="cap-entry"
+        ),
+        pytest.param({"pause_log": "garbage"}, id="unreadable-log"),
+        pytest.param({"landing": [_attempt(failure="account_limit")]}, id="already-stamped"),
+        pytest.param({"landing": [_attempt(delivered=True)]}, id="delivered"),
+        pytest.param({"landing": [{"step": "fix", "head": HEAD}]}, id="no-diagnose-entry"),
+        pytest.param({"landing": "garbage"}, id="unreadable-landing"),
+    ],
+)
+def test_stranded_diagnose_refuses_every_other_shape(over):
+    assert landing.stranded_diagnose(_stranded(**over), False) is False
+
+
+def test_stranded_diagnose_reads_only_the_epoch_after_the_last_resumed():
+    older_sdk = [{**_FAILED, "value": "sdk"}, _ESCALATION, {"kind": "resumed"}]
+    raw = _stranded(pause_log=[*older_sdk, _FAILED, _ESCALATION])
+    assert landing.stranded_diagnose(raw, False) is True
+
+
+def test_escalated_after_is_true_only_for_an_escalated_comment_created_after_the_entry():
+    at = AT.isoformat()
+    later = _comment(ESCALATED_PREFIX + "x", AT + timedelta(seconds=1))
+    earlier = _comment(ESCALATED_PREFIX + "x", AT - timedelta(seconds=1))
+    same = _comment(ESCALATED_PREFIX + "x", AT)
+    other = _comment("Landing: something", AT + timedelta(hours=1))
+    assert landing.escalated_after([later], at, ESCALATED_PREFIX) is True
+    assert landing.escalated_after([earlier, same, other], at, ESCALATED_PREFIX) is False
+    assert landing.escalated_after([], at, ESCALATED_PREFIX) is False
+
+
+def test_escalated_after_reads_a_z_suffixed_timestamp_as_utc():
+    later = _Comment(ESCALATED_PREFIX + "x", "2026-10-15T12:00:01Z")
+    assert landing.escalated_after([later], AT.isoformat(), ESCALATED_PREFIX) is True
+
+
+@pytest.mark.parametrize(
+    ("comment_at", "entry_at"),
+    [
+        ("garbage", AT.isoformat()),
+        ("2026-10-15T13:00:00", AT.isoformat()),
+        ((AT + timedelta(hours=1)).isoformat(), "2026-10-15T12:00:00"),
+        ((AT + timedelta(hours=1)).isoformat(), "garbage"),
+        ((AT + timedelta(hours=1)).isoformat(), None),
+    ],
+)
+def test_escalated_after_keeps_the_document_escalated_on_a_time_it_cannot_compare(
+    comment_at, entry_at
+):
+    comments = [_Comment(ESCALATED_PREFIX + "x", comment_at)]
+    assert landing.escalated_after(comments, entry_at, ESCALATED_PREFIX) is True
+
+
+def test_an_unreadable_time_on_a_comment_that_is_not_an_escalation_is_ignored():
+    comments = [_Comment("hello", "garbage")]
+    assert landing.escalated_after(comments, AT.isoformat(), ESCALATED_PREFIX) is False
+
+
+def test_the_domain_prefix_is_the_one_the_application_posts():
+    from agentic.core.process.application import escalate
+
+    assert landing.ESCALATED_COMMENT == escalate.ESCALATED
+
+
+def test_migration_clears_the_escalation_and_stamps_the_failure_in_one_patch():
+    raw = _stranded()
+    patch = landing.migration(raw)
+    assert patch["escalated"] is None and patch["escalation_class"] is None
+    assert patch["status"] == "ready_for_review"
+    # closure replaces a key whole: the history stays and `resumed` closes the epoch
+    assert patch["pause_log"] == [*raw["pause_log"], {"kind": "resumed"}]
+    assert patch["landing"][0] == raw["landing"][0]
+    assert patch["landing"][1] == {**raw["landing"][1], "failure": "account_limit"}
+    assert "cost_usd" not in patch
+    assert raw == _stranded()  # the input is not touched
+
+
+def test_migration_takes_the_failure_from_the_last_failure_of_the_closing_epoch():
+    raw = _stranded(
+        pause_log=[
+            {"kind": "failure", "value": "network", "section": DIAGNOSER},
+            {"kind": "failure", "value": "upstream", "section": DIAGNOSER},
+            _ESCALATION,
+        ]
+    )
+    assert landing.migration(raw)["landing"][-1]["failure"] == "upstream"
+
+
+def test_migration_leaves_diagnose_retry_due_or_waiting_never_escalate():
+    raw = _stranded()
+    patch = landing.migration(raw)
+    migrated = {**raw, **patch}
+    entry_at = datetime.fromisoformat(raw["landing"][-1]["at"])
+    wait = _minutes(rules.ACCOUNT_LIMIT_SCHEDULE, 0)
+    assert landing.diagnose_retry(migrated, entry_at) == "waiting"
+    assert landing.diagnose_retry(migrated, entry_at + wait) == "due"
+    assert landing.diagnose_retry(raw, entry_at + wait) == "escalate"  # before: stuck
+
+
+def test_migration_stamps_only_the_last_diagnose_entry():
+    earlier = _attempt(delivered=True, at=AT - timedelta(days=1))
+    raw = _stranded(landing=[earlier, _attempt(at=AT)])
+    stamped = landing.migration(raw)["landing"]
+    assert stamped[0] == earlier
+    assert stamped[1]["failure"] == "account_limit"

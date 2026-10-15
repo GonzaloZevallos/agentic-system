@@ -176,7 +176,9 @@ def _failing_world(tmp_path, landing=None):
 
 
 def test_a_refusal_whose_step_is_none_is_left_to_the_human(tmp_path):
-    spent = [{"head": HEAD, "step": "diagnose", "refusal": "merge_failed", "at": "t"}]
+    spent = [
+        {"head": HEAD, "step": "diagnose", "refusal": "merge_failed", "at": "t", "delivered": True}
+    ]
     ports = _failing_world(tmp_path, spent)
     _run(ports, tmp_path)
     [(_, comment)] = ports.tracker.comments
