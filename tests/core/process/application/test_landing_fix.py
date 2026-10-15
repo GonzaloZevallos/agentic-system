@@ -6,13 +6,15 @@ no human step."""
 from __future__ import annotations
 
 import dataclasses
+from datetime import datetime, timedelta
 
 import pytest
 
 from agentic.core.process.application import landing, landing_fix, landing_plan, poll
 from agentic.core.process.application.landing_sync import reopen
-from agentic.core.process.application.ports import Upstream
+from agentic.core.process.application.ports import AttemptFailed, RawResult, Upstream
 from agentic.core.process.domain import landing as landing_rules
+from agentic.core.process.domain import rules
 from tests.core.process.application.test_merge_ci import _check, _report
 from tests.core.process.application.test_poll import _cfg
 from tests.core.process.application.test_poll_merge import (
@@ -23,7 +25,7 @@ from tests.core.process.application.test_poll_merge import (
     _HeldLocks,
     _ports,
 )
-from tests.fakes import FakeLauncher, MemoryStack
+from tests.fakes import FakeLauncher, MemoryStack, ScriptedRunner
 
 NOW = "2026-10-14T00:00:00+00:00"
 
@@ -611,3 +613,191 @@ def test_acceptance_a_second_exhaustion_at_depth_one_escalates_and_files_nothing
     assert [a[1] for a in driver.spawned] == ["land"]
     assert ports.tracker.closed_pull_requests == [] and ports.tracker.opened_issues == []
     assert ports.documents.saved[-1]["escalation_class"] == "failure"
+
+
+# --- GH-257: a diagnosis that does not deliver is an attempt, never a stranded escalation ----
+
+
+START = datetime.fromisoformat(NOW)
+
+
+def _land_at(ports, tmp_path, when, launcher=None):
+    lines: list[str] = []
+    result = landing.land(
+        "GH-5",
+        _cfg(tmp_path),
+        ports,
+        _HeldLocks(),
+        Upstream("origin/master", MASTER, None),
+        frozenset(),
+        lines.append,
+        clock=lambda: when.isoformat(),
+        launcher=launcher,
+        argv0="agentic",
+    )
+    return result, lines
+
+
+def _merge_failed(ports, runner, **document):
+    spent = {"head": HEAD, "count": 3, "failure": "gh_rejected"}
+    ports.documents.record_closure(
+        "GH-5", {"merge_failures": spent, "title": "t", "description": "d", **document}
+    )
+    return dataclasses.replace(ports, runner=runner)
+
+
+def _cut(reason, times=2):
+    return [AttemptFailed(f"{reason} {n}", reason=reason) for n in range(times)]
+
+
+def _delivery():
+    return RawResult({"markdown": "### Why\n\nx", "reason": "stale"}, 0.4, 3, "s")
+
+
+def _diagnoses(ports):
+    return [e for e in _doc(ports)["landing"] if e["step"] == "diagnose"]
+
+
+def test_two_account_limit_failures_leave_the_task_ready_with_the_reason_on_its_entry(tmp_path):
+    ports = _merge_failed(
+        _ports(5), ScriptedRunner(landing_diagnoser=_cut("account_limit")), cost_usd=2.0
+    )
+
+    result, _ = _land_at(ports, tmp_path, START)
+
+    doc = _doc(ports)
+    assert result.step == "diagnose"
+    assert doc["status"] == "ready_for_review"
+    assert not doc.get("escalated") and not doc.get("escalation_class")
+    assert not doc.get("pause_log") and not doc.get("failures")
+    assert ports.tracker.labels == [] and ports.tracker.comments == []
+    assert doc["cost_usd"] >= 2.0
+    assert [(e["failure"], e.get("delivered")) for e in _diagnoses(ports)] == [
+        ("account_limit", None)
+    ]
+    assert rules.auto_resumable(doc) is None
+
+
+def test_a_sdk_failure_escalates_at_once_labelled_and_commented(tmp_path):
+    ports = _merge_failed(_ports(5), ScriptedRunner(landing_diagnoser=_cut("sdk")))
+
+    _land_at(ports, tmp_path, START)
+
+    doc = _doc(ports)
+    assert doc["escalation_class"] == "failure"
+    assert "Landing Diagnoser" in doc["escalated"] and "sdk" in doc["escalated"]
+    assert "1 attempt" in doc["escalated"]
+    assert ports.tracker.labels == [("GH-5", "needs-human")]
+    assert len(ports.tracker.comments) == 1
+    assert doc["pause_log"] == [{"kind": "escalation", "value": "failure"}]
+    assert rules.auto_resumable(doc) is None
+
+
+def test_a_retry_waits_for_its_slot_then_runs_the_role_again(tmp_path):
+    runner = ScriptedRunner(landing_diagnoser=[*_cut("account_limit"), _delivery()])
+    ports = _merge_failed(_ports(5), runner)
+    wait = timedelta(minutes=rules.ACCOUNT_LIMIT_SCHEDULE[0])
+    _land_at(ports, tmp_path, START)
+
+    early, _ = _land_at(ports, tmp_path, START + wait - timedelta(seconds=1))
+    assert early.kind == "skipped" and len(runner.calls) == 2
+
+    launcher = FakeLauncher()
+    due, _ = _land_at(ports, tmp_path, START + wait, launcher)
+
+    assert due.kind == "dispatched" and len(runner.calls) == 3
+    assert [e.get("delivered") for e in _diagnoses(ports)] == [None, True]
+    assert launcher.spawned[0][:3] == ["agentic", "run", "--issue"]
+
+
+def test_a_spent_calendar_escalates_without_running_the_role_and_is_nobodys_candidate(tmp_path):
+    runner = ScriptedRunner()
+    ports = _merge_failed(_ports(5), runner)
+    spent = [
+        {
+            "head": HEAD,
+            "step": "diagnose",
+            "refusal": "merge_failed",
+            "at": START.isoformat(),
+            "failure": "account_limit",
+        }
+        for _ in rules.ACCOUNT_LIMIT_SCHEDULE
+    ]
+    ports.documents.record_closure("GH-5", {"landing": spent})
+
+    result, _ = _land_at(ports, tmp_path, START + timedelta(days=2))
+
+    doc = _doc(ports)
+    assert result.step == "diagnose" and runner.calls == []
+    assert doc["escalation_class"] == "failure"
+    assert ports.tracker.labels == [("GH-5", "needs-human")]
+    assert poll.gather_resumes(ports, START + timedelta(days=2)) == []
+    again, _ = _land_at(ports, tmp_path, START + timedelta(days=3))
+    assert again.kind == "skipped" and len(ports.tracker.comments) == 1
+
+
+def test_a_delivered_run_is_marked_even_when_the_close_fails_and_land_then_does_nothing(tmp_path):
+    ports = _merge_failed(_ports(5), ScriptedRunner(landing_diagnoser=[_delivery()]))
+
+    def refuse(reference):
+        raise ValueError("gh pr close failed")
+
+    ports.tracker.close_pull_request = refuse
+    launcher = FakeLauncher()
+
+    _land_at(ports, tmp_path, START, launcher)
+
+    assert [e.get("delivered") for e in _diagnoses(ports)] == [True]
+    assert launcher.spawned == []
+    again, _ = _land_at(ports, tmp_path, START + timedelta(days=1), launcher)
+    assert again.kind == "skipped" and again.step == "none"
+
+
+def test_a_delivered_run_is_marked_even_when_the_spawn_raises(tmp_path):
+    ports = _merge_failed(_ports(5), ScriptedRunner(landing_diagnoser=[_delivery()]))
+
+    with pytest.raises(FileNotFoundError):
+        _land_at(ports, tmp_path, START, FakeLauncher(fails={0}))
+
+    assert [e.get("delivered") for e in _diagnoses(ports)] == [True]
+    assert ports.documents.closures["GH-5"]["landing_restarts"] == 1
+    again, _ = _land_at(ports, tmp_path, START + timedelta(days=1), FakeLauncher())
+    assert again.step == "none"
+
+
+def test_the_depth_one_escalation_keeps_the_delivered_mark_and_the_cost(tmp_path):
+    ports = _merge_failed(
+        _ports(5),
+        ScriptedRunner(landing_diagnoser=[_delivery()]),
+        landing_restarts=1,
+        cost_usd=2.0,
+    )
+
+    _land_at(ports, tmp_path, START)
+
+    doc = _doc(ports)
+    assert [e.get("delivered") for e in _diagnoses(ports)] == [True]
+    assert doc["escalation_class"] == "failure" and doc["escalated"]
+    assert max(s["cost_usd"] for s in ports.documents.saved) == pytest.approx(2.4)
+    assert all(s["cost_usd"] >= 2.0 for s in ports.documents.saved)
+    assert ports.tracker.labels == [("GH-5", "needs-human")]
+
+
+def test_no_save_after_the_delivered_mark_writes_the_stale_landing_back(tmp_path):
+    ports = _merge_failed(
+        _ports(5), ScriptedRunner(landing_diagnoser=[_delivery()]), landing_restarts=1
+    )
+    stale: list[object] = []
+    real_save = ports.documents.save
+
+    def watching(state):
+        marked = ports.documents.closures.get("GH-5", {}).get("landing")
+        if marked and any(e.get("delivered") for e in marked):
+            stale.append(state.get("landing") != marked)
+        return real_save(state)
+
+    ports.documents.save = watching
+
+    _land_at(ports, tmp_path, START)
+
+    assert stale and not any(stale)

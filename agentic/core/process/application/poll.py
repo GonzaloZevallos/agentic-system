@@ -508,7 +508,7 @@ def gather_merges(
             if lands is not None and decision.reason is not None:
                 # Every refusal logged above asks `landing_step` what to do instead; only a
                 # built step not yet dispatched on this head is worth a `land` child.
-                if landing_plan.pending(raw, decision.reason, facts, live) is not None or (
+                if landing_plan.pending(raw, decision.reason, facts, live, now) is not None or (
                     decision.reason == "not_ready" and landing_rules.resume_owed(raw, now)
                 ):
                     # A `not_ready` task whose reopened pass lost its resume child owes

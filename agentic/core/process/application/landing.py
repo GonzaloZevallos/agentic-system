@@ -123,6 +123,20 @@ def _land(
     if not landing_plan.takes_action(step.kind, live):
         log(f"agentic: land: {task_id}: {head} {step.kind}: nothing to do")
         return LandResult("skipped", "not_live", step.kind)
+    try:
+        now: datetime | None = datetime.fromisoformat(clock())
+    except ValueError:
+        now = None
+    gate = landing_plan.diagnose_gate(raw, step.kind, now)
+    if gate == "skip":
+        log(f"agentic: land: {task_id}: {head} {step.kind}: diagnosis not due")
+        return LandResult("skipped", "diagnose_waiting", step.kind)
+    if gate == "escalate":
+        context = LandingContext(
+            task_id, cfg, ports, step, head, upstream, assessed.facts, log, role_span=role_span
+        )
+        landing_fix.escalate_failed_diagnosis(context)
+        return LandResult("dispatched", step=step.kind)
     if landing_rules.already_dispatched(landing_plan.entries(raw), head, step.kind):
         log(f"agentic: land: {task_id}: {head} {step.kind}: already taken")
         return LandResult("skipped", "already_dispatched", step.kind)

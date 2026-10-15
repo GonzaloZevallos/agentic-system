@@ -167,8 +167,14 @@ def review_carries(
 
 def already_dispatched(landing: Sequence[Mapping[str, object]], head: str, step: str) -> bool:
     """Whether `(head, step)` is already in the document's `landing` list: the idempotency
-    key, written before the dispatch."""
-    return any(entry.get("head") == head and entry.get("step") == step for entry in landing)
+    key, written before the dispatch. A diagnose entry that never delivered is an attempt
+    (`diagnose_retry`), not a taken step."""
+    return any(
+        entry.get("head") == head
+        and entry.get("step") == step
+        and (step != "diagnose" or entry.get("delivered") is True)
+        for entry in landing
+    )
 
 
 def landing_open(state: TaskState) -> bool:

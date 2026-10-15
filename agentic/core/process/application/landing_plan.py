@@ -10,7 +10,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from typing import Protocol
+from datetime import datetime
+from typing import Literal, Protocol
 
 from agentic.shared.configuration import Configuration
 
@@ -65,7 +66,7 @@ def spent(
         ),
         syncs=count(lambda e: e.get("step") == "sync_master" and not _conflicting(e)),
         reruns_on_head=count(lambda e: e.get("step") == "rerun" and e.get("head") == head),
-        diagnosed=count(lambda e: e.get("step") == "diagnose") > 0,
+        diagnosed=count(lambda e: e.get("step") == "diagnose" and e.get("delivered") is True) > 0,
         waited_s=waited_s,
     )
 
@@ -80,17 +81,40 @@ def step_for(raw: TaskState, refusal: rules.MergeRefusal, facts: rules.MergeFact
     )
 
 
+def diagnose_gate(
+    raw: TaskState, kind: LandingStepKind, now: datetime | None
+) -> Literal["go", "skip", "escalate"]:
+    """What a `diagnose` step does when earlier attempts never delivered (GH-257): `go`
+    (dispatch, a first attempt or a retry that is `due`), `skip` (not yet due, or already
+    escalated) or `escalate` (without running the role). Any other step, or none waiting,
+    is `go`. An unreadable `now` waits."""
+    if kind != "diagnose" or not landing.diagnose_attempts(raw):
+        return "go"
+    if now is None:
+        return "skip"
+    match landing.diagnose_retry(raw, now):
+        case "none" | "due":
+            return "go"
+        case "waiting":
+            return "skip"
+        case "escalate":
+            return "skip" if raw.get("escalated") else "escalate"
+
+
 def pending(
     raw: TaskState,
     refusal: rules.MergeRefusal,
     facts: rules.MergeFacts,
     live: frozenset[LandingStepKind],
+    now: datetime | None = None,
 ) -> LandingStep | None:
     """The step worth a `land` child: built (`live`) and not yet dispatched on this head."""
     step = step_for(raw, refusal, facts)
     if not takes_action(step.kind, live) or facts.pr_head is None:
         return None
-    if landing.already_dispatched(entries(raw), facts.pr_head, step.kind):
+    if diagnose_gate(raw, step.kind, now) == "skip" or landing.already_dispatched(
+        entries(raw), facts.pr_head, step.kind
+    ):
         return None
     return step
 
