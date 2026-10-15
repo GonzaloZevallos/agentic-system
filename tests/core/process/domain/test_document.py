@@ -3,6 +3,8 @@ import yaml
 
 from agentic.core.process.application import resume
 from agentic.core.process.domain import document, legacy_names, presubmit, roles, rules
+from agentic.core.process.domain import landing as landing_rules
+from tests.gh150_stranded import GH150_STRANDED
 
 
 def test_render_then_parse_roundtrip():
@@ -943,41 +945,82 @@ def test_record_closure_round_trips_a_merge_checks_record_on_one_flow_line():
     _assert_roundtrip_and_replace("merge_checks", other, huge)
 
 
-_STRANDED = (
-    "---\n"
-    "id: GH-150\n"
-    "title: t\n"
-    "status: waiting_on_human\n"
-    "current_role: Landing Diagnoser\n"
-    "escalated: 'Landing Diagnoser failed 2 times: You''ve hit your session limit · resets\n"
-    "  8:50am (America/Argentina/Buenos_Aires) (terminal reason: api_error, HTTP 429, exit\n"
-    "  code 1)'\n"
-    "escalation_class: failure\n"
-    "cost_usd: 61.5\n"
-    "pull_request: https://example.test/pull/210\n"
-    "landing: [{at: '2026-10-15T09:20:25+00:00', head: aaa, refusal: ci_missing, step: diagnose}]\n"
-    "pause_log:\n"
-    "- kind: failure\n"
-    "  value: account_limit\n"
-    "  section: Landing Diagnoser\n"
-    "- kind: escalation\n"
-    "  value: failure\n"
-    "design_items: []\n"
-    "---\n"
-    "\n# t\n\n## Original request\n\nd\n"
-)
+def _top_key(line: str) -> str | None:
+    """The top-level key a frontmatter line opens, `None` for a continuation (an indented line,
+    a column-0 `- ` item of an indentless sequence, or a blank line inside a quoted scalar)."""
+    if line == "" or line[:1] in (" ", "\t") or line.startswith("-"):
+        return None
+    return line.split(":", 1)[0]
 
 
-def test_record_closure_clears_a_wrapped_escalation_and_replaces_the_pause_log_whole():
-    """GH-257: freeing a stranded diagnose rewrites the two keys a block or a wrapped line
-    holds, and only them: everything else stays byte for byte."""
-    log = [
-        {"kind": "failure", "value": "account_limit", "section": "Landing Diagnoser"},
-        {"kind": "escalation", "value": "failure"},
-        {"kind": "resumed"},
-    ]
+def _key_lines(text: str, key: str) -> list[str]:
+    """The raw frontmatter lines of `key`: its own line and every continuation after it."""
+    lines = text.split("\n---\n")[0].split("\n")[1:]
+    found: list[str] = []
+    inside = False
+    for line in lines:
+        if (opened := _top_key(line)) is not None:
+            inside = opened == key
+        if inside:
+            found.append(line)
+    return found
+
+
+def _keys(text: str) -> list[str]:
+    lines = text.split("\n---\n")[0].split("\n")[1:]
+    return [k for line in lines if (k := _top_key(line)) is not None]
+
+
+def test_the_real_stranded_text_has_the_shape_the_migration_was_written_for():
+    doc = document.parse(GH150_STRANDED)
+
+    assert landing_rules.stranded_diagnose(doc, False) is True
+    assert isinstance(doc["escalated"], str) and doc["escalated"]
+    assert len(_key_lines(GH150_STRANDED, "escalated")) > 1
+    assert _key_lines(GH150_STRANDED, "pause_log")[0] == "pause_log:"
+    assert _key_lines(GH150_STRANDED, "failures")[0] == "failures:"
+    log = doc["pause_log"]
+    assert sum(1 for e in log if e["kind"] == "resumed") >= 2
+    closing = log[max(i for i, e in enumerate(log) if e["kind"] == "resumed") + 1 :]
+    assert closing[:-1] and all(
+        e["kind"] == "failure"
+        and e["section"] == "Landing Diagnoser"
+        and e["value"] in rules.EXTERNAL_REASONS
+        for e in closing[:-1]
+    )
+    assert closing[-1] == {"kind": "escalation", "value": "failure"}
+
+
+def test_migration_written_through_record_closure_on_the_real_text_frees_it_and_nothing_else():
+    values = landing_rules.migration(document.parse(GH150_STRANDED))
+
+    out = document.record_closure(GH150_STRANDED, values)
+
+    for key in _keys(GH150_STRANDED):
+        if key not in values:
+            assert _key_lines(out, key) == _key_lines(GH150_STRANDED, key), key
+    assert {"failures", "cost_usd", "title", "current_role", "subtasks", "pull_request"} <= set(
+        _keys(out)
+    ) - set(values)
+    parsed = document.parse(out)
+    for key, value in values.items():
+        assert parsed[key] == value, key
+    for key in values.keys() & document.RECORD_KEYS:
+        assert len(_key_lines(out, key)) == 1, key
+    # `resumed_status` of the fixture's own `subtasks` (approved) and `pull_request` (set).
+    assert parsed["status"] == "ready_for_review"
+    assert document.record_closure(out, values) == out
+    assert landing_rules.stranded_diagnose(parsed, False) is False
+
+
+def test_record_closure_clears_the_real_wrapped_escalation_and_replaces_the_pause_log_whole():
+    """GH-257: freeing a stranded diagnose rewrites the keys a block or a wrapped line holds,
+    and only them: everything else stays byte for byte."""
+    before = document.parse(GH150_STRANDED)
+    log = [*before["pause_log"], {"kind": "resumed"}]
+
     closed = document.record_closure(
-        _STRANDED,
+        GH150_STRANDED,
         {
             "escalated": None,
             "escalation_class": None,
@@ -985,17 +1028,28 @@ def test_record_closure_clears_a_wrapped_escalation_and_replaces_the_pause_log_w
             "pause_log": log,
         },
     )
+
     parsed = document.parse(closed)
     assert parsed["escalated"] is None and parsed["escalation_class"] is None
-    assert parsed["status"] == "ready_for_review"
     assert parsed["pause_log"] == log
-    assert parsed["cost_usd"] == 61.5
-    assert closed.count("\n") < _STRANDED.count("\n")
-    assert "design_items: []\n---" in closed
-    assert "8:50am" not in closed
+    assert parsed["cost_usd"] == before["cost_usd"]
+    assert closed.count("\n") < GH150_STRANDED.count("\n")
+    assert len(_key_lines(GH150_STRANDED, "escalated")) == 3
+    assert _key_lines(closed, "escalated") == ["escalated: null"]
 
 
 def test_record_closure_still_refuses_to_replace_a_wrapped_value_of_any_other_key():
-    raw = _STRANDED.replace("escalation_class: failure", "note: 'a\n  b'")
-    with pytest.raises(ValueError, match="note"):
-        document.record_closure(raw, {"note": "x"})
+    """The block `failures:` of the real text is the rejected input: only the record keys are
+    rewritten whole."""
+    with pytest.raises(ValueError, match="failures"):
+        document.record_closure(GH150_STRANDED, {"failures": []})
+
+
+def test_a_record_keys_set_without_the_wrapped_and_block_keys_refuses_the_real_text(monkeypatch):
+    """The pre-GH-257 `RECORD_KEYS` is the rejected input: the real escalation and pause log
+    are then not a single scalar line, and the migration cannot be written."""
+    monkeypatch.setattr(document, "RECORD_KEYS", frozenset({"landing"}))
+    values = landing_rules.migration(document.parse(GH150_STRANDED))
+
+    with pytest.raises(ValueError, match="escalated|pause_log"):
+        document.record_closure(GH150_STRANDED, values)
