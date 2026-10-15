@@ -11,7 +11,7 @@ import pytest
 from agentic.core.process.domain import ci, landing, rules
 from agentic.core.process.domain.landing import LandingSpent, LandingStep
 from agentic.core.process.domain.rules import MergeFacts
-from agentic.core.process.domain.task import LandingEntry
+from agentic.core.process.domain.task import FailureReason, LandingEntry
 
 HEAD = "a" * 40
 MASTER = "b" * 40
@@ -398,11 +398,13 @@ def test_a_landing_that_is_not_open_owes_nothing(raw):
     assert landing.resume_owed(raw, NOW) is False
 
 
-_SAMPLE: dict[type, object] = {
+_SAMPLE: dict[object, object] = {
     str: "x",
     int: 1,
     float: 1.5,
+    bool: True,
     list[str]: ["a"],
+    FailureReason: "account_limit",
 }
 
 
@@ -438,3 +440,134 @@ def test_resolve_open_preserves_the_resume_keys_and_the_cost_base():
     assert out["resume_spawned_at"] == _RESUME["resume_spawned_at"]
     assert out["cost_base"] == 1.0
     assert out["cost_usd"] == 2.0
+
+
+# --- GH-257: a failed diagnosis is an attempt on the entry, retried on the shared calendar ----
+
+AT = datetime(2026, 10, 15, 12, 0, tzinfo=UTC)
+
+
+def _attempt(failure=None, at=AT, **more):
+    entry = {"head": HEAD, "step": "diagnose", "refusal": "merge_failed", "at": at.isoformat()}
+    if failure is not None:
+        entry["failure"] = failure
+    return {**entry, **more}
+
+
+def _minutes(schedule, index):
+    return timedelta(minutes=schedule[index])
+
+
+def test_entry_of_keeps_delivered_only_as_a_bool_and_failure_only_as_a_reason():
+    assert landing.entry_of({"delivered": True, "failure": "account_limit"}) == {
+        "delivered": True,
+        "failure": "account_limit",
+    }
+    assert "delivered" not in landing.entry_of({"delivered": 1})
+    assert "delivered" not in landing.entry_of({"delivered": "true"})
+    assert "failure" not in landing.entry_of({"failure": "gh_rejected"})
+    assert "failure" not in landing.entry_of({"failure": 429})
+
+
+def test_every_failure_reason_the_type_names_is_kept_by_entry_of():
+    for reason in get_args(FailureReason):
+        assert landing.entry_of({"failure": reason}) == {"failure": reason}
+
+
+def test_resolve_open_returns_delivered_and_failure_unchanged():
+    entries = [_attempt("account_limit", delivered=True, cost_base=1.0)]
+    (out,) = landing.resolve_open(entries, "2026-10-15T13:00:00+00:00", 3.0)
+    assert out["delivered"] is True and out["failure"] == "account_limit"
+
+
+def test_unescalated_is_the_one_patch_that_clears_the_escalation():
+    raw = {
+        "id": "GH-5",
+        "status": "waiting_on_human",
+        "escalated": "x",
+        "escalation_class": "failure",
+        "pull_request": "https://example.test/pull/5",
+        "landing": [_attempt()],
+        "cost_usd": 4.0,
+    }
+    patch = landing.unescalated(raw)
+    assert patch == {
+        "escalated": None,
+        "escalation_class": None,
+        "status": "ready_for_review",
+        "pause_log": [{"kind": "resumed"}],
+    }
+    assert "cost_usd" not in patch
+
+
+def test_diagnose_retry_is_none_without_an_undelivered_attempt():
+    assert landing.diagnose_retry({}, AT) == "none"
+    assert landing.diagnose_retry({"landing": [{"step": "fix", "head": HEAD}]}, AT) == "none"
+    delivered = {"landing": [_attempt("account_limit"), _attempt(delivered=True)]}
+    assert landing.diagnose_retry(delivered, AT) == "none"
+
+
+def test_diagnose_retry_escalates_an_entry_with_no_failure_or_a_non_external_one():
+    assert landing.diagnose_retry({"landing": [_attempt()]}, AT) == "escalate"
+    assert landing.diagnose_retry({"landing": [_attempt("sdk")]}, AT) == "escalate"
+    assert landing.diagnose_retry({"landing": [_attempt("schema")]}, AT) == "escalate"
+
+
+def test_diagnose_retry_first_slot_is_due_at_exactly_its_minutes_and_not_a_second_before():
+    raw = {"landing": [_attempt("account_limit")]}
+    wait = _minutes(rules.ACCOUNT_LIMIT_SCHEDULE, 0)
+    assert landing.diagnose_retry(raw, AT + wait - timedelta(seconds=1)) == "waiting"
+    assert landing.diagnose_retry(raw, AT + wait) == "due"
+
+
+def test_diagnose_retry_runs_the_flat_calendar_to_its_last_slot_then_escalates():
+    schedule = rules.ACCOUNT_LIMIT_SCHEDULE
+    last = len(schedule) - 1
+    late = AT + timedelta(days=30)
+    still = {"landing": [_attempt("account_limit") for _ in range(last)]}
+    assert landing.diagnose_retry(still, late) == "due"
+    spent = {"landing": [_attempt("account_limit") for _ in range(len(schedule))]}
+    assert landing.diagnose_retry(spent, late) == "escalate"
+
+
+def test_diagnose_retry_counts_only_the_attempts_after_the_last_delivered_one():
+    spent = [_attempt("account_limit") for _ in range(len(rules.ACCOUNT_LIMIT_SCHEDULE))]
+    raw = {"landing": [*spent, _attempt(delivered=True), _attempt("account_limit")]}
+    assert landing.diagnose_retry(raw, AT + timedelta(days=30)) == "due"
+
+
+def test_diagnose_retry_measures_from_the_last_attempt():
+    first, second = AT, AT + timedelta(hours=3)
+    raw = {"landing": [_attempt("account_limit", first), _attempt("account_limit", second)]}
+    wait = _minutes(rules.ACCOUNT_LIMIT_SCHEDULE, 2 - 1)
+    assert landing.diagnose_retry(raw, second + wait - timedelta(seconds=1)) == "waiting"
+    assert landing.diagnose_retry(raw, second + wait) == "due"
+
+
+def test_diagnose_retry_of_an_upstream_failure_follows_the_growing_calendar():
+    schedule = rules.RETAKE_SCHEDULE
+    raw = {"landing": [_attempt("upstream")]}
+    wait = _minutes(schedule, 1)
+    assert landing.diagnose_retry(raw, AT + wait - timedelta(seconds=1)) == "waiting"
+    assert landing.diagnose_retry(raw, AT + wait) == "due"
+    spent = {"landing": [_attempt("upstream") for _ in range(len(schedule))]}
+    assert landing.diagnose_retry(spent, AT + timedelta(days=30)) == "escalate"
+
+
+def test_diagnose_retry_never_reaches_the_hourly_week():
+    hourly = len(rules.ACCOUNT_LIMIT_SCHEDULE) + 1
+    assert hourly <= rules.ACCOUNT_LIMIT_CHASE_MAX
+    raw = {"landing": [_attempt("account_limit") for _ in range(hourly)]}
+    assert landing.diagnose_retry(raw, AT + timedelta(days=30)) == "escalate"
+
+
+@pytest.mark.parametrize("at", ["not a time", "2026-10-15T12:00:00", 5, None])
+def test_diagnose_retry_waits_when_the_attempt_time_is_unreadable_or_naive(at):
+    entry = _attempt("account_limit")
+    entry["at"] = at
+    assert landing.diagnose_retry({"landing": [entry]}, AT + timedelta(days=30)) == "waiting"
+
+
+def test_diagnose_retry_waits_when_now_is_naive():
+    raw = {"landing": [_attempt("account_limit")]}
+    assert landing.diagnose_retry(raw, datetime(2030, 1, 1)) == "waiting"

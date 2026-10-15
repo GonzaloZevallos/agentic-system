@@ -13,10 +13,10 @@ import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Literal
+from typing import Any, Literal, get_args
 
 from . import ci, rules
-from .task import LandingEntry, Subtask, SubtaskStatus, TaskState
+from .task import FailureReason, LandingEntry, Subtask, SubtaskStatus, TaskState
 
 LandingStepKind = Literal[
     "wait",
@@ -200,7 +200,81 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
         out["resume_spawns"] = spawns
     if isinstance(spawned := raw.get("resume_spawned_at"), str):
         out["resume_spawned_at"] = spawned
+    if isinstance(delivered := raw.get("delivered"), bool):
+        out["delivered"] = delivered
+    if (failure := _failure_of(raw.get("failure"))) is not None:
+        out["failure"] = failure
     return out
+
+
+def _failure_of(value: object) -> FailureReason | None:
+    """`value` as a `FailureReason`, `None` when it is not one: the closed set is the type's
+    own, never a second list."""
+    for reason in get_args(FailureReason):
+        if value == reason:
+            found: FailureReason = reason
+            return found
+    return None
+
+
+def diagnose_attempts(raw: Mapping[str, object]) -> list[LandingEntry]:
+    """The diagnose entries of the document's `landing` list that never delivered, after the
+    last one that did: the attempts the retry calendar counts, oldest first."""
+    entries = raw.get("landing")
+    kept = (
+        [entry_of(e) for e in entries if isinstance(e, Mapping)]
+        if isinstance(entries, list)
+        else []
+    )
+    diagnoses = [e for e in kept if e.get("step") == "diagnose"]
+    delivered = [i for i, e in enumerate(diagnoses) if e.get("delivered")]
+    after = diagnoses[delivered[-1] + 1 :] if delivered else diagnoses
+    return [e for e in after if not e.get("delivered")]
+
+
+def diagnose_retry(
+    raw: Mapping[str, object], now: datetime
+) -> Literal["none", "due", "waiting", "escalate"]:
+    """What the landing does about a diagnosis that did not deliver (GH-257): `none` when no
+    attempt is waiting on one, `escalate` when the last attempt has no external `failure` or
+    the calendar is spent, else `due` or `waiting` on the shared retake calendar
+    (`rules.retake_calendar`), measured from the last attempt's own `at`. No run delivers
+    between two attempts, so the chain is the flat 429 calendar and never the hourly week.
+    Timestamps are compared as aware datetimes, never as strings: an unreadable or naive one
+    waits."""
+    attempts = diagnose_attempts(raw)
+    if not attempts:
+        return "none"
+    last = attempts[-1]
+    reason = last.get("failure")
+    if reason is None or reason not in rules.EXTERNAL_REASONS:
+        return "escalate"
+    count = len(attempts)
+    limit = rules.auto_resume_limit(_landing_view(raw), reason)
+    since = _aware(last.get("at"))
+    candidate = rules.ResumeCandidate(0, reason, since or now, count, limit, count)
+    if rules.resume_exhausted(candidate):
+        return "escalate"
+    if since is None or now.tzinfo is None or now.utcoffset() is None:
+        return "waiting"
+    schedule, prior, slots = rules.retake_calendar(reason, count, count, limit)
+    due = rules.next_attempt_at(since, prior, slots, now, schedule=schedule)
+    return "due" if due is not None else "waiting"
+
+
+def unescalated(raw: Mapping[str, object]) -> dict[str, Any]:
+    """The one patch that clears a landing step's escalation: the task is back at the status
+    it had before it (`rules.resumed_status`) and the epoch is closed with a `resumed` entry.
+    Never writes `cost_usd`. No other module builds it."""
+    view = _landing_view(raw)
+    if isinstance(pull_request := raw.get("pull_request"), str):
+        view["pull_request"] = pull_request
+    return {
+        "escalated": None,
+        "escalation_class": None,
+        "status": rules.resumed_status(view),
+        "pause_log": [{"kind": "resumed"}],
+    }
 
 
 def _aware(value: object) -> datetime | None:

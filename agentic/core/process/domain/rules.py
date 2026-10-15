@@ -2369,14 +2369,23 @@ class ResumeCandidate:
     ceiling_spent: bool = False
 
 
-def _calendar(r: ResumeCandidate) -> tuple[tuple[int, ...], int, int]:
-    """`(schedule, prior, limit)` a resume candidate is measured on: its reason's own
+def retake_calendar(
+    reason: FailureReason, prior: int, chase_prior: int, limit: int
+) -> tuple[tuple[int, ...], int, int]:
+    """`(schedule, prior, limit)` a retake of `reason` is measured on: its reason's own
     calendar, and for an `account_limit` past the chase max the hourly one, indexed by
-    the retakes made since that max with all of it as the limit."""
-    schedule = schedule_for(r.reason, r.chase_prior)
+    the retakes made since that max with all of it as the limit. The one place that
+    mapping is applied: the poller's candidates (`_calendar`) and the landing's diagnoser
+    retry (`domain.landing.diagnose_retry`) both ask it."""
+    schedule = schedule_for(reason, chase_prior)
     if schedule is ACCOUNT_LIMIT_HOURLY:
-        return schedule, r.chase_prior - ACCOUNT_LIMIT_CHASE_MAX, len(schedule)
-    return schedule, r.prior, r.limit
+        return schedule, chase_prior - ACCOUNT_LIMIT_CHASE_MAX, len(schedule)
+    return schedule, prior, limit
+
+
+def _calendar(r: ResumeCandidate) -> tuple[tuple[int, ...], int, int]:
+    """`retake_calendar` of a resume candidate's own fields."""
+    return retake_calendar(r.reason, r.prior, r.chase_prior, r.limit)
 
 
 def retake_due(r: ResumeCandidate, now: datetime) -> datetime | None:
