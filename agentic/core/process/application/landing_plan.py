@@ -41,11 +41,16 @@ def entries(raw: Mapping[str, object]) -> list[dict[str, object]]:
     return [e for e in value if isinstance(e, dict)] if isinstance(value, list) else []
 
 
+def _conflicting(entry: Mapping[str, object]) -> bool:
+    return entry.get("refusal") in landing.CONFLICTING_SYNC_REFUSALS
+
+
 def spent(
     raw: Mapping[str, object], head: str | None, waited_s: float | None
 ) -> landing.LandingSpent:
     """The passes, clean syncs and reruns on `head` the `landing` list records. A
-    `sync_master` answering `checks_failed` is the conflicting one, a model pass."""
+    `sync_master` answering one of `landing.CONFLICTING_SYNC_REFUSALS` is the conflicting
+    one, a model pass; it never counts as a clean sync."""
     done = entries(raw)
 
     def count(predicate: Callable[[dict[str, object]], bool]) -> int:
@@ -55,12 +60,10 @@ def spent(
         passes=count(
             lambda e: (
                 e.get("step") in ("re_review", "fix")
-                or (e.get("step") == "sync_master" and e.get("refusal") == "checks_failed")
+                or (e.get("step") == "sync_master" and _conflicting(e))
             )
         ),
-        syncs=count(
-            lambda e: e.get("step") == "sync_master" and e.get("refusal") != "checks_failed"
-        ),
+        syncs=count(lambda e: e.get("step") == "sync_master" and not _conflicting(e)),
         reruns_on_head=count(lambda e: e.get("step") == "rerun" and e.get("head") == head),
         diagnosed=count(lambda e: e.get("step") == "diagnose") > 0,
         waited_s=waited_s,

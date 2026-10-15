@@ -2614,6 +2614,7 @@ MergeRefusal = Literal[
     "eval_set_unreadable",
     "attempts_exhausted",
     "checks_failed",
+    "merge_conflict",
     "master_moved",
     "merge_failed",
     "ci_failed",
@@ -2635,6 +2636,10 @@ MergeRefusal = Literal[
 - `eval_set`: the issue is in the evaluation set; its merge is the human's verdict.
 - `eval_set_unreadable`: the evaluation set could not be read, so nothing proves the
   issue is outside it.
+- `merge_conflict`: the head definitely conflicts with the current master (GH-255). Refused
+  first among the merge-side reasons, after `eval_set` and before `merge_failed`, so landing
+  syncs master: a head that cannot merge makes the merge-call budget and the CI result mean
+  nothing.
 - `attempts_exhausted`: the checks already ran `MERGE_ATTEMPTS_MAX` times on this head
   and the master moved again.
 - `checks_failed`: the checks ran on this head merged with the current master and failed.
@@ -2665,11 +2670,13 @@ class MergeFacts:
     the current master (None: not known) and `ci_waited_s` the seconds since the wait's
     anchor (None: no anchor). `open_blocking` and `open_important` split the open findings
     by severity (GH-239); `followups_filed` says the landing already filed the follow-up for
-    the important ones. `ci_untrusted` (GH-239) is `None` when `touched_paths` is unknown and
-    `True` when the diff touches the CI's own definition (`CI_DEFINITION_PREFIX`): a CI whose
-    definition the change itself could have edited proves nothing, so it never decides
-    `merge`. `failed_step` is the step of the recorded `merge_checks` that failed, which only
-    the landing reads."""
+    the important ones. `conflicts` (GH-255) is whether the head conflicts with the current
+    master: `None` unread, `False` clean, `True` a definite conflict.
+    `ci_untrusted` (GH-239) is `None` when `touched_paths` is unknown and `True` when the
+    diff touches the CI's own definition (`CI_DEFINITION_PREFIX`): a CI whose definition the
+    change itself could have edited proves nothing, so it never decides `merge`.
+    `failed_step` is the step of the recorded `merge_checks` that failed, which only the
+    landing reads."""
 
     task_id: str
     status: str | None
@@ -2697,6 +2704,7 @@ class MergeFacts:
     ci_untrusted: bool | None = None
     followups_filed: bool = False
     failed_step: presubmit.FailedStep | None = None
+    conflicts: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -2748,11 +2756,13 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     """The one place the conditions of an automatic merge live (GH-178, ADR-0045); no
     adapter, CLI or poller re-derives any of them. Checked in this order and refused at the
     first that fails: `not_ready`, `pr_not_open`, `not_approved`, `head_not_reviewed`,
-    `open_findings_blocking`, `open_findings`, `eval_set_unreadable`, `eval_set`, `merge_failed`,
-    then, only when the product declares its CI (`ci_required`): `ci_unreadable`, a `wait`
-    for a head that is not the reviewed one, `ci_failed` and `ci_missing`, a green and fresh
-    CI being the `merge` itself (a green stale one goes on); then `checks_failed` (only when
-    the recorded checks cover this head on this master; otherwise the next check) and
+    `open_findings_blocking`, `open_findings`, `eval_set_unreadable`, `eval_set`,
+    `merge_conflict` (only when `conflicts is True`; unread or clean change nothing),
+    `merge_failed`, then, only when the product declares its CI (`ci_required`):
+    `ci_unreadable`, a `wait` for a head that is not the reviewed one, `ci_failed` and
+    `ci_missing`, a green and fresh CI being the `merge` itself (a green stale one goes on);
+    then `checks_failed` (only when the recorded checks cover this head on this master;
+    otherwise the next check) and
     `attempts_exhausted`. A CI that cannot be decided yet is a `wait` until
     `ci.CI_WAIT_MAX_S` have passed since its anchor, a refusal after. `master_moved` is not
     here: the merge verb gives it, after its last fetch. The checks last: they are the costly
@@ -2778,6 +2788,8 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
         return MergeDecision("refuse", "eval_set_unreadable")
     if facts.in_eval_set:
         return MergeDecision("refuse", "eval_set")
+    if facts.conflicts is True:
+        return MergeDecision("refuse", "merge_conflict")
     if facts.merge_failures >= MERGE_CALLS_MAX:
         return MergeDecision("refuse", "merge_failed")
     if facts.ci_required:
@@ -2797,6 +2809,16 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     if facts.attempts >= MERGE_ATTEMPTS_MAX:
         return MergeDecision("refuse", "attempts_exhausted")
     return MergeDecision("run_checks", None)
+
+
+def conflict_probe_wanted(facts: MergeFacts) -> bool:
+    """Whether the conflict probe is worth running for `facts`: the only answer to that
+    question, derived from the order of `auto_merge_decision` and never from a list of
+    refusals. It is worth it exactly when a definite conflict would be the decision, that is,
+    when no refusal ahead of the conflict already rules the pull request out."""
+    return auto_merge_decision(replace(facts, conflicts=True)) == MergeDecision(
+        "refuse", "merge_conflict"
+    )
 
 
 def _ci_gate(facts: MergeFacts) -> MergeDecision | None:

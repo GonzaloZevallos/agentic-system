@@ -61,6 +61,7 @@ EXPECTED = {
     "ci_failed": "rerun",
     "checks_failed": "rerun",
     "attempts_exhausted": "sync_master",
+    "merge_conflict": "sync_master",
     "merge_failed": "diagnose",
     "master_moved": "wait",
 }
@@ -119,6 +120,22 @@ def test_a_conflicting_checks_failure_syncs_and_needs_both_budgets():
     assert _step("checks_failed", passes, failed_step="conflict").kind == "diagnose"
     syncs = _spent(syncs=landing.LANDING_SYNCS_MAX)
     assert _step("checks_failed", syncs, failed_step="conflict").kind == "diagnose"
+
+
+def test_a_definite_conflict_syncs_while_both_budgets_last_then_diagnoses():
+    assert _step("merge_conflict").kind == "sync_master"
+    last = _spent(passes=landing.LANDING_PASSES_MAX - 1, syncs=landing.LANDING_SYNCS_MAX - 1)
+    assert _step("merge_conflict", last) == LandingStep("sync_master", "merge_conflict")
+    passes = _spent(passes=landing.LANDING_PASSES_MAX)
+    assert _step("merge_conflict", passes).kind == "diagnose"
+    syncs = _spent(syncs=landing.LANDING_SYNCS_MAX)
+    assert _step("merge_conflict", syncs).kind == "diagnose"
+    assert _step("merge_conflict", _spent(diagnosed=True)).kind == "none"
+
+
+def test_the_refusals_that_make_a_sync_a_conflicting_one_are_the_two_conflict_reasons():
+    assert landing.CONFLICTING_SYNC_REFUSALS == ("checks_failed", "merge_conflict")
+    assert set(landing.CONFLICTING_SYNC_REFUSALS) <= set(get_args(rules.MergeRefusal))
 
 
 @pytest.mark.parametrize("refusal", ["ci_failed", "checks_failed"])
