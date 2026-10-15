@@ -309,14 +309,24 @@ class GitWorkspace:
         """See `Workspace.merge_conflicts`: both shas are fetched first, then `git
         merge-tree --write-tree` merges them in the object database alone -- no worktree,
         branch or index is touched. Only its own two exits mean something: 0 is clean,
-        1 is a conflict. Anything else is `None`, which the caller counts as unread."""
+        1 is a conflict. Anything else is `None`, which the caller counts as unread.
+        Every git call here is bounded (`fetch_commit` is not: its `cat-file` has no
+        timeout), so a stuck git costs a conflict left unread, never a hung poller."""
         try:
-            if not (self.fetch_commit(head) and self.fetch_commit(master)):
+            if not (self._commit_bounded(head) and self._commit_bounded(master)):
                 return None
             result = self._run_timed("merge-tree", "--write-tree", "--quiet", master, head)
         except (GitError, OSError, subprocess.SubprocessError):
             return None
         return {0: False, 1: True}.get(result.returncode)
+
+    def _commit_bounded(self, sha: str) -> bool:
+        """`fetch_commit` with every git call under a timeout: a timeout raises."""
+        exists = ("cat-file", "-e", f"{sha}^{{commit}}")
+        if self._run_timed(*exists).returncode == 0:
+            return True
+        self._run_bounded("fetch", "--quiet", "origin", sha)
+        return self._run_timed(*exists).returncode == 0
 
     def changed_paths(self, base: str, head: str) -> tuple[str, ...]:
         out = self._git("diff", "--name-only", f"{base}...{head}")

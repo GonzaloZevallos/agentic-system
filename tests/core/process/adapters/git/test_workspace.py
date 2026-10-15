@@ -1018,19 +1018,25 @@ def test_merge_conflicts_is_none_for_any_failure_never_raised(product, monkeypat
     assert ws.merge_conflicts(head, master) is None
 
 
-def test_merge_conflicts_runs_under_a_declared_timeout(product, monkeypatch):
+def test_every_git_call_merge_conflicts_makes_runs_under_a_timeout(product, monkeypatch):
     head, master = _two_branches(product, same_line=False)
-    seen: dict = {}
+    calls: list[tuple[list[str], float | None]] = []
     real_run = subprocess.run
 
     def spy(cmd, **kwargs):
-        if "merge-tree" in cmd:
-            seen.update(kwargs)
+        calls.append((cmd, kwargs.get("timeout")))
         return real_run(cmd, **kwargs)
 
     monkeypatch.setattr(workspace_module.subprocess, "run", spy)
-    assert GitWorkspace(product, IDENTITY).merge_conflicts(head, master) is False
-    assert seen["timeout"] == workspace_module.MERGE_TREE_TIMEOUT_S
+    ws = GitWorkspace(product, IDENTITY)
+    # The shas are here (existence checks and merge-tree), then one is not (a fetch too).
+    assert ws.merge_conflicts(head, master) is False
+    assert ws.merge_conflicts(head, "0" * 40) is None
+    verbs = {cmd[1] for cmd, _ in calls}
+    assert {"cat-file", "merge-tree", "fetch"} <= verbs
+    assert all(timeout is not None for _, timeout in calls), calls
+    merge_tree = [timeout for cmd, timeout in calls if cmd[1] == "merge-tree"]
+    assert merge_tree == [workspace_module.MERGE_TREE_TIMEOUT_S]
 
 
 # -- merge_upstream_into (GH-239) ----------------------------------------------------
