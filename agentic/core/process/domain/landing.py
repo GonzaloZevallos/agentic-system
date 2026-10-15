@@ -13,9 +13,10 @@ import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Literal, get_args
+from typing import Any, Literal, Protocol, get_args
 
 from . import ci, rules
+from .roles import LANDING_DIAGNOSER
 from .task import FailureReason, LandingEntry, Subtask, SubtaskStatus, TaskState
 
 LandingStepKind = Literal[
@@ -281,6 +282,130 @@ def unescalated(raw: Mapping[str, object]) -> dict[str, Any]:
         "status": rules.resumed_status(view),
         "pause_log": [{"kind": "resumed"}],
     }
+
+
+ESCALATED_COMMENT = "Escalated: "
+"""How an escalation comment starts. A copy of `application.escalate.ESCALATED`, which a test
+pins: the domain cannot import the application."""
+
+
+class Commented(Protocol):
+    """A tracker comment as `escalated_after` reads it: `application.ports.IssueComment`
+    satisfies it as it is."""
+
+    @property
+    def body(self) -> str: ...
+
+    @property
+    def created_at(self) -> str: ...
+
+
+def _diagnose_entries(raw: Mapping[str, object]) -> list[Mapping[str, object]]:
+    entries = raw.get("landing")
+    if not isinstance(entries, list):
+        return []
+    return [e for e in entries if isinstance(e, Mapping) and e.get("step") == "diagnose"]
+
+
+def diagnose_at(raw: Mapping[str, object]) -> object:
+    """The `at` of the document's last diagnose entry, as written (`None` without one)."""
+    entries = _diagnose_entries(raw)
+    return entries[-1].get("at") if entries else None
+
+
+def _closing_epoch(raw: Mapping[str, object]) -> list[Mapping[str, object]] | None:
+    """The `pause_log` entries after the last `resumed`, `None` when the log is not a list of
+    mappings."""
+    log = raw.get("pause_log")
+    if not isinstance(log, list) or not all(isinstance(e, Mapping) for e in log):
+        return None
+    last = max((i for i, e in enumerate(log) if e.get("kind") == "resumed"), default=-1)
+    return log[last + 1 :]
+
+
+def _stranded_failure(raw: Mapping[str, object]) -> FailureReason | None:
+    """The last failure of the epoch being closed, when the epoch is exactly the stranded
+    shape: one or more `failure` entries, each external and from the diagnoser's own
+    section, and an `escalation` entry that reads `failure`; `None` for any other epoch (a
+    real escalation, another role's failure)."""
+    epoch = _closing_epoch(raw)
+    if epoch is None:
+        return None
+    failures = [e for e in epoch if e.get("kind") == "failure"]
+    escalations = [e for e in epoch if e.get("kind") == "escalation"]
+    if not failures or not escalations:
+        return None
+    if any(e.get("value") != "failure" for e in escalations):
+        return None
+    if any(
+        e.get("section") != LANDING_DIAGNOSER.name or e.get("value") not in rules.EXTERNAL_REASONS
+        for e in failures
+    ):
+        return None
+    return _failure_of(failures[-1].get("value"))
+
+
+def stranded_diagnose(raw: Mapping[str, object], escalated_after: bool) -> bool:
+    """A document GH-257 stranded: the Landing Diagnoser's failed run escalated through the
+    graph's own patch, outside the graph, and nobody was told (ADR-0048, addendum). True only
+    for the whole legacy shape: waiting on a human as class `failure`, a pull request, the
+    diagnoser the current role, the last diagnose entry with neither `delivered` nor
+    `failure`, and an epoch of external failures of the diagnoser alone ending in the
+    escalation. `escalated_after` (`escalated_after`) says a comment already told a human, so
+    the stop is real and stays."""
+    if escalated_after:
+        return False
+    pull_request = raw.get("pull_request")
+    if (
+        raw.get("status") != "waiting_on_human"
+        or raw.get("escalation_class") != "failure"
+        or not isinstance(pull_request, str)
+        or not pull_request
+        or raw.get("current_role") != LANDING_DIAGNOSER.name
+    ):
+        return False
+    entries = _diagnose_entries(raw)
+    if not entries or "delivered" in entries[-1] or "failure" in entries[-1]:
+        return False
+    return _stranded_failure(raw) is not None
+
+
+def escalated_after(comments: Iterable[Commented], at: object, prefix: str) -> bool:
+    """Whether a comment starting with `prefix` (the escalation's) was created after `at`:
+    a human was told of this stop and it is theirs. Aware datetimes are compared, never
+    strings; a naive or unreadable time on `at` or on a matching comment gives True, so the
+    document stays escalated."""
+    mine = [c for c in comments if c.body.startswith(prefix)]
+    if not mine:
+        return False
+    since = _aware(at)
+    if since is None:
+        return True
+    for comment in mine:
+        created = _aware(comment.created_at.replace("Z", "+00:00"))
+        if created is None or created > since:
+            return True
+    return False
+
+
+def migration(raw: Mapping[str, object]) -> dict[str, Any]:
+    """The one write that frees a stranded document (`stranded_diagnose`): `unescalated`,
+    plus the failure of the epoch it closes stamped on the last diagnose entry, so the
+    ordinary retry takes it from there. `record_closure` replaces a key whole, so the
+    `pause_log` is the history with the `resumed` marker appended. Never writes `cost_usd`."""
+    patch = unescalated(raw)
+    reason = _stranded_failure(raw)
+    entries = raw.get("landing")
+    written = (
+        [dict(e) for e in entries if isinstance(e, Mapping)] if isinstance(entries, list) else []
+    )
+    last = max((i for i, e in enumerate(written) if e.get("step") == "diagnose"), default=None)
+    if last is not None and reason is not None:
+        written[last] = {**written[last], "failure": reason}
+    log = raw.get("pause_log")
+    patch["pause_log"] = [*(log if isinstance(log, list) else []), *patch["pause_log"]]
+    patch["landing"] = written
+    return patch
 
 
 def _aware(value: object) -> datetime | None:

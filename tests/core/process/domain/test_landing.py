@@ -2,7 +2,7 @@
 closed step, the predicates around it say when a step may be taken, and the record keys
 are the ones a poller tick reads back. Pure: facts in, a step out."""
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta, timezone
 from typing import get_args, get_type_hints
 
@@ -571,3 +571,193 @@ def test_diagnose_retry_waits_when_the_attempt_time_is_unreadable_or_naive(at):
 def test_diagnose_retry_waits_when_now_is_naive():
     raw = {"landing": [_attempt("account_limit")]}
     assert landing.diagnose_retry(raw, datetime(2030, 1, 1)) == "waiting"
+
+
+# --- GH-257: the stranded legacy diagnose document and its one migration ------------------
+
+ESCALATED_PREFIX = "Escalated: "
+DIAGNOSER = "Landing Diagnoser"
+
+
+def _stranded(**over):
+    """GH-150's shape, trimmed: a failed Landing Diagnoser that escalated through the
+    run_role patch, leaving its entry with no `delivered` and no `failure`."""
+    raw = {
+        "id": "GH-150",
+        "status": "waiting_on_human",
+        "current_role": DIAGNOSER,
+        "escalated": "Landing Diagnoser failed 2 times: You've hit your session limit",
+        "escalation_class": "failure",
+        "pull_request": "https://example.test/pull/210",
+        "cost_usd": 61.5,
+        "landing": [
+            {"head": "c" * 40, "step": "fix", "refusal": "ci_failed", "at": AT.isoformat()},
+            _attempt(at=AT + timedelta(hours=1)),
+        ],
+        "pause_log": [
+            {"kind": "failure", "value": "account_limit", "section": "Developer: land-101"},
+            {"kind": "escalation", "value": "failure"},
+            {"kind": "resumed"},
+            {"kind": "failure", "value": "account_limit", "section": DIAGNOSER},
+            {"kind": "failure", "value": "account_limit", "section": DIAGNOSER},
+            {"kind": "escalation", "value": "failure"},
+        ],
+    }
+    return {**raw, **over}
+
+
+@dataclass(frozen=True)
+class _Comment:
+    body: str
+    created_at: str
+
+
+def _comment(body, at):
+    return _Comment(body=body, created_at=at.isoformat())
+
+
+def test_stranded_diagnose_recognises_the_legacy_document():
+    assert landing.stranded_diagnose(_stranded(), False) is True
+
+
+def test_stranded_diagnose_is_false_when_an_escalation_comment_came_after():
+    assert landing.stranded_diagnose(_stranded(), True) is False
+
+
+def _without(key):
+    raw = _stranded()
+    del raw[key]
+    return raw
+
+
+def _epoch(*entries):
+    return {"pause_log": [{"kind": "resumed"}, *entries]}
+
+
+_FAILED = {"kind": "failure", "value": "account_limit", "section": DIAGNOSER}
+_ESCALATION = {"kind": "escalation", "value": "failure"}
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        pytest.param({"status": "ready_for_review"}, id="not-waiting"),
+        pytest.param({"escalation_class": "questions"}, id="questions"),
+        pytest.param({"escalation_class": "cap"}, id="cap"),
+        pytest.param({"escalation_class": None}, id="no-class"),
+        pytest.param({"current_role": "Developer"}, id="graph-role"),
+        pytest.param({"pull_request": None}, id="no-pull-request"),
+        pytest.param({"pull_request": ""}, id="empty-pull-request"),
+        pytest.param(_epoch(_ESCALATION), id="depth-one-escalation-without-failures"),
+        pytest.param(_epoch(_FAILED), id="no-escalation-entry"),
+        pytest.param(_epoch(_FAILED, {**_FAILED, "value": "sdk"}, _ESCALATION), id="sdk"),
+        pytest.param(_epoch(_FAILED, {**_FAILED, "value": "other"}, _ESCALATION), id="other"),
+        pytest.param(
+            _epoch({**_FAILED, "section": "Developer: land-101"}, _ESCALATION),
+            id="failure-of-a-graph-role",
+        ),
+        pytest.param(
+            _epoch(_FAILED, {"kind": "escalation", "value": "cap"}, _ESCALATION), id="cap-entry"
+        ),
+        pytest.param({"pause_log": "garbage"}, id="unreadable-log"),
+        pytest.param({"landing": [_attempt(failure="account_limit")]}, id="already-stamped"),
+        pytest.param({"landing": [_attempt(delivered=True)]}, id="delivered"),
+        pytest.param({"landing": [{"step": "fix", "head": HEAD}]}, id="no-diagnose-entry"),
+        pytest.param({"landing": "garbage"}, id="unreadable-landing"),
+    ],
+)
+def test_stranded_diagnose_refuses_every_other_shape(over):
+    assert landing.stranded_diagnose(_stranded(**over), False) is False
+
+
+def test_stranded_diagnose_reads_only_the_epoch_after_the_last_resumed():
+    older_sdk = [{**_FAILED, "value": "sdk"}, _ESCALATION, {"kind": "resumed"}]
+    raw = _stranded(pause_log=[*older_sdk, _FAILED, _ESCALATION])
+    assert landing.stranded_diagnose(raw, False) is True
+
+
+def test_escalated_after_is_true_only_for_an_escalated_comment_created_after_the_entry():
+    at = AT.isoformat()
+    later = _comment(ESCALATED_PREFIX + "x", AT + timedelta(seconds=1))
+    earlier = _comment(ESCALATED_PREFIX + "x", AT - timedelta(seconds=1))
+    same = _comment(ESCALATED_PREFIX + "x", AT)
+    other = _comment("Landing: something", AT + timedelta(hours=1))
+    assert landing.escalated_after([later], at, ESCALATED_PREFIX) is True
+    assert landing.escalated_after([earlier, same, other], at, ESCALATED_PREFIX) is False
+    assert landing.escalated_after([], at, ESCALATED_PREFIX) is False
+
+
+def test_escalated_after_reads_a_z_suffixed_timestamp_as_utc():
+    later = _Comment(ESCALATED_PREFIX + "x", "2026-10-15T12:00:01Z")
+    assert landing.escalated_after([later], AT.isoformat(), ESCALATED_PREFIX) is True
+
+
+@pytest.mark.parametrize(
+    ("comment_at", "entry_at"),
+    [
+        ("garbage", AT.isoformat()),
+        ("2026-10-15T13:00:00", AT.isoformat()),
+        ((AT + timedelta(hours=1)).isoformat(), "2026-10-15T12:00:00"),
+        ((AT + timedelta(hours=1)).isoformat(), "garbage"),
+        ((AT + timedelta(hours=1)).isoformat(), None),
+    ],
+)
+def test_escalated_after_keeps_the_document_escalated_on_a_time_it_cannot_compare(
+    comment_at, entry_at
+):
+    comments = [_Comment(ESCALATED_PREFIX + "x", comment_at)]
+    assert landing.escalated_after(comments, entry_at, ESCALATED_PREFIX) is True
+
+
+def test_an_unreadable_time_on_a_comment_that_is_not_an_escalation_is_ignored():
+    comments = [_Comment("hello", "garbage")]
+    assert landing.escalated_after(comments, AT.isoformat(), ESCALATED_PREFIX) is False
+
+
+def test_the_domain_prefix_is_the_one_the_application_posts():
+    from agentic.core.process.application import escalate
+
+    assert landing.ESCALATED_COMMENT == escalate.ESCALATED
+
+
+def test_migration_clears_the_escalation_and_stamps_the_failure_in_one_patch():
+    raw = _stranded()
+    patch = landing.migration(raw)
+    assert patch["escalated"] is None and patch["escalation_class"] is None
+    assert patch["status"] == "ready_for_review"
+    # closure replaces a key whole: the history stays and `resumed` closes the epoch
+    assert patch["pause_log"] == [*raw["pause_log"], {"kind": "resumed"}]
+    assert patch["landing"][0] == raw["landing"][0]
+    assert patch["landing"][1] == {**raw["landing"][1], "failure": "account_limit"}
+    assert "cost_usd" not in patch
+    assert raw == _stranded()  # the input is not touched
+
+
+def test_migration_takes_the_failure_from_the_last_failure_of_the_closing_epoch():
+    raw = _stranded(
+        pause_log=[
+            {"kind": "failure", "value": "network", "section": DIAGNOSER},
+            {"kind": "failure", "value": "upstream", "section": DIAGNOSER},
+            _ESCALATION,
+        ]
+    )
+    assert landing.migration(raw)["landing"][-1]["failure"] == "upstream"
+
+
+def test_migration_leaves_diagnose_retry_due_or_waiting_never_escalate():
+    raw = _stranded()
+    patch = landing.migration(raw)
+    migrated = {**raw, **patch}
+    entry_at = datetime.fromisoformat(raw["landing"][-1]["at"])
+    wait = _minutes(rules.ACCOUNT_LIMIT_SCHEDULE, 0)
+    assert landing.diagnose_retry(migrated, entry_at) == "waiting"
+    assert landing.diagnose_retry(migrated, entry_at + wait) == "due"
+    assert landing.diagnose_retry(raw, entry_at + wait) == "escalate"  # before: stuck
+
+
+def test_migration_stamps_only_the_last_diagnose_entry():
+    earlier = _attempt(delivered=True, at=AT - timedelta(days=1))
+    raw = _stranded(landing=[earlier, _attempt(at=AT)])
+    stamped = landing.migration(raw)["landing"]
+    assert stamped[0] == earlier
+    assert stamped[1]["failure"] == "account_limit"
