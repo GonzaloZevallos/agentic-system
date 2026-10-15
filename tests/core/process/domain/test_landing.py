@@ -580,31 +580,33 @@ ESCALATED_PREFIX = "Escalated: "
 DIAGNOSER = "Landing Diagnoser"
 
 
+def _real():
+    return document.parse(GH150_STRANDED)
+
+
+def _window(migrated):
+    """The instant the freed diagnosis becomes due, read off the shared calendar from the
+    fixture's own last diagnose `at`: the schedule is `rules.retake_calendar`'s, never a number
+    typed here, and no instant is a literal."""
+    since = datetime.fromisoformat(landing.diagnose_at(migrated))
+    reason = migrated["landing"][-1]["failure"]
+    count = len(landing.diagnose_attempts(migrated))
+    limit = rules.auto_resume_limit(landing._landing_view(migrated), reason)
+    schedule, prior, _ = rules.retake_calendar(reason, count, count, limit)
+    assert prior < len(schedule)  # the calendar is not spent: `due` and `waiting` both exist
+    return since + timedelta(minutes=schedule[prior])
+
+
+def _freed():
+    raw = _real()
+    return {**raw, **landing.migration(raw)}
+
+
 def _stranded(**over):
-    """GH-150's shape, trimmed: a failed Landing Diagnoser that escalated through the
-    run_role patch, leaving its entry with no `delivered` and no `failure`."""
-    raw = {
-        "id": "GH-150",
-        "status": "waiting_on_human",
-        "current_role": DIAGNOSER,
-        "escalated": "Landing Diagnoser failed 2 times: You've hit your session limit",
-        "escalation_class": "failure",
-        "pull_request": "https://example.test/pull/210",
-        "cost_usd": 61.5,
-        "landing": [
-            {"head": "c" * 40, "step": "fix", "refusal": "ci_failed", "at": AT.isoformat()},
-            _attempt(at=AT + timedelta(hours=1)),
-        ],
-        "pause_log": [
-            {"kind": "failure", "value": "account_limit", "section": "Developer: land-101"},
-            {"kind": "escalation", "value": "failure"},
-            {"kind": "resumed"},
-            {"kind": "failure", "value": "account_limit", "section": DIAGNOSER},
-            {"kind": "failure", "value": "account_limit", "section": DIAGNOSER},
-            {"kind": "escalation", "value": "failure"},
-        ],
-    }
-    return {**raw, **over}
+    """GH-150 as the Landing Diagnoser stranded it: its real frontmatter (`GH150_STRANDED`),
+    a failed run that escalated through the run_role patch, leaving its entry with no
+    `delivered` and no `failure`. `over` is applied on top."""
+    return {**_real(), **over}
 
 
 @dataclass(frozen=True)
@@ -728,8 +730,8 @@ def test_migration_clears_the_escalation_and_stamps_the_failure_in_one_patch():
     assert patch["status"] == "ready_for_review"
     # closure replaces a key whole: the history stays and `resumed` closes the epoch
     assert patch["pause_log"] == [*raw["pause_log"], {"kind": "resumed"}]
-    assert patch["landing"][0] == raw["landing"][0]
-    assert patch["landing"][1] == {**raw["landing"][1], "failure": "account_limit"}
+    assert patch["landing"][:-1] == raw["landing"][:-1]
+    assert patch["landing"][-1] == {**raw["landing"][-1], "failure": "account_limit"}
     assert "cost_usd" not in patch
     assert raw == _stranded()  # the input is not touched
 
@@ -746,14 +748,17 @@ def test_migration_takes_the_failure_from_the_last_failure_of_the_closing_epoch(
 
 
 def test_migration_leaves_diagnose_retry_due_or_waiting_never_escalate():
+    """The window sits a minute either side, never on the boundary: `next_attempt_at` is
+    inclusive, and `rules`' own tests own that edge."""
     raw = _stranded()
-    patch = landing.migration(raw)
-    migrated = {**raw, **patch}
-    entry_at = datetime.fromisoformat(raw["landing"][-1]["at"])
-    wait = _minutes(rules.ACCOUNT_LIMIT_SCHEDULE, 0)
-    assert landing.diagnose_retry(migrated, entry_at) == "waiting"
-    assert landing.diagnose_retry(migrated, entry_at + wait) == "due"
-    assert landing.diagnose_retry(raw, entry_at + wait) == "escalate"  # before: stuck
+    migrated = {**raw, **landing.migration(raw)}
+    window = _window(migrated)
+    margin = timedelta(minutes=1)
+
+    assert landing.diagnose_retry(migrated, window - margin) == "waiting"
+    assert landing.diagnose_retry(migrated, window + margin) == "due"
+    assert landing.diagnose_retry(raw, window - margin) == "escalate"  # before: stuck
+    assert landing.diagnose_retry(raw, window + margin) == "escalate"
 
 
 def test_migration_stamps_only_the_last_diagnose_entry():
@@ -765,41 +770,6 @@ def test_migration_stamps_only_the_last_diagnose_entry():
 
 
 # --- GH-259: the same migration on GH-150's real text -----------------------------------------
-
-
-def _real():
-    return document.parse(GH150_STRANDED)
-
-
-def _window(migrated):
-    """The instant the freed diagnosis becomes due, read off the shared calendar from the
-    fixture's own last diagnose `at`: the schedule is `rules.retake_calendar`'s, never a number
-    typed here, and no instant is a literal."""
-    since = datetime.fromisoformat(landing.diagnose_at(migrated))
-    reason = migrated["landing"][-1]["failure"]
-    count = len(landing.diagnose_attempts(migrated))
-    limit = rules.auto_resume_limit(landing._landing_view(migrated), reason)
-    schedule, prior, _ = rules.retake_calendar(reason, count, count, limit)
-    assert prior < len(schedule)  # the calendar is not spent: `due` and `waiting` both exist
-    return since + timedelta(minutes=schedule[prior])
-
-
-def _freed():
-    raw = _real()
-    return {**raw, **landing.migration(raw)}
-
-
-def test_the_real_document_is_stuck_before_the_migration_and_retried_after_it():
-    """The window sits a minute either side, never on the boundary: `next_attempt_at` is
-    inclusive, and `rules`' own tests own that edge."""
-    migrated = _freed()
-    window = _window(migrated)
-    margin = timedelta(minutes=1)
-
-    assert landing.diagnose_retry(migrated, window - margin) == "waiting"
-    assert landing.diagnose_retry(migrated, window + margin) == "due"
-    assert landing.diagnose_retry(_real(), window - margin) == "escalate"
-    assert landing.diagnose_retry(_real(), window + margin) == "escalate"
 
 
 def _closing_start(log):

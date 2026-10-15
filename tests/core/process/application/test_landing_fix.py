@@ -876,6 +876,8 @@ def test_land_frees_a_stranded_diagnose_in_one_write_and_keeps_the_cost(tmp_path
     assert [e["failure"] for e in _diagnoses(ports)] == ["account_limit"]
     assert landing_rules.diagnose_retry(doc, _window() - MARGIN) == "waiting"
     assert landing_rules.diagnose_retry(doc, _window() + MARGIN) == "due"
+    assert landing_rules.diagnose_retry(before, _window() - MARGIN) == "escalate"
+    assert landing_rules.diagnose_retry(before, _window() + MARGIN) == "escalate"
     assert result.kind == "skipped" and result.reason == "diagnose_waiting"
     assert runner.calls == [] and ports.tracker.labels == [] and ports.tracker.comments == []
     assert list(ports.documents.closures) == ["GH-5"]
