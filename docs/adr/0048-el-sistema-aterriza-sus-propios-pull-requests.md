@@ -247,4 +247,22 @@ un 429 falla antes del primer turno y cuesta ~0 USD. Un fallo externo no 429 (`u
 `resume` rechaza (`is not paused`): es el comportamiento de un alto humano deliberado.
 `agentic/cli.py::_resume` y su texto de rechazo no cambian.
 
-<!-- migración de los documentos varados: la agrega el siguiente subtask (stranded-migration) -->
+**Migración de los documentos varados.** Los documentos que el diagnóstico dejó escalados antes de
+este cambio (apostrophe GH-121, #132, #135, #144, #150) los libera `agentic land`, con una sola
+escritura. El discriminador es `domain.landing.stranded_diagnose(raw, escalated_after)`: `waiting_on_human`
+con clase `failure`, `pull_request`, el diagnóstico como rol actual, la última entrada `diagnose`
+sin `delivered` ni `failure`, y una época del `pause_log` (después del último `resumed`) con al menos
+un `failure`, todos del propio diagnóstico y con motivo en `rules.EXTERNAL_REASONS`, más la entrada
+`escalation`. `escalated_after` lee los comentarios solo cuando el documento ya tiene esa forma: un
+`Escalated:` creado después del `at` de la entrada dice que un humano fue avisado y la parada es
+suya; una hora ingenua o ilegible también lo deja escalado. La escritura es un solo
+`record_closure` con `domain.landing.migration`: el parche de `unescalated` más el `failure` de la
+época que cierra, puesto en la última entrada `diagnose`; después rige el reintento ordinario.
+Nunca escribe `cost_usd` ni borra historia: `record_closure` reemplaza una clave entera, así que
+`pause_log` se escribe completo con `resumed` al final (`document.RECORD_KEYS` suma `pause_log` y
+`escalated`, que el YAML parte en varias líneas). El poller ofrece `land` para estas tareas y
+`gather_resumes` las salta, de modo que un solo camino es dueño de cada documento.
+
+**Riesgo conocido.** La migración escribe documentos vivos: un error del discriminador desescalaría
+una parada humana real. Los casos contrarios (escalación real con y sin comentario, `sdk`, rol del
+grafo, `questions`, sin pull request) quedan fijados por tests.
