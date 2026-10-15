@@ -202,3 +202,49 @@ discrepar: un `True` falso gasta una pasada y un `False` falso lo atrapa la vía
 `checks_failed`/`conflict`; ambos los acota `LANDING_PASSES_MAX` y se ven en `landing`. Los
 presupuestos se comparten entre todos los rechazos: un PR que ya gastó sus pasadas va a
 `diagnose` en su primer conflicto.
+
+## Adenda (2026-10-15, GH-257): un diagnóstico que falla no es una escalación
+
+**Causa.** El Landing Diagnoser corre fuera del grafo, en `landing_fix.diagnose`. Cuando su
+`run_role` fallaba dos veces (típicamente HTTP 429), `diagnose` guardaba el parche de escalación
+de `run_role`: `waiting_on_human`, `escalated`, `escalation_class` y entradas `failure` en
+`pause_log`, sin etiquetar ni comentar el issue. El checkpoint del grafo estaba bien (la corrida
+terminó en `ready_for_review`), así que `resume` rechazaba con `is not paused` (correcto, y
+sin tocar), el poller leía `not_ready` y `land` devolvía `none` porque `diagnosed` ya era cierto.
+La tarea quedaba varada sin dueño.
+
+**Decisión.** Un diagnóstico que no entrega es un intento, no una escalación.
+
+- `diagnose` guarda solo la contabilidad del parche (`cost_usd`, `runs`, `current_role`) y deja la
+  tarea en `ready_for_review`; el motivo (`FailureReason`) se escribe en su propia entrada de
+  `landing` con `record_closure`.
+- Dos claves opcionales nuevas en la entrada `landing`: `delivered` (el rol entregó; se escribe
+  con `record_closure` antes de escalar, cerrar el PR o lanzar nada, y ningún `save` posterior
+  reescribe la instantánea vieja de `landing`) y `failure`. Se leen con `.get`: un documento
+  sin ellas se lee y se muestra como antes. `spent.diagnosed` cuenta solo entradas `delivered` y
+  `already_dispatched` ignora las entradas `diagnose` sin entregar.
+- Los reintentos siguen el calendario compartido de los reintentos 429: `rules.retake_calendar`
+  (el cuerpo de `_calendar`, extraído sin cambios), `rules.next_attempt_at` y
+  `rules.auto_resume_limit`; no hay constante ni tope nuevos. `domain.landing.diagnose_retry`
+  devuelve `none`, `due`, `waiting` o `escalate`. `since` es la hora de despacho del último intento
+  (`at` de la entrada), unos segundos antes de que fallara: aceptado. Como ninguna corrida entrega
+  entre dos intentos, la cadena del diagnóstico es el calendario plano `ACCOUNT_LIMIT_SCHEDULE` y
+  nunca llega a la semana horaria. Con `prior = chase_prior =` cantidad de intentos, la cadena
+  entera tiene `len(ACCOUNT_LIMIT_SCHEDULE)` intentos.
+- Un motivo que ninguna espera cura, o un calendario agotado, escalan de verdad por un solo
+  ayudante (`landing_fix._escalate`): etiqueta `needs-human`, comenta `Escalated:` y escribe
+  `rules.logged(rules.escalation("failure", …))` sin `failure` en el registro, así que
+  `auto_resumable` queda falso. La rama de profundidad >= 1 usa el mismo ayudante.
+  `domain.landing.unescalated` es el único parche que limpia la escalación de un paso de landing.
+
+**§7.** Ninguna métrica, etiqueta, atributo de span, prompt ni `prompts.fingerprint` cambia.
+
+**§8.** Un reintento cuesta como máximo el tope por intento (10 USD) por la longitud del calendario;
+un 429 falla antes del primer turno y cuesta ~0 USD. Un fallo externo no 429 (`upstream`,
+`network`) puede gastar dinero real por reintento, acotado por ese tope y por `RETAKE_SCHEDULE`.
+
+**Fuera de alcance.** Una escalación deliberada de profundidad >= 1 sigue dejando una tarea que
+`resume` rechaza (`is not paused`): es el comportamiento de un alto humano deliberado.
+`agentic/cli.py::_resume` y su texto de rechazo no cambian.
+
+<!-- migración de los documentos varados: la agrega el siguiente subtask (stranded-migration) -->

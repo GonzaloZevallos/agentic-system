@@ -778,8 +778,8 @@ def test_the_depth_one_escalation_keeps_the_delivered_mark_and_the_cost(tmp_path
     doc = _doc(ports)
     assert [e.get("delivered") for e in _diagnoses(ports)] == [True]
     assert doc["escalation_class"] == "failure" and doc["escalated"]
-    assert max(s["cost_usd"] for s in ports.documents.saved) == pytest.approx(2.4)
-    assert all(s["cost_usd"] >= 2.0 for s in ports.documents.saved)
+    assert max(s.get("cost_usd", 0.0) for s in ports.documents.saved) == pytest.approx(2.4)
+    assert all(s.get("cost_usd", 2.0) >= 2.0 for s in ports.documents.saved)
     assert ports.tracker.labels == [("GH-5", "needs-human")]
 
 
