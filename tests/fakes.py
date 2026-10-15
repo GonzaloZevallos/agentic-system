@@ -5,28 +5,41 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from agentic.core.knowledge.domain import knowledge
 from agentic.core.process.adapters.github.tracker import pull_request_number
+from agentic.core.process.application.limits import RunLimits
 from agentic.core.process.application.ports import (
     BranchPullRequest,
     Checkout,
     CommandResult,
+    Commands,
+    FlagVocabulary,
     GitError,
+    Inbox,
     IssueComment,
     IssueState,
     LaunchAttempt,
     ListedPullRequest,
     MergeCallFailed,
     Ports,
+    ProductKnowledge,
+    ProductStack,
+    Prompts,
     RawResult,
+    RoleRunner,
     RunRegistration,
+    SampleApp,
     SampleAppHandle,
+    TaskDocuments,
+    Tracker,
     Upstream,
     UpstreamMerge,
+    Workspace,
 )
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.ci import CiReport, CiUnreadable, Containment
@@ -57,12 +70,12 @@ class ScriptedRunner:
     reviews pops first is the event loop's business: a test that cares which subtask
     was returned scripts it by name, not by position."""
 
-    def __init__(self, **queues):
+    def __init__(self, **queues: list[RawResult | Exception]):
         self.queues = {k: list(v) for k, v in queues.items()}
-        self.calls: list[dict] = []
+        self.calls: list[dict[str, Any]] = []
         self.refused: list[str] = []
 
-    async def run_once(self, role: Role, prompt: str, **kwargs) -> RawResult:
+    async def run_once(self, role: Role, prompt: str, **kwargs: Any) -> RawResult:
         self.calls.append({"slug": role.slug, "prompt": prompt, "role": role, **kwargs})
         if (presubmit := kwargs.get("presubmit")) is not None:
             while (reason := presubmit()) is not None:
@@ -89,7 +102,7 @@ class ScriptedRunner:
         return [_subtask_of(c.get("cwd")) for c in self.calls if c["slug"] == slug]
 
 
-def _subtask_of(cwd) -> str:
+def _subtask_of(cwd: Path | str | None) -> str:
     """The subtask a checkout belongs to: `.../GH-1.api` is `api`, the task's own
     checkout (the integration, or a lone subtask) is the empty string."""
     name = Path(cwd).name if cwd else ""
@@ -97,12 +110,12 @@ def _subtask_of(cwd) -> str:
 
 
 class MemoryDocuments:
-    def __init__(self):
+    def __init__(self) -> None:
         self.saved: list[TaskState] = []
         self.written_into: list[tuple[str, Path]] = []
         # task_id -> the closure values recorded for it, folded over successive calls
         # the way the filesystem adapter's line-level replace-or-append does.
-        self.closures: dict[str, dict[str, str]] = {}
+        self.closures: dict[str, dict[str, object]] = {}
 
     def save(self, state: TaskState) -> Path:
         self.saved.append(state)
@@ -117,13 +130,13 @@ class MemoryDocuments:
     def ids_touched_since(self, since: datetime) -> list[str]:
         return self.ids()
 
-    def load(self, task_id: str) -> dict | None:
+    def load(self, task_id: str) -> dict[str, object] | None:
         mine = [s for s in self.saved if s["id"] == task_id]
         if not mine:
             return None
         return {**mine[-1], **self.closures.get(task_id, {})}
 
-    def record_closure(self, task_id: str, values: dict[str, str]) -> Path:
+    def record_closure(self, task_id: str, values: Mapping[str, object]) -> Path:
         if self.load(task_id) is None:
             raise FileNotFoundError(task_id)
         self.closures[task_id] = {**self.closures.get(task_id, {}), **values}
@@ -149,7 +162,7 @@ class MemoryKnowledge:
         text: str = "",
         standards: str = "## Engineering standards\n\nHex.",
         brief: str | None = None,
-    ):
+    ) -> None:
         self.text = text
         self.standards_text = standards
         self.brief_text = brief
@@ -166,13 +179,13 @@ class MemoryKnowledge:
     def brief(self, root: Path | None = None) -> str | None:
         return self.brief_text
 
-    def approval_check(self, task_type: str) -> Callable[[dict], None]:
+    def approval_check(self, task_type: str) -> Callable[[dict[str, object]], None]:
         return knowledge.approval_check(task_type)
 
-    def clarification_check(self) -> Callable[[dict], None]:
+    def clarification_check(self) -> Callable[[dict[str, object]], None]:
         return knowledge.clarification_check()
 
-    def consolidate(self, verdict: dict, root: Path | None = None) -> list[Path]:
+    def consolidate(self, verdict: dict[str, object], root: Path | None = None) -> list[Path]:
         definitions, terms = knowledge.consolidation(verdict)
         self.definitions.update(definitions)
         self.terms.update(terms)
@@ -222,7 +235,7 @@ class MemoryStack:
         ci: dict[str, tuple[str, ...]] | tuple[str, ...] | None = None,
         affected_checks: dict[str, str] | None = None,
         affected_fallback: tuple[str, ...] = (),
-    ):
+    ) -> None:
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
         # None is a product that declares no name, which `preflight` refuses.
@@ -328,7 +341,7 @@ class MemoryCommands:
         holds: dict[str, threading.Event] | None = None,
         raises: set[str] | None = None,
         **queues: list[CommandResult],
-    ):
+    ) -> None:
         self.queues = {k: list(v) for k, v in queues.items()}
         self.ran: list[tuple[Path, str]] = []
         self.holds = holds or {}
@@ -370,7 +383,7 @@ class MemorySampleApp:
     wants a refusal passes a `str`. `stopped` keeps every handle `stop` was called with,
     in order, so a test can tell the app never outlived the node."""
 
-    def __init__(self, result: SampleAppHandle | str | None = None):
+    def __init__(self, result: SampleAppHandle | str | None = None) -> None:
         default = SampleAppHandle(lines=("Listening on http://localhost:4242",), token=None)
         self.result = result or default
         self.started: list[tuple[str, Path]] = []
@@ -391,7 +404,7 @@ class MemoryInbox:
         open_issues: list[tuple[str, str]] | None = None,
         task_errors: set[int] | None = None,
         **issues: TaskInput,
-    ):
+    ) -> None:
         self.issues = issues
         # `(url, body)` pairs `open_issues()` hands back: a stack review's own read
         # seam, never filtered here -- the caller matches the marker (ADR-0034).
@@ -430,7 +443,7 @@ class MemoryWorkspace:
 
     ROOT = Path("/memory/worktrees")
 
-    def __init__(self):
+    def __init__(self) -> None:
         # Path -> the repository it belongs to; a path outside it is in none.
         self.repositories: dict[Path, Path] = {}
         self.moved: set[Path] = set()
@@ -591,7 +604,7 @@ class MemoryWorkspace:
             return MergeOutcome(reason=f"CONFLICT in {branch}", conflicted_paths=paths)
         return MergeOutcome(reason=None)
 
-    def dependency_state(self, path: Path, branch: str, paths) -> DependencyState:
+    def dependency_state(self, path: Path, branch: str, paths: Sequence[str]) -> DependencyState:
         self.dependency_state_calls.append((path, branch, tuple(paths)))
         queue = self.dependency_states.get(branch)
         if not queue:
@@ -693,7 +706,7 @@ class MemoryWorkspace:
 
 
 class MemoryTracker:
-    def __init__(self, url: str = "https://github.com/o/r/pull/7"):
+    def __init__(self, url: str = "https://github.com/o/r/pull/7") -> None:
         self.url = url
         self.pull_requests: list[tuple[str, str, str]] = []
         self.comments: list[tuple[str, str]] = []
@@ -873,7 +886,7 @@ class MemoryRunRegistry:
     """GH-137: no real pid, no real file. `live` answers whatever a test pre-loads in
     `entries`, since this fake never actually forks a second process to be alive."""
 
-    def __init__(self, entries: list[RunRegistration] | None = None):
+    def __init__(self, entries: list[RunRegistration] | None = None) -> None:
         self.entries: list[RunRegistration] = list(entries or [])
         self.registered: list[tuple[str, str]] = []
         self.unregistered = 0
@@ -897,14 +910,14 @@ class MemoryRunRegistry:
         return list(self.entries)
 
     @contextlib.contextmanager
-    def exclusive(self):
+    def exclusive(self) -> Iterator[None]:
         self.exclusive_entries += 1
         yield
 
     def launch_attempts(self, product: str, issue: int) -> LaunchAttempt | None:
         return self.attempts.get((product, issue))
 
-    def record_launch(self, product: str, issue: int, when) -> None:
+    def record_launch(self, product: str, issue: int, when: datetime) -> None:
         existing = self.attempts.get((product, issue))
         prior = existing.prior if existing is not None else 0
         self.attempts[(product, issue)] = LaunchAttempt(when, prior + 1)
@@ -913,7 +926,9 @@ class MemoryRunRegistry:
         self.attempts.pop((product, issue), None)
         self.cleared.append((product, issue))
 
-    def publish_spend(self, root: Path, product: str, runs, now: datetime) -> list[str]:
+    def publish_spend(
+        self, root: Path, product: str, runs: Sequence[rules.SpendRun], now: datetime
+    ) -> list[str]:
         self.publish_calls.append((root, product, list(runs), now))
         self.published[root] = rules.merged_spend(self.published.get(root, []), runs, now)
         return []
@@ -932,7 +947,7 @@ class FakeLauncher:
     OSError` seam (GH-140), never added to `spawned` since a real `Popen` never got the
     chance to run either."""
 
-    def __init__(self, pid: int = 4242, fails: set[int] | None = None):
+    def __init__(self, pid: int = 4242, fails: set[int] | None = None) -> None:
         self.pid = pid
         self.spawned: list[list[str]] = []
         self._fails = fails or set()
@@ -947,21 +962,35 @@ class FakeLauncher:
         return self.pid
 
 
-def memory_ports(runner: ScriptedRunner | None = None, **overrides) -> Ports:
-    fields = {
-        "runner": runner or ScriptedRunner(),
-        "documents": MemoryDocuments(),
-        "knowledge": MemoryKnowledge(),
-        "prompts": MemoryPrompts(),
-        "flags": MemoryFlags(),
-        "inbox": MemoryInbox(),
-        "workspace": MemoryWorkspace(),
-        "tracker": MemoryTracker(),
-        "stack": MemoryStack(),
-        "commands": MemoryCommands(),
-        "sample_app": MemorySampleApp(),
-    }
-    return Ports(**{**fields, **overrides})
+def memory_ports(
+    runner: RoleRunner | None = None,
+    *,
+    documents: TaskDocuments | None = None,
+    knowledge: ProductKnowledge | None = None,
+    prompts: Prompts | None = None,
+    flags: FlagVocabulary | None = None,
+    inbox: Inbox | None = None,
+    workspace: Workspace | None = None,
+    tracker: Tracker | None = None,
+    stack: ProductStack | None = None,
+    commands: Commands | None = None,
+    sample_app: SampleApp | None = None,
+    limits: RunLimits | None = None,
+) -> Ports:
+    return Ports(
+        runner=runner if runner is not None else ScriptedRunner(),
+        documents=documents if documents is not None else MemoryDocuments(),
+        knowledge=knowledge if knowledge is not None else MemoryKnowledge(),
+        prompts=prompts if prompts is not None else MemoryPrompts(),
+        flags=flags if flags is not None else MemoryFlags(),
+        inbox=inbox if inbox is not None else MemoryInbox(),
+        workspace=workspace if workspace is not None else MemoryWorkspace(),
+        tracker=tracker if tracker is not None else MemoryTracker(),
+        stack=stack if stack is not None else MemoryStack(),
+        commands=commands if commands is not None else MemoryCommands(),
+        sample_app=sample_app if sample_app is not None else MemorySampleApp(),
+        **({} if limits is None else {"limits": limits}),
+    )
 
 
 # Recorded role outputs, as the harness would hand them back.
@@ -970,14 +999,26 @@ def memory_ports(runner: ScriptedRunner | None = None, **overrides) -> Ports:
 REPORTS = "# Reports\n\n## Jobs\n\n- When I audit, I want CSV, so I can file it.\n\nCSV export."
 
 
-def questions(n=1, done=False, cost=0.05, session="q", invariants=()) -> RawResult:
+def questions(
+    n: int = 1,
+    done: bool = False,
+    cost: float = 0.05,
+    session: str = "q",
+    invariants: Sequence[object] = (),
+) -> RawResult:
     text = "### Closing\n\nDecided." if done else f"❓ **Q{n}** - **Scope**: which?\n\n➡️ a"
     return RawResult(
         {"markdown": text, "done": done, "invariants": list(invariants)}, cost, 2, session
     )
 
 
-def answers(n=1, for_human=(), withdrawn=(), cost=0.1, session="a") -> RawResult:
+def answers(
+    n: int = 1,
+    for_human: Sequence[object] = (),
+    withdrawn: Sequence[object] = (),
+    cost: float = 0.1,
+    session: str = "a",
+) -> RawResult:
     return RawResult(
         {
             "markdown": f"**Q{n}**: accepted",
@@ -990,14 +1031,22 @@ def answers(n=1, for_human=(), withdrawn=(), cost=0.1, session="a") -> RawResult
     )
 
 
-def tech_answers(n=1, for_pm=(), cost=0.1, session="t") -> RawResult:
+def tech_answers(
+    n: int = 1, for_pm: Sequence[object] = (), cost: float = 0.1, session: str = "t"
+) -> RawResult:
     return RawResult(
         {"markdown": f"**Q{n}**: accepted", "questions_for_pm": list(for_pm)}, cost, 1, session
     )
 
 
 def consulted(
-    n=1, for_human=(), withdrawn=(), definitions=None, glossary=None, cost=0.15, session="pm"
+    n: int = 1,
+    for_human: Sequence[object] = (),
+    withdrawn: Sequence[object] = (),
+    definitions: Sequence[object] | None = None,
+    glossary: Sequence[object] | None = None,
+    cost: float = 0.15,
+    session: str = "pm",
 ) -> RawResult:
     return RawResult(
         {
@@ -1013,8 +1062,14 @@ def consulted(
     )
 
 
-def planned(*subtasks: dict, cost=0.3, session="tl", invariants=(), integration="") -> RawResult:
-    items = [
+def planned(
+    *subtasks: dict[str, object],
+    cost: float = 0.3,
+    session: str = "tl",
+    invariants: Sequence[object] = (),
+    integration: str = "",
+) -> RawResult:
+    items: list[dict[str, object]] = [
         {"id": "api", "title": "API", "brief": "Build it.", "seams": ["GET /x"]},
         *subtasks,
     ]
@@ -1034,7 +1089,7 @@ def planned(*subtasks: dict, cost=0.3, session="tl", invariants=(), integration=
     )
 
 
-def delivered(summary="done", cost=0.5, session="dev") -> RawResult:
+def delivered(summary: str = "done", cost: float = 0.5, session: str = "dev") -> RawResult:
     return RawResult(
         {"markdown": "### Changes\n\nx.py", "summary": summary, "assumptions": []},
         cost,
@@ -1043,7 +1098,12 @@ def delivered(summary="done", cost=0.5, session="dev") -> RawResult:
     )
 
 
-def finding(severity="blocking", category="spec-behaviour", claim="wrong", scope="subtask"):
+def finding(
+    severity: str = "blocking",
+    category: str = "spec-behaviour",
+    claim: str = "wrong",
+    scope: str = "subtask",
+) -> dict[str, str]:
     return {
         "location": "x.py:1",
         "claim": claim,
@@ -1055,12 +1115,12 @@ def finding(severity="blocking", category="spec-behaviour", claim="wrong", scope
 
 
 def reviewed(
-    kind="approved",
-    reason="fine",
-    cost=0.2,
-    category="spec-behaviour",
-    findings=None,
-    settled=(),
+    kind: str = "approved",
+    reason: str = "fine",
+    cost: float = 0.2,
+    category: str = "spec-behaviour",
+    findings: list[dict[str, str]] | None = None,
+    settled: Sequence[object] = (),
 ) -> RawResult:
     """The verdict is derived: a return is a review with a blocking finding."""
     if findings is None:
@@ -1078,13 +1138,13 @@ def reviewed(
     )
 
 
-def classified(type_="feature", confidence="high", cost=0.01) -> RawResult:
+def classified(type_: str = "feature", confidence: str = "high", cost: float = 0.01) -> RawResult:
     return RawResult(
         {"markdown": "Clear.", "type": type_, "confidence": confidence, "reason": "r"}, cost
     )
 
 
-def defined(n=1, cost=0.1) -> RawResult:
+def defined(n: int = 1, cost: float = 0.1) -> RawResult:
     return RawResult(
         {
             "markdown": f"### Behaviour\n\nv{n}\n\n### For the next role\n\nDefinition v{n}.",
@@ -1094,7 +1154,14 @@ def defined(n=1, cost=0.1) -> RawResult:
     )
 
 
-def verdict(kind, reason="r", definitions=None, glossary=None, cost=0.2, flags=None) -> RawResult:
+def verdict(
+    kind: str,
+    reason: str = "r",
+    definitions: Sequence[object] | None = None,
+    glossary: Sequence[object] | None = None,
+    cost: float = 0.2,
+    flags: dict[str, bool] | None = None,
+) -> RawResult:
     if definitions is None:
         definitions = [{"capability": "reports", "content": REPORTS}] if kind == "approved" else []
     return RawResult(
@@ -1116,11 +1183,13 @@ def verdict(kind, reason="r", definitions=None, glossary=None, cost=0.2, flags=N
 # verdict, the questions UX's blocking findings become, and the rest as observations).
 
 
-def design_draft(markdown="### Flow\n\nUnchanged.", cost=0.1) -> RawResult:
+def design_draft(markdown: str = "### Flow\n\nUnchanged.", cost: float = 0.1) -> RawResult:
     return RawResult({"markdown": markdown}, cost)
 
 
-def design_findings(kind, reason="r", items=None, cost=0.1) -> RawResult:
+def design_findings(
+    kind: str, reason: str = "r", items: Sequence[object] | None = None, cost: float = 0.1
+) -> RawResult:
     return RawResult(
         {
             "markdown": f"### Walk\n\nOk.\n\n### Verdict\n\n{kind}\n\n{reason}",
@@ -1132,7 +1201,12 @@ def design_findings(kind, reason="r", items=None, cost=0.1) -> RawResult:
     )
 
 
-def final_validation(kind="approved", reason="r", blocking=None, cost=0.2) -> RawResult:
+def final_validation(
+    kind: str = "approved",
+    reason: str = "r",
+    blocking: Sequence[object] | None = None,
+    cost: float = 0.2,
+) -> RawResult:
     """PM's early, UI-only final validation (ADR-0040): same `verdict`/`reason` shape,
     `blocking` in place of `definitions`/`observations` -- one-line claims the
     integration review must settle, empty on `approved`."""
@@ -1148,7 +1222,11 @@ def final_validation(kind="approved", reason="r", blocking=None, cost=0.2) -> Ra
 
 
 def consolidation(
-    kind="approved", reason="r", questions=None, observations=None, cost=0.2
+    kind: str = "approved",
+    reason: str = "r",
+    questions: Sequence[object] | None = None,
+    observations: Sequence[object] | None = None,
+    cost: float = 0.2,
 ) -> RawResult:
     return RawResult(
         {
@@ -1166,12 +1244,12 @@ def consolidation(
 
 
 def stack_proposal(
-    verdict_text="keep the stack",
-    stack_diff="- a diff",
-    standards="## Engineering standards\n\nHex.",
-    adr_draft="an ADR draft",
-    cost=0.3,
-    session="stack",
+    verdict_text: str = "keep the stack",
+    stack_diff: str = "- a diff",
+    standards: str = "## Engineering standards\n\nHex.",
+    adr_draft: str = "an ADR draft",
+    cost: float = 0.3,
+    session: str = "stack",
 ) -> RawResult:
     return RawResult(
         {
@@ -1190,7 +1268,12 @@ def stack_proposal(
 # The bug path (issue #65): the Product Analyst's diagnosis and PM's ruling on it.
 
 
-def diagnosed(ruling="bug", capability="dashboard", for_pm=(), cost=0.1) -> RawResult:
+def diagnosed(
+    ruling: str = "bug",
+    capability: str = "dashboard",
+    for_pm: Sequence[object] = (),
+    cost: float = 0.1,
+) -> RawResult:
     return RawResult(
         {
             "markdown": f"### Reproduction\n\nRan it.\n\n### Ruling\n\n{ruling}",
@@ -1205,7 +1288,12 @@ def diagnosed(ruling="bug", capability="dashboard", for_pm=(), cost=0.1) -> RawR
 
 
 def ruled(
-    kind="approved", ruling="bug", reason="r", definitions=None, glossary=None, cost=0.2
+    kind: str = "approved",
+    ruling: str = "bug",
+    reason: str = "r",
+    definitions: Sequence[object] | None = None,
+    glossary: Sequence[object] | None = None,
+    cost: float = 0.2,
 ) -> RawResult:
     return RawResult(
         {

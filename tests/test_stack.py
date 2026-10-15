@@ -91,11 +91,38 @@ def test_every_mypy_file_exists():
         assert (REPO / entry).exists(), f"[tool.mypy] files: {entry!r} does not exist"
 
 
+# The two paths under `tests/` the checked scope admits: the in-memory doubles and the module
+# that assigns them to their ports (GH-227, the 2026-10-08 addendum to ADR-0021). Nothing else
+# under `tests/` is checked, so nothing else is admitted.
+MYPY_TEST_ENTRIES = frozenset({"tests/fakes.py", "tests/conformance.py"})
+
+
+def _outside_scope(entries: list[str]) -> list[str]:
+    """The entries that are neither `agentic` itself, nor under `agentic/`, nor one of
+    `MYPY_TEST_ENTRIES`."""
+    return [
+        entry
+        for entry in entries
+        if not (entry == "agentic" or entry.startswith("agentic/") or entry in MYPY_TEST_ENTRIES)
+    ]
+
+
 def test_every_mypy_file_is_inside_agentic():
-    for entry in _mypy_files():
-        assert entry == "agentic" or entry.startswith("agentic/"), (
-            f"[tool.mypy] files: {entry!r} is outside agentic/"
-        )
+    outside = _outside_scope(_mypy_files())
+    assert not outside, f"[tool.mypy] files: {outside!r} is outside agentic/ and the named tests"
+
+
+def test_the_guard_admits_the_named_doubles_and_refuses_any_other_test_file():
+    assert _outside_scope(["agentic/shared", "tests/fakes.py", "tests/conformance.py"]) == []
+    assert _outside_scope(["tests/fakes.py", "tests/other.py", "tests"]) == [
+        "tests/other.py",
+        "tests",
+    ]
+
+
+def test_the_test_entries_in_mypy_files_are_exactly_the_named_set():
+    entries = {entry for entry in _mypy_files() if entry.startswith("tests")}
+    assert entries == MYPY_TEST_ENTRIES
 
 
 def test_mypy_files_excludes_the_pinned_plugins_submodule():
