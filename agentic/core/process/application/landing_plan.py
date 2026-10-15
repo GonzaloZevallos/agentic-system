@@ -7,7 +7,7 @@ ask the same question the same way. It imports nothing from them."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime
@@ -19,7 +19,8 @@ from ..domain import landing, rules
 from ..domain.landing import LandingStep, LandingStepKind
 from ..domain.roles import Role
 from ..domain.task import TaskState
-from .ports import Launcher, Ports, Upstream
+from .escalate import ESCALATED
+from .ports import IssueComment, Launcher, Ports, Upstream
 
 LIVE_STEPS: frozenset[LandingStepKind] = frozenset(
     {"sync_master", "re_review", "fix", "rerun", "file_followups_and_land", "diagnose"}
@@ -99,6 +100,27 @@ def diagnose_gate(
             return "skip"
         case "escalate":
             return "skip" if raw.get("escalated") else "escalate"
+
+
+def stranded(raw: Mapping[str, object], comments: Sequence[IssueComment]) -> bool:
+    """Whether `raw` is a stranded diagnose (GH-257): the one question the poller's resume
+    gather and `land` both ask, over the comments the caller already has."""
+    return landing.stranded_diagnose(
+        raw, landing.escalated_after(comments, landing.diagnose_at(raw), ESCALATED)
+    )
+
+
+def stranded_now(ports: Ports, task_id: str, raw: Mapping[str, object]) -> bool:
+    """`stranded`, reading the issue's comments only when the document already has the
+    stranded shape: no tracker call for any other task. A tracker that cannot answer leaves
+    the document escalated."""
+    if not landing.stranded_diagnose(raw, False):
+        return False
+    try:
+        comments = ports.tracker.timestamped_comments(task_id)
+    except (ValueError, OSError):
+        return False
+    return stranded(raw, comments)
 
 
 def pending(

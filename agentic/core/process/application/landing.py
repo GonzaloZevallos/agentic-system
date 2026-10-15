@@ -99,8 +99,8 @@ def _land(
     number = ports.inbox.issue_of(task_id)
     if loaded is None or not loaded.get("pull_request") or number is None:
         return LandResult("stopped", "no_pull_request")
-    raw: TaskState = loaded
-    reference = loaded["pull_request"]
+    raw: TaskState = _freed(task_id, loaded, ports, log)
+    reference = raw["pull_request"]
     recovered = _recover(task_id, raw, str(reference), ports, log, clock, resume)
     if recovered is not None:
         return recovered
@@ -172,6 +172,19 @@ def _land(
     )
     _dispatch(context)
     return LandResult("dispatched", step=step.kind)
+
+
+def _freed(task_id: str, loaded: Any, ports: Ports, log: Callable[[str], None]) -> TaskState:
+    """A stranded legacy diagnose (`landing_rules.stranded_diagnose`, GH-257) is freed with
+    one `record_closure` call and read again; any other document, or one a comment says a
+    human was told of, is returned as it is. The comments are read only for a document
+    already shaped like the stranded one."""
+    if not landing_plan.stranded_now(ports, task_id, loaded):
+        return loaded
+    ports.documents.record_closure(task_id, landing_rules.migration(loaded))
+    log(f"agentic: land: {task_id}: stranded diagnosis freed, retrying on the calendar")
+    freed: Any = ports.documents.load(task_id)
+    return freed if freed is not None else loaded
 
 
 @dataclass(frozen=True)
