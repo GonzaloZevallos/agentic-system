@@ -49,6 +49,9 @@ EXCLUDES = (f"{WORKTREES}/", f"{STATE_FILE}*", f"{STATE_DIR}/", f"{LOGS_DIR}/")
 # How long `git fetch` may take before its whole process group is killed (GH-180): the
 # network blinking must cost a run a fallback and a note, never a hang.
 FETCH_TIMEOUT_S: float = 30
+# How long one `git merge-tree` may take (GH-255). Declared, not measured: it bounds one
+# serial poll round, so a hung probe costs a conflict left unread, never a hung poller.
+MERGE_TREE_TIMEOUT_S: float = 30
 # At most this many left-out local commits are named in a note.
 _LEFT_OUT_SHOWN = 10
 
@@ -302,6 +305,29 @@ class GitWorkspace:
             return "unknown"
         return {0: "yes", 1: "no"}.get(result.returncode, "unknown")
 
+    def merge_conflicts(self, head: str, master: str) -> bool | None:
+        """See `Workspace.merge_conflicts`: both shas are fetched first, then `git
+        merge-tree --write-tree` merges them in the object database alone -- no worktree,
+        branch or index is touched. Only its own two exits mean something: 0 is clean,
+        1 is a conflict. Anything else is `None`, which the caller counts as unread.
+        Every git call here is bounded (`fetch_commit` is not: its `cat-file` has no
+        timeout), so a stuck git costs a conflict left unread, never a hung poller."""
+        try:
+            if not (self._commit_bounded(head) and self._commit_bounded(master)):
+                return None
+            result = self._run_timed("merge-tree", "--write-tree", "--quiet", master, head)
+        except (GitError, OSError, subprocess.SubprocessError):
+            return None
+        return {0: False, 1: True}.get(result.returncode)
+
+    def _commit_bounded(self, sha: str) -> bool:
+        """`fetch_commit` with every git call under a timeout: a timeout raises."""
+        exists = ("cat-file", "-e", f"{sha}^{{commit}}")
+        if self._run_timed(*exists).returncode == 0:
+            return True
+        self._run_bounded("fetch", "--quiet", "origin", sha)
+        return self._run_timed(*exists).returncode == 0
+
     def changed_paths(self, base: str, head: str) -> tuple[str, ...]:
         out = self._git("diff", "--name-only", f"{base}...{head}")
         return tuple(line for line in out.splitlines() if line)
@@ -339,6 +365,17 @@ class GitWorkspace:
             capture_output=True,
             text=True,
             timeout=FETCH_TIMEOUT_S,
+        )
+
+    def _run_timed(self, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", *args],
+            cwd=self.product_dir,
+            env={**os.environ, **self.identity, "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": ""},
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=MERGE_TREE_TIMEOUT_S,
         )
 
     def upstream(self) -> Upstream:

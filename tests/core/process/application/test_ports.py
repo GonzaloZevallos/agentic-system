@@ -72,3 +72,11 @@ def test_full_head_on_a_moved_path_advances_the_counter_head_shares():
     assert workspace.full_head(path) == "head1"
     assert workspace.full_head(path) == "head2"
     assert workspace.head(path) == "head3"
+
+
+def test_the_double_reads_an_unscripted_conflict_probe_as_unread_and_records_every_ask():
+    workspace = MemoryWorkspace()
+    workspace.conflict_answers[("h1", "m")] = True
+    assert workspace.merge_conflicts("h1", "m") is True
+    assert workspace.merge_conflicts("h2", "m") is None
+    assert workspace.conflict_probes == [("h1", "m"), ("h2", "m")]
