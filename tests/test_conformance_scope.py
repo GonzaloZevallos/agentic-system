@@ -156,7 +156,9 @@ def test_mypy_refuses_a_protocol_whose_method_signature_drifted(tmp_path):
     assert len(errors) == 1, run.stdout + run.stderr
     assert "Incompatible types in assignment" in errors[0]
     assert '"ProductStack"' in errors[0]
-    assert errors[0].startswith(str(tmp_path / "drifted.py") + ":")
+    probe_lines = (tmp_path / "drifted.py").read_text(encoding="utf-8").splitlines()
+    assert_line = next(n for n, line in enumerate(probe_lines, 1) if "_s: ProductStack = x" in line)
+    assert errors[0].startswith(f"{tmp_path / 'drifted.py'}:{assert_line}: error:")
 
 
 def test_mypy_accepts_the_same_protocol_copied_without_drift(tmp_path):
