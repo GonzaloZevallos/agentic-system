@@ -954,6 +954,85 @@ def test_contains_is_unknown_for_any_git_failure_never_raised(product, monkeypat
     assert ws.contains(sha, sha) == "unknown"
 
 
+# -- GH-255: whether a head conflicts with master, read without touching a worktree --------
+
+
+def _two_branches(product: Path, same_line: bool) -> tuple[str, str]:
+    """`(head, master)`: two commits off one base, editing README.md's one line differently
+    (a conflict) or two different files (a clean merge)."""
+    git("checkout", "-q", "-b", "task", cwd=product)
+    if same_line:
+        (product / "README.md").write_text("task\n")
+        git("add", "-A", cwd=product)
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "t", cwd=product)
+        head = git("rev-parse", "HEAD", cwd=product)
+    else:
+        head = _commit_file(product, "task-work")
+    git("checkout", "-q", "master", cwd=product)
+    if same_line:
+        (product / "README.md").write_text("master\n")
+        git("add", "-A", cwd=product)
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "m", cwd=product)
+        master = git("rev-parse", "HEAD", cwd=product)
+    else:
+        master = _commit_file(product, "master-work")
+    return head, master
+
+
+def test_merge_conflicts_is_false_for_two_branches_that_merge_clean(product):
+    head, master = _two_branches(product, same_line=False)
+    assert GitWorkspace(product, IDENTITY).merge_conflicts(head, master) is False
+
+
+def test_merge_conflicts_is_true_for_two_branches_editing_the_same_line(product):
+    head, master = _two_branches(product, same_line=True)
+    before = git("status", "--porcelain", cwd=product)
+    assert GitWorkspace(product, IDENTITY).merge_conflicts(head, master) is True
+    # The probe touched neither the worktree nor HEAD.
+    assert git("status", "--porcelain", cwd=product) == before
+    assert git("rev-parse", "HEAD", cwd=product) == master
+
+
+def test_merge_conflicts_is_none_for_a_sha_neither_here_nor_fetchable(product):
+    head = git("rev-parse", "HEAD", cwd=product)
+    ws = GitWorkspace(product, IDENTITY)
+    assert ws.merge_conflicts(head, "0" * 40) is None
+    assert ws.merge_conflicts("0" * 40, head) is None
+
+
+@pytest.mark.parametrize("failure", ["timeout", "git-error", "no-git", "exit-129"])
+def test_merge_conflicts_is_none_for_any_failure_never_raised(product, monkeypatch, failure):
+    head, master = _two_branches(product, same_line=True)
+    ws = GitWorkspace(product, IDENTITY)
+
+    def fake(*args):
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(args, 30)
+        if failure == "git-error":
+            raise GitError("boom")
+        if failure == "no-git":
+            raise FileNotFoundError("git")
+        return subprocess.CompletedProcess(args, 129, "", "usage")
+
+    monkeypatch.setattr(ws, "_run_timed", fake)
+    assert ws.merge_conflicts(head, master) is None
+
+
+def test_merge_conflicts_runs_under_a_declared_timeout(product, monkeypatch):
+    head, master = _two_branches(product, same_line=False)
+    seen: dict = {}
+    real_run = subprocess.run
+
+    def spy(cmd, **kwargs):
+        if "merge-tree" in cmd:
+            seen.update(kwargs)
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(workspace_module.subprocess, "run", spy)
+    assert GitWorkspace(product, IDENTITY).merge_conflicts(head, master) is False
+    assert seen["timeout"] == workspace_module.MERGE_TREE_TIMEOUT_S
+
+
 # -- merge_upstream_into (GH-239) ----------------------------------------------------
 
 

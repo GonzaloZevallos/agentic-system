@@ -480,6 +480,10 @@ class MemoryWorkspace:
         # What every pair not in `containment` answers: the merge tests script one answer.
         self.contains_answer: Containment = "unknown"
         self.contains_calls: list[tuple[str, str]] = []
+        # GH-255: `merge_conflicts`'s answer per `(head, master)` -- an unscripted pair is
+        # `None`, unread -- and each ask, in order. (`conflicts` is the merge-refusal set.)
+        self.conflict_answers: dict[tuple[str, str], bool | None] = {}
+        self.conflict_probes: list[tuple[str, str]] = []
         # The `lease` every `push` received, in order (the failed ones too); `remote_tips`
         # is what `remote_tip` answers per branch (absent is `None`, the remote has none),
         # `remote_tip_error` makes it raise `GitError`, and `remote_tip_calls` is each ask.
@@ -699,6 +703,10 @@ class MemoryWorkspace:
     def contains(self, head: str, master: str) -> Containment:
         self.contains_calls.append((head, master))
         return self.containment.get((head, master), self.contains_answer)
+
+    def merge_conflicts(self, head: str, master: str) -> bool | None:
+        self.conflict_probes.append((head, master))
+        return self.conflict_answers.get((head, master))
 
     def upstream(self) -> Upstream:
         self.upstream_calls += 1
