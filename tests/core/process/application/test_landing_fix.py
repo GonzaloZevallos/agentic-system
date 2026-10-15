@@ -18,8 +18,8 @@ from agentic.core.process.application.ports import (
     RawResult,
     Upstream,
 )
+from agentic.core.process.domain import document, rules
 from agentic.core.process.domain import landing as landing_rules
-from agentic.core.process.domain import rules
 from tests.core.process.application.test_merge_ci import _check, _report
 from tests.core.process.application.test_poll import _cfg
 from tests.core.process.application.test_poll_merge import (
@@ -29,8 +29,10 @@ from tests.core.process.application.test_poll_merge import (
     _finding,
     _HeldLocks,
     _ports,
+    _pr,
 )
 from tests.fakes import FakeLauncher, MemoryStack, ScriptedRunner
+from tests.gh150_stranded import GH150_STRANDED
 
 NOW = "2026-10-14T00:00:00+00:00"
 
@@ -811,40 +813,42 @@ def test_no_save_after_the_delivered_mark_writes_the_stale_landing_back(tmp_path
 # --- GH-257: a stranded legacy diagnose document is freed by land, once --------------------
 
 DIAGNOSER = "Landing Diagnoser"
-_AFTER_FAILURE = [
-    {"kind": "failure", "value": "account_limit", "section": DIAGNOSER},
-    {"kind": "failure", "value": "account_limit", "section": DIAGNOSER},
-    {"kind": "escalation", "value": "failure"},
-]
+_REAL = document.parse(GH150_STRANDED)
+_REAL_HEAD = _REAL["landing"][-1]["head"]
+LAST_AT = datetime.fromisoformat(landing_rules.diagnose_at(_REAL))
+MARGIN = timedelta(minutes=1)
 
 
 def _stranded_ports(**over):
-    """GH-150 as the Landing Diagnoser left it: waiting on a human as `failure` after a
-    failed run, its entry with neither `delivered` nor `failure`, nobody told."""
-    legacy = {
-        "head": HEAD,
-        "step": "diagnose",
-        "refusal": "merge_failed",
-        "at": START.isoformat(),
+    """GH-150 as the Landing Diagnoser left it, from its real frontmatter (`GH150_STRANDED`):
+    waiting on a human as `failure` after a failed run, its entry with neither `delivered` nor
+    `failure`, nobody told. The pull request reports the head of the fixture's last landing
+    entry; only the id is the harness's own."""
+    ports = _ports()
+    # The merge facts the live file does not carry (it stopped at `ci_missing`): the checks
+    # green on the reviewed head and master, and the merge spent on it, as `_ready` and
+    # `_merge_failed` record them for every other task here.
+    merge_facts = {
+        "merge_checks": {"head": _REAL_HEAD, "master": MASTER, "passed": True},
+        "merge_failures": {"head": _REAL_HEAD, "count": 3, "failure": "gh_rejected"},
     }
-    document = {
-        "status": "waiting_on_human",
-        "current_role": DIAGNOSER,
-        "escalated": "Landing Diagnoser failed 2 times: You've hit your session limit",
-        "escalation_class": "failure",
-        "cost_usd": 61.5,
-        "landing": [legacy],
-        "pause_log": [
-            {"kind": "failure", "value": "account_limit", "section": "Developer: land-101"},
-            {"kind": "escalation", "value": "failure"},
-            {"kind": "resumed"},
-            *_AFTER_FAILURE,
-        ],
-        "title": "t",
-        "description": "d",
-        "merge_failures": {"head": HEAD, "count": 3, "failure": "gh_rejected"},
-    }
-    return _ports(5, **{**document, **over})
+    document_ = {**_REAL, "id": "GH-5", **merge_facts, **over}
+    ports.documents.save(document_)
+    if isinstance(url := document_.get("pull_request"), str):
+        ports.tracker.prs[url] = dataclasses.replace(_pr(), head_oid=_REAL_HEAD)
+    ports.workspace.conflict_answers[(_REAL_HEAD, MASTER)] = False
+    return ports
+
+
+def _window():
+    """When the freed diagnosis is due, read off the shared calendar from the fixture's own
+    last diagnose `at`; the tests stand a minute either side of it, never on its edge."""
+    freed = {**_REAL, **landing_rules.migration(_REAL)}
+    reason = freed["landing"][-1]["failure"]
+    count = len(landing_rules.diagnose_attempts(freed))
+    limit = rules.auto_resume_limit(landing_rules._landing_view(freed), reason)
+    schedule, prior, _ = rules.retake_calendar(reason, count, count, limit)
+    return LAST_AT + timedelta(minutes=schedule[prior])
 
 
 def _told(body, at):
@@ -861,16 +865,17 @@ def test_land_frees_a_stranded_diagnose_in_one_write_and_keeps_the_cost(tmp_path
     runner = ScriptedRunner()
     ports = dataclasses.replace(ports, runner=runner)
 
-    result, _ = _land_at(ports, tmp_path, START)
+    result, _ = _land_at(ports, tmp_path, _window() - MARGIN)
 
     doc = _doc(ports)
     assert doc["status"] == "ready_for_review"
     assert not doc["escalated"] and not doc["escalation_class"]
     assert doc["pause_log"] == [*before["pause_log"], {"kind": "resumed"}]
     assert rules.auto_resumable(doc) is None
-    assert doc["cost_usd"] == 61.5
+    assert doc["cost_usd"] == _REAL["cost_usd"]
     assert [e["failure"] for e in _diagnoses(ports)] == ["account_limit"]
-    assert landing_rules.diagnose_retry(doc, START) in ("due", "waiting")
+    assert landing_rules.diagnose_retry(doc, _window() - MARGIN) == "waiting"
+    assert landing_rules.diagnose_retry(doc, _window() + MARGIN) == "due"
     assert result.kind == "skipped" and result.reason == "diagnose_waiting"
     assert runner.calls == [] and ports.tracker.labels == [] and ports.tracker.comments == []
     assert list(ports.documents.closures) == ["GH-5"]
@@ -879,9 +884,8 @@ def test_land_frees_a_stranded_diagnose_in_one_write_and_keeps_the_cost(tmp_path
 def test_the_freed_diagnose_then_retries_on_the_calendar_and_delivers(tmp_path):
     runner = ScriptedRunner(landing_diagnoser=[_delivery()])
     ports = dataclasses.replace(_stranded_ports(), runner=runner)
-    wait = timedelta(minutes=rules.ACCOUNT_LIMIT_SCHEDULE[0])
 
-    _land_at(ports, tmp_path, START + wait)
+    _land_at(ports, tmp_path, _window() + MARGIN)
 
     assert len(runner.calls) == 1
     assert _diagnoses(ports)[-1]["delivered"] is True
@@ -889,22 +893,23 @@ def test_the_freed_diagnose_then_retries_on_the_calendar_and_delivers(tmp_path):
 
 def test_a_second_land_does_not_migrate_again(tmp_path):
     ports = _stranded_ports()
-    _land_at(ports, tmp_path, START)
+    _land_at(ports, tmp_path, LAST_AT)
     first = dict(ports.documents.closures["GH-5"])
 
-    _land_at(ports, tmp_path, START)
+    _land_at(ports, tmp_path, LAST_AT)
 
     assert ports.documents.closures["GH-5"] == first
-    assert _doc(ports)["pause_log"].count({"kind": "resumed"}) == 2
+    resumed = _REAL["pause_log"].count({"kind": "resumed"})
+    assert _doc(ports)["pause_log"].count({"kind": "resumed"}) == resumed + 1
 
 
 def test_an_escalated_comment_older_than_the_entry_does_not_keep_it_escalated(tmp_path):
     ports = _stranded_ports()
     ports.tracker.timestamped["GH-5"] = [
-        _told("Escalated: earlier 429", START - timedelta(hours=3))
+        _told("Escalated: earlier 429", LAST_AT - timedelta(hours=3))
     ]
 
-    _land_at(ports, tmp_path, START)
+    _land_at(ports, tmp_path, LAST_AT)
 
     assert _doc(ports)["status"] == "ready_for_review"
 
@@ -934,7 +939,7 @@ def test_a_document_that_is_not_the_legacy_shape_stays_escalated_and_untouched(t
     ports = _stranded_ports(**over)
     before = _doc(ports)
 
-    _land_at(ports, tmp_path, START)
+    _land_at(ports, tmp_path, LAST_AT)
 
     assert _untouched(ports) and _doc(ports) == before
 
@@ -942,21 +947,21 @@ def test_a_document_that_is_not_the_legacy_shape_stays_escalated_and_untouched(t
 def test_a_real_depth_one_escalation_with_its_comment_stays_escalated(tmp_path):
     ports = _stranded_ports(pause_log=[{"kind": "escalation", "value": "failure"}])
     ports.tracker.timestamped["GH-5"] = [
-        _told("Escalated: restart exhausted", START + timedelta(minutes=1))
+        _told("Escalated: restart exhausted", LAST_AT + timedelta(minutes=1))
     ]
     before = _doc(ports)
 
-    _land_at(ports, tmp_path, START)
+    _land_at(ports, tmp_path, LAST_AT)
 
     assert _untouched(ports) and _doc(ports) == before
 
 
 def test_the_stranded_shape_with_a_comment_after_the_entry_stays_escalated(tmp_path):
     ports = _stranded_ports()
-    ports.tracker.timestamped["GH-5"] = [_told("Escalated: x", START + timedelta(seconds=1))]
+    ports.tracker.timestamped["GH-5"] = [_told("Escalated: x", LAST_AT + timedelta(seconds=1))]
     before = _doc(ports)
 
-    _land_at(ports, tmp_path, START)
+    _land_at(ports, tmp_path, LAST_AT)
 
     assert _untouched(ports) and _doc(ports) == before
 
@@ -966,7 +971,7 @@ def test_an_unreadable_comment_time_keeps_the_stranded_shape_escalated(tmp_path)
     ports.tracker.timestamped["GH-5"] = [IssueComment("Escalated: x", "garbage")]
     before = _doc(ports)
 
-    _land_at(ports, tmp_path, START)
+    _land_at(ports, tmp_path, LAST_AT)
 
     assert _untouched(ports) and _doc(ports) == before
 
@@ -976,38 +981,38 @@ def test_comments_are_read_only_for_a_document_already_shaped_like_the_stranded_
     ports = _ports(5, status="waiting_on_human", escalation_class="questions", escalated="q")
     ports.tracker.timestamped_comments = lambda task_id: reads.append(task_id) or []
 
-    _land_at(ports, tmp_path, START)
+    _land_at(ports, tmp_path, LAST_AT)
     other = _stranded_ports(current_role="Developer")
     other.tracker.timestamped_comments = lambda task_id: reads.append(task_id) or []
-    _land_at(other, tmp_path, START)
+    _land_at(other, tmp_path, LAST_AT)
 
     assert reads == []
     shaped = _stranded_ports()
     shaped.tracker.timestamped_comments = lambda task_id: reads.append(task_id) or []
-    _land_at(shaped, tmp_path, START)
+    _land_at(shaped, tmp_path, LAST_AT)
     assert reads == ["GH-5"]
 
 
 def test_one_poll_round_over_a_stranded_document_offers_land_and_no_resume(tmp_path):
     ports = _stranded_ports()
     ports.tracker.timestamped["GH-5"] = [
-        _told("Escalated: an earlier 429", START - timedelta(hours=3))
+        _told("Escalated: an earlier 429", LAST_AT - timedelta(hours=3))
     ]
     from tests.core.process.application.test_poll import _Locks
 
     lands: list[int] = []
-    poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [], lands=lands, now=START)
+    poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [], lands=lands, now=LAST_AT)
 
     assert lands == [5]
-    assert poll.gather_resumes(ports, START + timedelta(days=1)) == []
+    assert poll.gather_resumes(ports, LAST_AT + timedelta(days=1)) == []
 
 
 def test_a_round_over_a_real_escalation_offers_neither(tmp_path):
     ports = _stranded_ports()
-    ports.tracker.timestamped["GH-5"] = [_told("Escalated: real", START + timedelta(minutes=1))]
+    ports.tracker.timestamped["GH-5"] = [_told("Escalated: real", LAST_AT + timedelta(minutes=1))]
     from tests.core.process.application.test_poll import _Locks
 
     lands: list[int] = []
-    poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [], lands=lands, now=START)
+    poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [], lands=lands, now=LAST_AT)
 
     assert lands == []
