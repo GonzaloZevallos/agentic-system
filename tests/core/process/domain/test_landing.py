@@ -8,10 +8,11 @@ from typing import get_args, get_type_hints
 
 import pytest
 
-from agentic.core.process.domain import ci, landing, rules
+from agentic.core.process.domain import ci, document, landing, rules
 from agentic.core.process.domain.landing import LandingSpent, LandingStep
 from agentic.core.process.domain.rules import MergeFacts
 from agentic.core.process.domain.task import FailureReason, LandingEntry
+from tests.gh150_stranded import GH150_STRANDED
 
 HEAD = "a" * 40
 MASTER = "b" * 40
@@ -761,3 +762,78 @@ def test_migration_stamps_only_the_last_diagnose_entry():
     stamped = landing.migration(raw)["landing"]
     assert stamped[0] == earlier
     assert stamped[1]["failure"] == "account_limit"
+
+
+# --- GH-259: the same migration on GH-150's real text -----------------------------------------
+
+
+def _real():
+    return document.parse(GH150_STRANDED)
+
+
+def _window(migrated):
+    """The instant the freed diagnosis becomes due, read off the shared calendar from the
+    fixture's own last diagnose `at`: the schedule is `rules.retake_calendar`'s, never a number
+    typed here, and no instant is a literal."""
+    since = datetime.fromisoformat(landing.diagnose_at(migrated))
+    reason = migrated["landing"][-1]["failure"]
+    count = len(landing.diagnose_attempts(migrated))
+    limit = rules.auto_resume_limit(landing._landing_view(migrated), reason)
+    schedule, prior, _ = rules.retake_calendar(reason, count, count, limit)
+    assert prior < len(schedule)  # the calendar is not spent: `due` and `waiting` both exist
+    return since + timedelta(minutes=schedule[prior])
+
+
+def _freed():
+    raw = _real()
+    return {**raw, **landing.migration(raw)}
+
+
+def test_the_real_document_is_stuck_before_the_migration_and_retried_after_it():
+    """The window sits a minute either side, never on the boundary: `next_attempt_at` is
+    inclusive, and `rules`' own tests own that edge."""
+    migrated = _freed()
+    window = _window(migrated)
+    margin = timedelta(minutes=1)
+
+    assert landing.diagnose_retry(migrated, window - margin) == "waiting"
+    assert landing.diagnose_retry(migrated, window + margin) == "due"
+    assert landing.diagnose_retry(_real(), window - margin) == "escalate"
+    assert landing.diagnose_retry(_real(), window + margin) == "escalate"
+
+
+def _closing_start(log):
+    return max(i for i, e in enumerate(log) if e["kind"] == "resumed") + 1
+
+
+def _stamped(raw):
+    """The `failure` the migration stamps on the last diagnose entry, `None` when it stamps none."""
+    return landing.migration(raw)["landing"][-1].get("failure")
+
+
+def test_a_pause_log_cut_at_its_last_resumed_is_not_stranded_and_stays_stuck():
+    raw = _real()
+    cut = {**raw, "pause_log": raw["pause_log"][: _closing_start(raw["pause_log"])]}
+
+    assert landing.stranded_diagnose(cut, False) is False
+    assert _stamped(cut) is None
+    after = {**cut, **landing.migration(cut)}
+    assert landing.diagnose_retry(after, _window(_freed()) + timedelta(minutes=1)) == "escalate"
+
+
+def test_another_roles_failure_in_the_closing_epoch_is_not_stranded_and_stamps_nothing():
+    raw = _real()
+    log = list(raw["pause_log"])
+    mixed_log = [
+        *log[:-1],
+        {"kind": "failure", "value": "account_limit", "section": "Developer: land-101"},
+        log[-1],
+    ]
+    mixed = {**raw, "pause_log": mixed_log}
+
+    assert landing.stranded_diagnose(mixed, False) is False
+    assert _stamped(mixed) is None
+
+
+def test_a_comment_after_the_entry_keeps_the_real_document_escalated():
+    assert landing.stranded_diagnose(_real(), True) is False
