@@ -204,3 +204,14 @@ algo.
   el test. Queda como umbral de reporte.
 - **`strict` completo de una**: dos diales a la vez, y el que cuesta cambios de runtime es
   justamente el que se posterga.
+
+## Adenda (2026-10-14, GH-227): dos archivos de `tests/` entran al alcance, y sólo esos dos
+
+Esta adenda reemplaza, por nombre, la frase «`tests/` queda fuera del alcance de este PE»; el resto de este ADR sigue igual.
+
+- **El alcance.** `[tool.mypy] files` incluye exactamente dos entradas fuera de `agentic/`: `tests/fakes.py`, los dobles de los ports, y `tests/conformance.py`, una asignación tipada por cada protocolo cubierto. Ningún otro archivo de `tests/` entra.
+- **El guardia.** `tests/test_stack.py` acepta una entrada fuera de `agentic/` sólo si figura en `MYPY_TEST_ENTRIES`, la lista con nombre de esas dos.
+- **La regla para un tercer archivo.** Se agrega a `MYPY_TEST_ENTRIES` y a `files` en el mismo diff que lo deja en verde, nunca antes. Se aplican las prohibiciones de este ADR: nada de `cast`, ignores sin código, `noqa` ni overrides.
+- **Qué se verifica.** Una deriva entre un doble y su protocolo de `ports.py` deja a `uv run mypy` en rojo. Una prueba lo demuestra sobre una copia con una firma alterada, en un paquete que no se llama `tests`, con un control positivo que sale verde. Una prueba de inventario exige que todo protocolo de `ports.py` figure como cubierto o no cubierto. Otra exige que los parámetros de `memory_ports` sean los campos de `Ports`.
+- **Riesgo residual.** `Presubmit`, `SchemaGuard` y `RunLock` no tienen doble en `tests/fakes.py`: sus suplentes viven en archivos de test fuera del alcance, y sólo se comprueba por nombre que declaran los miembros del protocolo, sin chequeo de tipos. Los archivos de test que usan los dobles siguen sin chequearse: una llamada mal tipada a un doble no la ve mypy.
+- **Lo que no cambia.** Ningún archivo de `agentic/` se toca, ni ninguna señal, prompt o `prompts.fingerprint`. La puerta de CI declarada en `.agentic/stack.yaml` y `.github/**` tampoco se tocan.
