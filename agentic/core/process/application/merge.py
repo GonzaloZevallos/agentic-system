@@ -19,10 +19,10 @@ from typing import Literal
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import ci, presubmit, rules
+from ..domain import adr_numbers, ci, presubmit, rules
 from ..domain import landing as landing_rules
 from ..domain.task import PullRequest, TaskState
-from . import landing_flakes, landing_plan
+from . import adr_collision, landing_flakes, landing_plan
 from .checkouts import task_base
 from .poll import AUTO_MERGE_REFUSED, AUTO_MERGED, LANDING, _merge_facts, with_ci
 from .ports import CommandResult, GitError, MergeCallFailed, Ports, Upstream
@@ -30,6 +30,7 @@ from .presubmit import CheckoutPresubmit
 
 # The refusals a human can act on, and so the only ones commented, once per (head, reason).
 COMMENTED: tuple[str, ...] = (
+    "adr_number_taken",
     "checks_failed",
     "no_merge_method",
     "eval_set_unreadable",
@@ -95,6 +96,13 @@ def merge_task(
             return MergeResult("stopped", f"diff_unreadable: {exc}")
     elif head is not None:
         return MergeResult("stopped", f"head_unreachable: {head}")
+    # Read once, on the one master this verb resolved: only a diff that touches `docs/adr/`
+    # costs the read, and the collision cannot change between the decision and the re-decision.
+    collision = (
+        adr_collision.adr_collision(ports, master, head)
+        if head is not None and adr_collision.touches_adrs(touched)
+        else None
+    )
     declared = ports.stack.ci(base)
     report: ci.CiReport | ci.CiUnreadable | None = None
     fresh: bool | None = None
@@ -105,7 +113,9 @@ def merge_task(
 
     def decide(document: TaskState) -> rules.MergeFacts:
         base_facts = _facts(task_id, document, pull_request, eval_set, number, master, touched)
-        return with_ci(base_facts, document, declared, report, fresh)
+        return with_ci(
+            replace(base_facts, adr_collision=collision), document, declared, report, fresh
+        )
 
     facts = decide(raw)
     decision = rules.auto_merge_decision(facts)
@@ -410,6 +420,17 @@ def _ci_evidence(reason: str, facts: rules.MergeFacts) -> str:
     return f"`gh` could not read the CI report ({cause})"
 
 
+def _adr_evidence(facts: rules.MergeFacts) -> str:
+    """What an `adr_number_taken` refusal says, from the structured collision only: one
+    `old -> new` line per move, or the ambiguity's reason and detail."""
+    collision = facts.adr_collision
+    if isinstance(collision, adr_numbers.Renaming):
+        return "\n".join(f"- {old} -> {new}" for old, new in collision.moves)
+    if isinstance(collision, adr_numbers.Ambiguous):
+        return f"Ambiguous: {collision.reason}: {collision.detail}"
+    return ""
+
+
 def _summary_line(comment: str) -> str:
     """The line after the first of an `Auto-merge refused:` comment that names what
     failed, or "" when there is none (the comment goes straight to its closing sentence)."""
@@ -449,6 +470,8 @@ def _refuse(
             summary = presubmit.failed_checks_summary(record, head)
             evidence = presubmit.failed_checks_markdown(record, head)
             text = "\n\n".join(part for part in (first, evidence, closing) if part)
+        if facts is not None and reason == "adr_number_taken":
+            text = "\n\n".join(part for part in (first, _adr_evidence(facts), closing) if part)
         if facts is not None and reason in ("ci_failed", "ci_missing", "ci_unreadable"):
             text = "\n\n".join(
                 part for part in (first, _ci_evidence(reason, facts), closing) if part

@@ -63,6 +63,7 @@ EXPECTED = {
     "attempts_exhausted": "sync_master",
     "merge_failed": "diagnose",
     "master_moved": "wait",
+    "adr_number_taken": "diagnose",
 }
 
 

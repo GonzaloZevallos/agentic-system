@@ -110,6 +110,13 @@ def collisions(master_names: Sequence[str], own: Sequence[OwnAdr]) -> Mapping[st
     return moves
 
 
+def old_numbers(moves: Mapping[str, str]) -> list[str]:
+    """The numbers `moves` (old path -> new path) moves away from, ascending: what the
+    adapter is asked for, as plain 4-digit strings."""
+    found = (number_of(_basename(old)) for old in moves)
+    return sorted({number for number in found if number is not None})
+
+
 _SEPARATOR = r"(?:\s*,\s*(?:(?:and|y)\s+)?|\s+(?:and|y)\s+|\s*/\s*)"
 _ITEM = r"\d{4}(?!\d)"
 _TOKEN = re.compile(r"(?<!\d)\d{4}(?!\d)")

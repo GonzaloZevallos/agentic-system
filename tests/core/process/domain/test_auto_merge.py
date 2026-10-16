@@ -68,7 +68,10 @@ def test_every_refusal_the_decision_gives_is_in_the_closed_set_and_master_moved_
     given = {reason for reason, _ in REFUSALS}
     # The CI's own reasons are given, one row each, by `test_auto_merge_ci.py`.
     ci_reasons = {"ci_failed", "ci_missing", "ci_unreadable"}
-    assert given | ci_reasons | {"master_moved"} == set(get_args(rules.MergeRefusal))
+    # The ADR collision's is given by `test_adr_refusal.py`.
+    assert given | ci_reasons | {"master_moved", "adr_number_taken"} == set(
+        get_args(rules.MergeRefusal)
+    )
 
 
 EARLIER_FAILURES = [
