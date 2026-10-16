@@ -981,7 +981,7 @@ def run_once(
         # `rules.counts_against_cap` decides what takes a slot; the children that run no
         # model (`merge`, `land_checks`) are counted apart, for the planning to bound.
         live = sum(1 for r in running if rules.counts_against_cap(r.kind))
-        _exempt_live = len(running) - live  # read by the poller subtask: bounds merge/land_checks
+        exempt_live = len(running) - live
         available = max(cfg.max_concurrent_runs - live, 0)
         pace: rules.SpendPace | None = None
         spend_notes: list[str] = []
@@ -1014,6 +1014,7 @@ def run_once(
             retakes=retakes,
             merges=merges,
             lands=[rules.LandCandidate(n, "land_model") for n in lands],
+            live_exempt=exempt_live,
             pace=pace,
         )
         lines = execute(

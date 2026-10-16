@@ -332,6 +332,24 @@ def test_with_no_slot_left_the_merge_is_still_spawned(tmp_path):
     assert launcher.spawned == [_merge_argv(5, tmp_path)]
 
 
+def test_a_live_exempt_child_of_another_product_holds_the_merge_back(tmp_path):
+    # Invariant 7 (GH-263): one exempt child live on the machine, whatever its product.
+    ports = _ports(5)
+    live = RunRegistration(1, "h", "other", "GH-1", kind="merge")
+    launcher = FakeLauncher()
+    lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(entries=[live]), launcher, ESCALATED_AT)
+    assert launcher.spawned == []
+    assert lines != ["agentic: poll: merge #5 -> pid 4242"]
+
+
+def test_a_live_role_child_does_not_hold_the_merge_back_as_an_exempt_one(tmp_path):
+    ports = _ports(5)
+    live = RunRegistration(1, "h", "other", "GH-1", kind="role")
+    launcher = FakeLauncher()
+    _round(_cfg(tmp_path), ports, MemoryRunRegistry(entries=[live]), launcher, ESCALATED_AT)
+    assert launcher.spawned == [_merge_argv(5, tmp_path)]
+
+
 def test_an_eval_set_issue_is_never_spawned(tmp_path):
     ports = _ports(5)
     launcher = FakeLauncher()
