@@ -371,6 +371,8 @@ class MergeAssessment:
     decision: rules.MergeDecision
     report: ci.CiReport | ci.CiUnreadable | None
     pull_request: PullRequest | None
+    # The conflict probe was asked and read `None` (GH-255): the decision is today's.
+    conflict_unread: bool = False
 
 
 def assess_merge(
@@ -399,13 +401,25 @@ def assess_merge(
         raise StackUnreadable(str(exc)) from exc
     facts = replace(facts, adr_collision=_adr_collision(ports, raw, facts, current_master))
     decision = rules.auto_merge_decision(replace(facts, ci_required=declared))
+    unread = False
+    if (
+        facts.pr_head is not None
+        and not landing_plan.spent(raw, facts.pr_head, None).diagnosed
+        and rules.conflict_probe_wanted(replace(facts, ci_required=declared))
+    ):
+        # GH-255: a head that does not merge with master is a conflict before it is a CI
+        # fact. Git is asked only now, with every git-free refusal ahead of it ruled out.
+        conflicts = ports.workspace.merge_conflicts(facts.pr_head, current_master)
+        unread = conflicts is None
+        facts = replace(facts, conflicts=conflicts)
+        decision = rules.auto_merge_decision(replace(facts, ci_required=declared))
     report = None
     if declared and decision.kind != "refuse":
         # Every refusal ahead of the CI's is ruled out: only now is the report read.
         report = ports.tracker.ci_report(str(reference))
         facts = with_ci(facts, raw, declared, report)
         decision = rules.auto_merge_decision(facts)
-    return MergeAssessment(facts, decision, report, pull_request)
+    return MergeAssessment(facts, decision, report, pull_request, unread)
 
 
 def _adr_collision(
@@ -499,6 +513,9 @@ def gather_merges(
             assessed.report,
             assessed.pull_request,
         )
+        if assessed.conflict_unread:
+            head = pull_request.head_oid if pull_request is not None else None
+            out.append(f"agentic: poll: auto-merge #{number} -> conflict unread ({head})")
         if decision.kind == "wait":
             out.append(ci_wait_line(number, facts, report))
         elif decision.kind == "refuse":
@@ -514,11 +531,16 @@ def gather_merges(
             if lands is not None and decision.reason is not None:
                 # Every refusal logged above asks `landing_step` what to do instead; only a
                 # built step not yet dispatched on this head is worth a `land` child.
-                if landing_plan.pending(raw, decision.reason, facts, live) is not None or (
-                    decision.reason == "not_ready" and landing_rules.resume_owed(raw, now)
+                if landing_plan.pending(raw, decision.reason, facts, live, now) is not None or (
+                    decision.reason == "not_ready"
+                    and (
+                        landing_rules.resume_owed(raw, now)
+                        or landing_plan.stranded_now(ports, task_id, raw)
+                    )
                 ):
                     # A `not_ready` task whose reopened pass lost its resume child owes
-                    # one: `land` respawns it (GH-242).
+                    # one: `land` respawns it (GH-242). So does a stranded diagnose, which
+                    # `land` frees and retries on the calendar (GH-257).
                     lands.append(number)
         else:
             found.append(number)
@@ -543,6 +565,8 @@ def gather_resumes(ports: Ports, now: datetime) -> list[rules.ResumeCandidate]:
         if reason is None:
             continue
         comments = ports.tracker.timestamped_comments(task_id)
+        if landing_plan.stranded(raw, comments):
+            continue  # `land` owns it (GH-257): `resume` would refuse a task that is not paused
         since = _since_last_escalated(comments)
         if since is None:
             continue

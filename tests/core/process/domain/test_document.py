@@ -2,7 +2,9 @@ import pytest
 import yaml
 
 from agentic.core.process.application import resume
-from agentic.core.process.domain import document, legacy_names, roles, rules
+from agentic.core.process.domain import document, legacy_names, presubmit, roles, rules
+from agentic.core.process.domain import landing as landing_rules
+from tests.gh150_stranded import GH150_STRANDED
 
 
 def test_render_then_parse_roundtrip():
@@ -835,3 +837,219 @@ def test_reviewed_head_carried_from_renders_and_parses_back_on_its_subtask():
     del plain["reviewed_head_carried_from"]
     without = document.render(_bare(subtasks={"only": plain}))
     assert "reviewed_head_carried_from" not in without
+
+
+def _one_flow_line(text, key):
+    """The frontmatter line of `key`, after asserting there is exactly one, that it holds
+    no newline and that it is in flow shape (`key: [` or `key: {`)."""
+    frontmatter = text.split("\n---\n", 1)[0]
+    found = [ln for ln in frontmatter.split("\n") if ln.startswith(f"{key}:")]
+    assert len(found) == 1, found
+    (line,) = found
+    assert "\n" not in line
+    assert line.startswith((f"{key}: [", f"{key}: {{")), line
+    return line
+
+
+def _assert_roundtrip_and_replace(key, value, other):
+    """First write onto a document without `key`, then a replace with a value of a
+    different length: the parsed value, the one flow line and every other line."""
+    raw = document.render(_bare())
+    assert not any(ln.startswith(f"{key}:") for ln in raw.split("\n"))
+    once = document.record_closure(raw, {key: value})
+    assert document.parse(once)[key] == value
+    _one_flow_line(once, key)
+    assert _lines_but(once, key) == _lines_but(raw, key)
+    twice = document.record_closure(once, {key: other})
+    assert len(repr(other)) != len(repr(value))
+    assert document.parse(twice)[key] == other
+    _one_flow_line(twice, key)
+    assert _lines_but(twice, key) == _lines_but(raw, key)
+
+
+_NEWLINE_DEFECT = (
+    "production defect in document._flow_line: the input ['first\\nsecond'] is written as "
+    "three lines, `auto_merge_guarded: ['first`, an empty one and `    second']` (yaml folds "
+    "a plain flow scalar holding a newline), so the frontmatter is not one line per key"
+)
+
+
+@pytest.mark.parametrize(
+    ("value", "other"),
+    [
+        pytest.param([], ["x"], id="empty"),
+        pytest.param(["only"], ["only", "two"], id="one_item"),
+        pytest.param(
+            ["a, b", "k: v", "it's", 'say "hi"', "- dash", "# not a comment", "]}", "{["],
+            ["a, b"],
+            id="yaml_punctuation",
+        ),
+        pytest.param(["año → mañana"], ["año", "→"], id="non_ascii"),
+        pytest.param(
+            ["first\nsecond"],
+            ["first\nsecond", "third"],
+            id="embedded_newline",
+            marks=pytest.mark.xfail(strict=True, reason=_NEWLINE_DEFECT),
+        ),
+        pytest.param(["col\tcol"], [], id="tab"),
+        pytest.param(["\x1b[31mred\x1b[0m"], ["\x1b[31mred\x1b[0m", "plain"], id="escape_sequence"),
+        pytest.param(["x" * 5000], ["x" * 5000, "y" * 4000], id="five_thousand_characters"),
+    ],
+)
+def test_record_closure_round_trips_a_list_of_strings_on_one_flow_line(value, other):
+    _assert_roundtrip_and_replace("auto_merge_guarded", value, other)
+
+
+def test_one_flow_line_rejects_a_block_a_scalar_a_duplicate_and_a_missing_key():
+    """The helper the round-trip tests lean on must refuse the shapes it exists to catch."""
+    for text in (
+        "k:\n- a\n- b\n---\nbody",
+        "k: plain\n---\nbody",
+        "k: [a]\nk: [b]\n---\nbody",
+        "id: 1\n---\nbody",
+    ):
+        with pytest.raises(AssertionError):
+            _one_flow_line(text, "k")
+    assert _one_flow_line("id: 1\nk: {a: 1}\n---\nbody", "k") == "k: {a: 1}"
+
+
+def _failing(output):
+    return {"name": "tests", "command": "pytest", "passed": False, "output": output}
+
+
+def _merge_checks(output, *, duration_s):
+    return presubmit.merge_checks_record(
+        head="a" * 40,
+        master="b" * 40,
+        duration_s=duration_s,
+        declared={"tests": "pytest"},
+        results=[_failing(output)],
+        witness=None,
+    )
+
+
+def test_record_closure_round_trips_a_merge_checks_record_on_one_flow_line():
+    long_line = "E   " + "assert " * 60 + "]} {["
+    noisy = f"\x1b[31mFAILED\x1b[0m\tx ]}} {{[\n{long_line}\n" + "\n".join(
+        f"l{i}" for i in range(5)
+    )
+    # `merge_checks_record` builds the whole record from a `CheckResult`; the tail is its own.
+    record = _merge_checks(noisy, duration_s=1.5)
+    stored = record["checks"][0]["tail"]
+    assert max(len(ln) for ln in stored) >= 81
+    assert all("\x1b" not in ln and "\t" not in ln for ln in stored)
+    huge = _merge_checks("z" * (presubmit.MERGE_TAIL_CHARS * 2), duration_s=2.25)
+    assert len(huge["checks"][0]["tail"][0]) == presubmit.MERGE_TAIL_CHARS
+    other = _merge_checks("short", duration_s=0.5)
+    _assert_roundtrip_and_replace("merge_checks", record, other)
+    _assert_roundtrip_and_replace("merge_checks", other, huge)
+
+
+def _top_key(line: str) -> str | None:
+    """The top-level key a frontmatter line opens, `None` for a continuation (an indented line,
+    a column-0 `- ` item of an indentless sequence, or a blank line inside a quoted scalar)."""
+    if line == "" or line[:1] in (" ", "\t") or line.startswith("-"):
+        return None
+    return line.split(":", 1)[0]
+
+
+def _key_lines(text: str, key: str) -> list[str]:
+    """The raw frontmatter lines of `key`: its own line and every continuation after it."""
+    lines = text.split("\n---\n")[0].split("\n")[1:]
+    found: list[str] = []
+    inside = False
+    for line in lines:
+        if (opened := _top_key(line)) is not None:
+            inside = opened == key
+        if inside:
+            found.append(line)
+    return found
+
+
+def _keys(text: str) -> list[str]:
+    lines = text.split("\n---\n")[0].split("\n")[1:]
+    return [k for line in lines if (k := _top_key(line)) is not None]
+
+
+def test_the_real_stranded_text_has_the_shape_the_migration_was_written_for():
+    doc = document.parse(GH150_STRANDED)
+
+    assert landing_rules.stranded_diagnose(doc, False) is True
+    assert isinstance(doc["escalated"], str) and doc["escalated"]
+    assert len(_key_lines(GH150_STRANDED, "escalated")) > 1
+    assert _key_lines(GH150_STRANDED, "pause_log")[0] == "pause_log:"
+    assert _key_lines(GH150_STRANDED, "failures")[0] == "failures:"
+    log = doc["pause_log"]
+    assert sum(1 for e in log if e["kind"] == "resumed") >= 2
+    closing = log[max(i for i, e in enumerate(log) if e["kind"] == "resumed") + 1 :]
+    assert closing[:-1] and all(
+        e["kind"] == "failure"
+        and e["section"] == "Landing Diagnoser"
+        and e["value"] in rules.EXTERNAL_REASONS
+        for e in closing[:-1]
+    )
+    assert closing[-1] == {"kind": "escalation", "value": "failure"}
+
+
+def test_migration_written_through_record_closure_on_the_real_text_frees_it_and_nothing_else():
+    values = landing_rules.migration(document.parse(GH150_STRANDED))
+
+    out = document.record_closure(GH150_STRANDED, values)
+
+    for key in _keys(GH150_STRANDED):
+        if key not in values:
+            assert _key_lines(out, key) == _key_lines(GH150_STRANDED, key), key
+    assert {"failures", "cost_usd", "title", "current_role", "subtasks", "pull_request"} <= set(
+        _keys(out)
+    ) - set(values)
+    parsed = document.parse(out)
+    for key, value in values.items():
+        assert parsed[key] == value, key
+    for key in values.keys() & document.RECORD_KEYS:
+        assert len(_key_lines(out, key)) == 1, key
+    # `resumed_status` of the fixture's own `subtasks` (approved) and `pull_request` (set).
+    assert parsed["status"] == "ready_for_review"
+    assert document.record_closure(out, values) == out
+    assert landing_rules.stranded_diagnose(parsed, False) is False
+
+
+def test_record_closure_clears_the_real_wrapped_escalation_and_replaces_the_pause_log_whole():
+    """GH-257: freeing a stranded diagnose rewrites the keys a block or a wrapped line holds,
+    and only them: everything else stays byte for byte."""
+    before = document.parse(GH150_STRANDED)
+    log = [*before["pause_log"], {"kind": "resumed"}]
+
+    closed = document.record_closure(
+        GH150_STRANDED,
+        {
+            "escalated": None,
+            "escalation_class": None,
+            "status": "ready_for_review",
+            "pause_log": log,
+        },
+    )
+
+    parsed = document.parse(closed)
+    assert parsed["escalated"] is None and parsed["escalation_class"] is None
+    assert parsed["pause_log"] == log
+    assert parsed["cost_usd"] == before["cost_usd"]
+    assert closed.count("\n") < GH150_STRANDED.count("\n")
+    assert len(_key_lines(GH150_STRANDED, "escalated")) == 3
+    assert _key_lines(closed, "escalated") == ["escalated: null"]
+
+
+def test_record_closure_still_refuses_to_replace_a_wrapped_value_of_any_other_key():
+    """The block `failures:` of the real text is the rejected input: only the record keys are
+    rewritten whole."""
+    with pytest.raises(ValueError, match="failures"):
+        document.record_closure(GH150_STRANDED, {"failures": []})
+
+
+def test_a_record_keys_set_without_the_wrapped_and_block_keys_refuses_the_real_text(monkeypatch):
+    """The pre-GH-257 `RECORD_KEYS` is the rejected input: the real escalation and pause log
+    are then not a single scalar line, and the migration cannot be written."""
+    monkeypatch.setattr(document, "RECORD_KEYS", frozenset({"landing"}))
+    values = landing_rules.migration(document.parse(GH150_STRANDED))
+
+    with pytest.raises(ValueError, match="escalated|pause_log"):
+        document.record_closure(GH150_STRANDED, values)

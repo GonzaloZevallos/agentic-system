@@ -7,10 +7,11 @@ ask the same question the same way. It imports nothing from them."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from typing import Protocol
+from datetime import datetime
+from typing import Literal, Protocol
 
 from agentic.shared.configuration import Configuration
 
@@ -18,7 +19,8 @@ from ..domain import landing, rules
 from ..domain.landing import LandingStep, LandingStepKind
 from ..domain.roles import Role
 from ..domain.task import TaskState
-from .ports import Launcher, Ports, Upstream
+from .escalate import ESCALATED
+from .ports import IssueComment, Launcher, Ports, Upstream
 
 LIVE_STEPS: frozenset[LandingStepKind] = frozenset(
     {
@@ -49,11 +51,16 @@ def entries(raw: Mapping[str, object]) -> list[dict[str, object]]:
     return [e for e in value if isinstance(e, dict)] if isinstance(value, list) else []
 
 
+def _conflicting(entry: Mapping[str, object]) -> bool:
+    return entry.get("refusal") in landing.CONFLICTING_SYNC_REFUSALS
+
+
 def spent(
     raw: Mapping[str, object], head: str | None, waited_s: float | None
 ) -> landing.LandingSpent:
     """The passes, clean syncs and reruns on `head` the `landing` list records. A
-    `sync_master` answering `checks_failed` is the conflicting one, a model pass."""
+    `sync_master` answering one of `landing.CONFLICTING_SYNC_REFUSALS` is the conflicting
+    one, a model pass; it never counts as a clean sync."""
     done = entries(raw)
 
     def count(predicate: Callable[[dict[str, object]], bool]) -> int:
@@ -63,14 +70,12 @@ def spent(
         passes=count(
             lambda e: (
                 e.get("step") in ("re_review", "fix")
-                or (e.get("step") == "sync_master" and e.get("refusal") == "checks_failed")
+                or (e.get("step") == "sync_master" and _conflicting(e))
             )
         ),
-        syncs=count(
-            lambda e: e.get("step") == "sync_master" and e.get("refusal") != "checks_failed"
-        ),
+        syncs=count(lambda e: e.get("step") == "sync_master" and not _conflicting(e)),
         reruns_on_head=count(lambda e: e.get("step") == "rerun" and e.get("head") == head),
-        diagnosed=count(lambda e: e.get("step") == "diagnose") > 0,
+        diagnosed=count(lambda e: e.get("step") == "diagnose" and e.get("delivered") is True) > 0,
         waited_s=waited_s,
         renumbers=count(lambda e: e.get("step") == "renumber"),
     )
@@ -86,17 +91,61 @@ def step_for(raw: TaskState, refusal: rules.MergeRefusal, facts: rules.MergeFact
     )
 
 
+def diagnose_gate(
+    raw: TaskState, kind: LandingStepKind, now: datetime | None
+) -> Literal["go", "skip", "escalate"]:
+    """What a `diagnose` step does when earlier attempts never delivered (GH-257): `go`
+    (dispatch, a first attempt or a retry that is `due`), `skip` (not yet due, or already
+    escalated) or `escalate` (without running the role). Any other step, or none waiting,
+    is `go`. An unreadable `now` waits."""
+    if kind != "diagnose" or not landing.diagnose_attempts(raw):
+        return "go"
+    if now is None:
+        return "skip"
+    match landing.diagnose_retry(raw, now):
+        case "none" | "due":
+            return "go"
+        case "waiting":
+            return "skip"
+        case "escalate":
+            return "skip" if raw.get("escalated") else "escalate"
+
+
+def stranded(raw: Mapping[str, object], comments: Sequence[IssueComment]) -> bool:
+    """Whether `raw` is a stranded diagnose (GH-257): the one question the poller's resume
+    gather and `land` both ask, over the comments the caller already has."""
+    return landing.stranded_diagnose(
+        raw, landing.escalated_after(comments, landing.diagnose_at(raw), ESCALATED)
+    )
+
+
+def stranded_now(ports: Ports, task_id: str, raw: Mapping[str, object]) -> bool:
+    """`stranded`, reading the issue's comments only when the document already has the
+    stranded shape: no tracker call for any other task. A tracker that cannot answer leaves
+    the document escalated."""
+    if not landing.stranded_diagnose(raw, False):
+        return False
+    try:
+        comments = ports.tracker.timestamped_comments(task_id)
+    except (ValueError, OSError):
+        return False
+    return stranded(raw, comments)
+
+
 def pending(
     raw: TaskState,
     refusal: rules.MergeRefusal,
     facts: rules.MergeFacts,
     live: frozenset[LandingStepKind],
+    now: datetime | None = None,
 ) -> LandingStep | None:
     """The step worth a `land` child: built (`live`) and not yet dispatched on this head."""
     step = step_for(raw, refusal, facts)
     if not takes_action(step.kind, live) or facts.pr_head is None:
         return None
-    if landing.already_dispatched(entries(raw), facts.pr_head, step.kind):
+    if diagnose_gate(raw, step.kind, now) == "skip" or landing.already_dispatched(
+        entries(raw), facts.pr_head, step.kind
+    ):
         return None
     return step
 

@@ -306,6 +306,12 @@ def _merge(
     if again.sha != master:
         log(f"agentic: merge: {task_id}: master moved since the checks ({master} -> {again.sha})")
         return MergeResult("refused", "master_moved")
+    # GH-255: the last look at the merge itself. A head that conflicts with this master is
+    # refused with nothing written (no intent, no failure count, no comment: `merge_conflict`
+    # is not in `COMMENTED`) and `Tracker.merge` is never called. Unread changes nothing.
+    if ports.workspace.merge_conflicts(head, master) is True:
+        log(f"agentic: merge: {task_id}: {head} conflicts with master {master}")
+        return MergeResult("refused", "merge_conflict")
     # The intent, immediately before the merge call: after a crash the document still
     # shows the system meant to merge this head (`delivery_outcome` reads it). The method
     # is not part of it: it is written only after the merge returned (ADR-0045, addendum

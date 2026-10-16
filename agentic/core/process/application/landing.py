@@ -99,8 +99,8 @@ def _land(
     number = ports.inbox.issue_of(task_id)
     if loaded is None or not loaded.get("pull_request") or number is None:
         return LandResult("stopped", "no_pull_request")
-    raw: TaskState = loaded
-    reference = loaded["pull_request"]
+    raw: TaskState = _freed(task_id, loaded, ports, log)
+    reference = raw["pull_request"]
     recovered = _recover(task_id, raw, str(reference), ports, log, clock, resume)
     if recovered is not None:
         return recovered
@@ -123,6 +123,20 @@ def _land(
     if not landing_plan.takes_action(step.kind, live):
         log(f"agentic: land: {task_id}: {head} {step.kind}: nothing to do")
         return LandResult("skipped", "not_live", step.kind)
+    try:
+        now: datetime | None = datetime.fromisoformat(clock())
+    except ValueError:
+        now = None
+    gate = landing_plan.diagnose_gate(raw, step.kind, now)
+    if gate == "skip":
+        log(f"agentic: land: {task_id}: {head} {step.kind}: diagnosis not due")
+        return LandResult("skipped", "diagnose_waiting", step.kind)
+    if gate == "escalate":
+        context = LandingContext(
+            task_id, cfg, ports, step, head, upstream, assessed.facts, log, role_span=role_span
+        )
+        landing_fix.escalate_failed_diagnosis(context)
+        return LandResult("dispatched", step=step.kind)
     if landing_rules.already_dispatched(landing_plan.entries(raw), head, step.kind):
         log(f"agentic: land: {task_id}: {head} {step.kind}: already taken")
         return LandResult("skipped", "already_dispatched", step.kind)
@@ -158,6 +172,21 @@ def _land(
     )
     _dispatch(context)
     return LandResult("dispatched", step=step.kind)
+
+
+def _freed(task_id: str, loaded: Any, ports: Ports, log: Callable[[str], None]) -> TaskState:
+    """A stranded legacy diagnose (`landing_rules.stranded_diagnose`, GH-257) is freed with
+    one `record_closure` call and read again; any other document, or one a comment says a
+    human was told of, is returned as it is. The comments are read only for a document
+    already shaped like the stranded one."""
+    document: TaskState = loaded
+    if not landing_plan.stranded_now(ports, task_id, document):
+        return document
+    ports.documents.record_closure(task_id, landing_rules.migration(document))
+    log(f"agentic: land: {task_id}: stranded diagnosis freed, retrying on the calendar")
+    freed: Any = ports.documents.load(task_id)
+    again: TaskState = freed if freed is not None else document
+    return again
 
 
 @dataclass(frozen=True)

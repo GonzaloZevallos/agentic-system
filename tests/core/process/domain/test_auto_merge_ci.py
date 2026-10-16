@@ -85,15 +85,19 @@ WAITS = [
 ]
 
 
+@pytest.mark.parametrize("conflicts", [None, False], ids=["unread", "clean"])
 @pytest.mark.parametrize(("reason", "over"), REFUSALS, ids=[r for r, _ in REFUSALS])
-def test_each_ci_refusal_has_the_input_that_provokes_it(reason, over):
-    assert rules.auto_merge_decision(_facts(**over)) == MergeDecision("refuse", reason)
-    assert rules.auto_merge_decision(_facts()) == MergeDecision("merge", None)
+def test_each_ci_refusal_has_the_input_that_provokes_it(reason, over, conflicts):
+    assert rules.auto_merge_decision(_facts(conflicts=conflicts, **over)) == MergeDecision(
+        "refuse", reason
+    )
+    assert rules.auto_merge_decision(_facts(conflicts=conflicts)) == MergeDecision("merge", None)
 
 
+@pytest.mark.parametrize("conflicts", [None, False], ids=["unread", "clean"])
 @pytest.mark.parametrize(("cause", "over"), WAITS, ids=[c for c, _ in WAITS])
-def test_each_cause_of_a_wait_waits_and_never_refuses(cause, over):
-    assert rules.auto_merge_decision(_facts(**over)) == WAIT
+def test_each_cause_of_a_wait_waits_and_never_refuses(cause, over, conflicts):
+    assert rules.auto_merge_decision(_facts(conflicts=conflicts, **over)) == WAIT
 
 
 def test_an_unknown_anchor_waits_on_a_pending_report_too():

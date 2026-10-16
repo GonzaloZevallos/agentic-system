@@ -6,12 +6,19 @@ no human step."""
 from __future__ import annotations
 
 import dataclasses
+from datetime import datetime, timedelta
 
 import pytest
 
 from agentic.core.process.application import landing, landing_fix, landing_plan, poll
 from agentic.core.process.application.landing_sync import reopen
-from agentic.core.process.application.ports import Upstream
+from agentic.core.process.application.ports import (
+    AttemptFailed,
+    IssueComment,
+    RawResult,
+    Upstream,
+)
+from agentic.core.process.domain import document, rules
 from agentic.core.process.domain import landing as landing_rules
 from tests.core.process.application.test_merge_ci import _check, _report
 from tests.core.process.application.test_poll import _cfg
@@ -22,8 +29,10 @@ from tests.core.process.application.test_poll_merge import (
     _finding,
     _HeldLocks,
     _ports,
+    _pr,
 )
-from tests.fakes import FakeLauncher, MemoryStack
+from tests.fakes import FakeLauncher, MemoryStack, ScriptedRunner
+from tests.gh150_stranded import GH150_STRANDED
 
 NOW = "2026-10-14T00:00:00+00:00"
 
@@ -612,3 +621,401 @@ def test_acceptance_a_second_exhaustion_at_depth_one_escalates_and_files_nothing
     assert [a[1] for a in driver.spawned] == ["land"]
     assert ports.tracker.closed_pull_requests == [] and ports.tracker.opened_issues == []
     assert ports.documents.saved[-1]["escalation_class"] == "failure"
+
+
+# --- GH-257: a diagnosis that does not deliver is an attempt, never a stranded escalation ----
+
+
+START = datetime.fromisoformat(NOW)
+
+
+def _land_at(ports, tmp_path, when, launcher=None):
+    lines: list[str] = []
+    result = landing.land(
+        "GH-5",
+        _cfg(tmp_path),
+        ports,
+        _HeldLocks(),
+        Upstream("origin/master", MASTER, None),
+        frozenset(),
+        lines.append,
+        clock=lambda: when.isoformat(),
+        launcher=launcher,
+        argv0="agentic",
+    )
+    return result, lines
+
+
+def _merge_failed(ports, runner, **document):
+    spent = {"head": HEAD, "count": 3, "failure": "gh_rejected"}
+    ports.documents.record_closure(
+        "GH-5", {"merge_failures": spent, "title": "t", "description": "d", **document}
+    )
+    return dataclasses.replace(ports, runner=runner)
+
+
+def _cut(reason, times=2):
+    return [AttemptFailed(f"{reason} {n}", reason=reason) for n in range(times)]
+
+
+def _delivery():
+    return RawResult({"markdown": "### Why\n\nx", "reason": "stale"}, 0.4, 3, "s")
+
+
+def _diagnoses(ports):
+    return [e for e in _doc(ports)["landing"] if e["step"] == "diagnose"]
+
+
+def test_two_account_limit_failures_leave_the_task_ready_with_the_reason_on_its_entry(tmp_path):
+    ports = _merge_failed(
+        _ports(5), ScriptedRunner(landing_diagnoser=_cut("account_limit")), cost_usd=2.0
+    )
+
+    result, _ = _land_at(ports, tmp_path, START)
+
+    doc = _doc(ports)
+    assert result.step == "diagnose"
+    assert doc["status"] == "ready_for_review"
+    assert not doc.get("escalated") and not doc.get("escalation_class")
+    assert not doc.get("pause_log") and not doc.get("failures")
+    assert ports.tracker.labels == [] and ports.tracker.comments == []
+    assert doc["cost_usd"] >= 2.0
+    assert [(e["failure"], e.get("delivered")) for e in _diagnoses(ports)] == [
+        ("account_limit", None)
+    ]
+    assert rules.auto_resumable(doc) is None
+
+
+def test_a_sdk_failure_escalates_at_once_labelled_and_commented(tmp_path):
+    ports = _merge_failed(_ports(5), ScriptedRunner(landing_diagnoser=_cut("sdk")))
+
+    _land_at(ports, tmp_path, START)
+
+    doc = _doc(ports)
+    assert doc["escalation_class"] == "failure"
+    assert "Landing Diagnoser" in doc["escalated"] and "sdk" in doc["escalated"]
+    assert "1 attempt" in doc["escalated"]
+    assert ports.tracker.labels == [("GH-5", "needs-human")]
+    assert len(ports.tracker.comments) == 1
+    assert doc["pause_log"] == [{"kind": "escalation", "value": "failure"}]
+    assert rules.auto_resumable(doc) is None
+
+
+def test_a_retry_waits_for_its_slot_then_runs_the_role_again(tmp_path):
+    runner = ScriptedRunner(landing_diagnoser=[*_cut("account_limit"), _delivery()])
+    ports = _merge_failed(_ports(5), runner)
+    wait = timedelta(minutes=rules.ACCOUNT_LIMIT_SCHEDULE[0])
+    _land_at(ports, tmp_path, START)
+
+    early, _ = _land_at(ports, tmp_path, START + wait - timedelta(seconds=1))
+    assert early.kind == "skipped" and len(runner.calls) == 2
+
+    launcher = FakeLauncher()
+    due, _ = _land_at(ports, tmp_path, START + wait, launcher)
+
+    assert due.kind == "dispatched" and len(runner.calls) == 3
+    assert [e.get("delivered") for e in _diagnoses(ports)] == [None, True]
+    assert launcher.spawned[0][:3] == ["agentic", "run", "--issue"]
+
+
+def test_a_spent_calendar_escalates_without_running_the_role_and_is_nobodys_candidate(tmp_path):
+    runner = ScriptedRunner()
+    ports = _merge_failed(_ports(5), runner)
+    spent = [
+        {
+            "head": HEAD,
+            "step": "diagnose",
+            "refusal": "merge_failed",
+            "at": START.isoformat(),
+            "failure": "account_limit",
+        }
+        for _ in rules.ACCOUNT_LIMIT_SCHEDULE
+    ]
+    ports.documents.record_closure("GH-5", {"landing": spent})
+
+    result, _ = _land_at(ports, tmp_path, START + timedelta(days=2))
+
+    doc = _doc(ports)
+    assert result.step == "diagnose" and runner.calls == []
+    assert doc["escalation_class"] == "failure"
+    assert ports.tracker.labels == [("GH-5", "needs-human")]
+    assert poll.gather_resumes(ports, START + timedelta(days=2)) == []
+    again, _ = _land_at(ports, tmp_path, START + timedelta(days=3))
+    assert again.kind == "skipped" and len(ports.tracker.comments) == 1
+
+
+def test_a_delivered_run_is_marked_even_when_the_close_fails_and_land_then_does_nothing(tmp_path):
+    ports = _merge_failed(_ports(5), ScriptedRunner(landing_diagnoser=[_delivery()]))
+
+    def refuse(reference):
+        raise ValueError("gh pr close failed")
+
+    ports.tracker.close_pull_request = refuse
+    launcher = FakeLauncher()
+
+    _land_at(ports, tmp_path, START, launcher)
+
+    assert [e.get("delivered") for e in _diagnoses(ports)] == [True]
+    assert launcher.spawned == []
+    again, _ = _land_at(ports, tmp_path, START + timedelta(days=1), launcher)
+    assert again.kind == "skipped" and again.step == "none"
+
+
+def test_a_delivered_run_is_marked_even_when_the_spawn_raises(tmp_path):
+    ports = _merge_failed(_ports(5), ScriptedRunner(landing_diagnoser=[_delivery()]))
+
+    with pytest.raises(FileNotFoundError):
+        _land_at(ports, tmp_path, START, FakeLauncher(fails={0}))
+
+    assert [e.get("delivered") for e in _diagnoses(ports)] == [True]
+    assert ports.documents.closures["GH-5"]["landing_restarts"] == 1
+    again, _ = _land_at(ports, tmp_path, START + timedelta(days=1), FakeLauncher())
+    assert again.step == "none"
+
+
+def test_the_depth_one_escalation_keeps_the_delivered_mark_and_the_cost(tmp_path):
+    ports = _merge_failed(
+        _ports(5),
+        ScriptedRunner(landing_diagnoser=[_delivery()]),
+        landing_restarts=1,
+        cost_usd=2.0,
+    )
+
+    _land_at(ports, tmp_path, START)
+
+    doc = _doc(ports)
+    assert [e.get("delivered") for e in _diagnoses(ports)] == [True]
+    assert doc["escalation_class"] == "failure" and doc["escalated"]
+    assert max(s.get("cost_usd", 0.0) for s in ports.documents.saved) == pytest.approx(2.4)
+    assert all(s.get("cost_usd", 2.0) >= 2.0 for s in ports.documents.saved)
+    assert ports.tracker.labels == [("GH-5", "needs-human")]
+
+
+def test_no_save_after_the_delivered_mark_writes_the_stale_landing_back(tmp_path):
+    ports = _merge_failed(
+        _ports(5), ScriptedRunner(landing_diagnoser=[_delivery()]), landing_restarts=1
+    )
+    stale: list[object] = []
+    real_save = ports.documents.save
+
+    def watching(state):
+        marked = ports.documents.closures.get("GH-5", {}).get("landing")
+        if marked and any(e.get("delivered") for e in marked):
+            stale.append(state.get("landing") != marked)
+        return real_save(state)
+
+    ports.documents.save = watching
+
+    _land_at(ports, tmp_path, START)
+
+    assert stale and not any(stale)
+
+
+# --- GH-257: a stranded legacy diagnose document is freed by land, once --------------------
+
+DIAGNOSER = "Landing Diagnoser"
+_REAL = document.parse(GH150_STRANDED)
+_REAL_HEAD = _REAL["landing"][-1]["head"]
+LAST_AT = datetime.fromisoformat(landing_rules.diagnose_at(_REAL))
+MARGIN = timedelta(minutes=1)
+
+
+def _stranded_ports(**over):
+    """GH-150 as the Landing Diagnoser left it, from its real frontmatter (`GH150_STRANDED`):
+    waiting on a human as `failure` after a failed run, its entry with neither `delivered` nor
+    `failure`, nobody told. The pull request reports the head of the fixture's last landing
+    entry; only the id is the harness's own."""
+    ports = _ports()
+    # The merge facts the live file does not carry (it stopped at `ci_missing`): the checks
+    # green on the reviewed head and master, and the merge spent on it, as `_ready` and
+    # `_merge_failed` record them for every other task here.
+    merge_facts = {
+        "merge_checks": {"head": _REAL_HEAD, "master": MASTER, "passed": True},
+        "merge_failures": {"head": _REAL_HEAD, "count": 3, "failure": "gh_rejected"},
+    }
+    document_ = {**_REAL, "id": "GH-5", **merge_facts, **over}
+    ports.documents.save(document_)
+    if isinstance(url := document_.get("pull_request"), str):
+        ports.tracker.prs[url] = dataclasses.replace(_pr(), head_oid=_REAL_HEAD)
+    ports.workspace.conflict_answers[(_REAL_HEAD, MASTER)] = False
+    return ports
+
+
+def _window():
+    """When the freed diagnosis is due, read off the shared calendar from the fixture's own
+    last diagnose `at`; the tests stand a minute either side of it, never on its edge."""
+    freed = {**_REAL, **landing_rules.migration(_REAL)}
+    reason = freed["landing"][-1]["failure"]
+    count = len(landing_rules.diagnose_attempts(freed))
+    limit = rules.auto_resume_limit(landing_rules._landing_view(freed), reason)
+    schedule, prior, _ = rules.retake_calendar(reason, count, count, limit)
+    return LAST_AT + timedelta(minutes=schedule[prior])
+
+
+def _told(body, at):
+    return IssueComment(body, at.isoformat())
+
+
+def _untouched(ports) -> bool:
+    return not ports.documents.closures and not ports.tracker.comments
+
+
+def test_land_frees_a_stranded_diagnose_in_one_write_and_keeps_the_cost(tmp_path):
+    ports = _stranded_ports()
+    before = _doc(ports)
+    runner = ScriptedRunner()
+    ports = dataclasses.replace(ports, runner=runner)
+
+    result, _ = _land_at(ports, tmp_path, _window() - MARGIN)
+
+    doc = _doc(ports)
+    assert doc["status"] == "ready_for_review"
+    assert not doc["escalated"] and not doc["escalation_class"]
+    assert doc["pause_log"] == [*before["pause_log"], {"kind": "resumed"}]
+    assert rules.auto_resumable(doc) is None
+    assert doc["cost_usd"] == _REAL["cost_usd"]
+    assert [e["failure"] for e in _diagnoses(ports)] == ["account_limit"]
+    assert landing_rules.diagnose_retry(doc, _window() - MARGIN) == "waiting"
+    assert landing_rules.diagnose_retry(doc, _window() + MARGIN) == "due"
+    assert landing_rules.diagnose_retry(before, _window() - MARGIN) == "escalate"
+    assert landing_rules.diagnose_retry(before, _window() + MARGIN) == "escalate"
+    assert result.kind == "skipped" and result.reason == "diagnose_waiting"
+    assert runner.calls == [] and ports.tracker.labels == [] and ports.tracker.comments == []
+    assert list(ports.documents.closures) == ["GH-5"]
+
+
+def test_the_freed_diagnose_then_retries_on_the_calendar_and_delivers(tmp_path):
+    runner = ScriptedRunner(landing_diagnoser=[_delivery()])
+    ports = dataclasses.replace(_stranded_ports(), runner=runner)
+
+    _land_at(ports, tmp_path, _window() + MARGIN)
+
+    assert len(runner.calls) == 1
+    assert _diagnoses(ports)[-1]["delivered"] is True
+
+
+def test_a_second_land_does_not_migrate_again(tmp_path):
+    ports = _stranded_ports()
+    _land_at(ports, tmp_path, LAST_AT)
+    first = dict(ports.documents.closures["GH-5"])
+
+    _land_at(ports, tmp_path, LAST_AT)
+
+    assert ports.documents.closures["GH-5"] == first
+    resumed = _REAL["pause_log"].count({"kind": "resumed"})
+    assert _doc(ports)["pause_log"].count({"kind": "resumed"}) == resumed + 1
+
+
+def test_an_escalated_comment_older_than_the_entry_does_not_keep_it_escalated(tmp_path):
+    ports = _stranded_ports()
+    ports.tracker.timestamped["GH-5"] = [
+        _told("Escalated: earlier 429", LAST_AT - timedelta(hours=3))
+    ]
+
+    _land_at(ports, tmp_path, LAST_AT)
+
+    assert _doc(ports)["status"] == "ready_for_review"
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        pytest.param(
+            {"pause_log": [{"kind": "escalation", "value": "failure"}]},
+            id="depth-one-escalation-without-the-comment",
+        ),
+        pytest.param(
+            {
+                "pause_log": [
+                    {"kind": "failure", "value": "sdk", "section": DIAGNOSER},
+                    {"kind": "escalation", "value": "failure"},
+                ]
+            },
+            id="sdk-failure",
+        ),
+        pytest.param({"current_role": "Developer"}, id="graph-role"),
+        pytest.param({"escalation_class": "questions"}, id="questions"),
+        pytest.param({"pull_request": None}, id="no-pull-request"),
+    ],
+)
+def test_a_document_that_is_not_the_legacy_shape_stays_escalated_and_untouched(tmp_path, over):
+    ports = _stranded_ports(**over)
+    before = _doc(ports)
+
+    _land_at(ports, tmp_path, LAST_AT)
+
+    assert _untouched(ports) and _doc(ports) == before
+
+
+def test_a_real_depth_one_escalation_with_its_comment_stays_escalated(tmp_path):
+    ports = _stranded_ports(pause_log=[{"kind": "escalation", "value": "failure"}])
+    ports.tracker.timestamped["GH-5"] = [
+        _told("Escalated: restart exhausted", LAST_AT + timedelta(minutes=1))
+    ]
+    before = _doc(ports)
+
+    _land_at(ports, tmp_path, LAST_AT)
+
+    assert _untouched(ports) and _doc(ports) == before
+
+
+def test_the_stranded_shape_with_a_comment_after_the_entry_stays_escalated(tmp_path):
+    ports = _stranded_ports()
+    ports.tracker.timestamped["GH-5"] = [_told("Escalated: x", LAST_AT + timedelta(seconds=1))]
+    before = _doc(ports)
+
+    _land_at(ports, tmp_path, LAST_AT)
+
+    assert _untouched(ports) and _doc(ports) == before
+
+
+def test_an_unreadable_comment_time_keeps_the_stranded_shape_escalated(tmp_path):
+    ports = _stranded_ports()
+    ports.tracker.timestamped["GH-5"] = [IssueComment("Escalated: x", "garbage")]
+    before = _doc(ports)
+
+    _land_at(ports, tmp_path, LAST_AT)
+
+    assert _untouched(ports) and _doc(ports) == before
+
+
+def test_comments_are_read_only_for_a_document_already_shaped_like_the_stranded_one(tmp_path):
+    reads: list[str] = []
+    ports = _ports(5, status="waiting_on_human", escalation_class="questions", escalated="q")
+    ports.tracker.timestamped_comments = lambda task_id: reads.append(task_id) or []
+
+    _land_at(ports, tmp_path, LAST_AT)
+    other = _stranded_ports(current_role="Developer")
+    other.tracker.timestamped_comments = lambda task_id: reads.append(task_id) or []
+    _land_at(other, tmp_path, LAST_AT)
+
+    assert reads == []
+    shaped = _stranded_ports()
+    shaped.tracker.timestamped_comments = lambda task_id: reads.append(task_id) or []
+    _land_at(shaped, tmp_path, LAST_AT)
+    assert reads == ["GH-5"]
+
+
+def test_one_poll_round_over_a_stranded_document_offers_land_and_no_resume(tmp_path):
+    ports = _stranded_ports()
+    ports.tracker.timestamped["GH-5"] = [
+        _told("Escalated: an earlier 429", LAST_AT - timedelta(hours=3))
+    ]
+    from tests.core.process.application.test_poll import _Locks
+
+    lands: list[int] = []
+    poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [], lands=lands, now=LAST_AT)
+
+    assert lands == [5]
+    assert poll.gather_resumes(ports, LAST_AT + timedelta(days=1)) == []
+
+
+def test_a_round_over_a_real_escalation_offers_neither(tmp_path):
+    ports = _stranded_ports()
+    ports.tracker.timestamped["GH-5"] = [_told("Escalated: real", LAST_AT + timedelta(minutes=1))]
+    from tests.core.process.application.test_poll import _Locks
+
+    lands: list[int] = []
+    poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [], lands=lands, now=LAST_AT)
+
+    assert lands == []

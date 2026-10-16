@@ -50,6 +50,9 @@ def _ports(*numbers: int, checks: bool = True, **more):
     master: every one of them a `merge` for `gather_merges`."""
     ports = memory_ports(tracker=MemoryTracker())
     ports.workspace.upstream_answer = Upstream("origin/master", MASTER, None)
+    # GH-255: a head that merges cleanly with master, as every test here assumed before the
+    # probe existed; a test of the probe scripts its own answer (`None` is unread).
+    ports.workspace.conflict_answers[(HEAD, MASTER)] = False
     for number in numbers:
         _ready(ports, number, checks=checks, **more)
     return ports

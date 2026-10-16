@@ -67,6 +67,8 @@ files = [
     "agentic/core/process/application/landing_sync.py",
     "agentic/core/process/application/landing_fix.py",
     "agentic/core/process/application/landing_flakes.py",
+    "tests/fakes.py",
+    "tests/conformance.py",
 ]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true

@@ -15,11 +15,12 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 from itertools import zip_longest
-from typing import Literal
+from typing import Any, Literal, Protocol, get_args
 
 from . import ci, rules
 from .adr_numbers import Renaming
-from .task import LandingEntry, Subtask, SubtaskStatus, TaskState
+from .roles import LANDING_DIAGNOSER
+from .task import FailureReason, LandingEntry, Subtask, SubtaskStatus, TaskState
 
 LandingStepKind = Literal[
     "wait",
@@ -40,6 +41,9 @@ ADR whose number master took and rewrite the references inside the branch's own 
 GH-229), `diagnose` (the
 terminal path: the landing diagnoser, then a restart) and `none` (nothing the system can
 do: the human's)."""
+
+CONFLICTING_SYNC_REFUSALS: tuple[rules.MergeRefusal, ...] = ("checks_failed", "merge_conflict")
+"""The refusals under which a recorded `sync_master` was a conflicting one, hence a model pass."""
 
 LANDING_PASSES_MAX = 3
 """Model passes (`re_review`, `fix`, a conflicting `sync_master`) per task."""
@@ -129,6 +133,8 @@ def landing_step(
             if facts.failed_step == "conflict":
                 return _sync(step, spent, conflicting=True)
             return step("rerun") if spent.reruns_on_head == 0 else pass_("fix", blocking_owners)
+        case "merge_conflict":
+            return _sync(step, spent, conflicting=True)
         case "attempts_exhausted":
             return _sync(step, spent, conflicting=False)
         case "adr_number_taken":
@@ -223,8 +229,14 @@ def renumber_carries(changes: Sequence[LineChange]) -> bool:
 
 def already_dispatched(landing: Sequence[Mapping[str, object]], head: str, step: str) -> bool:
     """Whether `(head, step)` is already in the document's `landing` list: the idempotency
-    key, written before the dispatch."""
-    return any(entry.get("head") == head and entry.get("step") == step for entry in landing)
+    key, written before the dispatch. A diagnose entry that never delivered is an attempt
+    (`diagnose_retry`), not a taken step."""
+    return any(
+        entry.get("head") == head
+        and entry.get("step") == step
+        and (step != "diagnose" or entry.get("delivered") is True)
+        for entry in landing
+    )
 
 
 def landing_open(state: TaskState) -> bool:
@@ -256,7 +268,205 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
         out["resume_spawns"] = spawns
     if isinstance(spawned := raw.get("resume_spawned_at"), str):
         out["resume_spawned_at"] = spawned
+    if isinstance(delivered := raw.get("delivered"), bool):
+        out["delivered"] = delivered
+    if (failure := _failure_of(raw.get("failure"))) is not None:
+        out["failure"] = failure
     return out
+
+
+def _failure_of(value: object) -> FailureReason | None:
+    """`value` as a `FailureReason`, `None` when it is not one: the closed set is the type's
+    own, never a second list."""
+    for reason in get_args(FailureReason):
+        if value == reason:
+            found: FailureReason = reason
+            return found
+    return None
+
+
+def diagnose_attempts(raw: Mapping[str, object]) -> list[LandingEntry]:
+    """The diagnose entries of the document's `landing` list that never delivered, after the
+    last one that did: the attempts the retry calendar counts, oldest first."""
+    entries = raw.get("landing")
+    kept = (
+        [entry_of(e) for e in entries if isinstance(e, Mapping)]
+        if isinstance(entries, list)
+        else []
+    )
+    diagnoses = [e for e in kept if e.get("step") == "diagnose"]
+    delivered = [i for i, e in enumerate(diagnoses) if e.get("delivered")]
+    after = diagnoses[delivered[-1] + 1 :] if delivered else diagnoses
+    return [e for e in after if not e.get("delivered")]
+
+
+def diagnose_retry(
+    raw: Mapping[str, object], now: datetime
+) -> Literal["none", "due", "waiting", "escalate"]:
+    """What the landing does about a diagnosis that did not deliver (GH-257): `none` when no
+    attempt is waiting on one, `escalate` when the last attempt has no external `failure` or
+    the calendar is spent, else `due` or `waiting` on the shared retake calendar
+    (`rules.retake_calendar`), measured from the last attempt's own `at`. No run delivers
+    between two attempts, so the chain is the flat 429 calendar and never the hourly week.
+    Timestamps are compared as aware datetimes, never as strings: an unreadable or naive one
+    waits."""
+    attempts = diagnose_attempts(raw)
+    if not attempts:
+        return "none"
+    last = attempts[-1]
+    reason = last.get("failure")
+    if reason is None or reason not in rules.EXTERNAL_REASONS:
+        return "escalate"
+    count = len(attempts)
+    limit = rules.auto_resume_limit(_landing_view(raw), reason)
+    since = _aware(last.get("at"))
+    candidate = rules.ResumeCandidate(0, reason, since or now, count, limit, count)
+    if rules.resume_exhausted(candidate):
+        return "escalate"
+    if since is None or now.tzinfo is None or now.utcoffset() is None:
+        return "waiting"
+    schedule, prior, slots = rules.retake_calendar(reason, count, count, limit)
+    due = rules.next_attempt_at(since, prior, slots, now, schedule=schedule)
+    return "due" if due is not None else "waiting"
+
+
+def unescalated(raw: Mapping[str, object]) -> dict[str, Any]:
+    """The one patch that clears a landing step's escalation: the task is back at the status
+    it had before it (`rules.resumed_status`) and the epoch is closed with a `resumed` entry.
+    Never writes `cost_usd`. No other module builds it."""
+    view = _landing_view(raw)
+    if isinstance(pull_request := raw.get("pull_request"), str):
+        view["pull_request"] = pull_request
+    return {
+        "escalated": None,
+        "escalation_class": None,
+        "status": rules.resumed_status(view),
+        "pause_log": [{"kind": "resumed"}],
+    }
+
+
+ESCALATED_COMMENT = "Escalated: "
+"""How an escalation comment starts. A copy of `application.escalate.ESCALATED`, which a test
+pins: the domain cannot import the application."""
+
+
+class Commented(Protocol):
+    """A tracker comment as `escalated_after` reads it: `application.ports.IssueComment`
+    satisfies it as it is."""
+
+    @property
+    def body(self) -> str: ...
+
+    @property
+    def created_at(self) -> str: ...
+
+
+def _diagnose_entries(raw: Mapping[str, object]) -> list[Mapping[str, object]]:
+    entries = raw.get("landing")
+    if not isinstance(entries, list):
+        return []
+    return [e for e in entries if isinstance(e, Mapping) and e.get("step") == "diagnose"]
+
+
+def diagnose_at(raw: Mapping[str, object]) -> object:
+    """The `at` of the document's last diagnose entry, as written (`None` without one)."""
+    entries = _diagnose_entries(raw)
+    return entries[-1].get("at") if entries else None
+
+
+def _closing_epoch(raw: Mapping[str, object]) -> list[Mapping[str, object]] | None:
+    """The `pause_log` entries after the last `resumed`, `None` when the log is not a list of
+    mappings."""
+    log = raw.get("pause_log")
+    if not isinstance(log, list) or not all(isinstance(e, Mapping) for e in log):
+        return None
+    last = max((i for i, e in enumerate(log) if e.get("kind") == "resumed"), default=-1)
+    return log[last + 1 :]
+
+
+def _stranded_failure(raw: Mapping[str, object]) -> FailureReason | None:
+    """The last failure of the epoch being closed, when the epoch is exactly the stranded
+    shape: one or more `failure` entries, each external and from the diagnoser's own
+    section, and an `escalation` entry that reads `failure`; `None` for any other epoch (a
+    real escalation, another role's failure)."""
+    epoch = _closing_epoch(raw)
+    if epoch is None:
+        return None
+    failures = [e for e in epoch if e.get("kind") == "failure"]
+    escalations = [e for e in epoch if e.get("kind") == "escalation"]
+    if not failures or not escalations:
+        return None
+    if any(e.get("value") != "failure" for e in escalations):
+        return None
+    if any(
+        e.get("section") != LANDING_DIAGNOSER.name or e.get("value") not in rules.EXTERNAL_REASONS
+        for e in failures
+    ):
+        return None
+    return _failure_of(failures[-1].get("value"))
+
+
+def stranded_diagnose(raw: Mapping[str, object], escalated_after: bool) -> bool:
+    """A document GH-257 stranded: the Landing Diagnoser's failed run escalated through the
+    graph's own patch, outside the graph, and nobody was told (ADR-0048, addendum). True only
+    for the whole legacy shape: waiting on a human as class `failure`, a pull request, the
+    diagnoser the current role, the last diagnose entry with neither `delivered` nor
+    `failure`, and an epoch of external failures of the diagnoser alone ending in the
+    escalation. `escalated_after` (`escalated_after`) says a comment already told a human, so
+    the stop is real and stays."""
+    if escalated_after:
+        return False
+    pull_request = raw.get("pull_request")
+    if (
+        raw.get("status") != "waiting_on_human"
+        or raw.get("escalation_class") != "failure"
+        or not isinstance(pull_request, str)
+        or not pull_request
+        or raw.get("current_role") != LANDING_DIAGNOSER.name
+    ):
+        return False
+    entries = _diagnose_entries(raw)
+    if not entries or "delivered" in entries[-1] or "failure" in entries[-1]:
+        return False
+    return _stranded_failure(raw) is not None
+
+
+def escalated_after(comments: Iterable[Commented], at: object, prefix: str) -> bool:
+    """Whether a comment starting with `prefix` (the escalation's) was created after `at`:
+    a human was told of this stop and it is theirs. Aware datetimes are compared, never
+    strings; a naive or unreadable time on `at` or on a matching comment gives True, so the
+    document stays escalated."""
+    mine = [c for c in comments if c.body.startswith(prefix)]
+    if not mine:
+        return False
+    since = _aware(at)
+    if since is None:
+        return True
+    for comment in mine:
+        created = _aware(comment.created_at.replace("Z", "+00:00"))
+        if created is None or created > since:
+            return True
+    return False
+
+
+def migration(raw: Mapping[str, object]) -> dict[str, Any]:
+    """The one write that frees a stranded document (`stranded_diagnose`): `unescalated`,
+    plus the failure of the epoch it closes stamped on the last diagnose entry, so the
+    ordinary retry takes it from there. `record_closure` replaces a key whole, so the
+    `pause_log` is the history with the `resumed` marker appended. Never writes `cost_usd`."""
+    patch = unescalated(raw)
+    reason = _stranded_failure(raw)
+    entries = raw.get("landing")
+    written = (
+        [dict(e) for e in entries if isinstance(e, Mapping)] if isinstance(entries, list) else []
+    )
+    last = max((i for i, e in enumerate(written) if e.get("step") == "diagnose"), default=None)
+    if last is not None and reason is not None:
+        written[last] = {**written[last], "failure": reason}
+    log = raw.get("pause_log")
+    patch["pause_log"] = [*(log if isinstance(log, list) else []), *patch["pause_log"]]
+    patch["landing"] = written
+    return patch
 
 
 def _aware(value: object) -> datetime | None:

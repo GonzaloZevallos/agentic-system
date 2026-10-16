@@ -750,6 +750,14 @@ class Workspace(Protocol):
         raises, and `unknown` is never `yes`: the caller counts it as stale."""
         ...
 
+    def merge_conflicts(self, head: str, master: str) -> bool | None:
+        """Whether the commit `head` conflicts when merged with the commit `master` (GH-255),
+        after fetching both shas: `True` is a definite conflict, `False` a clean merge, and
+        `None` anything that could not be read -- a sha that cannot be fetched, a git
+        failure, a timeout, a missing git. Never raises, and never writes a worktree, a
+        branch or the index. `None` is never a verdict: the caller treats it as unread."""
+        ...
+
     def upstream(self) -> Upstream:
         """The fetched upstream of the checkout's current branch (GH-180). Never returns
         None and never raises for a git failure or a missing git: every failure is an
