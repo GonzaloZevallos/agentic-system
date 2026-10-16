@@ -4,10 +4,10 @@ import subprocess
 import pytest
 
 from agentic.core.process.adapters.github import GhInbox
-from agentic.core.process.adapters.github import inbox as module
+from agentic.core.process.application.ports import TrackerTimedOut
 
 
-def fake_gh(monkeypatch, *, stdout="", returncode=0, stderr=""):
+def fake_gh(*, stdout="", returncode=0, stderr=""):
     calls = []
 
     def run(cmd, **kwargs):
@@ -16,15 +16,12 @@ def fake_gh(monkeypatch, *, stdout="", returncode=0, stderr=""):
             raise subprocess.CalledProcessError(returncode, cmd, stderr=stderr)
         return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
 
-    monkeypatch.setattr(module.subprocess, "run", run)
-    return calls
+    return calls, run
 
 
-def test_issue_feeds_title_body_and_id(monkeypatch, tmp_path):
-    calls = fake_gh(
-        monkeypatch, stdout=json.dumps({"title": " Metrics ", "body": "How is my gym\n"})
-    )
-    task = GhInbox(tmp_path).task(12)
+def test_issue_feeds_title_body_and_id(tmp_path):
+    calls, run = fake_gh(stdout=json.dumps({"title": " Metrics ", "body": "How is my gym\n"}))
+    task = GhInbox(tmp_path, run=run).task(12)
     assert task == {"id": "GH-12", "title": "Metrics", "description": "How is my gym"}
     ((cmd, kwargs),) = calls
     assert cmd[:4] == ["gh", "issue", "view", "12"]
@@ -37,25 +34,26 @@ def test_the_task_id_and_the_issue_map_both_ways_without_gh(tmp_path):
     assert inbox.issue_of("T-abc") is None
 
 
-def test_issue_without_body_is_rejected(monkeypatch, tmp_path):
-    fake_gh(monkeypatch, stdout=json.dumps({"title": "Empty", "body": None}))
+def test_issue_without_body_is_rejected(tmp_path):
+    _, run = fake_gh(stdout=json.dumps({"title": "Empty", "body": None}))
     with pytest.raises(ValueError, match="no body"):
-        GhInbox(tmp_path).task(3)
+        GhInbox(tmp_path, run=run).task(3)
 
 
-def test_gh_failure_carries_its_stderr(monkeypatch, tmp_path):
-    fake_gh(monkeypatch, returncode=1, stderr="GraphQL: Could not resolve to an Issue")
-    with pytest.raises(ValueError, match="Could not resolve"):
-        GhInbox(tmp_path).task(999)
+def test_gh_failure_carries_its_stderr(tmp_path):
+    _, run = fake_gh(returncode=1, stderr="GraphQL: Could not resolve to an Issue")
+    with pytest.raises(
+        ValueError, match="^gh could not read issue #999: GraphQL: Could not resolve to an Issue$"
+    ):
+        GhInbox(tmp_path, run=run).task(999)
 
 
-def test_missing_gh_is_explained(monkeypatch, tmp_path):
+def test_missing_gh_is_explained(tmp_path):
     def run(cmd, **kwargs):
         raise FileNotFoundError("gh")
 
-    monkeypatch.setattr(module.subprocess, "run", run)
-    with pytest.raises(ValueError, match="gh is not installed"):
-        GhInbox(tmp_path).task(1)
+    with pytest.raises(ValueError, match="^gh is not installed; --issue needs the GitHub CLI$"):
+        GhInbox(tmp_path, run=run).task(1)
 
 
 class _Recorder:
@@ -91,14 +89,11 @@ def test_open_issues_failure_is_a_value_error(tmp_path):
         GhInbox(tmp_path, run=run).open_issues()
 
 
-def test_task_still_uses_the_bare_subprocess_call_when_run_is_injected(monkeypatch, tmp_path):
-    # `task()` keeps its own inline `subprocess.run` (ADR-0034: old form stays old
-    # form); an injected `run` must not silently reroute it.
-    calls = fake_gh(monkeypatch, stdout=json.dumps({"title": "T", "body": "d"}))
-    never_called = _Recorder()
-    task = GhInbox(tmp_path, run=never_called).task(1)
+def test_task_goes_through_the_injected_run_like_open_issues(tmp_path):
+    run = _Recorder(stdout=json.dumps({"title": "T", "body": "d"}))
+    task = GhInbox(tmp_path, run=run).task(1)
     assert task == {"id": "GH-1", "title": "T", "description": "d"}
-    assert calls and never_called.calls == []
+    assert run.calls == [["gh", "issue", "view", "1", "--json", "title,body"]]
 
 
 def test_open_issue_bodies_is_the_same_unfiltered_read_as_open_issues(tmp_path):
@@ -130,3 +125,25 @@ def test_a_follow_up_is_found_locally_from_the_marker_in_the_open_issue_bodies(t
     found = [landing.marker_lineage(body, "GH-5") for _, body in bodies]
     assert found == [None, 1, None]  # only the issue naming GH-5 matches, byte for byte
     assert all("--search" not in call for call in run.calls)
+
+
+def _stalled(cmd, **kwargs):
+    raise subprocess.TimeoutExpired(cmd, 60, output="the issue body", stderr="secret")
+
+
+@pytest.mark.parametrize(
+    ("call", "wording"),
+    [
+        (lambda inbox: inbox.task(229), "gh issue view timed out after 60 s"),
+        (lambda inbox: inbox.open_issues(), "gh issue list timed out after 60 s"),
+        (lambda inbox: inbox.open_issue_bodies(), "gh issue list timed out after 60 s"),
+    ],
+)
+def test_a_stalled_gh_call_raises_tracker_timed_out_and_logs_one_line(tmp_path, call, wording):
+    lines: list[str] = []
+    inbox = GhInbox(tmp_path, run=_stalled, log=lines.append)
+    with pytest.raises(TrackerTimedOut) as raised:
+        call(inbox)
+    assert str(raised.value) == wording
+    assert lines == [f"agentic: {wording}; this read fails and the next round retries"]
+    assert not any("secret" in line or "issue body" in line for line in lines)

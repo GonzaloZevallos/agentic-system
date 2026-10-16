@@ -17,7 +17,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from agentic import cli, composition
 from agentic.core.measurement.domain import evaluation
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
-from agentic.core.process.adapters.github import inbox
+from agentic.core.process.adapters.github import GhInbox
 from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.application.ports import LockHeld, LockRecord
 from agentic.core.process.domain import legacy_names
@@ -129,21 +129,18 @@ def test_preflight_rejects_a_prompt_overlay_with_an_unknown_placeholder(monkeypa
 
 
 def fake_gh(monkeypatch, *, stdout="", returncode=0, stderr=""):
-    """Only `gh`. The patch lands on the `subprocess` module itself, which every adapter
-    shares, so anything else (preflight asking git about the product's repo) has to go
-    through for real."""
+    """Only `gh`, and only the inbox's: the composition root builds its `GhInbox` with this
+    `run`, so anything else (preflight asking git about the product's repo) goes through
+    for real."""
     calls = []
-    real = subprocess.run
 
     def run(cmd, **kwargs):
-        if cmd[0] != "gh":
-            return real(cmd, **kwargs)
         calls.append((cmd, kwargs))
         if returncode:
             raise subprocess.CalledProcessError(returncode, cmd, stderr=stderr)
         return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
 
-    monkeypatch.setattr(inbox.subprocess, "run", run)
+    monkeypatch.setattr(composition, "GhInbox", lambda product_dir: GhInbox(product_dir, run=run))
     return calls
 
 
@@ -3302,9 +3299,8 @@ def test_stack_review_dry_run_takes_no_lock_writes_no_file_and_calls_no_gh(
 
 @pytest.mark.anyio
 async def test_stack_review_refuses_on_an_already_open_proposal_spending_nothing(tmp_path):
-    """`GhInbox`/`GhTracker` bind their `subprocess.run` default at import time
-    (`inbox.py`'s own docstring: old form stays old form), so a real `main()` round
-    trip cannot fake `gh` for `open_issues` the way `fake_gh` fakes `task()` -- this
+    """`GhInbox` binds its `bounded_run` default at import time, so a real `main()`
+    round trip cannot fake `gh` for `open_issues` the way `fake_gh` fakes `task()` -- this
     calls `cli._stack_review` directly with `MemoryInbox`, the same seam
     `test_eval_run_dry_run_prefers_the_set_override...` already uses for a full round
     trip over in-memory ports (ADR-0034)."""

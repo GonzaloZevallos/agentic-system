@@ -8,7 +8,7 @@ import pytest
 
 from agentic.core.process.adapters.github import GhTracker
 from agentic.core.process.adapters.github.tracker import issue_number
-from agentic.core.process.application.ports import MergeCallFailed
+from agentic.core.process.application.ports import MergeCallFailed, TrackerTimedOut
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
@@ -919,3 +919,85 @@ def test_open_issue_sends_the_label_only_when_one_is_given():
     labelled, plain = run.calls
     assert labelled[labelled.index("--label") + 1] == "agentic"
     assert "--label" not in plain
+
+
+# -- a stalled gh call (GH-266) ------------------------------------------------------------
+
+
+def _stalls_at(*step, then=None):
+    """A `run` whose call whose argv starts with `step` runs out of time (every call is
+    kept in `.calls`); any other call answers `then` or an empty JSON object."""
+
+    class Run:
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, args, cwd, capture_output, text, check):
+            self.calls.append(args)
+            if tuple(args[1 : 1 + len(step)]) == step:
+                raise subprocess.TimeoutExpired(args, 60, output="issue body", stderr="secret")
+            if tuple(args[1:3]) == ("repo", "view"):
+                allowed = {"mergeCommitAllowed": True}
+                return subprocess.CompletedProcess(args, 0, json.dumps(allowed), "")
+            return subprocess.CompletedProcess(args, 0, then or "{}", "")
+
+    return Run()
+
+
+def test_every_gh_call_of_the_tracker_that_stalls_raises_tracker_timed_out():
+    run = _stalls_at("pr", "list")
+    lines: list[str] = []
+    with pytest.raises(TrackerTimedOut) as raised:
+        GhTracker(Path("/p"), run, log=lines.append).list_pull_requests()
+    assert str(raised.value) == "gh pr list timed out after 60 s"
+    assert lines == [
+        "agentic: gh pr list timed out after 60 s; this read fails and the next round retries"
+    ]
+    assert "secret" not in str(raised.value) + lines[0]
+
+
+def test_issue_state_after_a_timeout_makes_no_second_call_and_never_reads_as_an_old_gh():
+    run = _stalls_at("issue", "view")
+    with pytest.raises(TrackerTimedOut):
+        GhTracker(Path("/p"), run, log=lambda line: None).issue_state(229)
+    assert len(run.calls) == 1  # the "older gh" fallback would have been a second call
+
+
+def test_issue_state_still_falls_back_on_a_plain_failure_not_a_timeout():
+    # The rejected input of the narrowed clause: a non-timeout `ValueError` keeps its path.
+    class Run(Recorder):
+        def __call__(self, args, cwd, capture_output, text, check):
+            self.calls.append(args)
+            if "blockedBy" in args[-1]:
+                raise subprocess.CalledProcessError(1, args, stderr="Unknown JSON field")
+            return subprocess.CompletedProcess(args, 0, json.dumps({"state": "OPEN"}), "")
+
+    run = Run()
+    assert GhTracker(Path("/p"), run).issue_state(1).blocked_by is None
+    assert len(run.calls) == 2
+
+
+def test_merge_pr_merge_timeout_is_gh_unreadable_never_gh_rejected():
+    run = _stalls_at("pr", "merge")
+    with pytest.raises(MergeCallFailed) as raised:
+        GhTracker(Path("/p"), run, log=lambda line: None).merge(PR_URL, "abc123")
+    assert raised.value.failure == "gh_unreadable"
+    assert type(raised.value) is MergeCallFailed
+    assert isinstance(raised.value.__cause__, TrackerTimedOut)
+    assert str(raised.value) == "gh pr merge timed out after 60 s"
+
+
+def test_merge_repo_view_timeout_is_gh_unreadable_and_merges_nothing():
+    run = _stalls_at("repo", "view")
+    with pytest.raises(MergeCallFailed) as raised:
+        GhTracker(Path("/p"), run, log=lambda line: None).merge(PR_URL, "abc123")
+    assert raised.value.failure == "gh_unreadable"
+    assert [call[1:3] for call in run.calls] == [["repo", "view"]]
+
+
+def test_ci_report_timeout_is_ci_unreadable_gh_unreadable():
+    run = _stalls_at("api", "graphql")
+    report = GhTracker(Path("/p"), run, log=lambda line: None).ci_report(
+        "https://github.com/o/r/pull/7"
+    )
+    assert report == CiUnreadable("gh_unreadable")

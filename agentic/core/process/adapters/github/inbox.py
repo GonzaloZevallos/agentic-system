@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
 from ...domain.task import TaskInput
-from .tracker import issue_number
-
-Run = Callable[..., subprocess.CompletedProcess[str]]
+from .run import bounded_run, print_line, run_gh
+from .tracker import Run, issue_number
 
 # `gh issue list`'s own page size cap high enough that a product's open issues never
 # spill past one call, low enough that a runaway poller cannot ask for the world.
@@ -18,11 +16,16 @@ _OPEN_ISSUES_LIMIT = 100
 
 
 class GhInbox:
-    def __init__(self, product_dir: Path, *, run: Run = subprocess.run):
+    def __init__(
+        self,
+        product_dir: Path,
+        *,
+        run: Run = bounded_run,
+        log: Callable[[str], None] = print_line,
+    ):
         self.product_dir = product_dir
-        # Only `open_issues` uses this seam; `task` below keeps its own inline call
-        # (ADR-0034: old form stays old form until another task unifies the two).
         self._run = run
+        self._log = log
 
     def task(self, number: int) -> TaskInput:
         """Task id, title and description from a GitHub issue of the product repo.
@@ -31,19 +34,15 @@ class GhInbox:
         GitHub configuration of its own. The id carries the issue number so the
         document and the issue point at each other.
         """
-        try:
-            result = subprocess.run(
-                ["gh", "issue", "view", str(number), "--json", "title,body"],
-                cwd=self.product_dir,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-        except FileNotFoundError as exc:
-            raise ValueError("gh is not installed; --issue needs the GitHub CLI") from exc
-        except subprocess.CalledProcessError as exc:
-            raise ValueError(f"gh could not read issue #{number}: {exc.stderr.strip()}") from exc
-        issue = json.loads(result.stdout)
+        raw = run_gh(
+            self._run,
+            ("issue", "view", str(number), "--json", "title,body"),
+            cwd=self.product_dir,
+            log=self._log,
+            not_installed="gh is not installed; --issue needs the GitHub CLI",
+            failed=lambda stderr: f"gh could not read issue #{number}: {stderr}",
+        )
+        issue = json.loads(raw)
         title, body = issue["title"].strip(), (issue.get("body") or "").strip()
         if not body:
             raise ValueError(f"issue #{number} has no body; the roles need a description")
@@ -59,29 +58,24 @@ class GhInbox:
         """Every open issue's `(url, body)` (ADR-0034), never filtered by `--search`:
         the eventually consistent index is the failure mode the local, pure marker
         match in `domain.stack_review.open_proposal` exists to avoid."""
-        try:
-            result = self._run(
-                [
-                    "gh",
-                    "issue",
-                    "list",
-                    "--state",
-                    "open",
-                    "--json",
-                    "url,body",
-                    "--limit",
-                    str(_OPEN_ISSUES_LIMIT),
-                ],
-                cwd=self.product_dir,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-        except FileNotFoundError as exc:
-            raise ValueError("gh is not installed; a stack review needs the CLI") from exc
-        except subprocess.CalledProcessError as exc:
-            raise ValueError(f"gh issue list failed: {exc.stderr.strip()}") from exc
-        return [(i["url"], i.get("body") or "") for i in json.loads(result.stdout)]
+        raw = run_gh(
+            self._run,
+            (
+                "issue",
+                "list",
+                "--state",
+                "open",
+                "--json",
+                "url,body",
+                "--limit",
+                str(_OPEN_ISSUES_LIMIT),
+            ),
+            cwd=self.product_dir,
+            log=self._log,
+            not_installed="gh is not installed; a stack review needs the CLI",
+            failed=lambda stderr: f"gh issue list failed: {stderr}",
+        )
+        return [(i["url"], i.get("body") or "") for i in json.loads(raw)]
 
     def open_issue_bodies(self) -> list[tuple[str, str]]:
         """The landing's read of the same list as `open_issues` (GH-239)."""
