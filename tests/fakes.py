@@ -12,6 +12,8 @@ from pathlib import Path
 from agentic.core.knowledge.domain import knowledge
 from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.application.ports import (
+    AddedAdr,
+    AddedLine,
     BranchPullRequest,
     Checkout,
     CommandResult,
@@ -420,6 +422,18 @@ class MemoryInbox:
         return self._open_issues
 
 
+@dataclasses.dataclass(frozen=True)
+class BranchCommit:
+    """A non-merge commit of the branch in `MemoryWorkspace.branch_commits`: the paths it
+    `adds`, the `(path, text)` lines it added and the master sha whose tree it was made
+    on (the one it last merged)."""
+
+    sha: str
+    adds: tuple[str, ...]
+    lines: tuple[tuple[str, str], ...]
+    master: str
+
+
 class MemoryWorkspace:
     """Branches and worktrees as names. A Developer's commit is simulated by adding
     its checkout path to `moved` before the run: `head` then differs from the base.
@@ -461,6 +475,18 @@ class MemoryWorkspace:
         self.dependency_state_calls: list[tuple[Path, str, tuple[str, ...]]] = []
         self.dependency_states: dict[str, list[DependencyState]] = {}
         self.pushed: list[str] = []
+        # GH-229: the pushes that went through, `(branch, lease)`, in order; `leases`
+        # above also holds the ones a stale lease refused.
+        self.pushes: list[tuple[str, str | None]] = []
+        # GH-229: master as a tree a test moves with `advance_master`, `master_trees` being
+        # every file master held at each of its shas; the branch's own non-merge commits,
+        # which `added_adrs`, `added_lines` and `tree_names` answer from, and each ask.
+        self.master_sha = "master0"
+        self.master_trees: dict[str, tuple[str, ...]] = {"master0": ()}
+        self.branch_commits: list[BranchCommit] = []
+        self.added_adrs_calls: list[tuple[str, str]] = []
+        self.added_lines_calls: list[tuple[str, str, tuple[str, ...]]] = []
+        self.tree_names_calls: list[tuple[str, str]] = []
         # GH-216: `contains`'s answer per `(head, master)` -- absent is `unknown`, which
         # the caller counts as stale -- and each ask, in order.
         self.containment: dict[tuple[str, str], Containment] = {}
@@ -619,6 +645,7 @@ class MemoryWorkspace:
             self.push_failures -= 1
             raise GitError("git push -u origin failed: scripted")
         self.pushed.append(branch)
+        self.pushes.append((branch, lease))
 
     def remote_tip(self, path: Path, branch: str) -> str | None:
         self.remote_tip_calls.append((path, branch))
@@ -651,6 +678,67 @@ class MemoryWorkspace:
     def fetch_commit(self, sha: str) -> bool:
         self.fetched_commits.append(sha)
         return True
+
+    # GH-229: the two-phase reads of a branch's own ADRs, over `branch_commits`.
+    def advance_master(self, *files: str) -> str:
+        """Master takes a commit that adds `files` (full paths): its new sha."""
+        sha = f"master{len(self.master_trees)}"
+        self.master_trees[sha] = (*self.master_trees[self.master_sha], *files)
+        self.master_sha = sha
+        return sha
+
+    def add_branch_commit(
+        self,
+        *,
+        adds: tuple[str, ...] = (),
+        lines: tuple[tuple[str, str], ...] = (),
+        master: str | None = None,
+    ) -> str:
+        """The branch commits `adds` and `lines`, on `master`'s tree (now by default)."""
+        sha = f"branch{len(self.branch_commits)}"
+        on = self.master_sha if master is None else master
+        self.branch_commits.append(BranchCommit(sha, adds, lines, on))
+        return sha
+
+    def added_adrs(self, master: str, head: str) -> tuple[AddedAdr, ...]:
+        self.added_adrs_calls.append((master, head))
+        return tuple(
+            AddedAdr(path, commit.sha)
+            for commit in self.branch_commits
+            for path in commit.adds
+            if path.startswith("docs/adr/")
+        )
+
+    def added_lines(self, master: str, head: str, numbers: Sequence[str]) -> tuple[AddedLine, ...]:
+        for number in numbers:
+            if not (len(number) == 4 and number.isascii() and number.isdigit()):
+                raise ValueError(f"an ADR number is exactly four digits, not {number!r}")
+        self.added_lines_calls.append((master, head, tuple(numbers)))
+        return tuple(
+            AddedLine(path, commit.sha, text)
+            for commit in self.branch_commits
+            for path, text in commit.lines
+            if any(number in text for number in numbers)
+        )
+
+    def tree_names(self, ref: str, directory: str) -> tuple[str, ...]:
+        self.tree_names_calls.append((ref, directory))
+        if ref in self.master_trees:
+            held = list(self.master_trees[ref])
+        else:
+            held = []
+            for commit in self.branch_commits:
+                if commit.sha == ref:
+                    held = [*self.master_trees[commit.master]]
+                    for earlier in self.branch_commits:
+                        held.extend(earlier.adds)
+                        if earlier.sha == ref:
+                            break
+                    break
+            else:
+                raise GitError(f"git ls-tree failed: not a valid object name {ref}")
+        names = (path.rpartition("/") for path in held)
+        return tuple(sorted(name for parent, _, name in names if parent == directory))
 
     def changed_paths(self, base: str, head: str) -> tuple[str, ...]:
         self.diff_reads.append((base, head))
