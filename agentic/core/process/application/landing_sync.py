@@ -238,6 +238,16 @@ def _conflict_reason(paths: Sequence[str], source: str) -> str:
     )
 
 
+def _failed_reason(what: str, failed: object, source: str) -> str:
+    """A reopen reason for a step git or the setup refused: whatever merge was in progress
+    was aborted, and the Developer brings `source` in itself, in the task checkout."""
+    return (
+        f"{what}: {failed}. Any merge in progress was aborted and the worktree is clean. In "
+        f"this worktree (the task checkout) run `git merge {source}`, resolve any conflicts, "
+        "`git add` the files and commit the merge."
+    )
+
+
 type Reopening = tuple[str, Literal["returned", "delivered"]]
 
 
@@ -254,6 +264,10 @@ def re_review(context: LandingContext) -> None:
     _reopened(context, state, unit, *pending)
 
 
+def _head_failed(context: LandingContext, failed: object) -> str:
+    return _failed_reason("the pull request head could not be brought in", failed, context.head)
+
+
 def _re_reviewed(context: LandingContext, state: TaskState) -> Reopening:
     try:
         checkout = task_checkout(state, context.cfg, context.ports)
@@ -263,9 +277,9 @@ def _re_reviewed(context: LandingContext, state: TaskState) -> Reopening:
             try:
                 conflicted = _bring_in(context, state, checkout, merges)
             except GitError as failed:
-                return f"the pull request head could not be brought in: {failed}", "returned"
+                return _head_failed(context, failed), "returned"
     except SetupFailed as failed:
-        return f"the pull request head could not be brought in: {failed}", "returned"
+        return _head_failed(context, failed), "returned"
     if conflicted:
         return _conflict_reason(conflicted, context.head), "returned"
     reason = (
@@ -296,14 +310,14 @@ def _synced(context: LandingContext, state: TaskState, unit: str, sha: str) -> R
     try:
         checkout = task_checkout(state, context.cfg, ports)
     except SetupFailed as failed:
-        return f"syncing {sha} failed: {failed}", "returned"
+        return _failed_reason(f"syncing {sha} failed", failed, sha), "returned"
     with merges_cleared(ports.workspace, checkout.path, _owned(context, state)) as merges:
         try:
             if conflicted := _bring_in(context, state, checkout, merges):
                 return _conflict_reason(conflicted, context.head), "returned"
             merged = merges.merge_in(sha)
         except GitError as failed:
-            return f"syncing {sha} failed: {failed}", "returned"
+            return _failed_reason(f"syncing {sha} failed", failed, sha), "returned"
         if not merged.clean:
             return _conflict_reason(merged.conflicted, sha), "returned"
         if not _sync_carries(context, state, reviewed, merged.head):

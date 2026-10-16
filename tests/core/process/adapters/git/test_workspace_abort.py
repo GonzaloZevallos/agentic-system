@@ -15,7 +15,10 @@ import pytest
 from agentic.core.process.adapters.git import GitWorkspace
 from agentic.core.process.application import landing_sync
 from agentic.core.process.application.integrate import _merge_approved
+from agentic.core.process.application.landing_plan import LandingContext
+from agentic.core.process.application.ports import Upstream
 from agentic.core.process.domain import landing
+from agentic.core.process.domain.landing import LandingStep
 from agentic.shared.configuration import Configuration
 from tests.fakes import memory_ports
 
@@ -156,3 +159,47 @@ def test_merge_owner_recognises_the_systems_shas_and_rejects_a_stranger():
     assert landing.merge_owner("u" * 40, "m" * 40, "x" * 40, entries) == "own"
     assert landing.merge_owner("h" * 40, "m" * 40, "x" * 40, entries) == "own"
     assert landing.merge_owner("f" * 40, "m" * 40, "x" * 40, entries) == "foreign"
+
+
+def test_sync_master_on_a_conflict_leaves_the_tree_clean_and_the_fan_in_merge_finds_it_so(
+    world, tmp_path
+):
+    """(ii) and (iii) at the declared seam: the step itself on a real worktree, then the
+    fan-in merge the resume starts at."""
+    ports = _ports(world)
+    head = world.workspace.full_head(world.task.path)
+    ports.documents.save(
+        {
+            "id": "GH-9",
+            "status": "ready_for_review",
+            "pull_request": "https://example.test/pr/9",
+            "subtasks": {
+                "integration": {"id": "integration", "status": "approved", "reviewed_head": head},
+                "api": {"id": "api", "status": "approved", "branch": "agentic/GH-9.api"},
+            },
+            "landing": [{"head": head, "step": "sync_master", "refusal": "merge_conflict"}],
+        }
+    )
+    context = LandingContext(
+        "GH-9",
+        Configuration(product_dir=world.repo),
+        ports,
+        LandingStep("sync_master", "merge_conflict"),
+        head,
+        Upstream("origin/master", world.master, None),
+        None,
+        lambda line: None,
+    )
+
+    landing_sync.sync_master(context)
+
+    assert world.merge_head is None
+    assert world.workspace.full_head(world.task.path) == head
+    assert world.workspace.is_clean(world.task.path)
+    document = ports.documents.load("GH-9")
+    returned = [s for s in document["subtasks"].values() if s.get("status") == "returned"]
+    assert returned and all(
+        f"git merge {world.master}" in s["reason"] and "shared.txt" in s["reason"] for s in returned
+    )
+    assert _merge_approved(document, world.task.path, ports) == []
+    assert world.merge_head is None

@@ -82,7 +82,8 @@ def test_a_sync_git_refuses_aborts_what_it_left_and_reopens_from_a_clean_tree(tm
 
     events = ports.workspace.events
     assert events.index("abort_merge") < events.index("save")
-    assert "syncing" in _unit(ports)["reason"]
+    reason = _unit(ports)["reason"]
+    assert "syncing" in reason and f"git merge {MASTER}" in reason and "aborted" in reason
 
 
 def test_an_abort_that_fails_reopens_and_spawns_nothing(tmp_path):
