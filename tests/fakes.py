@@ -480,6 +480,15 @@ class MemoryWorkspace:
         self.upstream_merges: dict[str, UpstreamMerge] = {}
         self.upstream_merge_error: str | None = None
         self.upstream_merge_calls: list[tuple[Path, str]] = []
+        # GH-267: a clean `merge_upstream_into` leaves `upstream_sha` an ancestor of the
+        # head (as git does); a test sets this to script a merge that brings nothing in.
+        self.merge_brings_nothing = False
+        # GH-267: the MERGE_HEAD a checkout holds (a scripted conflict sets it, as git
+        # does; a test may preset one), and each `abort_merge` call in `events` order.
+        self.merge_heads: dict[Path, str] = {}
+        self.merge_head_error: str | None = None
+        self.abort_error: str | None = None
+        self.aborted: list[Path] = []
         self.conflict_paths: dict[str, tuple[str, ...]] = {}
         self.refused_branches: set[str] = set()
         # `dependency_state` calls, and the states scripted per branch, one queue each:
@@ -637,7 +646,13 @@ class MemoryWorkspace:
             raise GitError(self.upstream_merge_error)
         scripted = self.upstream_merges.get(upstream_sha)
         if scripted is not None:
+            if not scripted.clean:
+                self.merge_heads[checkout] = upstream_sha
+            elif not self.merge_brings_nothing:
+                self.ancestors.add(upstream_sha)
             return scripted
+        if not self.merge_brings_nothing:
+            self.ancestors.add(upstream_sha)
         return UpstreamMerge(clean=True, conflicted=(), head=self.full_head(checkout))
 
     def merge_keeping_conflicts(self, path: Path, branch: str) -> MergeOutcome:
@@ -648,6 +663,20 @@ class MemoryWorkspace:
             paths = self.conflict_paths.get(branch, ("x.py",))
             return MergeOutcome(reason=f"CONFLICT in {branch}", conflicted_paths=paths)
         return MergeOutcome(reason=None)
+
+    def merge_head(self, path: Path) -> str | None:
+        if self.merge_head_error is not None:
+            raise GitError(self.merge_head_error)
+        return self.merge_heads.get(path)
+
+    def abort_merge(self, path: Path) -> None:
+        if self.merge_heads.get(path) is None:
+            return
+        self.events.append("abort_merge")
+        self.aborted.append(path)
+        if self.abort_error is not None:
+            raise GitError(self.abort_error)
+        del self.merge_heads[path]
 
     def dependency_state(self, path: Path, branch: str, paths: Sequence[str]) -> DependencyState:
         self.dependency_state_calls.append((path, branch, tuple(paths)))

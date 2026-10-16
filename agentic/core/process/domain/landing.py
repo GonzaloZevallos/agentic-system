@@ -82,6 +82,13 @@ LANDING_RENUMBERS_MAX = 3
 `LANDING_SYNCS_MAX` nor to `LANDING_PASSES_MAX`; declared, not measured. A fourth collision
 is the `diagnose`: no further push."""
 
+LANDING_UNSYNCED_MAX = 2
+"""`sync_master` passes closed without their upstream (`lacks`) per upstream sha; declared, not
+measured. The second is the `diagnose`: a branch that cannot take master in is not retried."""
+
+entry_closed = rules.entry_closed
+"""Whether a `landing` entry is finished, re-exported from `rules`, which owns the reading."""
+
 RESTART_DEPTH_MAX = 1
 """Restarts of one issue by the landing; a second exhaustion escalates."""
 
@@ -117,6 +124,8 @@ class LandingSpent:
     waited_s: float | None
     # `renumber` entries across all heads (GH-229): the cap's own counter.
     renumbers: int = 0
+    # `sync_master` entries closed with `lacks` equal to the current upstream sha (GH-267).
+    unsynced_for_upstream: int = 0
 
 
 def landing_step(
@@ -182,7 +191,11 @@ def _sync(
 ) -> LandingStep:
     """`sync_master` while the sync budget lasts; a sync known to conflict is also a model
     pass and needs that budget too."""
-    if spent.syncs >= LANDING_SYNCS_MAX or (conflicting and spent.passes >= LANDING_PASSES_MAX):
+    if (
+        spent.syncs >= LANDING_SYNCS_MAX
+        or spent.unsynced_for_upstream >= LANDING_UNSYNCED_MAX
+        or (conflicting and spent.passes >= LANDING_PASSES_MAX)
+    ):
         return step("diagnose")
     return step("sync_master")
 
@@ -256,10 +269,12 @@ def renumber_carries(changes: Sequence[LineChange]) -> bool:
 def already_dispatched(landing: Sequence[Mapping[str, object]], head: str, step: str) -> bool:
     """Whether `(head, step)` is already in the document's `landing` list: the idempotency
     key, written before the dispatch. A diagnose entry that never delivered is an attempt
-    (`diagnose_retry`), not a taken step."""
+    (`diagnose_retry`), not a taken step; so is a sync closed with `lacks` (GH-267), which
+    the unsynced budget counts instead."""
     return any(
         entry.get("head") == head
         and entry.get("step") == step
+        and "lacks" not in entry
         and (step != "diagnose" or entry.get("delivered") is True)
         for entry in landing
     )
@@ -284,6 +299,9 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
         out["at"] = at
     if isinstance(resolved := raw.get("resolved_at"), str):
         out["resolved_at"] = resolved
+    for key in ("upstream", "closed_at", "lacks"):
+        if isinstance(text := raw.get(key), str):
+            out[key] = text
     if isinstance(cost := raw.get("cost_usd"), int | float) and not isinstance(cost, bool):
         out["cost_usd"] = float(cost)
     if isinstance(base := raw.get("cost_base"), int | float) and not isinstance(base, bool):
@@ -569,11 +587,11 @@ def resume_owed(raw: Mapping[str, object], now: datetime) -> bool:
 def with_cost_base(
     entries: Sequence[Mapping[str, object]], head: str, step: str, cost_base: float
 ) -> list[LandingEntry]:
-    """`entries` with `cost_base` set on the entry keyed `(head, step)`."""
+    """`entries` with `cost_base` set on the last entry, when it is keyed `(head, step)`;
+    an earlier entry is never written to (GH-267)."""
     out = [entry_of(entry) for entry in entries]
-    for entry in out:
-        if entry.get("head") == head and entry.get("step") == step:
-            entry["cost_base"] = cost_base
+    if out and out[-1].get("head") == head and out[-1].get("step") == step:
+        out[-1]["cost_base"] = cost_base
     return out
 
 
@@ -581,15 +599,62 @@ def resolve_open(
     entries: Sequence[Mapping[str, object]], at: str, cost_now: float
 ) -> list[LandingEntry]:
     """`entries` with the last one, when unresolved, closed at `at`: its `cost_usd` is
-    `cost_now` less the `cost_base` it was written with. An already resolved last entry,
+    `cost_now` less the `cost_base` it was written with. An already closed last entry,
     or none, leaves the list as it was."""
     out = [entry_of(entry) for entry in entries]
-    if not out or "resolved_at" in out[-1]:
+    if not out or entry_closed(out[-1]):
         return out
-    spent = cost_now - out[-1].get("cost_base", cost_now)
     out[-1]["resolved_at"] = at
-    out[-1]["cost_usd"] = round(max(spent, 0.0), 4)
+    out[-1]["cost_usd"] = _spent_since_base(out[-1], cost_now)
     return out
+
+
+def close_unsynced(
+    entries: Sequence[Mapping[str, object]], at: str, cost_now: float, lacks: str
+) -> list[LandingEntry]:
+    """`resolve_open`'s twin for a sync whose delivered head lacks its upstream (GH-267): the
+    last entry, when not closed, gets `closed_at`, `lacks` and its `cost_usd`; never
+    `resolved_at`."""
+    out = [entry_of(entry) for entry in entries]
+    if not out or entry_closed(out[-1]):
+        return out
+    out[-1]["closed_at"] = at
+    out[-1]["lacks"] = lacks
+    out[-1]["cost_usd"] = _spent_since_base(out[-1], cost_now)
+    return out
+
+
+def _spent_since_base(entry: LandingEntry, cost_now: float) -> float:
+    return round(max(cost_now - entry.get("cost_base", cost_now), 0.0), 4)
+
+
+def sync_verdict(
+    entry: Mapping[str, object], contains: bool | None
+) -> Literal["synced", "unsynced", "not_a_sync"]:
+    """What a delivered `sync_master` entry achieved (GH-267): `contains` is the answer to
+    whether the delivered head holds the entry's `upstream`. `not_a_sync` for another step or an
+    entry without a string `upstream` (written before this rule: it keeps resolving as it did).
+    Only `True` is `synced`; `False` and `None` (unreadable) are `unsynced`. Pure: no git."""
+    if entry.get("step") != "sync_master" or not isinstance(entry.get("upstream"), str):
+        return "not_a_sync"
+    return "synced" if contains is True else "unsynced"
+
+
+def merge_owner(
+    merge_head: str | None,
+    upstream: str | None,
+    head: str | None,
+    entries: Sequence[Mapping[str, object]],
+) -> Literal["none", "system", "foreign"]:
+    """Whose merge a worktree's MERGE_HEAD is (GH-267): `none` without one, `system` when it is
+    the round's `upstream`, the PR `head` or any `upstream` or `head` an entry recorded (through
+    `rules.same_commit`), else `foreign`. Pure: no git."""
+    if merge_head is None:
+        return "none"
+    known = [upstream, head]
+    for entry in entries:
+        known.extend(v for v in (entry.get("upstream"), entry.get("head")) if isinstance(v, str))
+    return "system" if any(rules.same_commit(merge_head, k) for k in known) else "foreign"
 
 
 def followup_marker(task_id: str, lineage: int) -> str:

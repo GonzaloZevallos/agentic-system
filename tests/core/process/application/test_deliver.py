@@ -503,3 +503,98 @@ async def test_a_redelivery_with_a_landing_list_survives_the_record_closure_afte
     assert closed["cost_base"] == 1.0
     assert closed["resume_spawns"] == 1
     assert closed["resume_spawned_at"] == "2026-10-14T12:00:00+00:00"
+
+
+# --- GH-267: a sync is resolved only when the delivered head holds its upstream ----
+
+UPSTREAM = "b" * 40
+HEAD = "a" * 40
+
+
+def _landing_state(**entry_extra):
+    entry = {
+        "head": HEAD,
+        "step": "sync_master",
+        "refusal": "merge_conflict",
+        "at": "t",
+        "cost_base": 1.0,
+        **entry_extra,
+    }
+    return {
+        **TASK,
+        "pull_request": "https://github.com/o/r/pull/12",
+        "landing": [entry],
+        "cost_usd": 3.5,
+    }
+
+
+async def test_a_sync_whose_head_lacks_its_upstream_is_closed_not_resolved_and_still_delivered(
+    cfg,
+):
+    ports = memory_ports()
+    state = _landing_state(upstream=UPSTREAM)
+
+    patch = await deliver(state, cfg, ports)
+
+    [closed] = patch["landing"]
+    assert "resolved_at" not in closed
+    assert closed["closed_at"]
+    assert closed["lacks"] == UPSTREAM
+    assert closed["cost_usd"] == pytest.approx(2.5)
+    assert patch["status"] == "ready_for_review"
+    assert ports.workspace.pushes
+
+
+async def test_a_sync_whose_head_holds_its_upstream_is_resolved(cfg):
+    ports = memory_ports()
+    ports.workspace.ancestors.add(UPSTREAM)
+
+    patch = await deliver(_landing_state(upstream=UPSTREAM), cfg, ports)
+
+    [resolved] = patch["landing"]
+    assert resolved["resolved_at"]
+    assert "lacks" not in resolved and "closed_at" not in resolved
+
+
+async def test_the_upstream_the_entry_was_dispatched_for_governs_not_the_one_master_has_now(
+    cfg,
+):
+    ports = memory_ports()
+    ports.workspace.ancestors.add("c" * 40)  # master moved on and the head holds only that
+
+    patch = await deliver(_landing_state(upstream=UPSTREAM), cfg, ports)
+
+    assert patch["landing"][0]["lacks"] == UPSTREAM
+    assert (ports.workspace.ancestor_checks[-1][1:]) == (UPSTREAM, "HEAD")
+
+
+async def test_an_ancestry_that_cannot_be_read_closes_the_sync_with_lacks(cfg):
+    ports = memory_ports()
+    ports.workspace.ancestor_errors.add(UPSTREAM)
+
+    patch = await deliver(_landing_state(upstream=UPSTREAM), cfg, ports)
+
+    assert patch["landing"][0]["lacks"] == UPSTREAM
+    assert "resolved_at" not in patch["landing"][0]
+    assert patch["status"] == "ready_for_review"
+
+
+@pytest.mark.parametrize("step", ["re_review", "fix"])
+async def test_a_step_that_is_not_a_sync_resolves_after_redelivery_as_before(cfg, step):
+    ports = memory_ports()
+    state = _landing_state(upstream=UPSTREAM)
+    state["landing"][0]["step"] = step
+
+    patch = await deliver(state, cfg, ports)
+
+    assert patch["landing"][0]["resolved_at"]
+    assert "lacks" not in patch["landing"][0]
+
+
+async def test_a_legacy_sync_entry_without_upstream_resolves_as_before(cfg):
+    ports = memory_ports()
+
+    patch = await deliver(_landing_state(), cfg, ports)
+
+    assert patch["landing"][0]["resolved_at"]
+    assert "lacks" not in patch["landing"][0]

@@ -266,3 +266,76 @@ Nunca escribe `cost_usd` ni borra historia: `record_closure` reemplaza una clave
 **Riesgo conocido.** La migración escribe documentos vivos: un error del discriminador desescalaría
 una parada humana real. Los casos contrarios (escalación real con y sin comentario, `sdk`, rol del
 grafo, `questions`, sin pull request) quedan fijados por tests.
+
+## Adenda (2026-10-16, GH-267): una sincronización se resuelve solo si el head contiene su upstream
+
+Enmienda este ADR y la adenda de GH-242 sin editarlos: dicen "una entrada se cierra tras la
+re-entrega", y para `sync_master` eso dejó de ser suficiente.
+
+**Diagnóstico (apostrophe GH-131, PR #252).** `sync_master` eligió dos veces el mismo paso y las dos
+veces quedó `resolved_at` sin que master entrara en la rama. Había dos fallos. (1) Ante un conflicto,
+`merge_upstream_into` dejaba `MERGE_HEAD` puesto, se reabría la unidad y se lanzaba `agentic resume`.
+El resume arranca en `integrate`, cuyo `_merge_approved` corre `git merge <rama del subtask>` en el
+mismo worktree; con un merge en curso git lo rechaza y `GitWorkspace.merge` hace `git merge --abort`,
+con lo que el merge de master se tiraba sin que nadie lo viera. El integrador encontraba un árbol
+limpio y un motivo que describía un merge que ya no existía. (2) `deliver` llamaba a
+`landing.resolve_open` en toda re-entrega, sin comprobar ascendencia. GH-237 y GH-166 funcionaron
+porque su merge fue limpio: `sync_master` empujó directo y no hubo resume.
+
+**La regla.** `resolved_at` en una entrada `sync_master` significa "cerrada, y el head contiene su
+`upstream`". Todo otro paso conserva "cerrada tras la re-entrega". `land` escribe `upstream` (el sha
+de master de la ronda) en la entrada `sync_master` al despachar. `landing.sync_verdict(entry,
+contains)` es pura: toma la entrada y la respuesta de ascendencia (`bool | None`), no llama a git, y
+`None` es `unsynced`. `deliver` y el camino limpio de `sync_master` la consultan con
+`Workspace.is_ancestor`; el head se entrega (push y PR) en todos los casos.
+
+**Sincronización no lograda.** Un head entregado que no contiene el `upstream` cierra la entrada con
+`closed_at`, `cost_usd` y `lacks` (el sha que faltó), nunca con `resolved_at`. `LandingSpent
+.unsynced_for_upstream` cuenta las entradas con `lacks` igual al sha de master de la ronda, por sha y
+no por head; `LANDING_UNSYNCED_MAX = 2` (declarado, no medido) y entonces el paso es `diagnose`, el
+camino terminal que ya existe. Sin sha, el conteo es 0. Un master ocupado, que cambia entre pasadas,
+agota `LANDING_PASSES_MAX` y llega al mismo `diagnose` por el otro camino.
+
+**"En vuelo" se lee en un solo lugar.** Si una entrada terminó solo lo dice `rules.entry_closed`
+(`resolved_at` o `closed_at`): `rules.landing_open` y la guarda de `resolve_open` leen a través de
+ella, y ningún otro código lee `resolved_at` ni `closed_at` para eso. `already_dispatched` ignora las
+entradas con `lacks`, de modo que un resume que no empuja nada puede despacharse otra vez y contarse.
+`with_cost_base` escribe solo en la última entrada.
+
+**Ningún paso deja un merge en curso.** `landing_sync.merges_cleared` envuelve el cuerpo de
+`sync_master`, `re_review` y `renumber_adr`: al entrar y en toda salida llama a `Workspace.abort_merge`
+sobre un `MERGE_HEAD` que reconoce como propio (`landing.merge_owner`). El aborto es propiedad de ese
+bloque, no de cada rama; `abort_merge` solo se llama desde ahí y `merge_head` solo lo leen
+`merges_cleared` y la guarda de `land`. Ante un conflicto, la unidad se reabre con un motivo que le
+dice al Developer que corra `git merge <sha>`, resuelva y confirme. Si el merge en curso no es del
+sistema (`merge_owner` responde `foreign`), `land` termina con `skipped/foreign_merge` y no registra
+nada. `integrate._merge_approved` y `GitWorkspace.merge` no cambian, aborto-al-rechazo incluido: el
+arreglo asegura que nunca se topen con un merge abierto.
+
+**Glosario.** El término es **Sincronización no lograda**, en el glosario de Proceso.
+
+**§7.** Ninguna métrica, etiqueta, atributo de span, prompt ni `prompts.fingerprint` cambia. Claves
+opcionales nuevas en las entradas `landing`: `upstream`, `closed_at`, `lacks`, escritas solo cuando
+existen y leídas con `.get`. Razón nueva de `LandResult`: `foreign_merge`.
+
+**§8.** Nada nuevo se vuelve alcanzable. El sistema puede ahora correr `git merge --abort` en su propio
+worktree de tarea, y solo sobre un merge que reconoce. Por ronda: un `rev-parse MERGE_HEAD` por paso
+que fusiona y un `cat-file` más un `merge-base --is-ancestor` por re-entrega de una sincronización;
+ninguno crece con el tamaño de los datos. Una sincronización que no trae master cuesta como mucho una
+pasada más y luego `diagnose`; antes el ciclo no tenía cota (~6 USD por vuelta).
+
+**Riesgos conocidos.**
+- `merge_owner` toma cualquier `upstream` o `head` registrado como propio: un merge a mano de un master
+  viejo registrado, en un worktree `ready_for_review`, se abortaría.
+- Un merge ajeno repite `skipped/foreign_merge` en cada tick hasta que una persona lo termine.
+- Un stage0 fijado antes de este cambio no conoce `closed_at` y lee una entrada cerrada sin lograr
+  como en vuelo hasta que se re-fije.
+- El Developer fusiona el sha fijado al despachar: un master ocupado puede costar una pasada por
+  movimiento, acotada por `LANDING_PASSES_MAX` y luego `diagnose`.
+- Un Developer que ignora la instrucción se detecta solo en la entrega, y cada vuelta cuesta un resume
+  y una revisión.
+- Las entradas escritas antes de este cambio no tienen `upstream` y se resuelven como antes; GH-131 queda
+  cubierto desde su próximo despacho.
+- Un SIGKILL entre el merge y el aborto solo lo cubre la limpieza al entrar de la pasada siguiente.
+- Seguimiento: mantener el merge con conflicto dentro del nodo develop, como hace el camino de
+  dependencias.

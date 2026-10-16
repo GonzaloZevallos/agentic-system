@@ -174,6 +174,16 @@ class GitWorkspace:
             head=self.full_head(checkout),
         )
 
+    def merge_head(self, path: Path) -> str | None:
+        found = self._run("rev-parse", "-q", "--verify", "MERGE_HEAD", cwd=path)
+        sha = found.stdout.strip()
+        return sha if found.returncode == 0 and sha else None
+
+    def abort_merge(self, path: Path) -> None:
+        if self.merge_head(path) is None:
+            return
+        self._git("merge", "--abort", cwd=path)
+
     def dependency_state(self, path: Path, branch: str, paths: Sequence[str]) -> DependencyState:
         ancestor = self._run("merge-base", "--is-ancestor", branch, "HEAD", cwd=path)
         merge_head = self._run("rev-parse", "--verify", "-q", "MERGE_HEAD", cwd=path)

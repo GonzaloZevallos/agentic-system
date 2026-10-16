@@ -1053,3 +1053,20 @@ def test_a_record_keys_set_without_the_wrapped_and_block_keys_refuses_the_real_t
 
     with pytest.raises(ValueError, match="escalated|pause_log"):
         document.record_closure(GH150_STRANDED, values)
+
+
+def test_a_closed_unsynced_entry_roundtrips_and_leaves_an_old_entry_byte_identical():
+    old = _LANDED[0]
+    new = {
+        "head": "b" * 40,
+        "step": "sync_master",
+        "upstream": "c" * 40,
+        "closed_at": "t2",
+        "lacks": "c" * 40,
+        "cost_usd": 1.5,
+    }
+    after = document.render(_bare(landing=[old, new]))
+    assert document.parse(after)["landing"] == [old, new]
+    assert landing_rules.entry_of(new) == new
+    assert document.render(_bare(landing=[old])) == document.render(_bare(landing=[dict(old)]))
+    assert document.render(_bare(landing=[old])).count("closed_at") == 0
