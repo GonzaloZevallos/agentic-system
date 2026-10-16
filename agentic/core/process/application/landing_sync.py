@@ -16,7 +16,7 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Literal, Protocol
 
-from ..domain import landing, rules
+from ..domain import adr_numbers, landing, rules
 from ..domain.adr_numbers import Renaming
 from ..domain.roles import pair_for
 from ..domain.task import INTEGRATION, ChangeCategory, ChangesRequested, Subtask, TaskState
@@ -286,9 +286,8 @@ def _sync_carries(
 
 
 def _message(moves: Sequence[tuple[str, str]]) -> str:
-    renamed = ", ".join(
-        f"{old.rsplit('/', 1)[-1][:4]} -> {new.rsplit('/', 1)[-1][:4]}" for old, new in moves
-    )
+    renamed = f"{', '.join(adr_numbers.old_numbers(dict(moves)))} -> "
+    renamed += ", ".join(adr_numbers.new_numbers(dict(moves)))
     return (
         f"Renumber ADR {renamed}: master already took the number\n\n"
         "Renamed and rewritten by the landing (ADR-0049); only the ADR files and the lines "
@@ -353,8 +352,8 @@ def renumber_adr(context: LandingContext) -> None:
         return
     carried = landing.renumber_carries(changes) and rules.same_commit(reviewed, head)
     record: dict[str, str | bool] = {
-        "from": ", ".join(old.rsplit("/", 1)[-1][:4] for old, _ in found.moves),
-        "to": ", ".join(new.rsplit("/", 1)[-1][:4] for _, new in found.moves),
+        "from": ", ".join(adr_numbers.old_numbers(dict(found.moves))),
+        "to": ", ".join(adr_numbers.new_numbers(dict(found.moves))),
         "head_before": head,
         "head_after": new_head,
         "carried": carried,

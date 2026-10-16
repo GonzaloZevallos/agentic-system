@@ -117,6 +117,14 @@ def old_numbers(moves: Mapping[str, str]) -> list[str]:
     return sorted({number for number in found if number is not None})
 
 
+def new_numbers(moves: Mapping[str, str]) -> list[str]:
+    """The numbers `moves` (old path -> new path) moves to, in the order of the old paths'
+    numbers: what a commit message and the record of a renumbering say."""
+    ordered = sorted(moves.items(), key=lambda pair: pair[0])
+    found = (number_of(_basename(new)) for _, new in ordered)
+    return [number for number in found if number is not None]
+
+
 _SEPARATOR = r"(?:\s*,\s*(?:(?:and|y)\s+)?|\s+(?:and|y)\s+|\s*/\s*)"
 _ITEM = r"\d{4}(?!\d)"
 _TOKEN = re.compile(r"(?<!\d)\d{4}(?!\d)")

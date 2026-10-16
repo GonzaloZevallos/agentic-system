@@ -132,3 +132,9 @@ def test_the_renumber_record_renders_only_when_present_and_a_document_without_it
     assert "adr_renumbered" not in without
     assert document.render({**state, "adr_renumbered": []}) == without
     assert "adr_renumbered" in document.render({**state, "adr_renumbered": [record]})
+
+
+def test_the_numbers_a_renumbering_says_come_from_the_adr_rule():
+    moves = {"docs/adr/0049-a.md": "docs/adr/0050-a.md", "docs/adr/0051-b.md": "docs/adr/0052-b.md"}
+    assert adr_numbers.old_numbers(moves) == ["0049", "0051"]
+    assert adr_numbers.new_numbers(moves) == ["0050", "0052"]
