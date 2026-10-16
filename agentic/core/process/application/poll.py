@@ -431,11 +431,12 @@ def _adr_collision(
     where the order lives, it moves no read).
 
     Per tick, for each task that is `ready_for_review` with an `OPEN` pull request: one local
-    `cat-file -e` for the head (one `fetch --quiet origin <sha>`, bounded by
-    `FETCH_TIMEOUT_S`, only when it is absent locally) and one `diff --name-only`. When the
-    diff touches `docs/adr/`, one `added_adrs` log more, and what `adr_collision.adr_collision`
-    reads after it. Bounded by the number of open pull requests, not by data size. A diff or
-    a read that fails is no collision here: the merge verb reads again and is the one that
+    `cat-file -e` for the head (when it is absent locally: that one, one `fetch --quiet origin
+    <sha>` bounded by `FETCH_TIMEOUT_S`, and a second `cat-file -e`), one `git config --get`
+    for the task's base (`task_base`, read once more than the one `assess_merge` already
+    makes for the stack's CI) and one `diff --name-only`. When the diff touches `docs/adr/`,
+    one `added_adrs` log more, and what `adr_collision.adr_collision` reads after it. Bounded by the number of open pull requests, not by data size. A diff
+    or a read that fails is no collision here: the merge verb reads again and is the one that
     stops."""
     head = facts.pr_head
     if head is None or not rules.adr_probe_wanted(facts):

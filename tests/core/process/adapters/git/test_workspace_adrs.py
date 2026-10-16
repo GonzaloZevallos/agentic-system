@@ -212,3 +212,26 @@ def test_a_head_that_is_absent_costs_exactly_one_bounded_fetch(
     absent = "f" * 40
     assert ws.fetch_commit(absent) is False
     assert calls == [("fetch", "--quiet", "origin", absent)]
+
+
+def test_fetch_commit_reads_the_head_once_when_local_and_twice_when_a_fetch_is_tried(
+    collision: Collision, monkeypatch: pytest.MonkeyPatch
+):
+    """The `cat-file -e` reads of `fetch_commit`, counted through `_run` (the bounded runner
+    is silenced): one for a head that is local, one before and one after the fetch otherwise."""
+    ws = GitWorkspace(collision.repo, IDENTITY)
+    real = ws._run
+    reads: list[tuple[str, ...]] = []
+
+    def recording(*args: str):
+        if args[:2] == ("cat-file", "-e"):
+            reads.append(args)
+        return real(*args)
+
+    monkeypatch.setattr(ws, "_run", recording)
+    monkeypatch.setattr(ws, "_run_bounded", lambda *args: None)
+    assert ws.fetch_commit(collision.head) is True
+    assert len(reads) == 1
+    reads.clear()
+    assert ws.fetch_commit("f" * 40) is False
+    assert len(reads) == 2

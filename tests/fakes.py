@@ -510,6 +510,8 @@ class MemoryWorkspace:
         self.added_adrs_calls: list[tuple[str, str]] = []
         self.added_lines_calls: list[tuple[str, str, tuple[str, ...]]] = []
         self.tree_names_calls: list[tuple[str, str]] = []
+        # GH-262: each `base_of` ask (a `git config --get` on the real adapter), in order.
+        self.base_of_calls: list[str] = []
         # GH-216: `contains`'s answer per `(head, master)` -- absent is `unknown`, which
         # the caller counts as stale -- and each ask, in order.
         self.containment: dict[tuple[str, str], Containment] = {}
@@ -738,6 +740,7 @@ class MemoryWorkspace:
         return self.existing_branches[branch][0] if branch in self.existing_branches else None
 
     def base_of(self, branch: str) -> str | None:
+        self.base_of_calls.append(branch)
         return self.existing_branches[branch][1] if branch in self.existing_branches else None
 
     def worktrees(self, task_id: str) -> list[Path]:

@@ -70,6 +70,16 @@ def test_a_ready_open_task_makes_its_head_local_and_diffs_it_once():
     assert ports.workspace.tree_names_calls == []
 
 
+def test_a_probed_tick_reads_the_task_base_once_more_than_one_that_is_not_probed():
+    """`task_base` is `git config --get branch.<b>.agenticBase`. `assess_merge` reads it once
+    for the stack's CI whatever the task; the probe's diff is the one more, per probed tick."""
+    idle = _ports(diff=("agentic/x.py",))
+    _tick(idle, status="developing")
+    probed = _ports(diff=("agentic/x.py",))
+    _tick(probed)
+    assert len(probed.workspace.base_of_calls) == len(idle.workspace.base_of_calls) + 1
+
+
 def test_a_diff_that_touches_no_adr_path_reads_no_adr():
     ports = _ports(diff=("docs/product/x.md", "docs/adrs.md"))
     ports.workspace.add_branch_commit(adds=(MINE,))
