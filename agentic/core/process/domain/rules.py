@@ -2720,8 +2720,8 @@ class MergeFacts:
     ci_untrusted: bool | None = None
     followups_filed: bool = False
     failed_step: presubmit.FailedStep | None = None
-    conflicts: bool | None = None
     adr_collision: adr_numbers.Renaming | adr_numbers.Ambiguous | None = None
+    conflicts: bool | None = None
 
 
 @dataclass(frozen=True)
