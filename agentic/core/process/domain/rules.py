@@ -2840,6 +2840,18 @@ def conflict_probe_wanted(facts: MergeFacts) -> bool:
     )
 
 
+def adr_probe_wanted(facts: MergeFacts) -> bool:
+    """Whether the ADR-collision read is worth running for `facts` (GH-262): the only answer
+    to that question, derived from the order of `auto_merge_decision` and never from a list
+    of refusals. It is worth it exactly when a collision would be the decision, that is,
+    when no refusal ahead of `adr_number_taken` already rules the pull request out. The
+    order is the decision's own, so a collision on an unapproved head is still read."""
+    taken = adr_numbers.Renaming((("docs/adr/0000-x.md", "docs/adr/0001-x.md"),), {})
+    return auto_merge_decision(replace(facts, adr_collision=taken)) == MergeDecision(
+        "refuse", "adr_number_taken"
+    )
+
+
 def _ci_gate(facts: MergeFacts) -> MergeDecision | None:
     """The CI's part of `auto_merge_decision`: `None` means a green CI that is not fresh,
     which goes on to the local checks, as does any green CI whose definition is untrusted."""

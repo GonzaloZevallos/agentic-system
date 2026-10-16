@@ -6,6 +6,7 @@ import pytest
 
 from agentic.core.process.application.ports import BranchPullRequest
 from agentic.core.process.domain import document, roles, rules, task
+from agentic.core.process.domain.adr_numbers import Renaming
 from agentic.core.process.domain.denials import denial_for
 from agentic.core.process.domain.roles import (
     DEVELOPER,
@@ -2652,3 +2653,57 @@ def test_retake_calendar_names_the_flat_hourly_and_growing_calendars():
         len(rules.ACCOUNT_LIMIT_HOURLY),
     )
     assert rules.retake_calendar("upstream", 2, past, limit) == (rules.RETAKE_SCHEDULE, 2, limit)
+
+
+# `adr_probe_wanted` is the one answer to "should the ADR-collision read run", derived from the
+# order of `auto_merge_decision` the way `conflict_probe_wanted` is.
+
+PROBE_HEAD = "a" * 40
+
+
+def _probe_facts(**over) -> rules.MergeFacts:
+    base = rules.MergeFacts(
+        task_id="GH-9",
+        status="ready_for_review",
+        reviewed_unit_approved=True,
+        reviewed_head=PROBE_HEAD,
+        open_blocking=0,
+        open_important=0,
+        pr_state="OPEN",
+        pr_head=PROBE_HEAD,
+        in_eval_set=False,
+        touched_paths=("docs/adr/0004-x.md",),
+        attempts=0,
+        checks_head=None,
+        checks_master=None,
+        checks_passed=None,
+        current_master=None,
+    )
+    return replace(base, **over)
+
+
+def test_the_adr_probe_is_wanted_for_a_ready_task_with_an_open_pull_request():
+    assert rules.adr_probe_wanted(_probe_facts()) is True
+
+
+def test_the_adr_probe_is_not_wanted_for_a_task_that_is_not_ready():
+    assert rules.adr_probe_wanted(_probe_facts(status="developing")) is False
+
+
+def test_the_adr_probe_is_not_wanted_for_a_pull_request_that_is_not_open():
+    assert rules.adr_probe_wanted(_probe_facts(pr_state="CLOSED")) is False
+    assert rules.adr_probe_wanted(_probe_facts(pr_state=None)) is False
+
+
+def test_the_adr_probe_is_wanted_for_an_unapproved_task_because_the_collision_comes_first():
+    """The order is the decision's, not a list kept beside it: `adr_number_taken` is ahead of
+    `not_approved`, so an unapproved head with a collision is a renumber, not a re-review."""
+    facts = _probe_facts(reviewed_unit_approved=False)
+    assert rules.auto_merge_decision(facts) == rules.MergeDecision("refuse", "not_approved")
+    assert rules.adr_probe_wanted(facts) is True
+
+
+def test_the_adr_probe_gate_ignores_the_collision_fact_it_is_asked_to_derive():
+    renaming = Renaming((("docs/adr/0004-x.md", "docs/adr/0010-x.md"),), {})
+    for known in (None, renaming):
+        assert rules.adr_probe_wanted(replace(_probe_facts(), adr_collision=known)) is True
