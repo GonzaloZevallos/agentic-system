@@ -906,9 +906,9 @@ def _registered(
     poller's own concurrency cap (`AGENTIC_MAX_CONCURRENT_RUNS`, GH-137) can count it
     across every product on this machine, under `kind`: `rules.counts_against_cap` decides
     whether it takes a slot (a `merge` or `land_checks` child does not, GH-263). Best
-    effort only, the same shape every other diagnostic write in this module already has: a `run`/`resume` that cannot write
-    here still runs, one stderr line the only trace -- it must never turn into a
-    `CannotStart`, since nothing about the task itself failed."""
+    effort only, the same shape every other diagnostic write in this module already has: a
+    `run`/`resume` that cannot write here still runs, one stderr line the only trace -- it
+    must never turn into a `CannotStart`, since nothing about the task itself failed."""
     try:
         registry.register(product, task_id, kind)
     except OSError as exc:
