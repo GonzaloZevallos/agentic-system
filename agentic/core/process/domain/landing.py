@@ -280,24 +280,6 @@ def already_dispatched(landing: Sequence[Mapping[str, object]], head: str, step:
     )
 
 
-def merge_owner(
-    merge_head: str | None,
-    upstream: str | None,
-    head: str,
-    entries: Sequence[Mapping[str, object]],
-) -> Literal["none", "own", "foreign"]:
-    """Whose merge `MERGE_HEAD` is (GH-267): `none` when there is no merge in progress,
-    `own` when it is a sha the landing merged (this round's upstream or head, or the
-    `head` / `upstream` of any recorded entry), `foreign` for any other, a person's merge
-    the landing must leave alone."""
-    if merge_head is None:
-        return "none"
-    known: set[object] = {upstream, head}
-    for entry in entries:
-        known.update((entry.get("head"), entry.get("upstream")))
-    return "own" if merge_head in known else "foreign"
-
-
 def landing_open(state: TaskState) -> bool:
     """A landing pass is in flight: the last `landing` entry is not resolved and some
     subtask is reopened for it (`rules.landing_open`, where `resume_target` reads it)."""

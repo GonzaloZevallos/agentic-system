@@ -154,10 +154,10 @@ def test_merge_owner_recognises_the_systems_shas_and_rejects_a_stranger():
     entries = [{"head": "h" * 40, "step": "sync_master", "upstream": "u" * 40}]
 
     assert landing.merge_owner(None, "m" * 40, "x" * 40, entries) == "none"
-    assert landing.merge_owner("m" * 40, "m" * 40, "x" * 40, entries) == "own"
-    assert landing.merge_owner("x" * 40, "m" * 40, "x" * 40, entries) == "own"
-    assert landing.merge_owner("u" * 40, "m" * 40, "x" * 40, entries) == "own"
-    assert landing.merge_owner("h" * 40, "m" * 40, "x" * 40, entries) == "own"
+    assert landing.merge_owner("m" * 40, "m" * 40, "x" * 40, entries) == "system"
+    assert landing.merge_owner("x" * 40, "m" * 40, "x" * 40, entries) == "system"
+    assert landing.merge_owner("u" * 40, "m" * 40, "x" * 40, entries) == "system"
+    assert landing.merge_owner("h" * 40, "m" * 40, "x" * 40, entries) == "system"
     assert landing.merge_owner("f" * 40, "m" * 40, "x" * 40, entries) == "foreign"
 
 

@@ -213,7 +213,7 @@ def merges_cleared(
 def _owned(context: LandingContext, state: TaskState) -> Callable[[str], bool]:
     """Whether a `MERGE_HEAD` is one this task's landing merged (`landing.merge_owner`)."""
     return lambda sha: (
-        landing.merge_owner(sha, context.upstream.sha, context.head, entries(state)) == "own"
+        landing.merge_owner(sha, context.upstream.sha, context.head, entries(state)) == "system"
     )
 
 
