@@ -213,9 +213,7 @@ def test_the_new_order_returns_what_the_old_one_did_for_every_added_and_head_sub
                 replace(memory_ports(), workspace=new_ws), "master", "head"
             )
             assert new == _old_order(old_ws, "master", "head"), (added, at_head)
-            superset = adr_numbers.collisions(
-                MASTER_NAMES, [OwnAdr(p, "c" * 40) for p in added]
-            )
+            superset = adr_numbers.collisions(MASTER_NAMES, [OwnAdr(p, "c" * 40) for p in added])
             reads = len(new_ws.tree_calls)
             if not added:
                 assert reads == 0

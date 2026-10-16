@@ -191,7 +191,9 @@ def test_commit_paths_commits_a_rename_as_an_add_and_a_delete(collision):
     assert AddedAdr("docs/adr/0050-mine.md", git("rev-parse", "HEAD", cwd=task)) in added
 
 
-def test_a_head_that_is_already_local_is_made_local_without_a_fetch(collision: Collision, monkeypatch: pytest.MonkeyPatch):
+def test_a_head_that_is_already_local_is_made_local_without_a_fetch(
+    collision: Collision, monkeypatch: pytest.MonkeyPatch
+):
     """The property is which git commands the adapter issues, so calls are counted (the
     bounded runner does not raise on a failure)."""
     ws = GitWorkspace(collision.repo, IDENTITY)
