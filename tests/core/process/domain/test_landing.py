@@ -807,3 +807,32 @@ def test_another_roles_failure_in_the_closing_epoch_is_not_stranded_and_stamps_n
 
 def test_a_comment_after_the_entry_keeps_the_real_document_escalated():
     assert landing.stranded_diagnose(_real(), True) is False
+
+
+@pytest.mark.parametrize(
+    ("step", "refusal", "kind"),
+    [
+        ("rerun", "checks_failed", "land_checks"),
+        ("file_followups_and_land", None, "land_checks"),
+        ("sync_master", "checks_stale", "land_checks"),
+        ("sync_master", "checks_failed", "land_model"),
+        ("sync_master", "merge_conflict", "land_model"),
+        ("re_review", None, "land_model"),
+        ("fix", "checks_failed", "land_model"),
+        ("diagnose", None, "land_model"),
+        ("wait", None, "land_model"),
+        ("none", None, "land_model"),
+        (None, None, "land_model"),
+    ],
+)
+def test_a_land_step_registers_under_the_kind_that_says_whether_it_can_spend_a_model(
+    step, refusal, kind
+):
+    assert landing.run_kind_of(step, refusal) == kind
+
+
+def test_every_conflicting_sync_refusal_is_a_model_sync_and_only_those():
+    for refusal in get_args(rules.MergeRefusal):
+        expected = "land_model" if refusal in landing.CONFLICTING_SYNC_REFUSALS else "land_checks"
+        assert landing.run_kind_of("sync_master", refusal) == expected
+    assert landing.run_kind_of("sync_master", None) == "land_checks"

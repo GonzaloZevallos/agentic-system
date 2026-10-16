@@ -977,7 +977,11 @@ def run_once(
     # Outside the lock, and only with pacing on: pacing off reads and writes nothing.
     fresh, skipped = _recent_spend(ports, now) if cfg.spend_pacing else ([], 0)
     with registry.exclusive():
-        live = len(registry.live())
+        running = registry.live()
+        # `rules.counts_against_cap` decides what takes a slot; the children that run no
+        # model (`merge`, `land_checks`) are counted apart, for the planning to bound.
+        live = sum(1 for r in running if rules.counts_against_cap(r.kind))
+        _exempt_live = len(running) - live  # read by the poller subtask: bounds merge/land_checks
         available = max(cfg.max_concurrent_runs - live, 0)
         pace: rules.SpendPace | None = None
         spend_notes: list[str] = []

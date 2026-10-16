@@ -2652,3 +2652,16 @@ def test_retake_calendar_names_the_flat_hourly_and_growing_calendars():
         len(rules.ACCOUNT_LIMIT_HOURLY),
     )
     assert rules.retake_calendar("upstream", 2, past, limit) == (rules.RETAKE_SCHEDULE, 2, limit)
+
+
+@pytest.mark.parametrize(
+    ("kind", "counts"),
+    [("role", True), ("land_model", True), ("merge", False), ("land_checks", False)],
+)
+def test_only_the_children_that_can_spend_a_model_count_against_the_cap(kind, counts):
+    assert rules.counts_against_cap(kind) is counts
+
+
+def test_counts_against_cap_decides_every_run_kind():
+    for kind in get_args(rules.RunKind):
+        assert isinstance(rules.counts_against_cap(kind), bool)

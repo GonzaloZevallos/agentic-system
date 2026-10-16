@@ -890,7 +890,9 @@ def _registry_for(cfg: Configuration) -> RunRegistry:
 
 
 @contextmanager
-def _registered(registry: RunRegistry, product: str, task_id: str) -> Iterator[None]:
+def _registered(
+    registry: RunRegistry, product: str, task_id: str, kind: rules.RunKind = "role"
+) -> Iterator[None]:
     """Registers this invocation under `Configuration.run_registry_dir` so the
     poller's own concurrency cap (`AGENTIC_MAX_CONCURRENT_RUNS`, GH-137) can count it
     across every product on this machine. Best effort only, the same shape every other
@@ -898,7 +900,7 @@ def _registered(registry: RunRegistry, product: str, task_id: str) -> Iterator[N
     here still runs, one stderr line the only trace -- it must never turn into a
     `CannotStart`, since nothing about the task itself failed."""
     try:
-        registry.register(product, task_id)
+        registry.register(product, task_id, kind)
     except OSError as exc:
         print(f"agentic: could not register the run: {exc}", file=sys.stderr)
     try:
@@ -1371,7 +1373,10 @@ async def _merge(task_id: str, issue: int, cfg: Configuration, ports: Ports) -> 
     money and opens no span, like `close`. The closure runs in this process once the pull
     request is merged."""
     lock = _lock_for(cfg)
-    with _locked(lock, task_id), _registered(_registry_for(cfg), product_name(ports), task_id):
+    with (
+        _locked(lock, task_id),
+        _registered(_registry_for(cfg), product_name(ports), task_id, "merge"),
+    ):
         raw = ports.documents.load(task_id)
         if raw is None or not raw.get("pull_request"):
             raise CannotStart(f"{task_id} has no pull request to merge")

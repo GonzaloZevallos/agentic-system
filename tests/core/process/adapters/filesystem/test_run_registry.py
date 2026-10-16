@@ -280,3 +280,73 @@ def test_spend_files_are_invisible_to_live_and_launch_attempts(tmp_path):
     registry.publish_spend(tmp_path / "docs", "apostrophe", [_spend(10, 3.0)], T0)
     assert (registry.live(), registry.launch_attempts("apostrophe", 7)) == before
     assert registry.launch_attempts("apostrophe", 8) is None
+
+
+def test_a_registered_kind_reads_back(tmp_path):
+    registry = FilesystemRunRegistry(tmp_path / "runs")
+    registry.register("apostrophe", "GH-19", "merge")
+    [entry] = registry.live()
+    assert entry.kind == "merge"
+    registry.unregister()
+    registry.register("apostrophe", "GH-19")
+    assert [e.kind for e in registry.live()] == ["role"]
+
+
+def _raw_record(registry: FilesystemRunRegistry, **extra: object) -> None:
+    record = {
+        "pid": os.getpid(),
+        "host": socket.gethostname(),
+        "product": "apostrophe",
+        "task_id": "GH-19",
+        "boot_id": None,
+        **extra,
+    }
+    registry.dir.mkdir(parents=True, exist_ok=True)
+    (registry.dir / f"{os.getpid()}.json").write_text(json.dumps(record), encoding="utf-8")
+
+
+def test_a_record_with_no_kind_reads_as_role(tmp_path):
+    """The rejected input: a record written before kinds existed must keep counting."""
+    registry = FilesystemRunRegistry(tmp_path / "runs")
+    _raw_record(registry)
+    assert [e.kind for e in registry.live()] == ["role"]
+
+
+def test_a_record_with_an_unknown_or_unreadable_kind_reads_as_role(tmp_path):
+    registry = FilesystemRunRegistry(tmp_path / "runs")
+    for bogus in ("bogus", 7, None, ["merge"], ""):
+        _raw_record(registry, kind=bogus)
+        assert [e.kind for e in registry.live()] == ["role"], bogus
+
+
+def test_a_write_replaces_the_record_whole_and_leaves_no_temp_file(tmp_path, monkeypatch):
+    registry = FilesystemRunRegistry(tmp_path / "runs")
+    replaced: list[tuple[str, str]] = []
+    real_replace = os.replace
+
+    def spy(src, dst):
+        replaced.append((str(src), str(dst)))
+        real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", spy)
+    registry.register("apostrophe", "GH-19", "land_checks")
+    [(src, dst)] = replaced
+    assert Path(src).parent == Path(dst).parent == registry.dir
+    assert sorted(p.name for p in registry.dir.iterdir()) == [f"{os.getpid()}.json"]
+    assert [(e.task_id, e.kind) for e in registry.live()] == [("GH-19", "land_checks")]
+
+
+def test_a_failed_write_leaves_neither_a_record_nor_a_temp_file(tmp_path, monkeypatch):
+    registry = FilesystemRunRegistry(tmp_path / "runs")
+
+    def refuse(src, dst):
+        raise OSError("scripted")
+
+    monkeypatch.setattr(os, "replace", refuse)
+    try:
+        registry.register("apostrophe", "GH-19")
+    except OSError:
+        pass
+    else:
+        raise AssertionError("the OSError must reach the caller")
+    assert list(registry.dir.iterdir()) == []

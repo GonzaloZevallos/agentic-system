@@ -10,7 +10,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, NamedTuple, Protocol
+from typing import Any, Literal, NamedTuple, Protocol, assert_never
 
 from . import ci, presubmit
 from .denials import denial_for
@@ -2441,6 +2441,25 @@ class LaunchCandidate:
     since: datetime | None
     prior: int
     limit: int
+
+
+RunKind = Literal["role", "merge", "land_checks", "land_model"]
+"""What a registered child of the poller is: `role` (`run`, `resume`), `merge` (the
+merge child), and the two kinds a `land` child registers under: `land_checks` (a step
+that only syncs cleanly, reruns checks or files follow-ups, never a model pass) and
+`land_model` (any step that can spend one, and the default)."""
+
+
+def counts_against_cap(kind: RunKind) -> bool:
+    """Whether a live child of this kind occupies a slot of `AGENTIC_MAX_CONCURRENT_RUNS`:
+    the one place that decides it. Only the children that can spend a model session do."""
+    match kind:
+        case "role" | "land_model":
+            return True
+        case "merge" | "land_checks":
+            return False
+        case _:
+            assert_never(kind)
 
 
 def poll_plan(

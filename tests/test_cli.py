@@ -965,7 +965,7 @@ async def test_a_run_still_happens_when_the_registry_cannot_be_written(
     from tests.fakes import memory_ports
 
     class BrokenRegistry:
-        def register(self, product, task_id):
+        def register(self, product, task_id, kind="role"):
             raise OSError("disk full")
 
         def unregister(self):

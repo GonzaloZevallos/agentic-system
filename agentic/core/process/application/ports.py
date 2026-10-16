@@ -19,7 +19,7 @@ from ..domain.ci import CiReport, CiUnreadable, Containment
 from ..domain.design import Design
 from ..domain.playbook import Playbook
 from ..domain.roles import Role
-from ..domain.rules import MergeFailure, SpendRun, motive
+from ..domain.rules import MergeFailure, RunKind, SpendRun, motive
 from ..domain.suppressions import Forbidden
 from ..domain.task import (
     DependencyState,
@@ -964,14 +964,17 @@ class RunLock(Protocol):
 
 @dataclass(frozen=True)
 class RunRegistration:
-    """One live `agentic run`/`resume` invocation, as `RunRegistry.live` hands it
-    back (GH-137): what the poller counts against `AGENTIC_MAX_CONCURRENT_RUNS`, across
-    every product on this machine -- the account's own 429 is not scoped to one."""
+    """One live `agentic` child invocation, as `RunRegistry.live` hands it back
+    (GH-137): what the poller counts against `AGENTIC_MAX_CONCURRENT_RUNS`, across
+    every product on this machine -- the account's own 429 is not scoped to one. `kind`
+    says whether it counts (`rules.counts_against_cap`); a record that names none is
+    `role`."""
 
     pid: int
     host: str
     product: str
     task_id: str
+    kind: RunKind = "role"
 
 
 @dataclass(frozen=True)
@@ -992,9 +995,12 @@ class RunRegistry(Protocol):
     product -- the account's session limit a 429 names is the machine's, not a
     product's."""
 
-    def register(self, product: str, task_id: str) -> None:
-        """Write this process's own entry (`os.getpid()`, this host). `run`/`resume`
-        call this inside their own per-task lock, right after they acquire it."""
+    def register(self, product: str, task_id: str, kind: RunKind = "role") -> None:
+        """Write this process's own entry (`os.getpid()`, this host) once, whole, under
+        `kind`; it is never rewritten while the child runs. `run`/`resume`/`merge`/`land`
+        call this inside their own per-task lock, right after they acquire it. Only the
+        kinds for which `rules.counts_against_cap` is true occupy a slot of
+        `AGENTIC_MAX_CONCURRENT_RUNS`."""
         ...
 
     def unregister(self) -> None:

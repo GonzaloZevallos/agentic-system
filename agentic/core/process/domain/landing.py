@@ -39,6 +39,20 @@ do: the human's)."""
 CONFLICTING_SYNC_REFUSALS: tuple[rules.MergeRefusal, ...] = ("checks_failed", "merge_conflict")
 """The refusals under which a recorded `sync_master` was a conflicting one, hence a model pass."""
 
+
+def run_kind_of(step: LandingStepKind | None, refusal: rules.MergeRefusal | None) -> rules.RunKind:
+    """The kind a `land` child registers under for the step it is about to carry out
+    (`None` for the recoveries that have no step). Only `land_checks` or `land_model`; a
+    step this table does not name is `land_model`, the kind that counts against the cap."""
+    match step:
+        case "rerun" | "file_followups_and_land":
+            return "land_checks"
+        case "sync_master":
+            return "land_model" if refusal in CONFLICTING_SYNC_REFUSALS else "land_checks"
+        case _:
+            return "land_model"
+
+
 LANDING_PASSES_MAX = 3
 """Model passes (`re_review`, `fix`, a conflicting `sync_master`) per task."""
 
