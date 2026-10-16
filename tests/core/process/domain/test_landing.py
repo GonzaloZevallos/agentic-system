@@ -808,3 +808,69 @@ def test_another_roles_failure_in_the_closing_epoch_is_not_stranded_and_stamps_n
 
 def test_a_comment_after_the_entry_keeps_the_real_document_escalated():
     assert landing.stranded_diagnose(_real(), True) is False
+
+
+@pytest.mark.parametrize(
+    ("step", "refusal", "kind"),
+    [
+        ("rerun", "checks_failed", "land_checks"),
+        ("file_followups_and_land", None, "land_checks"),
+        ("sync_master", "attempts_exhausted", "land_model"),
+        ("sync_master", "checks_stale", "land_model"),
+        ("sync_master", "checks_failed", "land_model"),
+        ("sync_master", "merge_conflict", "land_model"),
+        ("re_review", None, "land_model"),
+        ("fix", "checks_failed", "land_model"),
+        ("diagnose", None, "land_model"),
+        ("wait", None, "land_model"),
+        ("none", None, "land_model"),
+        (None, None, "land_model"),
+    ],
+)
+def test_a_land_step_registers_under_the_kind_that_says_whether_it_can_spend_a_model(
+    step, refusal, kind
+):
+    assert landing.run_kind_of(step, refusal) == kind
+
+
+def test_every_sync_master_is_a_model_step_because_a_clean_one_can_still_spawn_a_resume():
+    for refusal in get_args(rules.MergeRefusal):
+        assert landing.run_kind_of("sync_master", refusal) == "land_model"
+        assert not landing.run_kind_admits("land_checks", "sync_master", refusal)
+    assert landing.run_kind_of("sync_master", None) == "land_model"
+
+
+def test_a_model_registered_child_admits_every_step_and_the_recoveries():
+    for step in get_args(landing.LandingStepKind):
+        for refusal in (None, "checks_failed"):
+            assert landing.run_kind_admits("land_model", step, refusal)
+    assert landing.run_kind_admits("land_model", None, None)
+
+
+@pytest.mark.parametrize("registered", ["land_checks"])
+@pytest.mark.parametrize(
+    ("step", "refusal", "admitted"),
+    [
+        ("rerun", "checks_failed", True),
+        ("file_followups_and_land", "open_findings", True),
+        ("sync_master", "master_moved", False),
+        ("sync_master", "checks_failed", False),
+        ("sync_master", "merge_conflict", False),
+        ("fix", "checks_failed", False),
+        ("re_review", "head_not_reviewed", False),
+        ("diagnose", "checks_failed", False),
+        ("wait", "ci_unreadable", False),
+        ("none", "checks_failed", False),
+        (None, None, False),
+    ],
+)
+def test_a_checks_child_admits_only_the_steps_that_run_no_model(
+    registered, step, refusal, admitted
+):
+    assert landing.run_kind_admits(registered, step, refusal) is admitted
+
+
+@pytest.mark.parametrize("registered", ["role", "merge"])
+def test_a_kind_a_land_child_never_registers_under_admits_nothing_that_needs_a_model(registered):
+    assert not landing.run_kind_admits(registered, "fix", "checks_failed")
+    assert not landing.run_kind_admits(registered, None, None)

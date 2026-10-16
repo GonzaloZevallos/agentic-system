@@ -19,6 +19,7 @@ from agentic.shared.configuration import Configuration
 
 from ..domain import landing as landing_rules
 from ..domain.landing import LandingStepKind
+from ..domain.rules import RunKind
 from ..domain.task import TaskState
 from . import landing_fix, landing_plan, landing_sync
 from .landing_plan import LandingContext
@@ -56,9 +57,12 @@ def land(
     launcher: Launcher | None = None,
     argv0: str = "agentic",
     role_span: landing_plan.RoleSpanOpener | None = None,
+    run_kind: RunKind = "land_model",
 ) -> LandResult:
     """Takes `task_id`'s run lock (`LockHeld` if another process holds it) and releases it
-    on the way out, whatever happens."""
+    on the way out, whatever happens. `run_kind` is the kind this process registered under
+    at spawn: a step it does not admit (`landing_rules.run_kind_admits`) is refused before
+    anything is recorded or dispatched."""
     lock.acquire(task_id, "land")
     try:
         return _land(
@@ -74,6 +78,7 @@ def land(
             launcher,
             argv0,
             role_span,
+            run_kind,
         )
     finally:
         lock.release(task_id)
@@ -92,6 +97,7 @@ def _land(
     launcher: Launcher | None,
     argv0: str,
     role_span: landing_plan.RoleSpanOpener | None,
+    run_kind: RunKind,
 ) -> LandResult:
     # The port answers a bare `dict`: the document carries keys beyond the state, and every
     # reader below takes it as the state (`.get` for the keys that may be absent).
@@ -99,9 +105,13 @@ def _land(
     number = ports.inbox.issue_of(task_id)
     if loaded is None or not loaded.get("pull_request") or number is None:
         return LandResult("stopped", "no_pull_request")
+    if not landing_rules.run_kind_admits(run_kind, None, None) and landing_plan.stranded_now(
+        ports, task_id, loaded
+    ):
+        return _refused(task_id, loaded, run_kind, "recovery", None, log)
     raw: TaskState = _freed(task_id, loaded, ports, log)
     reference = raw["pull_request"]
-    recovered = _recover(task_id, raw, str(reference), ports, log, clock, resume)
+    recovered = _recover(task_id, raw, str(reference), ports, log, clock, resume, run_kind)
     if recovered is not None:
         return recovered
     master = upstream.sha
@@ -120,6 +130,8 @@ def _land(
     if head is None:
         return LandResult("skipped", "no_head")
     step = landing_plan.step_for(raw, decision.reason, facts)
+    if not landing_rules.run_kind_admits(run_kind, step.kind, step.refusal):
+        return _refused(task_id, raw, run_kind, step.kind, head, log)
     if not landing_plan.takes_action(step.kind, live):
         log(f"agentic: land: {task_id}: {head} {step.kind}: nothing to do")
         return LandResult("skipped", "not_live", step.kind)
@@ -174,6 +186,27 @@ def _land(
     return LandResult("dispatched", step=step.kind)
 
 
+def _refused(
+    task_id: str,
+    document: TaskState,
+    run_kind: RunKind,
+    step: LandingStepKind | Literal["recovery"],
+    head: str | None,
+    log: Callable[[str], None],
+) -> LandResult:
+    """The child was registered for steps that spend no model and the step it recomputed
+    does (the head moved since the poller classified it, or a recovery is owed): nothing is
+    recorded, no resume or diagnoser is spawned, and the next round decides again. `head`
+    is the one the step answers; a recovery has none, so the last entry's stands in."""
+    entries = landing_plan.entries(document)
+    shown = head or (str(entries[-1].get("head")) if entries else "-")
+    log(
+        f"agentic: land: {task_id}: {shown} skipped: run_kind_mismatch "
+        f"(registered {run_kind}, step {step})"
+    )
+    return LandResult("skipped", "run_kind_mismatch")
+
+
 def _freed(task_id: str, loaded: Any, ports: Ports, log: Callable[[str], None]) -> TaskState:
     """A stranded legacy diagnose (`landing_rules.stranded_diagnose`, GH-257) is freed with
     one `record_closure` call and read again; any other document, or one a comment says a
@@ -207,6 +240,7 @@ def _recover(
     log: Callable[[str], None],
     clock: Callable[[], str],
     resume: Callable[[int], int | None] | None,
+    run_kind: RunKind,
 ) -> LandResult | None:
     """A reopened landing whose resume child is gone (`landing_rules.resume_owed`) is
     respawned, whatever the merge decision would say: its entry is already written, so the
@@ -219,6 +253,8 @@ def _recover(
     except ValueError:
         now = None
     if now is not None and now.tzinfo is not None and landing_rules.resume_owed(raw, now):
+        if not landing_rules.run_kind_admits(run_kind, None, None):
+            return _refused(task_id, raw, run_kind, "recovery", None, log)
         try:
             pull_request = ports.tracker.pull_request(reference)
         except (ValueError, OSError) as exc:

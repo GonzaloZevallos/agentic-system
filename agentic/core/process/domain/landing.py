@@ -45,6 +45,32 @@ do: the human's)."""
 CONFLICTING_SYNC_REFUSALS: tuple[rules.MergeRefusal, ...] = ("checks_failed", "merge_conflict")
 """The refusals under which a recorded `sync_master` was a conflicting one, hence a model pass."""
 
+
+def run_kind_of(step: LandingStepKind | None, refusal: rules.MergeRefusal | None) -> rules.RunKind:
+    """The kind a `land` child registers under for the step it is about to carry out
+    (`None` for the recoveries that have no step). Only `land_checks` or `land_model`; a
+    step this table does not name is `land_model`, the kind that counts against the cap.
+    `sync_master` is always `land_model`, even a clean one: it reopens the task and spawns a
+    resume when the merge overlaps the reviewed paths, conflicts at run time, or a sync or
+    push fails, and none of that is known before it runs. `refusal` is kept for a step whose
+    kind may depend on it."""
+    match step:
+        case "rerun" | "file_followups_and_land":
+            return "land_checks"
+        case _:
+            return "land_model"
+
+
+def run_kind_admits(
+    registered: rules.RunKind, step: LandingStepKind | None, refusal: rules.MergeRefusal | None
+) -> bool:
+    """Whether a `land` child registered as `registered` may carry out `step` (`None` for
+    the recoveries). A `land_model` child may do anything; any other kind only a step that
+    `run_kind_of` says spends no model, so a child the poller did not count against the cap
+    never starts a pass that would have."""
+    return registered == "land_model" or run_kind_of(step, refusal) == "land_checks"
+
+
 LANDING_PASSES_MAX = 3
 """Model passes (`re_review`, `fix`, a conflicting `sync_master`) per task."""
 
