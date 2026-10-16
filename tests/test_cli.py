@@ -4059,3 +4059,19 @@ async def test_a_land_child_registers_once_under_the_kind_it_was_spawned_with(
 
     assert registry.registered_kinds == [registered]
     assert registry.unregistered == 1
+
+
+@pytest.mark.anyio
+async def test_a_merge_child_registers_under_the_merge_kind(monkeypatch, tmp_path):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import MemoryRunRegistry, memory_ports
+
+    registry = MemoryRunRegistry()
+    monkeypatch.setattr(cli, "_registry_for", lambda cfg: registry)
+    cfg = Configuration(product_dir=tmp_path)
+
+    with pytest.raises(cli.CannotStart):
+        await cli._merge("GH-9", 9, cfg, memory_ports())
+
+    assert registry.registered_kinds == ["merge"]
+    assert registry.unregistered == 1

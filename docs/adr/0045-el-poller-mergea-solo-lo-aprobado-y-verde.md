@@ -622,8 +622,11 @@ detrás de dos corridas largas (GH-237, GH-166) que ocupaban los dos slots de
 - **Tipos.** `rules.RunKind = Literal["role", "merge", "land_checks", "land_model"]` y
   `rules.counts_against_cap(kind)`, el único lugar que decide si un hijo cuenta: un `match`
   exhaustivo que termina en `assert_never`, verdadero para `role` y `land_model`. `run_kind_of`
-  asigna el tipo a cada paso de `land`: `rerun`, `file_followups_and_land` y un `sync_master` sin
-  conflicto son `land_checks`; el resto, y las recuperaciones sin paso, `land_model`.
+  asigna el tipo a cada paso de `land`: `rerun` y `file_followups_and_land` son `land_checks`; el
+  resto, y las recuperaciones sin paso, `land_model`. Todo `sync_master` es `land_model`, aun el
+  limpio: `landing_sync.sync_master` reabre la tarea y lanza un `resume` (una pasada de modelo)
+  cuando el merge toca los paths revisados, choca al correr o falla el sync o el push, y nada de
+  eso se sabe antes de correrlo; un hijo exento nunca lanza un `resume`.
 - **Registro.** Cada registro de corrida gana `kind`; uno ausente, desconocido o ilegible se lee
   como `role`. Se escribe una vez, a un temporal y `os.replace`, y no se reescribe mientras el hijo
   corre. `merge` se registra como `merge`; `run` y `resume` como `role`.

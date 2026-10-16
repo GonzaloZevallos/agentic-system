@@ -43,12 +43,14 @@ CONFLICTING_SYNC_REFUSALS: tuple[rules.MergeRefusal, ...] = ("checks_failed", "m
 def run_kind_of(step: LandingStepKind | None, refusal: rules.MergeRefusal | None) -> rules.RunKind:
     """The kind a `land` child registers under for the step it is about to carry out
     (`None` for the recoveries that have no step). Only `land_checks` or `land_model`; a
-    step this table does not name is `land_model`, the kind that counts against the cap."""
+    step this table does not name is `land_model`, the kind that counts against the cap.
+    `sync_master` is always `land_model`, even a clean one: it reopens the task and spawns a
+    resume when the merge overlaps the reviewed paths, conflicts at run time, or a sync or
+    push fails, and none of that is known before it runs. `refusal` is kept for a step whose
+    kind may depend on it."""
     match step:
         case "rerun" | "file_followups_and_land":
             return "land_checks"
-        case "sync_master":
-            return "land_model" if refusal in CONFLICTING_SYNC_REFUSALS else "land_checks"
         case _:
             return "land_model"
 

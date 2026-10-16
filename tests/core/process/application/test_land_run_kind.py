@@ -22,6 +22,7 @@ from tests.core.process.application.test_landing_fix import (
     _untouched,
     _window,
 )
+from tests.core.process.application.test_landing_sync import NEW, _behind, _diffs
 from tests.core.process.application.test_merge_ci import _check, _report
 from tests.core.process.application.test_poll import _cfg
 from tests.core.process.application.test_poll_merge import (
@@ -133,6 +134,39 @@ def test_a_checks_child_that_finds_a_conflicting_sync_records_nothing_and_spawns
     assert _doc(ports) == before and not ports.documents.closures.get("GH-5", {}).get("landing")
     assert launcher.spawned == [] and resumed.spawned == []
     assert any("step sync_master" in line for line in lines)
+
+
+def test_a_checks_child_that_finds_a_clean_but_overlapping_sync_spawns_no_resume(tmp_path):
+    ports, _ = _behind(tmp_path)
+    _diffs(ports, merged=("feature.py",), own=("feature.py",))
+    before, closures = dict(_doc(ports)), dict(ports.documents.closures)
+    launcher, resumed = FakeLauncher(), _Spawner()
+
+    result, lines = _land(ports, tmp_path, "land_checks", launcher, resumed)
+
+    assert result == landing.LandResult("skipped", "run_kind_mismatch")
+    assert _doc(ports) == before and ports.documents.closures == closures
+    assert launcher.spawned == [] and resumed.spawned == [] and not ports.workspace.pushed
+    assert any("step sync_master" in line for line in lines)
+    # The same document under a model child reopens the task and spawns the resume.
+    again, _ = _land(ports, tmp_path, "land_model", launcher, resumed)
+    assert (again.kind, again.step) == ("dispatched", "sync_master")
+    assert resumed.spawned == [5]
+
+
+def test_a_checks_child_that_finds_a_sync_conflicting_at_run_time_spawns_no_resume(tmp_path):
+    ports, _ = _behind(tmp_path)
+    ports.workspace.upstream_merges[MASTER] = UpstreamMerge(
+        clean=False, conflicted=("shared.py",), head=NEW
+    )
+    before, closures = dict(_doc(ports)), dict(ports.documents.closures)
+    launcher, resumed = FakeLauncher(), _Spawner()
+
+    result, _ = _land(ports, tmp_path, "land_checks", launcher, resumed)
+
+    assert result == landing.LandResult("skipped", "run_kind_mismatch")
+    assert _doc(ports) == before and ports.documents.closures == closures
+    assert launcher.spawned == [] and resumed.spawned == []
 
 
 def test_a_checks_child_does_not_respawn_a_reopened_pass_whose_child_is_gone():

@@ -188,7 +188,7 @@ def _land(
 
 def _refused(
     task_id: str,
-    document: Any,
+    document: TaskState,
     run_kind: RunKind,
     step: LandingStepKind | Literal["recovery"],
     head: str | None,

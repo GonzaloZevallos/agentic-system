@@ -814,7 +814,8 @@ def test_a_comment_after_the_entry_keeps_the_real_document_escalated():
     [
         ("rerun", "checks_failed", "land_checks"),
         ("file_followups_and_land", None, "land_checks"),
-        ("sync_master", "checks_stale", "land_checks"),
+        ("sync_master", "attempts_exhausted", "land_model"),
+        ("sync_master", "checks_stale", "land_model"),
         ("sync_master", "checks_failed", "land_model"),
         ("sync_master", "merge_conflict", "land_model"),
         ("re_review", None, "land_model"),
@@ -831,11 +832,11 @@ def test_a_land_step_registers_under_the_kind_that_says_whether_it_can_spend_a_m
     assert landing.run_kind_of(step, refusal) == kind
 
 
-def test_every_conflicting_sync_refusal_is_a_model_sync_and_only_those():
+def test_every_sync_master_is_a_model_step_because_a_clean_one_can_still_spawn_a_resume():
     for refusal in get_args(rules.MergeRefusal):
-        expected = "land_model" if refusal in landing.CONFLICTING_SYNC_REFUSALS else "land_checks"
-        assert landing.run_kind_of("sync_master", refusal) == expected
-    assert landing.run_kind_of("sync_master", None) == "land_checks"
+        assert landing.run_kind_of("sync_master", refusal) == "land_model"
+        assert not landing.run_kind_admits("land_checks", "sync_master", refusal)
+    assert landing.run_kind_of("sync_master", None) == "land_model"
 
 
 def test_a_model_registered_child_admits_every_step_and_the_recoveries():
@@ -851,7 +852,7 @@ def test_a_model_registered_child_admits_every_step_and_the_recoveries():
     [
         ("rerun", "checks_failed", True),
         ("file_followups_and_land", "open_findings", True),
-        ("sync_master", "master_moved", True),
+        ("sync_master", "master_moved", False),
         ("sync_master", "checks_failed", False),
         ("sync_master", "merge_conflict", False),
         ("fix", "checks_failed", False),

@@ -10,10 +10,17 @@ import dataclasses
 from datetime import datetime
 
 from agentic.core.process.application import landing, poll
-from agentic.core.process.application.ports import RunRegistration, Upstream
+from agentic.core.process.application.ports import IssueState, RunRegistration, Upstream
 from agentic.core.process.domain import rules
 from tests.core.process.application.test_land_run_kind import _failed_local_check_after_a_rerun
-from tests.core.process.application.test_poll import ESCALATED_AT, _cfg, _Locks, _no_sleep, _round
+from tests.core.process.application.test_poll import (
+    ESCALATED_AT,
+    _cfg,
+    _Locks,
+    _no_sleep,
+    _round,
+    _seed_body,
+)
 from tests.core.process.application.test_poll_merge import (
     MASTER,
     _HeldLocks,
@@ -59,6 +66,8 @@ def test_a_ready_merge_is_spawned_though_two_role_runs_hold_both_slots(tmp_path)
 def test_the_roles_are_unchanged_beside_the_merge_when_a_slot_is_free(tmp_path):
     ports = _ports(5)
     ports.tracker._queue = [9]
+    ports.tracker.states[9] = IssueState("OPEN", "", None, None)
+    _seed_body(ports, 9)
     launcher = FakeLauncher()
 
     lines = _round(
@@ -69,8 +78,9 @@ def test_the_roles_are_unchanged_beside_the_merge_when_a_slot_is_free(tmp_path):
         ESCALATED_AT,
     )
 
-    assert [argv[1] for argv in launcher.spawned][-1] == "merge"
-    assert lines[-1] == "agentic: poll: merge #5 -> pid 4242"
+    assert [argv[1] for argv in launcher.spawned] == ["run", "merge"]
+    assert launcher.spawned[0][3] == "9"
+    assert lines == ["agentic: poll: launch #9 -> pid 4242", "agentic: poll: merge #5 -> pid 4242"]
 
 
 def test_a_live_exempt_child_defers_a_second_one_and_the_round_is_not_idle(tmp_path):
