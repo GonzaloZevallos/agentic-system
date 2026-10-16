@@ -3,6 +3,7 @@ the ones master already holds, and the one simultaneous rewrite that moves them 
 references to them. Pure: names and texts in, a mapping or a `Renaming` out."""
 
 import re
+from itertools import chain, combinations
 
 import pytest
 
@@ -316,3 +317,33 @@ def test_two_tasks_on_one_base_that_both_add_the_next_adr_land_with_unique_numbe
     assert master[f"{ADR}0050-beta.md"] == "# ADR-0050: beta\n\nVer ADR-0048.\n"
     assert master["docs/product/glossary.md"] == BASE["docs/product/glossary.md"]
     assert {p: master[p] for p in TASK_A} == TASK_A
+
+
+def test_no_collision_in_a_set_means_none_in_any_of_its_subsets():
+    """The fact `adr_collision`'s first pass relies on (GH-262). The universe, exhaustive: master
+    holds `0003-a.md`, `0004-b.md`, `0007-c.md`; the branch's candidates are `0004-x` (a
+    collision), `0005-y` and `0005-z` (a shared number), `0007-c` (master's own basename) and
+    `0009-w` (none): every subset S of the five and every subset T of S, 243 pairs."""
+    master = ("0003-a.md", "0004-b.md", "0007-c.md")
+    paths = (
+        "docs/adr/0004-x.md",
+        "docs/adr/0005-y.md",
+        "docs/adr/0005-z.md",
+        "docs/adr/0007-c.md",
+        "docs/adr/0009-w.md",
+    )
+
+    def subsets(items):
+        return chain.from_iterable(combinations(items, n) for n in range(len(items) + 1))
+
+    def found(chosen):
+        return adr_numbers.collisions(master, [OwnAdr(p, "c" * 40) for p in chosen])
+
+    clear = 0
+    for whole in subsets(paths):
+        if found(whole) == {}:
+            clear += 1
+            for part in subsets(whole):
+                assert found(part) == {}, (whole, part)
+    assert clear > 1  # the empty set and at least one more: the property is not vacuous
+    assert found(paths[:1]) != {}  # and a set with a collision is not clear

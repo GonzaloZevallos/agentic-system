@@ -189,3 +189,49 @@ def test_commit_paths_commits_a_rename_as_an_add_and_a_delete(collision):
     # The rename is the branch's own ADR under its new number, added by that commit.
     added = ws.added_adrs(collision.master, "feature")
     assert AddedAdr("docs/adr/0050-mine.md", git("rev-parse", "HEAD", cwd=task)) in added
+
+
+def test_a_head_that_is_already_local_is_made_local_without_a_fetch(
+    collision: Collision, monkeypatch: pytest.MonkeyPatch
+):
+    """The property is which git commands the adapter issues, so calls are counted (the
+    bounded runner does not raise on a failure)."""
+    ws = GitWorkspace(collision.repo, IDENTITY)
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(ws, "_run_bounded", lambda *args: calls.append(args))
+    assert ws.fetch_commit(collision.head) is True
+    assert calls == []
+
+
+def test_a_head_that_is_absent_costs_exactly_one_bounded_fetch(
+    collision: Collision, monkeypatch: pytest.MonkeyPatch
+):
+    ws = GitWorkspace(collision.repo, IDENTITY)
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(ws, "_run_bounded", lambda *args: calls.append(args))
+    absent = "f" * 40
+    assert ws.fetch_commit(absent) is False
+    assert calls == [("fetch", "--quiet", "origin", absent)]
+
+
+def test_fetch_commit_reads_the_head_once_when_local_and_twice_when_a_fetch_is_tried(
+    collision: Collision, monkeypatch: pytest.MonkeyPatch
+):
+    """The `cat-file -e` reads of `fetch_commit`, counted through `_run` (the bounded runner
+    is silenced): one for a head that is local, one before and one after the fetch otherwise."""
+    ws = GitWorkspace(collision.repo, IDENTITY)
+    real = ws._run
+    reads: list[tuple[str, ...]] = []
+
+    def recording(*args: str):
+        if args[:2] == ("cat-file", "-e"):
+            reads.append(args)
+        return real(*args)
+
+    monkeypatch.setattr(ws, "_run", recording)
+    monkeypatch.setattr(ws, "_run_bounded", lambda *args: None)
+    assert ws.fetch_commit(collision.head) is True
+    assert len(reads) == 1
+    reads.clear()
+    assert ws.fetch_commit("f" * 40) is False
+    assert len(reads) == 2

@@ -1,11 +1,16 @@
 """The one place a collision between a branch's ADR numbers and master's is assembled
-(GH-229, ADR-0049): the git reads, in two phases, and the pure rule's answer.
+(GH-229, ADR-0049): the git reads and the pure rule's answer.
 
-The first phase asks only for the ADR files the branch's own commits added; a branch that
-added none costs that one read. Only a number master already holds under another file name
-asks for the lines and the trees the rewrite needs. Which numbers collide, what they become
-and what is rewritten is `domain.adr_numbers`'s; this module reads and hands over, it
-compares no number."""
+What it reads, per call (each count is a counter asserted in
+`tests/core/process/application/test_adr_collision_cost.py`): `added_adrs` always, one `git
+log` bounded by the branch's own commits; a branch that added none stops there. Then
+`tree_names(master)` once, and when no added ADR can collide that is the whole cost. Only
+when one can (a number master already holds under another file name, or a number two of them
+share) does it read `tree_names(head)` a second time, to drop what a later commit removed.
+The lines, the trees of the commits that added them and the texts of the rewrite are read
+only on a real collision. All of it is bounded by the branch's own commits and ADR files;
+there is no cache. Which numbers collide, what they become and what is rewritten is
+`domain.adr_numbers`'s; this module reads and hands over, it compares no number."""
 
 from __future__ import annotations
 
@@ -28,16 +33,24 @@ def adr_collision(ports: Ports, master: str, head: str) -> Renaming | Ambiguous 
 
     An own ADR is a file one of the branch's non-merge commits added in `master..head`; one a
     later commit of the branch removed or renamed (a renumber already done) is not, so it
-    must still be in the tree at `head`."""
+    must still be in the tree at `head`.
+
+    The first pass asks `collisions` about every added ADR against master's tree: a subset
+    has neither a duplicate number nor a number master holds under another name unless the
+    whole has it, so `{}` there is `None` for any head, after one tree read. That result only
+    filters, it is never returned: the answer is computed on the ADRs still at `head`."""
     workspace = ports.workspace
     added = workspace.added_adrs(master, head)
     if not added:
+        return None
+    master_names = workspace.tree_names(master, ADR_DIR)
+    if adr_numbers.collisions(master_names, [OwnAdr(a.path, a.commit) for a in added]) == {}:
         return None
     at_head = set(workspace.tree_names(head, ADR_DIR))
     own = [OwnAdr(a.path, a.commit) for a in added if a.path.rsplit("/", 1)[-1] in at_head]
     if not own:
         return None
-    moves = adr_numbers.collisions(workspace.tree_names(master, ADR_DIR), own)
+    moves = adr_numbers.collisions(master_names, own)
     if isinstance(moves, Ambiguous):
         return moves
     if not moves:
