@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from agentic.core.process.application import adr_collision, merge
-from agentic.core.process.application.ports import Upstream
+from agentic.core.process.application.ports import GitError, Upstream
 from agentic.core.process.domain.adr_numbers import Ambiguous, Renaming
 from tests.core.process.application.test_poll import _cfg
 from tests.core.process.application.test_poll_merge import URL, _pr, _ready
@@ -156,3 +156,28 @@ def test_touches_adrs_is_true_only_under_docs_adr():
     assert adr_collision.touches_adrs(("a.py", MINE))
     assert not adr_collision.touches_adrs(("docs/adrs.md", "docs/product/x.md"))
     assert not adr_collision.touches_adrs(None)
+
+
+def test_a_git_failure_reading_the_collision_stops_the_verb_instead_of_escaping(tmp_path):
+    ports = _ports()
+    ports.workspace.advance_master(THEIRS)
+    head = ports.workspace.add_branch_commit(adds=(MINE,))
+    _delivered(ports, head)
+    ports.workspace.diff_paths = (MINE,)
+
+    def broken(master: str, head: str):
+        raise GitError("bad object")
+
+    ports.workspace.added_adrs = broken  # type: ignore[method-assign]
+    result = merge.merge_task(
+        "GH-5",
+        5,
+        _cfg(tmp_path),
+        ports,
+        Upstream("origin/master", ports.workspace.master_sha, None),
+        frozenset(),
+        lambda line: None,
+    )
+    assert result.kind == "stopped"
+    assert (result.reason or "").startswith("adr_unreadable")
+    assert ports.commands.ran == []

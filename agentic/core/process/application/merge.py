@@ -98,11 +98,12 @@ def merge_task(
         return MergeResult("stopped", f"head_unreachable: {head}")
     # Read once, on the one master this verb resolved: only a diff that touches `docs/adr/`
     # costs the read, and the collision cannot change between the decision and the re-decision.
-    collision = (
-        adr_collision.adr_collision(ports, master, head)
-        if head is not None and adr_collision.touches_adrs(touched)
-        else None
-    )
+    collision = None
+    if head is not None and adr_collision.touches_adrs(touched):
+        try:
+            collision = adr_collision.adr_collision(ports, master, head)
+        except GitError as exc:
+            return MergeResult("stopped", f"adr_unreadable: {exc}")
     declared = ports.stack.ci(base)
     report: ci.CiReport | ci.CiUnreadable | None = None
     fresh: bool | None = None
