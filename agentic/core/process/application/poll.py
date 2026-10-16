@@ -3,8 +3,12 @@ product that keeps the queue moving without a human watching it. Each round clos
 every task whose pull request already merged, retakes every pause an external API cut
 caused once its own wait elapsed, and launches at most one more unblocked issue -- never
 past the machine-wide concurrency cap (`Configuration.max_concurrent_runs`). Every
-action is a detached `agentic close|resume|run` child (`Launcher.spawn`); no role ever
-runs in this process (the plan's own invariant).
+action is a detached `agentic close|resume|run|merge|land` child (`Launcher.spawn`); no
+role ever runs in this process (the plan's own invariant). Only a child that can spend a
+model session counts against that cap (`rules.counts_against_cap`): a merge child or a
+checks-only land child takes no slot, so an approved pull request is never held behind
+runs that last hours (GH-263); at most one such child is live per machine, and a merge
+or land the plan holds back is said in the round's output, never silent.
 
 `rules.poll_plan` decides the order and which issues qualify; this module only gathers
 the facts it needs from the ports and carries out what it returns. `AUTO_RESUMED`,
@@ -987,7 +991,13 @@ def run_once(
     The merges (GH-178) are gathered inside the same exclusive section, from the same
     memoised upstream, and only when some delivered task awaits one: `eval_set` is the
     issues whose merge is the human's verdict, `None` when it could not be read, which
-    refuses every merge (`rules.auto_merge_decision`)."""
+    refuses every merge (`rules.auto_merge_decision`). The slots are `cfg.max_concurrent_runs`
+    minus the live children `rules.counts_against_cap` says count; the others (`merge`,
+    `land_checks`) are passed to `poll_plan` as `live_exempt`, from the same `live()` read,
+    and the tasks that have any live child of this product are `busy`: no merge or land
+    candidate is gathered for them (GH-263). One line per `PollPlan.deferred` item ends the
+    round's output, and `nothing to do this round` is printed only when there is nothing
+    at all to say."""
     closes = gather_closes(ports)
     resumes = gather_resumes(ports, now)
     retakes, human_lines = gather_retakes(ports, lock, current_boot)

@@ -357,7 +357,9 @@ def main() -> None:
         "poll",
         help="a long-lived process per product (GH-137): closes merged pull requests, "
         "retakes a pause an external API cut caused once its own wait elapses, and "
-        "launches the next unblocked issue, never past AGENTIC_MAX_CONCURRENT_RUNS",
+        "launches the next unblocked issue; role runs never pass "
+        "AGENTIC_MAX_CONCURRENT_RUNS, while a merge or checks-only land child runs "
+        "beside them, at most one per machine",
     )
     poll_parser.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
     poll_parser.add_argument(
@@ -902,8 +904,9 @@ def _registered(
 ) -> Iterator[None]:
     """Registers this invocation under `Configuration.run_registry_dir` so the
     poller's own concurrency cap (`AGENTIC_MAX_CONCURRENT_RUNS`, GH-137) can count it
-    across every product on this machine. Best effort only, the same shape every other
-    diagnostic write in this module already has: a `run`/`resume` that cannot write
+    across every product on this machine, under `kind`: `rules.counts_against_cap` decides
+    whether it takes a slot (a `merge` or `land_checks` child does not, GH-263). Best
+    effort only, the same shape every other diagnostic write in this module already has: a `run`/`resume` that cannot write
     here still runs, one stderr line the only trace -- it must never turn into a
     `CannotStart`, since nothing about the task itself failed."""
     try:
