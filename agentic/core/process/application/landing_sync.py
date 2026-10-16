@@ -8,12 +8,20 @@ carries the Tech Lead's verdict (`landing.review_carries`): `reviewed_head` adva
 re-run the checks and the CI on the new head. Anything else reopens the technical stage
 under the existing pull request: the reviewed unit goes back to its Developer (a conflict)
 or to its review (`re_review`), the task document says so, and `agentic resume` is spawned
-to run it. `deliver` re-delivers to the same pull request and closes the landing entry."""
+to run it. `deliver` re-delivers to the same pull request and closes the landing entry.
+
+No step ends, or reopens and spawns a resume, with a merge in progress in the task
+worktree (GH-267): the resume starts at `integrate`, whose fan-in merge refuses on a
+`MERGE_HEAD` and aborts it, throwing the conflicted master merge away unseen. The abort is
+`merges_cleared`'s, around the body of each step, and the Developer is told to run the merge
+itself."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Literal, Protocol
 
 from ..domain import adr_numbers, landing, rules
@@ -22,9 +30,9 @@ from ..domain.roles import pair_for
 from ..domain.task import INTEGRATION, ChangeCategory, ChangesRequested, Subtask, TaskState
 from . import resume as resuming
 from .adr_collision import adr_collision
-from .checkouts import SetupFailed, task_base, task_checkout
+from .checkouts import Checkout, SetupFailed, task_base, task_checkout
 from .landing_plan import LandingContext, entries
-from .ports import GitError, Ports, Workspace
+from .ports import GitError, Ports, UpstreamMerge, Workspace
 
 CROSSCUT: ChangeCategory = "integration-crosscut"
 
@@ -164,26 +172,73 @@ def _unit(state: TaskState) -> str | None:
     return unit["id"] if unit is not None and "id" in unit else None
 
 
-def _bring_in(context: LandingContext, state: TaskState) -> tuple[str, tuple[str, ...]]:
-    """The task branch with the pull request's head in its worktree, and the paths a
-    conflict left (none for a clean one). A foreign push never reached the local branch;
-    merging the head in makes the next push a fast-forward."""
-    ports = context.ports
-    checkout = task_checkout(state, context.cfg, ports)
-    if ports.workspace.full_head(checkout.path) == context.head:
-        return checkout.branch, ()
-    ports.workspace.fetch_commit(context.head)
-    merged = ports.workspace.merge_upstream_into(checkout.path, context.head)
-    return checkout.branch, merged.conflicted
+class Merges:
+    """The merges one landing pass makes in a task worktree: every sha is remembered, so
+    `merges_cleared` knows which `MERGE_HEAD` the pass itself left."""
+
+    def __init__(self, workspace: Workspace, path: Path) -> None:
+        self._workspace, self._path = workspace, path
+        self.passed: set[str] = set()
+
+    def merge_in(self, sha: str) -> UpstreamMerge:
+        """Fetch `sha` and merge it into the worktree; a conflict stays in the tree until
+        the `merges_cleared` block exits."""
+        self.passed.add(sha)
+        self._workspace.fetch_commit(sha)
+        return self._workspace.merge_upstream_into(self._path, sha)
+
+
+@contextmanager
+def merges_cleared(
+    workspace: Workspace, path: Path, owned: Callable[[str], bool]
+) -> Iterator[Merges]:
+    """The worktree at `path` has no merge of the landing's in progress, on the way in
+    (a `MERGE_HEAD` a killed pass left, when `owned` says it is the system's) and on every
+    way out (one this pass made). The only caller of `Workspace.abort_merge`: the abort is a
+    property of the steps, not of each branch of them. A merge that is not the system's is
+    never touched. An abort that fails raises `GitError` out of the block, so nothing
+    reopens or spawns on a tree still mid-merge."""
+    stale = workspace.merge_head(path)
+    if stale is not None and owned(stale):
+        workspace.abort_merge(path)
+    merges = Merges(workspace, path)
+    try:
+        yield merges
+    finally:
+        left = workspace.merge_head(path)
+        if left is not None and (left in merges.passed or owned(left)):
+            workspace.abort_merge(path)
+
+
+def _owned(context: LandingContext, state: TaskState) -> Callable[[str], bool]:
+    """Whether a `MERGE_HEAD` is one this task's landing merged (`landing.merge_owner`)."""
+    return lambda sha: (
+        landing.merge_owner(sha, context.upstream.sha, context.head, entries(state)) == "own"
+    )
+
+
+def _bring_in(
+    context: LandingContext, state: TaskState, checkout: Checkout, merges: Merges
+) -> tuple[str, ...]:
+    """The pull request's head in the task worktree, and the paths a conflict left (none for
+    a clean one). A foreign push never reached the local branch; merging the head in makes
+    the next push a fast-forward."""
+    if context.ports.workspace.full_head(checkout.path) == context.head:
+        return ()
+    return merges.merge_in(context.head).conflicted
 
 
 def _conflict_reason(paths: Sequence[str], source: str) -> str:
     listed = ", ".join(paths)
     return (
-        f"Merging {source} into the task branch conflicted in: {listed}. The merge is in "
-        "progress in the worktree: resolve every conflict marker, `git add` the files and "
-        "commit the merge."
+        f"Merging {source} into the task branch conflicted in: {listed}. The merge was aborted "
+        f"and the worktree is clean. In this worktree (the task checkout) run `git merge "
+        f"{source}`, resolve the conflicts in {listed}, `git add` the files and commit the "
+        "merge."
     )
+
+
+type Reopening = tuple[str, Literal["returned", "delivered"]]
 
 
 def re_review(context: LandingContext) -> None:
@@ -194,61 +249,79 @@ def re_review(context: LandingContext) -> None:
     if state is None or unit is None:
         context.log(f"agentic: land: {context.task_id}: re_review: no reviewed unit")
         return
+    pending = _re_reviewed(context, state)
+    # After the block: a reopen always starts from a tree with no merge in progress.
+    _reopened(context, state, unit, *pending)
+
+
+def _re_reviewed(context: LandingContext, state: TaskState) -> Reopening:
     try:
-        _, conflicted = _bring_in(context, state)
-    except (SetupFailed, GitError) as failed:
-        reason = f"the pull request head could not be brought in: {failed}"
-        _reopened(context, state, unit, reason, "returned")
-        return
+        checkout = task_checkout(state, context.cfg, context.ports)
+        with merges_cleared(
+            context.ports.workspace, checkout.path, _owned(context, state)
+        ) as merges:
+            try:
+                conflicted = _bring_in(context, state, checkout, merges)
+            except GitError as failed:
+                return f"the pull request head could not be brought in: {failed}", "returned"
+    except SetupFailed as failed:
+        return f"the pull request head could not be brought in: {failed}", "returned"
     if conflicted:
-        _reopened(context, state, unit, _conflict_reason(conflicted, context.head), "returned")
-        return
+        return _conflict_reason(conflicted, context.head), "returned"
     reason = (
         f"The pull request head is {context.head}, which the Tech Lead has not reviewed "
         f"({context.step.refusal}): review it."
     )
-    _reopened(context, state, unit, reason, "delivered")
+    return reason, "delivered"
 
 
 def sync_master(context: LandingContext) -> None:
     """Merge the upstream into the task branch (see the module docstring)."""
-    ports, sha = context.ports, context.upstream.sha
+    sha = context.upstream.sha
     state = _state(context)
     unit = _unit(state) if state is not None else None
     if state is None or unit is None or sha is None:
         context.log(f"agentic: land: {context.task_id}: sync_master: nothing to sync")
         return
+    pending = _synced(context, state, unit, sha)
+    if pending is not None:
+        _reopened(context, state, unit, *pending)
+
+
+def _synced(context: LandingContext, state: TaskState, unit: str, sha: str) -> Reopening | None:
+    """The sync inside `merges_cleared`: `None` when master was merged, pushed and the
+    entry resolved, else why the unit reopens (the caller does it, with the tree clean)."""
+    ports = context.ports
     reviewed = state["subtasks"][unit].get("reviewed_head")
     try:
-        branch, conflicted = _bring_in(context, state)
-        if conflicted:
-            _reopened(context, state, unit, _conflict_reason(conflicted, context.head), "returned")
-            return
         checkout = task_checkout(state, context.cfg, ports)
-        ports.workspace.fetch_commit(sha)
-        merged = ports.workspace.merge_upstream_into(checkout.path, sha)
-    except (SetupFailed, GitError) as failed:
-        _reopened(context, state, unit, f"syncing {sha} failed: {failed}", "returned")
-        return
-    if not merged.clean:
-        _reopened(context, state, unit, _conflict_reason(merged.conflicted, sha), "returned")
-        return
-    if not _sync_carries(context, state, reviewed, merged.head):
-        reason = f"Master ({sha}) was merged into the branch; review the result as it is."
-        _reopened(context, state, unit, reason, "delivered")
-        return
-    try:
-        ports.workspace.push(branch)
-    except GitError as failed:
-        _reopened(context, state, unit, f"pushing the synced branch failed: {failed}", "delivered")
-        return
-    resolved = landing.resolve_open(entries(state), _now(), state.get("cost_usd", 0.0))
-    subtasks = _carries(state, unit, reviewed, merged.head, holds=True)
-    ports.documents.save({**state, "subtasks": subtasks, "landing": resolved})
-    record_landing(context, resolved)
-    context.log(
-        f"agentic: land: {context.task_id}: master synced, verdict carried to {merged.head}"
-    )
+    except SetupFailed as failed:
+        return f"syncing {sha} failed: {failed}", "returned"
+    with merges_cleared(ports.workspace, checkout.path, _owned(context, state)) as merges:
+        try:
+            if conflicted := _bring_in(context, state, checkout, merges):
+                return _conflict_reason(conflicted, context.head), "returned"
+            merged = merges.merge_in(sha)
+        except GitError as failed:
+            return f"syncing {sha} failed: {failed}", "returned"
+        if not merged.clean:
+            return _conflict_reason(merged.conflicted, sha), "returned"
+        if not _sync_carries(context, state, reviewed, merged.head):
+            return f"Master ({sha}) was merged into the branch; review the result as it is.", (
+                "delivered"
+            )
+        try:
+            ports.workspace.push(checkout.branch)
+        except GitError as failed:
+            return f"pushing the synced branch failed: {failed}", "delivered"
+        resolved = landing.resolve_open(entries(state), _now(), state.get("cost_usd", 0.0))
+        subtasks = _carries(state, unit, reviewed, merged.head, holds=True)
+        ports.documents.save({**state, "subtasks": subtasks, "landing": resolved})
+        record_landing(context, resolved)
+        context.log(
+            f"agentic: land: {context.task_id}: master synced, verdict carried to {merged.head}"
+        )
+    return None
 
 
 def _carries(
@@ -329,27 +402,31 @@ def renumber_adr(context: LandingContext) -> None:
         return
     reviewed = state["subtasks"][unit].get("reviewed_head")
     try:
-        branch, conflicted = _bring_in(context, state)
-        if conflicted:
-            context.log(f"agentic: land: {context.task_id}: renumber: head conflicts locally")
-            return
         checkout = task_checkout(state, context.cfg, ports)
-        changes = _changes(workspace, head, found)
-        for old, _ in found.moves:
-            (checkout.path / old).unlink(missing_ok=True)
-        for path, text in found.texts.items():
-            target = checkout.path / path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(text, encoding="utf-8")
-        relatives = sorted({old for old, _ in found.moves} | set(found.texts))
-        if workspace.commit_paths(checkout.path, relatives, _message(found.moves)) is None:
-            context.log(f"agentic: land: {context.task_id}: renumber: nothing to commit")
-            return
-        new_head = workspace.full_head(checkout.path)
-        workspace.push(branch, lease=head)
-    except (SetupFailed, GitError) as failed:
+    except SetupFailed as failed:
         context.log(f"agentic: land: {context.task_id}: renumber: not pushed: {failed}")
         return
+    with merges_cleared(workspace, checkout.path, _owned(context, state)) as merges:
+        try:
+            if _bring_in(context, state, checkout, merges):
+                context.log(f"agentic: land: {context.task_id}: renumber: head conflicts locally")
+                return
+            changes = _changes(workspace, head, found)
+            for old, _ in found.moves:
+                (checkout.path / old).unlink(missing_ok=True)
+            for path, text in found.texts.items():
+                target = checkout.path / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(text, encoding="utf-8")
+            relatives = sorted({old for old, _ in found.moves} | set(found.texts))
+            if workspace.commit_paths(checkout.path, relatives, _message(found.moves)) is None:
+                context.log(f"agentic: land: {context.task_id}: renumber: nothing to commit")
+                return
+            new_head = workspace.full_head(checkout.path)
+            workspace.push(checkout.branch, lease=head)
+        except GitError as failed:
+            context.log(f"agentic: land: {context.task_id}: renumber: not pushed: {failed}")
+            return
     carried = landing.renumber_carries(changes) and rules.same_commit(reviewed, head)
     record: dict[str, str | bool] = {
         "from": ", ".join(adr_numbers.old_numbers(dict(found.moves))),

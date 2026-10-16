@@ -602,6 +602,17 @@ class Workspace(Protocol):
         a dirty tree -- since there is then nothing for a Developer to resolve."""
         ...
 
+    def abort_merge(self, path: Path) -> None:
+        """`git merge --abort` in the checkout at `path`, only when a merge is in progress
+        (`MERGE_HEAD` exists), so it is idempotent. Raises `GitError` only when the abort
+        itself fails. `landing_sync.merges_cleared` is the only caller (GH-267)."""
+        ...
+
+    def merge_head(self, path: Path) -> str | None:
+        """The full sha of `MERGE_HEAD` in the checkout at `path`, or `None` when no merge
+        is in progress; read-only."""
+        ...
+
     def dependency_state(self, path: Path, branch: str, paths: Sequence[str]) -> DependencyState:
         """The facts a dependency merge leaves behind, for the pure verdict in
         `domain/rules.py` to decide from with no git call of its own: whether `branch`
