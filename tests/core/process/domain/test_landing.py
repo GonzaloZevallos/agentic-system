@@ -874,3 +874,143 @@ def test_a_checks_child_admits_only_the_steps_that_run_no_model(
 def test_a_kind_a_land_child_never_registers_under_admits_nothing_that_needs_a_model(registered):
     assert not landing.run_kind_admits(registered, "fix", "checks_failed")
     assert not landing.run_kind_admits(registered, None, None)
+
+
+# --- GH-267: a sync is resolved only when its head holds the upstream it was sent for ---
+
+UPSTREAM = "c" * 40
+
+
+def _sync_entry(**over) -> dict:
+    return {"head": HEAD, "step": "sync_master", "upstream": UPSTREAM, **over}
+
+
+@pytest.mark.parametrize(
+    ("entry", "contains", "verdict"),
+    [
+        ({"head": HEAD, "step": "fix", "upstream": UPSTREAM}, True, "not_a_sync"),
+        ({"head": HEAD, "step": "sync_master"}, True, "not_a_sync"),
+        ({"head": HEAD, "step": "sync_master", "upstream": 3}, True, "not_a_sync"),
+        (_sync_entry(), True, "synced"),
+        (_sync_entry(), False, "unsynced"),
+        (_sync_entry(), None, "unsynced"),
+    ],
+    ids=["other_step", "legacy_entry", "unreadable_upstream", "contained", "lacking", "unknown"],
+)
+def test_sync_verdict_is_synced_only_when_the_head_contains_the_upstream(entry, contains, verdict):
+    assert landing.sync_verdict(entry, contains) == verdict
+
+
+def test_close_unsynced_closes_without_resolving_and_records_what_was_lacking():
+    entries = [_sync_entry(cost_base=1.0)]
+    (out,) = landing.close_unsynced(entries, "t1", 3.5, UPSTREAM)
+    assert out["closed_at"] == "t1"
+    assert out["lacks"] == UPSTREAM
+    assert out["cost_usd"] == 2.5
+    assert "resolved_at" not in out
+    assert out["upstream"] == UPSTREAM
+
+
+def test_close_unsynced_takes_the_cost_now_as_base_when_none_was_written():
+    (out,) = landing.close_unsynced([_sync_entry()], "t1", 3.5, UPSTREAM)
+    assert out["cost_usd"] == 0.0
+
+
+@pytest.mark.parametrize("closed", [{"resolved_at": "r"}, {"closed_at": "c", "lacks": "x"}])
+def test_close_unsynced_leaves_an_already_closed_last_entry_untouched(closed):
+    entries = [_sync_entry(cost_usd=1.0, **closed)]
+    assert landing.close_unsynced(entries, "t1", 9.0, UPSTREAM) == entries
+    assert landing.close_unsynced([], "t1", 9.0, UPSTREAM) == []
+
+
+@pytest.mark.parametrize(
+    ("entry", "closed"),
+    [
+        ({"resolved_at": "t"}, True),
+        ({"closed_at": "t"}, True),
+        ({}, False),
+        ({"resolved_at": ""}, False),
+        ({"closed_at": 3}, False),
+    ],
+    ids=["resolved", "closed", "open", "empty", "not_a_string"],
+)
+def test_entry_closed_reads_resolved_at_or_closed_at(entry, closed):
+    assert rules.entry_closed(entry) is closed
+    assert landing.entry_closed(entry) is closed
+
+
+def test_landing_is_not_open_after_an_unsynced_close():
+    entries = landing.close_unsynced([_sync_entry()], "t1", 1.0, UPSTREAM)
+    assert landing.landing_open(_state(entries, "approved", "returned")) is False
+    assert landing.landing_open(_state([_sync_entry()], "approved", "returned")) is True
+
+
+def test_entry_of_keeps_the_sync_keys_only_when_they_are_strings():
+    kept = landing.entry_of({"upstream": "u", "closed_at": "c", "lacks": "l"})
+    assert kept == {"upstream": "u", "closed_at": "c", "lacks": "l"}
+    assert landing.entry_of({"upstream": 1, "closed_at": 2, "lacks": None}) == {}
+
+
+_OLDER = "d" * 40
+_FOREIGN = "e" * 40
+
+
+@pytest.mark.parametrize(
+    ("merge_head", "owner"),
+    [
+        (None, "none"),
+        (UPSTREAM, "system"),
+        (HEAD, "system"),
+        (_OLDER, "system"),
+        (UPSTREAM[:12], "system"),
+        (_FOREIGN, "foreign"),
+        (UPSTREAM[:3], "foreign"),
+    ],
+    ids=["none", "upstream", "head", "older_recorded", "prefix", "foreign", "too_short_prefix"],
+)
+def test_merge_owner_names_a_merge_by_the_shas_the_system_recorded(merge_head, owner):
+    entries = [{"head": "f" * 40, "step": "sync_master", "upstream": _OLDER}]
+    assert landing.merge_owner(merge_head, UPSTREAM, HEAD, entries) == owner
+
+
+def test_merge_owner_knows_the_head_of_an_earlier_entry_and_nothing_without_facts():
+    entries = [{"head": _OLDER, "step": "fix"}]
+    assert landing.merge_owner(_OLDER, None, None, entries) == "system"
+    assert landing.merge_owner(_FOREIGN, None, None, []) == "foreign"
+
+
+def test_a_closed_unsynced_entry_is_not_a_dispatched_step():
+    entries = [_sync_entry(closed_at="t", lacks=UPSTREAM)]
+    assert landing.already_dispatched(entries, HEAD, "sync_master") is False
+    assert landing.already_dispatched([_sync_entry()], HEAD, "sync_master") is True
+    assert landing.already_dispatched([_sync_entry(resolved_at="t")], HEAD, "sync_master") is True
+
+
+def test_with_cost_base_writes_only_the_last_entry_and_only_when_it_matches():
+    entries = [
+        {"head": HEAD, "step": "sync_master", "cost_usd": 1.0},
+        {"head": HEAD, "step": "sync_master"},
+    ]
+    first, last = landing.with_cost_base(entries, HEAD, "sync_master", 7.0)
+    assert "cost_base" not in first
+    assert last["cost_base"] == 7.0
+    untouched = landing.with_cost_base(entries, HEAD, "fix", 7.0)
+    assert all("cost_base" not in e for e in untouched)
+    assert landing.with_cost_base([entries[0]], "z" * 40, "sync_master", 7.0) == [entries[0]]
+
+
+def test_the_second_unsynced_pass_for_one_upstream_is_the_diagnose():
+    assert landing.LANDING_UNSYNCED_MAX == 2
+    one = _spent(unsynced_for_upstream=1)
+    two = _spent(unsynced_for_upstream=2)
+    assert _step("merge_conflict", one).kind == "sync_master"
+    assert _step("merge_conflict", two).kind == "diagnose"
+    assert _step("attempts_exhausted", two).kind == "diagnose"
+    assert _step("checks_failed", two, failed_step="conflict").kind == "diagnose"
+
+
+def test_a_busy_master_reaches_the_diagnose_only_through_the_pass_budget():
+    busy = _spent(passes=landing.LANDING_PASSES_MAX - 1, unsynced_for_upstream=0)
+    assert _step("merge_conflict", busy).kind == "sync_master"
+    spent = _spent(passes=landing.LANDING_PASSES_MAX, unsynced_for_upstream=0)
+    assert _step("merge_conflict", spent).kind == "diagnose"

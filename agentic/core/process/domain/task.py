@@ -606,6 +606,13 @@ class LandingEntry(TypedDict, total=False):
     # reads and renders as before.
     delivered: bool
     failure: FailureReason
+    # GH-267, all optional: a document without them reads and renders as before.
+    # `upstream` is the master sha a `sync_master` entry was dispatched for.
+    upstream: str
+    # When a pass was closed without succeeding (`landing.close_unsynced`).
+    closed_at: str
+    # The upstream sha the delivered head did not contain.
+    lacks: str
 
 
 class TaskState(TaskInput, total=False):

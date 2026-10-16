@@ -425,3 +425,8 @@ _Avoid_: triage, dictamen (el dictamen es de Product Analyst sobre un bug ya cla
 Lo que el sistema hace con un pull request aprobado cuyo merge `auto_merge_decision` rechazó, en vez de dejarlo al humano (ADR-0048): esperar, traer el upstream a la rama, volver a revisar, corregir, repetir el CI o los chequeos, archivar los hallazgos `important` como seguimiento y mergear, renumerar el ADR cuyo número el master ya tomó (`renumber`, ADR-0049), o diagnosticar y reiniciar. Cada paso lo elige una sola tabla (`landing_step`), está acotado por presupuestos por tarea y queda en la lista `landing` del documento antes de ejecutarse. Distinta de Reanudación: una reanudación retoma una corrida cortada; un aterrizaje trabaja sobre un pull request ya entregado.
 _Avoid_: rescate, merge manual
 _Campo_: sin término de arte
+
+**Sincronización no lograda**:
+Un paso `sync_master` del aterrizaje cuya entrega volvió con un head que no contiene el sha del upstream para el que se despachó. Se cierra (`closed_at`, con su costo) y dice qué le faltó (`lacks`), pero no queda resuelta: `resolved_at` lo lleva solo una sincronización cuyo head contiene ese sha. Cuenta, por sha de upstream, contra su propio tope; agotado, el paso es el diagnóstico.
+_Avoid_: sincronización resuelta, reintento
+_Campo_: sin término de arte

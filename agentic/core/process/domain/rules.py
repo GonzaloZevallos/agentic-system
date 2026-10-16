@@ -1779,13 +1779,23 @@ def resumed(state: TaskState, decision: str | None) -> dict[str, Any]:
     return patch
 
 
+def entry_closed(entry: Mapping[str, object]) -> bool:
+    """Whether a `landing` entry is finished (GH-267): `resolved_at` (it succeeded) or
+    `closed_at` (a sync that did not bring its upstream in) is a non-empty string. The only
+    place that reads either key to decide it."""
+    return any(
+        isinstance(value := entry.get(key), str) and bool(value)
+        for key in ("resolved_at", "closed_at")
+    )
+
+
 def landing_open(state: TaskState) -> bool:
     """A landing pass is in flight (GH-239): the last `landing` entry is not resolved and
     some subtask is reopened for it -- `returned`, `pending` or `delivered` awaiting its
     review. `domain.landing.landing_open` is this, under the landing's own name."""
     document: Mapping[str, object] = state  # `landing` is a document key, not a state field
     entries = document.get("landing")
-    if not isinstance(entries, list) or not entries or entries[-1].get("resolved_at"):
+    if not isinstance(entries, list) or not entries or entry_closed(entries[-1]):
         return False
     return any(
         unit.get("status") in ("returned", "pending", "delivered")
