@@ -226,6 +226,8 @@ def _dispatch(context: LandingContext) -> None:
             landing_sync.sync_master(context)
         case "re_review":
             landing_sync.re_review(context)
+        case "renumber":
+            landing_sync.renumber_adr(context)
         case "fix":
             landing_fix.fix(context)
         case "rerun":

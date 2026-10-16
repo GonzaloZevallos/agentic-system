@@ -21,9 +21,17 @@ from ..domain.task import TaskState
 from .ports import Launcher, Ports, Upstream
 
 LIVE_STEPS: frozenset[LandingStepKind] = frozenset(
-    {"sync_master", "re_review", "fix", "rerun", "file_followups_and_land", "diagnose"}
+    {
+        "sync_master",
+        "re_review",
+        "fix",
+        "rerun",
+        "file_followups_and_land",
+        "renumber",
+        "diagnose",
+    }
 )
-"""Every step has its executor: `landing_sync`'s (`sync_master`, `re_review`) and
+"""Every step has its executor: `landing_sync`'s (`sync_master`, `re_review`, `renumber`) and
 `landing_fix`'s (`fix`, `rerun`, `file_followups_and_land`, `diagnose`). A step outside the set
 is neither recorded nor spawned, so a refusal whose step is inert logs as it always did."""
 
@@ -64,6 +72,7 @@ def spent(
         reruns_on_head=count(lambda e: e.get("step") == "rerun" and e.get("head") == head),
         diagnosed=count(lambda e: e.get("step") == "diagnose") > 0,
         waited_s=waited_s,
+        renumbers=count(lambda e: e.get("step") == "renumber"),
     )
 
 

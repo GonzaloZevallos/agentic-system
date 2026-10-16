@@ -13,6 +13,8 @@ import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from difflib import SequenceMatcher
+from itertools import zip_longest
 from typing import Literal
 
 from . import ci, rules
@@ -187,6 +189,20 @@ class LineChange:
     path: str
     old: str
     new: str
+
+
+def line_changes(path: str, old: str, new: str) -> list[LineChange]:
+    """The lines that differ between two texts of `path`, paired in order; the side a line
+    has no counterpart on is empty."""
+    before, after = old.splitlines(), new.splitlines()
+    found: list[LineChange] = []
+    for tag, i1, i2, j1, j2 in SequenceMatcher(None, before, after, autojunk=False).get_opcodes():
+        if tag != "equal":
+            found.extend(
+                LineChange(path, x, y)
+                for x, y in zip_longest(before[i1:i2], after[j1:j2], fillvalue="")
+            )
+    return found
 
 
 def renumber_carries(changes: Sequence[LineChange]) -> bool:

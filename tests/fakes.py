@@ -432,6 +432,9 @@ class BranchCommit:
     adds: tuple[str, ...]
     lines: tuple[tuple[str, str], ...]
     master: str
+    # The paths it deleted (a renumber commit moves a file: the old path is gone from its
+    # tree, as git has it).
+    removes: tuple[str, ...] = ()
 
 
 class MemoryWorkspace:
@@ -482,6 +485,10 @@ class MemoryWorkspace:
         # every file master held at each of its shas; the branch's own non-merge commits,
         # which `added_adrs`, `added_lines` and `tree_names` answer from, and each ask.
         self.master_sha = "master0"
+        # GH-229: when True, `commit_paths` is also a commit of the branch -- what the
+        # worktree holds at each path it names becomes `show`'s text at the new head, and
+        # `full_head` answers that head -- so a renumber is visible to the reads after it.
+        self.track_commits = False
         self.master_trees: dict[str, tuple[str, ...]] = {"master0": ()}
         self.branch_commits: list[BranchCommit] = []
         self.added_adrs_calls: list[tuple[str, str]] = []
@@ -583,7 +590,10 @@ class MemoryWorkspace:
 
     def full_head(self, path: Path) -> str:
         """A look like `head`: on a moved path each call to either verb advances the same
-        counter; production reads are side-effect free."""
+        counter; production reads are side-effect free. With `track_commits`, the last
+        commit of the branch."""
+        if self.track_commits and self.branch_commits:
+            return self.branch_commits[-1].sha
         return self.head(path)
 
     def is_clean(self, path: Path) -> bool:
@@ -633,7 +643,36 @@ class MemoryWorkspace:
         if self.commit_paths_error is not None:
             raise GitError(self.commit_paths_error)
         self.path_commits.append((path, tuple(relatives), message))
+        if self.track_commits:
+            return self._commit_branch(path, relatives)
         return "c2"
+
+    def _commit_branch(self, path: Path, relatives: Sequence[str]) -> str:
+        """GH-229: the branch's next commit from what the worktree holds at `relatives`."""
+        previous = self.branch_commits[-1].sha if self.branch_commits else ""
+        adds: list[str] = []
+        removes: list[str] = []
+        lines: list[tuple[str, str]] = []
+        texts: dict[str, str] = {}
+        for relative in relatives:
+            target = path / relative
+            before = self.show(previous, relative)
+            if not target.exists():
+                removes.append(relative)
+                continue
+            text = target.read_text(encoding="utf-8")
+            texts[relative] = text
+            if before is None:
+                adds.append(relative)
+            known = set((before or "").splitlines())
+            lines.extend((relative, line) for line in text.splitlines() if line not in known)
+        sha = f"branch{len(self.branch_commits)}"
+        self.branch_commits.append(
+            BranchCommit(sha, tuple(adds), tuple(lines), self.master_sha, tuple(removes))
+        )
+        for relative, text in texts.items():
+            self.files[(sha, relative)] = text
+        return sha
 
     def push(self, branch: str, *, lease: str | None = None) -> None:
         self.events.append("push")
@@ -654,7 +693,17 @@ class MemoryWorkspace:
         return self.remote_tips.get(branch)
 
     def show(self, ref: str, relative: str) -> str | None:
-        return self.files.get((ref, relative))
+        if (ref, relative) in self.files or not self.track_commits:
+            return self.files.get((ref, relative))
+        # GH-229: a path a commit did not touch is what the commit before it held.
+        for index, commit in enumerate(self.branch_commits):
+            if commit.sha == ref:
+                if relative in commit.removes:
+                    return None
+                if index == 0:
+                    return None
+                return self.show(self.branch_commits[index - 1].sha, relative)
+        return None
 
     def cleanup(self, task_id: str) -> None:
         if self.cleanup_error is not None:
@@ -732,6 +781,7 @@ class MemoryWorkspace:
                     held = [*self.master_trees[commit.master]]
                     for earlier in self.branch_commits:
                         held.extend(earlier.adds)
+                        held = [p for p in held if p not in earlier.removes]
                         if earlier.sha == ref:
                             break
                     break

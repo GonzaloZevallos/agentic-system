@@ -138,6 +138,7 @@ def render(
         # byte-identical to one written before.
         # A placeholder here, swapped for the flow line below (`_flow_line`).
         **({"landing": _LANDING_PLACEHOLDER} if state.get("landing") else {}),
+        **({"adr_renumbered": r} if (r := state.get("adr_renumbered")) else {}),
         **({"auto_merge_guarded": g} if (g := state.get("auto_merge_guarded")) else {}),
         **({"followups_filed": True} if state.get("followups_filed") else {}),
         **({"landing_restarts": n} if (n := state.get("landing_restarts")) else {}),
