@@ -417,6 +417,6 @@ La decisión de PjM sobre de qué tipo es una tarea —bug, feature o platform e
 _Avoid_: triage, dictamen (el dictamen es de Product Analyst sobre un bug ya clasificado)
 
 **Aterrizaje**:
-Lo que el sistema hace con un pull request aprobado cuyo merge `auto_merge_decision` rechazó, en vez de dejarlo al humano (ADR-0048): esperar, traer el upstream a la rama, volver a revisar, corregir, repetir el CI o los chequeos, archivar los hallazgos `important` como seguimiento y mergear, o diagnosticar y reiniciar. Cada paso lo elige una sola tabla (`landing_step`), está acotado por presupuestos por tarea y queda en la lista `landing` del documento antes de ejecutarse. Distinta de Reanudación: una reanudación retoma una corrida cortada; un aterrizaje trabaja sobre un pull request ya entregado.
+Lo que el sistema hace con un pull request aprobado cuyo merge `auto_merge_decision` rechazó, en vez de dejarlo al humano (ADR-0048): esperar, traer el upstream a la rama, volver a revisar, corregir, repetir el CI o los chequeos, archivar los hallazgos `important` como seguimiento y mergear, renumerar el ADR cuyo número el master ya tomó (`renumber`, ADR-0049), o diagnosticar y reiniciar. Cada paso lo elige una sola tabla (`landing_step`), está acotado por presupuestos por tarea y queda en la lista `landing` del documento antes de ejecutarse. Distinta de Reanudación: una reanudación retoma una corrida cortada; un aterrizaje trabaja sobre un pull request ya entregado.
 _Avoid_: rescate, merge manual
 _Campo_: sin término de arte

@@ -489,6 +489,9 @@ class MemoryWorkspace:
         # worktree holds at each path it names becomes `show`'s text at the new head, and
         # `full_head` answers that head -- so a renumber is visible to the reads after it.
         self.track_commits = False
+        # GH-229: branch commits get 40-hex ids when True, the form the merge decision
+        # requires of a pull request head (`full_commit_id`).
+        self.full_shas = False
         self.master_trees: dict[str, tuple[str, ...]] = {"master0": ()}
         self.branch_commits: list[BranchCommit] = []
         self.added_adrs_calls: list[tuple[str, str]] = []
@@ -647,6 +650,10 @@ class MemoryWorkspace:
             return self._commit_branch(path, relatives)
         return "c2"
 
+    def _branch_sha(self) -> str:
+        count = len(self.branch_commits)
+        return f"{0xB000 + count:040x}" if self.full_shas else f"branch{count}"
+
     def _commit_branch(self, path: Path, relatives: Sequence[str]) -> str:
         """GH-229: the branch's next commit from what the worktree holds at `relatives`."""
         previous = self.branch_commits[-1].sha if self.branch_commits else ""
@@ -666,7 +673,7 @@ class MemoryWorkspace:
                 adds.append(relative)
             known = set((before or "").splitlines())
             lines.extend((relative, line) for line in text.splitlines() if line not in known)
-        sha = f"branch{len(self.branch_commits)}"
+        sha = self._branch_sha()
         self.branch_commits.append(
             BranchCommit(sha, tuple(adds), tuple(lines), self.master_sha, tuple(removes))
         )
@@ -744,7 +751,7 @@ class MemoryWorkspace:
         master: str | None = None,
     ) -> str:
         """The branch commits `adds` and `lines`, on `master`'s tree (now by default)."""
-        sha = f"branch{len(self.branch_commits)}"
+        sha = self._branch_sha()
         on = self.master_sha if master is None else master
         self.branch_commits.append(BranchCommit(sha, adds, lines, on))
         return sha

@@ -29,7 +29,7 @@ def _world(tmp_path, *, synced: bool = False, extra=()):
     (and in `extra`, `(path, line)` pairs), while master holds task A's `THEIRS`."""
     ports = memory_ports(tracker=MemoryTracker())
     workspace = ports.workspace
-    workspace.ROOT, workspace.track_commits = tmp_path, True
+    workspace.ROOT, workspace.track_commits, workspace.full_shas = tmp_path, True, True
     base = workspace.master_sha
     if not synced:
         workspace.advance_master(THEIRS)
@@ -168,7 +168,7 @@ def test_a_lost_lease_pushes_nothing_and_records_nothing(tmp_path):
     document = ports.documents.load("GH-5")
     assert "adr_renumbered" not in document
     assert "resolved_at" not in document["landing"][-1]
-    assert _unit(ports)["reviewed_head"] == "branch0"
+    assert _unit(ports)["reviewed_head"] == ports.workspace.branch_commits[0].sha
 
 
 def test_two_tasks_with_the_same_base_land_with_unique_numbers_and_resolving_references(
@@ -179,6 +179,8 @@ def test_two_tasks_with_the_same_base_land_with_unique_numbers_and_resolving_ref
 
     _land(tmp_path, ports)
     new = _pushed(ports)
+    ports.workspace.contains_answer = "yes"
+    ports.workspace.upstream_answer = Upstream("origin/master", ports.workspace.master_sha, None)
     merged = merge.merge_task(
         "GH-5",
         5,
@@ -193,10 +195,7 @@ def test_two_tasks_with_the_same_base_land_with_unique_numbers_and_resolving_ref
     assert ports.tracker.merge_calls == [(URL.format(5), new)]
     names = _tree(ports)
     assert adr_numbers.duplicate_numbers(names) == []
-    assert names == ["0049-mine.md", "0049-theirs.md", "0050-mine.md"][1:] or names == [
-        "0049-theirs.md",
-        "0050-mine.md",
-    ]
+    assert names == ["0049-theirs.md", "0050-mine.md"]
     assert ports.workspace.show(new, NOTES) == "see ADR-0050 for why\n"
     assert ports.workspace.show(new, "docs/adr/0050-mine.md") == "# ADR-0050: mine\n"
 
