@@ -4,7 +4,7 @@ poller merging a pull request on its own lives. Pure: each case is a `MergeFacts
 (ADR-0023), never a poll round."""
 
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import get_args
 
 import pytest
@@ -199,51 +199,133 @@ def test_several_subtasks_without_integration_have_no_reviewed_unit():
     assert rules.reviewed_unit({}) is None
 
 
-def test_poll_plan_places_one_merge_after_the_launch_with_a_slot_left():
-    actions = rules.poll_plan(
-        closes=[],
-        resumes=[],
-        launches=[rules.LaunchCandidate(4, False, None, 0, 3)],
-        available_slots=2,
-        now=NOW,
-        merges=[9, 7],
+# GH-263 (ADR-0045 addendum): a merge child runs no model, so it takes no slot of the cap.
+# Each test below used to assert "a merge only goes into a spare slot"; they now assert the
+# opposite and name the rule that replaced it.
+
+
+def _plan(**kwargs) -> rules.PollPlan:
+    base: dict = {"closes": [], "resumes": [], "launches": [], "now": NOW}
+    return rules.poll_plan(**{**base, **kwargs})
+
+
+def test_poll_plan_places_one_merge_after_the_launch_and_defers_the_other():
+    plan = _plan(
+        launches=[rules.LaunchCandidate(4, False, None, 0, 3)], available_slots=2, merges=[9, 7]
     )
-    assert actions == [rules.PollAction("launch", 4), rules.PollAction("merge", 7)]
+    assert plan.actions == [rules.PollAction("launch", 4), rules.PollAction("merge", 7)]
+    assert plan.deferred == [rules.Deferred("merge", 9, "exempt_busy")]
 
 
-def test_poll_plan_spends_no_slot_on_a_merge_when_the_launch_took_the_last_one():
-    actions = rules.poll_plan(
-        closes=[],
-        resumes=[],
+def test_poll_plan_still_places_the_merge_when_the_launch_took_the_last_slot():
+    # Was `spends_no_slot_on_a_merge_when_the_launch_took_the_last_one`: the merge no
+    # longer needs a slot, so it goes out beside the launch.
+    plan = _plan(
+        launches=[rules.LaunchCandidate(4, False, None, 0, 3)], available_slots=1, merges=[7]
+    )
+    assert plan.actions == [rules.PollAction("launch", 4), rules.PollAction("merge", 7)]
+    assert plan.deferred == []
+
+
+def test_poll_plan_with_no_slot_still_places_the_merge_and_with_no_merges_nothing_changes():
+    # Was `with_no_slot_places_no_merge`: the cap guards the model session, not the merge.
+    assert _plan(available_slots=0, merges=[7]).actions == [rules.PollAction("merge", 7)]
+    plan = rules.poll_plan(closes=[3], resumes=[], launches=[], available_slots=1, now=NOW)
+    assert plan == rules.PollPlan([rules.PollAction("close", 3)], [])
+
+
+def test_poll_plan_a_retake_and_a_merge_both_go_out_the_merge_last():
+    # Was `a_retake_takes_the_slot_a_merge_would_have_used`: they no longer compete.
+    plan = _plan(available_slots=1, retakes=[2], merges=[7])
+    assert plan.actions == [rules.PollAction("retake", 2), rules.PollAction("merge", 7)]
+
+
+def test_poll_plan_the_merge_is_emitted_last_with_every_slot_taken():
+    resume = rules.ResumeCandidate(3, "account_limit", NOW - timedelta(days=1), 1, 5)
+    plan = _plan(
+        available_slots=0,
+        retakes=[2],
+        resumes=[resume],
         launches=[rules.LaunchCandidate(4, False, None, 0, 3)],
-        available_slots=1,
-        now=NOW,
         merges=[7],
     )
-    assert actions == [rules.PollAction("launch", 4)]
-
-
-def test_poll_plan_with_no_slot_places_no_merge_and_with_no_merges_nothing_changes():
-    assert (
-        rules.poll_plan(closes=[], resumes=[], launches=[], available_slots=0, now=NOW, merges=[7])
-        == []
+    assert plan.actions == [rules.PollAction("merge", 7)]
+    two = _plan(
+        available_slots=2,
+        retakes=[2],
+        resumes=[resume],
+        launches=[rules.LaunchCandidate(4, False, None, 0, 3)],
+        merges=[7],
     )
-    assert rules.poll_plan(closes=[3], resumes=[], launches=[], available_slots=1, now=NOW) == [
-        rules.PollAction("close", 3)
+    assert two.actions == [
+        rules.PollAction("retake", 2),
+        rules.PollAction("resume", 3),
+        rules.PollAction("merge", 7),
     ]
 
 
-def test_poll_plan_a_retake_takes_the_slot_a_merge_would_have_used():
-    actions = rules.poll_plan(
-        closes=[],
-        resumes=[],
-        launches=[],
+def test_poll_plan_a_live_exempt_child_defers_the_merge_and_leaves_the_launch_alone():
+    plan = _plan(
+        launches=[rules.LaunchCandidate(4, False, None, 0, 3)],
         available_slots=1,
-        now=NOW,
-        retakes=[2],
         merges=[7],
+        live_exempt=1,
     )
-    assert actions == [rules.PollAction("retake", 2)]
+    assert plan.actions == [rules.PollAction("launch", 4)]
+    assert plan.deferred == [rules.Deferred("merge", 7, "exempt_busy")]
+
+
+def test_poll_plan_a_merge_and_a_checks_land_start_only_the_merge():
+    checks = rules.LandCandidate(4, "land_checks")
+    plan = _plan(available_slots=0, merges=[7], lands=[checks])
+    assert plan.actions == [rules.PollAction("merge", 7)]
+    assert plan.deferred == [rules.Deferred("land", 4, "exempt_busy")]
+
+
+def test_poll_plan_a_checks_land_starts_when_no_merge_waits_and_one_per_round():
+    lands = [rules.LandCandidate(9, "land_checks"), rules.LandCandidate(4, "land_checks")]
+    plan = _plan(available_slots=0, lands=lands)
+    assert plan.actions == [rules.PollAction("land", 4)]
+    assert plan.deferred == [rules.Deferred("land", 9, "exempt_busy")]
+    busy = _plan(available_slots=0, lands=lands, live_exempt=1)
+    assert busy.actions == []
+    assert busy.deferred == [
+        rules.Deferred("land", 4, "exempt_busy"),
+        rules.Deferred("land", 9, "exempt_busy"),
+    ]
+
+
+def test_poll_plan_a_model_land_without_a_slot_is_deferred_no_slot():
+    plan = _plan(available_slots=0, lands=[rules.LandCandidate(4, "land_model")])
+    assert plan.actions == []
+    assert plan.deferred == [rules.Deferred("land", 4, "no_slot")]
+
+
+def test_poll_plan_a_model_land_with_a_slot_goes_out_before_the_exempt_action():
+    lands = [rules.LandCandidate(9, "land_model"), rules.LandCandidate(4, "land_model")]
+    plan = _plan(available_slots=1, merges=[7], lands=lands)
+    assert plan.actions == [rules.PollAction("land", 4), rules.PollAction("merge", 7)]
+    assert plan.deferred == [rules.Deferred("land", 9, "no_slot")]
+
+
+@pytest.mark.parametrize("slots", [0, 1, 2, 3])
+@pytest.mark.parametrize("live_exempt", [0, 1])
+def test_poll_plan_no_exempt_action_precedes_a_slot_taking_one(slots, live_exempt):
+    resume = rules.ResumeCandidate(3, "account_limit", NOW - timedelta(days=1), 1, 5)
+    plan = _plan(
+        available_slots=slots,
+        live_exempt=live_exempt,
+        retakes=[2],
+        resumes=[resume],
+        launches=[rules.LaunchCandidate(4, False, None, 0, 3)],
+        merges=[7],
+        lands=[rules.LandCandidate(5, "land_model"), rules.LandCandidate(6, "land_checks")],
+    )
+    exempt = [i for i, a in enumerate(plan.actions) if a in (rules.PollAction("merge", 7),)]
+    exempt += [i for i, a in enumerate(plan.actions) if a == rules.PollAction("land", 6)]
+    taking = [i for i, a in enumerate(plan.actions) if i not in exempt]
+    assert not exempt or not taking or min(exempt) > max(taking)
+    assert len(exempt) <= 1 and (live_exempt == 0 or not exempt)
 
 
 def test_merge_calls_below_the_budget_still_merge_and_the_budget_refuses():

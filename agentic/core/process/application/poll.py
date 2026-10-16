@@ -981,7 +981,7 @@ def run_once(
         # `rules.counts_against_cap` decides what takes a slot; the children that run no
         # model (`merge`, `land_checks`) are counted apart, for the planning to bound.
         live = sum(1 for r in running if rules.counts_against_cap(r.kind))
-        _exempt_live = len(running) - live  # read by the poller subtask: bounds merge/land_checks
+        exempt_live = len(running) - live
         available = max(cfg.max_concurrent_runs - live, 0)
         pace: rules.SpendPace | None = None
         spend_notes: list[str] = []
@@ -1005,7 +1005,7 @@ def run_once(
                 ports, eval_set, upstream().sha, lock, merge_lines, lands, live_steps, now
             )
         notes = [*spend_notes, *_upstream_notes(upstream.cache_info().currsize > 0, upstream)]
-        actions = rules.poll_plan(
+        plan = rules.poll_plan(
             closes=closes,
             resumes=resumes,
             launches=launches,
@@ -1013,11 +1013,12 @@ def run_once(
             now=now,
             retakes=retakes,
             merges=merges,
-            lands=lands,
+            lands=[rules.LandCandidate(n, "land_model") for n in lands],
+            live_exempt=exempt_live,
             pace=pace,
         )
         lines = execute(
-            actions, cfg, ports, registry, launcher, now, argv0, register_timeout_s, sleep
+            plan.actions, cfg, ports, registry, launcher, now, argv0, register_timeout_s, sleep
         )
     # Outside the registry's exclusive section: reflecting takes no slot of the cap and
     # touches no task.
