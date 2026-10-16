@@ -97,12 +97,14 @@ TABLE: tuple[Row, ...] = (
         ("tests/test_observability_config.py",),
         "that test parses the collector config",
     ),
+    Row("docs/adr/*", ("tests/test_adr_numbers.py",), "that test lists the ADR directory"),
 )
 # Paths no test reads (the guard asserts it); a change to them selects nothing.
 IGNORE: tuple[str, ...] = (
     ".agentic/tasks/*",
     ".agentic/playbooks/*",
-    "docs/*",
+    "docs/agents/*",
+    "docs/product/*",
 )
 
 
