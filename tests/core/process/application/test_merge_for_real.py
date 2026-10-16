@@ -21,7 +21,7 @@ from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.adapters.shell.commands import ShellCommands
 from agentic.core.process.application import landing_plan
 from agentic.core.process.application.merge import merge_task
-from agentic.core.process.application.ports import Upstream
+from agentic.core.process.application.ports import MergeCallFailed, Upstream
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
 from agentic.shared.configuration import Configuration
@@ -523,3 +523,21 @@ def test_a_new_head_resets_the_failure_count_and_the_merge_goes_ahead(world):
     world.merge()
     assert world.tracker.merge_calls == [(URL, world.head)]
     assert world.doc()["delivery_outcome"] == "auto_merged"
+
+
+def test_a_merge_that_timed_out_but_landed_keeps_the_intent_and_closes_as_auto_merged(world):
+    # GH-266: the adapter maps a `pr merge` stall to `MergeCallFailed("gh_unreadable")`.
+    def landed(reference: str, head: str) -> str:
+        pull_request_number(reference)
+        world.tracker.prs[URL] = dataclasses.replace(
+            world.tracker.prs[URL], state="MERGED", merged_at="2026-10-06T00:00:00Z"
+        )
+        raise MergeCallFailed("gh_unreadable", "gh pr merge timed out after 60 s")
+
+    world.tracker.merge = landed  # type: ignore[method-assign]
+
+    world.merge()
+
+    doc = world.doc()
+    assert doc["auto_merge_head"] == world.head
+    assert doc["delivery_outcome"] == "auto_merged"

@@ -9,6 +9,7 @@ applications; only adapters see adapters and the frameworks. Only the root
 """
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
@@ -145,3 +146,28 @@ def test_the_rule_catches_what_it_promises(tmp_path, monkeypatch, where, source,
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(source + "\n")
     assert bool(violations(path)) is caught, violations(path)
+
+
+_STARTS_A_PROCESS = re.compile(r"subprocess\.(run|Popen)\b|\bPopen\(")
+
+
+def _starts_own_process(adapter: Path) -> list[str]:
+    return [
+        path.name
+        for path in sorted(adapter.glob("*.py"))
+        if path.name != "run.py" and _STARTS_A_PROCESS.search(path.read_text())
+    ]
+
+
+def test_nothing_in_the_github_adapter_starts_a_process_outside_run_py():
+    """GH-266: every `gh` call goes through `run.run_gh`, so none can lack a time limit."""
+    adapter = Path(agentic.__file__).parent / "core/process/adapters/github"
+    assert _starts_own_process(adapter) == []
+
+
+def test_the_process_guard_rejects_a_module_that_starts_its_own(tmp_path):
+    (tmp_path / "run.py").write_text("subprocess.run(['gh'])\n")  # the one allowed place
+    (tmp_path / "late.py").write_text("import subprocess\nsubprocess.run(['gh'])\n")
+    (tmp_path / "popen.py").write_text("from subprocess import Popen\nPopen(['gh'])\n")
+    (tmp_path / "fine.py").write_text("Run = Callable[..., subprocess.CompletedProcess[str]]\n")
+    assert _starts_own_process(tmp_path) == ["late.py", "popen.py"]

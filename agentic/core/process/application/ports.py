@@ -484,6 +484,13 @@ class MergeCallFailed(ValueError):
         self.failure = failure
 
 
+class TrackerTimedOut(ValueError):
+    """A `gh` call ran out of time (GH-266). A `ValueError`, so every handler that already
+    treats an unreadable read as harmless absorbs it unchanged; declared here so
+    `application/` and `cli.py` can name it without importing an adapter. The message
+    names the call and the bound, never stderr or issue content."""
+
+
 class GitError(RuntimeError):
     """A real git failure -- not a question `Workspace`'s own contract answers some
     other way, like `is_ancestor`'s `False` for an object this checkout does not have

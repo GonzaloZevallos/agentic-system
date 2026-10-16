@@ -20,9 +20,11 @@ from ...application.ports import (
     IssueState,
     ListedPullRequest,
     MergeCallFailed,
+    TrackerTimedOut,
 )
 from ...domain.ci import CiCheck, CiReport, CiUnreadable
 from ...domain.task import PullRequest, PullRequestCommit
+from .run import bounded_run, print_line, run_gh
 
 _ISSUE = re.compile(r"^GH-(\d+)$")
 _PULL_REQUEST_URL = re.compile(r"/pull/(\d+)$")
@@ -198,9 +200,15 @@ def pull_request_number(url: str) -> int:
 
 
 class GhTracker:
-    def __init__(self, product_dir: Path, run: Run = subprocess.run):
+    def __init__(
+        self,
+        product_dir: Path,
+        run: Run = bounded_run,
+        log: Callable[[str], None] = print_line,
+    ):
         self.product_dir = product_dir
         self._run = run
+        self._log = log
 
     def open_pull_request(self, task_id: str, branch: str, title: str, body: str) -> str:
         if (number := issue_number(task_id)) is not None:
@@ -371,6 +379,8 @@ class GhTracker:
         fields = "state,stateReason,blockedBy,closedByPullRequestsReferences"
         try:
             raw = self._gh("issue", "view", str(number), "--json", fields)
+        except TrackerTimedOut:
+            raise  # a stall is not an old `gh`: never fall back, never `blocked_by=None`
         except ValueError:
             # An older `gh` that does not expose the native dependency at all: fall
             # back to every other field, `blocked_by=None` tells the caller to read
@@ -526,16 +536,17 @@ class GhTracker:
             self._gh("pr", "merge", str(number), f"--{method}", "--match-head-commit", head_sha)
         except ValueError as exc:
             missing = isinstance(exc.__cause__, FileNotFoundError)
+            if isinstance(exc, TrackerTimedOut):  # the merge may or may not have happened
+                raise MergeCallFailed("gh_unreadable", str(exc)) from exc
             raise MergeCallFailed("gh_unavailable" if missing else "gh_rejected", str(exc)) from exc
         return method
 
     def _gh(self, *args: str) -> str:
-        try:
-            result = self._run(
-                ["gh", *args], cwd=self.product_dir, capture_output=True, text=True, check=True
-            )
-        except FileNotFoundError as exc:
-            raise ValueError("gh is not installed; delivering to GitHub needs the CLI") from exc
-        except subprocess.CalledProcessError as exc:
-            raise ValueError(f"gh {' '.join(args[:2])} failed: {exc.stderr.strip()}") from exc
-        return result.stdout.strip()
+        return run_gh(
+            self._run,
+            args,
+            cwd=self.product_dir,
+            log=self._log,
+            not_installed="gh is not installed; delivering to GitHub needs the CLI",
+            failed=lambda stderr: f"gh {' '.join(args[:2])} failed: {stderr}",
+        )

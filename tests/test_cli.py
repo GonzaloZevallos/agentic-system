@@ -17,7 +17,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from agentic import cli, composition
 from agentic.core.measurement.domain import evaluation
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
-from agentic.core.process.adapters.github import inbox
+from agentic.core.process.adapters.github import GhInbox
 from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.application.ports import LockHeld, LockRecord
 from agentic.core.process.domain import legacy_names
@@ -129,21 +129,18 @@ def test_preflight_rejects_a_prompt_overlay_with_an_unknown_placeholder(monkeypa
 
 
 def fake_gh(monkeypatch, *, stdout="", returncode=0, stderr=""):
-    """Only `gh`. The patch lands on the `subprocess` module itself, which every adapter
-    shares, so anything else (preflight asking git about the product's repo) has to go
-    through for real."""
+    """Only `gh`, and only the inbox's: the composition root builds its `GhInbox` with this
+    `run`, so anything else (preflight asking git about the product's repo) goes through
+    for real."""
     calls = []
-    real = subprocess.run
 
     def run(cmd, **kwargs):
-        if cmd[0] != "gh":
-            return real(cmd, **kwargs)
         calls.append((cmd, kwargs))
         if returncode:
             raise subprocess.CalledProcessError(returncode, cmd, stderr=stderr)
         return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
 
-    monkeypatch.setattr(inbox.subprocess, "run", run)
+    monkeypatch.setattr(composition, "GhInbox", lambda product_dir: GhInbox(product_dir, run=run))
     return calls
 
 
@@ -3302,9 +3299,8 @@ def test_stack_review_dry_run_takes_no_lock_writes_no_file_and_calls_no_gh(
 
 @pytest.mark.anyio
 async def test_stack_review_refuses_on_an_already_open_proposal_spending_nothing(tmp_path):
-    """`GhInbox`/`GhTracker` bind their `subprocess.run` default at import time
-    (`inbox.py`'s own docstring: old form stays old form), so a real `main()` round
-    trip cannot fake `gh` for `open_issues` the way `fake_gh` fakes `task()` -- this
+    """`GhInbox` binds its `bounded_run` default at import time, so a real `main()`
+    round trip cannot fake `gh` for `open_issues` the way `fake_gh` fakes `task()` -- this
     calls `cli._stack_review` directly with `MemoryInbox`, the same seam
     `test_eval_run_dry_run_prefers_the_set_override...` already uses for a full round
     trip over in-memory ports (ADR-0034)."""
@@ -4075,3 +4071,75 @@ async def test_a_merge_child_registers_under_the_merge_kind(monkeypatch, tmp_pat
 
     assert registry.registered_kinds == ["merge"]
     assert registry.unregistered == 1
+
+
+@pytest.mark.anyio
+async def test_poll_a_timed_out_round_prints_its_line_sleeps_and_runs_the_next(
+    monkeypatch, tmp_path, capsys
+):
+    from agentic.core.process.application.ports import TrackerTimedOut
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import FakeLauncher, MemoryRunRegistry
+
+    rounds = []
+
+    def run_once(*args, **kwargs):
+        rounds.append(1)
+        if len(rounds) == 1:
+            raise TrackerTimedOut("gh pr list timed out after 60 s")
+        return ["agentic: poll: nothing to do"]
+
+    monkeypatch.setattr(cli.pollmod, "run_once", run_once)
+
+    class Stop(Exception):
+        pass
+
+    sleeps = []
+
+    async def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        if len(sleeps) == 2:
+            raise Stop()
+
+    with pytest.raises(Stop):
+        await cli._poll(
+            Configuration(product_dir=tmp_path),
+            memory_ports(),
+            60.0,
+            run_lock=FakeLock(),
+            registry=MemoryRunRegistry(),
+            launcher=FakeLauncher(),
+            argv0="agentic",
+            sleep=sleep,
+        )
+    assert sleeps == [60.0, 60.0] and len(rounds) == 2
+    assert capsys.readouterr().out.splitlines() == [
+        "agentic: poll: round ended early: gh pr list timed out after 60 s",
+        "agentic: poll: nothing to do",
+    ]
+
+
+@pytest.mark.anyio
+async def test_poll_a_plain_value_error_still_escapes_the_loop(monkeypatch, tmp_path):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import FakeLauncher, MemoryRunRegistry
+
+    def run_once(*args, **kwargs):
+        raise ValueError("not a timeout")
+
+    monkeypatch.setattr(cli.pollmod, "run_once", run_once)
+
+    async def sleep(seconds: float) -> None:
+        raise AssertionError("a plain failure must not sleep and go on")
+
+    with pytest.raises(ValueError, match="not a timeout"):
+        await cli._poll(
+            Configuration(product_dir=tmp_path),
+            memory_ports(),
+            60.0,
+            run_lock=FakeLock(),
+            registry=MemoryRunRegistry(),
+            launcher=FakeLauncher(),
+            argv0="agentic",
+            sleep=sleep,
+        )
