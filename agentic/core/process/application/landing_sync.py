@@ -16,13 +16,15 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Literal, Protocol
 
-from ..domain import landing, rules
+from ..domain import adr_numbers, landing, rules
+from ..domain.adr_numbers import Renaming
 from ..domain.roles import pair_for
 from ..domain.task import INTEGRATION, ChangeCategory, ChangesRequested, Subtask, TaskState
 from . import resume as resuming
+from .adr_collision import adr_collision
 from .checkouts import SetupFailed, task_base, task_checkout
 from .landing_plan import LandingContext, entries
-from .ports import GitError, Ports
+from .ports import GitError, Ports, Workspace
 
 CROSSCUT: ChangeCategory = "integration-crosscut"
 
@@ -231,7 +233,7 @@ def sync_master(context: LandingContext) -> None:
     if not merged.clean:
         _reopened(context, state, unit, _conflict_reason(merged.conflicted, sha), "returned")
         return
-    if not _carries(context, state, reviewed, merged.head):
+    if not _sync_carries(context, state, reviewed, merged.head):
         reason = f"Master ({sha}) was merged into the branch; review the result as it is."
         _reopened(context, state, unit, reason, "delivered")
         return
@@ -240,13 +242,8 @@ def sync_master(context: LandingContext) -> None:
     except GitError as failed:
         _reopened(context, state, unit, f"pushing the synced branch failed: {failed}", "delivered")
         return
-    advanced: Subtask = {
-        **state["subtasks"][unit],
-        "reviewed_head": merged.head,
-        "reviewed_head_carried_from": reviewed or "",
-    }
     resolved = landing.resolve_open(entries(state), _now(), state.get("cost_usd", 0.0))
-    subtasks = {**state["subtasks"], unit: advanced}
+    subtasks = _carries(state, unit, reviewed, merged.head, holds=True)
     ports.documents.save({**state, "subtasks": subtasks, "landing": resolved})
     record_landing(context, resolved)
     context.log(
@@ -254,7 +251,26 @@ def sync_master(context: LandingContext) -> None:
     )
 
 
-def _carries(context: LandingContext, state: TaskState, reviewed: str | None, head: str) -> bool:
+def _carries(
+    state: TaskState, unit: str, reviewed: str | None, head: str, *, holds: bool
+) -> dict[str, Subtask]:
+    """The only writer of `reviewed_head` and `reviewed_head_carried_from` (ADR-0048): the
+    state's subtasks with `unit`'s verdict advanced to `head` when `holds` (the domain's
+    verdict, `landing.review_carries` for a sync, `landing.renumber_carries` for a
+    renumber) and it has one to carry; unchanged otherwise."""
+    if not holds or not reviewed:
+        return dict(state["subtasks"])
+    advanced: Subtask = {
+        **state["subtasks"][unit],
+        "reviewed_head": head,
+        "reviewed_head_carried_from": reviewed,
+    }
+    return {**state["subtasks"], unit: advanced}
+
+
+def _sync_carries(
+    context: LandingContext, state: TaskState, reviewed: str | None, head: str
+) -> bool:
     """Whether the verdict on `reviewed` stands for `head`, the merge commit: the paths the
     merge brought in against the paths of the branch's own work. An unreadable diff, or a
     unit never reviewed, carries nothing."""
@@ -267,3 +283,93 @@ def _carries(context: LandingContext, state: TaskState, reviewed: str | None, he
     except GitError:
         return False
     return landing.review_carries(False, merge_paths, branch_paths)
+
+
+def _message(moves: Sequence[tuple[str, str]]) -> str:
+    renamed = f"{', '.join(adr_numbers.old_numbers(dict(moves)))} -> "
+    renamed += ", ".join(adr_numbers.new_numbers(dict(moves)))
+    return (
+        f"Renumber ADR {renamed}: master already took the number\n\n"
+        "Renamed and rewritten by the landing (ADR-0049); only the ADR files and the lines "
+        "the branch added that cite them."
+    )
+
+
+def _changes(workspace: Workspace, head: str, found: Renaming) -> list[landing.LineChange]:
+    """The lines `found` changes against what `head` holds: a moved file against its old
+    path, under its new one."""
+    source = {new: old for old, new in found.moves}
+    changes: list[landing.LineChange] = []
+    for path, text in found.texts.items():
+        before = workspace.show(head, source.get(path, path)) or ""
+        changes.extend(landing.line_changes(path, before, text))
+    return changes
+
+
+def renumber_adr(context: LandingContext) -> None:
+    """Rename the branch's ADR whose number master took and rewrite what cites it
+    (GH-229, ADR-0049): the `Renaming` is `adr_collision`'s, recomputed here against the one
+    master sha of the round, written in the task's worktree, committed on exactly its own
+    paths and pushed with a lease on the head the decision saw. A lost lease, or anything
+    that is no longer a clean renaming, records nothing: the next round decides again."""
+    ports, head, sha = context.ports, context.head, context.upstream.sha
+    state = _state(context)
+    unit = _unit(state) if state is not None else None
+    if state is None or unit is None or sha is None:
+        context.log(f"agentic: land: {context.task_id}: renumber: nothing to renumber")
+        return
+    workspace = ports.workspace
+    try:
+        found = adr_collision(ports, sha, head)
+    except GitError as failed:
+        context.log(f"agentic: land: {context.task_id}: renumber: collision unreadable: {failed}")
+        return
+    if not isinstance(found, Renaming):
+        context.log(f"agentic: land: {context.task_id}: renumber: no clean renaming any more")
+        return
+    reviewed = state["subtasks"][unit].get("reviewed_head")
+    try:
+        branch, conflicted = _bring_in(context, state)
+        if conflicted:
+            context.log(f"agentic: land: {context.task_id}: renumber: head conflicts locally")
+            return
+        checkout = task_checkout(state, context.cfg, ports)
+        changes = _changes(workspace, head, found)
+        for old, _ in found.moves:
+            (checkout.path / old).unlink(missing_ok=True)
+        for path, text in found.texts.items():
+            target = checkout.path / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8")
+        relatives = sorted({old for old, _ in found.moves} | set(found.texts))
+        if workspace.commit_paths(checkout.path, relatives, _message(found.moves)) is None:
+            context.log(f"agentic: land: {context.task_id}: renumber: nothing to commit")
+            return
+        new_head = workspace.full_head(checkout.path)
+        workspace.push(branch, lease=head)
+    except (SetupFailed, GitError) as failed:
+        context.log(f"agentic: land: {context.task_id}: renumber: not pushed: {failed}")
+        return
+    carried = landing.renumber_carries(changes) and rules.same_commit(reviewed, head)
+    record: dict[str, str | bool] = {
+        "from": ", ".join(adr_numbers.old_numbers(dict(found.moves))),
+        "to": ", ".join(adr_numbers.new_numbers(dict(found.moves))),
+        "head_before": head,
+        "head_after": new_head,
+        "carried": carried,
+    }
+    resolved = landing.resolve_open(entries(state), _now(), state.get("cost_usd", 0.0))
+    subtasks = _carries(state, unit, reviewed, new_head, holds=carried)
+    ports.documents.save(
+        {
+            **state,
+            "subtasks": subtasks,
+            "landing": resolved,
+            "adr_renumbered": [*state.get("adr_renumbered", []), record],
+        }
+    )
+    record_landing(context, resolved)
+    context.log(
+        f"agentic: land: {context.task_id}: renumbered {record['from']} -> {record['to']}, "
+        f"pushed {new_head}" + ("" if carried else " (review not carried)")
+    )

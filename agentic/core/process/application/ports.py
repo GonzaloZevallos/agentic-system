@@ -524,6 +524,27 @@ class UpstreamMerge:
     head: str
 
 
+@dataclass(frozen=True)
+class AddedAdr:
+    """A file a non-merge commit of a branch added under `docs/adr` (GH-229): its `path`
+    as the repository names it and the full sha of the `commit` that added it. A path a
+    later commit of the branch deleted or renamed is still reported, for the commit that
+    added it did: whether it exists at head is the caller's to read."""
+
+    path: str
+    commit: str
+
+
+@dataclass(frozen=True)
+class AddedLine:
+    """A line a non-merge commit of a branch added (GH-229): the `text` without the
+    patch's leading `+`, the `path` it was added to and the full sha of its `commit`."""
+
+    path: str
+    commit: str
+    text: str
+
+
 class Workspace(Protocol):
     """The product repository as git sees it (ADR-0011): one branch and worktree per
     task, one per subtask, all idempotent so a use case can ask again."""
@@ -597,7 +618,8 @@ class Workspace(Protocol):
         """Commit only `relatives` (paths relative to the checkout at `path`), whatever
         else is changed there; `None` when those paths have nothing to commit. The
         delivery's own document commit (GH-203) is the caller: `commit_all` would take a
-        stray file along. Raises `GitError`."""
+        stray file along. A path deleted from the worktree is committed as a deletion, so
+        a rename is the old path and the new one together (GH-229). Raises `GitError`."""
         ...
 
     def push(self, branch: str, *, lease: str | None = None) -> None:
@@ -682,6 +704,28 @@ class Workspace(Protocol):
     def changed_paths(self, base: str, head: str) -> tuple[str, ...]:
         """The paths `git diff --name-only <base>...<head>` names (GH-178): what the
         pull request changes against the commit it branched from. Raises `GitError`."""
+        ...
+
+    def added_adrs(self, master: str, head: str) -> tuple[AddedAdr, ...]:
+        """Every path under `docs/adr` that a non-merge commit of `master..head` added,
+        with the commit that added it (GH-229): the branch's own ADRs, whatever master
+        took meanwhile and whatever a merge of master brought in. One read of the log.
+        A rename counts as the new path being added. Raises `GitError`."""
+        ...
+
+    def added_lines(self, master: str, head: str, numbers: Sequence[str]) -> tuple[AddedLine, ...]:
+        """Every line a non-merge commit of `master..head` added that contains one of
+        `numbers` as a plain substring (GH-229), once however many numbers it holds. The
+        second phase of the collision read: it is asked only for the numbers that
+        collide, and it knows no reference grammar -- what a line means is the domain's.
+        Each number is a string of exactly four digits; anything else raises `ValueError`
+        before git runs. Raises `GitError`."""
+        ...
+
+    def tree_names(self, ref: str, directory: str) -> tuple[str, ...]:
+        """The base names of what `ref` (a commit, a branch) holds directly under
+        `directory`, empty when it has no such directory (GH-229). Raises `GitError` for
+        a `ref` git does not know."""
         ...
 
     def fetch_commit(self, sha: str) -> bool:
