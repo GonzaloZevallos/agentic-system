@@ -10,7 +10,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, NamedTuple, Protocol
+from typing import Any, Literal, NamedTuple, Protocol, assert_never
 
 from . import adr_numbers, ci, presubmit
 from .denials import denial_for
@@ -2443,6 +2443,54 @@ class LaunchCandidate:
     limit: int
 
 
+RunKind = Literal["role", "merge", "land_checks", "land_model"]
+"""What a registered child of the poller is: `role` (`run`, `resume`), `merge` (the
+merge child), and the two kinds a `land` child registers under: `land_checks` (a step
+that only syncs cleanly, reruns checks or files follow-ups, never a model pass) and
+`land_model` (any step that can spend one, and the default)."""
+
+
+def counts_against_cap(kind: RunKind) -> bool:
+    """Whether a live child of this kind occupies a slot of `AGENTIC_MAX_CONCURRENT_RUNS`:
+    the one place that decides it. Only the children that can spend a model session do."""
+    match kind:
+        case "role" | "land_model":
+            return True
+        case "merge" | "land_checks":
+            return False
+        case _:
+            assert_never(kind)
+
+
+@dataclass(frozen=True)
+class LandCandidate:
+    """One issue whose refusal has a landing step to take, and the `RunKind` its child
+    registers under (`landing.run_kind_of`): the kind decides whether it takes a slot."""
+
+    issue: int
+    kind: RunKind
+
+
+@dataclass(frozen=True)
+class Deferred:
+    """A merge or land `poll_plan` held back this round, and why: `no_slot` (a `land_model`
+    child needs a slot and none is left) or `exempt_busy` (the one exempt child the machine
+    allows is already live, or this round already starts one)."""
+
+    kind: Literal["merge", "land"]
+    issue: int
+    reason: Literal["no_slot", "exempt_busy"]
+
+
+@dataclass(frozen=True)
+class PollPlan:
+    """What `poll_plan` decides: the `actions` in the order to carry them out, and what it
+    `deferred`, which is the only source of a poll line about a waiting merge or land."""
+
+    actions: list[PollAction]
+    deferred: list[Deferred]
+
+
 def poll_plan(
     *,
     closes: Sequence[int],
@@ -2453,8 +2501,9 @@ def poll_plan(
     retakes: Sequence[int] = (),
     merges: Sequence[int] = (),
     pace: SpendPace | None = None,
-    lands: Sequence[int] = (),
-) -> list[PollAction]:
+    lands: Sequence[LandCandidate] = (),
+    live_exempt: int = 0,
+) -> PollPlan:
     """This round's actions, in the order the Tech Lead plan fixes: every close first
     (merging freed the slot it used, if any, so closing never spends one); then every
     `retakes` issue (a run a reboot interrupted, `interrupted_run`), lowest first,
@@ -2472,14 +2521,23 @@ def poll_plan(
     caller; this function never reads the registry itself.
 
     `merges` (GH-178) are the issues `rules.auto_merge_decision` found ready to merge or
-    to check: at most one, the lowest, comes last and only into a slot still left after
-    the retakes, the resumes and the launch -- the merge child registers in the machine
-    registry like any run, so it counts against the cap, and it never takes a slot a task
-    waiting for a role could use.
+    to check. A merge child runs no model, so `counts_against_cap` is false for it: it takes
+    no slot, and a round with every slot taken still starts it (GH-263, ADR-0045 addendum).
 
     `lands` (GH-239) are the issues whose refusal has a built landing step not yet taken on
-    their head (`landing_step`; `wait` and `none` are never among them): at most one, the
-    lowest, goes after the merge and only into a slot still spare -- it registers like any run.
+    their head (`landing_step`; `wait` and `none` are never among them), each with the kind
+    its child registers under. A `land_model` land can spend a model, so it counts: at most
+    one, the lowest, goes after the launch and only into a slot still spare. A
+    `land_checks` land counts as the merge does not.
+
+    The children that do not count (`merge`, `land_checks`) are bounded together instead:
+    `live_exempt` is how many are live on the machine right now, and at most one is live
+    and at most one starts per round -- the lowest merge if there is one, otherwise the
+    lowest `land_checks` land. They come last in `actions`, after every action that takes a
+    slot, so the wait for a child to register never delays a role action.
+
+    Everything held back is in `PollPlan.deferred`: a `land_model` land with no slot is
+    `no_slot`; every merge or `land_checks` land that did not start is `exempt_busy`.
 
     `pace` (GH-177, `None` is today's behaviour) gates only the launch: it goes out only
     if `paced_launch_fits` says so, counting this round's retakes and resumes as live
@@ -2530,12 +2588,24 @@ def poll_plan(
         ):
             actions.append(PollAction("launch", ready[0].issue))
             slots_left -= 1
-    if merges and slots_left > 0:
-        actions.append(PollAction("merge", min(merges)))
-        slots_left -= 1
-    if lands and slots_left > 0:
-        actions.append(PollAction("land", min(lands)))
-    return actions
+    deferred: list[Deferred] = []
+    model_lands = sorted(c.issue for c in lands if counts_against_cap(c.kind))
+    if model_lands and slots_left > 0:
+        actions.append(PollAction("land", model_lands[0]))
+        model_lands = model_lands[1:]
+    deferred.extend(Deferred("land", issue, "no_slot") for issue in model_lands)
+
+    exempt_merges = sorted(merges)
+    exempt_lands = sorted(c.issue for c in lands if not counts_against_cap(c.kind))
+    if live_exempt == 0 and exempt_merges:
+        actions.append(PollAction("merge", exempt_merges[0]))
+        exempt_merges = exempt_merges[1:]
+    elif live_exempt == 0 and exempt_lands:
+        actions.append(PollAction("land", exempt_lands[0]))
+        exempt_lands = exempt_lands[1:]
+    deferred.extend(Deferred("merge", issue, "exempt_busy") for issue in exempt_merges)
+    deferred.extend(Deferred("land", issue, "exempt_busy") for issue in exempt_lands)
+    return PollPlan(actions, deferred)
 
 
 # How many times the checks run on one pull request head before the poller leaves it to

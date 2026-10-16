@@ -965,7 +965,7 @@ async def test_a_run_still_happens_when_the_registry_cannot_be_written(
     from tests.fakes import memory_ports
 
     class BrokenRegistry:
-        def register(self, product, task_id):
+        def register(self, product, task_id, kind="role"):
             raise OSError("disk full")
 
         def unregister(self):
@@ -4012,3 +4012,66 @@ async def test_fresh_of_a_task_the_landing_never_restarted_carries_nothing(monke
     assert "landing_restarts" not in graph.entered
     assert "landing_cost_carried" not in graph.entered
     assert graph.entered["description"] == "d"
+
+
+def test_land_run_kind_defaults_to_the_model_kind_and_takes_the_checks_kind(monkeypatch, tmp_path):
+    root = product(tmp_path, "p")
+    seen = capture_run(monkeypatch)
+    base = ["agentic", "land", "--issue", "9", "--product-dir", str(root)]
+    monkeypatch.setattr("sys.argv", base)
+    cli.main()
+    assert seen["fn"] is cli._land and seen["options"] == ("land_model",)
+    monkeypatch.setattr("sys.argv", [*base, "--run-kind", "land_checks"])
+    cli.main()
+    assert seen["options"] == ("land_checks",)
+
+
+@pytest.mark.parametrize("kind", ["merge", "role", "nonsense"])
+def test_land_run_kind_other_than_the_two_land_kinds_is_a_usage_error(monkeypatch, tmp_path, kind):
+    root = product(tmp_path, "p")
+    capture_run(monkeypatch)
+    argv = ["agentic", "land", "--issue", "9", "--product-dir", str(root), "--run-kind", kind]
+    monkeypatch.setattr("sys.argv", argv)
+    with pytest.raises(SystemExit) as info:
+        cli.main()
+    assert info.value.code == 2
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("given", "registered"),
+    [(None, "land_model"), ("land_checks", "land_checks"), ("land_model", "land_model")],
+)
+async def test_a_land_child_registers_once_under_the_kind_it_was_spawned_with(
+    monkeypatch, tmp_path, given, registered
+):
+    from agentic.core.process.application.landing import LandResult
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import MemoryRunRegistry, memory_ports
+
+    registry = MemoryRunRegistry()
+    monkeypatch.setattr(cli, "_registry_for", lambda cfg: registry)
+    monkeypatch.setattr(cli, "land", lambda *args, **kwargs: LandResult("skipped", "no_head"))
+    cfg = Configuration(product_dir=tmp_path)
+    args = (cfg, memory_ports()) if given is None else (cfg, memory_ports(), given)
+
+    await cli._land("GH-9", *args)
+
+    assert registry.registered_kinds == [registered]
+    assert registry.unregistered == 1
+
+
+@pytest.mark.anyio
+async def test_a_merge_child_registers_under_the_merge_kind(monkeypatch, tmp_path):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import MemoryRunRegistry, memory_ports
+
+    registry = MemoryRunRegistry()
+    monkeypatch.setattr(cli, "_registry_for", lambda cfg: registry)
+    cfg = Configuration(product_dir=tmp_path)
+
+    with pytest.raises(cli.CannotStart):
+        await cli._merge("GH-9", 9, cfg, memory_ports())
+
+    assert registry.registered_kinds == ["merge"]
+    assert registry.unregistered == 1

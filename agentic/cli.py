@@ -266,6 +266,13 @@ def main() -> None:
     )
     land.add_argument("--issue", type=int, metavar="N", required=True)
     land.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
+    land.add_argument(
+        "--run-kind",
+        choices=("land_checks", "land_model"),
+        default="land_model",
+        help="the kind this child registers under, set by the poller at spawn: land_checks "
+        "for a step that runs no model, land_model (the default) for any other",
+    )
     eval_parser = sub.add_parser(
         "eval", help="drive or score README.md 9's fixed five-task evaluation set"
     )
@@ -350,7 +357,9 @@ def main() -> None:
         "poll",
         help="a long-lived process per product (GH-137): closes merged pull requests, "
         "retakes a pause an external API cut caused once its own wait elapses, and "
-        "launches the next unblocked issue, never past AGENTIC_MAX_CONCURRENT_RUNS",
+        "launches the next unblocked issue; role runs never pass "
+        "AGENTIC_MAX_CONCURRENT_RUNS, while a merge or checks-only land child runs "
+        "beside them, at most one per machine",
     )
     poll_parser.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
     poll_parser.add_argument(
@@ -516,7 +525,7 @@ def main() -> None:
         elif args.command == "merge":
             work = partial(_merge, ports.inbox.task_id(args.issue), args.issue, cfg, ports)
         elif args.command == "land":
-            work = partial(_land, ports.inbox.task_id(args.issue), cfg, ports)
+            work = partial(_land, ports.inbox.task_id(args.issue), cfg, ports, args.run_kind)
         elif args.command == "eval":
             if args.eval_command == "run":
                 log_file = _log_file_for(cfg, "eval")
@@ -890,15 +899,18 @@ def _registry_for(cfg: Configuration) -> RunRegistry:
 
 
 @contextmanager
-def _registered(registry: RunRegistry, product: str, task_id: str) -> Iterator[None]:
+def _registered(
+    registry: RunRegistry, product: str, task_id: str, kind: rules.RunKind = "role"
+) -> Iterator[None]:
     """Registers this invocation under `Configuration.run_registry_dir` so the
     poller's own concurrency cap (`AGENTIC_MAX_CONCURRENT_RUNS`, GH-137) can count it
-    across every product on this machine. Best effort only, the same shape every other
-    diagnostic write in this module already has: a `run`/`resume` that cannot write
-    here still runs, one stderr line the only trace -- it must never turn into a
-    `CannotStart`, since nothing about the task itself failed."""
+    across every product on this machine, under `kind`: `rules.counts_against_cap` decides
+    whether it takes a slot (a `merge` or `land_checks` child does not, GH-263). Best
+    effort only, the same shape every other diagnostic write in this module already has: a
+    `run`/`resume` that cannot write here still runs, one stderr line the only trace -- it
+    must never turn into a `CannotStart`, since nothing about the task itself failed."""
     try:
-        registry.register(product, task_id)
+        registry.register(product, task_id, kind)
     except OSError as exc:
         print(f"agentic: could not register the run: {exc}", file=sys.stderr)
     try:
@@ -1371,7 +1383,10 @@ async def _merge(task_id: str, issue: int, cfg: Configuration, ports: Ports) -> 
     money and opens no span, like `close`. The closure runs in this process once the pull
     request is merged."""
     lock = _lock_for(cfg)
-    with _locked(lock, task_id), _registered(_registry_for(cfg), product_name(ports), task_id):
+    with (
+        _locked(lock, task_id),
+        _registered(_registry_for(cfg), product_name(ports), task_id, "merge"),
+    ):
         raw = ports.documents.load(task_id)
         if raw is None or not raw.get("pull_request"):
             raise CannotStart(f"{task_id} has no pull request to merge")
@@ -1417,12 +1432,17 @@ def _resume_spawner(cfg: Configuration) -> Callable[[int], int | None]:
     return spawn
 
 
-async def _land(task_id: str, cfg: Configuration, ports: Ports) -> None:
+async def _land(
+    task_id: str, cfg: Configuration, ports: Ports, run_kind: rules.RunKind = "land_model"
+) -> None:
     """`agentic land --issue N` (GH-239, ADR-0048): the step `landing_step` names for the
     refusal of the task's pull request, recorded under the task's run lock and then
-    dispatched. Registered like any run; spends no model money itself and opens no span."""
+    dispatched. Registered like any run; the kind
+    it registers under is the one it was spawned with (`--run-kind`), fixed for its whole life
+    and checked by `land` against the step it recomputes. Spends no model money itself and
+    opens no span."""
     lock = _lock_for(cfg)
-    with _registered(_registry_for(cfg), product_name(ports), task_id):
+    with _registered(_registry_for(cfg), product_name(ports), task_id, run_kind):
         upstream = ports.workspace.upstream()
         arm = delivery_metrics.arm_label(
             {"review_mode": cfg.review_mode, "skip_ephemeral": str(cfg.skip_ephemeral)}
@@ -1444,6 +1464,7 @@ async def _land(task_id: str, cfg: Configuration, ports: Ports) -> None:
                 launcher=SpawnLauncher(cfg),
                 argv0=_self_executable(),
                 role_span=lambda role: telemetry.role_span(role.name, role.slug, product, arm=arm),
+                run_kind=run_kind,
             )
         except LockHeld as exc:
             raise CannotStart(f"{exc}: {LOCK_SCOPE}") from exc

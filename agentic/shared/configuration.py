@@ -124,8 +124,10 @@ class Configuration(BaseModel):
     # Runs alive at once across every product on this machine (GH-137, the poller's
     # first piece): the human's own call is one at a time, default **1** -- two in
     # parallel already hit the account's own session limit (one 429 for the whole
-    # account, never per product) and clashed merging. The poller counts live entries
-    # under `run_registry_dir` against this before it launches a child.
+    # account, never per product) and clashed merging. The poller counts the live entries
+    # under `run_registry_dir` that can spend a model session (role runs and model-spending
+    # land children) against this before it launches a role run; a merge or checks-only
+    # land child runs no model and takes no slot (GH-263, ADR-0045 addendum).
     max_concurrent_runs: int = Field(default=1, ge=1)
     # Spend-paced concurrency (GH-177): off by default, so the poller behaves exactly as
     # before. When on, a launch beyond the first live run goes out only while the
@@ -135,7 +137,8 @@ class Configuration(BaseModel):
     spend_pacing: bool = False
     spend_pace_usd_per_h: float = Field(default=35.0, gt=0)
     # Where `run`/`resume` register the pid, host, product and task of a live
-    # invocation, and the poller counts them against `max_concurrent_runs` (GH-137).
+    # invocation and its kind, and the poller counts those that can spend a model against
+    # `max_concurrent_runs` (GH-137, GH-263).
     # Outside every product, one per machine: `$XDG_STATE_HOME/agentic/runs`, or
     # `~/.local/state/agentic/runs` when that variable is unset, the same fallback the
     # XDG base-directory spec gives. A plain field, not a property reading the

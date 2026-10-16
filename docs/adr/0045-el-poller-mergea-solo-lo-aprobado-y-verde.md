@@ -605,3 +605,59 @@ puerta solo para el producto que lo pide.
 - `prompts.fingerprint` cambia solo para `tech_lead_review` y `tech_lead_review_light`, y se pide un
   `bl-*` nuevo al mergear.
 - No se mueve ninguna métrica, etiqueta, atributo de span ni clave del documento.
+
+## Adenda (2026-10-16): el merge y los chequeos no cuentan contra el tope (GH-263)
+
+El 2026-10-16 un PR aprobado y mergeable de apostrophe (GH-135, PR #241) esperó unos 15 minutos
+detrás de dos corridas largas (GH-237, GH-166) que ocupaban los dos slots de
+`AGENTIC_MAX_CONCURRENT_RUNS=2`, y el poller sólo escribió `nothing to do this round`. Un
+`agentic merge --issue 135` a mano lo mergeó en pocos minutos.
+
+- **Decisión.** Los hijos que no corren modelo quedan **exentos del tope**, no sólo con
+  precedencia: darle precedencia no ayuda cuando los dos slots ya están ocupados por corridas de
+  horas, y estos hijos gastan CPU y tiempo, no sesión ni plata. Terminar lo entregado primero era
+  la regla del operador.
+- **Esto reemplaza, por nombre,** dos frases de la adenda de GH-178: "un merge nunca le saca el
+  lugar a trabajo de roles" y "un hijo de merge por vuelta, en un slot sobrante".
+- **Tipos.** `rules.RunKind = Literal["role", "merge", "land_checks", "land_model"]` y
+  `rules.counts_against_cap(kind)`, el único lugar que decide si un hijo cuenta: un `match`
+  exhaustivo que termina en `assert_never`, verdadero para `role` y `land_model`. `run_kind_of`
+  asigna el tipo a cada paso de `land`: `rerun` y `file_followups_and_land` son `land_checks`; el
+  resto, y las recuperaciones sin paso, `land_model`. Todo `sync_master` es `land_model`, aun el
+  limpio: `landing_sync.sync_master` reabre la tarea y lanza un `resume` (una pasada de modelo)
+  cuando el merge toca los paths revisados, choca al correr o falla el sync o el push, y nada de
+  eso se sabe antes de correrlo; un hijo exento nunca lanza un `resume`.
+- **Registro.** Cada registro de corrida gana `kind`; uno ausente, desconocido o ilegible se lee
+  como `role`. Se escribe una vez, a un temporal y `os.replace`, y no se reescribe mientras el hijo
+  corre. `merge` se registra como `merge`; `run` y `resume` como `role`.
+- **`--run-kind`.** El poller lanza `agentic land --issue N --run-kind {land_checks,land_model}`
+  (por defecto `land_model`). `land` compara su tipo con el paso que recalcula: un hijo
+  `land_checks` que encuentra un paso que gasta modelo no registra nada, no lanza nada y devuelve
+  `skipped/run_kind_mismatch`.
+- **Cota combinada de uno.** A lo sumo un hijo exento (`merge` o `land_checks`) vivo en la
+  máquina y a lo sumo uno arrancado por vuelta, el merge antes que el `land`. La cota es del lado
+  del plan y sólo rige para lo que arranca un poller: un `agentic merge` o `agentic land` directo
+  de una persona no se frena ni se rechaza al registrarse.
+- **Orden.** Las acciones exentas van al final de `PollPlan.actions`, para que la espera de hasta
+  60 s a que un hijo se registre nunca demore una acción de rol. Un `land_model` sigue pidiendo un
+  slot sobrante y va después del lanzamiento.
+- **Un hijo por tarea.** `gather_merges` salta toda tarea que ya tiene un hijo registrado vivo de
+  cualquier tipo en este producto, con la misma lectura de `live()` que el conteo.
+- **Líneas de espera.** `poll_plan` devuelve `PollPlan(actions, deferred)`; cada `Deferred`
+  (`no_slot` o `exempt_busy`) es una línea del poller, y una vuelta con una espera nunca escribe
+  `nothing to do this round`.
+- **§7.** No se agrega, mueve ni renombra ninguna métrica, span, atributo de span, etiqueta, clave
+  del documento ni prompt; `prompts.fingerprint` no se mueve. Lo nuevo: las líneas de espera del
+  poller, la línea de resultado `run_kind_mismatch` y el campo `kind` del archivo de registro de
+  corridas, que vive fuera de todo repo.
+- **§8.** Se ensancha: el poller puede correr un hijo `merge` o `land_checks` por encima de
+  `AGENTIC_MAX_CONCURRENT_RUNS`. Costo: CPU y tiempo de pared, no sesión ni dólares. El costo por
+  vuelta no crece con el tamaño de los datos: una lectura más de los registros vivos, que el poller
+  ya hacía.
+- **Riesgos conocidos.** Un `agentic land` directo de una persona se registra como `land_model` y
+  cuenta aunque su paso sólo reejecute chequeos: se equivoca hacia retener trabajo. El poller
+  clasifica con el sha de upstream que memorizó y el hijo recalcula después; un desacuerdo estable
+  repite `run_kind_mismatch` cada vuelta y sólo se ve en la línea del hijo. Un conjunto de chequeos
+  exento corre junto a hasta `cap` corridas de rol; si la máquina aún se sobrecarga, la palanca es
+  el valor de esa cota y no el tope. Los registros escritos antes de este cambio no tienen `kind` y
+  cuentan como `role` hasta que mueren.

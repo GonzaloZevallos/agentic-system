@@ -1042,6 +1042,7 @@ class MemoryRunRegistry:
     def __init__(self, entries: list[RunRegistration] | None = None) -> None:
         self.entries: list[RunRegistration] = list(entries or [])
         self.registered: list[tuple[str, str]] = []
+        self.registered_kinds: list[rules.RunKind] = []
         self.unregistered = 0
         self.exclusive_entries = 0
         self.attempts: dict[tuple[str, int], LaunchAttempt] = {}
@@ -1053,8 +1054,9 @@ class MemoryRunRegistry:
         self.spend_calls: list[datetime] = []
         self.spend_notes: list[str] = []
 
-    def register(self, product: str, task_id: str) -> None:
+    def register(self, product: str, task_id: str, kind: rules.RunKind = "role") -> None:
         self.registered.append((product, task_id))
+        self.registered_kinds.append(kind)
 
     def unregister(self) -> None:
         self.unregistered += 1

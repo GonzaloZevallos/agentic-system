@@ -1003,10 +1003,10 @@ def test_one_poll_round_over_a_stranded_document_offers_land_and_no_resume(tmp_p
     ]
     from tests.core.process.application.test_poll import _Locks
 
-    lands: list[int] = []
+    lands: list[rules.LandCandidate] = []
     poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [], lands=lands, now=LAST_AT)
 
-    assert lands == [5]
+    assert lands == [rules.LandCandidate(5, "land_model")]
     assert poll.gather_resumes(ports, LAST_AT + timedelta(days=1)) == []
 
 
@@ -1015,7 +1015,7 @@ def test_a_round_over_a_real_escalation_offers_neither(tmp_path):
     ports.tracker.timestamped["GH-5"] = [_told("Escalated: real", LAST_AT + timedelta(minutes=1))]
     from tests.core.process.application.test_poll import _Locks
 
-    lands: list[int] = []
+    lands: list[rules.LandCandidate] = []
     poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [], lands=lands, now=LAST_AT)
 
     assert lands == []

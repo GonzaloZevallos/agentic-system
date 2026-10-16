@@ -40,8 +40,8 @@ class FilesystemRunRegistry:
 
     # -- live runs ----------------------------------------------------------------
 
-    def register(self, product: str, task_id: str) -> None:
-        self._write(os.getpid(), _host(), product, task_id, self._boot_id())
+    def register(self, product: str, task_id: str, kind: rules.RunKind = "role") -> None:
+        self._write(os.getpid(), _host(), product, task_id, self._boot_id(), kind)
 
     def unregister(self) -> None:
         self._path(os.getpid()).unlink(missing_ok=True)
@@ -62,7 +62,11 @@ class FilesystemRunRegistry:
             # rule `FilesystemRunLock` already enforces. An entry from another boot is
             # dead whatever the pid says (`liveness.is_alive`).
             if host == here and is_alive(pid, data.get("boot_id"), current):
-                entries.append(RunRegistration(pid, host, data["product"], data["task_id"]))
+                entries.append(
+                    RunRegistration(
+                        pid, host, data["product"], data["task_id"], _kind_of(data.get("kind"))
+                    )
+                )
         return entries
 
     @contextlib.contextmanager
@@ -76,8 +80,16 @@ class FilesystemRunRegistry:
                 fcntl.flock(handle, fcntl.LOCK_UN)
 
     def _write(
-        self, pid: int, host: str, product: str, task_id: str, boot_id: str | None = None
+        self,
+        pid: int,
+        host: str,
+        product: str,
+        task_id: str,
+        boot_id: str | None = None,
+        kind: rules.RunKind = "role",
     ) -> None:
+        """The record whole, once: a temp file in the same directory then `os.replace`,
+        so `live()` never reads half a record."""
         self.dir.mkdir(parents=True, exist_ok=True)
         record = {
             "pid": pid,
@@ -85,8 +97,9 @@ class FilesystemRunRegistry:
             "product": product,
             "task_id": task_id,
             "boot_id": boot_id,
+            "kind": kind,
         }
-        self._path(pid).write_text(json.dumps(record), encoding="utf-8")
+        _replace_json(self._path(pid), record)
 
     def _path(self, pid: int) -> Path:
         return self.dir / f"{pid}.json"
@@ -136,14 +149,7 @@ class FilesystemRunRegistry:
             ],
         }
         path.parent.mkdir(parents=True, exist_ok=True)
-        handle, temp = tempfile.mkstemp(dir=path.parent, prefix=".tmp-", suffix=".json")
-        try:
-            with os.fdopen(handle, "w", encoding="utf-8") as out:
-                out.write(json.dumps(record))
-            os.replace(temp, path)
-        except BaseException:
-            Path(temp).unlink(missing_ok=True)
-            raise
+        _replace_json(path, record)
         return notes
 
     def spend(self, since: datetime) -> tuple[list[rules.SpendRun], list[str]]:
@@ -191,6 +197,33 @@ class FilesystemRunRegistry:
             else []
         )
         return runs, notes
+
+
+def _replace_json(path: Path, record: dict[str, object]) -> None:
+    """`record` as `path`, whole: a temp file beside it, then `os.replace`. A temp file
+    never outlives a failed write. The temp name ends in `.tmp`, never `.json`, so
+    `live()`'s glob cannot read it."""
+    handle, temp = tempfile.mkstemp(dir=path.parent, prefix=".tmp-", suffix=".tmp")
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as out:
+            out.write(json.dumps(record))
+        os.replace(temp, path)
+    except BaseException:
+        Path(temp).unlink(missing_ok=True)
+        raise
+
+
+def _kind_of(raw: object) -> rules.RunKind:
+    """The kind a record names; missing, unknown or not a string is `role`, which counts."""
+    match raw:
+        case "merge":
+            return "merge"
+        case "land_checks":
+            return "land_checks"
+        case "land_model":
+            return "land_model"
+        case _:
+            return "role"
 
 
 def _spend_entry(entry: object) -> rules.SpendRun | None:

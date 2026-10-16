@@ -1400,3 +1400,74 @@ def test_the_pace_never_holds_back_a_close_while_it_holds_the_launch(tmp_path):
     cfg = _cfg(tmp_path, max_concurrent_runs=2, spend_pacing=True)
     lines = _round(cfg, ports, registry, FakeLauncher(), PACE_NOW)
     assert lines == ["agentic: poll: close #3 -> pid 4242"]
+
+
+# -- what counts against the cap (RunKind) --------------------------------------------------
+
+
+def _live(kind: str, pid: int = 1) -> RunRegistration:
+    return RunRegistration(pid=pid, host="h", product="other-product", task_id="GH-1", kind=kind)
+
+
+def _launchable(tmp_path):
+    ports = memory_ports()
+    ports.tracker._queue = [5]
+    ports.tracker.states[5] = IssueState("OPEN", "", (), None)
+    _seed_body(ports, 5)
+    return ports
+
+
+def test_a_live_merge_or_checks_land_does_not_take_a_slot_of_the_cap(tmp_path):
+    for exempt in ("merge", "land_checks"):
+        ports = _launchable(tmp_path)
+        registry = MemoryRunRegistry(entries=[_live("role"), _live(exempt, pid=2)])
+        launcher = FakeLauncher()
+        lines = _round(
+            _cfg(tmp_path, max_concurrent_runs=2), ports, registry, launcher, ESCALATED_AT
+        )
+        assert lines == ["agentic: poll: launch #5 -> pid 4242"], exempt
+
+
+def test_a_live_model_land_and_a_role_fill_the_cap_but_a_merge_beside_them_changes_nothing(
+    tmp_path,
+):
+    """The rejected input: counted children (`role`, `land_model`) alone fill the cap, and
+    a merge beside them neither frees a slot nor takes one."""
+    for entries in (
+        [_live("role"), _live("role", pid=2)],
+        [_live("role"), _live("land_model", pid=2)],
+        [_live("role"), _live("land_model", pid=2), _live("merge", pid=3)],
+    ):
+        ports = _launchable(tmp_path)
+        launcher = FakeLauncher()
+        lines = _round(
+            _cfg(tmp_path, max_concurrent_runs=2),
+            ports,
+            MemoryRunRegistry(entries=entries),
+            launcher,
+            ESCALATED_AT,
+        )
+        assert lines == ["agentic: poll: nothing to do this round"]
+        assert launcher.spawned == []
+
+
+def test_a_record_that_names_no_kind_still_takes_a_slot(tmp_path):
+    ports = _launchable(tmp_path)
+    registry = MemoryRunRegistry(
+        entries=[RunRegistration(pid=1, host="h", product="p", task_id="GH-1")]
+    )
+    launcher = FakeLauncher()
+    lines = _round(_cfg(tmp_path, max_concurrent_runs=1), ports, registry, launcher, ESCALATED_AT)
+    assert lines == ["agentic: poll: nothing to do this round"]
+
+
+def test_the_pace_sees_only_the_counted_runs_so_a_live_merge_is_an_empty_machine(tmp_path):
+    ports = _paced_ports([_spent_run(10, 500.0)])
+    registry = MemoryRunRegistry(entries=[_live("merge")])
+    launcher = FakeLauncher()
+    cfg = _cfg(tmp_path, max_concurrent_runs=2, spend_pacing=True)
+    lines = _round(cfg, ports, registry, launcher, PACE_NOW)
+    assert lines == ["agentic: poll: launch #5 -> pid 4242"]
+    held = _paced_ports([_spent_run(10, 500.0)])
+    lines = _round(cfg, held, MemoryRunRegistry(entries=[_live("role")]), FakeLauncher(), PACE_NOW)
+    assert lines == ["agentic: poll: nothing to do this round"]

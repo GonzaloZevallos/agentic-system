@@ -1709,7 +1709,9 @@ def test_poll_plan_does_not_launch_a_late_attempt_before_its_growing_slot():
     late = rules.LaunchCandidate(
         issue=9, blocked=False, since=NOW - timedelta(minutes=20), prior=5, limit=6
     )
-    actions = rules.poll_plan(closes=[], resumes=[], launches=[late], available_slots=1, now=NOW)
+    actions = rules.poll_plan(
+        closes=[], resumes=[], launches=[late], available_slots=1, now=NOW
+    ).actions
     assert actions == []
 
 
@@ -1717,7 +1719,9 @@ def test_poll_plan_launches_a_late_attempt_once_its_growing_slot_elapses():
     late = rules.LaunchCandidate(
         issue=9, blocked=False, since=NOW - timedelta(minutes=121), prior=5, limit=6
     )
-    actions = rules.poll_plan(closes=[], resumes=[], launches=[late], available_slots=1, now=NOW)
+    actions = rules.poll_plan(
+        closes=[], resumes=[], launches=[late], available_slots=1, now=NOW
+    ).actions
     assert actions == [rules.PollAction("launch", 9)]
 
 
@@ -2005,7 +2009,9 @@ NOW = datetime(2026, 10, 3, 20, 0)
 
 
 def test_poll_plan_closes_everything_lowest_first_and_never_spends_a_slot():
-    actions = rules.poll_plan(closes=[9, 3], resumes=[], launches=[], available_slots=0, now=NOW)
+    actions = rules.poll_plan(
+        closes=[9, 3], resumes=[], launches=[], available_slots=0, now=NOW
+    ).actions
     assert actions == [rules.PollAction("close", 3), rules.PollAction("close", 9)]
 
 
@@ -2013,7 +2019,9 @@ def test_poll_plan_resumes_a_due_account_limit_pause():
     due = rules.ResumeCandidate(
         issue=5, reason="account_limit", since=NOW.replace(hour=0), prior=0, limit=6
     )
-    actions = rules.poll_plan(closes=[], resumes=[due], launches=[], available_slots=1, now=NOW)
+    actions = rules.poll_plan(
+        closes=[], resumes=[due], launches=[], available_slots=1, now=NOW
+    ).actions
     assert actions == [rules.PollAction("resume", 5)]
 
 
@@ -2022,7 +2030,9 @@ def test_poll_plan_does_not_resume_a_pause_still_waiting_out_its_own_calendar():
     not_due = rules.ResumeCandidate(
         issue=5, reason="account_limit", since=NOW - timedelta(minutes=1), prior=0, limit=6
     )
-    actions = rules.poll_plan(closes=[], resumes=[not_due], launches=[], available_slots=1, now=NOW)
+    actions = rules.poll_plan(
+        closes=[], resumes=[not_due], launches=[], available_slots=1, now=NOW
+    ).actions
     assert actions == []
 
 
@@ -2030,7 +2040,9 @@ def test_poll_plan_caps_resumes_at_available_slots_lowest_issue_first():
     since = NOW.replace(hour=0)
     a = rules.ResumeCandidate(issue=20, reason="upstream", since=since, prior=0, limit=6)
     b = rules.ResumeCandidate(issue=5, reason="upstream", since=since, prior=0, limit=6)
-    actions = rules.poll_plan(closes=[], resumes=[a, b], launches=[], available_slots=1, now=NOW)
+    actions = rules.poll_plan(
+        closes=[], resumes=[a, b], launches=[], available_slots=1, now=NOW
+    ).actions
     assert actions == [rules.PollAction("resume", 5)]
 
 
@@ -2039,20 +2051,24 @@ def test_poll_plan_launches_the_lowest_unblocked_issue():
     ready = rules.LaunchCandidate(issue=9, blocked=False, since=None, prior=0, limit=6)
     actions = rules.poll_plan(
         closes=[], resumes=[], launches=[blocked, ready], available_slots=1, now=NOW
-    )
+    ).actions
     assert actions == [rules.PollAction("launch", 9)]
 
 
 def test_poll_plan_does_not_launch_an_issue_with_an_open_blocker():
     # Rejected input: the one candidate there is stays blocked -- nothing launches.
     blocked = rules.LaunchCandidate(issue=4, blocked=True, since=None, prior=0, limit=6)
-    actions = rules.poll_plan(closes=[], resumes=[], launches=[blocked], available_slots=1, now=NOW)
+    actions = rules.poll_plan(
+        closes=[], resumes=[], launches=[blocked], available_slots=1, now=NOW
+    ).actions
     assert actions == []
 
 
 def test_poll_plan_launches_nothing_when_the_cap_is_full():
     ready = rules.LaunchCandidate(issue=9, blocked=False, since=None, prior=0, limit=6)
-    actions = rules.poll_plan(closes=[], resumes=[], launches=[ready], available_slots=0, now=NOW)
+    actions = rules.poll_plan(
+        closes=[], resumes=[], launches=[ready], available_slots=0, now=NOW
+    ).actions
     assert actions == []
 
 
@@ -2062,7 +2078,9 @@ def test_poll_plan_does_not_launch_an_issue_whose_own_wait_has_not_elapsed():
     not_due = rules.LaunchCandidate(
         issue=9, blocked=False, since=NOW - timedelta(minutes=1), prior=0, limit=6
     )
-    actions = rules.poll_plan(closes=[], resumes=[], launches=[not_due], available_slots=1, now=NOW)
+    actions = rules.poll_plan(
+        closes=[], resumes=[], launches=[not_due], available_slots=1, now=NOW
+    ).actions
     assert actions == []
 
 
@@ -2074,7 +2092,7 @@ def test_poll_plan_does_not_launch_an_issue_whose_own_calendar_is_spent():
     )
     actions = rules.poll_plan(
         closes=[], resumes=[], launches=[exhausted], available_slots=1, now=NOW
-    )
+    ).actions
     assert actions == []
 
 
@@ -2088,7 +2106,7 @@ def test_poll_plan_launches_even_though_an_exhausted_resume_elsewhere_cannot_ret
     ready = rules.LaunchCandidate(issue=9, blocked=False, since=None, prior=0, limit=6)
     actions = rules.poll_plan(
         closes=[], resumes=[exhausted], launches=[ready], available_slots=1, now=NOW
-    )
+    ).actions
     assert actions == [rules.PollAction("launch", 9)]
 
 
@@ -2101,15 +2119,15 @@ def test_poll_plan_launches_nothing_while_a_pause_elsewhere_still_waits():
     ready = rules.LaunchCandidate(issue=9, blocked=False, since=None, prior=0, limit=6)
     actions = rules.poll_plan(
         closes=[], resumes=[not_due], launches=[ready], available_slots=1, now=NOW
-    )
+    ).actions
     assert actions == []
 
 
 def test_poll_plan_called_twice_with_the_same_closes_never_doubles_the_action():
     # `poll_plan` is pure and stateless: not relaunching an already-registered issue is
     # the caller's own bookkeeping (the launches ledger), never this function's memory.
-    once = rules.poll_plan(closes=[7], resumes=[], launches=[], available_slots=1, now=NOW)
-    twice = rules.poll_plan(closes=[7], resumes=[], launches=[], available_slots=1, now=NOW)
+    once = rules.poll_plan(closes=[7], resumes=[], launches=[], available_slots=1, now=NOW).actions
+    twice = rules.poll_plan(closes=[7], resumes=[], launches=[], available_slots=1, now=NOW).actions
     assert once == twice == [rules.PollAction("close", 7)]
 
 
@@ -2123,7 +2141,7 @@ def test_poll_plan_blocks_a_launch_while_the_last_account_limit_slot_still_waits
     )
     actions = rules.poll_plan(
         closes=[], resumes=[waiting], launches=[_ready_launch()], available_slots=1, now=NOW
-    )
+    ).actions
     assert actions == []
 
 
@@ -2131,7 +2149,9 @@ def test_poll_plan_retakes_an_account_limit_pause_on_the_flat_calendar():
     due = rules.ResumeCandidate(
         issue=5, reason="account_limit", since=NOW - timedelta(minutes=16), prior=12, limit=24
     )
-    actions = rules.poll_plan(closes=[], resumes=[due], launches=[], available_slots=1, now=NOW)
+    actions = rules.poll_plan(
+        closes=[], resumes=[due], launches=[], available_slots=1, now=NOW
+    ).actions
     assert actions == [rules.PollAction("resume", 5)]
 
 
@@ -2145,15 +2165,17 @@ def test_poll_plan_retakes_hourly_once_the_chase_max_is_reached():
     # waiting pause still blocks the launch.
     actions = rules.poll_plan(
         closes=[], resumes=[over], launches=[_ready_launch()], available_slots=1, now=NOW
-    )
+    ).actions
     assert actions == []
     due = replace(over, since=NOW - timedelta(minutes=61))
-    actions = rules.poll_plan(closes=[], resumes=[due], launches=[], available_slots=1, now=NOW)
+    actions = rules.poll_plan(
+        closes=[], resumes=[due], launches=[], available_slots=1, now=NOW
+    ).actions
     assert actions == [rules.PollAction("resume", 5)]
     spent = replace(over, chase_prior=rules.ACCOUNT_LIMIT_CHASE_MAX + 168)
     actions = rules.poll_plan(
         closes=[], resumes=[spent], launches=[_ready_launch()], available_slots=1, now=NOW
-    )
+    ).actions
     assert actions == [rules.PollAction("launch", 9)]
 
 
@@ -2164,12 +2186,12 @@ def test_poll_plan_does_not_retake_nor_block_once_the_interview_ceiling_is_spent
     )
     actions = rules.poll_plan(
         closes=[], resumes=[spent], launches=[_ready_launch()], available_slots=1, now=NOW
-    )
+    ).actions
     assert actions == [rules.PollAction("launch", 9)]
     open_ceiling = replace(spent, ceiling_spent=False)
     actions = rules.poll_plan(
         closes=[], resumes=[open_ceiling], launches=[], available_slots=1, now=NOW
-    )
+    ).actions
     assert actions == [rules.PollAction("resume", 5)]
 
 
@@ -2183,7 +2205,7 @@ def test_poll_plan_treats_a_zero_limit_as_exhausted_never_as_a_flag():
         )
         actions = rules.poll_plan(
             closes=[], resumes=[zero], launches=[_ready_launch()], available_slots=1, now=NOW
-        )
+        ).actions
         assert actions == [rules.PollAction("launch", 9)]
 
 
@@ -2271,7 +2293,7 @@ def test_poll_plan_orders_closes_then_retakes_then_resumes_then_a_launch():
         launches=[_ready_launch()],
         available_slots=3,
         now=NOW,
-    )
+    ).actions
     assert actions == [
         rules.PollAction("close", 8),
         rules.PollAction("retake", 4),
@@ -2282,11 +2304,11 @@ def test_poll_plan_orders_closes_then_retakes_then_resumes_then_a_launch():
 
 def test_poll_plan_launches_after_a_retake_only_when_a_slot_remains():
     plan = dict(closes=[], resumes=[], launches=[_ready_launch()], now=NOW)
-    assert rules.poll_plan(retakes=[4], available_slots=2, **plan) == [
+    assert rules.poll_plan(retakes=[4], available_slots=2, **plan).actions == [
         rules.PollAction("retake", 4),
         rules.PollAction("launch", 9),
     ]
-    assert rules.poll_plan(retakes=[4], available_slots=1, **plan) == [
+    assert rules.poll_plan(retakes=[4], available_slots=1, **plan).actions == [
         rules.PollAction("retake", 4)
     ]
 
@@ -2305,7 +2327,7 @@ def test_poll_plan_never_spends_more_slots_than_available_on_retakes_resumes_and
             launches=[_ready_launch()],
             available_slots=slots,
             now=NOW,
-        )
+        ).actions
         spent = [a for a in actions if a.kind != "close"]
         assert len(spent) == min(slots, 6), slots
 
@@ -2315,14 +2337,14 @@ def test_poll_plan_gives_retakes_the_slots_before_resumes():
     resume = rules.ResumeCandidate(issue=1, reason="upstream", since=since, prior=0, limit=6)
     actions = rules.poll_plan(
         closes=[], retakes=[9], resumes=[resume], launches=[], available_slots=1, now=NOW
-    )
+    ).actions
     assert actions == [rules.PollAction("retake", 9)]
 
 
 def test_poll_plan_retakes_nothing_when_the_cap_is_full():
     actions = rules.poll_plan(
         closes=[], retakes=[9], resumes=[], launches=[], available_slots=0, now=NOW
-    )
+    ).actions
     assert actions == []
 
 
@@ -2337,7 +2359,7 @@ def test_poll_plan_retakes_do_not_unblock_a_launch_while_a_resume_still_waits():
         launches=[_ready_launch()],
         available_slots=3,
         now=NOW,
-    )
+    ).actions
     assert actions == [rules.PollAction("retake", 4)]
 
 
@@ -2652,3 +2674,16 @@ def test_retake_calendar_names_the_flat_hourly_and_growing_calendars():
         len(rules.ACCOUNT_LIMIT_HOURLY),
     )
     assert rules.retake_calendar("upstream", 2, past, limit) == (rules.RETAKE_SCHEDULE, 2, limit)
+
+
+@pytest.mark.parametrize(
+    ("kind", "counts"),
+    [("role", True), ("land_model", True), ("merge", False), ("land_checks", False)],
+)
+def test_only_the_children_that_can_spend_a_model_count_against_the_cap(kind, counts):
+    assert rules.counts_against_cap(kind) is counts
+
+
+def test_counts_against_cap_decides_every_run_kind():
+    for kind in get_args(rules.RunKind):
+        assert isinstance(rules.counts_against_cap(kind), bool)

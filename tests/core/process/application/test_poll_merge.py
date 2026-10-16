@@ -322,12 +322,32 @@ def test_two_rounds_with_the_merge_childs_lock_alive_spawn_exactly_once(tmp_path
     assert len(launcher.spawned) == 1
 
 
-def test_with_no_slot_left_no_merge_is_spawned(tmp_path):
+def test_with_no_slot_left_the_merge_is_still_spawned(tmp_path):
+    # Was `test_with_no_slot_left_no_merge_is_spawned` (GH-263): the merge child runs no
+    # model, so a full cap does not hold it.
     ports = _ports(5)
     registry = MemoryRunRegistry(entries=[RunRegistration(1, "h", "other", "GH-1")])
     launcher = FakeLauncher()
     _round(_cfg(tmp_path, max_concurrent_runs=1), ports, registry, launcher, ESCALATED_AT)
+    assert launcher.spawned == [_merge_argv(5, tmp_path)]
+
+
+def test_a_live_exempt_child_of_another_product_holds_the_merge_back(tmp_path):
+    # Invariant 7 (GH-263): one exempt child live on the machine, whatever its product.
+    ports = _ports(5)
+    live = RunRegistration(1, "h", "other", "GH-1", kind="merge")
+    launcher = FakeLauncher()
+    lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(entries=[live]), launcher, ESCALATED_AT)
     assert launcher.spawned == []
+    assert lines != ["agentic: poll: merge #5 -> pid 4242"]
+
+
+def test_a_live_role_child_does_not_hold_the_merge_back_as_an_exempt_one(tmp_path):
+    ports = _ports(5)
+    live = RunRegistration(1, "h", "other", "GH-1", kind="role")
+    launcher = FakeLauncher()
+    _round(_cfg(tmp_path), ports, MemoryRunRegistry(entries=[live]), launcher, ESCALATED_AT)
+    assert launcher.spawned == [_merge_argv(5, tmp_path)]
 
 
 def test_an_eval_set_issue_is_never_spawned(tmp_path):
@@ -703,20 +723,26 @@ def test_a_second_land_of_the_same_head_and_step_is_skipped_without_a_write(tmp_
     assert len(dispatched) == 1 and len((ports.documents.load("GH-5") or {})["landing"]) == 1
 
 
-def test_poll_plan_orders_at_most_one_land_into_a_spare_slot_after_the_merge():
+def test_poll_plan_orders_at_most_one_model_land_into_a_spare_slot_before_the_merge():
+    # Was `...into_a_spare_slot_after_the_merge` (GH-263): the merge is exempt and goes
+    # last; a land that can spend a model still needs a slot of its own.
     now = ESCALATED_AT
+    lands = [rules.LandCandidate(9, "land_model"), rules.LandCandidate(4, "land_model")]
     plan = rules.poll_plan(
-        closes=[], resumes=[], launches=[], available_slots=2, now=now, merges=[7], lands=[9, 4]
-    )
-    assert plan == [rules.PollAction("merge", 7), rules.PollAction("land", 4)]
+        closes=[], resumes=[], launches=[], available_slots=2, now=now, merges=[7], lands=lands
+    ).actions
+    assert plan == [rules.PollAction("land", 4), rules.PollAction("merge", 7)]
     tight = rules.poll_plan(
-        closes=[], resumes=[], launches=[], available_slots=1, now=now, merges=[7], lands=[4]
+        closes=[],
+        resumes=[],
+        launches=[],
+        available_slots=0,
+        now=now,
+        merges=[7],
+        lands=lands[1:],
     )
-    assert tight == [rules.PollAction("merge", 7)]
-    none = rules.poll_plan(
-        closes=[], resumes=[], launches=[], available_slots=0, now=now, lands=[4]
-    )
-    assert none == []
+    assert tight.actions == [rules.PollAction("merge", 7)]
+    assert tight.deferred == [rules.Deferred("land", 4, "no_slot")]
 
 
 # ---- a reopened landing that lost its resume child (GH-242) ---------------------------------
@@ -736,9 +762,9 @@ def _stuck(**entry):
 
 
 def _lands(ports, now):
-    lands: list[int] = []
+    lands: list[rules.LandCandidate] = []
     poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [], lands, now=now)
-    return lands
+    return [c.issue for c in lands]
 
 
 def test_a_not_ready_task_whose_reopened_landing_owes_a_resume_is_a_land_candidate():
