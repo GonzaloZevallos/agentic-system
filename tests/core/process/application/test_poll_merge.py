@@ -762,9 +762,9 @@ def _stuck(**entry):
 
 
 def _lands(ports, now):
-    lands: list[int] = []
+    lands: list[rules.LandCandidate] = []
     poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [], lands, now=now)
-    return lands
+    return [c.issue for c in lands]
 
 
 def test_a_not_ready_task_whose_reopened_landing_owes_a_resume_is_a_land_candidate():

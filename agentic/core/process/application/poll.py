@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import functools
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import assert_never, get_args
@@ -437,14 +437,17 @@ def gather_merges(
     current_master: str | None,
     lock: RunLock,
     lines: list[str] | None = None,
-    lands: list[int] | None = None,
+    lands: list[rules.LandCandidate] | None = None,
     live: frozenset[LandingStepKind] = landing_plan.LIVE_STEPS,
     now: datetime | None = None,
+    busy: frozenset[str] = frozenset(),
 ) -> list[int]:
     """Every delivered, unclosed task `rules.auto_merge_decision` finds worth a merge
     child -- `merge` or `run_checks` -- and a line appended to `lines` for each one it
     refuses, naming the reason (GH-178). A task whose run lock reads alive is skipped
-    before anything else is read: a merge child already works on it, or a run does. An
+    before anything else is read: a merge child already works on it, or a run does. So is a
+    task in `busy`, the ids that have a live registered child of any kind for this product
+    (GH-263): no second child for one task, whatever slots are free. An
     unreadable upstream sha leaves every task alone, since the checks could not be told
     from stale ones; an unreadable pull request reads as not open and is refused with its
     line, every round. A task whose pull request reads closed unmerged
@@ -455,9 +458,12 @@ def gather_merges(
     too, so a candidate here is a reason to look, never the merge. Every refusal it logs also
     asks `landing_step` (GH-239) what the system does instead; `lands`, when given, collects
     the issues whose step is in `live` and not yet in the document's `landing` list for this
-    head. `wait` and `none` are never in `live`: they spawn nothing. A `not_ready` task whose
-    reopened landing lost its resume child (`landing.resume_owed` at `now`, the round's time)
-    is a `lands` candidate too (GH-242)."""
+    head, each as a `rules.LandCandidate` with the kind its child registers under
+    (`landing.run_kind_of`). `wait` and `none` are never in `live`: they spawn nothing. A
+    `not_ready` task whose reopened landing lost its resume child (`landing.resume_owed` at
+    `now`, the round's time) is a `lands` candidate too (GH-242), as is a stranded diagnose;
+    both have no step, so they are `land_model`. A task is in `found` or in `lands`, never
+    both."""
     out = lines if lines is not None else []
     now = now or datetime.now(UTC)
     if current_master is None:
@@ -471,7 +477,7 @@ def gather_merges(
         reference = raw.get("pull_request")
         if raw.get("closed_at") or not reference:
             continue
-        if lock.refusal(task_id) is not None:
+        if task_id in busy or lock.refusal(task_id) is not None:
             continue
         try:
             assessed = assess_merge(ports, task_id, raw, number, eval_set, current_master)
@@ -508,17 +514,19 @@ def gather_merges(
             if lands is not None and decision.reason is not None:
                 # Every refusal logged above asks `landing_step` what to do instead; only a
                 # built step not yet dispatched on this head is worth a `land` child.
-                if landing_plan.pending(raw, decision.reason, facts, live, now) is not None or (
-                    decision.reason == "not_ready"
-                    and (
-                        landing_rules.resume_owed(raw, now)
-                        or landing_plan.stranded_now(ports, task_id, raw)
-                    )
+                step = landing_plan.pending(raw, decision.reason, facts, live, now)
+                if step is not None:
+                    kind = landing_rules.run_kind_of(step.kind, decision.reason)
+                    lands.append(rules.LandCandidate(number, kind))
+                elif decision.reason == "not_ready" and (
+                    landing_rules.resume_owed(raw, now)
+                    or landing_plan.stranded_now(ports, task_id, raw)
                 ):
                     # A `not_ready` task whose reopened pass lost its resume child owes
                     # one: `land` respawns it (GH-242). So does a stranded diagnose, which
-                    # `land` frees and retries on the calendar (GH-257).
-                    lands.append(number)
+                    # `land` frees and retries on the calendar (GH-257). No step: it can
+                    # spend a model, so it counts.
+                    lands.append(rules.LandCandidate(number, landing_rules.run_kind_of(None, None)))
         else:
             found.append(number)
     return found
@@ -822,6 +830,7 @@ def execute(
     argv0: str,
     register_timeout_s: float = REGISTER_WAIT_S,
     sleep: Callable[[float], None] = time.sleep,
+    land_kinds: Mapping[int, rules.RunKind] | None = None,
 ) -> list[str]:
     """Carries out this round's actions, in the order `rules.poll_plan` already fixed:
     a detached `agentic close|resume|run` child each, through `launcher.spawn` alone --
@@ -838,7 +847,9 @@ def execute(
     never a failed spawn either) is awaited into `registry.live()` before this round
     returns (`_await_registration`, Human decision): still under `run_once`'s own
     `registry.exclusive()`, so the next poller to decide -- this product's next round,
-    or another product's on the same machine -- never reads a stale count."""
+    or another product's on the same machine -- never reads a stale count. A `land` child is
+    told the kind it registers under, `--run-kind`, from `land_kinds` (the classified
+    candidates of this round; an issue not in it is `land_model`, the kind that counts)."""
     product = ports.stack.product()
     product_dir = str(cfg.product_dir)
     total_attempts = len(rules.LAUNCH_SCHEDULE)
@@ -889,7 +900,8 @@ def execute(
             _await_registration(registry, task_id, register_timeout_s, sleep)
             lines.append(f"agentic: poll: merge #{action.issue} -> pid {pid}")
         elif action.kind == "land":
-            argv = _argv(argv0, "land", action.issue, product_dir)
+            kind = (land_kinds or {}).get(action.issue, "land_model")
+            argv = _argv(argv0, "land", action.issue, product_dir, "--run-kind", kind)
             try:
                 pid = launcher.spawn(argv)
             except OSError as exc:
@@ -943,6 +955,12 @@ def _upstream_notes(asked: bool, upstream: Callable[[], Upstream]) -> list[str]:
     return [f"agentic: poll: upstream: {note}"] if note else []
 
 
+def deferred_line(deferred: rules.Deferred) -> str:
+    """The poll line for a merge or land `rules.poll_plan` held back: built from the plan's
+    own `Deferred`, never from a second slot count (GH-263)."""
+    return f"agentic: poll: {deferred.kind} #{deferred.issue} waits: {deferred.reason}"
+
+
 def run_once(
     cfg: Configuration,
     ports: Ports,
@@ -982,6 +1000,8 @@ def run_once(
         # model (`merge`, `land_checks`) are counted apart, for the planning to bound.
         live = sum(1 for r in running if rules.counts_against_cap(r.kind))
         exempt_live = len(running) - live
+        product = ports.stack.product()
+        busy = frozenset(r.task_id for r in running if r.product == product)
         available = max(cfg.max_concurrent_runs - live, 0)
         pace: rules.SpendPace | None = None
         spend_notes: list[str] = []
@@ -999,10 +1019,10 @@ def run_once(
         launches = gather_launches(cfg, ports, registry, upstream)
         merges: list[int] = []
         merge_lines: list[str] = []
-        lands: list[int] = []
+        lands: list[rules.LandCandidate] = []
         if awaiting_merge(ports):
             merges = gather_merges(
-                ports, eval_set, upstream().sha, lock, merge_lines, lands, live_steps, now
+                ports, eval_set, upstream().sha, lock, merge_lines, lands, live_steps, now, busy
             )
         notes = [*spend_notes, *_upstream_notes(upstream.cache_info().currsize > 0, upstream)]
         plan = rules.poll_plan(
@@ -1013,15 +1033,25 @@ def run_once(
             now=now,
             retakes=retakes,
             merges=merges,
-            lands=[rules.LandCandidate(n, "land_model") for n in lands],
+            lands=lands,
             live_exempt=exempt_live,
             pace=pace,
         )
         lines = execute(
-            plan.actions, cfg, ports, registry, launcher, now, argv0, register_timeout_s, sleep
+            plan.actions,
+            cfg,
+            ports,
+            registry,
+            launcher,
+            now,
+            argv0,
+            register_timeout_s,
+            sleep,
+            {c.issue: c.kind for c in lands},
         )
+        deferral_lines = [deferred_line(d) for d in plan.deferred]
     # Outside the registry's exclusive section: reflecting takes no slot of the cap and
     # touches no task.
     lines += reflect_lines(cfg, ports, launcher, argv0)
-    lines = [*human_lines, *merge_lines, *lines]
+    lines = [*human_lines, *merge_lines, *lines, *deferral_lines]
     return [*notes, *(lines or ["agentic: poll: nothing to do this round"])]
