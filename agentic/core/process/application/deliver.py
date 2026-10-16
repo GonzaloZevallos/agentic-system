@@ -8,6 +8,7 @@ No role runs here; it is the system talking to the human, which ADR-0001 allows.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import assert_never
 
 from agentic.shared.configuration import Configuration
@@ -75,17 +76,11 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     preface = "\n\n".join(
         part for part in (replaced_note, _guarded_preface(state, task.branch, ports)) if part
     )
-    # A re-delivery under a landing pass closes its entry with what the pass cost.
+    # A re-delivery under a landing pass closes its entry with what the pass cost; a sync
+    # is closed as resolved only when the head holds the upstream it was dispatched for.
     reopened = state.get("landing")
     if reopened:
-        state = {
-            **state,
-            "landing": landing.resolve_open(
-                reopened,
-                datetime.now(UTC).isoformat(timespec="seconds"),
-                state.get("cost_usd", 0.0),
-            ),
-        }
+        state = {**state, "landing": _closed_landing(reopened, state, task.path, ports)}
     body = _bounded(state, task.branch, relative, ignored=False, preface=preface)
     if body.bounded and ports.workspace.is_ignored(task.path, relative):
         body = _bounded(state, task.branch, relative, ignored=True, preface=preface)
@@ -143,6 +138,27 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     if state.get("landing"):
         ports.documents.record_closure(state["id"], {"landing": state["landing"]})
     return done
+
+
+def _closed_landing(
+    entries: list[landing.LandingEntry], state: TaskState, path: Path, ports: Ports
+) -> list[landing.LandingEntry]:
+    """The `landing` list with its open last entry closed (GH-267): `resolve_open` as ever,
+    unless `landing.sync_verdict` says the delivered head lacks the upstream the sync was
+    dispatched for, which `close_unsynced` records instead. The head is delivered either way."""
+    at = datetime.now(UTC).isoformat(timespec="seconds")
+    cost = state.get("cost_usd", 0.0)
+    last = entries[-1]
+    upstream = last.get("upstream")
+    if landing.entry_closed(last) or not isinstance(upstream, str):
+        return landing.resolve_open(entries, at, cost)
+    try:
+        contains: bool | None = ports.workspace.is_ancestor(path, upstream, "HEAD")
+    except (GitError, ValueError):
+        contains = None
+    if landing.sync_verdict(last, contains) == "unsynced":
+        return landing.close_unsynced(entries, at, cost, upstream)
+    return landing.resolve_open(entries, at, cost)
 
 
 def _guarded_preface(state: TaskState, branch: str, ports: Ports) -> str:
