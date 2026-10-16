@@ -46,6 +46,7 @@ from .ports import (
     Ports,
     RunLock,
     RunRegistry,
+    TrackerTimedOut,
     Upstream,
 )
 
@@ -845,9 +846,12 @@ def _spawn_resume(
         pid = launcher.spawn(argv)
     except OSError as exc:
         return [f"agentic: poll: {action.kind} #{number} -> not launched (not counted): {exc}"]
-    ports.tracker.comment(task_id, comment)
-    registered = _await_registration(registry, task_id, register_timeout_s, sleep)
     lines = [f"agentic: poll: {action.kind} #{number} -> pid {pid}"]
+    try:
+        ports.tracker.comment(task_id, comment)
+    except TrackerTimedOut:  # the child runs on: only the comment is lost
+        lines.append(f"agentic: poll: {action.kind} #{number} -> comment timed out")
+    registered = _await_registration(registry, task_id, register_timeout_s, sleep)
     if action.kind == "retake" and not registered:
         lines.append(
             f"agentic: poll: retake #{number} -> not registered "

@@ -16,6 +16,7 @@ from agentic.core.process.application.ports import (
     LaunchAttempt,
     LockRecord,
     RunRegistration,
+    TrackerTimedOut,
     Upstream,
 )
 from agentic.core.process.domain.roles import INTERVIEW_SOLUTION
@@ -1471,3 +1472,73 @@ def test_the_pace_sees_only_the_counted_runs_so_a_live_merge_is_an_empty_machine
     held = _paced_ports([_spent_run(10, 500.0)])
     lines = _round(cfg, held, MemoryRunRegistry(entries=[_live("role")]), FakeLauncher(), PACE_NOW)
     assert lines == ["agentic: poll: nothing to do this round"]
+
+
+# -- a stalled gh call (GH-266) ------------------------------------------------------------
+
+
+class _CommentStalls(MemoryTracker):
+    def __init__(self, error):
+        super().__init__()
+        self.error = error
+
+    def comment(self, task_id, text):
+        raise self.error
+
+
+def _retake(tracker):
+    from agentic.core.process.domain import rules
+
+    ports = memory_ports(tracker=tracker)
+    _open_task(ports)
+    return poll.execute(
+        [rules.PollAction("retake", 30)],
+        _cfg("/p"),
+        ports,
+        MemoryRunRegistry(),
+        FakeLauncher(),
+        ESCALATED_AT,
+        "agentic",
+        register_timeout_s=0.0,
+        sleep=_no_sleep,
+    )
+
+
+def test_a_comment_that_times_out_after_a_spawn_keeps_the_spawn_line_and_still_waits():
+    lines = _retake(_CommentStalls(TrackerTimedOut("gh issue comment timed out after 60 s")))
+    assert lines == [
+        "agentic: poll: retake #30 -> pid 4242",
+        "agentic: poll: retake #30 -> comment timed out",
+        "agentic: poll: retake #30 -> not registered (retake 1 of 3)",
+    ]
+
+
+def test_a_comment_failing_with_any_other_value_error_still_escapes():
+    with pytest.raises(ValueError, match="scripted") as raised:
+        _retake(_CommentStalls(ValueError("scripted")))
+    assert not isinstance(raised.value, TrackerTimedOut)
+
+
+class _ReadsStall(MemoryTracker):
+    def queue(self):
+        raise TrackerTimedOut("gh issue list timed out after 60 s")
+
+    def list_pull_requests(self):
+        raise TrackerTimedOut("gh pr list timed out after 60 s")
+
+
+def test_a_round_whose_reads_time_out_releases_the_registry_lock_and_acts_on_nothing(tmp_path):
+    import fcntl
+
+    from agentic.core.process.adapters.filesystem import FilesystemRunRegistry
+
+    ports = memory_ports(tracker=_ReadsStall())
+    _open_task(ports)
+    registry = FilesystemRunRegistry(tmp_path / "runs")
+    launcher = FakeLauncher()
+    with pytest.raises(TrackerTimedOut):
+        _round(_cfg(tmp_path), ports, registry, launcher, ESCALATED_AT)
+    with open(tmp_path / "runs" / ".lock", "w") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)  # raises if still held
+    assert launcher.spawned == [] and ports.tracker.comments == []
+    assert [path for path in (tmp_path / "runs").iterdir() if path.name != ".lock"] == []

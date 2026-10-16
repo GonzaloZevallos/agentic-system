@@ -66,6 +66,7 @@ from .core.process.application.ports import (
     Ports,
     RunLock,
     RunRegistry,
+    TrackerTimedOut,
     Upstream,
 )
 from .core.process.application.preflight import (
@@ -965,18 +966,21 @@ async def _poll(
     executable = argv0 if argv0 is not None else _self_executable()
     with _locked(lock, pollmod.LOCK_KEY):
         while True:
-            for line in pollmod.run_once(
-                cfg,
-                ports,
-                registry,
-                real_launcher,
-                datetime.now(UTC),
-                executable,
-                lock=lock,
-                current_boot=liveness.current_boot_id(),
-                eval_set=_round_eval_set(ports),
-            ):
-                print(line, flush=True)
+            try:
+                for line in pollmod.run_once(
+                    cfg,
+                    ports,
+                    registry,
+                    real_launcher,
+                    datetime.now(UTC),
+                    executable,
+                    lock=lock,
+                    current_boot=liveness.current_boot_id(),
+                    eval_set=_round_eval_set(ports),
+                ):
+                    print(line, flush=True)
+            except TrackerTimedOut as exc:  # a stalled `gh` read ends this round, not the poller
+                print(f"agentic: poll: round ended early: {exc}", flush=True)
             await sleep(interval_s)
 
 
