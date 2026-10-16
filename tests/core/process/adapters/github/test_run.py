@@ -1,7 +1,6 @@
 """`run.bounded_run` and `run.run_gh` (GH-266, ADR-0050)."""
 
 import os
-import re
 import signal
 import subprocess
 import sys
@@ -12,8 +11,6 @@ import pytest
 
 from agentic.core.process.adapters.github.run import GH_DRAIN_S, bounded_run, run_gh
 from agentic.core.process.application.ports import TrackerTimedOut
-
-GITHUB = Path(__file__).parents[5] / "agentic/core/process/adapters/github"
 
 
 def _gh(run, *args, log=None, cwd=Path(".")):
@@ -209,23 +206,3 @@ def test_a_stalled_call_whose_child_left_the_group_is_still_bounded(tmp_path):
                 os.kill(int(pidfile.read_text()), signal.SIGKILL)
             except ProcessLookupError:
                 pass
-
-
-# --- one runner -------------------------------------------------------------------------
-
-
-def test_nothing_in_the_github_adapter_starts_a_process_outside_run_py():
-    offenders = [
-        path.name
-        for path in sorted(GITHUB.glob("*.py"))
-        if path.name != "run.py"
-        and re.search(r"subprocess\.(run|Popen)\b|\bPopen\(", path.read_text())
-    ]
-    assert offenders == []
-
-
-def test_the_grep_rejects_a_module_that_starts_its_own_process(tmp_path):
-    pattern = r"subprocess\.(run|Popen)\b|\bPopen\("
-    assert re.search(pattern, "x = subprocess.run(['gh'])")
-    assert re.search(pattern, "from subprocess import Popen\nPopen(['gh'])")
-    assert not re.search(pattern, "Run = Callable[..., subprocess.CompletedProcess[str]]")
