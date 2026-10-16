@@ -836,3 +836,39 @@ def test_every_conflicting_sync_refusal_is_a_model_sync_and_only_those():
         expected = "land_model" if refusal in landing.CONFLICTING_SYNC_REFUSALS else "land_checks"
         assert landing.run_kind_of("sync_master", refusal) == expected
     assert landing.run_kind_of("sync_master", None) == "land_checks"
+
+
+def test_a_model_registered_child_admits_every_step_and_the_recoveries():
+    for step in get_args(landing.LandingStepKind):
+        for refusal in (None, "checks_failed"):
+            assert landing.run_kind_admits("land_model", step, refusal)
+    assert landing.run_kind_admits("land_model", None, None)
+
+
+@pytest.mark.parametrize("registered", ["land_checks"])
+@pytest.mark.parametrize(
+    ("step", "refusal", "admitted"),
+    [
+        ("rerun", "checks_failed", True),
+        ("file_followups_and_land", "open_findings", True),
+        ("sync_master", "master_moved", True),
+        ("sync_master", "checks_failed", False),
+        ("sync_master", "merge_conflict", False),
+        ("fix", "checks_failed", False),
+        ("re_review", "head_not_reviewed", False),
+        ("diagnose", "checks_failed", False),
+        ("wait", "ci_unreadable", False),
+        ("none", "checks_failed", False),
+        (None, None, False),
+    ],
+)
+def test_a_checks_child_admits_only_the_steps_that_run_no_model(
+    registered, step, refusal, admitted
+):
+    assert landing.run_kind_admits(registered, step, refusal) is admitted
+
+
+@pytest.mark.parametrize("registered", ["role", "merge"])
+def test_a_kind_a_land_child_never_registers_under_admits_nothing_that_needs_a_model(registered):
+    assert not landing.run_kind_admits(registered, "fix", "checks_failed")
+    assert not landing.run_kind_admits(registered, None, None)

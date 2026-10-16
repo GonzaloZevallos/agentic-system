@@ -266,6 +266,13 @@ def main() -> None:
     )
     land.add_argument("--issue", type=int, metavar="N", required=True)
     land.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
+    land.add_argument(
+        "--run-kind",
+        choices=("land_checks", "land_model"),
+        default="land_model",
+        help="the kind this child registers under, set by the poller at spawn: land_checks "
+        "for a step that runs no model, land_model (the default) for any other",
+    )
     eval_parser = sub.add_parser(
         "eval", help="drive or score README.md 9's fixed five-task evaluation set"
     )
@@ -516,7 +523,7 @@ def main() -> None:
         elif args.command == "merge":
             work = partial(_merge, ports.inbox.task_id(args.issue), args.issue, cfg, ports)
         elif args.command == "land":
-            work = partial(_land, ports.inbox.task_id(args.issue), cfg, ports)
+            work = partial(_land, ports.inbox.task_id(args.issue), cfg, ports, args.run_kind)
         elif args.command == "eval":
             if args.eval_command == "run":
                 log_file = _log_file_for(cfg, "eval")
@@ -1422,12 +1429,17 @@ def _resume_spawner(cfg: Configuration) -> Callable[[int], int | None]:
     return spawn
 
 
-async def _land(task_id: str, cfg: Configuration, ports: Ports) -> None:
+async def _land(
+    task_id: str, cfg: Configuration, ports: Ports, run_kind: rules.RunKind = "land_model"
+) -> None:
     """`agentic land --issue N` (GH-239, ADR-0048): the step `landing_step` names for the
     refusal of the task's pull request, recorded under the task's run lock and then
-    dispatched. Registered like any run; spends no model money itself and opens no span."""
+    dispatched. Registered like any run; the kind
+    it registers under is the one it was spawned with (`--run-kind`), fixed for its whole life
+    and checked by `land` against the step it recomputes. Spends no model money itself and
+    opens no span."""
     lock = _lock_for(cfg)
-    with _registered(_registry_for(cfg), product_name(ports), task_id):
+    with _registered(_registry_for(cfg), product_name(ports), task_id, run_kind):
         upstream = ports.workspace.upstream()
         arm = delivery_metrics.arm_label(
             {"review_mode": cfg.review_mode, "skip_ephemeral": str(cfg.skip_ephemeral)}
@@ -1449,6 +1461,7 @@ async def _land(task_id: str, cfg: Configuration, ports: Ports) -> None:
                 launcher=SpawnLauncher(cfg),
                 argv0=_self_executable(),
                 role_span=lambda role: telemetry.role_span(role.name, role.slug, product, arm=arm),
+                run_kind=run_kind,
             )
         except LockHeld as exc:
             raise CannotStart(f"{exc}: {LOCK_SCOPE}") from exc

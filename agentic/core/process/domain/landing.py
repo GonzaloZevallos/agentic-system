@@ -53,6 +53,16 @@ def run_kind_of(step: LandingStepKind | None, refusal: rules.MergeRefusal | None
             return "land_model"
 
 
+def run_kind_admits(
+    registered: rules.RunKind, step: LandingStepKind | None, refusal: rules.MergeRefusal | None
+) -> bool:
+    """Whether a `land` child registered as `registered` may carry out `step` (`None` for
+    the recoveries). A `land_model` child may do anything; any other kind only a step that
+    `run_kind_of` says spends no model, so a child the poller did not count against the cap
+    never starts a pass that would have."""
+    return registered == "land_model" or run_kind_of(step, refusal) == "land_checks"
+
+
 LANDING_PASSES_MAX = 3
 """Model passes (`re_review`, `fix`, a conflicting `sync_master`) per task."""
 
