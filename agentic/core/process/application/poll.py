@@ -1005,7 +1005,7 @@ def run_once(
                 ports, eval_set, upstream().sha, lock, merge_lines, lands, live_steps, now
             )
         notes = [*spend_notes, *_upstream_notes(upstream.cache_info().currsize > 0, upstream)]
-        actions = rules.poll_plan(
+        plan = rules.poll_plan(
             closes=closes,
             resumes=resumes,
             launches=launches,
@@ -1013,11 +1013,11 @@ def run_once(
             now=now,
             retakes=retakes,
             merges=merges,
-            lands=lands,
+            lands=[rules.LandCandidate(n, "land_model") for n in lands],
             pace=pace,
         )
         lines = execute(
-            actions, cfg, ports, registry, launcher, now, argv0, register_timeout_s, sleep
+            plan.actions, cfg, ports, registry, launcher, now, argv0, register_timeout_s, sleep
         )
     # Outside the registry's exclusive section: reflecting takes no slot of the cap and
     # touches no task.

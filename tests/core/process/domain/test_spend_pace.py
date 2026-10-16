@@ -324,7 +324,7 @@ def plan(
         now=NOW,
         retakes=retakes or [],
         pace=pace,
-    )
+    ).actions
 
 
 def paced(live: int = 1, spent: float = 0.0, covered: float = 3600.0) -> SpendPace:
@@ -348,7 +348,7 @@ def test_poll_plan_pace_none_equals_the_call_without_pace(
         available_slots=slots,
         now=NOW,
         retakes=retakes,
-    )
+    ).actions
     with_none = plan(
         closes=[9],
         resumes=resumes,
