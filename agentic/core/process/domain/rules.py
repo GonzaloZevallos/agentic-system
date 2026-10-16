@@ -2756,7 +2756,8 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     """The one place the conditions of an automatic merge live (GH-178, ADR-0045); no
     adapter, CLI or poller re-derives any of them. Checked in this order and refused at the
     first that fails: `not_ready`, `pr_not_open`, `adr_number_taken`, `not_approved`,
-    `head_not_reviewed`, `open_findings_blocking`, `open_findings`, `eval_set_unreadable`, `eval_set`, `merge_failed`,
+    `head_not_reviewed`, `open_findings_blocking`, `open_findings`, `eval_set_unreadable`,
+    `eval_set`, `merge_failed`,
     then, only when the product declares its CI (`ci_required`): `ci_unreadable`, a `wait`
     for a head that is not the reviewed one, `ci_failed` and `ci_missing`, a green and fresh
     CI being the `merge` itself (a green stale one goes on); then `checks_failed` (only when
