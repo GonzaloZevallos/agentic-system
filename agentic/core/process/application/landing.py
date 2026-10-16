@@ -22,9 +22,10 @@ from ..domain.landing import LandingStepKind
 from ..domain.rules import RunKind
 from ..domain.task import TaskState
 from . import landing_fix, landing_plan, landing_sync
+from .checkouts import SetupFailed, task_checkout
 from .landing_plan import LandingContext
 from .poll import StackUnreadable, assess_merge
-from .ports import Launcher, Ports, RunLock, Upstream
+from .ports import GitError, Launcher, Ports, RunLock, Upstream
 
 
 @dataclass(frozen=True)
@@ -152,6 +153,10 @@ def _land(
     if landing_rules.already_dispatched(landing_plan.entries(raw), head, step.kind):
         log(f"agentic: land: {task_id}: {head} {step.kind}: already taken")
         return LandResult("skipped", "already_dispatched", step.kind)
+    if (
+        foreign := _foreign_merge(task_id, cfg, ports, raw, step.kind, head, master, log)
+    ) is not None:
+        return foreign
     # The last look at the pull request before anything is written: a push since the
     # decision makes it stale, and the next round decides again.
     try:
@@ -182,8 +187,49 @@ def _land(
         argv0=argv0,
         role_span=role_span,
     )
-    _dispatch(context)
+    try:
+        _dispatch(context)
+    except GitError as exc:
+        # A merge the step could not clear (`landing_sync.merges_cleared`): nothing was
+        # reopened or spawned on a tree still mid-merge.
+        log(f"agentic: land: {task_id}: {head} {step.kind}: git failed: {exc}")
+        return LandResult("stopped", f"git_error: {exc}", step.kind)
     return LandResult("dispatched", step=step.kind)
+
+
+MERGING_STEPS: frozenset[LandingStepKind] = frozenset({"sync_master", "re_review", "renumber"})
+
+
+def _foreign_merge(
+    task_id: str,
+    cfg: Configuration,
+    ports: Ports,
+    document: TaskState,
+    kind: LandingStepKind,
+    head: str,
+    master: str,
+    log: Callable[[str], None],
+) -> LandResult | None:
+    """A merge in the task worktree that is not the system's (`landing_rules.merge_owner`):
+    a step that merges would collide with it, and aborting it would throw a person's work
+    away, so nothing is recorded or aborted and the next round looks again. `None` when the
+    step does not merge, nothing is in progress or the merge is the landing's own."""
+    if kind not in MERGING_STEPS:
+        return None
+    try:
+        checkout = task_checkout(document, cfg, ports)
+    except SetupFailed:
+        # The step itself reports a worktree that cannot be made (it reopens the unit).
+        return None
+    try:
+        merging = ports.workspace.merge_head(checkout.path)
+    except GitError as exc:
+        return LandResult("stopped", f"merge_head_unreadable: {exc}", kind)
+    owner = landing_rules.merge_owner(merging, master, head, landing_plan.entries(document))
+    if owner != "foreign":
+        return None
+    log(f"agentic: land: {task_id}: merge in progress ({merging}) is not the system's, left alone")
+    return LandResult("skipped", "foreign_merge", kind)
 
 
 def _refused(
