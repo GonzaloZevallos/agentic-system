@@ -27,11 +27,12 @@ from agentic.shared.configuration import Configuration
 
 from ..domain import ci, document, presubmit, rules
 from ..domain import landing as landing_rules
+from ..domain.adr_numbers import Ambiguous, Renaming
 from ..domain.boot import boot_verdict
 from ..domain.landing import LandingStepKind
 from ..domain.task import PullRequest, TaskState, apply
+from . import adr_collision, landing_plan, reflect_run
 from . import escalate as escalate_module
-from . import landing_plan, reflect_run
 from .checkouts import task_base
 from .ports import (
     GitError,
@@ -396,6 +397,7 @@ def assess_merge(
         declared = ports.stack.ci(task_base(raw, ports))
     except ValueError as exc:
         raise StackUnreadable(str(exc)) from exc
+    facts = replace(facts, adr_collision=_adr_collision(ports, raw, facts, current_master))
     decision = rules.auto_merge_decision(replace(facts, ci_required=declared))
     report = None
     if declared and decision.kind != "refuse":
@@ -404,6 +406,27 @@ def assess_merge(
         facts = with_ci(facts, raw, declared, report)
         decision = rules.auto_merge_decision(facts)
     return MergeAssessment(facts, decision, report, pull_request)
+
+
+def _adr_collision(
+    ports: Ports, raw: TaskState, facts: rules.MergeFacts, master: str
+) -> Renaming | Ambiguous | None:
+    """The collision the landing has to see to route `adr_number_taken` (GH-229), read on
+    the same master sha the merge verb uses and only for a ready task with an open pull
+    request whose diff touches `docs/adr/`. A diff or a read that fails is no collision here:
+    the merge verb reads again and is the one that stops."""
+    head = facts.pr_head
+    if head is None or facts.pr_state != "OPEN" or facts.status != "ready_for_review":
+        return None
+    try:
+        if not ports.workspace.fetch_commit(head):
+            return None
+        touched = ports.workspace.changed_paths(task_base(raw, ports), head)
+        if not adr_collision.touches_adrs(touched):
+            return None
+        return adr_collision.adr_collision(ports, master, head)
+    except GitError:
+        return None
 
 
 def awaiting_merge(ports: Ports) -> bool:
