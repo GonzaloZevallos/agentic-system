@@ -112,3 +112,23 @@ def test_it_agrees_with_review_carries_on_a_docs_only_change():
     assert landing.renumber_carries([DOC])
     assert not landing.review_carries(True, ["docs/adr/0050-x.md"], ["agentic/a.py"])
     assert not landing.renumber_carries([LineChange("agentic/a.py", "x = 1", "x = 2")])
+
+
+def test_line_changes_pairs_the_lines_that_differ_and_leaves_the_rest():
+    found = landing.line_changes("docs/a.md", "a\nsee ADR-0049\nz\n", "a\nsee ADR-0050\nz\nnew\n")
+    assert found == [
+        LineChange("docs/a.md", "see ADR-0049", "see ADR-0050"),
+        LineChange("docs/a.md", "", "new"),
+    ]
+    assert landing.line_changes("docs/a.md", "same\n", "same\n") == []
+
+
+def test_the_renumber_record_renders_only_when_present_and_a_document_without_it_is_unchanged():
+    from agentic.core.process.domain import document
+
+    state = {"id": "GH-9", "title": "t", "description": "d"}
+    record = {"from": "0049", "to": "0050", "head_before": "a", "head_after": "b", "carried": True}
+    without = document.render(state)
+    assert "adr_renumbered" not in without
+    assert document.render({**state, "adr_renumbered": []}) == without
+    assert "adr_renumbered" in document.render({**state, "adr_renumbered": [record]})
