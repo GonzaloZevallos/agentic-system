@@ -426,11 +426,19 @@ def _adr_collision(
     ports: Ports, raw: TaskState, facts: rules.MergeFacts, master: str
 ) -> Renaming | Ambiguous | None:
     """The collision the landing has to see to route `adr_number_taken` (GH-229), read on
-    the same master sha the merge verb uses and only for a ready task with an open pull
-    request whose diff touches `docs/adr/`. A diff or a read that fails is no collision here:
-    the merge verb reads again and is the one that stops."""
+    the same master sha the merge verb uses. Whether it is read at all is
+    `rules.adr_probe_wanted`'s, derived from the decision's own order (GH-262: a refactor of
+    where the order lives, it moves no read).
+
+    Per tick, for each task that is `ready_for_review` with an `OPEN` pull request: one local
+    `cat-file -e` for the head (one `fetch --quiet origin <sha>`, bounded by
+    `FETCH_TIMEOUT_S`, only when it is absent locally) and one `diff --name-only`. When the
+    diff touches `docs/adr/`, one `added_adrs` log more, and what `adr_collision.adr_collision`
+    reads after it. Bounded by the number of open pull requests, not by data size. A diff or
+    a read that fails is no collision here: the merge verb reads again and is the one that
+    stops."""
     head = facts.pr_head
-    if head is None or facts.pr_state != "OPEN" or facts.status != "ready_for_review":
+    if head is None or not rules.adr_probe_wanted(facts):
         return None
     try:
         if not ports.workspace.fetch_commit(head):
