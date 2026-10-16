@@ -172,6 +172,9 @@ def _land(
         "refusal": step.refusal,
         "at": clock(),
     }
+    if step.kind == "sync_master" and upstream.sha is not None:
+        # What the sync is for: `deliver` resolves it only if the head holds this sha.
+        entry["upstream"] = upstream.sha
     ports.documents.record_closure(task_id, {"landing": [*landing_plan.entries(raw), entry]})
     context = LandingContext(
         task_id,

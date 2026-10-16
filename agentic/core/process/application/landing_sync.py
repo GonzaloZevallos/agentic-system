@@ -328,7 +328,21 @@ def _synced(context: LandingContext, state: TaskState, unit: str, sha: str) -> R
             ports.workspace.push(checkout.branch)
         except GitError as failed:
             return f"pushing the synced branch failed: {failed}", "delivered"
-        resolved = landing.resolve_open(entries(state), _now(), state.get("cost_usd", 0.0))
+        try:
+            contains: bool | None = ports.workspace.is_ancestor(checkout.path, sha, merged.head)
+        except GitError:
+            contains = None
+        written = entries(state)
+        cost = state.get("cost_usd", 0.0)
+        # Defensive: a clean merge always holds its upstream; one that does not is closed
+        # as unsynced, never resolved, and the verdict is not carried to it.
+        if landing.sync_verdict({"step": "sync_master", "upstream": sha}, contains) != "synced":
+            unsynced = landing.close_unsynced(written, _now(), cost, sha)
+            ports.documents.save({**state, "landing": unsynced})
+            record_landing(context, unsynced)
+            context.log(f"agentic: land: {context.task_id}: sync closed, {merged.head} lacks {sha}")
+            return None
+        resolved = landing.resolve_open(written, _now(), cost)
         subtasks = _carries(state, unit, reviewed, merged.head, holds=True)
         ports.documents.save({**state, "subtasks": subtasks, "landing": resolved})
         record_landing(context, resolved)

@@ -56,11 +56,16 @@ def _conflicting(entry: Mapping[str, object]) -> bool:
 
 
 def spent(
-    raw: Mapping[str, object], head: str | None, waited_s: float | None
+    raw: Mapping[str, object],
+    head: str | None,
+    waited_s: float | None,
+    upstream: str | None = None,
 ) -> landing.LandingSpent:
     """The passes, clean syncs and reruns on `head` the `landing` list records. A
     `sync_master` answering one of `landing.CONFLICTING_SYNC_REFUSALS` is the conflicting
-    one, a model pass; it never counts as a clean sync."""
+    one, a model pass; it never counts as a clean sync. `unsynced_for_upstream` counts the
+    entries closed with `lacks` equal to `upstream` (the round's master sha), by sha and never
+    by head (GH-267); without a sha it is 0."""
     done = entries(raw)
 
     def count(predicate: Callable[[dict[str, object]], bool]) -> int:
@@ -78,6 +83,9 @@ def spent(
         diagnosed=count(lambda e: e.get("step") == "diagnose" and e.get("delivered") is True) > 0,
         waited_s=waited_s,
         renumbers=count(lambda e: e.get("step") == "renumber"),
+        unsynced_for_upstream=(
+            count(lambda e: e.get("lacks") == upstream) if upstream is not None else 0
+        ),
     )
 
 
@@ -86,7 +94,7 @@ def step_for(raw: TaskState, refusal: rules.MergeRefusal, facts: rules.MergeFact
     return landing.landing_step(
         refusal,
         facts,
-        spent(raw, facts.pr_head, facts.ci_waited_s),
+        spent(raw, facts.pr_head, facts.ci_waited_s, facts.current_master),
         landing.blocking_owners(raw),
     )
 
