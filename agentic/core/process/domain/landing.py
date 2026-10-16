@@ -13,9 +13,12 @@ import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from difflib import SequenceMatcher
+from itertools import zip_longest
 from typing import Any, Literal, Protocol, get_args
 
 from . import ci, rules
+from .adr_numbers import Renaming
 from .roles import LANDING_DIAGNOSER
 from .task import FailureReason, LandingEntry, Subtask, SubtaskStatus, TaskState
 
@@ -26,13 +29,16 @@ LandingStepKind = Literal[
     "fix",
     "rerun",
     "file_followups_and_land",
+    "renumber",
     "diagnose",
     "none",
 ]
 """What the landing does about a refusal: `wait` (the next tick decides again), `sync_master`
 (merge the upstream into the task branch), `re_review` (a Tech Lead review of the head),
 `fix` (a Developer pass on `units`), `rerun` (the CI or the checks, once per head),
-`file_followups_and_land` (file the important findings, then merge), `diagnose` (the
+`file_followups_and_land` (file the important findings, then merge), `renumber` (rename the
+ADR whose number master took and rewrite the references inside the branch's own work,
+GH-229), `diagnose` (the
 terminal path: the landing diagnoser, then a restart) and `none` (nothing the system can
 do: the human's)."""
 
@@ -44,6 +50,11 @@ LANDING_PASSES_MAX = 3
 
 LANDING_SYNCS_MAX = 6
 """Clean `sync_master` per task."""
+
+LANDING_RENUMBERS_MAX = 3
+"""`renumber` steps per task (GH-229), counted from the `landing` list and charged neither to
+`LANDING_SYNCS_MAX` nor to `LANDING_PASSES_MAX`; declared, not measured. A fourth collision
+is the `diagnose`: no further push."""
 
 RESTART_DEPTH_MAX = 1
 """Restarts of one issue by the landing; a second exhaustion escalates."""
@@ -71,13 +82,15 @@ class LandingSpent:
     """What the task document says is already spent: model `passes` and clean `syncs`
     (counted from the `landing` list), `reruns_on_head` (entries of kind `rerun` on the
     current head), whether the diagnosis ran, and the seconds waited on an undecidable
-    gate (`None`: no anchor)."""
+    gate (`None`: no anchor); `renumbers` is the `renumber` entries on the list."""
 
     passes: int
     syncs: int
     reruns_on_head: int
     diagnosed: bool
     waited_s: float | None
+    # `renumber` entries across all heads (GH-229): the cap's own counter.
+    renumbers: int = 0
 
 
 def landing_step(
@@ -124,6 +137,14 @@ def landing_step(
             return _sync(step, spent, conflicting=True)
         case "attempts_exhausted":
             return _sync(step, spent, conflicting=False)
+        case "adr_number_taken":
+            # A clean renaming has its own capped step; anything else -- an ambiguous result
+            # included -- is the diagnose, so no Developer ever picks an ADR number.
+            if isinstance(facts.adr_collision, Renaming) and (
+                spent.renumbers < LANDING_RENUMBERS_MAX
+            ):
+                return step("renumber")
+            return step("diagnose")
         case "merge_failed":
             return step("diagnose")
         case "master_moved":
@@ -164,6 +185,46 @@ def review_carries(
     if conflicted:
         return False
     return set(merge_paths).isdisjoint(branch_paths)
+
+
+@dataclass(frozen=True)
+class LineChange:
+    """One changed line of a rewrite: the `path` it is in, the line as it was (`old`) and as
+    it is (`new`), either empty when the line was added or removed."""
+
+    path: str
+    old: str
+    new: str
+
+
+def line_changes(path: str, old: str, new: str) -> list[LineChange]:
+    """The lines that differ between two texts of `path`, paired in order; the side a line
+    has no counterpart on is empty."""
+    before, after = old.splitlines(), new.splitlines()
+    found: list[LineChange] = []
+    for tag, i1, i2, j1, j2 in SequenceMatcher(None, before, after, autojunk=False).get_opcodes():
+        if tag != "equal":
+            found.extend(
+                LineChange(path, x, y)
+                for x, y in zip_longest(before[i1:i2], after[j1:j2], fillvalue="")
+            )
+    return found
+
+
+def renumber_carries(changes: Sequence[LineChange]) -> bool:
+    """Whether the Tech Lead's verdict stands for the head after a renumber (GH-229): every
+    changed line is under `docs/` or is, on both sides, a `#` comment line once its leading
+    whitespace is stripped. A docstring, a string literal or a trailing comment is code that
+    runs or is read by a tool, so it does not carry. The twin of `review_carries`, which
+    decides the same for a sync merge."""
+
+    def comment(line: str) -> bool:
+        return not line.strip() or line.lstrip().startswith("#")
+
+    return all(
+        change.path.startswith("docs/") or (comment(change.old) and comment(change.new))
+        for change in changes
+    )
 
 
 def already_dispatched(landing: Sequence[Mapping[str, object]], head: str, step: str) -> bool:

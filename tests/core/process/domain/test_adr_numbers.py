@@ -1,0 +1,318 @@
+"""The ADR numbering rule (GH-229, ADR-0049): which of a branch's own ADRs collide with
+the ones master already holds, and the one simultaneous rewrite that moves them and the
+references to them. Pure: names and texts in, a mapping or a `Renaming` out."""
+
+import re
+
+import pytest
+
+from agentic.core.process.domain import adr_numbers
+from agentic.core.process.domain.adr_numbers import Ambiguous, OwnAdr, OwnLine, Renaming
+
+ADR = "docs/adr/"
+
+
+def _adr(number: str, slug: str = "x") -> str:
+    return f"{number}-{slug}.md"
+
+
+def test_number_of_reads_the_four_digit_prefix_of_an_adr_name_and_nothing_else():
+    assert adr_numbers.number_of("0049-un-titulo.md") == "0049"
+    assert adr_numbers.number_of("49-x.md") is None
+    assert adr_numbers.number_of("0049.md") is None
+    assert adr_numbers.number_of("00490-x.md") is None
+    assert adr_numbers.number_of("0049-x.txt") is None
+    assert adr_numbers.number_of("README.md") is None
+
+
+def test_duplicate_numbers_lists_a_number_two_different_files_share():
+    names = [_adr("0047"), _adr("0048", "a"), _adr("0048", "b"), "README.md"]
+    assert adr_numbers.duplicate_numbers(names) == ["0048"]
+    assert adr_numbers.duplicate_numbers([_adr("0047"), _adr("0048")]) == []
+
+
+def test_a_branch_adr_whose_number_master_does_not_hold_is_no_collision():
+    own = [OwnAdr(f"{ADR}{_adr('0049', 'mine')}", "c1")]
+    assert adr_numbers.collisions([_adr("0047"), _adr("0048")], own) == {}
+
+
+def test_a_branch_adr_whose_number_master_holds_moves_after_the_highest_number():
+    own = [OwnAdr(f"{ADR}{_adr('0049', 'mine')}", "c1")]
+    master = [_adr("0048"), _adr("0049", "theirs")]
+    assert adr_numbers.collisions(master, own) == {
+        f"{ADR}0049-mine.md": f"{ADR}0050-mine.md",
+    }
+
+
+def test_the_same_file_name_on_master_is_no_collision():
+    own = [OwnAdr(f"{ADR}{_adr('0049', 'same')}", "c1")]
+    assert adr_numbers.collisions([_adr("0049", "same")], own) == {}
+
+
+def test_two_colliding_adrs_take_the_next_numbers_in_order_of_old_number_then_path():
+    own = [
+        OwnAdr(f"{ADR}{_adr('0050', 'b')}", "c2"),
+        OwnAdr(f"{ADR}{_adr('0049', 'a')}", "c1"),
+    ]
+    master = [_adr("0049", "m"), _adr("0050", "n")]
+    assert adr_numbers.collisions(master, own) == {
+        f"{ADR}0049-a.md": f"{ADR}0051-a.md",
+        f"{ADR}0050-b.md": f"{ADR}0052-b.md",
+    }
+
+
+def test_a_non_colliding_own_adr_counts_towards_where_the_new_numbers_start():
+    own = [
+        OwnAdr(f"{ADR}{_adr('0049', 'a')}", "c1"),
+        OwnAdr(f"{ADR}{_adr('0050', 'b')}", "c2"),
+    ]
+    assert adr_numbers.collisions([_adr("0049", "m")], own) == {
+        f"{ADR}0049-a.md": f"{ADR}0051-a.md",
+    }
+
+
+def test_the_same_path_added_twice_is_one_adr():
+    own = [OwnAdr(f"{ADR}{_adr('0049', 'a')}", "c1"), OwnAdr(f"{ADR}{_adr('0049', 'a')}", "c2")]
+    assert adr_numbers.collisions([_adr("0049", "m")], own) == {
+        f"{ADR}0049-a.md": f"{ADR}0050-a.md",
+    }
+
+
+def test_two_own_adrs_with_the_same_number_are_ambiguous_even_without_a_collision():
+    own = [OwnAdr(f"{ADR}{_adr('0049', 'a')}", "c1"), OwnAdr(f"{ADR}{_adr('0049', 'b')}", "c2")]
+    result = adr_numbers.collisions([_adr("0048")], own)
+    assert isinstance(result, Ambiguous)
+    assert result.reason == "duplicate_own_number"
+    assert "0049-a.md" in result.detail and "0049-b.md" in result.detail
+
+
+def test_an_own_file_that_is_not_an_adr_name_is_ignored():
+    own = [OwnAdr(f"{ADR}README.md", "c1")]
+    assert adr_numbers.collisions([_adr("0049")], own) == {}
+
+
+# -- the rewrite -------------------------------------------------------------------------
+
+OLD = f"{ADR}0049-mine.md"
+NEW = f"{ADR}0050-mine.md"
+
+
+def _line(path: str, text: str, commit: str = "c1") -> OwnLine:
+    return OwnLine(path, commit, text)
+
+
+def _rewrite(moves, texts, lines, trees=None):
+    return adr_numbers.renumber(moves, lines, trees or {}, texts)
+
+
+def test_the_moved_file_and_a_full_file_name_reference_follow_the_number():
+    texts = {
+        OLD: (None, "# ADR-0049: mine\n\nbody\n"),
+        "agentic/x.py": ("a = 1\n", "a = 1\n# see docs/adr/0049-mine.md\n"),
+    }
+    lines = [_line(OLD, "# ADR-0049: mine")]
+    result = _rewrite({OLD: NEW}, texts, lines)
+    assert result == Renaming(
+        ((OLD, NEW),),
+        {NEW: "# ADR-0050: mine\n\nbody\n", "agentic/x.py": "a = 1\n# see docs/adr/0050-mine.md\n"},
+    )
+
+
+def test_a_file_name_is_rewritten_with_or_without_its_directory_prefix_anywhere():
+    texts = {
+        OLD: (None, "x\n"),
+        "docs/a.md": (
+            "old 0049-mine.md stays?\n",
+            "old 0049-mine.md stays?\n[l](0049-mine.md) [m](adr/0049-mine.md) "
+            "docs/adr/0049-mine.md\n",
+        ),
+    }
+    result = _rewrite({OLD: NEW}, texts, [])
+    assert isinstance(result, Renaming)
+    assert result.texts["docs/a.md"] == (
+        "old 0050-mine.md stays?\n[l](0050-mine.md) [m](adr/0050-mine.md) docs/adr/0050-mine.md\n"
+    )
+
+
+def test_a_file_name_that_only_looks_alike_is_left_alone():
+    texts = {OLD: (None, "x\n"), "a.md": ("", "x0049-mine.md and 0049-mineral.md\n")}
+    result = _rewrite({OLD: NEW}, texts, [])
+    assert isinstance(result, Renaming)
+    assert "a.md" not in result.texts
+
+
+def test_adr_tokens_are_rewritten_on_own_lines_only():
+    texts = {
+        OLD: (None, "x\n"),
+        "docs/b.md": (
+            "master cites ADR-0049 here\n",
+            "master cites ADR-0049 here\nmine cites (ADR-0049) and ADR 0049, then\n",
+        ),
+    }
+    lines = [_line("docs/b.md", "mine cites (ADR-0049) and ADR 0049, then")]
+    result = _rewrite({OLD: NEW}, texts, lines)
+    assert isinstance(result, Renaming)
+    assert result.texts["docs/b.md"] == (
+        "master cites ADR-0049 here\nmine cites (ADR-0050) and ADR 0050, then\n"
+    )
+
+
+def test_a_line_the_branch_added_that_master_already_has_is_not_own():
+    texts = {OLD: (None, "x\n"), "docs/b.md": ("see ADR-0049\n", "see ADR-0049\n")}
+    result = _rewrite({OLD: NEW}, texts, [_line("docs/b.md", "see ADR-0049")])
+    assert result == Renaming(((OLD, NEW),), {NEW: "x\n"})
+
+
+def test_an_adr_list_after_one_head_is_rewritten_item_by_item():
+    moves = {OLD: NEW, f"{ADR}0051-other.md": f"{ADR}0052-other.md"}
+    text = "ADRs 0010, 0049 y 0051; ADR 0049/0051 and ADR-0049, 0051, and 0012\n"
+    texts = {OLD: (None, "x\n"), f"{ADR}0051-other.md": (None, "y\n"), "d.md": ("", text)}
+    result = _rewrite(moves, texts, [_line("d.md", text.rstrip("\n"))])
+    assert isinstance(result, Renaming)
+    assert result.texts["d.md"] == (
+        "ADRs 0010, 0050 y 0052; ADR 0050/0052 and ADR-0050, 0052, and 0012\n"
+    )
+
+
+def test_numbers_that_swap_places_never_chain():
+    moves = {f"{ADR}0049-a.md": f"{ADR}0050-a.md", f"{ADR}0050-b.md": f"{ADR}0051-b.md"}
+    text = "ADR-0049 then ADR-0050 and docs/adr/0049-a.md and 0050-b.md\n"
+    texts = {
+        f"{ADR}0049-a.md": (None, "a\n"),
+        f"{ADR}0050-b.md": (None, "b\n"),
+        "n.md": ("", text),
+    }
+    result = _rewrite(moves, texts, [_line("n.md", text.rstrip("\n"))])
+    assert isinstance(result, Renaming)
+    assert result.texts["n.md"] == "ADR-0050 then ADR-0051 and docs/adr/0050-a.md and 0051-b.md\n"
+    assert set(result.texts) == {f"{ADR}0050-a.md", f"{ADR}0051-b.md", "n.md"}
+
+
+def test_a_line_that_cites_the_number_after_master_s_file_arrived_is_ambiguous():
+    texts = {OLD: (None, "x\n"), "d.md": ("", "ADR-0049 is theirs or mine?\n")}
+    lines = [_line("d.md", "ADR-0049 is theirs or mine?", commit="late")]
+    trees = {"late": ["0049-theirs.md", "0048-x.md"]}
+    result = _rewrite({OLD: NEW}, texts, lines, trees)
+    assert isinstance(result, Ambiguous)
+    assert result.reason == "cites_master_after_sync"
+    assert "d.md" in result.detail and "ADR-0049 is theirs" in result.detail
+
+
+def test_a_file_name_citation_is_not_ambiguous_after_the_sync():
+    texts = {OLD: (None, "x\n"), "d.md": ("", "see 0049-mine.md\n")}
+    lines = [_line("d.md", "see 0049-mine.md", commit="late")]
+    result = _rewrite({OLD: NEW}, texts, lines, {"late": ["0049-theirs.md"]})
+    assert isinstance(result, Renaming)
+    assert result.texts["d.md"] == "see 0050-mine.md\n"
+
+
+def test_a_bare_number_in_prose_on_an_own_line_is_ambiguous():
+    texts = {OLD: (None, "x\n"), "d.md": ("", "decision 0049 was taken\n")}
+    result = _rewrite({OLD: NEW}, texts, [_line("d.md", "decision 0049 was taken")])
+    assert isinstance(result, Ambiguous)
+    assert result.reason == "unclassified_token"
+    assert "d.md" in result.detail and "decision 0049" in result.detail
+
+
+def test_a_bare_number_on_a_line_the_branch_did_not_add_is_left_alone():
+    texts = {OLD: (None, "x\n"), "d.md": ("year 0049\n", "year 0049\nnew\n")}
+    result = _rewrite({OLD: NEW}, texts, [_line("d.md", "new")])
+    assert result == Renaming(((OLD, NEW),), {NEW: "x\n"})
+
+
+def test_a_moved_path_without_a_text_is_refused_loudly():
+    with pytest.raises(ValueError, match=OLD):
+        _rewrite({OLD: NEW}, {}, [])
+
+
+# -- the acceptance: two tasks on one base both add "the next" ADR -----------------------
+
+BASE = {
+    f"{ADR}0047-previa.md": "# ADR-0047: previa\n",
+    f"{ADR}0048-anterior.md": "# ADR-0048: anterior\n",
+    "docs/product/glossary.md": "Ver ADR-0048 para el detalle.\n",
+}
+# What each task wrote on top of the base: the new ADR, a doc that cites it and a code
+# comment that names its file. Every line below is a line the task's own commit added.
+TASK_A = {
+    f"{ADR}0049-alfa.md": "# ADR-0049: alfa\n\nVer ADR-0048.\n",
+    "docs/product/alfa.md": (
+        "Ver ADR-0048 para el detalle.\nSe decide en ADR-0049 (0049-alfa.md).\n"
+    ),
+    "agentic/alfa.py": "# docs/adr/0049-alfa.md explica por que\n",
+}
+TASK_B = {
+    f"{ADR}0049-beta.md": "# ADR-0049: beta\n\nVer ADR-0048.\n",
+    "docs/product/beta.md": "Ver ADR-0048 para el detalle.\nVer ADRs 0049 y 0048 y 0049-beta.md.\n",
+    "agentic/beta.py": "# docs/adr/0049-beta.md explica por que\n",
+}
+
+
+def _adr_names(tree: dict[str, str]) -> list[str]:
+    return [p.rsplit("/", 1)[-1] for p in tree if p.startswith(ADR)]
+
+
+def _own_lines(task: dict[str, str], base: dict[str, str], commit: str) -> list[OwnLine]:
+    return [
+        OwnLine(path, commit, line)
+        for path, text in task.items()
+        for line in text.splitlines()
+        if line not in base.get(path, "").splitlines()
+    ]
+
+
+def _land(master: dict[str, str], task: dict[str, str], commit: str) -> dict[str, str]:
+    """What the landing does for one task against the master it sees now: nothing when
+    nothing collides, otherwise the renumber step. Returns the master after the merge."""
+    added = [OwnAdr(p, commit) for p in task if p.startswith(ADR)]
+    moved = adr_numbers.collisions(_adr_names(master), added)
+    assert not isinstance(moved, Ambiguous)
+    if not moved:
+        return master | task
+    texts = {p: (master.get(p), text) for p, text in task.items()}
+    renaming = adr_numbers.renumber(moved, _own_lines(task, BASE, commit), {}, texts)
+    assert isinstance(renaming, Renaming)
+    kept = {p: t for p, t in task.items() if p not in dict(renaming.moves)}
+    return master | kept | renaming.texts
+
+
+def _resolves(tree: dict[str, str]) -> list[str]:
+    """Every ADR file name and `ADR-NNNN` any text names that no ADR file in the tree has."""
+    names = _adr_names(tree)
+    numbers = {adr_numbers.number_of(n) for n in names}
+    missing = []
+    for path, text in tree.items():
+        for name in re.findall(r"\b\d{4}-[a-z-]+\.md", text):
+            if name not in names:
+                missing.append(f"{path}: {name}")
+        for number in re.findall(r"ADR-(\d{4})", text):
+            if number not in numbers:
+                missing.append(f"{path}: ADR-{number}")
+    return missing
+
+
+def test_two_tasks_on_one_base_that_both_add_the_next_adr_land_with_unique_numbers():
+    naive = BASE | TASK_A | TASK_B
+    assert adr_numbers.duplicate_numbers(_adr_names(naive)) == ["0049"]
+
+    master = _land(dict(BASE), TASK_A, "a1")
+    assert master == BASE | TASK_A  # the first to land finds no collision and is untouched
+    master = _land(master, TASK_B, "b1")
+
+    assert adr_numbers.duplicate_numbers(_adr_names(master)) == []
+    assert sorted(_adr_names(master)) == [
+        "0047-previa.md",
+        "0048-anterior.md",
+        "0049-alfa.md",
+        "0050-beta.md",
+    ]
+    assert _resolves(master) == []
+    # B's references follow its file; the line that cites master's ADR-0048 does not move,
+    # and A's texts are byte-identical to what A landed.
+    assert master["docs/product/beta.md"] == (
+        "Ver ADR-0048 para el detalle.\nVer ADRs 0050 y 0048 y 0050-beta.md.\n"
+    )
+    assert master["agentic/beta.py"] == "# docs/adr/0050-beta.md explica por que\n"
+    assert master[f"{ADR}0050-beta.md"] == "# ADR-0050: beta\n\nVer ADR-0048.\n"
+    assert master["docs/product/glossary.md"] == BASE["docs/product/glossary.md"]
+    assert {p: master[p] for p in TASK_A} == TASK_A

@@ -12,7 +12,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, NamedTuple, Protocol
 
-from . import ci, presubmit
+from . import adr_numbers, ci, presubmit
 from .denials import denial_for
 from .document import HUMAN, demote
 from .roles import (
@@ -2615,6 +2615,7 @@ def same_commit(a: str | None, b: str | None) -> bool:
 MergeRefusal = Literal[
     "not_ready",
     "pr_not_open",
+    "adr_number_taken",
     "not_approved",
     "head_not_reviewed",
     "open_findings_blocking",
@@ -2635,6 +2636,10 @@ MergeRefusal = Literal[
 - `not_ready`: the task is not `ready_for_review`.
 - `pr_not_open`: the pull request is merged, closed or unreadable. Second, so that a pull
   request that is not open is never reported as a review or findings problem.
+- `adr_number_taken` (GH-229): an ADR the branch's own commits added has a number master
+  already holds under another file name, or the rewrite that would fix it is ambiguous
+  (`MergeFacts.adr_collision`). Third, so that no review, fix pass or check run is spent on
+  a head that is about to change.
 - `not_approved`: the reviewed unit (`reviewed_unit`) is not approved.
 - `head_not_reviewed`: the pull request head is not the one Tech Lead reviewed, or either
   is unknown.
@@ -2685,7 +2690,9 @@ class MergeFacts:
     diff touches the CI's own definition (`CI_DEFINITION_PREFIX`): a CI whose definition the
     change itself could have edited proves nothing, so it never decides `merge`.
     `failed_step` is the step of the recorded `merge_checks` that failed, which only the
-    landing reads."""
+    landing reads. `adr_collision` (GH-229) is what `application.adr_collision` found: the
+    `Renaming` that fixes an own ADR whose number master took, an `Ambiguous` one, or `None`
+    (no collision, or the diff touches no `docs/adr/` path so nothing was read)."""
 
     task_id: str
     status: str | None
@@ -2713,6 +2720,7 @@ class MergeFacts:
     ci_untrusted: bool | None = None
     followups_filed: bool = False
     failed_step: presubmit.FailedStep | None = None
+    adr_collision: adr_numbers.Renaming | adr_numbers.Ambiguous | None = None
     conflicts: bool | None = None
 
 
@@ -2764,10 +2772,10 @@ def ci_untrusted(touched_paths: Sequence[str] | None) -> bool | None:
 def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     """The one place the conditions of an automatic merge live (GH-178, ADR-0045); no
     adapter, CLI or poller re-derives any of them. Checked in this order and refused at the
-    first that fails: `not_ready`, `pr_not_open`, `not_approved`, `head_not_reviewed`,
-    `open_findings_blocking`, `open_findings`, `eval_set_unreadable`, `eval_set`,
-    `merge_conflict` (only when `conflicts is True`; unread or clean change nothing),
-    `merge_failed`, then, only when the product declares its CI (`ci_required`):
+    first that fails: `not_ready`, `pr_not_open`, `adr_number_taken`, `not_approved`,
+    `head_not_reviewed`, `open_findings_blocking`, `open_findings`, `eval_set_unreadable`,
+    `eval_set`, `merge_conflict` (only when `conflicts is True`; unread or clean change
+    nothing), `merge_failed`, then, only when the product declares its CI (`ci_required`):
     `ci_unreadable`, a `wait` for a head that is not the reviewed one, `ci_failed` and
     `ci_missing`, a green and fresh CI being the `merge` itself (a green stale one goes on);
     then `checks_failed` (only when the recorded checks cover this head on this master;
@@ -2785,6 +2793,8 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
         return MergeDecision("refuse", "not_ready")
     if facts.pr_state != "OPEN":
         return MergeDecision("refuse", "pr_not_open")
+    if facts.adr_collision is not None:
+        return MergeDecision("refuse", "adr_number_taken")
     if not facts.reviewed_unit_approved:
         return MergeDecision("refuse", "not_approved")
     if not (full_commit_id(facts.pr_head) and same_commit(facts.reviewed_head, facts.pr_head)):

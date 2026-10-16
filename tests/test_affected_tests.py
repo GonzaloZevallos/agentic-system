@@ -309,8 +309,20 @@ def test_adding_a_test_selects_that_test_and_not_the_walkers():
 
 
 def test_a_doc_selects_no_walker_it_is_ignored_and_selects_nothing():
-    result = _select(["docs/x.md"], _walker_sources(), script.TABLE, script.IGNORE)
+    result = _select(["docs/product/x.md"], _walker_sources(), script.TABLE, script.IGNORE)
     assert isinstance(result, script.Empty)
+
+
+def test_an_adr_selects_the_test_that_lists_the_adr_directory_and_nothing_else():
+    sources = _walker_sources() | {"tests/test_adr_numbers.py": ""}
+    result = _select(["docs/adr/0049-x.md"], sources, script.TABLE, script.IGNORE)
+    assert _files(result) == ("tests/test_adr_numbers.py",)
+
+
+def test_a_doc_outside_the_adr_directory_and_the_ignored_ones_is_refused():
+    sources = _walker_sources() | {"tests/test_adr_numbers.py": ""}
+    result = _select(["docs/x.md"], sources, script.TABLE, script.IGNORE)
+    assert isinstance(result, script.Refusal)
 
 
 def test_a_test_that_loads_code_by_a_computed_name_joins_the_agentic_trigger():
