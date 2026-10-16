@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -34,7 +35,7 @@ from pathlib import Path
 
 from agentic.shared.configuration import LOGS_DIR, STATE_DIR, STATE_FILE
 
-from ...application.ports import Checkout, Upstream, UpstreamMerge
+from ...application.ports import AddedAdr, AddedLine, Checkout, Upstream, UpstreamMerge
 from ...application.ports import GitError as GitError  # re-exported: see ports.py
 from ...domain import rules
 from ...domain.ci import Containment
@@ -51,6 +52,14 @@ EXCLUDES = (f"{WORKTREES}/", f"{STATE_FILE}*", f"{STATE_DIR}/", f"{LOGS_DIR}/")
 FETCH_TIMEOUT_S: float = 30
 # At most this many left-out local commits are named in a note.
 _LEFT_OUT_SHOWN = 10
+
+
+# Prefix of the line that names a commit in `git log --format`: a control character no
+# path or patch line starts with.
+_COMMIT = "\x01"
+# Output with every name verbatim and not quoted.
+_PLAIN = ("-c", "core.quotepath=off")
+_NUMBER = re.compile("[0-9]{4}")
 
 
 class GitWorkspace:
@@ -306,6 +315,60 @@ class GitWorkspace:
         out = self._git("diff", "--name-only", f"{base}...{head}")
         return tuple(line for line in out.splitlines() if line)
 
+    def added_adrs(self, master: str, head: str) -> tuple[AddedAdr, ...]:
+        # `--no-renames`: a file renamed into `docs/adr` is an addition of its new path
+        # whatever `diff.renames` the machine has. The marker is a control character no
+        # path holds; `core.quotepath` off keeps non-ASCII names as they are.
+        out = self._git(
+            *_PLAIN,
+            "log",
+            "--no-merges",
+            "--no-renames",
+            "--diff-filter=A",
+            "--name-only",
+            f"--format={_COMMIT}%H",
+            f"{master}..{head}",
+            "--",
+            "docs/adr",
+        )
+        added: list[AddedAdr] = []
+        commit = ""
+        for line in out.splitlines():
+            if line.startswith(_COMMIT):
+                commit = line[len(_COMMIT) :]
+            elif line:
+                added.append(AddedAdr(line, commit))
+        return tuple(added)
+
+    def added_lines(self, master: str, head: str, numbers: Sequence[str]) -> tuple[AddedLine, ...]:
+        for number in numbers:
+            if not _NUMBER.fullmatch(number):
+                raise ValueError(f"an ADR number is exactly four digits, not {number!r}")
+        found: list[AddedLine] = []
+        for index, number in enumerate(numbers):
+            out = self._git(
+                *_PLAIN,
+                "log",
+                "--no-merges",
+                f"-G{number}",
+                "-p",
+                "--unified=0",
+                f"--format={_COMMIT}%H",
+                f"{master}..{head}",
+            )
+            # A line holding an earlier number came out of that number's own read.
+            earlier = numbers[:index]
+            found.extend(
+                line
+                for line in _patch_additions(out)
+                if number in line.text and not any(other in line.text for other in earlier)
+            )
+        return tuple(found)
+
+    def tree_names(self, ref: str, directory: str) -> tuple[str, ...]:
+        out = self._git(*_PLAIN, "ls-tree", "--name-only", "-z", ref, "--", f"{directory}/")
+        return tuple(name.rpartition("/")[2] for name in out.split("\0") if name)
+
     def fetch_commit(self, sha: str) -> bool:
         if self._run("cat-file", "-e", f"{sha}^{{commit}}").returncode == 0:
             return True
@@ -475,6 +538,31 @@ class GitWorkspace:
         if result.returncode != 0:
             raise GitError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
         return result.stdout.strip()
+
+
+def _patch_additions(log: str) -> list[AddedLine]:
+    """The added lines of a `git log -p --format=<_COMMIT>%H` output, with their file and
+    commit. A file's header (between `diff --git` and its first `@@`) is where its path
+    is read; after that every line is a hunk line, so an added `++ x` is not a header."""
+    lines: list[AddedLine] = []
+    commit = path = ""
+    in_header = False
+    for raw in log.splitlines():
+        if raw.startswith(_COMMIT):
+            # Also inside a header: a binary file never reaches its `@@`.
+            commit = raw[len(_COMMIT) :]
+            in_header = False
+        elif in_header:
+            if raw.startswith("+++ "):
+                target = raw[4:].split("\t")[0]
+                path = target[2:] if target.startswith("b/") else target
+            elif raw.startswith("@@"):
+                in_header = False
+        elif raw.startswith("diff --git "):
+            in_header = True
+        elif raw.startswith("+"):
+            lines.append(AddedLine(path, commit, raw[1:]))
+    return lines
 
 
 def _left_out_note(left_out: list[str], failure: str | None) -> str | None:
