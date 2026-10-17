@@ -150,6 +150,16 @@ escritura está en la adenda de GH-273 de ADR-0037; esta tabla dice qué trae ca
 | `delivered` | `delivery_outcome`: `merged`, `merged_with_changes` y `auto_merged` son verdadero, `closed` falso | booleano | no hay `delivery_outcome` (sin cierre, o descartada) |
 | `origin` | `title`: `followup` si empieza por `Follow-up of #`, si no `original` | categórico | no hay título |
 | `type` | `type` | categórico | nunca |
+| `returns.<ChangeCategory>` | cuántas veces `return_history` registra esa categoría (sin las reaperturas del aterrizaje); `returns` es el total y es su suma cuando el historial está completo | numérico | la categoría no ocurrió |
+| `failures.<FailureReason>` | cuántas entradas de `failures[]` tienen esa `reason` | numérico | la razón no ocurrió |
+| `escalations.<EscalationClass>` | cuántas entradas `escalation` de `pause_log` tienen esa clase | numérico | la clase no ocurrió |
+| `cost_usd.role.<Role>` | suma de `runs[].cost_usd` de las corridas con ese `slug` | numérico | ninguna corrida tiene ese `slug` |
+| `delivered_cost_usd.type.<TaskType>` | `cost_usd`, bajo el `type` de la tarea | numérico | la tarea no se entregó, o su `type` no es uno de los conocidos |
+| `cost_usd.origin.<Origin>` | `cost_usd`, bajo el origen de la tarea (`original` o `followup`, como `origin`) | numérico | no hay título |
+| `delivered_cost_usd` | `cost_usd` | numérico | la tarea no se entregó (`delivered` no es verdadero) |
+| `findings_important` | filas `important` de `findings`, plegadas por ubicación y reclamo como la tabla de hallazgos | numérico | el documento no tiene `findings` |
+| `followups` | `1` si `followups_filed`, `0` si hay registro `landing` sin él | numérico | la tarea no pasó por el aterrizaje (no es "cero", es desconocido) |
+| `checks_red` | entradas de `merge_checks.checks` con `passed: false` (las corridas del presubmit no quedan en el documento) | numérico | no hay registro `merge_checks` |
 
 Reglas para leerlos:
 
@@ -162,6 +172,7 @@ Reglas para leerlos:
   luego el `createdAt` del issue), nunca el momento de escribir.
 - **`delivered` cuenta `auto_merged`**: el pedido lo define como "el PR se mergeó"; si lo
   juzgó una persona lo dice el scorecard (ADR-0045), no este score.
+- **Una familia son los miembros de un conjunto cerrado del dominio** (`ChangeCategory`, `FailureReason`, `EscalationClass`, los `slug` de `ROLES`, `TaskType`, el origen); un miembro que no ocurrió no escribe nada, nunca un 0 en su lugar. `task_scores.FAMILIES` los construye y la prueba de este README expande cada fila `prefijo.<Conjunto>` desde ahí.
 - Un score `BOOLEAN` o `CATEGORICAL` se agrega por su valor de texto, no por `value`.
 
 `agentic scores backfill --product-dir <dir> [--dry-run]` escribe los mismos scores de todo

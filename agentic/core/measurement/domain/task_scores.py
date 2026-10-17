@@ -15,10 +15,9 @@ overwrites another run's scores."""
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from collections.abc import Iterable
 from typing import Any, Literal, get_args, get_origin
 
 from agentic.core.process.domain import roles, rules
@@ -289,6 +288,9 @@ def _findings_important(document: Mapping[str, Any]) -> float | None:
     if not isinstance(document.get("findings"), list):
         return None
     state: TaskState = {
+        "id": str(document.get("id") or ""),
+        "title": str(document.get("title") or ""),
+        "description": "",
         "findings": _list(document.get("findings")),
         "settled_findings": _list(document.get("settled_findings")),
         "approval_settled": _list(document.get("approval_settled")),
