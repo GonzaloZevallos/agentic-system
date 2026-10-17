@@ -2582,7 +2582,8 @@ def poll_plan(
     slot, so the wait for a child to register never delays a role action.
 
     Everything held back is in `PollPlan.deferred`: a `land_model` land with no slot is
-    `no_slot`, one held by an account-limit pause is `pause_waiting`; every merge or `land_checks` land that did not start is `exempt_busy`.
+    `no_slot`, one held by an account-limit pause is `pause_waiting`; every merge or
+    `land_checks` land that did not start is `exempt_busy`.
 
     `pace` (GH-177, `None` is today's behaviour) gates only the launch: it goes out only
     if `paced_launch_fits` says so, counting this round's retakes and resumes as live

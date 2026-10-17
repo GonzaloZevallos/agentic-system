@@ -49,14 +49,7 @@ from .ports import (
     TrackerTimedOut,
     Upstream,
 )
-
-# How long `execute` waits for a spawned `run`/`resume` child to register itself
-# (Human decision, issue #137): a second round must never count a slot this round's
-# own spawn has not registered into yet, which is what let a round exceed
-# `AGENTIC_MAX_CONCURRENT_RUNS` before this. Polled, never slept once: a child that
-# registers after the first step must not wait out the whole 60 s for nothing.
-REGISTER_WAIT_S = 60.0
-_REGISTER_POLL_INTERVAL_S = 1.0
+from .registration import REGISTER_WAIT_S, await_registration
 
 # How the system's own auto-resume comment starts (issue #137): registered into
 # `resume.SYSTEM_COMMENTS` by `resume.py` itself (a deferred import there, to avoid the
@@ -797,26 +790,6 @@ def _argv(argv0: str, command: str, number: int, product_dir: str, *extra: str) 
     return [argv0, command, "--issue", str(number), *extra, "--product-dir", product_dir]
 
 
-def _await_registration(
-    registry: RunRegistry, task_id: str, timeout_s: float, sleep: Callable[[float], None]
-) -> bool:
-    """Up to `timeout_s`, in `_REGISTER_POLL_INTERVAL_S` steps, until `task_id` shows up
-    in `registry.live()` (Human decision, issue #137): so a second poll round never
-    counts a slot this round's own spawn has not registered into yet, which is what let
-    a round exceed `AGENTIC_MAX_CONCURRENT_RUNS` before this. Returns whether it showed
-    up in time -- best-effort only, the same shape `cli._registered`'s own write
-    already has: a child that never registers within the timeout is not retried here,
-    and the round goes on rather than hang forever on one that crashed before it could."""
-    waited = 0.0
-    while True:
-        if any(r.task_id == task_id for r in registry.live()):
-            return True
-        if waited >= timeout_s:
-            return False
-        sleep(_REGISTER_POLL_INTERVAL_S)
-        waited += _REGISTER_POLL_INTERVAL_S
-
-
 def _spawn_resume(
     action: rules.PollAction,
     ports: Ports,
@@ -851,7 +824,7 @@ def _spawn_resume(
         ports.tracker.comment(task_id, comment)
     except TrackerTimedOut:  # the child runs on: only the comment is lost
         lines.append(f"agentic: poll: {action.kind} #{number} -> comment timed out")
-    registered = _await_registration(registry, task_id, register_timeout_s, sleep)
+    registered = await_registration(registry, task_id, register_timeout_s, sleep)
     if action.kind == "retake" and not registered:
         lines.append(
             f"agentic: poll: retake #{number} -> not registered "
@@ -885,7 +858,7 @@ def execute(
     own calendar next round, exactly as one that launched but never registered already
     does. A spawned `run`/`resume` (never `close`, which never registers at all, and
     never a failed spawn either) is awaited into `registry.live()` before this round
-    returns (`_await_registration`, Human decision): still under `run_once`'s own
+    returns (`await_registration`, Human decision): still under `run_once`'s own
     `registry.exclusive()`, so the next poller to decide -- this product's next round,
     or another product's on the same machine -- never reads a stale count. A `land` child is
     told the kind it registers under, `--run-kind`, from `land_kinds` (the classified
@@ -937,7 +910,7 @@ def execute(
             except OSError as exc:
                 lines.append(f"agentic: poll: merge #{action.issue} -> not launched: {exc}")
                 continue
-            _await_registration(registry, task_id, register_timeout_s, sleep)
+            await_registration(registry, task_id, register_timeout_s, sleep)
             lines.append(f"agentic: poll: merge #{action.issue} -> pid {pid}")
         elif action.kind == "land":
             kind = (land_kinds or {}).get(action.issue, "land_model")
@@ -947,7 +920,7 @@ def execute(
             except OSError as exc:
                 lines.append(f"agentic: poll: land #{action.issue} -> not launched: {exc}")
                 continue
-            _await_registration(registry, task_id, register_timeout_s, sleep)
+            await_registration(registry, task_id, register_timeout_s, sleep)
             lines.append(f"agentic: poll: land #{action.issue} -> pid {pid}")
         elif action.kind == "launch":
             registry.record_launch(product, action.issue, now)
@@ -963,7 +936,7 @@ def execute(
                     f"(attempt {k} of {total_attempts}){spent}: {exc}"
                 )
                 continue
-            _await_registration(registry, task_id, register_timeout_s, sleep)
+            await_registration(registry, task_id, register_timeout_s, sleep)
             lines.append(f"agentic: poll: launch #{action.issue} -> pid {pid}")
         else:
             assert_never(action.kind)

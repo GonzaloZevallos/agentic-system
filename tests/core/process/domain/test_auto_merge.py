@@ -538,6 +538,7 @@ def test_the_probe_gate_ignores_the_conflict_fact_it_is_asked_to_derive():
 # GH-270 (ADR-0045 addendum): a `land_model` land of a delivered task may use one reserved slot
 # above the cap (`LAND_HEADROOM`), and goes before the launch.
 
+PERSISTED = rules.ACCOUNT_LIMIT_CHASE_MAX + len(rules.ACCOUNT_LIMIT_HOURLY)
 MODEL_LAND = [rules.LandCandidate(4, "land_model")]
 LAUNCH = [rules.LaunchCandidate(8, False, None, 0, 3)]
 
@@ -564,9 +565,7 @@ def test_a_model_land_takes_the_plain_slot_and_blocks_the_launch_when_one_is_fre
 
 def test_a_due_resume_takes_the_plain_slot_and_the_land_starts_on_the_headroom():
     due = _resume(since=NOW - timedelta(days=1), prior=1)
-    plan = _plan(
-        available_slots=1, land_slots=2, resumes=[due], lands=MODEL_LAND, launches=LAUNCH
-    )
+    plan = _plan(available_slots=1, land_slots=2, resumes=[due], lands=MODEL_LAND, launches=LAUNCH)
     assert plan.actions == [rules.PollAction("resume", 3), rules.PollAction("land", 4)]
     assert plan.deferred == []
 
@@ -618,9 +617,7 @@ def test_a_pending_upstream_or_network_pause_never_holds_a_land(reason):
 
 def test_pacing_never_gates_a_land():
     spent = rules.SpendPace(spent_usd=10_000.0, covered_s=3600.0, live_runs=1, pace_usd_per_h=1.0)
-    plan = _plan(
-        available_slots=0, land_slots=1, lands=MODEL_LAND, launches=LAUNCH, pace=spent
-    )
+    plan = _plan(available_slots=0, land_slots=1, lands=MODEL_LAND, launches=LAUNCH, pace=spent)
     assert plan.actions == [rules.PollAction("land", 4)]
 
 
@@ -636,7 +633,10 @@ def test_a_checks_land_is_not_held_by_an_account_limit_pause():
     [
         (_resume(), True),
         (_resume(prior=5), False),  # exhausted: needs a human, holds nothing
-        (_resume(chase_prior=rules.ACCOUNT_LIMIT_CHASE_MAX + len(rules.ACCOUNT_LIMIT_HOURLY)), False),
+        (
+            _resume(chase_prior=rules.ACCOUNT_LIMIT_CHASE_MAX + len(rules.ACCOUNT_LIMIT_HOURLY)),
+            False,
+        ),
         (_resume("upstream"), False),
         (_resume("network"), False),
         (_resume(since=NOW - timedelta(days=1), prior=1), False),  # already due
