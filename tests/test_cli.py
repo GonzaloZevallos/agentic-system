@@ -4438,6 +4438,38 @@ def test_a_second_backfill_sends_the_very_same_ids(monkeypatch, tmp_path, capsys
     assert "scored 1, partial 0, failed 0" in capsys.readouterr().out.splitlines()[-1]
 
 
+def test_a_second_backfill_of_a_task_with_families_sends_identical_ids_and_values(
+    monkeypatch, tmp_path
+):
+    root = close_root(tmp_path)
+    tracker = FakePullRequestTracker({"https://github.com/o/r/pull/7": close_pull_request()})
+    tracker.issue_created["GH-9"] = "2026-09-19T00:00:00+00:00"
+    ports = close_ports(root, tracker)
+    ports.documents.save(
+        finished_task(
+            type="feature",
+            changes_requested={"Tech Lead→Developer": 1},
+            change_history=[
+                {"pair": "Tech Lead→Developer", "category": "spec-scope", "reason": "r"}
+            ],
+            failures=[{"reason": "account_limit", "cost_usd": 0.5}],
+            pause_log=[{"kind": "escalation", "value": "returns"}],
+            cost_usd=2.0,
+        )
+    )
+    close_it(ports)
+    scorer = FakeScorer()
+    assert _backfill(monkeypatch, root, ports, scorer) == 0
+    assert _backfill(monkeypatch, root, ports, scorer) == 0
+    first, second = ({s.name: (s.id, s.value) for s in call[2]} for call in scorer.calls)
+    assert first == second
+    assert first["returns.spec-scope"][1] == first["returns"][1] == 1.0
+    assert first["failures.account_limit"][1] == 1.0
+    assert first["escalations.returns"][1] == 1.0
+    assert first["delivered_cost_usd.type.feature"][1] == 2.0
+    assert len({id_ for id_, _ in first.values()}) == len(first)
+
+
 def test_each_skip_reason_is_counted_and_a_skip_alone_exits_zero(monkeypatch, tmp_path, capsys):
     root = close_root(tmp_path)
     ports = close_ports(root, FakePullRequestTracker())
