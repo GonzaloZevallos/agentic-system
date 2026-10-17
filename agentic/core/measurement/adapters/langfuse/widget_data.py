@@ -1,10 +1,10 @@
 """How many rows a dashboard widget reads, from Langfuse's ClickHouse (GH-274, ADR-0051).
 
-Read-only, over the HTTP interface with `urllib`. `FINAL` collapses the replacing-merge
-duplicates the way Langfuse's own views do, and every count is filtered to the project and
-to the environment of the widget's own `environment` filter: a product's numbers are never
-summed with another's. Query values travel as ClickHouse query parameters, never spliced
-into the SQL."""
+Read-only, over the HTTP interface with `urllib`. `FINAL` collapses only the replacing-merge
+duplicates that share a sort key (Langfuse's own views also group by id, ADR-0037), and every
+count is filtered to the project and to the environment of the widget's own `environment`
+filter: a product's numbers are never summed with another's. Query values travel as
+ClickHouse query parameters, never spliced into the SQL."""
 
 from __future__ import annotations
 
