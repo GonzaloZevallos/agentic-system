@@ -42,6 +42,10 @@ GH-229), `diagnose` (the
 terminal path: the landing diagnoser, then a restart) and `none` (nothing the system can
 do: the human's)."""
 
+FOLLOWUP_TITLE_PREFIX = "Follow-up of #"
+"""How the title of a follow-up issue begins (`landing_fix` composes it; measurement reads
+it to tell a follow-up task from an original one)."""
+
 CONFLICTING_SYNC_REFUSALS: tuple[rules.MergeRefusal, ...] = ("checks_failed", "merge_conflict")
 """The refusals under which a recorded `sync_master` was a conflicting one, hence a model pass."""
 
