@@ -545,6 +545,9 @@ class _HeldLocks:
     def release(self, task_id):
         self.released.append(task_id)
 
+    def held(self, task_id) -> bool:
+        return self.taken.count(task_id) > self.released.count(task_id)
+
 
 def _unapproved(ports, number: int) -> None:
     """A delivered task whose reviewed unit is not approved: `not_approved`, whose step is

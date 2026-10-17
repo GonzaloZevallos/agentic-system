@@ -14,9 +14,15 @@ import pytest
 
 from agentic.core.measurement.domain import metrics
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
-from agentic.core.process.application import landing, landing_sync, merge
+from agentic.core.process.application import landing, landing_sync, merge, registration
 from agentic.core.process.application.deliver import deliver
-from agentic.core.process.application.ports import GitError, Upstream, UpstreamMerge
+from agentic.core.process.application.ports import (
+    GitError,
+    RunRegistration,
+    Upstream,
+    UpstreamMerge,
+)
+from agentic.core.process.application.registration import REGISTER_WAIT_S
 from agentic.core.process.domain import landing as landing_rules
 from agentic.core.process.domain import playbook, rules
 from agentic.core.process.domain.task import TaskState
@@ -50,6 +56,8 @@ class _World(FakeLauncher):
         self.resumed: list[int] = []
         self.merged: list[merge.MergeResult] = []
         self.landed: list[landing.LandResult] = []
+        self.locks = _HeldLocks()
+        self.await_resume = None
 
     def resume(self, number: int) -> int:
         self.resumed.append(number)
@@ -64,13 +72,14 @@ class _World(FakeLauncher):
                     task_id,
                     _cfg(self.tmp_path),
                     self.ports,
-                    _HeldLocks(),
+                    self.locks,
                     upstream,
                     frozenset(),
                     lambda line: None,
                     clock=lambda: "2026-10-14T00:00:00+00:00",
                     live=LIVE,
                     resume=self.resume,
+                    await_resume=self.await_resume,
                 )
             )
         elif argv[1] == "merge":
@@ -442,8 +451,9 @@ class _Resumer:
 class _Spawning:
     """The part of a landing context `spawn_and_mark` reads."""
 
-    def __init__(self, ports, resume, log=lambda line: None) -> None:
+    def __init__(self, ports, resume, log=lambda line: None, await_resume=None) -> None:
         self.task_id, self.ports, self.resume, self.log = "GH-5", ports, resume, log
+        self.await_resume = await_resume
 
 
 def _on_disk(tmp_path):
@@ -512,3 +522,131 @@ def test_a_reopened_landing_whose_resume_answers_no_pid_counts_nothing(tmp_path)
     entry = _document(ports)["landing"][-1]
     assert "resume_spawns" not in entry and "resume_spawned_at" not in entry
     assert "cost_base" in entry
+
+
+# ---- the wait for the spawned resume to register (GH-270) -----------------------------------
+
+
+def _entry(kind="role", product="product", task_id="GH-5"):
+    return RunRegistration(pid=7, host="h", product=product, task_id=task_id, kind=kind)
+
+
+def _waiting_on(entries, slept=None):
+    """What `cli._land` wires: the shared wait over a registry, this product's `role` entry."""
+    registry = MemoryRunRegistry(entries)
+    return lambda task_id: registration.await_registration(
+        registry, task_id, 2.0, (slept if slept is not None else []).append,
+        kind="role", product="product",
+    )  # fmt: skip
+
+
+def _spawn_waiting(tmp_path, entries):
+    ports = _on_disk(tmp_path)
+    lines: list[str] = []
+    context = _Spawning(ports, _Resumer(4242), lines.append, _waiting_on(entries))
+    pid = landing_sync.spawn_and_mark(context, lambda: "2026-10-14T12:00:00+00:00")
+    return pid, lines, ports
+
+
+def test_this_products_role_entry_satisfies_the_wait_and_nothing_is_logged_for_it(tmp_path):
+    pid, lines, ports = _spawn_waiting(tmp_path, [_entry()])
+
+    assert pid == 4242
+    assert not [line for line in lines if "not registered" in line]
+    assert ports.documents.load("GH-5")["landing"][-1]["resume_spawns"] == 1
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [
+        [_entry(product="other")],  # the same task id in another product
+        [_entry(kind="land_model")],  # this land's own entry
+        [],
+    ],
+    ids=["other_product", "own_land_entry", "nothing"],
+)
+def test_an_entry_that_is_not_this_products_role_expires_the_wait_with_one_line(tmp_path, entries):
+    pid, lines, ports = _spawn_waiting(tmp_path, entries)
+
+    assert pid == 4242
+    expired = [line for line in lines if "not registered" in line]
+    assert expired == [
+        f"agentic: land: GH-5: resume pid 4242 not registered after {REGISTER_WAIT_S:g} s"
+    ]
+    assert ports.documents.load("GH-5")["landing"][-1]["resume_spawns"] == 1
+
+
+def test_a_wait_that_raises_propagates_and_leaves_the_mark_written(tmp_path):
+    ports = _on_disk(tmp_path)
+
+    def boom(task_id: str) -> bool:
+        raise OSError("registry unreadable")
+
+    context = _Spawning(ports, _Resumer(4242), await_resume=boom)
+    with pytest.raises(OSError, match="registry unreadable"):
+        landing_sync.spawn_and_mark(context, lambda: "2026-10-14T12:00:00+00:00")
+
+    [entry] = ports.documents.load("GH-5")["landing"]
+    assert entry["resume_spawns"] == 1
+    assert entry["resume_spawned_at"] == "2026-10-14T12:00:00+00:00"
+
+
+def test_the_mark_is_written_before_the_wait_starts(tmp_path):
+    ports = _on_disk(tmp_path)
+    seen: list[object] = []
+
+    def look(task_id: str) -> bool:
+        seen.append(ports.documents.load("GH-5")["landing"][-1].get("resume_spawns"))
+        return True
+
+    landing_sync.spawn_and_mark(_Spawning(ports, _Resumer(4242), await_resume=look))
+
+    assert seen == [1]
+
+
+def test_with_no_pid_there_is_no_mark_and_no_wait(tmp_path):
+    ports = _on_disk(tmp_path)
+    waited: list[str] = []
+    context = _Spawning(ports, _Resumer(None), await_resume=lambda t: waited.append(t) or True)
+
+    assert landing_sync.spawn_and_mark(context) is None
+    assert waited == []
+
+
+def test_the_land_has_let_go_of_the_task_lock_when_it_starts_waiting_for_its_resume(tmp_path):
+    """The resume's `--detach` refuses a task whose lock a live pid holds, so the land must
+    not hold it while it waits for that resume to register."""
+    ports = _ports(5)
+    ports.tracker.head_oid = FOREIGN
+    world = _World(ports, tmp_path)
+    held_during_wait: list[bool] = []
+
+    def wait(task_id: str) -> bool:
+        held_during_wait.append(world.locks.held(task_id))
+        return True
+
+    world.await_resume = wait
+
+    world.tick()
+
+    assert world.resumed == [5]
+    assert held_during_wait == [False]
+    assert world.locks.taken == ["GH-5"]
+
+
+def test_a_land_whose_wait_fails_still_leaves_no_lock_behind(tmp_path):
+    ports = _ports(5)
+    ports.tracker.head_oid = FOREIGN
+    world = _World(ports, tmp_path)
+
+    def boom(task_id: str) -> bool:
+        raise OSError("registry unreadable")
+
+    world.await_resume = boom
+
+    try:
+        world.tick()
+    except OSError:
+        pass  # whether the land lets it out or records it is not this test's business
+
+    assert not world.locks.held("GH-5")

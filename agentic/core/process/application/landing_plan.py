@@ -188,3 +188,5 @@ class LandingContext:
     launcher: Launcher | None = None
     argv0: str = "agentic"
     role_span: RoleSpanOpener | None = None
+    # Waits for the resume just spawned to register (GH-270); `None` waits for nothing.
+    await_resume: Callable[[str], bool] | None = None

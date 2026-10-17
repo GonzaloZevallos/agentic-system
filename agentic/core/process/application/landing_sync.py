@@ -33,6 +33,7 @@ from .adr_collision import adr_collision
 from .checkouts import Checkout, SetupFailed, task_base, task_checkout
 from .landing_plan import LandingContext, entries
 from .ports import GitError, Ports, UpstreamMerge, Workspace
+from .registration import REGISTER_WAIT_S
 
 CROSSCUT: ChangeCategory = "integration-crosscut"
 
@@ -110,6 +111,12 @@ class ResumeContext(Protocol):
     @property
     def log(self) -> Callable[[str], None]: ...
 
+    @property
+    def await_resume(self) -> Callable[[str], bool] | None:
+        """Waits until the resume just spawned shows in the run registry (GH-270), answering
+        whether it did in time; `None` waits for nothing."""
+        ...
+
 
 def spawn_resume(context: ResumeContext) -> int | None:
     """The pid `agentic resume` was spawned with; `None` when nothing could spawn it (no
@@ -140,6 +147,14 @@ def spawn_and_mark(context: ResumeContext, clock: Callable[[], str] = _now) -> i
     last["resume_spawns"] = (spawns if isinstance(spawns, int) else 0) + 1
     last["resume_spawned_at"] = clock()
     record_landing(context, [landing.entry_of(entry) for entry in written])
+    # The mark is written before the wait (GH-270): whatever the wait does, the spawn is
+    # counted. The land stays registered through it, so a poll round in the gap between
+    # this child exiting and the resume registering still counts one of the two.
+    if context.await_resume is not None and not context.await_resume(context.task_id):
+        context.log(
+            f"agentic: land: {context.task_id}: resume pid {pid} not registered "
+            f"after {REGISTER_WAIT_S:g} s"
+        )
     return pid
 
 

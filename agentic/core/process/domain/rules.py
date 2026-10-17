@@ -2472,6 +2472,13 @@ def counts_against_cap(kind: RunKind) -> bool:
             assert_never(kind)
 
 
+LAND_HEADROOM = 1
+"""The reserved slot (ADR-0045 addendum, GH-270; glossary: Cupo reservado para aterrizaje): a
+`land_model` land may start while the counted live children are fewer than the cap plus this.
+Only a land reads it -- launches, resumes and retakes keep the plain cap -- and the land and
+the resume it spawns still count, which keeps the reserve from growing past one."""
+
+
 @dataclass(frozen=True)
 class LandCandidate:
     """One issue whose refusal has a landing step to take, and the `RunKind` its child
@@ -2484,12 +2491,14 @@ class LandCandidate:
 @dataclass(frozen=True)
 class Deferred:
     """A merge or land `poll_plan` held back this round, and why: `no_slot` (a `land_model`
-    child needs a slot and none is left) or `exempt_busy` (the one exempt child the machine
-    allows is already live, or this round already starts one)."""
+    child needs a slot and none is left, headroom included), `exempt_busy` (the one exempt
+    child the machine allows is already live, or this round already starts one) or
+    `pause_waiting` (a `land_model` land while this product has an `account_limit` pause
+    still waiting out its calendar: the land would spend the session the pause protects)."""
 
     kind: Literal["merge", "land"]
     issue: int
-    reason: Literal["no_slot", "exempt_busy"]
+    reason: Literal["no_slot", "exempt_busy", "pause_waiting"]
 
 
 @dataclass(frozen=True)
@@ -2499,6 +2508,20 @@ class PollPlan:
 
     actions: list[PollAction]
     deferred: list[Deferred]
+
+
+def account_paused(resumes: Sequence[ResumeCandidate], now: datetime) -> bool:
+    """Whether this product has an `account_limit` pause still waiting out its calendar:
+    pending (`retake_due` is `None`), not exhausted and not persisted. It reads this
+    product's own pause, never the account's: another product's 429 on the same account is
+    invisible here. `upstream` and `network` pauses never count."""
+    return any(
+        r.reason == "account_limit"
+        and not resume_exhausted(r)
+        and not account_limit_persisted(r)
+        and retake_due(r, now) is None
+        for r in resumes
+    )
 
 
 def poll_plan(
@@ -2513,6 +2536,7 @@ def poll_plan(
     pace: SpendPace | None = None,
     lands: Sequence[LandCandidate] = (),
     live_exempt: int = 0,
+    land_slots: int | None = None,
 ) -> PollPlan:
     """This round's actions, in the order the Tech Lead plan fixes: every close first
     (merging freed the slot it used, if any, so closing never spends one); then every
@@ -2537,8 +2561,19 @@ def poll_plan(
     `lands` (GH-239) are the issues whose refusal has a built landing step not yet taken on
     their head (`landing_step`; `wait` and `none` are never among them), each with the kind
     its child registers under. A `land_model` land can spend a model, so it counts: at most
-    one, the lowest, goes after the launch and only into a slot still spare. A
-    `land_checks` land counts as the merge does not.
+    one, the lowest, goes after the due resumes and before the launch (GH-270), and it may
+    use the reserved slot (`LAND_HEADROOM`). `land_slots` is how many counted children
+    fit with the headroom (`None`: `available_slots`, no headroom). With `R` the retakes
+    and resumes started this round, `slots_left = max(available_slots - R, 0)` and
+    `L = land_slots - R`:
+
+    - `slots_left > 0`, `L > 0`: the land starts, takes one of `slots_left`; the launch
+      sees one fewer.
+    - `slots_left == 0`, `L > 0`: the land starts on the headroom and takes nothing.
+    - `L <= 0`: `Deferred(no_slot)`.
+
+    While `account_paused` holds, every `land_model` land is `Deferred(pause_waiting)`
+    instead; pacing never gates a land. A `land_checks` land counts as the merge does not.
 
     The children that do not count (`merge`, `land_checks`) are bounded together instead:
     `live_exempt` is how many are live on the machine right now, and at most one is live
@@ -2547,7 +2582,8 @@ def poll_plan(
     slot, so the wait for a child to register never delays a role action.
 
     Everything held back is in `PollPlan.deferred`: a `land_model` land with no slot is
-    `no_slot`; every merge or `land_checks` land that did not start is `exempt_busy`.
+    `no_slot`, one held by an account-limit pause is `pause_waiting`; every merge or
+    `land_checks` land that did not start is `exempt_busy`.
 
     `pace` (GH-177, `None` is today's behaviour) gates only the launch: it goes out only
     if `paced_launch_fits` says so, counting this round's retakes and resumes as live
@@ -2569,6 +2605,19 @@ def poll_plan(
     actions.extend(PollAction("resume", r.issue) for r in taken)
 
     slots_left = max(available_slots - len(taken), 0)
+    deferred: list[Deferred] = []
+    model_lands = sorted(c.issue for c in lands if counts_against_cap(c.kind))
+    started = len(retaken) + len(taken)
+    land_room = (received_slots if land_slots is None else land_slots) - started
+    if account_paused(resumes, now):
+        deferred.extend(Deferred("land", issue, "pause_waiting") for issue in model_lands)
+        model_lands = []
+    elif model_lands and land_room > 0:
+        actions.append(PollAction("land", model_lands[0]))
+        model_lands = model_lands[1:]
+        slots_left = max(slots_left - 1, 0)
+    deferred.extend(Deferred("land", issue, "no_slot") for issue in model_lands)
+
     some_resume_still_waiting = any(
         not resume_exhausted(r) and retake_due(r, now) is None for r in resumes
     )
@@ -2598,12 +2647,6 @@ def poll_plan(
         ):
             actions.append(PollAction("launch", ready[0].issue))
             slots_left -= 1
-    deferred: list[Deferred] = []
-    model_lands = sorted(c.issue for c in lands if counts_against_cap(c.kind))
-    if model_lands and slots_left > 0:
-        actions.append(PollAction("land", model_lands[0]))
-        model_lands = model_lands[1:]
-    deferred.extend(Deferred("land", issue, "no_slot") for issue in model_lands)
 
     exempt_merges = sorted(merges)
     exempt_lands = sorted(c.issue for c in lands if not counts_against_cap(c.kind))

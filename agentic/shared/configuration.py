@@ -126,8 +126,10 @@ class Configuration(BaseModel):
     # parallel already hit the account's own session limit (one 429 for the whole
     # account, never per product) and clashed merging. The poller counts the live entries
     # under `run_registry_dir` that can spend a model session (role runs and model-spending
-    # land children) against this before it launches a role run; a merge or checks-only
-    # land child runs no model and takes no slot (GH-263, ADR-0045 addendum).
+    # land children) against this before it launches a role run, plus one reserved slot that
+    # only a land step for a delivered task may use (`rules.LAND_HEADROOM`, ADR-0045); a
+    # merge or checks-only land child runs no model and takes no slot (GH-263, ADR-0045
+    # addendum).
     max_concurrent_runs: int = Field(default=1, ge=1)
     # Spend-paced concurrency (GH-177): off by default, so the poller behaves exactly as
     # before. When on, a launch beyond the first live run goes out only while the

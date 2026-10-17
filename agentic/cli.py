@@ -20,6 +20,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 import uuid
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, contextmanager
@@ -80,6 +81,7 @@ from .core.process.application.preflight import (
     refuse_its_own_checkout,
     unfixed_stage0,
 )
+from .core.process.application.registration import REGISTER_WAIT_S, await_registration
 from .core.process.application.run_role import load_prompt
 from .core.process.application.stack_review import stack_review as run_stack_review
 from .core.process.domain import document as task_document
@@ -359,8 +361,9 @@ def main() -> None:
         help="a long-lived process per product (GH-137): closes merged pull requests, "
         "retakes a pause an external API cut caused once its own wait elapses, and "
         "launches the next unblocked issue; role runs never pass "
-        "AGENTIC_MAX_CONCURRENT_RUNS, while a merge or checks-only land child runs "
-        "beside them, at most one per machine",
+        "AGENTIC_MAX_CONCURRENT_RUNS, plus one reserved slot that only a land step for a "
+        "delivered task may use (`rules.LAND_HEADROOM`, ADR-0045), while a merge or "
+        "checks-only land child runs beside them, at most one per machine",
     )
     poll_parser.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
     poll_parser.add_argument(
@@ -1446,7 +1449,21 @@ async def _land(
     and checked by `land` against the step it recomputes. Spends no model money itself and
     opens no span."""
     lock = _lock_for(cfg)
-    with _registered(_registry_for(cfg), product_name(ports), task_id, run_kind):
+    registry = _registry_for(cfg)
+
+    def await_resume(resumed: str) -> bool:
+        """Waits for the `role` entry of the resume this land spawned, in this product: this
+        land's own entry stays registered through the wait, and no registry lock is held."""
+        return await_registration(
+            registry,
+            resumed,
+            REGISTER_WAIT_S,
+            time.sleep,
+            kind="role",
+            product=product_name(ports),
+        )
+
+    with _registered(registry, product_name(ports), task_id, run_kind):
         upstream = ports.workspace.upstream()
         arm = delivery_metrics.arm_label(
             {"review_mode": cfg.review_mode, "skip_ephemeral": str(cfg.skip_ephemeral)}
@@ -1469,6 +1486,7 @@ async def _land(
                 argv0=_self_executable(),
                 role_span=lambda role: telemetry.role_span(role.name, role.slug, product, arm=arm),
                 run_kind=run_kind,
+                await_resume=await_resume,
             )
         except LockHeld as exc:
             raise CannotStart(f"{exc}: {LOCK_SCOPE}") from exc
