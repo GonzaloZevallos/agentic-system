@@ -533,3 +533,118 @@ def test_the_probe_gate_ignores_the_conflict_fact_it_is_asked_to_derive():
     facts = _facts(checks_passed=False)
     for known in (None, False, True):
         assert rules.conflict_probe_wanted(replace(facts, conflicts=known)) is True
+
+
+# GH-270 (ADR-0045 addendum): a `land_model` land of a delivered task may use one reserved slot
+# above the cap (`LAND_HEADROOM`), and goes before the launch.
+
+MODEL_LAND = [rules.LandCandidate(4, "land_model")]
+LAUNCH = [rules.LaunchCandidate(8, False, None, 0, 3)]
+
+
+def _resume(reason="account_limit", **over) -> rules.ResumeCandidate:
+    fields = {"issue": 3, "reason": reason, "since": NOW, "prior": 0, "limit": 5, **over}
+    return rules.ResumeCandidate(**fields)
+
+
+def test_land_headroom_is_one_slot():
+    assert rules.LAND_HEADROOM == 1
+
+
+def test_a_model_land_starts_on_the_headroom_when_the_cap_is_full_and_nothing_launches():
+    plan = _plan(available_slots=0, land_slots=1, lands=MODEL_LAND, launches=LAUNCH)
+    assert plan.actions == [rules.PollAction("land", 4)]
+    assert plan.deferred == []
+
+
+def test_a_model_land_takes_the_plain_slot_and_blocks_the_launch_when_one_is_free():
+    plan = _plan(available_slots=1, land_slots=2, lands=MODEL_LAND, launches=LAUNCH)
+    assert plan.actions == [rules.PollAction("land", 4)]
+
+
+def test_a_due_resume_takes_the_plain_slot_and_the_land_starts_on_the_headroom():
+    due = _resume(since=NOW - timedelta(days=1), prior=1)
+    plan = _plan(
+        available_slots=1, land_slots=2, resumes=[due], lands=MODEL_LAND, launches=LAUNCH
+    )
+    assert plan.actions == [rules.PollAction("resume", 3), rules.PollAction("land", 4)]
+    assert plan.deferred == []
+
+
+def test_a_land_goes_before_the_launch_with_two_free_slots_and_the_launch_keeps_the_other():
+    plan = _plan(available_slots=2, land_slots=3, lands=MODEL_LAND, launches=LAUNCH)
+    assert plan.actions == [rules.PollAction("land", 4), rules.PollAction("launch", 8)]
+
+
+def test_with_cap_plus_one_already_live_the_land_is_deferred_no_slot():
+    plan = _plan(available_slots=0, land_slots=0, lands=MODEL_LAND)
+    assert plan.actions == []
+    assert plan.deferred == [rules.Deferred("land", 4, "no_slot")]
+
+
+def test_a_retake_spends_the_headroom_before_the_land_does():
+    plan = _plan(available_slots=1, land_slots=1, retakes=[2], lands=MODEL_LAND)
+    assert plan.actions == [rules.PollAction("retake", 2)]
+    assert plan.deferred == [rules.Deferred("land", 4, "no_slot")]
+
+
+def test_without_land_slots_the_land_follows_the_plain_slots():
+    assert _plan(available_slots=1, lands=MODEL_LAND).actions == [rules.PollAction("land", 4)]
+    assert _plan(available_slots=0, lands=MODEL_LAND).actions == []
+
+
+def test_one_model_land_per_round_the_rest_wait_for_a_slot():
+    lands = [rules.LandCandidate(9, "land_model"), rules.LandCandidate(4, "land_model")]
+    plan = _plan(available_slots=0, land_slots=1, lands=lands)
+    assert plan.actions == [rules.PollAction("land", 4)]
+    assert plan.deferred == [rules.Deferred("land", 9, "no_slot")]
+
+
+def test_a_pending_account_limit_pause_defers_every_model_land_as_pause_waiting():
+    lands = [rules.LandCandidate(9, "land_model"), rules.LandCandidate(4, "land_model")]
+    plan = _plan(available_slots=1, land_slots=2, resumes=[_resume()], lands=lands)
+    assert plan.actions == []
+    assert plan.deferred == [
+        rules.Deferred("land", 4, "pause_waiting"),
+        rules.Deferred("land", 9, "pause_waiting"),
+    ]
+
+
+@pytest.mark.parametrize("reason", ["upstream", "network"])
+def test_a_pending_upstream_or_network_pause_never_holds_a_land(reason):
+    plan = _plan(available_slots=0, land_slots=1, resumes=[_resume(reason)], lands=MODEL_LAND)
+    assert plan.actions == [rules.PollAction("land", 4)]
+
+
+def test_pacing_never_gates_a_land():
+    spent = rules.SpendPace(spent_usd=10_000.0, covered_s=3600.0, live_runs=1, pace_usd_per_h=1.0)
+    plan = _plan(
+        available_slots=0, land_slots=1, lands=MODEL_LAND, launches=LAUNCH, pace=spent
+    )
+    assert plan.actions == [rules.PollAction("land", 4)]
+
+
+def test_a_checks_land_is_not_held_by_an_account_limit_pause():
+    plan = _plan(
+        available_slots=0, resumes=[_resume()], lands=[rules.LandCandidate(4, "land_checks")]
+    )
+    assert plan.actions == [rules.PollAction("land", 4)]
+
+
+@pytest.mark.parametrize(
+    ("resume", "paused"),
+    [
+        (_resume(), True),
+        (_resume(prior=5), False),  # exhausted: needs a human, holds nothing
+        (_resume(chase_prior=rules.ACCOUNT_LIMIT_CHASE_MAX + len(rules.ACCOUNT_LIMIT_HOURLY)), False),
+        (_resume("upstream"), False),
+        (_resume("network"), False),
+        (_resume(since=NOW - timedelta(days=1), prior=1), False),  # already due
+    ],
+)
+def test_account_paused_reads_a_pending_account_limit_pause_of_this_product(resume, paused):
+    assert rules.account_paused([resume], NOW) is paused
+
+
+def test_account_paused_with_no_pause_is_false():
+    assert rules.account_paused([], NOW) is False
