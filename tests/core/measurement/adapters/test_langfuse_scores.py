@@ -11,7 +11,11 @@ from datetime import UTC, datetime
 import pytest
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 
-from agentic.core.measurement.adapters.langfuse.scores import LangfuseScores, Transport
+from agentic.core.measurement.adapters.langfuse.scores import (
+    LangfuseScores,
+    Transport,
+    urllib_transport,
+)
 from agentic.core.measurement.domain import task_scores
 from agentic.core.measurement.domain.task_scores import Dimensions, TaskTime
 
@@ -39,7 +43,12 @@ class Recorder:
 
 def _writer(transport: Transport, **kwargs: float) -> LangfuseScores:
     return LangfuseScores(
-        "http://lf:3000", "pk-lf-pub", "sk-lf-secret", transport=transport, **kwargs
+        "http://lf:3000",
+        "pk-lf-pub",
+        "sk-lf-secret",
+        product="apostrophe",
+        transport=transport,
+        **kwargs,
     )
 
 
@@ -122,7 +131,9 @@ def test_a_transport_that_hangs_returns_false_within_the_timeout_and_a_small_mar
         release.wait()
         return 200, b""
 
-    writer = LangfuseScores("http://lf:3000", "pk", "sk", transport=hang, timeout_s=0.3)
+    writer = LangfuseScores(
+        "http://lf:3000", "pk", "sk", product="apostrophe", transport=hang, timeout_s=0.3
+    )
     started = time.monotonic()
     try:
         assert _write(writer) is False
@@ -155,7 +166,9 @@ def silent_server() -> Iterator[str]:
 
 
 def test_the_default_transport_gives_up_on_a_server_that_never_answers(silent_server: str) -> None:
-    writer = LangfuseScores(silent_server, "pk", "sk", timeout_s=0.3)
+    writer = LangfuseScores(
+        silent_server, "pk", "sk", product="apostrophe", transport=urllib_transport, timeout_s=0.3
+    )
     started = time.monotonic()
     assert _write(writer) is False
     assert time.monotonic() - started < 0.3 + 0.5
@@ -194,3 +207,36 @@ def test_a_batch_that_comes_back_with_errors_is_not_a_success(
     assert capsys.readouterr().out.strip() == (
         "Langfuse scores write failed for GH-12: Rejected (1 score(s) refused)"
     )
+
+
+def test_a_write_for_another_product_posts_nothing_and_prints_one_line_without_keys(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    transport = Recorder()
+    writer = _writer(transport)
+    assert writer.write("gym", "GH-12", DOCUMENT, _scores(), TIME, DIMENSIONS) is False
+    assert transport.posts == []
+    out = capsys.readouterr().out
+    assert out.strip() == "Langfuse write refused for GH-12: product gym is not apostrophe"
+    assert out.count("\n") == 1
+    assert "sk-lf-secret" not in out and "pk-lf-pub" not in out
+
+
+def test_the_span_and_every_score_carry_the_bound_product_as_their_environment() -> None:
+    transport = Recorder()
+    assert _write(_writer(transport)) is True
+    request = ExportTraceServiceRequest()
+    request.ParseFromString(transport.posts[0][1])
+    [span] = [s for rs in request.resource_spans for ss in rs.scope_spans for s in ss.spans]
+    attributes = {a.key: a.value.string_value for a in span.attributes}
+    assert attributes["langfuse.environment"] == "apostrophe"
+    batch = json.loads(transport.posts[1][1])["batch"]
+    assert batch and {e["body"]["environment"] for e in batch} == {"apostrophe"}
+
+
+def test_a_writer_built_without_a_transport_cannot_reach_the_real_one_inside_the_suite(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    writer = LangfuseScores("http://127.0.0.1:9", "pk", "sk", product="apostrophe")
+    assert _write(writer) is False
+    assert capsys.readouterr().out.strip() == "Langfuse span write failed for GH-12: AssertionError"

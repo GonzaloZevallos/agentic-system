@@ -107,10 +107,12 @@ class LangfuseScores:
         public_key: str,
         secret_key: str,
         *,
+        product: str,
         transport: Transport | None = None,
         timeout_s: float = LANGFUSE_TIMEOUT_S,
     ) -> None:
         self._host = host.rstrip("/")
+        self._product = product
         token = base64.b64encode(f"{public_key}:{secret_key}".encode()).decode()
         self._authorization = f"Basic {token}"
         self._transport: Transport = transport or urllib_transport
@@ -126,7 +128,17 @@ class LangfuseScores:
         dimensions: Dimensions,
     ) -> bool:
         """Sends the carrier span, then the scores. `True` only when both posts were
-        accepted; on any failure one line is printed and the result is `False`."""
+        accepted; on any failure one line is printed and the result is `False`.
+
+        The writer is bound to one product (GH-283): any other `product` is refused before
+        a post, so the carrier span's environment and every score's can only be the
+        declared one."""
+        if product != self._product:
+            print(
+                f"Langfuse write refused for {task_id}: product {product} is not {self._product}",
+                flush=True,
+            )
+            return False
         call = "span"
         try:
             ids = task_scores.identity(product, task_id, task_time.start)
