@@ -101,9 +101,7 @@ def test_the_product_key_is_the_first_twelve_hex_of_the_sha256_and_stable():
 def mark_literal_violations(files: dict[str, str], owner: str) -> list[str]:
     """The files, other than `owner`, whose text holds the mark's name."""
     return sorted(
-        path
-        for path, text in files.items()
-        if path != owner and reaping.MARK_NAME in text
+        path for path, text in files.items() if path != owner and reaping.MARK_NAME in text
     )
 
 
@@ -119,5 +117,8 @@ def test_the_mark_name_is_written_in_one_module_of_the_application():
 
 
 def test_the_literal_check_refuses_a_second_writer():
-    files = {"a/reaping.py": "MARK_NAME = 'ROLE_PROCESS_OWNER'", "a/runner.py": "x ROLE_PROCESS_OWNER"}
+    files = {
+        "a/reaping.py": "MARK_NAME = 'ROLE_PROCESS_OWNER'",
+        "a/runner.py": "x ROLE_PROCESS_OWNER",
+    }
     assert mark_literal_violations(files, "a/reaping.py") == ["a/runner.py"]

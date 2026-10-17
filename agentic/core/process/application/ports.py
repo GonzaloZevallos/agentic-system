@@ -18,6 +18,7 @@ from typing import Any, Literal, Protocol
 from ..domain.ci import CiReport, CiUnreadable, Containment
 from ..domain.design import Design
 from ..domain.playbook import Playbook
+from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
 from ..domain.rules import MergeFailure, RunKind, SpendRun, motive
 from ..domain.suppressions import Forbidden
@@ -1134,6 +1135,28 @@ class Launcher(Protocol):
         ...
 
 
+class ProcessReaper(Protocol):
+    """Stops the processes a role left running (GH-282, ADR-0052): everything that carries
+    the environment mark of a role the system ran, found by the mark and never by where
+    it runs. Built with the product's key, so a caller names only the task. TERM first, a
+    bounded grace, then KILL; what is still alive afterwards is a `survived` entry, never
+    an exception. No method ever raises: an unexpected failure is an `error` entry. A
+    process whose environment cannot be read is skipped, never signalled, and absent from
+    the answer."""
+
+    def reap_task(self, task_id: str) -> tuple[ReapedProcess, ...]:
+        """Every marked process of the task and of its subtasks, whichever run or attempt."""
+        ...
+
+    def reap_run(self, task_id: str, run: int) -> tuple[ReapedProcess, ...]:
+        """Only the processes marked by the system process `run`: a dead run's own."""
+        ...
+
+    def reap_attempt(self, task_id: str, run: int, token: str) -> tuple[ReapedProcess, ...]:
+        """Only the processes of one attempt of a role."""
+        ...
+
+
 @dataclass(frozen=True)
 class Ports:
     runner: RoleRunner
@@ -1147,6 +1170,7 @@ class Ports:
     stack: ProductStack
     commands: Commands
     sample_app: SampleApp
+    reaper: ProcessReaper
     # Not a port: the run as a process, shared by every branch of a fan-out, with
     # nothing outside it to talk to (`limits.py`). It rides here because `Ports` is
     # what a use case receives.
