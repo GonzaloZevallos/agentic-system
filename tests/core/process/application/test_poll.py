@@ -22,7 +22,14 @@ from agentic.core.process.application.ports import (
 from agentic.core.process.domain.roles import INTERVIEW_SOLUTION
 from agentic.core.process.domain.task import PullRequest
 from agentic.shared.configuration import Configuration
-from tests.fakes import FakeLauncher, MemoryInbox, MemoryRunRegistry, MemoryTracker, memory_ports
+from tests.fakes import (
+    FakeLauncher,
+    FakeReaper,
+    MemoryInbox,
+    MemoryRunRegistry,
+    MemoryTracker,
+    memory_ports,
+)
 
 ESCALATED_AT = datetime(2026, 10, 2, 19, 30, tzinfo=UTC)
 
@@ -1542,3 +1549,57 @@ def test_a_round_whose_reads_time_out_releases_the_registry_lock_and_acts_on_not
         fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)  # raises if still held
     assert launcher.spawned == [] and ports.tracker.comments == []
     assert [path for path in (tmp_path / "runs").iterdir() if path.name != ".lock"] == []
+
+
+# --- GH-282: the processes a run left are reaped by that run's own scope -------------
+
+_LEFT = ({"pid": 5, "command": "uv run sample_app.py", "outcome": "kill"},)
+
+
+def test_gather_retakes_reaps_a_same_boot_death_by_its_pid_and_says_so_on_its_line():
+    reaper = FakeReaper(reaped=_LEFT, reaped_runs=_LEFT)
+    ports = memory_ports(reaper=reaper)
+    _open_task(ports)
+
+    _, lines = poll.gather_retakes(
+        ports, _Locks(_dead_lock("GH-30", boot_id="boot-now")), "boot-now"
+    )
+
+    assert reaper.calls == [("run", "GH-30", 777, None)]  # never `reap_task`
+    assert lines[0].endswith("; reaped 1 process: `uv run sample_app.py` (kill)")
+
+
+def test_gather_retakes_says_nothing_extra_when_the_reap_found_nothing():
+    reaper = FakeReaper()
+    ports = memory_ports(reaper=reaper)
+    _open_task(ports)
+
+    _, lines = poll.gather_retakes(
+        ports, _Locks(_dead_lock("GH-30", boot_id="boot-now")), "boot-now"
+    )
+
+    assert reaper.calls == [("run", "GH-30", 777, None)]
+    assert "reaped" not in lines[0]
+
+
+@pytest.mark.parametrize("boot_id", ["boot-old", None])
+def test_gather_retakes_reaps_nothing_for_an_other_boot_or_unknown_boot_record(boot_id):
+    reaper = FakeReaper(reaped=_LEFT, reaped_runs=_LEFT)
+    ports = memory_ports(reaper=reaper)
+    _open_task(ports)
+
+    poll.gather_retakes(ports, _Locks(_dead_lock("GH-30", boot_id=boot_id)), "boot-now")
+
+    assert reaper.calls == []
+
+
+def test_gather_retakes_reaps_nothing_for_a_live_lock():
+    reaper = FakeReaper(reaped=_LEFT, reaped_runs=_LEFT)
+    ports = memory_ports(reaper=reaper)
+    _open_task(ports)
+
+    poll.gather_retakes(
+        ports, _Locks(_dead_lock("GH-30", boot_id="boot-now"), alive={"GH-30"}), "boot-now"
+    )
+
+    assert reaper.calls == []

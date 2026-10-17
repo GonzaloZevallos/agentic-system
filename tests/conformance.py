@@ -21,6 +21,7 @@ from agentic.core.process.application.ports import (
     Inbox,
     Launcher,
     Ports,
+    ProcessReaper,
     ProductKnowledge,
     ProductStack,
     Prompts,
@@ -33,6 +34,7 @@ from agentic.core.process.application.ports import (
 )
 from tests.fakes import (
     FakeLauncher,
+    FakeReaper,
     MemoryCommands,
     MemoryDocuments,
     MemoryFlags,
@@ -60,6 +62,7 @@ _workspace: Workspace = MemoryWorkspace()
 _tracker: Tracker = MemoryTracker()
 _registry: RunRegistry = MemoryRunRegistry()
 _launcher: Launcher = FakeLauncher()
+_reaper: ProcessReaper = FakeReaper()
 
 
 def ports_of_doubles() -> Ports:
@@ -75,6 +78,7 @@ def ports_of_doubles() -> Ports:
         stack=_stack,
         commands=_commands,
         sample_app=_sample_app,
+        reaper=_reaper,
         limits=RunLimits(),
     )
 
@@ -94,6 +98,7 @@ COVERED: dict[str, type] = {
     "Tracker": MemoryTracker,
     "RunRegistry": MemoryRunRegistry,
     "Launcher": FakeLauncher,
+    "ProcessReaper": FakeReaper,
 }
 
 

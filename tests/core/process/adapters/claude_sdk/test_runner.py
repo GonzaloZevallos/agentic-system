@@ -1,7 +1,10 @@
 """The SDK adapter with `query` replaced. No model involved."""
 
 import io
+import os
+import subprocess
 import sys
+import time
 from dataclasses import fields as dataclass_fields
 from dataclasses import replace
 from pathlib import Path
@@ -19,10 +22,13 @@ from claude_agent_sdk import (
 
 from agentic.core.process.adapters.claude_sdk import runner as module
 from agentic.core.process.adapters.claude_sdk.runner import ClaudeSdkRunner, options_for
+from agentic.core.process.adapters.shell import ShellReaper
 from agentic.core.process.application.ports import AttemptFailed
+from agentic.core.process.domain import reaping
 from agentic.core.process.domain.denials import denial_for
 from agentic.core.process.domain.roles import DEVELOPER, PJM, ROLES, TECH_LEAD_REVIEWER
 from agentic.shared.environment import RESOURCE_ROLE_SLUG_KEY, RESOURCE_TRACE_ID_KEY
+from tests.fakes import FakeReaper
 
 pytestmark = pytest.mark.anyio
 
@@ -54,6 +60,17 @@ def result(**overrides) -> ResultMessage:
     return ResultMessage(**{**fields, **overrides})
 
 
+PRODUCT_KEY = "abcdef012345"
+
+
+def make_runner(**kwargs) -> ClaudeSdkRunner:
+    """A runner with a recording reaper that touches no process (GH-282); a test of the
+    reaping itself passes its own `reaper` and `product_key`."""
+    kwargs.setdefault("reaper", FakeReaper())
+    kwargs.setdefault("product_key", PRODUCT_KEY)
+    return ClaudeSdkRunner(**kwargs)
+
+
 def fake_query(monkeypatch, messages):
     seen = []
 
@@ -68,13 +85,19 @@ def fake_query(monkeypatch, messages):
 
 async def run_once(runner: ClaudeSdkRunner, tmp_path):
     return await runner.run_once(
-        PJM, "p", system_prompt="s", model="model-x", json_schema={"type": "object"}, cwd=tmp_path
+        PJM,
+        "p",
+        system_prompt="s",
+        model="model-x",
+        json_schema={"type": "object"},
+        cwd=tmp_path,
+        owner_task="GH-1",
     )
 
 
 async def test_raw_result_carries_session_cost_and_turns(monkeypatch, tmp_path):
     seen = fake_query(monkeypatch, [result()])
-    raw = await run_once(ClaudeSdkRunner(), tmp_path)
+    raw = await run_once(make_runner(), tmp_path)
     assert raw.structured_output == DELIVERY
     assert (raw.session_id, raw.turns, raw.cost_usd) == ("sess-123", 2, 0.02)
     prompt, options = seen[0]
@@ -89,7 +112,7 @@ async def test_no_role_sees_the_users_mcp_servers(monkeypatch, tmp_path):
     # Without `strict_mcp_config` the CLI loads the user's own MCP servers into every
     # role, and no role uses them (README.md, 14, Observabilidad; issue #18).
     seen = fake_query(monkeypatch, [result()])
-    await run_once(ClaudeSdkRunner(), tmp_path)
+    await run_once(make_runner(), tmp_path)
     options = seen[0][1]
     assert options.strict_mcp_config is True
     assert options.mcp_servers == {}
@@ -103,11 +126,11 @@ async def test_raw_result_splits_the_cost_by_model(monkeypatch, tmp_path):
         "claude-sonnet-5": {"costUSD": 0.25, "inputTokens": 20},
     }
     fake_query(monkeypatch, [result(total_cost_usd=0.75, model_usage=usage)])
-    raw = await run_once(ClaudeSdkRunner(), tmp_path)
+    raw = await run_once(make_runner(), tmp_path)
     assert raw.cost_usd == 0.75
     assert raw.cost_by_model == {"claude-opus-5": 0.5, "claude-sonnet-5": 0.25}
     fake_query(monkeypatch, [result(model_usage=None)])
-    assert (await run_once(ClaudeSdkRunner(), tmp_path)).cost_by_model == {}
+    assert (await run_once(make_runner(), tmp_path)).cost_by_model == {}
 
 
 async def test_raw_result_carries_usage_calls_and_tool_calls(monkeypatch, tmp_path):
@@ -133,7 +156,7 @@ async def test_raw_result_carries_usage_calls_and_tool_calls(monkeypatch, tmp_pa
         model="m",
     )
     fake_query(monkeypatch, [first, second, result(usage=usage)])
-    raw = await run_once(ClaudeSdkRunner(), tmp_path)
+    raw = await run_once(make_runner(), tmp_path)
     # Normalised to the closed `kind` set `agentic.role.tokens` groups by, off the SDK's
     # own snake_case keys.
     assert raw.usage == {"input": 10, "output": 20, "cache_read": 30, "cache_write": 40}
@@ -143,7 +166,7 @@ async def test_raw_result_carries_usage_calls_and_tool_calls(monkeypatch, tmp_pa
 
 async def test_raw_result_usage_defaults_when_the_sdk_reports_none(monkeypatch, tmp_path):
     fake_query(monkeypatch, [result(usage=None)])
-    raw = await run_once(ClaudeSdkRunner(), tmp_path)
+    raw = await run_once(make_runner(), tmp_path)
     assert raw.usage == {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
     assert raw.calls == 0
     assert raw.tool_calls == {}
@@ -166,7 +189,7 @@ async def test_usage_of_a_resumed_session_from_an_earlier_node_is_not_adjusted(
         "output_tokens": 4,
     }
     fake_query(monkeypatch, [result(usage=usage)])
-    raw = await ClaudeSdkRunner().run_once(
+    raw = await make_runner().run_once(
         PJM,
         "p",
         system_prompt="s",
@@ -174,6 +197,7 @@ async def test_usage_of_a_resumed_session_from_an_earlier_node_is_not_adjusted(
         json_schema={"type": "object"},
         cwd=tmp_path,
         resume="session-opened-by-an-earlier-node",
+        owner_task="GH-1",
     )
     assert raw.usage == {"input": 2, "output": 4, "cache_read": 1862, "cache_write": 63}
 
@@ -185,8 +209,8 @@ async def test_nested_schemas_are_inlined_for_the_sdk(monkeypatch, tmp_path):
         "type": "object",
         "properties": {"items": {"type": "array", "items": {"$ref": "#/$defs/Item"}}},
     }
-    await ClaudeSdkRunner().run_once(
-        PJM, "p", system_prompt="s", model="m", json_schema=schema, cwd=tmp_path
+    await make_runner().run_once(
+        PJM, "p", system_prompt="s", model="m", json_schema=schema, cwd=tmp_path, owner_task="GH-1"
     )
     sent = seen[0][1].output_format["schema"]
     assert "$defs" not in sent and "$ref" not in str(sent)
@@ -197,18 +221,18 @@ async def test_nested_schemas_are_inlined_for_the_sdk(monkeypatch, tmp_path):
 async def test_missing_result_and_error_results_are_attempt_failures(monkeypatch, tmp_path):
     fake_query(monkeypatch, [])
     with pytest.raises(AttemptFailed, match="without a result") as info:
-        await run_once(ClaudeSdkRunner(), tmp_path)
+        await run_once(make_runner(), tmp_path)
     assert info.value.reason == "sdk"
 
     fake_query(monkeypatch, [result(subtype="error_max_turns", total_cost_usd=0.5)])
     with pytest.raises(AttemptFailed, match="max_turns \\(2\\) exhausted") as info:
-        await run_once(ClaudeSdkRunner(), tmp_path)
+        await run_once(make_runner(), tmp_path)
     assert info.value.cost_usd == 0.5
     assert info.value.reason == "max_turns"
 
     fake_query(monkeypatch, [result(is_error=True, subtype="error", errors=["boom"])])
     with pytest.raises(AttemptFailed, match="boom") as info:
-        await run_once(ClaudeSdkRunner(), tmp_path)
+        await run_once(make_runner(), tmp_path)
     assert info.value.reason == "sdk"
 
 
@@ -218,19 +242,19 @@ async def test_a_failed_attempt_keeps_the_session_it_left_behind(monkeypatch, tm
     cut = result(is_error=True, subtype="error_max_budget_usd", total_cost_usd=3.05)
     fake_query(monkeypatch, [cut])
     with pytest.raises(AttemptFailed, match="error_max_budget_usd") as info:
-        await run_once(ClaudeSdkRunner(), tmp_path)
+        await run_once(make_runner(), tmp_path)
     assert (info.value.cost_usd, info.value.session_id) == (3.05, "sess-123")
     # A per-attempt budget cap is `limit` (issue #66), not a generic `sdk` failure.
     assert info.value.reason == "limit"
 
     fake_query(monkeypatch, [result(subtype="error_max_turns", total_cost_usd=0.5)])
     with pytest.raises(AttemptFailed) as info:
-        await run_once(ClaudeSdkRunner(), tmp_path)
+        await run_once(make_runner(), tmp_path)
     assert info.value.session_id == "sess-123"
 
     fake_query(monkeypatch, [])  # no result at all: nothing to resume
     with pytest.raises(AttemptFailed) as info:
-        await run_once(ClaudeSdkRunner(), tmp_path)
+        await run_once(make_runner(), tmp_path)
     assert info.value.session_id == ""
 
 
@@ -261,7 +285,7 @@ async def test_the_run_ends_at_the_first_delivery(monkeypatch, tmp_path):
 
     monkeypatch.setattr(module, "query", query)
     buffer = io.StringIO()
-    raw = await run_once(ClaudeSdkRunner(verbose=True, stream=buffer), tmp_path)
+    raw = await run_once(make_runner(verbose=True, stream=buffer), tmp_path)
     assert raw.structured_output == {"markdown": "v1"}
     assert (raw.turns, raw.cost_usd) == (16, 2.53)
     assert repeat not in consumed  # the generator was closed before it
@@ -281,13 +305,13 @@ async def test_a_result_without_a_delivery_does_not_end_the_run(monkeypatch, tmp
     empty = result(structured_output=None, num_turns=1)
     fake_query(monkeypatch, [empty, result(num_turns=2)])
     buffer = io.StringIO()
-    raw = await run_once(ClaudeSdkRunner(stream=buffer), tmp_path)
+    raw = await run_once(make_runner(stream=buffer), tmp_path)
     assert raw.structured_output == DELIVERY and raw.turns == 2
     assert "[PjM] done: 1 turns" in buffer.getvalue()
     assert "[PjM] done: 2 turns" in buffer.getvalue()
 
     fake_query(monkeypatch, [empty])
-    raw = await run_once(ClaudeSdkRunner(stream=buffer), tmp_path)
+    raw = await run_once(make_runner(stream=buffer), tmp_path)
     assert raw.structured_output is None  # the use case's failure, not the runner's
 
 
@@ -307,7 +331,7 @@ async def test_a_sink_observes_the_stream_even_when_verbose_is_false(monkeypatch
         [launched, result(structured_output=DELIVERY, num_turns=3, total_cost_usd=0.1)],
     )
     buffer = io.StringIO()
-    raw = await run_once(ClaudeSdkRunner(stream=buffer, verbose=False), tmp_path)
+    raw = await run_once(make_runner(stream=buffer, verbose=False), tmp_path)
     assert raw.structured_output == DELIVERY
     assert seen[0][1].include_partial_messages is False  # verbose alone gates deltas
     written = buffer.getvalue()
@@ -328,7 +352,7 @@ async def test_verbose_also_mirrors_the_sink_on_stderr(monkeypatch, tmp_path, ca
     ]
     fake_query(monkeypatch, messages)
     buffer = io.StringIO()
-    await run_once(ClaudeSdkRunner(verbose=True, stream=buffer), tmp_path)
+    await run_once(make_runner(verbose=True, stream=buffer), tmp_path)
     written = buffer.getvalue()
     assert '[PjM] tool Read {"path": "x"}' in written and "[PjM] done: 1 turns" in written
     err = capsys.readouterr().err
@@ -345,7 +369,7 @@ async def test_verbose_without_a_sink_still_streams_to_stderr_alone(monkeypatch,
         result(num_turns=1, total_cost_usd=0.02),
     ]
     fake_query(monkeypatch, messages)
-    await run_once(ClaudeSdkRunner(verbose=True), tmp_path)
+    await run_once(make_runner(verbose=True), tmp_path)
     err = capsys.readouterr().err
     assert '[PjM] tool Read {"path": "x"}' in err and "[PjM] done: 1 turns" in err
 
@@ -375,7 +399,7 @@ async def test_a_cancelled_stream_writes_the_token_line_once_and_reraises_unchan
     monkeypatch.setattr(module, "query", query)
     buffer = io.StringIO()
     with pytest.raises(anyio.get_cancelled_exc_class()):
-        await run_once(ClaudeSdkRunner(stream=buffer), tmp_path)
+        await run_once(make_runner(stream=buffer), tmp_path)
     written = buffer.getvalue()
     assert written.count("interrupted") == 1
     assert "[PjM] interrupted after 2 turns, 5 input / 7 output tokens seen on the main " in written
@@ -390,7 +414,7 @@ async def test_sdk_exceptions_are_attempt_failures(monkeypatch, tmp_path):
 
     monkeypatch.setattr(module, "query", query)
     with pytest.raises(AttemptFailed, match="SDK error: socket closed") as info:
-        await run_once(ClaudeSdkRunner(), tmp_path)
+        await run_once(make_runner(), tmp_path)
     assert info.value.reason == "sdk"
 
 
@@ -403,7 +427,7 @@ async def test_an_sdk_exception_with_no_message_names_its_type_instead_of_nothin
 
     monkeypatch.setattr(module, "query", query)
     with pytest.raises(AttemptFailed, match="SDK error: RuntimeError, with no message"):
-        await run_once(ClaudeSdkRunner(), tmp_path)
+        await run_once(make_runner(), tmp_path)
 
 
 LIMIT_PROSE = "API Error: You've hit your session limit · resets 11:20pm"
@@ -425,7 +449,7 @@ async def test_a_result_error_with_success_and_no_errors_still_names_the_limit(
 
     monkeypatch.setattr(module, "query", query)
     with pytest.raises(AttemptFailed) as info:
-        await run_once(ClaudeSdkRunner(), tmp_path)
+        await run_once(make_runner(), tmp_path)
     assert LIMIT_PROSE in str(info.value)
     assert "success" not in str(info.value)
 
@@ -439,7 +463,7 @@ async def test_the_same_payload_as_a_result_message_still_names_the_limit(monkey
         [result(is_error=True, subtype="success", errors=[], result=LIMIT_PROSE)],
     )
     with pytest.raises(AttemptFailed) as info:
-        await run_once(ClaudeSdkRunner(), tmp_path)
+        await run_once(make_runner(), tmp_path)
     assert LIMIT_PROSE in str(info.value)
     assert "run ended in error: success" not in str(info.value)
 
@@ -460,7 +484,7 @@ async def test_max_turns_motive_carries_what_the_sdk_reported(monkeypatch, tmp_p
         ],
     )
     with pytest.raises(AttemptFailed) as info:
-        await run_once(ClaudeSdkRunner(), tmp_path)
+        await run_once(make_runner(), tmp_path)
     assert str(info.value) == (
         "max_turns (2) exhausted without a result: wrote a heredoc to /tmp/test_repro.py; denied"
     )
@@ -474,7 +498,7 @@ async def test_max_turns_motive_is_bare_when_the_sdk_reports_nothing_else(monkey
     # stands alone rather than being followed by a tautological "no cause reported".
     fake_query(monkeypatch, [result(subtype="error_max_turns", total_cost_usd=0.5)])
     with pytest.raises(AttemptFailed) as info:
-        await run_once(ClaudeSdkRunner(), tmp_path)
+        await run_once(make_runner(), tmp_path)
     assert str(info.value) == "max_turns (2) exhausted without a result"
 
 
@@ -495,7 +519,7 @@ async def test_max_turns_motive_via_result_error_carries_what_the_sdk_reported(
 
     monkeypatch.setattr(module, "query", query)
     with pytest.raises(AttemptFailed) as info:
-        await run_once(ClaudeSdkRunner(), tmp_path)
+        await run_once(make_runner(), tmp_path)
     assert str(info.value) == (
         "max_turns (2) exhausted without a result: "
         "cat > /tmp/test_repro.py <<EOF: permission denied"
@@ -514,7 +538,7 @@ async def test_a_result_error_with_a_budget_subtype_is_the_limit_reason(monkeypa
 
     monkeypatch.setattr(module, "query", query)
     with pytest.raises(AttemptFailed, match="error_max_budget_usd") as info:
-        await run_once(ClaudeSdkRunner(), tmp_path)
+        await run_once(make_runner(), tmp_path)
     assert info.value.reason == "limit"
 
 
@@ -559,7 +583,7 @@ async def test_verbose_streams_the_generation_through_the_printer(monkeypatch, t
     ]
     seen = fake_query(monkeypatch, messages)
     buffer = io.StringIO()
-    raw = await run_once(ClaudeSdkRunner(verbose=True, stream=buffer), tmp_path)
+    raw = await run_once(make_runner(verbose=True, stream=buffer), tmp_path)
     assert raw.session_id == "s"
     assert seen[0][1].include_partial_messages is True
     assert buffer.getvalue() == (
@@ -574,7 +598,7 @@ async def test_a_role_that_executes_runs_unattended_with_a_budget(monkeypatch, t
     developer = replace(
         PJM, slug="developer", tools=("Read", "Edit", "Bash"), skills=("tdd",), executes=True
     )
-    await ClaudeSdkRunner().run_once(
+    await make_runner().run_once(
         developer,
         "p",
         system_prompt="s",
@@ -582,6 +606,7 @@ async def test_a_role_that_executes_runs_unattended_with_a_budget(monkeypatch, t
         json_schema={"type": "object"},
         cwd=tmp_path,
         max_budget_usd=3.0,
+        owner_task="GH-1",
     )
     options = seen[0][1]
     assert options.permission_mode == "bypassPermissions"
@@ -600,8 +625,15 @@ async def test_a_reader_role_is_caged_by_permission_rules(monkeypatch, tmp_path)
     reader = replace(
         PJM, tools=("Read", "Bash"), allowed=("Bash(git diff:*)", "Read"), skills=("code-review",)
     )
-    await ClaudeSdkRunner().run_once(
-        reader, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path, resume="sess-1"
+    await make_runner().run_once(
+        reader,
+        "p",
+        system_prompt="s",
+        model="m",
+        json_schema={},
+        cwd=tmp_path,
+        resume="sess-1",
+        owner_task="GH-1",
     )
     options = seen[0][1]
     assert options.permission_mode == "default"  # anything outside the rules is denied
@@ -616,13 +648,19 @@ async def test_the_git_identity_and_the_deny_rules_reach_the_role(monkeypatch, t
     seen = fake_query(monkeypatch, [result()])
     identity = {"GIT_AUTHOR_NAME": "agentic-system", "GIT_COMMITTER_NAME": "agentic-system"}
     developer = replace(PJM, tools=("Bash",), executes=True, denied=("Bash(git config:*)",))
-    await ClaudeSdkRunner(env=identity).run_once(
-        developer, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
+    await make_runner(env=identity).run_once(
+        developer,
+        "p",
+        system_prompt="s",
+        model="m",
+        json_schema={},
+        cwd=tmp_path,
+        owner_task="GH-1",
     )
     options = seen[0][1]
     # The SDK merges `env` over the inherited environment, so every `git` the role
     # runs commits as the system, whatever `user.*` the product's config carries.
-    assert options.env == identity
+    assert {k: v for k, v in options.env.items() if k != reaping.MARK_NAME} == identity
     # Deny rules hold even in `bypassPermissions`.
     assert options.disallowed_tools == ["Bash(git config:*)"]
 
@@ -710,8 +748,8 @@ async def test_run_once_marks_against_the_real_ambient_resource_attributes(monke
     traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
     seen = fake_query(monkeypatch, [result()])
     identity = {"GIT_AUTHOR_NAME": "agentic-system"}
-    await ClaudeSdkRunner(env=identity, telemetry=_FakeTelemetry(traceparent)).run_once(
-        PJM, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
+    await make_runner(env=identity, telemetry=_FakeTelemetry(traceparent)).run_once(
+        PJM, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path, owner_task="GH-1"
     )
     attrs = seen[0][1].env["OTEL_RESOURCE_ATTRIBUTES"]
     assert "deployment.environment=prod" in attrs  # the real ambient entry survives
@@ -723,13 +761,19 @@ async def test_a_role_that_executes_runs_inside_the_hooks_cage(monkeypatch, tmp_
     # Deny rules match a prefix; the hooks see the parsed call (ADR-0011, addendum).
     seen = fake_query(monkeypatch, [result()])
     developer = replace(PJM, tools=("Bash",), executes=True)
-    await ClaudeSdkRunner().run_once(
-        developer, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
+    await make_runner().run_once(
+        developer,
+        "p",
+        system_prompt="s",
+        model="m",
+        json_schema={},
+        cwd=tmp_path,
+        owner_task="GH-1",
     )
     matchers = seen[0][1].hooks["PreToolUse"]
     assert {m.matcher for m in matchers} == {"Bash", "Edit|Write"}
     seen = fake_query(monkeypatch, [result()])
-    await run_once(ClaudeSdkRunner(), tmp_path)
+    await run_once(make_runner(), tmp_path)
     assert seen[0][1].hooks is None
 
 
@@ -739,8 +783,8 @@ async def test_a_non_executing_role_gets_a_can_use_tool_denial_callback(monkeypa
     # the role's own rule (`denial_for`) has to land instead of the SDK's generic text.
     seen = fake_query(monkeypatch, [result()])
     reader = replace(PJM, tools=("Read",), allowed=("Read",))
-    await ClaudeSdkRunner().run_once(
-        reader, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
+    await make_runner().run_once(
+        reader, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path, owner_task="GH-1"
     )
     assert seen[0][1].can_use_tool is not None
 
@@ -751,8 +795,14 @@ async def test_an_executing_role_gets_no_can_use_tool_callback(monkeypatch, tmp_
     # hooks cage already covers (ADR-0011, addendum).
     seen = fake_query(monkeypatch, [result()])
     developer = replace(PJM, tools=("Bash",), executes=True)
-    await ClaudeSdkRunner().run_once(
-        developer, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
+    await make_runner().run_once(
+        developer,
+        "p",
+        system_prompt="s",
+        model="m",
+        json_schema={},
+        cwd=tmp_path,
+        owner_task="GH-1",
     )
     assert seen[0][1].can_use_tool is None
 
@@ -769,8 +819,8 @@ async def test_the_denial_callback_names_the_role_rule_and_is_counted(monkeypatc
         yield result()
 
     monkeypatch.setattr(module, "query", query)
-    raw = await ClaudeSdkRunner().run_once(
-        reader, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
+    raw = await make_runner().run_once(
+        reader, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path, owner_task="GH-1"
     )
     assert raw.denials == 1
 
@@ -786,8 +836,14 @@ async def test_a_denial_during_a_failed_attempt_still_reaches_attemptfailed(monk
 
     monkeypatch.setattr(module, "query", query)
     with pytest.raises(AttemptFailed) as info:
-        await ClaudeSdkRunner().run_once(
-            reader, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
+        await make_runner().run_once(
+            reader,
+            "p",
+            system_prompt="s",
+            model="m",
+            json_schema={},
+            cwd=tmp_path,
+            owner_task="GH-1",
         )
     assert info.value.denials == 1
 
@@ -815,8 +871,14 @@ async def test_a_fired_turn_notice_is_carried_on_the_raw_result(monkeypatch, tmp
         yield result()
 
     monkeypatch.setattr(module, "query", query)
-    raw = await ClaudeSdkRunner().run_once(
-        developer, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
+    raw = await make_runner().run_once(
+        developer,
+        "p",
+        system_prompt="s",
+        model="m",
+        json_schema={},
+        cwd=tmp_path,
+        owner_task="GH-1",
     )
     assert raw.turn_notice is True
     assert raw.turn_notice_firings == 1
@@ -842,8 +904,14 @@ async def test_a_second_posttooluse_event_reaching_the_second_window_raises_the_
         yield result()
 
     monkeypatch.setattr(module, "query", query)
-    raw = await ClaudeSdkRunner().run_once(
-        developer, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
+    raw = await make_runner().run_once(
+        developer,
+        "p",
+        system_prompt="s",
+        model="m",
+        json_schema={},
+        cwd=tmp_path,
+        owner_task="GH-1",
     )
     assert raw.turn_notice_firings == 2
     assert raw.main_thread_turns == 65
@@ -861,8 +929,14 @@ async def test_no_turn_notice_when_the_threshold_is_never_crossed(monkeypatch, t
         yield result()
 
     monkeypatch.setattr(module, "query", query)
-    raw = await ClaudeSdkRunner().run_once(
-        developer, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
+    raw = await make_runner().run_once(
+        developer,
+        "p",
+        system_prompt="s",
+        model="m",
+        json_schema={},
+        cwd=tmp_path,
+        owner_task="GH-1",
     )
     assert raw.turn_notice is False
     assert raw.turn_notice_firings == 0
@@ -884,8 +958,14 @@ async def test_a_fired_turn_notice_during_a_failed_attempt_still_reaches_attempt
 
     monkeypatch.setattr(module, "query", query)
     with pytest.raises(AttemptFailed) as info:
-        await ClaudeSdkRunner().run_once(
-            developer, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
+        await make_runner().run_once(
+            developer,
+            "p",
+            system_prompt="s",
+            model="m",
+            json_schema={},
+            cwd=tmp_path,
+            owner_task="GH-1",
         )
     assert info.value.turn_notice is True
     assert info.value.turn_notice_firings == 1
@@ -901,8 +981,8 @@ async def test_main_thread_turns_is_carried_on_every_other_raise_site_too(monkey
 
     monkeypatch.setattr(module, "query", query)
     with pytest.raises(AttemptFailed) as info:
-        await ClaudeSdkRunner().run_once(
-            PJM, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path
+        await make_runner().run_once(
+            PJM, "p", system_prompt="s", model="m", json_schema={}, cwd=tmp_path, owner_task="GH-1"
         )
     assert info.value.main_thread_turns == 7
 
@@ -919,13 +999,13 @@ async def test_raw_result_carries_the_delivery_tool_emissions(monkeypatch, tmp_p
         model="m",
     )
     fake_query(monkeypatch, [calls, result()])
-    raw = await run_once(ClaudeSdkRunner(), tmp_path)
+    raw = await run_once(make_runner(), tmp_path)
     assert raw.deliveries == 2
 
 
 async def test_raw_result_deliveries_default_when_the_tool_was_never_called(monkeypatch, tmp_path):
     fake_query(monkeypatch, [result()])
-    raw = await run_once(ClaudeSdkRunner(), tmp_path)
+    raw = await run_once(make_runner(), tmp_path)
     assert raw.deliveries == 0
 
 
@@ -959,7 +1039,7 @@ async def test_attemptfailed_carries_deliveries_on_every_result_based_failure(
     ]
     fake_query(monkeypatch, build_messages(extra))
     with pytest.raises(AttemptFailed) as info:
-        await run_once(ClaudeSdkRunner(), tmp_path)
+        await run_once(make_runner(), tmp_path)
     assert info.value.deliveries == 2
 
 
@@ -977,7 +1057,7 @@ async def test_attemptfailed_carries_deliveries_via_result_error(monkeypatch, tm
 
     monkeypatch.setattr(module, "query", query)
     with pytest.raises(AttemptFailed) as info:
-        await run_once(ClaudeSdkRunner(), tmp_path)
+        await run_once(make_runner(), tmp_path)
     assert info.value.deliveries == 1
 
 
@@ -992,7 +1072,7 @@ async def test_attemptfailed_carries_deliveries_on_an_sdk_exception(monkeypatch,
 
     monkeypatch.setattr(module, "query", query)
     with pytest.raises(AttemptFailed) as info:
-        await run_once(ClaudeSdkRunner(), tmp_path)
+        await run_once(make_runner(), tmp_path)
     assert info.value.deliveries == 1
 
 
@@ -1010,7 +1090,7 @@ async def test_a_presubmit_denial_is_counted_on_the_raw_result(monkeypatch, tmp_
         yield result()
 
     monkeypatch.setattr(module, "query", query)
-    raw = await ClaudeSdkRunner().run_once(
+    raw = await make_runner().run_once(
         PJM,
         "p",
         system_prompt="s",
@@ -1018,6 +1098,7 @@ async def test_a_presubmit_denial_is_counted_on_the_raw_result(monkeypatch, tmp_
         json_schema={},
         cwd=tmp_path,
         presubmit=FakePresubmit(),
+        owner_task="GH-1",
     )
     assert raw.presubmit_denials == 1
     assert raw.denials == 0  # a different fact: the SDK's own permission layer
@@ -1040,7 +1121,7 @@ async def test_a_presubmit_denial_during_a_failed_attempt_still_reaches_attemptf
 
     monkeypatch.setattr(module, "query", query)
     with pytest.raises(AttemptFailed) as info:
-        await ClaudeSdkRunner().run_once(
+        await make_runner().run_once(
             PJM,
             "p",
             system_prompt="s",
@@ -1048,13 +1129,14 @@ async def test_a_presubmit_denial_during_a_failed_attempt_still_reaches_attemptf
             json_schema={},
             cwd=tmp_path,
             presubmit=FakePresubmit(),
+            owner_task="GH-1",
         )
     assert info.value.presubmit_denials == 1
 
 
 async def test_a_role_with_no_margin_never_gets_the_turn_notice_hook_wired(monkeypatch, tmp_path):
     seen = fake_query(monkeypatch, [result()])
-    await run_once(ClaudeSdkRunner(), tmp_path)
+    await run_once(make_runner(), tmp_path)
     assert "PostToolUse" not in (seen[0][1].hooks or {})
 
 
@@ -1067,7 +1149,7 @@ async def test_the_presubmit_becomes_a_hook_on_the_delivery_call(monkeypatch, tm
         def __call__(self):
             return None
 
-    await ClaudeSdkRunner().run_once(
+    await make_runner().run_once(
         PJM,
         "p",
         system_prompt="s",
@@ -1075,6 +1157,7 @@ async def test_the_presubmit_becomes_a_hook_on_the_delivery_call(monkeypatch, tm
         json_schema={},
         cwd=tmp_path,
         presubmit=FakePresubmit(),
+        owner_task="GH-1",
     )
     (matcher,) = seen[0][1].hooks["PreToolUse"]
     assert matcher.matcher == "StructuredOutput" and matcher.timeout > 300.0
@@ -1091,7 +1174,7 @@ class FakeGuard:
 
 async def test_the_guard_becomes_a_hook_on_the_delivery_call(monkeypatch, tmp_path):
     seen = fake_query(monkeypatch, [result()])
-    await ClaudeSdkRunner().run_once(
+    await make_runner().run_once(
         PJM,
         "p",
         system_prompt="s",
@@ -1099,6 +1182,7 @@ async def test_the_guard_becomes_a_hook_on_the_delivery_call(monkeypatch, tmp_pa
         json_schema={},
         cwd=tmp_path,
         guard=FakeGuard(),
+        owner_task="GH-1",
     )
     (matcher,) = seen[0][1].hooks["PreToolUse"]
     assert matcher.matcher == "StructuredOutput"
@@ -1286,3 +1370,151 @@ def test_options_for_wires_the_guard_ahead_of_the_presubmit(tmp_path):
     )
     (matcher,) = options.hooks["PreToolUse"]
     assert matcher.matcher == "StructuredOutput"
+
+
+# --- GH-282: every attempt is marked, and its processes are reaped when it ends -------
+
+
+async def test_each_attempt_is_marked_with_its_task_run_and_a_fresh_token(monkeypatch, tmp_path):
+    seen = fake_query(monkeypatch, [result()])
+    reaper = FakeReaper()
+    runner = make_runner(reaper=reaper)
+    await run_once(runner, tmp_path)
+    await run_once(runner, tmp_path)
+
+    marks = [reaping.parse_mark(options.env[reaping.MARK_NAME]) for _, options in seen]
+    assert all(m is not None and m.product == PRODUCT_KEY for m in marks)
+    assert [(m.task, m.run) for m in marks if m] == [("GH-1", os.getpid())] * 2
+    assert marks[0] is not None and marks[1] is not None and marks[0].token != marks[1].token
+    # the reap that follows names the same attempt, once each
+    assert reaper.calls == [("attempt", "GH-1", os.getpid(), m.token) for m in marks if m]
+
+
+async def test_the_attempt_is_reaped_on_the_error_path_too(monkeypatch, tmp_path):
+    seen = fake_query(monkeypatch, [])  # no result message: an AttemptFailed
+    reaper = FakeReaper()
+    with pytest.raises(AttemptFailed):
+        await run_once(make_runner(reaper=reaper), tmp_path)
+    mark = reaping.parse_mark(seen[0][1].env[reaping.MARK_NAME])
+    assert mark is not None
+    assert reaper.calls == [("attempt", "GH-1", os.getpid(), mark.token)]
+
+
+async def test_the_mark_never_reaches_the_shared_environment(monkeypatch, tmp_path):
+    fake_query(monkeypatch, [result()])
+    runner = make_runner(env={"GIT_AUTHOR_NAME": "system"})
+    await run_once(runner, tmp_path)
+    assert reaping.MARK_NAME not in runner.env
+    assert reaping.MARK_NAME not in os.environ
+
+
+def _alive(process: subprocess.Popen) -> bool:
+    return process.poll() is None
+
+
+def _spawner(monkeypatch, children: list, script: list[str]):
+    """A `query` that starts a real process, detached from the group, with the very env it
+    was handed, then waits forever (the role is still working)."""
+
+    async def query(prompt, options):
+        children.append(
+            subprocess.Popen(
+                script,
+                env={**os.environ, **options.env},
+                start_new_session=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        )
+        await anyio.sleep_forever()
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(module, "query", query)
+
+
+async def test_a_cancelled_attempt_still_has_its_processes_reaped(monkeypatch, tmp_path):
+    children: list[subprocess.Popen] = []
+    _spawner(monkeypatch, children, ["sleep", "300"])
+    runner = make_runner(reaper=ShellReaper(PRODUCT_KEY))
+    try:
+        with anyio.move_on_after(0.5):
+            await run_once(runner, tmp_path)
+        deadline = time.monotonic() + reaping.REAP_GRACE_S + reaping.REAP_KILL_WAIT_S + 2
+        while _alive(children[0]) and time.monotonic() < deadline:
+            await anyio.sleep(0.05)
+        assert not _alive(children[0])
+    finally:
+        for child in children:
+            child.kill()
+            child.wait()
+
+
+async def test_the_reap_does_not_block_the_loop_while_it_waits_out_the_grace(monkeypatch, tmp_path):
+    children: list[subprocess.Popen] = []
+    # Ignores SIGTERM, so the reap has to wait the whole grace before it kills.
+    _spawner(monkeypatch, children, ["bash", "-c", 'trap "" TERM; while :; do sleep 1; done'])
+    runner = make_runner(reaper=ShellReaper(PRODUCT_KEY))
+    ticks = 0
+
+    async def tick() -> None:
+        nonlocal ticks
+        while True:
+            await anyio.sleep(0.05)
+            ticks += 1
+
+    try:
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(tick)
+            with anyio.move_on_after(0.5):
+                await run_once(runner, tmp_path)
+            before = ticks
+            deadline = time.monotonic() + reaping.REAP_GRACE_S + reaping.REAP_KILL_WAIT_S + 2
+            while _alive(children[0]) and time.monotonic() < deadline:
+                await anyio.sleep(0.05)
+            assert not _alive(children[0])
+            # the loop kept running during the 5 s of grace the child forced
+            assert ticks - before > 20
+            tg.cancel_scope.cancel()
+    finally:
+        for child in children:
+            child.kill()
+            child.wait()
+
+
+def test_the_reaper_takes_the_escaped_grandchild_of_a_real_attempt_env_and_spares_a_sibling():
+    token = "regression"
+    mark = reaping.mark(PRODUCT_KEY, "GH-1", os.getpid(), token)
+    child_env = module._child_env({**os.environ}, PJM, None, None, mark)
+    sibling_env = {k: v for k, v in child_env.items() if k != reaping.MARK_NAME}
+    subprocess.run(
+        ["bash", "-c", "setsid nohup sleep 300 >/dev/null 2>&1 & echo $!"],
+        env=child_env,
+        check=True,
+        capture_output=True,
+    )
+    sibling = subprocess.Popen(["sleep", "301"], env=sibling_env, start_new_session=True)
+    try:
+        reaped = ShellReaper(PRODUCT_KEY).reap_attempt("GH-1", os.getpid(), token)
+        assert [p["command"] for p in reaped] == ["sleep 300"]
+        assert reaped[0]["outcome"] in ("term", "kill")
+        assert _alive(sibling)  # the same env minus the mark is not the role's
+    finally:
+        sibling.kill()
+        sibling.wait()
+
+
+async def test_what_the_reaper_stopped_comes_back_on_the_result_and_on_the_failure(
+    monkeypatch, tmp_path
+):
+    leak: tuple[reaping.ReapedProcess, ...] = (
+        {"pid": 7, "command": "sleep 300", "outcome": "term"},
+    )
+    fake_query(monkeypatch, [result()])
+    raw = await run_once(make_runner(reaper=FakeReaper(reaped_attempts=leak)), tmp_path)
+    assert raw.reaped == list(leak)
+    fake_query(monkeypatch, [])
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(make_runner(reaper=FakeReaper(reaped_attempts=leak)), tmp_path)
+    assert info.value.reaped == list(leak)
+    fake_query(monkeypatch, [result()])
+    assert (await run_once(make_runner(), tmp_path)).reaped == []

@@ -21,7 +21,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..domain import rules
+from ..domain.reaping import ReapedProcess
 from .ports import Ports
+from .release import release_task
 
 # How the system's comment on a `--fresh` archive starts: a resume looks past it, the
 # same as it does `escalate.ESCALATED`, `deliver.READY` and `discard.DISCARDED`.
@@ -43,11 +45,13 @@ class ArchiveResult:
     branches left to rename, the document and the worktrees already someone else's
     doing. `document_kept` says whether the document that landed in the commit is
     still there once the product's own `.gitignore` is asked -- meaningless, and left
-    at its default, whenever `written` is `False`."""
+    at its default, whenever `written` is `False`. `reaped` is what the release stopped
+    before the worktrees went (GH-282, ADR-0052); nothing is written to a document."""
 
     prefix: str | None
     written: bool
     document_kept: bool = True
+    reaped: tuple[ReapedProcess, ...] = ()
 
 
 def archive_previous_run(task_id: str, ports: Ports) -> ArchiveResult:
@@ -82,6 +86,7 @@ def archive_previous_run(task_id: str, ports: Ports) -> ArchiveResult:
     prefix = rules.archive_prefix(n, system_commit)
     written = False
     document_kept = True
+    reaped: tuple[ReapedProcess, ...] = ()
 
     if head is not None:
         checkout = workspace.task_checkout(task_id)
@@ -91,7 +96,7 @@ def archive_previous_run(task_id: str, ports: Ports) -> ArchiveResult:
         if doc_path is not None:
             relative = doc_path.relative_to(checkout.path).as_posix()
             document_kept = not workspace.is_ignored(checkout.path, relative)
-        workspace.cleanup(task_id)
+        reaped = release_task(ports, task_id)
         workspace.prune()
         workspace.rename_branch(task_branch, rules.archive_ref(task_branch, n, system_commit))
         written = True
@@ -101,4 +106,4 @@ def archive_previous_run(task_id: str, ports: Ports) -> ArchiveResult:
             continue
         workspace.rename_branch(branch, rules.archive_ref(branch, n, system_commit))
 
-    return ArchiveResult(prefix=prefix, written=written, document_kept=document_kept)
+    return ArchiveResult(prefix=prefix, written=written, document_kept=document_kept, reaped=reaped)

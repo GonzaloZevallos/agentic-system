@@ -15,6 +15,7 @@ from ..domain import document
 from ..domain.roles import PJM, PM
 from ..domain.task import TaskState
 from .ports import Ports
+from .release import release_task
 from .run_role import finish
 
 # How the discard comment starts: a resume looks past the system's comments.
@@ -27,8 +28,12 @@ async def discard(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         f"{DISCARDED}{discard_reason(state)}\n\n"
         f"Task document: `{document.relative_path(state['id'])}`",
     )
-    ports.workspace.cleanup(state["id"])
-    return finish(state, {"current_role": PJM.name}, ports)
+    reaped = release_task(ports, state["id"])
+    return finish(
+        state,
+        {"current_role": PJM.name, **({"reaped_at_cleanup": list(reaped)} if reaped else {})},
+        ports,
+    )
 
 
 def discard_reason(state: TaskState) -> str:

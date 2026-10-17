@@ -27,6 +27,7 @@ async def run_pjm(runner, limits, spent_usd=0.0, task_cap_usd=None):
         vocabulary={},
         cwd=Path("/p"),
         runner=runner,
+        owner_task="GH-1",
         spent_usd=spent_usd,
         task_cap_usd=task_cap_usd,
         limits=limits,

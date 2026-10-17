@@ -4,6 +4,7 @@ import pytest
 
 from agentic.core.process.adapters.claude_sdk import ClaudeSdkRunner
 from agentic.core.process.adapters.filesystem import FilesystemPrompts
+from agentic.core.process.adapters.shell import ShellReaper
 from agentic.core.process.application.run_role import run_with_retry
 from agentic.core.process.domain.roles import PJM, render
 
@@ -56,7 +57,8 @@ async def test_pjm_classifies(title, description, expected, tmp_path):
         retries=1,
         vocabulary={},
         cwd=tmp_path,
-        runner=ClaudeSdkRunner(),
+        runner=ClaudeSdkRunner(reaper=ShellReaper("pjm-test"), product_key="pjm-test"),
+        owner_task="GH-1",
     )
     assert output.data["type"] == expected
     assert output.data["confidence"] == "high"

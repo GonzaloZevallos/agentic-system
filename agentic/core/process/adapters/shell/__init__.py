@@ -1,7 +1,9 @@
 """The product's commands as the system itself runs them: the presubmit's checks, and
-the sample app PM's early final validation walks (ADR-0040)."""
+the sample app PM's early final validation walks (ADR-0040), and the reaper of what
+a role left running (ADR-0052)."""
 
 from .commands import ShellCommands
+from .reaper import ShellReaper
 from .sample_app import ShellSampleApp
 
-__all__ = ["ShellCommands", "ShellSampleApp"]
+__all__ = ["ShellCommands", "ShellReaper", "ShellSampleApp"]

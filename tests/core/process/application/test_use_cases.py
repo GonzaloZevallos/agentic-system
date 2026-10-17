@@ -14,6 +14,7 @@ from agentic.core.process.domain.task import apply
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
     REPORTS,
+    FakeReaper,
     MemoryStack,
     MemoryWorkspace,
     ScriptedRunner,
@@ -289,3 +290,24 @@ async def test_role_failure_is_saved_with_the_document(cfg):
     saved = ports.documents.last
     assert saved["status"] == "waiting_on_human" and saved["cost_usd"] == pytest.approx(0.08)
     assert [f["error"] for f in saved["failures"]] == ["x", "y"]
+
+
+async def test_a_discard_records_what_the_release_reaped(cfg):
+    reaped = ({"pid": 7, "command": "nohup ./cap.sh", "outcome": "term"},)
+    ports = memory_ports(reaper=FakeReaper(reaped))
+    state = {**BUG, "status": "discarded", "discard_reason": "weekly by definition"}
+
+    patch = await discard(state, cfg, ports)
+
+    assert patch == {"current_role": "PjM", "reaped_at_cleanup": list(reaped)}
+    assert ports.documents.last["reaped_at_cleanup"] == list(reaped)
+
+
+async def test_a_discard_that_reaped_nothing_leaves_the_key_out(cfg):
+    ports = memory_ports()
+    state = {**BUG, "status": "discarded", "discard_reason": "weekly by definition"}
+
+    patch = await discard(state, cfg, ports)
+
+    assert "reaped_at_cleanup" not in patch
+    assert "reaped_at_cleanup" not in ports.documents.last

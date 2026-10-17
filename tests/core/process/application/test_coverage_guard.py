@@ -97,6 +97,7 @@ async def run(runner, **more):
         vocabulary={},
         cwd=Path("/p"),
         runner=runner,
+        owner_task="GH-1",
         **more,
     )
 
@@ -146,6 +147,7 @@ async def test_a_delivery_check_alone_reaches_a_role_with_no_schema_guard():
         vocabulary={},
         cwd=Path("/p"),
         runner=runner,
+        owner_task="GH-1",
         delivery_check=check,
     )
     assert runner.calls[0]["guard"] is check

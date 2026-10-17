@@ -18,6 +18,7 @@ from typing import Any, Literal, Protocol
 from ..domain.ci import CiReport, CiUnreadable, Containment
 from ..domain.design import Design
 from ..domain.playbook import Playbook
+from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
 from ..domain.rules import MergeFailure, RunKind, SpendRun, motive
 from ..domain.suppressions import Forbidden
@@ -103,6 +104,10 @@ class RawResult:
     # by `max_turns` whose recorded `main_thread_turns` sits below that role's own
     # `max_turns` refutes "count >= consumed turns".
     main_thread_turns: int = 0
+    # The processes the reaper stopped when this attempt's session ended (GH-282,
+    # ADR-0052): what a role left running in the background. Empty when there were none,
+    # which is nearly every attempt, and a cancelled attempt has no result to carry it.
+    reaped: list[ReapedProcess] = field(default_factory=list)
 
 
 class AttemptFailed(Exception):
@@ -132,6 +137,7 @@ class AttemptFailed(Exception):
         deliveries: int = 0,
         presubmit_denials: int = 0,
         main_thread_turns: int = 0,
+        reaped: Sequence[ReapedProcess] = (),
     ):
         super().__init__(motive(error, reason))
         self.cost_usd = cost_usd
@@ -164,6 +170,9 @@ class AttemptFailed(Exception):
         # that can refute the counted-quantity assumption `domain/turn_notice.py`
         # states.
         self.main_thread_turns = main_thread_turns
+        # What the reaper stopped when this attempt's session ended (`RawResult.reaped`'s
+        # own docstring); empty at every raise site but the runner's own.
+        self.reaped = list(reaped)
 
 
 class Presubmit(Protocol):
@@ -208,7 +217,11 @@ class RoleRunner(Protocol):
     the product's own declared suppressions (issue #38): an Edit or a Write that adds
     one of them is denied with that rule's own `reason`, never the system's words.
     `None` or empty is the explicit no-op -- the cage is installed and denies nothing,
-    the same shape `presubmit`/`guard` absent already have."""
+    the same shape `presubmit`/`guard` absent already have.
+
+    `owner_task` is the parent task's id, never a subtask's (GH-282, ADR-0052): the mark
+    every process of this attempt carries, so its leftovers can be found and stopped when
+    the session ends."""
 
     async def run_once(
         self,
@@ -219,6 +232,7 @@ class RoleRunner(Protocol):
         model: str,
         json_schema: dict[str, Any],
         cwd: Path,
+        owner_task: str,
         resume: str | None = None,
         max_budget_usd: float | None = None,
         presubmit: Presubmit | None = None,
@@ -1134,6 +1148,28 @@ class Launcher(Protocol):
         ...
 
 
+class ProcessReaper(Protocol):
+    """Stops the processes a role left running (GH-282, ADR-0052): everything that carries
+    the environment mark of a role the system ran, found by the mark and never by where
+    it runs. Built with the product's key, so a caller names only the task. TERM first, a
+    bounded grace, then KILL; what is still alive afterwards is a `survived` entry, never
+    an exception. No method ever raises: an unexpected failure is an `error` entry. A
+    process whose environment cannot be read is skipped, never signalled, and absent from
+    the answer."""
+
+    def reap_task(self, task_id: str) -> tuple[ReapedProcess, ...]:
+        """Every marked process of the task and of its subtasks, whichever run or attempt."""
+        ...
+
+    def reap_run(self, task_id: str, run: int) -> tuple[ReapedProcess, ...]:
+        """Only the processes marked by the system process `run`: a dead run's own."""
+        ...
+
+    def reap_attempt(self, task_id: str, run: int, token: str) -> tuple[ReapedProcess, ...]:
+        """Only the processes of one attempt of a role."""
+        ...
+
+
 @dataclass(frozen=True)
 class Ports:
     runner: RoleRunner
@@ -1147,6 +1183,7 @@ class Ports:
     stack: ProductStack
     commands: Commands
     sample_app: SampleApp
+    reaper: ProcessReaper
     # Not a port: the run as a process, shared by every branch of a fan-out, with
     # nothing outside it to talk to (`limits.py`). It rides here because `Ports` is
     # what a use case receives.

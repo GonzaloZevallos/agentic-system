@@ -29,6 +29,7 @@ from agentic.core.process.application.ports import (
     ListedPullRequest,
     MergeCallFailed,
     Ports,
+    ProcessReaper,
     ProductKnowledge,
     ProductStack,
     Prompts,
@@ -47,6 +48,7 @@ from agentic.core.process.domain import rules
 from agentic.core.process.domain.ci import CiReport, CiUnreadable, Containment
 from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.playbook import Playbook
+from agentic.core.process.domain.reaping import ReapedProcess
 from agentic.core.process.domain.roles import PROMPTS_DIR, Role
 from agentic.core.process.domain.rules import MergeFailure
 from agentic.core.process.domain.suppressions import Forbidden
@@ -1135,6 +1137,37 @@ class MemoryRunRegistry:
         return runs, list(self.spend_notes)
 
 
+class FakeReaper:
+    """GH-282: records every reap it was asked for, as `(scope, task_id, run, token)`, and
+    answers the tuple it was configured with, the same for every scope, never touching a
+    process. `reaped` is the answer of `reap_task`, `reaped_runs` of `reap_run` and
+    `reaped_attempts` of `reap_attempt`; each defaults to nothing reaped."""
+
+    def __init__(
+        self,
+        reaped: tuple[ReapedProcess, ...] = (),
+        *,
+        reaped_runs: tuple[ReapedProcess, ...] = (),
+        reaped_attempts: tuple[ReapedProcess, ...] = (),
+    ) -> None:
+        self.reaped = reaped
+        self.reaped_runs = reaped_runs
+        self.reaped_attempts = reaped_attempts
+        self.calls: list[tuple[str, str, int | None, str | None]] = []
+
+    def reap_task(self, task_id: str) -> tuple[ReapedProcess, ...]:
+        self.calls.append(("task", task_id, None, None))
+        return self.reaped
+
+    def reap_run(self, task_id: str, run: int) -> tuple[ReapedProcess, ...]:
+        self.calls.append(("run", task_id, run, None))
+        return self.reaped_runs
+
+    def reap_attempt(self, task_id: str, run: int, token: str) -> tuple[ReapedProcess, ...]:
+        self.calls.append(("attempt", task_id, run, token))
+        return self.reaped_attempts
+
+
 class FakeLauncher:
     """GH-137: records every `argv` a poller would have spawned, in order, instead of
     ever calling `_spawn_detached`. `fails`, when given, is the set of 0-based call
@@ -1171,6 +1204,7 @@ def memory_ports(
     stack: ProductStack | None = None,
     commands: Commands | None = None,
     sample_app: SampleApp | None = None,
+    reaper: ProcessReaper | None = None,
     limits: RunLimits | None = None,
 ) -> Ports:
     return Ports(
@@ -1185,6 +1219,7 @@ def memory_ports(
         stack=stack if stack is not None else MemoryStack(),
         commands=commands if commands is not None else MemoryCommands(),
         sample_app=sample_app if sample_app is not None else MemorySampleApp(),
+        reaper=reaper if reaper is not None else FakeReaper(),
         **({} if limits is None else {"limits": limits}),
     )
 

@@ -1070,3 +1070,23 @@ def test_a_closed_unsynced_entry_roundtrips_and_leaves_an_old_entry_byte_identic
     assert landing_rules.entry_of(new) == new
     assert document.render(_bare(landing=[old])) == document.render(_bare(landing=[dict(old)]))
     assert document.render(_bare(landing=[old])).count("closed_at") == 0
+
+
+_REAPED = [
+    {"pid": 7, "command": "uv run scripts/design/sample_app.py", "outcome": "kill"},
+    {"pid": 9, "command": "bash /tmp/GH-224-evidence/cap.sh", "outcome": "survived"},
+]
+
+
+def test_a_state_without_reaped_at_cleanup_round_trips_byte_identical():
+    """GH-282: the key is optional, so a document that never reaped anything is what it was."""
+    bare = document.render(_bare())
+    assert "reaped_at_cleanup" not in bare
+    assert document.render(_bare(reaped_at_cleanup=[])) == bare
+    assert document.render(document.parse(bare) | {"sections": {}}) == bare
+
+
+def test_reaped_at_cleanup_renders_and_parses_back_equal():
+    text = document.render(_bare(reaped_at_cleanup=_REAPED))
+    assert document.parse(text)["reaped_at_cleanup"] == _REAPED
+    assert document.render(document.parse(text) | {"sections": {}}) == text

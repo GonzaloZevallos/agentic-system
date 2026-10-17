@@ -24,6 +24,7 @@ from agentic.core.process.application.schema_guard import RoleSchemaGuard
 from agentic.core.process.domain import rules, turn_notice
 from agentic.core.process.domain.document import HUMAN
 from agentic.core.process.domain.playbook import Item, Playbook, parse
+from agentic.core.process.domain.reaping import ReapedProcess
 from agentic.core.process.domain.roles import (
     DEVELOPER,
     PJM,
@@ -72,6 +73,7 @@ async def run_pjm(
         vocabulary={},
         cwd=Path("/p"),
         runner=runner,
+        owner_task="GH-1",
         check=check,
         spent_usd=spent_usd,
         task_cap_usd=task_cap_usd,
@@ -90,6 +92,7 @@ async def run_developer(runner, retries=1):
         vocabulary={},
         cwd=Path("/p"),
         runner=runner,
+        owner_task="GH-1",
     )
 
 
@@ -345,6 +348,7 @@ async def test_a_max_turns_cut_with_a_session_gets_the_turn_cut_message():
         vocabulary={},
         cwd=Path("/p"),
         runner=runner,
+        owner_task="GH-1",
     )
     retry = runner.calls[1]
     assert retry["resume"] == "sess-cut"
@@ -368,6 +372,7 @@ async def test_a_max_turns_cut_with_no_session_appends_the_message_to_the_prompt
         vocabulary={},
         cwd=Path("/p"),
         runner=runner,
+        owner_task="GH-1",
         resume="caller-session",
     )
     retry = runner.calls[1]
@@ -1120,3 +1125,42 @@ def test_the_playbook_keys_fold_and_subtract_through_the_reducers():
         "playbooks": {"pm": "c"},
         "playbooks_changed": {"developer": "b"},
     }
+
+
+# --- GH-282: what the reaper stopped travels with the attempt --------------------------
+
+LEAK: list[ReapedProcess] = [{"pid": 41, "command": "sample_app.py", "outcome": "kill"}]
+
+
+async def test_run_role_marks_the_attempt_with_the_parent_task_and_records_what_was_reaped(
+    tmp_path,
+):
+    cfg = Configuration(product_dir=tmp_path)
+    runner = ScriptedRunner(developer=[RawResult(delivered().structured_output, 0.03, reaped=LEAK)])
+    output, patch = await run_role(
+        {"id": "T-1", "title": "t", "description": "d", "subtask_id": "api"},
+        DEVELOPER,
+        cfg,
+        memory_ports(runner),
+        subtask="api",
+        invariants="",
+        branches="",
+        checks="",
+    )
+    assert output is not None
+    assert runner.calls[0]["owner_task"] == "T-1"  # the parent, never the subtask
+    assert patch["runs"][0]["reaped"] == LEAK
+    assert patch["sections"]["Developer"] == (f"{rules.reaped_note(LEAK)}\n\n{output.text}")
+    assert "Reaped 1 background process(es): 1 kill" in rules.reaped_note(LEAK)
+
+
+async def test_a_failed_attempts_reaped_processes_are_recorded_on_its_failure():
+    runner = ScriptedRunner(pjm=[AttemptFailed("boom", 0.05, reaped=LEAK), OK])
+    out = await run_pjm(runner)
+    assert out.failures[0]["reaped"] == LEAK
+    assert "reaped" not in (await run_pjm(ScriptedRunner(pjm=[OK]))).failures
+
+
+def test_a_run_with_nothing_reaped_writes_no_reaped_key():
+    output = Output(text="ok", data={})
+    assert "reaped" not in run_record({}, PJM, "PjM", output)

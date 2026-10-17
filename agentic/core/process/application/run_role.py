@@ -62,6 +62,7 @@ from agentic.shared.configuration import Configuration
 
 from ..domain import document, plan_view, playbook, rules, schemas, turn_notice
 from ..domain.document import HUMAN
+from ..domain.reaping import ReapedProcess
 from ..domain.roles import (
     ORIGINAL,
     TECH_LEAD,
@@ -189,6 +190,10 @@ class Output:
     # is what a `max_turns` cut needs to refute or hold up the counted-quantity
     # assumption, not a sum across retries.
     main_thread_turns: int = 0
+    # What the reaper stopped when the delivering attempt ended (`RawResult.reaped`'s own
+    # docstring); the run's total also folds in every `failures` entry's own list
+    # (`_run_reaped`).
+    reaped: list[ReapedProcess] = field(default_factory=list)
 
 
 def context_for(
@@ -318,6 +323,7 @@ async def run_with_retry(
     vocabulary: dict[str, str],
     cwd: Path,
     runner: RoleRunner,
+    owner_task: str,
     check: Check | None = None,
     resume: str | None = None,
     max_budget_usd: float | None = None,
@@ -342,6 +348,10 @@ async def run_with_retry(
     read against whichever of the two views is larger, so a branch stops on its
     sisters' spending too. It only refuses to start; a role already running is never
     cut off.
+
+    `owner_task` is the parent task's id (`state["id"]`, never a subtask's): every attempt
+    is marked with it so what a role leaves running in the background can be found when
+    the attempt ends (GH-282, ADR-0052).
 
     `presubmit` is handed to every attempt: the harness asks it when the model delivers.
     `forbidden` is handed to every attempt too: the product's own declared suppression
@@ -414,6 +424,7 @@ async def run_with_retry(
                     vocabulary=vocabulary,
                     cwd=cwd,
                     runner=runner,
+                    owner_task=owner_task,
                     check=check,
                     resume=session,
                     max_budget_usd=max_budget_usd,
@@ -441,6 +452,7 @@ async def run_with_retry(
                     "deliveries": exc.deliveries,
                     "presubmit_denials": exc.presubmit_denials,
                     "main_thread_turns": exc.main_thread_turns,
+                    **({"reaped": exc.reaped} if exc.reaped else {}),
                 }
             )
             continue
@@ -539,6 +551,7 @@ async def _attempt(
     vocabulary: dict[str, str],
     cwd: Path,
     runner: RoleRunner,
+    owner_task: str,
     check: Check | None,
     resume: str | None,
     max_budget_usd: float | None,
@@ -553,6 +566,7 @@ async def _attempt(
         model=model,
         json_schema=schemas.json_schema(role.schema, vocabulary),
         cwd=cwd,
+        owner_task=owner_task,
         resume=resume,
         max_budget_usd=max_budget_usd,
         presubmit=presubmit,
@@ -572,6 +586,7 @@ async def _attempt(
             deliveries=result.deliveries,
             presubmit_denials=result.presubmit_denials,
             main_thread_turns=result.main_thread_turns,
+            reaped=result.reaped,
         )
     try:
         data = schemas.validate(role.schema, result.structured_output, vocabulary)
@@ -587,6 +602,7 @@ async def _attempt(
             deliveries=result.deliveries,
             presubmit_denials=result.presubmit_denials,
             main_thread_turns=result.main_thread_turns,
+            reaped=result.reaped,
         ) from exc
     if check is not None:
         try:
@@ -603,6 +619,7 @@ async def _attempt(
                 deliveries=result.deliveries,
                 presubmit_denials=result.presubmit_denials,
                 main_thread_turns=result.main_thread_turns,
+                reaped=result.reaped,
             ) from exc
     text = data.pop("markdown").strip()
     if not text:
@@ -617,6 +634,7 @@ async def _attempt(
             deliveries=result.deliveries,
             presubmit_denials=result.presubmit_denials,
             main_thread_turns=result.main_thread_turns,
+            reaped=result.reaped,
         )
     return Output(
         text=text,
@@ -636,6 +654,7 @@ async def _attempt(
         deliveries=result.deliveries,
         presubmit_denials=result.presubmit_denials,
         main_thread_turns=result.main_thread_turns,
+        reaped=result.reaped,
     )
 
 
@@ -697,6 +716,7 @@ def run_record(state: TaskState, role: Role, section: str, output: Output) -> Ro
         "deliveries": output.deliveries,
         "presubmit_denials": output.presubmit_denials,
         "main_thread_turns": output.main_thread_turns,
+        **({"reaped": output.reaped} if output.reaped else {}),
     }
 
 
@@ -739,6 +759,12 @@ def _run_deliveries(output: Output) -> int:
     return output.deliveries + sum(f.get("deliveries", 0) for f in output.failures)
 
 
+def _run_reaped(output: Output) -> list[ReapedProcess]:
+    """Every process the run left behind and the reaper stopped: the delivering attempt's
+    plus every recorded failure's, the same fold `_run_denials` gives denials."""
+    return output.reaped + [p for f in output.failures for p in f.get("reaped", [])]
+
+
 def _section_text(role: Role, output: Output) -> str:
     """What lands in the role's section: its own delivery, with the system's one-line
     notes in front when the run had any (glossary: Negación; Sección) — the denial note
@@ -752,6 +778,8 @@ def _section_text(role: Role, output: Output) -> str:
         notes.append(turn_notice.notice_note(cut=_run_notice_cut(output), firings=firings))
     if (count := _run_deliveries(output)) > 1:
         notes.append(rules.deliveries_note(count))
+    if reaped := _run_reaped(output):
+        notes.append(rules.reaped_note(reaped))
     if notes:
         return "\n\n".join([*notes, output.text])
     return output.text
@@ -815,6 +843,7 @@ async def run_role(
             vocabulary=vocabulary,
             cwd=cwd or cfg.product_dir,
             runner=ports.runner,
+            owner_task=state["id"],
             check=check,
             resume=resume,
             max_budget_usd=cfg.max_budget_usd,
