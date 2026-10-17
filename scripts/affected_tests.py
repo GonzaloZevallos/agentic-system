@@ -98,6 +98,11 @@ TABLE: tuple[Row, ...] = (
         "that test parses the collector config",
     ),
     Row("docs/adr/*", ("tests/test_adr_numbers.py",), "that test lists the ADR directory"),
+    Row(
+        "tests/fixtures/langfuse_dashboards/*",
+        ("tests/core/measurement/domain/test_dashboards.py",),
+        "the dashboard definitions are checked against the golden catalogue of Langfuse's schema",
+    ),
 )
 # Paths no test reads (the guard asserts it); a change to them selects nothing.
 IGNORE: tuple[str, ...] = (

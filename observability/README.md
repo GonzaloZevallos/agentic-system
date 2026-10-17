@@ -182,6 +182,68 @@ cuando termine. Los ids son derivados, así que repetirlo completa huecos sin du
 costo es lineal en los documentos: a lo sumo dos lecturas de `gh` y dos envíos (el span y el
 lote de scores) por documento.
 
+## Dashboards
+
+Cuatro dashboards por producto, definidos en `agentic/core/measurement/domain/dashboards.py`
+y escritos en las tablas `dashboards` y `dashboard_widgets` de Langfuse por
+`agentic dashboards apply` (ADR-0051, que enmienda a ADR-0037). El repo es la fuente: una
+edición en la interfaz de un dashboard nuestro se pisa en el siguiente `apply`. El título de
+cada dashboard lleva el producto como sufijo (`Panorama · agentic-system`); los widgets leen
+`environment` = ese producto, nunca la suma de varios.
+
+| Dashboard | Título | Vista | Medida | Lee | Desglose | Tiempo | Nota |
+|---|---|---|---|---|---|---|---|
+| Panorama | Costo por PR mergeado (mediana), por tipo | `SCORES_NUMERIC` | `value` · `p50` | `delivered_cost_usd.type.<TaskType>` | `name`, `traceRelease` | `task_time.end` | |
+| Panorama | PRs mergeados por semana de entrega | `SCORES_BOOLEAN` | `count` · `count` | `delivered` | `traceRelease` | `task_time.end` | solo entregadas (`booleanValue` = true) |
+| Panorama | Tiempo de ciclo (h, calendario) | `SCORES_NUMERIC` | `value` · `p50` | `cycle_h` | `traceRelease` | `task_time.end` | |
+| Panorama | Devoluciones por tarea | `SCORES_NUMERIC` | `value` · `avg` | `returns` | `traceRelease` | `task_time.end` | |
+| Panorama | Plata perdida: costo de fallos | `SCORES_NUMERIC` | `value` · `sum` | `failed_cost_usd` | `traceRelease` | `task_time.end` | |
+| Panorama | Plata perdida: escalaciones | `SCORES_NUMERIC` | `value` · `sum` | `escalations.<EscalationClass>` | `name` | `task_time.end` | |
+| Panorama | Gasto: original vs. follow-ups | `SCORES_NUMERIC` | `value` · `sum` | `cost_usd.origin.<Origin>` | `name` | `task_time.end` | |
+| Mejora del sistema | Retrabajo por categoría de devolución | `SCORES_NUMERIC` | `value` · `sum` | `returns.<ChangeCategory>` | `name`, `traceRelease` | `task_time.end` | |
+| Mejora del sistema | Fallos por razón | `SCORES_NUMERIC` | `value` · `sum` | `failures.<FailureReason>` | `name`, `traceRelease` | `task_time.end` | |
+| Mejora del sistema | Roles más caros | `SCORES_NUMERIC` | `value` · `sum` | `cost_usd.role.<Role>` | `name`, `traceRelease` | `task_time.end` | |
+| Mejora del sistema | Horas activas por versión | `SCORES_NUMERIC` | `value` · `p50` | `active_h` | `traceRelease` | `task_time.end` | |
+| Mejora del sistema | Calidad de la entrega: hallazgos importantes | `SCORES_NUMERIC` | `value` · `avg` | `findings_important` | `traceRelease` | `task_time.end` | |
+| Mejora del sistema | Calidad de la entrega: follow-ups | `SCORES_NUMERIC` | `value` · `avg` | `followups` | `traceRelease` | `task_time.end` | |
+| Mejora del sistema | Calidad de la entrega: chequeos en rojo | `SCORES_NUMERIC` | `value` · `avg` | `checks_red` | `traceRelease` | `task_time.end` | |
+| Operación | Escalaciones por clase | `SCORES_NUMERIC` | `value` · `sum` | `escalations.<EscalationClass>` | `name` | `task_time.end` | rango de 7 días de la interfaz |
+| Operación | Fallos por límite de cuenta, por día | `SCORES_NUMERIC` | `value` · `sum` | `failures.account_limit` | `timestampDay` | `task_time.end` | por día, no por hora |
+| Operación | Entregas por día | `SCORES_BOOLEAN` | `count` · `count` | `delivered` | `timestampDay` | `task_time.end` | solo entregadas (`booleanValue` = true) |
+| Dónde va la plata | Costo por rol | `SCORES_NUMERIC` | `value` · `sum` | `cost_usd.role.<Role>` | `name` | `task_time.end` | |
+| Dónde va la plata | Costo por modelo | `OBSERVATIONS` | `totalCost` · `sum` | `totalCost` | `providedModelName` | `start_time` | medida nativa de la vista de observaciones |
+
+Cómo leer la tabla:
+
+- **El tiempo.** Cada score se ubica por `task_time.end`, el fin de la última corrida de la
+  tarea, nunca por la fecha del merge: "PRs mergeados por semana de entrega" cuenta la semana
+  en que terminó la tarea. La fecha del merge se lee en `cycle_h`. La observación de "Costo
+  por modelo" se ubica por su propio `start_time`.
+- **Versión del sistema.** El desglose `traceRelease` es el `release` de la traza portadora
+  del score; en Panorama es el marcador del cambio de versión (no hay línea vertical).
+- **`unknown` es una serie visible.** Una tarea cuya versión no se registró aparece como
+  `unknown` en el desglose; ningún widget la filtra.
+- **Semana calendario y "últimos 7 días" son del rango de la interfaz**, no de la definición:
+  la fila de un widget o de un dashboard no guarda ni granularidad ni rango (ADR-0051,
+  sección 3). Se elige la semana en Panorama y los últimos 7 días en Operación.
+- **Un widget no divide ni filtra por condición.** Lo condicional o por categoría es un
+  score propio (`delivered_cost_usd.type.*`, `returns.*`, `failures.*`, `escalations.*`,
+  `cost_usd.role.*`, `cost_usd.origin.*`), omitido cuando no ocurrió.
+- **`--verify` es manual.** `agentic dashboards apply --verify` cuenta, por widget, contra
+  ClickHouse; nunca corre en CI. Un widget sin filas es un fallo, salvo los de
+  `ZERO_ROW_EXCEPTIONS` (los que leen `failures.*`, `escalations.*`, `returns.*` o
+  `cost_usd.role.*`, cuyo score se omite cuando nada ocurrió).
+
+Widgets pedidos que no están, y por qué (ninguno se reemplazó con un visual inventado):
+
+- **Operación: tareas atascadas.** Una tarea atascada es la que no tiene score de cierre: su
+  ausencia no es una fila que una vista pueda contar.
+- **Operación: fallos por hora.** El catálogo no tiene dimensión de hora; queda por día.
+- **Panorama: línea vertical de cambio de versión.** No hay anotaciones; el marcador es el
+  desglose por versión.
+- **Panorama: "% del gasto en follow-ups".** Un widget no divide; "Gasto: original vs.
+  follow-ups" muestra las dos series.
+
 ## Costo en Langfuse
 
 Langfuse pricea cada llamada al modelo (`claude_code.llm_request`) a partir de sus tokens
