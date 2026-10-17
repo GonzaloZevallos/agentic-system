@@ -105,11 +105,12 @@ def mark_literal_violations(files: dict[str, str], owner: str) -> list[str]:
     )
 
 
+# Python sources only: the affected-tests guard (ADR-0047) covers a walk of `agentic/*.py`,
+# and no prompt or data file under `agentic/` has any reason to name the variable.
 def test_the_mark_name_is_written_in_one_module_of_the_application():
     files = {
         str(path.relative_to(ROOT)): path.read_text(encoding="utf-8")
-        for path in (ROOT / "agentic").rglob("*")
-        if path.is_file() and path.suffix in {".py", ".md", ".txt", ".json", ".yaml", ".toml"}
+        for path in (ROOT / "agentic").rglob("*.py")
     }
     owner = "agentic/core/process/domain/reaping.py"
     assert owner in files

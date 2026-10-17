@@ -51,6 +51,7 @@ WALKERS = (
     "tests/test_language.py",
     "tests/core/measurement/adapters/otel/test_semconv.py",
     "tests/core/process/application/test_pause_log_guard.py",
+    "tests/core/process/domain/test_reaping.py",
 )
 KNOWLEDGE = "agentic.core.knowledge.domain"
 TABLE: tuple[Row, ...] = (
