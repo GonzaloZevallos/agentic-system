@@ -2,7 +2,9 @@
 
 import io
 import os
+import subprocess
 import sys
+import time
 from dataclasses import fields as dataclass_fields
 from dataclasses import replace
 from pathlib import Path
@@ -20,6 +22,7 @@ from claude_agent_sdk import (
 
 from agentic.core.process.adapters.claude_sdk import runner as module
 from agentic.core.process.adapters.claude_sdk.runner import ClaudeSdkRunner, options_for
+from agentic.core.process.adapters.shell import ShellReaper
 from agentic.core.process.application.ports import AttemptFailed
 from agentic.core.process.domain import reaping
 from agentic.core.process.domain.denials import denial_for
@@ -1403,3 +1406,115 @@ async def test_the_mark_never_reaches_the_shared_environment(monkeypatch, tmp_pa
     await run_once(runner, tmp_path)
     assert reaping.MARK_NAME not in runner.env
     assert reaping.MARK_NAME not in os.environ
+
+
+def _alive(process: subprocess.Popen) -> bool:
+    return process.poll() is None
+
+
+def _spawner(monkeypatch, children: list, script: list[str]):
+    """A `query` that starts a real process, detached from the group, with the very env it
+    was handed, then waits forever (the role is still working)."""
+
+    async def query(prompt, options):
+        children.append(
+            subprocess.Popen(
+                script,
+                env={**os.environ, **options.env},
+                start_new_session=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        )
+        await anyio.sleep_forever()
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(module, "query", query)
+
+
+async def test_a_cancelled_attempt_still_has_its_processes_reaped(monkeypatch, tmp_path):
+    children: list[subprocess.Popen] = []
+    _spawner(monkeypatch, children, ["sleep", "300"])
+    runner = make_runner(reaper=ShellReaper(PRODUCT_KEY))
+    try:
+        with anyio.move_on_after(0.5):
+            await run_once(runner, tmp_path)
+        deadline = time.monotonic() + reaping.REAP_GRACE_S + reaping.REAP_KILL_WAIT_S + 2
+        while _alive(children[0]) and time.monotonic() < deadline:
+            await anyio.sleep(0.05)
+        assert not _alive(children[0])
+    finally:
+        for child in children:
+            child.kill()
+            child.wait()
+
+
+async def test_the_reap_does_not_block_the_loop_while_it_waits_out_the_grace(monkeypatch, tmp_path):
+    children: list[subprocess.Popen] = []
+    # Ignores SIGTERM, so the reap has to wait the whole grace before it kills.
+    _spawner(monkeypatch, children, ["bash", "-c", 'trap "" TERM; while :; do sleep 1; done'])
+    runner = make_runner(reaper=ShellReaper(PRODUCT_KEY))
+    ticks = 0
+
+    async def tick() -> None:
+        nonlocal ticks
+        while True:
+            await anyio.sleep(0.05)
+            ticks += 1
+
+    try:
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(tick)
+            with anyio.move_on_after(0.5):
+                await run_once(runner, tmp_path)
+            before = ticks
+            deadline = time.monotonic() + reaping.REAP_GRACE_S + reaping.REAP_KILL_WAIT_S + 2
+            while _alive(children[0]) and time.monotonic() < deadline:
+                await anyio.sleep(0.05)
+            assert not _alive(children[0])
+            # the loop kept running during the 5 s of grace the child forced
+            assert ticks - before > 20
+            tg.cancel_scope.cancel()
+    finally:
+        for child in children:
+            child.kill()
+            child.wait()
+
+
+def test_the_reaper_takes_the_escaped_grandchild_of_a_real_attempt_env_and_spares_a_sibling():
+    token = "regression"
+    mark = reaping.mark(PRODUCT_KEY, "GH-1", os.getpid(), token)
+    child_env = module._child_env({**os.environ}, PJM, None, None, mark)
+    sibling_env = {k: v for k, v in child_env.items() if k != reaping.MARK_NAME}
+    subprocess.run(
+        ["bash", "-c", "setsid nohup sleep 300 >/dev/null 2>&1 & echo $!"],
+        env=child_env,
+        check=True,
+        capture_output=True,
+    )
+    sibling = subprocess.Popen(["sleep", "301"], env=sibling_env, start_new_session=True)
+    try:
+        reaped = ShellReaper(PRODUCT_KEY).reap_attempt("GH-1", os.getpid(), token)
+        assert [p["command"] for p in reaped] == ["sleep 300"]
+        assert reaped[0]["outcome"] in ("term", "kill")
+        assert _alive(sibling)  # the same env minus the mark is not the role's
+    finally:
+        sibling.kill()
+        sibling.wait()
+
+
+async def test_what_the_reaper_stopped_comes_back_on_the_result_and_on_the_failure(
+    monkeypatch, tmp_path
+):
+    leak: tuple[reaping.ReapedProcess, ...] = (
+        {"pid": 7, "command": "sleep 300", "outcome": "term"},
+    )
+    fake_query(monkeypatch, [result()])
+    raw = await run_once(make_runner(reaper=FakeReaper(reaped_attempts=leak)), tmp_path)
+    assert raw.reaped == list(leak)
+    fake_query(monkeypatch, [])
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(make_runner(reaper=FakeReaper(reaped_attempts=leak)), tmp_path)
+    assert info.value.reaped == list(leak)
+    fake_query(monkeypatch, [result()])
+    assert (await run_once(make_runner(), tmp_path)).reaped == []
