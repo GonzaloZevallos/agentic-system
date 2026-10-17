@@ -17,7 +17,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.task import (
@@ -78,7 +78,7 @@ def rework_cost_usd(state: TaskState) -> float:
     return rework + unaccounted
 
 
-def changes_requested_total(state: TaskState) -> int:
+def changes_requested_total(state: Mapping[str, Any]) -> int:
     return sum(state.get("changes_requested", {}).values())
 
 

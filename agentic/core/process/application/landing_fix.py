@@ -185,7 +185,9 @@ def file_followups_and_land(context: LandingContext) -> None:
         context.ports.tracker.comment(context.task_id, body)
     else:
         context.ports.tracker.open_issue(
-            f"Follow-up of #{number}: open important findings", body, label=FOLLOWUP_LABEL
+            f"{landing_rules.FOLLOWUP_TITLE_PREFIX}{number}: open important findings",
+            body,
+            label=FOLLOWUP_LABEL,
         )
     context.ports.documents.record_closure(context.task_id, {"followups_filed": True})
 
