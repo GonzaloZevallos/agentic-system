@@ -1004,7 +1004,9 @@ def run_once(
     minus the live children `rules.counts_against_cap` says count; the others (`merge`,
     `land_checks`) are passed to `poll_plan` as `live_exempt`, from the same `live()` read,
     and the tasks that have any live child of this product are `busy`: no merge or land
-    candidate is gathered for them (GH-263). One line per `PollPlan.deferred` item ends the
+    candidate is gathered for them (GH-263). A `land_model` land may use one slot above the
+    cap (`rules.LAND_HEADROOM`, GH-270): `land_slots` is computed here from the same `live`
+    and nothing else. One line per `PollPlan.deferred` item ends the
     round's output, and `nothing to do this round` is printed only when there is nothing
     at all to say."""
     closes = gather_closes(ports)
@@ -1055,6 +1057,7 @@ def run_once(
             lands=lands,
             live_exempt=exempt_live,
             pace=pace,
+            land_slots=max(cfg.max_concurrent_runs + rules.LAND_HEADROOM - live, 0),
         )
         lines = execute(
             plan.actions,

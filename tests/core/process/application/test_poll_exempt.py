@@ -10,7 +10,12 @@ import dataclasses
 from datetime import datetime
 
 from agentic.core.process.application import landing, poll
-from agentic.core.process.application.ports import IssueState, RunRegistration, Upstream
+from agentic.core.process.application.ports import (
+    IssueComment,
+    IssueState,
+    RunRegistration,
+    Upstream,
+)
 from agentic.core.process.domain import rules
 from tests.core.process.application.test_land_run_kind import _failed_local_check_after_a_rerun
 from tests.core.process.application.test_poll import (
@@ -283,3 +288,114 @@ def test_a_classification_gone_stale_is_a_mismatch_and_the_next_round_spawns_lan
     again = FakeLauncher()
     _round(_cfg(tmp_path), ports, MemoryRunRegistry(), again, now, live_steps=LIVE)
     assert again.spawned[0][4:6] == ["--run-kind", "land_model"]
+
+
+# ---- GH-270 (ADR-0045 addendum): a model land uses the reserved slot ---------------------
+
+
+def _owed_lands(*extra_unapproved: int):
+    """Task 5 owes a model step (`fix`); each extra number is an unapproved PR, also a
+    `land_model` candidate."""
+    ports = _ports(5, *extra_unapproved)
+    _failed_local_check_after_a_rerun(ports)
+    for number in extra_unapproved:
+        _unapproved(ports, number)
+    return ports
+
+
+def _land_round(tmp_path, ports, entries, cap=2, **kw):
+    registry = MemoryRunRegistry(entries)
+    launcher = FakeLauncher()
+    lines = _round(
+        _cfg(tmp_path, max_concurrent_runs=cap),
+        ports,
+        registry,
+        launcher,
+        ESCALATED_AT,
+        live_steps=LIVE,
+        **kw,
+    )
+    return [line for line in lines if " land #" in line], launcher, registry
+
+
+def _land_argv(number: int, tmp_path) -> list[str]:
+    return [
+        "agentic",
+        "land",
+        "--issue",
+        str(number),
+        "--run-kind",
+        "land_model",
+        "--product-dir",
+        str(tmp_path),
+    ]
+
+
+def test_a_full_cap_of_role_runs_still_starts_the_owed_model_land(tmp_path):
+    lines, launcher, _ = _land_round(tmp_path, _owed_lands(), _roles())
+
+    assert launcher.spawned == [_land_argv(5, tmp_path)]
+    assert lines == ["agentic: poll: land #5 -> pid 4242"]
+
+
+def test_a_full_cap_plus_the_headroom_defers_the_land_no_slot(tmp_path):
+    entries = [*_roles(), _child("land_model", "GH-9", pid=3)]
+
+    lines, launcher, _ = _land_round(tmp_path, _owed_lands(), entries)
+
+    assert launcher.spawned == []
+    assert lines == ["agentic: poll: land #5 waits: no_slot"]
+
+
+def test_a_registry_entry_without_a_kind_counts_toward_the_cap(tmp_path):
+    kindless = [
+        RunRegistration(pid=1, host="h", product="product", task_id="GH-1"),
+        RunRegistration(pid=2, host="h", product="product", task_id="GH-2"),
+        RunRegistration(pid=3, host="h", product="product", task_id="GH-3"),
+    ]
+
+    lines, launcher, _ = _land_round(tmp_path, _owed_lands(), kindless)
+
+    assert launcher.spawned == []
+    assert lines == ["agentic: poll: land #5 waits: no_slot"]
+
+
+def test_a_land_waits_for_the_pending_account_limit_pause_of_its_product(tmp_path):
+    ports = _owed_lands()
+    ports.documents.save(
+        {
+            "id": "GH-19",
+            "escalated": "Developer failed 2 times: API Error: 429",
+            "pause_log": [
+                {"kind": "failure", "value": "account_limit", "section": "Developer"},
+                {"kind": "escalation", "value": "failure"},
+            ],
+        }
+    )
+    ports.tracker.timestamped["GH-19"] = [
+        IssueComment(
+            body="Escalated: Developer failed 2 times: API Error: 429",
+            created_at="2026-10-02T19:30:00Z",
+        )
+    ]
+
+    lines, launcher, _ = _land_round(tmp_path, ports, [])
+
+    assert launcher.spawned == []
+    assert lines == ["agentic: poll: land #5 waits: pause_waiting"]
+
+
+def test_the_gap_before_the_resume_registers_counts_the_land_and_defers_another(tmp_path):
+    ports = _owed_lands(6)
+    cap_full = _roles()
+    first, launcher, registry = _land_round(tmp_path, ports, cap_full)
+    assert launcher.spawned == [_land_argv(5, tmp_path)]
+    assert first == ["agentic: poll: land #5 -> pid 4242", "agentic: poll: land #6 waits: no_slot"]
+
+    # The land registered itself and exited into its wait; the resume it spawned has not
+    # registered yet: the second round sees cap + 1 through the land's own entry.
+    land_entry = _child("land_model", "GH-5", product=_product_of(ports), pid=3)
+    second, again, _ = _land_round(tmp_path, ports, [*cap_full, land_entry])
+
+    assert again.spawned == []
+    assert second == ["agentic: poll: land #6 waits: no_slot"]
