@@ -19,6 +19,7 @@ from ..domain.roles import DEVELOPER_INTEGRATOR, PJM, PM, TECH_LEAD
 from ..domain.task import WAITING_ON_HUMAN, TaskState
 from .checkouts import SetupFailed, task_base, task_checkout
 from .ports import BranchPullRequest, GitError, Ports
+from .release import release_task
 from .run_role import finish
 
 # How the delivery comment starts: a resume looks past the system's comments.
@@ -131,9 +132,11 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     except ValueError:
         pass
     try:
-        ports.workspace.cleanup(state["id"])
+        reaped = release_task(ports, state["id"])
     except GitError:
-        pass
+        reaped = ()
+    if reaped:
+        patch["reaped_at_cleanup"] = list(reaped)
     done = finish(state, patch, ports)
     if state.get("landing"):
         ports.documents.record_closure(state["id"], {"landing": state["landing"]})

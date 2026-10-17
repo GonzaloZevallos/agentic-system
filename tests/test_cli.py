@@ -1089,6 +1089,94 @@ async def test_a_resumed_run_acquires_and_releases_the_lock_and_a_takeover_is_pr
     assert ports.tracker.comments  # announced normally: the lock did not stop it
 
 
+def _paused_gh1(ports):
+    ports.documents.save(
+        {
+            "id": "GH-1",
+            "title": "t",
+            "description": "d",
+            "type": "bug",
+            "status": "waiting_on_human",
+            "escalated": "Developer stopped by the task cap",
+            "cost_usd": 1.0,
+        }
+    )
+    ports.tracker.earlier = ["Escalated: Developer stopped by the task cap"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("dead", [True, False])
+async def test_a_takeover_reaps_the_dead_runs_own_scope_and_no_takeover_reaps_nothing(
+    monkeypatch, tmp_path, capsys, dead
+):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import FakeReaper, memory_ports
+
+    monkeypatch.setattr(cli, "graph", Delivers({"id": "GH-1", "title": "t", "status": "open"}))
+    left = ({"pid": 5, "command": "uv run sample_app.py", "outcome": "kill"},)
+    reaper = FakeReaper(left, reaped_runs=left)
+    ports = memory_ports(reaper=reaper)
+    _paused_gh1(ports)
+    record = lock_record(pid=999_999_999, host="h", started_at="2026-09-01T00:00:00Z")
+    await cli._resume(
+        "GH-1",
+        Configuration(product_dir=tmp_path),
+        ports,
+        from_document=True,
+        yes=True,
+        checkpointer=in_memory,
+        run_lock=FakeLock(taken_over=record if dead else None),
+    )
+    err = capsys.readouterr().err
+    if dead:
+        assert reaper.calls == [("run", "GH-1", 999_999_999, None)]  # never the whole task
+        assert "reaped 1 process: `uv run sample_app.py` (kill)" in err
+    else:
+        assert reaper.calls == [] and "reaped" not in err
+
+
+@pytest.mark.anyio
+async def test_a_live_lock_refuses_the_run_before_anything_is_reaped(monkeypatch, tmp_path):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import FakeReaper, memory_ports
+
+    monkeypatch.setattr(cli, "graph", Delivers({"id": "GH-1", "title": "t", "status": "open"}))
+    reaper = FakeReaper()
+    ports = memory_ports(reaper=reaper)
+    _paused_gh1(ports)
+    with pytest.raises(cli.CannotStart):
+        await cli._resume(
+            "GH-1",
+            Configuration(product_dir=tmp_path),
+            ports,
+            from_document=True,
+            yes=True,
+            checkpointer=in_memory,
+            run_lock=FakeLock(held=lock_record(pid=os.getpid(), host="h")),
+        )
+    assert reaper.calls == []
+
+
+@pytest.mark.anyio
+async def test_a_run_takeover_reaps_the_dead_runs_own_scope(monkeypatch, tmp_path):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import FakeReaper, memory_ports
+
+    monkeypatch.setattr(cli, "graph", Delivers({"id": "T-9", "title": "t", "status": "open"}))
+    reaper = FakeReaper()
+    ports = memory_ports(reaper=reaper)
+    task = {"id": "T-9", "title": "t", "description": "d"}
+    dead = lock_record(pid=4444, host="h")
+    await cli._run(
+        task,
+        Configuration(product_dir=tmp_path),
+        ports,
+        checkpointer=in_memory,
+        run_lock=FakeLock(taken_over=dead),
+    )
+    assert reaper.calls == [("run", "T-9", 4444, None)]
+
+
 @pytest.mark.anyio
 async def test_a_resume_registers_itself_and_unregisters_once_it_finishes(monkeypatch, tmp_path):
     from agentic.shared.configuration import Configuration
@@ -1687,6 +1775,30 @@ async def test_fresh_archives_the_previous_run_and_prints_the_line_before_invoki
     ]
     # The document said the task was escalated: restarting it takes it out of the queue.
     assert ports.tracker.unlabeled == [("GH-1", "needs-human")]
+
+
+@pytest.mark.anyio
+async def test_fresh_names_what_the_archive_reaped_in_the_line_and_the_comment(
+    monkeypatch, tmp_path, capsys
+):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import FakeReaper, memory_ports
+
+    monkeypatch.setattr(cli, "graph", Delivers({"id": "GH-1", "title": "t", "status": "open"}))
+    reaped = ({"pid": 7, "command": "uv run sample_app.py", "outcome": "kill"},)
+    ports = memory_ports(reaper=FakeReaper(reaped))
+    ports.documents.save({"id": "GH-1", "system_commit": "abc1234"})
+    ports.workspace.existing_branches["agentic/GH-1"] = ("h1", "b0")
+    task = {"id": "GH-1", "title": "t", "description": "d"}
+    await cli._run(
+        task, Configuration(product_dir=tmp_path), ports, fresh=True, checkpointer=in_memory
+    )
+    assert "reaped 1 process: `uv run sample_app.py` (kill)" in capsys.readouterr().out
+    ((_, comment),) = ports.tracker.comments
+    assert comment == (
+        "Started over: previous run archived as archive/run1-abc1234/; "
+        "reaped 1 process: `uv run sample_app.py` (kill)"
+    )
 
 
 @pytest.mark.anyio

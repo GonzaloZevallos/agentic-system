@@ -56,7 +56,7 @@ from .core.process.adapters.filesystem import (
 from .core.process.adapters.git.workspace import GitError
 from .core.process.adapters.langgraph.graph import ESCALATE
 from .core.process.adapters.shell import inhibitor
-from .core.process.application import archive, reflect_run
+from .core.process.application import archive, reflect_run, release
 from .core.process.application import poll as pollmod
 from .core.process.application import resume as resuming
 from .core.process.application.escalate import NEEDS_HUMAN
@@ -911,11 +911,15 @@ def _print_lock(lock: RunLock, task_id: str) -> None:
 
 
 @contextmanager
-def _locked(lock: RunLock, task_id: str, stop: StopCause | None = None) -> Iterator[None]:
+def _locked(
+    lock: RunLock, task_id: str, stop: StopCause | None = None
+) -> Iterator[LockRecord | None]:
     """Around the invocation only (Tech Lead plan): refuses before anything is spent,
     releases whether the invocation delivers, escalates or raises -- except when the
     system shutdown stopped it (`stop.at_shutdown`): the record stays, marked, so the
-    next boot can retake the run."""
+    next boot can retake the run. Yields the record of the dead run it took over, if any
+    (`RunLock.acquire` only ever hands back a record of this host's own, never probing
+    another host's)."""
     taken_over = _acquire(lock, task_id)
     if taken_over is not None:
         print(
@@ -923,12 +927,21 @@ def _locked(lock: RunLock, task_id: str, stop: StopCause | None = None) -> Itera
             f"{taken_over.host} ({taken_over.started_at}), no longer running"
         )
     try:
-        yield
+        yield taken_over
     finally:
         if stop is not None and stop.at_shutdown:
             lock.keep_at_shutdown(task_id)
         else:
             lock.release(task_id)
+
+
+def _reap_dead_run(ports: Ports, task_id: str, taken_over: LockRecord | None) -> None:
+    """The processes the dead run left (GH-282, ADR-0052), by its own pid and never the
+    task's whole scope: this run's attempts may already be marked. Stderr only."""
+    if taken_over is None:
+        return
+    if reaped := release.summary(release.release_processes(ports, task_id, run=taken_over.pid)):
+        print(f"agentic: dead run {taken_over.pid} left processes: {reaped}", file=sys.stderr)
 
 
 @contextmanager
@@ -1058,10 +1071,11 @@ async def _run(
             _detach(lock, task["id"], child_argv or [], log_file or "", spawn)
             return
         with (
-            _locked(lock, task["id"], stop),
+            _locked(lock, task["id"], stop) as taken_over,
             _registered(registry, product_name(ports), task["id"]),
             _inhibited(f"{task['id']}: run"),
         ):
+            _reap_dead_run(ports, task["id"], taken_over)
             # Read before the archive moves the document: a landing restart (GH-239) carries its
             # depth, its cost and the diagnoser's section into the run that replaces it.
             carried, diagnosis = _landing_carry(task["id"], ports) if fresh else (None, "")
@@ -1125,10 +1139,12 @@ def _archive_previous_run(task_id: str, ports: Ports) -> None:
         line = f"agentic: {verb} {result.prefix}"
         if not result.document_kept:
             line += " (archived without the document: the product ignores .agentic/tasks/)"
+        note = f"{archive.STARTED_OVER}previous run archived as {result.prefix}/"
+        if reaped := release.summary(result.reaped):
+            line += f"; {reaped}"
+            note += f"; {reaped}"
         print(line)
-        ports.tracker.comment(
-            task_id, f"{archive.STARTED_OVER}previous run archived as {result.prefix}/"
-        )
+        ports.tracker.comment(task_id, note)
     try:
         raw = ports.documents.load(task_id)
         unreadable = False
@@ -1238,10 +1254,11 @@ async def _resume(
             return
 
         with (
-            _locked(lock, task_id, stop),
+            _locked(lock, task_id, stop) as taken_over,
             _registered(registry, product_name(ports), task_id),
             _inhibited(f"{task_id}: resume"),
         ):
+            _reap_dead_run(ports, task_id, taken_over)
             if r.source == "document":
                 # Seeded as if `escalate` had just run: the task pauses once more,
                 # without telling the human again, and the answer below resumes it
