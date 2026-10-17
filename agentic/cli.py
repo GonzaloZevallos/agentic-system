@@ -1460,7 +1460,7 @@ async def _land(
             REGISTER_WAIT_S,
             time.sleep,
             kind="role",
-            product=ports.stack.product(),
+            product=product_name(ports),
         )
 
     with _registered(registry, product_name(ports), task_id, run_kind):

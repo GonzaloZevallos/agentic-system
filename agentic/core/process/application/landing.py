@@ -64,7 +64,10 @@ def land(
     """Takes `task_id`'s run lock (`LockHeld` if another process holds it) and releases it
     on the way out, whatever happens. `run_kind` is the kind this process registered under
     at spawn: a step it does not admit (`landing_rules.run_kind_admits`) is refused before
-    anything is recorded or dispatched."""
+    anything is recorded or dispatched. `await_resume` runs with the lock already released
+    (GH-270): the resume this land spawned refuses a task whose lock a live pid holds, so a
+    land waiting for it to register must not be that pid."""
+
     lock.acquire(task_id, "land")
     try:
         return _land(
@@ -81,10 +84,25 @@ def land(
             argv0,
             role_span,
             run_kind,
-            await_resume,
+            _after_releasing(lock, await_resume),
         )
     finally:
         lock.release(task_id)
+
+
+def _after_releasing(
+    lock: RunLock, await_resume: Callable[[str], bool] | None
+) -> Callable[[str], bool] | None:
+    """`await_resume` preceded by letting go of the task's lock (`release` is a no-op the
+    second time, so the `finally` in `land` stays harmless)."""
+    if await_resume is None:
+        return None
+
+    def wait(task_id: str) -> bool:
+        lock.release(task_id)
+        return await_resume(task_id)
+
+    return wait
 
 
 def _land(

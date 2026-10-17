@@ -56,6 +56,8 @@ class _World(FakeLauncher):
         self.resumed: list[int] = []
         self.merged: list[merge.MergeResult] = []
         self.landed: list[landing.LandResult] = []
+        self.locks = _HeldLocks()
+        self.await_resume = None
 
     def resume(self, number: int) -> int:
         self.resumed.append(number)
@@ -70,13 +72,14 @@ class _World(FakeLauncher):
                     task_id,
                     _cfg(self.tmp_path),
                     self.ports,
-                    _HeldLocks(),
+                    self.locks,
                     upstream,
                     frozenset(),
                     lambda line: None,
                     clock=lambda: "2026-10-14T00:00:00+00:00",
                     live=LIVE,
                     resume=self.resume,
+                    await_resume=self.await_resume,
                 )
             )
         elif argv[1] == "merge":
@@ -608,3 +611,42 @@ def test_with_no_pid_there_is_no_mark_and_no_wait(tmp_path):
 
     assert landing_sync.spawn_and_mark(context) is None
     assert waited == []
+
+
+def test_the_land_has_let_go_of_the_task_lock_when_it_starts_waiting_for_its_resume(tmp_path):
+    """The resume's `--detach` refuses a task whose lock a live pid holds, so the land must
+    not hold it while it waits for that resume to register."""
+    ports = _ports(5)
+    ports.tracker.head_oid = FOREIGN
+    world = _World(ports, tmp_path)
+    held_during_wait: list[bool] = []
+
+    def wait(task_id: str) -> bool:
+        held_during_wait.append(world.locks.held(task_id))
+        return True
+
+    world.await_resume = wait
+
+    world.tick()
+
+    assert world.resumed == [5]
+    assert held_during_wait == [False]
+    assert world.locks.taken == ["GH-5"]
+
+
+def test_a_land_whose_wait_fails_still_leaves_no_lock_behind(tmp_path):
+    ports = _ports(5)
+    ports.tracker.head_oid = FOREIGN
+    world = _World(ports, tmp_path)
+
+    def boom(task_id: str) -> bool:
+        raise OSError("registry unreadable")
+
+    world.await_resume = boom
+
+    try:
+        world.tick()
+    except OSError:
+        pass  # whether the land lets it out or records it is not this test's business
+
+    assert not world.locks.held("GH-5")
