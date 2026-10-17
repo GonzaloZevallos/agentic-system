@@ -162,8 +162,14 @@ contando repeticiones.
 _Campo_: invoke_agent — OpenTelemetry GenAI semantic conventions, hoy en estado Development. Es el único nombre preciso que existe: LangGraph dice super-step, OpenAI y el Claude Agent SDK turn, CrewAI iteration, Google ADK agent call, SWE-agent step
 
 **Corrida exenta del tope**:
-Un hijo de merge o un hijo de `land` que sólo chequea: no corre ningún modelo y no cuenta contra el tope de concurrencia. A lo sumo una está viva por máquina y a lo sumo una se arranca por vuelta.
+Un hijo de merge o un hijo de `land` que sólo chequea: no corre ningún modelo y no cuenta contra el tope de concurrencia. A lo sumo una está viva por máquina y a lo sumo una se arranca por vuelta. Un aterrizaje que gasta modelo (`land_model`) no es una corrida exenta: cuenta contra el tope y, cuando no queda cupo, usa el Cupo reservado para aterrizaje.
 _Avoid_: corrida libre, non-counting run
+_Campo_: sin término de arte
+
+**Cupo reservado para aterrizaje**:
+El único cupo por encima del tope de concurrencia que sólo puede usar un aterrizaje que gasta modelo (`land_model`) de una tarea entregada: ni un lanzamiento, ni una reanudación, ni una retoma lo usan. Lo ocupa el aterrizaje mientras vive y, después, la reanudación que lanzó, que el aterrizaje espera ver registrada antes de terminar; así las corridas vivas que cuentan llegan a lo sumo al tope más uno. No es una exención: el aterrizaje y su reanudación cuentan. No arranca mientras una pausa por límite de cuenta del mismo producto espera su calendario.
+En el código se llama `LAND_HEADROOM`.
+_Avoid_: exento, slot extra, cupo libre
 _Campo_: sin término de arte
 
 **Revisión de stack**:

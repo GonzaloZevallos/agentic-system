@@ -661,3 +661,15 @@ detrás de dos corridas largas (GH-237, GH-166) que ocupaban los dos slots de
   exento corre junto a hasta `cap` corridas de rol; si la máquina aún se sobrecarga, la palanca es
   el valor de esa cota y no el tope. Los registros escritos antes de este cambio no tienen `kind` y
   cuentan como `role` hasta que mueren.
+
+## Adenda (2026-10-16): un aterrizaje entregado usa un cupo reservado, no queda exento (GH-270)
+
+Caso: GH-131 (PR #252) y GH-247 (PR #259), aprobados y con `merge_conflict`, esperaron horas `land #N waits: no_slot` porque dos corridas largas de rol ocupaban el tope. Mover el aterrizaje antes del lanzamiento no alcanza: con `available_slots == 0` la precedencia no desaloja a nadie.
+
+Decisión: `rules.LAND_HEADROOM = 1`. Un aterrizaje `land_model` puede arrancar mientras las corridas vivas que cuentan (`role` + `land_model`) sean menos que `AGENTIC_MAX_CONCURRENT_RUNS + LAND_HEADROOM`. Lanzamientos, reanudaciones y retomas usan el tope sin más. `counts_against_cap` no cambia. Se descartó la exención: el costo real del aterrizaje es la reanudación que lanza (`agentic resume --detach`, registrada como `role`), que ya cuenta, y una cota aparte no acotaría nada. Se descartó la expropiación: cambiaría corridas en curso.
+
+- Orden: cierres, retomas, reanudaciones debidas, el aterrizaje `land_model` más bajo, el lanzamiento, hijos exentos. Con `R` = retomas + reanudaciones de la vuelta, `slots_left = max(available - R, 0)` y `L = land_slots - R`: si `slots_left > 0` y `L > 0` consume un cupo del plano; si `slots_left == 0` y `L > 0` usa el reservado y no consume; si `L <= 0` queda `Deferred(no_slot)`. `poll_plan(..., land_slots=None)` equivale a `available_slots`; `run_once` pasa `max(cap + LAND_HEADROOM - live, 0)` con `live` sin recortar.
+- El aterrizaje no arranca mientras `account_paused`: una pausa `account_limit` de este producto, ni agotada ni persistida, espera su calendario (`Deferred(..., "pause_waiting")`). No mira pausas `upstream`/`network` ni el pacing. Riesgo conocido: el 429 de otro producto de la misma cuenta no se ve; el costo es casi nulo porque el 429 llega en el primer turno.
+- Hueco aterrizaje-reanudación: `spawn_and_mark` escribe `resume_spawns`/`resume_spawned_at` y después espera, hasta `REGISTER_WAIT_S`, una entrada `(producto, tarea, kind="role")`; si vence, lo registra en una línea y termina. `_await_registration` gana `kind` y `product` opcionales; sin ellos, igual que antes. El registro sigue siendo la única fuente de `live`.
+- §8: las corridas vivas que cuentan pueden llegar a tope + 1 (con el tope por defecto de 1, dos sesiones), sólo por un aterrizaje o su reanudación; a lo sumo uno a la vez por máquina, acotado por tarea por `LANDING_PASSES_MAX` y `LANDING_SYNCS_MAX`. Un `sync_master` limpio retiene el cupo lo que dura su `agentic land`; no se parte en dos clases en esta tarea.
+- §7: sólo se mueve una línea de poll (`pause_waiting`); ninguna métrica, etiqueta, atributo ni clave de documento.
