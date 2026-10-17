@@ -41,9 +41,10 @@ from . import composition
 from .composition import default_ports, graph
 from .core.knowledge.domain import knowledge
 from .core.knowledge.domain import stack as knowledge_stack
+from .core.measurement.adapters.langfuse.scores import LangfuseScores
 from .core.measurement.adapters.otel import telemetry
 from .core.measurement.adapters.otel.telemetry import InvocationKind
-from .core.measurement.domain import evaluation, playbook_window, scorecard
+from .core.measurement.domain import evaluation, playbook_window, scorecard, task_scores
 from .core.measurement.domain import metrics as delivery_metrics
 from .core.process.adapters.filesystem import (
     FilesystemRunLock,
@@ -1259,7 +1260,9 @@ class _ClosureOutcome:
     path: Path | None = None
 
 
-def _close_document(task_id: str, cfg: Configuration, ports: Ports) -> _ClosureOutcome:
+def _close_document(
+    task_id: str, cfg: Configuration, ports: Ports, scorer: LangfuseScores | None = None
+) -> _ClosureOutcome:
     """The closure of one task: read -> ask `gh` -> write, the body `_close` used to
     run inline and `_close_all`'s sweep now shares (Tech Lead plan, subtask
     `close-all`) -- one definition, so `--issue` and `--all` cannot drift on what
@@ -1326,6 +1329,7 @@ def _close_document(task_id: str, cfg: Configuration, ports: Ports) -> _ClosureO
     if pull_request.merge_commit:
         values["merge_commit"] = pull_request.merge_commit
     path = ports.documents.record_closure(task_id, values)
+    _score_closed(task_id, ports, pull_request, scorer)
     return _ClosureOutcome(
         "closed",
         "",
@@ -1334,6 +1338,31 @@ def _close_document(task_id: str, cfg: Configuration, ports: Ports) -> _ClosureO
         human_lines_changed=human_lines_changed,
         time_to_merge=time_to_merge,
         path=path,
+    )
+
+
+def _score_closed(
+    task_id: str, ports: Ports, pull_request: PullRequest, scorer: LangfuseScores | None
+) -> None:
+    """The write at a close (GH-273): the finish write's scores plus `delivered` and
+    `cycle_h`, under the same identity, so it upserts the one made at finish. One bounded
+    issue read gives `cycle_h` its start; a failed read prints one line and leaves that one
+    score out, and never fails the close."""
+    scorer = scorer or composition.task_scorer()
+    if scorer is None:
+        return
+    issue_created_at: str | None = None
+    try:
+        issue_created_at = ports.tracker.issue_created_at(task_id)
+    except (ValueError, OSError):
+        print(f"agentic: scores: {task_id}: issue creation unreadable, cycle_h omitted", flush=True)
+    _write_scores(
+        scorer,
+        task_id,
+        ports,
+        pr_created_at=pull_request.created_at,
+        pr_merged_at=pull_request.merged_at,
+        issue_created_at=issue_created_at,
     )
 
 
@@ -2194,6 +2223,7 @@ async def _invoke(
     cfg: Configuration,
     kind: InvocationKind = "run",
     decision: str | None = None,
+    scorer: LangfuseScores | None = None,
 ) -> TaskState:
     # The state as this invocation entered: `_run`'s fresh `TaskInput` (no prior cost),
     # or `_resume`'s paused state. `finish_invocation` diffs it against the state the
@@ -2218,9 +2248,53 @@ async def _invoke(
                 raise
             run.finish(final)
             run.finish_invocation(entering, final, kind, decision)
+        # After the span closed, so the write's wait is never part of the task's trace; a
+        # crashed invocation raised above and never gets here.
+        _write_scores(scorer, task["id"], ports, finished_only=True)
     finally:
         telemetry.flush()
     return final
+
+
+def _write_scores(
+    scorer: LangfuseScores | None,
+    task_id: str,
+    ports: Ports,
+    *,
+    finished_only: bool = False,
+    pr_created_at: str | None = None,
+    pr_merged_at: str | None = None,
+    issue_created_at: str | None = None,
+) -> None:
+    """Writes the task's scores from its saved document (GH-273, ADR-0037 addendum): a
+    side channel, so nothing here changes a result, an exit code or a printed line other
+    than its own failure line, and nothing raises out. With no scorer, no document or no
+    recorded time, it writes nothing; the time is the task's own, never the moment of
+    writing. A failure line names the exception's class, never its message, which a
+    transport may fill with what it must not print.
+
+    `finished_only` is the write at the finish of an invocation: only a document that is
+    finished (`ready_for_review` or `discarded`) is scored, a paused one leaves nothing."""
+    scorer = scorer or composition.task_scorer()
+    if scorer is None:
+        return
+    try:
+        document = ports.documents.load(task_id)
+        if document is None or (finished_only and not task_scores.scoreable(document)):
+            return
+        span = task_scores.task_time(document, pr_created_at, issue_created_at)
+        if span is None:
+            return
+        product = product_name(ports)
+        scores = task_scores.task_scores(
+            document,
+            pr_merged_at=pr_merged_at,
+            issue_created_at=issue_created_at,
+            identity=task_scores.identity(product, task_id, span.start),
+        )
+        scorer.write(product, task_id, document, scores, span, task_scores.dimensions(document))
+    except Exception as exc:
+        print(f"agentic: scores: {task_id}: not written ({type(exc).__name__})", flush=True)
 
 
 def _report(final: TaskState, task_id: str, ports: Ports) -> None:

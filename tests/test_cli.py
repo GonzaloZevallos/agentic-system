@@ -22,6 +22,7 @@ from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.application.ports import LockHeld, LockRecord
 from agentic.core.process.domain import legacy_names
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
+from agentic.shared.configuration import ENV_PREFIX, Configuration
 from tests.fakes import MemoryKnowledge, MemoryStack, MemoryTracker, memory_ports
 
 # `_run`/`_resume` now open their checkpointer twice per invocation (ADR-0003, addendum
@@ -4143,3 +4144,223 @@ async def test_poll_a_plain_value_error_still_escapes_the_loop(monkeypatch, tmp_
             argv0="agentic",
             sleep=sleep,
         )
+
+
+# --- GH-273: a task's scores, written at the finish of a run and at its close -----------
+
+
+class RecordingScorer:
+    """The scorer `cli._invoke` and `cli._close_document` write through, as a recording fake:
+    what it was asked to write, and optionally a failure it raises instead of answering."""
+
+    def __init__(self, raises: Exception | None = None):
+        self.raises = raises
+        self.calls: list[SimpleNamespace] = []
+
+    def write(self, product, task_id, document, scores, task_time, dimensions) -> bool:
+        self.calls.append(
+            SimpleNamespace(
+                product=product,
+                task_id=task_id,
+                document=document,
+                scores={s.name: s for s in scores},
+                task_time=task_time,
+                dimensions=dimensions,
+            )
+        )
+        if self.raises is not None:
+            raise self.raises
+        return True
+
+
+class FakeApp:
+    """`app.ainvoke` answering a canned state, or raising."""
+
+    def __init__(self, final=None, raises: Exception | None = None):
+        self.final, self.raises = final, raises
+
+    async def ainvoke(self, graph_input, config=None):
+        if self.raises is not None:
+            raise self.raises
+        return self.final
+
+
+SCORED_RUN = {
+    "role": "Developer",
+    "section": "Developer",
+    "version": 1,
+    "session_id": "s",
+    "model": "m",
+    "cost_usd": 1.0,
+    "cost_by_model": {},
+    "turns": 1,
+    "started_at": "2026-10-01T10:00:00.000Z",
+    "ended_at": "2026-10-01T11:00:00.000Z",
+    "queue_wait_s": 0.0,
+}
+
+
+def scored_task(**overrides):
+    return close_task(runs=[SCORED_RUN], failures=[], **overrides)
+
+
+def invoke_ports(root: Path):
+    return close_ports(root, MemoryTracker())
+
+
+async def invoke_for_scores(tmp_path, final, scorer, *, raises=None, ports=None, root=None):
+    root = close_root(tmp_path) if root is None else root
+    ports = invoke_ports(root) if ports is None else ports
+    ports.documents.save(final)
+    cfg = Configuration.from_sources({"product_dir": root}, {})
+    entering = {"id": final["id"], "title": final["title"], "description": "d"}
+    return await cli._invoke(
+        FakeApp(final, raises), entering, {}, entering, ports, cfg, scorer=scorer
+    )
+
+
+@pytest.mark.anyio
+async def test_a_finished_run_writes_its_scores_once_on_the_carrier_of_its_own_start(tmp_path):
+    scorer = RecordingScorer()
+    await invoke_for_scores(tmp_path, scored_task(), scorer)
+
+    (call,) = scorer.calls
+    assert (call.product, call.task_id) == ("p", "GH-9")
+    assert call.task_time.start.isoformat() == "2026-10-01T10:00:00+00:00"
+    assert call.task_time.end.isoformat() == "2026-10-01T11:00:00+00:00"
+    assert call.scores["cost_usd"].value == 1.0
+    assert call.scores["active_h"].value == 1.0
+    assert "delivered" not in call.scores and "cycle_h" not in call.scores
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("status", ["escalated", "paused", "open"])
+async def test_a_paused_invocation_writes_no_scores(tmp_path, status):
+    scorer = RecordingScorer()
+    await invoke_for_scores(tmp_path, scored_task(status=status), scorer)
+    assert scorer.calls == []
+
+
+@pytest.mark.anyio
+async def test_a_crashed_invocation_writes_no_scores_and_still_raises(tmp_path):
+    scorer = RecordingScorer()
+    with pytest.raises(RuntimeError):
+        await invoke_for_scores(tmp_path, scored_task(), scorer, raises=RuntimeError("boom"))
+    assert scorer.calls == []
+
+
+@pytest.mark.anyio
+async def test_a_failing_scorer_leaves_the_runs_result_unchanged(tmp_path, capsys):
+    final = scored_task()
+    result = await invoke_for_scores(tmp_path, final, RecordingScorer(raises=RuntimeError("k")))
+    assert result == final
+    assert "scores" in capsys.readouterr().out
+
+
+@pytest.mark.anyio
+async def test_a_run_with_no_recorded_times_writes_nothing_rather_than_stamp_now(tmp_path):
+    scorer = RecordingScorer()
+    await invoke_for_scores(tmp_path, close_task(runs=[]), scorer)
+    assert scorer.calls == []
+
+
+REFERENCE = "https://github.com/o/r/pull/7"
+
+
+def closing_ports(tmp_path, *, pull_request=None, issue_created="2026-08-31T01:00:00+00:00"):
+    root = close_root(tmp_path)
+    tracker = FakePullRequestTracker({REFERENCE: pull_request or close_pull_request()})
+    if issue_created is not None:
+        tracker.issue_created["GH-9"] = issue_created
+    return root, close_ports(root, tracker)
+
+
+def close_for_scores(root, ports, scorer):
+    cfg = Configuration.from_sources({"product_dir": root}, {})
+    return cli._close_document("GH-9", cfg, ports, scorer)
+
+
+@pytest.mark.anyio
+async def test_a_close_writes_delivered_and_cycle_h_on_the_carrier_the_finish_wrote(tmp_path):
+    root, ports = closing_ports(tmp_path)
+    finish, close = RecordingScorer(), RecordingScorer()
+    await invoke_for_scores(tmp_path, scored_task(), finish, ports=ports, root=root)
+
+    result = close_for_scores(root, ports, close)
+
+    assert result.status == "closed"
+    (before,), (after,) = finish.calls, close.calls
+    assert "delivered" not in before.scores
+    assert after.scores["delivered"].value == 1.0
+    assert after.scores["cycle_h"].value == 24.0
+    # The same start, so the same trace and the same score ids: the close upserts the finish.
+    assert after.task_time == before.task_time
+    assert after.scores["cost_usd"].id == before.scores["cost_usd"].id != ""
+    assert after.scores["delivered"].id != ""
+
+
+@pytest.mark.anyio
+async def test_a_failed_issue_read_omits_cycle_h_and_never_fails_the_close(tmp_path, capsys):
+    root, ports = closing_ports(tmp_path)
+    ports.tracker.issue_created_errors.add("GH-9")
+    ports.documents.save(scored_task())
+    scorer = RecordingScorer()
+
+    result = close_for_scores(root, ports, scorer)
+
+    assert result.status == "closed" and result.outcome == "merged"
+    (call,) = scorer.calls
+    assert "cycle_h" not in call.scores and call.scores["delivered"].value == 1.0
+    assert capsys.readouterr().out.count("cycle_h omitted") == 1
+
+
+def test_a_failing_scorer_leaves_the_close_result_and_its_document_unchanged(tmp_path, capsys):
+    root, ports = closing_ports(tmp_path)
+    ports.documents.save(scored_task())
+
+    result = close_for_scores(root, ports, RecordingScorer(raises=RuntimeError("secret-key")))
+
+    assert result.status == "closed" and result.outcome == "merged"
+    assert ports.documents.load("GH-9")["delivery_outcome"] == "merged"
+    out = capsys.readouterr().out
+    assert "not written (RuntimeError)" in out and "secret-key" not in out
+
+
+def test_a_close_that_closes_nothing_writes_no_scores(tmp_path):
+    root, ports = closing_ports(
+        tmp_path, pull_request=close_pull_request(state="OPEN", merged=False)
+    )
+    ports.documents.save(scored_task())
+    scorer = RecordingScorer()
+
+    assert close_for_scores(root, ports, scorer).status == "still_open"
+    assert scorer.calls == []
+
+
+def test_a_closed_pull_request_that_never_merged_is_scored_not_delivered(tmp_path):
+    root, ports = closing_ports(
+        tmp_path, pull_request=close_pull_request(state="CLOSED", merged=False)
+    )
+    ports.documents.save(scored_task())
+    scorer = RecordingScorer()
+
+    close_for_scores(root, ports, scorer)
+
+    (call,) = scorer.calls
+    assert call.scores["delivered"].value == 0.0 and "cycle_h" not in call.scores
+
+
+def test_the_composition_hands_a_scorer_only_when_all_three_variables_are_set(monkeypatch):
+    from agentic.core.measurement.adapters.langfuse.scores import LangfuseScores
+
+    assert composition.task_scorer() is None
+    monkeypatch.setenv("AGENTIC_LANGFUSE_HOST", "http://lf")
+    monkeypatch.setenv("AGENTIC_LANGFUSE_PUBLIC_KEY", "pk")
+    assert composition.task_scorer() is None
+    monkeypatch.setenv("AGENTIC_LANGFUSE_SECRET_KEY", "")
+    assert composition.task_scorer() is None
+    monkeypatch.setenv("AGENTIC_LANGFUSE_SECRET_KEY", "sk")
+    assert isinstance(composition.task_scorer(), LangfuseScores)
+    # Never a `Configuration` field: a field would travel with the configuration into a role.
+    fields = {ENV_PREFIX + name.upper() for name in Configuration.model_fields}
+    assert not fields & set(composition.LANGFUSE_VARIABLES)
