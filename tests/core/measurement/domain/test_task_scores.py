@@ -464,8 +464,9 @@ def test_a_malformed_register_reads_as_unknown_not_zero():
 
 # The distinct `cost_by_model` keys of every task document of agentic-system, apostrophe and
 # gym-saas on 2026-10-17, frozen. Collected read-only with:
-#   grep -rhE -A8 "^\s*cost_by_model:" <product>/.agentic/tasks | grep -E "^\s{4,}[^ :]+: [0-9.e-]+$" \
-#     | sed -E "s/^\s+([^:]+):.*/\1/" | grep -E "^(claude|<|opus|sonnet|haiku|[a-z]+-)" | sort | uniq -c
+#   grep -rhE -A8 "^\s*cost_by_model:" <product>/.agentic/tasks \
+#     | grep -E "^\s{4,}[^ :]+: [0-9.e-]+$" | sed -E "s/^\s+([^:]+):.*/\1/" \
+#     | grep -E "^(claude|<|opus|sonnet|haiku|[a-z]+-)" | sort | uniq -c
 #   3899 claude-haiku-4-5-20251001 / 624 claude-opus-5 / 2253 claude-opus-5-5
 #   1067 claude-sonnet-5 / 1731 claude-sonnet-5-5
 REAL_MODEL_KEYS = {
@@ -489,8 +490,7 @@ def test_a_key_that_is_no_claude_family_is_other(key):
 
 def test_no_real_model_key_lands_in_other():
     runs = [
-        run(cost_by_model={key: 1.0 + i}, slug="developer")
-        for i, key in enumerate(REAL_MODEL_KEYS)
+        run(cost_by_model={key: 1.0 + i}, slug="developer") for i, key in enumerate(REAL_MODEL_KEYS)
     ]
     got = by_name(ts.task_scores(document(runs=runs)))
     assert "cost_usd.model.other" not in got
