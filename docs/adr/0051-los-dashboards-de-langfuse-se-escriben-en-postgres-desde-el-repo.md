@@ -53,7 +53,7 @@ endpoint) y tRPC es una ruta de sesión de la UI.
 
 ## 1. Columnas de `dashboards` y `dashboard_widgets`
 
-Comando (host, puerto publicado; usuario y base del contenedor):
+Comando (dentro del contenedor, con el `psql` de la imagen):
 
 ```
 docker exec langfuse-postgres-1 psql -U postgres -d postgres -c "select table_name, ordinal_position, column_name, data_type, is_nullable, column_default from information_schema.columns where table_schema='public' and table_name in ('dashboards','dashboard_widgets') order by table_name, ordinal_position"
@@ -89,6 +89,44 @@ docker exec langfuse-postgres-1 psql -U postgres -d postgres -c "select table_na
  dashboards        |               10 | filters      | jsonb                       | NO          | '[]'::jsonb
 (25 rows)
 ```
+
+La misma consulta, ahora sí desde el host por el puerto publicado `127.0.0.1:5432` (el host no
+tiene `psql` ni psycopg instalados: se corrió con `uv run --no-project --with 'psycopg[binary]'`,
+sin tocar el proyecto). La primera línea es `host puerto` de la conexión; las demás, las filas
+verbatim como tuplas de Python:
+
+```
+uv run --no-project --with 'psycopg[binary]' python q.py   # q.py: psycopg.connect("postgresql://…@127.0.0.1:5432/postgres") y la consulta de arriba
+127.0.0.1 5432
+('dashboard_widgets', 1, 'id', 'text', 'NO', None)
+('dashboard_widgets', 2, 'created_at', 'timestamp without time zone', 'NO', 'CURRENT_TIMESTAMP')
+('dashboard_widgets', 3, 'updated_at', 'timestamp without time zone', 'NO', 'CURRENT_TIMESTAMP')
+('dashboard_widgets', 4, 'created_by', 'text', 'YES', None)
+('dashboard_widgets', 5, 'updated_by', 'text', 'YES', None)
+('dashboard_widgets', 6, 'project_id', 'text', 'YES', None)
+('dashboard_widgets', 7, 'name', 'text', 'NO', None)
+('dashboard_widgets', 8, 'description', 'text', 'NO', None)
+('dashboard_widgets', 9, 'view', 'USER-DEFINED', 'NO', None)
+('dashboard_widgets', 10, 'dimensions', 'jsonb', 'NO', None)
+('dashboard_widgets', 11, 'metrics', 'jsonb', 'NO', None)
+('dashboard_widgets', 12, 'filters', 'jsonb', 'NO', None)
+('dashboard_widgets', 13, 'chart_type', 'USER-DEFINED', 'NO', None)
+('dashboard_widgets', 14, 'chart_config', 'jsonb', 'NO', None)
+('dashboard_widgets', 15, 'min_version', 'integer', 'NO', '1')
+('dashboards', 1, 'id', 'text', 'NO', None)
+('dashboards', 2, 'created_at', 'timestamp without time zone', 'NO', 'CURRENT_TIMESTAMP')
+('dashboards', 3, 'updated_at', 'timestamp without time zone', 'NO', 'CURRENT_TIMESTAMP')
+('dashboards', 4, 'created_by', 'text', 'YES', None)
+('dashboards', 5, 'updated_by', 'text', 'YES', None)
+('dashboards', 6, 'project_id', 'text', 'YES', None)
+('dashboards', 7, 'name', 'text', 'NO', None)
+('dashboards', 8, 'description', 'text', 'NO', None)
+('dashboards', 9, 'definition', 'jsonb', 'NO', None)
+('dashboards', 10, 'filters', 'jsonb', 'NO', "'[]'::jsonb")
+```
+
+Las 25 filas coinciden con la tabla de arriba; la tabla se leyó dentro del contenedor, la
+lectura del host es la que `apply` repetirá.
 
 Los dos `USER-DEFINED` son enums de Postgres:
 
@@ -255,17 +293,21 @@ La relación es `api_keys.project_id` → `projects.id`, y `api_keys.public_key`
 ## 6. Qué hay hoy en ClickHouse
 
 ```
-docker exec langfuse-clickhouse-1 clickhouse-client --user clickhouse --password clickhouse -q "select environment, name, count(), min(timestamp), max(timestamp) from scores FINAL group by environment,name order by 1,2"
-agentic-gate-probe  agentic.gate.cost_usd   2   2025-10-09 09:53:20.000
-agentic-gate-probe  agentic.gate.delivered  2   2025-10-09 09:53:20.000
-agentic-gate-probe  agentic.gate.origin     2   2025-10-09 09:53:20.000
-default             agentic.gate.known      2   2026-09-24 14:50:27.529
-default             agentic.gate.unknown    2   2026-09-24 14:50:27.689
+curl -s "http://127.0.0.1:8123/?user=clickhouse&password=<password>" --data-binary "select environment, name, count() AS n, min(timestamp) AS first, max(timestamp) AS last from scores FINAL group by environment,name order by 1,2 format PrettyCompactMonoBlock"
+   ┌─environment────────┬─name───────────────────┬─n─┬───────────────────first─┬────────────────────last─┐
+1. │ agentic-gate-probe │ agentic.gate.cost_usd  │ 2 │ 2025-10-09 09:53:20.000 │ 2025-10-09 09:53:20.000 │
+2. │ agentic-gate-probe │ agentic.gate.delivered │ 2 │ 2025-10-09 09:53:20.000 │ 2025-10-09 09:53:20.000 │
+3. │ agentic-gate-probe │ agentic.gate.origin    │ 2 │ 2025-10-09 09:53:20.000 │ 2025-10-09 09:53:20.000 │
+4. │ default            │ agentic.gate.known     │ 2 │ 2026-09-24 14:50:27.529 │ 2026-09-24 14:50:58.797 │
+5. │ default            │ agentic.gate.unknown   │ 2 │ 2026-09-24 14:50:27.689 │ 2026-09-24 14:51:01.877 │
+   └────────────────────┴────────────────────────┴───┴─────────────────────────┴─────────────────────────┘
 ```
 
 Sólo hay scores de sondas: el backfill de GH-273 todavía no corrió contra esta instancia.
 
 ## Qué lee cada widget
+
+Filtros: `environment` es un filtro `stringOptions` `any of` con el producto; "`name` `any of` la familia" es un filtro `stringOptions` `any of` con la lista enumerada de los nombres de la familia (derivada de `SCORE_NAMES`), nunca `starts with`; `booleanValue` = true es un filtro de tipo `boolean` (operador `=`) sobre la dimensión `booleanValue` de `scores-boolean`, que el golden registra.
 
 Todos los widgets llevan el filtro `environment` del producto (lo agrega `build_dashboards`),
 leen `min_version = 2` y se ubican en el tiempo por el **fin de la última corrida de la
@@ -282,24 +324,24 @@ widget filtra `unknown` fuera de un desglose.
 
 | Dashboard | Título | Vista | Medida y agregación | Dimensión / desglose | Filtros | Score o campo nativo | Tiempo |
 |---|---|---|---|---|---|---|---|
-| Panorama | Costo por PR mergeado (mediana), por tipo | SCORES_NUMERIC | `value` · `p50` | `name` (familia `delivered_cost_usd.type.<tipo>`), `traceRelease` | `environment`; `name` ∈ familia | `delivered_cost_usd` (se omite si la tarea no se entregó) | fin de la última corrida |
-| Panorama | PRs mergeados por semana de entrega | SCORES_BOOLEAN | `count` · `count` | `traceRelease` | `environment`; `name` = `delivered`; `value` = 1 | `delivered` | fin de la última corrida (no la fecha de merge) |
+| Panorama | Costo por PR mergeado (mediana), por tipo | SCORES_NUMERIC | `value` · `p50` | `name` (familia `delivered_cost_usd.type.<tipo>`), `traceRelease` | `environment`; `name` `any of` la familia enumerada | `delivered_cost_usd` (se omite si la tarea no se entregó) | fin de la última corrida |
+| Panorama | PRs mergeados por semana de entrega | SCORES_BOOLEAN | `count` · `count` | `traceRelease` | `environment`; `name` = `delivered`; `booleanValue` = true | `delivered` | fin de la última corrida (no la fecha de merge) |
 | Panorama | Tiempo de ciclo (h, calendario) | SCORES_NUMERIC | `value` · `p50` | `traceRelease` | `environment`; `name` = `cycle_h` | `cycle_h` | fin de la última corrida |
 | Panorama | Devoluciones por tarea | SCORES_NUMERIC | `value` · `avg` | `traceRelease` | `environment`; `name` = `returns` | `returns` | fin de la última corrida |
 | Panorama | Plata perdida: costo de fallos | SCORES_NUMERIC | `value` · `sum` | `traceRelease` | `environment`; `name` = `failed_cost_usd` | `failed_cost_usd` | fin de la última corrida |
-| Panorama | Plata perdida: escalaciones | SCORES_NUMERIC | `value` · `sum` | `name` (familia `escalations.<clase>`) | `environment`; `name` ∈ familia | `escalations.<clase>` | fin de la última corrida |
-| Panorama | Gasto: original vs. follow-ups | SCORES_NUMERIC | `value` · `sum` | `name` (familia `cost_usd.origin.<origen>`) | `environment`; `name` ∈ familia | `cost_usd.origin.<origen>` | fin de la última corrida |
-| Mejora del sistema | Retrabajo por categoría de devolución | SCORES_NUMERIC | `value` · `sum` | `name` (familia `returns.<categoría>`), `traceRelease` | `environment`; `name` ∈ familia | `returns.<categoría>` | fin de la última corrida |
-| Mejora del sistema | Fallos por razón | SCORES_NUMERIC | `value` · `sum` | `name` (familia `failures.<razón>`), `traceRelease` | `environment`; `name` ∈ familia | `failures.<razón>` | fin de la última corrida |
-| Mejora del sistema | Roles más caros | SCORES_NUMERIC | `value` · `sum` | `name` (familia `cost_usd.role.<slug>`), `traceRelease` | `environment`; `name` ∈ familia | `cost_usd.role.<slug>` | fin de la última corrida |
+| Panorama | Plata perdida: escalaciones | SCORES_NUMERIC | `value` · `sum` | `name` (familia `escalations.<clase>`) | `environment`; `name` `any of` la familia enumerada | `escalations.<clase>` | fin de la última corrida |
+| Panorama | Gasto: original vs. follow-ups | SCORES_NUMERIC | `value` · `sum` | `name` (familia `cost_usd.origin.<origen>`) | `environment`; `name` `any of` la familia enumerada | `cost_usd.origin.<origen>` | fin de la última corrida |
+| Mejora del sistema | Retrabajo por categoría de devolución | SCORES_NUMERIC | `value` · `sum` | `name` (familia `returns.<categoría>`), `traceRelease` | `environment`; `name` `any of` la familia enumerada | `returns.<categoría>` | fin de la última corrida |
+| Mejora del sistema | Fallos por razón | SCORES_NUMERIC | `value` · `sum` | `name` (familia `failures.<razón>`), `traceRelease` | `environment`; `name` `any of` la familia enumerada | `failures.<razón>` | fin de la última corrida |
+| Mejora del sistema | Roles más caros | SCORES_NUMERIC | `value` · `sum` | `name` (familia `cost_usd.role.<slug>`), `traceRelease` | `environment`; `name` `any of` la familia enumerada | `cost_usd.role.<slug>` | fin de la última corrida |
 | Mejora del sistema | Horas activas por versión | SCORES_NUMERIC | `value` · `p50` | `traceRelease` | `environment`; `name` = `active_h` | `active_h` | fin de la última corrida |
 | Mejora del sistema | Calidad de la entrega: hallazgos importantes | SCORES_NUMERIC | `value` · `avg` | `traceRelease` | `environment`; `name` = `findings_important` | `findings_important` | fin de la última corrida |
 | Mejora del sistema | Calidad de la entrega: follow-ups | SCORES_NUMERIC | `value` · `avg` | `traceRelease` | `environment`; `name` = `followups` | `followups` | fin de la última corrida |
 | Mejora del sistema | Calidad de la entrega: chequeos en rojo | SCORES_NUMERIC | `value` · `avg` | `traceRelease` | `environment`; `name` = `checks_red` | `checks_red` | fin de la última corrida |
-| Operación | Escalaciones por clase | SCORES_NUMERIC | `value` · `sum` | `name` (familia `escalations.<clase>`) | `environment`; `name` ∈ familia | `escalations.<clase>` | fin de la última corrida; rango "7 días" de la UI |
-| Operación | Fallos por límite de cuenta, por hora | SCORES_NUMERIC | `value` · `sum` | `timestampDay` no sirve (la hora no es dimensión); queda sin la hora, por día | `environment`; `name` = `failures.account_limit` | `failures.account_limit` | fin de la última corrida; por día, no por hora |
-| Operación | Entregas por día | SCORES_BOOLEAN | `count` · `count` | `timestampDay` | `environment`; `name` = `delivered`; `value` = 1 | `delivered` | fin de la última corrida |
-| Dónde va la plata | Costo por rol | SCORES_NUMERIC | `value` · `sum` | `name` (familia `cost_usd.role.<slug>`) | `environment`; `name` ∈ familia | `cost_usd.role.<slug>` | fin de la última corrida |
+| Operación | Escalaciones por clase | SCORES_NUMERIC | `value` · `sum` | `name` (familia `escalations.<clase>`) | `environment`; `name` `any of` la familia enumerada | `escalations.<clase>` | fin de la última corrida; rango "7 días" de la UI |
+| Operación | Fallos por límite de cuenta, por día | SCORES_NUMERIC | `value` · `sum` | `timestampDay` | `environment`; `name` = `failures.account_limit` | `failures.account_limit` | fin de la última corrida; por día, no por hora |
+| Operación | Entregas por día | SCORES_BOOLEAN | `count` · `count` | `timestampDay` | `environment`; `name` = `delivered`; `booleanValue` = true | `delivered` | fin de la última corrida |
+| Dónde va la plata | Costo por rol | SCORES_NUMERIC | `value` · `sum` | `name` (familia `cost_usd.role.<slug>`) | `environment`; `name` `any of` la familia enumerada | `cost_usd.role.<slug>` | fin de la última corrida |
 | Dónde va la plata | Costo por modelo | OBSERVATIONS | `totalCost` · `sum` | `providedModelName` | `environment` | medida nativa `totalCost` de la vista de observaciones | `start_time` de la observación |
 
 ## Widgets descartados
@@ -309,7 +351,7 @@ widget filtra `unknown` fuera de un desglose.
   X". No se reemplaza con un visual inventado.
 - **División por hora de los fallos `account_limit`.** El catálogo no tiene dimensión de
   hora (`timestampDay` es el grano más fino; la granularidad de la UI no se guarda). Queda
-  por día, y la fila lo dice en su título.
+  por día, y el título de la fila lo dice ("por día").
 - **Línea vertical de cambio de versión (Panorama).** No hay anotaciones; el marcador es
   `traceRelease` como desglose de la serie semanal.
 - **Semana calendario y "últimos 7 días" como propiedades del widget o del dashboard.** La

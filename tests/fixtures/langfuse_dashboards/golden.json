@@ -613,18 +613,82 @@
         "count": "integer",
         "value": "number (default avg)"
       },
-      "time": "timestamp"
+      "time": "timestamp",
+      "dimension_types": {
+        "value": "number; filter type number"
+      }
     },
     "scores-categorical": {
+      "dimensions": [
+        "id",
+        "environment",
+        "name",
+        "evaluatorId",
+        "ruleId",
+        "isEvaluatorTest",
+        "source",
+        "dataType",
+        "traceId",
+        "configId",
+        "timestampMonth",
+        "timestampDay",
+        "observationId",
+        "sessionId",
+        "datasetRunId",
+        "traceName",
+        "userId",
+        "tags",
+        "traceRelease",
+        "traceVersion",
+        "observationName",
+        "observationModelName",
+        "observationPromptName",
+        "observationPromptVersion",
+        "experimentName",
+        "experimentId",
+        "stringValue"
+      ],
       "measures": {
         "count": "integer"
       },
       "time": "timestamp"
     },
     "scores-boolean": {
+      "dimensions": [
+        "id",
+        "environment",
+        "name",
+        "evaluatorId",
+        "ruleId",
+        "isEvaluatorTest",
+        "source",
+        "dataType",
+        "traceId",
+        "configId",
+        "timestampMonth",
+        "timestampDay",
+        "observationId",
+        "sessionId",
+        "datasetRunId",
+        "traceName",
+        "userId",
+        "tags",
+        "traceRelease",
+        "traceVersion",
+        "observationName",
+        "observationModelName",
+        "observationPromptName",
+        "observationPromptVersion",
+        "experimentName",
+        "experimentId",
+        "booleanValue"
+      ],
+      "dimension_types": {
+        "booleanValue": "boolean; sql toBool(scores_boolean.value); filter type boolean, operators = and <>"
+      },
       "measures": {
         "count": "integer",
-        "value": "number 0/1"
+        "value": "number 0/1 (any(value), default avg)"
       },
       "time": "timestamp"
     },
@@ -712,7 +776,7 @@
   },
   "api_key_project": {
     "relation": "api_keys.project_id -> projects.id",
-    "lookup": "select project_id from api_keys where public_key = $1",
+    "lookup": "select project_id from api_keys where public_key = $1 and scope = 'PROJECT'",
     "note": "public key only"
   }
 }
