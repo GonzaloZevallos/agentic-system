@@ -132,6 +132,45 @@ documentos que este mismo módulo ya recorría.
   su propia familia, arriba, nombra a quién preguntarle ahora. Esta sección no repite esa
   lista; ADR-0037 tampoco.
 
+## Scores por tarea (GH-273)
+
+Los widgets de Langfuse agregan sólo valores de score, nunca metadata de span, así que los
+números de negocio de una tarea terminada salen además como **scores** sobre una traza
+portadora propia (una traza por tarea y por incarnación: `agentic.task.scores <id>`). Las
+trazas y los atributos de arriba no cambian. Cómo se arma la identidad, el tiempo y la
+escritura está en la adenda de GH-273 de ADR-0037; esta tabla dice qué trae cada score.
+
+| Score | Fuente en el documento de tarea | Tipo | Se omite cuando |
+|---|---|---|---|
+| `cost_usd` | `cost_usd`, la misma cifra que `task.cost_usd` | numérico | nunca |
+| `cycle_h` | horas desde `createdAt` del issue hasta `merged_at` del PR | numérico | el PR no se mergeó, o falló una lectura de `gh` |
+| `active_h` | suma de `ended_at − started_at − queue_wait_s` de `runs` | numérico | alguna corrida no tiene marca de tiempo legible |
+| `returns` | `metrics.changes_requested_total` | numérico | nunca |
+| `failed_cost_usd` | suma de `failures[].cost_usd` | numérico | nunca |
+| `delivered` | `delivery_outcome`: `merged`, `merged_with_changes` y `auto_merged` son verdadero, `closed` falso | booleano | no hay `delivery_outcome` (sin cierre, o descartada) |
+| `origin` | `title`: `followup` si empieza por `Follow-up of #`, si no `original` | categórico | no hay título |
+| `type` | `type` | categórico | nunca |
+
+Reglas para leerlos:
+
+- **El producto es un filtro, nunca una suma.** Cada score lleva el producto como su
+  `environment` nativo; ningún widget suma entre `environment`.
+- **El eje comparado es el `release`**, el `system_version` que el documento registró, y no
+  el del proceso que escribe. `arm` y `baseline` (`system_baseline`) van en la metadata de
+  cada score y en el span portador, también leídos del documento.
+- **Cada score lleva el tiempo de la tarea**, de sus corridas (luego el `created_at` del PR,
+  luego el `createdAt` del issue), nunca el momento de escribir.
+- **`delivered` cuenta `auto_merged`**: el pedido lo define como "el PR se mergeó"; si lo
+  juzgó una persona lo dice el scorecard (ADR-0045), no este score.
+- Un score `BOOLEAN` o `CATEGORICAL` se agrega por su valor de texto, no por `value`.
+
+`agentic scores backfill --product-dir <dir> [--dry-run]` escribe los mismos scores de todo
+documento terminado (`ready_for_review`, `discarded` o cerrado) con las mismas funciones que
+la escritura en vivo; una tarea sin terminar sale `skipped:not_finished` y se puntúa en vivo
+cuando termine. Los ids son derivados, así que repetirlo completa huecos sin duplicar. Su
+costo es lineal en los documentos: a lo sumo dos lecturas de `gh` y dos envíos (el span y el
+lote de scores) por documento.
+
 ## Costo en Langfuse
 
 Langfuse pricea cada llamada al modelo (`claude_code.llm_request`) a partir de sus tokens

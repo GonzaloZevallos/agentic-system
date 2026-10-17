@@ -4364,3 +4364,193 @@ def test_the_composition_hands_a_scorer_only_when_all_three_variables_are_set(mo
     # Never a `Configuration` field: a field would travel with the configuration into a role.
     fields = {ENV_PREFIX + name.upper() for name in Configuration.model_fields}
     assert not fields & set(composition.LANGFUSE_VARIABLES)
+
+
+# `agentic scores backfill` (GH-273, subtask `backfill`): argv in, exit code, stdout and the
+# scorer's own record out. The scorer is a fake with `LangfuseScores.write`'s shape; the
+# tracker is `FakePullRequestTracker`, which also answers `issue_created_at`.
+
+
+class FakeScorer:
+    """`LangfuseScores.write`'s shape: records every call, answers `results` in order
+    (`True` once they run out)."""
+
+    def __init__(self, results=()):
+        self.calls = []
+        self._results = list(results)
+
+    def write(self, product, task_id, document, scores, task_time, dimensions):
+        self.calls.append((product, task_id, tuple(scores), task_time, dimensions))
+        return self._results.pop(0) if self._results else True
+
+
+def _backfill_run(monkeypatch, root: Path, ports, scorer, *extra: str) -> None:
+    monkeypatch.setattr(cli, "default_ports", lambda cfg: ports)
+    monkeypatch.setattr(cli.composition, "task_scorer", lambda: scorer)
+    monkeypatch.setattr(
+        "sys.argv", ["agentic", "scores", "backfill", "--product-dir", str(root), *extra]
+    )
+
+
+def _backfill(monkeypatch, root: Path, ports, scorer, *extra: str) -> int:
+    _backfill_run(monkeypatch, root, ports, scorer, *extra)
+    try:
+        cli.main()
+    except SystemExit as exit_:
+        return exit_.code
+    return 0
+
+
+STARTED = "2026-09-20T10:00:00+00:00"
+ENDED = "2026-09-20T11:00:00+00:00"
+
+
+def finished_task(task_id="GH-9", **overrides):
+    return close_task(
+        id=task_id,
+        title="A task",
+        runs=[{"started_at": STARTED, "ended_at": ENDED, "queue_wait_s": 0, "cost_usd": 1.0}],
+        **overrides,
+    )
+
+
+def close_it(ports, task_id="GH-9", outcome="merged"):
+    ports.documents.record_closure(
+        task_id,
+        {"closed_at": "2026-09-21T00:00:00.000Z", "delivery_outcome": outcome},
+    )
+
+
+def test_a_second_backfill_sends_the_very_same_ids(monkeypatch, tmp_path, capsys):
+    root = close_root(tmp_path)
+    tracker = FakePullRequestTracker({"https://github.com/o/r/pull/7": close_pull_request()})
+    tracker.issue_created["GH-9"] = "2026-09-19T00:00:00+00:00"
+    ports = close_ports(root, tracker)
+    ports.documents.save(finished_task())
+    close_it(ports)
+    scorer = FakeScorer()
+    assert _backfill(monkeypatch, root, ports, scorer) == 0
+    assert _backfill(monkeypatch, root, ports, scorer) == 0
+    first, second = scorer.calls
+    assert first == second
+    assert {score.name for score in first[2]} >= {"cost_usd", "cycle_h", "delivered"}
+    assert all(score.id for score in first[2])
+    assert "scored 1, partial 0, failed 0" in capsys.readouterr().out.splitlines()[-1]
+
+
+def test_each_skip_reason_is_counted_and_a_skip_alone_exits_zero(monkeypatch, tmp_path, capsys):
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    ports.documents.save(finished_task("GH-1", status="paused"))  # not finished
+    ports.documents.save(
+        close_task(id="GH-2", title="old", pull_request=None, status="ready_for_review")
+    )  # no runs, no pull request, no issue time
+    scorer = FakeScorer()
+    assert _backfill(monkeypatch, root, ports, scorer) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert "agentic: GH-1: skipped:not_finished" in lines
+    assert "agentic: GH-2: skipped:no_time" in lines
+    assert lines[-1] == "scored 0, partial 0, skipped:no_time 1, skipped:not_finished 1, failed 0"
+    assert scorer.calls == []
+
+
+def test_a_gh_read_that_fails_makes_the_document_partial_and_the_run_exit_one(
+    monkeypatch, tmp_path, capsys
+):
+    root = close_root(tmp_path)
+    tracker = FakePullRequestTracker({"https://github.com/o/r/pull/7": close_pull_request()})
+    tracker.issue_created_errors.add("GH-9")
+    ports = close_ports(root, tracker)
+    ports.documents.save(finished_task())
+    close_it(ports)
+    scorer = FakeScorer()
+    assert _backfill(monkeypatch, root, ports, scorer) == 1
+    lines = capsys.readouterr().out.splitlines()
+    assert "agentic: GH-9: partial:cycle_h" in lines
+    assert lines[-1] == "scored 0, partial 1, failed 0"
+    assert "cycle_h" not in {score.name for score in scorer.calls[0][2]}  # never a 0
+
+
+def test_a_run_with_no_timestamps_takes_the_pull_requests_time_never_the_clock(
+    monkeypatch, tmp_path
+):
+    root = close_root(tmp_path)
+    tracker = FakePullRequestTracker({"https://github.com/o/r/pull/7": close_pull_request()})
+    ports = close_ports(root, tracker)
+    ports.documents.save(close_task(title="old"))
+    scorer = FakeScorer()
+    assert _backfill(monkeypatch, root, ports, scorer) == 0
+    task_time = scorer.calls[0][3]
+    assert task_time.start == task_time.end
+    assert task_time.start.isoformat() == "2026-09-01T00:00:00+00:00"
+    assert "active_h" not in {score.name for score in scorer.calls[0][2]}
+
+
+def test_three_consecutive_failed_writes_stop_the_run_with_the_counts_so_far(
+    monkeypatch, tmp_path, capsys
+):
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    for number in range(1, 6):
+        ports.documents.save(finished_task(f"GH-{number}", pull_request=None))
+    scorer = FakeScorer([False, False, False])
+    assert _backfill(monkeypatch, root, ports, scorer) == 1
+    out = capsys.readouterr().out.splitlines()
+    assert len(scorer.calls) == 3  # GH-4 and GH-5 are never attempted
+    assert "agentic: stopped after 3 consecutive failed writes" in out
+    assert out[-1] == "scored 0, partial 0, failed 3"
+
+
+def test_a_success_between_failures_resets_the_consecutive_count(monkeypatch, tmp_path, capsys):
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    for number in range(1, 6):
+        ports.documents.save(finished_task(f"GH-{number}", pull_request=None))
+    scorer = FakeScorer([False, False, True, False, False])
+    assert _backfill(monkeypatch, root, ports, scorer) == 1
+    assert len(scorer.calls) == 5
+    assert capsys.readouterr().out.splitlines()[-1] == "scored 1, partial 0, failed 4"
+
+
+def test_dry_run_reads_everything_and_sends_nothing(monkeypatch, tmp_path, capsys):
+    root = close_root(tmp_path)
+    tracker = FakePullRequestTracker({"https://github.com/o/r/pull/7": close_pull_request()})
+    ports = close_ports(root, tracker)
+    ports.documents.save(finished_task())
+    close_it(ports)
+    scorer = FakeScorer()
+    assert _backfill(monkeypatch, root, ports, scorer, "--dry-run") == 0
+    assert scorer.calls == []
+    assert tracker.pull_request_refs == ["https://github.com/o/r/pull/7"]
+    assert capsys.readouterr().out.splitlines()[-1] == "scored 1, partial 0, failed 0"
+
+
+def test_a_discarded_task_is_scored_without_delivered(monkeypatch, tmp_path):
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    ports.documents.save(finished_task(status="discarded", pull_request=None))
+    scorer = FakeScorer()
+    assert _backfill(monkeypatch, root, ports, scorer) == 0
+    names = {score.name for score in scorer.calls[0][2]}
+    assert "delivered" not in names and "cycle_h" not in names
+    assert {"cost_usd", "active_h", "returns", "origin", "type"} <= names
+
+
+def test_without_a_scorer_and_without_dry_run_it_refuses_with_exit_two(
+    monkeypatch, tmp_path, capsys
+):
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    ports.documents.save(finished_task(pull_request=None))
+    assert _backfill(monkeypatch, root, ports, None) == 2
+    assert "AGENTIC_LANGFUSE_HOST" in capsys.readouterr().err
+    assert _backfill(monkeypatch, root, ports, None, "--dry-run") == 0
+
+
+def test_a_backfill_writes_no_task_document(monkeypatch, tmp_path):
+    root = close_root(tmp_path)
+    ports = close_ports(root, FakePullRequestTracker())
+    ports.documents.save(finished_task(pull_request=None))
+    before = ports.documents.path_for("GH-9").read_bytes()
+    assert _backfill(monkeypatch, root, ports, FakeScorer()) == 0
+    assert ports.documents.path_for("GH-9").read_bytes() == before
