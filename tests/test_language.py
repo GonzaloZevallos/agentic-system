@@ -60,6 +60,10 @@ TYPES = {
     "Aterrizaje": landing,
 }
 
+# Glossary term -> (the domain module, the name of the constant) that models it, for a term a
+# plain value names: `module_of` cannot place an int by itself.
+CONSTANTS = {"Cupo reservado para aterrizaje": (rules, "LAND_HEADROOM")}
+
 # Glossary term -> the field of the task state that holds it.
 STATE_FIELDS = {
     "Devolución": "changes_requested",
@@ -108,6 +112,12 @@ def test_every_context_has_a_glossary_and_the_map_lists_it():
 def test_every_type_is_defined_in_its_own_contexts_glossary():
     for term, obj in TYPES.items():
         assert term in glossary_terms(context_of(module_of(obj))), term
+
+
+def test_every_constant_is_defined_in_its_own_contexts_glossary():
+    for term, (module, name) in CONSTANTS.items():
+        assert isinstance(getattr(module, name), int), term
+        assert term in glossary_terms(context_of(module_of(module))), term
 
 
 def test_state_fields_exist_and_are_process_terms():

@@ -59,6 +59,7 @@ def land(
     argv0: str = "agentic",
     role_span: landing_plan.RoleSpanOpener | None = None,
     run_kind: RunKind = "land_model",
+    await_resume: Callable[[str], bool] | None = None,
 ) -> LandResult:
     """Takes `task_id`'s run lock (`LockHeld` if another process holds it) and releases it
     on the way out, whatever happens. `run_kind` is the kind this process registered under
@@ -80,6 +81,7 @@ def land(
             argv0,
             role_span,
             run_kind,
+            await_resume,
         )
     finally:
         lock.release(task_id)
@@ -99,6 +101,7 @@ def _land(
     argv0: str,
     role_span: landing_plan.RoleSpanOpener | None,
     run_kind: RunKind,
+    await_resume: Callable[[str], bool] | None,
 ) -> LandResult:
     # The port answers a bare `dict`: the document carries keys beyond the state, and every
     # reader below takes it as the state (`.get` for the keys that may be absent).
@@ -112,7 +115,9 @@ def _land(
         return _refused(task_id, loaded, run_kind, "recovery", None, log)
     raw: TaskState = _freed(task_id, loaded, ports, log)
     reference = raw["pull_request"]
-    recovered = _recover(task_id, raw, str(reference), ports, log, clock, resume, run_kind)
+    recovered = _recover(
+        task_id, raw, str(reference), ports, log, clock, resume, run_kind, await_resume
+    )
     if recovered is not None:
         return recovered
     master = upstream.sha
@@ -189,6 +194,7 @@ def _land(
         launcher=launcher,
         argv0=argv0,
         role_span=role_span,
+        await_resume=await_resume,
     )
     try:
         _dispatch(context)
@@ -279,6 +285,7 @@ class _Recovery:
     ports: Ports
     resume: Callable[[int], int | None] | None
     log: Callable[[str], None]
+    await_resume: Callable[[str], bool] | None = None
 
 
 def _recover(
@@ -290,6 +297,7 @@ def _recover(
     clock: Callable[[], str],
     resume: Callable[[int], int | None] | None,
     run_kind: RunKind,
+    await_resume: Callable[[str], bool] | None,
 ) -> LandResult | None:
     """A reopened landing whose resume child is gone (`landing_rules.resume_owed`) is
     respawned, whatever the merge decision would say: its entry is already written, so the
@@ -310,7 +318,9 @@ def _recover(
             return LandResult("stopped", f"tracker_error: {exc}")
         if pull_request is None or pull_request.state != "OPEN":
             return LandResult("skipped", "pr_abandoned")
-        pid = landing_sync.spawn_and_mark(_Recovery(task_id, ports, resume, log), clock)
+        pid = landing_sync.spawn_and_mark(
+            _Recovery(task_id, ports, resume, log, await_resume), clock
+        )
         if pid is not None:
             spawned = last.get("resume_spawns", 0)
             k = (spawned if isinstance(spawned, int) else 0) + 1
