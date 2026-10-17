@@ -31,6 +31,7 @@ from typing import (
 )
 
 from .presubmit import CheckResult
+from .reaping import ReapedProcess
 
 Status = Literal[
     "open",
@@ -296,6 +297,11 @@ class Failure(TypedDict):
     # turn_notice.py`'s docstring states. Absent on a failure recorded before this
     # field existed, which reads as `0`.
     main_thread_turns: NotRequired[int]
+    # What the reaper stopped when the attempt ended (GH-282, ADR-0052): the processes a
+    # role left running in the background, off `RawResult.reaped`/`AttemptFailed.reaped`.
+    # Written only when something was reaped, so a document with no leak renders as it
+    # always did; read with `.get("reaped", [])`.
+    reaped: NotRequired[list[ReapedProcess]]
 
 
 class RoleRun(TypedDict):
@@ -408,6 +414,11 @@ class RoleRun(TypedDict):
     # `max_turns` that can refute the counted-quantity assumption, not a sum across
     # retries. Absent on a run recorded before this field existed.
     main_thread_turns: NotRequired[int]
+    # What the reaper stopped when the attempt ended (GH-282, ADR-0052): the processes a
+    # role left running in the background, off `RawResult.reaped`/`AttemptFailed.reaped`.
+    # Written only when something was reaped, so a document with no leak renders as it
+    # always did; read with `.get("reaped", [])`.
+    reaped: NotRequired[list[ReapedProcess]]
 
 
 class InterviewStats(TypedDict):

@@ -10,11 +10,12 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, NamedTuple, Protocol, assert_never
+from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
 
 from . import adr_numbers, ci, presubmit
 from .denials import denial_for
 from .document import HUMAN, demote
+from .reaping import ReapedProcess, ReapOutcome
 from .roles import (
     DEVELOPER,
     FINDINGS,
@@ -1236,6 +1237,20 @@ def denial_note(role: Role, count: int) -> str:
     (`run_role.run_role`'s own rule)."""
     plural = "" if count == 1 else "s"
     return system_note(f"The system denied {count} write attempt{plural}: {denial_for(role)}")
+
+
+def reaped_note(reaped: Sequence[ReapedProcess]) -> str:
+    """The trace a role's leftover background processes leave on its section (GH-282,
+    ADR-0052): one line, system-written, only when the reaper stopped something, with how
+    each of them ended. `reaped` is the run's total, the delivering attempt's plus every
+    recorded failure's (`run_role._run_reaped`), so a leak is visible without opening the
+    task's records."""
+    counts = [
+        f"{sum(1 for p in reaped if p['outcome'] == outcome)} {outcome}"
+        for outcome in get_args(ReapOutcome)
+        if any(p["outcome"] == outcome for p in reaped)
+    ]
+    return system_note(f"Reaped {len(reaped)} background process(es): {', '.join(counts)}")
 
 
 def deliveries_note(count: int) -> str:

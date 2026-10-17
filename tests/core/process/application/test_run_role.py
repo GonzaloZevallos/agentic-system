@@ -72,6 +72,7 @@ async def run_pjm(
         vocabulary={},
         cwd=Path("/p"),
         runner=runner,
+        owner_task="GH-1",
         check=check,
         spent_usd=spent_usd,
         task_cap_usd=task_cap_usd,
@@ -90,6 +91,7 @@ async def run_developer(runner, retries=1):
         vocabulary={},
         cwd=Path("/p"),
         runner=runner,
+        owner_task="GH-1",
     )
 
 
@@ -345,6 +347,7 @@ async def test_a_max_turns_cut_with_a_session_gets_the_turn_cut_message():
         vocabulary={},
         cwd=Path("/p"),
         runner=runner,
+        owner_task="GH-1",
     )
     retry = runner.calls[1]
     assert retry["resume"] == "sess-cut"
@@ -368,6 +371,7 @@ async def test_a_max_turns_cut_with_no_session_appends_the_message_to_the_prompt
         vocabulary={},
         cwd=Path("/p"),
         runner=runner,
+        owner_task="GH-1",
         resume="caller-session",
     )
     retry = runner.calls[1]

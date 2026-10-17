@@ -122,6 +122,10 @@ def _ports(cfg: Configuration) -> Ports:
     # (README.md, 14). `None` with no `log_file` -- the `langgraph dev` door -- opens
     # nothing, byte-for-byte the runner this composed before this task (issue #33).
     stream = open(cfg.log_file, "a", buffering=1) if cfg.log_file is not None else None
+    # One reaper and one key for the runner (which marks and reaps each attempt) and for
+    # `Ports` (which reaps on release): a mark is only found by the key it was built with.
+    product_key = reaping.product_key(str(cfg.product_dir.resolve()))
+    reaper = ShellReaper(product_key)
     return Ports(
         # The roles get the configuration the run decided, never the one the human's
         # shell carries: the `AGENTIC_*` of this process are unset for them, which only
@@ -131,6 +135,8 @@ def _ports(cfg: Configuration) -> Ports:
             stream=stream,
             telemetry=telemetry,
             env={**cfg.role_env, **own_configuration_unset(os.environ)},
+            reaper=reaper,
+            product_key=product_key,
         ),
         documents=FilesystemTaskDocuments(
             cfg.product_dir,
@@ -146,7 +152,7 @@ def _ports(cfg: Configuration) -> Ports:
         stack=GitStack(cfg.product_dir),
         commands=ShellCommands(),
         sample_app=ShellSampleApp(),
-        reaper=ShellReaper(reaping.product_key(str(cfg.product_dir.resolve()))),
+        reaper=reaper,
     )
 
 
