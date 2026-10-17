@@ -214,6 +214,29 @@ def test_a_row_without_a_marker_has_no_product():
     assert d.product_of(row) is None
 
 
+# --- descriptions are English; only titles are Spanish -----------------------------------------
+
+_SPANISH_WORDS = re.compile(r"\b(?:de|la|el|las|los|del|por|que|para|una|con)\b", re.IGNORECASE)
+
+
+def _spanish(text: str) -> bool:
+    return not text.isascii() or _SPANISH_WORDS.search(text) is not None
+
+
+def test_the_spanish_guard_rejects_spanish_with_and_without_accents():
+    assert _spanish("Vista del negocio: versión")
+    assert _spanish("Mediana del costo por tipo")
+    assert not _spanish("Median cost of each role, newest release first.")
+
+
+def test_every_description_is_english_once_its_marker_line_is_removed():
+    for row in all_rows():
+        text, _, last = row.description.rpartition("\n")
+        assert last == d.marker(PRODUCT), row.id
+        assert text, row.id
+        assert not _spanish(text), (row.id, text)
+
+
 # --- scores read ---------------------------------------------------------------------------
 
 

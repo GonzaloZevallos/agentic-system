@@ -273,12 +273,12 @@ def _overview(product: str) -> DashboardSpec:
         product=product,
         key="overview",
         title=f"Panorama · {product}",
-        about="Vista del negocio: semana calendario de la entrega y versión del sistema.",
+        about="Business overview: calendar week of delivery and system release.",
         widgets=(
             w(
                 "cost_per_delivered_pr",
                 "Costo por PR mergeado (mediana), por tipo",
-                "Mediana del costo de las tareas entregadas, por tipo.",
+                "Median cost of delivered tasks, by type.",
                 agg="p50",
                 dimensions=("name", _COLUMN_RELEASE),
                 names=families["delivered_cost_usd.type"],
@@ -287,7 +287,7 @@ def _overview(product: str) -> DashboardSpec:
             w(
                 "delivered_per_week",
                 "PRs mergeados por semana de entrega",
-                "Tareas entregadas, ubicadas por el fin de su última corrida.",
+                "Delivered tasks, placed by the end of their last run.",
                 view="SCORES_BOOLEAN",
                 measure="count",
                 agg="count",
@@ -299,7 +299,7 @@ def _overview(product: str) -> DashboardSpec:
             w(
                 "cycle_time",
                 "Tiempo de ciclo (h, calendario)",
-                "Horas desde el issue hasta el merge, mediana.",
+                "Median hours from the issue to the merge.",
                 agg="p50",
                 dimensions=(_COLUMN_RELEASE,),
                 names=(_score("cycle_h"),),
@@ -308,7 +308,7 @@ def _overview(product: str) -> DashboardSpec:
             w(
                 "returns_per_task",
                 "Devoluciones por tarea",
-                "Devoluciones promedio por tarea.",
+                "Average returns per task.",
                 agg="avg",
                 dimensions=(_COLUMN_RELEASE,),
                 names=(_score("returns"),),
@@ -317,7 +317,7 @@ def _overview(product: str) -> DashboardSpec:
             w(
                 "failed_cost",
                 "Plata perdida: costo de fallos",
-                "Dólares gastados en intentos que fallaron.",
+                "Dollars spent on attempts that failed.",
                 agg="sum",
                 dimensions=(_COLUMN_RELEASE,),
                 names=(_score("failed_cost_usd"),),
@@ -326,7 +326,7 @@ def _overview(product: str) -> DashboardSpec:
             w(
                 "escalations_lost",
                 "Plata perdida: escalaciones",
-                "Escalaciones a una persona, por clase.",
+                "Escalations to a person, by class.",
                 agg="sum",
                 dimensions=("name",),
                 names=families["escalations"],
@@ -335,7 +335,7 @@ def _overview(product: str) -> DashboardSpec:
             w(
                 "original_vs_followup_spend",
                 "Gasto: original vs. follow-ups",
-                "Dólares gastados, según el origen de la tarea.",
+                "Dollars spent, by the origin of the task.",
                 agg="sum",
                 dimensions=("name",),
                 names=families["cost_usd.origin"],
@@ -354,12 +354,12 @@ def _improvement(product: str) -> DashboardSpec:
         product=product,
         key="improvement",
         title=f"Mejora del sistema · {product}",
-        about="Qué arreglar en la próxima versión: el eje es la versión del sistema.",
+        about="What to fix in the next release: the axis is the system release.",
         widgets=(
             w(
                 "returns_by_category",
                 "Retrabajo por categoría de devolución",
-                "Devoluciones por categoría y versión.",
+                "Returns by category and release.",
                 agg="sum",
                 dimensions=("name", _COLUMN_RELEASE),
                 names=families["returns"],
@@ -368,7 +368,7 @@ def _improvement(product: str) -> DashboardSpec:
             w(
                 "failures_by_reason",
                 "Fallos por razón",
-                "Fallos por razón y versión.",
+                "Failures by reason and release.",
                 agg="sum",
                 dimensions=("name", _COLUMN_RELEASE),
                 names=families["failures"],
@@ -377,7 +377,7 @@ def _improvement(product: str) -> DashboardSpec:
             w(
                 "most_expensive_roles",
                 "Roles más caros",
-                "Dólares por rol y versión.",
+                "Dollars by role and release.",
                 agg="sum",
                 dimensions=("name", _COLUMN_RELEASE),
                 names=families["cost_usd.role"],
@@ -386,7 +386,7 @@ def _improvement(product: str) -> DashboardSpec:
             w(
                 "active_hours",
                 "Horas activas por versión",
-                "Horas de corrida sin espera en cola, mediana.",
+                "Median run hours without queue waiting.",
                 agg="p50",
                 dimensions=(_COLUMN_RELEASE,),
                 names=(_score("active_h"),),
@@ -395,7 +395,7 @@ def _improvement(product: str) -> DashboardSpec:
             w(
                 "findings_important",
                 "Calidad de la entrega: hallazgos importantes",
-                "Hallazgos importantes por tarea, promedio.",
+                "Average important findings per task.",
                 agg="avg",
                 dimensions=(_COLUMN_RELEASE,),
                 names=(_score("findings_important"),),
@@ -404,7 +404,7 @@ def _improvement(product: str) -> DashboardSpec:
             w(
                 "followups",
                 "Calidad de la entrega: follow-ups",
-                "Tareas que dejaron follow-ups, promedio.",
+                "Tasks that left follow-ups, on average.",
                 agg="avg",
                 dimensions=(_COLUMN_RELEASE,),
                 names=(_score("followups"),),
@@ -413,7 +413,7 @@ def _improvement(product: str) -> DashboardSpec:
             w(
                 "checks_red",
                 "Calidad de la entrega: chequeos en rojo",
-                "Chequeos del merge que fallaron, promedio por tarea.",
+                "Merge checks that failed, average per task.",
                 agg="avg",
                 dimensions=(_COLUMN_RELEASE,),
                 names=(_score("checks_red"),),
@@ -431,12 +431,12 @@ def _operation(product: str) -> DashboardSpec:
         product=product,
         key="operation",
         title=f"Operación · {product}",
-        about="Si hay que intervenir: usar el rango de los últimos 7 días de la interfaz.",
+        about="Whether to intervene: use the interface's last 7 days range.",
         widgets=(
             w(
                 "escalations_by_class",
                 "Escalaciones por clase",
-                "Escalaciones a una persona, por clase.",
+                "Escalations to a person, by class.",
                 agg="sum",
                 dimensions=("name",),
                 names=task_scores.FAMILIES["escalations"],
@@ -445,7 +445,7 @@ def _operation(product: str) -> DashboardSpec:
             w(
                 "account_limit_failures_per_day",
                 "Fallos por límite de cuenta, por día",
-                "Fallos por límite de cuenta, por día.",
+                "Account limit failures, by day.",
                 agg="sum",
                 dimensions=("timestampDay",),
                 names=(_score("failures.account_limit"),),
@@ -454,7 +454,7 @@ def _operation(product: str) -> DashboardSpec:
             w(
                 "deliveries_per_day",
                 "Entregas por día",
-                "Tareas entregadas por día.",
+                "Delivered tasks by day.",
                 view="SCORES_BOOLEAN",
                 measure="count",
                 agg="count",
@@ -475,12 +475,12 @@ def _money(product: str) -> DashboardSpec:
         product=product,
         key="money",
         title=f"Dónde va la plata · {product}",
-        about="Qué rol mover a un modelo más barato o recortar.",
+        about="Which role to move to a cheaper model or cut back.",
         widgets=(
             w(
                 "cost_by_role",
                 "Costo por rol",
-                "Dólares por rol.",
+                "Dollars by role.",
                 agg="sum",
                 dimensions=("name",),
                 names=task_scores.FAMILIES["cost_usd.role"],
@@ -489,7 +489,7 @@ def _money(product: str) -> DashboardSpec:
             w(
                 "cost_by_model",
                 "Costo por modelo",
-                "Costo de las llamadas al modelo, por modelo.",
+                "Cost of the model calls, by model.",
                 view="OBSERVATIONS",
                 measure="totalCost",
                 agg="sum",
