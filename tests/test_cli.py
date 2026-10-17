@@ -4143,3 +4143,75 @@ async def test_poll_a_plain_value_error_still_escapes_the_loop(monkeypatch, tmp_
             argv0="agentic",
             sleep=sleep,
         )
+
+
+# `agentic scores backfill` (GH-273, subtask `backfill`): argv in, exit code, stdout and the
+# scorer's own record out. The scorer is a fake with `LangfuseScores.write`'s shape; the
+# tracker is `FakePullRequestTracker`, which also answers `issue_created_at`.
+
+
+class FakeScorer:
+    """`LangfuseScores.write`'s shape: records every call, answers `results` in order
+    (`True` once they run out)."""
+
+    def __init__(self, results=()):
+        self.calls = []
+        self._results = list(results)
+
+    def write(self, product, task_id, document, scores, task_time, dimensions):
+        self.calls.append((product, task_id, tuple(scores), task_time, dimensions))
+        return self._results.pop(0) if self._results else True
+
+
+def _backfill_run(monkeypatch, root: Path, ports, scorer, *extra: str) -> None:
+    monkeypatch.setattr(cli, "default_ports", lambda cfg: ports)
+    monkeypatch.setattr(cli.composition, "task_scorer", lambda: scorer)
+    monkeypatch.setattr(
+        "sys.argv", ["agentic", "scores", "backfill", "--product-dir", str(root), *extra]
+    )
+
+
+def _backfill(monkeypatch, root: Path, ports, scorer, *extra: str) -> int:
+    _backfill_run(monkeypatch, root, ports, scorer, *extra)
+    try:
+        cli.main()
+    except SystemExit as exit_:
+        return exit_.code
+    return 0
+
+
+STARTED = "2026-09-20T10:00:00+00:00"
+ENDED = "2026-09-20T11:00:00+00:00"
+
+
+def finished_task(task_id="GH-9", **overrides):
+    return close_task(
+        id=task_id,
+        title="A task",
+        runs=[{"started_at": STARTED, "ended_at": ENDED, "queue_wait_s": 0, "cost_usd": 1.0}],
+        **overrides,
+    )
+
+
+def close_it(ports, task_id="GH-9", outcome="merged"):
+    ports.documents.record_closure(
+        task_id,
+        {"closed_at": "2026-09-21T00:00:00.000Z", "delivery_outcome": outcome},
+    )
+
+
+def test_a_second_backfill_sends_the_very_same_ids(monkeypatch, tmp_path, capsys):
+    root = close_root(tmp_path)
+    tracker = FakePullRequestTracker({"https://github.com/o/r/pull/7": close_pull_request()})
+    tracker.issue_created["GH-9"] = "2026-09-19T00:00:00+00:00"
+    ports = close_ports(root, tracker)
+    ports.documents.save(finished_task())
+    close_it(ports)
+    scorer = FakeScorer()
+    assert _backfill(monkeypatch, root, ports, scorer) == 0
+    assert _backfill(monkeypatch, root, ports, scorer) == 0
+    first, second = scorer.calls
+    assert first == second
+    assert {score.name for score in first[2]} >= {"cost_usd", "cycle_h", "delivered"}
+    assert all(score.id for score in first[2])
+    assert "scored 1, partial 0, failed 0" in capsys.readouterr().out.splitlines()[-1]

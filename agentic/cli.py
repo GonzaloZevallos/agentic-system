@@ -24,7 +24,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from functools import partial
 from pathlib import Path
@@ -43,7 +43,8 @@ from .core.knowledge.domain import knowledge
 from .core.knowledge.domain import stack as knowledge_stack
 from .core.measurement.adapters.otel import telemetry
 from .core.measurement.adapters.otel.telemetry import InvocationKind
-from .core.measurement.domain import evaluation, playbook_window, scorecard
+from .core.measurement.adapters.langfuse.scores import LangfuseScores
+from .core.measurement.domain import evaluation, playbook_window, scorecard, task_scores
 from .core.measurement.domain import metrics as delivery_metrics
 from .core.process.adapters.filesystem import (
     FilesystemRunLock,
@@ -356,6 +357,22 @@ def main() -> None:
         help="show which signals hold, the anchor and what would be opened; spends "
         "nothing, takes no lock, writes no file and makes no `gh` call",
     )
+    scores = sub.add_parser("scores", help="a task's numbers as Langfuse scores (GH-273)")
+    scores_sub = scores.add_subparsers(dest="scores_command", required=True)
+    scores_backfill = scores_sub.add_parser(
+        "backfill",
+        help="write the scores of every finished task document of the product, once; a "
+        "rerun sends the same ids, so it fills gaps and never duplicates",
+    )
+    scores_backfill.add_argument(
+        "--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)"
+    )
+    scores_backfill.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="read every document, pull request and issue and print what would be written; "
+        "writes nothing to Langfuse",
+    )
     poll_parser = sub.add_parser(
         "poll",
         help="a long-lived process per product (GH-137): closes merged pull requests, "
@@ -459,6 +476,7 @@ def main() -> None:
             "reflect",
             "merge",
             "land",
+            "scores",
         ):
             # `close` runs no role and spends nothing, so the gate that renders every
             # role's prompt and checks the product's stack before a run spends money
@@ -559,6 +577,8 @@ def main() -> None:
                 None if args.all else ports.inbox.task_id(args.issue),
                 args.since,
             )
+        elif args.command == "scores":
+            work = partial(_scores_backfill, cfg, ports, args.dry_run)
         elif args.command == "stack":
             work = partial(_stack_review, cfg, ports, args.reason, args.dry_run)
         elif args.command == "poll":
@@ -2063,6 +2083,120 @@ async def _eval_score(
             print(f"  template differs for: {', '.join(template_roles)}")
     for issue in pending:
         print(f"agentic close --issue {issue}")
+
+
+# Consecutive documents whose Langfuse write failed before the backfill stops: past it the
+# instance is down, not the document, and every further line would be one more bounded wait.
+BACKFILL_TRANSPORT_FAILURES = 3
+
+
+@dataclass
+class _GhReads:
+    """The pull request and the issue creation of a backfill run, each read from `gh` at
+    most once (cached by reference and by task id); a failed read is cached as failed."""
+
+    ports: Ports
+    pull_requests: dict[str, PullRequest | None | Exception] = field(default_factory=dict)
+    issues: dict[str, str | None | Exception] = field(default_factory=dict)
+
+    def pull_request(self, reference: str) -> PullRequest | None | Exception:
+        if reference not in self.pull_requests:
+            try:
+                self.pull_requests[reference] = self.ports.tracker.pull_request(reference)
+            except (ValueError, OSError) as exc:
+                self.pull_requests[reference] = exc
+        return self.pull_requests[reference]
+
+    def issue_created_at(self, task_id: str) -> str | None | Exception:
+        if task_id not in self.issues:
+            try:
+                self.issues[task_id] = self.ports.tracker.issue_created_at(task_id)
+            except (ValueError, OSError) as exc:
+                self.issues[task_id] = exc
+        return self.issues[task_id]
+
+
+def _backfill_one(
+    product: str, task_id: str, document: Mapping[str, Any], reads: _GhReads
+) -> tuple[str, task_scores.Identity | None, list[task_scores.Score], Any, Any]:
+    """The outcome of one document and, when it has scores, what to write: `("scored" |
+    "partial:<names>" | "skipped:<reason>", identity, scores, task time, dimensions)`. The
+    same `task_time`, `identity`, `dimensions` and `task_scores` the live path calls."""
+    if not (task_scores.scoreable(document) or document.get("closed_at")):
+        return "skipped:not_finished", None, [], None, None
+    reference = document.get("pull_request")
+    pull_request = reads.pull_request(str(reference)) if reference else None
+    issue = reads.issue_created_at(task_id)
+    failed = isinstance(pull_request, Exception) or isinstance(issue, Exception)
+    pr = pull_request if isinstance(pull_request, PullRequest) else None
+    created = issue if isinstance(issue, str) else None
+    moment = task_scores.task_time(document, pr.created_at if pr else None, created)
+    if moment is None:
+        return "skipped:no_time", None, [], None, None
+    ids = task_scores.identity(product, task_id, moment.start)
+    scores = task_scores.task_scores(
+        document,
+        pr_merged_at=pr.merged_at if pr else None,
+        issue_created_at=created,
+        identity=ids,
+    )
+    omitted: list[str] = []
+    if failed:
+        if "cycle_h" not in {score.name for score in scores}:
+            omitted.append("cycle_h")
+        if task_scores.task_time(document, None, None) is None:
+            omitted.append("time")
+    outcome = f"partial:{','.join(omitted)}" if omitted else "scored"
+    return outcome, ids, scores, moment, task_scores.dimensions(document)
+
+
+async def _scores_backfill(cfg: Configuration, ports: Ports, dry_run: bool) -> None:
+    """`agentic scores backfill [--product-dir PATH] [--dry-run]` (GH-273): every finished
+    task document of the product (`ready_for_review`, `discarded` or closed) is scored on
+    its own carrier trace, read-only over the documents. Ids are derived, so a rerun sends
+    the same ones and fills gaps without duplicating (ADR-0037, addendum). One line per
+    document, then a count by outcome; exit 1 when any document was partial or failed.
+    After `BACKFILL_TRANSPORT_FAILURES` consecutive failed writes it stops and says so.
+    `--dry-run` reads everything (`gh` included) and writes nothing to Langfuse."""
+    scorer: LangfuseScores | None = composition.task_scorer()
+    if scorer is None and not dry_run:
+        raise CannotStart(
+            "no Langfuse configured: set AGENTIC_LANGFUSE_HOST, AGENTIC_LANGFUSE_PUBLIC_KEY "
+            "and AGENTIC_LANGFUSE_SECRET_KEY, or pass --dry-run"
+        )
+    try:
+        product = ports.stack.product()
+    except (ValueError, OSError) as exc:
+        raise CannotStart(str(exc)) from exc
+    reads = _GhReads(ports)
+    counts: dict[str, int] = {}
+    consecutive_failures = 0
+    for task_id in ports.documents.ids():
+        try:
+            document = ports.documents.load(task_id)
+        except (ValueError, OSError):
+            document = None
+        if document is None:
+            outcome, ids, scores, moment, dims = "skipped:unreadable", None, [], None, None
+        else:
+            outcome, ids, scores, moment, dims = _backfill_one(product, task_id, document, reads)
+        if ids is not None and not dry_run and scorer is not None and document is not None:
+            if scorer.write(product, task_id, document, scores, moment, dims):
+                consecutive_failures = 0
+            else:
+                outcome = "failed"
+                consecutive_failures += 1
+        print(f"agentic: {task_id}: {outcome}")
+        key = "partial" if outcome.startswith("partial") else outcome
+        counts[key] = counts.get(key, 0) + 1
+        if consecutive_failures >= BACKFILL_TRANSPORT_FAILURES:
+            print(f"agentic: stopped after {consecutive_failures} consecutive failed writes")
+            break
+    scored, partial, failed = (counts.pop(k, 0) for k in ("scored", "partial", "failed"))
+    skipped = ", ".join(f"{name} {n}" for name, n in sorted(counts.items()))
+    print(f"scored {scored}, partial {partial}, {skipped + ', ' if skipped else ''}failed {failed}")
+    if partial or failed:
+        sys.exit(1)
 
 
 def _bucket_documents(
