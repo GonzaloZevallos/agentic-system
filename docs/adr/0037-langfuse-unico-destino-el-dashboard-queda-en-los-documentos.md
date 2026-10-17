@@ -667,3 +667,88 @@ visibles arriba: un score `BOOLEAN` o `CATEGORICAL` se agrega por `string_value`
 Las trazas de prueba (`agentic.gate.*`, `environment=agentic-gate-probe`, dos trace ids) quedan
 en la instancia: en `events_only` no hay un endpoint público para borrarlas, y un widget que
 filtre por el `environment` de un producto real no las ve.
+
+### La decisión de GH-273: scores sobre una traza portadora por tarea
+
+La compuerta de arriba dio los cuatro verdictos `favorable`; esta parte registra lo que el
+sistema hace con ello. Nada de lo anterior cambia: `telemetry.py`, `TaskRun.finish`, el
+colector, los prompts y todo atributo de span existente quedan como estaban.
+
+- **Una traza portadora por tarea y por incarnación.** Cada tarea terminada tiene una traza
+  propia con un solo span, `agentic.task.scores <id>`, que lleva `langfuse.release`,
+  `langfuse.environment`, `arm` y `baseline`; los números salen como scores sobre esa
+  traza, lo único por traza que un widget de Langfuse v4 agrega. La identidad la deriva una
+  sola función, `task_scores.identity(producto, id de tarea, inicio)`: el id de traza, el
+  del span, el de cada score y el del evento de ingesta. Incluye el **inicio de la corrida**
+  que lo produjo, así que un `--fresh` o cada brazo de `eval run` tiene su propia identidad
+  y ninguna corrida pisa los scores de otra; el write de fin y el de cierre de una misma
+  corrida comparten identidad, y el segundo actualiza al primero por id (pregunta 3).
+- **El tiempo.** El span corre del primer `started_at` al último `ended_at` de `runs`; un
+  documento sin marcas (anterior al 2026-09-18) usa el `created_at` del PR y luego el
+  `createdAt` del issue para los dos extremos. Todo score lleva `timestamp` igual al fin.
+  Nunca se usa el reloj, `closed_at` ni el mtime de un archivo.
+- **Cada score, su fuente y cuándo se omite.** Está en la tabla de `observability/README.md`
+  ("Scores por tarea"), y un test la mantiene igual a `task_scores.SCORE_NAMES`. La regla
+  común: una entrada que falta omite su score y nunca lo escribe como `0` o `false`
+  (`active_h` sin marcas, `cycle_h` sin merge o sin lectura de `gh`, `delivered` sin
+  `delivery_outcome`, `origin` sin título). `cost_usd`, `returns`, `failed_cost_usd` y `type`
+  salen siempre, y un documento sin `cost_usd` da `0.0`: es el único lugar donde un dato
+  ausente se lee como cero, y el pedido lo fija así.
+- **`auto_merged` cuenta como entregada.** El pedido define `delivered` como "el PR se
+  mergeó"; si lo juzgó una persona es la pregunta del scorecard (ADR-0045), no la de este
+  score.
+- **Credenciales.** `AGENTIC_LANGFUSE_HOST`, `AGENTIC_LANGFUSE_PUBLIC_KEY` y
+  `AGENTIC_LANGFUSE_SECRET_KEY`. El prefijo `AGENTIC_` es lo que ya mantiene fuera de cada
+  subproceso de rol (`own_configuration_unset`), de los chequeos del producto y de la app de
+  muestra (`without_own_configuration`) todo lo que lo lleva; por eso no son un campo de
+  `Configuration` y `composition.task_scorer()` las lee de `os.environ` y se las da sólo al
+  adaptador. Con alguna sin definir no se escribe nada. Las `LANGFUSE_*` sin prefijo de un
+  `.env` humano siguen tan expuestas como hoy.
+- **El cable.** El span lo construye un `TracerProvider` que no exporta (un procesador que
+  sólo captura), se codifica con `encode_spans` del SDK y se envía una vez como protobuf a
+  `/api/public/otel/v1/traces`; los scores van en un solo lote `score-create` a
+  `/api/public/ingestion`. Siempre el span primero, un solo POST por llamada acotado por
+  `LANGFUSE_TIMEOUT_S`, sin reintento y sin `OTLPSpanExporter` en el camino de una corrida.
+  El cliente atrapa todo, imprime una línea con la llamada y la tarea, nunca la clave, un
+  encabezado ni un cuerpo, y devuelve.
+- **El backfill** es `agentic scores backfill --product-dir <dir> [--dry-run]`: recorre
+  `documents.ids()`, puntúa los terminados (`ready_for_review`, `discarded` o con
+  `closed_at`) con las mismas funciones `task_time`, `identity`, `dimensions` y
+  `task_scores` que la ruta en vivo, y no escribe ningún documento. Lee el PR y el issue a lo
+  sumo una vez cada uno, con la cota de ADR-0050. Imprime una línea por documento (`scored`,
+  `partial:<omitidos>`, `skipped:<motivo>` o `failed`) y una última con el conteo; sale `1`
+  si alguno quedó `partial` o `failed`, y `2` sin Langfuse configurado salvo `--dry-run`. Se
+  detiene tras 3 escrituras fallidas seguidas. Como los ids son derivados, repetirlo completa
+  huecos sin duplicar, y por eso no hace falta el ledger local que la tabla de consecuencias
+  de la compuerta reservaba: ninguna de sus tres consecuencias se activó.
+- **Desviación: "un conjunto por tarea terminada".** El pedido dice un conjunto de scores por
+  tarea histórica; una tarea sin terminar no tiene cifras finales y sale
+  `skipped:not_finished`: se puntúa en vivo cuando termine.
+- **El backfill real lo corre la persona** después del merge y de re-fijar stage0 a ese sha:
+  desde un checkout del propio sistema `default_ports` se niega a correr (ADR-0017), así que
+  esta tarea no lo ejecutó contra Langfuse.
+
+Evidencia del `--dry-run` de esta tarea (lee los documentos, el PR y el issue por `gh` y no
+escribe nada en Langfuse). `apostrophe`, sobre el repositorio real:
+
+```
+$ uv run agentic scores backfill --product-dir /home/zeta/dev/repos/apostrophe --dry-run
+scored 108, partial 0, skipped:not_finished 9, failed 0
+```
+
+`agentic-system`: el propio checkout se niega (ADR-0017, arriba), así que se corrió sobre una
+copia de sus documentos de tarea y de su `stack.yaml` en un repositorio temporal con el mismo
+`origin`:
+
+```
+$ uv run agentic scores backfill --product-dir /tmp/as-dry --dry-run
+scored 104, partial 0, skipped:not_finished 1, failed 0
+```
+
+Riesgos conocidos: un score enviado antes de que su traza llegue queda guardado y se une al
+leer por el id (pregunta 4), pero la página de la traza no se abrió en la UI; las claves
+`LANGFUSE_*` sin prefijo de un `.env` quedan expuestas como hoy; el backfill necesita que
+Langfuse y `gh` sean alcanzables desde donde corre; y la deduplicación por id es de lectura
+(`FINAL`), no de escritura, así que una consulta cruda sin `FINAL` ve las dos versiones de un
+score actualizado. Un ledger local de lo enviado, si hiciera falta, tendría el riesgo de dos
+escritores concurrentes sobre el mismo archivo.
