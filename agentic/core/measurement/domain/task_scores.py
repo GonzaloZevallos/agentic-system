@@ -49,6 +49,12 @@ BASE_SCORE_NAMES: tuple[str, ...] = (
 ORIGINS: tuple[str, ...] = ("original", "followup")
 """Where a task came from: `_origin` reads nothing else."""
 
+ModelFamily = Literal["opus", "sonnet", "haiku", "other"]
+"""The model families a run's cost is grouped into. A model id is open-ended; the family is
+closed, and `other` takes whatever no named member claims (GH-283)."""
+
+_MODEL_PREFIX = "claude-"
+
 
 def members(closed_set: object) -> tuple[str, ...]:
     """The members of a closed `Literal` set, or of a union of them (`ChangeCategory` is
@@ -64,6 +70,22 @@ def family_names(prefix: str, members: Iterable[str]) -> tuple[str, ...]:
     return tuple(f"{prefix}.{member}" for member in members)
 
 
+def model_family(name: str) -> ModelFamily:
+    """The family of a model id: the segment right after `claude-` when it names a member
+    (`claude-opus-5-5` is `opus`, `claude-haiku-4-5-20251001` is `haiku`); anything else
+    (`<synthetic>`, another vendor, a bare `opus`) is `other`."""
+    if not name.startswith(_MODEL_PREFIX):
+        return "other"
+    segment = name.removeprefix(_MODEL_PREFIX).split("-", 1)[0]
+    if segment == "opus":
+        return "opus"
+    if segment == "sonnet":
+        return "sonnet"
+    if segment == "haiku":
+        return "haiku"
+    return "other"
+
+
 FAMILIES: dict[str, tuple[str, ...]] = {
     "returns": family_names("returns", members(ChangeCategory)),
     "failures": family_names("failures", members(FailureReason)),
@@ -71,6 +93,7 @@ FAMILIES: dict[str, tuple[str, ...]] = {
     "cost_usd.role": family_names("cost_usd.role", dict.fromkeys(r.slug for r in roles.ROLES)),
     "delivered_cost_usd.type": family_names("delivered_cost_usd.type", members(TaskType)),
     "cost_usd.origin": family_names("cost_usd.origin", ORIGINS),
+    "cost_usd.model": family_names("cost_usd.model", members(ModelFamily)),
 }
 """The per-task families (ADR-0051): one name per member of a closed domain set, never a
 literal typed beside the widget that reads it. `README` rows write a family as
@@ -281,6 +304,21 @@ def _cost_by_role(document: Mapping[str, Any]) -> dict[str, float]:
     return spent
 
 
+def _cost_by_model(document: Mapping[str, Any]) -> dict[str, float]:
+    """The delivering attempt's model usage: every run's `cost_by_model`, summed into the
+    family of each model id. A run without it adds nothing, so a document where no run
+    has it emits none of the family."""
+    spent: dict[str, float] = {}
+    for run in _runs(document):
+        by_model = run.get("cost_by_model")
+        if not isinstance(by_model, Mapping):
+            continue
+        for model, cost in by_model.items():
+            name = f"cost_usd.model.{model_family(str(model))}"
+            spent[name] = spent.get(name, 0.0) + float(cost or 0.0)
+    return spent
+
+
 def _findings_important(document: Mapping[str, Any]) -> float | None:
     """Important findings, folded the way the findings table folds them (one row per
     location and claim, whatever pass or subtask raised it); `None` without a `findings`
@@ -354,6 +392,7 @@ def task_scores(
         **_failures_by_reason(document),
         **_escalations_by_class(document),
         **_cost_by_role(document),
+        **_cost_by_model(document),
     }
     if delivered == 1.0:
         numeric[f"delivered_cost_usd.type.{task_type}"] = cost

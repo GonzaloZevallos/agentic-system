@@ -21,10 +21,6 @@ _SCORES = (
     "select count() from scores final where project_id = {project:String} "
     "and is_deleted = 0 and environment in {environments:Array(String)}"
 )
-_OBSERVATIONS = (
-    "select count() from events_core final where project_id = {project:String} "
-    "and is_deleted = 0 and environment in {environments:Array(String)} and type = 'GENERATION'"
-)
 
 
 def _array(values: list[str]) -> str:
@@ -50,13 +46,10 @@ class ClickHouseWidgetData:
             "param_project": self._project,
             "param_environments": _array(_values(widget, "environment")),
         }
-        if widget.view == "OBSERVATIONS":
-            sql = _OBSERVATIONS
-        else:
-            sql = _SCORES + " and name in {names:Array(String)}"
-            params["param_names"] = _array(_values(widget, "name"))
-            if any(f["column"] == "booleanValue" and f["value"] is True for f in widget.filters):
-                sql += " and value = 1"
+        sql = _SCORES + " and name in {names:Array(String)}"
+        params["param_names"] = _array(_values(widget, "name"))
+        if any(f["column"] == "booleanValue" and f["value"] is True for f in widget.filters):
+            sql += " and value = 1"
         return self._query(sql, params)
 
     def _query(self, sql: str, params: dict[str, str]) -> int:

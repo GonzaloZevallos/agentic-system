@@ -1,10 +1,12 @@
 """The Langfuse dashboard definitions, their diff and the README widget table (GH-274,
 ADR-0051): `agentic.core.measurement.domain.dashboards`."""
 
+import hashlib
 import json
 import re
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -147,7 +149,6 @@ def test_a_widget_row_has_the_field_set_of_the_golden():
 
 def test_widget_values_are_ones_the_golden_catalogues():
     views = {
-        "OBSERVATIONS": "observations",
         "SCORES_NUMERIC": "scores-numeric",
         "SCORES_BOOLEAN": "scores-boolean",
         "SCORES_CATEGORICAL": "scores-categorical",
@@ -443,7 +444,68 @@ def test_a_readme_without_the_section_is_rejected():
         documented_widgets("# nothing here")
 
 
-def test_every_widget_is_placed_in_time_by_a_named_timestamp():
+def test_every_widget_is_placed_in_time_by_the_end_of_its_task():
     for widget in widgets():
-        view = widget.row().view
-        assert widget.placed_by == ("start_time" if view == "OBSERVATIONS" else "task_time.end")
+        assert widget.placed_by == "task_time.end"
+
+
+# --- Costo por modelo reads the per-model score family (GH-283) ----------------------------
+
+# The sha256 of every row but "Costo por modelo" (widgets, then the dashboards that place
+# them), as built before GH-283, for each product. A widget whose planned row moves breaks it.
+UNCHANGED_ROWS = {
+    "agentic-system": "a48275560d3b387ff04db92afc22e068eb2bdd3c40aef1dffa371b262ed45fb3",
+    "apostrophe": "5a09c7e8f7305000ce5af79a781a1302d913a513ba9acc0e5822a5132baf43bf",
+}
+
+
+def cost_by_model(product: str = PRODUCT) -> d.WidgetSpec:
+    return next(
+        w
+        for dash in d.build_dashboards(product)
+        for w in dash.widgets
+        if (dash.key, w.key) == ("money", "cost_by_model")
+    )
+
+
+def test_costo_por_modelo_sums_the_model_score_family_by_name_in_the_product_environment():
+    widget = cost_by_model()
+    row = widget.row()
+    assert row.name == "Costo por modelo"
+    assert row.view == "SCORES_NUMERIC"
+    assert row.metrics == [{"measure": "value", "agg": "sum"}]
+    assert row.dimensions == [{"field": "name"}]
+    assert row.chart_type == "VERTICAL_BAR"
+    assert env_filter(PRODUCT) in widget.filters
+    assert widget.scores == task_scores.FAMILIES["cost_usd.model"]
+    assert widget.placed_by == "task_time.end"
+
+
+@pytest.mark.parametrize("product", UNCHANGED_ROWS)
+def test_no_widget_but_costo_por_modelo_changes_its_planned_row(product):
+    others = [
+        r.columns() for r in all_rows(product) if getattr(r, "name", "") != "Costo por modelo"
+    ]
+    digest = hashlib.sha256(json.dumps(others, sort_keys=True).encode()).hexdigest()
+    assert digest == UNCHANGED_ROWS[product]
+
+
+@pytest.mark.parametrize("product", UNCHANGED_ROWS)
+def test_the_rows_re_applied_change_nothing(product):
+    desired = all_rows(product)
+    changes = d.plan(desired, all_rows(product))
+    assert changes.upserts == () and changes.deletes == ()
+
+
+def test_the_old_observations_row_is_replaced_not_kept():
+    stale = replace(cost_by_model().row(), view="OBSERVATIONS", dimensions=[])
+    desired = all_rows()
+    stored = [stale if r.id == stale.id else r for r in desired]
+    changes = d.plan(desired, stored)
+    assert [r.id for r in changes.upserts] == [stale.id]
+
+
+def test_a_widget_on_the_observations_view_cannot_be_built():
+    bad: dict[str, Any] = {"view": "OBSERVATIONS"}
+    with pytest.raises(ValueError, match="OBSERVATIONS"):
+        replace(widgets()[0], **bad)
