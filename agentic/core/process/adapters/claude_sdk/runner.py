@@ -29,13 +29,23 @@ reopens the session when it returns, and the model delivers again: one `ResultMe
 per notification, turns and money on repeats of a verdict already taken (issue #16).
 Leaving the stream at the first result that carries a structured output closes the SDK
 generator, which ends the process and whatever it still had running.
+
+Whatever a role started in the background (`nohup`, `setsid`, `run_in_background`) left
+the process group, and the closing of the stream does not reach it (GH-282, ADR-0052).
+Every attempt therefore carries one environment variable that every child inherits, and
+once the stream is closed the reaper stops every process that carries it. The variable
+goes only into the `options.env` of that attempt, never into `self.env` or `os.environ`,
+which every other attempt and the system's own children share.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
-from collections.abc import Callable, Mapping, Sequence
+import uuid
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import IO, Any
 
@@ -55,7 +65,14 @@ from claude_agent_sdk import (
 
 from agentic.shared.environment import trace_id_of, with_resource_marker
 
-from ...application.ports import AttemptFailed, Presubmit, RawResult, SchemaGuard
+from ...application.ports import (
+    AttemptFailed,
+    Presubmit,
+    ProcessReaper,
+    RawResult,
+    SchemaGuard,
+)
+from ...domain import reaping
 from ...domain.denials import denial_for
 from ...domain.roles import Role
 from ...domain.rules import (
@@ -113,6 +130,7 @@ def options_for(
     on_presubmit_denied: Callable[[], None] | None = None,
     guard: SchemaGuard | None = None,
     forbidden: Sequence[Forbidden] | None = None,
+    owner_mark: str | None = None,
 ) -> ClaudeAgentOptions:
     tools, allowed = list(role.tools), list(role.allowed)
     if role.skills and SKILL_TOOL not in tools:
@@ -150,7 +168,7 @@ def options_for(
         # `resource_attributes` is the ambient `os.environ` value, never `env` (the
         # runner's own git-identity overlay, which does not carry it in production) --
         # composing off `env` would overwrite whatever the real process inherited.
-        env=_child_env(env, role, traceparent, resource_attributes),
+        env=_child_env(env, role, traceparent, resource_attributes, owner_mark),
         hooks=hooks_for(
             role, cwd, presubmit, on_notice, turns, on_presubmit_denied, guard, forbidden
         )
@@ -171,6 +189,7 @@ def _child_env(
     role: Role,
     traceparent: str | None,
     resource_attributes: str | None,
+    owner_mark: str | None = None,
 ) -> dict[str, str]:
     """`env` with `TRACEPARENT` set (as today) and, when `traceparent` carries a valid
     trace id, `OTEL_RESOURCE_ATTRIBUTES` refreshed with this run's marker
@@ -179,8 +198,14 @@ def _child_env(
     which does not carry it in production; composing off `env` would silently drop
     whatever the real process inherited, invariant 8). Nothing is added when there is
     no trace to mark against, so a role run under `NoTelemetry` sees exactly the `env`
-    it was given, as before this change."""
+    it was given, as before this change.
+
+    `owner_mark`, when given, is the value of the process-owner variable (GH-282,
+    ADR-0052) and lands in this copy only: `env` is shared by every attempt, so the
+    mark of one must never be written into it."""
     child = {**env, **({"TRACEPARENT": traceparent} if traceparent else {})}
+    if owner_mark is not None:
+        child[reaping.MARK_NAME] = owner_mark
     trace_id = trace_id_of(traceparent)
     if trace_id is not None:
         child["OTEL_RESOURCE_ATTRIBUTES"] = with_resource_marker(
@@ -214,13 +239,21 @@ class ClaudeSdkRunner:
         stream: IO[str] | None = None,
         telemetry: Telemetry = NoTelemetry(),
         env: Mapping[str, str] | None = None,
+        *,
+        reaper: ProcessReaper,
+        product_key: str,
     ):
         # `verbose` streams each role's generation to `stream` (stderr by default).
         # `env` is added to every role's process: the git identity, for one.
+        # `reaper` and `product_key` are required, never defaulted (GH-282): a runner
+        # that marks its attempts and cannot stop what carries the mark would leak
+        # silently. `product_key` is the one the reaper was built with.
         self.verbose = verbose
         self.stream = stream
         self.telemetry = telemetry
         self.env = dict(env or {})
+        self.reaper = reaper
+        self.product_key = product_key
 
     async def run_once(
         self,
@@ -231,11 +264,68 @@ class ClaudeSdkRunner:
         model: str,
         json_schema: dict[str, Any],
         cwd: Path,
+        owner_task: str,
         resume: str | None = None,
         max_budget_usd: float | None = None,
         presubmit: Presubmit | None = None,
         guard: SchemaGuard | None = None,
         forbidden: Sequence[Forbidden] | None = None,
+    ) -> RawResult:
+        """One attempt, marked with `owner_task` (the parent task, never a subtask) and a
+        token of its own, and reaped once its stream is closed, whichever way it ended."""
+        token = uuid.uuid4().hex
+        try:
+            raw = await self._session(
+                role,
+                prompt,
+                system_prompt=system_prompt,
+                model=model,
+                json_schema=json_schema,
+                cwd=cwd,
+                owner_mark=reaping.mark(self.product_key, owner_task, os.getpid(), token),
+                resume=resume,
+                max_budget_usd=max_budget_usd,
+                presubmit=presubmit,
+                guard=guard,
+                forbidden=forbidden,
+            )
+        except AttemptFailed as exc:
+            exc.reaped = list(await self._reap(owner_task, token))
+            raise
+        except BaseException:
+            # A cancellation, or the process being asked to die: nothing to record, and
+            # the reap still has to happen (`_reap` finishes it even if this is cancelled
+            # again).
+            await self._reap(owner_task, token)
+            raise
+        reaped = await self._reap(owner_task, token)
+        return replace(raw, reaped=list(reaped)) if reaped else raw
+
+    async def _reap(self, owner_task: str, token: str) -> tuple[reaping.ReapedProcess, ...]:
+        """Stops what this attempt left running, off the event loop: the reap waits out a
+        grace period, and the sessions of a fan-out share one loop. Shielded and scheduled
+        before it is awaited, so a cancellation re-raises at once and the thread still
+        finishes the reap."""
+        work = asyncio.ensure_future(
+            asyncio.to_thread(self.reaper.reap_attempt, owner_task, os.getpid(), token)
+        )
+        return await asyncio.shield(work)
+
+    async def _session(
+        self,
+        role: Role,
+        prompt: str,
+        *,
+        system_prompt: str,
+        model: str,
+        json_schema: dict[str, Any],
+        cwd: Path,
+        owner_mark: str,
+        resume: str | None,
+        max_budget_usd: float | None,
+        presubmit: Presubmit | None,
+        guard: SchemaGuard | None,
+        forbidden: Sequence[Forbidden] | None,
     ) -> RawResult:
         denials = 0
         notice_firings = 0
@@ -302,6 +392,7 @@ class ClaudeSdkRunner:
             on_presubmit_denied=_count_presubmit_denial,
             guard=guard,
             forbidden=forbidden,
+            owner_mark=owner_mark,
         )
 
         result: ResultMessage | None = None
@@ -310,8 +401,9 @@ class ClaudeSdkRunner:
         # The last main-thread `AssistantMessage.usage` seen: what a cancellation
         # writes as its lower bound, never a sub-agent's (invariant 10).
         main_usage: dict[str, Any] | None = None
+        stream = query(prompt=prompt, options=options)
         try:
-            async for message in query(prompt=prompt, options=options):
+            async for message in stream:
                 for observer in observers:
                     observer(message)
                 if isinstance(message, AssistantMessage):
@@ -381,6 +473,10 @@ class ClaudeSdkRunner:
                 presubmit_denials=presubmit_denials,
                 main_thread_turns=turns.value,
             ) from exc
+        finally:
+            # The stream is closed before anything is reaped (`run_once`): a generator
+            # left suspended by the `break` above would still own the CLI.
+            await _close(stream)
 
         if result is None:
             raise AttemptFailed(
@@ -449,6 +545,13 @@ class ClaudeSdkRunner:
         stream = self.stream or sys.stderr
         stream.write(text)
         stream.flush()
+
+
+async def _close(stream: AsyncIterator[Message]) -> None:
+    """Closes `stream` when it is an async generator, as `query` returns."""
+    aclose = getattr(stream, "aclose", None)
+    if aclose is not None:
+        await aclose()
 
 
 def _reported_error(exc: ResultError) -> ReportedFailure:
