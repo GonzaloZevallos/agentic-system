@@ -69,11 +69,16 @@ def test_a_delete_with_a_forged_marker_deletes_nothing(store, products):
 
 
 def test_an_unknown_public_key_is_refused():
-    from agentic.core.measurement.adapters.langfuse.dashboards import (
-        PostgresDashboards,
-        UnknownProject,
-    )
+    from agentic.core.measurement.adapters.langfuse.dashboards import PostgresDashboards
 
     assert DSN
-    with pytest.raises(UnknownProject):
+    with pytest.raises(app.UnknownProject):
         PostgresDashboards(DSN, "pk-lf-no-such-key").read("p")
+
+
+def test_an_unreachable_database_is_the_use_cases_own_error():
+    from agentic.core.measurement.adapters.langfuse.dashboards import PostgresDashboards
+
+    dead = PostgresDashboards("postgresql://x:y@127.0.0.1:1/z?connect_timeout=1", "k")
+    with pytest.raises(app.StoreUnavailable):
+        dead.columns()

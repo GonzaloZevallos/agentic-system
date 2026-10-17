@@ -44,6 +44,7 @@ from .core.knowledge.domain import stack as knowledge_stack
 from .core.measurement.adapters.langfuse.scores import LangfuseScores
 from .core.measurement.adapters.otel import telemetry
 from .core.measurement.adapters.otel.telemetry import InvocationKind
+from .core.measurement.application import dashboards as dashboards_app
 from .core.measurement.domain import evaluation, playbook_window, scorecard, task_scores
 from .core.measurement.domain import metrics as delivery_metrics
 from .core.process.adapters.filesystem import (
@@ -373,6 +374,27 @@ def main() -> None:
         help="read every document, pull request and issue and print what would be written; "
         "writes nothing to Langfuse",
     )
+    dashboards = sub.add_parser("dashboards", help="the Langfuse dashboards as code (GH-274)")
+    dashboards_sub = dashboards.add_subparsers(dest="dashboards_command", required=True)
+    dashboards_apply = dashboards_sub.add_parser(
+        "apply",
+        help="write the product's four dashboards into the local Langfuse's Postgres, "
+        "idempotently (ADR-0051)",
+    )
+    dashboards_apply.add_argument(
+        "--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)"
+    )
+    dashboards_apply.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print what would be created, updated and deleted; writes nothing",
+    )
+    dashboards_apply.add_argument(
+        "--verify",
+        action="store_true",
+        help="also count the rows each widget reads in ClickHouse; a widget that reads none "
+        "fails unless its score is omitted by design",
+    )
     poll_parser = sub.add_parser(
         "poll",
         help="a long-lived process per product (GH-137): closes merged pull requests, "
@@ -477,6 +499,7 @@ def main() -> None:
             "merge",
             "land",
             "scores",
+            "dashboards",
         ):
             # `close` runs no role and spends nothing, so the gate that renders every
             # role's prompt and checks the product's stack before a run spends money
@@ -579,6 +602,8 @@ def main() -> None:
             )
         elif args.command == "scores":
             work = partial(_scores_backfill, cfg, ports, args.dry_run)
+        elif args.command == "dashboards":
+            work = partial(_dashboards_apply, ports, args.dry_run, args.verify)
         elif args.command == "stack":
             work = partial(_stack_review, cfg, ports, args.reason, args.dry_run)
         elif args.command == "poll":
@@ -2237,6 +2262,51 @@ async def _scores_backfill(cfg: Configuration, ports: Ports, dry_run: bool) -> N
     skipped = ", ".join(f"{name} {n}" for name, n in sorted(counts.items()))
     print(f"scored {scored}, partial {partial}, {skipped + ', ' if skipped else ''}failed {failed}")
     if partial or failed:
+        sys.exit(1)
+
+
+async def _dashboards_apply(ports: Ports, dry_run: bool, verify: bool) -> None:
+    """`agentic dashboards apply [--product-dir PATH] [--dry-run] [--verify]` (GH-274,
+    ADR-0051): the product's four dashboards, written into Langfuse's Postgres and read
+    back. One line per create, update and delete, then a count. `--verify` adds
+    `<dashboard>/<widget>: <n> rows` per widget. Exit 1 on a read-back mismatch or a widget
+    that reads nothing; exit 2 before touching anything when a variable is missing or the
+    tables are not the recorded ones. The adapters (and `psycopg`) load here and nowhere
+    else, through the composition root."""
+    missing = composition.missing_dashboard_variables(verify=verify)
+    if missing:
+        raise CannotStart(f"no Langfuse database configured: set {', '.join(missing)}")
+    try:
+        product = ports.stack.product()
+    except (ValueError, OSError) as exc:
+        raise CannotStart(str(exc)) from exc
+    store = composition.dashboard_store()
+    if store is None:
+        raise CannotStart("no Langfuse database configured")
+    try:
+        data = composition.widget_data(store.project_id()) if verify else None
+        report = dashboards_app.apply_dashboards(product, store, dry_run=dry_run, data=data)
+    except (
+        dashboards_app.ColumnDrift,
+        dashboards_app.UnknownProject,
+        dashboards_app.StoreUnavailable,
+    ) as exc:
+        raise CannotStart(str(exc)) from exc
+    changes = report.changes
+    for verb, rows in (("update", changes.upserts), ("delete", changes.deletes)):
+        for row in rows:
+            what = "create" if verb == "update" and row.id in report.created else verb
+            print(f"agentic: dashboards: {what} {row.name} ({row.id})")
+    updated = len(changes.upserts) - len(report.created)
+    print(
+        f"{'would ' if dry_run else ''}created {len(report.created)}, updated {updated}, "
+        f"deleted {len(changes.deletes)}, unchanged {len(changes.unchanged)}"
+    )
+    for dashboard, widget, rows_read in report.counts:
+        print(f"{dashboard}/{widget}: {rows_read} rows")
+    for problem in report.problems:
+        print(f"agentic: dashboards: {problem}", file=sys.stderr)
+    if not report.ok:
         sys.exit(1)
 
 

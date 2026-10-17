@@ -8,19 +8,17 @@ the rows are all written or none is."""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from typing import Any
 
 import psycopg
 from psycopg.types.json import Jsonb
 
+from ...application.dashboards import StoreUnavailable, UnknownProject
 from ...domain import dashboards as domain
 
 TABLES = ("dashboards", "dashboard_widgets")
-
-
-class UnknownProject(ValueError):
-    """The public key belongs to no project (or to an organization key)."""
 
 
 _PROJECT = "select project_id from api_keys where public_key = %s and scope = 'PROJECT'"
@@ -72,8 +70,18 @@ class PostgresDashboards:
         self._dsn = dsn
         self._public_key = public_key
 
+    @contextmanager
+    def _connection(self) -> Iterator[psycopg.Connection[Any]]:
+        """One transaction: committed on a clean exit, rolled back on any error, and every
+        database error is one the use case knows."""
+        try:
+            with psycopg.connect(self._dsn) as conn:
+                yield conn
+        except psycopg.Error as exc:
+            raise StoreUnavailable(str(exc).strip()) from exc
+
     def project_id(self) -> str:
-        with psycopg.connect(self._dsn) as conn:
+        with self._connection() as conn:
             return self._project(conn)
 
     def _project(self, conn: psycopg.Connection[Any]) -> str:
@@ -83,12 +91,12 @@ class PostgresDashboards:
         return str(found[0])
 
     def columns(self) -> frozenset[tuple[str, str]]:
-        with psycopg.connect(self._dsn) as conn:
+        with self._connection() as conn:
             rows = conn.execute(_COLUMNS, (list(TABLES),)).fetchall()
         return frozenset((str(table), str(column)) for table, column in rows)
 
     def read(self, product: str) -> Sequence[domain.Row]:
-        with psycopg.connect(self._dsn) as conn:
+        with self._connection() as conn:
             project = self._project(conn)
             ours = (project, domain.marker(product), domain.marker(product))
             widgets = conn.execute(_READ_WIDGETS, ours).fetchall()
@@ -98,7 +106,7 @@ class PostgresDashboards:
         return found
 
     def apply(self, changes: domain.Changes) -> None:
-        with psycopg.connect(self._dsn) as conn:
+        with self._connection() as conn:
             project = self._project(conn)
             for row in changes.deletes:
                 product = domain.product_of(row)

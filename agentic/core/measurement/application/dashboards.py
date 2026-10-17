@@ -58,6 +58,14 @@ class ColumnDrift(RuntimeError):
     """The tables are not the ones `RECORDED_COLUMNS` was read from: nothing was written."""
 
 
+class UnknownProject(ValueError):
+    """The public key belongs to no Langfuse project (or to an organization key)."""
+
+
+class StoreUnavailable(RuntimeError):
+    """The database could not be reached or refused the statement; the message says why."""
+
+
 class DashboardStore(Protocol):
     def columns(self) -> frozenset[tuple[str, str]]:
         """`(table, column)` of the two dashboard tables, as the database reports them."""
@@ -81,6 +89,7 @@ class WidgetData(Protocol):
 @dataclass(frozen=True)
 class Report:
     changes: domain.Changes
+    created: frozenset[str]
     applied: bool
     counts: Counts
     problems: tuple[str, ...]
@@ -128,7 +137,10 @@ def apply_dashboards(
         raise ColumnDrift(_drift(found))
     specs = domain.build_dashboards(product)
     desired = domain.rows(specs)
-    changes = domain.plan(desired, store.read(product))
+    stored = store.read(product)
+    changes = domain.plan(desired, stored)
+    stored_ids = {row.id for row in stored}
+    created = frozenset(row.id for row in changes.upserts if row.id not in stored_ids)
     problems: list[str] = []
     if not dry_run:
         store.apply(changes)
@@ -142,4 +154,4 @@ def apply_dashboards(
                 counts.append((dash.key, widget.key, n))
                 if n == 0 and (dash.key, widget.key) not in allowed:
                     problems.append(f"{dash.key}/{widget.key}: reads 0 rows")
-    return Report(changes, not dry_run, tuple(counts), tuple(problems))
+    return Report(changes, created, not dry_run, tuple(counts), tuple(problems))
