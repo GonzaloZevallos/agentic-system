@@ -150,6 +150,16 @@ escritura está en la adenda de GH-273 de ADR-0037; esta tabla dice qué trae ca
 | `delivered` | `delivery_outcome`: `merged`, `merged_with_changes` y `auto_merged` son verdadero, `closed` falso | booleano | no hay `delivery_outcome` (sin cierre, o descartada) |
 | `origin` | `title`: `followup` si empieza por `Follow-up of #`, si no `original` | categórico | no hay título |
 | `type` | `type` | categórico | nunca |
+| `returns.<ChangeCategory>` | cuántas veces `return_history` registra esa categoría (sin las reaperturas del aterrizaje); `returns` es el total y es su suma cuando el historial está completo | numérico | la categoría no ocurrió |
+| `failures.<FailureReason>` | cuántas entradas de `failures[]` tienen esa `reason` | numérico | la razón no ocurrió |
+| `escalations.<EscalationClass>` | cuántas entradas `escalation` de `pause_log` tienen esa clase | numérico | la clase no ocurrió |
+| `cost_usd.role.<Role>` | suma de `runs[].cost_usd` de las corridas con ese `slug` | numérico | ninguna corrida tiene ese `slug` |
+| `delivered_cost_usd.type.<TaskType>` | `cost_usd`, bajo el `type` de la tarea | numérico | la tarea no se entregó, o su `type` no es uno de los conocidos |
+| `cost_usd.origin.<Origin>` | `cost_usd`, bajo el origen de la tarea (`original` o `followup`, como `origin`) | numérico | no hay título |
+| `delivered_cost_usd` | `cost_usd` | numérico | la tarea no se entregó (`delivered` no es verdadero) |
+| `findings_important` | filas `important` de `findings`, plegadas por ubicación y reclamo como la tabla de hallazgos | numérico | el documento no tiene `findings` |
+| `followups` | `1` si `followups_filed`, `0` si hay registro `landing` sin él | numérico | la tarea no pasó por el aterrizaje (no es "cero", es desconocido) |
+| `checks_red` | entradas de `merge_checks.checks` con `passed: false` (las corridas del presubmit no quedan en el documento) | numérico | no hay registro `merge_checks` |
 
 Reglas para leerlos:
 
@@ -162,6 +172,7 @@ Reglas para leerlos:
   luego el `createdAt` del issue), nunca el momento de escribir.
 - **`delivered` cuenta `auto_merged`**: el pedido lo define como "el PR se mergeó"; si lo
   juzgó una persona lo dice el scorecard (ADR-0045), no este score.
+- **Una familia son los miembros de un conjunto cerrado del dominio** (`ChangeCategory`, `FailureReason`, `EscalationClass`, los `slug` de `ROLES`, `TaskType`, el origen); un miembro que no ocurrió no escribe nada, nunca un 0 en su lugar. `task_scores.FAMILIES` los construye y la prueba de este README expande cada fila `prefijo.<Conjunto>` desde ahí.
 - Un score `BOOLEAN` o `CATEGORICAL` se agrega por su valor de texto, no por `value`.
 
 `agentic scores backfill --product-dir <dir> [--dry-run]` escribe los mismos scores de todo
@@ -170,6 +181,68 @@ la escritura en vivo; una tarea sin terminar sale `skipped:not_finished` y se pu
 cuando termine. Los ids son derivados, así que repetirlo completa huecos sin duplicar. Su
 costo es lineal en los documentos: a lo sumo dos lecturas de `gh` y dos envíos (el span y el
 lote de scores) por documento.
+
+## Dashboards
+
+Cuatro dashboards por producto, definidos en `agentic/core/measurement/domain/dashboards.py`
+y escritos en las tablas `dashboards` y `dashboard_widgets` de Langfuse por
+`agentic dashboards apply` (ADR-0051, que enmienda a ADR-0037). El repo es la fuente: una
+edición en la interfaz de un dashboard nuestro se pisa en el siguiente `apply`. El título de
+cada dashboard lleva el producto como sufijo (`Panorama · agentic-system`); los widgets leen
+`environment` = ese producto, nunca la suma de varios.
+
+| Dashboard | Título | Vista | Medida | Lee | Desglose | Tiempo | Nota |
+|---|---|---|---|---|---|---|---|
+| Panorama | Costo por PR mergeado (mediana), por tipo | `SCORES_NUMERIC` | `value` · `p50` | `delivered_cost_usd.type.<TaskType>` | `name`, `traceRelease` | `task_time.end` | |
+| Panorama | PRs mergeados por semana de entrega | `SCORES_BOOLEAN` | `count` · `count` | `delivered` | `traceRelease` | `task_time.end` | solo entregadas (`booleanValue` = true) |
+| Panorama | Tiempo de ciclo (h, calendario) | `SCORES_NUMERIC` | `value` · `p50` | `cycle_h` | `traceRelease` | `task_time.end` | |
+| Panorama | Devoluciones por tarea | `SCORES_NUMERIC` | `value` · `avg` | `returns` | `traceRelease` | `task_time.end` | |
+| Panorama | Plata perdida: costo de fallos | `SCORES_NUMERIC` | `value` · `sum` | `failed_cost_usd` | `traceRelease` | `task_time.end` | |
+| Panorama | Plata perdida: escalaciones | `SCORES_NUMERIC` | `value` · `sum` | `escalations.<EscalationClass>` | `name` | `task_time.end` | |
+| Panorama | Gasto: original vs. follow-ups | `SCORES_NUMERIC` | `value` · `sum` | `cost_usd.origin.<Origin>` | `name` | `task_time.end` | |
+| Mejora del sistema | Retrabajo por categoría de devolución | `SCORES_NUMERIC` | `value` · `sum` | `returns.<ChangeCategory>` | `name`, `traceRelease` | `task_time.end` | |
+| Mejora del sistema | Fallos por razón | `SCORES_NUMERIC` | `value` · `sum` | `failures.<FailureReason>` | `name`, `traceRelease` | `task_time.end` | |
+| Mejora del sistema | Roles más caros | `SCORES_NUMERIC` | `value` · `sum` | `cost_usd.role.<Role>` | `name`, `traceRelease` | `task_time.end` | |
+| Mejora del sistema | Horas activas por versión | `SCORES_NUMERIC` | `value` · `p50` | `active_h` | `traceRelease` | `task_time.end` | |
+| Mejora del sistema | Calidad de la entrega: hallazgos importantes | `SCORES_NUMERIC` | `value` · `avg` | `findings_important` | `traceRelease` | `task_time.end` | |
+| Mejora del sistema | Calidad de la entrega: follow-ups | `SCORES_NUMERIC` | `value` · `avg` | `followups` | `traceRelease` | `task_time.end` | |
+| Mejora del sistema | Calidad de la entrega: chequeos en rojo | `SCORES_NUMERIC` | `value` · `avg` | `checks_red` | `traceRelease` | `task_time.end` | |
+| Operación | Escalaciones por clase | `SCORES_NUMERIC` | `value` · `sum` | `escalations.<EscalationClass>` | `name` | `task_time.end` | rango de 7 días de la interfaz |
+| Operación | Fallos por límite de cuenta, por día | `SCORES_NUMERIC` | `value` · `sum` | `failures.account_limit` | `timestampDay` | `task_time.end` | por día, no por hora |
+| Operación | Entregas por día | `SCORES_BOOLEAN` | `count` · `count` | `delivered` | `timestampDay` | `task_time.end` | solo entregadas (`booleanValue` = true) |
+| Dónde va la plata | Costo por rol | `SCORES_NUMERIC` | `value` · `sum` | `cost_usd.role.<Role>` | `name` | `task_time.end` | |
+| Dónde va la plata | Costo por modelo | `OBSERVATIONS` | `totalCost` · `sum` | `totalCost` | `providedModelName` | `start_time` | medida nativa de la vista de observaciones |
+
+Cómo leer la tabla:
+
+- **El tiempo.** Cada score se ubica por `task_time.end`, el fin de la última corrida de la
+  tarea, nunca por la fecha del merge: "PRs mergeados por semana de entrega" cuenta la semana
+  en que terminó la tarea. La fecha del merge se lee en `cycle_h`. La observación de "Costo
+  por modelo" se ubica por su propio `start_time`.
+- **Versión del sistema.** El desglose `traceRelease` es el `release` de la traza portadora
+  del score; en Panorama es el marcador del cambio de versión (no hay línea vertical).
+- **`unknown` es una serie visible.** Una tarea cuya versión no se registró aparece como
+  `unknown` en el desglose; ningún widget la filtra.
+- **Semana calendario y "últimos 7 días" son del rango de la interfaz**, no de la definición:
+  la fila de un widget o de un dashboard no guarda ni granularidad ni rango (ADR-0051,
+  sección 3). Se elige la semana en Panorama y los últimos 7 días en Operación.
+- **Un widget no divide ni filtra por condición.** Lo condicional o por categoría es un
+  score propio (`delivered_cost_usd.type.*`, `returns.*`, `failures.*`, `escalations.*`,
+  `cost_usd.role.*`, `cost_usd.origin.*`), omitido cuando no ocurrió.
+- **`--verify` es manual.** `agentic dashboards apply --verify` cuenta, por widget, contra
+  ClickHouse; nunca corre en CI. Un widget sin filas es un fallo, salvo los de
+  `ZERO_ROW_EXCEPTIONS` (los que leen `failures.*`, `escalations.*`, `returns.*` o
+  `cost_usd.role.*`, cuyo score se omite cuando nada ocurrió).
+
+Widgets pedidos que no están, y por qué (ninguno se reemplazó con un visual inventado):
+
+- **Operación: tareas atascadas.** Una tarea atascada es la que no tiene score de cierre: su
+  ausencia no es una fila que una vista pueda contar.
+- **Operación: fallos por hora.** El catálogo no tiene dimensión de hora; queda por día.
+- **Panorama: línea vertical de cambio de versión.** No hay anotaciones; el marcador es el
+  desglose por versión.
+- **Panorama: "% del gasto en follow-ups".** Un widget no divide; "Gasto: original vs.
+  follow-ups" muestra las dos series.
 
 ## Costo en Langfuse
 

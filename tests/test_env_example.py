@@ -31,6 +31,12 @@ ALLOWLIST = {
     "AGENTIC_LANGFUSE_HOST",
     "AGENTIC_LANGFUSE_PUBLIC_KEY",
     "AGENTIC_LANGFUSE_SECRET_KEY",
+    # agentic/composition.py, dashboard_store() and widget_data(): the dashboards command's
+    # database and ClickHouse credentials, each handed to one adapter alone.
+    "AGENTIC_LANGFUSE_DATABASE_URL",
+    "AGENTIC_LANGFUSE_CLICKHOUSE_URL",
+    "AGENTIC_LANGFUSE_CLICKHOUSE_USER",
+    "AGENTIC_LANGFUSE_CLICKHOUSE_PASSWORD",
 }
 
 _TOKEN = re.compile(rf"{ENV_PREFIX}[A-Z0-9_]+")
@@ -64,3 +70,13 @@ def test_undeclared_rejects_a_token_naming_no_field():
 def test_undeclared_accepts_a_real_field_and_the_allowlist():
     good = _tokens("AGENTIC_VERIFIER_MODEL=x\n# AGENTIC_SYSTEM_BASELINE=\n")
     assert _undeclared(good) == set()
+
+
+def test_every_dashboard_variable_is_documented_and_allowlisted():
+    from agentic import composition
+
+    text = ENV_EXAMPLE.read_text(encoding="utf-8")
+    for name in composition.DASHBOARD_VARIABLES:
+        assert name in ALLOWLIST
+        assert name in _tokens(text)
+    assert _undeclared({"AGENTIC_LANGFUSE_NEW_THING"}) == {"AGENTIC_LANGFUSE_NEW_THING"}

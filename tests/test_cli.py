@@ -4438,6 +4438,38 @@ def test_a_second_backfill_sends_the_very_same_ids(monkeypatch, tmp_path, capsys
     assert "scored 1, partial 0, failed 0" in capsys.readouterr().out.splitlines()[-1]
 
 
+def test_a_second_backfill_of_a_task_with_families_sends_identical_ids_and_values(
+    monkeypatch, tmp_path
+):
+    root = close_root(tmp_path)
+    tracker = FakePullRequestTracker({"https://github.com/o/r/pull/7": close_pull_request()})
+    tracker.issue_created["GH-9"] = "2026-09-19T00:00:00+00:00"
+    ports = close_ports(root, tracker)
+    ports.documents.save(
+        finished_task(
+            type="feature",
+            changes_requested={"Tech Lead→Developer": 1},
+            change_history=[
+                {"pair": "Tech Lead→Developer", "category": "spec-scope", "reason": "r"}
+            ],
+            failures=[{"reason": "account_limit", "cost_usd": 0.5}],
+            pause_log=[{"kind": "escalation", "value": "returns"}],
+            cost_usd=2.0,
+        )
+    )
+    close_it(ports)
+    scorer = FakeScorer()
+    assert _backfill(monkeypatch, root, ports, scorer) == 0
+    assert _backfill(monkeypatch, root, ports, scorer) == 0
+    first, second = ({s.name: (s.id, s.value) for s in call[2]} for call in scorer.calls)
+    assert first == second
+    assert first["returns.spec-scope"][1] == first["returns"][1] == 1.0
+    assert first["failures.account_limit"][1] == 1.0
+    assert first["escalations.returns"][1] == 1.0
+    assert first["delivered_cost_usd.type.feature"][1] == 2.0
+    assert len({id_ for id_, _ in first.values()}) == len(first)
+
+
 def test_each_skip_reason_is_counted_and_a_skip_alone_exits_zero(monkeypatch, tmp_path, capsys):
     root = close_root(tmp_path)
     ports = close_ports(root, FakePullRequestTracker())
@@ -4554,3 +4586,135 @@ def test_a_backfill_writes_no_task_document(monkeypatch, tmp_path):
     before = ports.documents.path_for("GH-9").read_bytes()
     assert _backfill(monkeypatch, root, ports, FakeScorer()) == 0
     assert ports.documents.path_for("GH-9").read_bytes() == before
+
+
+# --- GH-274: `agentic dashboards apply` ---------------------------------------------------
+
+
+class DashboardFake:
+    """A `DashboardStore` and its project, on a dict."""
+
+    def __init__(self):
+        from agentic.core.measurement.application import dashboards as app
+
+        self.recorded = app.RECORDED_COLUMNS
+        self.rows = {}
+
+    def project_id(self):
+        return "p1"
+
+    def columns(self):
+        return self.recorded
+
+    def read(self, product):
+        from agentic.core.measurement.domain import dashboards as dom
+
+        return [r for r in self.rows.values() if dom.product_of(r) == product]
+
+    def apply(self, changes):
+        for row in changes.deletes:
+            self.rows.pop(row.id, None)
+        for row in changes.upserts:
+            self.rows[row.id] = row
+
+
+def _dashboards(monkeypatch, root, store, *extra, env=None, data=None):
+    monkeypatch.setattr(
+        cli, "default_ports", lambda cfg: close_ports(root, FakePullRequestTracker())
+    )
+    for name in (
+        *cli.composition.DASHBOARD_VARIABLES,
+        cli.composition.LANGFUSE_VARIABLES[1],
+    ):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in (env or {}).items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(cli.composition, "dashboard_store", lambda: store)
+    monkeypatch.setattr(cli.composition, "widget_data", lambda project: data)
+    monkeypatch.setattr(
+        "sys.argv", ["agentic", "dashboards", "apply", "--product-dir", str(root), *extra]
+    )
+    try:
+        cli.main()
+    except SystemExit as exit_:
+        return exit_.code
+    return 0
+
+
+DASHBOARD_ENV = {
+    "AGENTIC_LANGFUSE_DATABASE_URL": "postgresql://x",
+    "AGENTIC_LANGFUSE_PUBLIC_KEY": "pk",
+}
+
+
+def test_dashboards_apply_names_every_missing_variable_and_exits_2(monkeypatch, tmp_path, capsys):
+    root = close_root(tmp_path)
+    store = DashboardFake()
+    code = _dashboards(monkeypatch, root, store, "--verify")
+    err = capsys.readouterr().err
+    assert code == 2
+    for name in (
+        "AGENTIC_LANGFUSE_DATABASE_URL",
+        "AGENTIC_LANGFUSE_PUBLIC_KEY",
+        "AGENTIC_LANGFUSE_CLICKHOUSE_URL",
+        "AGENTIC_LANGFUSE_CLICKHOUSE_USER",
+        "AGENTIC_LANGFUSE_CLICKHOUSE_PASSWORD",
+    ):
+        assert name in err
+    assert store.rows == {}
+
+
+def test_dashboards_apply_without_verify_does_not_ask_for_clickhouse(monkeypatch, tmp_path, capsys):
+    code = _dashboards(monkeypatch, close_root(tmp_path), DashboardFake(), env=DASHBOARD_ENV)
+    assert code == 0
+    assert "CLICKHOUSE" not in capsys.readouterr().err
+
+
+def test_a_dry_run_lists_every_create_with_title_and_id_and_writes_nothing(
+    monkeypatch, tmp_path, capsys
+):
+    store = DashboardFake()
+    code = _dashboards(monkeypatch, close_root(tmp_path), store, "--dry-run", env=DASHBOARD_ENV)
+    out = capsys.readouterr().out
+    assert code == 0 and store.rows == {}
+    assert "create Panorama · " in out and "create Dónde va la plata · " in out
+    assert "would created 23, updated 0, deleted 0, unchanged 0" in out
+
+
+def test_a_second_apply_reports_everything_unchanged(monkeypatch, tmp_path, capsys):
+    root, store = close_root(tmp_path), DashboardFake()
+    assert _dashboards(monkeypatch, root, store, env=DASHBOARD_ENV) == 0
+    capsys.readouterr()
+    assert _dashboards(monkeypatch, root, store, env=DASHBOARD_ENV) == 0
+    out = capsys.readouterr().out
+    assert "created 0, updated 0, deleted 0, unchanged 23" in out
+    assert "create " not in out
+
+
+def test_verify_prints_rows_per_widget_and_a_zero_widget_exits_1(monkeypatch, tmp_path, capsys):
+    class Data:
+        def count(self, widget):
+            return 0 if widget.key == "cycle_time" else 5
+
+    env = {
+        **DASHBOARD_ENV,
+        "AGENTIC_LANGFUSE_CLICKHOUSE_URL": "http://c",
+        "AGENTIC_LANGFUSE_CLICKHOUSE_USER": "u",
+        "AGENTIC_LANGFUSE_CLICKHOUSE_PASSWORD": "p",
+    }
+    code = _dashboards(
+        monkeypatch, close_root(tmp_path), DashboardFake(), "--verify", env=env, data=Data()
+    )
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "overview/delivered_per_week: 5 rows" in captured.out
+    assert "overview/cycle_time: 0 rows" in captured.out
+    assert "overview/cycle_time: reads 0 rows" in captured.err
+
+
+def test_column_drift_refuses_with_exit_2_and_writes_nothing(monkeypatch, tmp_path, capsys):
+    store = DashboardFake()
+    store.recorded = store.recorded | {("dashboards", "owner_team")}
+    code = _dashboards(monkeypatch, close_root(tmp_path), store, env=DASHBOARD_ENV)
+    assert code == 2 and store.rows == {}
+    assert "dashboards.owner_team" in capsys.readouterr().err

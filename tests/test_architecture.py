@@ -171,3 +171,80 @@ def test_the_process_guard_rejects_a_module_that_starts_its_own(tmp_path):
     (tmp_path / "popen.py").write_text("from subprocess import Popen\nPopen(['gh'])\n")
     (tmp_path / "fine.py").write_text("Run = Callable[..., subprocess.CompletedProcess[str]]\n")
     assert _starts_own_process(tmp_path) == ["late.py", "popen.py"]
+
+
+# Invariant 7 (GH-274, ADR-0051): `psycopg` is imported by the Langfuse adapter alone, and the
+# root never imports that adapter at module level, so no other command loads the driver.
+CONFINED = ("psycopg",)
+ADAPTER_MODULES = ("langfuse.dashboards", "langfuse.widget_data")
+DRIVER_HOME = Path("core") / "measurement" / "adapters" / "langfuse"
+
+
+def _imports_driver(path: Path) -> bool:
+    return any(name.split(".")[0] in CONFINED for name in imports_of(path))
+
+
+def _top_level_imports(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    found: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            found.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            found.update(f"{'.' * node.level}{node.module or ''}.{a.name}" for a in node.names)
+    return found
+
+
+def _outside_the_home(package: Path) -> list[str]:
+    home = package / DRIVER_HOME
+    return sorted(
+        str(p.relative_to(package))
+        for p in package.rglob("*.py")
+        if home not in p.parents and _imports_driver(p)
+    )
+
+
+def test_only_the_langfuse_adapter_imports_the_database_driver():
+    assert _outside_the_home(PACKAGE) == []
+    assert _imports_driver(PACKAGE / DRIVER_HOME / "dashboards.py")
+
+
+def test_the_driver_guard_rejects_a_domain_or_application_module_that_imports_it(tmp_path):
+    for layer in ("domain", "application"):
+        bad = tmp_path / "core" / "measurement" / layer / "x.py"
+        bad.parent.mkdir(parents=True)
+        bad.write_text("import psycopg\n")
+    ok = tmp_path / DRIVER_HOME / "dashboards.py"
+    ok.parent.mkdir(parents=True)
+    ok.write_text("from psycopg.types.json import Jsonb\n")
+    assert _outside_the_home(tmp_path) == [
+        "core/measurement/application/x.py",
+        "core/measurement/domain/x.py",
+    ]
+
+
+def test_the_application_layer_is_under_the_layer_rule(tmp_path, monkeypatch):
+    fake = tmp_path / "agentic"
+    monkeypatch.setattr("tests.test_architecture.PACKAGE", fake)
+    path = fake / "core/measurement/application/x.py"
+    path.parent.mkdir(parents=True)
+    path.write_text("from agentic.core.measurement.adapters.langfuse import dashboards\n")
+    assert violations(path)
+
+
+def _eager_dashboard_adapter(path: Path) -> bool:
+    return any(adapter in name for name in _top_level_imports(path) for adapter in ADAPTER_MODULES)
+
+
+def test_the_root_does_not_import_the_dashboard_adapters_at_module_level():
+    assert not _eager_dashboard_adapter(PACKAGE / "cli.py")
+    assert not _eager_dashboard_adapter(PACKAGE / "composition.py")
+
+
+def test_the_lazy_import_guard_rejects_a_module_level_import(tmp_path):
+    eager = tmp_path / "cli.py"
+    eager.write_text("from .core.measurement.adapters.langfuse.dashboards import X\n")
+    assert _eager_dashboard_adapter(eager)
+    lazy = tmp_path / "composition.py"
+    lazy.write_text("def f():\n    from .core.measurement.adapters.langfuse.dashboards import X\n")
+    assert not _eager_dashboard_adapter(lazy)

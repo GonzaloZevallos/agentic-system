@@ -15,18 +15,26 @@ overwrites another run's scores."""
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Literal, get_args
+from typing import Any, Literal, get_args, get_origin
 
+from agentic.core.process.domain import roles, rules
 from agentic.core.process.domain.landing import FOLLOWUP_TITLE_PREFIX
+from agentic.core.process.domain.schemas import TaskType
+from agentic.core.process.domain.task import (
+    ChangeCategory,
+    EscalationClass,
+    FailureReason,
+    TaskState,
+)
 
 from . import metrics
 
 ScoreDataType = Literal["NUMERIC", "CATEGORICAL", "BOOLEAN"]
 
-SCORE_NAMES: tuple[str, ...] = (
+BASE_SCORE_NAMES: tuple[str, ...] = (
     "cost_usd",
     "cycle_h",
     "active_h",
@@ -35,6 +43,50 @@ SCORE_NAMES: tuple[str, ...] = (
     "delivered",
     "origin",
     "type",
+)
+"""The eight scores GH-273 wrote; their ids and order never move."""
+
+ORIGINS: tuple[str, ...] = ("original", "followup")
+"""Where a task came from: `_origin` reads nothing else."""
+
+
+def members(closed_set: object) -> tuple[str, ...]:
+    """The members of a closed `Literal` set, or of a union of them (`ChangeCategory` is
+    one: the finding categories plus `definition`)."""
+    found: list[str] = []
+    for arg in get_args(closed_set):
+        found.extend(members(arg) if get_origin(arg) is not None else [str(arg)])
+    return tuple(found)
+
+
+def family_names(prefix: str, members: Iterable[str]) -> tuple[str, ...]:
+    """The score names of one family: `prefix.member` for each member of a closed set."""
+    return tuple(f"{prefix}.{member}" for member in members)
+
+
+FAMILIES: dict[str, tuple[str, ...]] = {
+    "returns": family_names("returns", members(ChangeCategory)),
+    "failures": family_names("failures", members(FailureReason)),
+    "escalations": family_names("escalations", members(EscalationClass)),
+    "cost_usd.role": family_names("cost_usd.role", dict.fromkeys(r.slug for r in roles.ROLES)),
+    "delivered_cost_usd.type": family_names("delivered_cost_usd.type", members(TaskType)),
+    "cost_usd.origin": family_names("cost_usd.origin", ORIGINS),
+}
+"""The per-task families (ADR-0051): one name per member of a closed domain set, never a
+literal typed beside the widget that reads it. `README` rows write a family as
+`<prefix>.<Set>`; `tests/test_observability_scores.py` expands them from here."""
+
+FIXED_SCORE_NAMES: tuple[str, ...] = (
+    "delivered_cost_usd",
+    "findings_important",
+    "followups",
+    "checks_red",
+)
+
+SCORE_NAMES: tuple[str, ...] = (
+    *BASE_SCORE_NAMES,
+    *(name for names in FAMILIES.values() for name in names),
+    *FIXED_SCORE_NAMES,
 )
 """The closed list of score names; no other name can be produced."""
 
@@ -179,6 +231,94 @@ def _cycle_hours(issue_created_at: str | None, pr_merged_at: str | None) -> floa
     return (merged - created).total_seconds() / _SECONDS_PER_HOUR
 
 
+def _list(value: object) -> list[Any]:
+    """A recorded register as a list; anything else (a hand-edited document) is none."""
+    return value if isinstance(value, list) else []
+
+
+def _entries(value: object) -> list[Mapping[str, Any]]:
+    return [e for e in _list(value) if isinstance(e, Mapping)]
+
+
+def _counts(members: Iterable[object], family: str) -> dict[str, float]:
+    """`family.member: occurrences` for each member of the family that occurred; one that
+    did not, or one outside the closed set, leaves no entry."""
+    tally: dict[str, float] = {}
+    for member in members:
+        name = f"{family}.{member}"
+        if name in FAMILIES[family]:
+            tally[name] = tally.get(name, 0.0) + 1.0
+    return tally
+
+
+def _returns_by_category(document: Mapping[str, Any]) -> dict[str, float]:
+    """The categories of `change_history`, without the landing's own reopens (the same
+    rule `metrics.changes_by_category` follows), so the parts sum to `returns` whenever
+    the history is complete."""
+    history = (
+        e.get("category")
+        for e in _entries(document.get("change_history"))
+        if e.get("by") != "landing"
+    )
+    return _counts(history, "returns")
+
+
+def _failures_by_reason(document: Mapping[str, Any]) -> dict[str, float]:
+    return _counts((f.get("reason") for f in _entries(document.get("failures"))), "failures")
+
+
+def _escalations_by_class(document: Mapping[str, Any]) -> dict[str, float]:
+    log = _entries(document.get("pause_log"))
+    return _counts((e.get("value") for e in log if e.get("kind") == "escalation"), "escalations")
+
+
+def _cost_by_role(document: Mapping[str, Any]) -> dict[str, float]:
+    spent: dict[str, float] = {}
+    for run in _runs(document):
+        name = f"cost_usd.role.{run.get('slug')}"
+        if name in FAMILIES["cost_usd.role"]:
+            spent[name] = spent.get(name, 0.0) + float(run.get("cost_usd") or 0.0)
+    return spent
+
+
+def _findings_important(document: Mapping[str, Any]) -> float | None:
+    """Important findings, folded the way the findings table folds them (one row per
+    location and claim, whatever pass or subtask raised it); `None` without a `findings`
+    register."""
+    if not isinstance(document.get("findings"), list):
+        return None
+    state: TaskState = {
+        "id": str(document.get("id") or ""),
+        "title": str(document.get("title") or ""),
+        "description": "",
+        "findings": _list(document.get("findings")),
+        "settled_findings": _list(document.get("settled_findings")),
+        "approval_settled": _list(document.get("approval_settled")),
+    }
+    rows = rules.findings_rows(state)
+    return float(sum(1 for row in rows if row["severity"] == "important"))
+
+
+def _followups(document: Mapping[str, Any]) -> float | None:
+    """Follow-ups the landing filed: `1` when `followups_filed` is set, `0` once a
+    `landing` record shows the landing ran and set none, `None` on a document the landing
+    never touched (the absence of the flag there is not knowledge)."""
+    if document.get("followups_filed") is True:
+        return 1.0
+    return 0.0 if document.get("landing") else None
+
+
+def _checks_red(document: Mapping[str, Any]) -> float | None:
+    """Merge checks that failed, from `merge_checks.checks[].passed is False` (the record
+    `merge.py` writes at the merge step, ADR-0045). The Developer's presubmit runs are not
+    in the document, so they are not counted. `None` without a readable record."""
+    record = document.get("merge_checks")
+    checks = record.get("checks") if isinstance(record, Mapping) else None
+    if not isinstance(checks, list):
+        return None
+    return float(sum(1 for c in checks if isinstance(c, Mapping) and c.get("passed") is False))
+
+
 def task_scores(
     document: Mapping[str, Any],
     *,
@@ -189,19 +329,36 @@ def task_scores(
     """The scores the document and the two tracker reads support, in `SCORE_NAMES` order.
     A score whose input is missing is left out, never written as `0` or `false`. With an
     `identity` each score carries its id."""
+    cost = float(document.get("cost_usd") or 0.0)
+    delivered = _delivered(document)
+    task_type, origin = document.get("type") or None, _origin(document)
     values: dict[str, tuple[float | str | None, ScoreDataType]] = {
-        "cost_usd": (float(document.get("cost_usd") or 0.0), "NUMERIC"),
+        "cost_usd": (cost, "NUMERIC"),
         "cycle_h": (_cycle_hours(issue_created_at, pr_merged_at), "NUMERIC"),
         "active_h": (_active_hours(document), "NUMERIC"),
         "returns": (metrics.changes_requested_total(document), "NUMERIC"),
         "failed_cost_usd": (
-            sum(float(f.get("cost_usd") or 0.0) for f in document.get("failures") or []),
+            sum(float(f.get("cost_usd") or 0.0) for f in _entries(document.get("failures"))),
             "NUMERIC",
         ),
-        "delivered": (_delivered(document), "BOOLEAN"),
-        "origin": (_origin(document), "CATEGORICAL"),
-        "type": (document.get("type") or None, "CATEGORICAL"),
+        "delivered": (delivered, "BOOLEAN"),
+        "origin": (origin, "CATEGORICAL"),
+        "type": (task_type, "CATEGORICAL"),
+        "delivered_cost_usd": (cost if delivered == 1.0 else None, "NUMERIC"),
+        "findings_important": (_findings_important(document), "NUMERIC"),
+        "followups": (_followups(document), "NUMERIC"),
+        "checks_red": (_checks_red(document), "NUMERIC"),
     }
+    numeric: dict[str, float] = {
+        **_returns_by_category(document),
+        **_failures_by_reason(document),
+        **_escalations_by_class(document),
+        **_cost_by_role(document),
+    }
+    if delivered == 1.0:
+        numeric[f"delivered_cost_usd.type.{task_type}"] = cost
+    numeric[f"cost_usd.origin.{origin}"] = cost
+    values.update({name: (value, "NUMERIC") for name, value in numeric.items()})
     return [
         Score(
             name=name,
@@ -210,7 +367,7 @@ def task_scores(
             id=identity.score_id(name) if identity else "",
         )
         for name in SCORE_NAMES
-        if (value := values[name][0]) is not None
+        if name in values and (value := values[name][0]) is not None
     ]
 
 
@@ -225,4 +382,4 @@ def _origin(document: Mapping[str, Any]) -> str | None:
     title = document.get("title")
     if not title:
         return None
-    return "followup" if str(title).startswith(FOLLOWUP_TITLE_PREFIX) else "original"
+    return ORIGINS[1] if str(title).startswith(FOLLOWUP_TITLE_PREFIX) else ORIGINS[0]

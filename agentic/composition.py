@@ -17,6 +17,7 @@ import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -37,10 +38,20 @@ from .core.process.application.preflight import refuse_its_own_checkout
 from .shared.configuration import STATE_FILE, Configuration, state_file_for
 from .shared.environment import own_configuration_unset
 
+if TYPE_CHECKING:
+    from .core.measurement.adapters.langfuse.dashboards import PostgresDashboards
+    from .core.measurement.adapters.langfuse.widget_data import ClickHouseWidgetData
+
 LANGFUSE_VARIABLES = (
     "AGENTIC_LANGFUSE_HOST",
     "AGENTIC_LANGFUSE_PUBLIC_KEY",
     "AGENTIC_LANGFUSE_SECRET_KEY",
+)
+DASHBOARD_VARIABLES = (
+    "AGENTIC_LANGFUSE_DATABASE_URL",
+    "AGENTIC_LANGFUSE_CLICKHOUSE_URL",
+    "AGENTIC_LANGFUSE_CLICKHOUSE_USER",
+    "AGENTIC_LANGFUSE_CLICKHOUSE_PASSWORD",
 )
 
 
@@ -56,6 +67,42 @@ def task_scorer() -> LangfuseScores | None:
     if not (host and public_key and secret_key):
         return None
     return LangfuseScores(host, public_key, secret_key)
+
+
+def missing_dashboard_variables(*, verify: bool) -> list[str]:
+    """The `AGENTIC_LANGFUSE_*` variables `agentic dashboards apply` needs and does not
+    find: the database URL and the public key, plus the three ClickHouse ones with
+    `--verify`."""
+    needed = (DASHBOARD_VARIABLES[0], LANGFUSE_VARIABLES[1])
+    if verify:
+        needed = (*needed, *DASHBOARD_VARIABLES[1:])
+    return [name for name in needed if not os.environ.get(name)]
+
+
+def dashboard_store() -> PostgresDashboards | None:
+    """The writer of the Langfuse dashboards (GH-274, ADR-0051), or `None` when the database
+    URL or the public key is unset or empty. The adapter is imported here, not at the top:
+    `psycopg` is loaded by `agentic dashboards apply` and by nothing else. The credentials are
+    read from `os.environ` here and handed to the adapter alone, never `Configuration`
+    fields, so they never reach a role's or a check's environment."""
+    from .core.measurement.adapters.langfuse.dashboards import PostgresDashboards
+
+    url = os.environ.get(DASHBOARD_VARIABLES[0])
+    public_key = os.environ.get(LANGFUSE_VARIABLES[1])
+    if not (url and public_key):
+        return None
+    return PostgresDashboards(url, public_key)
+
+
+def widget_data(project_id: str) -> ClickHouseWidgetData | None:
+    """The counter of what each widget reads, from ClickHouse, for the project the store
+    resolved; `None` when the URL, the user or the password is unset or empty."""
+    from .core.measurement.adapters.langfuse.widget_data import ClickHouseWidgetData
+
+    url, user, password = (os.environ.get(name) for name in DASHBOARD_VARIABLES[1:])
+    if not (url and user and password):
+        return None
+    return ClickHouseWidgetData(url, user, password, project_id)
 
 
 def default_ports(cfg: Configuration) -> Ports:

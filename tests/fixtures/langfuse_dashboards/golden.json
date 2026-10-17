@@ -1,0 +1,782 @@
+{
+  "image": "docker.langfuse.com/langfuse/langfuse:4 (web 4.35.0)",
+  "captured": "2026-10-17",
+  "columns": [
+    {
+      "table": "dashboard_widgets",
+      "position": 1,
+      "column": "id",
+      "data_type": "text",
+      "udt_name": "text",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "dashboard_widgets",
+      "position": 2,
+      "column": "created_at",
+      "data_type": "timestamp without time zone",
+      "udt_name": "timestamp",
+      "nullable": "NO",
+      "default": "CURRENT_TIMESTAMP"
+    },
+    {
+      "table": "dashboard_widgets",
+      "position": 3,
+      "column": "updated_at",
+      "data_type": "timestamp without time zone",
+      "udt_name": "timestamp",
+      "nullable": "NO",
+      "default": "CURRENT_TIMESTAMP"
+    },
+    {
+      "table": "dashboard_widgets",
+      "position": 4,
+      "column": "created_by",
+      "data_type": "text",
+      "udt_name": "text",
+      "nullable": "YES",
+      "default": null
+    },
+    {
+      "table": "dashboard_widgets",
+      "position": 5,
+      "column": "updated_by",
+      "data_type": "text",
+      "udt_name": "text",
+      "nullable": "YES",
+      "default": null
+    },
+    {
+      "table": "dashboard_widgets",
+      "position": 6,
+      "column": "project_id",
+      "data_type": "text",
+      "udt_name": "text",
+      "nullable": "YES",
+      "default": null
+    },
+    {
+      "table": "dashboard_widgets",
+      "position": 7,
+      "column": "name",
+      "data_type": "text",
+      "udt_name": "text",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "dashboard_widgets",
+      "position": 8,
+      "column": "description",
+      "data_type": "text",
+      "udt_name": "text",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "dashboard_widgets",
+      "position": 9,
+      "column": "view",
+      "data_type": "USER-DEFINED",
+      "udt_name": "DashboardWidgetViews",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "dashboard_widgets",
+      "position": 10,
+      "column": "dimensions",
+      "data_type": "jsonb",
+      "udt_name": "jsonb",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "dashboard_widgets",
+      "position": 11,
+      "column": "metrics",
+      "data_type": "jsonb",
+      "udt_name": "jsonb",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "dashboard_widgets",
+      "position": 12,
+      "column": "filters",
+      "data_type": "jsonb",
+      "udt_name": "jsonb",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "dashboard_widgets",
+      "position": 13,
+      "column": "chart_type",
+      "data_type": "USER-DEFINED",
+      "udt_name": "DashboardWidgetChartType",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "dashboard_widgets",
+      "position": 14,
+      "column": "chart_config",
+      "data_type": "jsonb",
+      "udt_name": "jsonb",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "dashboard_widgets",
+      "position": 15,
+      "column": "min_version",
+      "data_type": "integer",
+      "udt_name": "int4",
+      "nullable": "NO",
+      "default": "1"
+    },
+    {
+      "table": "dashboards",
+      "position": 1,
+      "column": "id",
+      "data_type": "text",
+      "udt_name": "text",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "dashboards",
+      "position": 2,
+      "column": "created_at",
+      "data_type": "timestamp without time zone",
+      "udt_name": "timestamp",
+      "nullable": "NO",
+      "default": "CURRENT_TIMESTAMP"
+    },
+    {
+      "table": "dashboards",
+      "position": 3,
+      "column": "updated_at",
+      "data_type": "timestamp without time zone",
+      "udt_name": "timestamp",
+      "nullable": "NO",
+      "default": "CURRENT_TIMESTAMP"
+    },
+    {
+      "table": "dashboards",
+      "position": 4,
+      "column": "created_by",
+      "data_type": "text",
+      "udt_name": "text",
+      "nullable": "YES",
+      "default": null
+    },
+    {
+      "table": "dashboards",
+      "position": 5,
+      "column": "updated_by",
+      "data_type": "text",
+      "udt_name": "text",
+      "nullable": "YES",
+      "default": null
+    },
+    {
+      "table": "dashboards",
+      "position": 6,
+      "column": "project_id",
+      "data_type": "text",
+      "udt_name": "text",
+      "nullable": "YES",
+      "default": null
+    },
+    {
+      "table": "dashboards",
+      "position": 7,
+      "column": "name",
+      "data_type": "text",
+      "udt_name": "text",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "dashboards",
+      "position": 8,
+      "column": "description",
+      "data_type": "text",
+      "udt_name": "text",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "dashboards",
+      "position": 9,
+      "column": "definition",
+      "data_type": "jsonb",
+      "udt_name": "jsonb",
+      "nullable": "NO",
+      "default": null
+    },
+    {
+      "table": "dashboards",
+      "position": 10,
+      "column": "filters",
+      "data_type": "jsonb",
+      "udt_name": "jsonb",
+      "nullable": "NO",
+      "default": "'[]'::jsonb"
+    }
+  ],
+  "enums": {
+    "\"DashboardWidgetChartType\"": [
+      "LINE_TIME_SERIES",
+      "BAR_TIME_SERIES",
+      "HORIZONTAL_BAR",
+      "VERTICAL_BAR",
+      "PIE",
+      "NUMBER",
+      "HISTOGRAM",
+      "PIVOT_TABLE",
+      "AREA_TIME_SERIES"
+    ],
+    "\"DashboardWidgetViews\"": [
+      "TRACES",
+      "OBSERVATIONS",
+      "SCORES_NUMERIC",
+      "SCORES_CATEGORICAL",
+      "SCORES_BOOLEAN"
+    ]
+  },
+  "row_counts": {
+    "dashboards": 5,
+    "widgets": 36,
+    "dashboards_with_project": 0,
+    "widgets_with_project": 0
+  },
+  "preset_dashboard": {
+    "id": "cmawoi7yd00aqad07f3why08w",
+    "created_at": "2025-05-20T15:38:32.005",
+    "updated_at": "2025-05-20T16:09:56.618",
+    "created_by": null,
+    "updated_by": null,
+    "project_id": null,
+    "name": "Langfuse Cost Dashboard",
+    "description": "Review your LLM costs.",
+    "definition": {
+      "widgets": [
+        {
+          "x": 0,
+          "y": 2,
+          "id": "c1e456c3-9e4a-4693-99de-ea3996e15003",
+          "type": "widget",
+          "x_size": 4,
+          "y_size": 3,
+          "widgetId": "cma2f2ioc001had07f7810kg1"
+        },
+        {
+          "x": 0,
+          "y": 5,
+          "id": "6d03b598-7950-423b-8e22-25ab4ac98b75",
+          "type": "widget",
+          "x_size": 4,
+          "y_size": 6,
+          "widgetId": "cmawk9xbu00lfad07s9j1bxnx"
+        },
+        {
+          "x": 8,
+          "y": 5,
+          "id": "2f018002-f922-4d3f-8495-43cc3a951dc8",
+          "type": "widget",
+          "x_size": 4,
+          "y_size": 6,
+          "widgetId": "cmawkfg0m00kzad07jyofrnq2"
+        },
+        {
+          "x": 4,
+          "y": 5,
+          "id": "c630af4d-b2e8-48d2-bb03-5f20e6b16e8f",
+          "type": "widget",
+          "x_size": 4,
+          "y_size": 6,
+          "widgetId": "cmawk6nqs00jwad07hwpsj3z2"
+        },
+        {
+          "x": 8,
+          "y": 0,
+          "id": "1e322175-b1c6-467c-a743-28c47255874b",
+          "type": "widget",
+          "x_size": 4,
+          "y_size": 5,
+          "widgetId": "cmawk7btd00khad07g625cqmp"
+        },
+        {
+          "x": 0,
+          "y": 11,
+          "id": "3587b86a-1dcc-4f51-b686-65e155615e76",
+          "type": "widget",
+          "x_size": 4,
+          "y_size": 5,
+          "widgetId": "cmawle4zj0096ad0650rzeh0z"
+        },
+        {
+          "x": 8,
+          "y": 11,
+          "id": "0ec8d95a-cb7b-4cd1-99e0-223e26a67964",
+          "type": "widget",
+          "x_size": 4,
+          "y_size": 5,
+          "widgetId": "cmawljmu100v7ad07pd3apnwe"
+        },
+        {
+          "x": 4,
+          "y": 11,
+          "id": "4754f821-7099-450c-89bc-db5e6ab2189e",
+          "type": "widget",
+          "x_size": 4,
+          "y_size": 5,
+          "widgetId": "cmawlkgt300vsad06g69vqqej"
+        },
+        {
+          "x": 0,
+          "y": 0,
+          "id": "e91465b7-63fd-4e77-babc-8e64abdb5672",
+          "type": "widget",
+          "x_size": 2,
+          "y_size": 2,
+          "widgetId": "cmawlaqoa004kad07e2q0za6k"
+        },
+        {
+          "x": 2,
+          "y": 0,
+          "id": "2ad4931e-b91d-4ca1-9178-5ac8c3edd0a8",
+          "type": "widget",
+          "x_size": 2,
+          "y_size": 2,
+          "widgetId": "cmawlbdu2004nad07lks0j8lw"
+        },
+        {
+          "x": 4,
+          "y": 0,
+          "id": "f7d74d8d-09a5-4a5e-a8de-f48dc6ba6a4b",
+          "type": "widget",
+          "x_size": 4,
+          "y_size": 5,
+          "widgetId": "cmawk5sik00igad07kjetg17j"
+        }
+      ]
+    },
+    "filters": []
+  },
+  "preset_widgets": [
+    {
+      "id": "cmawk5sik00igad07kjetg17j",
+      "created_at": "2025-05-20T13:36:53.661",
+      "updated_at": "2025-05-20T13:57:43.772",
+      "created_by": null,
+      "updated_by": null,
+      "project_id": null,
+      "name": "Cost by Model Name",
+      "description": "Total cost broken down by model name",
+      "view": "OBSERVATIONS",
+      "dimensions": [
+        {
+          "field": "providedModelName"
+        }
+      ],
+      "metrics": [
+        {
+          "agg": "sum",
+          "measure": "totalCost"
+        }
+      ],
+      "filters": [],
+      "chart_type": "VERTICAL_BAR",
+      "chart_config": {
+        "type": "VERTICAL_BAR",
+        "row_limit": 100
+      },
+      "min_version": 1
+    },
+    {
+      "id": "cmawk6isp00kbad07t66dohjn",
+      "created_at": "2025-05-20T13:37:27.721",
+      "updated_at": "2025-05-20T15:56:46",
+      "created_by": null,
+      "updated_by": null,
+      "project_id": null,
+      "name": "P 95 Latency by Level (Observations)",
+      "description": "P95 latency metrics for observations segmented by level",
+      "view": "OBSERVATIONS",
+      "dimensions": [
+        {
+          "field": "level"
+        }
+      ],
+      "metrics": [
+        {
+          "agg": "p95",
+          "measure": "latency"
+        }
+      ],
+      "filters": [],
+      "chart_type": "LINE_TIME_SERIES",
+      "chart_config": {
+        "type": "LINE_TIME_SERIES"
+      },
+      "min_version": 1
+    },
+    {
+      "id": "cmawltpsx00yaad07f51yvkwg",
+      "created_at": "2025-05-20T14:23:29.505",
+      "updated_at": "2025-05-20T15:56:46",
+      "created_by": null,
+      "updated_by": null,
+      "project_id": null,
+      "name": "Total Score Count (numeric)",
+      "description": "Trend of numeric score count over time",
+      "view": "SCORES_NUMERIC",
+      "dimensions": [],
+      "metrics": [
+        {
+          "agg": "count",
+          "measure": "count"
+        }
+      ],
+      "filters": [],
+      "chart_type": "BAR_TIME_SERIES",
+      "chart_config": {
+        "type": "BAR_TIME_SERIES"
+      },
+      "min_version": 1
+    },
+    {
+      "id": "cmawlrhom00xhad07phtqc81k",
+      "created_at": "2025-05-20T14:21:45.67",
+      "updated_at": "2025-05-20T15:56:46",
+      "created_by": null,
+      "updated_by": null,
+      "project_id": null,
+      "name": "Total Trace Count (over time)",
+      "description": "Trend of trace count over time",
+      "view": "TRACES",
+      "dimensions": [],
+      "metrics": [
+        {
+          "agg": "count",
+          "measure": "count"
+        }
+      ],
+      "filters": [],
+      "chart_type": "BAR_TIME_SERIES",
+      "chart_config": {
+        "type": "BAR_TIME_SERIES"
+      },
+      "min_version": 1
+    }
+  ],
+  "stored_widget_shape": {
+    "dimensions": "[{\"field\": <dimension>}]",
+    "metrics": "[{\"measure\": <measure>, \"agg\": <aggregation>}]",
+    "filters": "[singleFilter]; filter columns use the view's dimension names",
+    "chart_config": "{\"type\": <chart_type>, \"row_limit\"?: int}",
+    "min_version": "2 on a deployment that is not LANGFUSE_MIGRATION_V4_WRITE_MODE=legacy"
+  },
+  "dashboard_definition_shape": {
+    "widgets": [
+      {
+        "type": "widget",
+        "id": "<uuid of the placement>",
+        "widgetId": "<dashboard_widgets.id>",
+        "x": 0,
+        "y": 0,
+        "x_size": 4,
+        "y_size": 3
+      }
+    ]
+  },
+  "aggregations": [
+    "sum",
+    "avg",
+    "count",
+    "max",
+    "min",
+    "p50",
+    "p75",
+    "p90",
+    "p95",
+    "p99",
+    "histogram",
+    "uniq"
+  ],
+  "granularities": [
+    "auto",
+    "minute",
+    "hour",
+    "day",
+    "week",
+    "month",
+    "5m",
+    "10m",
+    "15m",
+    "30m",
+    "1h",
+    "2h",
+    "4h",
+    "1d",
+    "2d",
+    "1w"
+  ],
+  "filter_types": {
+    "stringOptions": [
+      "any of",
+      "none of"
+    ],
+    "string": [
+      "=",
+      "contains",
+      "does not contain",
+      "starts with",
+      "ends with",
+      "is not empty"
+    ],
+    "number": [
+      "=",
+      ">",
+      "<",
+      ">=",
+      "<="
+    ],
+    "datetime": [
+      ">",
+      "<",
+      ">=",
+      "<="
+    ],
+    "null": [
+      "is null",
+      "is not null"
+    ],
+    "categoryOptions": [
+      "any of",
+      "none of"
+    ],
+    "arrayOptions": [
+      "any of",
+      "none of",
+      "all of"
+    ],
+    "stringObject": [
+      "=",
+      "contains",
+      "does not contain",
+      "starts with",
+      "ends with"
+    ],
+    "boolean": [
+      "=",
+      "<>"
+    ]
+  },
+  "views_v2": {
+    "scores-numeric": {
+      "dimensions": [
+        "id",
+        "environment",
+        "name",
+        "evaluatorId",
+        "ruleId",
+        "isEvaluatorTest",
+        "source",
+        "dataType",
+        "traceId",
+        "configId",
+        "timestampMonth",
+        "timestampDay",
+        "observationId",
+        "sessionId",
+        "datasetRunId",
+        "traceName",
+        "userId",
+        "tags",
+        "traceRelease",
+        "traceVersion",
+        "observationName",
+        "observationModelName",
+        "observationPromptName",
+        "observationPromptVersion",
+        "experimentName",
+        "experimentId",
+        "value"
+      ],
+      "measures": {
+        "count": "integer",
+        "value": "number (default avg)"
+      },
+      "time": "timestamp",
+      "dimension_types": {
+        "value": "number; filter type number"
+      }
+    },
+    "scores-categorical": {
+      "dimensions": [
+        "id",
+        "environment",
+        "name",
+        "evaluatorId",
+        "ruleId",
+        "isEvaluatorTest",
+        "source",
+        "dataType",
+        "traceId",
+        "configId",
+        "timestampMonth",
+        "timestampDay",
+        "observationId",
+        "sessionId",
+        "datasetRunId",
+        "traceName",
+        "userId",
+        "tags",
+        "traceRelease",
+        "traceVersion",
+        "observationName",
+        "observationModelName",
+        "observationPromptName",
+        "observationPromptVersion",
+        "experimentName",
+        "experimentId",
+        "stringValue"
+      ],
+      "measures": {
+        "count": "integer"
+      },
+      "time": "timestamp"
+    },
+    "scores-boolean": {
+      "dimensions": [
+        "id",
+        "environment",
+        "name",
+        "evaluatorId",
+        "ruleId",
+        "isEvaluatorTest",
+        "source",
+        "dataType",
+        "traceId",
+        "configId",
+        "timestampMonth",
+        "timestampDay",
+        "observationId",
+        "sessionId",
+        "datasetRunId",
+        "traceName",
+        "userId",
+        "tags",
+        "traceRelease",
+        "traceVersion",
+        "observationName",
+        "observationModelName",
+        "observationPromptName",
+        "observationPromptVersion",
+        "experimentName",
+        "experimentId",
+        "booleanValue"
+      ],
+      "dimension_types": {
+        "booleanValue": "boolean; sql toBool(scores_boolean.value); filter type boolean, operators = and <>"
+      },
+      "measures": {
+        "count": "integer",
+        "value": "number 0/1 (any(value), default avg)"
+      },
+      "time": "timestamp"
+    },
+    "observations": {
+      "dimensions": [
+        "id",
+        "evaluatorId",
+        "isEvaluatorTest",
+        "traceId",
+        "environment",
+        "parentObservationId",
+        "isRootObservation",
+        "type",
+        "name",
+        "level",
+        "version",
+        "userId",
+        "sessionId",
+        "tags",
+        "release",
+        "traceName",
+        "traceRelease",
+        "traceVersion",
+        "providedModelName",
+        "promptName",
+        "promptVersion",
+        "startTimeMonth",
+        "toolNames",
+        "calledToolNames",
+        "costType",
+        "usageType",
+        "experimentName",
+        "experimentDatasetId",
+        "experimentId"
+      ],
+      "measures": [
+        "count",
+        "traceId",
+        "uniqueUserIds",
+        "uniqueSessionIds",
+        "latency",
+        "streamingLatency",
+        "inputTokens",
+        "outputTokens",
+        "totalTokens",
+        "outputTokensPerSecond",
+        "tokensPerSecond",
+        "inputCost",
+        "outputCost",
+        "totalCost",
+        "timeToFirstToken",
+        "countScores",
+        "toolDefinitions",
+        "toolCalls",
+        "toolCallInvocations",
+        "costByType",
+        "usageByType"
+      ],
+      "time": "start_time"
+    }
+  },
+  "views_v1_traces": {
+    "dimensions": [
+      "id",
+      "name",
+      "tags",
+      "userId",
+      "sessionId",
+      "release",
+      "version",
+      "environment",
+      "timestampMonth"
+    ],
+    "measures": [
+      "count",
+      "observationsCount",
+      "scoresCount",
+      "uniqueUserIds",
+      "uniqueSessionIds",
+      "latency",
+      "totalTokens",
+      "totalCost"
+    ],
+    "time": "timestamp"
+  },
+  "api_key_project": {
+    "relation": "api_keys.project_id -> projects.id",
+    "lookup": "select project_id from api_keys where public_key = $1 and scope = 'PROJECT'",
+    "note": "public key only"
+  }
+}

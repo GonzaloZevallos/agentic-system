@@ -2,11 +2,24 @@
 over the task document, shared by the live path and the backfill."""
 
 from datetime import UTC, datetime
+from typing import get_args
 
 import pytest
 
 from agentic.core.measurement.domain import task_scores as ts
 from agentic.core.process.domain.landing import FOLLOWUP_TITLE_PREFIX
+from agentic.core.process.domain.roles import ROLES
+from agentic.core.process.domain.schemas import TaskType
+from agentic.core.process.domain.task import ChangeCategory, EscalationClass, FailureReason
+
+
+def flat(alias):
+    """The strings of a `Literal` or of a union of `Literal`s, flattened by hand."""
+    out = []
+    for arg in get_args(alias):
+        out.extend(flat(arg) if get_args(arg) else [arg])
+    return out
+
 
 START = datetime(2026, 10, 1, 9, 0, tzinfo=UTC)
 
@@ -40,7 +53,15 @@ def by_name(scores):
 
 def test_a_finished_document_gives_every_score_it_has_inputs_for():
     got = by_name(ts.task_scores(document()))
-    assert set(got) == {"cost_usd", "active_h", "returns", "failed_cost_usd", "origin", "type"}
+    assert set(got) == {
+        "cost_usd",
+        "active_h",
+        "returns",
+        "failed_cost_usd",
+        "origin",
+        "type",
+        "cost_usd.origin.original",
+    }
     assert got["cost_usd"].value == 2.5
     assert got["returns"].value == 3
     assert got["failed_cost_usd"].value == pytest.approx(0.75)
@@ -49,13 +70,15 @@ def test_a_finished_document_gives_every_score_it_has_inputs_for():
     assert got["cost_usd"].data_type == "NUMERIC"
 
 
-def test_names_follow_the_closed_list_in_order():
+def test_the_base_names_follow_the_closed_list_in_order():
     got = ts.task_scores(
         document(delivery_outcome="merged"),
         pr_merged_at="2026-10-02T09:00:00Z",
         issue_created_at="2026-10-01T08:00:00Z",
     )
-    assert tuple(s.name for s in got) == ts.SCORE_NAMES
+    names = tuple(s.name for s in got)
+    assert set(ts.BASE_SCORE_NAMES) <= set(names)
+    assert names == tuple(n for n in ts.SCORE_NAMES if n in names)
 
 
 def test_a_score_outside_the_closed_list_is_refused():
@@ -226,3 +249,214 @@ def test_dimensions_fall_back_when_the_document_is_silent():
     assert ts.dimensions(document()) == ts.Dimensions(
         release="unknown", baseline="unknown", arm="default"
     )
+
+
+# --- GH-274: per-task score families derived from the closed domain sets -----------------
+
+
+def test_every_closed_set_member_yields_a_score_name():
+    expected = {
+        *(f"returns.{c}" for c in flat(ChangeCategory)),
+        *(f"failures.{r}" for r in flat(FailureReason)),
+        *(f"escalations.{e}" for e in flat(EscalationClass)),
+        *(f"cost_usd.role.{r.slug}" for r in ROLES),
+        *(f"delivered_cost_usd.type.{t}" for t in flat(TaskType)),
+        *(f"cost_usd.origin.{o}" for o in ("original", "followup")),
+    }
+    assert expected <= set(ts.SCORE_NAMES)
+    assert set(ts.BASE_SCORE_NAMES) <= set(ts.SCORE_NAMES)
+    assert {"delivered_cost_usd", "findings_important", "followups", "checks_red"} <= set(
+        ts.SCORE_NAMES
+    )
+    assert len(ts.SCORE_NAMES) == len(set(ts.SCORE_NAMES))
+
+
+def test_the_base_names_keep_their_order_at_the_head():
+    assert ts.SCORE_NAMES[: len(ts.BASE_SCORE_NAMES)] == ts.BASE_SCORE_NAMES
+    assert ts.BASE_SCORE_NAMES[0] == "cost_usd" and ts.BASE_SCORE_NAMES[-1] == "type"
+
+
+def test_adding_a_member_to_a_closed_set_adds_a_name():
+    members = ("a", "b")
+    assert ts.family_names("returns", members) == ("returns.a", "returns.b")
+    assert ts.family_names("returns", (*members, "c")) == ("returns.a", "returns.b", "returns.c")
+    assert ts.FAMILIES["returns"] == ts.family_names("returns", flat(ChangeCategory))
+
+
+def test_a_name_no_family_builds_is_refused():
+    with pytest.raises(ValueError):
+        ts.Score(name="returns.not_a_category", value=1.0, data_type="NUMERIC")
+    with pytest.raises(ValueError):
+        ts.Score(name="cost_usd.role.nobody", value=1.0, data_type="NUMERIC")
+
+
+def history(*categories, by=None):
+    return [
+        {"pair": "a→b", "category": c, "reason": "r", **({"by": by} if by else {})}
+        for c in categories
+    ]
+
+
+def test_returns_equals_the_sum_of_its_categories():
+    doc = document(
+        changes_requested={"a→b": 2, "c→d": 1},
+        change_history=history("spec-behaviour", "spec-behaviour", "definition"),
+    )
+    got = by_name(ts.task_scores(doc))
+    parts = {n: s.value for n, s in got.items() if n.startswith("returns.")}
+    assert parts == {"returns.spec-behaviour": 2.0, "returns.definition": 1.0}
+    assert got["returns"].value == sum(parts.values())
+    assert "returns.definition" in ts.SCORE_NAMES
+
+
+def test_a_landing_reopen_is_not_a_return_category():
+    doc = document(
+        changes_requested={"a→b": 1},
+        change_history=history("spec-behaviour") + history("definition", by="landing"),
+    )
+    assert "returns.definition" not in by_name(ts.task_scores(doc))
+
+
+def test_a_category_nobody_returned_is_omitted_not_zero():
+    got = by_name(ts.task_scores(document(change_history=[])))
+    assert not [n for n in got if n.startswith("returns.")]
+
+
+def test_failures_count_by_reason_and_skip_an_unknown_reason():
+    doc = document(
+        failures=[
+            {"reason": "account_limit", "cost_usd": 0.1},
+            {"reason": "account_limit", "cost_usd": 0.1},
+            {"reason": "schema", "cost_usd": 0.1},
+            {"cost_usd": 0.1},
+            {"reason": "from_the_future", "cost_usd": 0.1},
+        ]
+    )
+    got = by_name(ts.task_scores(doc))
+    assert got["failures.account_limit"].value == 2.0
+    assert got["failures.schema"].value == 1.0
+    assert {n for n in got if n.startswith("failures.")} == {
+        "failures.account_limit",
+        "failures.schema",
+    }
+
+
+def test_escalations_count_by_class_from_the_pause_log_only():
+    doc = document(
+        pause_log=[
+            {"kind": "escalation", "value": "returns"},
+            {"kind": "failure", "value": "schema", "section": "x"},
+            {"kind": "resumed"},
+            {"kind": "escalation", "value": "returns"},
+            {"kind": "escalation", "value": "cap"},
+        ]
+    )
+    got = by_name(ts.task_scores(doc))
+    assert got["escalations.returns"].value == 2.0
+    assert got["escalations.cap"].value == 1.0
+    assert {n for n in got if n.startswith("escalations.")} == {
+        "escalations.returns",
+        "escalations.cap",
+    }
+
+
+def test_cost_by_role_sums_the_runs_of_a_slug():
+    doc = document(
+        runs=[
+            run(slug="developer", cost_usd=1.0),
+            run(slug="developer", cost_usd=0.5),
+            run(slug="pm", cost_usd=0.25),
+            run(cost_usd=9.0),
+            run(slug="removed_role", cost_usd=9.0),
+        ]
+    )
+    got = by_name(ts.task_scores(doc))
+    assert got["cost_usd.role.developer"].value == 1.5
+    assert got["cost_usd.role.pm"].value == 0.25
+    assert len([n for n in got if n.startswith("cost_usd.role.")]) == 2
+
+
+def test_delivered_cost_is_the_task_cost_only_when_delivered():
+    got = by_name(ts.task_scores(document(delivery_outcome="merged")))
+    assert got["delivered_cost_usd"].value == 2.5
+    assert got["delivered_cost_usd.type.feature"].value == 2.5
+    closed = by_name(ts.task_scores(document(delivery_outcome="closed")))
+    undecided = by_name(ts.task_scores(document()))
+    for absent in (closed, undecided):
+        assert not [n for n in absent if n.startswith("delivered_cost_usd")]
+
+
+def test_delivered_cost_by_type_needs_a_known_type():
+    got = by_name(ts.task_scores(document(delivery_outcome="merged", type="mystery")))
+    assert "delivered_cost_usd" in got
+    assert not [n for n in got if n.startswith("delivered_cost_usd.type.")]
+
+
+def test_cost_by_origin_follows_the_title():
+    original = by_name(ts.task_scores(document()))
+    assert original["cost_usd.origin.original"].value == 2.5
+    assert "cost_usd.origin.followup" not in original
+    follow = by_name(ts.task_scores(document(title=f"{FOLLOWUP_TITLE_PREFIX}12: more")))
+    assert follow["cost_usd.origin.followup"].value == 2.5
+    assert not [n for n in by_name(ts.task_scores(document(title=""))) if "origin." in n]
+
+
+def finding(location, severity="important", subtask="s", claim="c", status="open"):
+    return {
+        "subtask": subtask,
+        "version": 1,
+        "location": location,
+        "claim": claim,
+        "severity": severity,
+        "scope": "subtask",
+        "status": status,
+        "category": "spec-behaviour",
+    }
+
+
+def test_findings_important_counts_each_folded_important_row_once():
+    doc = document(
+        findings=[
+            finding("a.py:1"),
+            finding("a.py:1", subtask="t"),
+            finding("b.py:2"),
+            finding("c.py:3", severity="observation"),
+        ]
+    )
+    assert by_name(ts.task_scores(doc))["findings_important"].value == 2.0
+
+
+def test_findings_important_is_zero_with_an_empty_register_and_absent_without_one():
+    assert by_name(ts.task_scores(document(findings=[])))["findings_important"].value == 0.0
+    assert "findings_important" not in by_name(ts.task_scores(document()))
+
+
+def test_followups_is_one_when_filed_zero_after_a_landing_and_unknown_before_it():
+    assert by_name(ts.task_scores(document(followups_filed=True)))["followups"].value == 1.0
+    assert by_name(ts.task_scores(document(landing=[{"step": "merge"}])))["followups"].value == 0.0
+    assert "followups" not in by_name(ts.task_scores(document()))
+
+
+def test_checks_red_counts_the_failed_merge_checks_and_is_absent_without_a_record():
+    record = {
+        "passed": False,
+        "checks": [
+            {"name": "tests", "passed": False, "tail": []},
+            {"name": "lint", "passed": True},
+            {"name": "types", "passed": False},
+            "not an entry",
+        ],
+    }
+    assert by_name(ts.task_scores(document(merge_checks=record)))["checks_red"].value == 2.0
+    green = {"passed": True, "checks": [{"name": "tests", "passed": True}]}
+    assert by_name(ts.task_scores(document(merge_checks=green)))["checks_red"].value == 0.0
+    assert "checks_red" not in by_name(ts.task_scores(document()))
+
+
+def test_a_malformed_register_reads_as_unknown_not_zero():
+    got = by_name(
+        ts.task_scores(
+            document(findings="x", merge_checks={"checks": "x"}, pause_log=None, runs=None)
+        )
+    )
+    assert "findings_important" not in got and "checks_red" not in got
