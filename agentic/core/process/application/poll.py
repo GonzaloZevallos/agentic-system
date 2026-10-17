@@ -970,7 +970,9 @@ def _upstream_notes(asked: bool, upstream: Callable[[], Upstream]) -> list[str]:
 
 def deferred_line(deferred: rules.Deferred) -> str:
     """The poll line for a merge or land `rules.poll_plan` held back: built from the plan's
-    own `Deferred`, never from a second slot count (GH-263)."""
+    own `Deferred`, never from a second slot count (GH-263). The reason is printed as it is:
+    `no_slot`, `exempt_busy` or, for a land held by an account-limit pause, `pause_waiting`
+    (GH-270)."""
     return f"agentic: poll: {deferred.kind} #{deferred.issue} waits: {deferred.reason}"
 
 
