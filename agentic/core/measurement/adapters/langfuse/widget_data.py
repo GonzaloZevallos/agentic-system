@@ -60,9 +60,11 @@ class ClickHouseWidgetData:
         return self._query(sql, params)
 
     def _query(self, sql: str, params: dict[str, str]) -> int:
-        query = urllib.parse.urlencode({"user": self._user, "password": self._password, **params})
         request = urllib.request.Request(
-            f"{self._url}?{query}", data=f"{sql} format JSON".encode(), method="POST"
+            f"{self._url}?{urllib.parse.urlencode(params)}",
+            data=f"{sql} format JSON".encode(),
+            headers={"X-ClickHouse-User": self._user, "X-ClickHouse-Key": self._password},
+            method="POST",
         )
         with urllib.request.urlopen(request, timeout=TIMEOUT_S) as response:
             body: dict[str, Any] = json.load(response)

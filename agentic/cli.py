@@ -2290,6 +2290,7 @@ async def _dashboards_apply(ports: Ports, dry_run: bool, verify: bool) -> None:
         dashboards_app.ColumnDrift,
         dashboards_app.UnknownProject,
         dashboards_app.StoreUnavailable,
+        OSError,  # ClickHouse unreachable: urllib's errors are OSErrors
     ) as exc:
         raise CannotStart(str(exc)) from exc
     changes = report.changes

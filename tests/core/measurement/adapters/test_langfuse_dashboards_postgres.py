@@ -82,3 +82,42 @@ def test_an_unreachable_database_is_the_use_cases_own_error():
     dead = PostgresDashboards("postgresql://x:y@127.0.0.1:1/z?connect_timeout=1", "k")
     with pytest.raises(app.StoreUnavailable):
         dead.columns()
+
+
+@pytest.fixture
+def other_project(store):
+    """A second project owning one dashboard row at an id our product would write, removed
+    (cascading to its rows) afterwards."""
+    pid = f"it-proj-{uuid.uuid4().hex[:8]}"
+    with store._connection() as conn:
+        conn.execute(
+            "insert into projects (id, name, org_id) "
+            "select %s, %s, org_id from projects where id = %s",
+            (pid, pid, store.project_id()),
+        )
+    yield pid
+    with store._connection() as conn:
+        conn.execute("delete from projects where id = %s", (pid,))
+
+
+def test_a_row_of_another_project_at_our_id_is_refused_untouched_and_rolls_back_the_rest(
+    store, products, other_project
+):
+    product = products[0]
+    ours = dom.rows(dom.build_dashboards(product))
+    foreign = ours[-1]  # a dashboard: every widget is upserted before it
+    assert isinstance(foreign, dom.DashboardRow)
+    with store._connection() as conn:
+        conn.execute(
+            "insert into dashboards (id, project_id, name, description, definition, filters) "
+            "values (%s, %s, 'theirs', 'theirs', '{\"widgets\": []}', '[]')",
+            (foreign.id, other_project),
+        )
+    with pytest.raises(RuntimeError, match="another project"):
+        app.apply_dashboards(product, store)
+    with store._connection() as conn:
+        row = conn.execute(
+            "select name, project_id from dashboards where id = %s", (foreign.id,)
+        ).fetchone()
+    assert row == ("theirs", other_project)
+    assert store.read(product) == []
