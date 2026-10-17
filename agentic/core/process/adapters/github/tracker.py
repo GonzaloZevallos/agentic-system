@@ -360,6 +360,13 @@ class GhTracker:
             for c in raw.get("comments", [])
         ]
 
+    def issue_created_at(self, task_id: str) -> str | None:
+        if (number := issue_number(task_id)) is None:
+            return None
+        raw = json.loads(self._gh("issue", "view", str(number), "--json", "createdAt"))
+        created = raw.get("createdAt") if isinstance(raw, dict) else None
+        return created if isinstance(created, str) and created else None
+
     def queue(self) -> list[int]:
         raw = self._gh(
             "issue",
