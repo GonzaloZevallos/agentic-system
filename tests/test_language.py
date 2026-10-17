@@ -2,6 +2,7 @@
 has exactly one English name, in the domain of the module whose `CONTEXT.md` defines
 the term. The glossaries stay free of identifiers; this table keeps both in step."""
 
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from types import ModuleType
 from typing import get_args, get_type_hints
@@ -114,10 +115,50 @@ def test_every_type_is_defined_in_its_own_contexts_glossary():
         assert term in glossary_terms(context_of(module_of(obj))), term
 
 
+def undefined_constants(
+    table: Mapping[str, tuple[ModuleType, str]], terms_of: Callable[[str], set[str]]
+) -> list[str]:
+    """The terms of `table`, in order, whose constant is missing, is not exactly an `int`
+    (a `bool` is not one) or is absent from the glossary of its own context."""
+    return [
+        term
+        for term, (module, name) in table.items()
+        if type(getattr(module, name, None)) is not int
+        or term not in terms_of(context_of(module_of(module)))
+    ]
+
+
 def test_every_constant_is_defined_in_its_own_contexts_glossary():
-    for term, (module, name) in CONSTANTS.items():
-        assert isinstance(getattr(module, name), int), term
-        assert term in glossary_terms(context_of(module_of(module))), term
+    assert undefined_constants(CONSTANTS, glossary_terms) == []
+
+
+def test_undefined_constants_reports_a_term_absent_from_the_glossary():
+    table = {"Cupo reservado para aterrizaje": (rules, "LAND_HEADROOM")}
+    assert undefined_constants(table, lambda _: set()) == ["Cupo reservado para aterrizaje"]
+
+
+def test_undefined_constants_reports_a_value_that_is_not_an_int():
+    table = {"Tope de tarea": (rules, "task_cap")}
+    assert undefined_constants(table, lambda _: {"Tope de tarea"}) == ["Tope de tarea"]
+
+
+def test_undefined_constants_reports_a_bool():
+    stub = ModuleType("agentic.core.process.domain.stub")
+    stub.__dict__["FLAG"] = True  # no domain module holds a bool constant to point at
+    table = {"Bandera": (stub, "FLAG")}
+    assert undefined_constants(table, lambda _: {"Bandera"}) == ["Bandera"]
+
+
+def test_undefined_constants_reports_a_missing_name():
+    table = {"Cupo reservado para aterrizaje": (rules, "NO_SUCH_CONSTANT")}
+    assert undefined_constants(table, lambda _: {"Cupo reservado para aterrizaje"}) == [
+        "Cupo reservado para aterrizaje"
+    ]
+
+
+def test_undefined_constants_accepts_a_defined_int_constant():
+    table = {"Cupo reservado para aterrizaje": (rules, "LAND_HEADROOM")}
+    assert undefined_constants(table, lambda _: {"Cupo reservado para aterrizaje"}) == []
 
 
 def test_state_fields_exist_and_are_process_terms():
