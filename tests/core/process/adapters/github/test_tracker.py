@@ -352,6 +352,29 @@ def test_timestamped_comments_of_a_task_without_an_issue_is_empty():
     assert GhTracker(Path("/p"), Recorder()).timestamped_comments("T-abc") == []
 
 
+def test_issue_created_at_reads_the_issues_own_creation_time():
+    run = Recorder(stdout=json.dumps({"createdAt": "2026-09-13T10:00:00Z"}))
+    tracker = GhTracker(Path("/p"), run)
+    assert tracker.issue_created_at("GH-19") == "2026-09-13T10:00:00Z"
+    assert run.calls == [["gh", "issue", "view", "19", "--json", "createdAt"]]
+
+
+def test_issue_created_at_of_a_task_without_an_issue_is_none_and_reads_nothing():
+    run = Recorder()
+    assert GhTracker(Path("/p"), run).issue_created_at("T-abc") is None
+    assert run.calls == []
+
+
+def test_issue_created_at_is_none_when_the_issue_carries_no_creation_time():
+    tracker = GhTracker(Path("/p"), Recorder(stdout="{}"))
+    assert tracker.issue_created_at("GH-19") is None
+
+
+def test_issue_created_at_lets_a_failed_read_propagate_as_a_value_error():
+    with pytest.raises(ValueError, match="gh issue view failed: no auth"):
+        GhTracker(Path("/p"), Recorder(fail=True)).issue_created_at("GH-19")
+
+
 def test_queue_is_every_open_agentic_issue_sorted_ascending():
     run = Recorder(stdout=json.dumps([{"number": 20}, {"number": 4}, {"number": 9}]))
     tracker = GhTracker(Path("/p"), run)

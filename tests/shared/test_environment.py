@@ -181,3 +181,27 @@ def test_merge_is_not_a_wholesale_overwrite():
         "deployment.environment=dev", role_slug="tech_lead", trace_id=VALID_TRACE_ID
     )
     assert "deployment.environment=dev" in result.split(",")
+
+
+LANGFUSE_KEYS = {
+    "AGENTIC_LANGFUSE_HOST": "http://lf:3000",
+    "AGENTIC_LANGFUSE_PUBLIC_KEY": "pk-lf-x",
+    "AGENTIC_LANGFUSE_SECRET_KEY": "sk-lf-x",
+}
+
+
+def test_the_langfuse_key_pair_never_reaches_a_role_a_check_or_the_sample_app():
+    """GH-273, ADR-0037 addendum: the three `AGENTIC_LANGFUSE_*` are not `Configuration`
+    fields, and the `AGENTIC_` prefix alone is what both scrubs key on. A name that lost
+    the prefix would pass through, which this pins from the other side."""
+    env = {"PATH": "/usr/bin", "LANGFUSE_SECRET_KEY": "sk-unprefixed", **LANGFUSE_KEYS}
+
+    # The checks and the sample app (`without_own_configuration`) never see them.
+    assert without_own_configuration(env) == {
+        "PATH": "/usr/bin",
+        "LANGFUSE_SECRET_KEY": "sk-unprefixed",
+    }
+    # The roles (`own_configuration_unset`) see each one empty, never its value.
+    blanked = own_configuration_unset(env)
+    assert {name: blanked[name] for name in LANGFUSE_KEYS} == dict.fromkeys(LANGFUSE_KEYS, "")
+    assert "LANGFUSE_SECRET_KEY" not in blanked

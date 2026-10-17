@@ -945,6 +945,13 @@ class Tracker(Protocol):
         when the task has no issue, the same shape `issue_comments` already has."""
         ...
 
+    def issue_created_at(self, task_id: str) -> str | None:
+        """When the task's issue was created, as the tracker writes it (GH-273: the start
+        of a task's cycle, which the score `cycle_h` measures from). `None` for a task id
+        that is not `GH-N`, or an issue that carries no creation time. A tracker that
+        cannot answer raises `ValueError` (`TrackerTimedOut` included), as every read."""
+        ...
+
     def merge(self, reference: str, head_sha: str) -> str:
         """Merges the pull request at `reference`, the URL `deliver` stored (the same key
         `pull_request` takes), only if its head is still `head_sha` (GH-178: the sha the

@@ -922,6 +922,10 @@ class MemoryTracker:
         # `earlier`/`issue_comments`, which stay bodies-only, and from `self.comments`
         # above, which is every comment *this fake posted*, not the issue's own.
         self.timestamped: dict[str, list[IssueComment]] = {}
+        # `issue_created_at`'s own answer, keyed by task id (none when absent), and the ids
+        # whose read raises `ValueError`, `gh`'s own failure shape.
+        self.issue_created: dict[str, str] = {}
+        self.issue_created_errors: set[str] = set()
         # The playbook delivery's reads and writes: every PR `pull_requests` lists, and
         # `(number, body)` of each body update.
         self.listed: list[ListedPullRequest] = []
@@ -1057,6 +1061,11 @@ class MemoryTracker:
 
     def timestamped_comments(self, task_id: str) -> list[IssueComment]:
         return self.timestamped.get(task_id, [])
+
+    def issue_created_at(self, task_id: str) -> str | None:
+        if task_id in self.issue_created_errors:
+            raise ValueError(f"gh issue view {task_id} failed: scripted")
+        return self.issue_created.get(task_id)
 
     def queue(self) -> list[int]:
         return sorted(self._queue)

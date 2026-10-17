@@ -306,3 +306,449 @@ mostrado quedan con su lector nombrado, en vez de con un panel:
   lectura respondan: cambia el modo de la instancia de producción del propio sistema para
   responder una pregunta de diseño, un efecto colateral que la compuerta no necesita pagar —
   la respuesta `unreachable` documentada es la que corresponde al despliegue real.
+
+## Adenda (2026-10-17, GH-273): scores por tarea en una traza portadora
+
+Esta adenda no edita nada de arriba: lo registra como evidencia para GH-273 ("un score por
+cifra de negocio de cada tarea, aggregable por un widget"). La primera sección de esta ADR
+dejó dicho por qué: los widgets de Langfuse v4 sólo agregan sus medidas fijas (conteo,
+latencia, costo/tokens de generación, **valores de score**) y agrupan por dimensiones fijas
+(nombre, modelo, `environment`, `release`, ...), nunca por metadata de span. Para que el
+costo, el ciclo y las devoluciones de una tarea sean números agregables hay que escribirlos
+como scores, sobre una traza que sea de la tarea y no de una invocación. El plan de GH-273
+elige una **traza portadora** por incarnation de tarea (un span construido por un
+`TracerProvider` que no exporta, enviado una vez como protobuf OTLP) y un lote `score-create`
+a la ingesta nativa. Antes de que otra subtarea construya sobre eso, esta compuerta lo
+verifica contra la instancia corriendo.
+
+### Instancia y método
+
+```
+$ docker ps --format '{{.Names}} {{.Ports}}' | grep langfuse-langfuse-web
+langfuse-langfuse-web-1 0.0.0.0:3000->3000/tcp, [::]:3000->3000/tcp
+
+$ curl -s http://localhost:3000/api/public/health
+{"status":"OK","version":"4.35.0"}
+```
+
+La misma instancia, `events_only`, de la compuerta de arriba. Las credenciales se leyeron de
+`observability/langfuse/.env` (ruta absoluta fuera del worktree) desde el script de prueba, que
+no las imprime; ninguna se copió al repo ni a esta página. Las trazas de prueba se llaman
+`agentic.gate.*` y viven en el `environment` `agentic-gate-probe`.
+
+**Cómo se leyó el resultado.** En `events_only` los endpoints de lectura puntual (`/api/public/
+traces`, `/api/public/scores`, `/api/public/v2/scores`) siguen respondiendo `404` (ver arriba),
+así que "lo que muestra la UI" no se puede pedir por la API pública. Dos lecturas sí
+alcanzan: `GET /api/public/v2/observations?traceId=…` (la API de lectura v4, que sí está
+habilitada) y una consulta directa a ClickHouse (`127.0.0.1:8123`, usuario y contraseña por
+defecto de `docker-compose.yml`, sólo `SELECT`), sobre las tablas `events_core` y `scores`: son
+las tablas de las que la UI y los widgets de v4 leen. No se abrió la UI en un navegador: lo
+que se afirma abajo es lo que está en esas tablas, no una captura de pantalla.
+
+El script de prueba (vive sólo acá; ningún archivo del repo lo contiene):
+
+```python
+import base64, hashlib, json, os, sys, urllib.request
+from opentelemetry.sdk.trace import TracerProvider, IdGenerator
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, SpanExportResult
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
+
+HOST = "http://localhost:3000"
+env = dict(
+    l.strip().split("=", 1)
+    for l in open("/home/zeta/dev/repos/agentic-system/observability/langfuse/.env")
+    if "=" in l and not l.startswith("#")
+)
+PUB, SEC = env["LANGFUSE_INIT_PROJECT_PUBLIC_KEY"], env["LANGFUSE_INIT_PROJECT_SECRET_KEY"]
+AUTH = "Basic " + base64.b64encode(f"{PUB}:{SEC}".encode()).decode()
+
+
+def ident(label):
+    h = hashlib.sha256(f"agentic.gate.{label}".encode()).hexdigest()
+    return h[:32], h[32:48]
+
+
+class Fixed(IdGenerator):
+    def __init__(self, t, s):
+        self.t, self.s = int(t, 16), int(s, 16)
+
+    def generate_trace_id(self):
+        return self.t
+
+    def generate_span_id(self):
+        return self.s
+
+
+class Cap(SpanExporter):
+    def __init__(self):
+        self.spans = []
+
+    def export(self, spans):
+        self.spans += list(spans)
+        return SpanExportResult.SUCCESS
+
+
+def post(path, body, ctype, count=False):
+    req = urllib.request.Request(
+        HOST + path,
+        data=body,
+        method="POST",
+        headers={"Content-Type": ctype, "Authorization": AUTH},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status, r.read().decode()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode()
+
+
+def carrier(label, start_ns, end_ns):
+    t, s = ident(label)
+    cap = Cap()
+    tp = TracerProvider(
+        resource=Resource.create({"service.name": "agentic-system"}), id_generator=Fixed(t, s)
+    )
+    tp.add_span_processor(SimpleSpanProcessor(cap))
+    sp = tp.get_tracer("agentic.gate").start_span(
+        "agentic.gate.task",
+        start_time=start_ns,
+        attributes={
+            "langfuse.release": "gate-probe-release",
+            "langfuse.environment": "agentic-gate-probe",
+            "langfuse.trace.name": "agentic.gate.task",
+        },
+    )
+    sp.end(end_time=end_ns)
+    return t, s, encode_spans(cap.spans).SerializeToString()
+
+
+def batch(label, trace_id, value, ts):
+    evs = []
+    for name, v, dt in (
+        ("agentic.gate.cost_usd", value, "NUMERIC"),
+        ("agentic.gate.origin", "original", "CATEGORICAL"),
+        ("agentic.gate.delivered", 1, "BOOLEAN"),
+    ):
+        sid = hashlib.sha256(f"agentic.gate.score.{label}.{name}".encode()).hexdigest()[:32]
+        evs.append(
+            {
+                "id": hashlib.sha256(f"event.{sid}".encode()).hexdigest()[:32],
+                "type": "score-create",
+                "timestamp": ts,
+                "body": {
+                    "id": sid,
+                    "traceId": trace_id,
+                    "name": name,
+                    "value": v,
+                    "dataType": dt,
+                    "environment": "agentic-gate-probe",
+                    "timestamp": ts,
+                    "metadata": {"release": "gate-probe-release", "arm": "default"},
+                },
+            }
+        )
+    return json.dumps({"batch": evs}).encode()
+
+
+if __name__ == "__main__":
+    step, label = sys.argv[1], sys.argv[2]
+    start, end = 1_760_000_000_000_000_000, 1_760_003_600_000_000_000  # 2025-10-09T08:53:20Z .. +1h
+    ts = "2025-10-09T09:53:20.000Z"
+    t, s, body = carrier(label, start, end)
+    if step == "span":
+        print("trace_id", t, "span_id", s, "bytes", len(body))
+        print(post("/api/public/otel/v1/traces", body, "application/x-protobuf"))
+    elif step == "scores":
+        print("trace_id", t)
+        print(
+            post(
+                "/api/public/ingestion", batch(label, t, float(sys.argv[3]), ts), "application/json"
+            )
+        )
+```
+
+### (1) ¿Un cuerpo protobuf OTLP con ids y tiempos fijados es aceptado, y `langfuse.release` / `langfuse.environment` llegan?
+
+El span lo hace un `TracerProvider` con un `IdGenerator` que devuelve el trace id y el span id
+derivados, un procesador que sólo captura, tiempos de inicio y de fin explícitos
+(`2025-10-09T08:53:20Z` a `+1 h`, distintos de "ahora" a propósito) y los atributos
+`langfuse.release=gate-probe-release` y `langfuse.environment=agentic-gate-probe`; se codifica
+con `encode_spans` del SDK y se postea una vez:
+
+```
+$ date -u
+Sat Oct 17 04:38:41 AM UTC 2026
+$ uv run python /tmp/gate273/probe.py span q1
+trace_id c94a47cac75f45e2424597b50020df1d span_id 1340e116ae3f0ffb bytes 379
+(200, '{"name":"otel-ingestion-job","data":{"id":"d2905243-343f-41f9-96ce-ba69e2a3f522","timestamp":"2026-10-17T04:38:42.565Z","name":"otel-ingestion-job","payload":{"data":{"fileKey":"events/otel/agentic-system/2026/10/17/04/38/b8379332-ef8f-40b8-add9-6a3c7d743f2f.json","publicKey":"<public key, elidida>"},"authCheck":{"validKey":true,"scope":{"projectId":"agentic-system","accessLevel":"project","orgId":"agentic"}}, … "queueQualifiedName":"bull:otel-ingestion-queue"}')
+```
+
+La ingesta responde `200` y encola el trabajo. Lo que quedó escrito (ClickHouse, ~10 s después):
+
+```
+$ SELECT id, name, release, environment, timestamp FROM traces FINAL WHERE id='c94a47cac75f45e2424597b50020df1d'
+(sin filas: en events_only la tabla legada `traces` ya no se escribe)
+
+$ SELECT trace_id, span_id, name, start_time, end_time, release, environment FROM events_core FINAL WHERE trace_id='c94a47cac75f45e2424597b50020df1d' FORMAT Vertical
+Row 1:
+trace_id:    c94a47cac75f45e2424597b50020df1d
+span_id:     1340e116ae3f0ffb
+name:        agentic.gate.task
+start_time:  2025-10-09 08:53:20.000000
+end_time:    2025-10-09 09:53:20.000000
+release:     gate-probe-release
+environment: agentic-gate-probe
+
+$ curl -s -u "$PUB:$SEC" "http://localhost:3000/api/public/v2/observations?traceId=c94a47cac75f45e2424597b50020df1d"
+{"data":[{"id":"1340e116ae3f0ffb","traceId":"c94a47cac75f45e2424597b50020df1d","startTime":"2025-10-09T08:53:20.000Z","endTime":"2025-10-09T09:53:20.000Z","projectId":"agentic-system","parentObservationId":null,"type":"SPAN","name":"agentic.gate.task","level":"DEFAULT","statusMessage":"","version":"","environment":"agentic-gate-probe","latency":3600,"timeToFirstToken":null,"userId":"","sessionId":"","isRootObservation":true,"bookmarked":false,"public":false,"modelId":null,"inputPrice":null,"outputPrice":null,"totalPrice":null}],"meta":{}}
+HTTP:200
+```
+
+El `trace_id` y el `span_id` son los fijados, los tiempos son los explícitos (no el de
+ingesta) y las columnas `release` y `environment` del span quedan con los atributos
+`langfuse.release` y `langfuse.environment`; la API v2 devuelve el `environment` y `latency`
+= 3600 s, la hora fijada. **Verdicto: `favorable`.** Salvedad: en v4 la "traza" no es una fila
+propia sino el agrupamiento por `trace_id` de las observaciones de `events_core`; el `release`
+está a nivel de observación. La UI no se abrió.
+
+### (2) ¿Un lote `score-create` a `/api/public/ingestion` es aceptado, con ids del cliente y `timestamp`?
+
+Tres scores (`NUMERIC`, `CATEGORICAL`, `BOOLEAN`), cada uno con el id del evento y el id del
+score derivados por el cliente (`sha256` truncado a 32 hex), `traceId`, `name`, `value`,
+`dataType`, `environment`, `timestamp` (`2025-10-09T09:53:20.000Z`) y `metadata`:
+
+```
+$ uv run python /tmp/gate273/probe.py scores q1 1.25
+trace_id c94a47cac75f45e2424597b50020df1d
+(207, '{"successes":[{"id":"1c89894f0b628dd146bfd4ed99975f0b","status":201},{"id":"b057790d9a176389ca367a3f730cd199","status":201},{"id":"01513f3fa93fb15715ed0440f83adbfe","status":201}],"errors":[]}')
+
+$ SELECT id, trace_id, name, value, string_value, data_type, environment, timestamp, created_at, metadata FROM scores FINAL WHERE trace_id='c94a47cac75f45e2424597b50020df1d' ORDER BY name FORMAT Vertical
+Row 1:
+id:           738b639106287ae5b43cc9f011a60033
+trace_id:     c94a47cac75f45e2424597b50020df1d
+name:         agentic.gate.cost_usd
+value:        1.25
+string_value: ᴺᵁᴸᴸ
+data_type:    NUMERIC
+environment:  agentic-gate-probe
+timestamp:    2025-10-09 09:53:20.000
+created_at:   2026-10-17 04:38:43.934
+metadata:     {'release':'gate-probe-release','arm':'default'}
+
+Row 2:
+id:           6cfe7767ea4f6854b67b1bead420ed4b
+trace_id:     c94a47cac75f45e2424597b50020df1d
+name:         agentic.gate.delivered
+value:        1
+string_value: True
+data_type:    BOOLEAN
+environment:  agentic-gate-probe
+timestamp:    2025-10-09 09:53:20.000
+created_at:   2026-10-17 04:38:43.940
+metadata:     {'release':'gate-probe-release','arm':'default'}
+
+Row 3:
+id:           9339cf11f69077c3468bff248a1bf2bd
+trace_id:     c94a47cac75f45e2424597b50020df1d
+name:         agentic.gate.origin
+value:        0
+string_value: original
+data_type:    CATEGORICAL
+environment:  agentic-gate-probe
+timestamp:    2025-10-09 09:53:20.000
+created_at:   2026-10-17 04:38:43.936
+metadata:     {'release':'gate-probe-release','arm':'default'}
+```
+
+El lote vuelve `207` con tres `201` (el `id` de cada `success` es el id del **evento**). Los
+tres scores están en `scores` con el **id de score del cliente** (`738b…` es
+`sha256("agentic.gate.score.q1.agentic.gate.cost_usd")[:32]`, comprobado a mano), el `value`,
+el `data_type`, el `environment` y la `metadata`. El `timestamp` del score es el que mandó el
+cliente (2025-10-09); `created_at` es el de ingesta (2026-10-17). Un `BOOLEAN` se guarda como
+`value=1`, `string_value=True`; un `CATEGORICAL` como `value=0`, `string_value=<la categoría>`:
+un widget que agregue `origin` o `type` lo hace por `string_value`. **Verdicto: `favorable`.**
+
+### (3) ¿Reenviar el mismo lote, con los mismos ids y un valor cambiado, actualiza el score?
+
+El mismo lote, mismos ids de evento y de score, `cost_usd` de `1.25` a `9.75`:
+
+```
+$ uv run python /tmp/gate273/probe.py scores q1 9.75
+trace_id c94a47cac75f45e2424597b50020df1d
+(207, '{"successes":[{"id":"1c89894f0b628dd146bfd4ed99975f0b","status":201},{"id":"b057790d9a176389ca367a3f730cd199","status":201},{"id":"01513f3fa93fb15715ed0440f83adbfe","status":201}],"errors":[]}')
+
+$ SELECT id, name, value, created_at, updated_at FROM scores WHERE trace_id='c94a47cac75f45e2424597b50020df1d' ORDER BY name, created_at
+738b639106287ae5b43cc9f011a60033	agentic.gate.cost_usd	9.75	2026-10-17 04:38:43.934	2026-10-17 04:39:14.920
+738b639106287ae5b43cc9f011a60033	agentic.gate.cost_usd	1.25	2026-10-17 04:38:43.934	2026-10-17 04:38:49.230
+6cfe7767ea4f6854b67b1bead420ed4b	agentic.gate.delivered	1	2026-10-17 04:38:43.940	2026-10-17 04:39:14.918
+6cfe7767ea4f6854b67b1bead420ed4b	agentic.gate.delivered	1	2026-10-17 04:38:43.940	2026-10-17 04:38:49.204
+9339cf11f69077c3468bff248a1bf2bd	agentic.gate.origin	0	2026-10-17 04:38:43.936	2026-10-17 04:39:14.924
+9339cf11f69077c3468bff248a1bf2bd	agentic.gate.origin	0	2026-10-17 04:38:43.936	2026-10-17 04:38:49.237
+
+$ SELECT id, name, value, timestamp FROM scores FINAL WHERE trace_id='c94a47cac75f45e2424597b50020df1d' ORDER BY name
+738b639106287ae5b43cc9f011a60033	agentic.gate.cost_usd	9.75	2025-10-09 09:53:20.000
+6cfe7767ea4f6854b67b1bead420ed4b	agentic.gate.delivered	1	2025-10-09 09:53:20.000
+9339cf11f69077c3468bff248a1bf2bd	agentic.gate.origin	0	2025-10-09 09:53:20.000
+```
+
+El segundo envío no crea un score nuevo: reemplaza al primero **por id**. `created_at` se
+conserva (04:38:43) y `updated_at` avanza; el valor leído es `9.75`, no `1.25` y no la suma.
+La tabla es un `ReplacingMergeTree`: hasta que ClickHouse fusione las partes, la lectura
+cruda ve las dos versiones de la fila y sólo una lectura con `FINAL` (o por `id` con la última
+`updated_at`) ve una. Que la UI y los widgets lean con esa deduplicación es lo esperable de la
+tabla, pero **no se comprobó** abriendo un widget; una consulta directa y sin `FINAL` (como la
+de este renglón) sí ve las dos. **Verdicto: `favorable`**
+con esa condición: el idempotente es por id, y por eso la identidad del plan incluye el
+`start` de la corrida: el write de cierre pisa al write de fin de la misma corrida (mismo
+id, a propósito) y ninguna otra corrida se pisa.
+
+### (4) ¿Un score enviado a un trace id antes de que llegue su span queda atado cuando el span llega?
+
+Un trace id nuevo (`q4`), con los scores enviados **primero**, y el span después:
+
+```
+$ uv run python /tmp/gate273/probe.py scores q4 3.5
+trace_id 152aef211cbfc6537177c0f0b9b94a15
+(207, '{"successes":[{"id":"8916b6cfc518bf66a0a5ceb92447af17","status":201},{"id":"6b267bcd0eff6efb80c788fe0d1ee5a8","status":201},{"id":"12bbe5bd3331a82f734694d92b1d2f19","status":201}],"errors":[]}')
+
+$ SELECT count() FROM events_core WHERE trace_id='152aef211cbfc6537177c0f0b9b94a15'
+0
+$ SELECT name, value, environment FROM scores FINAL WHERE trace_id='152aef211cbfc6537177c0f0b9b94a15' ORDER BY name
+agentic.gate.cost_usd	3.5	agentic-gate-probe
+agentic.gate.delivered	1	agentic-gate-probe
+agentic.gate.origin	0	agentic-gate-probe
+
+$ uv run python /tmp/gate273/probe.py span q4
+trace_id 152aef211cbfc6537177c0f0b9b94a15 span_id 7929da1242d4096f bytes 379
+(200, '{"name":"otel-ingestion-job", … }')
+
+$ SELECT span_id, name, release, environment FROM events_core FINAL WHERE trace_id='152aef211cbfc6537177c0f0b9b94a15'
+7929da1242d4096f	agentic.gate.task	gate-probe-release	agentic-gate-probe
+$ SELECT name, value, environment FROM scores FINAL WHERE trace_id='152aef211cbfc6537177c0f0b9b94a15' ORDER BY name
+agentic.gate.cost_usd	3.5	agentic-gate-probe
+agentic.gate.delivered	1	agentic-gate-probe
+agentic.gate.origin	0	agentic-gate-probe
+
+$ curl -s -u "$PUB:$SEC" "http://localhost:3000/api/public/v2/observations?traceId=152aef211cbfc6537177c0f0b9b94a15"
+{"data":[{"id":"7929da1242d4096f","traceId":"152aef211cbfc6537177c0f0b9b94a15","startTime":"2025-10-09T08:53:20.000Z","endTime":"2025-10-09T09:53:20.000Z", … ,"name":"agentic.gate.task", … "environment":"agentic-gate-probe", … }
+```
+
+Los scores no se descartan por no tener todavía una traza: se guardan igual (el `200`/`201`
+de arriba y la fila en `scores` con el span ausente) y siguen allí, intactos, cuando el span
+llega. No hay una clave foránea entre `scores.trace_id` y `events_core.trace_id`: se unen al
+leer, por el id, así que "atado" aquí es "el mismo `trace_id` en las dos tablas". Por la misma
+razón, el orden span→scores que usa el plan no es necesario para que el score exista, sino
+una precaución. **Verdicto: `favorable`**, con la misma salvedad que (1): no se abrió la UI
+para ver la página de la traza.
+
+### Veredicto y consecuencias
+
+| Pregunta | Verdicto |
+|---|---|
+| (1) Protobuf OTLP aceptado; `release`/`environment` del span llegan | `favorable` |
+| (2) Lote `score-create` aceptado, ids del cliente, `timestamp` respetado | `favorable` |
+| (3) Reenvío con los mismos ids actualiza, no duplica | `favorable` |
+| (4) Score antes del span queda atado cuando éste llega | `favorable` |
+
+| Resultado | Consecuencia |
+|---|---|
+| Upsert por id no respetado, o instancia `unreachable` | `backfill` agrega el ledger local (`run_registry_dir/langfuse/<12 hex del directorio del producto>.json`, escrito de forma atómica) y no reenvía lo ya enviado. |
+| Sin mapeo de `release`/`environment` desde el span | `release` se lee de la metadata del score. |
+| Sin atado tardío | Riesgo conocido, registrado. |
+
+Los cuatro verdictos son `favorable` y la instancia fue alcanzable: **ninguna de las tres
+consecuencias se activa**. `backfill` no agrega el ledger, `release` se lee del span
+(`langfuse.release`; también va en la metadata de cada score) y el orden span→scores queda
+como precaución. Dos cosas que las subtareas siguientes deben tener presentes, ambas ya
+visibles arriba: un score `BOOLEAN` o `CATEGORICAL` se agrega por `string_value`, no por
+`value`; y la deduplicación por id es de lectura (`FINAL`), no de escritura.
+
+Las trazas de prueba (`agentic.gate.*`, `environment=agentic-gate-probe`, dos trace ids) quedan
+en la instancia: en `events_only` no hay un endpoint público para borrarlas, y un widget que
+filtre por el `environment` de un producto real no las ve.
+
+### La decisión de GH-273: scores sobre una traza portadora por tarea
+
+La compuerta de arriba dio los cuatro verdictos `favorable`; esta parte registra lo que el
+sistema hace con ello. Nada de lo anterior cambia: `telemetry.py`, `TaskRun.finish`, el
+colector, los prompts y todo atributo de span existente quedan como estaban.
+
+- **Una traza portadora por tarea y por incarnación.** Cada tarea terminada tiene una traza
+  propia con un solo span, `agentic.task.scores <id>`, que lleva `langfuse.release`,
+  `langfuse.environment`, `arm` y `baseline`; los números salen como scores sobre esa
+  traza, lo único por traza que un widget de Langfuse v4 agrega. La identidad la deriva una
+  sola función, `task_scores.identity(producto, id de tarea, inicio)`: el id de traza, el
+  del span, el de cada score y el del evento de ingesta. Incluye el **inicio de la corrida**
+  que lo produjo, así que un `--fresh` o cada brazo de `eval run` tiene su propia identidad
+  y ninguna corrida pisa los scores de otra; el write de fin y el de cierre de una misma
+  corrida comparten identidad, y el segundo actualiza al primero por id (pregunta 3).
+- **El tiempo.** El span corre del primer `started_at` al último `ended_at` de `runs`; un
+  documento sin marcas (anterior al 2026-09-18) usa el `created_at` del PR y luego el
+  `createdAt` del issue para los dos extremos. Todo score lleva `timestamp` igual al fin.
+  Nunca se usa el reloj, `closed_at` ni el mtime de un archivo.
+- **Cada score, su fuente y cuándo se omite.** Está en la tabla de `observability/README.md`
+  ("Scores por tarea"), y un test la mantiene igual a `task_scores.SCORE_NAMES`. La regla
+  común: una entrada que falta omite su score y nunca lo escribe como `0` o `false`
+  (`active_h` sin marcas, `cycle_h` sin merge o sin lectura de `gh`, `delivered` sin
+  `delivery_outcome`, `origin` sin título). `cost_usd`, `returns`, `failed_cost_usd` y `type`
+  salen siempre, y un documento sin `cost_usd` da `0.0`: es el único lugar donde un dato
+  ausente se lee como cero, y el pedido lo fija así.
+- **`auto_merged` cuenta como entregada.** El pedido define `delivered` como "el PR se
+  mergeó"; si lo juzgó una persona es la pregunta del scorecard (ADR-0045), no la de este
+  score.
+- **Credenciales.** `AGENTIC_LANGFUSE_HOST`, `AGENTIC_LANGFUSE_PUBLIC_KEY` y
+  `AGENTIC_LANGFUSE_SECRET_KEY`. El prefijo `AGENTIC_` es lo que ya mantiene fuera de cada
+  subproceso de rol (`own_configuration_unset`), de los chequeos del producto y de la app de
+  muestra (`without_own_configuration`) todo lo que lo lleva; por eso no son un campo de
+  `Configuration` y `composition.task_scorer()` las lee de `os.environ` y se las da sólo al
+  adaptador. Con alguna sin definir no se escribe nada. Las `LANGFUSE_*` sin prefijo de un
+  `.env` humano siguen tan expuestas como hoy.
+- **El cable.** El span lo construye un `TracerProvider` que no exporta (un procesador que
+  sólo captura), se codifica con `encode_spans` del SDK y se envía una vez como protobuf a
+  `/api/public/otel/v1/traces`; los scores van en un solo lote `score-create` a
+  `/api/public/ingestion`. Siempre el span primero, un solo POST por llamada acotado por
+  `LANGFUSE_TIMEOUT_S`, sin reintento y sin `OTLPSpanExporter` en el camino de una corrida.
+  El cliente atrapa todo, imprime una línea con la llamada y la tarea, nunca la clave, un
+  encabezado ni un cuerpo, y devuelve.
+- **El backfill** es `agentic scores backfill --product-dir <dir> [--dry-run]`: recorre
+  `documents.ids()`, puntúa los terminados (`ready_for_review`, `discarded` o con
+  `closed_at`) con las mismas funciones `task_time`, `identity`, `dimensions` y
+  `task_scores` que la ruta en vivo, y no escribe ningún documento. Lee el PR y el issue a lo
+  sumo una vez cada uno, con la cota de ADR-0050. Imprime una línea por documento (`scored`,
+  `partial:<omitidos>`, `skipped:<motivo>` o `failed`) y una última con el conteo; sale `1`
+  si alguno quedó `partial` o `failed`, y `2` sin Langfuse configurado salvo `--dry-run`. Se
+  detiene tras 3 escrituras fallidas seguidas. Como los ids son derivados, repetirlo completa
+  huecos sin duplicar, y por eso no hace falta el ledger local que la tabla de consecuencias
+  de la compuerta reservaba: ninguna de sus tres consecuencias se activó.
+- **Desviación: "un conjunto por tarea terminada".** El pedido dice un conjunto de scores por
+  tarea histórica; una tarea sin terminar no tiene cifras finales y sale
+  `skipped:not_finished`: se puntúa en vivo cuando termine.
+- **El backfill real lo corre la persona** después del merge y de re-fijar stage0 a ese sha:
+  desde un checkout del propio sistema `default_ports` se niega a correr (ADR-0017), así que
+  esta tarea no lo ejecutó contra Langfuse.
+
+Evidencia del `--dry-run` de esta tarea (lee los documentos, el PR y el issue por `gh` y no
+escribe nada en Langfuse). `apostrophe`, sobre el repositorio real:
+
+```
+$ uv run agentic scores backfill --product-dir /home/zeta/dev/repos/apostrophe --dry-run
+scored 108, partial 0, skipped:not_finished 9, failed 0
+```
+
+`agentic-system`: el propio checkout se niega (ADR-0017, arriba), así que se corrió sobre una
+copia de sus documentos de tarea y de su `stack.yaml` en un repositorio temporal con el mismo
+`origin`:
+
+```
+$ uv run agentic scores backfill --product-dir /tmp/as-dry --dry-run
+scored 104, partial 0, skipped:not_finished 1, failed 0
+```
+
+Riesgos conocidos: un score enviado antes de que su traza llegue queda guardado y se une al
+leer por el id (pregunta 4), pero la página de la traza no se abrió en la UI; las claves
+`LANGFUSE_*` sin prefijo de un `.env` quedan expuestas como hoy; el backfill necesita que
+Langfuse y `gh` sean alcanzables desde donde corre; y la deduplicación por id es de lectura
+(`FINAL`), no de escritura, así que una consulta cruda sin `FINAL` ve las dos versiones de un
+score actualizado. Un ledger local de lo enviado, si hiciera falta, tendría el riesgo de dos
+escritores concurrentes sobre el mismo archivo.

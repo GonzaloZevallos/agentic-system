@@ -26,6 +26,11 @@ ALLOWLIST = {
     "AGENTIC_SYSTEM_VERSION",
     # agentic/core/measurement/adapters/otel/telemetry.py, system_baseline()
     "AGENTIC_SYSTEM_BASELINE",
+    # agentic/composition.py, task_scorer(): the Langfuse key pair, read once from the
+    # environment and handed to the scores adapter alone -- deliberately not fields.
+    "AGENTIC_LANGFUSE_HOST",
+    "AGENTIC_LANGFUSE_PUBLIC_KEY",
+    "AGENTIC_LANGFUSE_SECRET_KEY",
 }
 
 _TOKEN = re.compile(rf"{ENV_PREFIX}[A-Z0-9_]+")

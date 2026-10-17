@@ -23,6 +23,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from .core.knowledge.adapters.filesystem import FilesystemFlags, FilesystemKnowledge
 from .core.knowledge.adapters.git import GitStack
+from .core.measurement.adapters.langfuse.scores import LangfuseScores
 from .core.measurement.adapters.otel import telemetry
 from .core.measurement.domain.metrics import arm_label
 from .core.process.adapters.claude_sdk import ClaudeSdkRunner
@@ -35,6 +36,26 @@ from .core.process.application.ports import Ports
 from .core.process.application.preflight import refuse_its_own_checkout
 from .shared.configuration import STATE_FILE, Configuration, state_file_for
 from .shared.environment import own_configuration_unset
+
+LANGFUSE_VARIABLES = (
+    "AGENTIC_LANGFUSE_HOST",
+    "AGENTIC_LANGFUSE_PUBLIC_KEY",
+    "AGENTIC_LANGFUSE_SECRET_KEY",
+)
+
+
+def task_scorer() -> LangfuseScores | None:
+    """The writer of a finished task's Langfuse scores, or `None` when any of its three
+    variables is unset or empty (GH-273, ADR-0037 addendum).
+
+    Read from `os.environ` here and handed to the adapter alone: the key pair is
+    deliberately not a `Configuration` field, so it never reaches a role's or a check's
+    environment. The `AGENTIC_` prefix is what keeps it out of both
+    (`own_configuration_unset`, `without_own_configuration`)."""
+    host, public_key, secret_key = (os.environ.get(name) for name in LANGFUSE_VARIABLES)
+    if not (host and public_key and secret_key):
+        return None
+    return LangfuseScores(host, public_key, secret_key)
 
 
 def default_ports(cfg: Configuration) -> Ports:
