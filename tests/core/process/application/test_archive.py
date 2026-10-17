@@ -5,7 +5,7 @@ the document, and the damage order (nothing removed before it is committed)."""
 from pathlib import Path
 
 from agentic.core.process.application import archive
-from tests.fakes import MemoryDocuments, MemoryWorkspace, memory_ports
+from tests.fakes import FakeReaper, MemoryDocuments, MemoryWorkspace, memory_ports
 
 
 def test_nothing_to_archive_calls_no_mutating_verb():
@@ -155,3 +155,20 @@ def test_does_not_confuse_gh_1_with_gh_12():
     result = archive.archive_previous_run("GH-1", ports)
     assert result == archive.ArchiveResult(prefix=None, written=False)
     assert ports.workspace.renamed == []
+
+
+def test_what_the_release_reaped_comes_back_in_the_result_and_nothing_otherwise():
+    reaped = ({"pid": 7, "command": "uv run sample_app.py", "outcome": "kill"},)
+    ports = memory_ports(reaper=FakeReaper(reaped))
+    ports.documents.save({"id": "GH-1", "system_commit": "75de807"})
+    ports.workspace.existing_branches["agentic/GH-1"] = ("h1", "b0")
+
+    result = archive.archive_previous_run("GH-1", ports)
+
+    assert result.reaped == reaped
+    assert ports.workspace.cleaned == ["GH-1"]
+
+    quiet = memory_ports()
+    quiet.documents.save({"id": "GH-1", "system_commit": "75de807"})
+    quiet.workspace.existing_branches["agentic/GH-1"] = ("h1", "b0")
+    assert archive.archive_previous_run("GH-1", quiet).reaped == ()

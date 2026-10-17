@@ -31,6 +31,7 @@ from typing import (
 )
 
 from .presubmit import CheckResult
+from .reaping import ReapedProcess
 
 Status = Literal[
     "open",
@@ -676,6 +677,10 @@ class TaskState(TaskInput, total=False):
     # `.get`, written only to the product checkout's document and only by a delivery.
     pushed_head: str
     pushed_at: str
+    # The processes a role left running that the release stopped when the task closed
+    # (GH-282, ADR-0052): `deliver` and `discard` write it, only when something was reaped,
+    # and it is read with `.get`.
+    reaped_at_cleanup: list[ReapedProcess]
     # The landing's own record (GH-239, ADR-0048), every key optional and read with `.get`:
     # `landing` is append-only, one entry per `(head, step)` written before it dispatches;
     # `auto_merge_guarded` the guarded paths an automatic merge landed; `landing_restarts`

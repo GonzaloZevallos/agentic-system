@@ -12,7 +12,7 @@ from agentic.core.process.application.ports import BranchPullRequest
 from agentic.core.process.domain import document, rules
 from agentic.core.process.domain.pull_request import github_length
 from agentic.shared.configuration import Configuration
-from tests.fakes import memory_ports
+from tests.fakes import FakeReaper, memory_ports
 
 pytestmark = pytest.mark.anyio
 
@@ -598,3 +598,36 @@ async def test_a_legacy_sync_entry_without_upstream_resolves_as_before(cfg):
 
     assert patch["landing"][0]["resolved_at"]
     assert "lacks" not in patch["landing"][0]
+
+
+REAPED = ({"pid": 7, "command": "uv run sample_app.py", "outcome": "kill"},)
+
+
+async def test_what_the_release_reaped_is_in_the_patch_and_the_saved_document(cfg):
+    ports = memory_ports(reaper=FakeReaper(REAPED))
+
+    patch = await deliver(TASK, cfg, ports)
+
+    assert patch["reaped_at_cleanup"] == list(REAPED)
+    assert (ports.documents.load("GH-12") or {})["reaped_at_cleanup"] == list(REAPED)
+    assert ports.workspace.cleaned == ["GH-12"]
+
+
+async def test_nothing_reaped_leaves_the_key_out_of_the_patch_and_the_document(cfg):
+    ports = memory_ports()
+
+    patch = await deliver(TASK, cfg, ports)
+
+    assert "reaped_at_cleanup" not in patch
+    assert "reaped_at_cleanup" not in (ports.documents.load("GH-12") or {})
+
+
+async def test_a_cleanup_that_fails_still_delivers_after_the_reap_was_asked(cfg):
+    reaper = FakeReaper(REAPED)
+    ports = memory_ports(reaper=reaper)
+    ports.workspace.cleanup_error = "worktree locked"
+
+    patch = await deliver(TASK, cfg, ports)
+
+    assert patch["status"] == "ready_for_review"
+    assert reaper.calls == [("task", "GH-12", None, None)]

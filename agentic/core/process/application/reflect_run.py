@@ -10,6 +10,7 @@ reflection is recorded in `reflected.yaml` with its reason and never raised.
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,8 +21,10 @@ from agentic.shared.configuration import Configuration
 from ..domain import playbook as pb
 from ..domain import playbook_candidates as pc
 from ..domain import rules
+from ..domain.reaping import ReapedProcess
 from .ports import ListedPullRequest, Ports
 from .reflect import reflect_task
+from .release import release_task, summary
 
 TASK_ID = "playbook"
 BRANCH = rules.task_branch(TASK_ID)
@@ -217,7 +220,7 @@ async def reflect(
         # The previous pull request is over: its branch is kept aside, a fresh one starts
         # from the default branch with everything the old blocks remembered.
         head = ports.workspace.branch_head(BRANCH) or "old"
-        ports.workspace.cleanup(TASK_ID)
+        _say_reaped(release_task(ports, TASK_ID))
         ports.workspace.rename_branch(BRANCH, f"archive/playbook-{head}")
     checkout = ports.workspace.task_checkout(TASK_ID)
     reuse = not replace
@@ -275,8 +278,14 @@ async def reflect(
     elif sha is not None:
         text = open_pr.body.partition(pc.MARKER)[0].rstrip() or INTRO
         ports.tracker.update_pull_request_body(open_pr.number, _body(text, summary, record))
-    ports.workspace.cleanup(TASK_ID)
+    _say_reaped(release_task(ports, TASK_ID))
     return Outcome(len(batch), left, url)
+
+
+def _say_reaped(reaped: tuple[ReapedProcess, ...]) -> None:
+    """Stderr only (GH-282): a reflection has no task document to record a reap in."""
+    if reaped:
+        print(f"agentic: reflect: {summary(reaped)}", file=sys.stderr)
 
 
 def _message(count: int, first: bool) -> str:

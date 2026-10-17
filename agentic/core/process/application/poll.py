@@ -35,7 +35,7 @@ from ..domain.adr_numbers import Ambiguous, Renaming
 from ..domain.boot import boot_verdict
 from ..domain.landing import LandingStepKind
 from ..domain.task import PullRequest, TaskState, apply
-from . import adr_collision, landing_plan, reflect_run
+from . import adr_collision, landing_plan, reflect_run, release
 from . import escalate as escalate_module
 from .checkouts import task_base
 from .ports import (
@@ -681,7 +681,16 @@ def gather_retakes(
             retakes.append(number)
         elif decision == "human":
             cap_spent = first == "retake"  # only the count turned it into the human's
-            lines.append(_human_line(number, record, other_boot, cap_spent))
+            line = _human_line(number, record, other_boot, cap_spent)
+            # A run dead in THIS boot may have left processes alive (GH-282, ADR-0052): its
+            # own scope only, never the task's. An other-boot record has nothing alive, and
+            # an unknown boot proves nothing. Repeating it every round is fine: a re-scan of
+            # a reaped scope finds nothing.
+            if other_boot is False and (
+                reaped := release.summary(release.release_processes(ports, task_id, run=record.pid))
+            ):
+                line += f"; {reaped}"
+            lines.append(line)
     return retakes, lines
 
 
