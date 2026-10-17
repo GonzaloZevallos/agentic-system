@@ -56,18 +56,19 @@ DASHBOARD_VARIABLES = (
 )
 
 
-def task_scorer() -> LangfuseScores | None:
+def task_scorer(product: str) -> LangfuseScores | None:
     """The writer of a finished task's Langfuse scores, or `None` when any of its three
     variables is unset or empty (GH-273, ADR-0037 addendum).
 
     Read from `os.environ` here and handed to the adapter alone: the key pair is
     deliberately not a `Configuration` field, so it never reaches a role's or a check's
     environment. The `AGENTIC_` prefix is what keeps it out of both
-    (`own_configuration_unset`, `without_own_configuration`)."""
+    (`own_configuration_unset`, `without_own_configuration`). The writer is bound to
+    `product`, the declared name, and refuses to write any other (GH-283)."""
     host, public_key, secret_key = (os.environ.get(name) for name in LANGFUSE_VARIABLES)
     if not (host and public_key and secret_key):
         return None
-    return LangfuseScores(host, public_key, secret_key)
+    return LangfuseScores(host, public_key, secret_key, product=product)
 
 
 def missing_dashboard_variables(*, verify: bool) -> list[str]:

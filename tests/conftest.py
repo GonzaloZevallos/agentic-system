@@ -48,3 +48,20 @@ def no_real_inhibitor(monkeypatch):
     # The module `cli` holds is replaced, never `inhibitor.hold` itself: the adapter's own
     # tests use the real one.
     monkeypatch.setattr("agentic.cli.inhibitor", SimpleNamespace(hold=nothing))
+
+
+@pytest.fixture(autouse=True)
+def no_real_langfuse_transport(monkeypatch):
+    """GH-283: a test never reaches the real Langfuse. `LangfuseScores` reads
+    `urllib_transport` from its module at call time (`transport or urllib_transport`), so
+    replacing it here makes any writer built without an injected transport fail loudly.
+    Together with `isolated_env` unsetting `OTEL_EXPORTER_OTLP_ENDPOINT`, both the score
+    path and the OTLP exporter are closed. A test of the real transport imports
+    `urllib_transport` at its own module import (before this runs) and injects it."""
+
+    def unreachable(url, body, headers, timeout_s):
+        raise AssertionError("the real Langfuse transport is not reachable from tests")
+
+    monkeypatch.setattr(
+        "agentic.core.measurement.adapters.langfuse.scores.urllib_transport", unreachable
+    )

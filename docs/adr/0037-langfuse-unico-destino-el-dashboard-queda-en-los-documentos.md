@@ -1164,3 +1164,25 @@ de tareas con ≈3 % de frecuencia en el histórico (7 de 209, por el proxy de a
 Una consecuencia sobre el código, también registrada acá: la frase de `widget_data.py` según la
 cual `FINAL` colapsa los duplicados "como lo hacen las vistas de Langfuse" era falsa para este
 caso (`FINAL` deja las dos filas; las vistas además agrupan por `id`); se corrigió esa frase.
+
+## Adenda (2026-10-17, GH-283): el escritor de scores queda atado al producto declarado
+
+- **El escritor solo escribe el producto con el que se construyó.** `LangfuseScores` recibe
+  `product` al construirse (palabra clave obligatoria, sin valor por defecto) y `write` rechaza
+  antes de cualquier post, con una línea y `False`, un producto distinto. Cubre las dos
+  escrituras: el atributo `langfuse.environment` de la traza portadora y el `environment` de
+  cada score solo pueden ser el nombre declarado. `composition.task_scorer(product)` lo recibe
+  de los tres puntos de `cli.py`, que son raíces de composición.
+- **El transporte real queda cerrado en los tests.** Un fixture autouse de `tests/conftest.py`
+  reemplaza `urllib_transport` por una función que falla; un escritor sin transporte inyectado
+  falla en voz alta y no envía nada. `OTEL_EXPORTER_OTLP_ENDPOINT` ya se desactiva en los tests
+  (`isolated_env`), así que el camino de scores y el exportador OTLP quedan cerrados. El test
+  del servidor mudo inyecta `urllib_transport` de forma explícita.
+- **Las 46 filas de `agentic-gate-probe` y `agentic-gate-probe-gh276` se aceptan, no se
+  borran.** Salieron de scripts a mano en `/tmp/gate273/` y `/tmp/gh276/`, no de la suite, y
+  `events_only` no tiene borrado público. Ningún widget las ve, porque todos filtran por el
+  entorno del producto.
+- **Regla para compuertas futuras:** inyectar un transporte que capture, o usar otro proyecto
+  de Langfuse con otra clave; nunca el proyecto de un producto.
+- **Riesgo residual:** un script fuera del repositorio con una clave cruda sigue pudiendo
+  escribir cualquier entorno.

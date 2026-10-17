@@ -1409,7 +1409,7 @@ def _score_closed(
     `cycle_h`, under the same identity, so it upserts the one made at finish. One bounded
     issue read gives `cycle_h` its start; a failed read prints one line and leaves that one
     score out, and never fails the close."""
-    scorer = scorer or composition.task_scorer()
+    scorer = scorer or composition.task_scorer(product_name(ports))
     if scorer is None:
         return
     issue_created_at: str | None = None
@@ -2234,16 +2234,16 @@ async def _scores_backfill(cfg: Configuration, ports: Ports, dry_run: bool) -> N
     document, then a count by outcome; exit 1 when any document was partial or failed.
     After `BACKFILL_TRANSPORT_FAILURES` consecutive failed writes it stops and says so.
     `--dry-run` reads everything (`gh` included) and writes nothing to Langfuse."""
-    scorer: LangfuseScores | None = composition.task_scorer()
+    try:
+        product = ports.stack.product()
+    except (ValueError, OSError) as exc:
+        raise CannotStart(str(exc)) from exc
+    scorer: LangfuseScores | None = composition.task_scorer(product)
     if scorer is None and not dry_run:
         raise CannotStart(
             "no Langfuse configured: set AGENTIC_LANGFUSE_HOST, AGENTIC_LANGFUSE_PUBLIC_KEY "
             "and AGENTIC_LANGFUSE_SECRET_KEY, or pass --dry-run"
         )
-    try:
-        product = ports.stack.product()
-    except (ValueError, OSError) as exc:
-        raise CannotStart(str(exc)) from exc
     reads = _GhReads(ports)
     counts: dict[str, int] = {}
     consecutive_failures = 0
@@ -2509,7 +2509,8 @@ def _write_scores(
 
     `finished_only` is the write at the finish of an invocation: only a document that is
     finished (`ready_for_review` or `discarded`) is scored, a paused one leaves nothing."""
-    scorer = scorer or composition.task_scorer()
+    product = product_name(ports)
+    scorer = scorer or composition.task_scorer(product)
     if scorer is None:
         return
     try:
@@ -2519,7 +2520,6 @@ def _write_scores(
         span = task_scores.task_time(document, pr_created_at, issue_created_at)
         if span is None:
             return
-        product = product_name(ports)
         scores = task_scores.task_scores(
             document,
             pr_merged_at=pr_merged_at,

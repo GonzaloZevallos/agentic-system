@@ -359,3 +359,46 @@ widget filtra `unknown` fuera de un desglose.
   datos de la definición.
 - **"% del gasto en follow-ups"** como cociente: un widget no divide; se muestra el gasto
   de `cost_usd.origin.original` y `cost_usd.origin.followup` en una sola serie.
+
+## Adenda (2026-10-17, GH-283): «Costo por modelo» lee un score por familia de modelo
+
+Tras el backfill y `agentic dashboards apply --verify` del 2026-10-17, `money/cost_by_model`
+daba 0 filas en los dos productos. Esta adenda no edita el texto anterior: reemplaza una
+fila de la tabla de «Qué lee cada widget».
+
+- **La fila nueva.** «Costo por modelo» pasa a `SCORES_NUMERIC`, `value` · `sum`, desglose
+  `name`, con `environment` = el producto y `name` `any of` la familia
+  `cost_usd.model.<familia>`; se ubica por `task_time.end`, como los demás.
+- **Por qué.** Las generaciones de Claude Code (`claude_code.llm_request`) llevan
+  `environment = 'default'`: no se atribuyen a ningún producto, así que el filtro por
+  producto nunca las alcanza. Además cubren unos 3.384 USD de los unos 9.200 USD que
+  registran los documentos de tarea. El sistema ya registra el costo por modelo de cada
+  corrida (`runs[].cost_by_model`); ahora ese dato se escribe como score, con la identidad
+  y el tiempo de siempre (`identity(product, task_id, start)`, `task_time.end`).
+- **La vista OBSERVATIONS deja de usarse.** Ningún widget la lee. Se quitan su consulta
+  de conteo en `widget_data.py` y el brazo `start_time` de `WidgetSpec.placed_by`, y el
+  tipo `WidgetSpec.view` se estrecha a las tres vistas de scores; construir un widget con
+  otra vista se rechaza. `golden.json` y el catálogo de enums de Postgres no cambian:
+  describen el almacén, no nuestros widgets.
+- **Contra qué se verifica la cifra.** Contra Σ `cost_by_model` de los documentos, no
+  contra `cost_usd`: el score es el costo del intento que entregó y queda por debajo de
+  `cost_usd` por el costo de los intentos fallidos (`failed_cost_usd`) y por el residuo que
+  ninguna corrida registra.
+- **Granularidad.** La familia es `opus`/`sonnet`/`haiku`/`other`, con
+  `task_scores.model_family` como único normalizador (el segmento que sigue a `claude-`);
+  los ids exactos quedan en el documento. Agregar un miembro está permitido; renombrarlo
+  no (ADR-0008).
+- **El backfill no necesita código.** `cli._backfill_one` solo salta los documentos
+  `not_finished` y `no_time` (y `_scores_backfill`, los `unreadable`); todo otro documento
+  terminado re-deriva el conjunto completo de scores con los mismos ids y el mismo
+  `task_time.end`. La familia nueva llega a la historia con ids deterministas y sin
+  partir el día de ordenamiento.
+- **Orden posterior al merge, a cargo de una persona.** (1) Re-fijar stage0. (2)
+  `agentic scores backfill --product-dir <dir>` en los dos productos (ADR-0017 lo rechaza
+  desde este checkout). (3) `agentic dashboards apply --verify` en los dos productos; su
+  salida es el criterio de hecho.
+- **Lo que no se toca.** Las generaciones `default` existentes quedan como están: no se
+  reescriben ni se reetiquetan, y el colector no cambia.
+- **Riesgos.** Un proveedor o familia nuevos caen en `other` hasta que se agregue un
+  miembro. Los documentos anteriores al 2026-09-14, que no tienen `cost_by_model`, no
+  aportan nada: ese score se omite, nunca se escribe en 0.

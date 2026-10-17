@@ -23,7 +23,7 @@ import re
 import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Literal, get_args
 
 from . import task_scores
 
@@ -85,6 +85,11 @@ def _names(names: Iterable[str]) -> Filter:
 _DELIVERED: Filter = {"column": "booleanValue", "type": "boolean", "operator": "=", "value": True}
 
 
+WidgetView = Literal["SCORES_NUMERIC", "SCORES_BOOLEAN", "SCORES_CATEGORICAL"]
+"""The views a widget of ours reads: every one of them is a score. No widget reads the
+observations view since GH-283, so the type cannot name it."""
+
+
 @dataclass(frozen=True)
 class WidgetRow:
     """A `dashboard_widgets` row, less the columns Langfuse manages (`created_at`,
@@ -140,7 +145,7 @@ class WidgetSpec:
     key: str
     title: str
     about: str
-    view: str
+    view: WidgetView
     measure: str
     agg: str
     dimensions: tuple[str, ...]
@@ -148,6 +153,8 @@ class WidgetSpec:
     chart_type: str
 
     def __post_init__(self) -> None:
+        if self.view not in get_args(WidgetView):
+            raise ValueError(f"{self.key}: {self.view!r} is not a score view")
         if environment_filter(self.product) not in self.filters:
             raise ValueError(f"{self.key}: no environment filter for {self.product!r}")
         for name in self.scores:
@@ -169,9 +176,8 @@ class WidgetSpec:
     @property
     def placed_by(self) -> str:
         """The timestamp that places what the widget counts in time: a score carries
-        `task_time.end`, the end of the task's last run (never its merge date); an
-        observation, its own start."""
-        return "start_time" if self.view == "OBSERVATIONS" else "task_time.end"
+        `task_time.end`, the end of the task's last run (never its merge date)."""
+        return "task_time.end"
 
     def row(self) -> WidgetRow:
         config: dict[str, Any] = {"type": self.chart_type}
@@ -233,7 +239,7 @@ def _widget(
     title: str,
     about: str,
     *,
-    view: str = "SCORES_NUMERIC",
+    view: WidgetView = "SCORES_NUMERIC",
     measure: str = "value",
     agg: str,
     dimensions: Sequence[str] = (),
@@ -489,11 +495,11 @@ def _money(product: str) -> DashboardSpec:
             w(
                 "cost_by_model",
                 "Costo por modelo",
-                "Cost of the model calls, by model.",
-                view="OBSERVATIONS",
-                measure="totalCost",
+                "Dollars by model family: the delivering attempt's model cost, from the task "
+                "documents.",
                 agg="sum",
-                dimensions=("providedModelName",),
+                dimensions=("name",),
+                names=task_scores.FAMILIES["cost_usd.model"],
                 chart="VERTICAL_BAR",
             ),
         ),

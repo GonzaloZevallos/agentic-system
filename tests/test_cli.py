@@ -4463,16 +4463,26 @@ def test_a_closed_pull_request_that_never_merged_is_scored_not_delivered(tmp_pat
 
 
 def test_the_composition_hands_a_scorer_only_when_all_three_variables_are_set(monkeypatch):
-    from agentic.core.measurement.adapters.langfuse.scores import LangfuseScores
+    from datetime import UTC, datetime
 
-    assert composition.task_scorer() is None
+    from agentic.core.measurement.adapters.langfuse.scores import LangfuseScores
+    from agentic.core.measurement.domain.task_scores import Dimensions, TaskTime
+
+    assert composition.task_scorer("apostrophe") is None
     monkeypatch.setenv("AGENTIC_LANGFUSE_HOST", "http://lf")
     monkeypatch.setenv("AGENTIC_LANGFUSE_PUBLIC_KEY", "pk")
-    assert composition.task_scorer() is None
+    assert composition.task_scorer("apostrophe") is None
     monkeypatch.setenv("AGENTIC_LANGFUSE_SECRET_KEY", "")
-    assert composition.task_scorer() is None
+    assert composition.task_scorer("apostrophe") is None
     monkeypatch.setenv("AGENTIC_LANGFUSE_SECRET_KEY", "sk")
-    assert isinstance(composition.task_scorer(), LangfuseScores)
+    scorer = composition.task_scorer("apostrophe")
+    assert isinstance(scorer, LangfuseScores)
+    # Bound to the product it was built for: any other name is refused before a post.
+    moment = datetime(2026, 10, 17, tzinfo=UTC)
+    refused = scorer.write(
+        "gym", "GH-1", {}, [], TaskTime(moment, moment), Dimensions("v", "b", "a")
+    )
+    assert refused is False
     # Never a `Configuration` field: a field would travel with the configuration into a role.
     fields = {ENV_PREFIX + name.upper() for name in Configuration.model_fields}
     assert not fields & set(composition.LANGFUSE_VARIABLES)
@@ -4498,7 +4508,7 @@ class FakeScorer:
 
 def _backfill_run(monkeypatch, root: Path, ports, scorer, *extra: str) -> None:
     monkeypatch.setattr(cli, "default_ports", lambda cfg: ports)
-    monkeypatch.setattr(cli.composition, "task_scorer", lambda: scorer)
+    monkeypatch.setattr(cli.composition, "task_scorer", lambda product: scorer)
     monkeypatch.setattr(
         "sys.argv", ["agentic", "scores", "backfill", "--product-dir", str(root), *extra]
     )

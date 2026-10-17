@@ -155,6 +155,7 @@ escritura está en la adenda de GH-273 de ADR-0037; esta tabla dice qué trae ca
 | `escalations.<EscalationClass>` | cuántas entradas `escalation` de `pause_log` tienen esa clase | numérico | la clase no ocurrió |
 | `cost_usd.role.<Role>` | suma de `runs[].cost_usd` de las corridas con ese `slug` | numérico | ninguna corrida tiene ese `slug` |
 | `delivered_cost_usd.type.<TaskType>` | `cost_usd`, bajo el `type` de la tarea | numérico | la tarea no se entregó, o su `type` no es uno de los conocidos |
+| `cost_usd.model.<ModelFamily>` | suma de `runs[].cost_by_model` por familia del modelo (`opus`, `sonnet`, `haiku`; todo lo demás, `other`); es el costo del intento que entregó, así que queda por debajo de `cost_usd` por `failed_cost_usd` y por lo que ninguna corrida registra | numérico | ninguna corrida tiene `cost_by_model` (documentos anteriores al 2026-09-14) |
 | `cost_usd.origin.<Origin>` | `cost_usd`, bajo el origen de la tarea (`original` o `followup`, como `origin`) | numérico | no hay título |
 | `delivered_cost_usd` | `cost_usd` | numérico | la tarea no se entregó (`delivered` no es verdadero) |
 | `findings_important` | filas `important` de `findings`, plegadas por ubicación y reclamo como la tabla de hallazgos | numérico | el documento no tiene `findings` |
@@ -211,14 +212,13 @@ cada dashboard lleva el producto como sufijo (`Panorama · agentic-system`); los
 | Operación | Fallos por límite de cuenta, por día | `SCORES_NUMERIC` | `value` · `sum` | `failures.account_limit` | `timestampDay` | `task_time.end` | por día, no por hora |
 | Operación | Entregas por día | `SCORES_BOOLEAN` | `count` · `count` | `delivered` | `timestampDay` | `task_time.end` | solo entregadas (`booleanValue` = true) |
 | Dónde va la plata | Costo por rol | `SCORES_NUMERIC` | `value` · `sum` | `cost_usd.role.<Role>` | `name` | `task_time.end` | |
-| Dónde va la plata | Costo por modelo | `OBSERVATIONS` | `totalCost` · `sum` | `totalCost` | `providedModelName` | `start_time` | medida nativa de la vista de observaciones |
+| Dónde va la plata | Costo por modelo | `SCORES_NUMERIC` | `value` · `sum` | `cost_usd.model.<ModelFamily>` | `name` | `task_time.end` | costo del intento que entregó (Σ `cost_by_model`), no `cost_usd` |
 
 Cómo leer la tabla:
 
 - **El tiempo.** Cada score se ubica por `task_time.end`, el fin de la última corrida de la
   tarea, nunca por la fecha del merge: "PRs mergeados por semana de entrega" cuenta la semana
-  en que terminó la tarea. La fecha del merge se lee en `cycle_h`. La observación de "Costo
-  por modelo" se ubica por su propio `start_time`.
+  en que terminó la tarea. La fecha del merge se lee en `cycle_h`.
 - **Versión del sistema.** El desglose `traceRelease` es el `release` de la traza portadora
   del score; en Panorama es el marcador del cambio de versión (no hay línea vertical).
 - **`unknown` es una serie visible.** Una tarea cuya versión no se registró aparece como
@@ -228,7 +228,7 @@ Cómo leer la tabla:
   sección 3). Se elige la semana en Panorama y los últimos 7 días en Operación.
 - **Un widget no divide ni filtra por condición.** Lo condicional o por categoría es un
   score propio (`delivered_cost_usd.type.*`, `returns.*`, `failures.*`, `escalations.*`,
-  `cost_usd.role.*`, `cost_usd.origin.*`), omitido cuando no ocurrió.
+  `cost_usd.role.*`, `cost_usd.model.*`, `cost_usd.origin.*`), omitido cuando no ocurrió.
 - **`--verify` es manual.** `agentic dashboards apply --verify` cuenta, por widget, contra
   ClickHouse; nunca corre en CI. Un widget sin filas es un fallo, salvo los de
   `ZERO_ROW_EXCEPTIONS` (los que leen `failures.*`, `escalations.*`, `returns.*` o

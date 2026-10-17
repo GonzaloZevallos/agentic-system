@@ -460,3 +460,73 @@ def test_a_malformed_register_reads_as_unknown_not_zero():
         )
     )
     assert "findings_important" not in got and "checks_red" not in got
+
+
+# The distinct `cost_by_model` keys of every task document of agentic-system, apostrophe and
+# gym-saas on 2026-10-17, frozen. Collected read-only with:
+#   grep -rhE -A8 "^\s*cost_by_model:" <product>/.agentic/tasks \
+#     | grep -E "^\s{4,}[^ :]+: [0-9.e-]+$" | sed -E "s/^\s+([^:]+):.*/\1/" \
+#     | grep -E "^(claude|<|opus|sonnet|haiku|[a-z]+-)" | sort | uniq -c
+#   3899 claude-haiku-4-5-20251001 / 624 claude-opus-5 / 2253 claude-opus-5-5
+#   1067 claude-sonnet-5 / 1731 claude-sonnet-5-5
+REAL_MODEL_KEYS = {
+    "claude-opus-5": "opus",
+    "claude-opus-5-5": "opus",
+    "claude-sonnet-5": "sonnet",
+    "claude-sonnet-5-5": "sonnet",
+    "claude-haiku-4-5-20251001": "haiku",
+}
+
+
+@pytest.mark.parametrize(("key", "family"), REAL_MODEL_KEYS.items())
+def test_every_real_model_key_maps_to_its_named_family(key, family):
+    assert ts.model_family(key) == family
+
+
+@pytest.mark.parametrize("key", ["<synthetic>", "opus", "claude-foo-9", "", "gpt-5", "claude-"])
+def test_a_key_that_is_no_claude_family_is_other(key):
+    assert ts.model_family(key) == "other"
+
+
+def test_no_real_model_key_lands_in_other():
+    runs = [
+        run(cost_by_model={key: 1.0 + i}, slug="developer") for i, key in enumerate(REAL_MODEL_KEYS)
+    ]
+    got = by_name(ts.task_scores(document(runs=runs)))
+    assert "cost_usd.model.other" not in got
+    assert sum(s.value for n, s in got.items() if n.startswith("cost_usd.model.")) == pytest.approx(
+        sum(1.0 + i for i in range(len(REAL_MODEL_KEYS)))
+    )
+
+
+def test_the_model_families_are_a_closed_family_of_scores():
+    assert ts.FAMILIES["cost_usd.model"] == (
+        "cost_usd.model.opus",
+        "cost_usd.model.sonnet",
+        "cost_usd.model.haiku",
+        "cost_usd.model.other",
+    )
+    assert set(ts.FAMILIES["cost_usd.model"]) <= set(ts.SCORE_NAMES)
+
+
+def test_cost_by_model_sums_every_run_into_its_family_and_a_run_without_it_adds_nothing():
+    doc = document(
+        runs=[
+            run(cost_by_model={"claude-opus-5-5": 1.25, "claude-haiku-4-5-20251001": 0.0125}),
+            run(cost_by_model={"claude-opus-5": 0.75, "<synthetic>": 0.5}),
+            run(),
+        ]
+    )
+    got = by_name(ts.task_scores(doc))
+    assert got["cost_usd.model.opus"].value == pytest.approx(2.0)
+    assert got["cost_usd.model.haiku"].value == pytest.approx(0.0125)
+    assert got["cost_usd.model.other"].value == pytest.approx(0.5)
+    assert "cost_usd.model.sonnet" not in got
+    total = sum(s.value for n, s in got.items() if n.startswith("cost_usd.model."))
+    assert total == pytest.approx(1.25 + 0.0125 + 0.75 + 0.5, abs=0.005)
+    assert all(s.data_type == "NUMERIC" for n, s in got.items() if n.startswith("cost_usd.model."))
+
+
+def test_a_document_without_cost_by_model_emits_no_model_score():
+    got = by_name(ts.task_scores(document(runs=[run(), run(cost_by_model={})])))
+    assert not [n for n in got if n.startswith("cost_usd.model.")]
