@@ -4466,7 +4466,7 @@ def test_the_composition_hands_a_scorer_only_when_all_three_variables_are_set(mo
     from datetime import UTC, datetime
 
     from agentic.core.measurement.adapters.langfuse.scores import LangfuseScores
-    from agentic.core.measurement.domain.task_scores import Dimensions, TaskTime
+    from agentic.core.measurement.domain.task_scores import Dimensions, Score, TaskTime
 
     assert composition.task_scorer("apostrophe") is None
     monkeypatch.setenv("AGENTIC_LANGFUSE_HOST", "http://lf")
@@ -4475,14 +4475,41 @@ def test_the_composition_hands_a_scorer_only_when_all_three_variables_are_set(mo
     monkeypatch.setenv("AGENTIC_LANGFUSE_SECRET_KEY", "")
     assert composition.task_scorer("apostrophe") is None
     monkeypatch.setenv("AGENTIC_LANGFUSE_SECRET_KEY", "sk")
+
+    # A capturing transport that succeeds, so a refusal can only come from the binding and
+    # not from the autouse failing transport. It is set before the scorer is built: the
+    # writer resolves `transport or urllib_transport` at construction. Assertions on what it
+    # recorded are made after `write` returns; the recorder runs on the adapter's thread.
+    calls: list[tuple[str, bytes, dict[str, str]]] = []
+
+    def recorder(url, body, headers, timeout_s):
+        calls.append((url, body, headers))
+        return 200, b"{}"
+
+    monkeypatch.setattr(
+        "agentic.core.measurement.adapters.langfuse.scores.urllib_transport", recorder
+    )
     scorer = composition.task_scorer("apostrophe")
     assert isinstance(scorer, LangfuseScores)
-    # Bound to the product it was built for: any other name is refused before a post.
     moment = datetime(2026, 10, 17, tzinfo=UTC)
-    refused = scorer.write(
-        "gym", "GH-1", {}, [], TaskTime(moment, moment), Dimensions("v", "b", "a")
-    )
-    assert refused is False
+    task_time = TaskTime(moment, moment)
+    dimensions = Dimensions("v", "b", "a")
+    scores = [Score("cost_usd", 1.0, "NUMERIC")]
+
+    # Accepting control: the bound product reaches the transport, on both posts.
+    assert scorer.write("apostrophe", "GH-1", {}, scores, task_time, dimensions) is True
+    ingestion = [body for url, body, _ in calls if url.endswith("/api/public/ingestion")]
+    assert len(ingestion) == 1
+    events = json.loads(ingestion[0])["batch"]
+    assert events
+    assert {event["body"]["environment"] for event in events} == {"apostrophe"}
+    assert any(url.endswith("/api/public/otel/v1/traces") for url, _, _ in calls)
+
+    # Rejecting control: a foreign product is refused before any post. The recorder
+    # succeeds, so this `False` is the refusal and not a failed post.
+    posted = len(calls)
+    assert scorer.write("gym", "GH-1", {}, scores, task_time, dimensions) is False
+    assert len(calls) == posted
     # Never a `Configuration` field: a field would travel with the configuration into a role.
     fields = {ENV_PREFIX + name.upper() for name in Configuration.model_fields}
     assert not fields & set(composition.LANGFUSE_VARIABLES)
