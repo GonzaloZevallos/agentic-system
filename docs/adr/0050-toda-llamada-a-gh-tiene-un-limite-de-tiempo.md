@@ -72,3 +72,92 @@ pasan por `run_gh` y su `run` por defecto es `bounded_run`. No se edita ADR-0034
   registra para cualquier fallo de `gh`).
 - 60 s está declarado, no medido: si un incidente real muestra que es largo, es una
   constante.
+
+## Enmienda 2026-10-20 (GH-290): un `gh` que no llega a GitHub termina una ronda, no el poller
+
+Incidente: tras un reinicio, antes de que subiera la red, el poller de apostrophe salió con
+estado 1 cuatro veces seguidas por `ValueError: gh issue view failed: error connecting to
+api.github.com`. systemd lo levantó, pero cada caída pierde el estado en memoria y la
+tormenta de reinicios esconde los fallos reales del journal.
+
+### Decisión
+
+- **La clasificación vive en `run_gh`** (`adapters/github/run.py`), el único lugar que ve el
+  código de salida y el stderr de `gh`. La ronda del poller, en `application/`, solo ve un
+  `ValueError` ya compuesto y no puede clasificar.
+- **Familia de excepciones** (`application/ports.py`): base nueva `TrackerCallFailed(ValueError)`;
+  `TrackerTimedOut` pasa a ser su subclase sin cambiar nombre, módulo ni ascendencia
+  `ValueError`; `TrackerUnreachable(TrackerCallFailed)` es nueva. Todo `except ValueError`
+  existente absorbe ambas sin cambios. Los que terminan una ronda nombran la base.
+- **Reconocimiento.** La constante `GH_UNREACHABLE_MARKERS = ("error connecting to",)` en
+  `run.py`, comparada sin distinguir mayúsculas con el stderr. El código de salida 4
+  (autenticación) nunca se clasifica como inalcanzable. Todo lo que no coincide sigue siendo
+  el `ValueError` plano con el `failed(stderr)` de cada llamador, byte por byte.
+- **Línea de log.** Una sola, por `log`: `agentic: gh <args[0]> <args[1]> could not reach
+  GitHub (<marcador>); this read fails and the next round retries`. Nunca contiene stderr.
+- **Capturado** con el `gh` fijado (2.100.0), salida 1: `GH_HOST=nonexistent.invalid gh api /`
+  imprime `error connecting to nonexistent.invalid` y `check your internet connection or
+  https://githubstatus.com`. Es la misma forma que la del incidente con `api.github.com`.
+- **Quién atrapa.** `cli._poll` y `poll._spawn_resume` atrapan `TrackerCallFailed` (la línea
+  del segundo es `-> comment timed out` para un timeout, sin cambios, y `-> comment failed:
+  <exc>` para el inalcanzable). `GhTracker.issue_state` re-lanza `TrackerCallFailed` antes
+  del fallback de "`gh` viejo". `merge.py` atrapa `TrackerUnreachable` antes de
+  `MergeCallFailed` y `ValueError`.
+
+### Excepción declarada a ADR-0029 y a la sexta enmienda de ADR-0004
+
+Esto compara texto de `gh` para clasificar, lo que ADR-0029 prohíbe. Se acepta porque es el
+transporte de una lectura del sistema, no una razón de fallo de un rol; porque falla hacia
+lo ruidoso (un fallo sin marcador sigue matando al poller, como hoy); porque ocurre en un
+solo lugar (`GH_UNREACHABLE_MARKERS`, y ningún otro módulo compara texto de `gh`); y porque
+un marcador exige un fixture capturado del `gh` fijado: uno que falta cuesta un reinicio,
+uno de más esconde un error real.
+
+### `merge`: lo que cambia y lo que no se puede saber
+
+- Un fallo de conexión en `repo view` (una lectura, antes de cualquier cambio) se propaga
+  como `TrackerUnreachable`. `merge.py` retira la intención (`auto_merge_head: ""`), no
+  escribe `merge_failures`, no comenta, y devuelve `stopped/unreachable`. Antes registraba
+  `gh_unreadable` y una llamada contada; ahora no registra nada.
+- Un fallo de conexión en `pr merge` (la única escritura) antes era `gh_rejected` con el
+  consejo de protección de rama; ahora es `gh_unreadable`, contado contra `MERGE_CALLS_MAX`.
+  Una caída en el paso de escritura gasta una de las tres llamadas de la cabeza: es el
+  precio de no confundir una respuesta perdida con "no se mergeó".
+- Solo `merge` distingue "no se hizo nada" de "quizá se hizo"; ningún otro código trata
+  `TrackerUnreachable` como prueba de que una escritura (merge, comentario, cierre,
+  etiqueta) no ocurrió.
+
+### Frontera: dónde termina la ronda y dónde no
+
+Una falla de conectividad termina la ronda solo donde ningún handler de `ValueError` queda
+por encima de la llamada. Esos handlers no se editan y la línea de `run_gh` igual deja el
+registro cuando uno la absorbe: `_blocked`, `gather_closes`, `assess_merge`, reflect,
+`landing_plan` y `deliver`.
+
+Llamadas `gh` de `run_once` sin handler de `ValueError` por encima (terminan la ronda):
+`tracker.queue()` en `gather_launches`; `tracker.timestamped_comments` en `gather_resumes` y
+en `gather_retakes`; `tracker.label` y `tracker.comment` en `escalate_persisted_limits`; las
+lecturas de `GhInbox` fuera de `_blocked`.
+
+### Riesgos conocidos
+
+- **Un solo marcador.** Una frase de conectividad de `gh` que no hayamos visto sigue
+  causando un reinicio (el statu quo). El marcador puede cubrir también casos `net.Error` de
+  la fase de respuesta; el diseño no depende de eso porque el paso de escritura se trata
+  como ambiguo.
+- **Llamadas de red que no son `gh`.** `git fetch` en `upstream()` ya se vuelve una nota, y
+  `fetch_commit` (sondeo de ADR y `gather_merges`) devuelve `False` o cae en `except
+  GitError`. `push` y `ls-remote` no se alcanzan desde `run_once`: pertenecen a los hijos de
+  entrega. Ninguna llamada de red que no sea `gh` queda sin absorber en la ronda.
+- **Disciplina de marcadores.** Un marcador futuro necesita un stderr capturado del `gh`
+  fijado.
+- `escalate_persisted_limits` conserva su medio estado (documento escalado sin etiqueta ni
+  comentario) si el fallo ocurre entre medio, como ya registra este ADR.
+
+### Consecuencias
+
+- §7: ninguna señal, etiqueta, atributo, clave de documento, valor de `MergeFailure` o
+  `FailureReason`, ni prompt, se agrega, mueve ni renombra; la salida nueva son líneas por
+  stdout.
+- §8: nada nuevo se vuelve alcanzable. El costo por ronda no cambia; una caída de red
+  cuesta una ronda fallida en lugar de un reinicio del proceso.
