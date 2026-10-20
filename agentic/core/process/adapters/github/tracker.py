@@ -20,7 +20,8 @@ from ...application.ports import (
     IssueState,
     ListedPullRequest,
     MergeCallFailed,
-    TrackerTimedOut,
+    TrackerCallFailed,
+    TrackerUnreachable,
 )
 from ...domain.ci import CiCheck, CiReport, CiUnreadable
 from ...domain.task import PullRequest, PullRequestCommit
@@ -386,8 +387,10 @@ class GhTracker:
         fields = "state,stateReason,blockedBy,closedByPullRequestsReferences"
         try:
             raw = self._gh("issue", "view", str(number), "--json", fields)
-        except TrackerTimedOut:
-            raise  # a stall is not an old `gh`: never fall back, never `blocked_by=None`
+        except TrackerCallFailed:
+            # A stall or an unreachable GitHub is not an old `gh`: never fall back, never
+            # `blocked_by=None`.
+            raise
         except ValueError:
             # An older `gh` that does not expose the native dependency at all: fall
             # back to every other field, `blocked_by=None` tells the caller to read
@@ -508,8 +511,9 @@ class GhTracker:
         return answer if isinstance(answer, dict) else CiUnreadable("gh_unreadable")
 
     def merge(self, reference: str, head_sha: str) -> str:
-        """Raises only `MergeCallFailed`, its class chosen at the step that failed: never
-        by reading `gh`'s stderr (ADR-0029). The reference is parsed first, so an
+        """Raises `MergeCallFailed`, its class chosen at the step that failed: never by
+        reading `gh`'s stderr (ADR-0029), or `TrackerUnreachable` from the `repo view` read,
+        before anything could change. The reference is parsed first, so an
         unreadable one reaches no `gh` call at all; `gh pr merge` gets the bare number and
         resolves the repository from `product_dir`, as `pull_request` does."""
         try:
@@ -525,6 +529,8 @@ class GhTracker:
                     "mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed",
                 )
             )
+        except TrackerUnreachable:
+            raise  # a read, before any change: nothing merged, nothing to count
         except ValueError as exc:  # `_gh`'s own failure, or a `JSONDecodeError`
             missing = isinstance(exc.__cause__, FileNotFoundError)
             raise MergeCallFailed(
@@ -543,7 +549,7 @@ class GhTracker:
             self._gh("pr", "merge", str(number), f"--{method}", "--match-head-commit", head_sha)
         except ValueError as exc:
             missing = isinstance(exc.__cause__, FileNotFoundError)
-            if isinstance(exc, TrackerTimedOut):  # the merge may or may not have happened
+            if isinstance(exc, TrackerCallFailed):  # the merge may or may not have happened
                 raise MergeCallFailed("gh_unreadable", str(exc)) from exc
             raise MergeCallFailed("gh_unavailable" if missing else "gh_rejected", str(exc)) from exc
         return method

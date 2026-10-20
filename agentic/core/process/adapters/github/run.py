@@ -15,13 +15,23 @@ import subprocess
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from ...application.ports import TrackerTimedOut
+from ...application.ports import TrackerTimedOut, TrackerUnreachable
 
 # Declared, not measured: a healthy call takes about a second. One constant to change if a
 # real incident shows 60 s too long (no Configuration field, like FETCH_TIMEOUT_S).
 GH_TIMEOUT_S: float = 60
 # How long the wait for a killed `gh` to close its pipes and exit may take.
 GH_DRAIN_S: float = 2
+
+# What `gh` prints when it cannot reach GitHub, matched case-insensitively against its
+# stderr (GH-290, ADR-0050 addendum). The only module that compares text from `gh` to
+# classify. Captured from gh 2.100.0 on exit 1 (`GH_HOST=nonexistent.invalid gh api /`):
+# "error connecting to nonexistent.invalid\ncheck your internet connection or
+# https://githubstatus.com". A marker is added only with a stderr captured from the pinned
+# `gh`: a missing one costs a poller restart, an extra one hides a real error.
+GH_UNREACHABLE_MARKERS: tuple[str, ...] = ("error connecting to",)
+# `gh`'s exit code for an authentication failure: never a connectivity failure.
+_GH_EXIT_AUTH = 4
 
 Run = Callable[..., subprocess.CompletedProcess[str]]
 
@@ -87,6 +97,13 @@ def bounded_run(
     return subprocess.CompletedProcess(args, returncode, stdout, stderr)
 
 
+def _unreachable_marker(returncode: int, stderr: str) -> str | None:
+    if returncode == _GH_EXIT_AUTH:
+        return None
+    lowered = stderr.lower()
+    return next((marker for marker in GH_UNREACHABLE_MARKERS if marker in lowered), None)
+
+
 def run_gh(
     run: Run,
     args: Sequence[str],
@@ -99,14 +116,21 @@ def run_gh(
     """One `gh <args>` call through `run`, its stdout stripped. Every failure is a
     `ValueError`: `not_installed` when there is no `gh`, `failed(stderr)` when it exits
     non-zero (each caller keeps its own wording), `TrackerTimedOut` when `run` raised
-    `TimeoutExpired`, after exactly one line through `log` that names the call and the
-    bound and nothing `gh` printed."""
+    `TimeoutExpired`, `TrackerUnreachable` when `gh` exited saying it could not reach
+    GitHub (`GH_UNREACHABLE_MARKERS`, never exit 4). Each of the last two writes exactly
+    one line through `log` that names the call and nothing `gh` printed."""
     try:
         result = run(["gh", *args], cwd=cwd, capture_output=True, text=True, check=True)
     except FileNotFoundError as exc:
         raise ValueError(not_installed) from exc
     except subprocess.CalledProcessError as exc:
-        raise ValueError(failed(exc.stderr.strip())) from exc
+        stderr = exc.stderr.strip()
+        marker = _unreachable_marker(exc.returncode, stderr)
+        if marker is not None:
+            call = f"gh {' '.join(args[:2])} could not reach GitHub ({marker})"
+            log(f"agentic: {call}; this read fails and the next round retries")
+            raise TrackerUnreachable(call) from exc
+        raise ValueError(failed(stderr)) from exc
     except subprocess.TimeoutExpired as exc:
         call = f"gh {' '.join(args[:2])} timed out after {exc.timeout:g} s"
         log(f"agentic: {call}; this read fails and the next round retries")
@@ -114,4 +138,7 @@ def run_gh(
     return result.stdout.strip()
 
 
-__all__ = ["GH_DRAIN_S", "GH_TIMEOUT_S", "bounded_run", "print_line", "run_gh"]
+__all__ = [
+    "GH_DRAIN_S",
+    "GH_TIMEOUT_S",
+    "GH_UNREACHABLE_MARKERS", "bounded_run", "print_line", "run_gh"]

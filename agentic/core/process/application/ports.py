@@ -498,11 +498,24 @@ class MergeCallFailed(ValueError):
         self.failure = failure
 
 
-class TrackerTimedOut(ValueError):
-    """A `gh` call ran out of time (GH-266). A `ValueError`, so every handler that already
-    treats an unreadable read as harmless absorbs it unchanged; declared here so
-    `application/` and `cli.py` can name it without importing an adapter. The message
-    names the call and the bound, never stderr or issue content."""
+class TrackerCallFailed(ValueError):
+    """A `gh` call failed for a reason about the transport, not about the question (GH-266,
+    GH-290): the base of `TrackerTimedOut` and `TrackerUnreachable`, so a catcher that ends
+    one poll round names one class and cannot forget a subtype. A `ValueError`, so every
+    handler that already treats an unreadable read as harmless absorbs it unchanged."""
+
+
+class TrackerTimedOut(TrackerCallFailed):
+    """A `gh` call ran out of time (GH-266). Declared here so `application/` and `cli.py`
+    can name it without importing an adapter. The message names the call and the bound,
+    never stderr or issue content."""
+
+
+class TrackerUnreachable(TrackerCallFailed):
+    """A `gh` call could not reach GitHub (GH-290). For a read, no request is known to have
+    reached GitHub; for a write the response may have been lost after the change was made,
+    so a write stays ambiguous. The message names the call and the marker `run_gh`
+    recognised, never stderr."""
 
 
 class GitError(RuntimeError):
