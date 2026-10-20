@@ -17,6 +17,7 @@ from agentic.core.process.application.ports import (
     LockRecord,
     RunRegistration,
     TrackerTimedOut,
+    TrackerUnreachable,
     Upstream,
 )
 from agentic.core.process.domain.roles import INTERVIEW_SOLUTION
@@ -1518,6 +1519,37 @@ def test_a_comment_that_times_out_after_a_spawn_keeps_the_spawn_line_and_still_w
         "agentic: poll: retake #30 -> comment timed out",
         "agentic: poll: retake #30 -> not registered (retake 1 of 3)",
     ]
+
+
+def test_a_comment_that_cannot_reach_github_after_a_spawn_keeps_the_spawn_and_names_the_error():
+    error = TrackerUnreachable("gh issue comment could not reach GitHub (error connecting to)")
+    tracker = _CommentStalls(error)
+    ports = memory_ports(tracker=tracker)
+    _open_task(ports)
+    registry = MemoryRunRegistry()
+    launcher = FakeLauncher()
+    from agentic.core.process.domain import rules
+
+    waits: list[float] = []
+    lines = poll.execute(
+        [rules.PollAction("retake", 30)],
+        _cfg("/p"),
+        ports,
+        registry,
+        launcher,
+        ESCALATED_AT,
+        "agentic",
+        register_timeout_s=0.5,
+        sleep=waits.append,
+    )
+    assert lines == [
+        "agentic: poll: retake #30 -> pid 4242",
+        "agentic: poll: retake #30 -> comment failed: "
+        "gh issue comment could not reach GitHub (error connecting to)",
+        "agentic: poll: retake #30 -> not registered (retake 1 of 3)",
+    ]
+    assert len(launcher.spawned) == 1 and waits  # the child runs on; the wait still ran
+    assert registry.registered_kinds == []
 
 
 def test_a_comment_failing_with_any_other_value_error_still_escapes():

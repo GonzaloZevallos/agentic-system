@@ -8,7 +8,11 @@ import pytest
 
 from agentic.core.process.adapters.github import GhTracker
 from agentic.core.process.adapters.github.tracker import issue_number
-from agentic.core.process.application.ports import MergeCallFailed, TrackerTimedOut
+from agentic.core.process.application.ports import (
+    MergeCallFailed,
+    TrackerTimedOut,
+    TrackerUnreachable,
+)
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.ci import CiCheck, CiReport, CiUnreadable
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
@@ -1024,3 +1028,61 @@ def test_ci_report_timeout_is_ci_unreadable_gh_unreadable():
         "https://github.com/o/r/pull/7"
     )
     assert report == CiUnreadable("gh_unreadable")
+
+
+# -- gh cannot reach GitHub (GH-290) -------------------------------------------------------
+
+# Captured from the pinned gh 2.100.0 on exit 1 (`GH_HOST=nonexistent.invalid gh api /`).
+_UNREACHABLE = (
+    "error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com"
+)
+
+
+def _unreachable_at(*step):
+    """Like `_stalls_at`, but the matching call exits 1 with the incident's stderr; every
+    other call answers well, so a fallback call would succeed if it were made."""
+
+    class Run:
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, args, cwd, capture_output, text, check):
+            self.calls.append(args)
+            if tuple(args[1 : 1 + len(step)]) == step:
+                raise subprocess.CalledProcessError(1, args, stderr=_UNREACHABLE)
+            if tuple(args[1:3]) == ("repo", "view"):
+                allowed = {"mergeCommitAllowed": True}
+                return subprocess.CompletedProcess(args, 0, json.dumps(allowed), "")
+            return subprocess.CompletedProcess(args, 0, json.dumps({"state": "OPEN"}), "")
+
+    return Run()
+
+
+@pytest.mark.parametrize("failure", ["timed_out", "unreachable"])
+def test_issue_state_after_a_transport_failure_never_falls_back_to_an_old_gh(failure):
+    run = (
+        _stalls_at("issue", "view") if failure == "timed_out" else _unreachable_at("issue", "view")
+    )
+    lines: list[str] = []
+    with pytest.raises((TrackerTimedOut, TrackerUnreachable)) as raised:
+        GhTracker(Path("/p"), run, log=lines.append).issue_state(229)
+    assert type(raised.value) is (TrackerTimedOut if failure == "timed_out" else TrackerUnreachable)
+    assert len(run.calls) == 1  # the fallback would have answered: it is never made
+    assert len(lines) == 1
+
+
+def test_merge_repo_view_unreachable_propagates_unwrapped_and_merges_nothing():
+    run = _unreachable_at("repo", "view")
+    with pytest.raises(TrackerUnreachable) as raised:
+        GhTracker(Path("/p"), run, log=lambda line: None).merge(PR_URL, "abc123")
+    assert not isinstance(raised.value, MergeCallFailed)
+    assert [call[1:3] for call in run.calls] == [["repo", "view"]]
+
+
+def test_merge_pr_merge_unreachable_is_gh_unreadable_never_gh_rejected():
+    run = _unreachable_at("pr", "merge")
+    with pytest.raises(MergeCallFailed) as raised:
+        GhTracker(Path("/p"), run, log=lambda line: None).merge(PR_URL, "abc123")
+    assert raised.value.failure == "gh_unreadable"
+    assert type(raised.value) is MergeCallFailed
+    assert isinstance(raised.value.__cause__, TrackerUnreachable)

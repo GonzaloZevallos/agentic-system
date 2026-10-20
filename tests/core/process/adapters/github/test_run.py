@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from agentic.core.process.adapters.github.run import GH_DRAIN_S, bounded_run, run_gh
-from agentic.core.process.application.ports import TrackerTimedOut
+from agentic.core.process.application.ports import TrackerTimedOut, TrackerUnreachable
 
 
 def _gh(run, *args, log=None, cwd=Path(".")):
@@ -90,6 +90,52 @@ def test_run_gh_default_log_is_flushed_stdout(capsys):
     captured = capsys.readouterr()
     assert captured.out.startswith("agentic: gh pr list timed out after 60 s")
     assert captured.err == ""
+
+
+# Captured from the pinned gh 2.100.0 on exit 1: `GH_HOST=nonexistent.invalid gh api /`
+# prints the same two lines for `api.github.com` (the incident, GH-290).
+INCIDENT_STDERR = (
+    "error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com"
+)
+CAPTURED_STDERR = (
+    "error connecting to nonexistent.invalid\n"
+    "check your internet connection or https://githubstatus.com\n"
+)
+
+
+@pytest.mark.parametrize("stderr", [INCIDENT_STDERR, CAPTURED_STDERR, INCIDENT_STDERR.upper()])
+def test_run_gh_a_connect_failure_writes_one_line_and_raises_unreachable(stderr):
+    error = subprocess.CalledProcessError(1, ["gh"], stderr=stderr)
+    call, lines = _gh(_raising(error), "issue", "view", "7", "--json", "body")
+    with pytest.raises(TrackerUnreachable) as raised:
+        call()
+    assert isinstance(raised.value, ValueError)
+    assert raised.value.__cause__ is error
+    assert lines == [
+        "agentic: gh issue view could not reach GitHub (error connecting to); "
+        "this read fails and the next round retries"
+    ]
+    assert "api.github.com" not in lines[0] + str(raised.value)
+    assert "githubstatus" not in lines[0] + str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stderr"),
+    [
+        (1, "HTTP 401: Bad credentials"),
+        (1, "Could not resolve to an Issue with the number of 9"),
+        (4, INCIDENT_STDERR),
+        (1, ""),
+    ],
+)
+def test_run_gh_other_failures_stay_the_plain_failed_wording(returncode, stderr):
+    error = subprocess.CalledProcessError(returncode, ["gh"], stderr=stderr)
+    call, lines = _gh(_raising(error))
+    with pytest.raises(ValueError) as raised:
+        call()
+    assert type(raised.value) is ValueError
+    assert str(raised.value) == f"failed: {stderr.strip()}"
+    assert lines == []
 
 
 def test_run_gh_translates_the_other_failures_with_each_callers_wording():

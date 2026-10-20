@@ -69,7 +69,7 @@ from .core.process.application.ports import (
     Ports,
     RunLock,
     RunRegistry,
-    TrackerTimedOut,
+    TrackerCallFailed,
     Upstream,
 )
 from .core.process.application.preflight import (
@@ -1040,7 +1040,7 @@ async def _poll(
                     eval_set=_round_eval_set(ports),
                 ):
                     print(line, flush=True)
-            except TrackerTimedOut as exc:  # a stalled `gh` read ends this round, not the poller
+            except TrackerCallFailed as exc:  # a stalled or unreachable `gh` ends this round
                 print(f"agentic: poll: round ended early: {exc}", flush=True)
             await sleep(interval_s)
 
