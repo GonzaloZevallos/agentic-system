@@ -555,6 +555,7 @@ class _Unreachable(MergingTracker):
         self.step = step
 
     def merge(self, reference: str, head_sha: str) -> str:
+        pull_request_number(reference)
         self.merge_calls.append((reference, head_sha))
         error = TrackerUnreachable("gh repo view could not reach GitHub (error connecting to)")
         if self.step == "repo view":
