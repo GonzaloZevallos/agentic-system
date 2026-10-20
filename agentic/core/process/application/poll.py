@@ -46,6 +46,7 @@ from .ports import (
     Ports,
     RunLock,
     RunRegistry,
+    TrackerCallFailed,
     TrackerTimedOut,
     Upstream,
 )
@@ -831,8 +832,9 @@ def _spawn_resume(
     lines = [f"agentic: poll: {action.kind} #{number} -> pid {pid}"]
     try:
         ports.tracker.comment(task_id, comment)
-    except TrackerTimedOut:  # the child runs on: only the comment is lost
-        lines.append(f"agentic: poll: {action.kind} #{number} -> comment timed out")
+    except TrackerCallFailed as exc:  # the child runs on: only the comment is lost
+        what = "timed out" if isinstance(exc, TrackerTimedOut) else f"failed: {exc}"
+        lines.append(f"agentic: poll: {action.kind} #{number} -> comment {what}")
     registered = await_registration(registry, task_id, register_timeout_s, sleep)
     if action.kind == "retake" and not registered:
         lines.append(

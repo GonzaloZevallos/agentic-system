@@ -141,4 +141,8 @@ def run_gh(
 __all__ = [
     "GH_DRAIN_S",
     "GH_TIMEOUT_S",
-    "GH_UNREACHABLE_MARKERS", "bounded_run", "print_line", "run_gh"]
+    "GH_UNREACHABLE_MARKERS",
+    "bounded_run",
+    "print_line",
+    "run_gh",
+]

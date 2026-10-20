@@ -4867,3 +4867,148 @@ def test_column_drift_refuses_with_exit_2_and_writes_nothing(monkeypatch, tmp_pa
     code = _dashboards(monkeypatch, close_root(tmp_path), store, env=DASHBOARD_ENV)
     assert code == 2 and store.rows == {}
     assert "dashboards.owner_team" in capsys.readouterr().err
+
+
+# --- GH-290: a gh that cannot reach GitHub ends one round, not the poller ----------------
+
+# Captured from the pinned gh 2.100.0 on exit 1 (`GH_HOST=nonexistent.invalid gh api /`).
+_UNREACHABLE_STDERR = (
+    "error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com"
+)
+
+
+class _Stop(Exception):
+    pass
+
+
+def _poll_with(tmp_path, sleep):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import FakeLauncher, MemoryRunRegistry
+
+    return cli._poll(
+        Configuration(product_dir=tmp_path),
+        memory_ports(),
+        60.0,
+        run_lock=FakeLock(),
+        registry=MemoryRunRegistry(),
+        launcher=FakeLauncher(),
+        argv0="agentic",
+        sleep=sleep,
+    )
+
+
+@pytest.mark.anyio
+async def test_poll_an_unreachable_round_prints_its_lines_then_the_early_end_and_sleeps(
+    monkeypatch, tmp_path, capsys
+):
+    from agentic.core.process.application.ports import TrackerUnreachable
+
+    def run_once(*args, **kwargs):
+        yield "agentic: poll: launch #5 -> pid 1"
+        raise TrackerUnreachable("gh issue list could not reach GitHub (error connecting to)")
+
+    monkeypatch.setattr(cli.pollmod, "run_once", run_once)
+    sleeps = []
+
+    async def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        raise _Stop()
+
+    with pytest.raises(_Stop):
+        await _poll_with(tmp_path, sleep)
+    assert sleeps == [60.0]
+    assert capsys.readouterr().out.splitlines() == [
+        "agentic: poll: launch #5 -> pid 1",
+        "agentic: poll: round ended early: gh issue list could not reach GitHub "
+        "(error connecting to)",
+    ]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "error",
+    [
+        ValueError("not a connectivity failure"),
+        cli.GitError("git failed"),
+        OSError("disk"),
+    ],
+    ids=["value_error", "git_error", "os_error"],
+)
+async def test_poll_every_other_failure_still_escapes_the_loop(monkeypatch, tmp_path, error):
+    def run_once(*args, **kwargs):
+        yield "agentic: poll: nothing to do"
+        raise error
+
+    monkeypatch.setattr(cli.pollmod, "run_once", run_once)
+
+    async def sleep(seconds: float) -> None:
+        raise AssertionError("a failure that is not the transport must not sleep and go on")
+
+    with pytest.raises(type(error)):
+        await _poll_with(tmp_path, sleep)
+
+
+def _poll_over_a_real_tracker(tmp_path, stderr, returncode=1):
+    """`_poll` over the real `run_once`, a real `GhTracker` and the real `run_gh`; the
+    injected `run` fails the first `gh` call of round 1 with `stderr` and answers every
+    other call with an empty list."""
+    import subprocess
+    from pathlib import Path
+
+    from agentic.core.process.adapters.github.tracker import GhTracker
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import FakeLauncher, MemoryRunRegistry
+
+    calls: list[list[str]] = []
+
+    def run(args, cwd, capture_output, text, check):
+        calls.append(args)
+        if len(calls) == 1:
+            raise subprocess.CalledProcessError(returncode, args, stderr=stderr)
+        return subprocess.CompletedProcess(args, 0, "[]", "")
+
+    ports = memory_ports(tracker=GhTracker(Path(tmp_path), run))
+    sleeps: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        if len(sleeps) == 2:
+            raise _Stop()
+
+    poll = cli._poll(
+        Configuration(product_dir=tmp_path),
+        ports,
+        60.0,
+        run_lock=FakeLock(),
+        registry=MemoryRunRegistry(),
+        launcher=FakeLauncher(),
+        argv0="agentic",
+        sleep=sleep,
+    )
+    return poll, calls, sleeps
+
+
+@pytest.mark.anyio
+async def test_poll_the_incident_one_failed_round_then_the_next_round_retries(tmp_path, capsys):
+    poll, calls, sleeps = _poll_over_a_real_tracker(tmp_path, _UNREACHABLE_STDERR)
+
+    with pytest.raises(_Stop):  # only the sentinel escapes: the poller lived through round 1
+        await poll
+
+    assert sleeps == [60.0, 60.0]  # two rounds ran
+    first = calls[0]
+    assert sum(1 for call in calls if call == first) >= 2  # round 2 made the same read again
+    lines = capsys.readouterr().out.splitlines()
+    assert sum(1 for line in lines if line.startswith("agentic: gh ")) == 1  # run_gh's line
+    assert sum(1 for line in lines if "round ended early" in line) == 1
+    assert not any("githubstatus" in line or "api.github.com" in line for line in lines)
+
+
+@pytest.mark.anyio
+async def test_poll_control_the_same_failure_with_bad_credentials_ends_the_poller(tmp_path):
+    poll, _, sleeps = _poll_over_a_real_tracker(tmp_path, "HTTP 401: Bad credentials")
+
+    with pytest.raises(ValueError, match="Bad credentials") as raised:
+        await poll
+    assert type(raised.value) is ValueError
+    assert sleeps == []

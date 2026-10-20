@@ -1033,7 +1033,9 @@ def test_ci_report_timeout_is_ci_unreadable_gh_unreadable():
 # -- gh cannot reach GitHub (GH-290) -------------------------------------------------------
 
 # Captured from the pinned gh 2.100.0 on exit 1 (`GH_HOST=nonexistent.invalid gh api /`).
-_UNREACHABLE = "error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com"
+_UNREACHABLE = (
+    "error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com"
+)
 
 
 def _unreachable_at(*step):
@@ -1058,7 +1060,9 @@ def _unreachable_at(*step):
 
 @pytest.mark.parametrize("failure", ["timed_out", "unreachable"])
 def test_issue_state_after_a_transport_failure_never_falls_back_to_an_old_gh(failure):
-    run = _stalls_at("issue", "view") if failure == "timed_out" else _unreachable_at("issue", "view")
+    run = (
+        _stalls_at("issue", "view") if failure == "timed_out" else _unreachable_at("issue", "view")
+    )
     lines: list[str] = []
     with pytest.raises((TrackerTimedOut, TrackerUnreachable)) as raised:
         GhTracker(Path("/p"), run, log=lines.append).issue_state(229)
