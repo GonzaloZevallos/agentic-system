@@ -25,7 +25,14 @@ from ..domain.task import PullRequest, TaskState
 from . import adr_collision, landing_flakes, landing_plan
 from .checkouts import task_base
 from .poll import AUTO_MERGE_REFUSED, AUTO_MERGED, LANDING, _merge_facts, with_ci
-from .ports import CommandResult, GitError, MergeCallFailed, Ports, Upstream
+from .ports import (
+    CommandResult,
+    GitError,
+    MergeCallFailed,
+    Ports,
+    TrackerUnreachable,
+    Upstream,
+)
 from .presubmit import CheckoutPresubmit
 
 # The refusals a human can act on, and so the only ones commented, once per (head, reason).
@@ -334,6 +341,16 @@ def _merge(
     ports.documents.record_closure(task_id, intent)
     try:
         method = ports.tracker.merge(reference, head)
+    except TrackerUnreachable as exc:
+        # Only the `repo view` read can reach here (GH-290): nothing was sent to merge, so
+        # the intent is withdrawn and nothing is counted or commented; the next round decides
+        # again. A lost `pr merge` response is `MergeCallFailed("gh_unreadable")` below.
+        ports.documents.record_closure(task_id, {"auto_merge_head": ""})
+        log(
+            f"agentic: merge: {task_id}: gh could not reach GitHub ({exc}): "
+            "nothing merged, next round retries"
+        )
+        return MergeResult("stopped", "unreachable")
     except MergeCallFailed as exc:
         return _after_failure(task_id, reference, head, facts, exc.failure, str(exc), ports, log)
     except ValueError as exc:

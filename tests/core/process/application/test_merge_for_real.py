@@ -21,7 +21,7 @@ from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.adapters.shell.commands import ShellCommands
 from agentic.core.process.application import landing_plan
 from agentic.core.process.application.merge import merge_task
-from agentic.core.process.application.ports import MergeCallFailed, Upstream
+from agentic.core.process.application.ports import MergeCallFailed, TrackerUnreachable, Upstream
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
 from agentic.shared.configuration import Configuration
@@ -541,3 +541,62 @@ def test_a_merge_that_timed_out_but_landed_keeps_the_intent_and_closes_as_auto_m
     doc = world.doc()
     assert doc["auto_merge_head"] == world.head
     assert doc["delivery_outcome"] == "auto_merged"
+
+
+# GH-290: gh cannot reach GitHub.
+
+
+class _Unreachable(MergingTracker):
+    """`Tracker.merge` as `GhTracker.merge` raises it: unwrapped from the `repo view` read,
+    or wrapped as `gh_unreadable` from the `pr merge` write."""
+
+    def __init__(self, step: str):
+        super().__init__()
+        self.step = step
+
+    def merge(self, reference: str, head_sha: str) -> str:
+        self.merge_calls.append((reference, head_sha))
+        error = TrackerUnreachable("gh repo view could not reach GitHub (error connecting to)")
+        if self.step == "repo view":
+            raise error
+        raise MergeCallFailed("gh_unreadable", str(error)) from error
+
+
+def test_an_unreachable_repo_view_withdraws_the_intent_and_records_no_failure(world):
+    world.tracker = _Unreachable("repo view")
+    world.ports = dataclasses.replace(world.ports, tracker=world.tracker)
+    world.deliver()
+    lines: list[str] = []
+
+    result = merge_task(
+        "GH-209",
+        209,
+        world.cfg,
+        world.ports,
+        world.ports.workspace.upstream(),
+        frozenset(),
+        lines.append,
+    )
+
+    assert (result.kind, result.reason) == ("stopped", "unreachable")
+    doc = world.doc()
+    assert doc["auto_merge_head"] == ""
+    assert "merge_failures" not in doc and "auto_merged_at" not in doc
+    assert world.tracker.merge_calls == [(URL, world.head)]  # called once, not retried
+    assert world.tracker.comments == []
+    assert lines[-1].startswith("agentic: merge: GH-209: gh could not reach GitHub (")
+    assert lines[-1].endswith("): nothing merged, next round retries")
+    assert "merge_failed" not in "".join(lines)
+
+
+def test_an_unreachable_pr_merge_is_a_counted_gh_unreadable_and_keeps_the_ambiguity(world):
+    world.tracker = _Unreachable("pr merge")
+    world.ports = dataclasses.replace(world.ports, tracker=world.tracker)
+    world.deliver()
+
+    world.merge()
+
+    doc = world.doc()
+    assert doc["merge_failures"] == {"head": world.head, "count": 1, "failure": "gh_unreadable"}
+    assert doc["auto_merge_head"] == ""  # the pull request still reads OPEN: not merged
+    assert len(world.tracker.merge_calls) == 1
