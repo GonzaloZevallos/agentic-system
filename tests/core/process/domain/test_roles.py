@@ -342,3 +342,129 @@ def test_reviewer_for_without_affected_is_byte_identical_to_today():
     checks = {"tests": "pytest"}
     assert reviewer_for(checks, affected=None) == reviewer_for(checks)
     assert reviewer_for(checks, affected={}) == reviewer_for(checks)
+
+
+# --- GH-292: roles read product knowledge through an index -------------------------
+
+PM_SIDE_SLUGS = (
+    "pm_interviewee",
+    "product_analyst",
+    "pm",
+    "pm_consultant",
+    "pm_bug",
+    "pm_consolidator",
+    "pm_final",
+)
+# The only paths a PM-side role may read: the knowledge tree, the generated index and the
+# root knowledge files. A mapped product's `CONTEXT.md` files are covered by the one
+# `**/CONTEXT.md` rule, not by a rule built from the map.
+ALLOWED_READ_PATHS = frozenset(
+    {
+        "docs/**",
+        ".agentic/index/**",
+        "BRIEF.md",
+        "CONTEXT.md",
+        "CONTEXT-MAP.md",
+        "CODING_STANDARDS.md",
+        "**/CONTEXT.md",
+    }
+)
+
+
+def _outside_the_allowed_set(rules: tuple[str, ...]) -> list[str]:
+    """The rules that grant anything but a `Read`/`Glob` of a path in ALLOWED_READ_PATHS.
+    A bare `Read` or `Glob` has no path: it covers every one, so it is outside too."""
+    bad = []
+    for rule in rules:
+        tool, _, rest = rule.partition("(")
+        path = rest.removesuffix(")")
+        if tool not in ("Read", "Glob") or path not in ALLOWED_READ_PATHS:
+            bad.append(rule)
+    return bad
+
+
+def _by_slug(slug: str):
+    return next(role for role in ROLES if role.slug == slug)
+
+
+def test_reads_by_index_needs_something_to_read_and_a_tool_to_open_it():
+    from dataclasses import replace
+
+    from agentic.core.process.domain.roles import (
+        DEVELOPER,
+        REFLECTOR,
+        TECH_LEAD,
+        TECH_LEAD_REVIEWER,
+        reads_by_index,
+    )
+
+    assert reads_by_index(PM) and reads_by_index(DEVELOPER) and reads_by_index(TECH_LEAD)
+    assert reads_by_index(TECH_LEAD_REVIEWER)  # standards only, with Read
+    # Rejected: nothing to read, or no way to open what the index points at.
+    assert not reads_by_index(PJM) and not reads_by_index(REFLECTOR)
+    assert not reads_by_index(replace(PM, tools=()))
+    assert not reads_by_index(replace(DEVELOPER, reads_standards=False))
+
+
+def test_only_the_developer_and_the_integrator_receive_the_standards_by_index():
+    from agentic.core.process.domain.roles import standards_by_index
+
+    by_index = {r.slug for r in ROLES if r.reads_standards and standards_by_index(r)}
+    assert by_index == {"developer", "developer_integrator"}
+
+
+def test_every_verifier_receives_the_standards_whole():
+    from agentic.core.process.domain.roles import standards_by_index
+
+    verifiers = [r for r in ROLES if r.kind == "verifier" and r.reads_standards]
+    assert {r.slug for r in verifiers} >= {
+        "tech_lead",
+        "tech_lead_review",
+        "tech_lead_review_light",
+        "tech_lead_ephemeral",
+        "tech_lead_interviewee",
+    }
+    assert not any(standards_by_index(role) for role in verifiers)
+
+
+def test_every_role_that_reads_knowledge_can_open_a_file():
+    # Invariant 4: an index points at files, so a role handed one has `Read`.
+    for role in ROLES:
+        if role.reads_knowledge or role.reads_standards:
+            assert "Read" in role.tools, role.slug
+
+
+@pytest.mark.parametrize("slug", PM_SIDE_SLUGS)
+def test_a_pm_side_role_reads_the_knowledge_tree_and_nothing_else(slug):
+    role = _by_slug(slug)
+    assert set(role.tools) <= {"Read", "Glob"} and "Read" in role.tools
+    assert role.allowed and _outside_the_allowed_set(role.allowed) == []
+    assert not role.executes and not role.denied and not role.skills
+    # The rules name every path of the allowed set, so none is reachable only by luck.
+    granted = {rule.partition("(")[2].removesuffix(")") for rule in role.allowed}
+    assert ALLOWED_READ_PATHS <= granted
+
+
+@pytest.mark.parametrize("slug", PM_SIDE_SLUGS)
+def test_a_pm_side_role_cannot_edit_write_or_run_anything(slug):
+    role = _by_slug(slug)
+    for tool in ("Edit", "Write", "Bash", "Grep", "Agent", "TodoWrite"):
+        assert tool not in role.tools
+        assert not any(rule.startswith(tool) for rule in role.allowed)
+
+
+def test_the_permission_check_rejects_a_rule_outside_the_allowed_set():
+    rejected = [
+        "Read",  # no path: every path
+        "Glob",
+        "Read(**)",
+        "Read(/etc/**)",
+        "Read(../**)",
+        "Read(.agentic/tasks/**)",
+        "Edit(docs/**)",
+        "Write(docs/**)",
+        "Bash(git log:*)",
+    ]
+    for rule in rejected:
+        assert _outside_the_allowed_set((rule,)) == [rule]
+    assert _outside_the_allowed_set(("Read(docs/**)", "Glob(docs/**)")) == []

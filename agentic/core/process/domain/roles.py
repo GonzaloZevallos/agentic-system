@@ -102,6 +102,20 @@ class Role:
         return self.model_kind or self.kind
 
 
+def reads_by_index(role: Role) -> bool:
+    """Whether the role gets product knowledge or standards as an index, to open the
+    entries it needs with `Read`, instead of whole. The run materialises the index files
+    under the role's `cwd` before every attempt of such a role (`run_role`)."""
+    return (role.reads_knowledge or role.reads_standards) and "Read" in role.tools
+
+
+def standards_by_index(role: Role) -> bool:
+    """Whether the standards reach the role as an index. Only a role that is not a
+    verifier gets them that way (the Developer and the integrator): every `kind="verifier"`
+    role judges against the standards, so it reads them whole."""
+    return reads_by_index(role) and role.kind != "verifier"
+
+
 def render(raw: str, source: Path, **placeholders: object) -> Prompt:
     """Fill `{{name}}` placeholders; the hash is of the raw text, before filling."""
     values = {"date": date.today().isoformat(), **placeholders}
@@ -150,10 +164,37 @@ WRITE_DOCS_RULES = (
     "Write(docs/**)",
 )
 EXECUTE = ("Read", "Glob", "Grep", "Edit", "Write", "Bash", "Agent", "TodoWrite")
+# What PM's side reads the knowledge index with (GH-292): open a file and list a
+# directory, nothing else. The rules are the whole of what these roles may reach; every
+# other call falls to the `can_use_tool` denial with the role's own reason (ADR-0011,
+# fourth addendum). The paths are the knowledge tree, the index the system generates
+# under `.agentic/index/`, and the root knowledge files; a mapped product's `CONTEXT.md`
+# files are covered by one `**/CONTEXT.md` rule rather than by one built from the map,
+# so a role stays a module constant and the rule never depends on a product.
+READ_KNOWLEDGE = ("Read", "Glob")
+_KNOWLEDGE_PATHS = (
+    "docs/**",
+    ".agentic/index/**",
+    "BRIEF.md",
+    "CONTEXT.md",
+    "CONTEXT-MAP.md",
+    "CODING_STANDARDS.md",
+    "**/CONTEXT.md",
+)
+READ_KNOWLEDGE_RULES = tuple(
+    f"{tool}({path})" for tool in READ_KNOWLEDGE for path in _KNOWLEDGE_PATHS
+)
 # What a role that commits may never do to the product's git (ADR-0011, addendum):
 # rewrite its config (the identity comes in the environment), push, or touch other
 # worktrees. `checkout` stays: `git checkout -- file` is legitimate.
 GIT_DENIED = ("Bash(git config:*)", "Bash(git push:*)", "Bash(git worktree:*)")
+
+# The turn budget of the four PM-side seats that now open files (GH-292). They had 4,
+# which was enough to answer from what the prompt already held; each `Read` of an index
+# entry is a turn, so they get the Tech Lead interviewee's 12. `pm_consolidator` and
+# `pm_final` already had 20 and keep it. A cut shows as
+# `agentic.role.failures{reason="max_turns"}` per slug.
+PM_SIDE_TURNS = 12
 
 PJM = Role(
     name="PjM",
@@ -185,6 +226,9 @@ PM_INTERVIEWEE = Role(
     schema=Answers,
     reads=(ORIGINAL,),
     reads_knowledge=True,
+    tools=READ_KNOWLEDGE,
+    allowed=READ_KNOWLEDGE_RULES,
+    max_turns=PM_SIDE_TURNS,
 )
 
 # Section names of the interviews (ADR-0014); the `Interview` values below own them.
@@ -202,6 +246,9 @@ PRODUCT_ANALYST = Role(
     schema=PRD,
     reads=(ORIGINAL, "PjM", PRD_INTERVIEW, "Product Analyst", "PM"),
     reads_knowledge=True,
+    tools=READ_KNOWLEDGE,
+    allowed=READ_KNOWLEDGE_RULES,
+    max_turns=PM_SIDE_TURNS,
 )
 
 PM = Role(
@@ -211,6 +258,9 @@ PM = Role(
     schema=Verdict,
     reads=(ORIGINAL, PRD_INTERVIEW, "Product Analyst", "PM"),
     reads_knowledge=True,
+    tools=READ_KNOWLEDGE,
+    allowed=READ_KNOWLEDGE_RULES,
+    max_turns=PM_SIDE_TURNS,
 )
 
 # The design branch (ADR-0040): on the feature path, only when `touches_ui` is set,
@@ -431,6 +481,9 @@ PM_CONSULTANT = Role(
     schema=Consultation,
     reads=(ORIGINAL, PRD_INTERVIEW, "Product Analyst", "PM"),
     reads_knowledge=True,
+    tools=READ_KNOWLEDGE,
+    allowed=READ_KNOWLEDGE_RULES,
+    max_turns=PM_SIDE_TURNS,
 )
 
 TECH_LEAD = Role(
