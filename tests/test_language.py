@@ -7,7 +7,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import get_args, get_type_hints
 
-from agentic.core.knowledge.domain import knowledge, stack
+from agentic.core.knowledge.domain import knowledge, knowledge_index, stack
 from agentic.core.measurement.adapters.otel import telemetry
 from agentic.core.measurement.domain import metrics, scorecard
 from agentic.core.process.domain import (
@@ -38,7 +38,7 @@ TYPES = {
     "Entrevista": roles.Interview,
     "Subtarea": task.Subtask,
     "Conocimiento de producto": knowledge,
-    "Estándares de ingeniería": knowledge.assemble_standards,
+    "Estándares de ingeniería": knowledge_index.build_index,
     "Job": knowledge.approval_check,  # the check that a capability names its jobs
     "Retrabajo": metrics.rework_cost_usd,
     "Muestra residual": metrics.residual_cost_usd,

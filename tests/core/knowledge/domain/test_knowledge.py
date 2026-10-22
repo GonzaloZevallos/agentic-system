@@ -24,33 +24,6 @@ Untouched.
 """
 
 
-def test_assemble_is_empty_without_files():
-    assert knowledge.assemble({}, {}, {}) == ""
-
-
-def test_assemble_fences_glossary_then_capabilities_then_adrs_sorted():
-    text = knowledge.assemble(
-        {"CONTEXT.md": GLOSSARY},
-        {"subscriptions.md": "# Subscriptions\n", "check-ins.md": "# Check-ins\n"},
-        {"0002-no-isolation.md": "# No isolation\n", "0001-stack.md": "# Stack\n"},
-    )
-    assert text.startswith(
-        "## Product knowledge\n\n`CONTEXT.md`:\n\n````markdown\n# Gym Management"
-    )
-    assert text.index("docs/product/check-ins.md") < text.index("docs/product/subscriptions.md")
-    assert text.index("docs/product/subscriptions.md") < text.index("docs/adr/0001-stack.md")
-    assert text.index("docs/adr/0001-stack.md") < text.index("docs/adr/0002-no-isolation.md")
-    # Five files, each inside its own fence, so their `##` never read as task sections.
-    assert text.count("````markdown") == 5 and text.count("````") == 10
-
-
-def test_assemble_adrs_alone_are_knowledge():
-    text = knowledge.assemble({}, {}, {"0001-stack.md": "# Stack\n"})
-    assert text == (
-        "## Product knowledge\n\n`docs/adr/0001-stack.md`:\n\n````markdown\n# Stack\n````"
-    )
-
-
 def test_upsert_replaces_in_place_and_appends_new_terms():
     text = knowledge.upsert_terms(
         GLOSSARY,
@@ -154,15 +127,6 @@ def test_contexts_reads_the_map_in_order_keyed_by_the_name_it_gives_them():
 
 def test_a_map_without_links_has_no_contexts():
     assert knowledge.contexts("# Context Map\n\nNothing yet.\n") == {}
-
-
-def test_assemble_fences_every_glossary_by_its_path():
-    text = knowledge.assemble(
-        {"CONTEXT-MAP.md": CONTEXT_MAP, "agentic/core/process/CONTEXT.md": GLOSSARY}, {}, {}
-    )
-    # The map comes first: its relationships are what say which context may know which.
-    assert text.index("CONTEXT-MAP.md") < text.index("agentic/core/process/CONTEXT.md")
-    assert text.count("````markdown") == 2
 
 
 def test_upsert_keeps_the_lines_it_does_not_write():
@@ -283,23 +247,6 @@ Gym owners cannot tell if a member is about to churn.
 
 Payment processing.
 """
-
-
-def test_assemble_puts_the_brief_first_before_the_glossaries():
-    text = knowledge.assemble({"CONTEXT.md": GLOSSARY}, {}, {}, brief=VALID_BRIEF)
-    assert text.startswith("## Product knowledge\n\n`BRIEF.md`:\n\n````markdown\n# Brief")
-    assert text.index("BRIEF.md") < text.index("CONTEXT.md")
-
-
-def test_assemble_without_a_brief_is_unchanged():
-    assert knowledge.assemble({"CONTEXT.md": GLOSSARY}, {}, {}) == knowledge.assemble(
-        {"CONTEXT.md": GLOSSARY}, {}, {}, brief=None
-    )
-    assert "BRIEF.md" not in knowledge.assemble({"CONTEXT.md": GLOSSARY}, {}, {})
-
-
-def test_assemble_is_still_empty_with_nothing_at_all_brief_included():
-    assert knowledge.assemble({}, {}, {}, brief=None) == ""
 
 
 def test_brief_refusal_accepts_a_valid_brief():

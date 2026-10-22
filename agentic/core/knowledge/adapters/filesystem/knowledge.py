@@ -13,7 +13,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from ...domain import knowledge
+from ...domain import knowledge, knowledge_index
 
 
 class FilesystemKnowledge:
@@ -51,12 +51,14 @@ class FilesystemKnowledge:
 
     def read(self, root: Path | None = None) -> str:
         root = root or self.product_dir
-        return knowledge.assemble(
-            self._glossaries(root),
-            _read_dir(root / knowledge.PRODUCT_SUBDIR),
-            _read_dir(root / knowledge.ADR_SUBDIR),
-            brief=self.brief(root),
-        )
+        # Whole until the roles that read it can open an index (GH-292, `wiring-b`): a
+        # role without `Read` cannot follow a pointer. `build_index` is not yet on this path.
+        parts = [knowledge.fenced(knowledge.BRIEF, brief)] if (brief := self.brief(root)) else []
+        parts += [knowledge.fenced(path, text) for path, text in self._glossaries(root).items()]
+        for subdir in (knowledge.PRODUCT_SUBDIR, knowledge.ADR_SUBDIR):
+            files = _read_dir(root / subdir)
+            parts += [knowledge.fenced(f"{subdir}/{name}", files[name]) for name in sorted(files)]
+        return knowledge.HEADING + "\n\n" + "\n\n".join(parts) if parts else ""
 
     def brief(self, root: Path | None = None) -> str | None:
         """The product's `BRIEF.md`, or None when it has not written one yet
@@ -69,7 +71,7 @@ class FilesystemKnowledge:
         text = _read((root or self.product_dir) / knowledge.STANDARDS)
         if text is None:
             text = knowledge.DEFAULT_STANDARDS.read_text(encoding="utf-8")
-        return knowledge.assemble_standards(text)
+        return knowledge_index.build_index({}, {}, {}, None, text, standards_whole=True).standards
 
     def consolidate(self, verdict: dict[str, Any], root: Path | None = None) -> list[Path]:
         """What an approved verdict leaves: the capability files, then the glossary.

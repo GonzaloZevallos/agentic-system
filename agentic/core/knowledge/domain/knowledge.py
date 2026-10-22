@@ -3,8 +3,8 @@
 It lives in the product repo with the human docs, not under `.agentic/` (ADR-0006):
 `docs/product/<capability>.md`, one file per capability named after a glossary
 concept, `CONTEXT.md`, the glossary, and `docs/adr/`, the decisions Tech Lead (or the
-human) already took. Every product role reads all of it on every task: a role without
-tools has no other way to learn what an ADR settles (issue #11). On approval PM
+human) already took. A role reads the Brief and the glossaries whole and the rest through
+an index (`knowledge_index`, GH-292). On approval PM
 returns the complete updated file of each capability the task touched plus the new or
 changed glossary terms, and the system writes them; the ADRs it only reads.
 
@@ -146,40 +146,7 @@ def check_slug(capability: str) -> None:
         )
 
 
-def assemble(
-    glossaries: dict[str, str],
-    capabilities: dict[str, str],
-    adrs: dict[str, str],
-    brief: str | None = None,
-) -> str:
-    """Everything a product role reads before the task document: the Brief first when
-    one exists (ADR-0025), then the glossaries in the order given, then each capability
-    file by name, then each ADR by name, both sorted. The ADRs go last and whole,
-    superseded ones included: their status is in the file, and a replaced decision
-    still explains the shape the code has. Empty if nothing exists -- the Brief is one
-    more part, never a reason for `## Product knowledge` to appear alone.
-
-    `glossaries` is path -> text: one entry for a product with a single `CONTEXT.md`,
-    and for a mapped product the map first (its relationships say which context may
-    know which, and live nowhere else) and then every `CONTEXT.md` it links."""
-    parts = [_fenced(BRIEF, brief)] if brief else []
-    parts += [_fenced(path, text) for path, text in glossaries.items()]
-    parts += _fenced_all(PRODUCT_SUBDIR, capabilities) + _fenced_all(ADR_SUBDIR, adrs)
-    if not parts:
-        return ""
-    return HEADING + "\n\n" + "\n\n".join(parts)
-
-
-def assemble_standards(text: str) -> str:
-    """The standards as a role reads them, before the product knowledge."""
-    return STANDARDS_HEADING + "\n\n" + _fenced(STANDARDS, text)
-
-
-def _fenced_all(subdir: Path, files: dict[str, str]) -> list[str]:
-    return [_fenced(f"{subdir}/{name}", files[name]) for name in sorted(files)]
-
-
-def _fenced(name: str, text: str) -> str:
+def fenced(name: str, text: str) -> str:
     # Fenced, so the files' own `##` headings never look like task sections.
     return f"`{name}`:\n\n````markdown\n{text.strip()}\n````"
 

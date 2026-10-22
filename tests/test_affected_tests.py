@@ -431,6 +431,17 @@ ALLOWANCES: tuple[Allowance, ...] = (
         "reads the repo-root CODING_STANDARDS.md, not the package default of the same name",
     ),
     Allowance(
+        "tests/test_affected_tests.py",
+        "agentic/core/knowledge/docs/adr/*",
+        "names the path in the allowance below; it never opens it",
+    ),
+    Allowance(
+        "tests/test_adr_numbers.py",
+        "agentic/core/knowledge/docs/adr/*",
+        "its `.../'docs'/'adr'` is anchored at the repo root but the guard matches an "
+        "unknown anchor by suffix; it lists the root docs/adr, never a module's",
+    ),
+    Allowance(
         "tests/test_language.py",
         "tests/*__init__.py",
         "checks `agentic/core/*/__init__.py` exist; the same name under tests/ is not read",
