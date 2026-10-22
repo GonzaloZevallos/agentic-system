@@ -161,7 +161,7 @@ def _ports(cfg: Configuration) -> Ports:
         workspace=GitWorkspace(cfg.product_dir, cfg.git_identity),
         tracker=GhTracker(cfg.product_dir),
         stack=GitStack(cfg.product_dir),
-        commands=ShellCommands(),
+        commands=ShellCommands(product_key, reaper),
         sample_app=ShellSampleApp(),
         reaper=reaper,
     )

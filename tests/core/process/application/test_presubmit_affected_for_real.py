@@ -9,10 +9,10 @@ from pathlib import Path
 import pytest
 
 from agentic.core.process.adapters.git.workspace import GitWorkspace
-from agentic.core.process.adapters.shell.commands import ShellCommands
 from agentic.core.process.application.presubmit import CheckoutPresubmit
 from agentic.core.process.domain.presubmit import AffectedPlan
 from agentic.shared.configuration import Configuration
+from tests.fakes import real_commands
 
 
 def git(*args: str, cwd: Path) -> str:
@@ -43,7 +43,7 @@ def repo(tmp_path):
         (),
         {
             "workspace": GitWorkspace(work, Configuration(product_dir=work).git_identity),
-            "commands": ShellCommands(),
+            "commands": real_commands(),
         },
     )()
     return ports, work, base, tmp_path

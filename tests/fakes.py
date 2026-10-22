@@ -1694,3 +1694,11 @@ def ruled(
         },
         cost,
     )
+
+
+def real_commands() -> Any:
+    """`ShellCommands` over real bash with a real reaper whose worktrees root reaches
+    nothing: each check reaps its own mark, and no cwd reap can match."""
+    from agentic.core.process.adapters.shell import ShellCommands, ShellReaper
+
+    return ShellCommands("tests", ShellReaper("tests", Path("/nonexistent/worktrees")))

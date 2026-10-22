@@ -32,7 +32,7 @@ from typing import Any
 import yaml
 
 from agentic.core.knowledge.domain import stack
-from agentic.core.process.adapters.shell.commands import ShellCommands
+from tests.fakes import real_commands
 
 REPO = Path(__file__).resolve().parent.parent
 STACK_YAML = REPO / ".agentic" / "stack.yaml"
@@ -144,7 +144,7 @@ def test_the_declared_witness_runs_at_the_repo_root_and_resolves_under_it():
     command = stack.witness(data, STACK_YAML)
     assert command is not None
 
-    result = ShellCommands().run(REPO, command, timeout_s=120.0)
+    result = real_commands().run(REPO, command, timeout_s=120.0)
     assert result.passed, result.output
 
     lines = [line.strip() for line in result.output.splitlines() if line.strip()]
@@ -612,7 +612,7 @@ def test_pin_guard_accepts_the_real_ci_workflow_against_the_locally_observed_uv(
     the checks use, since `uv` itself (unlike `python`, ADR-0024) is not a
     per-venv artefact `without_own_toolchain` would strip off `PATH`."""
     command = PIN_ORACLE["astral-sh/setup-uv"]
-    result = ShellCommands().run(REPO, command, timeout_s=30.0)
+    result = real_commands().run(REPO, command, timeout_s=30.0)
     assert result.passed, (
         f"the pin guard's oracle command {command!r} did not run, so it cannot "
         f"verify astral-sh/setup-uv's `version:` in {CI_YML}: {result.output}"
