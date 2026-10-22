@@ -126,6 +126,21 @@ def no_setup(ports: Ports) -> str | None:
     )
 
 
+def over_cap(ports: Ports, revision: str = "HEAD") -> list[str]:
+    """One message per criteria file the product holds at `revision` past the line cap
+    (GH-295, ADR-0055). A file that is absent or was deleted at `revision` reads None and
+    is never measured; the count itself is `knowledge`'s alone. Never a refusal: what to do
+    with the messages is the caller's."""
+    # The names come from the knowledge port, which owns them (ADR-0010, invariant 5); the
+    # system default of the standards is no file of the product's and is never read.
+    texts = {
+        name: text
+        for name in ports.knowledge.criteria_files()
+        if (text := ports.workspace.show(revision, name)) is not None
+    }
+    return ports.knowledge.over_cap(texts)
+
+
 def no_forbidden(ports: Ports, revision: str) -> str | None:
     """Why this run's Edit/Write cage denies nothing, or None when it forbids at least
     one suppression (issue #38). Never a refusal, the same fact `no_setup` is: a Go

@@ -26,6 +26,8 @@ from agentic.core.process.domain.roles import (
     TECH_LEAD_EPHEMERAL,
     TECH_LEAD_PLATFORM,
     TECH_LEAD_REVIEWER,
+    UI_LEAD,
+    UX_DESIGNER,
 )
 from tests.fakes import MemoryKnowledge, memory_ports
 
@@ -225,8 +227,8 @@ PORTS = memory_ports(
 
 
 def _context(role, extra_sections: tuple[str, ...] = (), subtask_id: str | None = None) -> str:
-    standards, knowledge = preamble(role, PORTS)
-    return context_for(STATE, role, knowledge, standards, extra_sections, subtask_id)
+    standards, design, knowledge = preamble(role, PORTS)
+    return context_for(STATE, role, knowledge, standards, extra_sections, subtask_id, design)
 
 
 def test_pjm_context_is_pinned():
@@ -461,7 +463,7 @@ def test_context_for_degrades_to_the_full_plan_for_the_integrator():
     # once the fan-in has added it (`rules.integration_subtask`).
     with_integration_entry = {**PLAN_SUBTASKS, "integration": {"id": "integration"}}
     state = {**STATE, "subtasks": with_integration_entry}
-    standards, knowledge = preamble(DEVELOPER_INTEGRATOR, PORTS)
+    standards, _design, knowledge = preamble(DEVELOPER_INTEGRATOR, PORTS)
     text = context_for(
         state, DEVELOPER_INTEGRATOR, knowledge, standards, EXTRA_SECTIONS, "integration"
     )
@@ -501,7 +503,7 @@ def _real_ports(tmp_path):
 
 
 def test_index_mode_the_always_whole_parts_and_the_area_index_are_pinned(tmp_path):
-    _, knowledge = preamble(PM, _real_ports(tmp_path), tmp_path)
+    _, _, knowledge = preamble(PM, _real_ports(tmp_path), tmp_path)
     assert knowledge == (
         "## Product knowledge\n\n"
         "`BRIEF.md`:\n\n````markdown\n# Brief\n\nA shop.\n````\n\n"
@@ -519,13 +521,62 @@ def test_index_mode_the_always_whole_parts_and_the_area_index_are_pinned(tmp_pat
 
 
 def test_index_mode_the_developer_gets_the_marked_section_and_an_index_line(tmp_path):
-    standards, _ = preamble(DEVELOPER, _real_ports(tmp_path), tmp_path)
+    standards, _, _ = preamble(DEVELOPER, _real_ports(tmp_path), tmp_path)
     assert "Business data never crosses." in standards  # the marked section, whole
     assert "`.agentic/index/standards.md`" in standards
     assert "Layers." not in standards  # the unmarked section is an entry, not inlined
 
 
 def test_index_mode_a_verifier_gets_the_standards_whole(tmp_path):
-    standards, _ = preamble(TECH_LEAD, _real_ports(tmp_path), tmp_path)
+    standards, _, _ = preamble(TECH_LEAD, _real_ports(tmp_path), tmp_path)
     assert "Layers." in standards and "Business data never crosses." in standards
     assert ".agentic/index/" not in standards
+
+
+# --- GH-295: a product that has DESIGN_STANDARDS.md ----------------------------------------
+
+DESIGN_TEXT = "## Design standards\n\n### 1. Icons\n\nIcon and text, never alone."
+DESIGN_PORTS = memory_ports(
+    knowledge=MemoryKnowledge(
+        text=KNOWLEDGE_TEXT,
+        standards=STANDARDS_WHOLE_TEXT,
+        standards_index=STANDARDS_INDEX_TEXT,
+        design=DESIGN_TEXT,
+    )
+)
+TAIL = (
+    "## Original request\n\n"
+    "Context diet per role\n\n"
+    "Developers read the whole plan today, sisters included (README §6).\n\n"
+    "### Why it matters\n\nThe cache makes it cheap, not free.\n\n"
+)
+HUMAN_TAIL = (
+    "## Human\n\n"
+    "### Decision — where the trim lives\n\n"
+    "Inside `context_for`, never in `develop.py` or `review.py`."
+)
+PM_BLOCK = (
+    "## PM\n\n"
+    "### Verdict\n\napproved\n\n### For the next role\n\nCSV export only, no filters yet.\n\n"
+)
+
+
+def _design_context(role) -> str:
+    standards, design, knowledge = preamble(role, DESIGN_PORTS)
+    return context_for(STATE, role, knowledge, standards, (), None, design)
+
+
+def test_ui_lead_context_holds_the_design_standards_whole_and_no_product_knowledge():
+    assert _design_context(UI_LEAD) == DESIGN_TEXT + "\n\n" + TAIL + PM_BLOCK + HUMAN_TAIL
+
+
+def test_ux_designer_context_puts_the_design_standards_before_the_product_knowledge():
+    assert _design_context(UX_DESIGNER) == (
+        DESIGN_TEXT + "\n\n" + KNOWLEDGE_TEXT + "\n\n" + TAIL + PM_BLOCK + HUMAN_TAIL
+    )
+
+
+def test_a_role_without_the_design_family_ignores_the_design_file():
+    # Rejected input: the product has the file, the Developer's context does not hold it.
+    assert DESIGN_TEXT not in _design_context(DEVELOPER)
+    assert _design_context(PM) == _context(PM)

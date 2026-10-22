@@ -34,8 +34,12 @@ from agentic.core.process.domain.roles import (
     ROLES,
     TECH_LEAD_EPHEMERAL,
     TECH_LEAD_INTERVIEWEE,
+    UI_LEAD,
+    UX_DESIGNER,
+    UX_LEAD,
     describe_flags,
     prompt_hash,
+    reads_by_index,
     render,
 )
 from agentic.core.process.domain.task import FailureReason, apply, delta
@@ -1259,7 +1263,7 @@ async def test_the_developer_gets_the_standards_by_index_and_a_verifier_gets_the
 
 @pytest.mark.parametrize(
     "role",
-    [r for r in ROLES if r.reads_knowledge or r.reads_standards],
+    [r for r in ROLES if reads_by_index(r)],
     ids=lambda role: role.slug,
 )
 async def test_every_reader_gets_an_index_from_the_checkout_it_runs_in(role, tmp_path):
@@ -1281,9 +1285,77 @@ async def test_every_reader_gets_an_index_from_the_checkout_it_runs_in(role, tmp
     assert runner.calls[0]["cwd"] == checkout
     files = ports.workspace.indexes[checkout]
     listed = " ".join(files.values())
-    assert "docs/product/here.md" in listed and "elsewhere" not in listed
+    assert "elsewhere" not in listed
+    if "product" in role.criteria:
+        assert "docs/product/here.md" in listed
+    else:  # an engineering-only reader gets the standards files, not the product's
+        assert "docs/product/here.md" not in listed and any("standards" in path for path in files)
     assert (checkout / "docs/product/here.md").exists()
     assert not (checkout / "docs/product/elsewhere.md").exists()
+
+
+# --- GH-295: the index a role gets holds only the families it declares ---------------------
+
+
+async def test_a_design_only_lead_never_gets_an_index_written():
+    # UX Lead and UI Lead read the design standards whole and nothing through the index.
+    for role in (UX_LEAD, UI_LEAD):
+        ports, knowledge = _reader_ports()
+        runner = ScriptedRunner(**{role.slug: [delivered()]})
+        ports = memory_ports(knowledge=knowledge, runner=runner)
+        writes: list[dict[str, str]] = []
+        ports.workspace.write_index = lambda path, files, writes=writes: writes.append(files)
+        await _run(role, ports, runner, cwd=CHECKOUT)
+        assert writes == [] and ports.workspace.indexes == {}, role.slug
+
+
+def _real_product(root: Path) -> None:
+    (root / "docs/product").mkdir(parents=True)
+    (root / "docs/product/orders.md").write_text("# Orders\n", encoding="utf-8")
+    (root / STANDARDS).write_text("# S\n\n## 1. Hex\n\nx\n", encoding="utf-8")
+    (root / "DESIGN_STANDARDS.md").write_text("# D\n\n## 1. Icons\n\ny\n", encoding="utf-8")
+
+
+def _real_ports(root: Path, runner):
+    from agentic.core.knowledge.adapters.filesystem.knowledge import FilesystemKnowledge
+    from agentic.core.process.adapters.git.workspace import GitWorkspace
+
+    return memory_ports(
+        knowledge=FilesystemKnowledge(root),
+        workspace=GitWorkspace(root, {"name": "n", "email": "e@x"}),
+        runner=runner,
+    )
+
+
+async def test_a_developer_after_a_designer_in_one_checkout_is_left_with_its_own_families(
+    tmp_path,
+):
+    _real_product(tmp_path)
+    runner = ScriptedRunner(ux_designer=[delivered()], developer=[delivered()])
+    ports = _real_ports(tmp_path, runner)
+    state = {"id": "GH-1", "title": "t", "description": "d", "sections": {}}
+    cfg = Configuration(product_dir=tmp_path, role_retries=0)
+    await run_role(state, UX_DESIGNER, cfg, ports, cwd=tmp_path, **PLACEHOLDERS)
+    after_designer = {
+        p.relative_to(tmp_path).as_posix() for p in (tmp_path / ".agentic").rglob("*.md")
+    }
+    assert any("product" in path or "capabilit" in path for path in after_designer)
+    await run_role(state, DEVELOPER, cfg, ports, cwd=tmp_path, **PLACEHOLDERS)
+    left = {p.relative_to(tmp_path).as_posix() for p in (tmp_path / ".agentic").rglob("*.md")}
+    assert not (tmp_path / ".agentic/index/design").exists()
+    assert left and all(path.startswith(".agentic/index/standards") for path in left), left
+
+
+async def test_a_pm_side_role_gets_no_standards_files_in_its_checkout(tmp_path):
+    _real_product(tmp_path)
+    runner = ScriptedRunner(pm=[delivered()])
+    ports = _real_ports(tmp_path, runner)
+    state = {"id": "GH-1", "title": "t", "description": "d", "sections": {}}
+    cfg = Configuration(product_dir=tmp_path, role_retries=0)
+    await run_role(state, PM, cfg, ports, cwd=tmp_path, **PLACEHOLDERS)
+    written = [p for p in (tmp_path / ".agentic/index").rglob("*.md")]
+    assert written and not any("standards" in p.as_posix() for p in written)
+    assert not (tmp_path / ".agentic/index/design").exists()
 
 
 # The safety cap at twice the estimate (ADR-0054): checked beside the flat task cap, before

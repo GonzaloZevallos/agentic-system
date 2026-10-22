@@ -24,11 +24,12 @@ from . import knowledge
 
 # The closed set of areas. A path outside them has no entry and raises (invariant: tags
 # come from closed sets declared in one place).
-AREAS = ("product", "adr", "standards")
+AREAS = ("product", "adr", "standards", "design")
 AREA_SUMMARY = {
     "product": "capabilities: what the product does, one file per glossary concept",
     "adr": "decisions already taken, superseded ones left out",
     "standards": "engineering standards, one file per section",
+    "design": "design standards, read whole by the design roles",
 }
 INDEX_DIR = ".agentic/index"
 # What goes whole by name, never by size. The glossaries are the other half of the list,
@@ -90,10 +91,12 @@ def area_of(path: str) -> str:
         return "adr"
     if path == knowledge.STANDARDS:
         return "standards"
+    if path == knowledge.DESIGN_STANDARDS:
+        return "design"
     raise ValueError(
         f"{path}: outside the areas {', '.join(AREAS)}; "
         f"a knowledge file lives under {knowledge.PRODUCT_SUBDIR}/, {knowledge.ADR_SUBDIR}/ "
-        f"or is {knowledge.STANDARDS}"
+        f"or is {knowledge.STANDARDS} or {knowledge.DESIGN_STANDARDS}"
     )
 
 

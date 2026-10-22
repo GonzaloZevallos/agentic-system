@@ -37,6 +37,15 @@ STANDARDS = "CODING_STANDARDS.md"
 DEFAULT_STANDARDS = Path(__file__).resolve().parent / STANDARDS
 STANDARDS_HEADING = "## Engineering standards"
 
+# The design standards (ADR-0055): the criteria of the four design roles, a file at the
+# product's root. Unlike the engineering standards the system ships no default: a product
+# without the file has an empty design block.
+DESIGN_STANDARDS = "DESIGN_STANDARDS.md"
+DESIGN_HEADING = "## Design standards"
+# A criteria document never grows silently: past this many lines it is reported, never
+# refused or rewritten (ADR-0055).
+CRITERIA_MAX_LINES = 300
+
 # The Brief (ADR-0025): what the human writes once per product, before the first task
 # -- the problem, the jobs and the constraints. A root-level artefact, next to
 # `CONTEXT.md` and `CODING_STANDARDS.md`, never under `PRODUCT_SUBDIR`: there it would
@@ -55,7 +64,7 @@ BRIEF_HEADINGS = (
     "## Out of scope",
 )
 # One page. A constant, not a guess: `preflight` spends nothing before this is checked,
-# and every `reads_knowledge` role pays this cost on every call (ADR-0025).
+# and every role that reads the product knowledge pays this cost on every call (ADR-0025).
 BRIEF_MAX_WORDS = 500
 # What a human copies into `BRIEF.md` and commits: a shipped, valid example, the same
 # `TEMPLATE`/`not_declared` pattern `stack.py` already uses (ADR-0016, second addendum).
@@ -144,6 +153,20 @@ def check_slug(capability: str) -> None:
             f"capability {capability!r} must be a slug: lower-case, digits, hyphens, "
             "named after a glossary concept (e.g. `check-ins`)"
         )
+
+
+def criteria_over_cap(texts: dict[str, str]) -> list[str]:
+    """One message per criteria document strictly over `CRITERIA_MAX_LINES`, in input order.
+
+    `texts` is file name -> text and holds only files the product has: an absent, deleted
+    or system-default file is never measured, and the caller never passes it. Lines are
+    counted per document, never summed across them."""
+    return [
+        f"`{name}`: {count} lines (cap {CRITERIA_MAX_LINES}); cut the file or split it into "
+        "`## ` sections"
+        for name, text in texts.items()
+        if (count := len(text.splitlines())) > CRITERIA_MAX_LINES
+    ]
 
 
 def fenced(name: str, text: str) -> str:

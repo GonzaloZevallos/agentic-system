@@ -2,6 +2,7 @@ import pytest
 
 from agentic.core.knowledge.adapters.filesystem import FilesystemKnowledge
 
+FAMILIES = ("product", "engineering")
 GLOSSARY = "# Gym\n\n## Language\n\n**Gym**:\nA business.\n"
 
 
@@ -42,7 +43,7 @@ def test_read_is_the_always_whole_part_plus_the_area_index(tmp_path):
 
 def test_index_files_list_each_entry_once_and_leave_superseded_adrs_out(tmp_path):
     _product(tmp_path)
-    files = FilesystemKnowledge(tmp_path).index_files()
+    files = FilesystemKnowledge(tmp_path).index_files(None, FAMILIES)
     assert "docs/product/subscriptions.md" in files[".agentic/index/product.md"]
     assert "docs/adr/0001-stack.md" in files[".agentic/index/adr.md"]
     assert "0002-old" not in files[".agentic/index/adr.md"]  # still readable by its path
@@ -59,15 +60,17 @@ def test_read_takes_the_adrs_from_the_given_root(tmp_path):
     (checkout / "docs/adr/0003-new.md").write_text("# New\n")
     knowledge = FilesystemKnowledge(tmp_path)
     assert "adr.md" in knowledge.read(checkout)
-    assert "docs/adr/0003-new.md" in knowledge.index_files(checkout)[".agentic/index/adr.md"]
-    assert knowledge.index_files() != knowledge.index_files(checkout)
+    assert (
+        "docs/adr/0003-new.md" in knowledge.index_files(checkout, FAMILIES)[".agentic/index/adr.md"]
+    )
+    assert knowledge.index_files(None, FAMILIES) != knowledge.index_files(checkout, FAMILIES)
 
 
 def test_an_unknown_role_tag_in_an_adr_names_the_file(tmp_path):
     (tmp_path / "docs/adr").mkdir(parents=True)
     (tmp_path / "docs/adr/0001-x.md").write_text("---\nroles: [wizard]\n---\n# X\n")
     with pytest.raises(ValueError, match=r"0001-x\.md.*wizard"):
-        FilesystemKnowledge(tmp_path).index_files()
+        FilesystemKnowledge(tmp_path).index_files(None, FAMILIES)
 
 
 def test_standards_are_whole_for_a_verifier_and_through_the_index_otherwise(tmp_path):
@@ -79,8 +82,13 @@ def test_standards_are_whole_for_a_verifier_and_through_the_index_otherwise(tmp_
     assert by_index.startswith("## Engineering standards\n\n")
     assert "Never cross a business." in by_index  # marked: overrides everything
     assert "Ports." not in by_index and "`.agentic/index/standards.md`" in by_index
-    assert "Ports." in knowledge.index_files()[".agentic/index/standards/01-hexagonal.md"]
-    assert "Never cross" not in "".join(knowledge.index_files().values())  # not both ways
+    assert (
+        "Ports."
+        in knowledge.index_files(None, FAMILIES)[".agentic/index/standards/01-hexagonal.md"]
+    )
+    assert "Never cross" not in "".join(
+        knowledge.index_files(None, FAMILIES).values()
+    )  # not both ways
 
 
 BRIEF = (
@@ -99,7 +107,7 @@ def test_read_is_unchanged_without_a_brief_on_disk(tmp_path):
 
 
 def test_read_puts_the_brief_first_when_one_is_on_disk(tmp_path):
-    # ADR-0025: `read()` (the line every `reads_knowledge` role's `preamble` calls)
+    # ADR-0025: `read()` (called in the `preamble` of every role that reads the knowledge)
     # threads `self.brief(root)` into `assemble`. A `BRIEF.md` on disk must arrive as
     # its own fenced block, first, before the glossary -- and adding it must move
     # nothing else.
@@ -262,3 +270,67 @@ def test_one_consolidation_writes_every_context_the_task_touched(tmp_path):
     )
     assert "**Ola**" in (tmp_path / "core" / "process" / "CONTEXT.md").read_text()
     assert "**Muestra**" in (tmp_path / "core" / "measurement" / "CONTEXT.md").read_text()
+
+
+def test_index_files_hold_only_the_files_of_the_families_asked_for(tmp_path):
+    _product(tmp_path)
+    knowledge = FilesystemKnowledge(tmp_path)
+    product = knowledge.index_files(None, ("product",))
+    assert set(product) == {".agentic/index/product.md", ".agentic/index/adr.md"}
+    engineering = knowledge.index_files(None, ("engineering",))
+    assert ".agentic/index/standards.md" in engineering
+    assert ".agentic/index/standards/01-hexagonal.md" in engineering
+    assert not {".agentic/index/product.md", ".agentic/index/adr.md"} & set(engineering)
+    assert not any(path.startswith(".agentic/index/standards") for path in product)
+    assert knowledge.index_files(None, ()) == {}
+    # Both together are what the one-family builds add up to.
+    assert knowledge.index_files(None, FAMILIES) == product | engineering
+
+
+def test_design_is_a_family_that_contributes_no_index_file(tmp_path):
+    _product(tmp_path)
+    (tmp_path / "DESIGN_STANDARDS.md").write_text("# Design\n\n## Icons\n\nText beside.\n")
+    knowledge = FilesystemKnowledge(tmp_path)
+    assert knowledge.index_files(None, ("design",)) == {}
+    assert knowledge.index_files(None, ("product", "engineering", "design")) == (
+        knowledge.index_files(None, FAMILIES)
+    )
+    assert "design" not in knowledge.read().lower()
+
+
+def test_design_is_empty_without_the_file_and_fenced_whole_with_it(tmp_path):
+    knowledge = FilesystemKnowledge(tmp_path)
+    assert knowledge.design() == ""
+    text = "# Design\n\n## Icons\n\nText beside.\n"
+    (tmp_path / "DESIGN_STANDARDS.md").write_text(text)
+    assert knowledge.design() == (
+        "## Design standards\n\n`DESIGN_STANDARDS.md`:\n\n````markdown\n" + text.strip() + "\n````"
+    )
+
+
+def test_design_reads_from_the_given_root(tmp_path):
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "DESIGN_STANDARDS.md").write_text("Tabs.\n")
+    knowledge = FilesystemKnowledge(tmp_path)
+    assert knowledge.design() == ""
+    assert "Tabs." in knowledge.design(checkout)
+
+
+def test_over_cap_reports_the_documents_past_300_lines_and_none_at_300(tmp_path):
+    knowledge = FilesystemKnowledge(tmp_path)
+    at_cap = "x\n" * 300
+    assert knowledge.over_cap({"CODING_STANDARDS.md": at_cap}) == []
+    messages = knowledge.over_cap(
+        {"CODING_STANDARDS.md": at_cap, "DESIGN_STANDARDS.md": "x\n" * 301}
+    )
+    assert len(messages) == 1 and "DESIGN_STANDARDS.md" in messages[0] and "301" in messages[0]
+
+
+def test_criteria_files_are_the_knowledge_constants(tmp_path):
+    from agentic.core.knowledge.domain import knowledge as domain
+
+    assert FilesystemKnowledge(tmp_path).criteria_files() == (
+        domain.STANDARDS,
+        domain.DESIGN_STANDARDS,
+    )

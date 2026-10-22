@@ -45,7 +45,7 @@ def test_the_design_roles_are_all_read_only_and_registered_for_preflight():
     for role in (UX_DESIGNER, UI_DESIGNER):
         assert role.kind == "actor"
         assert role.tools == READ_CODE and role.allowed == READ_CODE_RULES
-        assert role.reads_knowledge
+        assert "product" in role.criteria
 
     for role in (UX_LEAD, UI_LEAD, UX_LEAD_FINAL, UI_LEAD_FINAL):
         assert role.kind == "verifier"
@@ -53,6 +53,24 @@ def test_the_design_roles_are_all_read_only_and_registered_for_preflight():
 
     for role in (PM_CONSOLIDATOR, PM_FINAL):
         assert role.kind == PM.kind == "verifier"
+
+
+def test_the_four_design_roles_read_the_design_standards_whole_and_the_leads_no_product():
+    from agentic.core.process.domain.roles import whole_for
+
+    for role in (UX_DESIGNER, UX_LEAD, UI_DESIGNER, UI_LEAD):
+        assert "design" in role.criteria and whole_for(role, "design"), role.slug
+    for role in (UX_LEAD, UI_LEAD):
+        assert "product" not in role.criteria, role.slug
+    # Rejected: no other family of roles reads the design standards.
+    assert {r.slug for r in ROLES if "design" in r.criteria} == {
+        "ux_designer",
+        "ux_lead",
+        "ui_designer",
+        "ui_lead",
+        "ux_lead_final",
+        "ui_lead_final",
+    }
 
 
 def test_the_final_roles_are_their_own_slugs_and_sections_not_edits():

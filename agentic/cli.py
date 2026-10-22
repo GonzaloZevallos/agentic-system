@@ -85,6 +85,7 @@ from .core.process.application.preflight import (
     declared_stack_of,
     no_forbidden,
     no_setup,
+    over_cap,
     preflight,
     product_name,
     refuse_its_own_checkout,
@@ -164,6 +165,18 @@ def brief_refusal(ports: Ports) -> str | None:
     layer, next to `no_forbidden`'s own split."""
     text = ports.knowledge.brief()
     return None if text is None else knowledge.brief_refusal(text)
+
+
+def _warn_over_cap(ports: Ports, revision: str) -> None:
+    """Say, on stderr, each criteria document past the line cap at `revision` (GH-295,
+    ADR-0055). Never a refusal, and an unreadable revision says nothing: the stack read
+    just before it already refused what could be refused."""
+    try:
+        messages = over_cap(ports, revision)
+    except GitError:
+        return
+    for message in messages:
+        print(f"agentic: {message}", file=sys.stderr)
 
 
 def _warn_no_tty(detach: bool) -> None:
@@ -538,6 +551,7 @@ def main() -> None:
                 # above, whose two warnings share one revision this one does not.
                 if (warning := no_forbidden(ports, "HEAD")) is not None:
                     print(f"agentic: {warning}", file=sys.stderr)
+                _warn_over_cap(ports, "HEAD")
                 # A malformed or over-cap Brief refuses `run` outright (ADR-0025): an
                 # absent one is `no_brief`'s fact above, never this one's.
                 if (problem := brief_refusal(ports)) is not None:
@@ -557,6 +571,7 @@ def main() -> None:
             base = declared_stack_of(task_id, ports)
             if (warning := no_forbidden(ports, base)) is not None:
                 print(f"agentic: {warning}", file=sys.stderr)
+            _warn_over_cap(ports, base)
             # A malformed or over-cap Brief only prints on `resume` and the run
             # proceeds: a human's edit to his own file must never strand every paused
             # task at the boot gate with no task named (ADR-0003; ADR-0025).

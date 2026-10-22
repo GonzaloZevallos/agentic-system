@@ -9,7 +9,7 @@ leaves the product half consolidated.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from pathlib import Path
 from typing import Any
 
@@ -49,15 +49,18 @@ class FilesystemKnowledge:
     def clarification_check(self) -> Callable[[dict[str, Any]], None]:
         return knowledge.clarification_check(self.contexts())
 
-    def _index(self, root: Path | None, *, standards: bool) -> knowledge_index.KnowledgeIndex:
+    def _index(
+        self, root: Path | None, *, standards: bool, product: bool = True
+    ) -> knowledge_index.KnowledgeIndex:
         """The index as `build_index` makes it from what is on disk under `root`. Both
         `read` and `index_files` come from here, so the text and the files it points at
-        can never describe different trees."""
+        can never describe different trees. `product=False` leaves capabilities and ADRs
+        out, so their area files are not built."""
         root = root or self.product_dir
         return knowledge_index.build_index(
             self._glossaries(root),
-            _read_dir(root / knowledge.PRODUCT_SUBDIR),
-            _read_dir(root / knowledge.ADR_SUBDIR),
+            _read_dir(root / knowledge.PRODUCT_SUBDIR) if product else {},
+            _read_dir(root / knowledge.ADR_SUBDIR) if product else {},
             self.brief(root),
             self._standards_text(root) if standards else None,
         )
@@ -67,9 +70,31 @@ class FilesystemKnowledge:
         `standards` is where a role gets them."""
         return self._index(root, standards=False).text
 
-    def index_files(self, root: Path | None = None) -> dict[str, str]:
-        """Every file `read` and `standards(whole=False)` point at, relative to `root`."""
-        return self._index(root, standards=True).files
+    def index_files(self, root: Path | None, families: Collection[str]) -> dict[str, str]:
+        """The files `read` and `standards(whole=False)` point at, relative to `root`, for
+        the criteria families a role has: the capability and ADR files for `product`, the
+        standards files for `engineering`. `design` is served whole and has no file."""
+        return self._index(
+            root, standards="engineering" in families, product="product" in families
+        ).files
+
+    def design(self, root: Path | None = None) -> str:
+        """The product's `DESIGN_STANDARDS.md`, whole, or "" when it has none: the system
+        ships no default (ADR-0055)."""
+        text = _read((root or self.product_dir) / knowledge.DESIGN_STANDARDS)
+        if text is None:
+            return ""
+        return (
+            knowledge.DESIGN_HEADING + "\n\n" + knowledge.fenced(knowledge.DESIGN_STANDARDS, text)
+        )
+
+    def criteria_files(self) -> tuple[str, ...]:
+        """The criteria documents the line cap measures (ADR-0055)."""
+        return (knowledge.STANDARDS, knowledge.DESIGN_STANDARDS)
+
+    def over_cap(self, texts: dict[str, str]) -> list[str]:
+        """The criteria documents past the line cap, one message each (ADR-0055)."""
+        return knowledge.criteria_over_cap(texts)
 
     def brief(self, root: Path | None = None) -> str | None:
         """The product's `BRIEF.md`, or None when it has not written one yet

@@ -49,6 +49,15 @@ tarea toca, no al que ya existía.
 _Avoid_: buenas prácticas, guía de estilo (el estilo lo impone el linter, no este archivo)
 _Campo_: coding standards — estándar
 
+**Estándares de diseño**:
+Los criterios de diseño del producto: reglas de iconos y texto, captura de diseño, lo que
+UX y UI deben respetar. Viven en `DESIGN_STANDARDS.md`, en la raíz del producto. Los leen
+entero los cuatro roles de diseño (UX Designer, UX Lead, UI Designer y UI Lead). El sistema
+no trae un default: sin el archivo no se entrega nada. Pasar de 300 líneas se avisa en el
+PR y el preflight, nunca se rechaza ni se reescribe. Ver ADR-0055.
+_Avoid_: guía de estilo, design system (el sistema de diseño es el código; esto son los criterios)
+_Campo_: design standards
+
 **Nombre del producto**:
 Cómo se llama este producto, declarado por él en su stack. Es lo que etiqueta cada span y cada métrica de una corrida suya, así que dos productos nunca se suman en un panel. Se declara y no se deduce del checkout: el nombre del directorio cambia si alguien clona con otro nombre y el remoto cambia en un fork, mientras que un archivo versionado viaja con el repo. Es la única parte del stack que vale la del checkout y no la del commit base: dice quién es el repositorio, no qué regía en un commit.
 _Avoid_: slug, id de producto, service name (el `service.name` es del sistema, y es uno solo)
