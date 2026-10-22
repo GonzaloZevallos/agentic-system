@@ -274,10 +274,61 @@ def test_the_reflection_schema_is_valid_and_rejects_an_unknown_op():
         schemas.validate(schemas.Reflection, {"markdown": "m", "deltas": [{"op": "rewrite"}]}, {})
 
 
+def _validated(delta: dict[str, Any]) -> dict[str, Any]:
+    raw = {"markdown": "m", "deltas": [delta]}
+    return schemas.validate(schemas.Reflection, raw, {})["deltas"][0]
+
+
+def test_a_delta_of_today_reads_as_it_did_and_a_new_one_carries_its_rating():
+    old = _validated(add())
+    assert (old["confidence"], old["scope"], old["decision"]) == ("high", "product", 0)
+    new = _validated(
+        {
+            **add(category="human-decision"),
+            "confidence": "low",
+            "scope": "system",
+            "source": "human_decision",
+            "decision": 2,
+        }
+    )
+    assert (new["confidence"], new["scope"], new["source"], new["decision"]) == (
+        "low",
+        "system",
+        "human_decision",
+        2,
+    )
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"source": "human_decision"},
+        {"source": "human_decision", "decision": 0},
+        {"confidence": "certain"},
+        {"scope": "everywhere"},
+        {"source": "rumour"},
+    ],
+)
+def test_a_delta_is_refused_when_a_human_decision_names_no_decision_or_a_field_is_out_of_range(
+    extra,
+):
+    with pytest.raises(ValueError):
+        _validated({**add(), **extra})
+
+
 def test_the_reflector_prompt_renders_with_the_placeholders_the_system_already_has(cfg):
     prompt = load_prompt(REFLECTOR, cfg, memory_ports(), {}, **PLACEHOLDERS)
     assert prompt.text.strip() and "{{" not in prompt.text
     assert prompt.playbook == ""  # an empty playbook leaves the prompt as `render` made it
+
+
+def test_the_reflector_prompt_teaches_the_new_fields_the_schema_validates(cfg):
+    text = load_prompt(REFLECTOR, cfg, memory_ports(), {}, **PLACEHOLDERS).text
+    for section in ("## Returns", "## Findings", "## Design remarks", "## Human decisions"):
+        assert section in text
+    for field in ("`confidence`", "`scope`", "`source`", "`decision`", "omitted"):
+        assert field in text
+    assert "when in doubt" in text.lower() and "`system`" in text
 
 
 def test_preflight_renders_the_reflector_prompt_and_refuses_a_stray_placeholder(

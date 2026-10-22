@@ -125,7 +125,7 @@ def pending(
 
 
 def _delta_dict(delta: pb.Delta) -> dict[str, Any]:
-    return {
+    out: dict[str, Any] = {
         "op": delta.op,
         "slug": delta.slug,
         "category": delta.category,
@@ -133,6 +133,15 @@ def _delta_dict(delta: pb.Delta) -> dict[str, Any]:
         "item_id": delta.item_id,
         "tasks": list(delta.tasks),
     }
+    # The fields ADR-0056 adds are written only when they say something: a record of a
+    # delta that rates nothing stays what it was before, and reads the same.
+    if delta.confidence != "high":
+        out["confidence"] = delta.confidence
+    if delta.scope != "product":
+        out["scope"] = delta.scope
+    if delta.decision:
+        out["decision"] = delta.decision
+    return out
 
 
 def _delta_of(raw: Mapping[str, Any]) -> pb.Delta:
@@ -143,6 +152,9 @@ def _delta_of(raw: Mapping[str, Any]) -> pb.Delta:
         lesson=raw.get("lesson", ""),
         item_id=raw.get("item_id", ""),
         tasks=tuple(raw.get("tasks") or ()),
+        confidence=raw.get("confidence", "high"),
+        scope=raw.get("scope", "product"),
+        decision=int(raw.get("decision") or 0),
     )
 
 
