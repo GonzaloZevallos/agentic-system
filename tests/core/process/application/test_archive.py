@@ -172,3 +172,22 @@ def test_what_the_release_reaped_comes_back_in_the_result_and_nothing_otherwise(
     quiet.documents.save({"id": "GH-1", "system_commit": "75de807"})
     quiet.workspace.existing_branches["agentic/GH-1"] = ("h1", "b0")
     assert archive.archive_previous_run("GH-1", quiet).reaped == ()
+
+
+def test_a_slice_branch_is_archived_with_the_subtask_branches_and_gh_1_slices_are_not_gh_12s():
+    ports = memory_ports()
+    ports.documents.save({"id": "GH-1", "system_commit": "75de807"})
+    ports.workspace.existing_branches.update(
+        {
+            "agentic/GH-1": ("h1", "b0"),
+            "agentic/GH-1.slice-1": ("h2", "b1"),
+            "agentic/GH-12.slice-1": ("h3", "b2"),
+        }
+    )
+
+    archive.archive_previous_run("GH-1", ports)
+
+    assert set(ports.workspace.renamed) == {
+        ("agentic/GH-1", "archive/run1-75de807/agentic/GH-1"),
+        ("agentic/GH-1.slice-1", "archive/run1-75de807/agentic/GH-1.slice-1"),
+    }

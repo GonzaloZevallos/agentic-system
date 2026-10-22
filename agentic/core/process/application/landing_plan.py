@@ -18,7 +18,7 @@ from agentic.shared.configuration import Configuration
 from ..domain import landing, rules
 from ..domain.landing import LandingStep, LandingStepKind
 from ..domain.roles import Role
-from ..domain.task import TaskState
+from ..domain.task import INTEGRATION, TaskState
 from .checkouts import task_base
 from .escalate import ESCALATED
 from .ports import GitError, IssueComment, Launcher, Ports, Upstream
@@ -156,7 +156,7 @@ def slice_inputs(
     approved = tuple(
         landing.SliceUnit(name, tuple(unit.get("depends_on", ())))
         for name, unit in subtasks.items()
-        if unit.get("status") == "approved"
+        if unit.get("status") == "approved" and name != INTEGRATION
     )
     refused = landing.refused_slices(entries(raw))
     blocking = frozenset(landing.blocking_owners(raw))
