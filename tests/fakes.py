@@ -166,8 +166,12 @@ class MemoryKnowledge:
         text: str = "",
         standards: str = "## Engineering standards\n\nHex.",
         brief: str | None = None,
+        standards_index: str | None = None,
     ) -> None:
         self.text = text
+        # What `standards(whole=False)` returns when a test pins the two shapes apart; None
+        # keeps one text for both, as every test written before the index did.
+        self.standards_index_text = standards_index
         self.index: dict[str, str] = {}
         self.standards_text = standards
         self.brief_text = brief
@@ -184,6 +188,8 @@ class MemoryKnowledge:
     def standards(self, root: Path | None = None, whole: bool = True) -> str:
         self.standards_from = root
         self.standards_whole = whole
+        if not whole and self.standards_index_text is not None:
+            return self.standards_index_text
         return self.standards_text
 
     def brief(self, root: Path | None = None) -> str | None:

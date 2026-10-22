@@ -343,8 +343,13 @@ async def run_with_retry(
     limits: RunLimits | None = None,
     section: str | None = None,
     cold_prompt: str | None = None,
+    before_attempt: Callable[[], None] | None = None,
 ) -> Output:
-    """`check` is the use case's own rule over the validated output (raise `ValueError`);
+    """`before_attempt` runs at the top of every attempt, retries included, before the
+    slot is taken: `run_role` hands it the index write, so a retry sees the files its
+    failed attempt left in the checkout (GH-292).
+
+    `check` is the use case's own rule over the validated output (raise `ValueError`);
     breaking it is a role failure like any other, so the model gets the error back.
 
     `spent_usd` is what the task spent before this call; with `task_cap_usd`
@@ -404,6 +409,8 @@ async def run_with_retry(
     )
     guard = _chain(schema_guard, delivery_check)
     for attempt in range(1, max(retries, 0) + 2):
+        if before_attempt is not None:
+            before_attempt()
         total = max(spent_usd + spent(failures), limits.spent_usd)
         if task_cap_usd is not None and total >= task_cap_usd:
             raise TaskCapReached(role, total, task_cap_usd, failures)
@@ -839,10 +846,12 @@ async def run_role(
     # One value for where the role runs, where its knowledge is read from and where its
     # index files are written: they are the same checkout by construction, never two.
     workdir = cwd or cfg.product_dir
-    if reads_by_index(role):
-        # Before every attempt of the role, a resumed one that receives only a delta
-        # included: the index points at files of this checkout as they are now.
+
+    def write_index() -> None:
+        # Before every attempt of the role, a resumed one that receives only a delta and
+        # a retry included: the index points at files of this checkout as they are now.
         ports.workspace.write_index(workdir, ports.knowledge.index_files(workdir))
+
     if prompt is None:
         standards, knowledge = preamble(role, ports, workdir)
         prompt = context_for(
@@ -871,6 +880,7 @@ async def run_role(
             limits=ports.limits,
             section=section,
             cold_prompt=cold_prompt,
+            before_attempt=write_index if reads_by_index(role) else None,
         )
     except Escalating as exc:
         # Never `patch | escalation(exc)` (issue #137): `escalation(exc)` already

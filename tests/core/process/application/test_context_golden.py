@@ -190,10 +190,14 @@ KNOWLEDGE_TEXT = (
     "Areas:\n"
     "- `.agentic/index/product.md`: product -- capabilities (1 entries)"
 )
-STANDARDS_TEXT = (
+STANDARDS_INDEX_TEXT = (
     "## Engineering standards\n\n"
     "Areas:\n"
     "- `.agentic/index/standards.md`: standards -- one file per section (2 entries)"
+)
+# What a verifier receives (invariant 5): the sections whole, no index line.
+STANDARDS_WHOLE_TEXT = (
+    "## Engineering standards\n\n### 1. Layers\n\nLayers.\n\n### 2. Tests\n\nTests."
 )
 
 STATE = {
@@ -213,7 +217,11 @@ STATE = {
     },
 }
 
-PORTS = memory_ports(knowledge=MemoryKnowledge(text=KNOWLEDGE_TEXT, standards=STANDARDS_TEXT))
+PORTS = memory_ports(
+    knowledge=MemoryKnowledge(
+        text=KNOWLEDGE_TEXT, standards=STANDARDS_WHOLE_TEXT, standards_index=STANDARDS_INDEX_TEXT
+    )
+)
 
 
 def _context(role, extra_sections: tuple[str, ...] = (), subtask_id: str | None = None) -> str:
@@ -273,7 +281,7 @@ def test_product_analyst_context_is_pinned():
 def test_tech_lead_ephemeral_context_is_pinned():
     assert _context(TECH_LEAD_EPHEMERAL) == (
         "## Engineering standards\n\n"
-        "Areas:\n- `.agentic/index/standards.md`: standards -- one file per section (2 entries)\n\n"
+        "### 1. Layers\n\nLayers.\n\n### 2. Tests\n\nTests.\n\n"
         "## Product knowledge\n\n"
         "Areas:\n- `.agentic/index/product.md`: product -- capabilities (1 entries)\n\n"
         "## Original request\n\n"
@@ -291,7 +299,7 @@ def test_tech_lead_ephemeral_context_is_pinned():
 def test_tech_lead_context_is_pinned():
     assert _context(TECH_LEAD) == (
         "## Engineering standards\n\n"
-        "Areas:\n- `.agentic/index/standards.md`: standards -- one file per section (2 entries)\n\n"
+        "### 1. Layers\n\nLayers.\n\n### 2. Tests\n\nTests.\n\n"
         "## Product knowledge\n\n"
         "Areas:\n- `.agentic/index/product.md`: product -- capabilities (1 entries)\n\n"
         "## Original request\n\n"
@@ -314,7 +322,7 @@ def test_tech_lead_platform_context_is_pinned():
     # the loop on this path (ADR-0017).
     assert _context(TECH_LEAD_PLATFORM) == (
         "## Engineering standards\n\n"
-        "Areas:\n- `.agentic/index/standards.md`: standards -- one file per section (2 entries)\n\n"
+        "### 1. Layers\n\nLayers.\n\n### 2. Tests\n\nTests.\n\n"
         "## Product knowledge\n\n"
         "Areas:\n- `.agentic/index/product.md`: product -- capabilities (1 entries)\n\n"
         "## Original request\n\n"
@@ -336,7 +344,7 @@ def test_tech_lead_reviewer_context_is_pinned():
     # its own brief plus a sister index instead of every subtask's (`plan_view`).
     assert _context(TECH_LEAD_REVIEWER, EXTRA_SECTIONS, subtask_id="api") == (
         "## Engineering standards\n\n"
-        "Areas:\n- `.agentic/index/standards.md`: standards -- one file per section (2 entries)\n\n"
+        "### 1. Layers\n\nLayers.\n\n### 2. Tests\n\nTests.\n\n"
         "## Original request\n\n"
         "Context diet per role\n\n"
         "Developers read the whole plan today, sisters included (README §6).\n\n"

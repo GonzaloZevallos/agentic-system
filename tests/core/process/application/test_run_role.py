@@ -1180,9 +1180,9 @@ def _reader_ports(**kwargs):
     return memory_ports(knowledge=knowledge), knowledge
 
 
-async def _run(role, ports, runner, **kwargs):
+async def _run(role, ports, runner, retries=0, **kwargs):
     state = {"id": "GH-1", "title": "t", "description": "d", "sections": {}}
-    cfg = Configuration(product_dir=Path("/product"), role_retries=0)
+    cfg = Configuration(product_dir=Path("/product"), role_retries=retries)
     return await run_role(state, role, cfg, ports, **PLACEHOLDERS, **kwargs)
 
 
@@ -1204,6 +1204,29 @@ async def test_a_resumed_role_that_receives_only_a_delta_still_gets_a_current_in
     await _run(PM, ports, runner, cwd=CHECKOUT, resume="s1", prompt="## Delta\n\nnew")
     assert ports.workspace.indexes == {CHECKOUT: knowledge.index}
     assert runner.calls[0]["prompt"] == "## Delta\n\nnew"
+
+
+async def test_a_retry_attempt_gets_its_own_index_write():
+    ports, knowledge = _reader_ports()
+    runner = ScriptedRunner(pm=[AttemptFailed("structured output missing", 0.05), delivered()])
+    ports = memory_ports(knowledge=knowledge, runner=runner)
+    writes: list[dict[str, str]] = []
+    write = ports.workspace.write_index
+
+    def counting(path, files):
+        writes.append(dict(files))
+        write(path, files)
+
+    ports.workspace.write_index = counting
+    await _run(PM, ports, runner, retries=1, cwd=CHECKOUT)
+    assert len(runner.calls) == 2 and len(writes) == 2  # one write per attempt, not per call
+
+
+async def test_a_retry_of_a_role_that_reads_nothing_still_writes_no_index():
+    runner = ScriptedRunner(pjm=[AttemptFailed("structured output missing", 0.05), OK])
+    ports = memory_ports(runner=runner)
+    await _run(PJM, ports, runner, retries=1, cwd=CHECKOUT)
+    assert len(runner.calls) == 2 and ports.workspace.indexes == {}
 
 
 async def test_a_role_that_reads_nothing_gets_no_index_written():
