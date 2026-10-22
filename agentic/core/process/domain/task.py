@@ -244,6 +244,45 @@ class TaskInput(TypedDict):
     # same reason as `decided`. Absent reads as a first run: depth 0, nothing carried.
     landing_restarts: NotRequired[int]
     landing_cost_carried: NotRequired[float]
+    # The `Human` section of the archived run, seeded verbatim by `rules.entering` so every
+    # decision the human took survives a landing restart (GH-297). Only that key is ever
+    # seeded; absent reads as a run with no section. Declared for the same reason as `decided`.
+    sections: NotRequired[dict[str, str]]
+
+
+@dataclass(frozen=True)
+class LandedSliceRef:
+    """A slice the landing already merged: the units it carried and its pull request."""
+
+    units: tuple[str, ...]
+    pull_request: str
+
+
+@dataclass(frozen=True)
+class Carried:
+    """What a landing restart carries from the archived run into the fresh one (GH-297):
+    the depth and cost (`restarts`, `cost`), the Landing Diagnoser's section (`diagnosis`),
+    every human decision (`human`, the `Human` section verbatim) and the slices already
+    landed. Built only by `landing.carry_over`, read by `rules.entering` and the CLI. Lives
+    here, not in `landing`, because `rules` cannot import `landing`."""
+
+    restarts: int
+    cost: float
+    diagnosis: str
+    human: str
+    landed: tuple[LandedSliceRef, ...]
+
+
+class LandedSlice(TypedDict, total=False):
+    """One slice of the task document's `landed_slices` list (GH-297), every key optional:
+    `units` the subtask ids it carried, `pull_request` its pull request, `merged_sha` what
+    master held after the merge and `at` when it was recorded. Git ancestry, never this
+    list alone, says whether a unit landed."""
+
+    units: list[str]
+    pull_request: str
+    merged_sha: str
+    at: str
 
 
 class Failure(TypedDict):
@@ -637,6 +676,18 @@ class LandingEntry(TypedDict, total=False):
     closed_at: str
     # The upstream sha the delivered head did not contain.
     lacks: str
+    # GH-297, all optional: a document without them reads and renders as before.
+    # `land_slice` entries: the units of the slice and its (never main) pull request.
+    slice_units: list[str]
+    slice_pull_request: str
+    # `land_slice` entries: whether the product's checks passed on the slice, so a CI wait
+    # across ticks does not run them again. `upstream` is the master the slice was built on.
+    checks_passed: bool
+    # `diagnose` entries: the `landing.RestartWhy` that no slice was possible for.
+    restart_why: str
+    # `diagnose` entries: the integrator's paths kept every slice from landing (the restart
+    # comment's `(integration work)`).
+    integration_work: bool
 
 
 class EstimateRecord(TypedDict):
@@ -761,6 +812,9 @@ class TaskState(TaskInput, total=False):
     followups_filed: bool
     landing_restarts: int
     landing_cost_carried: float
+    # The slices the landing merged ahead of the task's pull request (GH-297, ADR-0048):
+    # one record per slice, appended whole through `record_closure`. Optional, read with `.get`.
+    landed_slices: list[LandedSlice]
     # What an interviewee could not decide (ADR-0014); escalates with the task.
     questions_for_human: list[str]
     # What the ephemeral interviewer proposed for the deliverable that follows

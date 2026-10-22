@@ -30,6 +30,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
@@ -150,6 +151,49 @@ class GitWorkspace:
             return None
         self._run("merge", "--abort", cwd=path)
         return (result.stdout + result.stderr).strip() or f"`git merge {branch}` failed"
+
+    def build_slice(self, path: Path, master: str, heads: Sequence[str], branch: str) -> str | None:
+        """See `Workspace.build_slice`. `checkout -B` puts `branch` on `master` in the
+        checkout at `path`, and each head is merged in the order given. A merge that does
+        not go through is aborted, the checkout goes back to where it was and `branch` is
+        deleted: a slice that cannot be built leaves nothing behind, not a half-merged
+        tree and not a branch that looks like one that was."""
+        symbolic = self._run("symbolic-ref", "-q", "--short", "HEAD", cwd=path).stdout.strip()
+        if symbolic == branch:  # the checkout of an earlier round: leave the branch, detached
+            symbolic = ""
+        origin = symbolic or self._git("rev-parse", "HEAD", cwd=path)
+        self._git("checkout", "-q", "-B", branch, master, cwd=path)
+        for head in heads:
+            if self._run("merge", "--no-edit", "-q", head, cwd=path).returncode == 0:
+                continue
+            self._run("merge", "--abort", cwd=path)
+            self._run("checkout", "-q", *(() if symbolic else ("--detach",)), origin, cwd=path)
+            self._run("branch", "-D", branch, cwd=path)
+            return None
+        return self._git("rev-parse", "HEAD", cwd=path)
+
+    def integration_paths(
+        self, path: Path, heads: Sequence[str], task_head: str, *, master: str | None = None
+    ) -> frozenset[str] | None:
+        """See `Workspace.integration_paths`: every head merged, in a temporary worktree
+        that is always removed, onto the merge-base of `task_head` and `master`; the paths
+        that tree and `task_head` differ in are what the integrator did beyond the units."""
+        tip = master or self.upstream().sha
+        if tip is None:
+            return None
+        base = self._run("merge-base", task_head, tip, cwd=path)
+        if base.returncode != 0 or not base.stdout.strip():
+            return None
+        name = f"integration-{uuid.uuid4().hex[:12]}"
+        scratch = self.detached_checkout(name, base.stdout.strip())
+        try:
+            for head in heads:
+                if self._run("merge", "--no-edit", "-q", head, cwd=scratch).returncode != 0:
+                    return None
+            out = self._git("diff", "--name-only", "--no-renames", "HEAD", task_head, cwd=scratch)
+            return frozenset(line for line in out.splitlines() if line)
+        finally:
+            self.remove_checkout(name)
 
     def merge_keeping_conflicts(self, path: Path, branch: str) -> MergeOutcome:
         """Like `merge`, but never `merge --abort`: the checkout is left exactly as git

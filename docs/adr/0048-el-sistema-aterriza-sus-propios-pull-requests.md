@@ -339,3 +339,74 @@ pasada más y luego `diagnose`; antes el ciclo no tenía cota (~6 USD por vuelta
 - Un SIGKILL entre el merge y el aborto solo lo cubre la limpieza al entrar de la pasada siguiente.
 - Seguimiento: mantener el merge con conflicto dentro del nodo develop, como hace el camino de
   dependencias.
+
+## Adenda (2026-10-22, GH-297): reiniciar es el último recurso; antes se aterriza por tramos
+
+**Contexto.** En apostrophe GH-53 todas las subtareas y todas las revisiones finales aprobaron, pero el
+merge fallaba en cada sincronización con un master que se movía. Tras dos rechazos el Diagnoser cerró el
+pull request y reinició la tarea de cero, tirando trabajo ya aprobado, y las decisiones del humano de
+la primera vuelta no llegaron a la segunda. Decisión del dueño (2026-10-21): reiniciar es el último recurso.
+
+**`land_slice`.** Cuando un presupuesto del aterrizaje se agota, el paso ya no es siempre `diagnose`.
+`landing_step` pide, en su única función de agotamiento, el veredicto de `landing.slice_or_restart`: un
+**tramo aterrizado** o el motivo cerrado de reiniciar. El tramo es un prefijo estricto, en orden
+topológico, de las subtareas aprobadas aún no aterrizadas, cerrado bajo `depends_on`: nunca incluye todas
+(lo que queda es el pull request principal). Una sola regla decide si la revisión de una unidad vale para
+el tramo, `landing.review_carries`, la misma que usa el pull request principal; ninguna regla de
+ascendencia ni de rutas la reemplaza (la ascendencia y un build limpio son condiciones extra). Una unidad
+que toca las rutas del trabajo del integrador no entra.
+
+**El pull request del tramo.** Se arma desde master en `agentic/GH-N.slice-<k>`, corre los chequeos del
+producto y se abre con `closes_issue=False`. Nunca se escribe en `pull_request` del documento y no tiene
+resultado de entrega. El merge sigue siendo solo `auto_merge_decision` sobre los `MergeFacts` que arma
+`landing.slice_facts`, y va únicamente por `Tracker.merge`.
+
+**La ascendencia de git es la verdad.** Si una unidad ya aterrizó se lee de `Workspace.is_ancestor` del
+`reviewed_head` de la unidad contra master (`landing.slice_landed`), nunca de `landed_slices` solo; esa
+lista del documento es un registro, y un proceso que muera entre el merge y el registro se corrige en la
+vuelta siguiente.
+
+**La época de sincronización.** Tras aterrizar un tramo, el pull request principal abre una época nueva:
+los presupuestos de sincronización se cuentan de nuevo desde ese tramo. Es una segunda
+definición de «presupuesto gastado», cubierta por los tests del dominio y por el escenario del ejecutor.
+
+**Los motivos de reinicio (`RestartWhy`).** Un conjunto cerrado: `single_unit` (hay menos de dos unidades
+pendientes, nada que partir), `no_clean_slice` (ningún prefijo cumple `review_carries` y esquiva las
+rutas del integrador, o las rutas no se pudieron armar), `slice_refused` (los prefijos limpios fueron
+rechazados `SLICE_REFUSALS_MAX` veces) y `unreadable` (el documento no se pudo leer). Viaja en la
+entrada `diagnose` como `restart_why`. El caso GH-53 es `no_clean_slice`: master tocó los mismos archivos
+que las subtareas, y la otra salida era mergear sin revisión.
+
+**El aviso del reinicio.** Al reiniciar, `diagnose` cierra el pull request, registra la profundidad y el
+costo, comenta en el issue y lanza la corrida nueva, en ese orden, y no espera aprobación de nadie. El
+comentario es `Restarted by landing: <restart_why>: <motivo> (cost so far: $X.XX; landed slices: #a, #b)`:
+conserva el prefijo literal `RESTARTED_BY_LANDING` (así `human_decision` lo sigue leyendo como del
+sistema), añade `(integration work)` tras el motivo cuando el trabajo del integrador bloqueó el tramo, y
+omite el motivo cerrado en un documento anterior. Si el comentario falla, se registra y la corrida nueva
+nace igual. La profundidad `RESTART_DEPTH_MAX` sigue escalando como antes.
+
+**`Human` se hereda.** Todas las decisiones del humano (`sections[HUMAN]` del documento archivado) llegan
+a la corrida nueva por `landing.carry_over` y `rules.entering`, como la sección `Human` de la corrida
+fresca; ningún camino la concatena a `description` ni a otra sección. Los roles la tratan como resuelta.
+La sección del Diagnoser sigue pegada a `description`, como hoy.
+
+**Glosario.** El término nuevo es **Tramo aterrizado**, en el glosario de Proceso; **Aterrizaje** lo menciona.
+
+**§7.** Ninguna métrica nueva. `LandingStepKind` suma `land_slice` (`run_kind_of("land_slice")` es
+`land_checks`) y aparece el literal cerrado `RestartWhy`, que viaja en la entrada `landing`. Claves
+opcionales nuevas, leídas con `.get`: `landed_slices` en el documento y, en las entradas, `slice_units`,
+`slice_pull_request` y `restart_why`; un documento sin ellas se renderiza igual byte a byte.
+
+**§8 (se ensancha).** El sistema puede ahora abrir y mergear un segundo pull request del mismo producto
+por tarea, el del tramo. Siempre pasa por `auto_merge_decision` (rutas protegidas y `ci_untrusted
+incluidos), siempre mergea con `Tracker.merge` y nunca empuja a master; nadie más gana acceso. Costo: solo
+cuando el aterrizaje iba a terminar en `diagnose`, un merge en un árbol temporal, N consultas de rutas y
+ascendencia (N = unidades aprobadas) y, para el candidato elegido, una armada más los chequeos; lineal en
+las unidades y sin modelo. Un aterrizaje sano no paga nada.
+
+**Riesgos conocidos.**
+- Si master se mueve sobre los mismos archivos que las subtareas, ninguna unidad cumple `review_carries`:
+  se reinicia igual, ahora con `no_clean_slice` escrito en el aviso.
+- Si las rutas del integrador no se pueden armar, el resultado es `no_clean_slice`.
+- Un SIGKILL entre el merge del tramo y su registro deja un pull request de tramo abierto; la entrada
+  guarda `slice_pull_request` para cerrarlo en la vuelta siguiente.

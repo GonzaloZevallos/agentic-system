@@ -1,6 +1,6 @@
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from typing import get_args
+from typing import Any, cast, get_args
 
 import pytest
 
@@ -21,7 +21,7 @@ from agentic.core.process.domain.roles import (
     TECH_LEAD_EPHEMERAL,
 )
 from agentic.core.process.domain.schemas import TaskType
-from agentic.core.process.domain.task import INTEGRATION
+from agentic.core.process.domain.task import INTEGRATION, Carried
 
 PAIR = PAIR_PM_PA
 KEY = PAIR.key
@@ -2633,13 +2633,46 @@ def test_replaced_note_names_the_sha_and_how_to_recover_it():
 
 def test_entering_carries_the_landing_restart_and_adds_nothing_when_there_is_nothing():
     task = {"id": "GH-1", "title": "t", "description": "plain"}
-    assert rules.entering(task, cap=False, carried=(1, 2.5)) == {
+    assert rules.entering(task, cap=False, carried=Carried(1, 2.5, "", "", ())) == {
         **task,
         "landing_restarts": 1,
         "landing_cost_carried": 2.5,
     }
-    assert rules.entering(task, cap=False, carried=(0, 0.0)) == task
+    assert rules.entering(task, cap=False, carried=Carried(0, 0.0, "", "", ())) == task
     assert rules.entering(task, cap=False, carried=None) == task
+
+
+HUMAN_TEXT = (
+    "### Decision 1\n\nEscalated: the plan did not fit\n\nSplit it in two.\n\n"
+    "### Decision 2\n\nKeep the CLI as is."
+)
+
+
+def test_entering_seeds_the_human_section_verbatim_and_the_next_decision_is_numbered_three():
+    task = {"id": "GH-1", "title": "t", "description": "plain"}
+    entered = rules.entering(task, cap=False, carried=Carried(0, 0.0, "", HUMAN_TEXT, ()))
+    assert entered == {**task, "sections": {"Human": HUMAN_TEXT}}
+    assert "landing_restarts" not in entered and "landing_cost_carried" not in entered
+    grown = rules.human_section(cast(Any, entered), None, "Another call.")
+    assert "### Decision 3\n\nAnother call." in grown
+    assert grown.startswith(HUMAN_TEXT)
+
+
+def test_entering_with_a_restart_and_a_human_section_carries_both():
+    task = {"id": "GH-1", "title": "t", "description": "plain"}
+    entered = rules.entering(task, cap=False, carried=Carried(1, 2.5, "diag", HUMAN_TEXT, ()))
+    assert entered["sections"] == {"Human": HUMAN_TEXT}
+    assert (entered["landing_restarts"], entered["landing_cost_carried"]) == (1, 2.5)
+    assert "diag" not in str(entered["sections"])
+
+
+def test_entered_human_section_reaches_the_prompt_a_role_of_the_fresh_run_renders():
+    task = {"id": "GH-1", "title": "t", "description": "plain"}
+    entered = rules.entering(task, cap=False, carried=Carried(0, 0.0, "", HUMAN_TEXT, ()))
+    delta = rules.interview_retake_delta(
+        cast(Any, entered), INTERVIEW_DEFINITION, "agentic/GH-1", "abc"
+    )
+    assert f"## Human\n\n{HUMAN_TEXT}" in delta
 
 
 # --- GH-257: `retake_calendar` is `_calendar`'s body, asked by the landing too ----------------

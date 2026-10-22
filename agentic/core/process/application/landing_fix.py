@@ -18,6 +18,7 @@ from ..domain.task import ChangeCategory, FindingRecord, TaskState, apply
 from . import escalate, landing_plan, landing_sync, merge
 from .checkouts import task_base
 from .landing_plan import LandingContext
+from .poll import RESTARTED_BY_LANDING
 from .resume import state_from
 from .run_role import run_role
 
@@ -303,6 +304,37 @@ def _accounting(patch: TaskState) -> dict[str, object]:
     return kept
 
 
+def _landed_numbers(saved: Mapping[str, object]) -> list[str]:
+    """The pull requests of the slices the landing already merged, as `#N` (the whole
+    reference when it has no trailing number), in the order they landed."""
+    landed = saved.get("landed_slices")
+    found: list[str] = []
+    for item in landed if isinstance(landed, list) else []:
+        reference = item.get("pull_request") if isinstance(item, Mapping) else None
+        if isinstance(reference, str) and reference:
+            found.append(landing_rules.pull_request_label(reference))
+    return found
+
+
+def _restart_notice(saved: TaskState, reason: str, carried: float) -> str:
+    """The comment a landing restart leaves on the issue (GH-297): the closed `restart_why`
+    of the latest diagnose entry (with `(integration work)` when the entry says the
+    integrator's paths blocked the slice), the diagnoser's reason, what the task has cost so
+    far and the slices already landed. It keeps the `RESTARTED_BY_LANDING` prefix; a document
+    without the closed reason reads as before, plus the cost."""
+    diagnoses = [e for e in landing_plan.entries(saved) if e.get("step") == "diagnose"]
+    entry = diagnoses[-1] if diagnoses else {}
+    why = entry.get("restart_why")
+    label = ""
+    if isinstance(why, str) and why:
+        marker = " (integration work)" if entry.get("integration_work") is True else ""
+        label = f"{why}{marker}: "
+    tail = f"cost so far: ${carried:.2f}"
+    if numbers := _landed_numbers(saved):
+        tail += f"; landed slices: {', '.join(numbers)}"
+    return f"{RESTARTED_BY_LANDING}{label}{reason} ({tail})"
+
+
 def diagnose(context: LandingContext) -> None:
     """The landing's last step, once per task: the diagnoser reads why the merge keeps being
     refused. At restart depth 0 the pull request is closed and the issue starts over with
@@ -350,7 +382,12 @@ def diagnose(context: LandingContext) -> None:
     context.ports.documents.record_closure(
         context.task_id, {"landing_restarts": 1, "landing_cost_carried": carried}
     )
-    context.ports.tracker.comment(context.task_id, f"Restarted by landing: {reason}")
+    notice = _restart_notice(saved, reason, carried)
+    try:
+        context.ports.tracker.comment(context.task_id, notice)
+    except ValueError as exc:
+        # The notice informs, it does not gate: the fresh run starts without it.
+        context.log(f"agentic: land: {context.task_id}: comment failed: {exc}")
     if context.launcher is None:
         context.log(f"agentic: land: {context.task_id}: no way to spawn the restart")
         return

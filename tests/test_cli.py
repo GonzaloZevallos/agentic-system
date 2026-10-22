@@ -5129,3 +5129,83 @@ async def test_eval_compare_prints_the_per_role_table_after_an_unchanged_scoreca
     assert len(rows) == 2
     assert "2.0000" in rows[0] and "500" in rows[0]
     assert "1.5000" in rows[1] and rows[1].split()[1] == "2"
+
+
+TWO_HUMAN_DECISIONS = (
+    "### Decision 1\n\nEscalated: the plan did not fit\n\nSplit it in two.\n\n"
+    "### Decision 2\n\nKeep the CLI as is."
+)
+
+
+@pytest.mark.anyio
+async def test_fresh_carries_every_human_decision_into_the_entered_state_and_the_next_is_third(
+    monkeypatch, tmp_path
+):
+    from agentic.core.process.domain import rules
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    graph = RecordsEntry({"id": "GH-1", "title": "t", "status": "open"})
+    monkeypatch.setattr(cli, "graph", graph)
+    ports = memory_ports()
+    ports.documents.save(
+        {
+            "id": "GH-1",
+            "system_commit": "abc1234",
+            "landing_restarts": 1,
+            "landing_cost_carried": 3.25,
+            "sections": {"Human": TWO_HUMAN_DECISIONS, "Landing Diagnoser": "Same lock again."},
+            "landed_slices": [
+                {"units": ["a"], "pull_request": "https://github.com/o/r/pull/7"},
+                {"units": ["b"], "pull_request": "#9"},
+            ],
+        }
+    )
+    task = {"id": "GH-1", "title": "t", "description": "d"}
+    await cli._run(
+        task, Configuration(product_dir=tmp_path), ports, fresh=True, checkpointer=in_memory
+    )
+    assert graph.entered is not None
+    assert graph.entered["sections"] == {"Human": TWO_HUMAN_DECISIONS}
+    assert graph.entered["landing_restarts"] == 1
+    description = graph.entered["description"]
+    assert "## Landing Diagnoser\n\nSame lock again." in description
+    assert "Already on master: a, b (#7, #9)" in description
+    assert "Human" not in description and "Decision" not in description
+    grown = rules.human_section(graph.entered, None, "Third call.")
+    assert "### Decision 3\n\nThird call." in grown
+
+
+@pytest.mark.anyio
+async def test_fresh_carries_the_human_section_of_a_run_the_landing_never_restarted(
+    monkeypatch, tmp_path
+):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    graph = RecordsEntry({"id": "GH-1", "title": "t", "status": "open"})
+    monkeypatch.setattr(cli, "graph", graph)
+    ports = memory_ports()
+    ports.documents.save(
+        {"id": "GH-1", "system_commit": "abc1234", "sections": {"Human": TWO_HUMAN_DECISIONS}}
+    )
+    task = {"id": "GH-1", "title": "t", "description": "d"}
+    await cli._run(
+        task, Configuration(product_dir=tmp_path), ports, fresh=True, checkpointer=in_memory
+    )
+    assert graph.entered is not None
+    assert graph.entered["sections"] == {"Human": TWO_HUMAN_DECISIONS}
+    assert "landing_restarts" not in graph.entered
+    assert graph.entered["description"] == "d"
+
+
+def test_landing_carry_of_an_unreadable_document_carries_nothing(monkeypatch):
+    from tests.fakes import memory_ports
+
+    ports = memory_ports()
+
+    def unreadable(task_id):
+        raise ValueError("not a task document")
+
+    monkeypatch.setattr(ports.documents, "load", unreadable)
+    assert cli._landing_carry("GH-1", ports) == (None, "")

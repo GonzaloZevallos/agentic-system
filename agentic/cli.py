@@ -99,7 +99,7 @@ from .core.process.domain import legacy_names, rules, stack_signals
 from .core.process.domain import stack_review as stack_review_texts
 from .core.process.domain.playbook import Delta, Playbook
 from .core.process.domain.roles import LANDING_DIAGNOSER, ROLES
-from .core.process.domain.task import PullRequest, TaskInput, TaskState
+from .core.process.domain.task import Carried, PullRequest, TaskInput, TaskState
 from .shared.configuration import ENV_PREFIX, LOGS_DIR, Configuration, MissingProductDir
 from .shared.environment import without_own_toolchain
 
@@ -1113,24 +1113,30 @@ async def _run(
     _report(final, task["id"], ports)
 
 
-def _landing_carry(task_id: str, ports: Ports) -> tuple[tuple[int, float] | None, str]:
+def _landing_carry(task_id: str, ports: Ports) -> tuple[Carried | None, str]:
     """What the document a `--fresh` run is about to archive carries for the run that
-    replaces it (GH-239, ADR-0048): `(landing_restarts, landing_cost_carried)` and the
-    landing diagnoser's section, as a `## ` section for the request. Read from the document,
-    never counted from issue comments; `(None, "")` for a task that was never restarted by
-    the landing or whose document cannot be read."""
+    replaces it (GH-239, ADR-0048, GH-297): `landing.carry_over` of the document, read
+    never counted from issue comments, and the request's addition, the landing diagnoser's
+    section as a `## ` section plus one `Already on master:` line when slices already
+    landed. `(None, "")` for a task that carries nothing or whose document cannot be read.
+    The `Human` section does not go into the addition: it travels as a section."""
     try:
         raw = ports.documents.load(task_id)
     except (ValueError, OSError):
         return None, ""
     if not raw:
         return None, ""
-    restarts = landing_rules.restart_depth(raw)
-    cost = raw.get("landing_cost_carried", 0.0)
-    carried = float(cost) if isinstance(cost, int | float) and not isinstance(cost, bool) else 0.0
-    text = (raw.get("sections") or {}).get(LANDING_DIAGNOSER.name, "") if restarts else ""
-    section = f"## {LANDING_DIAGNOSER.name}\n\n{text}" if text else ""
-    return (restarts, carried) if restarts else None, section
+    carried = landing_rules.carry_over(raw)
+    if carried is None:
+        return None, ""
+    parts = [f"## {LANDING_DIAGNOSER.name}\n\n{carried.diagnosis}"] if carried.diagnosis else []
+    if carried.landed:
+        units = ", ".join(unit for ref in carried.landed for unit in ref.units)
+        requests = ", ".join(
+            landing_rules.pull_request_label(ref.pull_request) for ref in carried.landed
+        )
+        parts.append(f"Already on master: {units} ({requests})")
+    return carried, "\n\n".join(parts)
 
 
 def _archive_previous_run(task_id: str, ports: Ports) -> None:
