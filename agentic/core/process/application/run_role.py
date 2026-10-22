@@ -20,7 +20,7 @@ Reached, `TaskCapReached` escalates the same way, but it is not a role failure: 
 role did not break (ADR-0004, third addendum). The cap is a flat ceiling, the same for any
 plan size (2026-10-05 addendum), checked against what the whole process spent, which is
 what the state cannot hold once branches run in parallel (fifth addendum, `limits.py`).
-Beside it, before the same attempt, the safety cap of the task's estimate (ADR-0053):
+Beside it, before the same attempt, the safety cap of the task's estimate (ADR-0054):
 `EstimateCapReached`, its own escalation class and text, never the flat cap's.
 
 Context rule (README.md, 6): each role reads, in full, the sections it declares in
@@ -145,7 +145,7 @@ class EstimateStop:
 
 
 class EstimateCapReached(Escalating):
-    """The run reached the safety cap of its estimate (ADR-0053) before this role's next
+    """The run reached the safety cap of its estimate (ADR-0054) before this role's next
     attempt. Not a role failure, and not the flat task cap: its own class and its own text."""
 
     def __init__(self, role: Role, stop: EstimateStop, failures: list[Failure]):

@@ -1,4 +1,4 @@
-"""The cost history the Tech Lead's plan is calibrated against (ADR-0053), pure."""
+"""The cost history the Tech Lead's plan is calibrated against (ADR-0054), pure."""
 
 from agentic.core.process.domain import cost_history
 

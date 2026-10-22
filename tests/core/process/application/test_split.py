@@ -1,4 +1,4 @@
-"""The `split` node (ADR-0053) with a fake tracker and a fake inbox: a plan that does not
+"""The `split` node (ADR-0054) with a fake tracker and a fake inbox: a plan that does not
 fit becomes chained, labelled issues and the task ends `split`; a cut `gh` resumes without
 duplicating; a task that is itself a part never splits again."""
 

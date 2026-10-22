@@ -187,7 +187,7 @@ def prepare(
                 "answer them in comments on the issue, then resume"
             )
         if decision is None and estimate is None and paused.get("escalation_class") == "estimate":
-            # Never retaken on its own (ADR-0053): the estimate in force changes only on a
+            # Never retaken on its own (ADR-0054): the estimate in force changes only on a
             # resumption that carries a human decision.
             raise WaitingOnHuman(
                 f"{task_id}: the estimate does not fit; decide in comments on the issue "

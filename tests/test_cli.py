@@ -2615,7 +2615,7 @@ def _closed_with(monkeypatch, tmp_path, tracker_setup, pull_request=None, **task
 
 
 def test_close_records_the_files_the_pull_request_changed(monkeypatch, tmp_path):
-    """ADR-0053: `actual_files` comes from the tracker's `changed_files` through
+    """ADR-0054: `actual_files` comes from the tracker's `changed_files` through
     `rules.delivered_files`, for a merged and for a closed-unmerged pull request."""
 
     def three(tracker):

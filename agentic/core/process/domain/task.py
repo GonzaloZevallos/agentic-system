@@ -45,7 +45,7 @@ Status = Literal[
     # A bug whose behaviour PM ruled expected (README.md, 3, "Cierre"; issue #65): the
     # run ends without a pull request, and the human closes the issue.
     "discarded",
-    # A task whose plan did not fit (ADR-0053): it built nothing and opened chained issues
+    # A task whose plan did not fit (ADR-0054): it built nothing and opened chained issues
     # instead, one per part. An end like `discarded`, with no pull request.
     "split",
 ]
@@ -637,7 +637,7 @@ class LandingEntry(TypedDict, total=False):
 
 
 class EstimateRecord(TypedDict):
-    """The plan's estimate as the document keeps it (ADR-0053)."""
+    """The plan's estimate as the document keeps it (ADR-0054)."""
 
     cost_usd: float
     files: int
@@ -652,7 +652,7 @@ class EstimateRevision(TypedDict):
 
 
 class PartRecord(TypedDict):
-    """One part of a split plan as the document keeps it (ADR-0053): the issue the
+    """One part of a split plan as the document keeps it (ADR-0054): the issue the
     partition opens. `depends_on` holds the numbers (1 is the first) of earlier parts."""
 
     title: str
@@ -690,7 +690,7 @@ class TaskState(TaskInput, total=False):
     # first run had none (`run_role.playbook_patch`): the window excludes the task.
     playbooks_changed: Annotated[dict[str, str], merge]
     cost_usd: Annotated[float, add]
-    # The plan's estimate (ADR-0053): total cost in USD and the files the pull request will
+    # The plan's estimate (ADR-0054): total cost in USD and the files the pull request will
     # show as changed. Written once, by the plan, and never rewritten; absent on a document
     # from before it, which reads as "no estimate" (`rules.estimate_in_force`), never zero.
     estimate: Annotated[EstimateRecord, last]
@@ -699,7 +699,7 @@ class TaskState(TaskInput, total=False):
     estimate_revisions: Annotated[list[EstimateRevision], last]
     # The new estimate a stopped task proposed (the human decides on it, never the task).
     proposed_estimate: Annotated[float | None, last]
-    # The parts of a plan that did not fit (ADR-0053), in order; `rules.after_plan` routes a
+    # The parts of a plan that did not fit (ADR-0054), in order; `rules.after_plan` routes a
     # state holding any to `split`. Cleared when a human waives the fit on a resumption.
     parts: Annotated[list[PartRecord], last]
     # The issue URL of each part already opened, keyed by the part's number as text: written

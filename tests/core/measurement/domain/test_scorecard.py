@@ -413,7 +413,7 @@ def test_bucket_by_baseline_counts_and_excludes_an_unreadable_document():
     assert sum(len(tasks) for tasks in buckets.values()) == 1
 
 
-# --- actual/estimate (ADR-0053): median, over the plan's own estimate ---
+# --- actual/estimate (ADR-0054): median, over the plan's own estimate ---
 
 
 def _closed(**overrides):

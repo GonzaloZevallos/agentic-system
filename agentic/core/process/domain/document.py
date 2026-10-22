@@ -160,13 +160,13 @@ def render(
         # own name, never through `RECORDED_AS`.
         **({"approval_settled": approved} if (approved := state.get("approval_settled")) else {}),
         "cost_usd": round(state.get("cost_usd", 0.0), 4),
-        # The plan's estimate and what follows from it (ADR-0053), written only when the
+        # The plan's estimate and what follows from it (ADR-0054), written only when the
         # state carries them, so a document from before them is byte-identical.
         **({"estimate": e} if (e := state.get("estimate")) else {}),
         **({"estimate_revisions": e} if (e := state.get("estimate_revisions")) else {}),
         **({"proposed_estimate": e} if (e := state.get("proposed_estimate")) else {}),
         **({"actual_files": n} if (n := state.get("actual_files")) is not None else {}),
-        # The partition of a plan that did not fit (ADR-0053), written only when set.
+        # The partition of a plan that did not fit (ADR-0054), written only when set.
         **({"parts": e} if (e := state.get("parts")) else {}),
         **({"split_issues": e} if (e := state.get("split_issues")) else {}),
         **({"fit_waived": True} if state.get("fit_waived") else {}),

@@ -2793,7 +2793,7 @@ def test_auto_resumable_never_retakes_an_estimate_escalation():
     assert rules.auto_resumable({"pause_log": [_escalation_entry("estimate")]}) is None
 
 
-# --- The split (ADR-0053): a plan that does not fit ends in `split`, not in a build ---
+# --- The split (ADR-0054): a plan that does not fit ends in `split`, not in a build ---
 
 PARTS = [{"title": "First", "body": "Do it.", "depends_on": []}]
 

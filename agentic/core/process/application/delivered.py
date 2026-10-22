@@ -1,4 +1,4 @@
-"""The files a task's pull request changed, read for the record (ADR-0053): what the plan's
+"""The files a task's pull request changed, read for the record (ADR-0054): what the plan's
 file estimate is compared with. A read that fails never fails the close or the merge that
 asked for it; the task just carries no `actual_files`."""
 

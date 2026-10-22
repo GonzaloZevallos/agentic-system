@@ -1,4 +1,4 @@
-"""The safety cap at twice the estimate (ADR-0053), pure: when it is reached, what the
+"""The safety cap at twice the estimate (ADR-0054), pure: when it is reached, what the
 stopped task proposes as the new estimate, and how a decided resume revises the estimate."""
 
 import pytest

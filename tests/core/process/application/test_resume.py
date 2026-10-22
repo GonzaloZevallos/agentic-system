@@ -506,7 +506,7 @@ def test_an_all_approved_task_paused_at_delivery_still_resumes_through_integrate
 
 
 def test_an_estimate_escalation_waits_for_the_humans_decision(cfg):
-    # Only a human decision resumes it (ADR-0053): with none, resume refuses; with one,
+    # Only a human decision resumes it (ADR-0054): with none, resume refuses; with one,
     # it goes on. A stale cap or a role failure keeps its own behaviour (tests above).
     state = paused(
         escalated="stopped at the cap of the estimate: 220.00 of 110.00 USD",

@@ -105,7 +105,7 @@ class TaskFigures:
     runs: Sequence[RoleRun] = ()
     # The plan's own estimate (`estimate`, never the revisions: the column measures how well
     # the plan guessed) and the files the pull request changed. `None` for a document
-    # from before ADR-0053 or one not closed yet: no estimate, never a zero.
+    # from before ADR-0054 or one not closed yet: no estimate, never a zero.
     estimate_cost_usd: float | None = None
     estimate_files: int | None = None
     actual_files: int | None = None
@@ -238,7 +238,7 @@ class Scorecard:
     failures_by_reason: dict[str, int]
     time_to_merge_known: int
     judged: int
-    # Informative only (ADR-0053), enters no verdict: the median of actual over the plan's
+    # Informative only (ADR-0054), enters no verdict: the median of actual over the plan's
     # estimate, in cost and in files, over the closed documents that carry both sides of
     # each; `n/a` when none does.
     cost_over_estimate: Figure = Figure(None, 0, 0)

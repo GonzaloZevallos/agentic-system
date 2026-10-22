@@ -136,7 +136,7 @@ NOTE_PARTS = (
 
 def with_parts_block(section: str, parts: Sequence[PartRecord]) -> str:
     """`section` with a `### Parts` block guaranteed, the sibling of `with_subtasks_block`
-    for a plan that does not fit (ADR-0053): when the model's markdown has no exact
+    for a plan that does not fit (ADR-0054): when the model's markdown has no exact
     `### Parts` line outside a code fence, one is appended, built entirely from `parts`
     in plan order, with a note saying so; otherwise `section` is returned unchanged. Never
     a role failure: the issues are written from the structured parts, not from this prose."""

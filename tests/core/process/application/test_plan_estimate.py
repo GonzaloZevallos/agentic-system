@@ -1,4 +1,4 @@
-"""The plan's estimate at the `plan.plan` seam (ADR-0053): the history reaches the Tech
+"""The plan's estimate at the `plan.plan` seam (ADR-0054): the history reaches the Tech
 Lead as a placeholder value only, the check that refuses a bad estimate is injected on
 both arms, and a plan that fits is delivered with its `estimate`."""
 
@@ -123,7 +123,7 @@ async def test_an_estimate_below_half_the_bucket_median_is_refused(tmp_path):
     assert "median" in patch["failures"][0]["error"]
 
 
-# The two shapes of a plan at the `plan.plan` seam (ADR-0053): a plan that does not fit is
+# The two shapes of a plan at the `plan.plan` seam (ADR-0054): a plan that does not fit is
 # delivered as parts and builds nothing; a plan that fits is delivered as subtasks.
 
 

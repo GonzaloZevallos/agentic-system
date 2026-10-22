@@ -1625,7 +1625,7 @@ def after_consolidate(state: TaskState) -> str | None:
 
 
 def after_plan(state: TaskState) -> str | None:
-    """A plan that did not fit carries `parts` and goes to `split` (ADR-0053); any other
+    """A plan that did not fit carries `parts` and goes to `split` (ADR-0054); any other
     goes to the fan-in. The only routing decision between the two."""
     if state.get("escalated"):
         return None
@@ -1806,7 +1806,7 @@ def resumed(
     if decided:
         patch["sections"] = {HUMAN: human_section(state, reason, decision or "")}
     if state.get("escalation_class") == "estimate" and state.get("parts"):
-        # A part of a split does not fit and the human decided on it (ADR-0053): the plan
+        # A part of a split does not fit and the human decided on it (ADR-0054): the plan
         # is made again as one task, and a second partition is refused.
         patch["fit_waived"] = True
         patch["parts"] = []
@@ -1815,7 +1815,7 @@ def resumed(
         and (decided or estimate is not None)
         and (revision := _estimate_revision(state, estimate))
     ):
-        # Only here does `estimate_revisions` grow (ADR-0053): a resumption that carries
+        # Only here does `estimate_revisions` grow (ADR-0054): a resumption that carries
         # the human's decision (their comment, or the `--estimate` they typed). The plan's
         # own `estimate` is never rewritten.
         patch["estimate_revisions"] = [*state.get("estimate_revisions", []), revision]
@@ -3167,7 +3167,7 @@ def replaced_note(sha: str, prs: Sequence[_BranchPullRequest], branch: str) -> s
     )
 
 
-# The estimate (ADR-0053): the thresholds a plan must fit under before it builds, and the
+# The estimate (ADR-0054): the thresholds a plan must fit under before it builds, and the
 # factor of the safety cap. They live here and nowhere else; every other module asks
 # `estimate_fits` or `estimate_cap` and never repeats a number.
 SPLIT_COST_USD = 150
@@ -3184,7 +3184,7 @@ def estimate_fits(cost_usd: float, files: int, reference_usd: float | None) -> b
     return cost <= SPLIT_COST_USD and files <= SPLIT_FILES
 
 
-# The marker every issue the partition opens carries (ADR-0053): an HTML comment, invisible
+# The marker every issue the partition opens carries (ADR-0054): an HTML comment, invisible
 # once rendered, that names the task and the part. It is what a retry looks for among the
 # open issues before opening one, and what tells a task it is itself a part.
 _SPLIT_MARKER = re.compile(r"<!-- agentic-split: (\S+) part (\d+) -->")

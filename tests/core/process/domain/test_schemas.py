@@ -334,7 +334,7 @@ def test_the_coverage_description_quotes_the_forms_from_the_one_module_byte_for_
     assert "…" in coverage.MAPPED_FORM and "…" in coverage.BRIEF_FORM
 
 
-# The estimate check (ADR-0053): `plan_check_for(history, spent_usd)` is the plan check
+# The estimate check (ADR-0054): `plan_check_for(history, spent_usd)` is the plan check
 # plus three refusals that read the cost history and what the task already spent.
 
 
@@ -396,7 +396,7 @@ def test_plan_check_for_looks_at_the_bucket_of_the_plans_own_subtask_count():
         check(_estimated(1.0, 3, "a", "b"))
 
 
-# The two shapes of a plan (ADR-0053): (A) subtasks and a fitting estimate, (B) parts and an
+# The two shapes of a plan (ADR-0054): (A) subtasks and a fitting estimate, (B) parts and an
 # estimate that does not fit. `rules.estimate_fits` decides; the check only applies it.
 
 

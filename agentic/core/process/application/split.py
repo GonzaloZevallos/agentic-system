@@ -1,4 +1,4 @@
-"""The partition of a plan that does not fit (ADR-0053): the Tech Lead wrote `parts`
+"""The partition of a plan that does not fit (ADR-0054): the Tech Lead wrote `parts`
 instead of subtasks, so nothing is built here. Each part becomes an issue of the product
 repo, labelled `agentic` so the poller takes it up, chained to the parts it depends on
 with a `Blocked by:` line, each with its own small pull request that lands before the

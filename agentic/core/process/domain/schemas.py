@@ -620,7 +620,7 @@ def parts_check(parts: list[dict[str, Any]]) -> None:
 def plan_check_for(
     history: History, spent_usd: float, *, fit_waived: bool = False
 ) -> Callable[[dict[str, Any]], None]:
-    """The plan check with the refusals that need context (ADR-0053), built by the plan
+    """The plan check with the refusals that need context (ADR-0054), built by the plan
     stage from the cost history, what the task already spent and whether a human waived
     the fit -- never carried in the task state. Each refusal is a legible reason: it is
     what the retry reads.
@@ -631,7 +631,7 @@ def plan_check_for(
     bucket of the plan's own size: its subtasks in (A), its parts in (B)."""
 
     # `rules` imports this module for `TaskType`, so the one function that decides the fit
-    # is imported where it is used, never copied here (ADR-0053).
+    # is imported where it is used, never copied here (ADR-0054).
     from .rules import estimate_fits
 
     def check(data: dict[str, Any]) -> None:

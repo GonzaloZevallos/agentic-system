@@ -1,4 +1,4 @@
-"""The history a plan's estimate is calibrated against (ADR-0053): what closed tasks
+"""The history a plan's estimate is calibrated against (ADR-0054): what closed tasks
 cost, by how many subtasks they had, and how their estimates compared with what they
 spent. Pure over the frontmatter dicts of the closed documents; the Tech Lead reads it
 as the value of the `{{cost_history}}` placeholder, never as part of the prompt text

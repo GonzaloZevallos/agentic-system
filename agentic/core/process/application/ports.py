@@ -922,7 +922,7 @@ class Tracker(Protocol):
     def changed_files(self, pull_request: str) -> int:
         """How many files the pull request at `pull_request` (the URL `deliver` stored)
         shows as changed (`changedFiles`): the actual the plan's file estimate is compared
-        with (ADR-0053). Raises `ValueError` for a reference that is not a pull request URL,
+        with (ADR-0054). Raises `ValueError` for a reference that is not a pull request URL,
         before any call, and when the platform cannot answer or answers something unreadable;
         `TrackerTimedOut` is one, as every read."""
         ...

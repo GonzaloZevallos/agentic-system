@@ -913,7 +913,7 @@ class MemoryTracker:
     def __init__(self, url: str = "https://github.com/o/r/pull/7") -> None:
         self.url = url
         # `changed_files`: the count it answers per reference (default 12), the references it
-        # was asked for, and an error to raise instead (ADR-0053).
+        # was asked for, and an error to raise instead (ADR-0054).
         self.changed_files_count = 12
         self.changed_files_asked: list[str] = []
         self.changed_files_error: str | None = None
@@ -1038,7 +1038,7 @@ class MemoryTracker:
     def open_issue(self, title: str, body: str, *, label: str | None = None) -> str:
         """`open_issue_fails_on` lists the calls (0-based, failed ones counted) that raise
         `ValueError`, `gh`'s own failure shape; `issue_numbers_from` makes each opened issue
-        answer its own URL, numbered in order, instead of the shared one (ADR-0053)."""
+        answer its own URL, numbered in order, instead of the shared one (ADR-0054)."""
         call = self.open_issue_calls
         self.open_issue_calls += 1
         if call in self.open_issue_fails_on:
@@ -1375,7 +1375,7 @@ def planned_parts(
     estimated_cost_usd: float = 400.0,
     estimated_files: int = 90,
 ) -> RawResult:
-    """A Tech Lead plan that does not fit (ADR-0053): parts and no subtasks. With no part
+    """A Tech Lead plan that does not fit (ADR-0054): parts and no subtasks. With no part
     given, two chained ones."""
     items: list[dict[str, object]] = list(parts) or [
         {"title": "Catalogue", "body": "Extract the strings.", "depends_on": []},

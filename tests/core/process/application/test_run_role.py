@@ -1286,7 +1286,7 @@ async def test_every_reader_gets_an_index_from_the_checkout_it_runs_in(role, tmp
     assert not (checkout / "docs/product/elsewhere.md").exists()
 
 
-# The safety cap at twice the estimate (ADR-0053): checked beside the flat task cap, before
+# The safety cap at twice the estimate (ADR-0054): checked beside the flat task cap, before
 # every attempt, and never confused with it.
 
 

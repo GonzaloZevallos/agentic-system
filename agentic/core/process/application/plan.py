@@ -72,7 +72,7 @@ async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
 
 def _estimate_check(state: TaskState, history: cost_history.History) -> Check:
     """The plan check both arms share: the structural one plus the estimate's refusals,
-    which read the history and what the task has spent so far (ADR-0053)."""
+    which read the history and what the task has spent so far (ADR-0054)."""
     spent = state.get("cost_usd", 0.0) + state.get("landing_cost_carried", 0.0)
     return schemas.plan_check_for(history, spent, fit_waived=bool(state.get("fit_waived")))
 
@@ -113,7 +113,7 @@ def _delivered(
     cfg: Configuration, output: Output | None, written: TaskState, section: str
 ) -> TaskState:
     """What a successful plan call adds to its own patch, on either path: the subtasks,
-    the invariants, the integration brief, the estimate (ADR-0053), the status -- or, for a
+    the invariants, the integration brief, the estimate (ADR-0054), the status -- or, for a
     plan that does not fit, the parts instead of the subtasks -- and the
     experiment snapshot
     (issue #28) -- `{}` when both switches are at their default, which
@@ -136,7 +136,7 @@ def _delivered(
         reviewer_model = cfg.model_for(TECH_LEAD_REVIEWER.slug, TECH_LEAD_REVIEWER.kind)
         written["experiment"] = experiment_snapshot(cfg, reviewer_model)
         if output.data.get("parts"):
-            # A plan that does not fit (ADR-0053) builds nothing: no subtasks, no fan-out.
+            # A plan that does not fit (ADR-0054) builds nothing: no subtasks, no fan-out.
             # `rules.after_plan` sends the state holding `parts` to `split`.
             written["parts"] = list(output.data["parts"])
             written["sections"][section] = plan_view.with_parts_block(
