@@ -81,6 +81,45 @@ def test_a_green_fresh_ci_merges_without_a_worktree_a_setup_or_a_local_check(tmp
     assert comment.startswith("Auto-merged: ") and RUN.format(1) in comment
 
 
+def test_the_merge_comment_lists_the_task_important_rows_accepted_without_a_fix(tmp_path):
+    row = {
+        "location": "a.py:1",
+        "claim": "wrong",
+        "severity": "important",
+        "status": "open",
+        "scope": "subtask",
+        "subtask": "only",
+        "category": "standard-other",
+    }
+    pass_done = [{"step": "fix_important", "resolved_at": "2026-10-14T00:00:00+00:00"}]
+    ports = _world(_report(_check()), findings=[row], landing=pass_done)
+
+    result, _ = _run(ports, tmp_path)
+
+    assert result.kind == "merged"
+    [(_, comment)] = ports.tracker.comments
+    assert comment.startswith("Auto-merged: ")
+    assert "Accepted without a fix:\n- `a.py:1`: wrong" in comment
+
+
+def test_the_merge_comment_has_no_accepted_section_without_open_important_rows(tmp_path):
+    outside = {
+        "location": "a.py:1",
+        "claim": "wrong",
+        "severity": "important",
+        "status": "open",
+        "scope": "outside",
+        "subtask": "only",
+        "category": "standard-other",
+    }
+    ports = _world(_report(_check()), findings=[outside], followups_filed=True)
+
+    _run(ports, tmp_path)
+
+    [(_, comment)] = ports.tracker.comments
+    assert "Accepted without a fix" not in comment
+
+
 def test_a_green_ci_on_an_older_master_runs_the_local_checks_once_when_contains_says_no(tmp_path):
     ports = _world(_report(_check(), base="c" * 40))
     ports.workspace.contains_answer = "no"

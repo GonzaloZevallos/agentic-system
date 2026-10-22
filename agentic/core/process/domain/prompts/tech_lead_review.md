@@ -173,6 +173,10 @@ Record each finding with:
 - `scope`: `subtask` when it can be fixed on the branch you are reviewing; `plan` when
   it needs a change to the plan or to another subtask's branch. Only a `subtask`
   finding can block: the system lowers a `blocking` finding of the plan to `important`.
+  `outside` is work the task did not do or the issue did not ask for: it never returns
+  the subtask and goes to the task's single follow-up issue. An `important` finding of
+  the task itself (`subtask` or `plan`) is fixed in one final pass before the merge, so
+  do not mark it `outside` to spare that pass.
   In the integration review (`{{subtask}}` is `integration`) the branch holds every
   subtask, so a problem between subtasks is `subtask`: the integrator fixes it there.
 - `category`, one of:

@@ -257,7 +257,7 @@ _Avoid_: regla, restricción, contrato
 _Campo_: invariant — de Design by Contract (Meyer): una condición que se sostiene en todo momento. Allá es sobre una estructura de datos o un loop; acá es sobre un plan repartido entre subtareas que no se ven
 
 **Hallazgo**:
-Lo que Tech Lead encuentra al revisar, con su lugar, la afirmación, la evidencia (el comando que corrió y su salida, o la cita del estándar o del brief), la severidad, el alcance y la categoría. Solo un hallazgo bloqueante sobre la subtarea la devuelve; el veredicto se deriva de los hallazgos. Una objeción de comportamiento que no se reprodujo es una observación.
+Lo que Tech Lead encuentra al revisar, con su lugar, la afirmación, la evidencia (el comando que corrió y su salida, o la cita del estándar o del brief), la severidad, el alcance y la categoría. Solo un hallazgo bloqueante sobre la subtarea la devuelve; el veredicto se deriva de los hallazgos. El alcance `outside` marca trabajo que la tarea no hizo o que el issue no pidió: nunca devuelve y va al único issue de seguimiento de la tarea, con la etiqueta `needs-triage`. Una objeción de comportamiento que no se reprodujo es una observación.
 _Avoid_: comentario, issue
 _Campo_: finding — de auditoría y seguridad de nube (AWS Security Finding Format), no de code review: SARIF dice result, que es el dato, y GitHub dice alert, que es la presentación
 
@@ -428,8 +428,13 @@ La decisión de PjM sobre de qué tipo es una tarea —bug, feature o platform e
 _Avoid_: triage, dictamen (el dictamen es de Product Analyst sobre un bug ya clasificado)
 
 **Aterrizaje**:
-Lo que el sistema hace con un pull request aprobado cuyo merge `auto_merge_decision` rechazó, en vez de dejarlo al humano (ADR-0048): esperar, traer el upstream a la rama, volver a revisar, corregir, repetir el CI o los chequeos, archivar los hallazgos `important` como seguimiento y mergear, renumerar el ADR cuyo número el master ya tomó (`renumber`, ADR-0049), o diagnosticar y reiniciar. Cada paso lo elige una sola tabla (`landing_step`), está acotado por presupuestos por tarea y queda en la lista `landing` del documento antes de ejecutarse. Distinta de Reanudación: una reanudación retoma una corrida cortada; un aterrizaje trabaja sobre un pull request ya entregado.
+Lo que el sistema hace con un pull request aprobado cuyo merge `auto_merge_decision` rechazó, en vez de dejarlo al humano (ADR-0048): esperar, traer el upstream a la rama, volver a revisar, corregir, repetir el CI o los chequeos, hacer el pase final de importantes, archivar el seguimiento de fuera de alcance y mergear, renumerar el ADR cuyo número el master ya tomó (`renumber`, ADR-0049), o diagnosticar y reiniciar. Cada paso lo elige una sola tabla (`landing_step`), está acotado por presupuestos por tarea y queda en la lista `landing` del documento antes de ejecutarse. Distinta de Reanudación: una reanudación retoma una corrida cortada; un aterrizaje trabaja sobre un pull request ya entregado.
 _Avoid_: rescate, merge manual
+_Campo_: sin término de arte
+
+**Pase final de importantes**:
+El paso del aterrizaje que, antes del merge, reabre las unidades dueñas de los hallazgos `important` abiertos de la tarea (y la unidad revisada para los de alcance de plan) para una sola pasada de Developer y revisión. No es devolución: no cuenta para el límite del par, y su entrada en el historial de devoluciones lleva la marca del aterrizaje. Cuenta cuando la re-entrega lo resuelve; lo que sigue abierto después aterriza y se lista en el comentario del merge.
+_Avoid_: devolución, segundo fix
 _Campo_: sin término de arte
 
 **Sincronización no lograda**:
