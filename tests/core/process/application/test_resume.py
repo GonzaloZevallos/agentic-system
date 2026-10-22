@@ -596,3 +596,14 @@ def test_the_flat_task_cap_still_governs_the_flat_cap_of_a_resume(cfg):
             decided("Go on."),
             estimate=200.0,
         )
+
+
+def test_the_answer_the_graph_resumes_with_carries_the_flag_only_when_given(cfg):
+    without = resume.prepare(
+        "GH-12", stopped_at_the_estimate(), "checkpoint", cfg, decided("Go on.")
+    )
+    assert without.answer() == {"decision": "Go on."}
+    given = resume.prepare(
+        "GH-12", stopped_at_the_estimate(), "checkpoint", cfg, decided("Go on."), estimate=200.0
+    )
+    assert given.answer() == {"decision": "Go on.", "estimate": 200.0}

@@ -2430,7 +2430,7 @@ def _print_scorecard(product: str, baseline: str, sc: scorecard.Scorecard) -> No
         ("actual/estimate files:", sc.files_over_estimate),
     ):
         print(
-            f"{label:<19}{_fmt_figure(figure)} (median, n={figure.denominator}, "
+            f"{label:<23}{_fmt_figure(figure)} (median, n={figure.denominator}, "
             f"{figure.excluded} excluded)"
         )
 

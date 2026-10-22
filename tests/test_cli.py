@@ -5118,6 +5118,10 @@ async def test_eval_compare_prints_the_per_role_table_after_an_unchanged_scoreca
     assert "-- product / bl-a --" in scorecard_part
     assert "-- product / bl-b --" in scorecard_part
     assert "cost/delivery:" in scorecard_part
+    # The estimate columns keep a space between their label and the figure.
+    labels = [line for line in scorecard_part.splitlines() if line.startswith("actual/estimate ")]
+    assert len(labels) == 4
+    assert all(line.split(":", 1)[1].startswith(" ") for line in labels)
     # The table follows the verdict line, one block per baseline, one row per slug.
     assert "per-role usage -- product / bl-a" in table_part
     assert "per-role usage -- product / bl-b" in table_part
