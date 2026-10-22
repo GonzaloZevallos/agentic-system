@@ -772,12 +772,16 @@ class FakeLock:
         self.acquired: list[tuple[str, str]] = []
         self.released: list[str] = []
         self.kept: list[str] = []
+        self.kept_crashed: list[tuple[str, str]] = []
 
     def read(self, task_id):
         return self.held
 
     def keep_at_shutdown(self, task_id):
         self.kept.append(task_id)
+
+    def keep_crashed(self, task_id, system_version):
+        self.kept_crashed.append((task_id, system_version))
 
     def acquire(self, task_id, command):
         self.acquired.append((task_id, command))
@@ -843,9 +847,7 @@ async def test_run_refuses_when_the_lock_is_held_and_touches_nothing(monkeypatch
 
 
 @pytest.mark.anyio
-async def test_a_run_acquires_the_lock_for_this_task_and_releases_it_even_if_the_graph_breaks(
-    monkeypatch, tmp_path
-):
+async def test_a_run_whose_graph_breaks_keeps_the_lock_marked_as_crashed(monkeypatch, tmp_path):
     from agentic.shared.configuration import Configuration
     from tests.fakes import memory_ports
 
@@ -854,6 +856,7 @@ async def test_a_run_acquires_the_lock_for_this_task_and_releases_it_even_if_the
             raise RuntimeError("boom")
 
     monkeypatch.setattr(cli, "graph", Broken())
+    monkeypatch.setattr(cli.telemetry, "system_version", lambda: "abc1234")
     lock = FakeLock()
     task = {"id": "T-9", "title": "t", "description": "d"}
     with pytest.raises(RuntimeError, match="boom"):
@@ -863,9 +866,12 @@ async def test_a_run_acquires_the_lock_for_this_task_and_releases_it_even_if_the
             memory_ports(),
             checkpointer=in_memory,
             run_lock=lock,
+            stop=cli.StopCause(),
         )
     assert lock.acquired == [("T-9", " ".join(__import__("sys").argv))]
-    assert lock.released == ["T-9"]
+    assert lock.kept_crashed == [("T-9", "abc1234")]
+    assert lock.released == []
+    assert lock.kept == []
 
 
 @pytest.mark.anyio
@@ -1087,6 +1093,48 @@ async def test_a_resumed_run_acquires_and_releases_the_lock_and_a_takeover_is_pr
     out = capsys.readouterr().out
     assert "999999999" in out
     assert ports.tracker.comments  # announced normally: the lock did not stop it
+
+
+@pytest.mark.anyio
+async def test_a_resumed_run_whose_graph_breaks_keeps_the_lock_marked_as_crashed(
+    monkeypatch, tmp_path
+):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    class Broken(Delivers):
+        async def ainvoke(self, task, config):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(cli, "graph", Broken())
+    monkeypatch.setattr(cli.telemetry, "system_version", lambda: "abc1234")
+    ports = memory_ports()
+    ports.documents.save(
+        {
+            "id": "GH-1",
+            "title": "t",
+            "description": "d",
+            "type": "bug",
+            "status": "waiting_on_human",
+            "escalated": "Developer stopped by the task cap",
+            "cost_usd": 1.0,
+        }
+    )
+    ports.tracker.earlier = ["Escalated: Developer stopped by the task cap"]
+    lock = FakeLock()
+    with pytest.raises(RuntimeError, match="boom"):
+        await cli._resume(
+            "GH-1",
+            Configuration(product_dir=tmp_path),
+            ports,
+            from_document=True,
+            yes=True,
+            checkpointer=in_memory,
+            run_lock=lock,
+            stop=cli.StopCause(),
+        )
+    assert lock.kept_crashed == [("GH-1", "abc1234")]
+    assert lock.released == []
 
 
 def _paused_gh1(ports):
@@ -1357,7 +1405,94 @@ async def test_a_signal_outside_a_shutdown_releases_the_lock(monkeypatch, tmp_pa
 def test_each_invocation_has_its_own_stop_cause():
     first, second = cli.StopCause(), cli.StopCause()
     first.at_shutdown = True
-    assert second.at_shutdown is False
+    first.crashed = True
+    first.signalled = True
+    assert (second.at_shutdown, second.crashed, second.signalled) == (False, False, False)
+
+
+class RaisesWhenCancelled(Hangs):
+    """A graph whose `ainvoke` turns the signal's cancellation into a `RuntimeError`, as a
+    node that fails while it is being torn down would: the graph raised after a signal."""
+
+    async def ainvoke(self, task, config):
+        try:
+            await anyio.sleep_forever()
+        except anyio.get_cancelled_exc_class():
+            raise RuntimeError("boom while stopping") from None
+
+
+async def _signalled_then_raising_run(monkeypatch, tmp_path, lock, probe):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    monkeypatch.setattr(cli, "graph", RaisesWhenCancelled())
+    monkeypatch.setattr(cli.anyio, "open_signal_receiver", lambda *sigs: FiresOnce())
+    stop = cli.StopCause()
+    work = partial(
+        cli._run,
+        {"id": "T-9", "title": "t", "description": "d"},
+        Configuration(product_dir=tmp_path),
+        memory_ports(),
+        checkpointer=in_memory,
+        run_lock=lock,
+        stop=stop,
+    )
+    with pytest.raises(RuntimeError, match="boom while stopping"):
+        await cli._signal_guarded(work, stop, shutdown_probe=probe)
+    return stop
+
+
+@pytest.mark.anyio
+async def test_a_signal_followed_by_a_graph_exception_releases_the_lock_unmarked(
+    monkeypatch, tmp_path
+):
+    lock = FakeLock()
+    stop = await _signalled_then_raising_run(monkeypatch, tmp_path, lock, lambda: False)
+    assert (stop.signalled, stop.crashed, stop.at_shutdown) == (True, True, False)
+    assert lock.released == ["T-9"]
+    assert lock.kept_crashed == []
+    assert lock.kept == []
+
+
+@pytest.mark.anyio
+async def test_a_shutdown_and_a_crash_keep_the_lock_for_the_shutdown_only(monkeypatch, tmp_path):
+    lock = FakeLock()
+    stop = await _signalled_then_raising_run(monkeypatch, tmp_path, lock, lambda: True)
+    assert (stop.signalled, stop.crashed, stop.at_shutdown) == (True, True, True)
+    assert lock.kept == ["T-9"]
+    assert lock.kept_crashed == []
+    assert lock.released == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "failure", [OSError("disk full"), cli.CannotStart("cannot archive", code=2)]
+)
+async def test_an_exception_outside_the_graph_releases_the_lock_unmarked(
+    monkeypatch, tmp_path, failure
+):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    def archive_fails(task_id, ports):
+        raise failure
+
+    monkeypatch.setattr(cli, "graph", Delivers())
+    monkeypatch.setattr(cli, "_archive_previous_run", archive_fails)
+    lock = FakeLock()
+    stop = cli.StopCause()
+    with pytest.raises(type(failure)):
+        await cli._run(
+            {"id": "T-9", "title": "t", "description": "d"},
+            Configuration(product_dir=tmp_path),
+            memory_ports(),
+            checkpointer=in_memory,
+            run_lock=lock,
+            stop=stop,
+        )
+    assert stop.crashed is False
+    assert lock.released == ["T-9"]
+    assert lock.kept_crashed == []
 
 
 def test_system_is_stopping_only_on_exactly_stopping(monkeypatch):
@@ -2945,6 +3080,7 @@ class FakeKeyedLock:
         self.held = dict(held or {})
         self.acquired: list[tuple[str, str]] = []
         self.released: list[str] = []
+        self.kept_crashed: list[tuple[str, str]] = []
 
     def read(self, task_id):
         return self.held.get(task_id)
@@ -2965,6 +3101,9 @@ class FakeKeyedLock:
 
     def keep_at_shutdown(self, task_id):
         pass
+
+    def keep_crashed(self, task_id, system_version):
+        self.kept_crashed.append((task_id, system_version))
 
     def release(self, task_id):
         self.released.append(task_id)

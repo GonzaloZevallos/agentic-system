@@ -692,10 +692,14 @@ def main() -> None:
 @dataclass
 class StopCause:
     """Why this invocation was stopped, one per invocation and handed down as an
-    argument (never module state): `_signal_guarded` sets `at_shutdown` before it
-    cancels, `_locked` reads it in its `finally` to keep the lock record or release it."""
+    argument (never module state): `_signal_guarded` sets `signalled` and `at_shutdown`
+    before it cancels, `_invoke` sets `crashed` when the graph itself raised, and
+    `_locked` reads all three in its `finally` to keep the lock record (marked for the
+    shutdown, or marked as crashed) or release it."""
 
     at_shutdown: bool = False
+    crashed: bool = False
+    signalled: bool = False
 
 
 def _system_is_stopping() -> bool:
@@ -749,7 +753,8 @@ async def _signal_guarded(
             async for _ in signals:
                 interrupted = True
                 if stop is not None:
-                    # Before the cancel: `_locked`'s `finally` reads the answer.
+                    # Before the probe and the cancel: `_locked`'s `finally` reads both.
+                    stop.signalled = True
                     stop.at_shutdown = await anyio.to_thread.run_sync(shutdown_probe)
                 tg.cancel_scope.cancel()
                 return
@@ -946,9 +951,14 @@ def _locked(
     lock: RunLock, task_id: str, stop: StopCause | None = None
 ) -> Iterator[LockRecord | None]:
     """Around the invocation only (Tech Lead plan): refuses before anything is spent,
-    releases whether the invocation delivers, escalates or raises -- except when the
-    system shutdown stopped it (`stop.at_shutdown`): the record stays, marked, so the
-    next boot can retake the run. Yields the record of the dead run it took over, if any
+    releases whether the invocation delivers, escalates or raises -- except two cases where
+    the record stays, marked, and exactly one action runs (`keep_at_shutdown`,
+    `keep_crashed`, `release`, in that priority): the system shutdown stopped it
+    (`stop.at_shutdown`), so the next boot can retake the run; or the graph itself raised
+    (`stop.crashed`, set only by `_invoke`) with no signal, so the poller can retake it
+    -- the dying process's own memoised system version is the right one, it is a fresh
+    process. A `CannotStart`, a signal, or an exception outside `app.ainvoke` releases.
+    Yields the record of the dead run it took over, if any
     (`RunLock.acquire` only ever hands back a record of this host's own, never probing
     another host's)."""
     taken_over = _acquire(lock, task_id)
@@ -962,6 +972,8 @@ def _locked(
     finally:
         if stop is not None and stop.at_shutdown:
             lock.keep_at_shutdown(task_id)
+        elif stop is not None and stop.crashed and not stop.signalled:
+            lock.keep_crashed(task_id, telemetry.system_version())
         else:
             lock.release(task_id)
 
@@ -1069,6 +1081,7 @@ async def _poll(
                     lock=lock,
                     current_boot=liveness.current_boot_id(),
                     eval_set=_round_eval_set(ports),
+                    system_version=telemetry.fresh_system_version,
                 ):
                     print(line, flush=True)
             except TrackerCallFailed as exc:  # a stalled or unreachable `gh` ends this round
@@ -1124,7 +1137,9 @@ async def _run(
                 # The one place `decided` is set (`rules.entering`): before any node
                 # runs, so `--fresh`, the poller and `eval run` all reach it.
                 entered = rules.entering(task, cap=cfg.decided_cap, carried=carried)
-                final = await _invoke(migrated_app, entered, config, entered, ports, cfg, "run")
+                final = await _invoke(
+                    migrated_app, entered, config, entered, ports, cfg, "run", stop=stop
+                )
     _report(final, task["id"], ports)
 
 
@@ -1327,14 +1342,22 @@ async def _resume(
                     command: Command | None = None if crashed else Command(resume=r.answer())
                     resuming.announce(r, ports)
                     final = await _invoke(
-                        migrated_app, command, config, r.paused, ports, cfg, "resume", r.decision
+                        migrated_app,
+                        command,
+                        config,
+                        r.paused,
+                        ports,
+                        cfg,
+                        "resume",
+                        r.decision,
+                        stop=stop,
                     )
             else:
                 crashed = r.source == "checkpoint" and not snapshot.interrupts
                 command = None if crashed else Command(resume=r.answer())
                 resuming.announce(r, ports)
                 final = await _invoke(
-                    app, command, config, r.paused, ports, cfg, "resume", r.decision
+                    app, command, config, r.paused, ports, cfg, "resume", r.decision, stop=stop
                 )
     _report(final, task_id, ports)
 
@@ -2549,6 +2572,7 @@ async def _invoke(
     kind: InvocationKind = "run",
     decision: str | None = None,
     scorer: LangfuseScores | None = None,
+    stop: StopCause | None = None,
 ) -> TaskState:
     # The state as this invocation entered: `_run`'s fresh `TaskInput` (no prior cost),
     # or `_resume`'s paused state. `finish_invocation` diffs it against the state the
@@ -2567,6 +2591,10 @@ async def _invoke(
             except Exception:
                 # The run broke outside any use case; the task span still closes with a
                 # status, so the trace carries it (`crashed` is telemetry-only, never state).
+                # `stop.crashed` is what `_locked` reads to keep the lock marked: only here,
+                # never for a raise outside `app.ainvoke`.
+                if stop is not None:
+                    stop.crashed = True
                 crashed = cast(TaskState, {**task, "status": "crashed"})
                 run.finish(crashed)
                 run.finish_invocation(entering, crashed, kind, decision)

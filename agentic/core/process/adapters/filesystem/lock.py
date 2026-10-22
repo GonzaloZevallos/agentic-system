@@ -32,6 +32,7 @@ class FilesystemRunLock:
             data["command"],
             data.get("boot_id"),
             bool(data.get("stopped_at_shutdown", False)),
+            data.get("crashed_version"),
         )
 
     def acquire(self, task_id: str, command: str) -> LockRecord | None:
@@ -95,6 +96,21 @@ class FilesystemRunLock:
                 stopped_at_shutdown=True,
             )
 
+    def keep_crashed(self, task_id: str, system_version: str) -> None:
+        existing = self.read(task_id)
+        if existing is None:
+            return
+        if existing.pid == os.getpid() and existing.host == self._host():
+            self._write(
+                task_id,
+                pid=existing.pid,
+                host=existing.host,
+                started_at=existing.started_at,
+                command=existing.command,
+                boot_id=existing.boot_id,
+                crashed_version=system_version,
+            )
+
     def _path(self, task_id: str) -> Path:
         return self.runs_dir / f"{task_id}.lock"
 
@@ -111,6 +127,7 @@ class FilesystemRunLock:
         command: str = "",
         boot_id: str | None = None,
         stopped_at_shutdown: bool = False,
+        crashed_version: str | None = None,
     ) -> None:
         self.runs_dir.mkdir(parents=True, exist_ok=True)
         record: dict[str, object] = {
@@ -122,6 +139,8 @@ class FilesystemRunLock:
         }
         if stopped_at_shutdown:
             record["stopped_at_shutdown"] = True
+        if crashed_version is not None:
+            record["crashed_version"] = crashed_version
         self._path(task_id).write_text(json.dumps(record), encoding="utf-8")
 
 

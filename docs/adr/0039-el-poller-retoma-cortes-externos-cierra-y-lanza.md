@@ -574,3 +574,58 @@ Todos se equivocan hacia lanzar; el tope y el calendario del 429 siguen de respa
 Ninguna métrica, etiqueta, atributo de span, clave de documento, prompt ni `prompts.fingerprint` se
 agrega, mueve o renombra. Los archivos de gasto viven en `run_registry_dir`, fuera de todo
 repositorio, y solo con el ritmo encendido.
+
+## Adenda (2026-10-22): el poller retoma una corrida que cayó por una excepción del grafo (#308)
+
+### Evidencia
+
+La primera corrida de GH-295 cayó en la planificación (`ValueError: ... no value for placeholder
+{{cost_history}}`). El documento quedó en `status: open`, sin `escalated`, sin corrida viva y
+sin lock. `gather_launches` la salta porque el documento existe, `gather_resumes` porque no
+está escalada y `gather_retakes` porque no hay lock: la tarea quedó invisible hasta que un
+humano corrió `agentic resume`.
+
+### Decisión
+
+- **La huella**: una excepción del grafo deja el registro del lock marcado
+  (`RunLock.keep_crashed(task_id, system_version)` escribe `crashed_version`, con el id de
+  arranque intacto). La escribe `cli._locked`, en su `finally`, solo si `_invoke` marcó
+  `StopCause.crashed` (únicamente para lo que sale de `app.ainvoke`) y `StopCause` no registró
+  señal ni apagado. `keep_at_shutdown`, `keep_crashed` y `release` son excluyentes, con ese
+  orden de prioridad. Una señal, `CannotStart` o una excepción fuera del grafo siguen
+  liberando el lock.
+- **Quién decide**: `rules.interrupted_run`, la única. Da `retake_crash` si el registro tiene
+  huella (se evalúa antes de `alive`: la huella prueba que el proceso terminó), la clave de la
+  versión actual no es `None` y ambos topes siguen sin gastar. El poller solo le pasa hechos.
+- **Los dos topes y su clave**: como mucho `CRASH_RETAKE_PER_VERSION_MAX = 2` retomas por
+  versión de stage0 y `CRASH_RETAKE_TOTAL_MAX = 6` en total, ambos contados desde el último
+  comentario que no es del sistema. La clave es `rules.crash_version_key` de la versión que la
+  vuelta leyó con `telemetry.fresh_system_version` (inyectada por `cli`, sin memo): el sha sin
+  `+dirty`. `unknown` no produce retoma nunca: la tarea queda al humano, con su línea, sin
+  gastar tope. Con un tope gastado y un registro de otro arranque, cae a la retoma por reboot.
+- **El comentario**: `Retaken after crash: ` (registrado en `resume.SYSTEM_COMMENTS`) más el
+  texto de `rules.crash_retake_comment`, que dice la versión en que cayó y la clave bajo la
+  que reanuda; el mismo módulo lo escribe y lo cuenta. `gather_retakes` cuenta una sola vez y
+  `execute` recibe el conteo en `CrashRetake`.
+- **Por qué no una `EscalationClass` transitoria**: ADR-0029 cierra la lista de clases, y
+  escribir el documento en plena excepción pisaría lo que los nodos ya escribieron. El lock
+  no tiene ninguna de las dos objeciones.
+
+### Riesgos conocidos
+
+- **Checkpoint del código viejo**: la primera retoma tras un arreglo corre sobre un checkpoint
+  escrito por el código anterior; si falla distinto, gasta una de las 2 retomas de la versión
+  nueva.
+- **Ventana al salir**: entre escribir la huella y que el proceso salga, el `acquire` del hijo
+  puede ver el pid vivo y lanzar `LockHeld`. Esa retoma cuesta un comentario y se reintenta la
+  vuelta siguiente.
+- **Versión fijada por entorno**: con `AGENTIC_SYSTEM_VERSION` fijada, la clave no cambia nunca
+  y el conteo por versión solo lo reinicia un comentario humano.
+- **Contador de reboot**: sigue calculándose dos veces (en `gather_retakes` y en `execute`);
+  es deuda nombrada y no se toca aquí.
+
+### Costo
+
+Cada retoma repite solo el nodo que cayó (reanuda desde el checkpoint) y ocupa una plaza de
+`available_slots`: el peor caso son 6 repeticiones por comentario humano, independiente de los
+merges. El poller no corre nada nuevo en una vuelta sin huellas.

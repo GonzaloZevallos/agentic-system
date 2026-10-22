@@ -178,3 +178,43 @@ def test_keep_at_shutdown_with_no_record_is_a_no_op(tmp_path):
     lock = _lock(tmp_path, "boot-1")
     lock.keep_at_shutdown("GH-1")
     assert lock.read("GH-1") is None
+
+
+def test_keep_crashed_marks_this_processs_record_and_keeps_the_boot_id(tmp_path):
+    lock = _lock(tmp_path, "boot-1")
+    lock.acquire("GH-1", "agentic run t d")
+    lock.keep_crashed("GH-1", "abc123+dirty")
+    record = lock.read("GH-1")
+    assert record.crashed_version == "abc123+dirty"
+    assert record.stopped_at_shutdown is False
+    assert record.boot_id == "boot-1"
+    assert record.command == "agentic run t d"
+    assert record.pid == os.getpid()
+
+
+def test_keep_crashed_leaves_another_pids_record_untouched(tmp_path):
+    lock = _lock(tmp_path, "boot-1")
+    lock._write(
+        "GH-1",
+        pid=os.getpid() + 1,
+        host=lock._host(),
+        started_at="2026-09-15T00:00:00Z",
+        boot_id="boot-1",
+    )
+    lock.keep_crashed("GH-1", "abc123")
+    assert lock.read("GH-1").crashed_version is None
+
+
+def test_keep_crashed_with_no_record_is_a_no_op(tmp_path):
+    lock = _lock(tmp_path, "boot-1")
+    lock.keep_crashed("GH-1", "abc123")
+    assert lock.read("GH-1") is None
+
+
+def test_a_record_without_the_crash_key_reads_as_none_and_is_not_written_with_one(tmp_path):
+    lock = _lock(tmp_path, "boot-1")
+    lock.acquire("GH-1", "agentic run t d")
+    assert lock.read("GH-1").crashed_version is None
+    assert "crashed_version" not in lock._path("GH-1").read_text(encoding="utf-8")
+    lock.keep_at_shutdown("GH-1")
+    assert lock.read("GH-1").crashed_version is None

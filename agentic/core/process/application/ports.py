@@ -1078,6 +1078,9 @@ class LockRecord:
     command: str
     boot_id: str | None = None
     stopped_at_shutdown: bool = False
+    # The system version a run recorded when it raised under the graph
+    # (`RunLock.keep_crashed`); `None` for a record with no such mark.
+    crashed_version: str | None = None
 
 
 class LockHeld(Exception):
@@ -1132,6 +1135,14 @@ class RunLock(Protocol):
         rewrite this process's own record (same pid, same host) with
         `stopped_at_shutdown` set, keeping its boot id, so the next boot can retake the
         run. A no-op when there is none, or when the record belongs to another pid."""
+        ...
+
+    def keep_crashed(self, task_id: str, system_version: str) -> None:
+        """What a run does instead of `release` when the graph raised: the sibling of
+        `keep_at_shutdown`. Rewrite this process's own record (same pid, same host) with
+        `crashed_version` set to `system_version`, keeping its boot id, so the poller can
+        retake the run. A no-op when there is none, or when the record belongs to another
+        pid. Exclusive with `release` and `keep_at_shutdown`: a run calls one of the three."""
         ...
 
 
