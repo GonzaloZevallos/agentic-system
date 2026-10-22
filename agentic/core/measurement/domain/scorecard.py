@@ -19,11 +19,11 @@ structurally identical to it on every key this module reads.
 
 from __future__ import annotations
 
+import statistics
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-from agentic.core.process.domain import rules
 from agentic.core.process.domain.task import RoleRun, TaskState
 
 from . import metrics
@@ -103,9 +103,12 @@ class TaskFigures:
     # The document's own `runs[]`, carried so `role_usage.by_role` reads the same
     # bucket `bucket_by_baseline` grouped (GH-292); empty for a document with none.
     runs: Sequence[RoleRun] = ()
-    # The cost estimate in force when the task closed (`rules.estimate_in_force`), `None`
-    # for a document from before estimates existed: no estimate, never a zero (ADR-0053).
-    estimate_usd: float | None = None
+    # The plan's own estimate (`estimate`, never the revisions: the column measures how well
+    # the plan guessed) and the files the pull request changed. `None` for a document
+    # from before ADR-0053 or one not closed yet: no estimate, never a zero.
+    estimate_cost_usd: float | None = None
+    estimate_files: int | None = None
+    actual_files: int | None = None
 
 
 def task_figures(document: ScorecardDocument) -> TaskFigures:
@@ -115,6 +118,8 @@ def task_figures(document: ScorecardDocument) -> TaskFigures:
     human_commits = document.get("human_commits")
     human_lines = document.get("human_lines_changed")
     time_to_merge = document.get("time_to_merge_seconds")
+    plan = document.get("estimate")
+    actual_files = document.get("actual_files")
     return TaskFigures(
         cost_usd=document.get("cost_usd", 0.0),
         rework_usd=metrics.rework_cost_usd(document),
@@ -128,7 +133,9 @@ def task_figures(document: ScorecardDocument) -> TaskFigures:
         system_commit=document.get("system_commit"),
         system_baseline=document.get("system_baseline"),
         runs=document.get("runs", []),
-        estimate_usd=rules.estimate_in_force(document),
+        estimate_cost_usd=float(plan["cost_usd"]) if plan else None,
+        estimate_files=int(plan["files"]) if plan else None,
+        actual_files=int(actual_files) if actual_files is not None else None,
     )
 
 
@@ -207,6 +214,12 @@ def _average(values: Sequence[float], excluded: int) -> Figure:
     return Figure(sum(values) / len(values), len(values), excluded)
 
 
+def _median(values: Sequence[float], excluded: int) -> Figure:
+    if not values:
+        return Figure(None, 0, excluded)
+    return Figure(statistics.median(values), len(values), excluded)
+
+
 @dataclass(frozen=True)
 class Scorecard:
     """ADR-0028's four figures, in order, over one baseline's own documents
@@ -225,9 +238,11 @@ class Scorecard:
     failures_by_reason: dict[str, int]
     time_to_merge_known: int
     judged: int
-    # Informative only (ADR-0053): the average of cost over the estimate in force, across the
-    # closed tasks that carry a positive estimate; `n/a` when none does. It enters no verdict.
-    actual_over_estimate: Figure = Figure(None, 0, 0)
+    # Informative only (ADR-0053), enters no verdict: the median of actual over the plan's
+    # estimate, in cost and in files, over the closed documents that carry both sides of
+    # each; `n/a` when none does.
+    cost_over_estimate: Figure = Figure(None, 0, 0)
+    files_over_estimate: Figure = Figure(None, 0, 0)
 
 
 def build(figures: Sequence[TaskFigures]) -> Scorecard:
@@ -259,11 +274,18 @@ def build(figures: Sequence[TaskFigures]) -> Scorecard:
     rework_per_task = _average(
         values=[f.rework_usd for f in terminated], excluded=total - len(terminated)
     )
-    estimated = [f for f in figures if f.closed_at is not None and (f.estimate_usd or 0) > 0]
-    actual_over_estimate = _average(
-        values=[f.cost_usd / f.estimate_usd for f in estimated if f.estimate_usd],
-        excluded=total - len(estimated),
-    )
+    cost_ratios = [
+        f.cost_usd / f.estimate_cost_usd
+        for f in figures
+        if f.closed_at is not None and f.estimate_cost_usd
+    ]
+    files_ratios = [
+        f.actual_files / f.estimate_files
+        for f in figures
+        if f.closed_at is not None and f.estimate_files and f.actual_files is not None
+    ]
+    cost_over_estimate = _median(cost_ratios, excluded=total - len(cost_ratios))
+    files_over_estimate = _median(files_ratios, excluded=total - len(files_ratios))
     by_reason: dict[str, int] = {}
     for f in terminated:
         for reason, count in f.failures_by_reason.items():
@@ -276,7 +298,8 @@ def build(figures: Sequence[TaskFigures]) -> Scorecard:
         failures_by_reason=by_reason,
         time_to_merge_known=sum(1 for f in judged if f.time_to_merge_seconds is not None),
         judged=len(judged),
-        actual_over_estimate=actual_over_estimate,
+        cost_over_estimate=cost_over_estimate,
+        files_over_estimate=files_over_estimate,
     )
 
 
