@@ -3190,6 +3190,12 @@ def estimate_cap_reached(spent_usd: float, state: Mapping[str, Any]) -> bool:
     return estimate is not None and spent_usd >= estimate_cap(estimate)
 
 
+def estimate_to_cover(spent_usd: float) -> float:
+    """The estimate a task must be given to go on after spending `spent_usd`: anything
+    above it has a safety cap beyond what was spent."""
+    return spent_usd / ESTIMATE_CAP_FACTOR
+
+
 def unfinished_subtasks(state: Mapping[str, Any]) -> list[str]:
     """The subtasks not approved yet: what is left to build and review."""
     subtasks = state.get("subtasks") or {}

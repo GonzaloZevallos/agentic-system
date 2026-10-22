@@ -519,3 +519,80 @@ def test_an_estimate_escalation_waits_for_the_humans_decision(cfg):
     ports.tracker.earlier.append("Go on, the estimate is 200.")
     r = resume.prepare("GH-12", state, "checkpoint", cfg, ports)
     assert r.decision == "Go on, the estimate is 200."
+
+
+def stopped_at_the_estimate(**more):
+    return paused(
+        **{
+            "estimate": {"cost_usd": 40.0, "files": 10},
+            "proposed_estimate": 150.0,
+            **rules.escalation("estimate", "Developer stopped by the estimate cap: 106.27 of 80"),
+            **more,
+        },
+    )
+
+
+def decided(*comments):
+    ports = memory_ports()
+    ports.tracker.earlier = ["Escalated: Developer stopped by the estimate cap", *comments]
+    return ports
+
+
+def test_a_decision_without_the_flag_puts_the_proposed_estimate_in_force(cfg):
+    r = resume.prepare(
+        "GH-12", stopped_at_the_estimate(), "checkpoint", cfg, decided("Go on, same plan.")
+    )
+    assert r.resumed["estimate_revisions"] == [{"cost_usd": 150.0, "source": "proposed"}]
+    assert rules.estimate_in_force(r.resumed) == 150.0
+    assert r.resumed["estimate"] == {"cost_usd": 40.0, "files": 10}  # the plan's, untouched
+    assert r.resumed.get("proposed_estimate") is None
+
+
+def test_the_flag_puts_the_humans_own_estimate_in_force(cfg):
+    r = resume.prepare(
+        "GH-12",
+        stopped_at_the_estimate(),
+        "checkpoint",
+        cfg,
+        decided("Go on."),
+        estimate=200.0,
+    )
+    assert r.resumed["estimate_revisions"] == [{"cost_usd": 200.0, "source": "human"}]
+    assert rules.estimate_in_force(r.resumed) == 200.0
+    assert r.resumed["estimate"] == {"cost_usd": 40.0, "files": 10}
+
+
+def test_the_proposal_alone_is_not_a_decision(cfg):
+    # A proposed estimate with no answer from the human: nothing resumes, nothing is revised.
+    with pytest.raises(resume.WaitingOnHuman, match="estimate"):
+        resume.prepare("GH-12", stopped_at_the_estimate(), "checkpoint", cfg, decided())
+
+
+def test_a_resume_refuses_an_estimate_whose_cap_is_already_spent(cfg):
+    # 106.27 spent: an estimate of 50 caps at 100 and would stop at the first attempt.
+    with pytest.raises(ValueError, match="already spent.*--estimate above"):
+        resume.prepare(
+            "GH-12", stopped_at_the_estimate(), "checkpoint", cfg, decided("Go on."), estimate=50.0
+        )
+    # The same when the proposal is the one in force and it is already spent at 2x.
+    low = stopped_at_the_estimate(proposed_estimate=50.0)
+    with pytest.raises(ValueError, match="already spent"):
+        resume.prepare("GH-12", low, "checkpoint", cfg, decided("Go on."))
+
+
+def test_the_estimate_flag_on_another_escalation_is_a_usage_error(cfg):
+    with pytest.raises(ValueError, match="--estimate.*estimate"):
+        resume.prepare("GH-12", paused(), "checkpoint", cfg, memory_ports(), estimate=200.0)
+
+
+def test_the_flat_task_cap_still_governs_the_flat_cap_of_a_resume(cfg):
+    # --task-budget governs only the flat cap: the estimate in force changes nothing there.
+    with pytest.raises(ValueError, match="task cap in force"):
+        resume.prepare(
+            "GH-12",
+            stopped_at_the_estimate(),
+            "checkpoint",
+            Configuration(product_dir="/tmp/p", task_max_budget_usd=100.0),
+            decided("Go on."),
+            estimate=200.0,
+        )
