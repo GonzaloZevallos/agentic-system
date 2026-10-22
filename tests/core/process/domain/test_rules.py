@@ -616,8 +616,8 @@ def test_spent_by_phase_sums_the_runs_by_section_and_keeps_what_they_miss():
     assert rules.spent_by_phase({"runs": runs, "cost_usd": 12.5})["other"] == 1.0
 
 
-def test_run_ended_is_true_only_for_ready_for_review_and_discarded():
-    ended = {"ready_for_review", "discarded"}
+def test_run_ended_is_true_only_for_ready_for_review_discarded_and_split():
+    ended = {"ready_for_review", "discarded", "split"}
     for status in get_args(task.Status):
         assert rules.run_ended(status) is (status in ended)
 
@@ -2256,7 +2256,7 @@ def test_a_task_with_any_of_these_fields_is_not_an_interrupted_run():
 
 
 def test_a_task_in_a_finished_or_waiting_status_is_not_an_interrupted_run():
-    for status in ("ready_for_review", "discarded", "waiting_on_human"):
+    for status in ("ready_for_review", "discarded", "split", "waiting_on_human"):
         assert rules.interrupted_run({"status": status}, PREVIOUS_BOOT, 0) == "none", status
 
 
@@ -2742,6 +2742,123 @@ def test_the_adr_probe_gate_ignores_the_collision_fact_it_is_asked_to_derive():
     renaming = Renaming((("docs/adr/0004-x.md", "docs/adr/0010-x.md"),), {})
     for known in (None, renaming):
         assert rules.adr_probe_wanted(replace(_probe_facts(), adr_collision=known)) is True
+
+
+# The estimate's one home (invariants 1-3, 6): the thresholds, the factor, the decision
+# and the reading of the estimate in force live only in `rules`.
+
+
+def test_estimate_fits_at_the_limits_and_not_one_past():
+    assert rules.estimate_fits(150, 40, None)
+    assert not rules.estimate_fits(150.01, 40, None)
+    assert not rules.estimate_fits(150, 41, None)
+
+
+def test_estimate_fits_decides_on_the_larger_of_the_estimate_and_the_history_reference():
+    # A declared 100 that the bucket's p90 says is 200 does not fit: never the estimate alone.
+    assert not rules.estimate_fits(100, 10, 200.0)
+    # A reference below the estimate changes nothing.
+    assert rules.estimate_fits(100, 10, 50.0)
+    assert not rules.estimate_fits(160, 10, 50.0)
+
+
+def test_estimate_cap_is_twice_the_estimate():
+    assert rules.estimate_cap(110.0) == 220.0
+
+
+def test_estimate_in_force_is_the_last_revision_else_the_plans_estimate_else_none():
+    assert rules.estimate_in_force({}) is None
+    plan = {"estimate": {"cost_usd": 110.0, "files": 35}}
+    assert rules.estimate_in_force(plan) == 110.0
+    revised = {
+        **plan,
+        "estimate_revisions": [
+            {"cost_usd": 150.0, "source": "human"},
+            {"cost_usd": 190.0, "source": "human"},
+        ],
+    }
+    assert rules.estimate_in_force(revised) == 190.0
+    # An empty list of revisions falls back to the plan's estimate, never to zero.
+    assert rules.estimate_in_force({**plan, "estimate_revisions": []}) == 110.0
+
+
+def test_delivered_files_is_the_patch_that_records_the_actual_files():
+    assert rules.delivered_files(12) == {"actual_files": 12}
+
+
+def test_auto_resumable_never_retakes_an_estimate_escalation():
+    # Rejected input: an `estimate` pause, even with an external failure before it.
+    state = {"pause_log": [_failure_entry("upstream"), _escalation_entry("estimate")]}
+    assert rules.auto_resumable(state) is None
+    assert rules.auto_resumable({"pause_log": [_escalation_entry("estimate")]}) is None
+
+
+# --- The split (ADR-0054): a plan that does not fit ends in `split`, not in a build ---
+
+PARTS = [{"title": "First", "body": "Do it.", "depends_on": []}]
+
+
+def test_after_plan_routes_a_plan_with_parts_to_split_and_one_without_to_integrate():
+    assert rules.after_plan({"status": "planned", "parts": PARTS}) == "split"
+    assert rules.after_plan({"status": "planned", "parts": []}) == "integrate"
+    assert rules.after_plan({"status": "planned"}) == "integrate"
+    assert rules.after_plan({"status": "planned", "parts": PARTS, "escalated": "x"}) is None
+
+
+def test_the_split_marker_round_trips_and_names_its_task_and_part():
+    marker = rules.split_marker("GH-12", 3)
+    assert marker == "<!-- agentic-split: GH-12 part 3 -->"
+    assert rules.split_part_of(f"{marker}\nBody") == ("GH-12", 3)
+    assert rules.split_part_of(f"Blocked by: #4\n\ntext\n{marker}") == ("GH-12", 3)
+
+
+def test_split_part_of_reads_no_marker_from_text_that_only_resembles_one():
+    assert rules.split_part_of("") is None
+    assert rules.split_part_of("A plain description of a task.") is None
+    assert rules.split_part_of("<!-- agentic-split: GH-12 -->") is None
+    assert rules.split_part_of("<!-- agentic:stack-review anchor=abc -->") is None
+    assert rules.split_part_of("agentic-split: GH-12 part 3") is None
+
+
+def test_split_is_an_end_with_nothing_to_resume():
+    done = {"status": "split", "type": "feature", "parts": PARTS}
+    assert rules.resumed_status(done) == "split"
+    assert rules.resume_target({**done, **rules.resumed(done, None)}) is None
+
+
+def test_a_task_paused_while_splitting_resumes_at_split_without_planning_again():
+    paused = {
+        "status": "waiting_on_human",
+        "type": "feature",
+        "parts": PARTS,
+        "split_issues": {"1": "https://github.com/o/r/issues/5"},
+        **rules.escalation("failure", "gh failed"),
+    }
+    resumed = task.apply(paused, rules.resumed(paused, None))
+    assert rules.resume_target(resumed) == "split"
+
+
+def test_resuming_an_estimate_escalation_of_a_part_waives_the_fit_and_replans():
+    paused = {
+        "status": "waiting_on_human",
+        "type": "platform_enhancement",
+        "parts": PARTS,
+        "estimate": {"cost_usd": 400.0, "files": 90},
+        **rules.escalation("estimate", "a part of a split does not fit"),
+    }
+    patch = rules.resumed(paused, "Build it as one.")
+    assert patch["fit_waived"] is True
+    assert patch["parts"] == []
+    resumed = task.apply(paused, patch)
+    assert rules.resume_target(resumed) == "plan"
+    # Nothing here decides the estimate in force: only the cap's own resumption does.
+    assert "estimate_revisions" not in patch and "estimate" not in patch
+
+
+def test_resuming_any_other_escalation_leaves_the_fit_alone():
+    paused = {"status": "waiting_on_human", "parts": PARTS, **rules.escalation("failure", "x")}
+    patch = rules.resumed(paused, None)
+    assert "fit_waived" not in patch and "parts" not in patch
 
 
 # GH-294 pin: with no `important` open the decision is what it was before the final

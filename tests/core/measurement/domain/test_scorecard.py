@@ -411,3 +411,69 @@ def test_bucket_by_baseline_counts_and_excludes_an_unreadable_document():
     buckets, unreadable = scorecard.bucket_by_baseline(parsed, resolve=lambda sha: "pre-baseline")
     assert unreadable == 1
     assert sum(len(tasks) for tasks in buckets.values()) == 1
+
+
+# --- actual/estimate (ADR-0054): median, over the plan's own estimate ---
+
+
+def _closed(**overrides):
+    return scorecard.task_figures(doc(closed_at="t", delivery_outcome="merged", **overrides))
+
+
+def _plan(cost, files):
+    return {"cost_usd": cost, "files": files}
+
+
+def test_task_figures_reads_the_plans_estimate_and_the_actual_files_none_when_absent():
+    bare = scorecard.task_figures(doc())
+    assert (bare.estimate_cost_usd, bare.estimate_files, bare.actual_files) == (None, None, None)
+    figures = scorecard.task_figures(doc(estimate=_plan(40.0, 10), actual_files=12))
+    assert (figures.estimate_cost_usd, figures.estimate_files, figures.actual_files) == (
+        40.0,
+        10,
+        12,
+    )
+
+
+def test_the_ratio_uses_the_plans_estimate_and_never_the_revisions():
+    revised = _closed(
+        cost_usd=20.0,
+        estimate=_plan(10.0, 5),
+        estimate_revisions=[{"cost_usd": 80.0, "files": 20}],
+    )
+
+    assert scorecard.build([revised]).cost_over_estimate.value == 2.0
+
+
+def test_the_figures_are_medians_not_means():
+    figures = [
+        _closed(cost_usd=c, estimate=_plan(10.0, 10), actual_files=f)
+        for c, f in ((10.0, 10), (10.0, 10), (100.0, 100))
+    ]
+
+    card = scorecard.build(figures)
+
+    assert card.cost_over_estimate.value == 1.0 and card.cost_over_estimate.denominator == 3
+    assert card.files_over_estimate.value == 1.0 and card.files_over_estimate.denominator == 3
+
+
+def test_a_document_without_actual_files_stays_out_of_the_files_figure_only():
+    figures = [
+        _closed(cost_usd=20.0, estimate=_plan(10.0, 5), actual_files=10),
+        _closed(cost_usd=30.0, estimate=_plan(10.0, 5)),  # no actual_files
+        _closed(cost_usd=99.0),  # no estimate: out of both
+        scorecard.task_figures(doc(estimate=_plan(10.0, 5), actual_files=1)),  # not closed
+    ]
+
+    card = scorecard.build(figures)
+
+    assert (card.cost_over_estimate.value, card.cost_over_estimate.denominator) == (2.5, 2)
+    assert (card.files_over_estimate.value, card.files_over_estimate.denominator) == (2.0, 1)
+    assert card.files_over_estimate.excluded == 3
+
+
+def test_the_figures_are_n_a_when_no_closed_document_has_a_positive_estimate():
+    card = scorecard.build([_closed(), _closed(estimate=_plan(0.0, 0), actual_files=3)])
+
+    assert card.cost_over_estimate.value is None and card.cost_over_estimate.denominator == 0
+    assert card.files_over_estimate.value is None and card.files_over_estimate.denominator == 0

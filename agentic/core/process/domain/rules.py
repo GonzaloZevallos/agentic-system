@@ -51,6 +51,7 @@ from .task import (
     EscalationClass,
     EscalationPatch,
     EscalationPauseEntry,
+    EstimateRevision,
     Failure,
     FailurePauseEntry,
     FailureReason,
@@ -1682,7 +1683,11 @@ def after_consolidate(state: TaskState) -> str | None:
 
 
 def after_plan(state: TaskState) -> str | None:
-    return None if state.get("escalated") else "integrate"
+    """A plan that did not fit carries `parts` and goes to `split` (ADR-0054); any other
+    goes to the fan-in. The only routing decision between the two."""
+    if state.get("escalated"):
+        return None
+    return "split" if state.get("parts") else "integrate"
 
 
 def after_develop(state: TaskState) -> str | None:
@@ -1749,6 +1754,10 @@ def after_discard(state: TaskState) -> str | None:
     return None
 
 
+def after_split(state: TaskState) -> str | None:
+    return None
+
+
 def run_ended(status: Status) -> bool:
     """Whether the Corrida (the whole task, ADR-0003) ended: delivered
     (`ready_for_review`) or discarded (issue #65). Every other status, including a
@@ -1758,7 +1767,7 @@ def run_ended(status: Status) -> bool:
     twice would otherwise leave two samples of its accumulated total. `"crashed"` is
     not a `Status`: the CLI fabricates it only for its own telemetry when a process
     dies mid-run, so it cannot appear in this predicate's own type."""
-    return status in ("ready_for_review", "discarded")
+    return status in ("ready_for_review", "discarded", "split")
 
 
 # Pause and resume (ADR-0003): an escalation pauses the task; the human's answer resumes
@@ -1775,6 +1784,8 @@ def resumed_status(state: TaskState) -> Status:
         # Nothing overwrote it: a discard is an end, not a pause, and the runs it holds
         # (a diagnosis, PM's ruling) would otherwise read as a definition ready to plan.
         return "discarded"
+    if state.get("status") == "split":
+        return "split"  # the same: an end, not a pause
     subtasks = state.get("subtasks", {})
     if subtasks:
         started = any(sub.get("status") != "pending" for sub in subtasks.values())
@@ -1827,7 +1838,9 @@ def human_section(state: TaskState, reason: str | None, decision: str) -> str:
     return f"{previous}\n\n{entry}".strip()
 
 
-def resumed(state: TaskState, decision: str | None) -> dict[str, Any]:
+def resumed(
+    state: TaskState, decision: str | None, estimate: float | None = None
+) -> dict[str, Any]:
     """The patch that resumes a paused task: no escalation, the status it had, the pair
     that hit its limit back at zero, and the human's decision as a section the roles read.
 
@@ -1847,9 +1860,35 @@ def resumed(state: TaskState, decision: str | None) -> dict[str, Any]:
     }
     if pair := returns_pair(state):
         patch["changes_requested"] = {pair: 0}
-    if decision and decision.strip():
-        patch["sections"] = {HUMAN: human_section(state, reason, decision)}
+    decided = bool(decision and decision.strip())
+    if decided:
+        patch["sections"] = {HUMAN: human_section(state, reason, decision or "")}
+    if state.get("escalation_class") == "estimate" and state.get("parts"):
+        # A part of a split does not fit and the human decided on it (ADR-0054): the plan
+        # is made again as one task, and a second partition is refused.
+        patch["fit_waived"] = True
+        patch["parts"] = []
+    if (
+        state.get("escalation_class") == "estimate"
+        and (decided or estimate is not None)
+        and (revision := _estimate_revision(state, estimate))
+    ):
+        # Only here does `estimate_revisions` grow (ADR-0054): a resumption that carries
+        # the human's decision (their comment, or the `--estimate` they typed). The plan's
+        # own `estimate` is never rewritten.
+        patch["estimate_revisions"] = [*state.get("estimate_revisions", []), revision]
+        patch["proposed_estimate"] = None
     return patch
+
+
+def _estimate_revision(state: TaskState, estimate: float | None) -> EstimateRevision | None:
+    """The estimate a decided resume puts in force: the human's own value, else the one
+    the stopped task proposed; `None` when there is neither."""
+    if estimate is not None:
+        return {"cost_usd": estimate, "source": "human"}
+    if (proposed := state.get("proposed_estimate")) is not None:
+        return {"cost_usd": proposed, "source": "proposed"}
+    return None
 
 
 def entry_closed(entry: Mapping[str, object]) -> bool:
@@ -1881,6 +1920,10 @@ def resume_target(state: TaskState) -> str | None:
     request ends the road unless the landing reopened the stage under it."""
     if state.get("escalated") or (state.get("pull_request") and not landing_open(state)):
         return None
+    if state.get("status") == "split":
+        return None  # an end like a pull request: the parts are other tasks now
+    if state.get("parts") and not state.get("subtasks"):
+        return "split"  # paused while opening the parts: finish them, do not plan again
     if state.get("subtasks"):
         # Once there is a plan every road goes through the fan-in, which decides the
         # wave from the same facts: nothing here has to know about waves. Nothing to
@@ -2260,7 +2303,7 @@ RETAKE_AFTER_REBOOT_MAX = 3
 
 # The statuses where a run has nothing left to retake: the work is delivered, ruled
 # out, or waiting on a human's answer.
-_NOT_INTERRUPTED_STATUSES = ("ready_for_review", "discarded", "waiting_on_human")
+_NOT_INTERRUPTED_STATUSES = ("ready_for_review", "discarded", "split", "waiting_on_human")
 
 
 def interrupted_run(raw: TaskState, lock: LockFacts | None, prior_retakes: int) -> RetakeVerdict:
@@ -3189,3 +3232,116 @@ def replaced_note(sha: str, prs: Sequence[_BranchPullRequest], branch: str) -> s
         f"Replaced remote `{branch}` at `{sha}` ({seen}recover with "
         f"`git push origin {sha}:refs/heads/recovered/{branch}`)"
     )
+
+
+# The estimate (ADR-0054): the thresholds a plan must fit under before it builds, and the
+# factor of the safety cap. They live here and nowhere else; every other module asks
+# `estimate_fits` or `estimate_cap` and never repeats a number.
+SPLIT_COST_USD = 150
+SPLIT_FILES = 40
+ESTIMATE_CAP_FACTOR = 2
+
+
+def estimate_fits(cost_usd: float, files: int, reference_usd: float | None) -> bool:
+    """Whether a plan's estimate is small enough to build as one task. It decides on the
+    larger of the declared cost and the history's reference (the p90 of the bucket, when
+    the bucket has one), never on the declared cost alone: the same model estimates and
+    plans, so the estimate cannot be its own judge."""
+    cost = cost_usd if reference_usd is None else max(cost_usd, reference_usd)
+    return cost <= SPLIT_COST_USD and files <= SPLIT_FILES
+
+
+# The marker every issue the partition opens carries (ADR-0054): an HTML comment, invisible
+# once rendered, that names the task and the part. It is what a retry looks for among the
+# open issues before opening one, and what tells a task it is itself a part.
+_SPLIT_MARKER = re.compile(r"<!-- agentic-split: (\S+) part (\d+) -->")
+
+
+def split_marker(task_id: str, part: int) -> str:
+    """The marker of part `part` (1 is the first) of task `task_id`'s partition."""
+    return f"<!-- agentic-split: {task_id} part {part} -->"
+
+
+def split_part_of(body: str) -> tuple[str, int] | None:
+    """The `(task id, part)` the body's marker names, or `None` when it has none: a body
+    with a marker is a part of a partition, and a part never splits again."""
+    match = _SPLIT_MARKER.search(body)
+    return (match.group(1), int(match.group(2))) if match else None
+
+
+def estimate_cap(cost_usd: float) -> float:
+    """The task's safety cap for an estimate in force: a multiple of it."""
+    return cost_usd * ESTIMATE_CAP_FACTOR
+
+
+def estimate_in_force(state: Mapping[str, Any]) -> float | None:
+    """The cost estimate that governs the task now: the last revision a human decided
+    on, else the plan's own estimate, else `None` -- a document from before estimates
+    existed has none, which is "no estimate" and never zero."""
+    revisions = state.get("estimate_revisions")
+    if revisions:
+        return float(revisions[-1]["cost_usd"])
+    estimate = state.get("estimate")
+    if estimate:
+        return float(estimate["cost_usd"])
+    return None
+
+
+def estimate_cap_reached(spent_usd: float, state: Mapping[str, Any]) -> bool:
+    """Whether what the task spent reached the safety cap of its estimate in force. A task
+    with no estimate (a document from before them) has no such cap: it never stops here."""
+    estimate = estimate_in_force(state)
+    return estimate is not None and spent_usd >= estimate_cap(estimate)
+
+
+def estimate_to_cover(spent_usd: float) -> float:
+    """The estimate a task must be given to go on after spending `spent_usd`: anything
+    above it has a safety cap beyond what was spent."""
+    return spent_usd / ESTIMATE_CAP_FACTOR
+
+
+def unfinished_subtasks(state: Mapping[str, Any]) -> list[str]:
+    """The subtasks not approved yet: what is left to build and review."""
+    subtasks = state.get("subtasks") or {}
+    return [sid for sid, sub in subtasks.items() if sub.get("status") != "approved"]
+
+
+def reestimate(state: Mapping[str, Any], history_median: float | None) -> float:
+    """The estimate a task stopped at its estimate cap proposes: what it spent plus its
+    unfinished subtasks, each at the mean cost of this task's approved ones (a subtask's
+    cost is its Developer and review runs). With no approved subtask, the median of the
+    history's bucket; with neither, twice what was spent."""
+    spent = float(state.get("cost_usd", 0.0))
+    subtasks = state.get("subtasks") or {}
+    approved = [sid for sid, sub in subtasks.items() if sub.get("status") == "approved"]
+    left = len(unfinished_subtasks(state))
+    runs = state.get("runs") or []
+
+    def cost_of(sid: str) -> float:
+        sections = (developer_section(sid), review_section(sid))
+        return float(sum(run["cost_usd"] for run in runs if run.get("section") in sections))
+
+    if approved:
+        each = sum(cost_of(sid) for sid in approved) / len(approved)
+    elif history_median is not None:
+        each = history_median
+    else:
+        return spent * 2
+    return spent + left * each
+
+
+def estimate_cap_reached_reason(
+    role_name: str, spent_usd: float, cap_usd: float, left: int, proposed_usd: float
+) -> str:
+    """The escalation text of the estimate cap. Its own phrase, never `cap_reached`'s: the
+    flat task cap (ADR-0004) keeps its text and the comment that raises it."""
+    return (
+        f"{role_name} stopped by the estimate cap: {spent_usd:.2f} of {cap_usd:.2f} USD spent, "
+        f"{left} subtask(s) left, proposed estimate {proposed_usd:.2f} USD"
+    )
+
+
+def delivered_files(changed_files: int) -> dict[str, int]:
+    """The patch that records how many files the pull request changed, the actual the
+    estimate is compared with. The only place that names the key."""
+    return {"actual_files": changed_files}

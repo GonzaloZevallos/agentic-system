@@ -1088,6 +1088,27 @@ def test_merge_pr_merge_unreachable_is_gh_unreadable_never_gh_rejected():
     assert isinstance(raised.value.__cause__, TrackerUnreachable)
 
 
+def test_changed_files_reads_the_count_gh_reports_for_the_pull_request():
+    run = Scripted({"view": json.dumps({"changedFiles": 31})})
+    count = GhTracker(Path("/p"), run).changed_files("https://github.com/o/r/pull/7")
+    assert count == 31
+    assert run.calls == [["gh", "pr", "view", "7", "--json", "changedFiles"]]
+
+
+@pytest.mark.parametrize("stdout", ["not json", '{"changedFiles": "many"}', "[]", '{"x": 1}'])
+def test_changed_files_rejects_an_answer_it_cannot_read(stdout):
+    run = Scripted({"view": stdout})
+    with pytest.raises(ValueError, match="changedFiles"):
+        GhTracker(Path("/p"), run).changed_files("https://github.com/o/r/pull/7")
+
+
+def test_changed_files_rejects_a_non_pull_request_reference_before_any_gh_call():
+    run = Recorder()
+    with pytest.raises(ValueError):
+        GhTracker(Path("/p"), run).changed_files("https://github.com/o/r/issues/7")
+    assert run.calls == []
+
+
 class LabelRun(Recorder):
     """`gh label list` answers `listed`; every other call answers an empty success."""
 

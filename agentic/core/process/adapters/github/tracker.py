@@ -256,6 +256,18 @@ class GhTracker:
     def close_pull_request(self, reference: str) -> None:
         self._gh("pr", "close", str(pull_request_number(reference)))
 
+    def changed_files(self, pull_request: str) -> int:
+        raw = self._gh(
+            "pr", "view", str(pull_request_number(pull_request)), "--json", "changedFiles"
+        )
+        try:
+            count = json.loads(raw)["changedFiles"]
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            raise ValueError(f"gh pr view answered no readable changedFiles: {raw[:80]!r}") from exc
+        if not isinstance(count, int) or isinstance(count, bool):
+            raise ValueError(f"gh pr view answered a non-integer changedFiles: {count!r}")
+        return count
+
     @staticmethod
     def _json_list(raw: str, what: str) -> list[object]:
         try:

@@ -20,6 +20,8 @@ Reached, `TaskCapReached` escalates the same way, but it is not a role failure: 
 role did not break (ADR-0004, third addendum). The cap is a flat ceiling, the same for any
 plan size (2026-10-05 addendum), checked against what the whole process spent, which is
 what the state cannot hold once branches run in parallel (fifth addendum, `limits.py`).
+Beside it, before the same attempt, the safety cap of the task's estimate (ADR-0054):
+`EstimateCapReached`, its own escalation class and text, never the flat cap's.
 
 Context rule (README.md, 6): each role reads, in full, the sections it declares in
 `Role.reads`, after the engineering standards and the product knowledge if it reads
@@ -60,7 +62,7 @@ from typing import Any
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import document, plan_view, playbook, rules, schemas, turn_notice
+from ..domain import cost_history, document, plan_view, playbook, rules, schemas, turn_notice
 from ..domain.document import HUMAN
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import (
@@ -75,7 +77,16 @@ from ..domain.roles import (
     standards_by_index,
 )
 from ..domain.suppressions import Forbidden
-from ..domain.task import WAITING_ON_HUMAN, EscalationClass, Failure, RoleRun, TaskState, apply
+from ..domain.task import (
+    INTEGRATION,
+    WAITING_ON_HUMAN,
+    EscalationClass,
+    Failure,
+    RoleRun,
+    TaskState,
+    apply,
+)
+from .closed import closed_documents
 from .limits import RunLimits
 from .ports import AttemptFailed, Ports, Presubmit, RoleRunner, SchemaGuard
 from .schema_guard import RoleSchemaGuard
@@ -122,6 +133,24 @@ class TaskCapReached(Escalating):
         self.spent_usd = spent_usd
         self.cap_usd = cap_usd
         super().__init__(role, failures, rules.cap_reached(role.name, spent_usd, cap_usd))
+
+
+@dataclass(frozen=True)
+class EstimateStop:
+    """What a run that reached the safety cap of its estimate escalates with: the text for
+    the human and the estimate the task proposes (`rules.reestimate`)."""
+
+    reason: str
+    proposed_usd: float
+
+
+class EstimateCapReached(Escalating):
+    """The run reached the safety cap of its estimate (ADR-0054) before this role's next
+    attempt. Not a role failure, and not the flat task cap: its own class and its own text."""
+
+    def __init__(self, role: Role, stop: EstimateStop, failures: list[Failure]):
+        self.proposed_usd = stop.proposed_usd
+        super().__init__(role, failures, stop.reason)
 
 
 @dataclass
@@ -344,10 +373,16 @@ async def run_with_retry(
     section: str | None = None,
     cold_prompt: str | None = None,
     before_attempt: Callable[[], None] | None = None,
+    estimate_stop: Callable[[float], EstimateStop | None] | None = None,
 ) -> Output:
     """`before_attempt` runs at the top of every attempt, retries included, before the
     slot is taken: `run_role` hands it the index write, so a retry sees the files its
     failed attempt left in the checkout (GH-292).
+
+    `estimate_stop` is asked, after the flat cap, with what the run spent: it answers with
+    the escalation when the estimate's safety cap is reached (`EstimateCapReached`), and
+    `None` otherwise. The caller owns the decision (`rules.estimate_cap_reached`); this
+    only refuses to start the attempt, like the flat cap.
 
     `check` is the use case's own rule over the validated output (raise `ValueError`);
     breaking it is a role failure like any other, so the model gets the error back.
@@ -414,6 +449,8 @@ async def run_with_retry(
         total = max(spent_usd + spent(failures), limits.spent_usd)
         if task_cap_usd is not None and total >= task_cap_usd:
             raise TaskCapReached(role, total, task_cap_usd, failures)
+        if estimate_stop is not None and (stop := estimate_stop(total)) is not None:
+            raise EstimateCapReached(role, stop, failures)
         fallback_now = not cold_fallback and _stale_session(resume, failures, cold_prompt)
         if fallback_now:
             # The one drop: no error appended, since the caller's session never even
@@ -685,6 +722,30 @@ def task_cap(cfg: Configuration) -> float:
     return rules.task_cap(cfg.task_max_budget_usd, cfg.task_budget_usd)
 
 
+def estimate_stop_for(
+    state: TaskState, role: Role, spent_usd: float, ports: Ports
+) -> EstimateStop | None:
+    """Whether the run, having spent `spent_usd`, reached the safety cap of the estimate in
+    force, and the escalation if so. The decision is `rules.estimate_cap_reached`'s; the
+    history is read only here, once the cap is reached, to price the unfinished subtasks."""
+    if not rules.estimate_cap_reached(spent_usd, state):
+        return None
+    estimate = rules.estimate_in_force(state)
+    assert estimate is not None  # the cap is only reached over an estimate
+    spent_state: TaskState = {**state, "cost_usd": spent_usd}
+    count = len([sid for sid in state.get("subtasks", {}) if sid != INTEGRATION])
+    history = cost_history.build(closed_documents(ports))
+    proposed = rules.reestimate(spent_state, cost_history.bucket_median(history, count))
+    reason = rules.estimate_cap_reached_reason(
+        role.name,
+        spent_usd,
+        rules.estimate_cap(estimate),
+        len(rules.unfinished_subtasks(state)),
+        proposed,
+    )
+    return EstimateStop(reason, proposed)
+
+
 def escalation(exc: Escalating) -> TaskState:
     """The patch of a role that failed twice, or that the task cap stopped: the human
     sees it (README.md, 3), with its escalation class (`rules.escalation`) — `cap` for
@@ -693,13 +754,19 @@ def escalation(exc: Escalating) -> TaskState:
     Composed through `rules.logged` (issue #137), `exc.failures` passed along: the one
     call site that ever has a role's own failures to log, so `pause_log`'s eligibility
     for an automatic retake reads the reason each attempt actually failed with."""
-    cls: EscalationClass = "cap" if isinstance(exc, TaskCapReached) else "failure"
+    cls: EscalationClass = "failure"
+    if isinstance(exc, TaskCapReached):
+        cls = "cap"
+    elif isinstance(exc, EstimateCapReached):
+        cls = "estimate"
     patch: TaskState = {
         "failures": exc.failures,
         "cost_usd": exc.cost_usd,
         "status": WAITING_ON_HUMAN,
         **rules.escalation(cls, str(exc)),
     }
+    if isinstance(exc, EstimateCapReached):
+        patch["proposed_estimate"] = exc.proposed_usd
     return rules.logged(patch, exc.failures)
 
 
@@ -881,6 +948,7 @@ async def run_role(
             section=section,
             cold_prompt=cold_prompt,
             before_attempt=write_index if reads_by_index(role) else None,
+            estimate_stop=lambda total: estimate_stop_for(state, role, total, ports),
         )
     except Escalating as exc:
         # Never `patch | escalation(exc)` (issue #137): `escalation(exc)` already

@@ -34,6 +34,11 @@ request:
   around what stays open. When one of them turns out settled after all (the code or an
   ADR answers it), answer it in `markdown` as `**With the human N**: <decision and why>`
   and put N in `withdrawn`. Only what stays open reaches the human.
+- Close every round's `markdown` with a provisional `### Estimate`: the total cost in USD
+  (spent included) and the files the pull request will show as changed, with one line of
+  why. Revise it when a round's answers change the scope; the plan you write after the
+  interview repeats the last one, calibrated against the table of closed tasks it
+  receives.
 </Task>
 
 <Hard Limits>
