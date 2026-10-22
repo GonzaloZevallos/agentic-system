@@ -1,10 +1,12 @@
 """The SDK adapter with `query` replaced. No model involved."""
 
+import asyncio
 import io
 import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import fields as dataclass_fields
 from dataclasses import replace
@@ -17,8 +19,11 @@ from claude_agent_sdk import (
     ClaudeAgentOptions,
     ResultMessage,
     StreamEvent,
+    SystemMessage,
     ToolPermissionContext,
+    ToolResultBlock,
     ToolUseBlock,
+    UserMessage,
 )
 
 from agentic.core.process.adapters.claude_sdk import runner as module
@@ -1568,3 +1573,356 @@ async def test_what_the_reaper_stopped_comes_back_on_the_result_and_on_the_failu
     assert info.value.reaped == list(leak)
     fake_query(monkeypatch, [result()])
     assert (await run_once(make_runner(), tmp_path)).reaped == []
+
+
+# --- GH-299: a hung attempt is detected, reaped by its mark and failed as a stall ----
+
+TIMEOUT_S = 600.0
+
+
+class FakeClock:
+    """The runner's monotonic clock, moved by the test and by nothing else."""
+
+    def __init__(self) -> None:
+        self.now = 1_000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class HungReaper(FakeReaper):
+    """A reaper whose `reap_attempt` runs `on_reap` (in the reap's thread) and whose
+    `child_activity` is whatever `ticks` says; `survivors` is what the reap leaves."""
+
+    def __init__(self, on_reap=lambda: None, ticks=None, survivors=(), running=False):
+        super().__init__(reaped_attempts=survivors)
+        self.on_reap = on_reap
+        self.ticks = ticks or (lambda scan: 0)
+        self.running = running
+
+    def reap_attempt(self, task_id, run, token):
+        self.on_reap()
+        return super().reap_attempt(task_id, run, token)
+
+    def child_activity(self, task_id, run, token, parent_pid):
+        super().child_activity(task_id, run, token, parent_pid)
+        return module.ChildActivity(cpu_ticks=self.ticks(self.scans), running=self.running)
+
+
+SURVIVOR = (reaping.ReapedProcess(pid=7, command="sleep", outcome="survived"),)
+INIT = SystemMessage(subtype="init", data={"session_id": "sess-init"})
+
+
+def tool_call(tool_id: str, parent: str | None = None) -> AssistantMessage:
+    block = ToolUseBlock(id=tool_id, name="Bash", input={})
+    return AssistantMessage(content=[block], model="m", parent_tool_use_id=parent)
+
+
+def tool_result(tool_id: str) -> UserMessage:
+    return UserMessage(content=[ToolResultBlock(tool_use_id=tool_id, content="ok")])
+
+
+@pytest.fixture
+def clock(monkeypatch) -> FakeClock:
+    monkeypatch.setattr(module, "CHECK_EVERY_S", 0.01)
+    return FakeClock()
+
+
+def stalling_runner(clock, reaper, buffer=None, **kwargs) -> ClaudeSdkRunner:
+    return make_runner(
+        clock=clock, stall_timeout_s=TIMEOUT_S, reaper=reaper, stream=buffer, **kwargs
+    )
+
+
+async def until(condition, seconds: float = 5.0) -> None:
+    with anyio.fail_after(seconds):
+        while not condition():
+            await anyio.sleep(0.005)
+
+
+def silent_after(clock, messages, killed: threading.Event, *, before_silence=None):
+    """A query that yields `messages`, lets the fake clock run past the threshold, then
+    stays silent until `killed` is set -- the CLI dying under the reap -- and ends (EOF)."""
+
+    async def query(prompt, options):
+        for message in messages:
+            yield message
+        if before_silence is not None:
+            await before_silence(options)
+        while not killed.is_set():
+            clock.now += 5 * TIMEOUT_S  # the silence goes on, whatever the first scan saw
+            await anyio.sleep(0.005)
+
+    return query
+
+
+async def test_a_silent_attempt_is_reaped_and_fails_as_a_stall_on_the_eof_path(
+    monkeypatch, tmp_path, clock
+):
+    killed = threading.Event()
+    reaper = HungReaper(on_reap=killed.set)
+    monkeypatch.setattr(module, "query", silent_after(clock, [INIT], killed))
+    buffer = io.StringIO()
+    with pytest.raises(AttemptFailed) as caught:
+        await run_once(stalling_runner(clock, reaper, buffer), tmp_path)
+    failure = caught.value
+    assert failure.reason == "stall" and failure.session_id == "sess-init"
+    assert failure.cost_usd == 0.0
+    assert [call[0] for call in reaper.calls][:1] == ["attempt"]
+    written = buffer.getvalue()
+    assert "interrupted" not in written
+    assert written.count("stalled") == 1
+    assert "stalled 3000s, last event system" in written
+    assert "cost unknown" in written
+
+
+async def test_the_attempt_is_reaped_before_any_scope_is_cancelled_when_the_cli_survives(
+    monkeypatch, tmp_path, clock
+):
+    order: list[str] = []
+    reaper = HungReaper(on_reap=lambda: order.append("reap"), survivors=SURVIVOR)
+
+    async def query(prompt, options):
+        yield INIT
+        clock.now += 5 * TIMEOUT_S
+        try:
+            await anyio.sleep_forever()  # the CLI that ignores the reap
+        finally:
+            order.append("cancelled")
+
+    monkeypatch.setattr(module, "query", query)
+    buffer = io.StringIO()
+    with pytest.raises(AttemptFailed) as caught:
+        await run_once(stalling_runner(clock, reaper, buffer), tmp_path)
+    assert caught.value.reason == "stall" and caught.value.session_id == "sess-init"
+    assert order[:2] == ["reap", "cancelled"]
+    assert "interrupted" not in buffer.getvalue()
+    assert "stalled" in buffer.getvalue()
+
+
+async def test_a_stall_before_the_init_message_leaves_no_session(monkeypatch, tmp_path, clock):
+    killed = threading.Event()
+    monkeypatch.setattr(module, "query", silent_after(clock, [], killed))
+    buffer = io.StringIO()
+    with pytest.raises(AttemptFailed) as caught:
+        await run_once(stalling_runner(clock, HungReaper(on_reap=killed.set), buffer), tmp_path)
+    assert caught.value.session_id == ""
+    assert "last event none" in buffer.getvalue()
+
+
+async def test_a_stall_surfacing_as_an_sdk_error_is_still_the_stall(monkeypatch, tmp_path, clock):
+    killed = threading.Event()
+
+    async def query(prompt, options):
+        yield INIT
+        clock.now += 5 * TIMEOUT_S
+        while not killed.is_set():
+            await anyio.sleep(0.005)
+        raise RuntimeError("Command failed with exit code -15")  # the SDK noticing the kill
+
+    monkeypatch.setattr(module, "query", query)
+    buffer = io.StringIO()
+    with pytest.raises(AttemptFailed) as caught:
+        await run_once(stalling_runner(clock, HungReaper(on_reap=killed.set), buffer), tmp_path)
+    assert caught.value.reason == "stall"
+    assert "exit code" not in buffer.getvalue()  # the log never copies a message
+
+
+async def test_a_marked_child_burning_cpu_does_not_hold_an_attempt_with_no_pending_tool(
+    monkeypatch, tmp_path, clock
+):
+    killed = threading.Event()
+    reaper = HungReaper(on_reap=killed.set, ticks=lambda scan: scan * 100, running=True)
+    monkeypatch.setattr(module, "query", silent_after(clock, [INIT], killed))
+    with pytest.raises(AttemptFailed) as caught:
+        await run_once(stalling_runner(clock, reaper), tmp_path)
+    assert caught.value.reason == "stall"
+
+
+async def _run_with_silence(monkeypatch, tmp_path, clock, reaper, messages, steps=4):
+    """Runs an attempt that sends `messages`, then stays silent for `steps` periods of
+    most of the threshold, then delivers."""
+
+    async def query(prompt, options):
+        for message in messages:
+            yield message
+        for _ in range(steps):
+            clock.now += TIMEOUT_S - 100
+            await anyio.sleep(0.1)
+        yield result()
+
+    monkeypatch.setattr(module, "query", query)
+    return await run_once(stalling_runner(clock, reaper), tmp_path)
+
+
+async def test_a_pending_tool_is_held_by_a_child_burning_cpu_or_running(
+    monkeypatch, tmp_path, clock
+):
+    burning = HungReaper(ticks=lambda scan: scan * 100)
+    raw = await _run_with_silence(monkeypatch, tmp_path, clock, burning, [INIT, tool_call("t1")])
+    assert raw.session_id == "sess-123"
+    running = HungReaper(running=True)
+    raw = await _run_with_silence(monkeypatch, tmp_path, clock, running, [INIT, tool_call("t1")])
+    assert raw.session_id == "sess-123"
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        pytest.param([INIT, tool_call("t1")], id="idle child"),
+        pytest.param([INIT, tool_call("t1"), tool_result("t1")], id="tool already returned"),
+        pytest.param([INIT, tool_call("t1", parent="sub-1")], id="sub-agent's tool"),
+    ],
+)
+async def test_an_idle_child_or_no_pending_main_thread_tool_does_not_hold_the_attempt(
+    monkeypatch, tmp_path, clock, messages
+):
+    killed = threading.Event()
+    # The child burns CPU in the last two cases; only a pending main-thread tool counts it.
+    idle = messages == [INIT, tool_call("t1")]
+    reaper = HungReaper(
+        on_reap=killed.set, ticks=(lambda scan: 5) if idle else (lambda scan: scan * 100)
+    )
+    monkeypatch.setattr(module, "query", silent_after(clock, messages, killed))
+    with pytest.raises(AttemptFailed) as caught:
+        await run_once(stalling_runner(clock, reaper), tmp_path)
+    assert caught.value.reason == "stall"
+
+
+class SlowPresubmit:
+    timeout_s = 1500.0
+
+    def __init__(self) -> None:
+        self.release = threading.Event()
+        self.entered = threading.Event()
+
+    def __call__(self):
+        self.entered.set()
+        self.release.wait(10)
+        return None
+
+
+async def test_a_long_delivery_hook_holds_the_attempt_and_the_whole_threshold_restarts_after_it(
+    monkeypatch, tmp_path, clock
+):
+    presubmit = SlowPresubmit()
+    killed = threading.Event()
+    reaper = HungReaper(on_reap=killed.set)
+    reaped_at: list[int] = []
+
+    async def query(prompt, options):
+        yield INIT
+        hook = options.hooks["PreToolUse"][0].hooks[0]
+        running = asyncio.ensure_future(hook({"tool_input": {}}, None, {"signal": None}))
+        await until(lambda: reaper.scans >= 1)
+        clock.now += 3 * 1500  # a hook thrice the check timeout, with no message
+        scans = reaper.scans
+        await until(lambda: reaper.scans >= scans + 3)
+        reaped_at.append(len(reaper.calls))  # during the hook: no reap
+        presubmit.release.set()
+        await running
+        clock.now += TIMEOUT_S - 1  # a whole threshold after it, minus a second
+        scans = reaper.scans
+        await until(lambda: reaper.scans >= scans + 3)
+        reaped_at.append(len(reaper.calls))  # still no reap
+        clock.now += 2
+        while not killed.is_set():
+            await anyio.sleep(0.005)
+
+    monkeypatch.setattr(module, "query", query)
+    with pytest.raises(AttemptFailed) as caught:
+        await stalling_runner(clock, reaper).run_once(
+            PJM,
+            "p",
+            system_prompt="s",
+            model="m",
+            json_schema={},
+            cwd=tmp_path,
+            presubmit=presubmit,
+            owner_task="GH-1",
+        )
+    assert caught.value.reason == "stall"
+    assert reaped_at == [0, 0]
+
+
+async def test_the_hook_counter_is_per_attempt_not_shared_between_sessions(
+    monkeypatch, tmp_path, clock
+):
+    # Two attempts at once: one holds a hook open, the other is silent. Only the silent
+    # one stalls; a counter shared between sessions would hold both.
+    presubmit = SlowPresubmit()
+    killed = threading.Event()
+    reaper_quiet, reaper_held = HungReaper(on_reap=killed.set), HungReaper()
+
+    async def query(prompt, options):
+        yield INIT
+        if prompt == "held":
+            hook = options.hooks["PreToolUse"][0].hooks[0]
+            running = asyncio.ensure_future(hook({"tool_input": {}}, None, {"signal": None}))
+            await until(lambda: killed.is_set())
+            presubmit.release.set()
+            await running
+            yield result()
+        else:
+            await until(presubmit.entered.is_set)  # the other attempt's hook is in flight
+            clock.now += 5 * TIMEOUT_S
+            while not killed.is_set():
+                await anyio.sleep(0.005)
+
+    monkeypatch.setattr(module, "query", query)
+    outcomes: dict[str, object] = {}
+
+    async def attempt(prompt: str, reaper: HungReaper) -> None:
+        runner = stalling_runner(clock, reaper)
+        try:
+            outcomes[prompt] = await runner.run_once(
+                PJM,
+                prompt,
+                system_prompt="s",
+                model="m",
+                json_schema={},
+                cwd=tmp_path,
+                presubmit=presubmit if prompt == "held" else None,
+                owner_task="GH-1",
+            )
+        except AttemptFailed as exc:
+            outcomes[prompt] = exc
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(attempt, "held", reaper_held)
+        group.start_soon(attempt, "quiet", reaper_quiet)
+    quiet = outcomes["quiet"]
+    assert isinstance(quiet, AttemptFailed) and quiet.reason == "stall"
+    assert not isinstance(outcomes["held"], AttemptFailed)
+    assert reaper_held.calls == [call for call in reaper_held.calls if call[0] == "attempt"]
+    assert len(reaper_held.calls) == 1  # only run_once's own reap, never the watchdog's
+
+
+async def test_an_external_cancellation_stays_an_interruption_with_the_watchdog_running(
+    monkeypatch, tmp_path, clock
+):
+    async def query(prompt, options):
+        yield INIT
+        await anyio.sleep_forever()
+
+    monkeypatch.setattr(module, "query", query)
+    buffer = io.StringIO()
+    reaper = HungReaper()
+    with anyio.CancelScope() as outside:
+
+        async def cancel_soon():
+            await anyio.sleep(0.1)
+            outside.cancel()
+
+        async with anyio.create_task_group() as group:
+            group.start_soon(cancel_soon)
+            await run_once(stalling_runner(clock, reaper, buffer), tmp_path)
+    assert outside.cancel_called
+    assert buffer.getvalue().count("interrupted") == 1
+    assert "stalled" not in buffer.getvalue()
+
+
+async def test_a_default_runner_never_stalls_an_attempt_that_keeps_talking(monkeypatch, tmp_path):
+    fake_query(monkeypatch, [INIT, tool_call("t1"), tool_result("t1"), result()])
+    raw = await run_once(make_runner(), tmp_path)
+    assert raw.session_id == "sess-123"

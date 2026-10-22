@@ -74,7 +74,9 @@ from __future__ import annotations
 import os
 import re
 import shlex
-from collections.abc import Callable, Sequence
+import time
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -139,6 +141,30 @@ class TurnCount:
     value: int = 0
 
 
+class HookActivity:
+    """Which delivery hooks of one attempt are in flight, and when the last one left
+    (GH-299, ADR-0056): one instance per attempt, constructed in `_session` beside
+    `TurnCount` and never shared between sessions or kept at module level. The delivery
+    hook runs the product's checks and can be silent for far longer than any stall
+    threshold; the watchdog reads this to know the silence is the hook's, and to
+    restart the whole threshold from the moment it left. `clock` is the runner's own
+    monotonic clock, so the instant is on the scale the watchdog compares it against."""
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        self.in_flight = 0
+        self.last_exit: float | None = None
+        self._clock = clock
+
+    @contextmanager
+    def running(self) -> Iterator[None]:
+        self.in_flight += 1
+        try:
+            yield
+        finally:
+            self.in_flight -= 1
+            self.last_exit = self._clock()
+
+
 def git_denial(
     command: str, cwd: Path, relative_to: Path | None = None, checkout: Path | None = None
 ) -> str | None:
@@ -190,6 +216,7 @@ def hooks_for(
     on_presubmit_denied: Callable[[], None] | None = None,
     guard: SchemaGuard | None = None,
     forbidden: Sequence[Forbidden] | None = None,
+    activity: HookActivity | None = None,
 ) -> dict[str, list[HookMatcher]]:
     """The hooks of one run: the cage for a role that executes, the schema guard and
     the presubmit sharing one matcher on the delivery tool when either is given, and
@@ -215,7 +242,7 @@ def hooks_for(
         matchers.append(
             HookMatcher(
                 matcher=DELIVERY_TOOL,
-                hooks=[_delivery_gate(guard, presubmit, on_presubmit_denied)],
+                hooks=[_delivery_gate(guard, presubmit, on_presubmit_denied, activity)],
                 # The presubmit runs the product's checks: its own budget, plus the
                 # answer. The guard is in-process and fast, so it adds nothing here:
                 # `GUARD_TIMEOUT_S` alone already covers its share (unchanged from
@@ -338,6 +365,7 @@ def _delivery_gate(
     guard: SchemaGuard | None,
     presubmit: Presubmit | None,
     on_presubmit_denied: Callable[[], None] | None = None,
+    activity: HookActivity | None = None,
 ) -> HookCallback:
     """The one `PreToolUse` callback on the delivery tool: the schema guard first, the
     presubmit second, the order this module's docstring promises written here in code
@@ -345,11 +373,17 @@ def _delivery_gate(
     absent skips its own step. `on_presubmit_denied` counts only the presubmit's own
     refusals (glossary: Puerta de entrega), the same closure shape `_deny_writes` has
     for `denials`: a presubmit refusal is the gate working, never the re-emission of an
-    invalid shape a schema rejection is, and the two travel as separate counts."""
+    invalid shape a schema rejection is, and the two travel as separate counts.
+    `activity`, when given, says the hook is in flight for the whole call, the guard
+    included (`HookActivity`)."""
 
     async def hook(
         data: HookInput, tool_use_id: str | None, context: HookContext
     ) -> HookJSONOutput:
+        with activity.running() if activity is not None else nullcontext():
+            return await _gate(data)
+
+    async def _gate(data: HookInput) -> HookJSONOutput:
         if guard is not None:
             reason = guard(_tool_input(data))
             if reason:
