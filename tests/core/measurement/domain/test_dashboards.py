@@ -454,8 +454,8 @@ def test_every_widget_is_placed_in_time_by_the_end_of_its_task():
 # The sha256 of every row but "Costo por modelo" (widgets, then the dashboards that place
 # them), as built before GH-283, for each product. A widget whose planned row moves breaks it.
 UNCHANGED_ROWS = {
-    "agentic-system": "a48275560d3b387ff04db92afc22e068eb2bdd3c40aef1dffa371b262ed45fb3",
-    "apostrophe": "5a09c7e8f7305000ce5af79a781a1302d913a513ba9acc0e5822a5132baf43bf",
+    "agentic-system": "68b029c078b6bdf6fe4bf76374ad4333d2196378138c4aaadd155efb4f433c39",
+    "apostrophe": "ad5be19bb104b7e91c7df01d3e40859e2a0389b49fb699ab758c68d0a432fd75",
 }
 
 

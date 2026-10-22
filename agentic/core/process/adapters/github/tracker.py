@@ -211,8 +211,10 @@ class GhTracker:
         self._run = run
         self._log = log
 
-    def open_pull_request(self, task_id: str, branch: str, title: str, body: str) -> str:
-        if (number := issue_number(task_id)) is not None:
+    def open_pull_request(
+        self, task_id: str, branch: str, title: str, body: str, *, closes_issue: bool = True
+    ) -> str:
+        if closes_issue and (number := issue_number(task_id)) is not None:
             body = f"Closes #{number}\n\n{body}"
         # `--body-file`, as `open_issue`: a multibyte body near the bound is larger than
         # one argv slot takes, and the limit that can bite is GitHub's own (ADR-0034).
@@ -255,6 +257,18 @@ class GhTracker:
 
     def close_pull_request(self, reference: str) -> None:
         self._gh("pr", "close", str(pull_request_number(reference)))
+
+    def changed_files(self, pull_request: str) -> int:
+        raw = self._gh(
+            "pr", "view", str(pull_request_number(pull_request)), "--json", "changedFiles"
+        )
+        try:
+            count = json.loads(raw)["changedFiles"]
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            raise ValueError(f"gh pr view answered no readable changedFiles: {raw[:80]!r}") from exc
+        if not isinstance(count, int) or isinstance(count, bool):
+            raise ValueError(f"gh pr view answered a non-integer changedFiles: {count!r}")
+        return count
 
     @staticmethod
     def _json_list(raw: str, what: str) -> list[object]:

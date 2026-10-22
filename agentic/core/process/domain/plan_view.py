@@ -45,7 +45,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 
-from .task import INTEGRATION, Subtask
+from .task import INTEGRATION, PartRecord, Subtask
 
 # `### Subtasks` at the top level only, exactly that line (`### Subtasks:` and
 # `#### Subtasks` both miss): the `#### <id>` briefs inside it start with a fourth
@@ -124,6 +124,32 @@ def with_subtasks_block(section: str, subtasks: Sequence[Subtask]) -> str:
     note = NOTE_SHORT.format(n=len(subtasks))
     repaired = block[: heading.end()] + f"\n\n{note}" + block[heading.end() :]
     return section[:start] + repaired + section[end:]
+
+
+_PARTS_HEADING = re.compile(r"^### Parts[ \t]*$", re.M)
+NOTE_PARTS = (
+    "`### Parts` written by the system from the structured plan: no exact `### Parts` line "
+    "(outside code fences) was found in this section, so the block below was built from the "
+    "structured plan. Each issue the split opens is written from the structured parts."
+)
+
+
+def with_parts_block(section: str, parts: Sequence[PartRecord]) -> str:
+    """`section` with a `### Parts` block guaranteed, the sibling of `with_subtasks_block`
+    for a plan that does not fit (ADR-0054): when the model's markdown has no exact
+    `### Parts` line outside a code fence, one is appended, built entirely from `parts`
+    in plan order, with a note saying so; otherwise `section` is returned unchanged. Never
+    a role failure: the issues are written from the structured parts, not from this prose."""
+    fenced = _fenced_ranges(section)
+    if any(not _in_fenced(m.start(), fenced) for m in _PARTS_HEADING.finditer(section)):
+        return section
+    blocks = "\n\n".join(_part_brief(n, p) for n, p in enumerate(parts, 1))
+    return f"{section.rstrip()}\n\n### Parts\n\n{NOTE_PARTS}\n\n{blocks}"
+
+
+def _part_brief(number: int, part: PartRecord) -> str:
+    depends_on = ", ".join(f"part {d}" for d in part["depends_on"]) or "nothing"
+    return f"#### Part {number}: {part['title']}\n\n{part['body']}\n\nDepends on: {depends_on}."
 
 
 def for_reader(section: str, subtask_id: str | None, subtasks: Mapping[str, Subtask]) -> str:

@@ -313,6 +313,14 @@ def test_a_doc_selects_no_walker_it_is_ignored_and_selects_nothing():
     assert isinstance(result, script.Empty)
 
 
+def test_a_module_adr_is_ignored_and_selects_nothing():
+    sources = _walker_sources() | {"tests/test_adr_numbers.py": ""}
+    result = _select(
+        ["agentic/core/knowledge/docs/adr/0001-x.md"], sources, script.TABLE, script.IGNORE
+    )
+    assert isinstance(result, script.Empty)
+
+
 def test_an_adr_selects_the_test_that_lists_the_adr_directory_and_nothing_else():
     sources = _walker_sources() | {"tests/test_adr_numbers.py": ""}
     result = _select(["docs/adr/0049-x.md"], sources, script.TABLE, script.IGNORE)
@@ -433,7 +441,7 @@ ALLOWANCES: tuple[Allowance, ...] = (
     Allowance(
         "tests/test_affected_tests.py",
         "agentic/core/knowledge/docs/adr/*",
-        "names the path in the allowance below; it never opens it",
+        "names the path in an allowance and in the assertion that it is ignored; it never opens it",
     ),
     Allowance(
         "tests/test_adr_numbers.py",
@@ -767,8 +775,20 @@ def _overlaps(
     return found
 
 
-def _ignored_but_read(ignore: tuple[str, ...], reads: list[tuple[str, str, str]]):
-    return [(g, t, p) for g in ignore for t, p, _ in reads if script.matches(g, p)]
+def _ignored_but_read(
+    ignore: tuple[str, ...],
+    reads: list[tuple[str, str, str]],
+    allowances: tuple[Allowance, ...] = (),
+):
+    """(ignore glob, test, path) for every read an ignore entry covers, unless a named
+    allowance says the test only names that path."""
+    return [
+        (g, t, p)
+        for g in ignore
+        for t, p, _ in reads
+        if script.matches(g, p)
+        and not any(script.matches(a.test, t) and script.matches(a.path, p) for a in allowances)
+    ]
 
 
 def _dead_globs(fallback: tuple[str, ...], tracked: list[str]) -> list[str]:
@@ -799,13 +819,20 @@ def test_the_overlap_check_rejects_a_row_inside_a_fallback_glob_and_a_repeated_g
 
 def test_no_ignore_entry_is_read_by_a_test(real):
     _, reads, _ = real
-    assert _ignored_but_read(script.IGNORE, reads) == []
+    assert _ignored_but_read(script.IGNORE, reads, ALLOWANCES) == []
 
 
 def test_the_ignore_check_rejects_an_entry_a_test_reads():
     reads = [("tests/test_x.py", "docs/x.md", "docs/x.md")]
     assert _ignored_but_read(("docs/*",), reads) == [("docs/*", "tests/test_x.py", "docs/x.md")]
     assert _ignored_but_read((".agentic/tasks/*",), reads) == []
+    named = (Allowance("tests/test_x.py", "docs/x.md", "only names it"),)
+    assert _ignored_but_read(("docs/*",), reads, named) == []
+    other_test = (Allowance("tests/test_y.py", "docs/x.md", "another test names it"),)
+    other_path = (Allowance("tests/test_x.py", "docs/y.md", "names another path"),)
+    expected = [("docs/*", "tests/test_x.py", "docs/x.md")]
+    assert _ignored_but_read(("docs/*",), reads, other_test) == expected
+    assert _ignored_but_read(("docs/*",), reads, other_path) == expected
 
 
 def test_every_fallback_glob_matches_a_real_path(real):

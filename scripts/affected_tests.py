@@ -53,6 +53,7 @@ WALKERS = (
     "tests/core/process/application/test_pause_log_guard.py",
     "tests/core/process/domain/test_reaping.py",
     "tests/core/process/application/test_release.py",
+    "tests/core/process/application/test_prompt_placeholder_scan.py",
 )
 KNOWLEDGE = "agentic.core.knowledge.domain"
 TABLE: tuple[Row, ...] = (
@@ -68,6 +69,12 @@ TABLE: tuple[Row, ...] = (
         "ADR-0047's guard parses every test file for the repo paths it reads, and the "
         "Tracker-doubles guard parses every test file for doubles installed as "
         "`pull_request` or `merge`",
+    ),
+    Row(
+        "agentic/core/process/application/landing*.py",
+        ("tests/core/process/domain/test_document.py",),
+        "its guard reads the keys the landing writes through `record_closure` and requires "
+        "each to be a scalar or in `RECORD_KEYS`",
     ),
     Row(
         "agentic/core/knowledge/domain/*.md",
@@ -116,6 +123,7 @@ IGNORE: tuple[str, ...] = (
     ".agentic/playbooks/*",
     "docs/agents/*",
     "docs/product/*",
+    "agentic/core/*/docs/adr/*",
 )
 
 

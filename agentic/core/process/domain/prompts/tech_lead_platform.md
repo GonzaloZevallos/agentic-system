@@ -72,6 +72,28 @@ Write, in Markdown, using `###` headings and nothing above `###`:
    base commit has them. If this task brings in a new one (a linter, a type checker), a
    subtask leaves the code green under it and adds it to that file, which applies from
    the next task.
+7. `### Estimate`: what this task will cost and touch, as two numbers the structured
+   output repeats. The cost is the TOTAL for the task from its start to its merge, in
+   USD, including what it already spent. The files are those the pull request will show
+   as changed: code, tests, ADRs, the glossary, lockfiles and generated files all count.
+   Calibrate against this table of closed tasks (cost by number of subtasks, and the
+   latest estimates next to what they became), and say which bucket you used and why you
+   sit above or below its median:
+
+{{cost_history}}
+
+   An estimate below half the median of a bucket with at least five tasks is refused,
+   and so is one below what the task already spent. A plan whose estimate is over the size
+   limit the system sets, or over the p90 of its bucket, is not built
+   as one task: write it as `parts` (see `### Parts`) instead of subtasks. Do not shrink the
+   estimate to make it fit; a plan that fits and carries `parts` is refused too.
+8. `### Parts`, only when the estimate does not fit: at least two chained parts, each a
+   small task of its own that lands and shows in the product before the next one starts.
+   Each part has a `title`, a `body` (its whole description: the person who builds it has
+   not seen this plan) and `depends_on`, the numbers of EARLIER parts (1 is the first).
+   Write no subtasks then, and `### Subtasks` is not needed. A part is never split again.
+   If the section `## Human` says the human decided to build this task whole, write
+   subtasks and no parts.
 </Task>
 
 <Hard Limits>
@@ -93,10 +115,13 @@ Everything goes in the structured output, in one call:
 
 - `subtasks`: one entry per subtask with `id` (slug), `title`, `brief`, `seams` and
   `depends_on` (ids of subtasks that must be approved first; empty to run in parallel).
+- `parts`: one entry per part with `title`, `body` and `depends_on`, ONLY when the
+  estimate does not fit; then `subtasks` is empty. Empty when the plan fits.
 - `invariants`: the rules from `### Invariants`, one per line in a single string; an
   empty string when the subtasks share none. Only the adopted ones; the rejected ones
   live in the Markdown with their reason.
 - `integration`: `### Integration` as one string, what the integrating Developer has to
   do beyond merging; an empty string when merging is the whole job.
+- `estimated_cost_usd` and `estimated_files`: the two numbers of `### Estimate`.
 - `markdown`: the full section above, in Markdown.
 </Output>

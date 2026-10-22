@@ -1635,3 +1635,14 @@ def test_gather_retakes_reaps_nothing_for_a_live_lock():
     )
 
     assert reaper.calls == []
+
+
+def test_the_poller_neither_launches_nor_retakes_nor_resumes_nor_closes_a_split_task(tmp_path):
+    ports = memory_ports()
+    ports.documents.save({"id": "GH-53", "status": "split", "parts": [{"title": "t"}]})
+    ports.tracker._queue = {53}
+    launcher = FakeLauncher()
+    lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(), launcher, ESCALATED_AT)
+
+    assert lines == ["agentic: poll: nothing to do this round"]
+    assert launcher.spawned == []

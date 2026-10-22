@@ -45,6 +45,9 @@ Status = Literal[
     # A bug whose behaviour PM ruled expected (README.md, 3, "Cierre"; issue #65): the
     # run ends without a pull request, and the human closes the issue.
     "discarded",
+    # A task whose plan did not fit (ADR-0054): it built nothing and opened chained issues
+    # instead, one per part. An end like `discarded`, with no pull request.
+    "split",
 ]
 WAITING_ON_HUMAN: Status = "waiting_on_human"
 # The system's own subtask: the integrator joins the others on the task branch
@@ -117,7 +120,14 @@ ReviewKind = Literal["first", "incremental", "integration"]
 # `failure`: it still pauses the task like any other role failure (ADR-0029); only the
 # reason series tells the two apart.
 EscalationClass = Literal[
-    "classification", "returns", "failure", "cap", "questions", "unmergeable", "setup"
+    "classification",
+    "returns",
+    "failure",
+    "cap",
+    "questions",
+    "unmergeable",
+    "setup",
+    "estimate",
 ]
 
 
@@ -234,6 +244,45 @@ class TaskInput(TypedDict):
     # same reason as `decided`. Absent reads as a first run: depth 0, nothing carried.
     landing_restarts: NotRequired[int]
     landing_cost_carried: NotRequired[float]
+    # The `Human` section of the archived run, seeded verbatim by `rules.entering` so every
+    # decision the human took survives a landing restart (GH-297). Only that key is ever
+    # seeded; absent reads as a run with no section. Declared for the same reason as `decided`.
+    sections: NotRequired[dict[str, str]]
+
+
+@dataclass(frozen=True)
+class LandedSliceRef:
+    """A slice the landing already merged: the units it carried and its pull request."""
+
+    units: tuple[str, ...]
+    pull_request: str
+
+
+@dataclass(frozen=True)
+class Carried:
+    """What a landing restart carries from the archived run into the fresh one (GH-297):
+    the depth and cost (`restarts`, `cost`), the Landing Diagnoser's section (`diagnosis`),
+    every human decision (`human`, the `Human` section verbatim) and the slices already
+    landed. Built only by `landing.carry_over`, read by `rules.entering` and the CLI. Lives
+    here, not in `landing`, because `rules` cannot import `landing`."""
+
+    restarts: int
+    cost: float
+    diagnosis: str
+    human: str
+    landed: tuple[LandedSliceRef, ...]
+
+
+class LandedSlice(TypedDict, total=False):
+    """One slice of the task document's `landed_slices` list (GH-297), every key optional:
+    `units` the subtask ids it carried, `pull_request` its pull request, `merged_sha` what
+    master held after the merge and `at` when it was recorded. Git ancestry, never this
+    list alone, says whether a unit landed."""
+
+    units: list[str]
+    pull_request: str
+    merged_sha: str
+    at: str
 
 
 class Failure(TypedDict):
@@ -627,6 +676,42 @@ class LandingEntry(TypedDict, total=False):
     closed_at: str
     # The upstream sha the delivered head did not contain.
     lacks: str
+    # GH-297, all optional: a document without them reads and renders as before.
+    # `land_slice` entries: the units of the slice and its (never main) pull request.
+    slice_units: list[str]
+    slice_pull_request: str
+    # `land_slice` entries: whether the product's checks passed on the slice, so a CI wait
+    # across ticks does not run them again. `upstream` is the master the slice was built on.
+    checks_passed: bool
+    # `diagnose` entries: the `landing.RestartWhy` that no slice was possible for.
+    restart_why: str
+    # `diagnose` entries: the integrator's paths kept every slice from landing (the restart
+    # comment's `(integration work)`).
+    integration_work: bool
+
+
+class EstimateRecord(TypedDict):
+    """The plan's estimate as the document keeps it (ADR-0054)."""
+
+    cost_usd: float
+    files: int
+
+
+class EstimateRevision(TypedDict):
+    """One estimate a human decided on: `human` is what they wrote, `proposed` the one the
+    stopped task proposed and they accepted."""
+
+    cost_usd: float
+    source: Literal["human", "proposed"]
+
+
+class PartRecord(TypedDict):
+    """One part of a split plan as the document keeps it (ADR-0054): the issue the
+    partition opens. `depends_on` holds the numbers (1 is the first) of earlier parts."""
+
+    title: str
+    body: str
+    depends_on: list[int]
 
 
 class TaskState(TaskInput, total=False):
@@ -659,6 +744,26 @@ class TaskState(TaskInput, total=False):
     # first run had none (`run_role.playbook_patch`): the window excludes the task.
     playbooks_changed: Annotated[dict[str, str], merge]
     cost_usd: Annotated[float, add]
+    # The plan's estimate (ADR-0054): total cost in USD and the files the pull request will
+    # show as changed. Written once, by the plan, and never rewritten; absent on a document
+    # from before it, which reads as "no estimate" (`rules.estimate_in_force`), never zero.
+    estimate: Annotated[EstimateRecord, last]
+    # The estimates a human decided on after the task stopped at its cap, in order; the last
+    # one is in force. Grows only on a resumption with a decision.
+    estimate_revisions: Annotated[list[EstimateRevision], last]
+    # The new estimate a stopped task proposed (the human decides on it, never the task).
+    proposed_estimate: Annotated[float | None, last]
+    # The parts of a plan that did not fit (ADR-0054), in order; `rules.after_plan` routes a
+    # state holding any to `split`. Cleared when a human waives the fit on a resumption.
+    parts: Annotated[list[PartRecord], last]
+    # The issue URL of each part already opened, keyed by the part's number as text: written
+    # part by part, so a `gh` cut in the middle resumes without opening a part twice.
+    split_issues: Annotated[dict[str, str], merge]
+    # A human decided the task builds whole although its estimate does not fit; the plan
+    # check then accepts a plan that does not fit and refuses a split one.
+    fit_waived: Annotated[bool, last]
+    # The files the pull request changed, recorded at close through `rules.delivered_files`.
+    actual_files: Annotated[int, last]
     # The technical stage (ADR-0011): subtasks by id, each Developer patches its own.
     subtasks: Annotated[dict[str, Subtask], merge]
     # Rules of the plan every subtask honours (issue #42): the one channel between
@@ -710,6 +815,9 @@ class TaskState(TaskInput, total=False):
     followups_filed: bool
     landing_restarts: int
     landing_cost_carried: float
+    # The slices the landing merged ahead of the task's pull request (GH-297, ADR-0048):
+    # one record per slice, appended whole through `record_closure`. Optional, read with `.get`.
+    landed_slices: list[LandedSlice]
     # What an interviewee could not decide (ADR-0014); escalates with the task.
     questions_for_human: list[str]
     # What the ephemeral interviewer proposed for the deliverable that follows

@@ -2596,6 +2596,54 @@ def test_close_omits_time_to_merge_seconds_when_the_pull_request_never_merged(
     assert "time_to_merge_seconds" not in doc
 
 
+def _closed_with(monkeypatch, tmp_path, tracker_setup, pull_request=None, **task):
+    from agentic.core.measurement.adapters.otel import telemetry
+
+    root = close_root(tmp_path)
+    reference = "https://github.com/o/r/pull/7"
+    tracker = FakePullRequestTracker({reference: pull_request or close_pull_request()})
+    tracker_setup(tracker)
+    ports = close_ports(root, tracker)
+    ports.documents.save(close_task(pull_request=reference, **task))
+    telemetry.configure()
+    try:
+        _closed_run(monkeypatch, root, ports)
+        cli.main()
+    finally:
+        telemetry.configure()
+    return ports.documents.load("GH-9"), tracker
+
+
+def test_close_records_the_files_the_pull_request_changed(monkeypatch, tmp_path):
+    """ADR-0054: `actual_files` comes from the tracker's `changed_files` through
+    `rules.delivered_files`, for a merged and for a closed-unmerged pull request."""
+
+    def three(tracker):
+        tracker.changed_files_count = 3
+
+    doc, tracker = _closed_with(monkeypatch, tmp_path, three)
+    assert doc["actual_files"] == 3
+    assert tracker.changed_files_asked == ["https://github.com/o/r/pull/7"]
+
+
+def test_close_records_the_files_of_a_pull_request_closed_without_merging(monkeypatch, tmp_path):
+    def three(tracker):
+        tracker.changed_files_count = 3
+
+    doc, _ = _closed_with(
+        monkeypatch, tmp_path, three, close_pull_request(state="CLOSED", merged=False)
+    )
+    assert doc["delivery_outcome"] == "closed" and doc["actual_files"] == 3
+
+
+def test_close_still_closes_when_the_file_count_is_unreadable(monkeypatch, tmp_path):
+    def broken(tracker):
+        tracker.changed_files_error = "gh printed garbage"
+
+    doc, _ = _closed_with(monkeypatch, tmp_path, broken)
+    assert doc["closed_at"] and "actual_files" not in doc
+
+
 # `agentic close --all` (Tech Lead plan, subtask `close-all`): the sweep over every
 # task document with a `pull_request` and no `closed_at`, through the CLI seam like
 # every close test above -- argv in, exit code, stdout and document bytes out.
@@ -5070,6 +5118,10 @@ async def test_eval_compare_prints_the_per_role_table_after_an_unchanged_scoreca
     assert "-- product / bl-a --" in scorecard_part
     assert "-- product / bl-b --" in scorecard_part
     assert "cost/delivery:" in scorecard_part
+    # The estimate columns keep a space between their label and the figure.
+    labels = [line for line in scorecard_part.splitlines() if line.startswith("actual/estimate ")]
+    assert len(labels) == 4
+    assert all(line.split(":", 1)[1].startswith(" ") for line in labels)
     # The table follows the verdict line, one block per baseline, one row per slug.
     assert "per-role usage -- product / bl-a" in table_part
     assert "per-role usage -- product / bl-b" in table_part
@@ -5138,3 +5190,83 @@ def test_a_resume_measures_at_the_base_the_stack_check_returned_not_at_head(
 
     assert "agentic: `CODING_STANDARDS.md`: 301 lines" in capsys.readouterr().err
     assert seen["fn"] is cli._resume
+
+
+TWO_HUMAN_DECISIONS = (
+    "### Decision 1\n\nEscalated: the plan did not fit\n\nSplit it in two.\n\n"
+    "### Decision 2\n\nKeep the CLI as is."
+)
+
+
+@pytest.mark.anyio
+async def test_fresh_carries_every_human_decision_into_the_entered_state_and_the_next_is_third(
+    monkeypatch, tmp_path
+):
+    from agentic.core.process.domain import rules
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    graph = RecordsEntry({"id": "GH-1", "title": "t", "status": "open"})
+    monkeypatch.setattr(cli, "graph", graph)
+    ports = memory_ports()
+    ports.documents.save(
+        {
+            "id": "GH-1",
+            "system_commit": "abc1234",
+            "landing_restarts": 1,
+            "landing_cost_carried": 3.25,
+            "sections": {"Human": TWO_HUMAN_DECISIONS, "Landing Diagnoser": "Same lock again."},
+            "landed_slices": [
+                {"units": ["a"], "pull_request": "https://github.com/o/r/pull/7"},
+                {"units": ["b"], "pull_request": "#9"},
+            ],
+        }
+    )
+    task = {"id": "GH-1", "title": "t", "description": "d"}
+    await cli._run(
+        task, Configuration(product_dir=tmp_path), ports, fresh=True, checkpointer=in_memory
+    )
+    assert graph.entered is not None
+    assert graph.entered["sections"] == {"Human": TWO_HUMAN_DECISIONS}
+    assert graph.entered["landing_restarts"] == 1
+    description = graph.entered["description"]
+    assert "## Landing Diagnoser\n\nSame lock again." in description
+    assert "Already on master: a, b (#7, #9)" in description
+    assert "Human" not in description and "Decision" not in description
+    grown = rules.human_section(graph.entered, None, "Third call.")
+    assert "### Decision 3\n\nThird call." in grown
+
+
+@pytest.mark.anyio
+async def test_fresh_carries_the_human_section_of_a_run_the_landing_never_restarted(
+    monkeypatch, tmp_path
+):
+    from agentic.shared.configuration import Configuration
+    from tests.fakes import memory_ports
+
+    graph = RecordsEntry({"id": "GH-1", "title": "t", "status": "open"})
+    monkeypatch.setattr(cli, "graph", graph)
+    ports = memory_ports()
+    ports.documents.save(
+        {"id": "GH-1", "system_commit": "abc1234", "sections": {"Human": TWO_HUMAN_DECISIONS}}
+    )
+    task = {"id": "GH-1", "title": "t", "description": "d"}
+    await cli._run(
+        task, Configuration(product_dir=tmp_path), ports, fresh=True, checkpointer=in_memory
+    )
+    assert graph.entered is not None
+    assert graph.entered["sections"] == {"Human": TWO_HUMAN_DECISIONS}
+    assert "landing_restarts" not in graph.entered
+    assert graph.entered["description"] == "d"
+
+
+def test_landing_carry_of_an_unreadable_document_carries_nothing(monkeypatch):
+    from tests.fakes import memory_ports
+
+    ports = memory_ports()
+
+    def unreadable(task_id):
+        raise ValueError("not a task document")
+
+    monkeypatch.setattr(ports.documents, "load", unreadable)
+    assert cli._landing_carry("GH-1", ports) == (None, "")

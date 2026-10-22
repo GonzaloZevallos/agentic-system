@@ -61,6 +61,7 @@ from ...application.plan import plan
 from ...application.ports import Ports
 from ...application.preflight import product_name
 from ...application.review import review
+from ...application.split import split
 from ...application.validate_prd import validate_prd
 from ...domain import rules
 from ...domain.roles import (
@@ -163,7 +164,9 @@ def _system_node(use_case: UseCase, ports_of: PortsOf):
 
 
 async def pause(state: TaskState) -> TaskState:
-    """Wait for the human; resumed with `Command(resume={"decision": text or None})`."""
+    """Wait for the human; resumed with `Command(resume={"decision": text or None})`, plus
+    `"estimate": USD` when the human gave `--estimate` (the estimate to put in force when the
+    task paused at the cap of its estimate)."""
     answer = interrupt(
         {
             "reason": state.get("escalated"),
@@ -171,7 +174,8 @@ async def pause(state: TaskState) -> TaskState:
             "questions": state.get("questions_for_human", []),
         }
     )
-    return rules.resumed(state, (answer or {}).get("decision"))
+    answer = answer or {}
+    return rules.resumed(state, answer.get("decision"), answer.get("estimate"))
 
 
 def _route(rule: Rule) -> Callable[[TaskState], str]:
@@ -275,6 +279,7 @@ def build_graph(
     )
     graph.add_node("deliver", _system_node(deliver, shared))
     graph.add_node("discard", _system_node(discard, shared))
+    graph.add_node("split", _system_node(split, shared))
     graph.add_node(ESCALATE, _system_node(escalate, shared))
     graph.add_node(PAUSE, pause)
 
@@ -308,7 +313,8 @@ def build_graph(
         _route(rules.after_consolidate),
         ["define", "ux_flow", "plan", ESCALATE],
     )
-    graph.add_conditional_edges("plan", _route(rules.after_plan), [INTEGRATE, ESCALATE])
+    graph.add_conditional_edges("plan", _route(rules.after_plan), [INTEGRATE, "split", ESCALATE])
+    graph.add_conditional_edges("split", _route(rules.after_split), [END, ESCALATE])
     # Every branch of the wave comes back here, once, however many were sent.
     graph.add_edge(PIPELINE, INTEGRATE)
     graph.add_conditional_edges(
@@ -339,6 +345,7 @@ def build_graph(
             INTEGRATE,
             "deliver",
             "discard",
+            "split",
             ESCALATE,
             END,
         ],

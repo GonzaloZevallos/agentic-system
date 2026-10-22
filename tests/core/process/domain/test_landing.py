@@ -11,7 +11,12 @@ import pytest
 from agentic.core.process.domain import ci, document, landing, rules
 from agentic.core.process.domain.landing import LandingSpent, LandingStep
 from agentic.core.process.domain.rules import MergeFacts
-from agentic.core.process.domain.task import FailureReason, LandingEntry
+from agentic.core.process.domain.task import (
+    Carried,
+    FailureReason,
+    LandedSliceRef,
+    LandingEntry,
+)
 from tests.gh150_stranded import GH150_STRANDED
 
 HEAD = "a" * 40
@@ -1143,3 +1148,74 @@ def test_a_plan_row_of_a_one_subtask_task_goes_to_that_subtask():
 
 def test_an_outside_row_owns_no_unit():
     assert landing.important_owners(_doc(["api"], ("api", "o", "outside"))) == ()
+
+
+# --- GH-297: `carry_over` reads what a landing restart carries from the archived document --------
+
+TWO_DECISIONS = (
+    "### Decision 1\n\nEscalated: the plan did not fit\n\nSplit it in two.\n\n"
+    "### Decision 2\n\nKeep the CLI as is."
+)
+
+
+def test_carry_over_moves_the_depth_cost_and_diagnosis_of_a_restarted_run():
+    raw = {
+        "landing_restarts": 1,
+        "landing_cost_carried": 3.25,
+        "sections": {"Landing Diagnoser": "It keeps failing."},
+    }
+    assert landing.carry_over(raw) == Carried(1, 3.25, "It keeps failing.", "", ())
+
+
+def test_carry_over_carries_the_human_section_with_or_without_a_restart():
+    assert landing.carry_over({"sections": {"Human": TWO_DECISIONS}}) == Carried(
+        0, 0.0, "", TWO_DECISIONS, ()
+    )
+    restarted = landing.carry_over(
+        {"landing_restarts": 2, "sections": {"Human": TWO_DECISIONS, "Landing Diagnoser": "x"}}
+    )
+    assert restarted is not None and restarted.human == TWO_DECISIONS
+
+
+def test_carry_over_ignores_the_diagnosis_of_a_run_the_landing_never_restarted():
+    raw = {"sections": {"Human": "h", "Landing Diagnoser": "stale"}}
+    carried = landing.carry_over(raw)
+    assert carried is not None and carried.diagnosis == ""
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {},
+        {"cost_usd": 4.0},
+        {"landing_restarts": "1", "landing_cost_carried": "2"},
+        {"landing_restarts": True},
+        {"sections": {"Human": ""}},
+    ],
+)
+def test_carry_over_is_none_when_nothing_is_carried(raw):
+    assert landing.carry_over(raw) is None
+
+
+def test_carry_over_reads_the_cost_defensively():
+    carried = landing.carry_over({"landing_restarts": 1, "landing_cost_carried": "lots"})
+    assert carried is not None and carried.cost == 0.0
+    carried = landing.carry_over({"landing_restarts": 1, "landing_cost_carried": True})
+    assert carried is not None and carried.cost == 0.0
+
+
+def test_carry_over_reads_the_landed_slices_and_skips_what_it_cannot_read():
+    raw = {
+        "sections": {"Human": "h"},
+        "landed_slices": [
+            {"units": ["a", "b"], "pull_request": "#7", "merged_sha": "s"},
+            {"units": "not-a-list", "pull_request": "#8"},
+            {"units": ["c"]},
+            "junk",
+            {"units": ["d"], "pull_request": 9},
+        ],
+    }
+    carried = landing.carry_over(raw)
+    assert carried is not None
+    assert carried.landed == (LandedSliceRef(("a", "b"), "#7"),)
+    assert landing.carry_over({"landed_slices": "junk"}) is None

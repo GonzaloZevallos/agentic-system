@@ -299,7 +299,7 @@ _Avoid_: terminada, cerrada (todavía no lo está)
 _Campo_: ready for review — GitHub, el estado de un pull request que sale de draft
 
 **Cierre**:
-PjM da por terminada la tarea: aprobada, con las aprobaciones del tipo, o descartada, cuando PM dictamina que el comportamiento es el esperado.
+PjM da por terminada la tarea: aprobada, con las aprobaciones del tipo, o descartada, cuando PM dictamina que el comportamiento es el esperado, o partida, cuando el plan no cabe y se reparte en issues encadenados.
 _Campo_: sin término de arte
 
 **Descartado**:
@@ -307,18 +307,23 @@ El cierre de un bug cuyo dictamen PM validó como comportamiento esperado: el pr
 _Avoid_: rechazado, cerrado (el que cierra es el humano), wontfix (la etiqueta de triage de este repo, no el estado)
 _Campo_: won't fix, works as intended — resoluciones de los trackers (Bugzilla `WONTFIX` y `WORKSFORME`, Chromium `WontFix` y `WorkingAsIntended`). Acá es un estado de la tarea, no una resolución del issue
 
+**Partida**:
+El final de una tarea cuyo plan no cabe (más de 150 USD o de 40 archivos, o por encima del p90 de su balde; ADR-0054): no construye nada. Abre un issue por parte, encadenados con `Blocked by:` y con la etiqueta `agentic`, cada uno con su propio pull request chico; comenta la lista en el issue original y termina la corrida sin pull request, y no se relanza. Es un final, no una pausa: no se reanuda. Una parte nunca se parte de nuevo: si su plan tampoco cabe, escala con la clase `estimate` y una decisión del humano la construye entera.
+_Avoid_: descartado (acá sí hay algo que construir, en las partes), dividida (la unidad es la parte, no la tarea), subtarea (esas se construyen dentro de una tarea; las partes son tareas)
+_Campo_: sin término de arte
+
 **Escalado**:
-Lo que un rol, un par o el tope dejan dicho cuando la tarea no puede seguir sin el humano, con las preguntas si las hay. El sistema lo entrega al humano en el issue y pausa la tarea: queda esperando con su estado guardado, sin gastar, y se retoma desde el mismo punto. Son siete las situaciones que lo provocan (su clase de escalado): PjM no puede clasificarla, un par llegó a su límite, un rol falló dos veces o la entrega del propio sistema a GitHub falló, se alcanzó el tope de tarea, quedaron preguntas para el humano, una subtarea no pudo mergear su dependencia, o el setup del producto falló en un checkout. El motivo viaja como texto libre para el humano; cuál de las siete situaciones fue, además, como dato cerrado (Clase de escalado).
+Lo que un rol, un par o el tope dejan dicho cuando la tarea no puede seguir sin el humano, con las preguntas si las hay. El sistema lo entrega al humano en el issue y pausa la tarea: queda esperando con su estado guardado, sin gastar, y se retoma desde el mismo punto. Son ocho las situaciones que lo provocan (su clase de escalado): PjM no puede clasificarla, un par llegó a su límite, un rol falló dos veces o la entrega del propio sistema a GitHub falló, se alcanzó el tope de tarea, quedaron preguntas para el humano, una subtarea no pudo mergear su dependencia, el setup del producto falló en un checkout, o la estimación del plan no cabe (ADR-0054). El motivo viaja como texto libre para el humano; cuál de las ocho situaciones fue, además, como dato cerrado (Clase de escalado).
 _Avoid_: causa, pausa, bloqueo, espera
 _Campo_: escalation — de soporte y operaciones, no del campo agéntico; ahí el mecanismo es interrupt (LangGraph): frena el grafo, expone un valor al cliente y se reanuda con `Command(resume=...)`
 
 **Clase de escalado**:
-El motivo de un escalado como dato, de una lista cerrada: PjM no pudo clasificar la tarea, un par llegó a su límite de devoluciones, un rol falló dos veces o la entrega del propio sistema a GitHub falló (issue #203), se alcanzó el tope de tarea, quedaron preguntas para el humano, una subtarea no pudo mergear su dependencia, o el setup del producto falló en un checkout (issue #24). La escribe un solo constructor de dominio junto con el escalado mismo (`rules.escalation`), así que una patch nunca pone uno sin el otro, y se limpia con él al reanudar. Distinta del motivo en texto, que sigue siendo lo que lee el humano; un documento de antes de esta tarea no la tiene. El tope por intento (issue #66) no es una de las siete: para la tarea es un fallo de rol, no un escalado.
+El motivo de un escalado como dato, de una lista cerrada: PjM no pudo clasificar la tarea, un par llegó a su límite de devoluciones, un rol falló dos veces o la entrega del propio sistema a GitHub falló (issue #203), se alcanzó el tope de tarea, quedaron preguntas para el humano, una subtarea no pudo mergear su dependencia, el setup del producto falló en un checkout (issue #24), o la estimación del plan no cabe (`estimate`, ADR-0054). La escribe un solo constructor de dominio junto con el escalado mismo (`rules.escalation`), así que una patch nunca pone uno sin el otro, y se limpia con él al reanudar. Distinta del motivo en texto, que sigue siendo lo que lee el humano; un documento de antes de esta tarea no la tiene. El tope por intento (issue #66) no es una de las ocho: para la tarea es un fallo de rol, no un escalado.
 _Avoid_: motivo de escalado, tipo de escalado (para la clase)
 _Campo_: sin término de arte
 
 **Reanudación**:
-La tarea sigue desde donde se pausó. Hace falta una decisión del humano cuando hay preguntas abiertas o un par llegó a su límite, y con ella el contador de ese par vuelve a cero; un tope alcanzado o un fallo de rol se reanudan sin decisión, y una corrida interrumpida también. Nada se reanuda bajo un tope ya gastado. Si el estado guardado se perdió, se reconstruye desde el documento de tarea, cruzado con git.
+La tarea sigue desde donde se pausó. Hace falta una decisión del humano cuando hay preguntas abiertas, un par llegó a su límite o la estimación no cabe (`estimate`: ni el sondeo ni el sondeo periódico la reanudan; solo una decisión, que además deja la revisión de la estimación), y con ella el contador de ese par vuelve a cero; un tope alcanzado o un fallo de rol se reanudan sin decisión, y una corrida interrumpida también. Nada se reanuda bajo un tope ya gastado. Si el estado guardado se perdió, se reconstruye desde el documento de tarea, cruzado con git.
 _Avoid_: reintento (eso es tras un fallo de rol), relanzar (eso es empezar de cero)
 _Campo_: resume — estándar (LangGraph, Temporal, el Claude Agent SDK)
 
@@ -356,6 +361,10 @@ _Campo_: per_instance_cost_limit — SWE-agent
 Gasto acumulado de una tarea a partir del cual el sistema escala y pausa en vez de seguir. Es un techo plano, el mismo para cualquier tamaño de plan. Se mira antes de cada intento de cualquier rol, contra lo que gastó la corrida entera y no sólo la rama que va a gastar. Subirlo al reanudar es decisión del humano, que puede pasar el techo y nunca lo baja. Alcanzado, lo que ya está corriendo termina: sólo frena lo que todavía no arrancó. No es fallo de rol ni devolución y no cuenta para ningún límite. Como el tope por intento, es red de seguridad, bien arriba de lo que cuesta una tarea sana. Hoy 250 USD.
 _Avoid_: presupuesto de tarea
 _Campo_: total_cost_limit — SWE-agent
+
+**Tope por estimación**:
+Red de seguridad al doble de la estimación vigente de la tarea (ADR-0054). Se mira antes de cada intento de cualquier rol, junto al tope de tarea y contra el mismo gasto de la corrida entera; alcanzado, sólo frena lo que todavía no arrancó y la tarea escala con la clase `estimate`, con lo gastado, el tope, las subtareas que faltan y una estimación nueva propuesta. Una tarea sin estimación (documento anterior) no tiene este tope. No lo reanuda el sondeo: solo una decisión del humano, que deja vigente la propuesta o el valor de `--estimate`, y se rechaza si la estimación nueva ya está gastada al doble. No sustituye ni cambia el tope de tarea, que sigue plano.
+_Avoid_: tope de tarea, presupuesto
 
 ### Artefactos
 
@@ -428,8 +437,13 @@ La decisión de PjM sobre de qué tipo es una tarea —bug, feature o platform e
 _Avoid_: triage, dictamen (el dictamen es de Product Analyst sobre un bug ya clasificado)
 
 **Aterrizaje**:
-Lo que el sistema hace con un pull request aprobado cuyo merge `auto_merge_decision` rechazó, en vez de dejarlo al humano (ADR-0048): esperar, traer el upstream a la rama, volver a revisar, corregir, repetir el CI o los chequeos, hacer el pase final de importantes, archivar el seguimiento de fuera de alcance y mergear, renumerar el ADR cuyo número el master ya tomó (`renumber`, ADR-0049), o diagnosticar y reiniciar. Cada paso lo elige una sola tabla (`landing_step`), está acotado por presupuestos por tarea y queda en la lista `landing` del documento antes de ejecutarse. Distinta de Reanudación: una reanudación retoma una corrida cortada; un aterrizaje trabaja sobre un pull request ya entregado.
+Lo que el sistema hace con un pull request aprobado cuyo merge `auto_merge_decision` rechazó, en vez de dejarlo al humano (ADR-0048): esperar, traer el upstream a la rama, volver a revisar, corregir, repetir el CI o los chequeos, hacer el pase final de importantes, archivar el seguimiento de fuera de alcance y mergear, renumerar el ADR cuyo número el master ya tomó (`renumber`, ADR-0049), o aterrizar por tramos lo ya aprobado y, solo cuando eso no se puede, diagnosticar y reiniciar (el reinicio es el último recurso: avisa en el issue con el motivo y el costo hasta el momento, sin esperar a nadie). Cada paso lo elige una sola tabla (`landing_step`), está acotado por presupuestos por tarea y queda en la lista `landing` del documento antes de ejecutarse. Distinta de Reanudación: una reanudación retoma una corrida cortada; un aterrizaje trabaja sobre un pull request ya entregado.
 _Avoid_: rescate, merge manual
+_Campo_: sin término de arte
+
+**Tramo aterrizado**:
+Un prefijo estricto, en orden topológico y cerrado bajo `depends_on`, de las subtareas aprobadas de una tarea cuyo aterrizaje se agotó, que el sistema arma desde master y mergea en un pull request propio (`closes_issue=False`, fuera de `pull_request`) antes de reiniciar (ADR-0048, addenda GH-297). Cada unidad del tramo cumple `review_carries` contra lo que master cambió y ninguna toca las rutas del trabajo del integrador; lo que queda sigue en el pull request principal. Si ningún tramo es posible, el reinicio dice por qué con un motivo cerrado (`single_unit`, `no_clean_slice`, `slice_refused`, `unreadable`).
+_Avoid_: parte, partida
 _Campo_: sin término de arte
 
 **Pase final de importantes**:

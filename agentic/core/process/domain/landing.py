@@ -17,10 +17,19 @@ from difflib import SequenceMatcher
 from itertools import zip_longest
 from typing import Any, Literal, Protocol, get_args
 
-from . import ci, rules
+from . import ci, presubmit, rules
 from .adr_numbers import Renaming
+from .document import HUMAN
 from .roles import LANDING_DIAGNOSER
-from .task import FailureReason, LandingEntry, Subtask, SubtaskStatus, TaskState
+from .task import (
+    Carried,
+    FailureReason,
+    LandedSliceRef,
+    LandingEntry,
+    Subtask,
+    SubtaskStatus,
+    TaskState,
+)
 
 LandingStepKind = Literal[
     "wait",
@@ -31,6 +40,7 @@ LandingStepKind = Literal[
     "rerun",
     "file_followups_and_land",
     "renumber",
+    "land_slice",
     "diagnose",
     "none",
 ]
@@ -40,9 +50,17 @@ LandingStepKind = Literal[
 open `important` findings, GH-294), `rerun` (the CI or the checks, once per head),
 `file_followups_and_land` (file the `outside` findings, then merge), `renumber` (rename the
 ADR whose number master took and rewrite the references inside the branch's own work,
-GH-229), `diagnose` (the
-terminal path: the landing diagnoser, then a restart) and `none` (nothing the system can
-do: the human's)."""
+GH-229), `land_slice` (GH-297: land the approved units that apply cleanly on master as a
+slice of their own, then go on with the rest; `LandingStep.units` is the slice), `diagnose`
+(the terminal path: the landing diagnoser, then a restart; `restart_why` says why no slice
+was possible) and `none` (nothing the system can do: the human's)."""
+
+RestartWhy = Literal["single_unit", "no_clean_slice", "slice_refused", "unreadable"]
+"""Why a landing that exhausted its budgets restarts instead of landing a slice (GH-297):
+`single_unit` (fewer than two approved units still to land, nothing to split), `no_clean_slice`
+(no strict prefix of them is clean against master), `slice_refused` (the only clean ones were
+refused twice) and `unreadable` (the facts could not be read). Closed: the restart comment
+names one of them."""
 
 FOLLOWUP_TITLE_PREFIX = "Follow-up of #"
 """How the title of a follow-up issue begins (`landing_fix` composes it; measurement reads
@@ -65,6 +83,8 @@ def run_kind_of(step: LandingStepKind | None, refusal: rules.MergeRefusal | None
             return "land_checks"
         case "fix_important":
             return "land_model"
+        case "land_slice":
+            return "land_checks"
         case _:
             return "land_model"
 
@@ -120,6 +140,8 @@ class LandingStep:
     kind: LandingStepKind
     refusal: rules.MergeRefusal
     units: tuple[str, ...] = ()
+    # Only on a `diagnose` that `slice_or_restart` decided: the reason no slice was landed.
+    restart_why: RestartWhy | None = None
 
 
 @dataclass(frozen=True)
@@ -149,17 +171,31 @@ def landing_step(
     blocking_owners: tuple[str, ...],
     *,
     important_units: tuple[str, ...] = (),
+    slicing: Slice | RestartWhy | Callable[[], SliceInputs] | None = None,
 ) -> LandingStep:
-    """The step for `refusal`. A model pass or a sync past its budget is the `diagnose`;
-    a task already diagnosed has no step left (`none`). `blocking_owners` is the units that
-    own the open blocking records (`blocking_owners`); `important_units` the ones the final
-    important pass reopens (`important_owners`)."""
+    """The step for `refusal`. A model pass or a sync past its budget is the exhaustion: the
+    `land_slice` when `slicing` is a `Slice`, else the `diagnose` carrying `slicing` as its
+    `restart_why` (`None`: as before GH-297). A task already diagnosed has no step left
+    (`none`). `blocking_owners` is the units that own the open blocking records
+    (`blocking_owners`); `important_units` the ones the final important pass reopens
+    (`important_owners`); `slicing` is what the exhaustion decides a slice from: a ready
+    `slice_or_restart` answer, or a provider of the `SliceInputs` that is called, and handed to
+    `slice_or_restart`, only when a budget has run out, so a healthy landing reads no git for
+    it. This is the only place `slice_or_restart` is called."""
 
     def step(kind: LandingStepKind, units: tuple[str, ...] = ()) -> LandingStep:
         return LandingStep(kind, refusal, units)
 
+    def exhausted() -> LandingStep:
+        """The one place every budget that ran out ends (invariant: nothing else lists
+        the conditions of a slice or a restart)."""
+        answer = slice_or_restart(slicing()) if callable(slicing) else slicing
+        if isinstance(answer, Slice):
+            return step("land_slice", answer.units)
+        return LandingStep("diagnose", refusal, restart_why=answer)
+
     def pass_(kind: LandingStepKind, units: tuple[str, ...] = ()) -> LandingStep:
-        return step(kind, units) if spent.passes < LANDING_PASSES_MAX else step("diagnose")
+        return step(kind, units) if spent.passes < LANDING_PASSES_MAX else exhausted()
 
     if spent.diagnosed:
         return step("none")
@@ -169,9 +205,7 @@ def landing_step(
         case "eval_set_unreadable" | "ci_missing" | "ci_unreadable":
             waited = spent.waited_s
             return (
-                step("diagnose")
-                if waited is not None and waited >= ci.CI_WAIT_MAX_S
-                else step("wait")
+                exhausted() if waited is not None and waited >= ci.CI_WAIT_MAX_S else step("wait")
             )
         case "not_approved" | "head_not_reviewed":
             return pass_("re_review")
@@ -189,12 +223,12 @@ def landing_step(
             return step("rerun") if spent.reruns_on_head == 0 else pass_("fix", blocking_owners)
         case "checks_failed":
             if facts.failed_step == "conflict":
-                return _sync(step, spent, conflicting=True)
+                return _sync(step, exhausted, spent, conflicting=True)
             return step("rerun") if spent.reruns_on_head == 0 else pass_("fix", blocking_owners)
         case "merge_conflict":
-            return _sync(step, spent, conflicting=True)
+            return _sync(step, exhausted, spent, conflicting=True)
         case "attempts_exhausted":
-            return _sync(step, spent, conflicting=False)
+            return _sync(step, exhausted, spent, conflicting=False)
         case "adr_number_taken":
             # A clean renaming has its own capped step; anything else -- an ambiguous result
             # included -- is the diagnose, so no Developer ever picks an ADR number.
@@ -202,15 +236,19 @@ def landing_step(
                 spent.renumbers < LANDING_RENUMBERS_MAX
             ):
                 return step("renumber")
-            return step("diagnose")
+            return exhausted()
         case "merge_failed":
-            return step("diagnose")
+            return exhausted()
         case "master_moved":
             return step("wait")
 
 
 def _sync(
-    step: Callable[..., LandingStep], spent: LandingSpent, *, conflicting: bool
+    step: Callable[..., LandingStep],
+    exhausted: Callable[[], LandingStep],
+    spent: LandingSpent,
+    *,
+    conflicting: bool,
 ) -> LandingStep:
     """`sync_master` while the sync budget lasts; a sync known to conflict is also a model
     pass and needs that budget too."""
@@ -219,7 +257,7 @@ def _sync(
         or spent.unsynced_for_upstream >= LANDING_UNSYNCED_MAX
         or (conflicting and spent.passes >= LANDING_PASSES_MAX)
     ):
-        return step("diagnose")
+        return exhausted()
     return step("sync_master")
 
 
@@ -248,13 +286,260 @@ def important_owners(state: TaskState) -> tuple[str, ...]:
 
 
 def review_carries(
-    conflicted: bool, merge_paths: Iterable[str], branch_paths: Iterable[str]
+    conflicted: bool,
+    merge_paths: Iterable[str],
+    branch_paths: Iterable[str],
+    landed_paths: Iterable[str] = (),
 ) -> bool:
     """Whether the Tech Lead's verdict on the branch stands for the head after a sync: the
-    merge was clean and the paths it brought in are disjoint from the branch's own."""
+    merge was clean and the paths it brought in are disjoint from the branch's own. The
+    paths a landed slice of this very task brought (`landed_paths`, GH-297) are not master's
+    doing and do not count against the branch."""
     if conflicted:
         return False
-    return set(merge_paths).isdisjoint(branch_paths)
+    return (set(merge_paths) - set(landed_paths)).isdisjoint(branch_paths)
+
+
+SLICE_REFUSALS_MAX = 2
+"""Times one exact set of units may be refused as a slice before `slice_or_restart` stops
+proposing it (GH-297); declared, not measured."""
+
+
+@dataclass(frozen=True)
+class Slice:
+    """A set of approved units the landing merges on their own (GH-297): a strict prefix of
+    the pending ones in topological order, closed under `depends_on`."""
+
+    units: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SliceUnit:
+    """An approved unit and the units it depends on, as the plan says."""
+
+    name: str
+    depends_on: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SliceInputs:
+    """The facts `slice_or_restart` decides from, gathered by the application. `approved` is
+    the approved units in plan order; `carries` says per unit whether `review_carries` holds
+    against what master changed since its base; `integration_paths` is what the integrator's
+    work touches (`None`: it could not be built); `unit_paths` what each unit touches;
+    `landed` the units whose `reviewed_head` is already an ancestor of master (`slice_landed`);
+    `refused` the failed `land_slice` entries per set of units (`refused_slices`);
+    `blocking_units` the units that own an open blocking row; `readable` whether every fact
+    above could be read."""
+
+    approved: tuple[SliceUnit, ...]
+    carries: Mapping[str, bool]
+    integration_paths: frozenset[str] | None
+    unit_paths: Mapping[str, frozenset[str]]
+    landed: frozenset[str]
+    refused: Mapping[tuple[str, ...], int]
+    blocking_units: frozenset[str]
+    readable: bool
+
+
+def _pending(inputs: SliceInputs) -> list[SliceUnit]:
+    return [unit for unit in inputs.approved if unit.name not in inputs.landed]
+
+
+def _topological(pending: Sequence[SliceUnit], landed: frozenset[str]) -> list[SliceUnit]:
+    """`pending` with every unit after the ones it depends on, plan order among the free
+    ones. A unit whose dependency is neither landed nor pending (not approved), or that is
+    in a cycle, never comes out: nothing that needs it can be landed either."""
+    done = set(landed)
+    ordered: list[SliceUnit] = []
+    waiting = list(pending)
+    while True:
+        ready = next((u for u in waiting if all(d in done for d in u.depends_on)), None)
+        if ready is None:
+            return ordered
+        ordered.append(ready)
+        done.add(ready.name)
+        waiting.remove(ready)
+
+
+def _clean(inputs: SliceInputs, unit: SliceUnit) -> bool:
+    paths = inputs.unit_paths.get(unit.name)
+    return (
+        inputs.integration_paths is not None
+        and paths is not None
+        and inputs.carries.get(unit.name) is True
+        and unit.name not in inputs.blocking_units
+        and paths.isdisjoint(inputs.integration_paths)
+    )
+
+
+def slice_or_restart(inputs: SliceInputs) -> Slice | RestartWhy:
+    """The one place a landing decides to land a slice or to restart (GH-297). The slice is
+    the largest strict prefix of the pending units (approved, not landed), in topological
+    order, whose units all carry, own no open blocking row, touch none of the integrator's
+    paths and were not refused `SLICE_REFUSALS_MAX` times as that exact set. Otherwise the
+    closed reason: `unreadable`, `single_unit`, `no_clean_slice`, or `slice_refused` when
+    the clean prefixes were all refused."""
+    if not inputs.readable:
+        return "unreadable"
+    pending = _pending(inputs)
+    if len(pending) < 2:
+        return "single_unit"
+    if inputs.integration_paths is None:
+        return "no_clean_slice"
+    ordered = _topological(pending, inputs.landed)
+    clean = 0
+    while clean < len(ordered) and _clean(inputs, ordered[clean]):
+        clean += 1
+    candidates = [
+        tuple(unit.name for unit in ordered[:size])
+        for size in range(min(clean, len(pending) - 1), 0, -1)
+    ]
+    if not candidates:
+        return "no_clean_slice"
+    for units in candidates:
+        if _refusals(inputs.refused, units) < SLICE_REFUSALS_MAX:
+            return Slice(units)
+    return "slice_refused"
+
+
+def _refusals(refused: Mapping[tuple[str, ...], int], units: tuple[str, ...]) -> int:
+    return sum(count for key, count in refused.items() if set(key) == set(units))
+
+
+def integration_blocked(inputs: SliceInputs) -> bool:
+    """Whether some pending unit touches the integrator's paths: what the restart comment
+    calls `(integration work)`. Unknown integration paths block nothing."""
+    if inputs.integration_paths is None:
+        return False
+    return any(
+        not inputs.unit_paths.get(unit.name, frozenset()).isdisjoint(inputs.integration_paths)
+        for unit in _pending(inputs)
+    )
+
+
+def slice_landed(units: Iterable[str], ancestry: Mapping[str, bool]) -> bool:
+    """Whether every unit's `reviewed_head` is an ancestor of master (`ancestry` per unit,
+    from `Workspace.is_ancestor`): git's word, never `landed_slices` alone. A unit whose
+    ancestry was not read, or no unit at all, has not landed."""
+    names = tuple(units)
+    return bool(names) and all(ancestry.get(name) is True for name in names)
+
+
+def slice_facts(
+    slice_: Slice,
+    state: TaskState,
+    *,
+    task_id: str,
+    slice_head: str | None,
+    built_clean: bool,
+    contains_reviewed: Mapping[str, bool],
+    carries: Mapping[str, bool],
+    pr_state: str | None,
+    pr_head: str | None,
+    in_eval_set: bool | None,
+    touched_paths: tuple[str, ...] | None,
+    current_master: str | None,
+    attempts: int = 0,
+    checks_head: str | None = None,
+    checks_master: str | None = None,
+    checks_passed: bool | None = None,
+    merge_failures: int = 0,
+    merge_failure: rules.MergeFailure | None = None,
+    failed_step: presubmit.FailedStep | None = None,
+    ci_required: tuple[str, ...] = (),
+    ci_head: str | None = None,
+    ci_verdict: ci.CiVerdict | None = None,
+    ci_unreadable: ci.CiUnreadable | None = None,
+    ci_fresh: bool | None = None,
+    ci_waited_s: float | None = None,
+    followups_filed: bool = False,
+    important_pass_done: bool = False,
+) -> rules.MergeFacts:
+    """The `MergeFacts` of a slice's pull request, the only builder of them (GH-297);
+    `rules.auto_merge_decision` alone decides whether it merges. The head stands as reviewed
+    only when every unit is approved, carries, has its `reviewed_head` contained in the slice
+    and the slice built clean; a unit that does not carry leaves `head_not_reviewed`. Only the
+    rows owned by the slice's units are counted, and `open_outside` is 0: a row of a unit left
+    out is that unit's. `pr_state`/`pr_head` are the slice pull request's, the checks and the
+    CI are over the slice's own paths, `in_eval_set` is the task's."""
+    units = slice_.units
+    subtasks = state.get("subtasks", {})
+    approved = bool(units) and all(
+        subtasks.get(name, {}).get("status") == "approved" for name in units
+    )
+    reviewed = (
+        approved
+        and built_clean
+        and all(carries.get(name) is True and contains_reviewed.get(name) is True for name in units)
+    )
+    owned = [
+        row for row in rules.open_findings(state) if set(rules.row_owners(state, row)) & set(units)
+    ]
+    return rules.MergeFacts(
+        task_id=task_id,
+        status=state.get("status"),
+        reviewed_unit_approved=approved,
+        reviewed_head=slice_head if reviewed else None,
+        open_blocking=sum(1 for row in owned if row["severity"] == "blocking"),
+        open_important=sum(1 for row in owned if row["severity"] == "important"),
+        open_outside=0,
+        important_pass_done=important_pass_done,
+        pr_state=pr_state,
+        pr_head=pr_head,
+        in_eval_set=in_eval_set,
+        touched_paths=touched_paths,
+        ci_untrusted=rules.ci_untrusted(touched_paths),
+        attempts=attempts,
+        checks_head=checks_head,
+        checks_master=checks_master,
+        checks_passed=checks_passed,
+        current_master=current_master,
+        merge_failures=merge_failures,
+        merge_failure=merge_failure,
+        failed_step=failed_step,
+        ci_required=ci_required,
+        ci_head=ci_head,
+        ci_verdict=ci_verdict,
+        ci_unreadable=ci_unreadable,
+        ci_fresh=ci_fresh,
+        ci_waited_s=ci_waited_s,
+        followups_filed=followups_filed,
+    )
+
+
+def refused_slices(entries: Sequence[Mapping[str, object]]) -> dict[tuple[str, ...], int]:
+    """The failed `land_slice` entries of the `landing` list per set of units (`slice_units`
+    in the order recorded): finished without `resolved_at`. Input of `SliceInputs.refused`."""
+    counts: dict[tuple[str, ...], int] = {}
+    for entry in entries:
+        units = entry.get("slice_units")
+        if (
+            entry.get("step") == "land_slice"
+            and rules.entry_closed(entry)
+            and not entry.get("resolved_at")
+            and isinstance(units, list)
+            and all(isinstance(unit, str) for unit in units)
+        ):
+            key = tuple(str(unit) for unit in units)
+            counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def sync_epoch(entries: Sequence[Mapping[str, object]]) -> list[Mapping[str, object]]:
+    """The `landing` entries a sync budget counts (GH-297): those after the last resolved
+    `land_slice` entry, since a landed slice gives the rest a master worth syncing with
+    again. `passes` is not counted from here, ever; with no `land_slice` entry this is
+    every entry."""
+    last = max(
+        (
+            index
+            for index, entry in enumerate(entries)
+            if entry.get("step") == "land_slice" and entry.get("resolved_at")
+        ),
+        default=-1,
+    )
+    return list(entries[last + 1 :])
 
 
 @dataclass(frozen=True)
@@ -301,8 +586,10 @@ def already_dispatched(landing: Sequence[Mapping[str, object]], head: str, step:
     """Whether `(head, step)` is already in the document's `landing` list: the idempotency
     key, written before the dispatch. A diagnose entry that never delivered is an attempt
     (`diagnose_retry`), not a taken step; so is a sync closed with `lacks` (GH-267), which
-    the unsynced budget counts instead."""
-    return any(
+    the unsynced budget counts instead. A `land_slice` is never taken for good (GH-297): an
+    open one is continued by its executor, a refused one is retried until
+    `SLICE_REFUSALS_MAX`, and a landed one leaves other units to land on the same head."""
+    return step != "land_slice" and any(
         entry.get("head") == head
         and entry.get("step") == step
         and "lacks" not in entry
@@ -330,7 +617,7 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
         out["at"] = at
     if isinstance(resolved := raw.get("resolved_at"), str):
         out["resolved_at"] = resolved
-    for key in ("upstream", "closed_at", "lacks"):
+    for key in ("upstream", "closed_at", "lacks", "slice_pull_request", "restart_why"):
         if isinstance(text := raw.get(key), str):
             out[key] = text
     if isinstance(cost := raw.get("cost_usd"), int | float) and not isinstance(cost, bool):
@@ -343,8 +630,14 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
         out["resume_spawns"] = spawns
     if isinstance(spawned := raw.get("resume_spawned_at"), str):
         out["resume_spawned_at"] = spawned
+    if isinstance(units := raw.get("slice_units"), list) and all(isinstance(u, str) for u in units):
+        out["slice_units"] = [u for u in units if isinstance(u, str)]
     if isinstance(delivered := raw.get("delivered"), bool):
         out["delivered"] = delivered
+    if isinstance(passed := raw.get("checks_passed"), bool):
+        out["checks_passed"] = passed
+    if isinstance(work := raw.get("integration_work"), bool):
+        out["integration_work"] = work
     if (failure := _failure_of(raw.get("failure"))) is not None:
         out["failure"] = failure
     return out
@@ -706,6 +999,58 @@ def restart_depth(raw: Mapping[str, object]) -> int:
     """How many times the landing restarted this issue, from the task document."""
     value = raw.get("landing_restarts", 0)
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def pull_request_label(reference: str) -> str:
+    """A pull request as `#N` when its reference (the URL `Tracker.open_pull_request`
+    returns, or `#N` already) ends in a number, else the reference as it is: the one
+    spelling every message about a landed slice uses."""
+    tail = reference.rstrip("/").rsplit("/", 1)[-1].lstrip("#")
+    return f"#{tail}" if tail.isdigit() else reference
+
+
+def carry_over(raw: Mapping[str, object]) -> Carried | None:
+    """What the archived document `raw` hands the fresh run of a `--fresh` start (GH-239,
+    GH-297): the restart depth and cost, the Landing Diagnoser's section (only when the
+    landing restarted it), every human decision (the `Human` section whole, restart or not:
+    a `--fresh` start is the case that matters) and the slices already landed. Read from the
+    document, never counted from issue comments; `None` when nothing is carried."""
+    restarts = restart_depth(raw)
+    cost = raw.get("landing_cost_carried", 0.0)
+    spent = float(cost) if isinstance(cost, int | float) and not isinstance(cost, bool) else 0.0
+    sections = raw.get("sections")
+    held = sections if isinstance(sections, Mapping) else {}
+    diagnosis = held.get(LANDING_DIAGNOSER.name, "") if restarts else ""
+    human = held.get(HUMAN, "")
+    carried = Carried(
+        restarts=restarts,
+        cost=spent,
+        diagnosis=diagnosis if isinstance(diagnosis, str) else "",
+        human=human if isinstance(human, str) else "",
+        landed=_landed_refs(raw.get("landed_slices")),
+    )
+    if not (restarts or carried.human):
+        return None
+    return carried
+
+
+def _landed_refs(value: object) -> tuple[LandedSliceRef, ...]:
+    """The readable entries of a `landed_slices` list: a `units` list of strings and a
+    `pull_request` string; whatever else a hand-edited document holds is skipped."""
+    if not isinstance(value, list):
+        return ()
+    refs: list[LandedSliceRef] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        units, pull_request = item.get("units"), item.get("pull_request")
+        if (
+            isinstance(units, list)
+            and all(isinstance(unit, str) for unit in units)
+            and isinstance(pull_request, str)
+        ):
+            refs.append(LandedSliceRef(tuple(units), pull_request))
+    return tuple(refs)
 
 
 def marker_parent(body: str) -> tuple[str, int] | None:

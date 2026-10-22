@@ -2,6 +2,7 @@
 
 import io
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -1481,26 +1482,75 @@ async def test_the_reap_does_not_block_the_loop_while_it_waits_out_the_grace(mon
             child.wait()
 
 
+def _await_argv(pid: int, expected: str, deadline_s: float = 5.0) -> None:
+    """Wait until `/proc/<pid>` shows `expected` as its argv: a forked `bash` shows the
+    parent's argv until it execs, so reading it straight after spawning races the exec."""
+    deadline = time.monotonic() + deadline_s
+    last = "gone"
+    while True:
+        try:
+            last = reaping.truncate_command(Path(f"/proc/{pid}/cmdline").read_bytes())
+        except OSError:
+            last = "gone"
+        if last == expected:
+            return
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"pid {pid} never showed argv {expected!r}; last seen: {last!r}")
+        time.sleep(0.02)
+
+
+def _kill_quietly(pid: int) -> None:
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
 def test_the_reaper_takes_the_escaped_grandchild_of_a_real_attempt_env_and_spares_a_sibling():
     token = "regression"
     mark = reaping.mark(PRODUCT_KEY, "GH-1", os.getpid(), token)
     child_env = module._child_env({**os.environ}, PJM, None, None, mark)
     sibling_env = {k: v for k, v in child_env.items() if k != reaping.MARK_NAME}
-    subprocess.run(
+    spawned = subprocess.run(
         ["bash", "-c", "setsid nohup sleep 300 >/dev/null 2>&1 & echo $!"],
         env=child_env,
         check=True,
         capture_output=True,
+        text=True,
     )
+    grandchild = int(spawned.stdout.strip())
     sibling = subprocess.Popen(["sleep", "301"], env=sibling_env, start_new_session=True)
     try:
+        _await_argv(grandchild, "sleep 300")
         reaped = ShellReaper(PRODUCT_KEY).reap_attempt("GH-1", os.getpid(), token)
         assert [p["command"] for p in reaped] == ["sleep 300"]
+        assert reaped[0]["pid"] == grandchild
         assert reaped[0]["outcome"] in ("term", "kill")
         assert _alive(sibling)  # the same env minus the mark is not the role's
     finally:
+        _kill_quietly(grandchild)
         sibling.kill()
         sibling.wait()
+
+
+def test_the_argv_wait_fails_with_the_last_argv_until_the_exec_and_returns_after_it(tmp_path):
+    gate = tmp_path / "gate"
+    mark = reaping.mark(PRODUCT_KEY, "GH-1", os.getpid(), "gate")
+    env = {**module._child_env({**os.environ}, PJM, None, None, mark), "GATE": str(gate)}
+    process = subprocess.Popen(
+        ["bash", "-c", 'until [ -e "$GATE" ]; do sleep 0.05; done; exec setsid nohup sleep 300'],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        with pytest.raises(AssertionError, match="bash -c"):
+            _await_argv(process.pid, "sleep 300", deadline_s=0.3)
+        gate.touch()
+        _await_argv(process.pid, "sleep 300")
+    finally:
+        _kill_quietly(process.pid)
+        process.wait()
 
 
 async def test_what_the_reaper_stopped_comes_back_on_the_result_and_on_the_failure(

@@ -604,6 +604,13 @@ class MemoryWorkspace:
         self.upstream_answer = Upstream("HEAD", None, None)
         self.upstream_calls = 0
         self.checkouts: list[Path] = []
+        # GH-297: `build_slice`'s and `integration_paths`'s scripts and their calls.
+        self.slice_conflicts: set[str] = set()
+        self.slice_head = "5" * 40
+        self.slice_builds: list[tuple[Path, str, tuple[str, ...], str]] = []
+        self.integration_work: frozenset[str] = frozenset()
+        self.integration_conflicts = False
+        self.integration_reads: list[tuple[Path, tuple[str, ...], str, str | None]] = []
         # The worktrees this fake has made, as a real one has them on disk.
         self.on_disk: set[Path] = set()
         self.discarded: list[Path] = []
@@ -667,6 +674,21 @@ class MemoryWorkspace:
     def merge(self, path: Path, branch: str) -> str | None:
         self.merges.append((path, branch))
         return f"CONFLICT in {branch}" if branch in self.conflicts else None
+
+    def build_slice(self, path: Path, master: str, heads: Sequence[str], branch: str) -> str | None:
+        """GH-297: a head in `slice_conflicts` makes the build answer `None`, a clean one
+        the sha in `slice_head` (a fixed one by default). Every call is in `slice_builds`."""
+        self.slice_builds.append((path, master, tuple(heads), branch))
+        if any(head in self.slice_conflicts for head in heads):
+            return None
+        return self.slice_head
+
+    def integration_paths(
+        self, path: Path, heads: Sequence[str], task_head: str, *, master: str | None = None
+    ) -> frozenset[str] | None:
+        """GH-297: what `integration_work` holds, `None` when `integration_conflicts` is set."""
+        self.integration_reads.append((path, tuple(heads), task_head, master))
+        return None if self.integration_conflicts else self.integration_work
 
     def merge_upstream_into(self, checkout: Path, upstream_sha: str) -> UpstreamMerge:
         """GH-239: a scripted answer per `upstream_sha` in `upstream_merges`, a clean merge
@@ -924,7 +946,14 @@ class MemoryWorkspace:
 class MemoryTracker:
     def __init__(self, url: str = "https://github.com/o/r/pull/7") -> None:
         self.url = url
+        # `changed_files`: the count it answers per reference (default 12), the references it
+        # was asked for, and an error to raise instead (ADR-0054).
+        self.changed_files_count = 12
+        self.changed_files_asked: list[str] = []
+        self.changed_files_error: str | None = None
         self.pull_requests: list[tuple[str, str, str]] = []
+        # Whether each `open_pull_request` call (failed ones counted) asked to close the issue.
+        self.closes_issue_calls: list[bool] = []
         self.comments: list[tuple[str, str]] = []
         self.labels: list[tuple[str, str]] = []
         self.unlabeled: list[tuple[str, str]] = []
@@ -937,6 +966,9 @@ class MemoryTracker:
         self.earlier: list[str] = []
         # `(title, body)` of every issue `open_issue` opened, in order.
         self.opened_issues: list[tuple[str, str]] = []
+        self.open_issue_calls = 0
+        self.open_issue_fails_on: set[int] = set()
+        self.issue_numbers_from: int | None = None
         # GH-239: the `label` of each of them (None: unlabelled), the `(reference, head)` of
         # every `rerun_failed_ci` and the run links it answers, its `ValueError` text and
         # every reference `close_pull_request` closed.
@@ -1036,8 +1068,11 @@ class MemoryTracker:
             raise ValueError(self.merge_error)
         return self.merge_method
 
-    def open_pull_request(self, task_id: str, branch: str, title: str, body: str) -> str:
+    def open_pull_request(
+        self, task_id: str, branch: str, title: str, body: str, *, closes_issue: bool = True
+    ) -> str:
         self.attempted_bodies.append(body)
+        self.closes_issue_calls.append(closes_issue)
         if self.open_failures > 0:
             self.open_failures -= 1
             raise ValueError(self.open_error)
@@ -1045,9 +1080,20 @@ class MemoryTracker:
         return self.url
 
     def open_issue(self, title: str, body: str, *, label: str | None = None) -> str:
+        """`open_issue_fails_on` lists the calls (0-based, failed ones counted) that raise
+        `ValueError`, `gh`'s own failure shape; `issue_numbers_from` makes each opened issue
+        answer its own URL, numbered in order, instead of the shared one (ADR-0054)."""
+        call = self.open_issue_calls
+        self.open_issue_calls += 1
+        if call in self.open_issue_fails_on:
+            raise ValueError("gh: could not create the issue")
         self.opened_issues.append((title, body))
         self.opened_labels.append(label)
-        return self.url
+        if self.issue_numbers_from is None:
+            return self.url
+        return (
+            f"https://github.com/o/r/issues/{self.issue_numbers_from + len(self.opened_issues) - 1}"
+        )
 
     def rerun_failed_ci(self, reference: str, head: str) -> list[str]:
         """GH-239: the runs of `head` that failed, rerun. Scripted by `failed_runs`; a bad
@@ -1064,6 +1110,13 @@ class MemoryTracker:
         pull_request_number(reference)
         self.events.append("close_pull_request")
         self.closed_pull_requests.append(reference)
+
+    def changed_files(self, pull_request: str) -> int:
+        pull_request_number(pull_request)
+        self.changed_files_asked.append(pull_request)
+        if self.changed_files_error is not None:
+            raise ValueError(self.changed_files_error)
+        return self.changed_files_count
 
     def comment(self, task_id: str, text: str) -> None:
         self.events.append("comment")
@@ -1340,6 +1393,8 @@ def planned(
     session: str = "tl",
     invariants: Sequence[object] = (),
     integration: str = "",
+    estimated_cost_usd: float = 20.0,
+    estimated_files: int = 5,
 ) -> RawResult:
     items: list[dict[str, object]] = [
         {"id": "api", "title": "API", "brief": "Build it.", "seams": ["GET /x"]},
@@ -1354,6 +1409,41 @@ def planned(
             "subtasks": items,
             "invariants": list(invariants),
             "integration": integration,
+            "estimated_cost_usd": estimated_cost_usd,
+            "estimated_files": estimated_files,
+        },
+        cost,
+        2,
+        session,
+    )
+
+
+def planned_parts(
+    *parts: dict[str, object],
+    cost: float = 0.3,
+    session: str = "tl",
+    invariants: Sequence[object] = ("Every part ships alone.",),
+    estimated_cost_usd: float = 400.0,
+    estimated_files: int = 90,
+) -> RawResult:
+    """A Tech Lead plan that does not fit (ADR-0054): parts and no subtasks. With no part
+    given, two chained ones."""
+    items: list[dict[str, object]] = list(parts) or [
+        {"title": "Catalogue", "body": "Extract the strings.", "depends_on": []},
+        {"title": "Screens", "body": "Translate the screens.", "depends_on": [1]},
+    ]
+    markdown = "### Solution\n\nCut it.\n\n### Parts\n\n" + "\n\n".join(
+        f"#### {i['title']}\n\n{i['body']}" for i in items
+    )
+    return RawResult(
+        {
+            "markdown": markdown,
+            "subtasks": [],
+            "parts": items,
+            "invariants": list(invariants),
+            "integration": "",
+            "estimated_cost_usd": estimated_cost_usd,
+            "estimated_files": estimated_files,
         },
         cost,
         2,

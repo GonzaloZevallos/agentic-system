@@ -62,8 +62,13 @@ SUBTASK_RECORDED_AS = {"change_category": "return_category"}
 # the next write; every other key keeps the surgery guarantee. `pause_log` (a block) and
 # `escalated` (a string yaml wrapped over lines) are the two the migration of a stranded
 # diagnose rewrites in place (GH-257): the log whole, the escalation cleared.
-RECORD_KEYS: frozenset[str] = frozenset({"landing", "pause_log", "escalated"})
+# `landed_slices` is the landing's own list of slices it merged ahead of the task's pull
+# request (GH-297): written whole through `record_closure` every time one lands.
+RECORD_KEYS: frozenset[str] = frozenset({"landing", "pause_log", "escalated", "landed_slices"})
 _LANDING_PLACEHOLDER = "<landing-flow-line>"
+# The record keys `render` writes as one flow line, swapped in for a placeholder: a list the
+# landing keeps about itself, which `record_closure` then replaces whole (GH-242, GH-297).
+_FLOW_KEYS = ("landing", "landed_slices")
 
 
 def _recorded(subtask: dict[str, Any]) -> dict[str, Any]:
@@ -146,6 +151,8 @@ def render(
         # byte-identical to one written before.
         # A placeholder here, swapped for the flow line below (`_flow_line`).
         **({"landing": _LANDING_PLACEHOLDER} if state.get("landing") else {}),
+        # The slices the landing merged ahead of the pull request (GH-297): the same shape.
+        **({"landed_slices": _LANDING_PLACEHOLDER} if state.get("landed_slices") else {}),
         **({"adr_renumbered": r} if (r := state.get("adr_renumbered")) else {}),
         **({"auto_merge_guarded": g} if (g := state.get("auto_merge_guarded")) else {}),
         **({"followups_filed": True} if state.get("followups_filed") else {}),
@@ -163,6 +170,16 @@ def render(
         # own name, never through `RECORDED_AS`.
         **({"approval_settled": approved} if (approved := state.get("approval_settled")) else {}),
         "cost_usd": round(state.get("cost_usd", 0.0), 4),
+        # The plan's estimate and what follows from it (ADR-0054), written only when the
+        # state carries them, so a document from before them is byte-identical.
+        **({"estimate": e} if (e := state.get("estimate")) else {}),
+        **({"estimate_revisions": e} if (e := state.get("estimate_revisions")) else {}),
+        **({"proposed_estimate": e} if (e := state.get("proposed_estimate")) else {}),
+        **({"actual_files": n} if (n := state.get("actual_files")) is not None else {}),
+        # The partition of a plan that did not fit (ADR-0054), written only when set.
+        **({"parts": e} if (e := state.get("parts")) else {}),
+        **({"split_issues": e} if (e := state.get("split_issues")) else {}),
+        **({"fit_waived": True} if state.get("fit_waived") else {}),
         "prompts": state.get("prompts", {}),
         # The playbook section hash each role first ran with, and any later one
         # (ADR-0043), written under their own names and only when non-empty, so a task
@@ -197,9 +214,10 @@ def render(
     }
 
     dumped = yaml.safe_dump(frontmatter, allow_unicode=True, sort_keys=False).strip()
-    if landing := state.get("landing"):
-        placeholder = yaml.safe_dump({"landing": _LANDING_PLACEHOLDER}).strip()
-        dumped = dumped.replace(placeholder, _flow_line("landing", landing), 1)
+    for key in _FLOW_KEYS:
+        if value := state.get(key):
+            placeholder = yaml.safe_dump({key: _LANDING_PLACEHOLDER}).strip()
+            dumped = dumped.replace(placeholder, _flow_line(key, value), 1)
     parts = [
         "---",
         dumped,
