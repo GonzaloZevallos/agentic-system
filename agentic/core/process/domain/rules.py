@@ -2313,32 +2313,90 @@ class LockFacts:
 
     other_boot: bool | None
     alive: bool
+    # The version the run recorded when it raised under the graph (`RunLock.keep_crashed`);
+    # `None` for a record with no crash mark, which reads exactly as before.
+    crashed_version: str | None = None
 
 
-RetakeVerdict = Literal["retake", "human", "running", "none"]
+RetakeVerdict = Literal["retake", "retake_crash", "human", "running", "none"]
 
 # How many times the poller retakes one task after a reboot before the run is the
 # human's. A judgement, not a measurement: a reboot is rare, so a run that keeps being
 # found dead after three retakes is dying of something else.
 RETAKE_AFTER_REBOOT_MAX = 3
 
+# How many times the poller retakes one task after its run raised, under one stage0
+# version, and how many in all, both counted from the last human comment. A judgement,
+# not a measurement: a fix that landed gets two fresh tries under its new version, and a
+# task that raises under every version is not going to be cured by a seventh retake.
+CRASH_RETAKE_PER_VERSION_MAX = 2
+CRASH_RETAKE_TOTAL_MAX = 6
+
 # The statuses where a run has nothing left to retake: the work is delivered, ruled
 # out, or waiting on a human's answer.
 _NOT_INTERRUPTED_STATUSES = ("ready_for_review", "discarded", "split", "waiting_on_human")
 
 
-def interrupted_run(raw: TaskState, lock: LockFacts | None, prior_retakes: int) -> RetakeVerdict:
-    """Whether the poller retakes an open task whose run is gone (GH-176):
+def crash_version_key(version: str | None) -> str | None:
+    """The key a crash retake is counted under: the version without a trailing `+dirty`
+    (an edited working tree is still the same sha), and `None` for a version that says
+    nothing -- `None` or `unknown` -- which never produces a retake."""
+    if version is None:
+        return None
+    key = version.removesuffix("+dirty")
+    if not key or key == "unknown":
+        return None
+    return key
+
+
+def _resuming_fragment(key: str) -> str:
+    """The one place the `resuming under <key> ` fragment is spelled: the comment
+    writes it and the counter reads it, so they cannot drift. The trailing space keeps
+    a key from matching another it is a prefix of."""
+    return f"resuming under {key} "
+
+
+def crash_retake_comment(crashed_version: str, key: str, n: int, cap: int) -> str:
+    """The text after the `RETAKEN_AFTER_CRASH` prefix of the comment a crash retake
+    posts: the version the run raised under, the key it resumes under, and which retake
+    of `cap` this is."""
+    return f"run raised under {crashed_version}; {_resuming_fragment(key)}(retake {n} of {cap})"
+
+
+def crash_retake_counts(bodies: Sequence[str], key: str, prefix: str) -> tuple[int, int]:
+    """`(at_version, total)` over comment bodies: those starting with `prefix`, and among
+    them those that resumed under `key`. The caller hands over only the bodies after the
+    last non-system comment, so a human comment resets both."""
+    ours = [b[len(prefix) :] for b in bodies if b.startswith(prefix)]
+    fragment = _resuming_fragment(key)
+    return sum(1 for b in ours if fragment in b), len(ours)
+
+
+def interrupted_run(
+    raw: TaskState,
+    lock: LockFacts | None,
+    prior_retakes: int,
+    crash_prior_at_version: int = 0,
+    crash_prior_total: int = 0,
+    version_key: str | None = None,
+) -> RetakeVerdict:
+    """Whether the poller retakes an open task whose run is gone (GH-176, GH-308):
 
     - `none`: there is no lock record (`lock is None`), or the document has a truthy
       `closed_at`, `escalated` or `pull_request`, or its `status` is `ready_for_review`,
       `discarded` or `waiting_on_human` -- this is not an interrupted run at all;
     - `human`: the document has no `status` key at all (not one this rule can read);
+    - `retake_crash`: the record carries a crash mark (`lock.crashed_version`), checked
+      before `alive` because the mark proves the process ended, `version_key` is not
+      `None`, and both `crash_prior_at_version` (retakes under this key) and
+      `crash_prior_total` are under `CRASH_RETAKE_PER_VERSION_MAX` and
+      `CRASH_RETAKE_TOTAL_MAX`. With a mark and a spent cap or no key, a record of
+      another boot falls to the reboot rule below, anything else is the `human`'s;
     - `running`: `lock.alive`, the process still runs;
     - `retake`: `lock.other_boot is True` and `prior_retakes` is under
       `RETAKE_AFTER_REBOOT_MAX` -- a reboot killed it;
-    - `human` in every other case: the same boot (a human killed it, or it crashed),
-      an unknown boot (never retaken), or the cap spent."""
+    - `human` in every other case: the same boot (a human killed it), an unknown boot
+      (never retaken), or the cap spent."""
     if lock is None:
         return "none"
     if raw.get("closed_at") or raw.get("escalated") or raw.get("pull_request"):
@@ -2347,6 +2405,16 @@ def interrupted_run(raw: TaskState, lock: LockFacts | None, prior_retakes: int) 
         return "human"
     if raw["status"] in _NOT_INTERRUPTED_STATUSES:
         return "none"
+    if lock.crashed_version is not None:
+        if (
+            version_key is not None
+            and crash_prior_at_version < CRASH_RETAKE_PER_VERSION_MAX
+            and crash_prior_total < CRASH_RETAKE_TOTAL_MAX
+        ):
+            return "retake_crash"
+        if lock.other_boot is True and prior_retakes < RETAKE_AFTER_REBOOT_MAX:
+            return "retake"
+        return "human"
     if lock.alive:
         return "running"
     if lock.other_boot is True and prior_retakes < RETAKE_AFTER_REBOOT_MAX:
@@ -2494,6 +2562,9 @@ class PollAction:
 
     kind: PollActionKind
     issue: int
+    # Why a `retake` was ordered: the run a reboot cut, or one that raised under the graph
+    # (the caller writes a different comment for each). Other kinds leave the default.
+    reason: Literal["reboot", "crash"] = "reboot"
 
 
 @dataclass(frozen=True)
@@ -2674,6 +2745,7 @@ def poll_plan(
     lands: Sequence[LandCandidate] = (),
     live_exempt: int = 0,
     land_slots: int | None = None,
+    crash_retakes: Sequence[int] = (),
 ) -> PollPlan:
     """This round's actions, in the order the Tech Lead plan fixes: every close first
     (merging freed the slot it used, if any, so closing never spends one); then every
@@ -2730,8 +2802,14 @@ def poll_plan(
     actions = [PollAction("close", issue) for issue in sorted(closes)]
     received_slots = available_slots
 
-    retaken = sorted(retakes)[: max(available_slots, 0)]
-    actions.extend(PollAction("retake", issue) for issue in retaken)
+    ordered_retakes = sorted(
+        [(issue, "reboot") for issue in retakes] + [(issue, "crash") for issue in crash_retakes]
+    )
+    retaken = ordered_retakes[: max(available_slots, 0)]
+    actions.extend(
+        PollAction("retake", issue, reason="crash" if why == "crash" else "reboot")
+        for issue, why in retaken
+    )
     available_slots = max(available_slots - len(retaken), 0)
 
     due_resumes = sorted(

@@ -3151,3 +3151,114 @@ def test_ending_a_task_without_a_delivery_stamps_finished_at_and_nothing_else_do
     assert "finished_at" not in document.render(base)
     stamped = document.render({**base, "finished_at": "2026-10-22T10:00:00+00:00"})
     assert "finished_at: '2026-10-22T10:00:00+00:00'" in stamped
+
+
+# --- crash retake: a run that raised under the graph (GH-308) ---
+
+CRASHED = rules.LockFacts(other_boot=False, alive=False, crashed_version="abc123")
+CRASH_PREFIX = "Retaken after crash: "
+
+
+def _crash_verdict(lock=CRASHED, at_version=0, total=0, key="def456", prior=0):
+    return rules.interrupted_run(
+        _interrupted_task(),
+        lock,
+        prior,
+        crash_prior_at_version=at_version,
+        crash_prior_total=total,
+        version_key=key,
+    )
+
+
+def test_crash_version_key_strips_dirty_and_refuses_unknown():
+    assert rules.crash_version_key("abc123") == "abc123"
+    assert rules.crash_version_key("abc123+dirty") == "abc123"
+    assert rules.crash_version_key("unknown") is None
+    assert rules.crash_version_key(None) is None
+    assert rules.crash_version_key("") is None
+
+
+def test_the_crash_comment_names_both_versions_and_the_count():
+    assert (
+        rules.crash_retake_comment("abc+dirty", "def", 2, 2)
+        == "run raised under abc+dirty; resuming under def (retake 2 of 2)"
+    )
+
+
+def test_crash_retake_counts_read_what_the_formatter_wrote():
+    mine = CRASH_PREFIX + rules.crash_retake_comment("a", "def456", 1, 2)
+    other_version = CRASH_PREFIX + rules.crash_retake_comment("a", "def4567", 1, 2)
+    prefix_of_mine = CRASH_PREFIX + rules.crash_retake_comment("a", "def45", 1, 2)
+    unrelated = "Auto-resumed: resuming under def456 (retake 1 of 2)"
+    bodies = [mine, other_version, prefix_of_mine, unrelated, "a human said so"]
+    assert rules.crash_retake_counts(bodies, "def456", CRASH_PREFIX) == (1, 3)
+    assert rules.crash_retake_counts([], "def456", CRASH_PREFIX) == (0, 0)
+
+
+def test_a_crash_mark_under_both_caps_is_a_crash_retake():
+    assert _crash_verdict() == "retake_crash"
+    one_short = rules.CRASH_RETAKE_PER_VERSION_MAX - 1
+    assert _crash_verdict(at_version=one_short) == "retake_crash"
+
+
+def test_the_per_version_cap_spent_leaves_the_task_to_the_human():
+    assert _crash_verdict(at_version=rules.CRASH_RETAKE_PER_VERSION_MAX) == "human"
+
+
+def test_the_total_cap_spent_leaves_the_task_to_the_human_even_with_a_fresh_version():
+    assert _crash_verdict(total=rules.CRASH_RETAKE_TOTAL_MAX, at_version=0) == "human"
+    assert _crash_verdict(total=rules.CRASH_RETAKE_TOTAL_MAX - 1) == "retake_crash"
+
+
+def test_an_unreadable_version_key_never_retakes_a_crash():
+    assert _crash_verdict(key=None) == "human"
+
+
+def test_a_crash_mark_with_the_caps_spent_falls_to_the_reboot_branch_on_another_boot():
+    lock = rules.LockFacts(other_boot=True, alive=False, crashed_version="abc123")
+    spent = rules.CRASH_RETAKE_PER_VERSION_MAX
+    assert _crash_verdict(lock, at_version=spent) == "retake"
+    assert _crash_verdict(lock, at_version=spent, prior=rules.RETAKE_AFTER_REBOOT_MAX) == "human"
+    assert _crash_verdict(lock, key=None) == "retake"
+
+
+def test_a_crash_mark_proves_the_process_ended_even_when_the_pid_reads_alive():
+    lock = rules.LockFacts(other_boot=False, alive=True, crashed_version="abc123")
+    assert _crash_verdict(lock) == "retake_crash"
+    spent = rules.CRASH_RETAKE_TOTAL_MAX
+    assert _crash_verdict(lock, total=spent) == "human"
+
+
+def test_a_crash_mark_does_not_override_the_document_checks():
+    for task_doc in (
+        {"status": "developing", "escalated": "needs a human"},
+        {"status": "ready_for_review"},
+    ):
+        assert (
+            rules.interrupted_run(task_doc, CRASHED, 0, version_key="def456") == "none"
+        ), task_doc
+    assert rules.interrupted_run({}, CRASHED, 0, version_key="def456") == "human"
+
+
+def test_a_lock_without_a_crash_mark_ignores_the_crash_arguments():
+    assert _crash_verdict(SAME_BOOT) == "human"
+    assert _crash_verdict(PREVIOUS_BOOT) == "retake"
+
+
+def test_poll_plan_crash_retakes_share_the_slots_with_reboot_retakes_lowest_first():
+    plan = dict(closes=[], resumes=[], launches=[], now=NOW)
+    actions = rules.poll_plan(retakes=[6], crash_retakes=[4, 9], available_slots=2, **plan).actions
+    assert actions == [
+        rules.PollAction("retake", 4, reason="crash"),
+        rules.PollAction("retake", 6),
+    ]
+    assert rules.PollAction("retake", 6).reason == "reboot"
+
+
+def test_poll_plan_crash_retakes_take_a_slot_from_resumes_and_launches():
+    plan = dict(closes=[], resumes=[], launches=[_ready_launch()], now=NOW)
+    only_retake = rules.poll_plan(crash_retakes=[4], available_slots=1, **plan).actions
+    assert only_retake == [rules.PollAction("retake", 4, reason="crash")]
+    with_launch = rules.poll_plan(crash_retakes=[4], available_slots=2, **plan).actions
+    assert with_launch == [rules.PollAction("retake", 4, reason="crash"), rules.PollAction("launch", 9)]
+    assert rules.poll_plan(crash_retakes=[4], available_slots=0, **plan).actions == []
