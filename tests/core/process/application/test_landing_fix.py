@@ -67,7 +67,8 @@ def _candidates(ports) -> list[int]:
 def test_an_important_finding_files_one_agentic_follow_up_and_the_next_decision_merges(tmp_path):
     ports = _ports(5)
     ports.documents.record_closure(
-        "GH-5", {"findings": [{**_finding("important"), "category": "standard-other"}]}
+        "GH-5",
+        {"findings": [{**_finding("important"), "category": "standard-other", "scope": "outside"}]},
     )
     assert _candidates(ports) == []
 
@@ -86,7 +87,8 @@ def test_an_important_finding_files_one_agentic_follow_up_and_the_next_decision_
 def test_a_follow_up_already_open_for_the_task_is_not_filed_twice(tmp_path):
     ports = _ports(5)
     ports.documents.record_closure(
-        "GH-5", {"findings": [{**_finding("important"), "category": "standard-other"}]}
+        "GH-5",
+        {"findings": [{**_finding("important"), "category": "standard-other", "scope": "outside"}]},
     )
     ports.inbox._open_issues = [("u", landing_rules.followup_marker("GH-5", 1) + "\nold")]
 
@@ -99,7 +101,8 @@ def test_a_follow_up_already_open_for_the_task_is_not_filed_twice(tmp_path):
 def test_a_task_that_is_itself_a_follow_up_files_nothing_and_writes_the_rows_in_a_comment(tmp_path):
     ports = _ports(5, description=landing_rules.followup_marker("GH-5", 1) + "\nfrom a task")
     ports.documents.record_closure(
-        "GH-5", {"findings": [{**_finding("important"), "category": "standard-other"}]}
+        "GH-5",
+        {"findings": [{**_finding("important"), "category": "standard-other", "scope": "outside"}]},
     )
 
     _land(ports, tmp_path)
@@ -114,7 +117,8 @@ def test_a_follow_up_whose_marker_names_its_parent_files_nothing_and_comments_th
 ):
     ports = _ports(5, description=landing_rules.followup_marker("GH-3", 1) + "\nfrom GH-3")
     ports.documents.record_closure(
-        "GH-5", {"findings": [{**_finding("important"), "category": "standard-other"}]}
+        "GH-5",
+        {"findings": [{**_finding("important"), "category": "standard-other", "scope": "outside"}]},
     )
 
     _land(ports, tmp_path)
@@ -436,7 +440,8 @@ def _redelivered(ports) -> None:
 def test_acceptance_an_important_finding_files_the_follow_up_then_the_task_merges(tmp_path):
     ports = _ports(5)
     ports.documents.record_closure(
-        "GH-5", {"findings": [{**_finding("important"), "category": "standard-other"}]}
+        "GH-5",
+        {"findings": [{**_finding("important"), "category": "standard-other", "scope": "outside"}]},
     )
     driver = _Driver(ports, tmp_path)
 
