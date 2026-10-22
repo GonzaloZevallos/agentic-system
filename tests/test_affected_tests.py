@@ -776,7 +776,9 @@ def _overlaps(
 
 
 def _ignored_but_read(
-    ignore: tuple[str, ...], reads: list[tuple[str, str, str]], allowances: tuple = ()
+    ignore: tuple[str, ...],
+    reads: list[tuple[str, str, str]],
+    allowances: tuple[Allowance, ...] = (),
 ):
     """(ignore glob, test, path) for every read an ignore entry covers, unless a named
     allowance says the test only names that path."""
@@ -826,6 +828,11 @@ def test_the_ignore_check_rejects_an_entry_a_test_reads():
     assert _ignored_but_read((".agentic/tasks/*",), reads) == []
     named = (Allowance("tests/test_x.py", "docs/x.md", "only names it"),)
     assert _ignored_but_read(("docs/*",), reads, named) == []
+    other_test = (Allowance("tests/test_y.py", "docs/x.md", "another test names it"),)
+    other_path = (Allowance("tests/test_x.py", "docs/y.md", "names another path"),)
+    expected = [("docs/*", "tests/test_x.py", "docs/x.md")]
+    assert _ignored_but_read(("docs/*",), reads, other_test) == expected
+    assert _ignored_but_read(("docs/*",), reads, other_path) == expected
 
 
 def test_every_fallback_glob_matches_a_real_path(real):
