@@ -22,6 +22,7 @@ from ..domain import playbook as pb
 from ..domain import playbook_candidates as pc
 from ..domain import rules
 from ..domain.reaping import ReapedProcess
+from .closed import closed_documents
 from .ports import ListedPullRequest, Ports
 from .reflect import reflect_task
 from .release import release_task, summary
@@ -107,12 +108,6 @@ def gather(cfg: Configuration, ports: Ports) -> Known:
         branch_ledger=branch_ledger,
         head_ledger=head_ledger,
     )
-
-
-def closed_documents(ports: Ports) -> list[dict[str, Any]]:
-    """Every task document with a recorded closure, as the state-shaped dicts `load` gives."""
-    docs = (ports.documents.load(task_id) for task_id in ports.documents.ids())
-    return [d for d in docs if d and d.get("closed_at")]
 
 
 def pending(
