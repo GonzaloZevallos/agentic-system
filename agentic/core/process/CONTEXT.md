@@ -437,8 +437,13 @@ La decisión de PjM sobre de qué tipo es una tarea —bug, feature o platform e
 _Avoid_: triage, dictamen (el dictamen es de Product Analyst sobre un bug ya clasificado)
 
 **Aterrizaje**:
-Lo que el sistema hace con un pull request aprobado cuyo merge `auto_merge_decision` rechazó, en vez de dejarlo al humano (ADR-0048): esperar, traer el upstream a la rama, volver a revisar, corregir, repetir el CI o los chequeos, hacer el pase final de importantes, archivar el seguimiento de fuera de alcance y mergear, renumerar el ADR cuyo número el master ya tomó (`renumber`, ADR-0049), o diagnosticar y reiniciar. Cada paso lo elige una sola tabla (`landing_step`), está acotado por presupuestos por tarea y queda en la lista `landing` del documento antes de ejecutarse. Distinta de Reanudación: una reanudación retoma una corrida cortada; un aterrizaje trabaja sobre un pull request ya entregado.
+Lo que el sistema hace con un pull request aprobado cuyo merge `auto_merge_decision` rechazó, en vez de dejarlo al humano (ADR-0048): esperar, traer el upstream a la rama, volver a revisar, corregir, repetir el CI o los chequeos, hacer el pase final de importantes, archivar el seguimiento de fuera de alcance y mergear, renumerar el ADR cuyo número el master ya tomó (`renumber`, ADR-0049), o aterrizar por tramos lo ya aprobado y, solo cuando eso no se puede, diagnosticar y reiniciar (el reinicio es el último recurso: avisa en el issue con el motivo y el costo hasta el momento, sin esperar a nadie). Cada paso lo elige una sola tabla (`landing_step`), está acotado por presupuestos por tarea y queda en la lista `landing` del documento antes de ejecutarse. Distinta de Reanudación: una reanudación retoma una corrida cortada; un aterrizaje trabaja sobre un pull request ya entregado.
 _Avoid_: rescate, merge manual
+_Campo_: sin término de arte
+
+**Tramo aterrizado**:
+Un prefijo estricto, en orden topológico y cerrado bajo `depends_on`, de las subtareas aprobadas de una tarea cuyo aterrizaje se agotó, que el sistema arma desde master y mergea en un pull request propio (`closes_issue=False`, fuera de `pull_request`) antes de reiniciar (ADR-0048, addenda GH-297). Cada unidad del tramo cumple `review_carries` contra lo que master cambió y ninguna toca las rutas del trabajo del integrador; lo que queda sigue en el pull request principal. Si ningún tramo es posible, el reinicio dice por qué con un motivo cerrado (`single_unit`, `no_clean_slice`, `slice_refused`, `unreadable`).
+_Avoid_: parte, partida
 _Campo_: sin término de arte
 
 **Pase final de importantes**:

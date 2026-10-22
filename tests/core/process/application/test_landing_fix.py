@@ -610,7 +610,9 @@ def test_merge_failed_diagnoses_once_closes_the_pull_request_and_restarts_fresh(
 
     assert result.step == "diagnose"
     assert ports.tracker.closed_pull_requests == [URL.format(5)]
-    assert ports.tracker.comments == [("GH-5", "Restarted by landing: stale premise")]
+    assert ports.tracker.comments == [
+        ("GH-5", "Restarted by landing: stale premise (cost so far: $1.90)")
+    ]
     assert launcher.spawned[0][:6] == ["agentic", "run", "--issue", "5", "--fresh", "--detach"]
     closure = ports.documents.closures["GH-5"]
     assert closure["landing_restarts"] == 1
@@ -1301,3 +1303,124 @@ def test_a_round_over_a_real_escalation_offers_neither(tmp_path):
     poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [], lands=lands, now=LAST_AT)
 
     assert lands == []
+
+
+# --- GH-297: the restart notice carries the closed reason and the cost, and waits for no one ----
+
+
+def _stamped_entry(monkeypatch, **keys):
+    """What the slice executor leaves on the diagnose entry before the diagnoser runs: the
+    closed reason the landing decided, written through the landing's own `_stamp`."""
+    run = landing_fix.diagnose
+
+    def stamped(context):
+        landing_fix._stamp(context, **keys)
+        run(context)
+
+    monkeypatch.setattr(landing_fix, "diagnose", stamped)
+
+
+def _restart_comments(ports):
+    return [text for _, text in ports.tracker.comments if text.startswith("Restarted by landing")]
+
+
+def test_the_restart_comment_carries_the_closed_reason_the_diagnosis_and_the_cost_so_far(
+    tmp_path, monkeypatch
+):
+    _stamped_entry(monkeypatch, restart_why="no_clean_slice")
+    ports = _merge_failed(
+        _ports(5),
+        ScriptedRunner(landing_diagnoser=[_delivery()]),
+        cost_usd=1.5,
+        landing_cost_carried=0.25,
+    )
+    launcher = FakeLauncher()
+
+    _land_at(ports, tmp_path, START, launcher)
+
+    assert _restart_comments(ports) == [
+        "Restarted by landing: no_clean_slice: stale (cost so far: $2.15)"
+    ]
+    assert ports.documents.closures["GH-5"]["landing_cost_carried"] == pytest.approx(2.15)
+    assert launcher.spawned and launcher.spawned[0][:6] == [
+        "agentic",
+        "run",
+        "--issue",
+        "5",
+        "--fresh",
+        "--detach",
+    ]
+
+
+def test_the_restart_comment_names_integration_work_and_the_slices_already_landed(
+    tmp_path, monkeypatch
+):
+    _stamped_entry(monkeypatch, restart_why="no_clean_slice", integration_work=True)
+    landed = [
+        {"units": ["a"], "pull_request": URL.format(11)},
+        {"units": ["b"], "pull_request": URL.format(12)},
+    ]
+    ports = _merge_failed(
+        _ports(5),
+        ScriptedRunner(landing_diagnoser=[_delivery()]),
+        cost_usd=1.0,
+        landed_slices=landed,
+    )
+
+    _land_at(ports, tmp_path, START, FakeLauncher())
+
+    assert _restart_comments(ports) == [
+        "Restarted by landing: no_clean_slice (integration work): stale"
+        " (cost so far: $1.40; landed slices: #11, #12)"
+    ]
+
+
+def test_a_document_without_a_closed_reason_gets_todays_text_plus_the_cost(tmp_path):
+    ports = _merge_failed(_ports(5), ScriptedRunner(landing_diagnoser=[_delivery()]), cost_usd=1.5)
+
+    _land_at(ports, tmp_path, START, FakeLauncher())
+
+    assert _restart_comments(ports) == ["Restarted by landing: stale (cost so far: $1.90)"]
+
+
+def test_a_comment_that_fails_is_logged_and_the_fresh_run_still_spawns(tmp_path):
+    ports = _merge_failed(_ports(5), ScriptedRunner(landing_diagnoser=[_delivery()]), cost_usd=1.0)
+    ports.tracker.comment_failures = 1
+    launcher = FakeLauncher()
+
+    _, lines = _land_at(ports, tmp_path, START, launcher)
+
+    assert any("comment failed: gh issue failed: scripted" in line for line in lines)
+    assert any(line.startswith("agentic: land: GH-5: comment failed") for line in lines)
+    assert len(launcher.spawned) == 1 and "--fresh" in launcher.spawned[0]
+    assert ports.documents.closures["GH-5"]["landing_restarts"] == 1
+
+
+def test_the_restart_never_waits_for_approval_and_its_comment_is_not_a_human_decision(tmp_path):
+    from agentic.core.process.application.resume import human_decision
+
+    ports = _merge_failed(_ports(5), ScriptedRunner(landing_diagnoser=[_delivery()]), cost_usd=1.0)
+    launcher = FakeLauncher()
+
+    _land_at(ports, tmp_path, START, launcher)
+
+    (text,) = _restart_comments(ports)
+    assert len(launcher.spawned) == 1
+    assert ports.tracker.labels == []
+    assert human_decision([text]) is None
+    assert human_decision(["Escalated: x", text, "go on with option B"]) == "go on with option B"
+
+
+def test_the_restart_at_the_depth_limit_still_escalates_without_the_notice(tmp_path, monkeypatch):
+    _stamped_entry(monkeypatch, restart_why="single_unit")
+    ports = _merge_failed(
+        _ports(5),
+        ScriptedRunner(landing_diagnoser=[_delivery()]),
+        landing_restarts=1,
+    )
+    launcher = FakeLauncher()
+
+    _land_at(ports, tmp_path, START, launcher)
+
+    assert launcher.spawned == [] and _restart_comments(ports) == []
+    assert ports.tracker.labels == [("GH-5", "needs-human")]
