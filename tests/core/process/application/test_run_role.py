@@ -1231,3 +1231,32 @@ async def test_the_developer_gets_the_standards_by_index_and_a_verifier_gets_the
     assert knowledge.standards_whole is False and knowledge.standards_from == CHECKOUT
     await _run(TECH_LEAD, ports, runner, cwd=CHECKOUT)
     assert knowledge.standards_whole is True and knowledge.standards_from == CHECKOUT
+
+
+@pytest.mark.parametrize(
+    "role",
+    [r for r in ROLES if r.reads_knowledge or r.reads_standards],
+    ids=lambda role: role.slug,
+)
+async def test_every_reader_gets_an_index_from_the_checkout_it_runs_in(role, tmp_path):
+    # The knowledge adapter is built over ANOTHER directory with other content: the index
+    # can only come from the `cwd` the role runs in. And one real entry of that index
+    # exists under the checkout (or is one of the files the system writes there).
+    from agentic.core.knowledge.adapters.filesystem.knowledge import FilesystemKnowledge
+
+    other, checkout = tmp_path / "other", tmp_path / "checkout"
+    for root, name in ((other, "elsewhere"), (checkout, "here")):
+        (root / "docs/product").mkdir(parents=True)
+        (root / "docs/product" / f"{name}.md").write_text(f"# {name}\n", encoding="utf-8")
+        (root / "CODING_STANDARDS.md").write_text("# S\n\n## 1. Hex\n\nx\n", encoding="utf-8")
+    runner = ScriptedRunner(**{role.slug: [delivered()]})
+    ports = memory_ports(knowledge=FilesystemKnowledge(other), runner=runner)
+    state = {"id": "GH-1", "title": "t", "description": "d", "sections": {}}
+    cfg = Configuration(product_dir=other, role_retries=0)
+    await run_role(state, role, cfg, ports, cwd=checkout, **PLACEHOLDERS)
+    assert runner.calls[0]["cwd"] == checkout
+    files = ports.workspace.indexes[checkout]
+    listed = " ".join(files.values())
+    assert "docs/product/here.md" in listed and "elsewhere" not in listed
+    assert (checkout / "docs/product/here.md").exists()
+    assert not (checkout / "docs/product/elsewhere.md").exists()
