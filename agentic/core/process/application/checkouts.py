@@ -19,6 +19,7 @@ from ..domain import presubmit, rules
 from ..domain.roles import Role
 from ..domain.task import INTEGRATION, TaskState
 from .ports import Checkout, Ports
+from .release import release_checkout
 
 
 class SetupFailed(Exception):
@@ -73,6 +74,7 @@ def _prepared(checkout: Checkout, state: TaskState, cfg: Configuration, ports: P
     for step, command in ports.stack.setup(task_base(state, ports)).items():
         result = ports.commands.run(checkout.path, command, cfg.check_timeout_s)
         if not result.passed:
+            release_checkout(ports, checkout.path)
             ports.workspace.discard(checkout.path)
             said = presubmit.said(result.output, result.timed_out, cfg.check_timeout_s)
             raise SetupFailed(checkout.branch, step, command, said)

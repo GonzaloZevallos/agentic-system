@@ -15,6 +15,7 @@ from agentic.core.process.application.ports import CommandResult
 from agentic.core.process.domain.task import WAITING_ON_HUMAN
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
+    FakeReaper,
     MemoryCommands,
     MemoryStack,
     MemoryWorkspace,
@@ -191,3 +192,17 @@ async def test_a_setup_that_fails_outside_the_fan_in_still_reaches_the_human(cfg
     assert patch["status"] == WAITING_ON_HUMAN
     assert "'venv' failed" in patch["escalated"]
     assert ports.workspace.pushed == []  # nothing was delivered
+
+
+def test_a_checkout_whose_setup_failed_is_reaped_before_it_is_discarded(cfg):
+    journal: list[str] = []
+    commands = MemoryCommands(**{"uv venv": [CommandResult(1, "no python 3.13")]})
+    ports = ports_with(commands=commands)
+    assert isinstance(ports.workspace, MemoryWorkspace) and isinstance(ports.reaper, FakeReaper)
+    ports.workspace.journal = journal
+    ports.reaper.journal = journal
+
+    with pytest.raises(SetupFailed):
+        task_checkout(TASK, cfg, ports)
+
+    assert journal == ["reap:GH-12", "discard:GH-12"]

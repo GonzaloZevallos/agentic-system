@@ -486,6 +486,9 @@ class MemoryWorkspace:
     `rename_branch`; `checkouts` are the worktrees on disk."""
 
     ROOT = Path("/memory/worktrees")
+    # GH-315: when a test sets it, every removal appends `kind:name` to a list shared with a
+    # `FakeReaper`, so the order of reap and removal is observable.
+    journal: list[str] | None = None
 
     def __init__(self) -> None:
         # Path -> the repository it belongs to; a path outside it is in none.
@@ -647,6 +650,7 @@ class MemoryWorkspace:
         return Checkout(branch, path, base, created=created)
 
     def discard(self, path: Path) -> None:
+        self._noted("discard", path.name)
         self.discarded.append(path)
         self.on_disk.discard(path)
 
@@ -820,6 +824,7 @@ class MemoryWorkspace:
         return self.commit_dates.get(ref)
 
     def cleanup(self, task_id: str) -> None:
+        self._noted("cleanup", task_id)
         if self.cleanup_error is not None:
             raise GitError(self.cleanup_error)
         self.cleaned.append(task_id)
@@ -912,11 +917,16 @@ class MemoryWorkspace:
     def checkout_path(self, name: str) -> Path:
         return self.ROOT / name
 
+    def _noted(self, kind: str, name: str) -> None:
+        if self.journal is not None:
+            self.journal.append(f"{kind}:{name}")
+
     def detached_checkout(self, name: str, sha: str) -> Path:
         self.detached.append(name)
         return self.checkout_path(name)
 
     def remove_checkout(self, name: str) -> None:
+        self._noted("remove", name)
         self.removed_checkouts.append(name)
 
     def branches(self, prefix: str) -> list[str]:
@@ -1264,9 +1274,12 @@ class FakeReaper:
         # GH-315: what `reap_within` answers, and the paths of each call.
         self.reaped_within: tuple[ReapedProcess, ...] = ()
         self.within_calls: list[tuple[Path, ...]] = []
+        self.journal: list[str] | None = None
 
     def reap_within(self, paths: Sequence[Path]) -> tuple[ReapedProcess, ...]:
         self.within_calls.append(tuple(paths))
+        if self.journal is not None:
+            self.journal.extend(f"reap:{path.name}" for path in paths)
         return self.reaped_within
 
     def reap_task(self, task_id: str) -> tuple[ReapedProcess, ...]:
