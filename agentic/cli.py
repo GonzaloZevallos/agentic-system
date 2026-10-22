@@ -1081,6 +1081,7 @@ async def _poll(
                     lock=lock,
                     current_boot=liveness.current_boot_id(),
                     eval_set=_round_eval_set(ports),
+                    system_version=telemetry.fresh_system_version,
                 ):
                     print(line, flush=True)
             except TrackerCallFailed as exc:  # a stalled or unreachable `gh` ends this round

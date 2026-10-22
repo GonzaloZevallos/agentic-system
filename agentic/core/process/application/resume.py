@@ -34,6 +34,7 @@ from .poll import (
     LANDING,
     RESTARTED_BY_LANDING,
     RETAKEN,
+    RETAKEN_AFTER_CRASH,
 )
 from .ports import Ports, Workspace
 from .run_role import task_cap
@@ -52,6 +53,7 @@ SYSTEM_COMMENTS = (
     STARTED_OVER,
     AUTO_RESUMED,
     RETAKEN,
+    RETAKEN_AFTER_CRASH,
     AUTO_MERGE_REFUSED,
     AUTO_MERGED,
     LANDING,

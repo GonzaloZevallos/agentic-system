@@ -1651,3 +1651,212 @@ def test_the_poller_neither_launches_nor_retakes_nor_resumes_nor_closes_a_split_
 
     assert lines == ["agentic: poll: nothing to do this round"]
     assert launcher.spawned == []
+
+
+# --- GH-308: a run that raised under the graph is retaken by the poller --------------
+
+
+def _crashed_lock(task_id: str = "GH-30", version: str = "abc123") -> dict[str, LockRecord]:
+    return _dead_lock(task_id, boot_id="boot-now", crashed_version=version)
+
+
+def _crash_comments(*keys: str) -> list[IssueComment]:
+    """A human comment, then one `Retaken after crash:` comment per key, as `execute` writes."""
+    from agentic.core.process.domain import rules
+
+    human = IssueComment(body="a human decision", created_at="2026-10-05T07:00:00Z")
+    retaken = [
+        IssueComment(
+            body=poll.RETAKEN_AFTER_CRASH + rules.crash_retake_comment(key, key, n, 2),
+            created_at="2026-10-05T09:00:00Z",
+        )
+        for n, key in enumerate(keys, start=1)
+    ]
+    return [human, *retaken]
+
+
+def _gather_crash(ports, locks, version="abc123"):
+    crash: dict[int, poll.CrashRetake] = {}
+    result = poll.gather_retakes(
+        ports, locks, "boot-now", system_version=lambda: version, crash=crash
+    )
+    return result, crash
+
+
+def test_retaken_after_crash_is_a_system_comment_a_resume_reads_past():
+    from agentic.core.process.application import resume
+
+    assert poll.RETAKEN_AFTER_CRASH in resume.SYSTEM_COMMENTS
+
+
+def test_gather_retakes_returns_a_crashed_same_boot_run_apart_with_its_counts():
+    ports = memory_ports()
+    _open_task(ports)
+    ports.tracker.timestamped["GH-30"] = _crash_comments("abc123")
+    (retakes, lines), crash = _gather_crash(ports, _Locks(_crashed_lock("GH-30", "abc123+dirty")))
+    assert (retakes, lines) == ([], [])
+    assert crash == {30: poll.CrashRetake(1, "abc123+dirty", "abc123")}
+
+
+def test_the_system_version_is_read_only_for_a_crash_mark_and_once_per_round():
+    ports = memory_ports()
+    _open_task(ports, "GH-30")
+    _open_task(ports, "GH-31")
+    _open_task(ports, "GH-32")
+    calls: list[int] = []
+
+    def version():
+        calls.append(1)
+        return "abc123"
+
+    plain = _Locks(_dead_lock("GH-32"))
+    poll.gather_retakes(ports, plain, "boot-now", system_version=version)
+    assert calls == []
+    both = _Locks({**_crashed_lock("GH-30"), **_crashed_lock("GH-31")})
+    poll.gather_retakes(ports, both, "boot-now", system_version=version, crash={})
+    assert calls == [1]
+
+
+def test_a_crash_retake_is_spawned_with_its_own_comment_and_counted_line():
+    ports = memory_ports()
+    _open_task(ports)
+    launcher = FakeLauncher()
+    lines = _round(
+        _cfg("/p"),
+        ports,
+        MemoryRunRegistry(),
+        launcher,
+        ESCALATED_AT,
+        lock=_Locks(_crashed_lock("GH-30", "abc123+dirty")),
+        system_version=lambda: "abc123",
+    )
+    assert lines[0] == "agentic: poll: retake #30 -> pid 4242"
+    assert lines[1] == "agentic: poll: retake #30 -> not registered (retake 1 of 2)"
+    assert ports.tracker.comments == [
+        (
+            "GH-30",
+            "Retaken after crash: run raised under abc123+dirty; resuming under abc123 "
+            "(retake 1 of 2)",
+        )
+    ]
+    assert len(launcher.spawned) == 1
+
+
+def test_a_round_leaves_a_crash_to_the_human_once_its_version_cap_is_spent_and_says_it_each_round():
+    ports = memory_ports()
+    _open_task(ports)
+    ports.tracker.timestamped["GH-30"] = _crash_comments("abc123", "abc123")
+    launcher = FakeLauncher()
+    locks = _Locks(_crashed_lock("GH-30"))
+    kw = {"lock": locks, "system_version": lambda: "abc123+dirty"}  # same key as the clean sha
+    first = _round(_cfg("/p"), ports, MemoryRunRegistry(), launcher, ESCALATED_AT, **kw)
+    second = _round(_cfg("/p"), ports, MemoryRunRegistry(), launcher, ESCALATED_AT, **kw)
+    assert first == second
+    assert len(first) == 1
+    assert first[0].startswith(
+        "agentic: poll: #30 crashed, crash retake cap spent for this system version (lock pid 777"
+    )
+    assert first[0].endswith("left to the human: agentic resume --issue 30")
+    assert launcher.spawned == [] and ports.tracker.comments == []
+
+
+def test_the_same_comments_under_a_new_version_retake_again():
+    ports = memory_ports()
+    _open_task(ports)
+    ports.tracker.timestamped["GH-30"] = _crash_comments("abc123", "abc123")
+    launcher = FakeLauncher()
+    lines = _round(
+        _cfg("/p"),
+        ports,
+        MemoryRunRegistry(),
+        launcher,
+        ESCALATED_AT,
+        lock=_Locks(_crashed_lock("GH-30", "abc123")),
+        system_version=lambda: "def456",
+    )
+    assert lines[0] == "agentic: poll: retake #30 -> pid 4242"
+    assert "resuming under def456 (retake 1 of 2)" in ports.tracker.comments[0][1]
+
+
+def test_a_total_of_six_crash_retakes_across_versions_goes_to_the_human():
+    ports = memory_ports()
+    _open_task(ports)
+    ports.tracker.timestamped["GH-30"] = _crash_comments("a1", "a1", "b2", "b2", "c3", "c3")
+    launcher = FakeLauncher()
+    lines = _round(
+        _cfg("/p"),
+        ports,
+        MemoryRunRegistry(),
+        launcher,
+        ESCALATED_AT,
+        lock=_Locks(_crashed_lock("GH-30")),
+        system_version=lambda: "d4",
+    )
+    assert len(lines) == 1
+    assert lines[0].startswith("agentic: poll: #30 crashed, crash retake cap spent (lock pid 777")
+    assert launcher.spawned == [] and ports.tracker.comments == []
+
+
+def test_a_human_comment_resets_both_crash_counts():
+    ports = memory_ports()
+    _open_task(ports)
+    ports.tracker.timestamped["GH-30"] = [
+        *_crash_comments("abc123", "abc123"),
+        IssueComment(body="try again", created_at="2026-10-05T10:00:00Z"),
+    ]
+    (_, _), crash = _gather_crash(ports, _Locks(_crashed_lock("GH-30")))
+    assert crash == {30: poll.CrashRetake(0, "abc123", "abc123")}
+
+
+@pytest.mark.parametrize("version", ["unknown", "unknown+dirty", None, ""])
+def test_a_crash_under_an_unknown_system_version_goes_to_the_human_with_no_comment(version):
+    ports = memory_ports()
+    _open_task(ports)
+    launcher = FakeLauncher()
+    lines = _round(
+        _cfg("/p"),
+        ports,
+        MemoryRunRegistry(),
+        launcher,
+        ESCALATED_AT,
+        lock=_Locks(_crashed_lock("GH-30")),
+        system_version=lambda: version,
+    )
+    assert len(lines) == 1 and "#30 crashed, system version unknown (lock pid 777" in lines[0]
+    assert launcher.spawned == [] and ports.tracker.comments == []
+
+
+def test_a_crashed_record_of_another_boot_with_an_unknown_version_falls_to_the_reboot_retake():
+    ports = memory_ports()
+    _open_task(ports)
+    launcher = FakeLauncher()
+    locks = _Locks(_dead_lock("GH-30", boot_id="boot-old", crashed_version="abc123"))
+    _round(
+        _cfg("/p"),
+        ports,
+        MemoryRunRegistry(),
+        launcher,
+        ESCALATED_AT,
+        lock=locks,
+        system_version=lambda: "unknown",
+    )
+    assert ports.tracker.comments == [("GH-30", "Retaken after reboot: previous boot")]
+
+
+def test_gather_retakes_reaps_a_same_boot_crash_left_to_the_human():
+    reaper = FakeReaper(reaped=_LEFT, reaped_runs=_LEFT)
+    ports = memory_ports(reaper=reaper)
+    _open_task(ports)
+    ports.tracker.timestamped["GH-30"] = _crash_comments("abc123", "abc123")
+    (_, lines), _ = _gather_crash(ports, _Locks(_crashed_lock("GH-30")))
+    assert reaper.calls == [("run", "GH-30", 777, None)]
+    assert lines[0].endswith("; reaped 1 process: `uv run sample_app.py` (kill)")
+
+
+def test_a_crash_mark_on_a_task_that_is_not_interrupted_retakes_nothing():
+    ports = memory_ports()
+    _open_task(ports, "GH-30", status="ready_for_review")
+    _open_task(ports, "GH-31", escalated="Developer failed")
+    locks = _Locks({**_crashed_lock("GH-30"), **_crashed_lock("GH-31")})
+    (result, crash) = _gather_crash(ports, locks)
+    assert result == ([], []) and crash == {}

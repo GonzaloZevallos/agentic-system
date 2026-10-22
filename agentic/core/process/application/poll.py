@@ -62,6 +62,11 @@ AUTO_RESUMED = "Auto-resumed: "
 # `resume.SYSTEM_COMMENTS` beside `AUTO_RESUMED`, posted only once the spawn returned a pid.
 RETAKEN = "Retaken after reboot: "
 
+# How the comment of a retake after the run raised under the graph starts (GH-308): registered
+# into `resume.SYSTEM_COMMENTS` too. Its text after the prefix is `rules.crash_retake_comment`'s,
+# the one function that writes it and `rules.crash_retake_counts` reads it.
+RETAKEN_AFTER_CRASH = "Retaken after crash: "
+
 # The two comments the automatic merge posts (GH-178, ADR-0045), both registered into
 # `resume.SYSTEM_COMMENTS` the same way: a refusal the human can act on, and the merge
 # itself. Defined here, imported by `resume.py`, so neither is ever read as a human's answer.
@@ -636,13 +641,43 @@ def escalate_persisted_limits(
     return lines
 
 
+@dataclass(frozen=True)
+class CrashRetake:
+    """What `gather_retakes` read once about a run that raised under the graph, handed to
+    `execute` so it never recounts: the retakes already made under `key`, the version the
+    run recorded when it raised, and the key (the current version, without `+dirty`) this
+    retake resumes under."""
+
+    prior_at_version: int
+    crashed_version: str
+    key: str
+
+
+def _prior_crash_retakes(comments: Sequence[IssueComment], key: str) -> tuple[int, int]:
+    """`(at_version, total)` of the `Retaken after crash:` comments after the last comment
+    that is not the system's own, so a human comment resets both."""
+    from .resume import SYSTEM_COMMENTS
+
+    last_non_system = _last_non_system_index(comments, SYSTEM_COMMENTS)
+    bodies = [comment.body for comment in comments[last_non_system + 1 :]]
+    return rules.crash_retake_counts(bodies, key, RETAKEN_AFTER_CRASH)
+
+
 def _human_line(
-    number: int, record: LockRecord, other_boot: bool | None, verdict_cap_spent: bool
+    number: int,
+    record: LockRecord,
+    other_boot: bool | None,
+    verdict_cap_spent: bool,
+    crash_why: str | None = None,
 ) -> str:
     """The one line a run left to the human says: what happened to its lock, whose it
     was, and the command that takes it up. It repeats every round (the poller keeps no
-    state), which is how a human watching the output learns of it."""
-    if verdict_cap_spent:
+    state), which is how a human watching the output learns of it. `crash_why` is what a
+    record with a crash mark adds: which of the crash caps is spent, or that the system
+    version says nothing."""
+    if crash_why is not None:
+        what = f"crashed, {crash_why}"
+    elif verdict_cap_spent:
         what = "retake cap spent"
     elif record.stopped_at_shutdown:
         what = "stopped at shutdown"
@@ -657,10 +692,22 @@ def _human_line(
 
 
 def gather_retakes(
-    ports: Ports, lock: RunLock, current_boot: str | None
+    ports: Ports,
+    lock: RunLock,
+    current_boot: str | None,
+    *,
+    system_version: Callable[[], str | None] = lambda: None,
+    crash: dict[int, CrashRetake] | None = None,
 ) -> tuple[list[int], list[str]]:
     """Every open task whose run a reboot interrupted (`rules.interrupted_run`), and the
-    lines for the ones left to the human. The lock is only ever *read* here
+    lines for the ones left to the human. A run that raised under the graph (its record
+    carries `crashed_version`, GH-308) is retaken the same way, but is returned apart: its
+    issue is a key of `crash` (the mapping the caller hands in, filled here, the same shape
+    as `gather_merges`' `lands`) with the counts `execute` needs, and is not in the list.
+    `system_version` is read only when some record carries the mark, at most once per
+    round, and keys the per-version count (`rules.crash_version_key`); the counts come from
+    the comments after the last human one, read once with the reboot count. The lock is
+    only ever *read* here
     (`RunLock.read`, and `RunLock.refusal` for liveness, which never writes): taking it
     over is the retaken `resume`'s own first act, never the poller's, and a decision made
     over a record the poller had just rewritten would read its own pid. Liveness is
@@ -670,6 +717,8 @@ def gather_retakes(
     cheap verdict did not already rule out."""
     retakes: list[int] = []
     lines: list[str] = []
+    crashes = crash if crash is not None else {}
+    read_version = functools.cache(system_version)
     for task_id in ports.documents.ids():
         number = ports.inbox.issue_of(task_id)
         if number is None:
@@ -680,18 +729,40 @@ def gather_retakes(
         raw = ports.documents.load(task_id) or {}
         verdict = boot_verdict(record.boot_id, current_boot)
         other_boot = None if verdict == "unknown" else verdict == "other_boot"
-        facts = rules.LockFacts(other_boot, alive=lock.refusal(task_id) is not None)
-        first = rules.interrupted_run(raw, facts, 0)
+        facts = rules.LockFacts(
+            other_boot,
+            alive=lock.refusal(task_id) is not None,
+            crashed_version=record.crashed_version,
+        )
+        key = (
+            rules.crash_version_key(read_version()) if record.crashed_version is not None else None
+        )
+        first = rules.interrupted_run(raw, facts, 0, 0, 0, key)
         if first in ("none", "running"):
             continue
-        prior = _prior_retakes(ports.tracker.timestamped_comments(task_id))
-        decision = rules.interrupted_run(raw, facts, prior)
+        comments = ports.tracker.timestamped_comments(task_id)
+        prior = _prior_retakes(comments)
+        at_version, total = (0, 0) if key is None else _prior_crash_retakes(comments, key)
+        decision = rules.interrupted_run(raw, facts, prior, at_version, total, key)
         match decision:
-            case "retake" | "retake_crash":
+            case "retake":
                 retakes.append(number)
+            case "retake_crash":
+                assert key is not None and record.crashed_version is not None  # the rule's own
+                crashes[number] = CrashRetake(at_version, record.crashed_version, key)
             case "human":
                 cap_spent = first in ("retake", "retake_crash")  # only the count turned it
-                line = _human_line(number, record, other_boot, cap_spent)
+                crash_why = None
+                if record.crashed_version is not None:
+                    if key is None:
+                        crash_why = "system version unknown"
+                    elif first == "retake_crash":
+                        crash_why = "crash retake cap spent" + (
+                            " for this system version"
+                            if at_version >= rules.CRASH_RETAKE_PER_VERSION_MAX
+                            else ""
+                        )
+                line = _human_line(number, record, other_boot, cap_spent, crash_why)
                 # A run dead in THIS boot may have left processes alive (GH-282, ADR-0052):
                 # its own scope only, never the task's. An other-boot record has nothing
                 # alive, and an unknown boot proves nothing. Repeating it every round is
@@ -825,20 +896,26 @@ def _spawn_resume(
     comment: str,
     register_timeout_s: float,
     sleep: Callable[[float], None],
+    crash: CrashRetake | None = None,
 ) -> list[str]:
     """What a `resume` and a `retake` share (GH-176): a detached `agentic resume --issue N
     --yes --detach` child, the system comment (`comment`, `AUTO_RESUMED` or `RETAKEN`
     plus its reason) posted only once `spawn` returned a pid, and the wait for the child
     to register. A retake that never registered says so, with which of its tries it was:
     it is the only case where the wait ends with the registry flock held for nothing.
-    Neither kind records a launch attempt: that calendar belongs to `launch` alone."""
+    Neither kind records a launch attempt: that calendar belongs to `launch` alone. A crash
+    retake (`crash`, counted once by `gather_retakes`) names its own count and cap there."""
     number = action.issue
     task_id = ports.inbox.task_id(number)
-    prior = (
-        _prior_retakes(ports.tracker.timestamped_comments(task_id))
-        if action.kind == "retake"
-        else 0
-    )
+    if crash is not None:
+        prior, cap = crash.prior_at_version, rules.CRASH_RETAKE_PER_VERSION_MAX
+    else:
+        prior = (
+            _prior_retakes(ports.tracker.timestamped_comments(task_id))
+            if action.kind == "retake"
+            else 0
+        )
+        cap = rules.RETAKE_AFTER_REBOOT_MAX
     argv = _argv(argv0, "resume", number, product_dir, "--yes", "--detach")
     try:
         pid = launcher.spawn(argv)
@@ -853,8 +930,7 @@ def _spawn_resume(
     registered = await_registration(registry, task_id, register_timeout_s, sleep)
     if action.kind == "retake" and not registered:
         lines.append(
-            f"agentic: poll: retake #{number} -> not registered "
-            f"(retake {prior + 1} of {rules.RETAKE_AFTER_REBOOT_MAX})"
+            f"agentic: poll: retake #{number} -> not registered (retake {prior + 1} of {cap})"
         )
     return lines
 
@@ -870,6 +946,7 @@ def execute(
     register_timeout_s: float = REGISTER_WAIT_S,
     sleep: Callable[[float], None] = time.sleep,
     land_kinds: Mapping[int, rules.RunKind] | None = None,
+    crash_retakes: Mapping[int, CrashRetake] | None = None,
 ) -> list[str]:
     """Carries out this round's actions, in the order `rules.poll_plan` already fixed:
     a detached `agentic close|resume|run` child each, through `launcher.spawn` alone --
@@ -888,7 +965,10 @@ def execute(
     `registry.exclusive()`, so the next poller to decide -- this product's next round,
     or another product's on the same machine -- never reads a stale count. A `land` child is
     told the kind it registers under, `--run-kind`, from `land_kinds` (the classified
-    candidates of this round; an issue not in it is `land_model`, the kind that counts)."""
+    candidates of this round; an issue not in it is `land_model`, the kind that counts).
+    A `retake` whose `reason` is `crash` (GH-308) posts `RETAKEN_AFTER_CRASH` with the text
+    `rules.crash_retake_comment` formats from `crash_retakes[issue]`, counted by
+    `gather_retakes` and never here; a reboot retake is as it was."""
     product = ports.stack.product()
     product_dir = str(cfg.product_dir)
     total_attempts = len(rules.LAUNCH_SCHEDULE)
@@ -916,6 +996,26 @@ def execute(
                 f"{AUTO_RESUMED}{reason.replace('_', ' ')}",
                 register_timeout_s,
                 sleep,
+            )
+        elif action.kind == "retake" and action.reason == "crash":
+            crash = (crash_retakes or {})[action.issue]
+            text = rules.crash_retake_comment(
+                crash.crashed_version,
+                crash.key,
+                crash.prior_at_version + 1,
+                rules.CRASH_RETAKE_PER_VERSION_MAX,
+            )
+            lines += _spawn_resume(
+                action,
+                ports,
+                registry,
+                launcher,
+                argv0,
+                product_dir,
+                f"{RETAKEN_AFTER_CRASH}{text}",
+                register_timeout_s,
+                sleep,
+                crash,
             )
         elif action.kind == "retake":
             lines += _spawn_resume(
@@ -1016,6 +1116,7 @@ def run_once(
     current_boot: str | None,
     eval_set: frozenset[int] | None = frozenset(),
     live_steps: frozenset[LandingStepKind] = landing_plan.LIVE_STEPS,
+    system_version: Callable[[], str | None] = lambda: None,
 ) -> list[str]:
     """One round: gather, decide (`rules.poll_plan`), carry out. The slot count and the
     launch candidates are read under `registry.exclusive()` together (Tech Lead plan):
@@ -1036,10 +1137,15 @@ def run_once(
     cap (`rules.LAND_HEADROOM`, GH-270): `land_slots` is computed here from the same `live`
     and nothing else. One line per `PollPlan.deferred` item ends the
     round's output, and `nothing to do this round` is printed only when there is nothing
-    at all to say."""
+    at all to say. `system_version` (GH-308) is the non-memoising read of the stage0 version
+    that keys the count of crash retakes, injected by `cli` and called only when some lock
+    record carries a crash mark."""
     closes = gather_closes(ports)
     resumes = gather_resumes(ports, now)
-    retakes, human_lines = gather_retakes(ports, lock, current_boot)
+    crash_retakes: dict[int, CrashRetake] = {}
+    retakes, human_lines = gather_retakes(
+        ports, lock, current_boot, system_version=system_version, crash=crash_retakes
+    )
     human_lines += escalate_persisted_limits(cfg, ports, resumes)
     # Outside the lock, and only with pacing on: pacing off reads and writes nothing.
     fresh, skipped = _recent_spend(ports, now) if cfg.spend_pacing else ([], 0)
@@ -1081,6 +1187,7 @@ def run_once(
             available_slots=available,
             now=now,
             retakes=retakes,
+            crash_retakes=sorted(crash_retakes),
             merges=merges,
             lands=lands,
             live_exempt=exempt_live,
@@ -1098,6 +1205,7 @@ def run_once(
             register_timeout_s,
             sleep,
             {c.issue: c.kind for c in lands},
+            crash_retakes,
         )
         deferral_lines = [deferred_line(d) for d in plan.deferred]
     # Outside the registry's exclusive section: reflecting takes no slot of the cap and
