@@ -5,7 +5,7 @@ from typing import get_args
 import pytest
 
 from agentic.core.process.application.ports import BranchPullRequest
-from agentic.core.process.domain import document, roles, rules, task
+from agentic.core.process.domain import ci, document, roles, rules, task
 from agentic.core.process.domain.adr_numbers import Renaming
 from agentic.core.process.domain.denials import denial_for
 from agentic.core.process.domain.roles import (
@@ -2742,3 +2742,90 @@ def test_the_adr_probe_gate_ignores_the_collision_fact_it_is_asked_to_derive():
     renaming = Renaming((("docs/adr/0004-x.md", "docs/adr/0010-x.md"),), {})
     for known in (None, renaming):
         assert rules.adr_probe_wanted(replace(_probe_facts(), adr_collision=known)) is True
+
+
+# GH-294 pin: with no `important` open the decision is what it was before the final
+# important pass existed. This table is written first and never edited by that change.
+
+PIN_HEAD = "a" * 40
+PIN_MASTER = "b" * 40
+
+
+def _pin_facts(**over) -> rules.MergeFacts:
+    base = rules.MergeFacts(
+        task_id="GH-9",
+        status="ready_for_review",
+        reviewed_unit_approved=True,
+        reviewed_head=PIN_HEAD,
+        open_blocking=0,
+        open_important=0,
+        pr_state="OPEN",
+        pr_head=PIN_HEAD,
+        in_eval_set=False,
+        touched_paths=("agentic/x.py",),
+        attempts=1,
+        checks_head=PIN_HEAD,
+        checks_master=PIN_MASTER,
+        checks_passed=True,
+        current_master=PIN_MASTER,
+    )
+    return replace(base, **over)
+
+
+_PIN_RED = ci.CiVerdict("red", ("t",), ())
+_PIN_PENDING = ci.CiVerdict("pending", (), ("t",))
+_PIN_CI = {"ci_required": ("t",), "ci_head": PIN_HEAD}
+
+NO_IMPORTANT_DECISIONS = [
+    ("no findings", {}, ("merge", None)),
+    ("only blocking", {"open_blocking": 2}, ("refuse", "open_findings_blocking")),
+    ("not ready", {"status": "developing"}, ("refuse", "not_ready")),
+    ("not approved", {"reviewed_unit_approved": False}, ("refuse", "not_approved")),
+    ("ci red", {**_PIN_CI, "ci_verdict": _PIN_RED}, ("refuse", "ci_failed")),
+    (
+        "ci pending, spent",
+        {**_PIN_CI, "ci_verdict": _PIN_PENDING, "ci_waited_s": ci.CI_WAIT_MAX_S},
+        ("refuse", "ci_missing"),
+    ),
+    (
+        "ci unreadable, spent",
+        {
+            **_PIN_CI,
+            "ci_unreadable": ci.CiUnreadable("gh_unavailable"),
+            "ci_waited_s": ci.CI_WAIT_MAX_S,
+        },
+        ("refuse", "ci_unreadable"),
+    ),
+    ("checks failed", {"checks_passed": False}, ("refuse", "checks_failed")),
+    (
+        "checks failed on a conflict",
+        {"checks_passed": False, "failed_step": "conflict"},
+        ("refuse", "checks_failed"),
+    ),
+    ("merge conflict", {"conflicts": True}, ("refuse", "merge_conflict")),
+    (
+        "adr number taken",
+        {"adr_collision": Renaming((("docs/adr/0000-x.md", "docs/adr/0001-x.md"),), {})},
+        ("refuse", "adr_number_taken"),
+    ),
+    (
+        "attempts exhausted",
+        {"checks_master": "d" * 40, "attempts": rules.MERGE_ATTEMPTS_MAX},
+        ("refuse", "attempts_exhausted"),
+    ),
+    (
+        "merge failed",
+        {"merge_failures": rules.MERGE_CALLS_MAX},
+        ("refuse", "merge_failed"),
+    ),
+    ("checks to run", {"checks_passed": None, "attempts": 0}, ("run_checks", None)),
+]
+
+
+@pytest.mark.parametrize(
+    ("over", "expected"),
+    [(o, e) for _, o, e in NO_IMPORTANT_DECISIONS],
+    ids=[n for n, _, _ in NO_IMPORTANT_DECISIONS],
+)
+def test_with_no_important_open_the_merge_decision_is_what_it_was(over, expected):
+    assert rules.auto_merge_decision(_pin_facts(**over)) == rules.MergeDecision(*expected)

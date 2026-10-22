@@ -1014,3 +1014,58 @@ def test_a_busy_master_reaches_the_diagnose_only_through_the_pass_budget():
     assert _step("merge_conflict", busy).kind == "sync_master"
     spent = _spent(passes=landing.LANDING_PASSES_MAX, unsynced_for_upstream=0)
     assert _step("merge_conflict", spent).kind == "diagnose"
+
+
+# GH-294 pin: with no `important` open `landing_step` answers what it answered before the
+# final important pass existed. Written first, never edited by that change.
+
+NO_IMPORTANT_STEPS = [
+    ("blocking, fresh", "open_findings_blocking", {}, {}, ("fix", ("api",))),
+    (
+        "blocking, passes spent",
+        "open_findings_blocking",
+        {"passes": landing.LANDING_PASSES_MAX},
+        {},
+        ("diagnose", ()),
+    ),
+    ("ci failed, first", "ci_failed", {}, {}, ("rerun", ())),
+    ("ci failed, rerun spent", "ci_failed", {"reruns_on_head": 1}, {}, ("fix", ("api",))),
+    ("checks failed, first", "checks_failed", {}, {}, ("rerun", ())),
+    (
+        "checks failed, rerun spent",
+        "checks_failed",
+        {"reruns_on_head": 1},
+        {},
+        ("fix", ("api",)),
+    ),
+    (
+        "checks failed on a conflict",
+        "checks_failed",
+        {},
+        {"failed_step": "conflict"},
+        ("sync_master", ()),
+    ),
+    ("merge conflict", "merge_conflict", {}, {}, ("sync_master", ())),
+    ("attempts exhausted", "attempts_exhausted", {}, {}, ("sync_master", ())),
+    ("merge failed", "merge_failed", {}, {}, ("diagnose", ())),
+    ("master moved", "master_moved", {}, {}, ("wait", ())),
+    ("adr number taken, ambiguous", "adr_number_taken", {}, {}, ("diagnose", ())),
+    ("ci missing", "ci_missing", {}, {}, ("wait", ())),
+    ("ci unreadable", "ci_unreadable", {}, {}, ("wait", ())),
+    ("diagnosed", "merge_conflict", {"diagnosed": True}, {}, ("none", ())),
+]
+
+
+@pytest.mark.parametrize(
+    ("refusal", "spent", "facts", "expected"),
+    [(r, s, f, e) for _, r, s, f, e in NO_IMPORTANT_STEPS],
+    ids=[n for n, *_ in NO_IMPORTANT_STEPS],
+)
+def test_with_no_important_open_the_landing_step_is_what_it_was(refusal, spent, facts, expected):
+    step = _step(refusal, _spent(**spent), owners=("api",), **facts)
+    assert (step.kind, step.units) == expected
+    assert step.refusal == refusal
+
+
+def test_the_findings_refusal_without_important_files_the_followups_as_before():
+    assert _step("open_findings") == LandingStep("file_followups_and_land", "open_findings", ())
