@@ -1,3 +1,6 @@
+import ast
+from pathlib import Path
+
 import pytest
 import yaml
 
@@ -1114,3 +1117,79 @@ def test_the_estimate_keys_round_trip_when_the_state_carries_them():
     assert parsed["estimate_revisions"] == [{"cost_usd": 150.0, "source": "human"}]
     assert parsed["proposed_estimate"] == 180.0
     assert parsed["actual_files"] == 31
+
+
+_SLICE = {"branch": "agentic/GH-9.slice-1", "units": ["api"], "head": "a" * 40, "pr": "u/pull/5"}
+
+
+def test_a_document_without_landed_slices_renders_byte_identical():
+    assert document.render(_bare()) == document.render(_bare(landed_slices=[]))
+    assert "landed_slices" not in document.render(_bare())
+
+
+def test_landed_slices_render_as_one_flow_line_and_parse_back():
+    text = document.render(_bare(landed_slices=[_SLICE]))
+    assert [ln for ln in text.split("\n") if ln.startswith("landed_slices:")] == [
+        document._scalar_line("landed_slices", [_SLICE])
+    ]
+    assert document.parse(text)["landed_slices"] == [_SLICE]
+
+
+def test_landed_slices_written_twice_through_record_closure_replace_in_place():
+    raw = document.render(_bare(landed_slices=[_SLICE]))
+    second = {**_SLICE, "units": ["db"], "branch": "agentic/GH-9.slice-2"}
+    once = document.record_closure(raw, {"landed_slices": [_SLICE, second]})
+    twice = document.record_closure(once, {"landed_slices": [_SLICE, second, second]})
+    assert document.parse(once)["landed_slices"] == [_SLICE, second]
+    assert len(document.parse(twice)["landed_slices"]) == 3
+    assert twice.count("\nlanded_slices:") == 1
+    assert _lines_but(twice, "landed_slices") == _lines_but(raw, "landed_slices")
+
+
+# The keys the landing writes through `record_closure` that are not lists: every other key
+# of those calls must be in `RECORD_KEYS`, or a second write of its block value raises.
+_LANDING_SCALAR_KEYS = frozenset({"followups_filed", "landing_restarts", "landing_cost_carried"})
+_APPLICATION = Path(__file__).parents[4] / "agentic/core/process/application"
+
+
+def _keys_written_through_record_closure(source: str) -> set[str]:
+    """The string keys of every dict literal handed to a `record_closure(...)` call."""
+    keys: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        is_call = isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "record_closure"
+        if not is_call:
+            continue
+        for argument in node.args:
+            if isinstance(argument, ast.Dict):
+                keys.update(k.value for k in argument.keys if isinstance(k, ast.Constant))
+    return keys
+
+
+def _unrecorded(source: str) -> set[str]:
+    return (
+        _keys_written_through_record_closure(source) - _LANDING_SCALAR_KEYS - document.RECORD_KEYS
+    )
+
+
+def test_every_key_the_landing_writes_through_record_closure_is_a_scalar_or_a_record_key():
+    found = {
+        key
+        for path in sorted(_APPLICATION.glob("landing*.py"))
+        for key in _unrecorded(path.read_text(encoding="utf-8"))
+    }
+    assert found == set()
+
+
+def test_the_guard_rejects_a_list_key_that_is_not_in_record_keys():
+    source = 'ports.documents.record_closure(t, {"landing": [1], "new_list": [1]})'
+    assert _unrecorded(source) == {"new_list"}
+    assert _unrecorded('ports.documents.record_closure(t, {"landed_slices": [1]})') == set()
+
+
+def test_record_closure_refuses_a_list_key_missing_from_record_keys_when_it_is_a_block():
+    """The rejected input: a list key outside `RECORD_KEYS` written as a block by the
+    document is refused by the surgery, which is what the guard above protects against."""
+    raw = document.render(_bare(findings=[{"id": "F1", "text": "x"}]))
+    assert "findings" not in document.RECORD_KEYS
+    with pytest.raises(ValueError, match="findings"):
+        document.record_closure(raw, {"findings": [{"id": "F2"}]})

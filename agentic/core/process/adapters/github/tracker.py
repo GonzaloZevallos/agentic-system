@@ -211,8 +211,10 @@ class GhTracker:
         self._run = run
         self._log = log
 
-    def open_pull_request(self, task_id: str, branch: str, title: str, body: str) -> str:
-        if (number := issue_number(task_id)) is not None:
+    def open_pull_request(
+        self, task_id: str, branch: str, title: str, body: str, *, closes_issue: bool = True
+    ) -> str:
+        if closes_issue and (number := issue_number(task_id)) is not None:
             body = f"Closes #{number}\n\n{body}"
         # `--body-file`, as `open_issue`: a multibyte body near the bound is larger than
         # one argv slot takes, and the limit that can bite is GitHub's own (ADR-0034).

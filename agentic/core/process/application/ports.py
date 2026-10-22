@@ -638,6 +638,25 @@ class Workspace(Protocol):
         decides what to do with it."""
         ...
 
+    def build_slice(self, path: Path, master: str, heads: Sequence[str], branch: str) -> str | None:
+        """A slice of approved units on master (GH-297): in the checkout at `path`, creates
+        `branch` from `master` (resetting one an earlier round left) and merges each of
+        `heads` in the order given. Returns the new head's full sha, or `None` when any
+        merge conflicts: then the merge is aborted, the checkout is back where it was and
+        `branch` does not exist, so nothing half-merged is left. Raises `GitError` for a
+        `master` or a checkout git refuses."""
+        ...
+
+    def integration_paths(
+        self, path: Path, heads: Sequence[str], task_head: str, *, master: str | None = None
+    ) -> frozenset[str] | None:
+        """The paths of the integrator's own work (GH-297): `heads` merged, in a temporary
+        worktree that is always removed, onto the merge-base of `task_head` and `master`
+        (the fetched upstream of the product when not given); the paths that tree and
+        `task_head` differ in, which includes what was resolved inside merge commits.
+        `None` when that merge conflicts or has no base to start from."""
+        ...
+
     def merge_keeping_conflicts(self, path: Path, branch: str) -> MergeOutcome:
         """Like `merge`, but a conflict is left in the checkout instead of undone: the
         dependency-merge path in `develop.py` is the only caller, and it hands the
@@ -889,9 +908,14 @@ class Tracker(Protocol):
     labels. A task that did not come from an issue has no issue to write to; the
     adapter ignores those calls."""
 
-    def open_pull_request(self, task_id: str, branch: str, title: str, body: str) -> str:
+    def open_pull_request(
+        self, task_id: str, branch: str, title: str, body: str, *, closes_issue: bool = True
+    ) -> str:
         """Returns the pull request's URL. Linking it to the task's issue, when there
-        is one, is the adapter's: only it knows what a task id says about the tracker."""
+        is one, is the adapter's: only it knows what a task id says about the tracker.
+        With `closes_issue=False` the body carries no closing keyword, so merging the
+        pull request does not close the issue: a slice of the task (GH-297), which is
+        not the task's own pull request."""
         ...
 
     def open_issue(self, title: str, body: str, *, label: str | None = None) -> str:

@@ -592,6 +592,13 @@ class MemoryWorkspace:
         self.upstream_answer = Upstream("HEAD", None, None)
         self.upstream_calls = 0
         self.checkouts: list[Path] = []
+        # GH-297: `build_slice`'s and `integration_paths`'s scripts and their calls.
+        self.slice_conflicts: set[str] = set()
+        self.slice_head = "5" * 40
+        self.slice_builds: list[tuple[Path, str, tuple[str, ...], str]] = []
+        self.integration_work: frozenset[str] = frozenset()
+        self.integration_conflicts = False
+        self.integration_reads: list[tuple[Path, tuple[str, ...], str, str | None]] = []
         # The worktrees this fake has made, as a real one has them on disk.
         self.on_disk: set[Path] = set()
         self.discarded: list[Path] = []
@@ -655,6 +662,21 @@ class MemoryWorkspace:
     def merge(self, path: Path, branch: str) -> str | None:
         self.merges.append((path, branch))
         return f"CONFLICT in {branch}" if branch in self.conflicts else None
+
+    def build_slice(self, path: Path, master: str, heads: Sequence[str], branch: str) -> str | None:
+        """GH-297: a head in `slice_conflicts` makes the build answer `None`, a clean one
+        the sha in `slice_head` (a fixed one by default). Every call is in `slice_builds`."""
+        self.slice_builds.append((path, master, tuple(heads), branch))
+        if any(head in self.slice_conflicts for head in heads):
+            return None
+        return self.slice_head
+
+    def integration_paths(
+        self, path: Path, heads: Sequence[str], task_head: str, *, master: str | None = None
+    ) -> frozenset[str] | None:
+        """GH-297: what `integration_work` holds, `None` when `integration_conflicts` is set."""
+        self.integration_reads.append((path, tuple(heads), task_head, master))
+        return None if self.integration_conflicts else self.integration_work
 
     def merge_upstream_into(self, checkout: Path, upstream_sha: str) -> UpstreamMerge:
         """GH-239: a scripted answer per `upstream_sha` in `upstream_merges`, a clean merge
@@ -918,6 +940,8 @@ class MemoryTracker:
         self.changed_files_asked: list[str] = []
         self.changed_files_error: str | None = None
         self.pull_requests: list[tuple[str, str, str]] = []
+        # Whether each `open_pull_request` call (failed ones counted) asked to close the issue.
+        self.closes_issue_calls: list[bool] = []
         self.comments: list[tuple[str, str]] = []
         self.labels: list[tuple[str, str]] = []
         self.unlabeled: list[tuple[str, str]] = []
@@ -1032,8 +1056,11 @@ class MemoryTracker:
             raise ValueError(self.merge_error)
         return self.merge_method
 
-    def open_pull_request(self, task_id: str, branch: str, title: str, body: str) -> str:
+    def open_pull_request(
+        self, task_id: str, branch: str, title: str, body: str, *, closes_issue: bool = True
+    ) -> str:
         self.attempted_bodies.append(body)
+        self.closes_issue_calls.append(closes_issue)
         if self.open_failures > 0:
             self.open_failures -= 1
             raise ValueError(self.open_error)
