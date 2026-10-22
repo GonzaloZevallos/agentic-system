@@ -453,9 +453,11 @@ def test_every_widget_is_placed_in_time_by_the_end_of_its_task():
 
 # The sha256 of every row but "Costo por modelo" (widgets, then the dashboards that place
 # them), as built before GH-283, for each product. A widget whose planned row moves breaks it.
+# Re-pinned once by GH-299: the failure-reason family iterates `FailureReason`, so the new
+# `stall` reason adds itself to the one row that lists the reasons (nothing else moved).
 UNCHANGED_ROWS = {
-    "agentic-system": "68b029c078b6bdf6fe4bf76374ad4333d2196378138c4aaadd155efb4f433c39",
-    "apostrophe": "ad5be19bb104b7e91c7df01d3e40859e2a0389b49fb699ab758c68d0a432fd75",
+    "agentic-system": "3f8f2e983581c37a3b9f047644af59c9d560cebfef880e0a40c7da7fb43116a3",
+    "apostrophe": "5dd60eace563f758f10088b408aa608726d8f69ff9c639e707feaa715aca7ffc",
 }
 
 
