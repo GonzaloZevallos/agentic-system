@@ -13,7 +13,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from functools import partial
 from typing import Any, Literal, assert_never
 
 from agentic.shared.configuration import Configuration
@@ -154,6 +153,7 @@ def _land(
     head = facts.pr_head
     if head is None:
         return LandResult("skipped", "no_head")
+    integration_work = False
     resumed = landing_slice.open_entry(landing_plan.entries(raw), head)
     if resumed is not None:
         # A slice a crash or a CI wait left open: continued as recorded, never decided again.
@@ -164,11 +164,20 @@ def _land(
             tuple(str(u) for u in units) if isinstance(units, list) else (),
         )
     else:
-        step = landing_plan.step_for(
-            raw,
-            decision.reason,
-            facts,
-            partial(landing_plan.slice_inputs, raw, cfg, ports, master, head),
+        read: list[landing_rules.SliceInputs] = []
+
+        def slice_inputs() -> landing_rules.SliceInputs:
+            read.append(landing_plan.slice_inputs(raw, cfg, ports, master, head))
+            return read[-1]
+
+        step = landing_plan.step_for(raw, decision.reason, facts, slice_inputs)
+        # What the restart comment calls "(integration work)": the integrator's paths are
+        # what kept every slice from landing (stamped on the diagnose entry, read by landing_fix).
+        integration_work = (
+            step.kind == "diagnose"
+            and step.restart_why is not None
+            and bool(read)
+            and landing_rules.integration_blocked(read[-1])
         )
     if not landing_rules.run_kind_admits(run_kind, step.kind, step.refusal):
         return _refused(task_id, raw, run_kind, step.kind, head, log)
@@ -220,6 +229,8 @@ def _land(
         entry["slice_units"] = list(step.units)
     if step.restart_why is not None:
         entry["restart_why"] = step.restart_why
+        if integration_work:
+            entry["integration_work"] = True
     if resumed is None:
         ports.documents.record_closure(task_id, {"landing": [*landing_plan.entries(raw), entry]})
     context = LandingContext(

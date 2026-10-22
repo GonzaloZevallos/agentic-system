@@ -612,7 +612,7 @@ def test_merge_failed_diagnoses_once_closes_the_pull_request_and_restarts_fresh(
     assert result.step == "diagnose"
     assert ports.tracker.closed_pull_requests == [URL.format(5)]
     assert ports.tracker.comments == [
-        ("GH-5", "Restarted by landing: stale premise (cost so far: $1.90)")
+        ("GH-5", "Restarted by landing: single_unit: stale premise (cost so far: $1.90)")
     ]
     assert launcher.spawned[0][:6] == ["agentic", "run", "--issue", "5", "--fresh", "--detach"]
     closure = ports.documents.closures["GH-5"]
@@ -1376,7 +1376,8 @@ def test_the_restart_comment_names_integration_work_and_the_slices_already_lande
     ]
 
 
-def test_a_document_without_a_closed_reason_gets_todays_text_plus_the_cost(tmp_path):
+def test_a_document_without_a_closed_reason_gets_todays_text_plus_the_cost(tmp_path, monkeypatch):
+    _stamped_entry(monkeypatch, restart_why=None)  # a document written before GH-297
     ports = _merge_failed(_ports(5), ScriptedRunner(landing_diagnoser=[_delivery()]), cost_usd=1.5)
 
     _land_at(ports, tmp_path, START, FakeLauncher())

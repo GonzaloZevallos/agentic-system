@@ -146,6 +146,7 @@ def test_gh53_crossed_paths_restart_with_the_reason_no_clean_slice():
     assert result.step == "diagnose"
     entry = _doc(ports)["landing"][-1]
     assert (entry["step"], entry["restart_why"]) == ("diagnose", "no_clean_slice")
+    assert entry.get("integration_work") is True  # the restart comment's "(integration work)"
     assert ports.tracker.merge_calls == [] and ports.tracker.closes_issue_calls == []
 
 
@@ -161,6 +162,7 @@ def test_gh53_master_moving_over_the_units_own_paths_restarts_with_no_clean_slic
     assert result.step == "diagnose"
     entry = _doc(ports)["landing"][-1]
     assert (entry["step"], entry["restart_why"]) == ("diagnose", "no_clean_slice")
+    assert "integration_work" not in entry  # master, not the integrator, blocked the slices
     assert ports.tracker.merge_calls == [] and ports.workspace.slice_builds == []
 
 

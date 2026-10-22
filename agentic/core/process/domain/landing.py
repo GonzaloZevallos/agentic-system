@@ -636,6 +636,8 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
         out["delivered"] = delivered
     if isinstance(passed := raw.get("checks_passed"), bool):
         out["checks_passed"] = passed
+    if isinstance(work := raw.get("integration_work"), bool):
+        out["integration_work"] = work
     if (failure := _failure_of(raw.get("failure"))) is not None:
         out["failure"] = failure
     return out

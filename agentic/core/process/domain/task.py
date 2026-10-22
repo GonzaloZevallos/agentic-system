@@ -685,6 +685,9 @@ class LandingEntry(TypedDict, total=False):
     checks_passed: bool
     # `diagnose` entries: the `landing.RestartWhy` that no slice was possible for.
     restart_why: str
+    # `diagnose` entries: the integrator's paths kept every slice from landing (the restart
+    # comment's `(integration work)`).
+    integration_work: bool
 
 
 class EstimateRecord(TypedDict):
