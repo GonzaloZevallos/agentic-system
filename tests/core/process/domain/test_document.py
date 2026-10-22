@@ -1150,24 +1150,48 @@ def test_landed_slices_written_twice_through_record_closure_replace_in_place():
 # of those calls must be in `RECORD_KEYS`, or a second write of its block value raises.
 _LANDING_SCALAR_KEYS = frozenset({"followups_filed", "landing_restarts", "landing_cost_carried"})
 _APPLICATION = Path(__file__).parents[4] / "agentic/core/process/application"
+# A `record_closure` whose values are not a dict literal is checked through the keys its
+# producer builds, never skipped: the expression as written -> a sample of what it returns.
+_OPAQUE_PATCHES = {
+    "landing_rules.migration(document)": lambda: landing_rules.migration(
+        {"status": "escalated", "pull_request": "u/pull/1", "pause_log": [], "landing": []}
+    ),
+}
 
 
 def _keys_written_through_record_closure(source: str) -> set[str]:
-    """The string keys of every dict literal handed to a `record_closure(...)` call."""
+    """The keys of the values handed to every `record_closure(task_id, values)` call: a dict
+    literal's own keys, a producer's from `_OPAQUE_PATCHES`, and `<unreadable: ...>` for any
+    other expression, so a write the guard cannot read fails it instead of passing."""
     keys: set[str] = set()
     for node in ast.walk(ast.parse(source)):
         is_call = isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "record_closure"
-        if not is_call:
+        if not (is_call and isinstance(node, ast.Call)):
             continue
-        for argument in node.args:
-            if isinstance(argument, ast.Dict):
-                keys.update(k.value for k in argument.keys if isinstance(k, ast.Constant))
+        values = node.args[1] if len(node.args) > 1 else node.keywords[0].value
+        if isinstance(values, ast.Dict):
+            keys.update(
+                k.value if isinstance(k, ast.Constant) else f"<unreadable: {ast.unparse(k)}>"
+                for k in values.keys
+                if k is not None
+            )
+            continue
+        text = ast.unparse(values)
+        keys.update(
+            _OPAQUE_PATCHES[text]() if text in _OPAQUE_PATCHES else {f"<unreadable: {text}>"}
+        )
     return keys
+
+
+_PRODUCED_SCALARS = frozenset({"status", "escalation_class"})
 
 
 def _unrecorded(source: str) -> set[str]:
     return (
-        _keys_written_through_record_closure(source) - _LANDING_SCALAR_KEYS - document.RECORD_KEYS
+        _keys_written_through_record_closure(source)
+        - _LANDING_SCALAR_KEYS
+        - _PRODUCED_SCALARS
+        - document.RECORD_KEYS
     )
 
 
@@ -1184,6 +1208,16 @@ def test_the_guard_rejects_a_list_key_that_is_not_in_record_keys():
     source = 'ports.documents.record_closure(t, {"landing": [1], "new_list": [1]})'
     assert _unrecorded(source) == {"new_list"}
     assert _unrecorded('ports.documents.record_closure(t, {"landed_slices": [1]})') == set()
+
+
+def test_the_guard_rejects_a_write_whose_values_it_cannot_read():
+    assert _unrecorded("ports.documents.record_closure(t, build_patch(raw))") == {
+        "<unreadable: build_patch(raw)>"
+    }
+    assert _unrecorded("ports.documents.record_closure(t, {key: [1]})") == {"<unreadable: key>"}
+    assert (
+        _unrecorded("ports.documents.record_closure(t, landing_rules.migration(document))") == set()
+    )
 
 
 def test_record_closure_refuses_a_list_key_missing_from_record_keys_when_it_is_a_block():
