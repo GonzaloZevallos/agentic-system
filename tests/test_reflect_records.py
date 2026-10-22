@@ -108,7 +108,7 @@ def _put_playbook(root: Path, message: str) -> str:
     return git(root, "rev-parse", "HEAD")
 
 
-def _aging_documents(ports, count: int) -> None:
+def _aging_documents(ports, count: int, closed: int | None = None) -> None:
     for n in range(1, count + 1):
         doc = ports.documents.load(f"GH-{n}")
         assert doc is not None
@@ -117,11 +117,35 @@ def _aging_documents(ports, count: int) -> None:
         doc["runs"] = [
             {"role": "developer", "ended_at": f"2099-01-{n:02d}T00:00:00.000+00:00", "cost_usd": 0}
         ]
+        if closed is not None and n > closed:  # ran the role, never closed: not reflected
+            doc.pop("closed_at", None)
+            doc.pop("delivery_outcome", None)
+            ports.documents.save(doc)
+            continue
         ports.documents.save(doc)
         ports.documents.record_closure(
             f"GH-{n}",
             {"closed_at": f"2026-10-{n:02d}T09:00:00.000+00:00", "delivery_outcome": "merged"},
         )
+
+
+@pytest.mark.parametrize(
+    "closed, archived", [(pb.ARCHIVE_AFTER, True), (pb.ARCHIVE_AFTER - 1, False)]
+)
+async def test_only_reflected_tasks_of_the_role_age_an_item(tmp_path, closed, archived):
+    root, cfg, ports, tracker = product(tmp_path, 24)
+    _aging_documents(ports, 24, closed)
+    git(root, "add", "-A")
+    git(root, "commit", "-qm", "documents with runs")
+    cfg = cfg.model_copy(update={"reflect_max_tasks_per_run": closed - 1})
+    ports.runner.queues["reflector"] = [reflection(cost=0.1) for _ in range(24)]
+    await run(cfg, ports)
+    _, _, body = tracker.pull_requests[-1]
+    commit = _put_playbook(root, "merge the playbook PR")
+    tracker.listed = [ListedPullRequest(7, tracker.url, "MERGED", body, commit, reflect_run.BRANCH)]
+    await run(cfg, ports)  # reflects the one task left, then ages the item
+    developer = pb.parse(at_branch(root, pc.playbook_file("developer")), "developer")
+    assert (developer.items == ()) is archived
 
 
 @pytest.mark.parametrize("merged", [True, False])
@@ -130,7 +154,8 @@ async def test_an_item_that_stopped_applying_is_archived_only_after_its_pr_merge
     _aging_documents(ports, 24)
     git(root, "add", "-A")
     git(root, "commit", "-qm", "documents with runs")
-    ports.runner.queues["reflector"] = [reflection(cost=0.1) for _ in range(10)]
+    cfg = cfg.model_copy(update={"reflect_max_tasks_per_run": 23})
+    ports.runner.queues["reflector"] = [reflection(cost=0.1) for _ in range(24)]
     await run(cfg, ports)
     _, _, body = tracker.pull_requests[-1]
     if merged:
@@ -224,7 +249,9 @@ def test_an_item_backed_by_a_design_remark_does_not_age_out_and_one_nothing_back
     remark_in, archived
 ):
     playbooks = {"ux_designer": pb.Playbook("ux_designer", (_ux_item(),))}
-    gone = reflect_run._archive_stale(_ux_documents(remark_in), playbooks, (), "2026-11-01")
+    documents = _ux_documents(remark_in)
+    reflected = {f"{d['id']}@review": pc.Entry(0.1) for d in documents}
+    gone = reflect_run._archive_stale(documents, reflected, playbooks, (), "2026-11-01")
     assert bool(gone) is archived
     assert (playbooks["ux_designer"].items == ()) is archived
 

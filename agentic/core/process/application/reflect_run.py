@@ -332,13 +332,16 @@ def _stamp_prompt_dates(
 
 def _archive_stale(
     documents: Sequence[Mapping[str, Any]],
+    tasks: Mapping[str, pc.Entry],
     playbooks: dict[str, pb.Playbook],
     archived: tuple[pb.Archived, ...],
     now: str,
 ) -> tuple[pb.Archived, ...]:
     """Move every item that stopped applying out of its playbook, in place, into the
     archive. `playbook.archive_due` decides; this counts the role's tasks since the item
-    reached a prompt and whether one backed or cited it."""
+    reached a prompt and whether one backed or cited it. The count is the ledger's
+    (`reflected_tasks`) over the role's tasks: one not reflected yet, or waiting for a
+    retry, does not age an item."""
     for slug, playbook in list(playbooks.items()):
         aging: dict[str, tuple[int, bool]] = {}
         for item in playbook.items:
@@ -352,7 +355,9 @@ def _archive_stale(
             backed = item.last_applied > item.in_prompt_since or any(
                 b.slug == slug and b.category == item.category for d in ran for b in backings(d)
             )
-            aging[item.id] = (len(ran), backed)
+            ids = {str(d.get("id") or "") for d in ran}
+            mine = {k: e for k, e in tasks.items() if pc.split_key(k)[0] in ids}
+            aging[item.id] = (pc.reflected_tasks(pc.Ledger(tasks=mine)), backed)
         playbooks[slug], archived = pb.archive_stale(playbook, archived, aging, now=now)
     return archived
 
@@ -466,7 +471,7 @@ async def reflect(
         tasks[key] = _entry(result, before_entry, pc.decision_count(document))
     _file_system(system, tasks)
     documents = _documents(ports, None)
-    archived = _archive_stale(documents, playbooks, archived, now)
+    archived = _archive_stale(documents, tasks, playbooks, archived, now)
     ledger = pc.Ledger(started, tasks, base.summaries, base.summarised)
 
     summary = ""

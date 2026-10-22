@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any, cast
+from typing import Any
 
 from agentic.shared.configuration import Configuration
 
@@ -161,7 +161,13 @@ def _return_facts(document: Mapping[str, Any], task_type: str) -> list[Fact]:
 def _finding_facts(document: Mapping[str, Any], task_type: str) -> list[Fact]:
     out: list[Fact] = []
     seen: set[tuple[str, str, str]] = set()
-    rows = rules.findings_rows(cast(TaskState, document))
+    # The three keys the table reads, as the closed document holds them.
+    state: TaskState = {
+        "findings": document.get("findings") or [],
+        "settled_findings": document.get("settled_findings") or [],
+        "approval_settled": document.get("approval_settled") or [],
+    }
+    rows = rules.findings_rows(state)
     for order, row in enumerate(rows):
         if row["status"] not in _LEARNABLE_STATUSES or row["scope"] not in _LEARNABLE_SCOPES:
             continue
