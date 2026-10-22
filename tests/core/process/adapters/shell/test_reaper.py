@@ -290,11 +290,18 @@ def test_child_activity_is_none_when_proc_cannot_be_read(monkeypatch, tmp_path):
 # it, and the `children` fixture reaps whatever a test leaves.
 
 
+def reap_everything_under(worktrees: Path) -> None:
+    """Teardown: whatever a test left running in a checkout under its own `tmp_path`
+    worktrees root, a grandchild no `Popen` handle knows included. Never `pkill`."""
+    ShellReaper(PRODUCT, worktrees).reap_within(sorted(worktrees.glob("*")))
+
+
 @pytest.fixture
-def root(tmp_path: Path) -> Path:
+def root(tmp_path: Path) -> Iterator[Path]:
     worktrees = tmp_path / "worktrees"
     worktrees.mkdir()
-    return worktrees
+    yield worktrees
+    reap_everything_under(worktrees)
 
 
 def checkout(root: Path, name: str, sub: str | None = None) -> Path:
@@ -387,9 +394,12 @@ def test_no_roots_reap_nothing(children, root):
     assert alive(inside)
 
 
-def test_a_worktrees_root_reached_through_a_symlinked_parent_still_matches(children, tmp_path):
+def test_a_worktrees_root_reached_through_a_symlinked_parent_still_matches(
+    children, tmp_path, request
+):
     real = tmp_path / "real"
     (real / "worktrees" / "GH-7").mkdir(parents=True)
+    request.addfinalizer(lambda: reap_everything_under(real / "worktrees"))
     link = tmp_path / "link"
     link.symlink_to(real)
     inside = spawn(children, OBEDIENT, None, cwd=real / "worktrees" / "GH-7")
