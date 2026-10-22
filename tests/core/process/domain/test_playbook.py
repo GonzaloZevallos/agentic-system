@@ -5,10 +5,15 @@ import pytest
 from agentic.core.process.domain import roles
 from agentic.core.process.domain.playbook import (
     ACCOUNTABLE,
+    ARCHIVE_AFTER,
+    KEEP_CONFIDENCE,
+    KEEP_MIN_TASKS,
     PLAYBOOK_MAX_ITEMS,
     PLAYBOOK_ROLES,
     REVIEW_PAIR,
     Applied,
+    Backing,
+    Confidence,
     Delta,
     Evidence,
     Item,
@@ -16,10 +21,13 @@ from agentic.core.process.domain.playbook import (
     Rejected,
     accountable,
     apply,
+    attribute,
+    keep,
     lesson_refusal,
     normalise,
     parse,
     render_file,
+    return_backing,
     section,
 )
 from agentic.core.process.domain.task import FindingCategory
@@ -100,25 +108,40 @@ def full_playbook() -> Playbook:
 # ---- the accountability table --------------------------------------------------------
 
 
-def expected_slug(task_type: str, category: str, integration: bool) -> str:
-    if category in PLANNER:
+def expected_slug(origin: str, task_type: str, category: str, qualifier: str) -> str:
+    if origin == "definition":
+        return "product_analyst"
+    if origin == "design":
+        return "ux_designer" if qualifier == "ux" else "ui_designer"
+    if origin == "review" and category in PLANNER:
         return "tech_lead_platform" if task_type == "platform_enhancement" else "tech_lead"
-    return "developer_integrator" if integration else "developer"
+    return "developer_integrator" if qualifier == "integration" else "developer"
 
 
-def test_the_table_has_a_row_for_every_task_type_category_and_integration_flag():
-    assert len(ACCOUNTABLE) == len(TASK_TYPES) * len(CATEGORIES) * 2
-    assert {key[1] for key in ACCOUNTABLE} == set(CATEGORIES)
+def test_the_table_has_a_row_for_every_origin_task_type_category_and_qualifier():
+    per_type = len(CATEGORIES) * 2 * 2 + 1 + 2  # review, final_validation, definition, design
+    assert len(ACCOUNTABLE) == len(TASK_TYPES) * per_type
+    assert {key[2] for key in ACCOUNTABLE if key[0] == "review"} == set(CATEGORIES)
+    assert {key[0] for key in ACCOUNTABLE} == {"review", "final_validation", "definition", "design"}
 
 
 @pytest.mark.parametrize(("key", "slug"), sorted(ACCOUNTABLE.items()))
-def test_each_accountable_row_names_its_role_and_accountable_reads_it(
-    key: tuple[str, str, bool], slug: str
+def test_each_accountable_row_names_its_role(key: tuple[str, str, str, str], slug: str) -> None:
+    origin, task_type, category, qualifier = key
+    assert slug == expected_slug(origin, task_type, category, qualifier)
+    assert attribute(origin, task_type, category, qualifier) == slug
+
+
+@pytest.mark.parametrize(
+    ("task_type", "category", "integration"),
+    sorted((t, c, i) for t in TASK_TYPES for c in CATEGORIES for i in (False, True)),
+)
+def test_accountable_reads_a_review_return_through_the_table(
+    task_type: str, category: str, integration: bool
 ) -> None:
-    task_type, category, integration = key
-    assert slug == expected_slug(task_type, category, integration)
     subtask = "integration" if integration else "s1"
-    assert accountable(entry(category, subtask), task_type) == slug
+    expected = expected_slug("review", task_type, category, "integration" if integration else "")
+    assert accountable(entry(category, subtask), task_type) == expected
 
 
 def test_every_accountable_slug_is_a_role():
@@ -130,8 +153,26 @@ def test_the_review_pair_is_the_one_the_roles_module_writes():
     assert roles.pair_for("s1").key == f"{REVIEW_PAIR}:s1"
 
 
-def test_a_definition_return_is_unattributable():
-    assert accountable({"pair": "PM→Product Analyst", "category": "definition"}, "feature") is None
+def test_a_definition_return_is_the_product_analysts():
+    returned = {"pair": "PM→Product Analyst", "category": "definition"}
+    assert accountable(returned, "feature") == "product_analyst"
+    assert return_backing(returned, "feature") == Backing("return", "product_analyst", "definition")
+
+
+@pytest.mark.parametrize(
+    ("pair", "slug"),
+    [("UX Lead→UX Designer", "ux_designer"), ("UI Lead→UI Designer", "ui_designer")],
+)
+def test_a_lead_return_is_its_designers_and_the_pairs_are_the_roles_modules(
+    pair: str, slug: str
+) -> None:
+    assert accountable({"pair": pair, "category": "design"}, "feature") == slug
+    assert pair in (roles.PAIR_UX_LEAD.key, roles.PAIR_UI_LEAD.key)
+    assert roles.PAIR_PM_PA.key == "PM→Product Analyst"
+
+
+def test_a_landing_return_is_unattributable_whatever_the_pair():
+    assert accountable({**entry("spec-scope"), "by": "landing"}, "feature") is None
 
 
 def test_an_unknown_task_type_or_pair_is_unattributable():
@@ -275,7 +316,7 @@ def test_an_add_with_a_category_outside_the_closed_set_is_refused():
 def test_an_add_whose_category_is_not_in_the_cited_return_history_is_refused():
     result = run([add(category="spec-scope", lesson="Stay inside the brief.")])
     assert result.playbook.items == ()
-    assert "return_history" in result.refused[0].reason
+    assert "backing" in result.refused[0].reason
 
 
 def test_an_add_for_a_role_other_than_the_accountable_one_is_refused():
@@ -387,7 +428,7 @@ def test_bump_citing_evidence_without_the_item_category_is_refused():
     bump = Delta(op="bump", slug="developer", item_id="developer-1", tasks=("GH-9",))
     result = run([bump], start, ev=ev)
     assert result.playbook == start
-    assert "return_history" in result.refused[0].reason
+    assert "backing" in result.refused[0].reason
 
 
 def test_bump_with_a_category_that_is_not_the_items_is_refused():
@@ -490,3 +531,31 @@ def test_parse_names_the_file_problem(text: str, needle: str) -> None:
 def test_parse_refuses_an_item_that_breaks_the_text_rules_naming_the_id():
     with pytest.raises(ValueError, match="developer-1"):
         parse(_file(lesson="x" * 241), "developer")
+
+
+# ---- keep and archive_due (GH-296) ---------------------------------------------------
+
+
+def test_the_thresholds_are_the_named_ones():
+    assert (KEEP_CONFIDENCE, KEEP_MIN_TASKS, ARCHIVE_AFTER) == ("high", 2, 20)
+
+
+@pytest.mark.parametrize(
+    ("confidence", "seen", "sources", "kept"),
+    [
+        ("high", 1, {"finding"}, True),
+        ("medium", 1, {"finding"}, False),
+        ("low", 1, {"return"}, False),
+        ("medium", 2, {"finding"}, True),
+        ("low", 2, {"return", "finding"}, True),
+        ("high", 1, {"human_decision", "finding"}, True),
+        # every source a human decision: one task is never enough, whatever the confidence
+        ("high", 1, {"human_decision"}, False),
+        ("high", 2, {"human_decision"}, True),
+        ("low", 2, {"human_decision"}, True),
+    ],
+)
+def test_keep_is_confidence_or_two_tasks_and_a_lone_human_decision_needs_two(
+    confidence: Confidence, seen: int, sources: set[str], kept: bool
+) -> None:
+    assert keep(confidence, seen, frozenset(sources)) is kept
