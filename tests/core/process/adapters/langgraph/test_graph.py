@@ -523,7 +523,7 @@ async def test_approval_writes_the_product_knowledge(config, tmp_path):
     final = await run_graph(script, config)
     assert final["status"] == "ready_for_review"
 
-    # Product roles read the knowledge, whole, before the task document; PjM does not.
+    # Product roles read the knowledge index before the task document; PjM does not.
     assert "## Product knowledge" not in script.calls[0]["prompt"]
     # The request's own headings never look like sections, in context or in the file.
     assert "### Why" in script.calls[0]["prompt"] and "\n## Why" not in script.calls[0]["prompt"]
@@ -532,7 +532,9 @@ async def test_approval_writes_the_product_knowledge(config, tmp_path):
         if call["resume"]:  # a resumed session already holds the context
             continue
         assert "## Product knowledge" in call["prompt"]
-        assert "A business." in call["prompt"] and "Old." in call["prompt"]
+        # The glossary goes whole; a capability only as an area line (GH-292).
+        assert "A business." in call["prompt"] and ".agentic/index/product.md" in call["prompt"]
+        assert "Old." not in call["prompt"]
         assert "## Original request" in call["prompt"]
     # The roles that build read the standards first, then the knowledge.
     assert script.calls[6]["prompt"].startswith("## Engineering standards")

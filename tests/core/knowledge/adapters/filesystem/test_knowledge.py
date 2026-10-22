@@ -21,10 +21,11 @@ def test_read_gathers_glossary_capabilities_and_adrs(tmp_path):
     (tmp_path / "docs/adr/template.txt").write_text("ignored")
     text = FilesystemKnowledge(tmp_path).read()
     assert text.startswith("## Product knowledge\n\n`CONTEXT.md`:\n\n````markdown\n# Gym")
-    assert text.index("check-ins.md") < text.index("subscriptions.md")
-    assert text.index("subscriptions.md") < text.index("docs/adr/0001-stack.md")
-    assert text.index("0001-stack.md") < text.index("0002-no-isolation.md")
-    assert "# No isolation" in text
+    # The glossary goes whole; capabilities and ADRs only as area lines (GH-292).
+    assert "````markdown\n# Gym" in text
+    assert ".agentic/index/product.md" in text and "(2 entries)" in text
+    assert ".agentic/index/adr.md" in text
+    assert "# No isolation" not in text and "# Subscriptions" not in text
     assert "notes.txt" not in text and "template.txt" not in text
 
 
@@ -34,7 +35,7 @@ def test_read_takes_the_adrs_from_the_given_root(tmp_path):
     (checkout / "docs/adr").mkdir(parents=True)
     (checkout / "docs/adr/0003-new.md").write_text("# New\n")
     text = FilesystemKnowledge(tmp_path).read(checkout)
-    assert "docs/adr/0003-new.md" in text and "# New" in text
+    assert ".agentic/index/adr.md" in text and "(1 entries)" in text
 
 
 BRIEF = (
