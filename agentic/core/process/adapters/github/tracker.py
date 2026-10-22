@@ -278,6 +278,19 @@ class GhTracker:
         if (number := issue_number(task_id)) is not None:
             self._gh("issue", "edit", str(number), "--remove-label", label)
 
+    def ensure_label(self, name: str) -> None:
+        # Never `--search`: its index is eventually consistent (ADR-0034), so the whole
+        # list is asked and the name is compared here. No `--force`: an existing label is
+        # not ours to edit, and nothing here reads `stderr` to decide.
+        raw = self._gh("label", "list", "--limit", "1000", "--json", "name")
+        existing: set[str] = set()
+        for item in self._json_list(raw, "gh label list"):
+            if not isinstance(item, dict) or not isinstance(item.get("name"), str):
+                raise ValueError("gh label list answered an entry without a name")
+            existing.add(item["name"])
+        if name not in existing:
+            self._gh("label", "create", name)
+
     def list_pull_requests(self) -> list[ListedPullRequest]:
         raw = self._gh(
             "pr",
