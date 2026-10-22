@@ -17,6 +17,8 @@ import pytest
 
 from agentic.core.process.adapters.filesystem.prompts import FilesystemPrompts
 from agentic.core.process.application.design import design_review, ux_walk
+from agentic.core.process.application.develop import develop
+from agentic.core.process.application.diagnose import diagnose
 from agentic.core.process.application.final_validation import final_validation
 from agentic.core.process.application.interview import interview
 from agentic.core.process.application.plan import plan
@@ -24,23 +26,28 @@ from agentic.core.process.application.ports import Ports, Prompts, RawResult
 from agentic.core.process.application.reflect_run import closed_documents
 from agentic.core.process.application.review import review
 from agentic.core.process.application.stack_review import stack_review
+from agentic.core.process.application.validate_prd import validate_prd
 from agentic.core.process.domain import cost_history, roles
 from agentic.core.process.domain.playbook import Playbook
 from agentic.core.process.domain.roles import Interview, Role
-from agentic.core.process.domain.task import Subtask, TaskState
+from agentic.core.process.domain.task import INTEGRATION, Subtask, TaskState
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
     MemoryWorkspace,
     ScriptedRunner,
     answers,
     consulted,
+    delivered,
     design_findings,
+    diagnosed,
     memory_ports,
     planned,
     questions,
     reviewed,
+    ruled,
     stack_proposal,
     tech_answers,
+    verdict,
 )
 from tests.fakes import final_validation as final_verdict
 
@@ -305,3 +312,52 @@ async def test_final_validation_widened_renders_prompt(tmp_path):
 
     assert_rendered(runner, prompts, ["ux_lead_final", "ui_lead_final", "pm_final"])
     assert runner.slugs == ["ux_lead_final", "ui_lead_final", "pm_final"]
+
+
+BUG: TaskState = {**TASK, "type": "bug", "sections": {"PjM": "A bug."}}
+
+
+@pytest.mark.parametrize(
+    ("state", "slug", "reply"),
+    [(TASK, "pm", verdict("approved")), (BUG, "pm_bug", ruled("approved"))],
+    ids=["feature", "bug"],
+)
+async def test_validate_prd_renders_prompt(state, slug, reply, tmp_path):
+    runner = scripted({slug: [reply]})
+    ports, prompts = wired(runner, tmp_path)
+
+    await validate_prd(state, Configuration(product_dir=tmp_path), ports)
+
+    assert_rendered(runner, prompts, [slug])
+    assert runner.slugs == [slug]
+
+
+async def test_diagnose_renders_prompt(tmp_path):
+    runner = scripted({"product_analyst_bug": [diagnosed()]})
+    ports, prompts = wired(runner, tmp_path)
+
+    await diagnose(BUG, Configuration(product_dir=tmp_path), ports)
+
+    assert_rendered(runner, prompts, ["product_analyst_bug"])
+    assert runner.slugs == ["product_analyst_bug"]
+
+
+@pytest.mark.parametrize(
+    ("subtask_id", "slug"), [("api", "developer"), (INTEGRATION, "developer_integrator")]
+)
+async def test_develop_renders_prompt(subtask_id, slug, tmp_path):
+    runner = scripted({slug: [delivered()]})
+    ports, prompts = wired(runner, tmp_path)
+    state: TaskState = {
+        **TASK,
+        "subtasks": {"api": subtask("api", status="pending"), INTEGRATION: subtask(INTEGRATION)},
+        "subtask_id": subtask_id,
+    }
+    path = ports.workspace.subtask_checkout("GH-12", subtask_id).path
+    ports.workspace.moved.add(path)
+    ports.workspace.moved.add(MemoryWorkspace.ROOT / "GH-12")
+
+    await develop(state, Configuration(product_dir=tmp_path), ports)
+
+    assert_rendered(runner, prompts, [slug])
+    assert runner.slugs == [slug]

@@ -20,8 +20,6 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-import pytest
-
 from agentic.core.process.application import preflight
 from agentic.core.process.application.run_role import run_role
 from agentic.core.process.domain import roles
@@ -51,11 +49,9 @@ ALLOWLIST: dict[str, str] = {
         f"{ENTRY_POINTS}.test_final_validation_widened_renders_prompt"
     ),
     "review.py:review:reviewer": f"{ENTRY_POINTS}.test_review_renders_prompt",
-    # No driven test among the seven declared drives these three; they point at the
-    # nearest one (see the delivery's Decisions), so their proof is still to be written.
-    "develop.py:develop:role": f"{ENTRY_POINTS}.test_review_renders_prompt",
-    "diagnose.py:diagnose:diagnoser_for(checks)": f"{ENTRY_POINTS}.test_review_renders_prompt",
-    "validate_prd.py:validate_prd:role": f"{ENTRY_POINTS}.test_review_renders_prompt",
+    "develop.py:develop:role": f"{ENTRY_POINTS}.test_develop_renders_prompt",
+    "diagnose.py:diagnose:diagnoser_for(checks)": f"{ENTRY_POINTS}.test_diagnose_renders_prompt",
+    "validate_prd.py:validate_prd:role": f"{ENTRY_POINTS}.test_validate_prd_renders_prompt",
 }
 # The only tests an entry may name; `driven-render-tests` writes them.
 DRIVEN_TESTS = frozenset(
@@ -68,6 +64,9 @@ DRIVEN_TESTS = frozenset(
         "test_interview_renders_every_side",
         "test_review_renders_prompt",
         "test_stack_review_renders_every_prompt",
+        "test_develop_renders_prompt",
+        "test_diagnose_renders_prompt",
+        "test_validate_prd_renders_prompt",
     )
 )
 
@@ -426,10 +425,5 @@ def test_an_allowlist_test_that_does_not_exist_is_reported() -> None:
     assert [p.where for p in problems] == ["b", "c"]
 
 
-@pytest.mark.skipif(
-    importlib.util.find_spec(ENTRY_POINTS) is None,
-    reason="`driven-render-tests` has not landed test_prompt_render_entry_points.py on this "
-    "branch; with the module present, a missing test function fails this check",
-)
 def test_every_allowlist_test_exists_in_the_entry_points_module() -> None:
     assert missing_tests(ALLOWLIST) == []
