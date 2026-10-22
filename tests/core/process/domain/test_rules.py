@@ -2742,3 +2742,52 @@ def test_the_adr_probe_gate_ignores_the_collision_fact_it_is_asked_to_derive():
     renaming = Renaming((("docs/adr/0004-x.md", "docs/adr/0010-x.md"),), {})
     for known in (None, renaming):
         assert rules.adr_probe_wanted(replace(_probe_facts(), adr_collision=known)) is True
+
+
+# The estimate's one home (invariants 1-3, 6): the thresholds, the factor, the decision
+# and the reading of the estimate in force live only in `rules`.
+
+
+def test_estimate_fits_at_the_limits_and_not_one_past():
+    assert rules.estimate_fits(150, 40, None)
+    assert not rules.estimate_fits(150.01, 40, None)
+    assert not rules.estimate_fits(150, 41, None)
+
+
+def test_estimate_fits_decides_on_the_larger_of_the_estimate_and_the_history_reference():
+    # A declared 100 that the bucket's p90 says is 200 does not fit: never the estimate alone.
+    assert not rules.estimate_fits(100, 10, 200.0)
+    # A reference below the estimate changes nothing.
+    assert rules.estimate_fits(100, 10, 50.0)
+    assert not rules.estimate_fits(160, 10, 50.0)
+
+
+def test_estimate_cap_is_twice_the_estimate():
+    assert rules.estimate_cap(110.0) == 220.0
+
+
+def test_estimate_in_force_is_the_last_revision_else_the_plans_estimate_else_none():
+    assert rules.estimate_in_force({}) is None
+    plan = {"estimate": {"cost_usd": 110.0, "files": 35}}
+    assert rules.estimate_in_force(plan) == 110.0
+    revised = {
+        **plan,
+        "estimate_revisions": [
+            {"cost_usd": 150.0, "source": "human"},
+            {"cost_usd": 190.0, "source": "human"},
+        ],
+    }
+    assert rules.estimate_in_force(revised) == 190.0
+    # An empty list of revisions falls back to the plan's estimate, never to zero.
+    assert rules.estimate_in_force({**plan, "estimate_revisions": []}) == 110.0
+
+
+def test_delivered_files_is_the_patch_that_records_the_actual_files():
+    assert rules.delivered_files(12) == {"actual_files": 12}
+
+
+def test_auto_resumable_never_retakes_an_estimate_escalation():
+    # Rejected input: an `estimate` pause, even with an external failure before it.
+    state = {"pause_log": [_failure_entry("upstream"), _escalation_entry("estimate")]}
+    assert rules.auto_resumable(state) is None
+    assert rules.auto_resumable({"pause_log": [_escalation_entry("estimate")]}) is None

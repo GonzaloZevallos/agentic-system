@@ -117,7 +117,14 @@ ReviewKind = Literal["first", "incremental", "integration"]
 # `failure`: it still pauses the task like any other role failure (ADR-0029); only the
 # reason series tells the two apart.
 EscalationClass = Literal[
-    "classification", "returns", "failure", "cap", "questions", "unmergeable", "setup"
+    "classification",
+    "returns",
+    "failure",
+    "cap",
+    "questions",
+    "unmergeable",
+    "setup",
+    "estimate",
 ]
 
 
@@ -626,6 +633,21 @@ class LandingEntry(TypedDict, total=False):
     lacks: str
 
 
+class EstimateRecord(TypedDict):
+    """The plan's estimate as the document keeps it (ADR-0053)."""
+
+    cost_usd: float
+    files: int
+
+
+class EstimateRevision(TypedDict):
+    """One estimate a human decided on: `human` is what they wrote, `proposed` the one the
+    stopped task proposed and they accepted."""
+
+    cost_usd: float
+    source: Literal["human", "proposed"]
+
+
 class TaskState(TaskInput, total=False):
     type: str
     status: Annotated[Status, last]
@@ -656,6 +678,17 @@ class TaskState(TaskInput, total=False):
     # first run had none (`run_role.playbook_patch`): the window excludes the task.
     playbooks_changed: Annotated[dict[str, str], merge]
     cost_usd: Annotated[float, add]
+    # The plan's estimate (ADR-0053): total cost in USD and the files the pull request will
+    # show as changed. Written once, by the plan, and never rewritten; absent on a document
+    # from before it, which reads as "no estimate" (`rules.estimate_in_force`), never zero.
+    estimate: Annotated[EstimateRecord, last]
+    # The estimates a human decided on after the task stopped at its cap, in order; the last
+    # one is in force. Grows only on a resumption with a decision.
+    estimate_revisions: Annotated[list[EstimateRevision], last]
+    # The new estimate a stopped task proposed (the human decides on it, never the task).
+    proposed_estimate: Annotated[float, last]
+    # The files the pull request changed, recorded at close through `rules.delivered_files`.
+    actual_files: Annotated[int, last]
     # The technical stage (ADR-0011): subtasks by id, each Developer patches its own.
     subtasks: Annotated[dict[str, Subtask], merge]
     # Rules of the plan every subtask honours (issue #42): the one channel between

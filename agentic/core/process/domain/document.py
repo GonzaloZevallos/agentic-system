@@ -160,6 +160,12 @@ def render(
         # own name, never through `RECORDED_AS`.
         **({"approval_settled": approved} if (approved := state.get("approval_settled")) else {}),
         "cost_usd": round(state.get("cost_usd", 0.0), 4),
+        # The plan's estimate and what follows from it (ADR-0053), written only when the
+        # state carries them, so a document from before them is byte-identical.
+        **({"estimate": e} if (e := state.get("estimate")) else {}),
+        **({"estimate_revisions": e} if (e := state.get("estimate_revisions")) else {}),
+        **({"proposed_estimate": e} if (e := state.get("proposed_estimate")) else {}),
+        **({"actual_files": n} if (n := state.get("actual_files")) is not None else {}),
         "prompts": state.get("prompts", {}),
         # The playbook section hash each role first ran with, and any later one
         # (ADR-0043), written under their own names and only when non-empty, so a task

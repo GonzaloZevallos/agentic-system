@@ -3122,3 +3122,44 @@ def replaced_note(sha: str, prs: Sequence[_BranchPullRequest], branch: str) -> s
         f"Replaced remote `{branch}` at `{sha}` ({seen}recover with "
         f"`git push origin {sha}:refs/heads/recovered/{branch}`)"
     )
+
+
+# The estimate (ADR-0053): the thresholds a plan must fit under before it builds, and the
+# factor of the safety cap. They live here and nowhere else; every other module asks
+# `estimate_fits` or `estimate_cap` and never repeats a number.
+SPLIT_COST_USD = 150
+SPLIT_FILES = 40
+ESTIMATE_CAP_FACTOR = 2
+
+
+def estimate_fits(cost_usd: float, files: int, reference_usd: float | None) -> bool:
+    """Whether a plan's estimate is small enough to build as one task. It decides on the
+    larger of the declared cost and the history's reference (the p90 of the bucket, when
+    the bucket has one), never on the declared cost alone: the same model estimates and
+    plans, so the estimate cannot be its own judge."""
+    cost = cost_usd if reference_usd is None else max(cost_usd, reference_usd)
+    return cost <= SPLIT_COST_USD and files <= SPLIT_FILES
+
+
+def estimate_cap(cost_usd: float) -> float:
+    """The task's safety cap for an estimate in force: a multiple of it."""
+    return cost_usd * ESTIMATE_CAP_FACTOR
+
+
+def estimate_in_force(state: Mapping[str, Any]) -> float | None:
+    """The cost estimate that governs the task now: the last revision a human decided
+    on, else the plan's own estimate, else `None` -- a document from before estimates
+    existed has none, which is "no estimate" and never zero."""
+    revisions = state.get("estimate_revisions")
+    if revisions:
+        return float(revisions[-1]["cost_usd"])
+    estimate = state.get("estimate")
+    if estimate:
+        return float(estimate["cost_usd"])
+    return None
+
+
+def delivered_files(changed_files: int) -> dict[str, int]:
+    """The patch that records how many files the pull request changed, the actual the
+    estimate is compared with. The only place that names the key."""
+    return {"actual_files": changed_files}

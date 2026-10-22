@@ -1090,3 +1090,27 @@ def test_reaped_at_cleanup_renders_and_parses_back_equal():
     text = document.render(_bare(reaped_at_cleanup=_REAPED))
     assert document.parse(text)["reaped_at_cleanup"] == _REAPED
     assert document.render(document.parse(text) | {"sections": {}}) == text
+
+
+def test_a_state_without_an_estimate_renders_without_the_estimate_keys():
+    state = {"id": "T-1", "title": "t", "description": "d"}
+    text = document.render(state)
+    for key in ("estimate", "estimate_revisions", "proposed_estimate", "actual_files"):
+        assert f"\n{key}:" not in text
+
+
+def test_the_estimate_keys_round_trip_when_the_state_carries_them():
+    state = {
+        "id": "T-1",
+        "title": "t",
+        "description": "d",
+        "estimate": {"cost_usd": 110.0, "files": 35},
+        "estimate_revisions": [{"cost_usd": 150.0, "source": "human"}],
+        "proposed_estimate": 180.0,
+        "actual_files": 31,
+    }
+    parsed = document.parse(document.render(state))
+    assert parsed["estimate"] == {"cost_usd": 110.0, "files": 35}
+    assert parsed["estimate_revisions"] == [{"cost_usd": 150.0, "source": "human"}]
+    assert parsed["proposed_estimate"] == 180.0
+    assert parsed["actual_files"] == 31
