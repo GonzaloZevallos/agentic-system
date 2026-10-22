@@ -7,6 +7,7 @@ import anyio
 import pytest
 import yaml
 
+from agentic.core.knowledge.domain.knowledge import STANDARDS
 from agentic.core.process.application.ports import AttemptFailed, RawResult
 from agentic.core.process.application.preflight import PLACEHOLDERS
 from agentic.core.process.application.run_role import (
@@ -1248,7 +1249,7 @@ async def test_every_reader_gets_an_index_from_the_checkout_it_runs_in(role, tmp
     for root, name in ((other, "elsewhere"), (checkout, "here")):
         (root / "docs/product").mkdir(parents=True)
         (root / "docs/product" / f"{name}.md").write_text(f"# {name}\n", encoding="utf-8")
-        (root / "CODING_STANDARDS.md").write_text("# S\n\n## 1. Hex\n\nx\n", encoding="utf-8")
+        (root / STANDARDS).write_text("# S\n\n## 1. Hex\n\nx\n", encoding="utf-8")
     runner = ScriptedRunner(**{role.slug: [delivered()]})
     ports = memory_ports(knowledge=FilesystemKnowledge(other), runner=runner)
     state = {"id": "GH-1", "title": "t", "description": "d", "sections": {}}
