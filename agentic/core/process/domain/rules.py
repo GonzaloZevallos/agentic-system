@@ -1695,6 +1695,10 @@ def after_discard(state: TaskState) -> str | None:
     return None
 
 
+def after_split(state: TaskState) -> str | None:
+    return None
+
+
 def run_ended(status: Status) -> bool:
     """Whether the Corrida (the whole task, ADR-0003) ended: delivered
     (`ready_for_review`) or discarded (issue #65). Every other status, including a

@@ -74,7 +74,7 @@ def _estimate_check(state: TaskState, history: cost_history.History) -> Check:
     """The plan check both arms share: the structural one plus the estimate's refusals,
     which read the history and what the task has spent so far (ADR-0053)."""
     spent = state.get("cost_usd", 0.0) + state.get("landing_cost_carried", 0.0)
-    return schemas.plan_check_for(history, spent)
+    return schemas.plan_check_for(history, spent, fit_waived=bool(state.get("fit_waived")))
 
 
 async def _plan_cold(
@@ -113,7 +113,8 @@ def _delivered(
     cfg: Configuration, output: Output | None, written: TaskState, section: str
 ) -> TaskState:
     """What a successful plan call adds to its own patch, on either path: the subtasks,
-    the invariants, the integration brief, the estimate (ADR-0053), the status, and the
+    the invariants, the integration brief, the estimate (ADR-0053), the status -- or, for a
+    plan that does not fit, the parts instead of the subtasks -- and the
     experiment snapshot
     (issue #28) -- `{}` when both switches are at their default, which
     `document.render` then omits, so the default path's document does not move.
@@ -125,7 +126,6 @@ def _delivered(
     being written here is never versioned (`rules.sections_for` versions only the
     earlier delivery)."""
     if output is not None:
-        written["subtasks"] = {s["id"]: _pending(s) for s in output.data["subtasks"]}
         written["invariants"] = output.data["invariants"]
         written["integration_brief"] = output.data["integration"].strip()
         written["estimate"] = {
@@ -135,6 +135,15 @@ def _delivered(
         written["status"] = "planned"
         reviewer_model = cfg.model_for(TECH_LEAD_REVIEWER.slug, TECH_LEAD_REVIEWER.kind)
         written["experiment"] = experiment_snapshot(cfg, reviewer_model)
+        if output.data.get("parts"):
+            # A plan that does not fit (ADR-0053) builds nothing: no subtasks, no fan-out.
+            # `rules.after_plan` sends the state holding `parts` to `split`.
+            written["parts"] = list(output.data["parts"])
+            written["sections"][section] = plan_view.with_parts_block(
+                written["sections"][section], written["parts"]
+            )
+            return written
+        written["subtasks"] = {s["id"]: _pending(s) for s in output.data["subtasks"]}
         written["sections"][section] = plan_view.with_subtasks_block(
             written["sections"][section], list(written["subtasks"].values())
         )

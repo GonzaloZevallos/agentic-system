@@ -925,6 +925,9 @@ class MemoryTracker:
         self.earlier: list[str] = []
         # `(title, body)` of every issue `open_issue` opened, in order.
         self.opened_issues: list[tuple[str, str]] = []
+        self.open_issue_calls = 0
+        self.open_issue_fails_on: set[int] = set()
+        self.issue_numbers_from: int | None = None
         # GH-239: the `label` of each of them (None: unlabelled), the `(reference, head)` of
         # every `rerun_failed_ci` and the run links it answers, its `ValueError` text and
         # every reference `close_pull_request` closed.
@@ -1033,9 +1036,20 @@ class MemoryTracker:
         return self.url
 
     def open_issue(self, title: str, body: str, *, label: str | None = None) -> str:
+        """`open_issue_fails_on` lists the calls (0-based, failed ones counted) that raise
+        `ValueError`, `gh`'s own failure shape; `issue_numbers_from` makes each opened issue
+        answer its own URL, numbered in order, instead of the shared one (ADR-0053)."""
+        call = self.open_issue_calls
+        self.open_issue_calls += 1
+        if call in self.open_issue_fails_on:
+            raise ValueError("gh: could not create the issue")
         self.opened_issues.append((title, body))
         self.opened_labels.append(label)
-        return self.url
+        if self.issue_numbers_from is None:
+            return self.url
+        return (
+            f"https://github.com/o/r/issues/{self.issue_numbers_from + len(self.opened_issues) - 1}"
+        )
 
     def rerun_failed_ci(self, reference: str, head: str) -> list[str]:
         """GH-239: the runs of `head` that failed, rerun. Scripted by `failed_runs`; a bad
@@ -1344,6 +1358,39 @@ def planned(
             "subtasks": items,
             "invariants": list(invariants),
             "integration": integration,
+            "estimated_cost_usd": estimated_cost_usd,
+            "estimated_files": estimated_files,
+        },
+        cost,
+        2,
+        session,
+    )
+
+
+def planned_parts(
+    *parts: dict[str, object],
+    cost: float = 0.3,
+    session: str = "tl",
+    invariants: Sequence[object] = ("Every part ships alone.",),
+    estimated_cost_usd: float = 400.0,
+    estimated_files: int = 90,
+) -> RawResult:
+    """A Tech Lead plan that does not fit (ADR-0053): parts and no subtasks. With no part
+    given, two chained ones."""
+    items: list[dict[str, object]] = list(parts) or [
+        {"title": "Catalogue", "body": "Extract the strings.", "depends_on": []},
+        {"title": "Screens", "body": "Translate the screens.", "depends_on": [1]},
+    ]
+    markdown = "### Solution\n\nCut it.\n\n### Parts\n\n" + "\n\n".join(
+        f"#### {i['title']}\n\n{i['body']}" for i in items
+    )
+    return RawResult(
+        {
+            "markdown": markdown,
+            "subtasks": [],
+            "parts": items,
+            "invariants": list(invariants),
+            "integration": "",
             "estimated_cost_usd": estimated_cost_usd,
             "estimated_files": estimated_files,
         },

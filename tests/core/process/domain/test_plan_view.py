@@ -5,6 +5,7 @@ The fixture section reuses the three-brief, three-heading-shape plan
 (`#### api`, `#### api — SQL adapter`, `#### 2. api`) `context-golden` (issue #71)
 introduced, so this module is proven never to key off any one of those shapes."""
 
+from agentic.core.process.domain import plan_view
 from agentic.core.process.domain.plan_view import (
     NOTE_SHORT,
     NOTE_WRITTEN,
@@ -270,3 +271,29 @@ def test_with_subtasks_block_appends_after_a_near_miss_heading_without_naming_it
     assert with_subtasks_block(section, [SUBTASKS["api"]]) == (
         f"{section}\n\n### Subtasks\n\n{NOTE_WRITTEN}\n\n{_brief_text('api')}"
     )
+
+
+# --- with_parts_block: the sibling of with_subtasks_block for a plan that does not fit ---
+
+PARTS = [
+    {"title": "Catalogue", "body": "Extract the strings.", "depends_on": []},
+    {"title": "Screens", "body": "Translate the screens.", "depends_on": [1]},
+]
+
+
+def test_with_parts_block_appends_a_block_built_from_the_structured_parts():
+    out = plan_view.with_parts_block("### Solution\n\nCut it.", PARTS)
+    assert out.startswith("### Solution\n\nCut it.\n\n### Parts\n\n")
+    assert plan_view.NOTE_PARTS in out
+    assert "#### Part 1: Catalogue\n\nExtract the strings.\n\nDepends on: nothing." in out
+    assert "#### Part 2: Screens\n\nTranslate the screens.\n\nDepends on: part 1." in out
+
+
+def test_with_parts_block_leaves_a_section_with_its_own_block_untouched():
+    section = "### Solution\n\nx\n\n### Parts\n\n#### One\n\nthe model's own"
+    assert plan_view.with_parts_block(section, PARTS) == section
+
+
+def test_with_parts_block_ignores_a_heading_inside_a_code_fence():
+    section = "### Solution\n\n```\n### Parts\n```\n"
+    assert plan_view.NOTE_PARTS in plan_view.with_parts_block(section, PARTS)
