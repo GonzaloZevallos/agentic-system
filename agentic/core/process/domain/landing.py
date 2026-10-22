@@ -1001,6 +1001,14 @@ def restart_depth(raw: Mapping[str, object]) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
+def pull_request_label(reference: str) -> str:
+    """A pull request as `#N` when its reference (the URL `Tracker.open_pull_request`
+    returns, or `#N` already) ends in a number, else the reference as it is: the one
+    spelling every message about a landed slice uses."""
+    tail = reference.rstrip("/").rsplit("/", 1)[-1].lstrip("#")
+    return f"#{tail}" if tail.isdigit() else reference
+
+
 def carry_over(raw: Mapping[str, object]) -> Carried | None:
     """What the archived document `raw` hands the fresh run of a `--fresh` start (GH-239,
     GH-297): the restart depth and cost, the Landing Diagnoser's section (only when the

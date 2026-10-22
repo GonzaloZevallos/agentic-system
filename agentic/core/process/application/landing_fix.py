@@ -312,8 +312,7 @@ def _landed_numbers(saved: Mapping[str, object]) -> list[str]:
     for item in landed if isinstance(landed, list) else []:
         reference = item.get("pull_request") if isinstance(item, Mapping) else None
         if isinstance(reference, str) and reference:
-            tail = reference.rstrip("/").rsplit("/", 1)[-1]
-            found.append(f"#{tail}" if tail.isdigit() else reference)
+            found.append(landing_rules.pull_request_label(reference))
     return found
 
 

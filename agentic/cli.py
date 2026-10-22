@@ -1132,7 +1132,9 @@ def _landing_carry(task_id: str, ports: Ports) -> tuple[Carried | None, str]:
     parts = [f"## {LANDING_DIAGNOSER.name}\n\n{carried.diagnosis}"] if carried.diagnosis else []
     if carried.landed:
         units = ", ".join(unit for ref in carried.landed for unit in ref.units)
-        requests = ", ".join(ref.pull_request for ref in carried.landed)
+        requests = ", ".join(
+            landing_rules.pull_request_label(ref.pull_request) for ref in carried.landed
+        )
         parts.append(f"Already on master: {units} ({requests})")
     return carried, "\n\n".join(parts)
 

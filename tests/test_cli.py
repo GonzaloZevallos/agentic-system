@@ -5155,7 +5155,10 @@ async def test_fresh_carries_every_human_decision_into_the_entered_state_and_the
             "landing_restarts": 1,
             "landing_cost_carried": 3.25,
             "sections": {"Human": TWO_HUMAN_DECISIONS, "Landing Diagnoser": "Same lock again."},
-            "landed_slices": [{"units": ["a", "b"], "pull_request": "#7"}],
+            "landed_slices": [
+                {"units": ["a"], "pull_request": "https://github.com/o/r/pull/7"},
+                {"units": ["b"], "pull_request": "#9"},
+            ],
         }
     )
     task = {"id": "GH-1", "title": "t", "description": "d"}
@@ -5167,7 +5170,7 @@ async def test_fresh_carries_every_human_decision_into_the_entered_state_and_the
     assert graph.entered["landing_restarts"] == 1
     description = graph.entered["description"]
     assert "## Landing Diagnoser\n\nSame lock again." in description
-    assert "Already on master: a, b (#7)" in description
+    assert "Already on master: a, b (#7, #9)" in description
     assert "Human" not in description and "Decision" not in description
     grown = rules.human_section(graph.entered, None, "Third call.")
     assert "### Decision 3\n\nThird call." in grown
