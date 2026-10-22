@@ -236,6 +236,26 @@ async def test_a_stale_caller_session_falls_back_cold_once():
     assert out.failures[0]["cold_fallback"] is False  # the stale attempt is not the fallback
 
 
+async def test_a_stall_before_any_session_does_not_spend_the_cold_fallback():
+    # A hung CLI says nothing about whether the caller's session opens: the retry keeps
+    # the `resume` the caller entered with (GH-299, ADR-0056), where an `sdk` failure
+    # with no session would drop it.
+    hung = AttemptFailed("stalled: no sign of life", session_id="", reason="stall")
+    runner = ScriptedRunner(pjm=[hung, RawResult(OK.structured_output, 0.03, session_id="s")])
+    out = await run_pjm(runner, resume="live-id", cold_prompt="COLD CONTEXT")
+    first, retry = runner.calls
+    assert first["resume"] == "live-id" and retry["resume"] == "live-id"
+    assert "COLD CONTEXT" not in retry["prompt"] and retry["prompt"].startswith("task")
+    assert out.cold_fallback is False
+
+
+async def test_a_second_stall_is_a_role_failure_like_any_other():
+    hung = AttemptFailed("stalled: no sign of life", session_id="", reason="stall")
+    with pytest.raises(RoleFailure) as caught:
+        await run_pjm(ScriptedRunner(pjm=[hung, hung]), resume="live-id", cold_prompt="COLD")
+    assert caught.value.failures[-1]["reason"] == "stall"
+
+
 async def test_a_resumed_attempt_that_delivers_records_what_it_resumed():
     # No failure at all: `resumed_from` still names the session the delivery continued,
     # the same fact `RoleRun` persists, taken from the call and not re-derived from it.

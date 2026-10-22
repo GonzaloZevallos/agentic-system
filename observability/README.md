@@ -103,9 +103,10 @@ acompañan a `agentic.role.failures`/`.tool_calls`/`.tokens`/`.presubmit.checks`
 dimensión del array: esa segmentación fina, cuando hace falta, se lee del documento de
 tarea, que ya lleva cada corrida con su `slug` y su sección. `reason` sigue siendo la
 única dimensión de `agentic.role.failures`/`.failure_cost_usd` ∈ {schema, check,
-max_turns, limit, account_limit, upstream, network, sdk, other}, decidido en el sitio
+max_turns, limit, account_limit, upstream, network, sdk, stall, other}, decidido en el sitio
 donde se lanza `AttemptFailed`, nunca por parsear el mensaje de error (`network`: un
-`api_error` sin status HTTP, ADR-0039).
+`api_error` sin status HTTP, ADR-0039; `stall`: un intento sin señal de vida que
+el vigilante mató, ADR-0056, un fallo propio que el scorecard sí cuenta).
 
 ### El scorecard (ADR-0028) se calcula igual, de una sola fuente
 

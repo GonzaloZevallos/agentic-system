@@ -138,6 +138,7 @@ def _ports(cfg: Configuration) -> Ports:
             env={**cfg.role_env, **own_configuration_unset(os.environ)},
             reaper=reaper,
             product_key=product_key,
+            stall_timeout_s=cfg.stall_timeout_s,
         ),
         documents=FilesystemTaskDocuments(
             cfg.product_dir,
