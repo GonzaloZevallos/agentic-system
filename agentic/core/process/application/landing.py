@@ -372,15 +372,15 @@ def _dispatch(context: LandingContext) -> None:
             landing_sync.renumber_adr(context)
         case "fix":
             landing_fix.fix(context)
+        case "fix_important":
+            landing_fix.fix_important(context)
         case "rerun":
             landing_fix.rerun(context)
         case "file_followups_and_land":
             landing_fix.file_followups_and_land(context)
         case "diagnose":
             landing_fix.diagnose(context)
-        case "wait" | "none" | "fix_important":
-            # `fix_important` is not live yet (`landing_plan.LIVE_STEPS`): its executor is
-            # the `landing` subtask's, until then the step is nothing to do.
+        case "wait" | "none":
             context.log(f"agentic: land: {context.task_id}: {context.head} {kind}: nothing to do")
         case _:
             assert_never(kind)

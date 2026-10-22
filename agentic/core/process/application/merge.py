@@ -367,8 +367,21 @@ def _merge(
         text += "\n\nCI relied on:\n" + "\n".join(
             f"- {row['name']}: {row['link']}" for row in relied
         )
+    if accepted := _accepted_without_a_fix(ports.documents.load(task_id) or {}):
+        text += "\n\nAccepted without a fix:\n" + accepted
     ports.tracker.comment(task_id, text)
     return MergeResult("merged", method=method)
+
+
+def _accepted_without_a_fix(document: TaskState) -> str:
+    """The task's own `important` rows (`rules.important_partition`'s `owned` and `plan`)
+    still open at the merge, one line each, a row owned by several units once; empty when
+    there are none (the comment then has no such section)."""
+    part = rules.important_partition(document)
+    rows: dict[tuple[str, str], str] = {}
+    for row in [*(r for owned in part.owned.values() for r in owned), *part.plan]:
+        rows.setdefault((row["location"], row["claim"]), f"- `{row['location']}`: {row['claim']}")
+    return "\n".join(rows.values())
 
 
 def _after_failure(
