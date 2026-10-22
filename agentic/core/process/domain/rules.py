@@ -111,14 +111,15 @@ def lower_unbacked_blocks(
     """The findings as the verdict counts them, and a line for each block the system
     lowered (ADR-0016). A block needs evidence, or it is an `observation`; and something
     this subtask's Developer can fix, or it is `important`. Lowering instead of failing
-    the role: a field filled badly must not cost a retry, nor escalate the task."""
+    the role: a field filled badly must not cost a retry, nor escalate the task. A finding
+    it lowers carries `reported_severity`, what the reviewer said, for the record."""
     settled, lowered = [], []
     for item in findings:
         if item["severity"] == "blocking" and not item["evidence"].strip():
-            item = {**item, "severity": "observation"}
+            item = {**item, "severity": "observation", "reported_severity": "blocking"}
             lowered.append(f"`{item['location']}` blocking lowered to observation: no evidence")
         elif item["severity"] == "blocking" and item["scope"] != "subtask":
-            item = {**item, "severity": "important"}
+            item = {**item, "severity": "important", "reported_severity": "blocking"}
             lowered.append(
                 f"`{item['location']}` blocking lowered to important: scope {item['scope']}, "
                 "not fixable in this subtask"
@@ -153,22 +154,27 @@ def finding_records(
     A finding nobody can check is `dismissed` on the spot: an `observation` with no
     evidence is either the reviewer's own hunch or a `blocking` the system lowered for
     having none, and neither is something to hand the next role as a live objection.
-    Everything else enters `open`; only a reviewer saying so closes it."""
-    return [
-        {
-            "subtask": subtask_id,
-            "version": version,
-            "location": item["location"],
-            "claim": item["claim"],
-            "severity": item["severity"],
-            "scope": item["scope"],
-            "category": item["category"],
-            "status": "dismissed"
-            if item["severity"] == "observation" and not item["evidence"].strip()
-            else "open",
-        }
-        for item in findings
-    ]
+    Everything else enters `open`; only a reviewer saying so closes it. `reported_severity`
+    is written only when the system lowered the severity, never otherwise."""
+    return [_record(subtask_id, version, item) for item in findings]
+
+
+def _record(subtask_id: str, version: int, item: dict[str, Any]) -> FindingRecord:
+    record: FindingRecord = {
+        "subtask": subtask_id,
+        "version": version,
+        "location": item["location"],
+        "claim": item["claim"],
+        "severity": item["severity"],
+        "scope": item["scope"],
+        "category": item["category"],
+        "status": "dismissed"
+        if item["severity"] == "observation" and not item["evidence"].strip()
+        else "open",
+    }
+    if "reported_severity" in item:
+        record["reported_severity"] = item["reported_severity"]
+    return record
 
 
 def findings_rows(state: TaskState) -> list[FindingRecord]:
@@ -290,6 +296,58 @@ def open_findings(state: TaskState) -> list[FindingRecord]:
     order = {"blocking": 0, "important": 1, "observation": 2}
     rows = [row for row in findings_rows(state) if row["status"] == "open"]
     return sorted(rows, key=lambda row: (row["scope"] != "plan", order[row["severity"]]))
+
+
+def row_owners(state: TaskState, row: FindingRecord) -> tuple[str, ...]:
+    """The subtasks of the document whose review raised `row`, in the order the table first
+    raised them. A name that is not a subtask of the document is no owner."""
+    known = state.get("subtasks", {})
+    return tuple(name for name in row["subtask"].split(", ") if name in known)
+
+
+def reviewed_unit_name(state: TaskState) -> str | None:
+    """The name of the subtask `reviewed_unit` returns, `None` when it returns none."""
+    subtasks = state.get("subtasks", {})
+    if INTEGRATION in subtasks:
+        return INTEGRATION
+    return next(iter(subtasks)) if len(subtasks) == 1 else None
+
+
+@dataclass(frozen=True)
+class ImportantPartition:
+    """The open `important` rows, by who settles them: `owned` maps a unit to the
+    `scope == "subtask"` rows its review raised (a row whose names are no subtask goes to the
+    reviewed unit), `plan` holds the `scope == "plan"` rows, which reopen the reviewed unit,
+    and `outside` the `scope == "outside"` rows, which go to the task's follow-up issue."""
+
+    owned: Mapping[str, tuple[FindingRecord, ...]]
+    plan: tuple[FindingRecord, ...]
+    outside: tuple[FindingRecord, ...]
+
+
+def important_partition(state: TaskState) -> ImportantPartition:
+    """The one place the open `important` rows are split by `scope`; no other module
+    filters them. A `subtask` row with no owner and no reviewed unit to fall to is counted
+    with `plan`, which also reopens the reviewed unit (an empty `units`)."""
+    owned: dict[str, list[FindingRecord]] = {}
+    plan: list[FindingRecord] = []
+    outside: list[FindingRecord] = []
+    fallback = reviewed_unit_name(state)
+    for row in open_findings(state):
+        if row["severity"] != "important":
+            continue
+        if row["scope"] == "outside":
+            outside.append(row)
+        elif row["scope"] == "plan":
+            plan.append(row)
+        elif owners := row_owners(state, row) or ((fallback,) if fallback else ()):
+            for name in owners:
+                owned.setdefault(name, []).append(row)
+        else:
+            plan.append(row)
+    return ImportantPartition(
+        {name: tuple(rows) for name, rows in owned.items()}, tuple(plan), tuple(outside)
+    )
 
 
 def findings_markdown(rows: list[FindingRecord]) -> str:
@@ -2783,8 +2841,10 @@ MergeRefusal = Literal[
   is unknown.
 - `open_findings_blocking`: a `blocking` finding is still open. Checked before
   `open_findings`: a blocking one is never filed as a follow-up (GH-239).
-- `open_findings`: an `important` finding is still open and no follow-up was filed for it
-  (`followups_filed`); the landing files it and lands the pull request (GH-239).
+- `open_findings`: an `important` finding of the task is still open with neither the final
+  important pass done (`important_pass_done`) nor the follow-up filed (`followups_filed`), or
+  an `outside` one is open with no follow-up filed; the landing fixes or files it and lands
+  the pull request (GH-239, GH-294).
 - `eval_set`: the issue is in the evaluation set; its merge is the human's verdict.
 - `eval_set_unreadable`: the evaluation set could not be read, so nothing proves the
   issue is outside it.
@@ -2820,10 +2880,13 @@ class MergeFacts:
     report was read for, `ci_verdict` its classification (`ci.ci_state`), `ci_unreadable`
     the closed cause when it could not be read, `ci_fresh` whether it ran on a tree holding
     the current master (None: not known) and `ci_waited_s` the seconds since the wait's
-    anchor (None: no anchor). `open_blocking` and `open_important` split the open findings
-    by severity (GH-239); `followups_filed` says the landing already filed the follow-up for
-    the important ones. `conflicts` (GH-255) is whether the head conflicts with the current
-    master: `None` unread, `False` clean, `True` a definite conflict.
+    anchor (None: no anchor). `open_blocking`, `open_important` and `open_outside` split the
+    open findings (GH-239, GH-294): `open_important` counts the task's own `important` rows
+    (`important_partition`'s `owned` and `plan`), `open_outside` the `outside` ones;
+    `important_pass_done` says the final important pass was resolved and `followups_filed`
+    that the landing filed or commented the follow-up for the `outside` ones. `conflicts`
+    (GH-255) is whether the head conflicts with the current master: `None` unread, `False`
+    clean, `True` a definite conflict.
     `ci_untrusted` (GH-239) is `None` when `touched_paths` is unknown and `True` when the
     diff touches the CI's own definition (`CI_DEFINITION_PREFIX`): a CI whose definition the
     change itself could have edited proves nothing, so it never decides `merge`.
@@ -2860,6 +2923,8 @@ class MergeFacts:
     failed_step: presubmit.FailedStep | None = None
     adr_collision: adr_numbers.Renaming | adr_numbers.Ambiguous | None = None
     conflicts: bool | None = None
+    open_outside: int = 0
+    important_pass_done: bool = False
 
 
 @dataclass(frozen=True)
@@ -2939,7 +3004,9 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
         return MergeDecision("refuse", "head_not_reviewed")
     if facts.open_blocking > 0:
         return MergeDecision("refuse", "open_findings_blocking")
-    if facts.open_important > 0 and not facts.followups_filed:
+    if (
+        facts.open_important > 0 and not facts.important_pass_done and not facts.followups_filed
+    ) or (facts.open_outside > 0 and not facts.followups_filed):
         return MergeDecision("refuse", "open_findings")
     if facts.in_eval_set is None:
         return MergeDecision("refuse", "eval_set_unreadable")

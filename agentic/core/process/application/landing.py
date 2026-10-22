@@ -378,7 +378,9 @@ def _dispatch(context: LandingContext) -> None:
             landing_fix.file_followups_and_land(context)
         case "diagnose":
             landing_fix.diagnose(context)
-        case "wait" | "none":
+        case "wait" | "none" | "fix_important":
+            # `fix_important` is not live yet (`landing_plan.LIVE_STEPS`): its executor is
+            # the `landing` subtask's, until then the step is nothing to do.
             context.log(f"agentic: land: {context.task_id}: {context.head} {kind}: nothing to do")
         case _:
             assert_never(kind)
