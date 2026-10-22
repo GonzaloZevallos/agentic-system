@@ -191,6 +191,9 @@ class MemoryKnowledge:
     def design(self, root: Path | None = None) -> str:
         return self.design_text
 
+    def criteria_files(self) -> tuple[str, ...]:
+        return (knowledge.STANDARDS, knowledge.DESIGN_STANDARDS)
+
     def over_cap(self, texts: dict[str, str]) -> list[str]:
         return knowledge.criteria_over_cap(texts)
 

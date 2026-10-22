@@ -325,3 +325,12 @@ def test_over_cap_reports_the_documents_past_300_lines_and_none_at_300(tmp_path)
         {"CODING_STANDARDS.md": at_cap, "DESIGN_STANDARDS.md": "x\n" * 301}
     )
     assert len(messages) == 1 and "DESIGN_STANDARDS.md" in messages[0] and "301" in messages[0]
+
+
+def test_criteria_files_are_the_knowledge_constants(tmp_path):
+    from agentic.core.knowledge.domain import knowledge as domain
+
+    assert FilesystemKnowledge(tmp_path).criteria_files() == (
+        domain.STANDARDS,
+        domain.DESIGN_STANDARDS,
+    )

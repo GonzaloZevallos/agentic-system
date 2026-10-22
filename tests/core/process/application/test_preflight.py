@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from agentic.core.knowledge.domain import knowledge, stack
+from agentic.core.knowledge.domain import stack
 from agentic.core.process.adapters.filesystem import FilesystemPrompts
 from agentic.core.process.application import preflight as module
 from agentic.core.process.application.preflight import (
@@ -396,8 +396,13 @@ def _lines(count: int) -> str:
     return "".join(f"rule {n}\n" for n in range(count))
 
 
-def test_the_criteria_file_names_here_are_the_knowledge_constants():
-    assert module.CRITERIA_FILES == (knowledge.STANDARDS, knowledge.DESIGN_STANDARDS)
+def test_the_files_measured_are_the_ones_the_knowledge_port_names():
+    ports = memory_ports()
+    ports.knowledge.criteria_files = lambda: ("OTHER.md",)
+    ports.workspace.files[("HEAD", "OTHER.md")] = _lines(301)
+    ports.workspace.files[("HEAD", "DESIGN_STANDARDS.md")] = _lines(301)
+    (message,) = module.over_cap(ports)
+    assert "OTHER.md" in message
 
 
 def test_a_product_with_no_criteria_files_has_nothing_over_the_cap():
