@@ -3,6 +3,8 @@ status: accepted
 date: 2026-10-05
 ---
 
+Enmendado por ADR-0056.
+
 # Los roles aprenden de sus devoluciones: un Reflector propone, un curador de código aplica, una persona fusiona
 
 Dentro de una tarea el ciclo funciona: `## Tech Lead: findings` lleva lo que las

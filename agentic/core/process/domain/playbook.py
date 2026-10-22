@@ -138,10 +138,13 @@ def return_backing(entry: Mapping[str, Any], task_type: str) -> Backing | None:
 
 
 def accountable(entry: Mapping[str, Any], task_type: str) -> str | None:
-    """The slug of the role a `return_history` entry is attributable to, or `None`: a
-    landing return, a task type or a pair the table does not name."""
+    """The slug of the role a Tech Lead review return (`REVIEW_PAIR`) is attributable to,
+    or `None`: a landing return, any other pair, a task type the table does not name.
+    The other pairs' returns are `return_backing`'s."""
     backing = return_backing(entry, task_type)
-    return backing.slug if backing else None
+    if backing is None or not str(entry.get("pair", "")).startswith(REVIEW_PAIR):
+        return None
+    return backing.slug
 
 
 # ---- text ----------------------------------------------------------------------------
@@ -735,9 +738,12 @@ def _evidence_check(
                     continue
             sources.add(backing.source)
     if not sources:
-        return reasons[
-            0
-        ] if reasons else f"no cited task has a {category} backing for {slug}", frozenset()
+        return (
+            reasons[0]
+            if reasons
+            else f"no cited task has a return_history entry or a backing of {category} for {slug}",
+            frozenset(),
+        )
     return None, frozenset(sources)
 
 

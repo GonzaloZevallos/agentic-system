@@ -1,3 +1,4 @@
+from dataclasses import replace
 from typing import Any, get_args
 
 import pytest
@@ -12,15 +13,19 @@ from agentic.core.process.domain.playbook import (
     PLAYBOOK_ROLES,
     REVIEW_PAIR,
     Applied,
+    Archived,
     Backing,
     Confidence,
     Delta,
     Evidence,
     Item,
+    Pending,
     Playbook,
     Rejected,
     accountable,
     apply,
+    archive_due,
+    archive_stale,
     attribute,
     keep,
     lesson_refusal,
@@ -29,6 +34,7 @@ from agentic.core.process.domain.playbook import (
     render_file,
     return_backing,
     section,
+    shared_term,
 )
 from agentic.core.process.domain.task import FindingCategory
 
@@ -76,14 +82,18 @@ def run(
     playbook: Playbook | None = None,
     rejected: tuple[Rejected, ...] = (),
     ev: dict[str, Evidence] | None = None,
+    candidates: tuple[Pending, ...] = (),
+    archived: tuple[Archived, ...] = (),
 ) -> Applied:
     return apply(
         playbook or empty(),
         deltas,
-        ev or EVIDENCE,
+        EVIDENCE if ev is None else ev,
         rejected,
         section_hash="abc123",
         now=NOW,
+        candidates=candidates,
+        archived=archived,
     )
 
 
@@ -155,7 +165,7 @@ def test_the_review_pair_is_the_one_the_roles_module_writes():
 
 def test_a_definition_return_is_the_product_analysts():
     returned = {"pair": "PM→Product Analyst", "category": "definition"}
-    assert accountable(returned, "feature") == "product_analyst"
+    assert accountable(returned, "feature") is None  # `accountable` is the review pair's
     assert return_backing(returned, "feature") == Backing("return", "product_analyst", "definition")
 
 
@@ -166,7 +176,8 @@ def test_a_definition_return_is_the_product_analysts():
 def test_a_lead_return_is_its_designers_and_the_pairs_are_the_roles_modules(
     pair: str, slug: str
 ) -> None:
-    assert accountable({"pair": pair, "category": "design"}, "feature") == slug
+    backing = return_backing({"pair": pair, "category": "design"}, "feature")
+    assert backing == Backing("return", slug, "design")
     assert pair in (roles.PAIR_UX_LEAD.key, roles.PAIR_UI_LEAD.key)
     assert roles.PAIR_PM_PA.key == "PM→Product Analyst"
 
@@ -559,3 +570,169 @@ def test_keep_is_confidence_or_two_tasks_and_a_lone_human_decision_needs_two(
     confidence: Confidence, seen: int, sources: set[str], kept: bool
 ) -> None:
     assert keep(confidence, seen, frozenset(sources)) is kept
+
+
+def test_archive_due_has_its_edges_at_the_threshold_and_never_without_a_prompt_date():
+    aged = replace(item(1), in_prompt_since="2026-09-01")
+    assert archive_due(aged, ARCHIVE_AFTER - 1, False) is False
+    assert archive_due(aged, ARCHIVE_AFTER, False) is True
+    assert archive_due(aged, ARCHIVE_AFTER * 3, True) is False  # backed or cited since
+    # never in a prompt (its PR did not merge): `added_at` is not a clock
+    assert archive_due(item(1), ARCHIVE_AFTER * 3, False) is False
+
+
+# ---- evidence from the four sources ----------------------------------------------------
+
+DECISION = "Spanish quotes in the docs are a follow-up, never part of this task."
+DLESSON = "Treat Spanish quotes in docs as a follow-up, not as part of the task."
+
+
+def decided(
+    slug: str = "developer", ref: str = "1", text: str = DECISION, ran: frozenset[str] | None = None
+) -> Evidence:
+    return Evidence(
+        True,
+        "feature",
+        backings=(Backing("human_decision", slug, "human-decision", ref),),
+        decisions={int(ref): text},
+        ran=frozenset({slug}) if ran is None else ran,
+    )
+
+
+def human_add(
+    lesson: str = DLESSON, decision: int = 1, tasks: tuple[str, ...] = ("GH-1",)
+) -> Delta:
+    return Delta(
+        op="add",
+        slug="developer",
+        category="human-decision",
+        lesson=lesson,
+        tasks=tasks,
+        decision=decision,
+        confidence="high",
+    )
+
+
+def test_a_human_decision_lesson_needs_two_tasks_even_with_high_confidence():
+    ev = {"GH-1": decided(), "GH-2": decided()}
+    first = run([human_add()], ev=ev)
+    assert first.playbook.items == ()
+    assert [d.lesson for d in first.held] == [DLESSON]
+    assert first.candidates[0].seen_in == ("GH-1",)
+    second = run([human_add(tasks=("GH-2",))], ev=ev, candidates=first.candidates)
+    # promoted, keeping the task the candidate already had; recorded as an add
+    assert [i.seen_in for i in second.playbook.items] == [("GH-1", "GH-2")]
+    assert [d.op for d in second.applied] == ["add"]
+    assert second.candidates == ()
+
+
+@pytest.mark.parametrize(
+    ("make", "why"),
+    [
+        (lambda: decided(ref="2"), "does not cite"),
+        (lambda: decided(ran=frozenset()), "did not run"),
+        (
+            lambda: decided(text="Postpone the migration until the schema freezes."),
+            "shares no term",
+        ),
+    ],
+)
+def test_an_invented_human_decision_is_refused(make, why: str) -> None:
+    result = run([human_add()], ev={"GH-1": make()})
+    assert result.playbook.items == () and result.candidates == ()
+    assert why in result.refused[0].reason
+
+
+def test_a_decision_the_task_does_not_carry_is_refused():
+    only_backing = Evidence(
+        True,
+        "feature",
+        backings=(Backing("human_decision", "developer", "human-decision", "3"),),
+        ran=frozenset({"developer"}),
+    )
+    result = run([human_add(decision=3)], ev={"GH-1": only_backing})
+    assert "does not exist" in result.refused[0].reason
+
+
+@pytest.mark.parametrize("source", ["finding", "design", "return"])
+def test_a_citation_without_a_backing_is_refused_for_every_source(source) -> None:
+    category = "design" if source == "design" else "spec-scope"
+    slug = "ux_designer" if source == "design" else "developer"
+    backed = Evidence(True, "feature", backings=(Backing(source, slug, category),))
+    ok = run(
+        [Delta("add", slug, category, LESSON, tasks=("GH-1",))], empty(slug), ev={"GH-1": backed}
+    )
+    assert [d.category for d in ok.applied] == [category]
+    other = Evidence(True, "feature", backings=(Backing(source, slug, "spec-behaviour"),))
+    bad = run(
+        [Delta("add", slug, category, LESSON, tasks=("GH-1",))], empty(slug), ev={"GH-1": other}
+    )
+    assert bad.playbook.items == () and "backing" in bad.refused[0].reason
+    unknown = run([Delta("add", slug, category, LESSON, tasks=("GH-404",))], empty(slug), ev={})
+    assert "no evidence" in unknown.refused[0].reason
+
+
+def test_a_low_confidence_lesson_waits_as_a_candidate_and_two_tasks_keep_it():
+    ev = {"GH-1": evidence("process-suite-red"), "GH-2": evidence("process-suite-red")}
+    low = replace(add(LESSON, "GH-1"), confidence="low")
+    first = run([low], ev=ev)
+    assert first.playbook.items == () and first.held == (low,)
+    again = run([replace(low, tasks=("GH-1",))], ev=ev, candidates=first.candidates)
+    assert "already counts" in again.refused[0].reason
+    second = run([replace(low, tasks=("GH-2",))], ev=ev, candidates=first.candidates)
+    assert second.playbook.items[0].seen_in == ("GH-1", "GH-2")
+    assert second.playbook.items[0].id == "developer-1"
+
+
+def test_an_add_that_matches_an_archived_item_restores_it_with_its_id_and_seen_in():
+    old = replace(item(4, LESSON, ("GH-1", "GH-2")), in_prompt_since="2026-09-01")
+    shelf = (Archived(old, "stale", "2026-10-01"),)
+    ev = {"GH-3": evidence("process-suite-red")}
+    result = run([add(LESSON, "GH-3")], ev=ev, archived=shelf)
+    restored = result.playbook.items[0]
+    assert (restored.id, restored.seen_in, restored.in_prompt_since) == (
+        "developer-4",
+        ("GH-1", "GH-2", "GH-3"),
+        "",
+    )
+    assert [d.op for d in result.applied] == ["add"] and result.archived == ()
+    # a new lesson never reuses an archived id
+    fresh = run([add("Another lesson entirely.", "GH-3")], ev=ev, archived=shelf)
+    assert fresh.playbook.items[0].id == "developer-5"
+
+
+def test_archive_stale_moves_only_the_due_items_and_deletes_nothing():
+    aged = replace(item(1, "Lesson one."), in_prompt_since="2026-09-01")
+    young = replace(item(2, "Lesson two."), in_prompt_since="2026-10-01")
+    book = Playbook("developer", (aged, young, item(3, "Lesson three.")))
+    aging = {
+        "developer-1": (ARCHIVE_AFTER, False),
+        "developer-2": (ARCHIVE_AFTER - 1, False),
+        "developer-3": (ARCHIVE_AFTER * 2, False),
+    }
+    kept, shelf = archive_stale(book, (), aging, now=NOW)
+    assert [i.id for i in kept.items] == ["developer-2", "developer-3"]
+    assert [(a.item, a.reason, a.archived_at) for a in shelf] == [(aged, "stale", NOW)]
+
+
+def test_a_playbook_file_of_today_reads_the_same_and_the_new_keys_are_optional():
+    today = (
+        "items:\n- id: developer-1\n  lesson: Run the suite.\n  category: process-suite-red\n"
+        "  since: empty\n  seen_in:\n  - GH-1\n  added_at: '2026-10-05'\n"
+    )
+    book = parse(today, "developer")
+    assert book.items[0].last_applied == "" and book.items[0].in_prompt_since == ""
+    assert render_file(book) == today
+    stamped = replace(book.items[0], last_applied="2026-10-20", in_prompt_since="2026-10-10")
+    assert parse(render_file(Playbook("developer", (stamped,))), "developer").items == (stamped,)
+    design = today.replace("process-suite-red", "design")
+    assert parse(design, "developer").items[0].category == "design"
+    with pytest.raises(ValueError):
+        parse(today.replace("process-suite-red", "vibes"), "developer")
+
+
+def test_shared_term_ignores_trivial_short_and_accented_words():
+    assert shared_term("Avoid migrations before schema freeze", "The schema is frozen") is True
+    assert shared_term("Valida la decisión", "una decisión humana") is False  # trivial only
+    assert shared_term("Usa comillas españolas", "Las COMILLAS españolas son seguimiento") is True
+    assert shared_term("Do it now", "Do it later") is False  # under five characters

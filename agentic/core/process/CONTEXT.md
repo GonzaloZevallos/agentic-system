@@ -60,17 +60,17 @@ Rol con reloj propio que genera tareas o insumos sin que nadie se lo pida.
 _Campo_: ambient agent — LangChain (Chase, enero de 2025): un agente que escucha un flujo de eventos en vez de un mensaje humano. Google ADK usa el nombre sin definirlo
 
 **Reflector**:
-El rol que, con una tarea ya cerrada, lee sus devoluciones y propone lecciones para el rol al que cada una se le puede atribuir. Solo propone: no escribe ningún playbook, y lo que propone lo decide el curador, que es código. No corre dentro de ninguna tarea.
+El rol que, con una tarea ya cerrada, lee sus devoluciones, hallazgos, observaciones de diseño y decisiones humanas, y propone lecciones puntuadas para el rol al que cada una se le puede atribuir (ADR-0056). Solo propone: no escribe ningún playbook, y lo que propone lo decide el curador, que es código. No corre dentro de ninguna tarea.
 _Avoid_: PjM (el que mejora el proceso en el diseño original), curador (como si fuera un rol: es código), crítico
 _Campo_: reflector — ACE, Agentic Context Engineering (Zhang et al., 2025), que lo separa del curador; Reflexion (Shinn 2023) llama self-reflection a lo que un agente se dice sobre su propio intento
 
 **Playbook**:
-Las lecciones de un rol en un producto, a lo sumo 12, como datos versionados en el repo del producto; entra al prompt del rol como una sección propia después de rellenar los placeholders. Solo cambia por deltas (agregar, fusionar, sumar una cita, retirar), nunca reescrito entero. Con un playbook vacío el prompt y su hash son los de siempre.
+Las lecciones de un rol en un producto, a lo sumo 12, como datos versionados en el repo del producto; entra al prompt del rol como una sección propia después de rellenar los placeholders. Solo cambia por deltas (agregar, fusionar, sumar una cita, retirar), nunca reescrito entero. Lo que `keep` no deja pasar espera en `candidates.yaml`, y lo que dejó de aplicar se archiva en `archived.yaml` sin borrarse. Con un playbook vacío el prompt y su hash son los de siempre.
 _Avoid_: memoria, guía de estilo, contexto aprendido
 _Campo_: playbook — ACE (Zhang et al., 2025), donde son bullets con contadores de ayuda y daño que un curador mantiene con deltas incrementales
 
 **Lección**:
-Una línea imperativa de a lo sumo 240 caracteres, para un rol, atada a una categoría de devolución y a las tareas cerradas que la citan. Se rechaza lo que tenga salto de línea, backtick, llaves dobles o un enlace, y una que una persona ya rechazó no vuelve a proponerse.
+Una línea imperativa de a lo sumo 240 caracteres, para un rol, atada a una categoría (de hallazgo, de diseño o de decisión humana) y a las tareas cerradas que la citan, con una confianza de que es general y la cuenta de tareas donde apareció. Se rechaza lo que tenga salto de línea, backtick, llaves dobles o un enlace, y una que una persona ya rechazó no vuelve a proponerse.
 _Avoid_: regla, tip, instrucción (la instrucción es el prompt)
 _Campo_: item — ACE, el bullet del playbook; lesson learned en Reflexion
 

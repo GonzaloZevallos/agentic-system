@@ -127,8 +127,10 @@ def test_the_ledger_round_trips_and_merging_keeps_entries_over_bare_block_costs(
     ledger = pc.Ledger(
         "2026-10-05T10:00:00+00:00",
         {
-            "GH-1": pc.Entry(0.4, applied=({"op": "add", "slug": "developer", "lesson": LESSON},)),
-            "GH-2": pc.Entry(0.2, failed="RuntimeError: x"),
+            "GH-1@review": pc.Entry(
+                0.4, applied=({"op": "add", "slug": "developer", "lesson": LESSON},)
+            ),
+            "GH-2@review": pc.Entry(0.2, failed="RuntimeError: x"),
         },
         1,
         1,
@@ -137,8 +139,8 @@ def test_the_ledger_round_trips_and_merging_keeps_entries_over_bare_block_costs(
     assert ledger.since_summary == 1
     block_only = candidate("CLOSED", tasks={"GH-1": 9.0, "GH-3": 0.7})
     merged = pc.merge_ledgers([ledger], [block_only])
-    assert merged.tasks["GH-1"].cost_usd == 0.4
-    assert merged.tasks["GH-3"].cost_usd == 0.7
+    assert merged.tasks["GH-1@review"].cost_usd == 0.4
+    assert merged.tasks["GH-3@review"].cost_usd == 0.7
     assert merged.started_at == ledger.started_at
     with pytest.raises(ValueError):
         pc.parse_ledger("tasks: [GH-1]")
@@ -188,3 +190,208 @@ def test_an_auto_merged_delivery_is_never_a_kept_candidate():
     ]
     names = [d["id"] for d in pc.eligible(docs, [], "2026-10-01", None)]
     assert names == ["GH-2"]
+
+
+# ---- the ledger across ADR-0056 ---------------------------------------------------------
+
+TODAYS_LEDGER = """\
+started_at: '2026-10-05T10:00:00+00:00'
+summaries: 0
+summarised: 0
+tasks:
+  GH-1:
+    cost_usd: 0.4
+  GH-2:
+    cost_usd: 0.2
+    failed: 'RuntimeError: x'
+"""
+
+
+def test_a_ledger_written_before_the_gates_reads_every_key_as_review():
+    ledger = pc.parse_ledger(TODAYS_LEDGER)
+    assert list(ledger.tasks) == ["GH-1@review", "GH-2@review"]
+    assert ledger.tasks["GH-1@review"] == pc.Entry(cost_usd=0.4)
+    assert pc.split_key("GH-1") == ("GH-1", "review")
+    assert pc.split_key("GH-1@decision") == ("GH-1", "decision")
+
+
+def test_decisions_and_attempts_round_trip_and_are_omitted_when_zero():
+    ledger = pc.Ledger("t", {"GH-3@decision": pc.Entry(0.3, decisions=2, attempts=1)})
+    text = pc.render_ledger(ledger)
+    assert pc.parse_ledger(text) == ledger
+    assert "decisions" not in pc.render_ledger(pc.parse_ledger(TODAYS_LEDGER))
+
+
+def test_reflected_tasks_counts_distinct_ids_and_not_keys_waiting_for_a_retry():
+    ledger = pc.Ledger(
+        "t",
+        {
+            "GH-1@review": pc.Entry(),
+            "GH-1@decision": pc.Entry(decisions=1),
+            "GH-2@review": pc.Entry(attempts=1),  # transient failure, tries left
+            "GH-3@review": pc.Entry(attempts=pc.REFLECT_ATTEMPTS, failed="x"),  # given up: counted
+            "GH-4@review": pc.Entry(attempts=pc.REFLECT_ATTEMPTS - 1),
+        },
+        summarised=1,
+    )
+    assert pc.reflected_tasks(ledger) == 2
+    assert ledger.since_summary == 1
+    assert ledger.done_keys == {"GH-1@review", "GH-1@decision", "GH-3@review"}
+
+
+# ---- the two gates ------------------------------------------------------------------------
+
+CLOCK = "2026-10-05T00:00:00+00:00"
+HUMAN_TWO = "### Decision 1\n\nA.\n\n### Decision 2\n\nB."
+
+
+def ended(task_id: str, status: str, **extra) -> dict:
+    return {"id": task_id, "status": status, "sections": {"Human": HUMAN_TWO}, **extra}
+
+
+def decision_ids(docs, done=(), **kw) -> list[str]:
+    return [d["id"] for d in pc.eligible(docs, done, CLOCK, None, gate="decision", **kw)]
+
+
+def test_the_decision_gate_takes_discarded_split_closed_pr_and_closed_escalations():
+    docs = [
+        ended("GH-1", "discarded", finished_at="2026-10-06T00:00:00+00:00"),
+        ended("GH-2", "split", finished_at="2026-10-07T00:00:00+00:00"),
+        ended(
+            "GH-3",
+            "ready_for_review",
+            closed_at="2026-10-08T00:00:00+00:00",
+            delivery_outcome="closed",
+        ),
+        ended(
+            "GH-4",
+            "waiting_on_human",
+            runs=[
+                {"ended_at": "2026-10-09T00:00:00+00:00"},
+                {"ended_at": "2026-10-09T05:00:00+00:00"},
+            ],
+        ),
+        ended("GH-5", "waiting_on_human", runs=[{"ended_at": "2026-10-09T00:00:00+00:00"}]),
+        ended("GH-6", "discarded"),  # no finished_at: no clock yet
+        {"id": "GH-7", "status": "discarded", "finished_at": "2026-10-06T00:00:00+00:00"},
+        ended("GH-8", "discarded", finished_at="2026-09-01T00:00:00+00:00"),
+    ]
+    assert decision_ids(docs, closed_escalations={"GH-4"}) == ["GH-1", "GH-2", "GH-3", "GH-4"]
+
+
+def test_a_kept_delivery_is_not_a_decision_gate_task_and_a_discarded_one_is_not_a_review_task():
+    kept = ended(
+        "GH-1", "ready_for_review", closed_at="2026-10-06T00:00:00+00:00", delivery_outcome="merged"
+    )
+    gone = ended("GH-2", "discarded", finished_at="2026-10-06T00:00:00+00:00")
+    assert decision_ids([kept, gone]) == ["GH-2"]
+    assert [d["id"] for d in pc.eligible([kept, gone], set(), CLOCK, None)] == ["GH-1"]
+
+
+def test_a_decision_key_returns_only_when_the_task_has_more_decisions_than_it_read():
+    doc = ended("GH-1", "discarded", finished_at="2026-10-06T00:00:00+00:00")
+    done = {"GH-1@decision"}
+    assert decision_ids([doc], done, decisions_read={"GH-1@decision": 2}) == []
+    assert decision_ids([doc], done, decisions_read={"GH-1@decision": 1}) == ["GH-1"]
+    assert decision_ids([doc], done) == ["GH-1"]  # recorded as having read none
+
+
+def test_a_review_key_written_before_the_gates_still_counts_as_reflected():
+    docs = [document("GH-1", "2026-10-06T00:00:00+00:00")]
+    assert pc.eligible(docs, {"GH-1"}, CLOCK, None) == []
+    assert pc.eligible(docs, {"GH-1@review"}, CLOCK, None) == []
+    assert len(pc.eligible(docs, {"GH-1@decision"}, CLOCK, None)) == 1
+
+
+def test_a_key_waiting_for_a_retry_is_eligible_again():
+    ledger = pc.Ledger("t", {"GH-1@review": pc.Entry(attempts=1)})
+    docs = [document("GH-1", "2026-10-06T00:00:00+00:00")]
+    assert [d["id"] for d in pc.eligible(docs, ledger.done_keys, CLOCK, None)] == ["GH-1"]
+
+
+def test_no_clock_means_no_decision_gate_task():
+    assert decision_ids([ended("GH-1", "discarded", finished_at="2026-10-06")]) != []
+    assert (
+        pc.eligible(
+            [ended("GH-1", "discarded", finished_at="2026-10-06")], set(), "", None, gate="decision"
+        )
+        == []
+    )
+
+
+# ---- candidates.yaml and archived.yaml ----------------------------------------------------
+
+
+def test_candidates_and_archived_round_trip_and_reject_a_bad_lesson():
+    pending = pb.Pending("developer", "spec-scope", LESSON, "medium", ("GH-1",), ("finding",), "d")
+    assert pc.parse_candidates(pc.render_candidates([pending])) == [pending]
+    assert pc.parse_candidates("") == []
+    item = pb.Item(
+        "developer-3",
+        LESSON,
+        "spec-scope",
+        "empty",
+        ("GH-1", "GH-2"),
+        "d",
+        last_applied="e",
+        in_prompt_since="f",
+    )
+    shelved = pb.Archived(item, "stale", "2026-10-22")
+    assert pc.parse_archived(pc.render_archived([shelved])) == [shelved]
+    with pytest.raises(ValueError):
+        pc.parse_candidates(pc.render_candidates([pending]).replace(LESSON, "see https://x.y"))
+    with pytest.raises(ValueError):
+        pc.parse_candidates("candidates: [{slug: developer}]")
+
+
+def test_the_new_record_files_are_named_beside_the_old_ones():
+    assert {"candidates", "archived"} <= set(pb.RECORD_FILES)
+    assert pc.CANDIDATES_FILE.endswith("/candidates.yaml")
+    assert pc.ARCHIVED_FILE.endswith("/archived.yaml")
+
+
+# ---- in_prompt_since ---------------------------------------------------------------------
+
+
+def merged(commit: str) -> pc.Candidate:
+    return pc.Candidate("MERGED", commit, pc.Record())
+
+
+def test_in_prompt_since_is_the_first_merge_whose_playbook_holds_the_id():
+    books = {
+        "c1": playbook_with("developer", "Other."),
+        "c2": playbook_with("developer", "Other.", LESSON),
+    }
+    dates = {"c1": "2026-10-01", "c2": "2026-10-10", "c3": "2026-10-20"}
+    books["c3"] = books["c2"]
+
+    def at(commit: str, slug: str) -> pb.Playbook:
+        return books[commit]
+
+    got = pc.in_prompt_since(
+        "developer-2", [merged("c3"), merged("c2"), merged("c1")], at, dates.get
+    )
+    assert got == "2026-10-10"
+    # the id decides, not the text of the block: a PR whose playbook lacks the id never counts
+    assert pc.in_prompt_since("developer-9", [merged("c2")], at, dates.get) is None
+
+
+def test_in_prompt_since_ignores_unmerged_prs_and_merges_before_a_restore():
+    book = playbook_with("developer", LESSON)
+    dates = {"c1": "2026-10-01", "c2": "2026-10-15"}
+    prs = [
+        pc.Candidate("CLOSED", "", pc.Record()),
+        pc.Candidate("OPEN", "", pc.Record()),
+        merged("c1"),
+        merged("c2"),
+    ]
+
+    def at(commit: str, slug: str) -> pb.Playbook:
+        return book
+
+    assert pc.in_prompt_since("developer-1", prs[:2], at, dates.get) is None
+    assert pc.in_prompt_since("developer-1", prs, at, dates.get) == "2026-10-01"
+    assert (
+        pc.in_prompt_since("developer-1", prs, at, dates.get, not_before="2026-10-10")
+        == "2026-10-15"
+    )
