@@ -3130,6 +3130,5 @@ def test_ending_a_task_without_a_delivery_stamps_finished_at_and_nothing_else_do
     # The document writes the key only when set: one written before it is byte-identical.
     base = {"id": "T-1", "title": "t", "description": "d", "status": "discarded"}
     assert "finished_at" not in document.render(base)
-    assert "finished_at: 2026-10-22T10:00:00+00:00" in document.render(
-        {**base, "finished_at": "2026-10-22T10:00:00+00:00"}
-    )
+    stamped = document.render({**base, "finished_at": "2026-10-22T10:00:00+00:00"})
+    assert "finished_at: '2026-10-22T10:00:00+00:00'" in stamped
