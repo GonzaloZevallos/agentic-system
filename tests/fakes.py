@@ -918,6 +918,8 @@ class MemoryTracker:
         self.changed_files_asked: list[str] = []
         self.changed_files_error: str | None = None
         self.pull_requests: list[tuple[str, str, str]] = []
+        # Whether each `open_pull_request` call (failed ones counted) asked to close the issue.
+        self.closes_issue_calls: list[bool] = []
         self.comments: list[tuple[str, str]] = []
         self.labels: list[tuple[str, str]] = []
         self.unlabeled: list[tuple[str, str]] = []
@@ -1032,8 +1034,11 @@ class MemoryTracker:
             raise ValueError(self.merge_error)
         return self.merge_method
 
-    def open_pull_request(self, task_id: str, branch: str, title: str, body: str) -> str:
+    def open_pull_request(
+        self, task_id: str, branch: str, title: str, body: str, *, closes_issue: bool = True
+    ) -> str:
         self.attempted_bodies.append(body)
+        self.closes_issue_calls.append(closes_issue)
         if self.open_failures > 0:
             self.open_failures -= 1
             raise ValueError(self.open_error)

@@ -95,6 +95,26 @@ def test_a_task_without_an_issue_opens_its_pull_request_with_no_closes_prefix():
     assert seen["body"] == "x"
 
 
+def _body_written_by(**options) -> str:
+    seen = {}
+
+    def run(args, cwd, capture_output, text, check):
+        seen["body"] = Path(args[args.index("--body-file") + 1]).read_text(encoding="utf-8")
+        return subprocess.CompletedProcess(args, 0, "https://github.com/o/r/pull/7\n", "")
+
+    GhTracker(Path("/p"), run).open_pull_request("GH-12", "b", "t", "x", **options)
+    return seen["body"]
+
+
+def test_a_pull_request_opened_without_closes_issue_has_no_closes_line():
+    assert _body_written_by(closes_issue=False) == "x"
+
+
+def test_a_pull_request_closes_its_issue_by_default_and_when_asked():
+    assert _body_written_by() == "Closes #12\n\nx"
+    assert _body_written_by(closes_issue=True) == "Closes #12\n\nx"
+
+
 def test_open_issue_uses_body_file_and_sends_no_label(tmp_path, monkeypatch):
     written = {}
 

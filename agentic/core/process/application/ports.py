@@ -889,9 +889,14 @@ class Tracker(Protocol):
     labels. A task that did not come from an issue has no issue to write to; the
     adapter ignores those calls."""
 
-    def open_pull_request(self, task_id: str, branch: str, title: str, body: str) -> str:
+    def open_pull_request(
+        self, task_id: str, branch: str, title: str, body: str, *, closes_issue: bool = True
+    ) -> str:
         """Returns the pull request's URL. Linking it to the task's issue, when there
-        is one, is the adapter's: only it knows what a task id says about the tracker."""
+        is one, is the adapter's: only it knows what a task id says about the tracker.
+        With `closes_issue=False` the body carries no closing keyword, so merging the
+        pull request does not close the issue: a slice of the task (GH-297), which is
+        not the task's own pull request."""
         ...
 
     def open_issue(self, title: str, body: str, *, label: str | None = None) -> str:
