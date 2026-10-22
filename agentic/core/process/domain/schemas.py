@@ -497,9 +497,9 @@ class LessonDelta(BaseModel):
         description="The ids of the closed tasks whose returns this delta cites. "
         "Required on `add` and `bump`"
     )
-    confidence: Literal["low", "medium", "high"] = Field(
-        default="high",
-        description="Always state it on `add`: how sure you are the lesson is general, "
+    confidence: Literal["", "low", "medium", "high"] = Field(
+        default="",
+        description="Required on `add`, empty otherwise: how sure you are the lesson is general, "
         "not specific to this task. `high` only when it plainly holds for any task of the "
         "role; `low` or `medium` when the pattern needs to recur before it is kept",
     )
@@ -521,6 +521,8 @@ class LessonDelta(BaseModel):
 
     @model_validator(mode="after")
     def _decision_is_cited(self) -> LessonDelta:
+        if self.op == "add" and not self.confidence:
+            raise ValueError("an `add` states its confidence: low, medium or high")
         if self.source == "human_decision" and self.decision < 1:
             raise ValueError("a human_decision lesson cites the number of its decision")
         return self

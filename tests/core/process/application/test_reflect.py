@@ -84,6 +84,7 @@ def add(lesson: str = LESSON, slug: str = "developer", category: str = "standard
         "lesson": lesson,
         "item_id": "",
         "tasks": ["GH-10"],
+        "confidence": "high",
     }
 
 
@@ -279,7 +280,24 @@ def _validated(delta: dict[str, Any]) -> dict[str, Any]:
     return schemas.validate(schemas.Reflection, raw, {})["deltas"][0]
 
 
+def test_an_add_without_its_rating_is_refused_so_a_missing_one_is_never_read_as_high():
+    unrated = {k: v for k, v in add().items() if k != "confidence"}
+    with pytest.raises(ValueError, match="confidence"):
+        _validated(unrated)
+
+
 def test_a_delta_of_today_reads_as_it_did_and_a_new_one_carries_its_rating():
+    old = _validated(
+        {
+            "op": "bump",
+            "slug": "developer",
+            "category": "",
+            "lesson": "",
+            "item_id": "developer-1",
+            "tasks": ["GH-10"],
+        }
+    )
+    assert (old["scope"], old["decision"]) == ("product", 0)
     old = _validated(add())
     assert (old["confidence"], old["scope"], old["decision"]) == ("high", "product", 0)
     new = _validated(

@@ -50,6 +50,7 @@ async def written_playbook(tmp_path: Path, existing: pb.Playbook | None = None) 
                     "lesson": LESSON,
                     "item_id": "",
                     "tasks": ["GH-1"],
+                    "confidence": "high",
                 }
             ],
         },

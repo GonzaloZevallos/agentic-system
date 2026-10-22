@@ -396,7 +396,7 @@ def _fold(
             lesson=d["lesson"],
             item_id=d["item_id"],
             tasks=tuple(d["tasks"]),
-            confidence=d.get("confidence", "high"),
+            confidence=d.get("confidence") or "high",
             scope=d.get("scope", "product"),
             decision=int(d.get("decision") or 0),
         )

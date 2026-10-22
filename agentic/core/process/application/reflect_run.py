@@ -26,7 +26,7 @@ from ..domain import system_lessons as sl
 from ..domain.reaping import ReapedProcess
 from .closed import closed_documents as closed_documents  # re-exported: plan.py reads it here
 from .ports import GitError, Inbox, ListedPullRequest, Ports, Tracker
-from .reflect import Reflected, reflect_task
+from .reflect import Reflected, backings, reflect_task
 from .release import release_task, summary
 
 TASK_ID = "playbook"
@@ -224,7 +224,7 @@ def _delta_of(raw: Mapping[str, Any]) -> pb.Delta:
         lesson=raw.get("lesson", ""),
         item_id=raw.get("item_id", ""),
         tasks=tuple(raw.get("tasks") or ()),
-        confidence=raw.get("confidence", "high"),
+        confidence=raw.get("confidence") or "high",
         scope=raw.get("scope", "product"),
         decision=int(raw.get("decision") or 0),
     )
@@ -288,19 +288,10 @@ def _entry(result: Reflected, prior: pc.Entry | None, decisions: int) -> pc.Entr
         return pc.Entry(cost_usd=cost, applied=applied, decisions=decisions)
     attempts = (prior.attempts if prior and waiting else 0) + 1
     failed = result.error if attempts >= pc.REFLECT_ATTEMPTS else ""
-    return pc.Entry(cost, failed, earlier, decisions, attempts)
-
-
-def _backings_of(document: Mapping[str, Any]) -> list[pb.Backing]:
-    """What a task's recorded returns back. Findings, remarks and decisions join once the
-    input of the reflector builds them (`reflect.backings`)."""
-    task_type = str(document.get("type") or "")
-    found = (
-        pb.return_backing(e, task_type)
-        for e in document.get("change_history") or []
-        if isinstance(e, Mapping)
-    )
-    return [b for b in found if b is not None]
+    # While a retry is due, the decisions read stay those of the last good read, so the
+    # retry reads the ones that failed; only a failure for good counts them all as seen.
+    read = decisions if failed else (prior.decisions if prior else 0)
+    return pc.Entry(cost, failed, earlier, read, attempts)
 
 
 def _ended(document: Mapping[str, Any]) -> str:
@@ -359,7 +350,7 @@ def _archive_stale(
                 if slug in (d.get("prompts") or {}) and _ended(d) > item.in_prompt_since
             ]
             backed = item.last_applied > item.in_prompt_since or any(
-                b.slug == slug and b.category == item.category for d in ran for b in _backings_of(d)
+                b.slug == slug and b.category == item.category for d in ran for b in backings(d)
             )
             aging[item.id] = (len(ran), backed)
         playbooks[slug], archived = pb.archive_stale(playbook, archived, aging, now=now)
@@ -455,6 +446,8 @@ async def reflect(
     before = (dict(read), candidates, archived)
     tasks = dict(base.tasks)
     for document, gate in batch:
+        key = pc.ledger_key(str(document["id"]), gate)
+        before_entry = tasks.get(key)
         result = await reflect_task(
             cfg,
             ports,
@@ -465,12 +458,12 @@ async def reflect(
             candidates=candidates,
             archived=archived,
             gate=gate,
+            decisions=before_entry.decisions if before_entry else 0,
         )
         playbooks.update(result.playbooks)
         candidates = candidates if result.candidates is None else result.candidates
         archived = archived if result.archived is None else result.archived
-        key = pc.ledger_key(str(document["id"]), gate)
-        tasks[key] = _entry(result, tasks.get(key), pc.decision_count(document))
+        tasks[key] = _entry(result, before_entry, pc.decision_count(document))
     _file_system(system, tasks)
     documents = _documents(ports, None)
     archived = _archive_stale(documents, playbooks, archived, now)

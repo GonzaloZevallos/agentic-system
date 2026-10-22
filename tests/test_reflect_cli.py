@@ -55,6 +55,7 @@ def add_delta(task: str) -> dict:
         "lesson": LESSON,
         "item_id": "",
         "tasks": [task],
+        "confidence": "high",
     }
 
 

@@ -186,3 +186,69 @@ async def test_gather_refuses_a_ledger_it_cannot_read_instead_of_guessing(tmp_pa
     git(root, "commit", "-qm", "broken ledger")
     with pytest.raises(ValueError, match="reflected.yaml"):
         reflect_run.gather(cfg, ports)
+
+
+def _ux_item() -> pb.Item:
+    return pb.Item(
+        "ux_designer-1",
+        "Name the empty state of every screen the lead lists.",
+        "design",
+        "empty",
+        ("GH-90",),
+        "2026-09-01",
+        in_prompt_since="2026-09-02T00:00:00.000+00:00",
+    )
+
+
+def _ux_documents(remark_in: int | None) -> list[dict]:
+    docs = []
+    for n in range(1, pb.ARCHIVE_AFTER + 2):
+        docs.append(
+            {
+                "id": f"GH-{n}",
+                "type": "feature",
+                "prompts": {"ux_designer": "h1"},
+                "runs": [{"ended_at": f"2026-10-{n:02d}T00:00:00.000+00:00"}],
+                "design_items": [
+                    {"role_slug": "ux_lead", "kind": "important", "step": "s", "text": "empty"}
+                ]
+                if n == remark_in
+                else [],
+            }
+        )
+    return docs
+
+
+@pytest.mark.parametrize("remark_in, archived", [(None, True), (5, False)])
+def test_an_item_backed_by_a_design_remark_does_not_age_out_and_one_nothing_backs_does(
+    remark_in, archived
+):
+    playbooks = {"ux_designer": pb.Playbook("ux_designer", (_ux_item(),))}
+    gone = reflect_run._archive_stale(_ux_documents(remark_in), playbooks, (), "2026-11-01")
+    assert bool(gone) is archived
+    assert (playbooks["ux_designer"].items == ()) is archived
+
+
+async def test_a_retry_of_a_decision_read_asks_again_for_the_decisions_that_failed(tmp_path):
+    root, cfg, ports, _tracker = product(tmp_path, 1)
+    doc = ports.documents.load("GH-1")
+    assert doc is not None
+    doc["sections"] = {**doc["sections"], "Human": "### Decision 1\n\nuse snake_case"}
+    doc["prompts"] = {"developer": "h1"}
+    ports.documents.save(doc)
+    ports.documents.record_closure(
+        "GH-1", {"closed_at": "2026-10-01T09:00:00.000+00:00", "delivery_outcome": "merged"}
+    )
+    ports = memory_ports(
+        ScriptedRunner(reflector=[RuntimeError("down"), reflection(cost=0.1)]),
+        documents=ports.documents,
+        prompts=ports.prompts,
+        workspace=ports.workspace,
+        tracker=ports.tracker,
+    )
+    await run(cfg, ports)
+    failed = ledger_of(root).tasks["GH-1@review"]
+    assert failed.attempts == 1 and failed.decisions == 0  # nothing read for good yet
+    await run(cfg, ports)
+    assert ledger_of(root).tasks["GH-1@review"].decisions == 1
+    assert "Decision 1" in ports.runner.calls[-1]["prompt"]
