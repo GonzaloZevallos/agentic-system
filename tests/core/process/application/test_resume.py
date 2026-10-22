@@ -503,3 +503,19 @@ def test_an_all_approved_task_paused_at_delivery_still_resumes_through_integrate
     resumed = {**paused, **rules.resumed(paused, None)}
     assert resumed["escalated"] is None
     assert rules.resume_target(resumed) == "integrate"
+
+
+def test_an_estimate_escalation_waits_for_the_humans_decision(cfg):
+    # Only a human decision resumes it (ADR-0053): with none, resume refuses; with one,
+    # it goes on. A stale cap or a role failure keeps its own behaviour (tests above).
+    state = paused(
+        escalated="stopped at the cap of the estimate: 220.00 of 110.00 USD",
+        escalation_class="estimate",
+    )
+    ports = memory_ports()
+    ports.tracker.earlier = ["Escalated: stopped at the cap of the estimate"]
+    with pytest.raises(resume.WaitingOnHuman, match="estimate"):
+        resume.prepare("GH-12", state, "checkpoint", cfg, ports)
+    ports.tracker.earlier.append("Go on, the estimate is 200.")
+    r = resume.prepare("GH-12", state, "checkpoint", cfg, ports)
+    assert r.decision == "Go on, the estimate is 200."

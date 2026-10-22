@@ -166,6 +166,13 @@ def prepare(
                 f"{task_id} waits on {len(paused['questions_for_human'])} question(s): "
                 "answer them in comments on the issue, then resume"
             )
+        if decision is None and paused.get("escalation_class") == "estimate":
+            # Never retaken on its own (ADR-0053): the estimate in force changes only on a
+            # resumption that carries a human decision.
+            raise WaitingOnHuman(
+                f"{task_id}: the estimate does not fit; decide in comments on the issue "
+                "whether to go on, with which estimate, or to stop, then resume"
+            )
         if decision is None and (pair := rules.returns_pair(paused)):
             # The counter starts over only on an answer (README.md, 3): with nothing new,
             # the pair would return for the same reason again.
