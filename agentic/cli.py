@@ -245,6 +245,14 @@ def main() -> None:
         help="raise the task cap for this run, never lower it (AGENTIC_TASK_BUDGET_USD)",
     )
     resume.add_argument(
+        "--estimate",
+        type=_positive_usd,
+        metavar="USD",
+        help="the cost estimate to put in force when the task paused at the cap of its "
+        "estimate (default: the one the task proposed); an error on any other pause. "
+        "--task-budget governs only the flat task cap",
+    )
+    resume.add_argument(
         "--from-document",
         action="store_true",
         help="seed the state from the task document instead of the checkpoint",
@@ -563,6 +571,7 @@ def main() -> None:
                 cfg,
                 ports,
                 *options,
+                estimate=args.estimate,
                 log_file=log_file,
                 detach=args.detach,
                 child_argv=_child_argv(),
@@ -1194,6 +1203,17 @@ async def _refuse_a_started_task(app, config: RunnableConfig, task_id: str, port
     raise CannotStart(f"{task_id} {why}. {hint}")
 
 
+def _positive_usd(text: str) -> float:
+    """An argparse type: a cost in USD above zero."""
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a number") from None
+    if not value > 0:
+        raise argparse.ArgumentTypeError(f"{text!r} must be above zero")
+    return value
+
+
 async def _resume(
     task_id: str,
     cfg: Configuration,
@@ -1209,6 +1229,7 @@ async def _resume(
     child_argv: list[str] | None = None,
     spawn: Spawner | None = None,
     stop: StopCause | None = None,
+    estimate: float | None = None,
 ) -> None:
     lock = run_lock if run_lock is not None else _lock_for(cfg)
     registry = registry if registry is not None else _registry_for(cfg)
@@ -1220,7 +1241,7 @@ async def _resume(
         try:
             if from_document or not snapshot.values:
                 paused = resuming.from_document(task_id, ports)
-                r = resuming.prepare(task_id, paused, "document", cfg, ports)
+                r = resuming.prepare(task_id, paused, "document", cfg, ports, estimate=estimate)
             elif not snapshot.next:
                 status = snapshot.values.get("status", "open")
                 raise CannotStart(f"{task_id} is not paused: its run ended ({status})")
@@ -1239,12 +1260,12 @@ async def _resume(
                         listed = message[len(prefix) :].lstrip("\n")
                         raise ValueError(f"{_LEGACY_DISAGREEMENT_CAUSE}\n{listed}") from exc
                     raise
-                r = resuming.prepare(task_id, paused, "document", cfg, ports)
+                r = resuming.prepare(task_id, paused, "document", cfg, ports, estimate=estimate)
             else:
                 # No interrupt with nodes still to run: the run crashed rather than paused.
                 pending = () if snapshot.interrupts else tuple(snapshot.next)
                 paused = cast(TaskState, snapshot.values)
-                r = resuming.prepare(task_id, paused, "checkpoint", cfg, ports, pending)
+                r = resuming.prepare(task_id, paused, "checkpoint", cfg, ports, pending, estimate)
         except resuming.WaitingOnHuman as exc:
             raise CannotStart(str(exc), code=1) from exc
         except ValueError as exc:
