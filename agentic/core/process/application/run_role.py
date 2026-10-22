@@ -554,12 +554,15 @@ def _stale_session(resume: str | None, failures: list[Failure], cold_prompt: str
     """Whether the run's very first attempt held a caller-supplied session the harness
     never opened: the one condition that spends the cold fallback (`run_with_retry`'s
     own docstring). Gated on `cold_prompt`: a caller with none keeps today's retry,
-    which tries the same stale id again instead of dropping it."""
+    which tries the same stale id again instead of dropping it. A stall is not that
+    evidence: a CLI that hung before opening a session says nothing about whether the
+    caller's id opens, so the retry keeps it (GH-299, ADR-0057)."""
     return (
         cold_prompt is not None
         and resume is not None
         and len(failures) == 1
         and not failures[0]["session_id"]
+        and failures[0].get("reason") != "stall"
     )
 
 

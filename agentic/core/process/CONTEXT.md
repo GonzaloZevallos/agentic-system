@@ -348,9 +348,13 @@ _Avoid_: corrida, ejecución (eso es la Corrida completa), run (en inglés, para
 _Campo_: `InvocationKind` (`run` | `resume`) en el código; sin término de arte compartido — los frameworks hablan de resume/invoke sin nombrar la llamada suelta
 
 **Fallo de rol**:
-El rol se rompe: su ejecución falla, se le acaban los turnos sin resultado, la salida estructurada falta o es inválida, el `markdown` está vacío. Se reintenta una vez con el error como entrada, continuando la conversación del intento fallido cuando la hay. El motivo que queda escrito nombra siempre una causa: cuando el harness no deja material, lleva lo que el proceso sí dejó (stderr, código de salida), nunca un texto vacío. Distinto de devolución; no cuenta para el límite.
+El rol se rompe: su ejecución falla, se le acaban los turnos sin resultado, la salida estructurada falta o es inválida, el `markdown` está vacío. Se reintenta una vez con el error como entrada, continuando la conversación del intento fallido cuando la hay. El motivo que queda escrito nombra siempre una causa: cuando el harness no deja material, lleva lo que el proceso sí dejó (stderr, código de salida), nunca un texto vacío. Distinto de devolución; no cuenta para el límite. Un intento estancado es uno de sus motivos (`stall`).
 _Avoid_: error (demasiado amplio), reintento (es parte del fallo, no otro término)
 _Campo_: sin término de arte; el reintento sí lo tiene, `retry`, pero nombra la vuelta y no la rotura
+
+**Intento estancado**:
+Intento de un rol que lleva más que `stall_timeout_s` sin señal de vida: ni mensaje del stream, ni salida o vuelo de un hook de entrega, ni, con una herramienta del hilo principal pendiente, CPU o estado R/D de un hijo marcado del intento. Un vigilante lo mata por la marca del intento y lo falla con el motivo `stall`, que se reintenta como cualquier fallo de rol (ADR-0057). Un dato ilegible cuenta como actividad.
+_Avoid_: colgado, timeout (el umbral es solo una parte)
 
 **Tope por intento**:
 Gasto máximo de un intento de cualquier rol. Excederlo es un fallo de rol. Red de seguridad contra un rol desbocado, no presupuesto de trabajo. Hoy 10 USD.

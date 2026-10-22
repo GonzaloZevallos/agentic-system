@@ -36,6 +36,13 @@ Every attempt therefore carries one environment variable that every child inheri
 once the stream is closed the reaper stops every process that carries it. The variable
 goes only into the `options.env` of that attempt, never into `self.env` or `os.environ`,
 which every other attempt and the system's own children share.
+
+A CLI that hangs holds its slot forever: the stream loop has no clock of its own. A
+watchdog beside the loop therefore asks `domain/stall.py` every `CHECK_EVERY_S` whether
+the attempt is stalled, and when it is, reaps the attempt by its mark before anything is
+cancelled; only a CLI that survives the reap has its scope cancelled. The attempt then
+fails as `AttemptFailed(reason="stall")` -- never as the "interrupted" of an external
+cancellation, which stays what it was (GH-299, ADR-0057).
 """
 
 from __future__ import annotations
@@ -43,9 +50,10 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import IO, Any
 
@@ -58,8 +66,12 @@ from claude_agent_sdk import (
     PermissionResultDeny,
     ResultError,
     ResultMessage,
+    StreamEvent,
+    SystemMessage,
     ToolPermissionContext,
+    ToolResultBlock,
     ToolUseBlock,
+    UserMessage,
     query,
 )
 
@@ -82,10 +94,18 @@ from ...domain.rules import (
     failure_reason,
     max_turns_motive,
 )
+from ...domain.stall import (
+    CHECK_EVERY_S,
+    ChildActivity,
+    LastEvent,
+    Stall,
+    StallSnapshot,
+    judge,
+)
 from ...domain.suppressions import Forbidden
 from ..plugins import PLUGIN, PLUGIN_DIR
 from ..telemetry import NoTelemetry, Telemetry
-from .hooks import DELIVERY_TOOL, TurnCount, hooks_for
+from .hooks import DELIVERY_TOOL, HookActivity, TurnCount, hooks_for
 from .printer import Printer
 from .schema import inline_refs
 
@@ -131,6 +151,7 @@ def options_for(
     guard: SchemaGuard | None = None,
     forbidden: Sequence[Forbidden] | None = None,
     owner_mark: str | None = None,
+    hook_activity: HookActivity | None = None,
 ) -> ClaudeAgentOptions:
     tools, allowed = list(role.tools), list(role.allowed)
     if role.skills and SKILL_TOOL not in tools:
@@ -170,7 +191,15 @@ def options_for(
         # composing off `env` would overwrite whatever the real process inherited.
         env=_child_env(env, role, traceparent, resource_attributes, owner_mark),
         hooks=hooks_for(
-            role, cwd, presubmit, on_notice, turns, on_presubmit_denied, guard, forbidden
+            role,
+            cwd,
+            presubmit,
+            on_notice,
+            turns,
+            on_presubmit_denied,
+            guard,
+            forbidden,
+            hook_activity,
         )
         or None,
         # A role that executes runs under `bypassPermissions`, which already shadows
@@ -242,18 +271,24 @@ class ClaudeSdkRunner:
         *,
         reaper: ProcessReaper,
         product_key: str,
+        stall_timeout_s: float = 2400.0,
+        clock: Callable[[], float] = time.monotonic,
     ):
         # `verbose` streams each role's generation to `stream` (stderr by default).
         # `env` is added to every role's process: the git identity, for one.
         # `reaper` and `product_key` are required, never defaulted (GH-282): a runner
         # that marks its attempts and cannot stop what carries the mark would leak
         # silently. `product_key` is the one the reaper was built with.
+        # `stall_timeout_s` (the composition passes `Configuration.stall_timeout_s`) and
+        # the monotonic `clock` are what the watchdog judges an attempt by (ADR-0057).
         self.verbose = verbose
         self.stream = stream
         self.telemetry = telemetry
         self.env = dict(env or {})
         self.reaper = reaper
         self.product_key = product_key
+        self.stall_timeout_s = stall_timeout_s
+        self.clock = clock
 
     async def run_once(
         self,
@@ -283,6 +318,8 @@ class ClaudeSdkRunner:
                 json_schema=json_schema,
                 cwd=cwd,
                 owner_mark=reaping.mark(self.product_key, owner_task, os.getpid(), token),
+                owner_task=owner_task,
+                token=token,
                 resume=resume,
                 max_budget_usd=max_budget_usd,
                 presubmit=presubmit,
@@ -321,6 +358,8 @@ class ClaudeSdkRunner:
         json_schema: dict[str, Any],
         cwd: Path,
         owner_mark: str,
+        owner_task: str,
+        token: str,
         resume: str | None,
         max_budget_usd: float | None,
         presubmit: Presubmit | None,
@@ -360,6 +399,9 @@ class ClaudeSdkRunner:
         # place below, inside the stream loop's existing `parent_tool_use_id is None`
         # branch -- never by the hook, which only ever reads `.value`.
         turns = TurnCount()
+        # The delivery hooks in flight, one object per attempt like `turns` (never module
+        # state, never shared with another session): the watchdog reads it.
+        hooks = HookActivity(self.clock)
 
         def _mark_notice() -> None:
             nonlocal notice_firings
@@ -393,6 +435,7 @@ class ClaudeSdkRunner:
             guard=guard,
             forbidden=forbidden,
             owner_mark=owner_mark,
+            hook_activity=hooks,
         )
 
         result: ResultMessage | None = None
@@ -401,82 +444,173 @@ class ClaudeSdkRunner:
         # The last main-thread `AssistantMessage.usage` seen: what a cancellation
         # writes as its lower bound, never a sub-agent's (invariant 10).
         main_usage: dict[str, Any] | None = None
-        stream = query(prompt=prompt, options=options)
-        try:
-            async for message in stream:
-                for observer in observers:
-                    observer(message)
-                if isinstance(message, AssistantMessage):
-                    calls += 1
-                    if message.parent_tool_use_id is None:
-                        main_usage = message.usage
-                        # The quantity `domain/turn_notice.py`'s threshold is stated
-                        # in: a main-thread `AssistantMessage` count, >=1 per harness
-                        # turn by construction, unlike the `PostToolUse` tally it
-                        # replaces (`hooks.TurnCount`'s own docstring).
-                        turns.value += 1
-                    for name in _tool_names(message):
-                        tool_calls[name] = tool_calls.get(name, 0) + 1
-                background += _background_agents(message)
-                if isinstance(message, ResultMessage):
-                    result = message
-                    if _delivered(message):
-                        break  # the first delivery is the verdict (module docstring)
-        except anyio.get_cancelled_exc_class():
-            # Never an `AttemptFailed`: the process is being asked to die, and turning
-            # this into a retry would spend money while it happens (invariant 9). The
-            # figure is a read, never a sum, off the same normaliser `_usage` uses.
+        pulse = _Pulse(last_activity=self.clock())
+        stalled: Stall | None = None
+        watch_scope = anyio.CancelScope()
+
+        def _stall_failure() -> AttemptFailed:
+            """The stall as the attempt's failure, with its own log line: the silence and
+            the last event's kind, the counts the interruption line also carries, and no
+            text of any message."""
+            assert stalled is not None
             usage = _usage(main_usage)
             self._warn(
-                f"[{role.name}] interrupted after {calls} turns, {usage['input']} input / "
-                f"{usage['output']} output tokens seen on the main thread, sub-agents "
-                "not counted, cost unknown\n"
+                f"[{role.name}] stalled {stalled.seconds}s, last event {stalled.last_event}, "
+                f"{calls} turns, {usage['input']} input / {usage['output']} output tokens "
+                "seen on the main thread, cost unknown\n"
             )
-            raise
-        except ResultError as exc:
-            # The CLI reports the failed result, then exits non-zero; the SDK turns
-            # that into ResultError after yielding the ResultMessage.
-            cost, session = _left_behind(result)
-            if exc.subtype == "error_max_turns":
-                raise AttemptFailed(
-                    max_turns_motive(role.max_turns, _reported_error(exc)),
-                    cost,
-                    session,
-                    reason="max_turns",
-                    denials=denials,
-                    turn_notice=notice_firings > 0,
-                    turn_notice_firings=notice_firings,
-                    deliveries=tool_calls.get(DELIVERY_TOOL, 0),
-                    presubmit_denials=presubmit_denials,
-                    main_thread_turns=turns.value,
-                ) from exc
-            raise AttemptFailed(
-                failure_motive(_reported_error(exc)),
-                cost,
-                session,
-                reason=failure_reason(_reported_error(exc)),
+            return AttemptFailed(
+                f"stalled: no sign of life for {stalled.seconds}s, last event {stalled.last_event}",
+                session_id=pulse.session_id,
+                reason="stall",
                 denials=denials,
                 turn_notice=notice_firings > 0,
                 turn_notice_firings=notice_firings,
                 deliveries=tool_calls.get(DELIVERY_TOOL, 0),
                 presubmit_denials=presubmit_denials,
                 main_thread_turns=turns.value,
-            ) from exc
-        except Exception as exc:  # the SDK raises its own hierarchy; all of it is a failure
-            raise AttemptFailed(
-                f"SDK error: {exception_motive(exc)}",
-                reason="sdk",
-                denials=denials,
-                turn_notice=notice_firings > 0,
-                turn_notice_firings=notice_firings,
-                deliveries=tool_calls.get(DELIVERY_TOOL, 0),
-                presubmit_denials=presubmit_denials,
-                main_thread_turns=turns.value,
-            ) from exc
-        finally:
-            # The stream is closed before anything is reaped (`run_once`): a generator
-            # left suspended by the `break` above would still own the CLI.
-            await _close(stream)
+            )
+
+        async def watch() -> None:
+            """One tick after another, never piling up: scan, judge, and on a stall reap
+            the attempt by its mark first and cancel the scope only if the reap left
+            something alive."""
+            nonlocal stalled
+            previous: ChildActivity | None = None
+            while True:
+                child = await asyncio.to_thread(
+                    self.reaper.child_activity, owner_task, os.getpid(), token, os.getpid()
+                )
+                now = self.clock()
+                verdict = judge(
+                    StallSnapshot(
+                        now=now,
+                        last_activity=pulse.last_activity,
+                        pending_tools=len(pulse.pending),
+                        hooks_in_flight=hooks.in_flight,
+                        last_hook_exit=hooks.last_exit,
+                        child=child,
+                        previous_child=previous,
+                        timeout_s=self.stall_timeout_s,
+                    )
+                )
+                pulse.last_activity, previous = verdict.last_activity, child
+                if verdict.stalled:
+                    stalled = Stall(int(now - verdict.last_activity), pulse.last_event)
+                    left = await asyncio.to_thread(
+                        self.reaper.reap_attempt, owner_task, os.getpid(), token
+                    )
+                    if any(entry["outcome"] in {"survived", "error"} for entry in left):
+                        watch_scope.cancel()
+                    return
+                await anyio.sleep(CHECK_EVERY_S)
+
+        stream = query(prompt=prompt, options=options)
+        try:
+            async with anyio.create_task_group() as group:
+                group.start_soon(watch)
+                try:
+                    with watch_scope:
+                        try:
+                            async for message in stream:
+                                pulse.see(message, self.clock())
+                                for observer in observers:
+                                    observer(message)
+                                if isinstance(message, AssistantMessage):
+                                    calls += 1
+                                    if message.parent_tool_use_id is None:
+                                        main_usage = message.usage
+                                        # The quantity `domain/turn_notice.py`'s
+                                        # threshold is stated in: a main-thread
+                                        # `AssistantMessage` count, >=1 per harness turn by
+                                        # construction, unlike the `PostToolUse` tally it
+                                        # replaces (`hooks.TurnCount`'s own docstring).
+                                        turns.value += 1
+                                    for name in _tool_names(message):
+                                        tool_calls[name] = tool_calls.get(name, 0) + 1
+                                background += _background_agents(message)
+                                if isinstance(message, ResultMessage):
+                                    result = message
+                                    if _delivered(message):
+                                        # the first delivery is the verdict (module docstring)
+                                        break
+                        except anyio.get_cancelled_exc_class():
+                            if stalled is not None and watch_scope.cancel_called:
+                                # the watchdog's own cancel: the stall is told below
+                                raise
+                            # Never an `AttemptFailed`: the process is being asked to die,
+                            # and turning this into a retry would spend money while it
+                            # happens (invariant 9). The figure is a read, never a sum, off
+                            # the same normaliser `_usage` uses.
+                            usage = _usage(main_usage)
+                            self._warn(
+                                f"[{role.name}] interrupted after {calls} turns, "
+                                f"{usage['input']} input / {usage['output']} output tokens "
+                                "seen on the main thread, sub-agents not counted, "
+                                "cost unknown\n"
+                            )
+                            raise
+                        except ResultError as exc:
+                            if stalled is not None:
+                                # the kill's symptom, not its own news
+                                raise _stall_failure() from exc
+                            # The CLI reports the failed result, then exits non-zero; the
+                            # SDK turns that into ResultError after yielding the
+                            # ResultMessage.
+                            cost, session = _left_behind(result)
+                            if exc.subtype == "error_max_turns":
+                                raise AttemptFailed(
+                                    max_turns_motive(role.max_turns, _reported_error(exc)),
+                                    cost,
+                                    session,
+                                    reason="max_turns",
+                                    denials=denials,
+                                    turn_notice=notice_firings > 0,
+                                    turn_notice_firings=notice_firings,
+                                    deliveries=tool_calls.get(DELIVERY_TOOL, 0),
+                                    presubmit_denials=presubmit_denials,
+                                    main_thread_turns=turns.value,
+                                ) from exc
+                            raise AttemptFailed(
+                                failure_motive(_reported_error(exc)),
+                                cost,
+                                session,
+                                reason=failure_reason(_reported_error(exc)),
+                                denials=denials,
+                                turn_notice=notice_firings > 0,
+                                turn_notice_firings=notice_firings,
+                                deliveries=tool_calls.get(DELIVERY_TOOL, 0),
+                                presubmit_denials=presubmit_denials,
+                                main_thread_turns=turns.value,
+                            ) from exc
+                        except (
+                            Exception
+                        ) as exc:  # the SDK raises its own hierarchy; all of it is a failure
+                            if stalled is not None:
+                                raise _stall_failure() from exc
+                            raise AttemptFailed(
+                                f"SDK error: {exception_motive(exc)}",
+                                reason="sdk",
+                                denials=denials,
+                                turn_notice=notice_firings > 0,
+                                turn_notice_firings=notice_firings,
+                                deliveries=tool_calls.get(DELIVERY_TOOL, 0),
+                                presubmit_denials=presubmit_denials,
+                                main_thread_turns=turns.value,
+                            ) from exc
+                        finally:
+                            # The stream is closed before anything is reaped
+                            # (`run_once`): a generator left suspended by the `break`
+                            # above would still own the CLI.
+                            await _close(stream)
+                finally:
+                    group.cancel_scope.cancel()  # the watchdog's work ends with the loop
+        except BaseExceptionGroup as grouped:
+            # The task group wraps whatever its body raised; the raise sites above are
+            # the attempt's contract, so a lone exception leaves as itself.
+            raise (grouped.exceptions[0] if len(grouped.exceptions) == 1 else grouped)
+        if stalled is not None:
+            raise _stall_failure()
 
         if result is None:
             raise AttemptFailed(
@@ -545,6 +679,47 @@ class ClaudeSdkRunner:
         stream = self.stream or sys.stderr
         stream.write(text)
         stream.flush()
+
+
+@dataclass
+class _Pulse:
+    """What the stream has shown of one attempt, for the watchdog: the instant of the
+    last sign of life, the kind of the last message, the ids of the main-thread tool
+    calls still waiting for their result and the session the CLI opened."""
+
+    last_activity: float
+    last_event: LastEvent = "none"
+    pending: set[str] = field(default_factory=set)
+    session_id: str = ""
+
+    def see(self, message: Message, now: float) -> None:
+        self.last_activity = now
+        self.last_event = _event_of(message)
+        if isinstance(message, SystemMessage) and message.subtype == "init":
+            self.session_id = str(message.data.get("session_id") or self.session_id)
+        elif isinstance(message, AssistantMessage) and message.parent_tool_use_id is None:
+            self.pending.update(
+                block.id for block in message.content if isinstance(block, ToolUseBlock)
+            )
+        elif isinstance(message, UserMessage) and isinstance(message.content, list):
+            # A sub-agent's result carries an id that was never pending: nothing to drop.
+            self.pending.difference_update(
+                block.tool_use_id for block in message.content if isinstance(block, ToolResultBlock)
+            )
+
+
+def _event_of(message: Message) -> LastEvent:
+    """The kind of `message`, from its type alone: the one place `LastEvent` is derived.
+    The SDK's two other event types are system-side notices."""
+    if isinstance(message, AssistantMessage):
+        return "assistant"
+    if isinstance(message, UserMessage):
+        return "user"
+    if isinstance(message, ResultMessage):
+        return "result"
+    if isinstance(message, StreamEvent):
+        return "stream_event"
+    return "system"
 
 
 async def _close(stream: AsyncIterator[Message]) -> None:

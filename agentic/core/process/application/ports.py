@@ -21,6 +21,7 @@ from ..domain.playbook import Playbook
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
 from ..domain.rules import MergeFailure, RunKind, SpendRun, motive
+from ..domain.stall import ChildActivity
 from ..domain.suppressions import Forbidden
 from ..domain.task import (
     DependencyState,
@@ -1256,6 +1257,14 @@ class ProcessReaper(Protocol):
 
     def reap_attempt(self, task_id: str, run: int, token: str) -> tuple[ReapedProcess, ...]:
         """Only the processes of one attempt of a role."""
+        ...
+
+    def child_activity(
+        self, task_id: str, run: int, token: str, parent_pid: int
+    ) -> ChildActivity | None:
+        """What the attempt's marked processes are doing, the one marked process whose
+        parent is `parent_pid` (the CLI) left out: their CPU time in all and whether any is
+        running or in disk wait. `None` when it could not be read; never raises."""
         ...
 
 
