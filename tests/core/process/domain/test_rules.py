@@ -616,8 +616,8 @@ def test_spent_by_phase_sums_the_runs_by_section_and_keeps_what_they_miss():
     assert rules.spent_by_phase({"runs": runs, "cost_usd": 12.5})["other"] == 1.0
 
 
-def test_run_ended_is_true_only_for_ready_for_review_and_discarded():
-    ended = {"ready_for_review", "discarded"}
+def test_run_ended_is_true_only_for_ready_for_review_discarded_and_split():
+    ended = {"ready_for_review", "discarded", "split"}
     for status in get_args(task.Status):
         assert rules.run_ended(status) is (status in ended)
 
@@ -2256,7 +2256,7 @@ def test_a_task_with_any_of_these_fields_is_not_an_interrupted_run():
 
 
 def test_a_task_in_a_finished_or_waiting_status_is_not_an_interrupted_run():
-    for status in ("ready_for_review", "discarded", "waiting_on_human"):
+    for status in ("ready_for_review", "discarded", "split", "waiting_on_human"):
         assert rules.interrupted_run({"status": status}, PREVIOUS_BOOT, 0) == "none", status
 
 
@@ -2791,3 +2791,71 @@ def test_auto_resumable_never_retakes_an_estimate_escalation():
     state = {"pause_log": [_failure_entry("upstream"), _escalation_entry("estimate")]}
     assert rules.auto_resumable(state) is None
     assert rules.auto_resumable({"pause_log": [_escalation_entry("estimate")]}) is None
+
+
+# --- The split (ADR-0053): a plan that does not fit ends in `split`, not in a build ---
+
+PARTS = [{"title": "First", "body": "Do it.", "depends_on": []}]
+
+
+def test_after_plan_routes_a_plan_with_parts_to_split_and_one_without_to_integrate():
+    assert rules.after_plan({"status": "planned", "parts": PARTS}) == "split"
+    assert rules.after_plan({"status": "planned", "parts": []}) == "integrate"
+    assert rules.after_plan({"status": "planned"}) == "integrate"
+    assert rules.after_plan({"status": "planned", "parts": PARTS, "escalated": "x"}) is None
+
+
+def test_the_split_marker_round_trips_and_names_its_task_and_part():
+    marker = rules.split_marker("GH-12", 3)
+    assert marker == "<!-- agentic-split: GH-12 part 3 -->"
+    assert rules.split_part_of(f"{marker}\nBody") == ("GH-12", 3)
+    assert rules.split_part_of(f"Blocked by: #4\n\ntext\n{marker}") == ("GH-12", 3)
+
+
+def test_split_part_of_reads_no_marker_from_text_that_only_resembles_one():
+    assert rules.split_part_of("") is None
+    assert rules.split_part_of("A plain description of a task.") is None
+    assert rules.split_part_of("<!-- agentic-split: GH-12 -->") is None
+    assert rules.split_part_of("<!-- agentic:stack-review anchor=abc -->") is None
+    assert rules.split_part_of("agentic-split: GH-12 part 3") is None
+
+
+def test_split_is_an_end_with_nothing_to_resume():
+    done = {"status": "split", "type": "feature", "parts": PARTS}
+    assert rules.resumed_status(done) == "split"
+    assert rules.resume_target({**done, **rules.resumed(done, None)}) is None
+
+
+def test_a_task_paused_while_splitting_resumes_at_split_without_planning_again():
+    paused = {
+        "status": "waiting_on_human",
+        "type": "feature",
+        "parts": PARTS,
+        "split_issues": {"1": "https://github.com/o/r/issues/5"},
+        **rules.escalation("failure", "gh failed"),
+    }
+    resumed = task.apply(paused, rules.resumed(paused, None))
+    assert rules.resume_target(resumed) == "split"
+
+
+def test_resuming_an_estimate_escalation_of_a_part_waives_the_fit_and_replans():
+    paused = {
+        "status": "waiting_on_human",
+        "type": "platform_enhancement",
+        "parts": PARTS,
+        "estimate": {"cost_usd": 400.0, "files": 90},
+        **rules.escalation("estimate", "a part of a split does not fit"),
+    }
+    patch = rules.resumed(paused, "Build it as one.")
+    assert patch["fit_waived"] is True
+    assert patch["parts"] == []
+    resumed = task.apply(paused, patch)
+    assert rules.resume_target(resumed) == "plan"
+    # Nothing here decides the estimate in force: only the cap's own resumption does.
+    assert "estimate_revisions" not in patch and "estimate" not in patch
+
+
+def test_resuming_any_other_escalation_leaves_the_fit_alone():
+    paused = {"status": "waiting_on_human", "parts": PARTS, **rules.escalation("failure", "x")}
+    patch = rules.resumed(paused, None)
+    assert "fit_waived" not in patch and "parts" not in patch

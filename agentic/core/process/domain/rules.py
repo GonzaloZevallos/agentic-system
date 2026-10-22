@@ -1624,7 +1624,11 @@ def after_consolidate(state: TaskState) -> str | None:
 
 
 def after_plan(state: TaskState) -> str | None:
-    return None if state.get("escalated") else "integrate"
+    """A plan that did not fit carries `parts` and goes to `split` (ADR-0053); any other
+    goes to the fan-in. The only routing decision between the two."""
+    if state.get("escalated"):
+        return None
+    return "split" if state.get("parts") else "integrate"
 
 
 def after_develop(state: TaskState) -> str | None:
@@ -1700,7 +1704,7 @@ def run_ended(status: Status) -> bool:
     twice would otherwise leave two samples of its accumulated total. `"crashed"` is
     not a `Status`: the CLI fabricates it only for its own telemetry when a process
     dies mid-run, so it cannot appear in this predicate's own type."""
-    return status in ("ready_for_review", "discarded")
+    return status in ("ready_for_review", "discarded", "split")
 
 
 # Pause and resume (ADR-0003): an escalation pauses the task; the human's answer resumes
@@ -1717,6 +1721,8 @@ def resumed_status(state: TaskState) -> Status:
         # Nothing overwrote it: a discard is an end, not a pause, and the runs it holds
         # (a diagnosis, PM's ruling) would otherwise read as a definition ready to plan.
         return "discarded"
+    if state.get("status") == "split":
+        return "split"  # the same: an end, not a pause
     subtasks = state.get("subtasks", {})
     if subtasks:
         started = any(sub.get("status") != "pending" for sub in subtasks.values())
@@ -1791,6 +1797,11 @@ def resumed(state: TaskState, decision: str | None) -> dict[str, Any]:
         patch["changes_requested"] = {pair: 0}
     if decision and decision.strip():
         patch["sections"] = {HUMAN: human_section(state, reason, decision)}
+    if state.get("escalation_class") == "estimate" and state.get("parts"):
+        # A part of a split does not fit and the human decided on it (ADR-0053): the plan
+        # is made again as one task, and a second partition is refused.
+        patch["fit_waived"] = True
+        patch["parts"] = []
     return patch
 
 
@@ -1823,6 +1834,10 @@ def resume_target(state: TaskState) -> str | None:
     request ends the road unless the landing reopened the stage under it."""
     if state.get("escalated") or (state.get("pull_request") and not landing_open(state)):
         return None
+    if state.get("status") == "split":
+        return None  # an end like a pull request: the parts are other tasks now
+    if state.get("parts") and not state.get("subtasks"):
+        return "split"  # paused while opening the parts: finish them, do not plan again
     if state.get("subtasks"):
         # Once there is a plan every road goes through the fan-in, which decides the
         # wave from the same facts: nothing here has to know about waves. Nothing to
@@ -2202,7 +2217,7 @@ RETAKE_AFTER_REBOOT_MAX = 3
 
 # The statuses where a run has nothing left to retake: the work is delivered, ruled
 # out, or waiting on a human's answer.
-_NOT_INTERRUPTED_STATUSES = ("ready_for_review", "discarded", "waiting_on_human")
+_NOT_INTERRUPTED_STATUSES = ("ready_for_review", "discarded", "split", "waiting_on_human")
 
 
 def interrupted_run(raw: TaskState, lock: LockFacts | None, prior_retakes: int) -> RetakeVerdict:
@@ -3139,6 +3154,24 @@ def estimate_fits(cost_usd: float, files: int, reference_usd: float | None) -> b
     plans, so the estimate cannot be its own judge."""
     cost = cost_usd if reference_usd is None else max(cost_usd, reference_usd)
     return cost <= SPLIT_COST_USD and files <= SPLIT_FILES
+
+
+# The marker every issue the partition opens carries (ADR-0053): an HTML comment, invisible
+# once rendered, that names the task and the part. It is what a retry looks for among the
+# open issues before opening one, and what tells a task it is itself a part.
+_SPLIT_MARKER = re.compile(r"<!-- agentic-split: (\S+) part (\d+) -->")
+
+
+def split_marker(task_id: str, part: int) -> str:
+    """The marker of part `part` (1 is the first) of task `task_id`'s partition."""
+    return f"<!-- agentic-split: {task_id} part {part} -->"
+
+
+def split_part_of(body: str) -> tuple[str, int] | None:
+    """The `(task id, part)` the body's marker names, or `None` when it has none: a body
+    with a marker is a part of a partition, and a part never splits again."""
+    match = _SPLIT_MARKER.search(body)
+    return (match.group(1), int(match.group(2))) if match else None
 
 
 def estimate_cap(cost_usd: float) -> float:

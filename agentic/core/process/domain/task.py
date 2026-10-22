@@ -45,6 +45,9 @@ Status = Literal[
     # A bug whose behaviour PM ruled expected (README.md, 3, "Cierre"; issue #65): the
     # run ends without a pull request, and the human closes the issue.
     "discarded",
+    # A task whose plan did not fit (ADR-0053): it built nothing and opened chained issues
+    # instead, one per part. An end like `discarded`, with no pull request.
+    "split",
 ]
 WAITING_ON_HUMAN: Status = "waiting_on_human"
 # The system's own subtask: the integrator joins the others on the task branch
@@ -648,6 +651,15 @@ class EstimateRevision(TypedDict):
     source: Literal["human", "proposed"]
 
 
+class PartRecord(TypedDict):
+    """One part of a split plan as the document keeps it (ADR-0053): the issue the
+    partition opens. `depends_on` holds the numbers (1 is the first) of earlier parts."""
+
+    title: str
+    body: str
+    depends_on: list[int]
+
+
 class TaskState(TaskInput, total=False):
     type: str
     status: Annotated[Status, last]
@@ -687,6 +699,15 @@ class TaskState(TaskInput, total=False):
     estimate_revisions: Annotated[list[EstimateRevision], last]
     # The new estimate a stopped task proposed (the human decides on it, never the task).
     proposed_estimate: Annotated[float, last]
+    # The parts of a plan that did not fit (ADR-0053), in order; `rules.after_plan` routes a
+    # state holding any to `split`. Cleared when a human waives the fit on a resumption.
+    parts: Annotated[list[PartRecord], last]
+    # The issue URL of each part already opened, keyed by the part's number as text: written
+    # part by part, so a `gh` cut in the middle resumes without opening a part twice.
+    split_issues: Annotated[dict[str, str], merge]
+    # A human decided the task builds whole although its estimate does not fit; the plan
+    # check then accepts a plan that does not fit and refuses a split one.
+    fit_waived: Annotated[bool, last]
     # The files the pull request changed, recorded at close through `rules.delivered_files`.
     actual_files: Annotated[int, last]
     # The technical stage (ADR-0011): subtasks by id, each Developer patches its own.

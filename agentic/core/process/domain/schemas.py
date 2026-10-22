@@ -23,7 +23,7 @@ from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, Field
 
-from .cost_history import MIN_BUCKET, History, bucket_median
+from .cost_history import MIN_BUCKET, History, bucket_median, reference_usd
 from .coverage import BRIEF_FORM, MAPPED_FORM, NOT_TOUCHED, UNSATISFIABLE
 from .task import INTEGRATION, FindingCategory, FindingScope, Severity
 
@@ -262,6 +262,20 @@ class Subtask(BaseModel):
     )
 
 
+class Part(BaseModel):
+    title: str = Field(description="One line: the title of the issue this part becomes")
+    body: str = Field(
+        description="What this part delivers, as the issue's description: a reader who has "
+        "not seen the plan builds it from this alone, and it lands and shows in the product "
+        "by itself"
+    )
+    depends_on: list[int] = Field(
+        default_factory=list,
+        description="Numbers of the EARLIER parts that must be merged before this one starts "
+        "(1 is the first part). Empty when it can start at once",
+    )
+
+
 class DesignItem(BaseModel):
     """One remark from a lead (UX Lead or UI Lead) or from PM's consolidation (ADR-0040),
     the unit `design_items` is made of. `blocking` means the job cannot be completed as
@@ -335,7 +349,17 @@ class TechPlan(RoleOutput):
         description="The files the pull request will show as changed (its `changedFiles`): "
         "code, tests, ADRs, the glossary, lockfiles and generated files all count"
     )
-    subtasks: list[Subtask] = Field(description="The subtasks, in the order to start them")
+    subtasks: list[Subtask] = Field(
+        default_factory=list,
+        description="The subtasks, in the order to start them. Empty ONLY when the estimate "
+        "does not fit and `parts` holds the split",
+    )
+    parts: list[Part] = Field(
+        default_factory=list,
+        description="When the estimate does not fit (over 150 USD or over 40 files, or the "
+        "history's reference says so): at least two chained parts, each a small task of its "
+        "own, in the order to build them, and no subtasks. Empty when the plan fits",
+    )
     invariants: list[str] = Field(
         default_factory=list,
         description="Rules every subtask honours, each checkable on one subtask's diff "
@@ -569,13 +593,59 @@ def _lines(text: str) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
-def plan_check_for(history: History, spent_usd: float) -> Callable[[dict[str, Any]], None]:
-    """The plan check with the three refusals that need context (ADR-0053), built by the
-    plan stage from the cost history and what the task already spent -- never carried in
-    the task state. Each refusal is a legible reason: it is what the retry reads."""
+def parts_check(parts: list[dict[str, Any]]) -> None:
+    """The structure of a split: at least two parts, each with a title and a body, each
+    depending only on earlier parts, once. Earlier-only is what keeps the chain acyclic."""
+    if len(parts) < 2:
+        raise ValueError(
+            f"a split needs at least two parts, this one has {len(parts)}: "
+            "a plan that does not fit is cut into chained tasks"
+        )
+    for number, part in enumerate(parts, 1):
+        if not part["title"].strip():
+            raise ValueError(f"part {number} has no title")
+        if not part["body"].strip():
+            raise ValueError(f"part {number} has no body: it is the whole description of its issue")
+        if len(set(part["depends_on"])) != len(part["depends_on"]):
+            raise ValueError(f"part {number} lists the same dependency twice")
+        for dep in part["depends_on"]:
+            if not 1 <= dep <= len(parts):
+                raise ValueError(f"part {number} depends on unknown part {dep}")
+            if dep >= number:
+                raise ValueError(
+                    f"part {number} depends on part {dep}: a part depends only on earlier parts"
+                )
+
+
+def plan_check_for(
+    history: History, spent_usd: float, *, fit_waived: bool = False
+) -> Callable[[dict[str, Any]], None]:
+    """The plan check with the refusals that need context (ADR-0053), built by the plan
+    stage from the cost history, what the task already spent and whether a human waived
+    the fit -- never carried in the task state. Each refusal is a legible reason: it is
+    what the retry reads.
+
+    A plan has exactly one of two shapes. (A) subtasks, no parts, and an estimate that
+    fits -- or a waived fit. (B) parts, no subtasks, an estimate that does not fit, and no
+    waiver. `rules.estimate_fits` decides which, over the history's reference for the
+    bucket of the plan's own size: its subtasks in (A), its parts in (B)."""
+
+    # `rules` imports this module for `TaskType`, so the one function that decides the fit
+    # is imported where it is used, never copied here (ADR-0053).
+    from .rules import estimate_fits
 
     def check(data: dict[str, Any]) -> None:
-        plan_check(data)
+        parts = data.get("parts") or []
+        subtasks = data.get("subtasks") or []
+        if parts and subtasks:
+            raise ValueError(
+                "a plan holds subtasks or parts, never both: a plan that does not fit "
+                "is split into parts and builds nothing itself"
+            )
+        if parts:
+            parts_check(parts)
+        else:
+            plan_check(data)
         files, cost = data["estimated_files"], data["estimated_cost_usd"]
         if files < 1:
             raise ValueError("estimated_files must be at least one file: every task changes one")
@@ -583,6 +653,26 @@ def plan_check_for(history: History, spent_usd: float) -> Callable[[dict[str, An
             raise ValueError(
                 f"estimated_cost_usd {cost:.2f} is below what the task already spent "
                 f"{spent_usd:.2f}: the estimate is the TOTAL cost, spent included"
+            )
+        size = len(parts) if parts else len(subtasks)
+        fits = estimate_fits(cost, files, reference_usd(history, size))
+        if parts:
+            if fit_waived:
+                raise ValueError(
+                    "a human waived the fit of this task: it is built whole, so write "
+                    "subtasks and no parts"
+                )
+            if fits:
+                raise ValueError(
+                    f"the estimate ({cost:.2f} USD, {files} files) fits: write subtasks "
+                    "and no parts; a task is split only when it does not fit"
+                )
+            return
+        if not fits and not fit_waived:
+            raise ValueError(
+                f"the estimate ({cost:.2f} USD, {files} files) does not fit one task "
+                "(or the history's reference for this size does not): write parts, "
+                "at least two chained tasks, and no subtasks"
             )
         median = bucket_median(history, len(data["subtasks"]))
         if median is not None and cost < 0.5 * median:

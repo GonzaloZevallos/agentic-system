@@ -166,6 +166,10 @@ def render(
         **({"estimate_revisions": e} if (e := state.get("estimate_revisions")) else {}),
         **({"proposed_estimate": e} if (e := state.get("proposed_estimate")) else {}),
         **({"actual_files": n} if (n := state.get("actual_files")) is not None else {}),
+        # The partition of a plan that did not fit (ADR-0053), written only when set.
+        **({"parts": e} if (e := state.get("parts")) else {}),
+        **({"split_issues": e} if (e := state.get("split_issues")) else {}),
+        **({"fit_waived": True} if state.get("fit_waived") else {}),
         "prompts": state.get("prompts", {}),
         # The playbook section hash each role first ran with, and any later one
         # (ADR-0043), written under their own names and only when non-empty, so a task

@@ -394,3 +394,118 @@ def test_plan_check_for_looks_at_the_bucket_of_the_plans_own_subtask_count():
     check(_estimated(1.0, 3, "a"))  # a different bucket: no floor
     with pytest.raises(ValueError, match="median"):
         check(_estimated(1.0, 3, "a", "b"))
+
+
+# The two shapes of a plan (ADR-0053): (A) subtasks and a fitting estimate, (B) parts and an
+# estimate that does not fit. `rules.estimate_fits` decides; the check only applies it.
+
+
+def _split(cost, files, parts=None, **more):
+    two = [
+        {"title": "One", "body": "First slice.", "depends_on": []},
+        {"title": "Two", "body": "Second slice.", "depends_on": [1]},
+    ]
+    data = _plan("### Solution", "a")
+    return {
+        **data,
+        "estimated_cost_usd": cost,
+        "estimated_files": files,
+        "subtasks": [],
+        "parts": two if parts is None else parts,
+        **more,
+    }
+
+
+def _part(depends_on=(), title="T", body="B"):
+    return {"title": title, "body": body, "depends_on": list(depends_on)}
+
+
+def test_a_plan_that_does_not_fit_and_builds_whole_is_refused_with_the_split_reason():
+    check = schemas.plan_check_for(_history(1, []), 0.0)
+    with pytest.raises(ValueError, match="does not fit.*parts"):
+        check(_estimated(151.0, 3))
+    with pytest.raises(ValueError, match="does not fit.*parts"):
+        check(_estimated(20.0, 41))
+    check(_estimated(150.0, 40))  # the thresholds themselves fit
+
+
+def test_the_bucket_p90_makes_a_declared_fit_not_fit():
+    check = schemas.plan_check_for(_history(1, [200] * 5), 0.0)
+    with pytest.raises(ValueError, match="does not fit"):
+        check(_estimated(100.0, 3))
+
+
+def test_a_waived_fit_lets_a_plan_that_does_not_fit_build_whole_and_refuses_parts():
+    check = schemas.plan_check_for(_history(1, []), 0.0, fit_waived=True)
+    check(_estimated(400.0, 90))
+    with pytest.raises(ValueError, match="waived"):
+        check(_split(400.0, 90))
+
+
+def test_a_plan_with_parts_and_an_estimate_that_does_not_fit_is_accepted():
+    check = schemas.plan_check_for(_history(1, []), 0.0)
+    check(_split(400.0, 90))
+    check(_split(100.0, 41))
+
+
+def test_the_split_shape_skips_the_half_median_floor():
+    # 5 tasks of 400 USD: the bucket median is 400, half of it 200; a split estimate of 160
+    # would be under the floor in the build shape.
+    check = schemas.plan_check_for(_history(2, [400] * 5), 0.0)
+    check(_split(160.0, 3))
+
+
+def test_a_split_that_fits_is_refused_because_nothing_needs_splitting():
+    check = schemas.plan_check_for(_history(1, []), 0.0)
+    with pytest.raises(ValueError, match="fits"):
+        check(_split(20.0, 3))
+
+
+def test_a_split_is_judged_on_the_declared_estimate_when_the_bucket_is_too_thin():
+    # No bucket with enough tasks: only the declared estimate speaks.
+    check = schemas.plan_check_for(_history(2, [10] * 4), 0.0)
+    with pytest.raises(ValueError, match="fits"):
+        check(_split(100.0, 3))
+
+
+def test_a_plan_with_both_subtasks_and_parts_is_refused():
+    check = schemas.plan_check_for(_history(1, []), 0.0)
+    with pytest.raises(ValueError, match="subtasks or parts, never both"):
+        check({**_split(400.0, 90), "subtasks": _plan("x", "a")["subtasks"]})
+
+
+def test_a_split_needs_at_least_two_parts():
+    check = schemas.plan_check_for(_history(1, []), 0.0)
+    with pytest.raises(ValueError, match="at least two parts"):
+        check(_split(400.0, 90, [_part()]))
+
+
+@pytest.mark.parametrize(
+    ("parts", "reason"),
+    [
+        ([_part(), _part([3])], "unknown part 3"),
+        ([_part(), _part([0])], "unknown part 0"),
+        ([_part(), _part([2])], "earlier"),
+        ([_part([2]), _part()], "earlier"),
+        ([_part(), _part([1, 1])], "twice"),
+        ([_part(title=" "), _part()], "title"),
+        ([_part(), _part(body="")], "body"),
+    ],
+)
+def test_every_violation_of_a_split_has_its_own_reason(parts, reason):
+    check = schemas.plan_check_for(_history(1, []), 0.0)
+    with pytest.raises(ValueError, match=reason):
+        check(_split(400.0, 90, parts))
+
+
+def test_a_split_still_answers_for_the_files_and_the_spend():
+    with pytest.raises(ValueError, match="at least one file"):
+        schemas.plan_check_for(_history(1, []), 0.0)(_split(400.0, 0))
+    with pytest.raises(ValueError, match="already spent"):
+        schemas.plan_check_for(_history(1, []), 500.0)(_split(400.0, 90))
+
+
+def test_the_plan_schema_leaves_subtasks_and_parts_optional_for_the_model():
+    plan = schemas.json_schema(schemas.TechPlan, VOCAB)
+    assert "parts" in plan["properties"]
+    assert "subtasks" not in plan.get("required", []) and "parts" not in plan.get("required", [])
