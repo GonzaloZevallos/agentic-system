@@ -77,11 +77,19 @@ def system_version() -> str:
     uncommitted changes, so a run with edited prompts never passes for the committed
     version. Running from stage0 that tree is never the one a task edits, so the sha is
     a real one whatever the product is doing (ADR-0017). `AGENTIC_SYSTEM_VERSION`
-    overrides it; `unknown` when git is not there."""
+    overrides it; `unknown` when git is not there. Memoised for the process: a run is one
+    version from start to end; `fresh_system_version` is the one that re-reads."""
     global _version
     if _version is None:
-        _version = os.environ.get("AGENTIC_SYSTEM_VERSION") or _git_version()
+        _version = fresh_system_version()
     return _version
+
+
+def fresh_system_version() -> str:
+    """`system_version` without the memo, for a long-lived caller (the poller) that must
+    see the checkout's version as it is each round: `AGENTIC_SYSTEM_VERSION` if set, else
+    `_git_version()`. It reads every call and leaves the memo as it found it."""
+    return os.environ.get("AGENTIC_SYSTEM_VERSION") or _git_version()
 
 
 def _git_version() -> str:

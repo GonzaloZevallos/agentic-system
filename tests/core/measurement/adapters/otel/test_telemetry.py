@@ -992,6 +992,23 @@ def test_system_version_prefers_the_env_var(monkeypatch):
     assert telemetry.system_version() == "v-test"
 
 
+def test_fresh_system_version_rereads_while_system_version_stays_memoised(monkeypatch):
+    monkeypatch.setattr(telemetry, "_version", None)
+    monkeypatch.setenv("AGENTIC_SYSTEM_VERSION", "first")
+    assert telemetry.fresh_system_version() == "first"
+    assert telemetry.system_version() == "first"
+    monkeypatch.setenv("AGENTIC_SYSTEM_VERSION", "second")
+    assert telemetry.fresh_system_version() == "second"
+    assert telemetry.system_version() == "first"
+
+
+def test_fresh_system_version_does_not_fill_the_memo(monkeypatch):
+    monkeypatch.setattr(telemetry, "_version", None)
+    monkeypatch.setenv("AGENTIC_SYSTEM_VERSION", "only-fresh")
+    telemetry.fresh_system_version()
+    assert telemetry._version is None
+
+
 def test_system_version_from_git_is_a_short_sha(monkeypatch):
     monkeypatch.delenv("AGENTIC_SYSTEM_VERSION", raising=False)
     monkeypatch.setattr(telemetry, "_version", None)
