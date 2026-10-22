@@ -88,6 +88,14 @@ class Resumption:
     # paused. Never derived from `RunLock`'s presence or absence (its own docstring):
     # the checkpoint is the only source of this fact.
     interrupted: bool = False
+    # The human's `--estimate`, which the graph's `pause` node puts in force with the decision.
+    estimate: float | None = None
+
+    def answer(self) -> dict[str, float | str | None]:
+        """What the graph resumes with: the decision, and the `--estimate` when given."""
+        if self.estimate is None:
+            return {"decision": self.decision}
+        return {"decision": self.decision, "estimate": self.estimate}
 
 
 def state_from(raw: dict) -> TaskState:
@@ -210,7 +218,15 @@ def prepare(
             f"pass --task-budget above {spent:.2f}"
         )
     return Resumption(
-        task_id, source, paused, resumed, decision, target, cap, interrupted=bool(pending)
+        task_id,
+        source,
+        paused,
+        resumed,
+        decision,
+        target,
+        cap,
+        interrupted=bool(pending),
+        estimate=estimate,
     )
 
 

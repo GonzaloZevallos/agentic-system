@@ -1303,16 +1303,14 @@ async def _resume(
                     migrated_app = graph.compile(checkpointer=migrated_saver)
                     await migrated_app.aupdate_state(config, r.paused, as_node=ESCALATE)
                     crashed = r.source == "checkpoint" and not snapshot.interrupts
-                    command: Command | None = (
-                        None if crashed else Command(resume={"decision": r.decision})
-                    )
+                    command: Command | None = None if crashed else Command(resume=r.answer())
                     resuming.announce(r, ports)
                     final = await _invoke(
                         migrated_app, command, config, r.paused, ports, cfg, "resume", r.decision
                     )
             else:
                 crashed = r.source == "checkpoint" and not snapshot.interrupts
-                command = None if crashed else Command(resume={"decision": r.decision})
+                command = None if crashed else Command(resume=r.answer())
                 resuming.announce(r, ports)
                 final = await _invoke(
                     app, command, config, r.paused, ports, cfg, "resume", r.decision
