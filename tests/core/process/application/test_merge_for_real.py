@@ -601,3 +601,22 @@ def test_an_unreachable_pr_merge_is_a_counted_gh_unreadable_and_keeps_the_ambigu
     assert doc["merge_failures"] == {"head": world.head, "count": 1, "failure": "gh_unreadable"}
     assert doc["auto_merge_head"] == ""  # the pull request still reads OPEN: not merged
     assert len(world.tracker.merge_calls) == 1
+
+
+def test_an_auto_merge_records_the_files_the_pull_request_changed(world):
+    world.tracker.changed_files_count = 7
+
+    world.merge()
+
+    assert world.doc()["actual_files"] == 7
+    assert set(world.tracker.changed_files_asked) == {URL}
+
+
+def test_an_auto_merge_whose_file_count_is_unreadable_still_merges_without_actual_files(world):
+    world.tracker.changed_files_error = "gh printed garbage"
+
+    world.merge()
+
+    doc = world.doc()
+    assert doc["delivery_outcome"] == "auto_merged"
+    assert "actual_files" not in doc

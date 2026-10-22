@@ -24,6 +24,7 @@ from ..domain import landing as landing_rules
 from ..domain.task import PullRequest, TaskState
 from . import adr_collision, landing_flakes, landing_plan
 from .checkouts import task_base
+from .delivered import files_patch
 from .poll import AUTO_MERGE_REFUSED, AUTO_MERGED, LANDING, _merge_facts, with_ci
 from .ports import (
     CommandResult,
@@ -358,7 +359,12 @@ def _merge(
             task_id, reference, head, facts, "gh_unreadable", str(exc), ports, log
         )
     ports.documents.record_closure(
-        task_id, {"auto_merged_at": clock(), "auto_merge_method": method}
+        task_id,
+        {
+            "auto_merged_at": clock(),
+            "auto_merge_method": method,
+            **files_patch(reference, ports, log),
+        },
     )
     text = f"{AUTO_MERGED}{head} via {method}"
     if guarded:

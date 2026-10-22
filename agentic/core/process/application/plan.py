@@ -113,7 +113,8 @@ def _delivered(
     cfg: Configuration, output: Output | None, written: TaskState, section: str
 ) -> TaskState:
     """What a successful plan call adds to its own patch, on either path: the subtasks,
-    the invariants, the integration brief, the estimate (ADR-0053), the status, and the experiment snapshot
+    the invariants, the integration brief, the estimate (ADR-0053), the status, and the
+    experiment snapshot
     (issue #28) -- `{}` when both switches are at their default, which
     `document.render` then omits, so the default path's document does not move.
 

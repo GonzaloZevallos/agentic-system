@@ -2596,6 +2596,54 @@ def test_close_omits_time_to_merge_seconds_when_the_pull_request_never_merged(
     assert "time_to_merge_seconds" not in doc
 
 
+def _closed_with(monkeypatch, tmp_path, tracker_setup, pull_request=None, **task):
+    from agentic.core.measurement.adapters.otel import telemetry
+
+    root = close_root(tmp_path)
+    reference = "https://github.com/o/r/pull/7"
+    tracker = FakePullRequestTracker({reference: pull_request or close_pull_request()})
+    tracker_setup(tracker)
+    ports = close_ports(root, tracker)
+    ports.documents.save(close_task(pull_request=reference, **task))
+    telemetry.configure()
+    try:
+        _closed_run(monkeypatch, root, ports)
+        cli.main()
+    finally:
+        telemetry.configure()
+    return ports.documents.load("GH-9"), tracker
+
+
+def test_close_records_the_files_the_pull_request_changed(monkeypatch, tmp_path):
+    """ADR-0053: `actual_files` comes from the tracker's `changed_files` through
+    `rules.delivered_files`, for a merged and for a closed-unmerged pull request."""
+
+    def three(tracker):
+        tracker.changed_files_count = 3
+
+    doc, tracker = _closed_with(monkeypatch, tmp_path, three)
+    assert doc["actual_files"] == 3
+    assert tracker.changed_files_asked == ["https://github.com/o/r/pull/7"]
+
+
+def test_close_records_the_files_of_a_pull_request_closed_without_merging(monkeypatch, tmp_path):
+    def three(tracker):
+        tracker.changed_files_count = 3
+
+    doc, _ = _closed_with(
+        monkeypatch, tmp_path, three, close_pull_request(state="CLOSED", merged=False)
+    )
+    assert doc["delivery_outcome"] == "closed" and doc["actual_files"] == 3
+
+
+def test_close_still_closes_when_the_file_count_is_unreadable(monkeypatch, tmp_path):
+    def broken(tracker):
+        tracker.changed_files_error = "gh printed garbage"
+
+    doc, _ = _closed_with(monkeypatch, tmp_path, broken)
+    assert doc["closed_at"] and "actual_files" not in doc
+
+
 # `agentic close --all` (Tech Lead plan, subtask `close-all`): the sweep over every
 # task document with a `pull_request` and no `closed_at`, through the CLI seam like
 # every close test above -- argv in, exit code, stdout and document bytes out.

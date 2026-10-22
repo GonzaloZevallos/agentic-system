@@ -912,6 +912,11 @@ class MemoryWorkspace:
 class MemoryTracker:
     def __init__(self, url: str = "https://github.com/o/r/pull/7") -> None:
         self.url = url
+        # `changed_files`: the count it answers per reference (default 12), the references it
+        # was asked for, and an error to raise instead (ADR-0053).
+        self.changed_files_count = 12
+        self.changed_files_asked: list[str] = []
+        self.changed_files_error: str | None = None
         self.pull_requests: list[tuple[str, str, str]] = []
         self.comments: list[tuple[str, str]] = []
         self.labels: list[tuple[str, str]] = []
@@ -1047,6 +1052,13 @@ class MemoryTracker:
         pull_request_number(reference)
         self.events.append("close_pull_request")
         self.closed_pull_requests.append(reference)
+
+    def changed_files(self, pull_request: str) -> int:
+        pull_request_number(pull_request)
+        self.changed_files_asked.append(pull_request)
+        if self.changed_files_error is not None:
+            raise ValueError(self.changed_files_error)
+        return self.changed_files_count
 
     def comment(self, task_id: str, text: str) -> None:
         self.events.append("comment")

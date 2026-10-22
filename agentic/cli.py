@@ -65,6 +65,7 @@ from .core.process.adapters.shell import inhibitor
 from .core.process.application import archive, reflect_run, release
 from .core.process.application import poll as pollmod
 from .core.process.application import resume as resuming
+from .core.process.application.delivered import files_patch
 from .core.process.application.escalate import NEEDS_HUMAN
 from .core.process.application.landing import land
 from .core.process.application.merge import merge_task
@@ -1327,6 +1328,10 @@ class _ClosureOutcome:
     path: Path | None = None
 
 
+def _warn(message: str) -> None:
+    print(message, file=sys.stderr)
+
+
 def _close_document(
     task_id: str, cfg: Configuration, ports: Ports, scorer: LangfuseScores | None = None
 ) -> _ClosureOutcome:
@@ -1395,7 +1400,11 @@ def _close_document(
     # Same rule: omitted, never empty, for a pull request that never merged (ADR-0038).
     if pull_request.merge_commit:
         values["merge_commit"] = pull_request.merge_commit
-    path = ports.documents.record_closure(task_id, values)
+    # ADR-0053: the files the pull request changed, next to the estimate; a pull request that
+    # never merged still has a count, and an unreadable one leaves the key out.
+    path = ports.documents.record_closure(
+        task_id, {**values, **files_patch(reference, ports, _warn)}
+    )
     _score_closed(task_id, ports, pull_request, scorer)
     return _ClosureOutcome(
         "closed",
