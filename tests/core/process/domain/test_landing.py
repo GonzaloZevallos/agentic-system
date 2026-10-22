@@ -155,9 +155,9 @@ def test_an_undecidable_ci_waits_until_the_bound_then_diagnoses(refusal):
     assert _step(refusal, _spent(waited_s=ci.CI_WAIT_MAX_S)).kind == "diagnose"
 
 
-def test_important_findings_are_filed_whatever_the_pass_budget():
+def test_findings_outside_the_task_are_filed_whatever_the_pass_budget():
     spent = _spent(passes=landing.LANDING_PASSES_MAX)
-    assert _step("open_findings", spent, open_important=1).kind == "file_followups_and_land"
+    assert _step("open_findings", spent, open_outside=1).kind == "file_followups_and_land"
 
 
 def test_the_budgets_are_the_plans():
@@ -1014,3 +1014,132 @@ def test_a_busy_master_reaches_the_diagnose_only_through_the_pass_budget():
     assert _step("merge_conflict", busy).kind == "sync_master"
     spent = _spent(passes=landing.LANDING_PASSES_MAX, unsynced_for_upstream=0)
     assert _step("merge_conflict", spent).kind == "diagnose"
+
+
+# GH-294 pin: with no `important` open `landing_step` answers what it answered before the
+# final important pass existed. Written first, never edited by that change.
+
+NO_IMPORTANT_STEPS = [
+    ("blocking, fresh", "open_findings_blocking", {}, {}, ("fix", ("api",))),
+    (
+        "blocking, passes spent",
+        "open_findings_blocking",
+        {"passes": landing.LANDING_PASSES_MAX},
+        {},
+        ("diagnose", ()),
+    ),
+    ("ci failed, first", "ci_failed", {}, {}, ("rerun", ())),
+    ("ci failed, rerun spent", "ci_failed", {"reruns_on_head": 1}, {}, ("fix", ("api",))),
+    ("checks failed, first", "checks_failed", {}, {}, ("rerun", ())),
+    (
+        "checks failed, rerun spent",
+        "checks_failed",
+        {"reruns_on_head": 1},
+        {},
+        ("fix", ("api",)),
+    ),
+    (
+        "checks failed on a conflict",
+        "checks_failed",
+        {},
+        {"failed_step": "conflict"},
+        ("sync_master", ()),
+    ),
+    ("merge conflict", "merge_conflict", {}, {}, ("sync_master", ())),
+    ("attempts exhausted", "attempts_exhausted", {}, {}, ("sync_master", ())),
+    ("merge failed", "merge_failed", {}, {}, ("diagnose", ())),
+    ("master moved", "master_moved", {}, {}, ("wait", ())),
+    ("adr number taken, ambiguous", "adr_number_taken", {}, {}, ("diagnose", ())),
+    ("ci missing", "ci_missing", {}, {}, ("wait", ())),
+    ("ci unreadable", "ci_unreadable", {}, {}, ("wait", ())),
+    ("diagnosed", "merge_conflict", {"diagnosed": True}, {}, ("none", ())),
+]
+
+
+@pytest.mark.parametrize(
+    ("refusal", "spent", "facts", "expected"),
+    [(r, s, f, e) for _, r, s, f, e in NO_IMPORTANT_STEPS],
+    ids=[n for n, *_ in NO_IMPORTANT_STEPS],
+)
+def test_with_no_important_open_the_landing_step_is_what_it_was(refusal, spent, facts, expected):
+    step = _step(refusal, _spent(**spent), owners=("api",), **facts)
+    assert (step.kind, step.units) == expected
+    assert step.refusal == refusal
+
+
+def test_the_findings_refusal_without_important_files_the_followups_as_before():
+    assert _step("open_findings") == LandingStep("file_followups_and_land", "open_findings", ())
+
+
+# GH-294: the final important pass.
+
+
+def _important(spent=None, units=("api",), **facts) -> LandingStep:
+    return landing.landing_step(
+        "open_findings",
+        _facts(**facts),
+        spent or _spent(),
+        (),
+        important_units=units,
+    )
+
+
+def test_the_task_s_own_important_rows_are_a_pass_on_their_owners_first():
+    assert _important(open_important=2) == LandingStep("fix_important", "open_findings", ("api",))
+
+
+def test_the_pass_is_not_taken_twice_nor_once_it_is_resolved():
+    spent = _spent(important_passes=landing.LANDING_IMPORTANT_PASSES_MAX)
+    assert landing.LANDING_IMPORTANT_PASSES_MAX == 1
+    assert _important(spent, open_important=1).kind == "file_followups_and_land"
+    assert _important(open_important=1, important_pass_done=True).kind == "file_followups_and_land"
+
+
+def test_outside_rows_alone_are_the_follow_up_and_never_the_pass():
+    assert _important(open_outside=1).kind == "file_followups_and_land"
+    assert _important(open_important=0, open_outside=2, units=("api",)).units == ()
+
+
+def test_the_pass_does_not_draw_on_the_landing_pass_budget():
+    spent = _spent(passes=landing.LANDING_PASSES_MAX)
+    assert _important(spent, open_important=1).kind == "fix_important"
+    assert _important(_spent(diagnosed=True), open_important=1).kind == "none"
+
+
+def test_the_pass_runs_a_model():
+    assert landing.run_kind_of("fix_important", "open_findings") == "land_model"
+    assert landing.run_kind_of("file_followups_and_land", "open_findings") == "land_checks"
+    assert not landing.run_kind_admits("land_checks", "fix_important", "open_findings")
+    assert landing.run_kind_admits("land_model", "fix_important", "open_findings")
+
+
+def _doc(subtasks, *rows):
+    return {
+        "subtasks": {name: {"status": "approved"} for name in subtasks},
+        "findings": [
+            {
+                "subtask": who,
+                "version": 1,
+                "location": "x.py:1",
+                "claim": claim,
+                "severity": "important",
+                "scope": scope,
+                "category": "spec-behaviour",
+                "status": "open",
+            }
+            for who, claim, scope in rows
+        ],
+    }
+
+
+def test_the_pass_reopens_the_owners_and_the_reviewed_unit_for_a_plan_row():
+    state = _doc(["api", "domain", "integration"], ("domain", "a", "subtask"), ("api", "b", "plan"))
+    assert landing.important_owners(state) == ("domain", "integration")
+
+
+def test_a_plan_row_of_a_one_subtask_task_goes_to_that_subtask():
+    assert landing.important_owners(_doc(["api"], ("api", "b", "plan"))) == ("api",)
+
+
+def test_an_outside_row_owns_no_unit():
+    assert landing.important_owners(_doc(["api"], ("api", "o", "outside"))) == ()

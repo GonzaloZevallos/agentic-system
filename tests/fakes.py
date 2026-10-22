@@ -921,6 +921,11 @@ class MemoryTracker:
         self.comments: list[tuple[str, str]] = []
         self.labels: list[tuple[str, str]] = []
         self.unlabeled: list[tuple[str, str]] = []
+        # GH-294: the labels the repository has, the ones `ensure_label` created, and the
+        # `ValueError` text that makes it fail the way `gh` does (nothing is created).
+        self.existing_labels: set[str] = set()
+        self.created_labels: list[str] = []
+        self.ensure_label_error: str | None = None
         # Bodies of the issue's comments before the run, oldest first.
         self.earlier: list[str] = []
         # `(title, body)` of every issue `open_issue` opened, in order.
@@ -1086,6 +1091,13 @@ class MemoryTracker:
 
     def unlabel(self, task_id: str, label: str) -> None:
         self.unlabeled.append((task_id, label))
+
+    def ensure_label(self, name: str) -> None:
+        if self.ensure_label_error is not None:
+            raise ValueError(self.ensure_label_error)
+        if name not in self.existing_labels:
+            self.existing_labels.add(name)
+            self.created_labels.append(name)
 
     def list_pull_requests(self) -> list[ListedPullRequest]:
         return list(self.listed)

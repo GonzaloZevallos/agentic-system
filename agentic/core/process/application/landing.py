@@ -372,6 +372,8 @@ def _dispatch(context: LandingContext) -> None:
             landing_sync.renumber_adr(context)
         case "fix":
             landing_fix.fix(context)
+        case "fix_important":
+            landing_fix.fix_important(context)
         case "rerun":
             landing_fix.rerun(context)
         case "file_followups_and_land":

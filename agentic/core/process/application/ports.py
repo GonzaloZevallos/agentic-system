@@ -933,6 +933,12 @@ class Tracker(Protocol):
 
     def unlabel(self, task_id: str, label: str) -> None: ...
 
+    def ensure_label(self, name: str) -> None:
+        """Makes sure the repository has a label called `name` (GH-294), so `open_issue`
+        can pass it. Creates it when missing and never touches an existing one, its color
+        and description included. Raises `ValueError` when the platform cannot answer."""
+        ...
+
     def list_pull_requests(self) -> list[ListedPullRequest]:
         """Every pull request of the product, any state, with its body: the playbook
         delivery filters them locally for its marker block (never through the search

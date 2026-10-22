@@ -1,5 +1,5 @@
 """The landing steps that act without moving the head by themselves (GH-239, ADR-0048):
-`fix`, `rerun`, `file_followups_and_land` and `diagnose`.
+`fix`, `fix_important`, `rerun`, `file_followups_and_land` and `diagnose`.
 
 Each executor receives the step `landing.land` already recorded for the head, so none of
 them decides again what to do about the refusal."""
@@ -7,21 +7,23 @@ them decides again what to do about the refusal."""
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import nullcontext
 from datetime import UTC, datetime
 
 from ..domain import landing as landing_rules
 from ..domain import presubmit, rules
 from ..domain.roles import LANDING_DIAGNOSER
-from ..domain.task import ChangeCategory, TaskState, apply
+from ..domain.task import ChangeCategory, FindingRecord, TaskState, apply
 from . import escalate, landing_plan, landing_sync, merge
 from .checkouts import task_base
 from .landing_plan import LandingContext
 from .resume import state_from
 from .run_role import run_role
 
-FOLLOWUP_LABEL = "agentic"
+TRIAGE_LABEL = "needs-triage"
+"""The one label the landing puts on an issue it opens from findings (ADR-0053): a person
+decides whether it enters the queue. Never `agentic`."""
 
 
 def _state(context: LandingContext) -> TaskState | None:
@@ -86,6 +88,15 @@ def fix(context: LandingContext) -> None:
         reason, category = _blocking_reason(raw)
     else:
         reason, category = _red_reason(context, document), "process-suite-red"
+    _reopen_and_resume(context, raw, reason, category)
+
+
+def _reopen_and_resume(
+    context: LandingContext, raw: TaskState, reason: str, category: ChangeCategory
+) -> None:
+    """The reopening both Developer passes share: the step's units `returned` with `reason`,
+    the entry carrying its cost base, the `landing` list written through `record_landing`,
+    then the resume. `landing_sync.reopen` leaves `changes_requested` alone."""
     reopened = landing_sync.reopen(raw, context.step.units, reason, category, "returned")
     marked = landing_rules.with_cost_base(
         landing_plan.entries(raw), context.head, context.step.kind, raw.get("cost_usd", 0.0)
@@ -93,6 +104,38 @@ def fix(context: LandingContext) -> None:
     context.ports.documents.save({**reopened, "landing": marked})
     landing_sync.record_landing(context, marked)
     _resume(context)
+
+
+def _important_reason(raw: TaskState) -> tuple[str, ChangeCategory]:
+    """The reason the final important pass hands the Developer: the task's own open
+    `important` rows by unit, then the plan-scope ones, from the one partition."""
+    part = rules.important_partition(raw)
+    lines = ["Open important findings (final pass before merge, not a return):"]
+    rows: list[FindingRecord] = []
+    for unit, owned in part.owned.items():
+        lines.append(f"Unit `{unit}`:")
+        lines.extend(f"- {row['location']}: {row['claim']}" for row in owned)
+        rows.extend(owned)
+    if part.plan:
+        lines.append("Plan:")
+        lines.extend(f"- {row['location']}: {row['claim']}" for row in part.plan)
+        rows.extend(part.plan)
+    category: ChangeCategory = rows[0]["category"] if rows else "process-suite-red"
+    return "\n".join(lines), category
+
+
+def fix_important(context: LandingContext) -> None:
+    """The one final pass on the task's own open `important` findings (GH-294): reopens the
+    step's units as `returned` and resumes the task, so the graph runs the Developer and an
+    incremental review. Not a return: the entry is marked `by: "landing"` and
+    `changes_requested` is never touched. It counts when `deliver` resolves the entry."""
+    document = context.ports.documents.load(context.task_id)
+    if document is None:
+        context.log(f"agentic: land: {context.task_id}: fix_important: no document")
+        return
+    raw = state_from(document)
+    reason, category = _important_reason(raw)
+    _reopen_and_resume(context, raw, reason, category)
 
 
 def _remember_rerun(context: LandingContext, checks: list[str]) -> None:
@@ -151,44 +194,61 @@ def rerun(context: LandingContext) -> None:
     )
 
 
-def _followup_body(raw: TaskState, task_id: str, lineage: int) -> str:
-    rows = [row for row in rules.open_findings(raw) if row["severity"] == "important"]
+def _followup_body(rows: Sequence[FindingRecord], task_id: str, lineage: int) -> str:
     lines = [f"- `{row['location']}` ({row['category']}): {row['claim']}" for row in rows]
     return "\n".join(
         [
             landing_rules.followup_marker(task_id, lineage),
-            f"Open `important` findings left on the approved head of {task_id}:",
+            f"Open `important` findings outside the scope of {task_id}:",
             "",
             *lines,
         ]
     )
 
 
+def _open_triage_issue(context: LandingContext, number: int, body: str) -> None:
+    """Opens the one `needs-triage` issue, creating the label if it is missing. Any
+    `ValueError` (`TrackerCallFailed` included) from the label or the issue degrades to a
+    comment on the pull request with the same body; a comment that fails too is logged."""
+    tracker = context.ports.tracker
+    try:
+        tracker.ensure_label(TRIAGE_LABEL)
+        tracker.open_issue(
+            f"{landing_rules.FOLLOWUP_TITLE_PREFIX}{number}: open important findings",
+            body,
+            label=TRIAGE_LABEL,
+        )
+    except ValueError as exc:
+        context.log(f"agentic: land: {context.task_id}: followups: issue not opened: {exc}")
+        try:
+            tracker.comment(context.task_id, body)
+        except ValueError as failed:
+            context.log(f"agentic: land: {context.task_id}: followups: comment failed: {failed}")
+
+
 def file_followups_and_land(context: LandingContext) -> None:
-    """Files one `agentic` follow-up issue for the task's open important findings (none
-    when the task is itself a follow-up: it writes them into the pull request thread), and
-    sets `followups_filed` so the next decision passes `open_findings`."""
+    """Files the one `needs-triage` follow-up issue for the task's open `outside` findings
+    (`rules.important_partition`; none when the task is itself a follow-up: it writes them
+    into the pull request thread, and none at all when no `outside` row is open), and sets
+    `followups_filed` so the next decision passes `open_findings`."""
     raw = _state(context)
     number = context.ports.inbox.issue_of(context.task_id)
     if raw is None or number is None:
         context.log(f"agentic: land: {context.task_id}: followups: no document")
         return
-    bodies = context.ports.inbox.open_issue_bodies()
-    own = [landing_rules.marker_lineage(body, context.task_id) for _, body in bodies]
-    description = raw.get("description", "")
-    parent = landing_rules.marker_parent(description)
-    lineage = (parent[1] if parent else 0) + 1
-    body = _followup_body(raw, context.task_id, lineage)
-    if any(found is not None for found in own):
-        context.log(f"agentic: land: {context.task_id}: follow-up already open")
-    elif parent is not None:
-        context.ports.tracker.comment(context.task_id, body)
-    else:
-        context.ports.tracker.open_issue(
-            f"{landing_rules.FOLLOWUP_TITLE_PREFIX}{number}: open important findings",
-            body,
-            label=FOLLOWUP_LABEL,
-        )
+    outside = rules.important_partition(raw).outside
+    if outside:
+        bodies = context.ports.inbox.open_issue_bodies()
+        own = [landing_rules.marker_lineage(body, context.task_id) for _, body in bodies]
+        parent = landing_rules.marker_parent(raw.get("description", ""))
+        lineage = (parent[1] if parent else 0) + 1
+        body = _followup_body(outside, context.task_id, lineage)
+        if any(found is not None for found in own):
+            context.log(f"agentic: land: {context.task_id}: follow-up already open")
+        elif parent is not None:
+            context.ports.tracker.comment(context.task_id, body)
+        else:
+            _open_triage_issue(context, number, body)
     context.ports.documents.record_closure(context.task_id, {"followups_filed": True})
 
 

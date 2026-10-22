@@ -10,6 +10,7 @@ from typing import get_args, get_type_hints
 from agentic.core.knowledge.domain import knowledge, knowledge_index, stack
 from agentic.core.measurement.adapters.otel import telemetry
 from agentic.core.measurement.domain import metrics, scorecard
+from agentic.core.process.application import landing_fix
 from agentic.core.process.domain import (
     boot,
     document,
@@ -83,7 +84,11 @@ ROLE_KINDS = {"Pensador": "actor", "Validador": "verifier"}
 # Glossary term -> a closed-set type that names it but lives in an adapter, not a
 # domain module (the concept crosses no port: `cli._invoke` is the only writer and
 # `core/measurement`'s adapter the only reader), so `context_of` cannot place it.
-ADAPTER_TERMS = {"Invocación": telemetry.InvocationKind}
+ADAPTER_TERMS = {
+    "Invocación": telemetry.InvocationKind,
+    # The landing step lives in the application layer (`landing_fix`), not in a domain module.
+    "Pase final de importantes": landing_fix.fix_important,
+}
 
 
 def module_of(obj) -> str:

@@ -82,7 +82,7 @@ FindingCategory = Literal[
 # How much a finding weighs (ADR-0016): only a `blocking` one returns the subtask, and
 # only one the branch under review can fix; anything wider is the plan's.
 Severity = Literal["blocking", "important", "observation"]
-FindingScope = Literal["subtask", "plan"]
+FindingScope = Literal["subtask", "plan", "outside"]
 # Where a finding stands in the findings table: `open` until a later review of its
 # subtask stops raising it (`fixed`), or `dismissed` when nobody can check it.
 FindingStatus = Literal["open", "fixed", "dismissed"]
@@ -492,6 +492,9 @@ class FindingRecord(TypedDict):
     category: FindingCategory
     # `open` or `dismissed` as written; `fixed` is only ever derived.
     status: FindingStatus
+    # What the reviewer reported when the system lowered it (`lower_unbacked_blocks`); the key
+    # is absent on a finding the system did not lower.
+    reported_severity: NotRequired[Severity]
 
 
 class DesignItemRecord(TypedDict):

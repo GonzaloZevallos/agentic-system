@@ -436,7 +436,9 @@ class Finding(BaseModel):
     )
     scope: FindingScope = Field(
         description="`subtask` when it can be fixed on the branch under review; `plan` when "
-        "it needs a change to the plan or to another subtask's branch. On the integration "
+        "it needs a change to the plan or to another subtask's branch; `outside` is work the "
+        "task did not do or the issue did not ask for: it never returns the subtask and goes "
+        "to the task's single follow-up issue. On the integration "
         "branch a problem between subtasks is `subtask`"
     )
     category: FindingCategory
