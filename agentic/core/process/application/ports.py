@@ -294,11 +294,20 @@ class ProductKnowledge(Protocol):
 
     def read(self, root: Path | None = None) -> str:
         """The knowledge as found under `root`: the task's checkout, where the interview
-        may already have edited the glossary (ADR-0014). The product root by default."""
+        may already have edited the glossary (ADR-0014). The product root by default.
+        What always goes whole, plus the area index (ADR-0001 of the knowledge module);
+        the files that index points at are `index_files`. Side-effect free."""
         ...
 
-    def standards(self, root: Path | None = None) -> str:
-        """The engineering standards (ADR-0012), as the roles that build read them."""
+    def index_files(self, root: Path | None = None) -> dict[str, str]:
+        """The files the index of `read` points at: path relative to `root` -> text, all
+        under `.agentic/index/`. Pure; `Workspace.write_index` is who puts them on disk."""
+        ...
+
+    def standards(self, root: Path | None = None, whole: bool = True) -> str:
+        """The engineering standards (ADR-0012). `whole` is the caller's choice: every
+        verifier reads them whole, the Developer and the integrator through the index
+        (`index_files` carries the files that index points at)."""
         ...
 
     def brief(self, root: Path | None = None) -> str | None:
@@ -596,6 +605,14 @@ class Workspace(Protocol):
     def subtask_checkout(self, task_id: str, subtask_id: str) -> Checkout: ...
 
     def head(self, path: Path) -> str: ...
+
+    def write_index(self, path: Path, files: dict[str, str]) -> None:
+        """Write the knowledge index `files` (path relative to `path` -> text, all under
+        `.agentic/index/`) into the checkout at `path`. Each file lands atomically, the new
+        ones before any stale file under that directory is deleted, and a file already
+        holding the same content is left alone. The directory is excluded from git, so the
+        index is never committed. A key outside it raises `ValueError`."""
+        ...
 
     def full_head(self, path: Path) -> str:
         """The full object id of HEAD in `path`; read-only. `head` keeps its short form."""

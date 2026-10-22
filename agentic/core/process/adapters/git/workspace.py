@@ -45,7 +45,10 @@ WORKTREES = Path(".agentic/worktrees")
 # The glob covers SQLite's journal next to the file. `LOGS_DIR`: every invocation's log
 # (README.md, 14; issue #33), through this same mechanism rather than the product's own
 # `.gitignore`, which is the product's business.
-EXCLUDES = (f"{WORKTREES}/", f"{STATE_FILE}*", f"{STATE_DIR}/", f"{LOGS_DIR}/")
+# The knowledge index a role reads is written here on every attempt and never committed
+# (ADR-0001 of the knowledge module); `core.knowledge`'s builder names the same directory.
+INDEX_DIR = ".agentic/index"
+EXCLUDES = (f"{WORKTREES}/", f"{STATE_FILE}*", f"{STATE_DIR}/", f"{LOGS_DIR}/", f"{INDEX_DIR}/")
 
 # How long `git fetch` may take before its whole process group is killed (GH-180): the
 # network blinking must cost a run a fallback and a note, never a hang.
@@ -553,6 +556,34 @@ class GitWorkspace:
         missing = [entry for entry in EXCLUDES if entry not in lines]
         if missing:
             exclude.write_text("\n".join([*lines, *missing]) + "\n", encoding="utf-8")
+
+    def write_index(self, path: Path, files: dict[str, str]) -> None:
+        """Write the knowledge index into the checkout at `path`: every file of `files`
+        (keys relative to `path`, all under `.agentic/index/`) atomically, the new ones
+        before the stale ones are deleted, so a reader never finds a listed entry
+        missing. A file already holding the same content is left alone."""
+        root = path / INDEX_DIR
+        wanted: dict[Path, str] = {}
+        for relative, text in files.items():
+            target = (path / relative).resolve()
+            if not target.is_relative_to(root.resolve()) or Path(relative).is_absolute():
+                raise ValueError(f"{relative}: an index file lives under {INDEX_DIR}/")
+            wanted[path / relative] = text
+        for target, text in wanted.items():
+            if target.is_file() and target.read_text(encoding="utf-8") == text:
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+            temporary.write_text(text, encoding="utf-8")
+            os.replace(temporary, target)
+        if not root.is_dir():
+            return
+        for stale in sorted(root.rglob("*"), reverse=True):
+            if stale.is_dir():
+                with contextlib.suppress(OSError):  # not empty: it holds a listed file
+                    stale.rmdir()
+            elif stale not in wanted:
+                stale.unlink()
 
     # -- plumbing ---------------------------------------------------------------
 

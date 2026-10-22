@@ -168,6 +168,7 @@ class MemoryKnowledge:
         brief: str | None = None,
     ) -> None:
         self.text = text
+        self.index: dict[str, str] = {}
         self.standards_text = standards
         self.brief_text = brief
         self.definitions: dict[str, str] = {}
@@ -177,7 +178,10 @@ class MemoryKnowledge:
         self.read_from = root
         return self.text
 
-    def standards(self, root: Path | None = None) -> str:
+    def index_files(self, root: Path | None = None) -> dict[str, str]:
+        return dict(self.index)
+
+    def standards(self, root: Path | None = None, whole: bool = True) -> str:
         return self.standards_text
 
     def brief(self, root: Path | None = None) -> str | None:
@@ -466,6 +470,8 @@ class MemoryWorkspace:
         # Path -> the repository it belongs to; a path outside it is in none.
         self.repositories: dict[Path, Path] = {}
         self.moved: set[Path] = set()
+        # Checkout path -> the index files last written into it (`write_index`).
+        self.indexes: dict[Path, dict[str, str]] = {}
         self.dirty: set[Path] = set()
         self.uncommitted: set[Path] = set()
         self.commits: list[tuple[Path, str]] = []
@@ -613,6 +619,9 @@ class MemoryWorkspace:
     def discard(self, path: Path) -> None:
         self.discarded.append(path)
         self.on_disk.discard(path)
+
+    def write_index(self, path: Path, files: dict[str, str]) -> None:
+        self.indexes[path] = dict(files)
 
     def head(self, path: Path) -> str:
         # A path in `moved` advances on every look, as a branch someone commits to.

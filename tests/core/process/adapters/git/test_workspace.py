@@ -155,6 +155,7 @@ def test_the_checkpointer_file_stays_out_of_the_products_status(product, tmp_pat
     ws.exclude_system_files()  # once each
     exclude = (product / ".git/info/exclude").read_text()
     assert ".agentic/logs/" in exclude  # every invocation's log, never the product's own gitignore
+    assert ".agentic/index/" in exclude  # the knowledge index, regenerated on every read
     (product / ".agentic").mkdir()
     (product / ".agentic/state.sqlite").write_text("x")
     (product / ".agentic/state.sqlite-journal").write_text("x")
@@ -1099,3 +1100,69 @@ def test_merge_upstream_into_a_refusal_that_is_not_a_conflict_raises_git_error(p
     task = ws.task_checkout("GH-241")
     with pytest.raises(GitError):
         ws.merge_upstream_into(task.path, "0" * 40)
+
+
+def test_an_index_written_into_a_task_worktree_is_never_committed(product):
+    # The index is generated on every read (ADR-0001 of the knowledge module); the
+    # directory it lives in is excluded, so a delivery's `commit_all` never carries it.
+    ws = GitWorkspace(product, IDENTITY)
+    ws.exclude_system_files()
+    task = ws.task_checkout("GH-12")
+    ws.write_index(
+        task.path, {".agentic/index/adr.md": "# adr\n", ".agentic/index/s/00-a.md": "a\n"}
+    )
+    assert (task.path / ".agentic/index/adr.md").read_text() == "# adr\n"
+    assert (task.path / ".agentic/index/s/00-a.md").read_text() == "a\n"
+    assert ws.is_clean(task.path)
+    (task.path / "work.txt").write_text("work\n")
+    assert ws.commit_all(task.path, "work") is not None
+    assert git("status", "--porcelain", cwd=task.path) == ""
+    assert git("ls-tree", "-r", "--name-only", "HEAD", cwd=task.path).split() == [
+        "README.md",
+        "work.txt",
+    ]
+
+
+def test_writing_an_index_removes_the_stale_files_and_keeps_every_listed_one(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    ws.write_index(task.path, {".agentic/index/old.md": "old\n", ".agentic/index/keep.md": "1\n"})
+    keep = task.path / ".agentic/index/keep.md"
+    inode = keep.stat().st_ino
+    ws.write_index(task.path, {".agentic/index/keep.md": "1\n", ".agentic/index/new.md": "new\n"})
+    assert not (task.path / ".agentic/index/old.md").exists()
+    assert (
+        keep.read_text() == "1\n" and (task.path / ".agentic/index/new.md").read_text() == "new\n"
+    )
+    assert keep.stat().st_ino == inode  # the same content is not rewritten
+    ws.write_index(task.path, {".agentic/index/keep.md": "2\n"})
+    assert keep.read_text() == "2\n"
+    assert sorted(p.name for p in (task.path / ".agentic/index").iterdir()) == ["keep.md"]
+
+
+def test_a_stale_file_is_pruned_only_after_the_new_ones_exist(product, monkeypatch):
+    # Write-new-then-prune: at the moment the first deletion happens, every file of the
+    # new set is already on disk, so a concurrent reader never finds a listed entry gone.
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    ws.write_index(task.path, {".agentic/index/old.md": "old\n"})
+    seen: list[bool] = []
+    real_unlink = Path.unlink
+
+    def unlink(self, *args, **kwargs):
+        seen.append((task.path / ".agentic/index/new.md").is_file())
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", unlink)
+    ws.write_index(task.path, {".agentic/index/new.md": "new\n"})
+    assert seen and all(seen)
+
+
+def test_an_index_path_outside_the_excluded_directory_is_refused(product):
+    ws = GitWorkspace(product, IDENTITY)
+    task = ws.task_checkout("GH-12")
+    for bad in ("README.md", ".agentic/index/../../README.md", "/etc/passwd"):
+        with pytest.raises(ValueError, match="index"):
+            ws.write_index(task.path, {bad: "x\n"})
+    assert (task.path / "README.md").read_text() == "v0\n"
+    assert ws.is_clean(task.path)
