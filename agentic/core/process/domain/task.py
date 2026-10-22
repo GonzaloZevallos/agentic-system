@@ -680,6 +680,9 @@ class LandingEntry(TypedDict, total=False):
     # `land_slice` entries: the units of the slice and its (never main) pull request.
     slice_units: list[str]
     slice_pull_request: str
+    # `land_slice` entries: whether the product's checks passed on the slice, so a CI wait
+    # across ticks does not run them again. `upstream` is the master the slice was built on.
+    checks_passed: bool
     # `diagnose` entries: the `landing.RestartWhy` that no slice was possible for.
     restart_why: str
 

@@ -171,15 +171,17 @@ def landing_step(
     blocking_owners: tuple[str, ...],
     *,
     important_units: tuple[str, ...] = (),
-    slicing: Slice | RestartWhy | None = None,
+    slicing: Slice | RestartWhy | Callable[[], SliceInputs] | None = None,
 ) -> LandingStep:
     """The step for `refusal`. A model pass or a sync past its budget is the exhaustion: the
     `land_slice` when `slicing` is a `Slice`, else the `diagnose` carrying `slicing` as its
     `restart_why` (`None`: as before GH-297). A task already diagnosed has no step left
     (`none`). `blocking_owners` is the units that own the open blocking records
     (`blocking_owners`); `important_units` the ones the final important pass reopens
-    (`important_owners`); `slicing` is `slice_or_restart`'s answer, which the application asks
-    for only when an exhaustion is possible and the only place this reads it."""
+    (`important_owners`); `slicing` is what the exhaustion decides a slice from: a ready
+    `slice_or_restart` answer, or a provider of the `SliceInputs` that is called, and handed to
+    `slice_or_restart`, only when a budget has run out, so a healthy landing reads no git for
+    it. This is the only place `slice_or_restart` is called."""
 
     def step(kind: LandingStepKind, units: tuple[str, ...] = ()) -> LandingStep:
         return LandingStep(kind, refusal, units)
@@ -187,9 +189,10 @@ def landing_step(
     def exhausted() -> LandingStep:
         """The one place every budget that ran out ends (invariant: nothing else lists
         the conditions of a slice or a restart)."""
-        if isinstance(slicing, Slice):
-            return step("land_slice", slicing.units)
-        return LandingStep("diagnose", refusal, restart_why=slicing)
+        answer = slice_or_restart(slicing()) if callable(slicing) else slicing
+        if isinstance(answer, Slice):
+            return step("land_slice", answer.units)
+        return LandingStep("diagnose", refusal, restart_why=answer)
 
     def pass_(kind: LandingStepKind, units: tuple[str, ...] = ()) -> LandingStep:
         return step(kind, units) if spent.passes < LANDING_PASSES_MAX else exhausted()
@@ -583,8 +586,10 @@ def already_dispatched(landing: Sequence[Mapping[str, object]], head: str, step:
     """Whether `(head, step)` is already in the document's `landing` list: the idempotency
     key, written before the dispatch. A diagnose entry that never delivered is an attempt
     (`diagnose_retry`), not a taken step; so is a sync closed with `lacks` (GH-267), which
-    the unsynced budget counts instead."""
-    return any(
+    the unsynced budget counts instead. A `land_slice` is never taken for good (GH-297): an
+    open one is continued by its executor, a refused one is retried until
+    `SLICE_REFUSALS_MAX`, and a landed one leaves other units to land on the same head."""
+    return step != "land_slice" and any(
         entry.get("head") == head
         and entry.get("step") == step
         and "lacks" not in entry
@@ -629,6 +634,8 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
         out["slice_units"] = [u for u in units if isinstance(u, str)]
     if isinstance(delivered := raw.get("delivered"), bool):
         out["delivered"] = delivered
+    if isinstance(passed := raw.get("checks_passed"), bool):
+        out["checks_passed"] = passed
     if (failure := _failure_of(raw.get("failure"))) is not None:
         out["failure"] = failure
     return out

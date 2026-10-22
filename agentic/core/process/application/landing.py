@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from typing import Any, Literal, assert_never
 
 from agentic.shared.configuration import Configuration
@@ -21,7 +22,7 @@ from ..domain import landing as landing_rules
 from ..domain.landing import LandingStepKind
 from ..domain.rules import RunKind
 from ..domain.task import TaskState
-from . import landing_fix, landing_plan, landing_sync
+from . import landing_fix, landing_plan, landing_slice, landing_sync
 from .checkouts import SetupFailed, task_checkout
 from .landing_plan import LandingContext
 from .poll import StackUnreadable, assess_merge
@@ -153,7 +154,22 @@ def _land(
     head = facts.pr_head
     if head is None:
         return LandResult("skipped", "no_head")
-    step = landing_plan.step_for(raw, decision.reason, facts)
+    resumed = landing_slice.open_entry(landing_plan.entries(raw), head)
+    if resumed is not None:
+        # A slice a crash or a CI wait left open: continued as recorded, never decided again.
+        units = resumed.get("slice_units")
+        step = landing_rules.LandingStep(
+            "land_slice",
+            decision.reason,
+            tuple(str(u) for u in units) if isinstance(units, list) else (),
+        )
+    else:
+        step = landing_plan.step_for(
+            raw,
+            decision.reason,
+            facts,
+            partial(landing_plan.slice_inputs, raw, cfg, ports, master, head),
+        )
     if not landing_rules.run_kind_admits(run_kind, step.kind, step.refusal):
         return _refused(task_id, raw, run_kind, step.kind, head, log)
     if not landing_plan.takes_action(step.kind, live):
@@ -173,7 +189,9 @@ def _land(
         )
         landing_fix.escalate_failed_diagnosis(context)
         return LandResult("dispatched", step=step.kind)
-    if landing_rules.already_dispatched(landing_plan.entries(raw), head, step.kind):
+    if resumed is None and landing_rules.already_dispatched(
+        landing_plan.entries(raw), head, step.kind
+    ):
         log(f"agentic: land: {task_id}: {head} {step.kind}: already taken")
         return LandResult("skipped", "already_dispatched", step.kind)
     if (
@@ -198,7 +216,12 @@ def _land(
     if step.kind == "sync_master" and upstream.sha is not None:
         # What the sync is for: `deliver` resolves it only if the head holds this sha.
         entry["upstream"] = upstream.sha
-    ports.documents.record_closure(task_id, {"landing": [*landing_plan.entries(raw), entry]})
+    if step.kind == "land_slice":
+        entry["slice_units"] = list(step.units)
+    if step.restart_why is not None:
+        entry["restart_why"] = step.restart_why
+    if resumed is None:
+        ports.documents.record_closure(task_id, {"landing": [*landing_plan.entries(raw), entry]})
     context = LandingContext(
         task_id,
         cfg,
@@ -213,6 +236,7 @@ def _land(
         argv0=argv0,
         role_span=role_span,
         await_resume=await_resume,
+        clock=clock,
     )
     try:
         _dispatch(context)
@@ -381,9 +405,7 @@ def _dispatch(context: LandingContext) -> None:
         case "diagnose":
             landing_fix.diagnose(context)
         case "land_slice":
-            # The executor arrives with the slice-executor subtask; `landing_step` returns
-            # this kind only when the application passes it a `Slice`, which nothing does yet.
-            context.log(f"agentic: land: {context.task_id}: {context.head} land_slice: not built")
+            landing_slice.land_slice(context)
         case "wait" | "none":
             context.log(f"agentic: land: {context.task_id}: {context.head} {kind}: nothing to do")
         case _:
