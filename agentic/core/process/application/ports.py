@@ -306,7 +306,7 @@ class ProductKnowledge(Protocol):
         ...
 
     def design(self, root: Path | None = None) -> str:
-        """The product's design standards (ADR-0054), whole under their heading, or "" when
+        """The product's design standards (ADR-0055), whole under their heading, or "" when
         the product has no `DESIGN_STANDARDS.md`. There is no default."""
         ...
 

@@ -197,7 +197,7 @@ def _guarded_preface(state: TaskState, branch: str, ports: Ports) -> str:
 
 def _criteria_over_cap(branch: str, ports: Ports) -> list[str]:
     """The criteria files past the line cap at the head of the branch being delivered
-    (GH-295, ADR-0054). A file the delivery deleted reads None there and is not measured;
+    (GH-295, ADR-0055). A file the delivery deleted reads None there and is not measured;
     a head that cannot be read says nothing, as `_guarded_preface` does."""
     try:
         return over_cap(ports, branch)
@@ -213,7 +213,7 @@ def _criteria_preface(over: list[str]) -> str:
     listed = "\n".join(f"- {message}" for message in over)
     return (
         "## Criteria over cap\n\nA criteria document of the product is past the line cap "
-        f"(ADR-0054); cut it or split it by area:\n\n{listed}"
+        f"(ADR-0055); cut it or split it by area:\n\n{listed}"
     )
 
 

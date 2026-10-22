@@ -168,7 +168,7 @@ def brief_refusal(ports: Ports) -> str | None:
 
 def _warn_over_cap(ports: Ports, revision: str) -> None:
     """Say, on stderr, each criteria document past the line cap at `revision` (GH-295,
-    ADR-0054). Never a refusal, and an unreadable revision says nothing: the stack read
+    ADR-0055). Never a refusal, and an unreadable revision says nothing: the stack read
     just before it already refused what could be refused."""
     try:
         messages = over_cap(ports, revision)

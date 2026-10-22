@@ -289,7 +289,7 @@ def test_a_marker_inside_an_adr_or_capability_does_not_inline_it():
 
 
 def test_the_design_area_adds_no_line_and_no_file_to_the_index():
-    """Design is served whole (ADR-0054): the area exists in the closed set, but nothing
+    """Design is served whole (ADR-0055): the area exists in the closed set, but nothing
     ever lists entries under it, so `read()`'s text and files are what they were."""
     built = index()
     assert "design" not in built.areas

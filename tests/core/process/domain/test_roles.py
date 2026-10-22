@@ -448,7 +448,7 @@ def test_every_role_that_reads_a_criteria_family_can_open_a_file():
 
 
 # Copied from the booleans this table replaced (`reads_knowledge` -> product,
-# `reads_standards` -> engineering), plus `design` for the design roles (ADR-0054). A
+# `reads_standards` -> engineering), plus `design` for the design roles (ADR-0055). A
 # role that appears here with other families, or is missing, changes what it reads.
 EXPECTED_CRITERIA = {
     "pjm": (),

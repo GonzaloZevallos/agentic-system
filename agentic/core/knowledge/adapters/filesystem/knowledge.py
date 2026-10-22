@@ -80,7 +80,7 @@ class FilesystemKnowledge:
 
     def design(self, root: Path | None = None) -> str:
         """The product's `DESIGN_STANDARDS.md`, whole, or "" when it has none: the system
-        ships no default (ADR-0054)."""
+        ships no default (ADR-0055)."""
         text = _read((root or self.product_dir) / knowledge.DESIGN_STANDARDS)
         if text is None:
             return ""
@@ -89,11 +89,11 @@ class FilesystemKnowledge:
         )
 
     def criteria_files(self) -> tuple[str, ...]:
-        """The criteria documents the line cap measures (ADR-0054)."""
+        """The criteria documents the line cap measures (ADR-0055)."""
         return (knowledge.STANDARDS, knowledge.DESIGN_STANDARDS)
 
     def over_cap(self, texts: dict[str, str]) -> list[str]:
-        """The criteria documents past the line cap, one message each (ADR-0054)."""
+        """The criteria documents past the line cap, one message each (ADR-0055)."""
         return knowledge.criteria_over_cap(texts)
 
     def brief(self, root: Path | None = None) -> str | None:

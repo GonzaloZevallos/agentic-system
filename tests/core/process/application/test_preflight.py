@@ -389,7 +389,7 @@ def test_a_stack_with_the_affected_keys_passes_and_keeps_its_setup_as_the_answer
     assert stack.revisions == ["HEAD", "HEAD", "HEAD", "HEAD"]
 
 
-# -- criteria documents past the line cap (GH-295, ADR-0054) -------------------------
+# -- criteria documents past the line cap (GH-295, ADR-0055) -------------------------
 
 
 def _lines(count: int) -> str:

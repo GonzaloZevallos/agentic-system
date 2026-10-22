@@ -51,7 +51,7 @@ PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 _PLACEHOLDER = re.compile(r"\{\{(\w+)\}\}")
 
 
-# The families of criteria documents a role may read (ADR-0054).
+# The families of criteria documents a role may read (ADR-0055).
 Criteria = Literal["engineering", "product", "design"]
 
 
@@ -79,7 +79,7 @@ class Role:
     # A role that lists itself reads its own previous section on a return. The human's
     # decisions (`HUMAN`) are not declared: every role reads them, last.
     reads: tuple[str, ...] = (ORIGINAL,)
-    # The criteria families the role reads (ADR-0054): `product` is the Brief and the
+    # The criteria families the role reads (ADR-0055): `product` is the Brief and the
     # product knowledge (ADR-0006), `engineering` the coding standards (ADR-0012),
     # `design` the design standards. How each reaches the role is `whole_for`'s business.
     criteria: tuple[Criteria, ...] = ()
@@ -108,7 +108,7 @@ class Role:
 
 def whole_for(role: Role, family: Criteria) -> bool:
     """Whether the family reaches the role whole, in its prompt, or through the index.
-    The one place that decides it (ADR-0054). `design` is always whole: it is bounded by
+    The one place that decides it (ADR-0055). `design` is always whole: it is bounded by
     the size cap and has no index. `engineering` is whole for every verifier, which judges
     against it, and for a role that cannot open a file; the Developer and the integrator
     get it through the index. `product` is never whole: it always arrives as what goes

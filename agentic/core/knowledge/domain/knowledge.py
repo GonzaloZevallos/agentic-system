@@ -37,13 +37,13 @@ STANDARDS = "CODING_STANDARDS.md"
 DEFAULT_STANDARDS = Path(__file__).resolve().parent / STANDARDS
 STANDARDS_HEADING = "## Engineering standards"
 
-# The design standards (ADR-0054): the criteria of the four design roles, a file at the
+# The design standards (ADR-0055): the criteria of the four design roles, a file at the
 # product's root. Unlike the engineering standards the system ships no default: a product
 # without the file has an empty design block.
 DESIGN_STANDARDS = "DESIGN_STANDARDS.md"
 DESIGN_HEADING = "## Design standards"
 # A criteria document never grows silently: past this many lines it is reported, never
-# refused or rewritten (ADR-0054).
+# refused or rewritten (ADR-0055).
 CRITERIA_MAX_LINES = 300
 
 # The Brief (ADR-0025): what the human writes once per product, before the first task
