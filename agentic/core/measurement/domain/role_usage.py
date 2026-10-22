@@ -7,9 +7,10 @@ key is added (ADR-0037). Pure domain -- `eval compare` groups the documents with
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any
+
+from agentic.core.process.domain.task import RoleRun
 
 
 @dataclass(frozen=True)
@@ -26,7 +27,7 @@ class RoleUsage:
     cost_usd: float
 
 
-def by_role(runs: Iterable[Mapping[str, Any]]) -> dict[str, RoleUsage]:
+def by_role(runs: Iterable[RoleRun]) -> dict[str, RoleUsage]:
     """Sums `runs` per `slug`, in order of first appearance.
 
     A field missing from a run recorded before it existed reads as 0 through `.get`:

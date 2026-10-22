@@ -27,7 +27,7 @@ reciben un índice, no los documentos.
 - **`.agentic/index/` entra en `exclude_system_files`**, que resuelve
   `git rev-parse --git-common-dir`, así que vale también en worktrees. Nunca se commitea.
 - **Qué va entero** lo decide una sola función, `always_whole`, y ningún otro módulo:
-  `BRIEF.md`, `CONTEXT-MAP.md`, todo `CONTEXT.md` (lista nombrada, nunca inferida del nombre o
+  `BRIEF.md`, `CONTEXT-MAP.md`, todo `CONTEXT.md` que el llamador nombra (la raíz, o lo que enlaza el mapa; nunca inferido del nombre o
   el tamaño de un archivo) y toda sección `## ` de `CODING_STANDARDS.md` cuya línea siguiente
   es exactamente `<!-- agentic:always -->`. Nada llega a un rol de las dos formas.
 - **Las rutas de las entradas son relativas al `cwd`** del rol, que es el checkout de la tarea

@@ -12,8 +12,8 @@ Pure: nothing here touches disk. `build_index` returns the texts and the files; 
 from __future__ import annotations
 
 import re
+from collections.abc import Collection
 from dataclasses import dataclass
-from pathlib import PurePosixPath
 from typing import Any
 
 import yaml
@@ -31,8 +31,9 @@ AREA_SUMMARY = {
     "standards": "engineering standards, one file per section",
 }
 INDEX_DIR = ".agentic/index"
-# What goes whole by name, never by size. `CONTEXT.md` matches by its file name because
-# a mapped product keeps one per context, at the path its `CONTEXT-MAP.md` links.
+# What goes whole by name, never by size. The glossaries are the other half of the list,
+# and the caller names them: the root `CONTEXT.md`, or the paths `CONTEXT-MAP.md` links.
+# A file called `CONTEXT.md` that is on neither is an ordinary entry.
 ALWAYS_FILES = (knowledge.BRIEF, knowledge.CONTEXT_MAP)
 ALWAYS_MARKER = "<!-- agentic:always -->"
 INDEX_SENTENCE = (
@@ -63,10 +64,12 @@ class KnowledgeIndex:
         return knowledge.HEADING + "\n\n" + "\n\n".join(parts) if parts else ""
 
 
-def always_whole(path: str, section: str | None = None) -> bool:
+def always_whole(path: str, section: str | None = None, glossaries: Collection[str] = ()) -> bool:
     """The single decision of whole or index. Nothing else decides it.
 
-    A file is whole when it is on the named list (`ALWAYS_FILES`, or a `CONTEXT.md`).
+    A file is whole when it is on the named list: `ALWAYS_FILES` or one of `glossaries`,
+    the glossary paths the caller read (the root `CONTEXT.md`, or what the map links).
+    The file's name decides nothing: a `CONTEXT.md` outside that list is an entry.
     A `## ` section -- `section` is its text, heading first -- is whole when the line
     right after its heading is exactly `ALWAYS_MARKER`. The
     predicate does not look at the file, but `build_index` only asks it about
@@ -76,7 +79,7 @@ def always_whole(path: str, section: str | None = None) -> bool:
     if section is not None:
         lines = section.split("\n")
         return len(lines) > 1 and _H2_LINE.match(lines[0]) is not None and lines[1] == ALWAYS_MARKER
-    return path in ALWAYS_FILES or PurePosixPath(path).name == knowledge.GLOSSARY
+    return path in ALWAYS_FILES or path in glossaries
 
 
 def area_of(path: str) -> str:
@@ -122,7 +125,12 @@ def build_index(
     whole: list[str] = []
     if brief:
         whole.append(_whole_file(knowledge.BRIEF, brief))
-    whole += [_whole_file(path, text) for path, text in glossaries.items()]
+    for path in glossaries:
+        # The caller's list is the named one, but it can only name glossaries: this
+        # rejects an input, it does not decide whole (`always_whole` does).
+        if path != knowledge.CONTEXT_MAP and not path.endswith(knowledge.GLOSSARY):
+            raise ValueError(f"{path}: not a glossary; it cannot be given whole")
+    whole += [_whole_file(path, text, glossaries) for path, text in glossaries.items()]
 
     entries: dict[str, list[tuple[str, str, tuple[str, ...]]]] = {area: [] for area in AREAS}
     files: dict[str, str] = {}
@@ -131,7 +139,9 @@ def build_index(
             path = f"{subdir}/{name}"
             text = found[name]
             area = area_of(path)
-            if always_whole(path):
+            if path in glossaries:
+                continue  # a glossary the map links that lives here: already whole, once
+            if always_whole(path, glossaries=glossaries):
                 whole.append(knowledge.fenced(path, text))
             elif not (area == "adr" and superseded(text)):
                 entries[area].append((path, _title(text, name), _roles(path, text)))
@@ -163,8 +173,8 @@ def build_index(
     return KnowledgeIndex("\n\n".join(whole), areas, files, standards_block)
 
 
-def _whole_file(path: str, text: str) -> str:
-    if not always_whole(path):
+def _whole_file(path: str, text: str, glossaries: Collection[str] = ()) -> str:
+    if not always_whole(path, glossaries=glossaries):
         raise ValueError(f"{path}: not on the always-whole list; it cannot be given whole")
     return knowledge.fenced(path, text)
 

@@ -19,11 +19,11 @@ structurally identical to it on every key this module reads.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 
-from agentic.core.process.domain.task import TaskState
+from agentic.core.process.domain.task import RoleRun, TaskState
 
 from . import metrics
 
@@ -101,7 +101,7 @@ class TaskFigures:
     system_baseline: str | None
     # The document's own `runs[]`, carried so `role_usage.by_role` reads the same
     # bucket `bucket_by_baseline` grouped (GH-292); empty for a document with none.
-    runs: Sequence[Mapping[str, Any]] = ()
+    runs: Sequence[RoleRun] = ()
 
 
 def task_figures(document: ScorecardDocument) -> TaskFigures:

@@ -85,11 +85,35 @@ def test_every_always_whole_member_is_present_byte_for_byte():
 
 def test_always_whole_is_a_named_list_not_a_size_or_a_name_guess():
     assert always_whole("BRIEF.md") and always_whole("CONTEXT-MAP.md")
-    assert always_whole("CONTEXT.md") and always_whole("agentic/core/process/CONTEXT.md")
+    named = ("CONTEXT.md", "agentic/core/process/CONTEXT.md")
+    assert all(always_whole(path, glossaries=named) for path in named)
+    # Rejected: a `CONTEXT.md` the caller did not name is not whole, whatever its name.
+    assert not always_whole("CONTEXT.md")
+    assert not always_whole("docs/product/CONTEXT.md", glossaries=named)
     # Rejected: a small file with a suggestive name is not whole; it goes through the index.
     assert not always_whole("docs/product/BRIEF-notes.md")
     assert not always_whole("docs/adr/0001-queue.md")
     assert not always_whole("CODING_STANDARDS.md")
+
+
+def test_an_unlinked_context_file_is_an_index_entry_and_a_linked_one_is_whole_once():
+    stray = "# Stray\n\nNot a mapped glossary.\n"
+    built = index(
+        glossaries={
+            "CONTEXT-MAP.md": CONTEXT_MAP,
+            "agentic/core/process/CONTEXT.md": PROCESS_GLOSSARY,
+        },
+        capabilities={"CONTEXT.md": stray, "check-ins.md": "# Check-ins\n"},
+    )
+    assert "Not a mapped glossary." not in built.always
+    assert "`docs/product/CONTEXT.md` | Stray" in built.files[".agentic/index/product.md"]
+    # A glossary the map links that sits under docs/product/ reaches the role once, whole.
+    linked = index(
+        glossaries={"docs/product/CONTEXT.md": stray},
+        capabilities={"CONTEXT.md": stray, "check-ins.md": "# Check-ins\n"},
+    )
+    assert linked.text.count("Not a mapped glossary.") == 1
+    assert "docs/product/CONTEXT.md" not in linked.files[".agentic/index/product.md"]
 
 
 def test_a_section_is_whole_only_with_the_marker_on_the_line_right_after_its_heading():
