@@ -74,6 +74,7 @@ class _Locks:
         self.records = records or {}
         self.alive = alive or set()
         self.reads: list[str] = []
+        self.kept_crashed: list[tuple[str, str]] = []
 
     def read(self, task_id):
         self.reads.append(task_id)
@@ -90,6 +91,10 @@ class _Locks:
 
     def keep_at_shutdown(self, task_id):
         raise AssertionError("the poller must never rewrite a run's lock")
+
+    def keep_crashed(self, task_id, system_version):
+        # Recorded, never acted on: a test asserts the poller left it empty.
+        self.kept_crashed.append((task_id, system_version))
 
 
 def _no_sleep(seconds: float) -> None:

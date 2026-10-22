@@ -3234,9 +3234,7 @@ def test_a_crash_mark_does_not_override_the_document_checks():
         {"status": "developing", "escalated": "needs a human"},
         {"status": "ready_for_review"},
     ):
-        assert (
-            rules.interrupted_run(task_doc, CRASHED, 0, version_key="def456") == "none"
-        ), task_doc
+        assert rules.interrupted_run(task_doc, CRASHED, 0, version_key="def456") == "none", task_doc
     assert rules.interrupted_run({}, CRASHED, 0, version_key="def456") == "human"
 
 
@@ -3260,5 +3258,8 @@ def test_poll_plan_crash_retakes_take_a_slot_from_resumes_and_launches():
     only_retake = rules.poll_plan(crash_retakes=[4], available_slots=1, **plan).actions
     assert only_retake == [rules.PollAction("retake", 4, reason="crash")]
     with_launch = rules.poll_plan(crash_retakes=[4], available_slots=2, **plan).actions
-    assert with_launch == [rules.PollAction("retake", 4, reason="crash"), rules.PollAction("launch", 9)]
+    assert with_launch == [
+        rules.PollAction("retake", 4, reason="crash"),
+        rules.PollAction("launch", 9),
+    ]
     assert rules.poll_plan(crash_retakes=[4], available_slots=0, **plan).actions == []

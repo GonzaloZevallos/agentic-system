@@ -772,12 +772,16 @@ class FakeLock:
         self.acquired: list[tuple[str, str]] = []
         self.released: list[str] = []
         self.kept: list[str] = []
+        self.kept_crashed: list[tuple[str, str]] = []
 
     def read(self, task_id):
         return self.held
 
     def keep_at_shutdown(self, task_id):
         self.kept.append(task_id)
+
+    def keep_crashed(self, task_id, system_version):
+        self.kept_crashed.append((task_id, system_version))
 
     def acquire(self, task_id, command):
         self.acquired.append((task_id, command))
@@ -2945,6 +2949,7 @@ class FakeKeyedLock:
         self.held = dict(held or {})
         self.acquired: list[tuple[str, str]] = []
         self.released: list[str] = []
+        self.kept_crashed: list[tuple[str, str]] = []
 
     def read(self, task_id):
         return self.held.get(task_id)
@@ -2965,6 +2970,9 @@ class FakeKeyedLock:
 
     def keep_at_shutdown(self, task_id):
         pass
+
+    def keep_crashed(self, task_id, system_version):
+        self.kept_crashed.append((task_id, system_version))
 
     def release(self, task_id):
         self.released.append(task_id)

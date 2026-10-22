@@ -686,20 +686,27 @@ def gather_retakes(
             continue
         prior = _prior_retakes(ports.tracker.timestamped_comments(task_id))
         decision = rules.interrupted_run(raw, facts, prior)
-        if decision == "retake":
-            retakes.append(number)
-        elif decision == "human":
-            cap_spent = first == "retake"  # only the count turned it into the human's
-            line = _human_line(number, record, other_boot, cap_spent)
-            # A run dead in THIS boot may have left processes alive (GH-282, ADR-0052): its
-            # own scope only, never the task's. An other-boot record has nothing alive, and
-            # an unknown boot proves nothing. Repeating it every round is fine: a re-scan of
-            # a reaped scope finds nothing.
-            if other_boot is False and (
-                reaped := release.summary(release.release_processes(ports, task_id, run=record.pid))
-            ):
-                line += f"; {reaped}"
-            lines.append(line)
+        match decision:
+            case "retake" | "retake_crash":
+                retakes.append(number)
+            case "human":
+                cap_spent = first in ("retake", "retake_crash")  # only the count turned it
+                line = _human_line(number, record, other_boot, cap_spent)
+                # A run dead in THIS boot may have left processes alive (GH-282, ADR-0052):
+                # its own scope only, never the task's. An other-boot record has nothing
+                # alive, and an unknown boot proves nothing. Repeating it every round is
+                # fine: a re-scan of a reaped scope finds nothing.
+                if other_boot is False and (
+                    reaped := release.summary(
+                        release.release_processes(ports, task_id, run=record.pid)
+                    )
+                ):
+                    line += f"; {reaped}"
+                lines.append(line)
+            case "none" | "running":
+                continue
+            case _:
+                assert_never(decision)
     return retakes, lines
 
 
