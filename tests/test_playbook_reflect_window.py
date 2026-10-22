@@ -31,7 +31,8 @@ def reflected_document() -> dict[str, Any]:
     return {
         "id": "GH-1",
         "type": "feature",
-        "status": "closed",
+        "closed_at": "2026-10-01T00:00:00+00:00",
+        "delivery_outcome": "merged",
         "change_history": [{"pair": PAIR, "category": CATEGORY, "reason": "unrun"}],
         "sections": {"Tech Lead: review parser": "### Verdict\n\nreview"},
     }

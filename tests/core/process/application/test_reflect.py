@@ -10,18 +10,21 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from agentic.core.process.application import preflight as preflight_module
+from agentic.core.process.application import reflect
 from agentic.core.process.application.ports import RawResult
 from agentic.core.process.application.preflight import PLACEHOLDERS, preflight
 from agentic.core.process.application.reflect import Reflected, reflect_task
 from agentic.core.process.application.run_role import load_prompt
 from agentic.core.process.domain import playbook as pb
-from agentic.core.process.domain import schemas
+from agentic.core.process.domain import rules, schemas
+from agentic.core.process.domain.document import HUMAN
 from agentic.core.process.domain.roles import REFLECTOR, ROLES, prompt_hash
+from agentic.core.process.domain.task import Carried
 from agentic.shared.configuration import Configuration
 from tests.fakes import MemoryPrompts, ScriptedRunner, memory_ports
 
@@ -36,13 +39,20 @@ def document(
     history: list[dict[str, str]] | None = None,
     sections: dict[str, str] | None = None,
     task_type: str = "feature",
-    status: str = "closed",
+    closed: bool = True,
+    **extra: Any,
 ) -> dict[str, Any]:
     return {
         "id": task_id,
         "title": "A task",
         "type": task_type,
-        "status": status,
+        "status": "ready_for_review",
+        **(
+            {"closed_at": "2026-10-04T00:00:00+00:00", "delivery_outcome": "merged"}
+            if closed
+            else {}
+        ),
+        **extra,
         "description": "the request",
         "change_history": history
         if history is not None
@@ -117,7 +127,8 @@ async def test_the_input_holds_only_attributable_returns_and_their_review_sectio
     assert "standard-other" in prompt and "developer" in prompt
     assert "PARSER-REVIEW-ONE" in prompt
     assert "PARSER-REVIEW-TWO" not in prompt  # the first return maps to the first delivery
-    assert "PRD gap" not in prompt and "spec-behaviour" not in prompt
+    assert "PRD gap" in prompt  # the table attributes the PRD return to product_analyst
+    assert "no-such-category" not in prompt
     assert "OTHER-REVIEW-SHOULD-NOT-APPEAR" not in prompt
     assert not result.failed
 
@@ -139,7 +150,7 @@ async def test_the_input_carries_the_accountable_roles_playbook_with_ids_and_its
 
 async def test_no_attributable_return_means_no_model_call(cfg):
     runner = ScriptedRunner()  # a call would raise: nothing is scripted
-    history = [{"pair": "PM→Product Analyst", "category": "spec-behaviour", "reason": "x"}]
+    history = [{"pair": "PM→Tech Lead", "category": "spec-behaviour", "reason": "x"}]
     result = await run(cfg, runner, document(history=history))
     assert runner.calls == []
     assert result.applied == () and result.refused == () and result.cost_usd == 0.0
@@ -208,7 +219,7 @@ async def test_a_lesson_rejected_before_is_refused(cfg):
 
 async def test_a_task_that_is_not_closed_backs_no_lesson(cfg):
     runner = ScriptedRunner(reflector=[reflection(add())])
-    result = await run(cfg, runner, document(status="open"))
+    result = await run(cfg, runner, document(closed=False))
     assert result.applied == () and "not closed" in result.refused[0].reason
 
 
@@ -279,3 +290,124 @@ def test_preflight_renders_the_reflector_prompt_and_refuses_a_stray_placeholder(
     stray = replace(ports, prompts=MemoryPrompts(reflector="Today is {{date}}. Stray: {{nope}}"))
     with pytest.raises(ValueError, match="nope"):
         preflight(Configuration(product_dir=product), stray)
+
+
+# ---- the four sources (ADR-0056) -----------------------------------------------------------
+
+DECISIONS = (
+    "### Decision 1\n\nEscalated: quotes\n\nSpanish quotes in docs are a follow-up.\n\n"
+    "### Decision 2\n\nEscalated: naming\n\nName the flag with a verb."
+)
+
+
+def finding(claim: str, **over: Any) -> dict[str, Any]:
+    return {
+        "subtask": "parser",
+        "version": 1,
+        "location": "a.py:1",
+        "claim": claim,
+        "severity": "blocking",
+        "scope": "subtask",
+        "category": "spec-behaviour",
+        "status": "open",
+        **over,
+    }
+
+
+def test_a_dismissed_or_outside_finding_neither_appears_nor_backs_anything():
+    doc = document(
+        history=[],
+        findings=[
+            finding("OPEN-CLAIM"),
+            finding("DISMISSED-CLAIM", status="dismissed", location="b.py:2"),
+            finding("OUTSIDE-CLAIM", scope="outside", location="c.py:3"),
+            finding("PLAN-CLAIM", scope="plan", category="plan-calibration", location="d.py:4"),
+        ],
+    )
+    found = reflect.facts(doc)
+    assert sorted(f.text.rsplit("\n", 1)[-1] for f in found) == ["OPEN-CLAIM", "PLAN-CLAIM"]
+    assert set(reflect.backings(doc)) == {
+        pb.Backing("finding", "developer", "spec-behaviour"),
+        pb.Backing("finding", "tech_lead", "plan-calibration"),
+    }
+    text = reflect.reflection_input("GH-10", found, {}, [])
+    assert "OPEN-CLAIM" in text and "DISMISSED-CLAIM" not in text and "OUTSIDE-CLAIM" not in text
+
+
+def test_the_pm_final_goes_to_the_developer_and_a_lead_remark_to_its_designer():
+    doc = document(
+        history=[],
+        findings=[finding("PM-CLAIM", subtask="integration", location="PM: final validation")],
+        design_items=[
+            {"role_slug": "ux_lead_final", "kind": "blocking", "step": "s1", "text": "UX-TEXT"},
+            {"role_slug": "ui_lead", "kind": "observation", "step": "s2", "text": "UI-TEXT"},
+            {"role_slug": "pm_consolidator", "kind": "observation", "step": "s", "text": "NOPE"},
+        ],
+        change_history=None,
+    )
+    assert set(reflect.backings(doc)) == {
+        pb.Backing("finding", "developer_integrator", "spec-behaviour"),
+        pb.Backing("design", "ux_designer", "design"),
+        pb.Backing("design", "ui_designer", "design"),
+    }
+
+
+def test_a_merged_task_with_human_decisions_has_human_decision_backings_above_the_read_ones():
+    doc = document(history=[], prompts={"developer": "h1", "pm": "h2"}, sections={HUMAN: DECISIONS})
+    assert set(reflect.backings(doc)) == {
+        pb.Backing("human_decision", "developer", "human-decision", "1"),
+        pb.Backing("human_decision", "developer", "human-decision", "2"),
+    }
+    later = reflect.backings(doc, decisions=1)
+    assert [b.ref for b in later] == ["2"]
+
+
+def test_a_carried_human_section_keeps_its_decision_numbering():
+    carried = Carried(1, 0.0, "", DECISIONS, ())
+    entered = rules.entering(
+        {"id": "GH-9", "title": "t", "description": "d"}, cap=False, carried=carried
+    )
+    assert set(reflect.decision_blocks(entered)) == {1, 2}
+    # The next decision is numbered after the carried ones, and the document reads it so.
+    more = rules.human_section(cast(Any, entered), None, "Use a table.")
+    assert set(reflect.decision_blocks({"sections": {HUMAN: more}})) == {1, 2, 3}
+
+
+def test_the_input_caps_each_source_by_severity_then_recency_and_says_what_it_omitted():
+    claims = [finding(f"C{n}", location=f"f.py:{n}", severity="observation") for n in range(45)]
+    claims.append(finding("THE-BLOCKING-ONE", location="old.py:1"))
+    claims.append(finding("X" * 7000, location="big.py:1", severity="important"))
+    doc = document(history=[], findings=[claims[-2], claims[-1], *claims[:-2]])
+    text = reflect.reflection_input("GH-10", reflect.facts(doc), {}, [])
+    assert "THE-BLOCKING-ONE" in text
+    assert "[7 entries omitted]" in text
+    assert "X" * 6001 not in text and "[the text is cut here]" in text
+    assert text.count("### Finding ") == reflect.REFLECT_MAX_ENTRIES
+
+
+async def test_a_decision_lesson_is_checked_against_the_decisions_the_code_read(cfg):
+    doc = document(history=[], prompts={"developer": "h"}, sections={HUMAN: DECISIONS})
+    lesson = "Treat Spanish quotes in docs as a follow-up, not a blocker."
+    runner = ScriptedRunner(reflector=[reflection(add(lesson, category="human-decision"))])
+    result = await run(cfg, runner, doc)
+    assert "Human decision 1" in runner.calls[0]["prompt"]
+    # The backing exists (the code built it), but the delta cites no `Decision N` yet: the
+    # curator refuses it, it never counts as backed by prose.
+    assert result.applied == () and "does not cite Decision" in result.refused[0].reason
+
+
+async def test_the_decision_gate_reads_only_decisions_and_a_not_yet_ended_task_backs_nothing(cfg):
+    doc = document(
+        closed=False,
+        status="discarded",
+        history=[{"pair": "Tech Lead→Developer:p", "category": "standard-other", "reason": "R-X"}],
+        prompts={"developer": "h"},
+        sections={HUMAN: DECISIONS},
+    )
+    runner = ScriptedRunner(reflector=[reflection()])
+    await reflect_task(cfg, memory_ports(runner), doc, {}, [], now=NOW, gate="decision")
+    prompt = runner.calls[0]["prompt"]
+    assert "R-X" not in prompt and "Decision 1" in prompt
+    only_review = ScriptedRunner(reflector=[reflection(add())])
+    result = await reflect_task(cfg, memory_ports(only_review), doc, {}, [], now=NOW)
+    assert "not closed" in result.refused[0].reason  # the review gate wants a kept delivery

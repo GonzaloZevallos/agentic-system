@@ -17,24 +17,42 @@ reflection can never fail, escalate or reopen a task.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, cast
 
 from agentic.shared.configuration import Configuration
 
 from ..domain import playbook as pb
+from ..domain import playbook_candidates as pc
 from ..domain import rules
-from ..domain.roles import REFLECTOR, prompt_hash
-from ..domain.task import TaskState
+from ..domain.document import HUMAN
+from ..domain.roles import PM_FINAL, REFLECTOR, prompt_hash
+from ..domain.task import INTEGRATION, TaskState
 from .ports import Ports
 from .run_role import Escalating, run_role
 
-# A review section longer than this is cut in the reflector's input, with a note: the
-# lessons live in the head of a review (its verdict, its findings), and the input has to
-# stay inside the per-attempt cap however long a review ran.
-REVIEW_MAX_CHARS = 6000
+# A text longer than this is cut in the reflector's input, with a note: the lessons live in
+# the head of a review, a claim or a decision, and the input has to stay inside the
+# per-attempt cap however long it ran. At most this many entries per source reach the model
+# too (`facts` keeps blocking before important before observation, then the most recent) and
+# the input says how many it left out.
+REFLECT_MAX_ENTRIES = 40
+REFLECT_MAX_CHARS = 6000
 _SUPERSEDED = re.compile(r"^(?P<name>.+) \(v(?P<n>\d+)\)$")
+_DECISION_BLOCK = re.compile(r"^### Decision (?P<n>\d+)\s*$", re.M)
+_SOURCES: tuple[pb.Source, ...] = ("return", "finding", "design", "human_decision")
+_TITLES = {
+    "return": "Returns",
+    "finding": "Findings",
+    "design": "Design remarks",
+    "human_decision": "Human decisions",
+}
+_RANK = {"blocking": 0, "important": 1, "observation": 2}
+# A finding teaches only while it is the branch's or the plan's own: `outside` is nobody's
+# lesson, and a `dismissed` one was not a fault.
+_LEARNABLE_SCOPES = ("subtask", "plan")
+_LEARNABLE_STATUSES = ("open", "fixed")
 
 
 @dataclass(frozen=True)
@@ -54,45 +72,153 @@ class Reflected:
 
 
 @dataclass(frozen=True)
-class Attributed:
-    """One return of the task, attributed: whose lesson it can be, in which category,
-    and the review section it came from (`None` when the document no longer has it)."""
+class Fact:
+    """One recorded fact the model may learn from, built by code from the closed document:
+    its `backing` (what a lesson may cite it by), a one-line `title`, its `text` and its
+    `rank` (0 blocking, 1 important, 2 observation) and `order` in the document."""
 
-    slug: str
-    pair: str
-    category: str
-    reason: str
-    review: str | None
+    backing: pb.Backing
+    title: str
+    text: str
+    rank: int
+    order: int
 
 
-def attributable_returns(document: Mapping[str, Any]) -> list[Attributed]:
-    """The task's returns `playbook.accountable` can attribute, in order. The rest never
-    reach the model. The n-th return of a subtask's pair came from the n-th delivery of its
-    review section: a superseded one is `<section> (vN)`, the latest has no suffix."""
+def facts(
+    document: Mapping[str, Any], decisions: int = 0, sources: Collection[str] = _SOURCES
+) -> list[Fact]:
+    """Every fact of the closed document `pb.ACCOUNTABLE` can attribute, from structured
+    fields alone, never from prose: returns of any pair, findings (`open` or `fixed`, scope
+    `subtask` or `plan`: a `dismissed` or `outside` one is neither here nor a `Backing`),
+    a lead's design remarks, and the human's `### Decision N` blocks above `decisions`."""
     task_type = str(document.get("type") or "")
+    found: list[Fact] = []
+    if "return" in sources:
+        found += _return_facts(document, task_type)
+    if "finding" in sources:
+        found += _finding_facts(document, task_type)
+    if "design" in sources:
+        found += _design_facts(document, task_type)
+    if "human_decision" in sources:
+        found += _decision_facts(document, decisions)
+    return found
+
+
+def backings(document: Mapping[str, Any], decisions: int = 0) -> tuple[pb.Backing, ...]:
+    """The distinct `Backing`s of the document: what `apply` may let a lesson cite."""
+    return backings_of(document, decisions, _SOURCES)
+
+
+def backings_of(
+    document: Mapping[str, Any], decisions: int, sources: Collection[str]
+) -> tuple[pb.Backing, ...]:
+    return tuple(dict.fromkeys(f.backing for f in facts(document, decisions, sources)))
+
+
+def _closed(document: Mapping[str, Any], gate: pc.Gate) -> bool:
+    """Whether the document is one of the two doors' (ADR-0056): `review`, a closed one
+    with a delivery a person kept; `decision`, one that ended without it (discarded, split,
+    a closed pull request or an escalation whose issue closed; the poller checked which)."""
+    if gate == "review":
+        return bool(document.get("closed_at")) and document.get("delivery_outcome") in pc.KEPT
+    return bool(document.get("closed_at")) or document.get("status") in (
+        "discarded",
+        "split",
+        "waiting_on_human",
+    )
+
+
+def _return_facts(document: Mapping[str, Any], task_type: str) -> list[Fact]:
     sections: Mapping[str, str] = document.get("sections") or {}
     seen: dict[str, int] = {}
-    out: list[Attributed] = []
-    for entry in document.get("change_history") or []:
-        if not isinstance(entry, Mapping):
-            continue
-        if entry.get("by") == "landing":
-            continue  # not a Tech Lead return: it has no review delivery of its own
+    out: list[Fact] = []
+    for order, entry in enumerate(document.get("change_history") or []):
+        if not isinstance(entry, Mapping) or entry.get("by") == "landing":
+            continue  # a landing return has no review delivery of its own
         pair = str(entry.get("pair") or "")
         seen[pair] = seen.get(pair, 0) + 1
-        slug = pb.accountable(entry, task_type)
+        backing = pb.return_backing(entry, task_type)
+        if backing is None:
+            continue
+        review = (
+            _review_text(sections, pair.partition(":")[2], seen[pair])
+            if pair.startswith(pb.REVIEW_PAIR)
+            else None
+        )
+        body = f"Pair: {pair}\nReason: {entry.get('reason') or ''}\n\n"
+        body += f"Review it came from:\n\n{review}" if review else "Review: not kept."
+        title = f"role {backing.slug}, category {backing.category}"
+        out.append(Fact(backing, title, body, 0, order))
+    return out
+
+
+def _finding_facts(document: Mapping[str, Any], task_type: str) -> list[Fact]:
+    out: list[Fact] = []
+    seen: set[tuple[str, str, str]] = set()
+    rows = rules.findings_rows(cast(TaskState, document))
+    for order, row in enumerate(rows):
+        if row["status"] not in _LEARNABLE_STATUSES or row["scope"] not in _LEARNABLE_SCOPES:
+            continue
+        origin: pb.Origin = "final_validation" if row["location"] == PM_FINAL.name else "review"
+        for subtask in row["subtask"].split(", "):
+            qualifier = pb.INTEGRATION_QUALIFIER if subtask == INTEGRATION else ""
+            slug = pb.attribute(origin, task_type, row["category"], qualifier)
+            key = (subtask, row["location"], row["claim"])
+            if slug is None or key in seen:
+                continue
+            seen.add(key)
+            body = (
+                f"Subtask: {subtask}\nLocation: {row['location']}\n"
+                f"Severity: {row['severity']}, scope {row['scope']}, status {row['status']}\n\n"
+                f"{row['claim']}"
+            )
+            title = f"role {slug}, category {row['category']}"
+            backing = pb.Backing("finding", slug, row["category"])
+            out.append(Fact(backing, title, body, _RANK[row["severity"]], order))
+    return out
+
+
+def _design_facts(document: Mapping[str, Any], task_type: str) -> list[Fact]:
+    out: list[Fact] = []
+    for order, item in enumerate(document.get("design_items") or []):
+        role = str(item.get("role_slug") or "")
+        qualifier = (
+            "ux" if role.startswith("ux_lead") else "ui" if role.startswith("ui_lead") else ""
+        )
+        slug = pb.attribute("design", task_type, "design", qualifier) if qualifier else None
         if slug is None:
             continue
-        subtask = pair.partition(":")[2]
-        out.append(
-            Attributed(
-                slug=slug,
-                pair=pair,
-                category=str(entry["category"]),
-                reason=str(entry.get("reason") or ""),
-                review=_review_text(sections, subtask, seen[pair]),
-            )
-        )
+        body = f"Raised by: {role}\nStep: {item.get('step') or ''}\n\n{item.get('text') or ''}"
+        rank = _RANK.get(str(item.get("kind")), 2)
+        out.append(Fact(pb.Backing("design", slug, "design"), f"role {slug}", body, rank, order))
+    return out
+
+
+def decision_blocks(document: Mapping[str, Any]) -> dict[int, str]:
+    """The human's `### Decision N` blocks by number, as the HUMAN section carries them
+    (a carried-over section keeps its numbering, so the numbers are the task's, not a run's)."""
+    sections = document.get("sections")
+    human = str(sections.get(HUMAN) or "") if isinstance(sections, Mapping) else ""
+    marks = list(_DECISION_BLOCK.finditer(human))
+    return {
+        int(m["n"]): human[
+            m.end() : marks[i + 1].start() if i + 1 < len(marks) else len(human)
+        ].strip()
+        for i, m in enumerate(marks)
+    }
+
+
+def _decision_facts(document: Mapping[str, Any], decisions: int) -> list[Fact]:
+    ran = sorted(set(document.get("prompts") or {}) & pb.PLAYBOOK_ROLES)
+    out: list[Fact] = []
+    for number, text in decision_blocks(document).items():
+        if number <= decisions:
+            continue
+        # A decision is nobody's mistake: any role that ran in the task may learn from it,
+        # and the curator checks the slug ran and shares a term with the decision.
+        for slug in ran:
+            backing = pb.Backing("human_decision", slug, "human-decision", str(number))
+            out.append(Fact(backing, f"Decision {number}, role {slug}", text, 0, number))
     return out
 
 
@@ -104,30 +230,40 @@ def _review_text(sections: Mapping[str, str], subtask: str, delivery: int) -> st
         if (m := _SUPERSEDED.match(key)) and m["name"] == name
     }
     text = versions.get(delivery) if delivery in versions else sections.get(name)
-    if text is None:
-        return None
-    if len(text) > REVIEW_MAX_CHARS:
-        return text[:REVIEW_MAX_CHARS].rstrip() + "\n\n[the review is cut here]"
+    return text
+
+
+def _cut(text: str) -> str:
+    if len(text) > REFLECT_MAX_CHARS:
+        return text[:REFLECT_MAX_CHARS].rstrip() + "\n\n[the text is cut here]"
     return text
 
 
 def reflection_input(
     task_id: str,
-    returns: Sequence[Attributed],
+    found: Sequence[Fact],
     playbooks: Mapping[str, pb.Playbook],
     rejected: Sequence[pb.Rejected],
 ) -> str:
-    """The reflector's whole message: the attributable returns with the review each came
-    from, then each accountable role's playbook with item ids and its rejected lessons."""
-    parts = ["## Returns"]
-    for number, item in enumerate(returns, 1):
-        parts.append(
-            f"### Return {number}: task {task_id}, role {item.slug}, category {item.category}\n\n"
-            f"Pair: {item.pair}\nReason: {item.reason}\n\n"
-            + (f"Review it came from:\n\n{item.review}" if item.review else "Review: not kept.")
-        )
+    """The reflector's whole message: each source's facts (at most `REFLECT_MAX_ENTRIES`,
+    blocking first, then the most recent, saying how many it left out), then each
+    accountable role's playbook with item ids and its rejected lessons."""
+    parts: list[str] = []
+    for source in _SOURCES:
+        mine = [f for f in found if f.backing.source == source]
+        if not mine:
+            continue
+        chosen = sorted(mine, key=lambda f: (f.rank, -f.order))[:REFLECT_MAX_ENTRIES]
+        parts.append(f"## {_TITLES[source]}")
+        for number, fact in enumerate(sorted(chosen, key=lambda f: f.order), 1):
+            parts.append(
+                f"### {source.replace('_', ' ').capitalize()} {number}: task {task_id}, "
+                f"{fact.title}\n\n{_cut(fact.text)}"
+            )
+        if len(mine) > len(chosen):
+            parts.append(f"[{len(mine) - len(chosen)} entries omitted]")
     parts.append("## Playbooks")
-    for slug in dict.fromkeys(item.slug for item in returns):
+    for slug in dict.fromkeys(f.backing.slug for f in found):
         current = playbooks.get(slug, pb.Playbook(slug))
         lines = [
             f"- {i.id} ({i.category}, cited by {i.seen} task(s)): {i.lesson}"
@@ -173,13 +309,17 @@ async def reflect_task(
     rejected: Sequence[pb.Rejected],
     *,
     now: str,
+    gate: pc.Gate = "review",
+    decisions: int = 0,
 ) -> Reflected:
     """Reflect on one closed task. `playbooks` is each role's current playbook by slug
     (a role missing from it has an empty one), `rejected` what people refused before, and
-    `now` what a new item records as `added_at`."""
+    `now` what a new item records as `added_at`. `gate` is the door the task came through
+    (the `review` gate reads the four sources; `decision`, only the human's decisions) and
+    `decisions` how many `### Decision` blocks an earlier reflection of it already read."""
     task_id = str(document.get("id") or "")
     try:
-        return await _reflect(cfg, ports, document, task_id, playbooks, rejected, now)
+        return await _reflect(cfg, ports, document, (gate, decisions), playbooks, rejected, now)
     except Exception as error:  # by contract: a reflection never raises into a task
         return Reflected(task_id, failed=True, error=f"{type(error).__name__}: {error}")
 
@@ -188,13 +328,15 @@ async def _reflect(
     cfg: Configuration,
     ports: Ports,
     document: Mapping[str, Any],
-    task_id: str,
+    door: tuple[pc.Gate, int],
     playbooks: Mapping[str, pb.Playbook],
     rejected: Sequence[pb.Rejected],
     now: str,
 ) -> Reflected:
-    returns = attributable_returns(document)
-    if not returns:
+    task_id = str(document.get("id") or "")
+    gate, decisions = door
+    found = facts(document, decisions, ("human_decision",) if gate == "decision" else _SOURCES)
+    if not found:
         return Reflected(task_id)
     state: TaskState = {
         "id": f"reflect-{task_id}",
@@ -202,7 +344,7 @@ async def _reflect(
         "description": f"What the returns of {task_id} teach the role that made each mistake.",
     }
     capped = cfg.model_copy(update={"max_budget_usd": cfg.reflect_max_budget_usd})
-    message = reflection_input(task_id, returns, playbooks, rejected)
+    message = reflection_input(task_id, found, playbooks, rejected)
     try:
         output, patch = await run_role(state, REFLECTOR, capped, ports, prompt=message)
     except Escalating as exc:  # pragma: no cover -- `run_role` converts these itself
@@ -214,20 +356,20 @@ async def _reflect(
             failed=True,
             error=str(patch.get("escalated") or "the reflector failed"),
         )
-    return _fold(
-        output.data["deltas"], output.cost_usd, document, task_id, playbooks, rejected, now
-    )
+    return _fold(output.data["deltas"], output.cost_usd, document, door, playbooks, rejected, now)
 
 
 def _fold(
     raw: Sequence[Mapping[str, Any]],
     cost: float,
     document: Mapping[str, Any],
-    task_id: str,
+    door: tuple[pc.Gate, int],
     playbooks: Mapping[str, pb.Playbook],
     rejected: Sequence[pb.Rejected],
     now: str,
 ) -> Reflected:
+    task_id = str(document.get("id") or "")
+    gate, decisions = door
     deltas = [
         pb.Delta(
             op=d["op"],
@@ -236,16 +378,20 @@ def _fold(
             lesson=d["lesson"],
             item_id=d["item_id"],
             tasks=tuple(d["tasks"]),
+            confidence=d.get("confidence", "high"),
+            scope=d.get("scope", "product"),
+            decision=int(d.get("decision") or 0),
         )
         for d in raw
     ]
+    sources = ("human_decision",) if gate == "decision" else _SOURCES
     evidence = {
         task_id: pb.Evidence(
-            closed=document.get("status") == "closed",
+            closed=_closed(document, gate),
             task_type=str(document.get("type") or ""),
-            return_history=[
-                e for e in document.get("change_history") or [] if isinstance(e, Mapping)
-            ],
+            backings=backings_of(document, decisions, sources),
+            decisions=decision_blocks(document),
+            ran=frozenset(document.get("prompts") or {}),
         )
     }
     current = dict(playbooks)

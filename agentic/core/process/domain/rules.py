@@ -58,6 +58,7 @@ from .task import (
     FailureReason,
     FindingCategory,
     FindingRecord,
+    FinishedPatch,
     MergeOutcome,
     PauseEntry,
     ResumedPauseEntry,
@@ -389,7 +390,7 @@ def invariants_markdown(state: TaskState) -> str:
     return "\n".join(f"{n}. {line}" for n, line in enumerate(lines, 1)) or "- none"
 
 
-def finished(status: Literal["discarded", "split"], at: str) -> TaskState:
+def finished(status: Literal["discarded", "split"], at: str) -> FinishedPatch:
     """The patch that ends a task with no delivery: its `status` and `finished_at`, the
     clock the Reflector's decision gate reads (ADR-0056). The only place the key is set."""
     if status not in ("discarded", "split"):

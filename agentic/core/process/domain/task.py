@@ -509,6 +509,13 @@ class EscalationPatch(TypedDict):
     escalation_class: EscalationClass | None
 
 
+class FinishedPatch(TypedDict):
+    """The two keys `rules.finished` writes together, spread into a bigger patch literal."""
+
+    status: Literal["discarded", "split"]
+    finished_at: str
+
+
 class FindingRecord(TypedDict):
     """One finding as the table keeps it (issue #42): what the reviewer wrote, plus
     which subtask's review raised it and in which pass. Append-only and never rewritten:
