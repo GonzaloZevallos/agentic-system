@@ -23,12 +23,12 @@ the *existence* of a `uses:` ref — only whether a ref *moved* is decidable off
 whether it exists at all needs the network this guard refuses to touch.
 """
 
+import copy
 import re
 import tomllib
 from pathlib import Path
 from typing import Any
 
-import pytest
 import yaml
 
 from agentic.core.knowledge.domain import stack
@@ -185,76 +185,54 @@ def unknown_ci_names(declared: tuple[str, ...], workflow: dict[str, Any]) -> lis
     return violations
 
 
-def ci_under_test(text: str, source: object) -> tuple[str, ...]:
-    """The `ci` names this stack's tests must hold against `ci.yml`, whether `ci` is on or
-    off (ADR-0045, GH-216 amendment).
+def _workflow_triggers(workflow: dict[str, Any]) -> set[str]:
+    """The event names a workflow triggers on, from the string, list or mapping form."""
+    # PyYAML (YAML 1.1) loads a bare `on` as `True`.
+    on = workflow.get("on", workflow.get(True))
+    if isinstance(on, str):
+        return {on}
+    if isinstance(on, (list, dict)):
+        return {str(event) for event in on}
+    return set()
 
-    While GitHub Actions is blocked by billing, `ci` is off in `.agentic/stack.yaml`, and the
-    way back is kept as one commented line, `# ci: [check]`. A test that read only the live
-    declaration would see `()` and either fail on that or pass vacuously. So: `ci` present is
-    the live declaration; `ci` absent is the single restore line, uncommented (exactly its
-    first two characters removed, inside the full text, so the test checks what a human
-    editing that file produces) and read through `stack.ci`. No restore line, or more than
-    one, raises `AssertionError` naming `source`; a broken restore value surfaces
-    `stack.ci`'s own `ValueError`.
 
-    The product template `agentic/core/knowledge/domain/stack.yaml` is out of scope on
-    purpose: it is not this repo's declaration, and its `ci` is its own to keep off."""
-    data = yaml.safe_load(text)
-    if "ci" in data:
-        return stack.ci(data, source)
-    lines = text.splitlines(keepends=True)
-    restore = [index for index, line in enumerate(lines) if line.startswith("# ci: ")]
-    if len(restore) != 1:
-        raise AssertionError(
-            f"{source}: `ci` is absent and there is no single commented restore line "
-            f"`# ci: [...]` (found {len(restore)})"
-        )
-    lines[restore[0]] = lines[restore[0]][2:]
-    return stack.ci(yaml.safe_load("".join(lines)), source)
+def ci_gate_violations(declared: tuple[str, ...], workflow: dict[str, Any]) -> list[str]:
+    """What keeps the `ci` names a stack declares from gating a merge, beyond being real
+    check-run names (`unknown_ci_names`): a declared job with a job-level `if` can be
+    skipped, and a skipped job never reports success; and a workflow that does not
+    trigger on `pull_request` reports nothing on the reviewed head."""
+    violations = []
+    for job_id, job in workflow.get("jobs", {}).items():
+        if str(job.get("name", job_id)) in declared and "if" in job:
+            violations.append(f"the job {job_id!r} is declared in `ci` but has a job-level `if`")
+    if "pull_request" not in _workflow_triggers(workflow):
+        violations.append("the workflow does not trigger on `pull_request`")
+    return violations
 
 
 def test_every_declared_ci_name_is_a_job_of_ci_yml_that_reports_under_that_name():
-    declared = ci_under_test(STACK_YAML.read_text(encoding="utf-8"), STACK_YAML)
+    """This repo's live `ci` (ADR-0045, GH-216 amendment), read through `stack.ci`, against
+    `ci.yml`: every name is a job that reports under it, the job is unconditional and the
+    workflow triggers on `pull_request`. The guard is also run on workflows it must reject.
+
+    The product template `agentic/core/knowledge/domain/stack.yaml` is out of scope on
+    purpose: it is not this repo's declaration, and its `ci` is its own to keep off."""
+    text = STACK_YAML.read_text(encoding="utf-8")
+    declared = stack.ci(yaml.safe_load(text), STACK_YAML)
     assert declared, f"{STACK_YAML} declares no `ci`"
     workflow = yaml.safe_load(CI_YML.read_text(encoding="utf-8"))
     assert unknown_ci_names(declared, workflow) == []
-    assert "ADR-0045" in STACK_YAML.read_text(encoding="utf-8")
+    assert ci_gate_violations(declared, workflow) == []
+    assert "ADR-0045" in text
 
+    skippable = copy.deepcopy(workflow)
+    skippable["jobs"]["check"]["if"] = "github.event_name == 'push'"
+    assert any("job-level `if`" in v for v in ci_gate_violations(declared, skippable))
 
-_BASE_STACK = "product: x\nchecks:\n  tests: uv run pytest\n"
-
-
-def test_ci_under_test_reads_the_live_ci_and_ignores_a_commented_one():
-    text = _BASE_STACK + "ci: [check]\n# ci: [other]\n"
-    assert ci_under_test(text, "synthetic") == ("check",)
-
-
-def test_ci_under_test_reads_the_single_restore_line_when_ci_is_absent():
-    text = _BASE_STACK + "# Off while Actions is blocked.\n# ci: [check]\n"
-    assert ci_under_test(text, "synthetic") == ("check",)
-
-
-def test_ci_under_test_rejects_an_absent_ci_with_no_restore_line():
-    with pytest.raises(AssertionError, match="synthetic.*no single commented restore line"):
-        ci_under_test(_BASE_STACK, "synthetic")
-
-
-def test_ci_under_test_rejects_an_absent_ci_with_two_restore_lines():
-    text = _BASE_STACK + "# ci: [check]\n# ci: [other]\n"
-    with pytest.raises(AssertionError, match="synthetic.*no single commented restore line"):
-        ci_under_test(text, "synthetic")
-
-
-def test_ci_under_test_surfaces_the_domains_error_for_a_broken_restore_value():
-    with pytest.raises(ValueError, match="non-empty list"):
-        ci_under_test(_BASE_STACK + "# ci: []\n", "synthetic")
-
-
-def test_ci_under_test_does_not_take_prose_mentioning_ci_for_a_restore_line():
-    text = _BASE_STACK + "# `ci` is off for now.\n#ci: [check]\n#  ci: [check]\n"
-    with pytest.raises(AssertionError, match="found 0"):
-        ci_under_test(text, "synthetic")
+    no_pull_request = copy.deepcopy(workflow)
+    no_pull_request[True if True in no_pull_request else "on"] = {"push": None}
+    assert any("pull_request" in v for v in ci_gate_violations(declared, no_pull_request))
+    assert ci_gate_violations(declared, {**workflow, "on": ["push", "pull_request"]}) == []
 
 
 def test_unknown_ci_names_rejects_a_name_that_is_no_job_and_a_prefix_of_one():
