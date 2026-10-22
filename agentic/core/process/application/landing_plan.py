@@ -106,10 +106,11 @@ def step_for(
     raw: TaskState,
     refusal: rules.MergeRefusal,
     facts: rules.MergeFacts,
-    slicing: landing.Slice | landing.RestartWhy | None = None,
+    slicing: landing.Slice | landing.RestartWhy | Callable[[], landing.SliceInputs] | None = None,
 ) -> LandingStep:
     """The one question every caller asks: `landing_step` over the document's spent budgets.
-    `slicing` is `slice_or_restart`'s answer (`step_with_slicing`), `None` as before GH-297."""
+    `slicing` is what `landing_step` decides a slice from at the exhaustion (`slice_inputs`,
+    read lazily), `None` as before GH-297."""
     return landing.landing_step(
         refusal,
         facts,
@@ -177,24 +178,6 @@ def slice_inputs(
     return landing.SliceInputs(
         approved, carries, integration, paths, landed, refused, blocking, True
     )
-
-
-def step_with_slicing(
-    raw: TaskState,
-    refusal: rules.MergeRefusal,
-    facts: rules.MergeFacts,
-    cfg: Configuration,
-    ports: Ports,
-    master: str,
-) -> LandingStep:
-    """`step_for`, and when the budgets are exhausted (a `diagnose`, the only exhaustion)
-    the same question again with `slice_or_restart`'s answer, so a healthy landing reads no
-    git for it. The step carries the slice or the reason it restarts."""
-    step = step_for(raw, refusal, facts)
-    if step.kind != "diagnose" or facts.pr_head is None:
-        return step
-    answer = landing.slice_or_restart(slice_inputs(raw, cfg, ports, master, facts.pr_head))
-    return step_for(raw, refusal, facts, answer)
 
 
 def diagnose_gate(

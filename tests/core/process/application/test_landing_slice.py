@@ -8,6 +8,7 @@ from pathlib import Path
 
 from agentic.core.process.application import landing
 from agentic.core.process.application.ports import RawResult, Upstream
+from agentic.core.process.domain.ci import CiCheck, CiReport
 from agentic.core.process.domain.task import PullRequest
 from tests.core.process.application.test_poll import _cfg
 from tests.core.process.application.test_poll_merge import HEAD, MASTER, URL, _HeldLocks, _ports
@@ -146,6 +147,90 @@ def test_gh53_crossed_paths_restart_with_the_reason_no_clean_slice():
     entry = _doc(ports)["landing"][-1]
     assert (entry["step"], entry["restart_why"]) == ("diagnose", "no_clean_slice")
     assert ports.tracker.merge_calls == [] and ports.tracker.closes_issue_calls == []
+
+
+def test_gh53_master_moving_over_the_units_own_paths_restarts_with_no_clean_slice():
+    runner = ScriptedRunner(
+        landing_diagnoser=[RawResult({"markdown": "### Why\n\nx", "reason": "r"}, 0.1, 1, "s")]
+    )
+    ports = _world(frozenset({"integration.py"}), runner)  # the integration paths are disjoint
+    ports.workspace.moved = ("a.py", "b.py", "c.py")  # master changed what each unit changed
+
+    result = _land(ports, FakeLauncher())
+
+    assert result.step == "diagnose"
+    entry = _doc(ports)["landing"][-1]
+    assert (entry["step"], entry["restart_why"]) == ("diagnose", "no_clean_slice")
+    assert ports.tracker.merge_calls == [] and ports.workspace.slice_builds == []
+
+
+def _ci(ports, conclusion: str | None, status: str = "COMPLETED", head: str = SLICE_HEAD):
+    ports.stack.declared_ci_all = ("ci",)
+    checks = (CiCheck("ci", status, conclusion, "link"),)
+    ports.tracker.ci_reports[SLICE_URL] = CiReport(head, None, None, "2026-10-22T00:00:00Z", checks)
+    # the task's own pull request is green on CI, so its budget (the sync attempts) is what ends
+    green = (CiCheck("ci", "COMPLETED", "SUCCESS", "link"),)
+    ports.tracker.ci_reports[URL.format(5)] = CiReport(HEAD, "master", MASTER, NOW, green)
+
+
+def test_a_slice_whose_ci_turns_red_after_opening_is_closed_and_its_entry_refused():
+    ports = _world(frozenset({"integration.py"}))
+    _ci(ports, None, status="IN_PROGRESS")
+    _land(ports)
+    assert ports.tracker.merge_calls == [] and ports.tracker.closed_pull_requests == []
+
+    _ci(ports, "FAILURE")
+    _land(ports)
+
+    entry = _doc(ports)["landing"][-1]
+    assert entry["step"] == "land_slice" and entry["closed_at"] and "resolved_at" not in entry
+    assert ports.tracker.closed_pull_requests == [SLICE_URL]
+    assert ports.tracker.merge_calls == [] and _doc(ports).get("landed_slices", []) == []
+
+
+def test_a_slice_whose_master_moved_after_opening_is_closed_and_its_entry_refused():
+    ports = _world(frozenset({"integration.py"}))
+    _ci(ports, None, status="IN_PROGRESS")
+    _land(ports)
+
+    moved = "9" * 40
+    ports.workspace.upstream_answer = Upstream("origin/master", moved, None)
+    landing.land(
+        "GH-5",
+        _cfg(Path("/nonexistent")),
+        ports,
+        _HeldLocks(),
+        Upstream("origin/master", moved, None),
+        frozenset(),
+        lambda line: None,
+        clock=lambda: NOW,
+        launcher=None,
+        resume=lambda number: 777,
+    )
+
+    entry = _doc(ports)["landing"][-1]
+    assert entry["closed_at"] and "resolved_at" not in entry
+    assert ports.tracker.closed_pull_requests == [SLICE_URL] and ports.tracker.merge_calls == []
+
+
+def test_a_slice_waiting_for_its_ci_stays_open_and_merges_the_same_pull_request_later():
+    ports = _world(frozenset({"integration.py"}))
+    _ci(ports, None, status="IN_PROGRESS")
+
+    _land(ports)
+
+    entry = _doc(ports)["landing"][-1]
+    assert entry["slice_pull_request"] == SLICE_URL
+    assert "resolved_at" not in entry and "closed_at" not in entry
+    assert ports.tracker.merge_calls == [] and len(ports.workspace.slice_builds) == 1
+
+    _ci(ports, "SUCCESS")
+    _land(ports)
+
+    assert ports.tracker.merge_calls == [(SLICE_URL, SLICE_HEAD)]
+    assert len(ports.workspace.slice_builds) == 1  # the same pull request, not rebuilt
+    assert [s["units"] for s in _doc(ports)["landed_slices"]] == [["a", "b"]]
+    assert _doc(ports)["landing"][-1]["resolved_at"]
 
 
 def test_a_crash_between_the_merge_and_the_record_does_not_land_the_slice_twice():

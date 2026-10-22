@@ -171,15 +171,17 @@ def landing_step(
     blocking_owners: tuple[str, ...],
     *,
     important_units: tuple[str, ...] = (),
-    slicing: Slice | RestartWhy | None = None,
+    slicing: Slice | RestartWhy | Callable[[], SliceInputs] | None = None,
 ) -> LandingStep:
     """The step for `refusal`. A model pass or a sync past its budget is the exhaustion: the
     `land_slice` when `slicing` is a `Slice`, else the `diagnose` carrying `slicing` as its
     `restart_why` (`None`: as before GH-297). A task already diagnosed has no step left
     (`none`). `blocking_owners` is the units that own the open blocking records
     (`blocking_owners`); `important_units` the ones the final important pass reopens
-    (`important_owners`); `slicing` is `slice_or_restart`'s answer, which the application asks
-    for only when an exhaustion is possible and the only place this reads it."""
+    (`important_owners`); `slicing` is what the exhaustion decides a slice from: a ready
+    `slice_or_restart` answer, or a provider of the `SliceInputs` that is called, and handed to
+    `slice_or_restart`, only when a budget has run out, so a healthy landing reads no git for
+    it. This is the only place `slice_or_restart` is called."""
 
     def step(kind: LandingStepKind, units: tuple[str, ...] = ()) -> LandingStep:
         return LandingStep(kind, refusal, units)
@@ -187,9 +189,10 @@ def landing_step(
     def exhausted() -> LandingStep:
         """The one place every budget that ran out ends (invariant: nothing else lists
         the conditions of a slice or a restart)."""
-        if isinstance(slicing, Slice):
-            return step("land_slice", slicing.units)
-        return LandingStep("diagnose", refusal, restart_why=slicing)
+        answer = slice_or_restart(slicing()) if callable(slicing) else slicing
+        if isinstance(answer, Slice):
+            return step("land_slice", answer.units)
+        return LandingStep("diagnose", refusal, restart_why=answer)
 
     def pass_(kind: LandingStepKind, units: tuple[str, ...] = ()) -> LandingStep:
         return step(kind, units) if spent.passes < LANDING_PASSES_MAX else exhausted()

@@ -1,7 +1,7 @@
 """`land_slice` (GH-297, ADR-0048): the landing step that lands the approved units which
 apply cleanly on master as a pull request of their own, before the task is restarted.
 
-`domain.landing.slice_or_restart` chose the units and `landing.land` recorded the entry
+The domain chose the units and `landing.land` recorded the entry
 before dispatching here; this module carries the step out in an order that is safe to run
 twice. Git says what landed (`slice_landed`, never `landed_slices` alone); the slice's merge
 facts are `landing.slice_facts`'; `rules.auto_merge_decision` alone decides whether it
@@ -12,14 +12,13 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+from ..domain import ci, presubmit, rules
 from ..domain import landing as landing_rules
-from ..domain import presubmit, rules
 from ..domain.task import TaskState
-from . import landing_plan, poll
+from . import landing_plan
 from .checkouts import task_base
 from .landing_plan import LandingContext
 from .ports import GitError, MergeCallFailed, TrackerUnreachable
@@ -29,6 +28,20 @@ from .resume import state_from
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _seconds_since(anchor: str | None, now: str) -> float | None:
+    """Seconds from an ISO timestamp to `now`; `None` for no anchor or one that does not
+    parse, which the decision reads as an unknown wait."""
+    if not anchor:
+        return None
+    try:
+        then, current = datetime.fromisoformat(anchor), datetime.fromisoformat(now)
+    except ValueError:
+        return None
+    then = then if then.tzinfo else then.replace(tzinfo=UTC)
+    current = current if current.tzinfo else current.replace(tzinfo=UTC)
+    return (current - then).total_seconds()
 
 
 def open_entry(entries: Sequence[Mapping[str, object]], head: str) -> dict[str, object] | None:
@@ -219,6 +232,19 @@ def _decide(
     except (GitError, ValueError) as exc:
         _refuse(context, reference, f"unreadable: {exc}")
         return
+    ci_head: str | None = None
+    ci_verdict: ci.CiVerdict | None = None
+    ci_unreadable: ci.CiUnreadable | None = None
+    ci_waited_s: float | None = None
+    if declared:
+        report = ports.tracker.ci_report(reference)
+        opened_at = None if isinstance(report, ci.CiUnreadable) else report.opened_at
+        anchor = ci.ci_wait_anchor(head, str(entry.get("at", "")) or None, head, opened_at)
+        ci_waited_s = _seconds_since(anchor, (context.clock or _now)())
+        if isinstance(report, ci.CiUnreadable):
+            ci_unreadable = report
+        else:
+            ci_head, ci_verdict = report.head_sha, ci.ci_state(report, declared)
     facts = landing_rules.slice_facts(
         landing_rules.Slice(units),
         raw,
@@ -235,13 +261,13 @@ def _decide(
         checks_head=head,
         checks_master=master,
         checks_passed=True,
+        ci_required=declared,
+        ci_head=ci_head,
+        ci_verdict=ci_verdict,
+        ci_unreadable=ci_unreadable,
+        ci_waited_s=ci_waited_s,
     )
-    decision = rules.auto_merge_decision(replace(facts, ci_required=declared))
-    if declared and decision.kind != "refuse":
-        anchor: TaskState = {"pushed_head": head, "pushed_at": str(entry.get("at", ""))}
-        report = ports.tracker.ci_report(reference)
-        facts = poll.with_ci(facts, anchor, declared, report)
-        decision = rules.auto_merge_decision(facts)
+    decision = rules.auto_merge_decision(facts)
     if decision.kind == "wait":
         context.log(f"agentic: land: {context.task_id}: slice waits for its CI")
         return

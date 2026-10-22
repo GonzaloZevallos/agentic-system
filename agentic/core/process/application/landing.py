@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from typing import Any, Literal, assert_never
 
 from agentic.shared.configuration import Configuration
@@ -163,7 +164,12 @@ def _land(
             tuple(str(u) for u in units) if isinstance(units, list) else (),
         )
     else:
-        step = landing_plan.step_with_slicing(raw, decision.reason, facts, cfg, ports, master)
+        step = landing_plan.step_for(
+            raw,
+            decision.reason,
+            facts,
+            partial(landing_plan.slice_inputs, raw, cfg, ports, master, head),
+        )
     if not landing_rules.run_kind_admits(run_kind, step.kind, step.refusal):
         return _refused(task_id, raw, run_kind, step.kind, head, log)
     if not landing_plan.takes_action(step.kind, live):
