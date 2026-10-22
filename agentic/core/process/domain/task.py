@@ -680,6 +680,9 @@ class LandingEntry(TypedDict, total=False):
     # `land_slice` entries: the units of the slice and its (never main) pull request.
     slice_units: list[str]
     slice_pull_request: str
+    # `land_slice` entries: whether the product's checks passed on the slice, so a CI wait
+    # across ticks does not run them again. `upstream` is the master the slice was built on.
+    checks_passed: bool
     # `diagnose` entries: the `landing.RestartWhy` that no slice was possible for.
     restart_why: str
 
@@ -798,9 +801,6 @@ class TaskState(TaskInput, total=False):
     # `auto_merge_guarded` the guarded paths an automatic merge landed; `landing_restarts`
     # and `landing_cost_carried` the depth and the cost a `--fresh` restart carries over.
     landing: list[LandingEntry]
-    # The slices the landing merged ahead of the task's pull request (GH-297, ADR-0048):
-    # one record per slice, appended whole through `record_closure`. Optional, read with `.get`.
-    landed_slices: list[dict[str, Any]]
     # What each `renumber` step did (GH-229, ADR-0049): `{from, to, head_before, head_after,
     # carried}`. Written only when present, read with `.get`.
     adr_renumbered: list[dict[str, str | bool]]
@@ -809,8 +809,8 @@ class TaskState(TaskInput, total=False):
     followups_filed: bool
     landing_restarts: int
     landing_cost_carried: float
-    # The slices the landing merged ahead of the main pull request (GH-297), optional,
-    # read with `.get`.
+    # The slices the landing merged ahead of the main pull request (GH-297, ADR-0048): one
+    # record per slice, appended whole through `record_closure`; optional, read with `.get`.
     landed_slices: list[LandedSlice]
     # What an interviewee could not decide (ADR-0014); escalates with the task.
     questions_for_human: list[str]

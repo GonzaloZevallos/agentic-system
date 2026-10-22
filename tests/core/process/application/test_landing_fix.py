@@ -231,6 +231,7 @@ def test_the_executors_that_are_built_are_the_live_steps():
         "rerun",
         "file_followups_and_land",
         "renumber",
+        "land_slice",
         "diagnose",
     }
 

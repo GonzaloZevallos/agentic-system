@@ -583,8 +583,10 @@ def already_dispatched(landing: Sequence[Mapping[str, object]], head: str, step:
     """Whether `(head, step)` is already in the document's `landing` list: the idempotency
     key, written before the dispatch. A diagnose entry that never delivered is an attempt
     (`diagnose_retry`), not a taken step; so is a sync closed with `lacks` (GH-267), which
-    the unsynced budget counts instead."""
-    return any(
+    the unsynced budget counts instead. A `land_slice` is never taken for good (GH-297): an
+    open one is continued by its executor, a refused one is retried until
+    `SLICE_REFUSALS_MAX`, and a landed one leaves other units to land on the same head."""
+    return step != "land_slice" and any(
         entry.get("head") == head
         and entry.get("step") == step
         and "lacks" not in entry
@@ -629,6 +631,8 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
         out["slice_units"] = [u for u in units if isinstance(u, str)]
     if isinstance(delivered := raw.get("delivered"), bool):
         out["delivered"] = delivered
+    if isinstance(passed := raw.get("checks_passed"), bool):
+        out["checks_passed"] = passed
     if (failure := _failure_of(raw.get("failure"))) is not None:
         out["failure"] = failure
     return out
