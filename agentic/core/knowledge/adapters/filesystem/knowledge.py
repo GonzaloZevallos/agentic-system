@@ -13,7 +13,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from ...domain import knowledge
+from ...domain import knowledge, knowledge_index
 
 
 class FilesystemKnowledge:
@@ -49,14 +49,27 @@ class FilesystemKnowledge:
     def clarification_check(self) -> Callable[[dict[str, Any]], None]:
         return knowledge.clarification_check(self.contexts())
 
-    def read(self, root: Path | None = None) -> str:
+    def _index(self, root: Path | None, *, standards: bool) -> knowledge_index.KnowledgeIndex:
+        """The index as `build_index` makes it from what is on disk under `root`. Both
+        `read` and `index_files` come from here, so the text and the files it points at
+        can never describe different trees."""
         root = root or self.product_dir
-        return knowledge.assemble(
+        return knowledge_index.build_index(
             self._glossaries(root),
             _read_dir(root / knowledge.PRODUCT_SUBDIR),
             _read_dir(root / knowledge.ADR_SUBDIR),
-            brief=self.brief(root),
+            self.brief(root),
+            self._standards_text(root) if standards else None,
         )
+
+    def read(self, root: Path | None = None) -> str:
+        """What always goes whole plus the area index. The standards are not part of it:
+        `standards` is where a role gets them."""
+        return self._index(root, standards=False).text
+
+    def index_files(self, root: Path | None = None) -> dict[str, str]:
+        """Every file `read` and `standards(whole=False)` point at, relative to `root`."""
+        return self._index(root, standards=True).files
 
     def brief(self, root: Path | None = None) -> str | None:
         """The product's `BRIEF.md`, or None when it has not written one yet
@@ -64,12 +77,22 @@ class FilesystemKnowledge:
         prints, never a fallback text a run reads instead."""
         return _read((root or self.product_dir) / knowledge.BRIEF)
 
-    def standards(self, root: Path | None = None) -> str:
+    def _standards_text(self, root: Path) -> str:
         """The product's `CODING_STANDARDS.md`, or the system's default (ADR-0012)."""
-        text = _read((root or self.product_dir) / knowledge.STANDARDS)
-        if text is None:
-            text = knowledge.DEFAULT_STANDARDS.read_text(encoding="utf-8")
-        return knowledge.assemble_standards(text)
+        text = _read(root / knowledge.STANDARDS)
+        return text if text is not None else knowledge.DEFAULT_STANDARDS.read_text(encoding="utf-8")
+
+    def standards(self, root: Path | None = None, whole: bool = True) -> str:
+        """The engineering standards, whole when the caller is a verifier and through the
+        index otherwise: the sections marked as overriding everything inline, and a line
+        pointing at the file that lists the rest."""
+        found = knowledge_index.build_index(
+            {}, {}, {}, None, self._standards_text(root or self.product_dir), standards_whole=whole
+        )
+        if whole:
+            return found.standards
+        parts = [part for part in (found.always, found.areas) if part]
+        return knowledge.STANDARDS_HEADING + "\n\n" + "\n\n".join(parts) if parts else ""
 
     def consolidate(self, verdict: dict[str, Any], root: Path | None = None) -> list[Path]:
         """What an approved verdict leaves: the capability files, then the glossary.

@@ -9,23 +9,47 @@ def test_read_is_empty_without_files(tmp_path):
     assert FilesystemKnowledge(tmp_path).read() == ""
 
 
-def test_read_gathers_glossary_capabilities_and_adrs(tmp_path):
+STANDARDS = (
+    "# Standards\n\n## 1. Hexagonal\n\nPorts.\n\n"
+    "## 9. Isolation\n<!-- agentic:always -->\n\nNever cross a business.\n"
+)
+
+
+def _product(tmp_path):
+    (tmp_path / "BRIEF.md").write_text("# Brief\n\nGym owners.\n")
     (tmp_path / "CONTEXT.md").write_text(GLOSSARY)
     (tmp_path / "docs/product").mkdir(parents=True)
-    (tmp_path / "docs/product/subscriptions.md").write_text("# Subscriptions\n")
-    (tmp_path / "docs/product/check-ins.md").write_text("# Check-ins\n")
+    (tmp_path / "docs/product/subscriptions.md").write_text("# Subscriptions\n\nPlans.\n")
     (tmp_path / "docs/product/notes.txt").write_text("ignored")
     (tmp_path / "docs/adr").mkdir()
-    (tmp_path / "docs/adr/0002-no-isolation.md").write_text("# No isolation\n")
-    (tmp_path / "docs/adr/0001-stack.md").write_text("# Stack\n")
-    (tmp_path / "docs/adr/template.txt").write_text("ignored")
+    (tmp_path / "docs/adr/0001-stack.md").write_text(
+        "---\nstatus: accepted\n---\n# Stack\n\nBody.\n"
+    )
+    (tmp_path / "docs/adr/0002-old.md").write_text("---\nstatus: superseded by 0001\n---\n# Old\n")
+    (tmp_path / "CODING_STANDARDS.md").write_text(STANDARDS)
+
+
+def test_read_is_the_always_whole_part_plus_the_area_index(tmp_path):
+    _product(tmp_path)
     text = FilesystemKnowledge(tmp_path).read()
-    assert text.startswith("## Product knowledge\n\n`CONTEXT.md`:\n\n````markdown\n# Gym")
-    assert text.index("check-ins.md") < text.index("subscriptions.md")
-    assert text.index("subscriptions.md") < text.index("docs/adr/0001-stack.md")
-    assert text.index("0001-stack.md") < text.index("0002-no-isolation.md")
-    assert "# No isolation" in text
-    assert "notes.txt" not in text and "template.txt" not in text
+    assert text.startswith("## Product knowledge\n\n`BRIEF.md`:\n\n````markdown\n# Brief")
+    assert "`CONTEXT.md`:" in text and "A business." in text
+    assert "`.agentic/index/product.md`" in text and "`.agentic/index/adr.md`" in text
+    # What goes through the index does not also arrive whole (invariant 1).
+    assert "Plans." not in text and "Body." not in text and "Never cross" not in text
+    assert "standards.md" not in text  # the standards come from `standards`
+
+
+def test_index_files_list_each_entry_once_and_leave_superseded_adrs_out(tmp_path):
+    _product(tmp_path)
+    files = FilesystemKnowledge(tmp_path).index_files()
+    assert "docs/product/subscriptions.md" in files[".agentic/index/product.md"]
+    assert "docs/adr/0001-stack.md" in files[".agentic/index/adr.md"]
+    assert "0002-old" not in files[".agentic/index/adr.md"]  # still readable by its path
+    assert (tmp_path / "docs/adr/0002-old.md").is_file()
+    assert "notes.txt" not in "".join(files.values())
+    assert files[".agentic/index/standards/01-hexagonal.md"] == ("## 1. Hexagonal\n\nPorts.\n")
+    assert all(path.startswith(".agentic/index/") for path in files)
 
 
 def test_read_takes_the_adrs_from_the_given_root(tmp_path):
@@ -33,8 +57,30 @@ def test_read_takes_the_adrs_from_the_given_root(tmp_path):
     checkout = tmp_path / "checkout"
     (checkout / "docs/adr").mkdir(parents=True)
     (checkout / "docs/adr/0003-new.md").write_text("# New\n")
-    text = FilesystemKnowledge(tmp_path).read(checkout)
-    assert "docs/adr/0003-new.md" in text and "# New" in text
+    knowledge = FilesystemKnowledge(tmp_path)
+    assert "adr.md" in knowledge.read(checkout)
+    assert "docs/adr/0003-new.md" in knowledge.index_files(checkout)[".agentic/index/adr.md"]
+    assert knowledge.index_files() != knowledge.index_files(checkout)
+
+
+def test_an_unknown_role_tag_in_an_adr_names_the_file(tmp_path):
+    (tmp_path / "docs/adr").mkdir(parents=True)
+    (tmp_path / "docs/adr/0001-x.md").write_text("---\nroles: [wizard]\n---\n# X\n")
+    with pytest.raises(ValueError, match=r"0001-x\.md.*wizard"):
+        FilesystemKnowledge(tmp_path).index_files()
+
+
+def test_standards_are_whole_for_a_verifier_and_through_the_index_otherwise(tmp_path):
+    _product(tmp_path)
+    knowledge = FilesystemKnowledge(tmp_path)
+    whole = knowledge.standards(whole=True)
+    assert "Ports." in whole and "Never cross a business." in whole
+    by_index = knowledge.standards(whole=False)
+    assert by_index.startswith("## Engineering standards\n\n")
+    assert "Never cross a business." in by_index  # marked: overrides everything
+    assert "Ports." not in by_index and "`.agentic/index/standards.md`" in by_index
+    assert "Ports." in knowledge.index_files()[".agentic/index/standards/01-hexagonal.md"]
+    assert "Never cross" not in "".join(knowledge.index_files().values())  # not both ways
 
 
 BRIEF = (

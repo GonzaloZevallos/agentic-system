@@ -5012,3 +5012,68 @@ async def test_poll_control_the_same_failure_with_bad_credentials_ends_the_polle
         await poll
     assert type(raised.value) is ValueError
     assert sleeps == []
+
+
+def write_compare_document(root: Path, task_id: str, baseline: str, runs: list[dict]) -> None:
+    import yaml
+
+    front = {
+        "id": task_id,
+        "title": "t",
+        "status": "ready_for_review",
+        "cost_usd": sum(r["cost_usd"] for r in runs),
+        "system_baseline": baseline,
+        "runs": runs,
+    }
+    tasks = root / ".agentic" / "tasks"
+    tasks.mkdir(parents=True, exist_ok=True)
+    (tasks / f"{task_id}.md").write_text(
+        f"---\n{yaml.safe_dump(front)}---\n\n## Original request\n\nd\n"
+    )
+
+
+def compare_run(slug: str, cost: float, **tokens: int) -> dict:
+    return {
+        "role": slug,
+        "slug": slug,
+        "section": "s",
+        "version": 1,
+        "session_id": "x",
+        "model": "m",
+        "cost_usd": cost,
+        "cost_by_model": {"m": cost},
+        "turns": 4,
+        "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0, **tokens},
+    }
+
+
+@pytest.mark.anyio
+async def test_eval_compare_prints_the_per_role_table_after_an_unchanged_scorecard(
+    tmp_path, capsys
+):
+    root = eval_root(tmp_path, eval_set=None)
+    write_compare_document(
+        root, "GH-1", "bl-a", [compare_run("developer", 2.0, input=10, cache_read=500)]
+    )
+    write_compare_document(
+        root,
+        "GH-2",
+        "bl-b",
+        [compare_run("developer", 1.0, input=3), compare_run("developer", 0.5, input=4)],
+    )
+    cfg = Configuration(product_dir=root)
+
+    await cli._eval_compare(cfg, memory_ports(), "bl-a", "bl-b", None)
+
+    out = capsys.readouterr().out
+    scorecard_part, _, table_part = out.partition("verdict:")
+    assert "-- product / bl-a --" in scorecard_part
+    assert "-- product / bl-b --" in scorecard_part
+    assert "cost/delivery:" in scorecard_part
+    # The table follows the verdict line, one block per baseline, one row per slug.
+    assert "per-role usage -- product / bl-a" in table_part
+    assert "per-role usage -- product / bl-b" in table_part
+    rows = [line for line in table_part.splitlines() if line.startswith("developer")]
+    assert len(rows) == 2
+    assert "2.0000" in rows[0] and "500" in rows[0]
+    assert "1.5000" in rows[1] and rows[1].split()[1] == "2"

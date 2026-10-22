@@ -7,6 +7,7 @@ import anyio
 import pytest
 import yaml
 
+from agentic.core.knowledge.domain.knowledge import STANDARDS
 from agentic.core.process.application.ports import AttemptFailed, RawResult
 from agentic.core.process.application.preflight import PLACEHOLDERS
 from agentic.core.process.application.run_role import (
@@ -1164,3 +1165,122 @@ async def test_a_failed_attempts_reaped_processes_are_recorded_on_its_failure():
 def test_a_run_with_nothing_reaped_writes_no_reaped_key():
     output = Output(text="ok", data={})
     assert "reaped" not in run_record({}, PJM, "PjM", output)
+
+
+# --- GH-292: the index is written where the role runs, before it runs -------------------
+
+CHECKOUT = Path("/memory/worktrees/GH-1")
+
+
+def _reader_ports(**kwargs):
+    from tests.fakes import MemoryKnowledge
+
+    knowledge = MemoryKnowledge(**kwargs)
+    knowledge.index = {".agentic/index/product.md": "- docs/product/x.md\n"}
+    return memory_ports(knowledge=knowledge), knowledge
+
+
+async def _run(role, ports, runner, retries=0, **kwargs):
+    state = {"id": "GH-1", "title": "t", "description": "d", "sections": {}}
+    cfg = Configuration(product_dir=Path("/product"), role_retries=retries)
+    return await run_role(state, role, cfg, ports, **PLACEHOLDERS, **kwargs)
+
+
+async def test_a_role_that_reads_by_index_gets_it_written_into_the_checkout_it_runs_in():
+    ports, knowledge = _reader_ports()
+    runner = ScriptedRunner(pm=[delivered()])
+    ports = memory_ports(knowledge=knowledge, runner=runner)
+    await _run(PM, ports, runner, cwd=CHECKOUT)
+    assert ports.workspace.indexes == {CHECKOUT: knowledge.index}
+    assert runner.calls[0]["cwd"] == CHECKOUT
+    # One value, never two: the knowledge was read from the very checkout the role ran in.
+    assert knowledge.read_from == CHECKOUT
+
+
+async def test_a_resumed_role_that_receives_only_a_delta_still_gets_a_current_index():
+    ports, knowledge = _reader_ports()
+    runner = ScriptedRunner(pm=[delivered()])
+    ports = memory_ports(knowledge=knowledge, runner=runner)
+    await _run(PM, ports, runner, cwd=CHECKOUT, resume="s1", prompt="## Delta\n\nnew")
+    assert ports.workspace.indexes == {CHECKOUT: knowledge.index}
+    assert runner.calls[0]["prompt"] == "## Delta\n\nnew"
+
+
+async def test_a_retry_attempt_gets_its_own_index_write():
+    ports, knowledge = _reader_ports()
+    runner = ScriptedRunner(pm=[AttemptFailed("structured output missing", 0.05), delivered()])
+    ports = memory_ports(knowledge=knowledge, runner=runner)
+    writes: list[dict[str, str]] = []
+    write = ports.workspace.write_index
+
+    def counting(path, files):
+        writes.append(dict(files))
+        write(path, files)
+
+    ports.workspace.write_index = counting
+    await _run(PM, ports, runner, retries=1, cwd=CHECKOUT)
+    assert len(runner.calls) == 2 and len(writes) == 2  # one write per attempt, not per call
+
+
+async def test_a_retry_of_a_role_that_reads_nothing_still_writes_no_index():
+    runner = ScriptedRunner(pjm=[AttemptFailed("structured output missing", 0.05), OK])
+    ports = memory_ports(runner=runner)
+    await _run(PJM, ports, runner, retries=1, cwd=CHECKOUT)
+    assert len(runner.calls) == 2 and ports.workspace.indexes == {}
+
+
+async def test_a_role_that_reads_nothing_gets_no_index_written():
+    ports, _ = _reader_ports()
+    runner = ScriptedRunner(pjm=[OK])
+    ports = memory_ports(runner=runner)
+    await _run(PJM, ports, runner, cwd=CHECKOUT)
+    assert ports.workspace.indexes == {}
+
+
+async def test_the_default_checkout_is_the_product_dir_for_the_read_and_the_write():
+    ports, knowledge = _reader_ports()
+    runner = ScriptedRunner(pm=[delivered()])
+    ports = memory_ports(knowledge=knowledge, runner=runner)
+    await _run(PM, ports, runner)
+    assert set(ports.workspace.indexes) == {Path("/product")} == {knowledge.read_from}
+
+
+async def test_the_developer_gets_the_standards_by_index_and_a_verifier_gets_them_whole():
+    from agentic.core.process.domain.roles import TECH_LEAD
+
+    ports, knowledge = _reader_ports()
+    runner = ScriptedRunner(developer=[delivered()], tech_lead=[delivered()])
+    ports = memory_ports(knowledge=knowledge, runner=runner)
+    await _run(DEVELOPER, ports, runner, cwd=CHECKOUT)
+    assert knowledge.standards_whole is False and knowledge.standards_from == CHECKOUT
+    await _run(TECH_LEAD, ports, runner, cwd=CHECKOUT)
+    assert knowledge.standards_whole is True and knowledge.standards_from == CHECKOUT
+
+
+@pytest.mark.parametrize(
+    "role",
+    [r for r in ROLES if r.reads_knowledge or r.reads_standards],
+    ids=lambda role: role.slug,
+)
+async def test_every_reader_gets_an_index_from_the_checkout_it_runs_in(role, tmp_path):
+    # The knowledge adapter is built over ANOTHER directory with other content: the index
+    # can only come from the `cwd` the role runs in. And one real entry of that index
+    # exists under the checkout (or is one of the files the system writes there).
+    from agentic.core.knowledge.adapters.filesystem.knowledge import FilesystemKnowledge
+
+    other, checkout = tmp_path / "other", tmp_path / "checkout"
+    for root, name in ((other, "elsewhere"), (checkout, "here")):
+        (root / "docs/product").mkdir(parents=True)
+        (root / "docs/product" / f"{name}.md").write_text(f"# {name}\n", encoding="utf-8")
+        (root / STANDARDS).write_text("# S\n\n## 1. Hex\n\nx\n", encoding="utf-8")
+    runner = ScriptedRunner(**{role.slug: [delivered()]})
+    ports = memory_ports(knowledge=FilesystemKnowledge(other), runner=runner)
+    state = {"id": "GH-1", "title": "t", "description": "d", "sections": {}}
+    cfg = Configuration(product_dir=other, role_retries=0)
+    await run_role(state, role, cfg, ports, cwd=checkout, **PLACEHOLDERS)
+    assert runner.calls[0]["cwd"] == checkout
+    files = ports.workspace.indexes[checkout]
+    listed = " ".join(files.values())
+    assert "docs/product/here.md" in listed and "elsewhere" not in listed
+    assert (checkout / "docs/product/here.md").exists()
+    assert not (checkout / "docs/product/elsewhere.md").exists()

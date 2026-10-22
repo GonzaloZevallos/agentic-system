@@ -4,7 +4,12 @@ practice is met, so the shipped default must carry no token that only makes sens
 one stack. A golden over the file's bytes would break on every reword with no
 behaviour change (§5); this asserts the property the task claims instead."""
 
-from agentic.core.knowledge.domain import knowledge
+from agentic.core.knowledge.domain import knowledge, knowledge_index
+
+
+def assemble_standards(text: str) -> str:
+    return knowledge_index.build_index({}, {}, {}, None, text, standards_whole=True).standards
+
 
 # A transport, a storage kind, a test runner, a typing habit, a source extension and a
 # tool name: the six supposed-Python spellings the inventory found leaking into the
@@ -22,7 +27,7 @@ STACK_SPECIFIC_TOKENS = (
 
 def test_default_standards_carry_no_stack_specific_token():
     default = knowledge.DEFAULT_STANDARDS.read_text(encoding="utf-8")
-    assembled = knowledge.assemble_standards(default).casefold()
+    assembled = assemble_standards(default).casefold()
     for token in STACK_SPECIFIC_TOKENS:
         assert token.casefold() not in assembled, (
             f"{token!r} is stack-specific; the shipped default states a practice, "
@@ -34,7 +39,7 @@ def test_the_token_scan_actually_rejects_a_stack_specific_default():
     """The guard above is not vacuous: fed a default that names a tool, it finds the
     tool. Proves the property test would have failed before this task, not only that
     it passes after."""
-    assembled = knowledge.assemble_standards(
+    assembled = assemble_standards(
         "Behaviour tests at the HTTP seam, over a throwaway database, run with pytest."
     ).casefold()
     found = [token for token in STACK_SPECIFIC_TOKENS if token.casefold() in assembled]
@@ -90,7 +95,7 @@ def _missing_anchors(section: str) -> list[str]:
 
 def test_default_standards_carry_section_9_with_every_naming_anchor():
     default = knowledge.DEFAULT_STANDARDS.read_text(encoding="utf-8")
-    assembled = knowledge.assemble_standards(default)
+    assembled = assemble_standards(default)
     section = _section_9(assembled)
     assert section
     assert _missing_anchors(section) == []
@@ -100,7 +105,7 @@ def test_without_section_9_the_anchor_check_finds_no_section():
     """Rejecting case: the default with the whole `## 9.` slice cut out of the
     assembled text. `_section_9` must report the heading absent, not an empty pass."""
     default = knowledge.DEFAULT_STANDARDS.read_text(encoding="utf-8")
-    assembled = knowledge.assemble_standards(default)
+    assembled = assemble_standards(default)
     section = _section_9(assembled)
     assert section is not None
     without_section_9 = assembled.replace(section, "")
@@ -111,7 +116,7 @@ def test_a_section_9_missing_the_index_rule_fails_naming_it():
     """Rejecting case: the heading stays, but the index/unique-constraint rule line is
     gone. The anchor check must fail and name exactly the anchors that line carried."""
     default = knowledge.DEFAULT_STANDARDS.read_text(encoding="utf-8")
-    assembled = knowledge.assemble_standards(default)
+    assembled = assemble_standards(default)
     section = _section_9(assembled)
     assert section is not None
     index_line = next(

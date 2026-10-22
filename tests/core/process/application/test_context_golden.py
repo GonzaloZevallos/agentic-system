@@ -182,11 +182,22 @@ HUMAN_SECTION_TEXT = (
     "Inside `context_for`, never in `develop.py` or `review.py`."
 )
 
+# Index mode (GH-292, on purpose): what a role reads is the always-whole part and the area
+# index, not the corpus; the standards are whole for a verifier and an index line for the
+# Developer. The real builder is pinned byte for byte in `test_index_mode_*` below.
 KNOWLEDGE_TEXT = (
-    "## Product knowledge\n\nCSV export ships weekly; the audit list is the only entry point."
+    "## Product knowledge\n\n"
+    "Areas:\n"
+    "- `.agentic/index/product.md`: product -- capabilities (1 entries)"
 )
-STANDARDS_TEXT = (
-    "## Engineering standards\n\nHexagonal architecture; tests at two seams; strict typing."
+STANDARDS_INDEX_TEXT = (
+    "## Engineering standards\n\n"
+    "Areas:\n"
+    "- `.agentic/index/standards.md`: standards -- one file per section (2 entries)"
+)
+# What a verifier receives (invariant 5): the sections whole, no index line.
+STANDARDS_WHOLE_TEXT = (
+    "## Engineering standards\n\n### 1. Layers\n\nLayers.\n\n### 2. Tests\n\nTests."
 )
 
 STATE = {
@@ -206,7 +217,11 @@ STATE = {
     },
 }
 
-PORTS = memory_ports(knowledge=MemoryKnowledge(text=KNOWLEDGE_TEXT, standards=STANDARDS_TEXT))
+PORTS = memory_ports(
+    knowledge=MemoryKnowledge(
+        text=KNOWLEDGE_TEXT, standards=STANDARDS_WHOLE_TEXT, standards_index=STANDARDS_INDEX_TEXT
+    )
+)
 
 
 def _context(role, extra_sections: tuple[str, ...] = (), subtask_id: str | None = None) -> str:
@@ -229,7 +244,7 @@ def test_pjm_context_is_pinned():
 def test_pm_context_is_pinned():
     assert _context(PM) == (
         "## Product knowledge\n\n"
-        "CSV export ships weekly; the audit list is the only entry point.\n\n"
+        "Areas:\n- `.agentic/index/product.md`: product -- capabilities (1 entries)\n\n"
         "## Original request\n\n"
         "Context diet per role\n\n"
         "Developers read the whole plan today, sisters included (README §6).\n\n"
@@ -247,7 +262,7 @@ def test_pm_context_is_pinned():
 def test_product_analyst_context_is_pinned():
     assert _context(PRODUCT_ANALYST) == (
         "## Product knowledge\n\n"
-        "CSV export ships weekly; the audit list is the only entry point.\n\n"
+        "Areas:\n- `.agentic/index/product.md`: product -- capabilities (1 entries)\n\n"
         "## Original request\n\n"
         "Context diet per role\n\n"
         "Developers read the whole plan today, sisters included (README §6).\n\n"
@@ -266,9 +281,9 @@ def test_product_analyst_context_is_pinned():
 def test_tech_lead_ephemeral_context_is_pinned():
     assert _context(TECH_LEAD_EPHEMERAL) == (
         "## Engineering standards\n\n"
-        "Hexagonal architecture; tests at two seams; strict typing.\n\n"
+        "### 1. Layers\n\nLayers.\n\n### 2. Tests\n\nTests.\n\n"
         "## Product knowledge\n\n"
-        "CSV export ships weekly; the audit list is the only entry point.\n\n"
+        "Areas:\n- `.agentic/index/product.md`: product -- capabilities (1 entries)\n\n"
         "## Original request\n\n"
         "Context diet per role\n\n"
         "Developers read the whole plan today, sisters included (README §6).\n\n"
@@ -284,9 +299,9 @@ def test_tech_lead_ephemeral_context_is_pinned():
 def test_tech_lead_context_is_pinned():
     assert _context(TECH_LEAD) == (
         "## Engineering standards\n\n"
-        "Hexagonal architecture; tests at two seams; strict typing.\n\n"
+        "### 1. Layers\n\nLayers.\n\n### 2. Tests\n\nTests.\n\n"
         "## Product knowledge\n\n"
-        "CSV export ships weekly; the audit list is the only entry point.\n\n"
+        "Areas:\n- `.agentic/index/product.md`: product -- capabilities (1 entries)\n\n"
         "## Original request\n\n"
         "Context diet per role\n\n"
         "Developers read the whole plan today, sisters included (README §6).\n\n"
@@ -307,9 +322,9 @@ def test_tech_lead_platform_context_is_pinned():
     # the loop on this path (ADR-0017).
     assert _context(TECH_LEAD_PLATFORM) == (
         "## Engineering standards\n\n"
-        "Hexagonal architecture; tests at two seams; strict typing.\n\n"
+        "### 1. Layers\n\nLayers.\n\n### 2. Tests\n\nTests.\n\n"
         "## Product knowledge\n\n"
-        "CSV export ships weekly; the audit list is the only entry point.\n\n"
+        "Areas:\n- `.agentic/index/product.md`: product -- capabilities (1 entries)\n\n"
         "## Original request\n\n"
         "Context diet per role\n\n"
         "Developers read the whole plan today, sisters included (README §6).\n\n"
@@ -329,7 +344,7 @@ def test_tech_lead_reviewer_context_is_pinned():
     # its own brief plus a sister index instead of every subtask's (`plan_view`).
     assert _context(TECH_LEAD_REVIEWER, EXTRA_SECTIONS, subtask_id="api") == (
         "## Engineering standards\n\n"
-        "Hexagonal architecture; tests at two seams; strict typing.\n\n"
+        "### 1. Layers\n\nLayers.\n\n### 2. Tests\n\nTests.\n\n"
         "## Original request\n\n"
         "Context diet per role\n\n"
         "Developers read the whole plan today, sisters included (README §6).\n\n"
@@ -361,7 +376,7 @@ def test_developer_context_is_pinned():
     # file, is untouched.
     assert _context(DEVELOPER, EXTRA_SECTIONS, subtask_id="api") == (
         "## Engineering standards\n\n"
-        "Hexagonal architecture; tests at two seams; strict typing.\n\n"
+        "Areas:\n- `.agentic/index/standards.md`: standards -- one file per section (2 entries)\n\n"
         "## Original request\n\n"
         "Context diet per role\n\n"
         "Developers read the whole plan today, sisters included (README §6).\n\n"
@@ -394,7 +409,7 @@ def test_developer_integrator_context_is_pinned():
     # pass by moving both sides of an equality together.
     assert _context(DEVELOPER_INTEGRATOR, EXTRA_SECTIONS) == (
         "## Engineering standards\n\n"
-        "Hexagonal architecture; tests at two seams; strict typing.\n\n"
+        "Areas:\n- `.agentic/index/standards.md`: standards -- one file per section (2 entries)\n\n"
         "## Original request\n\n"
         "Context diet per role\n\n"
         "Developers read the whole plan today, sisters included (README §6).\n\n"
@@ -459,3 +474,58 @@ def test_every_role_reads_the_human_last_and_it_is_not_declared():
     # ends with it by the same rule, not by a fixture accident.
     for role in (PJM, PM, PRODUCT_ANALYST, TECH_LEAD_EPHEMERAL, TECH_LEAD, TECH_LEAD_PLATFORM):
         assert HUMAN not in role.reads
+
+
+# --- GH-292: the real index over an example product, byte for byte ------------------------
+
+PRODUCT_FILES = {
+    "BRIEF.md": "# Brief\n\nA shop.\n",
+    "CONTEXT.md": "# Glossary\n\n**Order**: a purchase.\n",
+    "docs/product/export-orders.md": "# Export orders\n\nCSV.\n",
+    "docs/adr/0001-use-sqlite.md": "---\nstatus: accepted\n---\n# 0001 Use SQLite\n\nx\n",
+    "docs/adr/0002-old.md": "---\nstatus: superseded by 0001\n---\n# 0002 Old\n\nx\n",
+    "CODING_STANDARDS.md": (
+        "# Standards\n\n## 1. Hex\n\nLayers.\n\n"
+        "## 9. Isolation\n<!-- agentic:always -->\n\nBusiness data never crosses.\n"
+    ),
+}
+
+
+def _real_ports(tmp_path):
+    from agentic.core.knowledge.adapters.filesystem.knowledge import FilesystemKnowledge
+
+    for name, text in PRODUCT_FILES.items():
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text(text, encoding="utf-8")
+    return memory_ports(knowledge=FilesystemKnowledge(tmp_path))
+
+
+def test_index_mode_the_always_whole_parts_and_the_area_index_are_pinned(tmp_path):
+    _, knowledge = preamble(PM, _real_ports(tmp_path), tmp_path)
+    assert knowledge == (
+        "## Product knowledge\n\n"
+        "`BRIEF.md`:\n\n````markdown\n# Brief\n\nA shop.\n````\n\n"
+        "`CONTEXT.md`:\n\n````markdown\n# Glossary\n\n**Order**: a purchase.\n````\n\n"
+        "Areas:\n"
+        "- `.agentic/index/product.md`: product -- capabilities: what the product does, one "
+        "file per glossary concept (1 entries)\n"
+        "- `.agentic/index/adr.md`: adr -- decisions already taken, superseded ones left out "
+        "(1 entries)\n\n"
+        "Paths are relative to your working directory; open an area's index file, and an "
+        "entry's file, with `Read` only when you need it."
+    )
+    # Rejected: the superseded ADR and the capability's text are not in the reading.
+    assert "0002" not in knowledge and "CSV." not in knowledge
+
+
+def test_index_mode_the_developer_gets_the_marked_section_and_an_index_line(tmp_path):
+    standards, _ = preamble(DEVELOPER, _real_ports(tmp_path), tmp_path)
+    assert "Business data never crosses." in standards  # the marked section, whole
+    assert "`.agentic/index/standards.md`" in standards
+    assert "Layers." not in standards  # the unmarked section is an entry, not inlined
+
+
+def test_index_mode_a_verifier_gets_the_standards_whole(tmp_path):
+    standards, _ = preamble(TECH_LEAD, _real_ports(tmp_path), tmp_path)
+    assert "Layers." in standards and "Business data never crosses." in standards
+    assert ".agentic/index/" not in standards
