@@ -71,6 +71,12 @@ TABLE: tuple[Row, ...] = (
         "`pull_request` or `merge`",
     ),
     Row(
+        "agentic/core/process/application/landing*.py",
+        ("tests/core/process/domain/test_document.py",),
+        "its guard reads the keys the landing writes through `record_closure` and requires "
+        "each to be a scalar or in `RECORD_KEYS`",
+    ),
+    Row(
         "agentic/core/knowledge/domain/*.md",
         (f"module:{KNOWLEDGE}.knowledge",),
         "the default standards and brief template are read through `knowledge`",
