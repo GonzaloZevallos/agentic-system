@@ -8,7 +8,7 @@ second product arrived and it is this repo (README.md, 8; ADR-0017).
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -299,9 +299,20 @@ class ProductKnowledge(Protocol):
         the files that index points at are `index_files`. Side-effect free."""
         ...
 
-    def index_files(self, root: Path | None = None) -> dict[str, str]:
-        """The files the index of `read` points at: path relative to `root` -> text, all
-        under `.agentic/index/`. Pure; `Workspace.write_index` is who puts them on disk."""
+    def index_files(self, root: Path | None, families: Collection[str]) -> dict[str, str]:
+        """The files the index of `read` points at, for the criteria families given:
+        path relative to `root` -> text, all under `.agentic/index/`. Pure;
+        `Workspace.write_index` is who puts them on disk."""
+        ...
+
+    def design(self, root: Path | None = None) -> str:
+        """The product's design standards (ADR-0054), whole under their heading, or "" when
+        the product has no `DESIGN_STANDARDS.md`. There is no default."""
+        ...
+
+    def over_cap(self, texts: dict[str, str]) -> list[str]:
+        """One message per criteria document past the line cap. `texts` is file name ->
+        text and holds only files the product has."""
         ...
 
     def standards(self, root: Path | None = None, whole: bool = True) -> str:

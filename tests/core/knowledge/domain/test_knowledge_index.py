@@ -222,15 +222,23 @@ def test_a_path_outside_the_areas_raises_naming_the_path():
         area_of("docs/product/a.md"),
         area_of("docs/adr/b.md"),
         area_of("CODING_STANDARDS.md"),
+        area_of("DESIGN_STANDARDS.md"),
     ] == [
         "product",
         "adr",
         "standards",
+        "design",
     ]
-    for path in ("docs/other/a.md", "README.md", "docs/product", "src/CODING_STANDARDS.md"):
+    for path in (
+        "docs/other/a.md",
+        "README.md",
+        "docs/product",
+        "src/CODING_STANDARDS.md",
+        "src/DESIGN_STANDARDS.md",
+    ):
         with pytest.raises(ValueError, match=path.replace(".", r"\.")):
             area_of(path)
-    assert knowledge_index.AREAS == ("product", "adr", "standards")
+    assert knowledge_index.AREAS == ("product", "adr", "standards", "design")
 
 
 def test_a_glossary_off_the_always_list_is_refused_not_silently_dropped():
@@ -278,3 +286,12 @@ def test_a_marker_inside_an_adr_or_capability_does_not_inline_it():
     assert "Secret rule." not in built.always
     assert "docs/product/cap.md" in built.files[".agentic/index/product.md"]
     assert "docs/adr/0005-x.md" in built.files[".agentic/index/adr.md"]
+
+
+def test_the_design_area_adds_no_line_and_no_file_to_the_index():
+    """Design is served whole (ADR-0054): the area exists in the closed set, but nothing
+    ever lists entries under it, so `read()`'s text and files are what they were."""
+    built = index()
+    assert "design" not in built.areas
+    assert not any("design" in path for path in built.files)
+    assert "design" in knowledge_index.AREA_SUMMARY

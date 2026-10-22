@@ -323,3 +323,37 @@ def test_brief_refusal_strips_fenced_blocks_before_counting_words():
         "Gym owners cannot tell if a member is about to churn.\n\n" + fenced_code,
     )
     assert knowledge.brief_refusal(padded) is None
+
+
+def _lines(count: int) -> str:
+    return "\n".join(f"line {n}" for n in range(count)) + "\n"
+
+
+def test_the_cap_is_300_lines_and_exactly_300_passes():
+    assert knowledge.CRITERIA_MAX_LINES == 300
+    assert knowledge.criteria_over_cap({knowledge.STANDARDS: _lines(300)}) == []
+
+
+def test_a_document_over_the_cap_gets_one_message_naming_the_file_and_its_lines():
+    messages = knowledge.criteria_over_cap({knowledge.STANDARDS: _lines(301)})
+    assert len(messages) == 1
+    assert knowledge.STANDARDS in messages[0] and "301" in messages[0]
+    assert "cut" in messages[0] and "## " in messages[0]
+
+
+def test_lines_are_counted_per_document_never_summed():
+    texts = {
+        knowledge.STANDARDS: _lines(200),
+        knowledge.DESIGN_STANDARDS: _lines(200),
+    }
+    assert knowledge.criteria_over_cap(texts) == []
+
+
+def test_messages_follow_the_input_order_and_skip_the_documents_within_the_cap():
+    texts = {
+        knowledge.DESIGN_STANDARDS: _lines(350),
+        knowledge.STANDARDS: _lines(10),
+        "OTHER.md": _lines(400),
+    }
+    messages = knowledge.criteria_over_cap(texts)
+    assert [m.split()[0].strip("`:") for m in messages] == [knowledge.DESIGN_STANDARDS, "OTHER.md"]

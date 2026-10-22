@@ -850,7 +850,9 @@ async def run_role(
     def write_index() -> None:
         # Before every attempt of the role, a resumed one that receives only a delta and
         # a retry included: the index points at files of this checkout as they are now.
-        ports.workspace.write_index(workdir, ports.knowledge.index_files(workdir))
+        ports.workspace.write_index(
+            workdir, ports.knowledge.index_files(workdir, ("product", "engineering"))
+        )
 
     if prompt is None:
         standards, knowledge = preamble(role, ports, workdir)

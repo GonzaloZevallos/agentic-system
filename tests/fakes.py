@@ -5,7 +5,7 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import threading
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -167,8 +167,10 @@ class MemoryKnowledge:
         standards: str = "## Engineering standards\n\nHex.",
         brief: str | None = None,
         standards_index: str | None = None,
+        design: str = "",
     ) -> None:
         self.text = text
+        self.design_text = design
         # What `standards(whole=False)` returns when a test pins the two shapes apart; None
         # keeps one text for both, as every test written before the index did.
         self.standards_index_text = standards_index
@@ -182,8 +184,15 @@ class MemoryKnowledge:
         self.read_from = root
         return self.text
 
-    def index_files(self, root: Path | None = None) -> dict[str, str]:
+    def index_files(self, root: Path | None, families: Collection[str]) -> dict[str, str]:
+        self.index_families = tuple(families)
         return dict(self.index)
+
+    def design(self, root: Path | None = None) -> str:
+        return self.design_text
+
+    def over_cap(self, texts: dict[str, str]) -> list[str]:
+        return knowledge.criteria_over_cap(texts)
 
     def standards(self, root: Path | None = None, whole: bool = True) -> str:
         self.standards_from = root

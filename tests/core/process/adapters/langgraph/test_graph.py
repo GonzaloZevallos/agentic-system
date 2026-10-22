@@ -155,8 +155,14 @@ class _Rooted:
     def read(self, root=None):
         return self.inner.read(self.root)
 
-    def index_files(self, root=None):
-        return self.inner.index_files(self.root)
+    def index_files(self, root, families):
+        return self.inner.index_files(self.root, families)
+
+    def design(self, root=None):
+        return self.inner.design(self.root)
+
+    def over_cap(self, texts):
+        return self.inner.over_cap(texts)
 
     def standards(self, root=None, whole=True):
         return self.inner.standards(self.root, whole)
