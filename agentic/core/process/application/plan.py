@@ -14,7 +14,6 @@ measurable (issue #28)."""
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 from agentic.shared.configuration import Configuration, experiment_snapshot
 
@@ -28,8 +27,8 @@ from ..domain.roles import (
 from ..domain.task import Subtask, TaskState, apply
 from .checkouts import SetupFailed, task_checkout
 from .interview import interview
-from .reflect_run import closed_documents
 from .ports import Ports
+from .reflect_run import closed_documents
 from .run_role import Check, Output, finish, run_role
 
 # The ephemeral-arm skip path's own value for the existing `{{proposed_invariants}}`

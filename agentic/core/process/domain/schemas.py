@@ -23,8 +23,8 @@ from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, Field
 
-from .coverage import BRIEF_FORM, MAPPED_FORM, NOT_TOUCHED, UNSATISFIABLE
 from .cost_history import MIN_BUCKET, History, bucket_median
+from .coverage import BRIEF_FORM, MAPPED_FORM, NOT_TOUCHED, UNSATISFIABLE
 from .task import INTEGRATION, FindingCategory, FindingScope, Severity
 
 TaskType = Literal["bug", "feature", "platform_enhancement"]
