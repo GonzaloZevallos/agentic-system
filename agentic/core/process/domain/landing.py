@@ -19,8 +19,17 @@ from typing import Any, Literal, Protocol, get_args
 
 from . import ci, rules
 from .adr_numbers import Renaming
+from .document import HUMAN
 from .roles import LANDING_DIAGNOSER
-from .task import FailureReason, LandingEntry, Subtask, SubtaskStatus, TaskState
+from .task import (
+    Carried,
+    FailureReason,
+    LandedSliceRef,
+    LandingEntry,
+    Subtask,
+    SubtaskStatus,
+    TaskState,
+)
 
 LandingStepKind = Literal[
     "wait",
@@ -706,6 +715,50 @@ def restart_depth(raw: Mapping[str, object]) -> int:
     """How many times the landing restarted this issue, from the task document."""
     value = raw.get("landing_restarts", 0)
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def carry_over(raw: Mapping[str, object]) -> Carried | None:
+    """What the archived document `raw` hands the fresh run of a `--fresh` start (GH-239,
+    GH-297): the restart depth and cost, the Landing Diagnoser's section (only when the
+    landing restarted it), every human decision (the `Human` section whole, restart or not:
+    a `--fresh` start is the case that matters) and the slices already landed. Read from the
+    document, never counted from issue comments; `None` when nothing is carried."""
+    restarts = restart_depth(raw)
+    cost = raw.get("landing_cost_carried", 0.0)
+    spent = float(cost) if isinstance(cost, int | float) and not isinstance(cost, bool) else 0.0
+    sections = raw.get("sections")
+    held = sections if isinstance(sections, Mapping) else {}
+    diagnosis = held.get(LANDING_DIAGNOSER.name, "") if restarts else ""
+    human = held.get(HUMAN, "")
+    carried = Carried(
+        restarts=restarts,
+        cost=spent,
+        diagnosis=diagnosis if isinstance(diagnosis, str) else "",
+        human=human if isinstance(human, str) else "",
+        landed=_landed_refs(raw.get("landed_slices")),
+    )
+    if not (restarts or carried.human):
+        return None
+    return carried
+
+
+def _landed_refs(value: object) -> tuple[LandedSliceRef, ...]:
+    """The readable entries of a `landed_slices` list: a `units` list of strings and a
+    `pull_request` string; whatever else a hand-edited document holds is skipped."""
+    if not isinstance(value, list):
+        return ()
+    refs: list[LandedSliceRef] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        units, pull_request = item.get("units"), item.get("pull_request")
+        if (
+            isinstance(units, list)
+            and all(isinstance(unit, str) for unit in units)
+            and isinstance(pull_request, str)
+        ):
+            refs.append(LandedSliceRef(tuple(units), pull_request))
+    return tuple(refs)
 
 
 def marker_parent(body: str) -> tuple[str, int] | None:

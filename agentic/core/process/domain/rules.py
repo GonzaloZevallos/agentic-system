@@ -44,6 +44,7 @@ from .schemas import TaskType
 from .task import (
     INTEGRATION,
     WAITING_ON_HUMAN,
+    Carried,
     ChangeCategory,
     ChangesRequested,
     DependencyState,
@@ -1030,19 +1031,30 @@ def decided(text: str, level: int = 2) -> bool:
     return False
 
 
-def entering(task: TaskInput, *, cap: bool, carried: tuple[int, float] | None = None) -> TaskInput:
+def entering(task: TaskInput, *, cap: bool, carried: Carried | None = None) -> TaskInput:
     """`task` as it enters the graph: with `decided: True` when `cap` is on and its
     request carries the heading, and otherwise unchanged, with no key added. Called
     once, from `cli._run`; nothing else sets `decided`.
 
-    `carried` is `(landing_restarts, landing_cost_carried)` of the run a landing restart
-    replaces (GH-239, ADR-0048), read from its task document and never counted from issue
-    comments; `None`, or a restart that carries nothing, adds neither key."""
+    `carried` is what the archived run hands this one (`landing.carry_over`; GH-239,
+    ADR-0048, GH-297), read from its task document and never counted from issue comments.
+    Its restart depth and cost become `landing_restarts` and `landing_cost_carried`, only
+    when either is positive. Its `Human` section seeds `sections[HUMAN]` verbatim, when
+    non-empty: the decisions keep their `### Decision N` headings, so `human_section`
+    numbers the next one N+1, and the roles read them as settled. `None` adds no key."""
     entered = task
     if cap and decided(task["description"]):
         entered = {**entered, "decided": True}
-    if carried is not None and (carried[0] > 0 or carried[1] > 0):
-        entered = {**entered, "landing_restarts": carried[0], "landing_cost_carried": carried[1]}
+    if carried is None:
+        return entered
+    if carried.restarts > 0 or carried.cost > 0:
+        entered = {
+            **entered,
+            "landing_restarts": carried.restarts,
+            "landing_cost_carried": carried.cost,
+        }
+    if carried.human:
+        entered = {**entered, "sections": {HUMAN: carried.human}}
     return entered
 
 
