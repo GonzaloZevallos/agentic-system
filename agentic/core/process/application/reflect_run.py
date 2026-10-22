@@ -22,9 +22,10 @@ from agentic.shared.configuration import Configuration
 from ..domain import playbook as pb
 from ..domain import playbook_candidates as pc
 from ..domain import rules
+from ..domain import system_lessons as sl
 from ..domain.reaping import ReapedProcess
 from .closed import closed_documents as closed_documents  # re-exported: plan.py reads it here
-from .ports import GitError, ListedPullRequest, Ports
+from .ports import GitError, Inbox, ListedPullRequest, Ports, Tracker
 from .reflect import Reflected, reflect_task
 from .release import release_task, summary
 
@@ -60,6 +61,16 @@ class Known:
         """The branch exists and every pull request it ever had is closed or merged."""
         mine = [pr for pr in self.listed if pr.branch == BRANCH]
         return bool(mine) and not any(pr.state == "OPEN" for pr in mine)
+
+
+@dataclass(frozen=True)
+class SystemRepo:
+    """The system's own repo as two reads and one write the verb needs: the `tracker` that
+    opens the issue and the `inbox` that lists the open ones. Built by the composition
+    root over the stage0 checkout; the product's ports are never used for it (ADR-0002)."""
+
+    tracker: Tracker
+    inbox: Inbox
 
 
 @dataclass(frozen=True)
@@ -183,7 +194,7 @@ def pending(
     return [document for document, _ in doors]
 
 
-def _delta_dict(delta: pb.Delta) -> dict[str, Any]:
+def _delta_dict(delta: pb.Delta, *, filed: bool = True) -> dict[str, Any]:
     out: dict[str, Any] = {
         "op": delta.op,
         "slug": delta.slug,
@@ -200,6 +211,8 @@ def _delta_dict(delta: pb.Delta) -> dict[str, Any]:
         out["scope"] = delta.scope
     if delta.decision:
         out["decision"] = delta.decision
+    if not filed:
+        out["filed"] = False  # a lesson for the system still to be opened as an issue
     return out
 
 
@@ -246,13 +259,17 @@ def _summary(
     # The window reads the frontmatter's own key for the returns.
     docs = [{**d, "return_history": d.get("change_history") or []} for d in documents]
     recent = pc.entries_since(ledger, ledger.summarised)
-    applied = [_delta_of(raw) for entry in recent for raw in entry.applied]
+    applied = [_delta_of(raw) for entry in recent for raw in entry.applied if not _is_system(raw)]
     gained = sum(1 for d in applied if d.op == "add")
     text, retirements = summarise(docs, playbooks, applied, gained)
     for delta in retirements:
         outcome = pb.apply(playbooks[delta.slug], [delta], {}, [], section_hash="empty", now=now)
         playbooks[delta.slug] = outcome.playbook
     return text
+
+
+def _is_system(raw: Mapping[str, Any]) -> bool:
+    return raw.get("scope") == "system"
 
 
 def _entry(result: Reflected, prior: pc.Entry | None, decisions: int) -> pc.Entry:
@@ -263,7 +280,11 @@ def _entry(result: Reflected, prior: pc.Entry | None, decisions: int) -> pc.Entr
     cost = result.cost_usd + (prior.cost_usd if prior else 0.0)
     earlier = prior.applied if prior and not waiting else ()
     if not result.failed:
-        applied = (*earlier, *(_delta_dict(d) for d in result.applied))
+        applied = (
+            *earlier,
+            *(_delta_dict(d) for d in result.applied),
+            *(_delta_dict(d, filed=False) for d in result.system),
+        )
         return pc.Entry(cost_usd=cost, applied=applied, decisions=decisions)
     attempts = (prior.attempts if prior and waiting else 0) + 1
     failed = result.error if attempts >= pc.REFLECT_ATTEMPTS else ""
@@ -345,6 +366,48 @@ def _archive_stale(
     return archived
 
 
+def _unfiled(tasks: Mapping[str, pc.Entry]) -> bool:
+    return any(raw.get("filed") is False for entry in tasks.values() for raw in entry.applied)
+
+
+def _file_system(system: SystemRepo | None, tasks: dict[str, pc.Entry]) -> None:
+    """Open the one issue the lessons for the system still unfiled ask for, in the system's
+    repo, with `needs-triage` and never `agentic`. A lesson already in the ledger or in an
+    open issue's marker is not proposed again; those are simply marked filed. A failure
+    (reading the open issues or opening the issue) is a line on stderr and leaves the
+    lessons unfiled for the next run: it never fails the product's reflection."""
+    waiting = [
+        (key, raw)
+        for key, entry in tasks.items()
+        for raw in entry.applied
+        if raw.get("filed") is False
+    ]
+    if system is None or not waiting:
+        return
+    known = {
+        sl.lesson_of(raw)
+        for entry in tasks.values()
+        for raw in entry.applied
+        if _is_system(raw) and raw.get("filed") is not False
+    }
+    try:
+        known |= sl.proposed_in(body for _, body in system.inbox.open_issues())
+        fresh = sl.fresh([raw for _, raw in waiting], known)
+        if fresh:
+            title, body = sl.render_issue(fresh)
+            system.tracker.open_issue(title, body, label=sl.LABEL)
+    except (ValueError, OSError, GitError) as exc:
+        print(f"agentic: reflect: could not open the system issue: {exc}", file=sys.stderr)
+        return
+    for key in {key for key, _ in waiting}:
+        entry = tasks[key]
+        done = tuple(
+            {k: v for k, v in raw.items() if k != "filed"} if raw.get("filed") is False else raw
+            for raw in entry.applied
+        )
+        tasks[key] = replace(entry, applied=done)
+
+
 async def reflect(
     cfg: Configuration,
     ports: Ports,
@@ -353,6 +416,7 @@ async def reflect(
     summarise: Summariser,
     since: str | None = None,
     task_id: str | None = None,
+    system: SystemRepo | None = None,
 ) -> Outcome:
     """One invocation: reflect on at most `cfg.reflect_max_tasks_per_run` eligible
     documents through their doors and deliver what they taught on the candidate branch, in
@@ -365,7 +429,7 @@ async def reflect(
         todo[: cfg.reflect_max_tasks_per_run],
         max(len(todo) - cfg.reflect_max_tasks_per_run, 0),
     )
-    if not first and not batch:
+    if not first and not batch and not _unfiled(known.ledger.tasks):
         return Outcome(0, 0)
 
     replace_branch = known.stale
@@ -407,6 +471,7 @@ async def reflect(
         archived = archived if result.archived is None else result.archived
         key = pc.ledger_key(str(document["id"]), gate)
         tasks[key] = _entry(result, tasks.get(key), pc.decision_count(document))
+    _file_system(system, tasks)
     documents = _documents(ports, None)
     archived = _archive_stale(documents, playbooks, archived, now)
     ledger = pc.Ledger(started, tasks, base.summaries, base.summarised)
@@ -486,7 +551,7 @@ def _record(ledger: pc.Ledger, known: Known) -> pc.Record:
         pc.Add(raw["slug"], raw.get("category", ""), pb.normalise(raw.get("lesson", "")))
         for entry in mine.values()
         for raw in entry.applied
-        if raw.get("op") == "add"
+        if raw.get("op") == "add" and not _is_system(raw)
     )
     return pc.Record(
         {task: entry.cost_usd for task, entry in mine.items()},

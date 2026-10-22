@@ -72,6 +72,9 @@ class Reflected:
     # The lists after the run, or `None` when the reflection left them as they were.
     candidates: tuple[pb.Pending, ...] | None = None
     archived: tuple[pb.Archived, ...] | None = None
+    # The lessons for the system that passed `screen_system`: the caller files them as an
+    # issue; they are in no playbook (ADR-0002).
+    system: tuple[pb.Delta, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -409,9 +412,11 @@ def _fold(
             ran=frozenset(document.get("prompts") or {}),
         )
     }
+    system, unsuitable = pb.screen_system([d for d in deltas if d.scope == "system"], evidence)
+    deltas = [d for d in deltas if d.scope != "system"]
     current = dict(playbooks)
     applied: list[pb.Delta] = []
-    refused: list[pb.Refusal] = []
+    refused: list[pb.Refusal] = list(unsuitable)
     changed: dict[str, pb.Playbook] = {}
     for slug in dict.fromkeys(d.slug for d in deltas):
         if slug not in pb.PLAYBOOK_ROLES:
@@ -444,4 +449,5 @@ def _fold(
         cost_usd=cost,
         candidates=candidates,
         archived=archived,
+        system=system,
     )

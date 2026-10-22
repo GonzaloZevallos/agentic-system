@@ -662,6 +662,45 @@ def archive_stale(
     return kept, (*archived, *(Archived(i, "stale", now) for i in due))
 
 
+def screen_system(
+    deltas: Sequence[Delta], evidence: Mapping[str, Evidence]
+) -> tuple[tuple[Delta, ...], tuple[Refusal, ...]]:
+    """The `scope: system` deltas that may become an issue in the system's repo, and the
+    refusals of the rest. A lesson for the system is only ever an `add`: its text passes
+    `lesson_refusal` (and carries no comment marker, which would break the issue's block),
+    its cited tasks pass the same evidence check a playbook add does, and `keep` rates it.
+    Nothing here touches a playbook: the caller files what passes as an issue (ADR-0002)."""
+    passed: list[Delta] = []
+    refused: list[Refusal] = []
+    for delta in deltas:
+        why = _system_refusal(delta, evidence)
+        if why:
+            refused.append(Refusal(delta, why))
+        else:
+            passed.append(delta)
+    return tuple(passed), tuple(refused)
+
+
+def _system_refusal(delta: Delta, evidence: Mapping[str, Evidence]) -> str | None:
+    if delta.op != "add":
+        return "a lesson for the system is only proposed as an add"
+    if delta.category not in LESSON_CATEGORIES:
+        return f"the category {delta.category!r} is not a lesson category"
+    if why := lesson_refusal(delta.lesson):
+        return why
+    if "<!--" in delta.lesson or "-->" in delta.lesson:
+        return "the lesson contains a comment marker"
+    cited = tuple(dict.fromkeys(delta.tasks))
+    checked = _evidence_check(
+        delta.slug, delta.category, cited, evidence, delta.lesson, delta.decision
+    )
+    if checked.why:
+        return checked.why
+    if not keep(delta.confidence, len(checked.backed), checked.sources):
+        return "the lesson is not rated high and appeared in too few tasks to propose"
+    return None
+
+
 def _is_rejected(rejected: Sequence[Rejected], slug: str, category: str, lesson: str) -> bool:
     text = normalise(lesson)
     return any(
