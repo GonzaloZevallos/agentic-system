@@ -116,6 +116,7 @@ IGNORE: tuple[str, ...] = (
     ".agentic/playbooks/*",
     "docs/agents/*",
     "docs/product/*",
+    "agentic/core/*/docs/adr/*",
 )
 
 

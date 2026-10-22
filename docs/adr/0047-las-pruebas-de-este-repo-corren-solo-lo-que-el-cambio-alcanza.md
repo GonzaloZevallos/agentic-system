@@ -113,3 +113,22 @@ la suite completa `uv run pytest -m "not llm"` en el mismo checkout: 2704 pasan,
    test`, salida 8, 1,1 s.
 3. `pyproject.toml` tocado: `affected-tests: refused: pyproject.toml maps to no test,
    input-table row or ignore entry`, salida 9, 1,8 s; sigue la forma completa de arriba.
+
+## Adenda (GH-301): ADRs de módulo
+
+GH-292 incorporó `agentic/core/knowledge/docs/adr/0001-el-conocimiento-se-lee-por-indice.md`,
+una ruta que no cubría ninguna fila de `TABLE` ni entrada de `IGNORE`: cualquier diff que la
+tocara terminaba en `Refusal` y la forma affected de `tests` salía REFUSED, aunque la suite
+completa pasara. Se decide:
+
+- Los directorios de ADR de módulo (`agentic/core/*/docs/adr/`) van en `IGNORE`, porque ningún
+  test los lee. La fila `docs/adr/*` sigue apuntando solo a `tests/test_adr_numbers.py`, que
+  lista el directorio raíz.
+- Los ADR de módulo se numeran por módulo. Quedan fuera de `tests/test_adr_numbers.py` y de
+  `renumber` (ADR-0049), que ven solo el `docs/adr` raíz; el `0001` de un módulo no choca con
+  el `0001` raíz.
+- Un `Allowance` en la guarda de `tests/test_affected_tests.py` se agrega solo para una ruta que
+  el plan fija, y en la misma subtarea que la fija. La comprobación de `IGNORE` respeta esos
+  `Allowance`: un test que solo nombra una ruta ignorada no cuenta como que la lee.
+- Un golden que fija la forma del prompt de un rol pertenece a la costura que cambia lo que
+  devuelve `knowledge.read()`, y se mueve en esa misma subtarea.
