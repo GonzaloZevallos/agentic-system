@@ -80,6 +80,12 @@ class Configuration(BaseModel):
     # How long one product check may run inside the presubmit before it counts as
     # failed (issue #22). The presubmit's hook waits for all of them.
     check_timeout_s: float = Field(default=600.0, gt=0)
+    # How long a role attempt may go with no sign of life before the watchdog kills it
+    # and fails it as a stall (GH-299, ADR-0056): above the longest legitimate silence,
+    # which the in-flight hook counter and the pending-tool rule cover on their own, so
+    # no cross-check against `check_timeout_s`. The floor is `domain.stall.STALL_FLOOR_S`
+    # (600), written out because `shared` imports nothing of the project.
+    stall_timeout_s: float = Field(default=2400.0, ge=600.0)
     # Roles that may run at once across the whole process (ADR-0004, fifth addendum).
     # With the review inside each branch of the fan-out, a wave of four subtasks puts
     # four Developers and four reviewers in flight, each reviewer with its own

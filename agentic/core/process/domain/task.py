@@ -99,9 +99,20 @@ ChangeCategory = FindingCategory | Literal["definition"]
 # no HTTP status at all — the network down (`EAI_AGAIN`) or the same shape, never read
 # from the prose (issue #137) — `sdk` the harness breaking in a way none of the named
 # facts covers (narrowed by `account_limit`, `upstream` and `network`, ADR-0029), `other`
-# the residual nothing else names.
+# the residual nothing else names, `stall` an attempt that hung with nothing to wait for
+# and was killed by the watchdog (`domain/stall.py`, ADR-0056): a reason of its own, not
+# an external one, so the poller never retakes it by itself.
 FailureReason = Literal[
-    "schema", "check", "max_turns", "limit", "account_limit", "upstream", "network", "sdk", "other"
+    "schema",
+    "check",
+    "max_turns",
+    "limit",
+    "account_limit",
+    "upstream",
+    "network",
+    "sdk",
+    "stall",
+    "other",
 ]
 # Which review this is (ADR-0016; `rules.review_kind`): `first` until a return sends the
 # subtask back, `incremental` (ADR-0015) after that, `integration` for the fan-in's own

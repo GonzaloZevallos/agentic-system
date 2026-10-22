@@ -85,6 +85,23 @@ def test_defaults():
     assert cfg.agentic_dir == Path("/tmp/p/.agentic")
 
 
+def test_stall_timeout_defaults_to_forty_minutes_and_reads_its_environment():
+    assert Configuration.from_sources(PRODUCT, {}).stall_timeout_s == 2400
+    env = {"AGENTIC_STALL_TIMEOUT_S": "900"}
+    assert Configuration.from_sources(PRODUCT, env).stall_timeout_s == 900
+
+
+@pytest.mark.parametrize("bad", ["599", "0", "-1"])
+def test_stall_timeout_below_the_floor_is_rejected_on_load(bad):
+    with pytest.raises(ValueError, match="stall_timeout_s"):
+        Configuration.from_sources(PRODUCT, {"AGENTIC_STALL_TIMEOUT_S": bad})
+
+
+def test_stall_timeout_at_the_floor_is_accepted():
+    cfg = Configuration.from_sources(PRODUCT, {"AGENTIC_STALL_TIMEOUT_S": "600"})
+    assert cfg.stall_timeout_s == 600
+
+
 def test_product_dir_is_required():
     # The system never writes inside its own repo (ADR-0002): no silent default.
     with pytest.raises(MissingProductDir, match="AGENTIC_PRODUCT_DIR"):
