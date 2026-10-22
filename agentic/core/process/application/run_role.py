@@ -70,7 +70,9 @@ from ..domain.roles import (
     Role,
     describe_flags,
     prompt_hash,
+    reads_by_index,
     render,
+    standards_by_index,
 )
 from ..domain.suppressions import Forbidden
 from ..domain.task import WAITING_ON_HUMAN, EscalationClass, Failure, RoleRun, TaskState, apply
@@ -232,8 +234,14 @@ def context_for(
 
 def preamble(role: Role, ports: Ports, root: Path | None = None) -> tuple[str, str]:
     """What the role reads before the task document: (standards, product knowledge),
-    as found in the checkout the role works in."""
-    standards = ports.knowledge.standards(root) if role.reads_standards else ""
+    as found in the checkout the role works in. The knowledge is what always goes
+    whole plus the area index; the standards are whole for a verifier and an index
+    entry for the Developer and the integrator (`standards_by_index`)."""
+    standards = (
+        ports.knowledge.standards(root, whole=not standards_by_index(role))
+        if role.reads_standards
+        else ""
+    )
     knowledge = ports.knowledge.read(root) if role.reads_knowledge else ""
     return standards, knowledge
 
@@ -828,8 +836,15 @@ async def run_role(
         "prompts": {role.slug: loaded.hash},
         **playbook_patch(state, role, loaded),
     }
+    # One value for where the role runs, where its knowledge is read from and where its
+    # index files are written: they are the same checkout by construction, never two.
+    workdir = cwd or cfg.product_dir
+    if reads_by_index(role):
+        # Before every attempt of the role, a resumed one that receives only a delta
+        # included: the index points at files of this checkout as they are now.
+        ports.workspace.write_index(workdir, ports.knowledge.index_files(workdir))
     if prompt is None:
-        standards, knowledge = preamble(role, ports, cwd)
+        standards, knowledge = preamble(role, ports, workdir)
         prompt = context_for(
             state, role, knowledge, standards, extra_sections, state.get("subtask_id")
         )
@@ -841,7 +856,7 @@ async def run_role(
             model=cfg.model_for(role.slug, role.runs_on),
             retries=cfg.role_retries,
             vocabulary=vocabulary,
-            cwd=cwd or cfg.product_dir,
+            cwd=workdir,
             runner=ports.runner,
             owner_task=state["id"],
             check=check,

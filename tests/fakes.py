@@ -182,6 +182,8 @@ class MemoryKnowledge:
         return dict(self.index)
 
     def standards(self, root: Path | None = None, whole: bool = True) -> str:
+        self.standards_from = root
+        self.standards_whole = whole
         return self.standards_text
 
     def brief(self, root: Path | None = None) -> str | None:
