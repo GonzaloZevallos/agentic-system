@@ -1083,6 +1083,7 @@ def test_exported_graph_uses_the_default_ports():
         "final_validation",
         "deliver",
         "discard",
+        "split",
         "escalate",
         "pause",
     }

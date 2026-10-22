@@ -82,8 +82,16 @@ Write, in Markdown, using `###` headings and nothing above `###`:
 
    An estimate below half the median of a bucket with at least five tasks is refused,
    and so is one below what the task already spent. A plan whose estimate is over the size
-   limit the system sets, or over the p90 of its bucket, will not be built as one task: it is
-   split afterwards into chained issues, so do not shrink the estimate to make it fit.
+   limit the system sets (150 USD or 40 files), or over the p90 of its bucket, is not built
+   as one task: write it as `parts` (see `### Parts`) instead of subtasks. Do not shrink the
+   estimate to make it fit; a plan that fits and carries `parts` is refused too.
+8. `### Parts`, only when the estimate does not fit: at least two chained parts, each a
+   small task of its own that lands and shows in the product before the next one starts.
+   Each part has a `title`, a `body` (its whole description: the person who builds it has
+   not seen this plan) and `depends_on`, the numbers of EARLIER parts (1 is the first).
+   Write no subtasks then, and `### Subtasks` is not needed. A part is never split again.
+   If the section `## Human` says the human decided to build this task whole, write
+   subtasks and no parts.
 </Task>
 
 <Hard Limits>
@@ -104,6 +112,8 @@ Everything goes in the structured output, in one call:
 
 - `subtasks`: one entry per subtask with `id` (slug), `title`, `brief`, `seams` and
   `depends_on` (ids of subtasks that must be approved first; empty to run in parallel).
+- `parts`: one entry per part with `title`, `body` and `depends_on`, ONLY when the
+  estimate does not fit; then `subtasks` is empty. Empty when the plan fits.
 - `invariants`: the rules from `### Invariants`, one per line in a single string; an
   empty string when the subtasks share none. Only the adopted ones; the rejected ones
   live in the Markdown with their reason.

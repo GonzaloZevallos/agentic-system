@@ -299,13 +299,18 @@ _Avoid_: terminada, cerrada (todavía no lo está)
 _Campo_: ready for review — GitHub, el estado de un pull request que sale de draft
 
 **Cierre**:
-PjM da por terminada la tarea: aprobada, con las aprobaciones del tipo, o descartada, cuando PM dictamina que el comportamiento es el esperado.
+PjM da por terminada la tarea: aprobada, con las aprobaciones del tipo, o descartada, cuando PM dictamina que el comportamiento es el esperado, o partida, cuando el plan no cabe y se reparte en issues encadenados.
 _Campo_: sin término de arte
 
 **Descartado**:
 El cierre de un bug cuyo dictamen PM validó como comportamiento esperado: el producto ya hace lo que debe y no hay nada que construir. El sistema comenta el motivo en el issue y termina la corrida sin pull request; cerrar el issue es del humano, como mergear el pull request. Es un final, no una pausa: no se reanuda.
 _Avoid_: rechazado, cerrado (el que cierra es el humano), wontfix (la etiqueta de triage de este repo, no el estado)
 _Campo_: won't fix, works as intended — resoluciones de los trackers (Bugzilla `WONTFIX` y `WORKSFORME`, Chromium `WontFix` y `WorkingAsIntended`). Acá es un estado de la tarea, no una resolución del issue
+
+**Partida**:
+El final de una tarea cuyo plan no cabe (más de 150 USD o de 40 archivos, o por encima del p90 de su balde; ADR-0053): no construye nada. Abre un issue por parte, encadenados con `Blocked by:` y con la etiqueta `agentic`, cada uno con su propio pull request chico; comenta la lista en el issue original y termina la corrida sin pull request, y no se relanza. Es un final, no una pausa: no se reanuda. Una parte nunca se parte de nuevo: si su plan tampoco cabe, escala con la clase `estimate` y una decisión del humano la construye entera.
+_Avoid_: descartado (acá sí hay algo que construir, en las partes), dividida (la unidad es la parte, no la tarea), subtarea (esas se construyen dentro de una tarea; las partes son tareas)
+_Campo_: sin término de arte
 
 **Escalado**:
 Lo que un rol, un par o el tope dejan dicho cuando la tarea no puede seguir sin el humano, con las preguntas si las hay. El sistema lo entrega al humano en el issue y pausa la tarea: queda esperando con su estado guardado, sin gastar, y se retoma desde el mismo punto. Son ocho las situaciones que lo provocan (su clase de escalado): PjM no puede clasificarla, un par llegó a su límite, un rol falló dos veces o la entrega del propio sistema a GitHub falló, se alcanzó el tope de tarea, quedaron preguntas para el humano, una subtarea no pudo mergear su dependencia, el setup del producto falló en un checkout, o la estimación del plan no cabe (ADR-0053). El motivo viaja como texto libre para el humano; cuál de las ocho situaciones fue, además, como dato cerrado (Clase de escalado).
