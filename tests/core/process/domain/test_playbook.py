@@ -736,3 +736,19 @@ def test_shared_term_ignores_trivial_short_and_accented_words():
     assert shared_term("Valida la decisión", "una decisión humana") is False  # trivial only
     assert shared_term("Usa comillas españolas", "Las COMILLAS españolas son seguimiento") is True
     assert shared_term("Do it now", "Do it later") is False  # under five characters
+
+
+def test_padding_a_lone_human_decision_with_an_unbacked_task_does_not_keep_it():
+    ev = {"GH-1": decided(), "GH-2": Evidence(True, "feature", ran=frozenset({"developer"}))}
+    result = run([human_add(tasks=("GH-1", "GH-2"))], ev=ev)
+    assert result.playbook.items == ()
+    assert [d.lesson for d in result.held] == [DLESSON]
+    assert result.candidates[0].seen_in == ("GH-1",)
+
+
+def test_a_restore_needs_the_same_slug_and_category_as_the_archived_item():
+    other = replace(item(4, LESSON, ("GH-1",)), category="spec-scope")
+    shelf = (Archived(other, "stale", "2026-10-01"),)
+    result = run([add(LESSON, "GH-1")], ev={"GH-1": evidence("process-suite-red")}, archived=shelf)
+    assert [i.id for i in result.playbook.items] == ["developer-5"]
+    assert result.archived == shelf

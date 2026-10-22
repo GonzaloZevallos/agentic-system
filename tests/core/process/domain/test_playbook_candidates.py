@@ -395,3 +395,33 @@ def test_in_prompt_since_ignores_unmerged_prs_and_merges_before_a_restore():
         pc.in_prompt_since("developer-1", prs, at, dates.get, not_before="2026-10-10")
         == "2026-10-15"
     )
+
+
+TODAYS_BLOCK = """\
+Body text.
+
+<!-- agentic:playbook -->
+```yaml
+started_at: '2026-10-05T10:00:00+00:00'
+summaries: 1
+summarised: 10
+tasks:
+  GH-10: 0.4
+  GH-11: 0.9
+adds:
+- slug: developer
+  category: standard-other
+  lesson: run every declared check before delivering.
+```
+"""
+
+
+def test_a_marker_block_written_before_adr_0056_reads_the_same():
+    record = pc.parse_block(TODAYS_BLOCK)
+    assert record == pc.Record(
+        {"GH-10": 0.4, "GH-11": 0.9},
+        (pc.Add("developer", "standard-other", "run every declared check before delivering."),),
+        "2026-10-05T10:00:00+00:00",
+        1,
+        10,
+    )

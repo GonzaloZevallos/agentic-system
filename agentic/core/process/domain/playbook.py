@@ -97,7 +97,7 @@ ACCOUNTABLE: dict[tuple[str, str, str, str], str] = _rows()
 PLAYBOOK_ROLES = frozenset(ACCOUNTABLE.values())
 
 
-def attribute(origin: str, task_type: str, category: str, qualifier: str = "") -> str | None:
+def attribute(origin: Origin, task_type: str, category: str, qualifier: str = "") -> str | None:
     """The slug a fact of `origin` and `category` is attributable to, or `None`."""
     return ACCOUNTABLE.get((origin, task_type, category, qualifier))
 
@@ -124,6 +124,7 @@ def return_backing(entry: Mapping[str, Any], task_type: str) -> Backing | None:
     if not isinstance(pair, str) or not isinstance(category, str):
         return None
     base, _, subtask = pair.partition(":")
+    origin: Origin
     if base == REVIEW_PAIR:
         qualifier = INTEGRATION_QUALIFIER if subtask == INTEGRATION else ""
         origin, kind = "review", category
@@ -513,11 +514,11 @@ def _apply_one(
     if delta.op == "merge":
         lesson = delta.lesson.strip()
     if new_ids:
-        why, _ = _evidence_check(
+        checked = _evidence_check(
             delta.slug, target.category, new_ids, evidence, lesson, delta.decision
         )
-        if why:
-            return why
+        if checked.why:
+            return checked.why
     if delta.op == "merge":
         if why := lesson_refusal(delta.lesson):
             return why
@@ -560,12 +561,13 @@ def _add(
     lesson = delta.lesson.strip()
     if _is_rejected(rejected, delta.slug, delta.category, lesson):
         return "the lesson was rejected before"
-    tasks = tuple(dict.fromkeys(delta.tasks))
-    why, sources = _evidence_check(
-        delta.slug, delta.category, tasks, evidence, lesson, delta.decision
-    )
-    if why:
-        return why
+    cited = tuple(dict.fromkeys(delta.tasks))
+    checked = _evidence_check(delta.slug, delta.category, cited, evidence, lesson, delta.decision)
+    if checked.why:
+        return checked.why
+    # Only a task that carries a matching backing counts toward `seen`: padding a citation
+    # with an unbacked closed task cannot satisfy `KEEP_MIN_TASKS`.
+    tasks, sources = checked.backed, checked.sources
     text = normalise(lesson)
     same = next((i for i in playbook.items if normalise(i.lesson) == text), None)
     if same is not None:
@@ -575,7 +577,16 @@ def _add(
         bumped = replace(same, seen_in=same.seen_in + new_ids, last_applied=now)
         effective = replace(delta, op="bump", item_id=same.id)
         return replace(shelves, playbook=_replace_items(playbook, same, bumped)), effective, False
-    shelf = next((a for a in shelves.archived if normalise(a.item.lesson) == text), None)
+    shelf = next(
+        (
+            a
+            for a in shelves.archived
+            if normalise(a.item.lesson) == text
+            and a.item.category == delta.category
+            and a.item.id.rpartition("-")[0] == delta.slug
+        ),
+        None,
+    )
     if shelf is not None:
         # A restore keeps the id and the `seen_in` it had, plus the tasks this add cites.
         if len(playbook.items) >= PLAYBOOK_MAX_ITEMS:
@@ -705,6 +716,16 @@ def _decision_refusal(backing: Backing, known: Evidence, lesson: str, cited: int
     return None
 
 
+@dataclass(frozen=True)
+class _Check:
+    """The outcome of `_evidence_check`: `why` it refuses (or `None`), the `sources` that
+    back the lesson and the cited `backed` tasks, the only ones `keep` may count."""
+
+    why: str | None = None
+    sources: frozenset[str] = frozenset()
+    backed: tuple[str, ...] = ()
+
+
 def _evidence_check(
     slug: str,
     category: str,
@@ -712,20 +733,21 @@ def _evidence_check(
     evidence: Mapping[str, Evidence],
     lesson: str = "",
     decision: int = 0,
-) -> tuple[str | None, frozenset[str]]:
-    """Why `tasks` cannot back a lesson of `category` for `slug`, or `None`, and the
-    sources that do back it: every task is known and closed, and at least one has a
+) -> _Check:
+    """Why `tasks` cannot back a lesson of `category` for `slug`, the sources that do back
+    it and the tasks that carry one: every task is known and closed, and at least one has a
     `Backing` of that slug and category (a `human_decision` one also needs its decision
     to exist, the role to have run and a term in common with the lesson)."""
     if not tasks:
-        return "the delta cites no task", frozenset()
+        return _Check("the delta cites no task")
     for task in tasks:
         known = evidence.get(task)
         if known is None:
-            return f"task {task} has no evidence", frozenset()
+            return _Check(f"task {task} has no evidence")
         if not known.closed:
-            return f"task {task} is not closed", frozenset()
+            return _Check(f"task {task} is not closed")
     sources: set[str] = set()
+    backed: list[str] = []
     reasons: list[str] = []
     for task in tasks:
         for backing in _backings(evidence[task]):
@@ -737,21 +759,22 @@ def _evidence_check(
                     reasons.append(why)
                     continue
             sources.add(backing.source)
+            if task not in backed:
+                backed.append(task)
     if not sources:
-        return (
+        return _Check(
             reasons[0]
             if reasons
-            else f"no cited task has a return_history entry or a backing of {category} for {slug}",
-            frozenset(),
+            else f"no cited task has a return_history entry or a backing of {category} for {slug}"
         )
-    return None, frozenset(sources)
+    return _Check(None, frozenset(sources), tuple(backed))
 
 
 def _evidence_refusal(
     slug: str, category: str, tasks: Sequence[str], evidence: Mapping[str, Evidence]
 ) -> str | None:
     """Why `tasks` cannot back a lesson of `category` for `slug`, or `None`."""
-    return _evidence_check(slug, category, tasks, evidence)[0]
+    return _evidence_check(slug, category, tasks, evidence).why
 
 
 def _replace_items(playbook: Playbook, old: Item, new: Item | None) -> Playbook:
