@@ -109,7 +109,9 @@ def _body(state: TaskState, number: int, part: PartRecord, total: int) -> str:
     blockers = ", ".join(f"#{_issue_number(issues[str(dep)])}" for dep in part["depends_on"])
     invariants = "\n".join(f"{n}. {line}" for n, line in enumerate(state.get("invariants", []), 1))
     sections = [
-        # One line for every dependency: `rules.blockers_from_body` reads the first line only.
+        # One line for every dependency, not one line each (invariant 8 cannot hold literally):
+        # `rules.blockers_from_body` reads the first non-empty line only. See the test
+        # `test_the_reader_of_blockers_loses_every_blocker_after_the_first_line`.
         *([f"Blocked by: {blockers}"] if blockers else []),
         part["body"].strip(),
         *([f"## Invariants\n\n{invariants}"] if invariants else []),
