@@ -909,9 +909,12 @@ class MemoryWorkspace:
         self.diff_reads.append((base, head))
         return self.diff_paths
 
+    def checkout_path(self, name: str) -> Path:
+        return self.ROOT / name
+
     def detached_checkout(self, name: str, sha: str) -> Path:
         self.detached.append(name)
-        return self.ROOT / name
+        return self.checkout_path(name)
 
     def remove_checkout(self, name: str) -> None:
         self.removed_checkouts.append(name)
@@ -1258,6 +1261,13 @@ class FakeReaper:
         self.activity = activity
         self.scans = 0
         self.calls: list[tuple[str, str, int | None, str | None]] = []
+        # GH-315: what `reap_within` answers, and the paths of each call.
+        self.reaped_within: tuple[ReapedProcess, ...] = ()
+        self.within_calls: list[tuple[Path, ...]] = []
+
+    def reap_within(self, paths: Sequence[Path]) -> tuple[ReapedProcess, ...]:
+        self.within_calls.append(tuple(paths))
+        return self.reaped_within
 
     def reap_task(self, task_id: str) -> tuple[ReapedProcess, ...]:
         self.calls.append(("task", task_id, None, None))

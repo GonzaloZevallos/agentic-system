@@ -23,6 +23,7 @@ from agentic.core.process.domain import reaping
 from agentic.core.process.domain.stall import ChildActivity
 
 PRODUCT = reaping.product_key("/work/a-product")
+WORKTREES_ROOT = Path("/nonexistent/worktrees")
 
 STUBBORN = "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(300)"
 OBEDIENT = "import time; time.sleep(300)"
@@ -44,7 +45,7 @@ def short_waits(monkeypatch):
     monkeypatch.setattr(reaper_module, "REAP_KILL_WAIT_S", 2.0)
 
 
-def spawn(children, code: str, value: str | None) -> subprocess.Popen:
+def spawn(children, code: str, value: str | None, cwd: Path | None = None) -> subprocess.Popen:
     env = {k: v for k, v in os.environ.items() if k != reaping.MARK_NAME}
     if value is not None:
         env[reaping.MARK_NAME] = value
@@ -52,6 +53,7 @@ def spawn(children, code: str, value: str | None) -> subprocess.Popen:
     child = subprocess.Popen(
         [sys.executable, "-c", f"import sys; print('up', flush=True); {code}"],
         env=env,
+        cwd=cwd,
         stdout=subprocess.PIPE,
         start_new_session=True,
     )
@@ -78,7 +80,7 @@ def test_a_process_that_obeys_term_is_reaped_as_term_and_one_that_ignores_it_as_
     stubborn = spawn(children, STUBBORN, mark_of("GH-12"))
     sibling = spawn(children, OBEDIENT, None)
 
-    reaped = ShellReaper(PRODUCT).reap_task("GH-12")
+    reaped = ShellReaper(PRODUCT, WORKTREES_ROOT).reap_task("GH-12")
 
     by_pid = {entry["pid"]: entry for entry in reaped}
     assert by_pid[obedient.pid]["outcome"] == "term"
@@ -97,15 +99,15 @@ def test_a_process_that_obeys_term_is_reaped_as_term_and_one_that_ignores_it_as_
 def test_a_reap_for_another_task_signals_nothing(children):
     mine = spawn(children, STUBBORN, mark_of("GH-12"))
 
-    assert ShellReaper(PRODUCT).reap_task("GH-99") == ()
-    assert ShellReaper(PRODUCT).reap_task("GH-1") == ()
+    assert ShellReaper(PRODUCT, WORKTREES_ROOT).reap_task("GH-99") == ()
+    assert ShellReaper(PRODUCT, WORKTREES_ROOT).reap_task("GH-1") == ()
     assert alive(mine)
 
 
 def test_a_process_of_another_product_with_the_same_task_is_left_alone(children):
     other = spawn(children, STUBBORN, mark_of("GH-12", product=reaping.product_key("/work/other")))
 
-    assert ShellReaper(PRODUCT).reap_task("GH-12") == ()
+    assert ShellReaper(PRODUCT, WORKTREES_ROOT).reap_task("GH-12") == ()
     assert alive(other)
 
 
@@ -113,7 +115,7 @@ def test_the_task_scope_takes_the_subtasks_of_the_task(children):
     sub = spawn(children, OBEDIENT, mark_of("GH-12.reaper"))
     longer = spawn(children, OBEDIENT, mark_of("GH-120"))
 
-    reaped = ShellReaper(PRODUCT).reap_task("GH-12")
+    reaped = ShellReaper(PRODUCT, WORKTREES_ROOT).reap_task("GH-12")
 
     assert [entry["pid"] for entry in reaped] == [sub.pid]
     assert alive(longer)
@@ -123,7 +125,7 @@ def test_a_run_scope_reaps_only_the_dead_runs_processes(children):
     dead = spawn(children, OBEDIENT, mark_of("GH-12", run=111))
     live = spawn(children, OBEDIENT, mark_of("GH-12", run=222))
 
-    reaped = ShellReaper(PRODUCT).reap_run("GH-12", 111)
+    reaped = ShellReaper(PRODUCT, WORKTREES_ROOT).reap_run("GH-12", 111)
 
     assert [entry["pid"] for entry in reaped] == [dead.pid]
     assert alive(live)
@@ -133,7 +135,7 @@ def test_an_attempt_scope_reaps_only_that_attempts_processes(children):
     first = spawn(children, OBEDIENT, mark_of("GH-12", run=7, token="aa"))
     second = spawn(children, OBEDIENT, mark_of("GH-12", run=7, token="bb"))
 
-    reaped = ShellReaper(PRODUCT).reap_attempt("GH-12", 7, "aa")
+    reaped = ShellReaper(PRODUCT, WORKTREES_ROOT).reap_attempt("GH-12", 7, "aa")
 
     assert [entry["pid"] for entry in reaped] == [first.pid]
     assert alive(second)
@@ -149,7 +151,7 @@ def test_a_process_that_survives_kill_is_recorded_and_announced_on_stderr(
     monkeypatch.setattr(reaper_module, "REAP_GRACE_S", 0.2)
     monkeypatch.setattr(reaper_module, "REAP_KILL_WAIT_S", 0.2)
 
-    reaped = ShellReaper(PRODUCT).reap_task("GH-12")
+    reaped = ShellReaper(PRODUCT, WORKTREES_ROOT).reap_task("GH-12")
 
     assert [(e["pid"], e["outcome"]) for e in reaped] == [(stubborn.pid, "survived")]
     err = capsys.readouterr().err
@@ -170,7 +172,7 @@ def test_a_process_whose_environ_cannot_be_read_is_skipped_not_signalled_nor_rec
 
     monkeypatch.setattr(Path, "read_bytes", refuse)
 
-    assert ShellReaper(PRODUCT).reap_task("GH-12") == ()
+    assert ShellReaper(PRODUCT, WORKTREES_ROOT).reap_task("GH-12") == ()
     assert alive(victim)
 
 
@@ -180,18 +182,18 @@ def test_an_unexpected_failure_is_an_error_entry_and_never_an_exception(monkeypa
 
     monkeypatch.setattr(reaper_module.os, "listdir", broken)
 
-    reaped = ShellReaper(PRODUCT).reap_task("GH-12")
+    reaped = ShellReaper(PRODUCT, WORKTREES_ROOT).reap_task("GH-12")
 
     assert reaped == ({"pid": 0, "command": "RuntimeError", "outcome": "error"},)
-    assert ShellReaper(PRODUCT).reap_run("GH-12", 1) == reaped
-    assert ShellReaper(PRODUCT).reap_attempt("GH-12", 1, "t") == reaped
+    assert ShellReaper(PRODUCT, WORKTREES_ROOT).reap_run("GH-12", 1) == reaped
+    assert ShellReaper(PRODUCT, WORKTREES_ROOT).reap_attempt("GH-12", 1, "t") == reaped
 
 
 def test_the_reaper_never_signals_its_own_process(children):
     me = reaping.mark(PRODUCT, "GH-12", os.getpid(), "t")
     os.environ[reaping.MARK_NAME] = me
     try:
-        assert ShellReaper(PRODUCT).reap_task("GH-12") == ()
+        assert ShellReaper(PRODUCT, WORKTREES_ROOT).reap_task("GH-12") == ()
     finally:
         del os.environ[reaping.MARK_NAME]
 
@@ -211,7 +213,7 @@ def spawn_cli(children, mark: str, grandchild: str | None) -> subprocess.Popen:
 
 
 def activity(task: str = "GH-77", token: str = "t"):
-    return ShellReaper(PRODUCT).child_activity(task, 1, token, os.getpid())
+    return ShellReaper(PRODUCT, WORKTREES_ROOT).child_activity(task, 1, token, os.getpid())
 
 
 def test_child_activity_counts_cpu_of_a_marked_child_but_not_of_the_cli(children):
@@ -228,7 +230,7 @@ def test_child_activity_counts_cpu_of_a_marked_child_but_not_of_the_cli(children
             assert grown is not None
         assert grown.cpu_ticks > first.cpu_ticks
     finally:
-        ShellReaper(PRODUCT).reap_task("GH-77")
+        ShellReaper(PRODUCT, WORKTREES_ROOT).reap_task("GH-77")
 
 
 def test_child_activity_sees_a_running_child(children):
@@ -241,7 +243,7 @@ def test_child_activity_sees_a_running_child(children):
             seen = activity()
         assert seen is not None and seen.running
     finally:
-        ShellReaper(PRODUCT).reap_task("GH-77")
+        ShellReaper(PRODUCT, WORKTREES_ROOT).reap_task("GH-77")
 
 
 def test_child_activity_of_a_present_but_idle_child_is_flat_and_not_running(children):
@@ -253,7 +255,7 @@ def test_child_activity_of_a_present_but_idle_child_is_flat_and_not_running(chil
         assert not first.running
         assert first.cpu_ticks == second.cpu_ticks
     finally:
-        ShellReaper(PRODUCT).reap_task("GH-77")
+        ShellReaper(PRODUCT, WORKTREES_ROOT).reap_task("GH-77")
 
 
 def test_child_activity_ignores_the_cli_even_when_it_burns_cpu(children):
@@ -274,10 +276,176 @@ def test_child_activity_ignores_children_of_another_attempt_or_task_or_product(c
         assert activity() == ChildActivity(cpu_ticks=0, running=False)
     finally:
         for task in ("GH-77", "GH-78"):
-            ShellReaper(PRODUCT).reap_task(task)
+            ShellReaper(PRODUCT, WORKTREES_ROOT).reap_task(task)
 
 
 def test_child_activity_is_none_when_proc_cannot_be_read(monkeypatch, tmp_path):
     # Unreadable is not "idle": the verdict reads None as activity (invariant 2).
     monkeypatch.setattr(reaper_module, "_PROC", tmp_path / "missing")
     assert activity() is None
+
+
+# `reap_within` (GH-315): the processes whose cwd is inside a checkout under the worktrees
+# root. A `tmp_path` is the root, so every process a test starts is reachable only through
+# it, and the `children` fixture reaps whatever a test leaves.
+
+
+@pytest.fixture
+def root(tmp_path: Path) -> Path:
+    worktrees = tmp_path / "worktrees"
+    worktrees.mkdir()
+    return worktrees
+
+
+def checkout(root: Path, name: str, sub: str | None = None) -> Path:
+    path = root / name / sub if sub else root / name
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def test_an_unmarked_process_in_the_checkout_dies_and_is_reported(children, root, capsys):
+    inside = spawn(children, OBEDIENT, None, cwd=checkout(root, "GH-7"))
+
+    reaped = ShellReaper(PRODUCT, root).reap_within([root / "GH-7"])
+
+    assert [(e["pid"], e["outcome"]) for e in reaped] == [(inside.pid, "term")]
+    wait_gone(inside)
+    assert capsys.readouterr().err == (
+        f"reaper: stopped {inside.pid} {reaped[0]['command']} (term)\n"
+    )
+
+
+def test_one_that_ignores_term_is_killed_and_reported_as_kill(children, root):
+    stubborn = spawn(children, STUBBORN, None, cwd=checkout(root, "GH-7"))
+
+    reaped = ShellReaper(PRODUCT, root).reap_within([root / "GH-7"])
+
+    assert [(e["pid"], e["outcome"]) for e in reaped] == [(stubborn.pid, "kill")]
+    wait_gone(stubborn)
+
+
+def test_a_marked_process_in_the_same_cwd_survives(children, root):
+    cwd = checkout(root, "GH-7")
+    unmarked = spawn(children, OBEDIENT, None, cwd=cwd)
+    marked = spawn(children, OBEDIENT, mark_of("GH-7"), cwd=cwd)
+
+    reaped = ShellReaper(PRODUCT, root).reap_within([root / "GH-7"])
+
+    assert [e["pid"] for e in reaped] == [unmarked.pid]
+    assert alive(marked), "a marked process belongs to the mark reap"
+
+
+def test_a_sibling_checkout_whose_name_extends_the_root_survives(children, root):
+    sibling = spawn(children, OBEDIENT, None, cwd=checkout(root, "GH-70"))
+
+    assert ShellReaper(PRODUCT, root).reap_within([root / "GH-7"]) == ()
+    assert alive(sibling), "GH-70 is not inside GH-7"
+
+
+def test_a_process_in_a_subdirectory_of_the_checkout_dies(children, root):
+    deep = spawn(children, OBEDIENT, None, cwd=checkout(root, "GH-7", "web"))
+
+    reaped = ShellReaper(PRODUCT, root).reap_within([root / "GH-7"])
+
+    assert [e["pid"] for e in reaped] == [deep.pid]
+    wait_gone(deep)
+
+
+def test_a_root_outside_the_worktrees_root_is_dropped_and_nothing_there_is_touched(
+    children, root, tmp_path
+):
+    product = tmp_path / "product"
+    other = product / ".agentic" / "other"
+    other.mkdir(parents=True)
+    in_product = spawn(children, OBEDIENT, None, cwd=product)
+    in_other = spawn(children, OBEDIENT, None, cwd=other)
+    reaper = ShellReaper(PRODUCT, root)
+
+    assert reaper.reap_within([product]) == ()
+    assert reaper.reap_within([other]) == ()
+    assert reaper.reap_within([root]) == (), "the worktrees root itself is no checkout"
+    assert reaper.reap_within([root / ".." / "product"]) == ()
+    assert alive(in_product)
+    assert alive(in_other)
+
+
+def test_a_root_that_escapes_through_dotdot_or_a_symlink_is_dropped(children, root, tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (root / "link").symlink_to(outside)
+    bystander = spawn(children, OBEDIENT, None, cwd=outside)
+
+    assert ShellReaper(PRODUCT, root).reap_within([root / "link"]) == ()
+    assert ShellReaper(PRODUCT, root).reap_within([root / "GH-7" / ".." / ".." / "outside"]) == ()
+    assert alive(bystander)
+
+
+def test_no_roots_reap_nothing(children, root):
+    inside = spawn(children, OBEDIENT, None, cwd=checkout(root, "GH-7"))
+
+    assert ShellReaper(PRODUCT, root).reap_within([]) == ()
+    assert alive(inside)
+
+
+def test_a_worktrees_root_reached_through_a_symlinked_parent_still_matches(children, tmp_path):
+    real = tmp_path / "real"
+    (real / "worktrees" / "GH-7").mkdir(parents=True)
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    inside = spawn(children, OBEDIENT, None, cwd=real / "worktrees" / "GH-7")
+
+    reaped = ShellReaper(PRODUCT, link / "worktrees").reap_within([link / "worktrees" / "GH-7"])
+
+    assert [e["pid"] for e in reaped] == [inside.pid]
+    wait_gone(inside)
+
+
+def test_the_system_and_its_ancestors_are_never_signalled_even_in_a_checkout(
+    children, root, monkeypatch
+):
+    cwd = checkout(root, "GH-7")
+    monkeypatch.chdir(cwd)  # this very process now has its cwd inside the checkout
+    bystander = spawn(children, OBEDIENT, None, cwd=cwd)
+
+    reaped = ShellReaper(PRODUCT, root).reap_within([cwd])
+
+    assert [e["pid"] for e in reaped] == [bystander.pid], "only the bystander, not pytest"
+
+
+def test_a_process_with_a_controlling_terminal_is_never_signalled(children, root, monkeypatch):
+    cwd = checkout(root, "GH-7")
+    inside = spawn(children, OBEDIENT, None, cwd=cwd)
+    stat_of = reaper_module._stat
+    monkeypatch.setattr(
+        reaper_module,
+        "_stat",
+        lambda pid: stat_of(pid)._replace(tty=34816) if pid == inside.pid else stat_of(pid),
+    )
+
+    assert ShellReaper(PRODUCT, root).reap_within([cwd]) == ()
+    assert alive(inside)
+
+
+def test_a_process_whose_directory_was_deleted_is_not_a_checkouts(children, root):
+    cwd = checkout(root, "GH-7", "gone")
+    gone = spawn(children, OBEDIENT, None, cwd=cwd)
+    cwd.rmdir()
+
+    assert ShellReaper(PRODUCT, root).reap_within([root / "GH-7"]) == ()
+    assert alive(gone)
+
+
+def test_a_child_born_during_the_grace_inside_the_checkout_is_reaped_too(children, root):
+    cwd = checkout(root, "GH-7")
+    code = (
+        "import signal, subprocess, sys, time; "
+        "signal.signal(signal.SIGTERM, lambda *a: subprocess.Popen("
+        "[sys.executable, '-c', 'import time; time.sleep(300)'])); time.sleep(300)"
+    )
+    parent = spawn(children, code, None, cwd=cwd)
+
+    reaped = ShellReaper(PRODUCT, root).reap_within([cwd])
+
+    assert parent.pid in {e["pid"] for e in reaped}
+    assert len(reaped) == 2
+    assert all(e["outcome"] in {"term", "kill"} for e in reaped)

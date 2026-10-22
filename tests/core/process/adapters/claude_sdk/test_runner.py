@@ -1441,7 +1441,7 @@ def _spawner(monkeypatch, children: list, script: list[str]):
 async def test_a_cancelled_attempt_still_has_its_processes_reaped(monkeypatch, tmp_path):
     children: list[subprocess.Popen] = []
     _spawner(monkeypatch, children, ["sleep", "300"])
-    runner = make_runner(reaper=ShellReaper(PRODUCT_KEY))
+    runner = make_runner(reaper=ShellReaper(PRODUCT_KEY, Path("/nonexistent/worktrees")))
     try:
         with anyio.move_on_after(0.5):
             await run_once(runner, tmp_path)
@@ -1459,7 +1459,7 @@ async def test_the_reap_does_not_block_the_loop_while_it_waits_out_the_grace(mon
     children: list[subprocess.Popen] = []
     # Ignores SIGTERM, so the reap has to wait the whole grace before it kills.
     _spawner(monkeypatch, children, ["bash", "-c", 'trap "" TERM; while :; do sleep 1; done'])
-    runner = make_runner(reaper=ShellReaper(PRODUCT_KEY))
+    runner = make_runner(reaper=ShellReaper(PRODUCT_KEY, Path("/nonexistent/worktrees")))
     ticks = 0
 
     async def tick() -> None:
@@ -1527,7 +1527,9 @@ def test_the_reaper_takes_the_escaped_grandchild_of_a_real_attempt_env_and_spare
     sibling = subprocess.Popen(["sleep", "301"], env=sibling_env, start_new_session=True)
     try:
         _await_argv(grandchild, "sleep 300")
-        reaped = ShellReaper(PRODUCT_KEY).reap_attempt("GH-1", os.getpid(), token)
+        reaped = ShellReaper(PRODUCT_KEY, Path("/nonexistent/worktrees")).reap_attempt(
+            "GH-1", os.getpid(), token
+        )
         assert [p["command"] for p in reaped] == ["sleep 300"]
         assert reaped[0]["pid"] == grandchild
         assert reaped[0]["outcome"] in ("term", "kill")

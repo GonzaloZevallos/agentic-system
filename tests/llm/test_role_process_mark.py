@@ -132,7 +132,7 @@ async def test_the_mark_reaches_a_background_process_of_the_bash_tool(tmp_path: 
     finally:
         # What the runner does once the stream is closed: reap the attempt's leftovers.
         at_close = _marked_now()
-        reaped = ShellReaper(PRODUCT).reap_task(TASK)
+        reaped = ShellReaper(PRODUCT, Path("/nonexistent/worktrees")).reap_task(TASK)
 
     print(f"CLI version: {_cli_version.__cli_version__}")
     print(f"SDK version: {importlib.metadata.version('claude-agent-sdk')}")

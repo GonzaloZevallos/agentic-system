@@ -13,7 +13,9 @@ only file under `agentic/` that spells the variable's name. Pure: the reading of
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 from typing import Literal, NamedTuple, TypedDict
 
 # Deliberately outside the `AGENTIC_*` prefix: the scrubbers of the environment remove
@@ -26,6 +28,11 @@ MARK_NAME = "ROLE_PROCESS_OWNER"
 REAP_GRACE_S = 5
 REAP_KILL_WAIT_S = 2
 COMMAND_MAX = 120
+
+# The task segment of a check's mark (GH-315): no task id is ever `check`.
+CHECK_TASK = "check"
+
+DELETED_SUFFIX = " (deleted)"
 
 ReapOutcome = Literal["term", "kill", "survived", "error"]
 
@@ -82,6 +89,28 @@ def _mark_value(environ: bytes) -> str | None:
         if entry.startswith(wanted):
             return entry[len(wanted) :].decode("utf-8", errors="replace")
     return None
+
+
+def is_marked(environ: bytes) -> bool:
+    """Whether the NUL-separated `KEY=VALUE` block carries the mark, whatever its value:
+    a marked process belongs to the mark reap, never to the cwd one."""
+    return _mark_value(environ) is not None
+
+
+def cwd_within(cwd: str, roots: Sequence[str]) -> bool:
+    """Whether `cwd`, as `/proc/<pid>/cwd` links it, is a root or lies under one. The
+    segments are compared whole (`<w>/GH-7` never takes `<w>/GH-70`), a cwd of a deleted
+    directory never matches, and an empty or relative root or cwd matches nothing."""
+    if cwd.endswith(DELETED_SUFFIX) or not cwd.startswith("/"):
+        return False
+    parts = PurePosixPath(cwd).parts
+    for root in roots:
+        if not root.startswith("/"):
+            continue
+        base = PurePosixPath(root).parts
+        if parts[: len(base)] == base:
+            return True
+    return False
 
 
 def matches(environ: bytes, scope: ReapScope) -> bool:

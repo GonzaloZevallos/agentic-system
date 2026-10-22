@@ -473,15 +473,18 @@ class GitWorkspace:
             return False
         return self._run("cat-file", "-e", f"{sha}^{{commit}}").returncode == 0
 
+    def checkout_path(self, name: str) -> Path:
+        return self.product_dir / WORKTREES / name
+
     def detached_checkout(self, name: str, sha: str) -> Path:
-        path = self.product_dir / WORKTREES / name
+        path = self.checkout_path(name)
         self.exclude_system_files()
         path.parent.mkdir(parents=True, exist_ok=True)
         self._git("worktree", "add", "--detach", str(path), sha)
         return path
 
     def remove_checkout(self, name: str) -> None:
-        path = self.product_dir / WORKTREES / name
+        path = self.checkout_path(name)
         self._run("worktree", "prune")
         self._run("worktree", "remove", "--force", str(path))
         if path.exists():
