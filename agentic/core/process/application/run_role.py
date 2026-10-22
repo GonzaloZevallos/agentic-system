@@ -210,7 +210,8 @@ def context_for(
     """The role's input: the standards, the design standards and the product knowledge
     if the role reads them, in that order, then the sections it declares plus
     `extra_sections` (a subtask's own), in document order, that exist, and last the
-    human's decisions, which every role reads: they hold for the whole task and override what they contradict.
+    human's decisions, which every role reads: they hold for the whole task and override
+    what they contradict.
 
     `subtask_id` is the reader's own plan subtask, when it has one (the Developer, the
     reviewer): the second exception to "each role reads, in full" (this module's own
