@@ -19,6 +19,7 @@ from ..domain.roles import DEVELOPER_INTEGRATOR, PJM, PM, TECH_LEAD
 from ..domain.task import WAITING_ON_HUMAN, TaskState
 from .checkouts import SetupFailed, task_base, task_checkout
 from .ports import BranchPullRequest, GitError, Ports
+from .preflight import over_cap
 from .release import release_task
 from .run_role import finish
 
@@ -74,8 +75,17 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     if record:
         state = {**state, **record}
     replaced_note = rules.replaced_note(replaced, prs, task.branch) if replaced else ""
+    over = _criteria_over_cap(task.branch, ports)
+    if over:
+        state = {**state, "criteria_over_cap": over}
     preface = "\n\n".join(
-        part for part in (replaced_note, _guarded_preface(state, task.branch, ports)) if part
+        part
+        for part in (
+            replaced_note,
+            _guarded_preface(state, task.branch, ports),
+            _criteria_preface(over),
+        )
+        if part
     )
     # A re-delivery under a landing pass closes its entry with what the pass cost; a sync
     # is closed as resolved only when the head holds the upstream it was dispatched for.
@@ -120,6 +130,7 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         "pushed_head": pushed_head,
         "pushed_at": pushed_at,
         **record,
+        **({"criteria_over_cap": over} if over else {}),
         **({"landing": state["landing"]} if state.get("landing") else {}),
     }
     # Best effort from here: the pull request exists, so a crash would only make the
@@ -181,6 +192,28 @@ def _guarded_preface(state: TaskState, branch: str, ports: Ports) -> str:
         "## Guarded changes\n\nThis pull request changes paths the system guards (its own "
         "record, the standards or the workflows). The landing merges it without a human "
         f"gate (ADR-0048):\n\n{listed}"
+    )
+
+
+def _criteria_over_cap(branch: str, ports: Ports) -> list[str]:
+    """The criteria files past the line cap at the head of the branch being delivered
+    (GH-295, ADR-0054). A file the delivery deleted reads None there and is not measured;
+    a head that cannot be read says nothing, as `_guarded_preface` does."""
+    try:
+        return over_cap(ports, branch)
+    except GitError:
+        return []
+
+
+def _criteria_preface(over: list[str]) -> str:
+    """The `Criteria over cap` block, after `Guarded changes`: the cap is a fact for the
+    human, never a refusal. Empty when nothing is over it."""
+    if not over:
+        return ""
+    listed = "\n".join(f"- {message}" for message in over)
+    return (
+        "## Criteria over cap\n\nA criteria document of the product is past the line cap "
+        f"(ADR-0054); cut it or split it by area:\n\n{listed}"
     )
 
 

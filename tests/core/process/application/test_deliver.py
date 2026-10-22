@@ -8,7 +8,7 @@ import pytest
 
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.application.deliver import deliver
-from agentic.core.process.application.ports import BranchPullRequest
+from agentic.core.process.application.ports import BranchPullRequest, GitError
 from agentic.core.process.domain import document, rules
 from agentic.core.process.domain.pull_request import github_length
 from agentic.shared.configuration import Configuration
@@ -631,3 +631,85 @@ async def test_a_cleanup_that_fails_still_delivers_after_the_reap_was_asked(cfg)
 
     assert patch["status"] == "ready_for_review"
     assert reaper.calls == [("task", "GH-12", None, None)]
+
+
+# --- GH-295: criteria documents past the line cap are said in the body and the record ---
+
+BRANCH_REF = rules.task_branch("GH-12")
+NO_CRITERIA_BODY = "## PM\n\n### Consolidated definition\n\nSix numbers."
+
+
+def _doc(count: int) -> str:
+    return "".join(f"rule {n}\n" for n in range(count))
+
+
+async def test_a_product_with_no_criteria_files_has_a_body_identical_to_today(cfg):
+    """The system default `CODING_STANDARDS.md` is 90 lines and is never measured."""
+    ports = memory_ports()
+
+    patch = await deliver(TASK, cfg, ports)
+
+    assert ports.tracker.pull_requests[0][2] == NO_CRITERIA_BODY
+    assert "criteria_over_cap" not in patch
+    assert "criteria_over_cap" not in (ports.documents.load("GH-12") or {})
+
+
+async def test_a_file_over_the_cap_at_the_head_is_in_the_body_and_the_record_not_the_base(cfg):
+    ports = memory_ports()
+    ports.workspace.files[("HEAD", "CODING_STANDARDS.md")] = _doc(200)
+    ports.workspace.files[(BRANCH_REF, "CODING_STANDARDS.md")] = _doc(301)
+
+    patch = await deliver(TASK, cfg, ports)
+
+    body = ports.tracker.pull_requests[0][2]
+    assert "## Criteria over cap" in body and "CODING_STANDARDS.md" in body and "301" in body
+    assert NO_CRITERIA_BODY in body
+    assert len(patch["criteria_over_cap"]) == 1
+    saved = ports.documents.load("GH-12") or {}
+    assert saved["criteria_over_cap"] == patch["criteria_over_cap"]
+
+
+async def test_the_block_comes_after_the_guarded_changes_block(cfg):
+    ports = memory_ports()
+    ports.workspace.diff_paths = ("CODING_STANDARDS.md",)
+    ports.workspace.files[(BRANCH_REF, "DESIGN_STANDARDS.md")] = _doc(301)
+
+    await deliver(TASK, cfg, ports)
+
+    body = ports.tracker.pull_requests[0][2]
+    assert body.index("## Guarded changes") < body.index("## Criteria over cap")
+
+
+async def test_exactly_the_cap_adds_no_line(cfg):
+    ports = memory_ports()
+    ports.workspace.files[(BRANCH_REF, "CODING_STANDARDS.md")] = _doc(300)
+
+    patch = await deliver(TASK, cfg, ports)
+
+    assert ports.tracker.pull_requests[0][2] == NO_CRITERIA_BODY
+    assert "criteria_over_cap" not in patch
+
+
+async def test_a_file_the_delivery_deleted_is_not_measured(cfg):
+    """Over the cap at the base, gone at the head: `show` reads None there."""
+    ports = memory_ports()
+    ports.workspace.files[("HEAD", "DESIGN_STANDARDS.md")] = _doc(400)
+
+    patch = await deliver(TASK, cfg, ports)
+
+    assert ports.tracker.pull_requests[0][2] == NO_CRITERIA_BODY
+    assert "criteria_over_cap" not in patch
+
+
+async def test_a_head_that_cannot_be_read_delivers_with_no_block(cfg):
+    ports = memory_ports()
+
+    def unreadable(ref, relative):
+        raise GitError("bad object")
+
+    ports.workspace.show = unreadable
+
+    patch = await deliver(TASK, cfg, ports)
+
+    assert patch["status"] == "ready_for_review"
+    assert ports.tracker.pull_requests[0][2] == NO_CRITERIA_BODY

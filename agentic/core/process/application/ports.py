@@ -310,6 +310,11 @@ class ProductKnowledge(Protocol):
         the product has no `DESIGN_STANDARDS.md`. There is no default."""
         ...
 
+    def criteria_files(self) -> tuple[str, ...]:
+        """The names of the criteria documents the product owns, at its root, that the
+        line cap measures. The process side asks and never spells them (ADR-0010)."""
+        ...
+
     def over_cap(self, texts: dict[str, str]) -> list[str]:
         """One message per criteria document past the line cap. `texts` is file name ->
         text and holds only files the product has."""

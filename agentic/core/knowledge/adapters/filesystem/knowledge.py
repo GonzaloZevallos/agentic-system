@@ -88,6 +88,10 @@ class FilesystemKnowledge:
             knowledge.DESIGN_HEADING + "\n\n" + knowledge.fenced(knowledge.DESIGN_STANDARDS, text)
         )
 
+    def criteria_files(self) -> tuple[str, ...]:
+        """The criteria documents the line cap measures (ADR-0054)."""
+        return (knowledge.STANDARDS, knowledge.DESIGN_STANDARDS)
+
     def over_cap(self, texts: dict[str, str]) -> list[str]:
         """The criteria documents past the line cap, one message each (ADR-0054)."""
         return knowledge.criteria_over_cap(texts)

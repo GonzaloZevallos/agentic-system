@@ -161,6 +161,9 @@ class _Rooted:
     def design(self, root=None):
         return self.inner.design(self.root)
 
+    def criteria_files(self):
+        return self.inner.criteria_files()
+
     def over_cap(self, texts):
         return self.inner.over_cap(texts)
 

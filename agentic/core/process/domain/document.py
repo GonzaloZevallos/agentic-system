@@ -139,6 +139,9 @@ def render(
         # What the release reaped when the task closed (GH-282, ADR-0052), written only when
         # something was, so a document without one is byte-identical to one written before.
         **({"reaped_at_cleanup": r} if (r := state.get("reaped_at_cleanup")) else {}),
+        # The criteria files past the line cap when delivered (GH-295), written only when one
+        # was, so a document without one is byte-identical to one written before.
+        **({"criteria_over_cap": c} if (c := state.get("criteria_over_cap")) else {}),
         # The landing's record (GH-239), written only when set so a document without one is
         # byte-identical to one written before.
         # A placeholder here, swapped for the flow line below (`_flow_line`).

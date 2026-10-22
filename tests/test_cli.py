@@ -5077,3 +5077,64 @@ async def test_eval_compare_prints_the_per_role_table_after_an_unchanged_scoreca
     assert len(rows) == 2
     assert "2.0000" in rows[0] and "500" in rows[0]
     assert "1.5000" in rows[1] and rows[1].split()[1] == "2"
+
+
+# --- GH-295: criteria documents past the line cap are said, never refused -----------
+
+
+def _commit_file(root, name, lines):
+    (root / name).write_text("".join(f"rule {n}\n" for n in range(lines)))
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*git, "add", "-A"], cwd=root, check=True)
+    subprocess.run([*git, "commit", "-q", "-m", name], cwd=root, check=True)
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
+    )
+    return head.stdout.strip()
+
+
+def test_a_run_says_the_criteria_file_over_the_cap_at_head_and_proceeds(
+    monkeypatch, tmp_path, capsys
+):
+    root = product(tmp_path, "p")
+    _commit_file(root, "DESIGN_STANDARDS.md", 301)
+    monkeypatch.setattr(cli, "unfixed_stage0", lambda ports: None)
+    seen = capture_run(monkeypatch)
+    monkeypatch.setattr("sys.argv", ["agentic", "run", "t", "d", "--product-dir", str(root)])
+
+    cli.main()
+
+    error = capsys.readouterr().err
+    assert "agentic: `DESIGN_STANDARDS.md`: 301 lines (cap 300)" in error
+    assert seen["task"]["title"] == "t"  # a warning, not a refusal
+
+
+def test_a_run_with_a_file_of_exactly_the_cap_says_nothing_about_it(monkeypatch, tmp_path, capsys):
+    root = product(tmp_path, "p")
+    _commit_file(root, "DESIGN_STANDARDS.md", 300)
+    monkeypatch.setattr(cli, "unfixed_stage0", lambda ports: None)
+    capture_run(monkeypatch)
+    monkeypatch.setattr("sys.argv", ["agentic", "run", "t", "d", "--product-dir", str(root)])
+
+    cli.main()
+
+    assert "lines (cap" not in capsys.readouterr().err
+
+
+def test_a_resume_measures_at_the_base_the_stack_check_returned_not_at_head(
+    monkeypatch, tmp_path, capsys
+):
+    root = product(tmp_path, "p")
+    base = _commit_file(root, "CODING_STANDARDS.md", 301)
+    _commit_file(root, "CODING_STANDARDS.md", 200)  # HEAD is under the cap
+    monkeypatch.setattr(cli, "unfixed_stage0", lambda ports: None)
+    monkeypatch.setattr(cli, "declared_stack_of", lambda task_id, ports: base)
+    seen = capture_run(monkeypatch)
+    monkeypatch.setattr(
+        "sys.argv", ["agentic", "resume", "--issue", "9", "--yes", "--product-dir", str(root)]
+    )
+
+    cli.main()
+
+    assert "agentic: `CODING_STANDARDS.md`: 301 lines" in capsys.readouterr().err
+    assert seen["fn"] is cli._resume
