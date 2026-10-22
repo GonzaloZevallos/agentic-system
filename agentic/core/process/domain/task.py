@@ -676,6 +676,12 @@ class LandingEntry(TypedDict, total=False):
     closed_at: str
     # The upstream sha the delivered head did not contain.
     lacks: str
+    # GH-297, all optional: a document without them reads and renders as before.
+    # `land_slice` entries: the units of the slice and its (never main) pull request.
+    slice_units: list[str]
+    slice_pull_request: str
+    # `diagnose` entries: the `landing.RestartWhy` that no slice was possible for.
+    restart_why: str
 
 
 class EstimateRecord(TypedDict):
