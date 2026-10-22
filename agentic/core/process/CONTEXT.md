@@ -362,6 +362,10 @@ Gasto acumulado de una tarea a partir del cual el sistema escala y pausa en vez 
 _Avoid_: presupuesto de tarea
 _Campo_: total_cost_limit — SWE-agent
 
+**Tope por estimación**:
+Red de seguridad al doble de la estimación vigente de la tarea (ADR-0053). Se mira antes de cada intento de cualquier rol, junto al tope de tarea y contra el mismo gasto de la corrida entera; alcanzado, sólo frena lo que todavía no arrancó y la tarea escala con la clase `estimate`, con lo gastado, el tope, las subtareas que faltan y una estimación nueva propuesta. Una tarea sin estimación (documento anterior) no tiene este tope. No lo reanuda el sondeo: solo una decisión del humano, que deja vigente la propuesta o el valor de `--estimate`, y se rechaza si la estimación nueva ya está gastada al doble. No sustituye ni cambia el tope de tarea, que sigue plano.
+_Avoid_: tope de tarea, presupuesto
+
 ### Artefactos
 
 **Documento de tarea**:

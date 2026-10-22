@@ -88,6 +88,14 @@ class Resumption:
     # paused. Never derived from `RunLock`'s presence or absence (its own docstring):
     # the checkpoint is the only source of this fact.
     interrupted: bool = False
+    # The human's `--estimate`, which the graph's `pause` node puts in force with the decision.
+    estimate: float | None = None
+
+    def answer(self) -> dict[str, float | str | None]:
+        """What the graph resumes with: the decision, and the `--estimate` when given."""
+        if self.estimate is None:
+            return {"decision": self.decision}
+        return {"decision": self.decision, "estimate": self.estimate}
 
 
 def state_from(raw: dict) -> TaskState:
@@ -151,11 +159,23 @@ def prepare(
     cfg: Configuration,
     ports: Ports,
     pending: tuple[str, ...] = (),
+    estimate: float | None = None,
 ) -> Resumption:
     """Decide the resume. `pending` are the nodes a run that crashed left to run: it did
     not pause, so there is no answer to take and nothing to reset. Raises
     `WaitingOnHuman` when the questions, or a pair at its limit, have no answer yet, and
-    `ValueError` when the cap in force is already spent."""
+    `ValueError` when the cap in force is already spent.
+
+    `estimate` is the human's `--estimate`: the cost estimate that goes in force when the
+    task paused at the cap of its estimate. It is itself the human's decision (the poller
+    never passes one); on any other pause it is a usage error. `--task-budget` stays the
+    flat cap's, read below, whatever the estimate in force."""
+    if estimate is not None and paused.get("escalation_class") != "estimate":
+        raise ValueError(
+            "--estimate applies only to a task paused at the cap of its estimate "
+            f"(escalation class `estimate`); {task_id} is paused for "
+            f"`{paused.get('escalation_class') or 'another reason'}`"
+        )
     decision = None
     if pending:
         resumed, target = paused, ", ".join(pending)
@@ -166,7 +186,7 @@ def prepare(
                 f"{task_id} waits on {len(paused['questions_for_human'])} question(s): "
                 "answer them in comments on the issue, then resume"
             )
-        if decision is None and paused.get("escalation_class") == "estimate":
+        if decision is None and estimate is None and paused.get("escalation_class") == "estimate":
             # Never retaken on its own (ADR-0053): the estimate in force changes only on a
             # resumption that carries a human decision.
             raise WaitingOnHuman(
@@ -180,7 +200,9 @@ def prepare(
                 f"{task_id}: {pair} hit its return limit; decide in comments on the issue "
                 "what the next attempt must do, then resume"
             )
-        resumed = apply(paused, rules.resumed(paused, decision))
+        resumed = apply(paused, rules.resumed(paused, decision, estimate))
+        if paused.get("escalation_class") == "estimate":
+            _refuse_spent_estimate(task_id, resumed, paused.get("cost_usd", 0.0))
         next_node = rules.resume_target(resumed)
         if next_node is None:
             raise ValueError(
@@ -196,8 +218,29 @@ def prepare(
             f"pass --task-budget above {spent:.2f}"
         )
     return Resumption(
-        task_id, source, paused, resumed, decision, target, cap, interrupted=bool(pending)
+        task_id,
+        source,
+        paused,
+        resumed,
+        decision,
+        target,
+        cap,
+        interrupted=bool(pending),
+        estimate=estimate,
     )
+
+
+def _refuse_spent_estimate(task_id: str, resumed: TaskState, spent: float) -> None:
+    """A resume that puts an estimate in force must leave room under its cap, or the first
+    attempt would stop again at once."""
+    if (in_force := rules.estimate_in_force(resumed)) is not None and rules.estimate_cap_reached(
+        spent, resumed
+    ):
+        raise ValueError(
+            f"{task_id}: the estimate in force is {in_force:.2f} USD and {spent:.2f} are "
+            f"already spent: its cap is reached; pass --estimate above "
+            f"{rules.estimate_to_cover(spent):.2f}"
+        )
 
 
 def summary(r: Resumption, cfg: Configuration, ports: Ports) -> str:

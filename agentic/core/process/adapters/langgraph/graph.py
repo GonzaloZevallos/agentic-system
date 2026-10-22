@@ -164,7 +164,9 @@ def _system_node(use_case: UseCase, ports_of: PortsOf):
 
 
 async def pause(state: TaskState) -> TaskState:
-    """Wait for the human; resumed with `Command(resume={"decision": text or None})`."""
+    """Wait for the human; resumed with `Command(resume={"decision": text or None})`, plus
+    `"estimate": USD` when the human gave `--estimate` (the estimate to put in force when the
+    task paused at the cap of its estimate)."""
     answer = interrupt(
         {
             "reason": state.get("escalated"),
@@ -172,7 +174,8 @@ async def pause(state: TaskState) -> TaskState:
             "questions": state.get("questions_for_human", []),
         }
     )
-    return rules.resumed(state, (answer or {}).get("decision"))
+    answer = answer or {}
+    return rules.resumed(state, answer.get("decision"), answer.get("estimate"))
 
 
 def _route(rule: Rule) -> Callable[[TaskState], str]:

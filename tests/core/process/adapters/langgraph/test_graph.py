@@ -1214,6 +1214,51 @@ async def test_the_task_cap_pauses_the_task_and_a_raised_cap_resumes_it_to_deliv
     assert fakes.tracker.comments[-1][1].startswith("Ready for review")
 
 
+def small_estimate():
+    """A plan whose estimate (0.60, above what planning spent) caps the run at 1.20 USD."""
+    plan = planned(
+        {"id": "domain", "title": "Domain", "brief": "b", "seams": ["x"]}, estimated_cost_usd=0.6
+    )
+    return script_for(
+        **technical(
+            tech_lead=[plan],
+            developer=[delivered("api"), delivered("domain")],
+            developer_integrator=[delivered("merged")],
+            tech_lead_review=[reviewed("approved")] * 3,
+        )
+    )
+
+
+async def test_the_estimate_cap_pauses_and_a_decided_resume_puts_the_proposal_in_force(config):
+    script = small_estimate()
+    app = compiled(script, fakes=Fakes())
+    paused = await app.ainvoke(TASK, config=config)
+    assert paused["escalation_class"] == "estimate"
+    assert paused["estimate"]["cost_usd"] == 0.6
+    proposed = paused["proposed_estimate"]
+
+    # What `agentic resume` sends with a comment and no `--estimate`.
+    final = await app.ainvoke(Command(resume={"decision": "Go on."}), config=config)
+    assert final["status"] == "ready_for_review"
+    assert final["estimate_revisions"] == [{"cost_usd": proposed, "source": "proposed"}]
+    assert final["proposed_estimate"] is None
+    assert final["estimate"]["cost_usd"] == 0.6
+
+
+async def test_the_estimate_flag_reaches_the_state_the_graph_resumes_with(config):
+    script = small_estimate()
+    app = compiled(script, fakes=Fakes())
+    paused = await app.ainvoke(TASK, config=config)
+    assert paused["escalation_class"] == "estimate"
+
+    # What `agentic resume --estimate 5` sends, with no comment at all.
+    final = await app.ainvoke(Command(resume={"decision": None, "estimate": 5.0}), config=config)
+    assert final["status"] == "ready_for_review"
+    assert final["estimate_revisions"] == [{"cost_usd": 5.0, "source": "human"}]
+    assert final["proposed_estimate"] is None
+    assert final["estimate"]["cost_usd"] == 0.6
+
+
 async def test_a_subtask_at_its_limit_resumes_with_the_decision_and_the_pair_reset(config):
     config["configurable"]["max_changes_requested_per_pair"] = 0
     fakes = Fakes()

@@ -698,7 +698,7 @@ class TaskState(TaskInput, total=False):
     # one is in force. Grows only on a resumption with a decision.
     estimate_revisions: Annotated[list[EstimateRevision], last]
     # The new estimate a stopped task proposed (the human decides on it, never the task).
-    proposed_estimate: Annotated[float, last]
+    proposed_estimate: Annotated[float | None, last]
     # The parts of a plan that did not fit (ADR-0053), in order; `rules.after_plan` routes a
     # state holding any to `split`. Cleared when a human waives the fit on a resumption.
     parts: Annotated[list[PartRecord], last]

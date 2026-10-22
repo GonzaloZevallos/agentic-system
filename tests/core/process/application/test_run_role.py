@@ -1284,3 +1284,56 @@ async def test_every_reader_gets_an_index_from_the_checkout_it_runs_in(role, tmp
     assert "docs/product/here.md" in listed and "elsewhere" not in listed
     assert (checkout / "docs/product/here.md").exists()
     assert not (checkout / "docs/product/elsewhere.md").exists()
+
+
+# The safety cap at twice the estimate (ADR-0053): checked beside the flat task cap, before
+# every attempt, and never confused with it.
+
+
+async def run_with_estimate(tmp_path, cost_usd, estimate=40.0, **more):
+    state = {"id": "T-1", "title": "t", "description": "d", "cost_usd": cost_usd, **more}
+    if estimate is not None:
+        state["estimate"] = {"cost_usd": estimate, "files": 10}
+    cfg = Configuration(product_dir=tmp_path, task_budget_usd=100_000.0)
+    runner = ScriptedRunner(pjm=[OK])
+    output, patch = await run_role(state, PJM, cfg, memory_ports(runner), product="x")
+    return output, patch, runner
+
+
+async def test_the_attempt_does_not_start_at_twice_the_estimate(tmp_path):
+    output, patch, runner = await run_with_estimate(tmp_path, 80.0)
+    assert output is None and runner.calls == []
+    assert patch["status"] == "waiting_on_human"
+    assert patch["escalation_class"] == "estimate"
+    assert patch["escalated"].startswith("PjM stopped by the estimate cap: 80.00 of 80.00 USD")
+    assert patch["proposed_estimate"] == pytest.approx(160.0)
+    assert "estimate_revisions" not in patch and "sections" not in patch and "runs" not in patch
+
+
+async def test_one_dollar_under_twice_the_estimate_the_attempt_starts(tmp_path):
+    output, patch, runner = await run_with_estimate(tmp_path, 79.0)
+    assert output is not None and len(runner.calls) == 1
+    assert "proposed_estimate" not in patch
+
+
+async def test_a_task_without_an_estimate_is_never_stopped_by_it(tmp_path):
+    output, _, runner = await run_with_estimate(tmp_path, 5_000.0, estimate=None)
+    assert output is not None and len(runner.calls) == 1
+
+
+async def test_the_estimate_in_force_is_the_revised_one(tmp_path):
+    revisions = [{"cost_usd": 100.0, "source": "human"}]
+    output, _, _ = await run_with_estimate(tmp_path, 150.0, estimate_revisions=revisions)
+    assert output is not None
+
+
+async def test_the_flat_cap_keeps_its_class_and_text_when_both_are_reached(tmp_path):
+    cfg = Configuration(product_dir=tmp_path, task_max_budget_usd=50.0)
+    runner = ScriptedRunner(pjm=[OK])
+    state = {"id": "T-1", "title": "t", "description": "d", "cost_usd": 90.0}
+    state["estimate"] = {"cost_usd": 40.0, "files": 10}
+    output, patch = await run_role(state, PJM, cfg, memory_ports(runner), product="x")
+    assert output is None
+    assert patch["escalation_class"] == "cap"
+    assert patch["escalated"] == "PjM stopped by the task cap: 90.00 of 50.00 USD spent"
+    assert "proposed_estimate" not in patch
