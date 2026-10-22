@@ -105,6 +105,8 @@ async def test_plan_repairs_a_markdown_missing_the_subtasks_heading(cfg):
             "subtasks": [{"id": "domain", "title": "Domain", "brief": "b", "seams": ["Dashboard"]}],
             "invariants": [],
             "integration": "",
+            "estimated_cost_usd": 20.0,
+            "estimated_files": 5,
         },
         0.3,
         2,

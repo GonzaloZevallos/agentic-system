@@ -14,10 +14,11 @@ measurable (issue #28)."""
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from agentic.shared.configuration import Configuration, experiment_snapshot
 
-from ..domain import plan_view, schemas
+from ..domain import cost_history, plan_view, schemas
 from ..domain.roles import (
     INTERVIEW_SOLUTION,
     INTERVIEW_SOLUTION_PLATFORM,
@@ -27,8 +28,9 @@ from ..domain.roles import (
 from ..domain.task import Subtask, TaskState, apply
 from .checkouts import SetupFailed, task_checkout
 from .interview import interview
+from .reflect_run import closed_documents
 from .ports import Ports
-from .run_role import Output, finish, run_role
+from .run_role import Check, Output, finish, run_role
 
 # The ephemeral-arm skip path's own value for the existing `{{proposed_invariants}}`
 # placeholder (issue #28): no prompt file is edited -- doing so would move
@@ -47,27 +49,42 @@ async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
         task = task_checkout(state, cfg, ports)
     except SetupFailed as unprepared:
         return finish(state, unprepared.patch(spec.author), ports)
+    history = cost_history.build(closed_documents(ports))
     if cfg.skip_ephemeral:
-        return await _plan_cold(state, spec, cfg, ports, task.path)
+        return await _plan_cold(state, spec, cfg, ports, task.path, history)
     transcript, patch = await interview(state, spec, cfg, ports, cwd=task.path)
     ports.workspace.commit_all(task.path, f"{state['id']}: solution interview")
     if transcript is None:
         return finish(state, patch, ports)
+    interviewed = apply(state, patch)
     output, written = await run_role(
-        apply(state, patch),
+        interviewed,
         spec.author,
         cfg,
         ports,
-        check=schemas.plan_check,
+        check=_estimate_check(interviewed, history),
         cwd=task.path,
         resume=transcript.sessions.get(spec.author_side.slug),
         proposed_invariants=_proposed(state, spec, transcript.invariants),
+        cost_history=history.text(),
     )
     return finish(state, apply(patch, _delivered(cfg, output, written, spec.author.name)), ports)
 
 
+def _estimate_check(state: TaskState, history: cost_history.History) -> Check:
+    """The plan check both arms share: the structural one plus the estimate's refusals,
+    which read the history and what the task has spent so far (ADR-0053)."""
+    spent = state.get("cost_usd", 0.0) + state.get("landing_cost_carried", 0.0)
+    return schemas.plan_check_for(history, spent)
+
+
 async def _plan_cold(
-    state: TaskState, spec: Interview, cfg: Configuration, ports: Ports, cwd: Path
+    state: TaskState,
+    spec: Interview,
+    cfg: Configuration,
+    ports: Ports,
+    cwd: Path,
+    history: cost_history.History,
 ) -> TaskState:
     """The ephemeral-arm skip path (issue #28): no interviewer, no interviewee, no
     consultation, no transcript -- the Tech Lead's own cold call is the whole solution
@@ -85,9 +102,10 @@ async def _plan_cold(
         spec.author,
         cfg,
         ports,
-        check=schemas.plan_check,
+        check=_estimate_check(state, history),
         cwd=cwd,
         proposed_invariants=_SKIPPED_PROPOSAL,
+        cost_history=history.text(),
     )
     return finish(state, _delivered(cfg, output, written, spec.author.name), ports)
 
@@ -96,7 +114,7 @@ def _delivered(
     cfg: Configuration, output: Output | None, written: TaskState, section: str
 ) -> TaskState:
     """What a successful plan call adds to its own patch, on either path: the subtasks,
-    the invariants, the integration brief, the status, and the experiment snapshot
+    the invariants, the integration brief, the estimate (ADR-0053), the status, and the experiment snapshot
     (issue #28) -- `{}` when both switches are at their default, which
     `document.render` then omits, so the default path's document does not move.
 
@@ -110,6 +128,10 @@ def _delivered(
         written["subtasks"] = {s["id"]: _pending(s) for s in output.data["subtasks"]}
         written["invariants"] = output.data["invariants"]
         written["integration_brief"] = output.data["integration"].strip()
+        written["estimate"] = {
+            "cost_usd": output.data["estimated_cost_usd"],
+            "files": output.data["estimated_files"],
+        }
         written["status"] = "planned"
         reviewer_model = cfg.model_for(TECH_LEAD_REVIEWER.slug, TECH_LEAD_REVIEWER.kind)
         written["experiment"] = experiment_snapshot(cfg, reviewer_model)

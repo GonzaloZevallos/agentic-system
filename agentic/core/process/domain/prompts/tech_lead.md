@@ -70,6 +70,20 @@ Write, in Markdown, using `###` headings and nothing above `###`:
    as the task's base commit has them. If this task brings in a new one (a linter, a
    type checker), a subtask leaves the code green under it and adds it to that file,
    which applies from the next task.
+7. `### Estimate`: what this task will cost and touch, as two numbers the structured
+   output repeats. The cost is the TOTAL for the task from its start to its merge, in
+   USD, including what it already spent. The files are those the pull request will show
+   as changed: code, tests, ADRs, the glossary, lockfiles and generated files all count.
+   Calibrate against this table of closed tasks (cost by number of subtasks, and the
+   latest estimates next to what they became), and say which bucket you used and why you
+   sit above or below its median:
+
+{{cost_history}}
+
+   An estimate below half the median of a bucket with at least five tasks is refused,
+   and so is one below what the task already spent. A plan whose estimate is over the size
+   limit the system sets, or over the p90 of its bucket, will not be built as one task: it is
+   split afterwards into chained issues, so do not shrink the estimate to make it fit.
 </Task>
 
 <Hard Limits>
@@ -95,5 +109,6 @@ Everything goes in the structured output, in one call:
   live in the Markdown with their reason.
 - `integration`: `### Integration` as one string, what the integrating Developer has to
   do beyond merging; an empty string when merging is the whole job.
+- `estimated_cost_usd` and `estimated_files`: the two numbers of `### Estimate`.
 - `markdown`: the full section above, in Markdown.
 </Output>

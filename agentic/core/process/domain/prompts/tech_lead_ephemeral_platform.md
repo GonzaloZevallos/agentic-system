@@ -42,6 +42,12 @@ Each round, in `markdown`:
   or splitting subtasks is always a question, never an invariant: no single subtask's
   diff can break it, so nobody could check it there. Nothing this round uncovered,
   nothing to write.
+- Attack the provisional `### Estimate` the Tech Lead closes each round with: read the
+  closed task documents under `.agentic/tasks/` (their `cost_usd`, how many `subtasks`
+  they had, and for the newer ones their `estimate` against `actual_files`) and say
+  whether the figure is below what tasks of that many subtasks cost. An estimate over
+  the size limit the system sets means the task will be split before it builds: say so when the
+  scope you are sharpening points there.
 
 When the frontier is empty, set `done` to true and put in `markdown` a short closing
 summary of what was decided and what remains a known risk.

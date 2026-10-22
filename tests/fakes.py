@@ -1316,6 +1316,8 @@ def planned(
     session: str = "tl",
     invariants: Sequence[object] = (),
     integration: str = "",
+    estimated_cost_usd: float = 20.0,
+    estimated_files: int = 5,
 ) -> RawResult:
     items: list[dict[str, object]] = [
         {"id": "api", "title": "API", "brief": "Build it.", "seams": ["GET /x"]},
@@ -1330,6 +1332,8 @@ def planned(
             "subtasks": items,
             "invariants": list(invariants),
             "integration": integration,
+            "estimated_cost_usd": estimated_cost_usd,
+            "estimated_files": estimated_files,
         },
         cost,
         2,

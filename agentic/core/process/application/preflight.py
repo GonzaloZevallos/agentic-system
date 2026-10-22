@@ -23,6 +23,7 @@ PLACEHOLDERS = {
     "branches": "- none",
     "invariants": "- none",
     "proposed_invariants": "- none",
+    "cost_history": "- none",
     "checks": "- `tests`: `<the product's own command>`",
     # `pjm.md` names it (ADR-0019); the real value `classify.py` passes at runtime is
     # `product_name(ports)`, not this generic stand-in, which only has to render.

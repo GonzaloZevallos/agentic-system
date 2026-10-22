@@ -24,6 +24,7 @@ from typing import Any, Literal, get_args
 from pydantic import BaseModel, Field
 
 from .coverage import BRIEF_FORM, MAPPED_FORM, NOT_TOUCHED, UNSATISFIABLE
+from .cost_history import MIN_BUCKET, History, bucket_median
 from .task import INTEGRATION, FindingCategory, FindingScope, Severity
 
 TaskType = Literal["bug", "feature", "platform_enhancement"]
@@ -325,6 +326,15 @@ class FinalValidation(RoleOutput):
 
 
 class TechPlan(RoleOutput):
+    estimated_cost_usd: float = Field(
+        description="The TOTAL cost of the task in USD, from its start to its merge, "
+        "including what it already spent (the plan prompt says how much). Calibrate it "
+        "on the history table, not on the scope alone"
+    )
+    estimated_files: int = Field(
+        description="The files the pull request will show as changed (its `changedFiles`): "
+        "code, tests, ADRs, the glossary, lockfiles and generated files all count"
+    )
     subtasks: list[Subtask] = Field(description="The subtasks, in the order to start them")
     invariants: list[str] = Field(
         default_factory=list,
@@ -559,17 +569,13 @@ def _lines(text: str) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
-def plan_check_for(history: Any, spent_usd: float) -> Callable[[dict[str, Any]], None]:
+def plan_check_for(history: History, spent_usd: float) -> Callable[[dict[str, Any]], None]:
     """The plan check with the three refusals that need context (ADR-0053), built by the
     plan stage from the cost history and what the task already spent -- never carried in
-    the task state. Each refusal is a legible reason: it is what the retry reads. The
-    estimate fields are checked only when the output carries them."""
-    from .cost_history import MIN_BUCKET, bucket_median  # noqa: PLC0415
+    the task state. Each refusal is a legible reason: it is what the retry reads."""
 
     def check(data: dict[str, Any]) -> None:
         plan_check(data)
-        if "estimated_files" not in data and "estimated_cost_usd" not in data:
-            return
         files, cost = data["estimated_files"], data["estimated_cost_usd"]
         if files < 1:
             raise ValueError("estimated_files must be at least one file: every task changes one")
