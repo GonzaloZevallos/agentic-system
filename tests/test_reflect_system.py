@@ -109,6 +109,7 @@ async def test_a_lesson_already_in_an_open_issue_is_not_proposed_again(tmp_path)
     [(_, body)] = first_tracker.opened_issues
     # a fresh clone of the ledger knows nothing: the open issue's marker is what remembers
     git(root, "branch", "-D", reflect_run.BRANCH)
+    git(root, "push", "-q", "origin", "--delete", reflect_run.BRANCH)  # the remote forgets it too
     ports.runner.queues["reflector"] = [reflection(system_delta("GH-1"), cost=0.1)]
     second, second_tracker = system_repo(MemoryInbox(open_issues=[("https://x/issues/9", body)]))
     await run(cfg, ports, second)
