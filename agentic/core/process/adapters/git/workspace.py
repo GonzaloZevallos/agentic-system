@@ -32,6 +32,7 @@ import subprocess
 import sys
 import uuid
 from collections.abc import Callable, Mapping, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 
 from agentic.shared.configuration import LOGS_DIR, STATE_DIR, STATE_FILE
@@ -292,6 +293,17 @@ class GitWorkspace:
     def show(self, ref: str, relative: str) -> str | None:
         result = self._run("show", f"{ref}:{relative}")
         return result.stdout if result.returncode == 0 else None
+
+    def commit_date(self, ref: str) -> str | None:
+        result = self._run("show", "-s", "--format=%cI", f"{ref}^{{commit}}")
+        text = result.stdout.strip()
+        if result.returncode != 0 or not text:
+            return None
+        try:
+            moment = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+        return moment.astimezone(UTC).isoformat(timespec="milliseconds")
 
     def cleanup(self, task_id: str) -> None:
         root = self.product_dir / WORKTREES

@@ -235,7 +235,7 @@ def split_key(key: str) -> tuple[str, str]:
     return task, gate or "review"
 
 
-def _normal(key: str) -> str:
+def normal_key(key: str) -> str:
     task, gate = split_key(key)
     return f"{task}@{gate}"
 
@@ -265,6 +265,21 @@ def reflected_tasks(ledger: Ledger) -> int:
     return len({split_key(k)[0] for k, entry in ledger.tasks.items() if not entry.waits_retry})
 
 
+def entries_since(ledger: Ledger, reflected: int) -> list[Entry]:
+    """The entries of the tasks reflected after the first `reflected` distinct ones (the
+    summary's window), in order. A key waiting for a retry belongs to no task yet. Counts
+    the way `reflected_tasks` does: by distinct task id."""
+    order: dict[str, int] = {}
+    out: list[Entry] = []
+    for key, entry in ledger.tasks.items():
+        if entry.waits_retry:
+            continue
+        task = split_key(key)[0]
+        if order.setdefault(task, len(order)) >= reflected:
+            out.append(entry)
+    return out
+
+
 @dataclass(frozen=True)
 class Ledger:
     """`reflected.yaml`. `tasks` keeps the order keys were reflected in (a key is
@@ -283,11 +298,11 @@ class Ledger:
     @property
     def done_keys(self) -> set[str]:
         """The keys not to reflect again: every one but those waiting for a retry."""
-        return {_normal(k) for k, entry in self.tasks.items() if not entry.waits_retry}
+        return {normal_key(k) for k, entry in self.tasks.items() if not entry.waits_retry}
 
     @property
     def decisions_read(self) -> dict[str, int]:
-        return {_normal(k): entry.decisions for k, entry in self.tasks.items()}
+        return {normal_key(k): entry.decisions for k, entry in self.tasks.items()}
 
 
 def render_ledger(ledger: Ledger) -> str:
@@ -302,7 +317,7 @@ def render_ledger(ledger: Ledger) -> str:
             item["decisions"] = entry.decisions
         if entry.attempts:
             item["attempts"] = entry.attempts
-        tasks[_normal(key)] = item
+        tasks[normal_key(key)] = item
     data = {
         "started_at": ledger.started_at,
         "summaries": ledger.summaries,
@@ -327,7 +342,7 @@ def parse_ledger(text: str) -> Ledger:
         raise ValueError("reflected.yaml: not a mapping with a `tasks` mapping")
     try:
         tasks = {
-            _normal(str(task)): Entry(
+            normal_key(str(task)): Entry(
                 cost_usd=float(raw.get("cost_usd") or 0.0),
                 failed=str(raw.get("failed") or ""),
                 applied=tuple(dict(d) for d in raw.get("applied") or []),
@@ -354,10 +369,10 @@ def merge_ledgers(ledgers: Sequence[Ledger], candidates: Sequence[Candidate] = (
     tasks: dict[str, Entry] = {}
     for ledger in ledgers:
         for task, entry in ledger.tasks.items():
-            tasks.setdefault(_normal(task), entry)
+            tasks.setdefault(normal_key(task), entry)
     for candidate in candidates:
         for task, cost in candidate.record.tasks.items():
-            tasks.setdefault(_normal(task), Entry(cost_usd=cost))
+            tasks.setdefault(normal_key(task), Entry(cost_usd=cost))
     starts = [
         x
         for x in (*(g.started_at for g in ledgers), *(c.record.started_at for c in candidates))
@@ -427,7 +442,7 @@ def eligible(
     threshold = since or started_at
     if not threshold:
         return []
-    done = {_normal(k) for k in reflected_ids}
+    done = {normal_key(k) for k in reflected_ids}
     read = decisions_read or {}
     clocked: list[tuple[str, Mapping[str, Any]]] = []
     for d in documents:

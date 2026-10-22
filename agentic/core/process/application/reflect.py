@@ -69,6 +69,9 @@ class Reflected:
     cost_usd: float = 0.0
     failed: bool = False
     error: str = ""
+    # The lists after the run, or `None` when the reflection left them as they were.
+    candidates: tuple[pb.Pending, ...] | None = None
+    archived: tuple[pb.Archived, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -309,17 +312,24 @@ async def reflect_task(
     rejected: Sequence[pb.Rejected],
     *,
     now: str,
+    candidates: Sequence[pb.Pending] = (),
+    archived: Sequence[pb.Archived] = (),
     gate: pc.Gate = "review",
     decisions: int = 0,
 ) -> Reflected:
     """Reflect on one closed task. `playbooks` is each role's current playbook by slug
     (a role missing from it has an empty one), `rejected` what people refused before, and
-    `now` what a new item records as `added_at`. `gate` is the door the task came through
-    (the `review` gate reads the four sources; `decision`, only the human's decisions) and
-    `decisions` how many `### Decision` blocks an earlier reflection of it already read."""
+    `now` what a new item records as `added_at`. `candidates` and `archived` are the lists
+    `playbook.apply` promotes from and restores out of; the result carries them back. `gate`
+    is the door the task came through (the `review` gate reads the four sources; `decision`,
+    only the human's decisions) and `decisions` how many `### Decision` blocks an earlier
+    reflection of it already read."""
     task_id = str(document.get("id") or "")
+    shelves = (tuple(candidates), tuple(archived))
     try:
-        return await _reflect(cfg, ports, document, (gate, decisions), playbooks, rejected, now)
+        return await _reflect(
+            cfg, ports, document, (gate, decisions), playbooks, rejected, now, shelves
+        )
     except Exception as error:  # by contract: a reflection never raises into a task
         return Reflected(task_id, failed=True, error=f"{type(error).__name__}: {error}")
 
@@ -332,6 +342,7 @@ async def _reflect(
     playbooks: Mapping[str, pb.Playbook],
     rejected: Sequence[pb.Rejected],
     now: str,
+    shelves: tuple[tuple[pb.Pending, ...], tuple[pb.Archived, ...]],
 ) -> Reflected:
     task_id = str(document.get("id") or "")
     gate, decisions = door
@@ -356,7 +367,9 @@ async def _reflect(
             failed=True,
             error=str(patch.get("escalated") or "the reflector failed"),
         )
-    return _fold(output.data["deltas"], output.cost_usd, document, door, playbooks, rejected, now)
+    return _fold(
+        output.data["deltas"], output.cost_usd, document, door, playbooks, rejected, now, shelves
+    )
 
 
 def _fold(
@@ -367,9 +380,11 @@ def _fold(
     playbooks: Mapping[str, pb.Playbook],
     rejected: Sequence[pb.Rejected],
     now: str,
+    shelves: tuple[tuple[pb.Pending, ...], tuple[pb.Archived, ...]],
 ) -> Reflected:
     task_id = str(document.get("id") or "")
     gate, decisions = door
+    candidates, archived = shelves
     deltas = [
         pb.Delta(
             op=d["op"],
@@ -413,7 +428,10 @@ def _fold(
             rejected,
             section_hash=prompt_hash(rendered) if rendered else "empty",
             now=now,
+            candidates=candidates,
+            archived=archived,
         )
+        candidates, archived = outcome.candidates, outcome.archived
         applied.extend(outcome.applied)
         refused.extend(outcome.refused)
         if outcome.playbook != before:
@@ -424,4 +442,6 @@ def _fold(
         applied=tuple(applied),
         refused=tuple(refused),
         cost_usd=cost,
+        candidates=candidates,
+        archived=archived,
     )

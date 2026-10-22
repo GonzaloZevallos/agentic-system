@@ -738,6 +738,11 @@ class Workspace(Protocol):
         the ref or the file does not exist there."""
         ...
 
+    def commit_date(self, ref: str) -> str | None:
+        """When the commit at `ref` was made, as an ISO-8601 instant in UTC with
+        milliseconds (the form task documents carry), or `None` when `ref` is no commit."""
+        ...
+
     def cleanup(self, task_id: str) -> None:
         """Remove the task's worktrees. The branches stay."""
         ...
