@@ -1177,8 +1177,11 @@ async def test_a_takeover_reaps_the_dead_runs_own_scope_and_no_takeover_reaps_no
     )
     err = capsys.readouterr().err
     if dead:
-        assert reaper.calls == [("run", "GH-1", 999_999_999, None)]  # never the whole task
-        assert "reaped 1 process: `uv run sample_app.py` (kill)" in err
+        assert reaper.calls == [
+            ("run", "GH-1", 999_999_999, None),  # never the whole task
+            ("run", "check", 999_999_999, None),
+        ]
+        assert "reaped 2 processes: `uv run sample_app.py` (kill), " in err
     else:
         assert reaper.calls == [] and "reaped" not in err
 
@@ -1222,7 +1225,7 @@ async def test_a_run_takeover_reaps_the_dead_runs_own_scope(monkeypatch, tmp_pat
         checkpointer=in_memory,
         run_lock=FakeLock(taken_over=dead),
     )
-    assert reaper.calls == [("run", "T-9", 4444, None)]
+    assert reaper.calls == [("run", "T-9", 4444, None), ("run", "check", 4444, None)]
 
 
 @pytest.mark.anyio
