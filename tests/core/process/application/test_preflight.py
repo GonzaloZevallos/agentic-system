@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from agentic.core.knowledge.domain import stack
+from agentic.core.knowledge.domain import knowledge, stack
 from agentic.core.process.adapters.filesystem import FilesystemPrompts
 from agentic.core.process.application import preflight as module
 from agentic.core.process.application.preflight import (
@@ -387,3 +387,35 @@ def test_a_stack_with_the_affected_keys_passes_and_keeps_its_setup_as_the_answer
     preflight(Configuration(product_dir=PRODUCT), replace(ports, stack=stack))
     assert declared_stack(replace(ports, stack=stack)) == {"deps": "uv sync"}
     assert stack.revisions == ["HEAD", "HEAD", "HEAD", "HEAD"]
+
+
+# -- criteria documents past the line cap (GH-295, ADR-0054) -------------------------
+
+
+def _lines(count: int) -> str:
+    return "".join(f"rule {n}\n" for n in range(count))
+
+
+def test_the_criteria_file_names_here_are_the_knowledge_constants():
+    assert module.CRITERIA_FILES == (knowledge.STANDARDS, knowledge.DESIGN_STANDARDS)
+
+
+def test_a_product_with_no_criteria_files_has_nothing_over_the_cap():
+    """The system default `CODING_STANDARDS.md` (90 lines) is never read, let alone counted."""
+    ports = memory_ports()
+    assert module.over_cap(ports) == []
+
+
+def test_a_file_over_the_cap_is_named_at_the_revision_asked():
+    ports = memory_ports()
+    ports.workspace.files[("abc", "DESIGN_STANDARDS.md")] = _lines(301)
+    ports.workspace.files[("HEAD", "DESIGN_STANDARDS.md")] = _lines(10)
+    (message,) = module.over_cap(ports, "abc")
+    assert "DESIGN_STANDARDS.md" in message and "301" in message
+    assert module.over_cap(ports) == []
+
+
+def test_exactly_the_cap_is_not_over_it():
+    ports = memory_ports()
+    ports.workspace.files[("HEAD", "CODING_STANDARDS.md")] = _lines(300)
+    assert module.over_cap(ports) == []

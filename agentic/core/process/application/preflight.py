@@ -125,6 +125,25 @@ def no_setup(ports: Ports) -> str | None:
     )
 
 
+# The criteria documents a product owns, by name: `core.knowledge` owns the constants and the
+# dependency rule keeps the two cores apart (ADR-0010), so a test asserts these equal them.
+# The system default `CODING_STANDARDS.md` is no file of the product's and is never read.
+CRITERIA_FILES = ("CODING_STANDARDS.md", "DESIGN_STANDARDS.md")
+
+
+def over_cap(ports: Ports, revision: str = "HEAD") -> list[str]:
+    """One message per criteria file the product holds at `revision` past the line cap
+    (GH-295, ADR-0054). A file that is absent or was deleted at `revision` reads None and
+    is never measured; the count itself is `knowledge`'s alone. Never a refusal: what to do
+    with the messages is the caller's."""
+    texts = {
+        name: text
+        for name in CRITERIA_FILES
+        if (text := ports.workspace.show(revision, name)) is not None
+    }
+    return ports.knowledge.over_cap(texts)
+
+
 def no_forbidden(ports: Ports, revision: str) -> str | None:
     """Why this run's Edit/Write cage denies nothing, or None when it forbids at least
     one suppression (issue #38). Never a refusal, the same fact `no_setup` is: a Go

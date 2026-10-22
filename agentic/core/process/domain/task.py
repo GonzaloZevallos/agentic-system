@@ -694,6 +694,9 @@ class TaskState(TaskInput, total=False):
     # (GH-282, ADR-0052): `deliver` and `discard` write it, only when something was reaped,
     # and it is read with `.get`.
     reaped_at_cleanup: list[ReapedProcess]
+    # The criteria documents past the line cap at the head `deliver` pushed (GH-295,
+    # ADR-0054): one message each, written only when there is one, read with `.get`.
+    criteria_over_cap: list[str]
     # The landing's own record (GH-239, ADR-0048), every key optional and read with `.get`:
     # `landing` is append-only, one entry per `(head, step)` written before it dispatches;
     # `auto_merge_guarded` the guarded paths an automatic merge landed; `landing_restarts`
