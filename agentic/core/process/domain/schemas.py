@@ -356,7 +356,7 @@ class TechPlan(RoleOutput):
     )
     parts: list[Part] = Field(
         default_factory=list,
-        description="When the estimate does not fit (over 150 USD or over 40 files, or the "
+        description="When the estimate does not fit (over the size limit the system sets, or the "
         "history's reference says so): at least two chained parts, each a small task of its "
         "own, in the order to build them, and no subtasks. Empty when the plan fits",
     )

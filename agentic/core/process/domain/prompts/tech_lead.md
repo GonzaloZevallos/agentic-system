@@ -82,7 +82,7 @@ Write, in Markdown, using `###` headings and nothing above `###`:
 
    An estimate below half the median of a bucket with at least five tasks is refused,
    and so is one below what the task already spent. A plan whose estimate is over the size
-   limit the system sets (150 USD or 40 files), or over the p90 of its bucket, is not built
+   limit the system sets, or over the p90 of its bucket, is not built
    as one task: write it as `parts` (see `### Parts`) instead of subtasks. Do not shrink the
    estimate to make it fit; a plan that fits and carries `parts` is refused too.
 8. `### Parts`, only when the estimate does not fit: at least two chained parts, each a

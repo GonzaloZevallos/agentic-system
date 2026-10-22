@@ -35,7 +35,10 @@ async def split(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState
         return finish(state, _part_does_not_fit(task_id), ports)
     parts = state.get("parts", [])
     current = state
-    open_bodies = list(ports.inbox.open_issues())
+    try:
+        open_bodies = list(ports.inbox.open_issues())
+    except (ValueError, OSError) as exc:
+        return _stopped(current, "reading the open issues", exc, ports)
     for number, part in enumerate(parts, 1):
         key = str(number)
         if key in current.get("split_issues", {}):
@@ -47,7 +50,7 @@ async def split(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState
             try:
                 url = ports.tracker.open_issue(part["title"], body, label=PART_LABEL)
             except (ValueError, OSError) as exc:
-                return _stopped(current, number, exc, ports)
+                return _stopped(current, f"opening part {number}", exc, ports)
             open_bodies.append((url, body))
         patch: TaskState = {"split_issues": {key: url}}
         finish(current, patch, ports)  # saved as soon as the part exists
@@ -56,13 +59,16 @@ async def split(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState
     listed = "\n".join(
         f"{n}. {parts[n - 1]['title']}: {issues[str(n)]}" for n in range(1, len(parts) + 1)
     )
-    ports.tracker.comment(
-        task_id,
-        f"{SPLIT}the estimate does not fit one task, so it was split into {len(parts)} chained "
-        f"issues, each with its own pull request:\n\n{listed}\n\n"
-        "This task is NOT relaunched: the parts replace it.\n\n"
-        f"Task document: `{document.relative_path(task_id)}`",
-    )
+    try:
+        ports.tracker.comment(
+            task_id,
+            f"{SPLIT}the estimate does not fit one task, so it was split into {len(parts)} "
+            f"chained issues, each with its own pull request:\n\n{listed}\n\n"
+            "This task is NOT relaunched: the parts replace it.\n\n"
+            f"Task document: `{document.relative_path(task_id)}`",
+        )
+    except (ValueError, OSError) as exc:
+        return _stopped(current, "commenting the list of parts", exc, ports)
     return finish(current, {"current_role": PJM.name, "status": "split"}, ports)
 
 
@@ -81,7 +87,7 @@ def _part_does_not_fit(task_id: str) -> TaskState:
     )
 
 
-def _stopped(state: TaskState, number: int, exc: Exception, ports: Ports) -> TaskState:
+def _stopped(state: TaskState, step: str, exc: Exception, ports: Ports) -> TaskState:
     done = len(state.get("split_issues", {}))
     patch = rules.logged(
         {
@@ -89,8 +95,8 @@ def _stopped(state: TaskState, number: int, exc: Exception, ports: Ports) -> Tas
             "status": WAITING_ON_HUMAN,
             **rules.escalation(
                 "failure",
-                f"split: opening part {number} failed ({exc}); {done} of "
-                f"{len(state.get('parts', []))} parts are open, resume to open the rest",
+                f"split: {step} failed ({exc}); {done} of "
+                f"{len(state.get('parts', []))} parts are open, resume to finish",
             ),
         }
     )

@@ -106,3 +106,37 @@ async def test_a_part_of_a_partition_never_splits_again_and_escalates_estimate(t
     resumption = rules.resumed(paused, "Build it whole.")
     assert resumption["fit_waived"] is True and resumption["parts"] == []
     assert rules.resume_target(apply(paused, resumption)) == "plan"
+
+
+@pytest.mark.parametrize("failing", ["open_issues", "comment"])
+async def test_a_gh_failure_outside_the_creation_escalates_failure_and_resumes_complete(
+    failing, tmp_path
+):
+    cfg = Configuration(product_dir=tmp_path)
+    ports = ports_with_numbered_issues()
+
+    def broken(*_args):
+        raise ValueError("gh: boom")
+
+    target = ports.inbox if failing == "open_issues" else ports.tracker
+    setattr(target, failing, broken)
+    cut = await split(STATE, cfg, ports)
+
+    assert cut["escalation_class"] == "failure" and "boom" in cut["escalated"]
+    assert (failing == "comment") == (len(ports.tracker.opened_issues) == 4)
+    paused = apply(ports.documents.saved[-1], cut)
+    assert paused.get("status") != "split"
+
+    again = ports_with_numbered_issues()
+    done = await split(apply(paused, rules.resumed(paused, None)), cfg, again)
+    assert done["status"] == "split"
+    assert len(again.tracker.comments) == 1
+    created = len(ports.tracker.opened_issues) + len(again.tracker.opened_issues)
+    assert created == 4
+
+
+def test_the_reader_of_blockers_loses_every_blocker_after_the_first_line():
+    # Why a part lists all its blockers on one line (invariant 8 cannot hold literally):
+    # `rules.blockers_from_body` reads the first non-empty line only.
+    assert rules.blockers_from_body("Blocked by: #1\nBlocked by: #2\n\nbody") == (1,)
+    assert rules.blockers_from_body("Blocked by: #1, #2\n\nbody") == (1, 2)
