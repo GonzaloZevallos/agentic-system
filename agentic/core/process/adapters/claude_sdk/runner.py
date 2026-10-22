@@ -506,93 +506,109 @@ class ClaudeSdkRunner:
                 await anyio.sleep(CHECK_EVERY_S)
 
         stream = query(prompt=prompt, options=options)
-        watcher = asyncio.ensure_future(watch())
         try:
-            with watch_scope:
+            async with anyio.create_task_group() as group:
+                group.start_soon(watch)
                 try:
-                    async for message in stream:
-                        pulse.see(message, self.clock())
-                        for observer in observers:
-                            observer(message)
-                        if isinstance(message, AssistantMessage):
-                            calls += 1
-                            if message.parent_tool_use_id is None:
-                                main_usage = message.usage
-                                # The quantity `domain/turn_notice.py`'s threshold is stated
-                                # in: a main-thread `AssistantMessage` count, >=1 per harness
-                                # turn by construction, unlike the `PostToolUse` tally it
-                                # replaces (`hooks.TurnCount`'s own docstring).
-                                turns.value += 1
-                            for name in _tool_names(message):
-                                tool_calls[name] = tool_calls.get(name, 0) + 1
-                        background += _background_agents(message)
-                        if isinstance(message, ResultMessage):
-                            result = message
-                            if _delivered(message):
-                                break  # the first delivery is the verdict (module docstring)
-                except anyio.get_cancelled_exc_class():
-                    if stalled is not None and watch_scope.cancel_called:
-                        raise  # the watchdog's own cancel: the stall is told below, not here
-                    # Never an `AttemptFailed`: the process is being asked to die, and turning
-                    # this into a retry would spend money while it happens (invariant 9). The
-                    # figure is a read, never a sum, off the same normaliser `_usage` uses.
-                    usage = _usage(main_usage)
-                    self._warn(
-                        f"[{role.name}] interrupted after {calls} turns, {usage['input']} input / "
-                        f"{usage['output']} output tokens seen on the main thread, sub-agents "
-                        "not counted, cost unknown\n"
-                    )
-                    raise
-                except ResultError as exc:
-                    if stalled is not None:
-                        raise _stall_failure() from exc  # the kill's symptom, not its own news
-                    # The CLI reports the failed result, then exits non-zero; the SDK turns
-                    # that into ResultError after yielding the ResultMessage.
-                    cost, session = _left_behind(result)
-                    if exc.subtype == "error_max_turns":
-                        raise AttemptFailed(
-                            max_turns_motive(role.max_turns, _reported_error(exc)),
-                            cost,
-                            session,
-                            reason="max_turns",
-                            denials=denials,
-                            turn_notice=notice_firings > 0,
-                            turn_notice_firings=notice_firings,
-                            deliveries=tool_calls.get(DELIVERY_TOOL, 0),
-                            presubmit_denials=presubmit_denials,
-                            main_thread_turns=turns.value,
-                        ) from exc
-                    raise AttemptFailed(
-                        failure_motive(_reported_error(exc)),
-                        cost,
-                        session,
-                        reason=failure_reason(_reported_error(exc)),
-                        denials=denials,
-                        turn_notice=notice_firings > 0,
-                        turn_notice_firings=notice_firings,
-                        deliveries=tool_calls.get(DELIVERY_TOOL, 0),
-                        presubmit_denials=presubmit_denials,
-                        main_thread_turns=turns.value,
-                    ) from exc
-                except Exception as exc:  # the SDK raises its own hierarchy; all of it is a failure
-                    if stalled is not None:
-                        raise _stall_failure() from exc
-                    raise AttemptFailed(
-                        f"SDK error: {exception_motive(exc)}",
-                        reason="sdk",
-                        denials=denials,
-                        turn_notice=notice_firings > 0,
-                        turn_notice_firings=notice_firings,
-                        deliveries=tool_calls.get(DELIVERY_TOOL, 0),
-                        presubmit_denials=presubmit_denials,
-                        main_thread_turns=turns.value,
-                    ) from exc
+                    with watch_scope:
+                        try:
+                            async for message in stream:
+                                pulse.see(message, self.clock())
+                                for observer in observers:
+                                    observer(message)
+                                if isinstance(message, AssistantMessage):
+                                    calls += 1
+                                    if message.parent_tool_use_id is None:
+                                        main_usage = message.usage
+                                        # The quantity `domain/turn_notice.py`'s
+                                        # threshold is stated in: a main-thread
+                                        # `AssistantMessage` count, >=1 per harness turn by
+                                        # construction, unlike the `PostToolUse` tally it
+                                        # replaces (`hooks.TurnCount`'s own docstring).
+                                        turns.value += 1
+                                    for name in _tool_names(message):
+                                        tool_calls[name] = tool_calls.get(name, 0) + 1
+                                background += _background_agents(message)
+                                if isinstance(message, ResultMessage):
+                                    result = message
+                                    if _delivered(message):
+                                        # the first delivery is the verdict (module docstring)
+                                        break
+                        except anyio.get_cancelled_exc_class():
+                            if stalled is not None and watch_scope.cancel_called:
+                                # the watchdog's own cancel: the stall is told below
+                                raise
+                            # Never an `AttemptFailed`: the process is being asked to die,
+                            # and turning this into a retry would spend money while it
+                            # happens (invariant 9). The figure is a read, never a sum, off
+                            # the same normaliser `_usage` uses.
+                            usage = _usage(main_usage)
+                            self._warn(
+                                f"[{role.name}] interrupted after {calls} turns, "
+                                f"{usage['input']} input / {usage['output']} output tokens "
+                                "seen on the main thread, sub-agents not counted, "
+                                "cost unknown\n"
+                            )
+                            raise
+                        except ResultError as exc:
+                            if stalled is not None:
+                                # the kill's symptom, not its own news
+                                raise _stall_failure() from exc
+                            # The CLI reports the failed result, then exits non-zero; the
+                            # SDK turns that into ResultError after yielding the
+                            # ResultMessage.
+                            cost, session = _left_behind(result)
+                            if exc.subtype == "error_max_turns":
+                                raise AttemptFailed(
+                                    max_turns_motive(role.max_turns, _reported_error(exc)),
+                                    cost,
+                                    session,
+                                    reason="max_turns",
+                                    denials=denials,
+                                    turn_notice=notice_firings > 0,
+                                    turn_notice_firings=notice_firings,
+                                    deliveries=tool_calls.get(DELIVERY_TOOL, 0),
+                                    presubmit_denials=presubmit_denials,
+                                    main_thread_turns=turns.value,
+                                ) from exc
+                            raise AttemptFailed(
+                                failure_motive(_reported_error(exc)),
+                                cost,
+                                session,
+                                reason=failure_reason(_reported_error(exc)),
+                                denials=denials,
+                                turn_notice=notice_firings > 0,
+                                turn_notice_firings=notice_firings,
+                                deliveries=tool_calls.get(DELIVERY_TOOL, 0),
+                                presubmit_denials=presubmit_denials,
+                                main_thread_turns=turns.value,
+                            ) from exc
+                        except (
+                            Exception
+                        ) as exc:  # the SDK raises its own hierarchy; all of it is a failure
+                            if stalled is not None:
+                                raise _stall_failure() from exc
+                            raise AttemptFailed(
+                                f"SDK error: {exception_motive(exc)}",
+                                reason="sdk",
+                                denials=denials,
+                                turn_notice=notice_firings > 0,
+                                turn_notice_firings=notice_firings,
+                                deliveries=tool_calls.get(DELIVERY_TOOL, 0),
+                                presubmit_denials=presubmit_denials,
+                                main_thread_turns=turns.value,
+                            ) from exc
+                        finally:
+                            # The stream is closed before anything is reaped
+                            # (`run_once`): a generator left suspended by the `break`
+                            # above would still own the CLI.
+                            await _close(stream)
                 finally:
-                    # The stream is closed before anything is reaped (`run_once`): a generator
-                    # left suspended by the `break` above would still own the CLI.
-                    await _close(stream)
-        finally:
-            watcher.cancel()
+                    group.cancel_scope.cancel()  # the watchdog's work ends with the loop
+        except BaseExceptionGroup as grouped:
+            # The task group wraps whatever its body raised; the raise sites above are
+            # the attempt's contract, so a lone exception leaves as itself.
+            raise (grouped.exceptions[0] if len(grouped.exceptions) == 1 else grouped)
         if stalled is not None:
             raise _stall_failure()
 
