@@ -244,3 +244,13 @@ def test_an_area_without_entries_has_no_line_and_no_file():
     built = index(capabilities={}, adrs={"0002-old.md": SUPERSEDED})
     assert built.files == {} and built.areas == ""
     assert built.text.startswith("## Product knowledge\n\n`BRIEF.md`:")
+
+
+def test_a_marker_inside_an_adr_or_capability_does_not_inline_it():
+    """Those files are opened whole through the index; inlining their marked section
+    would deliver it twice. The marker is honoured in the standards only."""
+    marked = f"# Doc\n\n## Rule\n{ALWAYS_MARKER}\n\nSecret rule.\n"
+    built = index(capabilities={"cap.md": marked}, adrs={"0005-x.md": marked})
+    assert "Secret rule." not in built.always
+    assert "docs/product/cap.md" in built.files[".agentic/index/product.md"]
+    assert "docs/adr/0005-x.md" in built.files[".agentic/index/adr.md"]

@@ -68,8 +68,11 @@ def always_whole(path: str, section: str | None = None) -> bool:
 
     A file is whole when it is on the named list (`ALWAYS_FILES`, or a `CONTEXT.md`).
     A `## ` section -- `section` is its text, heading first -- is whole when the line
-    right after its heading is exactly `ALWAYS_MARKER`; the file it lives in does not
-    matter."""
+    right after its heading is exactly `ALWAYS_MARKER`. The
+    predicate does not look at the file, but `build_index` only asks it about
+    `CODING_STANDARDS.md` sections: those are split into their own files, so a marked one
+    is inlined with nothing left in the index. In an ADR or capability the section is
+    part of a file opened whole, and inlining it would deliver it twice (invariant 1)."""
     if section is not None:
         lines = section.split("\n")
         return len(lines) > 1 and _H2_LINE.match(lines[0]) is not None and lines[1] == ALWAYS_MARKER
