@@ -61,7 +61,9 @@ def test_the_text_is_one_fixed_line_when_the_history_is_empty():
 
 
 def test_the_text_lists_the_buckets_and_the_pairs():
-    docs = [doc(2, 10.0 * i, estimate={"cost_usd": 12.0, "files": 7}, actual_files=9) for i in (1, 2)]
+    docs = [
+        doc(2, 10.0 * i, estimate={"cost_usd": 12.0, "files": 7}, actual_files=9) for i in (1, 2)
+    ]
     text = cost_history.build(docs).text()
     assert "2 subtasks" in text and "n=2" in text
     assert "estimated 12.00 USD / 7 files, actual 10.00 USD / 9 files" in text

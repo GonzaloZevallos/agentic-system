@@ -18,6 +18,7 @@ tags instead of an array, five times in a row in one case. Lists nested in objec
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, Field
@@ -556,3 +557,33 @@ def validate(schema: type[RoleOutput], raw: Any, vocabulary: dict[str, str]) -> 
 
 def _lines(text: str) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def plan_check_for(history: Any, spent_usd: float) -> Callable[[dict[str, Any]], None]:
+    """The plan check with the three refusals that need context (ADR-0053), built by the
+    plan stage from the cost history and what the task already spent -- never carried in
+    the task state. Each refusal is a legible reason: it is what the retry reads. The
+    estimate fields are checked only when the output carries them."""
+    from .cost_history import MIN_BUCKET, bucket_median  # noqa: PLC0415
+
+    def check(data: dict[str, Any]) -> None:
+        plan_check(data)
+        if "estimated_files" not in data and "estimated_cost_usd" not in data:
+            return
+        files, cost = data["estimated_files"], data["estimated_cost_usd"]
+        if files < 1:
+            raise ValueError("estimated_files must be at least one file: every task changes one")
+        if cost < spent_usd:
+            raise ValueError(
+                f"estimated_cost_usd {cost:.2f} is below what the task already spent "
+                f"{spent_usd:.2f}: the estimate is the TOTAL cost, spent included"
+            )
+        median = bucket_median(history, len(data["subtasks"]))
+        if median is not None and cost < 0.5 * median:
+            raise ValueError(
+                f"estimated_cost_usd {cost:.2f} is below half the median {median:.2f} of "
+                f"closed tasks with this many subtasks (at least {MIN_BUCKET} of them): "
+                "estimate from the history table or explain the gap in the plan"
+            )
+
+    return check

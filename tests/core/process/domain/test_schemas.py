@@ -332,3 +332,65 @@ def test_the_coverage_description_quotes_the_forms_from_the_one_module_byte_for_
     # The forms use the typographic ellipsis the prompts quote, never an ASCII stand-in.
     assert "..." not in description
     assert "…" in coverage.MAPPED_FORM and "…" in coverage.BRIEF_FORM
+
+
+# The estimate check (ADR-0053): `plan_check_for(history, spent_usd)` is the plan check
+# plus three refusals that read the cost history and what the task already spent.
+
+
+def _estimated(cost, files, *subtask_ids):
+    data = _plan("### Solution", *(subtask_ids or ("a",)))
+    return {**data, "estimated_cost_usd": cost, "estimated_files": files}
+
+
+def _history(n_subtasks, costs):
+    from agentic.core.process.domain import cost_history
+
+    return cost_history.build(
+        [
+            {"cost_usd": c, "subtasks": {f"s{i}": {} for i in range(n_subtasks)}, "closed_at": "x"}
+            for c in costs
+        ]
+    )
+
+
+def test_plan_check_for_accepts_a_plan_that_clears_the_floors():
+    check = schemas.plan_check_for(_history(1, []), 5.0)
+    check(_estimated(20.0, 3))  # does not raise
+
+
+def test_plan_check_for_still_applies_what_plan_check_validates():
+    check = schemas.plan_check_for(_history(1, []), 0.0)
+    with pytest.raises(ValueError, match="at least one"):
+        check({**_estimated(20.0, 3), "subtasks": []})
+
+
+def test_plan_check_for_rejects_less_than_one_file():
+    check = schemas.plan_check_for(_history(1, []), 0.0)
+    with pytest.raises(ValueError, match="at least one file"):
+        check(_estimated(20.0, 0))
+
+
+def test_plan_check_for_rejects_an_estimate_below_what_was_already_spent():
+    check = schemas.plan_check_for(_history(1, []), 30.0)
+    with pytest.raises(ValueError, match="already spent 30.00"):
+        check(_estimated(20.0, 3))
+
+
+def test_plan_check_for_rejects_half_the_median_of_a_bucket_of_five():
+    check = schemas.plan_check_for(_history(1, [40, 40, 40, 40, 40]), 0.0)
+    with pytest.raises(ValueError, match="median"):
+        check(_estimated(19.0, 3))
+    check(_estimated(20.0, 3))  # exactly half: allowed
+
+
+def test_plan_check_for_does_not_apply_the_floor_to_a_bucket_below_five():
+    check = schemas.plan_check_for(_history(1, [40, 40, 40, 40]), 0.0)
+    check(_estimated(1.0, 3))  # does not raise
+
+
+def test_plan_check_for_looks_at_the_bucket_of_the_plans_own_subtask_count():
+    check = schemas.plan_check_for(_history(2, [40] * 5), 0.0)
+    check(_estimated(1.0, 3, "a"))  # a different bucket: no floor
+    with pytest.raises(ValueError, match="median"):
+        check(_estimated(1.0, 3, "a", "b"))
