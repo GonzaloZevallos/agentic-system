@@ -3117,3 +3117,18 @@ def test_the_blocking_refusal_still_comes_before_the_important_ones():
     assert rules.auto_merge_decision(facts) == rules.MergeDecision(
         "refuse", "open_findings_blocking"
     )
+
+
+def test_ending_a_task_without_a_delivery_stamps_finished_at_and_nothing_else_does():
+    assert rules.finished("discarded", "2026-10-22T10:00:00+00:00") == {
+        "status": "discarded",
+        "finished_at": "2026-10-22T10:00:00+00:00",
+    }
+    assert rules.finished("split", "2026-10-22T10:00:00+00:00")["finished_at"]
+    with pytest.raises(ValueError, match="ready_for_review"):
+        rules.finished("ready_for_review", "2026-10-22T10:00:00+00:00")
+    # The document writes the key only when set: one written before it is byte-identical.
+    base = {"id": "T-1", "title": "t", "description": "d", "status": "discarded"}
+    assert "finished_at" not in document.render(base)
+    stamped = document.render({**base, "finished_at": "2026-10-22T10:00:00+00:00"})
+    assert "finished_at: '2026-10-22T10:00:00+00:00'" in stamped

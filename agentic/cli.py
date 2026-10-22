@@ -1891,6 +1891,7 @@ async def _reflect(
     task_id: str | None,
     since: str | None,
     run_lock: RunLock | None = None,
+    system: reflect_run.SystemRepo | None = None,
 ) -> None:
     """`agentic reflect --product-dir D [--issue N | --all] [--since YYYY-MM-DD]` (ADR-0043):
     the reflector over the closed tasks no earlier run reflected on, at most
@@ -1905,7 +1906,13 @@ async def _reflect(
     try:
         with _locked(lock, reflect_run.TASK_ID):
             outcome = await reflect_run.reflect(
-                cfg, ports, now=_now_iso(), summarise=_window_summary, since=since, task_id=task_id
+                cfg,
+                ports,
+                now=_now_iso(),
+                summarise=_window_summary,
+                since=since,
+                task_id=task_id,
+                system=system if system is not None else composition.system_repo(),
             )
     except (ValueError, GitError, OSError) as exc:
         raise CannotStart(f"reflect: {exc}") from exc

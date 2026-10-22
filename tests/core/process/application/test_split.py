@@ -2,6 +2,8 @@
 fit becomes chained, labelled issues and the task ends `split`; a cut `gh` resumes without
 duplicating; a task that is itself a part never splits again."""
 
+from datetime import datetime
+
 import pytest
 
 from agentic.core.process.application.split import split
@@ -49,6 +51,7 @@ async def test_a_plan_that_does_not_fit_opens_chained_labelled_issues_and_ends_s
         assert "1. No string is hard coded.\n2. Every part ships alone." in body
         assert ".agentic/tasks/GH-53.md" in body and "agentic/GH-53" in body
     assert patch["current_role"] == "PjM"
+    assert datetime.fromisoformat(patch["finished_at"]).tzinfo is not None
     saved = ports.documents.saved[-1]
     assert saved["status"] == "split" and sorted(saved["split_issues"]) == ["1", "2", "3", "4"]
     ((task_id, text),) = ports.tracker.comments

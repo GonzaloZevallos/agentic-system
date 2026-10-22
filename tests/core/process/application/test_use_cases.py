@@ -1,6 +1,8 @@
 """The rules of each node, against in-memory ports. No graph: each use case is called
 with the state it would receive."""
 
+from datetime import datetime
+
 import pytest
 
 from agentic.core.process.application.classify import classify
@@ -211,8 +213,10 @@ async def test_discard_tells_the_issue_why_and_leaves_it_to_the_human(cfg):
     ]
     assert ports.tracker.labels == [] and ports.tracker.pull_requests == []
     assert ports.workspace.cleaned == ["T-1"]  # an end keeps no worktree, like a delivery
-    assert patch == {"current_role": "PjM"}
+    assert patch["current_role"] == "PjM"
+    assert datetime.fromisoformat(patch["finished_at"]).tzinfo is not None
     assert ports.documents.last["status"] == "discarded"
+    assert ports.documents.last["finished_at"] == patch["finished_at"]
     # A document that lost the reason falls back to PM's section, past its heading.
     section = "### Verdict\n\napproved: the report is weekly\n\n### Adjustments"
     assert discard_reason({"sections": {"PM": section}}) == "approved: the report is weekly"
@@ -299,7 +303,7 @@ async def test_a_discard_records_what_the_release_reaped(cfg):
 
     patch = await discard(state, cfg, ports)
 
-    assert patch == {"current_role": "PjM", "reaped_at_cleanup": list(reaped)}
+    assert patch["reaped_at_cleanup"] == list(reaped) and patch["current_role"] == "PjM"
     assert ports.documents.last["reaped_at_cleanup"] == list(reaped)
 
 

@@ -21,7 +21,7 @@ import re
 from collections.abc import Callable
 from typing import Any, Literal, get_args
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .cost_history import MIN_BUCKET, History, bucket_median, reference_usd
 from .coverage import BRIEF_FORM, MAPPED_FORM, NOT_TOUCHED, UNSATISFIABLE
@@ -497,6 +497,35 @@ class LessonDelta(BaseModel):
         description="The ids of the closed tasks whose returns this delta cites. "
         "Required on `add` and `bump`"
     )
+    confidence: Literal["", "low", "medium", "high"] = Field(
+        default="",
+        description="Required on `add`, empty otherwise: how sure you are the lesson is general, "
+        "not specific to this task. `high` only when it plainly holds for any task of the "
+        "role; `low` or `medium` when the pattern needs to recur before it is kept",
+    )
+    scope: Literal["product", "system"] = Field(
+        default="product",
+        description="`system` only for a lesson that holds for any product the system "
+        "builds; `product` otherwise, and whenever in doubt",
+    )
+    source: Literal["", "return", "finding", "design", "human_decision"] = Field(
+        default="",
+        description="Where the lesson comes from, as the input names the section. Empty "
+        "when it cannot be told",
+    )
+    decision: int = Field(
+        default=0,
+        description="The number N of the `Decision N` a `human_decision` lesson cites. "
+        "Required when `source` is `human_decision`, 0 otherwise",
+    )
+
+    @model_validator(mode="after")
+    def _decision_is_cited(self) -> LessonDelta:
+        if self.op == "add" and not self.confidence:
+            raise ValueError("an `add` states its confidence: low, medium or high")
+        if self.source == "human_decision" and self.decision < 1:
+            raise ValueError("a human_decision lesson cites the number of its decision")
+        return self
 
 
 class Reflection(RoleOutput):

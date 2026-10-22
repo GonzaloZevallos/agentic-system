@@ -17,13 +17,14 @@ Nothing here decides what a lesson says: `playbook.apply` does that.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 
 from . import playbook as pb
+from .document import HUMAN
 
 MARKER = "<!-- agentic:playbook -->"
 # Closed task documents whose delivery a person kept: a closed pull request taught
@@ -32,11 +33,18 @@ MARKER = "<!-- agentic:playbook -->"
 # (ADR-0010); a test keeps it equal to `metrics.OUTCOME_CLASS`'s `human_kept`.
 KEPT = ("merged", "merged_with_changes")
 # Reflected tasks that make a summary due, and the files this module owns beside the
-# playbooks (`playbook.RECORD_FILES` names the same two).
+# playbooks (`playbook.RECORD_FILES` names the same four).
 SUMMARY_EVERY = 10
+# A reflection that failed for a transient reason is tried again, this many attempts in all,
+# before the key is marked `failed` for good.
+REFLECT_ATTEMPTS = 3
 PLAYBOOKS_DIR = ".agentic/playbooks"
 LEDGER_FILE = f"{PLAYBOOKS_DIR}/reflected.yaml"
 REJECTED_FILE = f"{PLAYBOOKS_DIR}/rejected.yaml"
+# Rated lessons that did not pass `playbook.keep` (outside every prompt) and items
+# `playbook.archive_due` took out of one (kept, never deleted).
+CANDIDATES_FILE = f"{PLAYBOOKS_DIR}/candidates.yaml"
+ARCHIVED_FILE = f"{PLAYBOOKS_DIR}/archived.yaml"
 SUMMARIES_DIR = f"{PLAYBOOKS_DIR}/summaries"
 
 _FENCE = re.compile(r"```yaml\n(?P<yaml>.*?)```", re.DOTALL)
@@ -210,21 +218,73 @@ def parse_rejected(text: str) -> list[pb.Rejected]:
 
 # ---- the ledger: reflected.yaml ------------------------------------------------------
 
+Gate = Literal["review", "decision"]
+# The two doors a task enters through (ADR-0056): `review` reads every source once the
+# delivery is kept, `decision` only the human's decisions of a task that ended without one.
+GATES: tuple[Gate, ...] = ("review", "decision")
+
+
+def ledger_key(task_id: str, gate: Gate = "review") -> str:
+    return f"{task_id}@{gate}"
+
+
+def split_key(key: str) -> tuple[str, str]:
+    """`(task id, gate)` of a ledger key; a key without `@` (every one written before
+    ADR-0056) is read as `@review`."""
+    task, _, gate = key.partition("@")
+    return task, gate or "review"
+
+
+def normal_key(key: str) -> str:
+    task, gate = split_key(key)
+    return f"{task}@{gate}"
+
 
 @dataclass(frozen=True)
 class Entry:
-    """One reflected task: what it cost, why the reflection failed (empty when it did
-    not) and the effective deltas the curator applied, as plain dicts."""
+    """One reflected key: what it cost, why the reflection failed (empty when it did
+    not), the effective deltas the curator applied as plain dicts, how many of the task's
+    `### Decision` blocks it had read and how many attempts a transient failure has used."""
 
     cost_usd: float = 0.0
     failed: str = ""
     applied: tuple[Mapping[str, Any], ...] = ()
+    decisions: int = 0
+    attempts: int = 0
+
+    @property
+    def waits_retry(self) -> bool:
+        """A transient failure with attempts left: not reflected yet, not failed for good."""
+        return not self.failed and 0 < self.attempts < REFLECT_ATTEMPTS
+
+
+def reflected_tasks(ledger: Ledger) -> int:
+    """How many tasks the ledger has reflected: distinct ids over both gates, not counting
+    a key that waits for a retry. The one place this is counted; the summary and the
+    archive both call it."""
+    return len({split_key(k)[0] for k, entry in ledger.tasks.items() if not entry.waits_retry})
+
+
+def entries_since(ledger: Ledger, reflected: int) -> list[Entry]:
+    """The entries of the tasks reflected after the first `reflected` distinct ones (the
+    summary's window), in order. A key waiting for a retry belongs to no task yet. Counts
+    the way `reflected_tasks` does: by distinct task id."""
+    order: dict[str, int] = {}
+    out: list[Entry] = []
+    for key, entry in ledger.tasks.items():
+        if entry.waits_retry:
+            continue
+        task = split_key(key)[0]
+        if order.setdefault(task, len(order)) >= reflected:
+            out.append(entry)
+    return out
 
 
 @dataclass(frozen=True)
 class Ledger:
-    """`reflected.yaml`. `tasks` keeps the order tasks were reflected in; `summarised` is
-    how many of them the last summary covered, `summaries` how many were written."""
+    """`reflected.yaml`. `tasks` keeps the order keys were reflected in (a key is
+    `<id>@review` or `<id>@decision`); `summarised` is how many tasks the last summary
+    covered, `summaries` how many were written."""
 
     started_at: str = ""
     tasks: Mapping[str, Entry] = field(default_factory=dict)
@@ -233,18 +293,31 @@ class Ledger:
 
     @property
     def since_summary(self) -> int:
-        return len(self.tasks) - self.summarised
+        return reflected_tasks(self) - self.summarised
+
+    @property
+    def done_keys(self) -> set[str]:
+        """The keys not to reflect again: every one but those waiting for a retry."""
+        return {normal_key(k) for k, entry in self.tasks.items() if not entry.waits_retry}
+
+    @property
+    def decisions_read(self) -> dict[str, int]:
+        return {normal_key(k): entry.decisions for k, entry in self.tasks.items()}
 
 
 def render_ledger(ledger: Ledger) -> str:
     tasks: dict[str, Any] = {}
-    for task, entry in ledger.tasks.items():
+    for key, entry in ledger.tasks.items():
         item: dict[str, Any] = {"cost_usd": round(entry.cost_usd, 4)}
         if entry.failed:
             item["failed"] = entry.failed
         if entry.applied:
             item["applied"] = [dict(delta) for delta in entry.applied]
-        tasks[task] = item
+        if entry.decisions:
+            item["decisions"] = entry.decisions
+        if entry.attempts:
+            item["attempts"] = entry.attempts
+        tasks[normal_key(key)] = item
     data = {
         "started_at": ledger.started_at,
         "summaries": ledger.summaries,
@@ -257,7 +330,8 @@ def render_ledger(ledger: Ledger) -> str:
 
 def parse_ledger(text: str) -> Ledger:
     """Read `reflected.yaml`; empty text is an empty ledger, anything malformed raises
-    `ValueError` (the verb refuses to guess what was already paid for)."""
+    `ValueError` (the verb refuses to guess what was already paid for). A key without
+    `@` is read as `@review`; `decisions` and `attempts` are optional."""
     try:
         data = yaml.safe_load(text)
     except yaml.YAMLError as error:
@@ -268,10 +342,12 @@ def parse_ledger(text: str) -> Ledger:
         raise ValueError("reflected.yaml: not a mapping with a `tasks` mapping")
     try:
         tasks = {
-            str(task): Entry(
+            normal_key(str(task)): Entry(
                 cost_usd=float(raw.get("cost_usd") or 0.0),
                 failed=str(raw.get("failed") or ""),
                 applied=tuple(dict(d) for d in raw.get("applied") or []),
+                decisions=int(raw.get("decisions") or 0),
+                attempts=int(raw.get("attempts") or 0),
             )
             for task, raw in (data.get("tasks") or {}).items()
         }
@@ -287,15 +363,16 @@ def parse_ledger(text: str) -> Ledger:
 
 def merge_ledgers(ledgers: Sequence[Ledger], candidates: Sequence[Candidate] = ()) -> Ledger:
     """What is known to be reflected, from every place that says so: ledger files first
-    (they carry the entries), then candidate blocks (only task ids and costs). The
-    earliest `started_at` wins, the counters are the furthest any source reached."""
+    (they carry the entries), then candidate blocks (only task ids and costs, always
+    `@review`: a block says nothing of the gate). The earliest `started_at` wins, the
+    counters are the furthest any source reached."""
     tasks: dict[str, Entry] = {}
     for ledger in ledgers:
         for task, entry in ledger.tasks.items():
-            tasks.setdefault(task, entry)
+            tasks.setdefault(normal_key(task), entry)
     for candidate in candidates:
         for task, cost in candidate.record.tasks.items():
-            tasks.setdefault(task, Entry(cost_usd=cost))
+            tasks.setdefault(normal_key(task), Entry(cost_usd=cost))
     starts = [
         x
         for x in (*(g.started_at for g in ledgers), *(c.record.started_at for c in candidates))
@@ -313,30 +390,203 @@ def merge_ledgers(ledgers: Sequence[Ledger], candidates: Sequence[Candidate] = (
 
 # ---- which tasks to reflect ----------------------------------------------------------
 
+_DECISION_HEADING = re.compile(r"^### Decision \d+", re.M)
+
+
+def decision_count(document: Mapping[str, Any]) -> int:
+    """How many `### Decision N` blocks the document's HUMAN section carries."""
+    sections = document.get("sections")
+    human = sections.get(HUMAN, "") if isinstance(sections, Mapping) else ""
+    return len(_DECISION_HEADING.findall(str(human or "")))
+
+
+def _decision_clock(document: Mapping[str, Any], closed_escalations: Collection[str]) -> str:
+    """When a task ended without a kept delivery, or `""` when it did not (yet):
+    `discarded` and `split` by `finished_at`, a closed pull request by `closed_at`, an
+    escalation whose issue is closed by the end of its last run."""
+    status = document.get("status")
+    if status in ("discarded", "split"):
+        return str(document.get("finished_at") or "")
+    if document.get("closed_at") and document.get("delivery_outcome") == "closed":
+        return str(document["closed_at"])
+    if status == "waiting_on_human" and str(document.get("id") or "") in closed_escalations:
+        runs = document.get("runs")
+        ended = [
+            str(r.get("ended_at"))
+            for r in runs or []
+            if isinstance(r, Mapping) and r.get("ended_at")
+        ]
+        return max(ended, default="")
+    return ""
+
 
 def eligible(
     documents: Sequence[Mapping[str, Any]],
-    reflected_ids: Sequence[str] | set[str],
+    reflected_ids: Collection[str],
     started_at: str,
     since: str | None,
+    *,
+    gate: Gate = "review",
+    closed_escalations: Collection[str] = frozenset(),
+    decisions_read: Mapping[str, int] | None = None,
 ) -> list[Mapping[str, Any]]:
-    """The closed documents worth a reflection, oldest first: closed (`closed_at`), with
-    a delivery a person kept, closed on or after `since` (else after `started_at`) and not
-    reflected yet. With neither `since` nor `started_at` nothing is eligible: the first
-    run only starts the clock, it never reaches back (backfill is explicit, `--since`)."""
+    """The documents worth a reflection through `gate`, oldest first, closed on or after
+    `since` (else after `started_at`) and not reflected yet. With neither `since` nor
+    `started_at` nothing is eligible: the first run only starts the clock, it never reaches
+    back (backfill is explicit, `--since`). `reflected_ids` are ledger keys (a bare id is
+    `@review`); no I/O: whether an escalation's issue is closed is `closed_escalations`.
+
+    - `review`: `closed_at` and a delivery a person kept (`KEPT`).
+    - `decision`: it has a `### Decision`, ended without a kept delivery (`_decision_clock`),
+      and is new or has more decisions than the key had read (`decisions_read`)."""
     threshold = since or started_at
     if not threshold:
         return []
-    done = set(reflected_ids)
-    kept = [
-        d
-        for d in documents
-        if d.get("closed_at")
-        and d.get("delivery_outcome") in KEPT
-        and str(d["closed_at"]) >= threshold
-        and str(d.get("id") or "") not in done
+    done = {normal_key(k) for k in reflected_ids}
+    read = decisions_read or {}
+    clocked: list[tuple[str, Mapping[str, Any]]] = []
+    for d in documents:
+        key = ledger_key(str(d.get("id") or ""), gate)
+        if gate == "review":
+            clock = (
+                str(d["closed_at"])
+                if d.get("closed_at") and d.get("delivery_outcome") in KEPT
+                else ""
+            )
+            fresh = key not in done
+        else:
+            count = decision_count(d)
+            clock = _decision_clock(d, closed_escalations) if count else ""
+            fresh = key not in done or count > read.get(key, 0)
+        if clock and clock >= threshold and fresh:
+            clocked.append((clock, d))
+    return [d for _, d in sorted(clocked, key=lambda pair: pair[0])]
+
+
+def in_prompt_since(
+    item_id: str,
+    merged_candidates: Sequence[Candidate],
+    playbook_at_merge: Callable[[str, str], pb.Playbook],
+    commit_date: Callable[[str], str],
+    *,
+    not_before: str = "",
+) -> str | None:
+    """The date `item_id` reached a prompt: the merge date of the first merged candidate
+    PR whose playbook, read at its merge commit (`playbook_at_merge(commit, slug)`),
+    contains the item's **id**. Never `added_at`, never the block's text: an item whose PR
+    never merged has not been in a prompt and does not age. `not_before` skips merges
+    before it (a restored item counts from the merge after its restore)."""
+    slug = item_id.rpartition("-")[0]
+    dates = [
+        date
+        for candidate in merged_candidates
+        if candidate.state == "MERGED" and candidate.merge_commit
+        if any(i.id == item_id for i in playbook_at_merge(candidate.merge_commit, slug).items)
+        if (date := commit_date(candidate.merge_commit)) and date >= not_before
     ]
-    return sorted(kept, key=lambda d: str(d["closed_at"]))
+    return min(dates) if dates else None
+
+
+# ---- candidates.yaml and archived.yaml -----------------------------------------------
+
+
+def render_candidates(pending: Sequence[pb.Pending]) -> str:
+    data = [
+        {
+            "slug": p.slug,
+            "category": p.category,
+            "lesson": p.lesson,
+            "confidence": p.confidence,
+            "seen_in": list(p.seen_in),
+            "sources": list(p.sources),
+            "added_at": p.added_at,
+        }
+        for p in pending
+    ]
+    text: str = yaml.safe_dump(
+        {"candidates": data}, sort_keys=False, allow_unicode=True, width=10**6
+    )
+    return text
+
+
+def parse_candidates(text: str) -> list[pb.Pending]:
+    """Read `candidates.yaml`; empty text is an empty list, anything malformed raises
+    `ValueError`. The lesson goes through `lesson_refusal` like any other."""
+    rows = _rows_of(text, "candidates")
+    out: list[pb.Pending] = []
+    for row in rows:
+        try:
+            confidence = str(row["confidence"])
+            if confidence not in pb.CONFIDENCES:
+                raise ValueError(f"confidence {confidence} is unknown")
+            lesson = str(row["lesson"])
+            if refusal := pb.lesson_refusal(lesson):
+                raise ValueError(refusal)
+            if str(row["category"]) not in pb.LESSON_CATEGORIES:
+                raise ValueError(f"category {row['category']} is unknown")
+            out.append(
+                pb.Pending(
+                    slug=str(row["slug"]),
+                    category=str(row["category"]),
+                    lesson=lesson.strip(),
+                    confidence=_confidence(confidence),
+                    seen_in=tuple(dict.fromkeys(str(t) for t in row.get("seen_in") or [])),
+                    sources=tuple(str(x) for x in row.get("sources") or []),
+                    added_at=str(row.get("added_at") or ""),
+                )
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(f"candidates.yaml: a malformed entry ({error})") from error
+    return out
+
+
+def _confidence(text: str) -> pb.Confidence:
+    if text == "low":
+        return "low"
+    if text == "medium":
+        return "medium"
+    if text == "high":
+        return "high"
+    raise ValueError(f"confidence {text} is unknown")
+
+
+def render_archived(archived: Sequence[pb.Archived]) -> str:
+    data = [
+        {"reason": a.reason, "archived_at": a.archived_at, **pb.item_data(a.item)} for a in archived
+    ]
+    text: str = yaml.safe_dump({"archived": data}, sort_keys=False, allow_unicode=True, width=10**6)
+    return text
+
+
+def parse_archived(text: str) -> list[pb.Archived]:
+    """Read `archived.yaml`: each row an item plus `reason` and `archived_at`."""
+    out: list[pb.Archived] = []
+    for row in _rows_of(text, "archived"):
+        if not isinstance(row, dict):
+            raise ValueError("archived.yaml: an entry is not a mapping")
+        rest = {k: v for k, v in row.items() if k not in ("reason", "archived_at")}
+        slug = str(row.get("id", "")).rpartition("-")[0]
+        out.append(
+            pb.Archived(
+                pb.parse_item(rest, slug),
+                str(row.get("reason") or ""),
+                str(row.get("archived_at") or ""),
+            )
+        )
+    return out
+
+
+def _rows_of(text: str, key: str) -> list[Any]:
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as error:
+        raise ValueError(f"{key}.yaml: not valid YAML: {error}") from error
+    if data is None:
+        return []
+    rows = data.get(key) if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        raise ValueError(f"{key}.yaml: no `{key}` list")
+    return rows
 
 
 def summary_due(count_since_last: int) -> bool:

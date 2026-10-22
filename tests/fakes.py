@@ -539,6 +539,8 @@ class MemoryWorkspace:
         # worktree holds at each path it names becomes `show`'s text at the new head, and
         # `full_head` answers that head -- so a renumber is visible to the reads after it.
         self.track_commits = False
+        # The instant each commit was made, by ref: what `commit_date` answers.
+        self.commit_dates: dict[str, str] = {}
         # GH-229: branch commits get 40-hex ids when True, the form the merge decision
         # requires of a pull request head (`full_commit_id`).
         self.full_shas = False
@@ -812,6 +814,9 @@ class MemoryWorkspace:
                     return None
                 return self.show(self.branch_commits[index - 1].sha, relative)
         return None
+
+    def commit_date(self, ref: str) -> str | None:
+        return self.commit_dates.get(ref)
 
     def cleanup(self, task_id: str) -> None:
         if self.cleanup_error is not None:

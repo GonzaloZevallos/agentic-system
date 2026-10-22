@@ -55,6 +55,7 @@ def add_delta(task: str) -> dict:
         "lesson": LESSON,
         "item_id": "",
         "tasks": [task],
+        "confidence": "high",
     }
 
 
@@ -116,7 +117,7 @@ async def test_the_cap_reflects_five_of_eight_and_leaves_the_default_branch_and_
     assert git(root, "rev-parse", "HEAD") == before
     assert git(root, "status", "--porcelain", "--", ".agentic/tasks") == ""
     ledger = pc.parse_ledger(git(root, "show", f"agentic/playbook:{pc.LEDGER_FILE}"))
-    assert list(ledger.tasks) == ["GH-1", "GH-2", "GH-3", "GH-4", "GH-5"]
+    assert list(ledger.tasks) == [f"GH-{n}@review" for n in range(1, 6)]
     [(branch, _, body)] = tracker.pull_requests
     assert branch == "agentic/playbook"
     assert pc.parse_block(body) is not None
@@ -146,7 +147,7 @@ async def test_a_pr_closed_unmerged_is_never_asked_twice_and_its_lesson_is_refus
     assert "reflected 3, 0 left for the next run" in capsys.readouterr().out.splitlines()[-2]
     assert len(ports.runner.calls) == calls + 3  # GH-6..8 only
     ledger = pc.parse_ledger(git(root, "show", f"agentic/playbook:{pc.LEDGER_FILE}"))
-    assert set(ledger.tasks) == {f"GH-{n}" for n in range(1, 9)}
+    assert set(ledger.tasks) == {f"GH-{n}@review" for n in range(1, 9)}
     # The lesson the closed PR proposed is refused for good: no playbook item, one record.
     rejected = pc.parse_rejected(git(root, "show", f"agentic/playbook:{pc.REJECTED_FILE}"))
     assert [r.slug for r in rejected] == ["developer"]
@@ -176,7 +177,7 @@ async def test_an_auto_merged_task_is_neither_reflected_nor_counted_as_kept(tmp_
     await cli._reflect(cfg, ports, None, "2026-10-01")
     assert "reflected 1, 0 left for the next run" in capsys.readouterr().out
     ledger = pc.parse_ledger(git(root, "show", f"agentic/playbook:{pc.LEDGER_FILE}"))
-    assert list(ledger.tasks) == ["GH-1"]
+    assert list(ledger.tasks) == ["GH-1@review"]
 
 
 async def test_a_replaced_candidate_branch_is_pushed_on_a_lease_at_the_tip_remote_tip_read(

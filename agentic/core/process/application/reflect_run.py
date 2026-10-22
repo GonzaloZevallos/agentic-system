@@ -10,9 +10,10 @@ reflection is recorded in `reflected.yaml` with its reason and never raised.
 
 from __future__ import annotations
 
+import re
 import sys
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -21,10 +22,11 @@ from agentic.shared.configuration import Configuration
 from ..domain import playbook as pb
 from ..domain import playbook_candidates as pc
 from ..domain import rules
+from ..domain import system_lessons as sl
 from ..domain.reaping import ReapedProcess
-from .closed import closed_documents
-from .ports import ListedPullRequest, Ports
-from .reflect import reflect_task
+from .closed import closed_documents as closed_documents  # re-exported: plan.py reads it here
+from .ports import GitError, Inbox, ListedPullRequest, Ports, Tracker
+from .reflect import Reflected, backings, reflect_task
 from .release import release_task, summary
 
 TASK_ID = "playbook"
@@ -62,6 +64,16 @@ class Known:
 
 
 @dataclass(frozen=True)
+class SystemRepo:
+    """The system's own repo as two reads and one write the verb needs: the `tracker` that
+    opens the issue and the `inbox` that lists the open ones. Built by the composition
+    root over the stage0 checkout; the product's ports are never used for it (ADR-0002)."""
+
+    tracker: Tracker
+    inbox: Inbox
+
+
+@dataclass(frozen=True)
 class Outcome:
     reflected: int
     left: int
@@ -70,6 +82,15 @@ class Outcome:
 
 def _read(ports: Ports, ref: str, relative: str) -> str:
     return ports.workspace.show(ref, relative) or ""
+
+
+def _at_merge(ports: Ports) -> Callable[[str, str], pb.Playbook]:
+    """`slug`'s playbook as the file stood at `commit`."""
+
+    def playbook_at_merge(commit: str, slug: str) -> pb.Playbook:
+        return pb.parse(_read(ports, commit, pc.playbook_file(slug)), slug)
+
+    return playbook_at_merge
 
 
 def gather(cfg: Configuration, ports: Ports) -> Known:
@@ -93,12 +114,9 @@ def gather(cfg: Configuration, ports: Ports) -> Known:
     head_ledger, head_rejected = at("HEAD")
     branch_ledger, branch_rejected = at(BRANCH) if on_branch else (pc.Ledger(), [])
 
-    def playbook_at_merge(commit: str, slug: str) -> pb.Playbook:
-        return pb.parse(_read(ports, commit, pc.playbook_file(slug)), slug)
-
     only = [c for _, c in candidates]
     rejected = pc.merge_rejected(
-        head_rejected, branch_rejected, pc.rejected_from(only, playbook_at_merge)
+        head_rejected, branch_rejected, pc.rejected_from(only, _at_merge(ports))
     )
     return Known(
         ledger=pc.merge_ledgers([head_ledger, branch_ledger], only),
@@ -110,22 +128,74 @@ def gather(cfg: Configuration, ports: Ports) -> Known:
     )
 
 
+Door = tuple[Mapping[str, Any], pc.Gate]
+_ISSUE = re.compile(r"^GH-(\d+)$")
+
+
+def _documents(ports: Ports, task_id: str | None) -> list[dict[str, Any]]:
+    docs = (ports.documents.load(i) for i in ports.documents.ids())
+    return [d for d in docs if d and (task_id is None or d.get("id") == task_id)]
+
+
+def _closed_escalations(ports: Ports, documents: Sequence[Mapping[str, Any]]) -> set[str]:
+    """The escalated documents whose issue is closed: one `issue_state` ask per escalated
+    document. A doubt (gh fails, an id that is no issue) reads as still open."""
+    closed: set[str] = set()
+    for document in documents:
+        found = _ISSUE.match(str(document.get("id") or ""))
+        if document.get("status") != "waiting_on_human" or not found:
+            continue
+        try:
+            if ports.tracker.issue_state(int(found[1])).state == "CLOSED":
+                closed.add(str(document["id"]))
+        except (ValueError, OSError, GitError, KeyError, TypeError):
+            continue
+    return closed
+
+
+def _todo(
+    cfg: Configuration,
+    ports: Ports,
+    *,
+    since: str | None,
+    task_id: str | None,
+    known: Known | None = None,
+    now: str = "",
+) -> tuple[list[Door], Known | None]:
+    """The documents to reflect through each door, review first, each oldest first. Cheap
+    first: with no document a person kept and none that carries a decision, nothing is
+    asked of `gh` or git at all."""
+    everyone = _documents(ports, task_id)
+    kept = [d for d in everyone if d.get("closed_at") and d.get("delivery_outcome") in pc.KEPT]
+    asked = [d for d in everyone if pc.decision_count(d)]
+    if not kept and not asked:
+        return [], known
+    known = known or gather(cfg, ports)
+    ledger = known.ledger
+    threshold = ledger.started_at or now
+    review = pc.eligible(kept, ledger.done_keys, threshold, since, gate="review")
+    decision = pc.eligible(
+        asked,
+        ledger.done_keys,
+        threshold,
+        since,
+        gate="decision",
+        closed_escalations=_closed_escalations(ports, asked),
+        decisions_read=ledger.decisions_read,
+    )
+    return [*((d, "review") for d in review), *((d, "decision") for d in decision)], known
+
+
 def pending(
     cfg: Configuration, ports: Ports, *, since: str | None = None, task_id: str | None = None
 ) -> list[Mapping[str, Any]]:
-    """The closed tasks `reflect` would reflect on, oldest first. Cheap first: with no
-    closed document that a person kept, nothing is asked of `gh` or git at all."""
-    closed = [d for d in closed_documents(ports) if d.get("delivery_outcome") in pc.KEPT]
-    if task_id is not None:
-        closed = [d for d in closed if d.get("id") == task_id]
-    if not closed:
-        return []
-    known = gather(cfg, ports)
-    return pc.eligible(closed, set(known.ledger.tasks), known.ledger.started_at, since)
+    """The documents `reflect` would reflect on, oldest first by door."""
+    doors, _ = _todo(cfg, ports, since=since, task_id=task_id)
+    return [document for document, _ in doors]
 
 
-def _delta_dict(delta: pb.Delta) -> dict[str, Any]:
-    return {
+def _delta_dict(delta: pb.Delta, *, filed: bool = True) -> dict[str, Any]:
+    out: dict[str, Any] = {
         "op": delta.op,
         "slug": delta.slug,
         "category": delta.category,
@@ -133,6 +203,17 @@ def _delta_dict(delta: pb.Delta) -> dict[str, Any]:
         "item_id": delta.item_id,
         "tasks": list(delta.tasks),
     }
+    # The fields ADR-0056 adds are written only when they say something: a record of a
+    # delta that rates nothing stays what it was before, and reads the same.
+    if delta.confidence != "high":
+        out["confidence"] = delta.confidence
+    if delta.scope != "product":
+        out["scope"] = delta.scope
+    if delta.decision:
+        out["decision"] = delta.decision
+    if not filed:
+        out["filed"] = False  # a lesson for the system still to be opened as an issue
+    return out
 
 
 def _delta_of(raw: Mapping[str, Any]) -> pb.Delta:
@@ -143,6 +224,9 @@ def _delta_of(raw: Mapping[str, Any]) -> pb.Delta:
         lesson=raw.get("lesson", ""),
         item_id=raw.get("item_id", ""),
         tasks=tuple(raw.get("tasks") or ()),
+        confidence=raw.get("confidence") or "high",
+        scope=raw.get("scope", "product"),
+        decision=int(raw.get("decision") or 0),
     )
 
 
@@ -174,14 +258,150 @@ def _summary(
     place)."""
     # The window reads the frontmatter's own key for the returns.
     docs = [{**d, "return_history": d.get("change_history") or []} for d in documents]
-    recent = list(ledger.tasks.values())[ledger.summarised :]
-    applied = [_delta_of(raw) for entry in recent for raw in entry.applied]
+    recent = pc.entries_since(ledger, ledger.summarised)
+    applied = [_delta_of(raw) for entry in recent for raw in entry.applied if not _is_system(raw)]
     gained = sum(1 for d in applied if d.op == "add")
     text, retirements = summarise(docs, playbooks, applied, gained)
     for delta in retirements:
         outcome = pb.apply(playbooks[delta.slug], [delta], {}, [], section_hash="empty", now=now)
         playbooks[delta.slug] = outcome.playbook
     return text
+
+
+def _is_system(raw: Mapping[str, Any]) -> bool:
+    return raw.get("scope") == "system"
+
+
+def _entry(result: Reflected, prior: pc.Entry | None, decisions: int) -> pc.Entry:
+    """The ledger entry a reflection leaves: what it cost over every attempt, the deltas it
+    applied (after those of an earlier read of the same key) and the decisions it read. A
+    failure is a retry until `REFLECT_ATTEMPTS` attempts are used, then it is `failed`."""
+    waiting = prior is not None and prior.waits_retry
+    cost = result.cost_usd + (prior.cost_usd if prior else 0.0)
+    earlier = prior.applied if prior and not waiting else ()
+    if not result.failed:
+        applied = (
+            *earlier,
+            *(_delta_dict(d) for d in result.applied),
+            *(_delta_dict(d, filed=False) for d in result.system),
+        )
+        return pc.Entry(cost_usd=cost, applied=applied, decisions=decisions)
+    attempts = (prior.attempts if prior and waiting else 0) + 1
+    failed = result.error if attempts >= pc.REFLECT_ATTEMPTS else ""
+    # While a retry is due, the decisions read stay those of the last good read, so the
+    # retry reads the ones that failed; only a failure for good counts them all as seen.
+    read = decisions if failed else (prior.decisions if prior else 0)
+    return pc.Entry(cost, failed, earlier, read, attempts)
+
+
+def _ended(document: Mapping[str, Any]) -> str:
+    runs = document.get("runs")
+    ended = [str(r["ended_at"]) for r in runs or [] if isinstance(r, Mapping) and r.get("ended_at")]
+    return max(ended, default="")
+
+
+def _stamp_prompt_dates(
+    ports: Ports, known: Known, playbooks: Mapping[str, pb.Playbook]
+) -> dict[str, pb.Playbook]:
+    """Give every item that has been in a prompt its `in_prompt_since`: the merge date of
+    the first merged candidate PR whose playbook at the merge commit holds the item's id.
+    Done before a run changes anything, so a bump of the run cannot hide the merge."""
+    merged = [c for _, c in known.candidates if c.state == "MERGED"]
+    at_merge = _at_merge(ports)
+
+    def date(commit: str) -> str:
+        return ports.workspace.commit_date(commit) or ""
+
+    stamped: dict[str, pb.Playbook] = {}
+    for slug, playbook in playbooks.items():
+        items = tuple(
+            item
+            if item.in_prompt_since
+            else replace(
+                item,
+                in_prompt_since=pc.in_prompt_since(
+                    item.id, merged, at_merge, date, not_before=item.last_applied
+                )
+                or "",
+            )
+            for item in playbook.items
+        )
+        stamped[slug] = pb.Playbook(slug, items)
+    return stamped
+
+
+def _archive_stale(
+    documents: Sequence[Mapping[str, Any]],
+    tasks: Mapping[str, pc.Entry],
+    playbooks: dict[str, pb.Playbook],
+    archived: tuple[pb.Archived, ...],
+    now: str,
+) -> tuple[pb.Archived, ...]:
+    """Move every item that stopped applying out of its playbook, in place, into the
+    archive. `playbook.archive_due` decides; this counts the role's tasks since the item
+    reached a prompt and whether one backed or cited it. The count is the ledger's
+    (`reflected_tasks`) over the role's tasks: one not reflected yet, or waiting for a
+    retry, does not age an item."""
+    for slug, playbook in list(playbooks.items()):
+        aging: dict[str, tuple[int, bool]] = {}
+        for item in playbook.items:
+            if not item.in_prompt_since:
+                continue
+            ran = [
+                d
+                for d in documents
+                if slug in (d.get("prompts") or {}) and _ended(d) > item.in_prompt_since
+            ]
+            backed = item.last_applied > item.in_prompt_since or any(
+                b.slug == slug and b.category == item.category for d in ran for b in backings(d)
+            )
+            ids = {str(d.get("id") or "") for d in ran}
+            mine = {k: e for k, e in tasks.items() if pc.split_key(k)[0] in ids}
+            aging[item.id] = (pc.reflected_tasks(pc.Ledger(tasks=mine)), backed)
+        playbooks[slug], archived = pb.archive_stale(playbook, archived, aging, now=now)
+    return archived
+
+
+def _unfiled(tasks: Mapping[str, pc.Entry]) -> bool:
+    return any(raw.get("filed") is False for entry in tasks.values() for raw in entry.applied)
+
+
+def _file_system(system: SystemRepo | None, tasks: dict[str, pc.Entry]) -> None:
+    """Open the one issue the lessons for the system still unfiled ask for, in the system's
+    repo, with `needs-triage` and never `agentic`. A lesson already in the ledger or in an
+    open issue's marker is not proposed again; those are simply marked filed. A failure
+    (reading the open issues or opening the issue) is a line on stderr and leaves the
+    lessons unfiled for the next run: it never fails the product's reflection."""
+    waiting = [
+        (key, raw)
+        for key, entry in tasks.items()
+        for raw in entry.applied
+        if raw.get("filed") is False
+    ]
+    if system is None or not waiting:
+        return
+    known = {
+        sl.lesson_of(raw)
+        for entry in tasks.values()
+        for raw in entry.applied
+        if _is_system(raw) and raw.get("filed") is not False
+    }
+    try:
+        known |= sl.proposed_in(body for _, body in system.inbox.open_issues())
+        fresh = sl.fresh([raw for _, raw in waiting], known)
+        if fresh:
+            title, body = sl.render_issue(fresh)
+            system.tracker.open_issue(title, body, label=sl.LABEL)
+    except (ValueError, OSError, GitError) as exc:
+        print(f"agentic: reflect: could not open the system issue: {exc}", file=sys.stderr)
+        return
+    for key in {key for key, _ in waiting}:
+        entry = tasks[key]
+        done = tuple(
+            {k: v for k, v in raw.items() if k != "filed"} if raw.get("filed") is False else raw
+            for raw in entry.applied
+        )
+        tasks[key] = replace(entry, applied=done)
 
 
 async def reflect(
@@ -192,44 +412,47 @@ async def reflect(
     summarise: Summariser,
     since: str | None = None,
     task_id: str | None = None,
+    system: SystemRepo | None = None,
 ) -> Outcome:
-    """One invocation: reflect on at most `cfg.reflect_max_tasks_per_run` eligible tasks
-    and deliver what they taught on the candidate branch, in one open pull request."""
+    """One invocation: reflect on at most `cfg.reflect_max_tasks_per_run` eligible
+    documents through their doors and deliver what they taught on the candidate branch, in
+    one open pull request."""
     known = gather(cfg, ports)
-    closed = closed_documents(ports)
-    kept = [d for d in closed if d.get("delivery_outcome") in pc.KEPT]
-    if task_id is not None:
-        kept = [d for d in kept if d.get("id") == task_id]
     first = not known.ledger.started_at
     started = known.ledger.started_at or now
-    todo = pc.eligible(kept, set(known.ledger.tasks), started, since)
+    todo, _ = _todo(cfg, ports, since=since, task_id=task_id, known=known, now=now)
     batch, left = (
         todo[: cfg.reflect_max_tasks_per_run],
         max(len(todo) - cfg.reflect_max_tasks_per_run, 0),
     )
-    if not first and not batch:
+    if not first and not batch and not _unfiled(known.ledger.tasks):
         return Outcome(0, 0)
 
-    replace = known.stale
-    if replace:
+    replace_branch = known.stale
+    if replace_branch:
         # The previous pull request is over: its branch is kept aside, a fresh one starts
         # from the default branch with everything the old blocks remembered.
         head = ports.workspace.branch_head(BRANCH) or "old"
         _say_reaped(release_task(ports, TASK_ID))
         ports.workspace.rename_branch(BRANCH, f"archive/playbook-{head}")
     checkout = ports.workspace.task_checkout(TASK_ID)
-    reuse = not replace
+    reuse = not replace_branch
     base = pc.merge_ledgers(
         [known.branch_ledger if reuse else pc.Ledger(), known.ledger],
         [c for _, c in known.candidates],
     )
-    playbooks = {
+    read = {
         slug: pb.parse(_read(ports, BRANCH, pc.playbook_file(slug)), slug)
         for slug in sorted(pb.PLAYBOOK_ROLES)
     }
-    before = dict(playbooks)
+    playbooks = _stamp_prompt_dates(ports, known, read)
+    candidates = tuple(pc.parse_candidates(_read(ports, BRANCH, pc.CANDIDATES_FILE)))
+    archived = tuple(pc.parse_archived(_read(ports, BRANCH, pc.ARCHIVED_FILE)))
+    before = (dict(read), candidates, archived)
     tasks = dict(base.tasks)
-    for document in batch:
+    for document, gate in batch:
+        key = pc.ledger_key(str(document["id"]), gate)
+        before_entry = tasks.get(key)
         result = await reflect_task(
             cfg,
             ports,
@@ -237,25 +460,36 @@ async def reflect(
             playbooks,
             known.rejected,
             now=now,
+            candidates=candidates,
+            archived=archived,
+            gate=gate,
+            decisions=before_entry.decisions if before_entry else 0,
         )
         playbooks.update(result.playbooks)
-        tasks[result.task_id] = pc.Entry(
-            cost_usd=result.cost_usd,
-            failed=result.error if result.failed else "",
-            applied=tuple(_delta_dict(d) for d in result.applied),
-        )
+        candidates = candidates if result.candidates is None else result.candidates
+        archived = archived if result.archived is None else result.archived
+        tasks[key] = _entry(result, before_entry, pc.decision_count(document))
+    _file_system(system, tasks)
+    documents = _documents(ports, None)
+    archived = _archive_stale(documents, tasks, playbooks, archived, now)
     ledger = pc.Ledger(started, tasks, base.summaries, base.summarised)
 
     summary = ""
     if pc.summary_due(ledger.since_summary):
         number = ledger.summaries + 1
-        summary = _summary(ledger, playbooks, closed, summarise, now)
+        summary = _summary(
+            ledger, playbooks, [d for d in documents if d.get("closed_at")], summarise, now
+        )
         _write(checkout.path, pc.summary_file(number), summary)
-        ledger = pc.Ledger(started, tasks, number, len(tasks))
+        ledger = pc.Ledger(started, tasks, number, pc.reflected_tasks(ledger))
 
     for slug, current in playbooks.items():
-        if current != before[slug]:
+        if current != before[0][slug]:
             _write(checkout.path, pc.playbook_file(slug), pb.render_file(current))
+    if candidates != before[1]:
+        _write(checkout.path, pc.CANDIDATES_FILE, pc.render_candidates(candidates))
+    if archived != before[2]:
+        _write(checkout.path, pc.ARCHIVED_FILE, pc.render_archived(archived))
     _write(checkout.path, pc.LEDGER_FILE, pc.render_ledger(ledger))
     _write(checkout.path, pc.REJECTED_FILE, pc.render_rejected(known.rejected))
     sha = ports.workspace.commit_all(checkout.path, _message(len(batch), first))
@@ -265,7 +499,7 @@ async def reflect(
     if sha is not None or open_pr is None:
         # The playbook branch is the system's own (ADR-0043): its replace is not a
         # `push_plan` decision, it leases on whatever the remote holds now.
-        lease = ports.workspace.remote_tip(checkout.path, BRANCH) if replace else None
+        lease = ports.workspace.remote_tip(checkout.path, BRANCH) if replace_branch else None
         ports.workspace.push(BRANCH, lease=lease)
     record = _record(ledger, known)
     if open_pr is None:
@@ -301,7 +535,7 @@ def _record(ledger: pc.Ledger, known: Known) -> pc.Record:
     """What this PR carries: the tasks no other place already had, and the adds they made."""
     open_number = known.open_pr.number if known.open_pr else None
     elsewhere = {
-        task
+        pc.normal_key(task)
         for pr, candidate in known.candidates
         if pr.number != open_number
         for task in candidate.record.tasks
@@ -309,13 +543,13 @@ def _record(ledger: pc.Ledger, known: Known) -> pc.Record:
     mine = {
         task: entry
         for task, entry in ledger.tasks.items()
-        if task not in elsewhere and task not in known.head_ledger.tasks
+        if task not in elsewhere and task not in known.head_ledger.tasks and not entry.waits_retry
     }
     adds = tuple(
         pc.Add(raw["slug"], raw.get("category", ""), pb.normalise(raw.get("lesson", "")))
         for entry in mine.values()
         for raw in entry.applied
-        if raw.get("op") == "add"
+        if raw.get("op") == "add" and not _is_system(raw)
     )
     return pc.Record(
         {task: entry.cost_usd for task, entry in mine.items()},

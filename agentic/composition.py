@@ -35,6 +35,7 @@ from .core.process.adapters.langgraph.graph import build_graph
 from .core.process.adapters.shell import ShellCommands, ShellReaper, ShellSampleApp
 from .core.process.application.ports import Ports
 from .core.process.application.preflight import refuse_its_own_checkout
+from .core.process.application.reflect_run import SystemRepo
 from .core.process.domain import reaping
 from .shared.configuration import STATE_FILE, Configuration, state_file_for
 from .shared.environment import own_configuration_unset
@@ -115,6 +116,13 @@ def default_ports(cfg: Configuration) -> Ports:
     # (issue #44).
     refuse_its_own_checkout(cfg, ports)
     return ports
+
+
+def system_repo() -> SystemRepo:
+    """The system's own repo, for the one thing the `reflect` verb writes there: an issue
+    with `needs-triage` for a lesson about the system (ADR-0056, ADR-0002). The stage0
+    checkout `gh` resolves the repo from is `telemetry.REPO`, never the product's."""
+    return SystemRepo(GhTracker(telemetry.REPO), GhInbox(telemetry.REPO))
 
 
 def _ports(cfg: Configuration) -> Ports:

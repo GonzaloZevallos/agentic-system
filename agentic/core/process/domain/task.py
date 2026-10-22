@@ -509,6 +509,13 @@ class EscalationPatch(TypedDict):
     escalation_class: EscalationClass | None
 
 
+class FinishedPatch(TypedDict):
+    """The two keys `rules.finished` writes together, spread into a bigger patch literal."""
+
+    status: Literal["discarded", "split"]
+    finished_at: str
+
+
 class FindingRecord(TypedDict):
     """One finding as the table keeps it (issue #42): what the reviewer wrote, plus
     which subtask's review raised it and in which pass. Append-only and never rewritten:
@@ -837,6 +844,10 @@ class TaskState(TaskInput, total=False):
     # Why a bug was discarded, in PM's words (issue #65): `discard` writes it on the
     # issue, and the frontmatter keeps it so the document says why the run ended.
     discard_reason: str
+    # When a task ended without a delivery, `discarded` or `split` (ADR-0056): the clock
+    # the Reflector's decision gate reads. Written only by `rules.finished`, and optional:
+    # a document without it reads as before.
+    finished_at: str
     # Which subtask a branch of the fan-out is running: set by the fan-out, read by
     # `develop` and `review`, never persisted and never handed back to the parent.
     subtask_id: str

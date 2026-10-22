@@ -1,3 +1,4 @@
+from dataclasses import replace
 from typing import Any, get_args
 
 import pytest
@@ -5,22 +6,35 @@ import pytest
 from agentic.core.process.domain import roles
 from agentic.core.process.domain.playbook import (
     ACCOUNTABLE,
+    ARCHIVE_AFTER,
+    KEEP_CONFIDENCE,
+    KEEP_MIN_TASKS,
     PLAYBOOK_MAX_ITEMS,
     PLAYBOOK_ROLES,
     REVIEW_PAIR,
     Applied,
+    Archived,
+    Backing,
+    Confidence,
     Delta,
     Evidence,
     Item,
+    Pending,
     Playbook,
     Rejected,
     accountable,
     apply,
+    archive_due,
+    archive_stale,
+    attribute,
+    keep,
     lesson_refusal,
     normalise,
     parse,
     render_file,
+    return_backing,
     section,
+    shared_term,
 )
 from agentic.core.process.domain.task import FindingCategory
 
@@ -68,14 +82,18 @@ def run(
     playbook: Playbook | None = None,
     rejected: tuple[Rejected, ...] = (),
     ev: dict[str, Evidence] | None = None,
+    candidates: tuple[Pending, ...] = (),
+    archived: tuple[Archived, ...] = (),
 ) -> Applied:
     return apply(
         playbook or empty(),
         deltas,
-        ev or EVIDENCE,
+        EVIDENCE if ev is None else ev,
         rejected,
         section_hash="abc123",
         now=NOW,
+        candidates=candidates,
+        archived=archived,
     )
 
 
@@ -100,25 +118,40 @@ def full_playbook() -> Playbook:
 # ---- the accountability table --------------------------------------------------------
 
 
-def expected_slug(task_type: str, category: str, integration: bool) -> str:
-    if category in PLANNER:
+def expected_slug(origin: str, task_type: str, category: str, qualifier: str) -> str:
+    if origin == "definition":
+        return "product_analyst"
+    if origin == "design":
+        return "ux_designer" if qualifier == "ux" else "ui_designer"
+    if origin == "review" and category in PLANNER:
         return "tech_lead_platform" if task_type == "platform_enhancement" else "tech_lead"
-    return "developer_integrator" if integration else "developer"
+    return "developer_integrator" if qualifier == "integration" else "developer"
 
 
-def test_the_table_has_a_row_for_every_task_type_category_and_integration_flag():
-    assert len(ACCOUNTABLE) == len(TASK_TYPES) * len(CATEGORIES) * 2
-    assert {key[1] for key in ACCOUNTABLE} == set(CATEGORIES)
+def test_the_table_has_a_row_for_every_origin_task_type_category_and_qualifier():
+    per_type = len(CATEGORIES) * 2 * 2 + 1 + 2  # review, final_validation, definition, design
+    assert len(ACCOUNTABLE) == len(TASK_TYPES) * per_type
+    assert {key[2] for key in ACCOUNTABLE if key[0] == "review"} == set(CATEGORIES)
+    assert {key[0] for key in ACCOUNTABLE} == {"review", "final_validation", "definition", "design"}
 
 
 @pytest.mark.parametrize(("key", "slug"), sorted(ACCOUNTABLE.items()))
-def test_each_accountable_row_names_its_role_and_accountable_reads_it(
-    key: tuple[str, str, bool], slug: str
+def test_each_accountable_row_names_its_role(key: tuple[str, str, str, str], slug: str) -> None:
+    origin, task_type, category, qualifier = key
+    assert slug == expected_slug(origin, task_type, category, qualifier)
+    assert attribute(origin, task_type, category, qualifier) == slug
+
+
+@pytest.mark.parametrize(
+    ("task_type", "category", "integration"),
+    sorted((t, c, i) for t in TASK_TYPES for c in CATEGORIES for i in (False, True)),
+)
+def test_accountable_reads_a_review_return_through_the_table(
+    task_type: str, category: str, integration: bool
 ) -> None:
-    task_type, category, integration = key
-    assert slug == expected_slug(task_type, category, integration)
     subtask = "integration" if integration else "s1"
-    assert accountable(entry(category, subtask), task_type) == slug
+    expected = expected_slug("review", task_type, category, "integration" if integration else "")
+    assert accountable(entry(category, subtask), task_type) == expected
 
 
 def test_every_accountable_slug_is_a_role():
@@ -130,8 +163,27 @@ def test_the_review_pair_is_the_one_the_roles_module_writes():
     assert roles.pair_for("s1").key == f"{REVIEW_PAIR}:s1"
 
 
-def test_a_definition_return_is_unattributable():
-    assert accountable({"pair": "PM→Product Analyst", "category": "definition"}, "feature") is None
+def test_a_definition_return_is_the_product_analysts():
+    returned = {"pair": "PM→Product Analyst", "category": "definition"}
+    assert accountable(returned, "feature") is None  # `accountable` is the review pair's
+    assert return_backing(returned, "feature") == Backing("return", "product_analyst", "definition")
+
+
+@pytest.mark.parametrize(
+    ("pair", "slug"),
+    [("UX Lead→UX Designer", "ux_designer"), ("UI Lead→UI Designer", "ui_designer")],
+)
+def test_a_lead_return_is_its_designers_and_the_pairs_are_the_roles_modules(
+    pair: str, slug: str
+) -> None:
+    backing = return_backing({"pair": pair, "category": "design"}, "feature")
+    assert backing == Backing("return", slug, "design")
+    assert pair in (roles.PAIR_UX_LEAD.key, roles.PAIR_UI_LEAD.key)
+    assert roles.PAIR_PM_PA.key == "PM→Product Analyst"
+
+
+def test_a_landing_return_is_unattributable_whatever_the_pair():
+    assert accountable({**entry("spec-scope"), "by": "landing"}, "feature") is None
 
 
 def test_an_unknown_task_type_or_pair_is_unattributable():
@@ -275,7 +327,7 @@ def test_an_add_with_a_category_outside_the_closed_set_is_refused():
 def test_an_add_whose_category_is_not_in_the_cited_return_history_is_refused():
     result = run([add(category="spec-scope", lesson="Stay inside the brief.")])
     assert result.playbook.items == ()
-    assert "return_history" in result.refused[0].reason
+    assert "backing" in result.refused[0].reason
 
 
 def test_an_add_for_a_role_other_than_the_accountable_one_is_refused():
@@ -387,7 +439,7 @@ def test_bump_citing_evidence_without_the_item_category_is_refused():
     bump = Delta(op="bump", slug="developer", item_id="developer-1", tasks=("GH-9",))
     result = run([bump], start, ev=ev)
     assert result.playbook == start
-    assert "return_history" in result.refused[0].reason
+    assert "backing" in result.refused[0].reason
 
 
 def test_bump_with_a_category_that_is_not_the_items_is_refused():
@@ -490,3 +542,213 @@ def test_parse_names_the_file_problem(text: str, needle: str) -> None:
 def test_parse_refuses_an_item_that_breaks_the_text_rules_naming_the_id():
     with pytest.raises(ValueError, match="developer-1"):
         parse(_file(lesson="x" * 241), "developer")
+
+
+# ---- keep and archive_due (GH-296) ---------------------------------------------------
+
+
+def test_the_thresholds_are_the_named_ones():
+    assert (KEEP_CONFIDENCE, KEEP_MIN_TASKS, ARCHIVE_AFTER) == ("high", 2, 20)
+
+
+@pytest.mark.parametrize(
+    ("confidence", "seen", "sources", "kept"),
+    [
+        ("high", 1, {"finding"}, True),
+        ("medium", 1, {"finding"}, False),
+        ("low", 1, {"return"}, False),
+        ("medium", 2, {"finding"}, True),
+        ("low", 2, {"return", "finding"}, True),
+        ("high", 1, {"human_decision", "finding"}, True),
+        # every source a human decision: one task is never enough, whatever the confidence
+        ("high", 1, {"human_decision"}, False),
+        ("high", 2, {"human_decision"}, True),
+        ("low", 2, {"human_decision"}, True),
+    ],
+)
+def test_keep_is_confidence_or_two_tasks_and_a_lone_human_decision_needs_two(
+    confidence: Confidence, seen: int, sources: set[str], kept: bool
+) -> None:
+    assert keep(confidence, seen, frozenset(sources)) is kept
+
+
+def test_archive_due_has_its_edges_at_the_threshold_and_never_without_a_prompt_date():
+    aged = replace(item(1), in_prompt_since="2026-09-01")
+    assert archive_due(aged, ARCHIVE_AFTER - 1, False) is False
+    assert archive_due(aged, ARCHIVE_AFTER, False) is True
+    assert archive_due(aged, ARCHIVE_AFTER * 3, True) is False  # backed or cited since
+    # never in a prompt (its PR did not merge): `added_at` is not a clock
+    assert archive_due(item(1), ARCHIVE_AFTER * 3, False) is False
+
+
+# ---- evidence from the four sources ----------------------------------------------------
+
+DECISION = "Spanish quotes in the docs are a follow-up, never part of this task."
+DLESSON = "Treat Spanish quotes in docs as a follow-up, not as part of the task."
+
+
+def decided(
+    slug: str = "developer", ref: str = "1", text: str = DECISION, ran: frozenset[str] | None = None
+) -> Evidence:
+    return Evidence(
+        True,
+        "feature",
+        backings=(Backing("human_decision", slug, "human-decision", ref),),
+        decisions={int(ref): text},
+        ran=frozenset({slug}) if ran is None else ran,
+    )
+
+
+def human_add(
+    lesson: str = DLESSON, decision: int = 1, tasks: tuple[str, ...] = ("GH-1",)
+) -> Delta:
+    return Delta(
+        op="add",
+        slug="developer",
+        category="human-decision",
+        lesson=lesson,
+        tasks=tasks,
+        decision=decision,
+        confidence="high",
+    )
+
+
+def test_a_human_decision_lesson_needs_two_tasks_even_with_high_confidence():
+    ev = {"GH-1": decided(), "GH-2": decided()}
+    first = run([human_add()], ev=ev)
+    assert first.playbook.items == ()
+    assert [d.lesson for d in first.held] == [DLESSON]
+    assert first.candidates[0].seen_in == ("GH-1",)
+    second = run([human_add(tasks=("GH-2",))], ev=ev, candidates=first.candidates)
+    # promoted, keeping the task the candidate already had; recorded as an add
+    assert [i.seen_in for i in second.playbook.items] == [("GH-1", "GH-2")]
+    assert [d.op for d in second.applied] == ["add"]
+    assert second.candidates == ()
+
+
+@pytest.mark.parametrize(
+    ("make", "why"),
+    [
+        (lambda: decided(ref="2"), "does not cite"),
+        (lambda: decided(ran=frozenset()), "did not run"),
+        (
+            lambda: decided(text="Postpone the migration until the schema freezes."),
+            "shares no term",
+        ),
+    ],
+)
+def test_an_invented_human_decision_is_refused(make, why: str) -> None:
+    result = run([human_add()], ev={"GH-1": make()})
+    assert result.playbook.items == () and result.candidates == ()
+    assert why in result.refused[0].reason
+
+
+def test_a_decision_the_task_does_not_carry_is_refused():
+    only_backing = Evidence(
+        True,
+        "feature",
+        backings=(Backing("human_decision", "developer", "human-decision", "3"),),
+        ran=frozenset({"developer"}),
+    )
+    result = run([human_add(decision=3)], ev={"GH-1": only_backing})
+    assert "does not exist" in result.refused[0].reason
+
+
+@pytest.mark.parametrize("source", ["finding", "design", "return"])
+def test_a_citation_without_a_backing_is_refused_for_every_source(source) -> None:
+    category = "design" if source == "design" else "spec-scope"
+    slug = "ux_designer" if source == "design" else "developer"
+    backed = Evidence(True, "feature", backings=(Backing(source, slug, category),))
+    ok = run(
+        [Delta("add", slug, category, LESSON, tasks=("GH-1",))], empty(slug), ev={"GH-1": backed}
+    )
+    assert [d.category for d in ok.applied] == [category]
+    other = Evidence(True, "feature", backings=(Backing(source, slug, "spec-behaviour"),))
+    bad = run(
+        [Delta("add", slug, category, LESSON, tasks=("GH-1",))], empty(slug), ev={"GH-1": other}
+    )
+    assert bad.playbook.items == () and "backing" in bad.refused[0].reason
+    unknown = run([Delta("add", slug, category, LESSON, tasks=("GH-404",))], empty(slug), ev={})
+    assert "no evidence" in unknown.refused[0].reason
+
+
+def test_a_low_confidence_lesson_waits_as_a_candidate_and_two_tasks_keep_it():
+    ev = {"GH-1": evidence("process-suite-red"), "GH-2": evidence("process-suite-red")}
+    low = replace(add(LESSON, "GH-1"), confidence="low")
+    first = run([low], ev=ev)
+    assert first.playbook.items == () and first.held == (low,)
+    again = run([replace(low, tasks=("GH-1",))], ev=ev, candidates=first.candidates)
+    assert "already counts" in again.refused[0].reason
+    second = run([replace(low, tasks=("GH-2",))], ev=ev, candidates=first.candidates)
+    assert second.playbook.items[0].seen_in == ("GH-1", "GH-2")
+    assert second.playbook.items[0].id == "developer-1"
+
+
+def test_an_add_that_matches_an_archived_item_restores_it_with_its_id_and_seen_in():
+    old = replace(item(4, LESSON, ("GH-1", "GH-2")), in_prompt_since="2026-09-01")
+    shelf = (Archived(old, "stale", "2026-10-01"),)
+    ev = {"GH-3": evidence("process-suite-red")}
+    result = run([add(LESSON, "GH-3")], ev=ev, archived=shelf)
+    restored = result.playbook.items[0]
+    assert (restored.id, restored.seen_in, restored.in_prompt_since) == (
+        "developer-4",
+        ("GH-1", "GH-2", "GH-3"),
+        "",
+    )
+    assert [d.op for d in result.applied] == ["add"] and result.archived == ()
+    # a new lesson never reuses an archived id
+    fresh = run([add("Another lesson entirely.", "GH-3")], ev=ev, archived=shelf)
+    assert fresh.playbook.items[0].id == "developer-5"
+
+
+def test_archive_stale_moves_only_the_due_items_and_deletes_nothing():
+    aged = replace(item(1, "Lesson one."), in_prompt_since="2026-09-01")
+    young = replace(item(2, "Lesson two."), in_prompt_since="2026-10-01")
+    book = Playbook("developer", (aged, young, item(3, "Lesson three.")))
+    aging = {
+        "developer-1": (ARCHIVE_AFTER, False),
+        "developer-2": (ARCHIVE_AFTER - 1, False),
+        "developer-3": (ARCHIVE_AFTER * 2, False),
+    }
+    kept, shelf = archive_stale(book, (), aging, now=NOW)
+    assert [i.id for i in kept.items] == ["developer-2", "developer-3"]
+    assert [(a.item, a.reason, a.archived_at) for a in shelf] == [(aged, "stale", NOW)]
+
+
+def test_a_playbook_file_of_today_reads_the_same_and_the_new_keys_are_optional():
+    today = (
+        "items:\n- id: developer-1\n  lesson: Run the suite.\n  category: process-suite-red\n"
+        "  since: empty\n  seen_in:\n  - GH-1\n  added_at: '2026-10-05'\n"
+    )
+    book = parse(today, "developer")
+    assert book.items[0].last_applied == "" and book.items[0].in_prompt_since == ""
+    assert render_file(book) == today
+    stamped = replace(book.items[0], last_applied="2026-10-20", in_prompt_since="2026-10-10")
+    assert parse(render_file(Playbook("developer", (stamped,))), "developer").items == (stamped,)
+    design = today.replace("process-suite-red", "design")
+    assert parse(design, "developer").items[0].category == "design"
+    with pytest.raises(ValueError):
+        parse(today.replace("process-suite-red", "vibes"), "developer")
+
+
+def test_shared_term_ignores_trivial_short_and_accented_words():
+    assert shared_term("Avoid migrations before schema freeze", "The schema is frozen") is True
+    assert shared_term("Valida la decisión", "una decisión humana") is False  # trivial only
+    assert shared_term("Usa comillas españolas", "Las COMILLAS españolas son seguimiento") is True
+    assert shared_term("Do it now", "Do it later") is False  # under five characters
+
+
+def test_padding_a_lone_human_decision_with_an_unbacked_task_does_not_keep_it():
+    ev = {"GH-1": decided(), "GH-2": Evidence(True, "feature", ran=frozenset({"developer"}))}
+    result = run([human_add(tasks=("GH-1", "GH-2"))], ev=ev)
+    assert result.playbook.items == ()
+    assert [d.lesson for d in result.held] == [DLESSON]
+    assert result.candidates[0].seen_in == ("GH-1",)
+
+
+def test_a_restore_needs_the_same_slug_and_category_as_the_archived_item():
+    other = replace(item(4, LESSON, ("GH-1",)), category="spec-scope")
+    shelf = (Archived(other, "stale", "2026-10-01"),)
+    result = run([add(LESSON, "GH-1")], ev={"GH-1": evidence("process-suite-red")}, archived=shelf)
+    assert [i.id for i in result.playbook.items] == ["developer-5"]
+    assert result.archived == shelf
