@@ -380,6 +380,10 @@ def _dispatch(context: LandingContext) -> None:
             landing_fix.file_followups_and_land(context)
         case "diagnose":
             landing_fix.diagnose(context)
+        case "land_slice":
+            # The executor arrives with the slice-executor subtask; `landing_step` returns
+            # this kind only when the application passes it a `Slice`, which nothing does yet.
+            context.log(f"agentic: land: {context.task_id}: {context.head} land_slice: not built")
         case "wait" | "none":
             context.log(f"agentic: land: {context.task_id}: {context.head} {kind}: nothing to do")
         case _:

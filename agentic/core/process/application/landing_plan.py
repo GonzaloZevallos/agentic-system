@@ -67,12 +67,18 @@ def spent(
     `sync_master` answering one of `landing.CONFLICTING_SYNC_REFUSALS` is the conflicting
     one, a model pass; it never counts as a clean sync. `unsynced_for_upstream` counts the
     entries closed with `lacks` equal to `upstream` (the round's master sha), by sha and never
-    by head (GH-267); without a sha it is 0. `important_passes` counts the `fix_important`
+    by head (GH-267); without a sha it is 0. `syncs` and `unsynced_for_upstream` count only the
+    entries after the last resolved `land_slice` (`landing.sync_epoch`, GH-297); `passes` never
+    reset. `important_passes` counts the `fix_important`
     entries (GH-294), which never enter `passes`."""
     done = entries(raw)
+    epoch = landing.sync_epoch(done)
 
     def count(predicate: Callable[[dict[str, object]], bool]) -> int:
         return sum(1 for entry in done if predicate(entry))
+
+    def count_epoch(predicate: Callable[[Mapping[str, object]], bool]) -> int:
+        return sum(1 for entry in epoch if predicate(entry))
 
     return landing.LandingSpent(
         passes=count(
@@ -81,14 +87,14 @@ def spent(
                 or (e.get("step") == "sync_master" and _conflicting(e))
             )
         ),
-        syncs=count(lambda e: e.get("step") == "sync_master" and not _conflicting(e)),
+        syncs=count_epoch(lambda e: e.get("step") == "sync_master" and not _conflicting(e)),
         reruns_on_head=count(lambda e: e.get("step") == "rerun" and e.get("head") == head),
         diagnosed=count(lambda e: e.get("step") == "diagnose" and e.get("delivered") is True) > 0,
         waited_s=waited_s,
         renumbers=count(lambda e: e.get("step") == "renumber"),
         important_passes=count(lambda e: e.get("step") == "fix_important"),
         unsynced_for_upstream=(
-            count(lambda e: e.get("lacks") == upstream) if upstream is not None else 0
+            count_epoch(lambda e: e.get("lacks") == upstream) if upstream is not None else 0
         ),
     )
 
