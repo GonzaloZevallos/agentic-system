@@ -81,7 +81,7 @@ class Configuration(BaseModel):
     # failed (issue #22). The presubmit's hook waits for all of them.
     check_timeout_s: float = Field(default=600.0, gt=0)
     # How long a role attempt may go with no sign of life before the watchdog kills it
-    # and fails it as a stall (GH-299, ADR-0056): above the longest legitimate silence,
+    # and fails it as a stall (GH-299, ADR-0057): above the longest legitimate silence,
     # which the in-flight hook counter and the pending-tool rule cover on their own, so
     # no cross-check against `check_timeout_s`. The floor is `domain.stall.STALL_FLOOR_S`
     # (600), written out because `shared` imports nothing of the project.

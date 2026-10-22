@@ -238,7 +238,7 @@ async def test_a_stale_caller_session_falls_back_cold_once():
 
 async def test_a_stall_before_any_session_does_not_spend_the_cold_fallback():
     # A hung CLI says nothing about whether the caller's session opens: the retry keeps
-    # the `resume` the caller entered with (GH-299, ADR-0056), where an `sdk` failure
+    # the `resume` the caller entered with (GH-299, ADR-0057), where an `sdk` failure
     # with no session would drop it.
     hung = AttemptFailed("stalled: no sign of life", session_id="", reason="stall")
     runner = ScriptedRunner(pjm=[hung, RawResult(OK.structured_output, 0.03, session_id="s")])

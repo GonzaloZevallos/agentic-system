@@ -106,7 +106,7 @@ tarea, que ya lleva cada corrida con su `slug` y su sección. `reason` sigue sie
 max_turns, limit, account_limit, upstream, network, sdk, stall, other}, decidido en el sitio
 donde se lanza `AttemptFailed`, nunca por parsear el mensaje de error (`network`: un
 `api_error` sin status HTTP, ADR-0039; `stall`: un intento sin señal de vida que
-el vigilante mató, ADR-0056, un fallo propio que el scorecard sí cuenta).
+el vigilante mató, ADR-0057, un fallo propio que el scorecard sí cuenta).
 
 ### El scorecard (ADR-0028) se calcula igual, de una sola fuente
 

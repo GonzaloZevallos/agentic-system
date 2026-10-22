@@ -1,4 +1,4 @@
-"""The stalled attempt (GH-299, ADR-0056): a role attempt whose CLI hung, holding its
+"""The stalled attempt (GH-299, ADR-0057): a role attempt whose CLI hung, holding its
 concurrency slot with nothing left to wait for.
 
 One pure verdict over one snapshot: the adapter and the runner only feed it and obey it.

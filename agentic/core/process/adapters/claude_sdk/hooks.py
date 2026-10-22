@@ -143,7 +143,7 @@ class TurnCount:
 
 class HookActivity:
     """Which delivery hooks of one attempt are in flight, and when the last one left
-    (GH-299, ADR-0056): one instance per attempt, constructed in `_session` beside
+    (GH-299, ADR-0057): one instance per attempt, constructed in `_session` beside
     `TurnCount` and never shared between sessions or kept at module level. The delivery
     hook runs the product's checks and can be silent for far longer than any stall
     threshold; the watchdog reads this to know the silence is the hook's, and to

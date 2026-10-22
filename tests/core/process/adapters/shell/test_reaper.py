@@ -196,7 +196,7 @@ def test_the_reaper_never_signals_its_own_process(children):
         del os.environ[reaping.MARK_NAME]
 
 
-# -- child_activity (GH-299, ADR-0056) ----------------------------------------------
+# -- child_activity (GH-299, ADR-0057) ----------------------------------------------
 #
 # The "CLI" of these tests is a marked process whose parent is this test process (the
 # orchestrator, `parent_pid`); the child it launches inherits the mark, as a tool the

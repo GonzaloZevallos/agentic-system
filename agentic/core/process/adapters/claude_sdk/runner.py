@@ -42,7 +42,7 @@ watchdog beside the loop therefore asks `domain/stall.py` every `CHECK_EVERY_S` 
 the attempt is stalled, and when it is, reaps the attempt by its mark before anything is
 cancelled; only a CLI that survives the reap has its scope cancelled. The attempt then
 fails as `AttemptFailed(reason="stall")` -- never as the "interrupted" of an external
-cancellation, which stays what it was (GH-299, ADR-0056).
+cancellation, which stays what it was (GH-299, ADR-0057).
 """
 
 from __future__ import annotations
@@ -280,7 +280,7 @@ class ClaudeSdkRunner:
         # that marks its attempts and cannot stop what carries the mark would leak
         # silently. `product_key` is the one the reaper was built with.
         # `stall_timeout_s` (the composition passes `Configuration.stall_timeout_s`) and
-        # the monotonic `clock` are what the watchdog judges an attempt by (ADR-0056).
+        # the monotonic `clock` are what the watchdog judges an attempt by (ADR-0057).
         self.verbose = verbose
         self.stream = stream
         self.telemetry = telemetry

@@ -556,7 +556,7 @@ def _stale_session(resume: str | None, failures: list[Failure], cold_prompt: str
     own docstring). Gated on `cold_prompt`: a caller with none keeps today's retry,
     which tries the same stale id again instead of dropping it. A stall is not that
     evidence: a CLI that hung before opening a session says nothing about whether the
-    caller's id opens, so the retry keeps it (GH-299, ADR-0056)."""
+    caller's id opens, so the retry keeps it (GH-299, ADR-0057)."""
     return (
         cold_prompt is not None
         and resume is not None

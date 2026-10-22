@@ -1,4 +1,4 @@
-"""The stall verdict is a pure function of a snapshot (GH-299, ADR-0056)."""
+"""The stall verdict is a pure function of a snapshot (GH-299, ADR-0057)."""
 
 import pytest
 

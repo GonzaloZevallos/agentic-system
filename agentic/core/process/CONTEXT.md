@@ -353,7 +353,7 @@ _Avoid_: error (demasiado amplio), reintento (es parte del fallo, no otro térmi
 _Campo_: sin término de arte; el reintento sí lo tiene, `retry`, pero nombra la vuelta y no la rotura
 
 **Intento estancado**:
-Intento de un rol que lleva más que `stall_timeout_s` sin señal de vida: ni mensaje del stream, ni salida o vuelo de un hook de entrega, ni, con una herramienta del hilo principal pendiente, CPU o estado R/D de un hijo marcado del intento. Un vigilante lo mata por la marca del intento y lo falla con el motivo `stall`, que se reintenta como cualquier fallo de rol (ADR-0056). Un dato ilegible cuenta como actividad.
+Intento de un rol que lleva más que `stall_timeout_s` sin señal de vida: ni mensaje del stream, ni salida o vuelo de un hook de entrega, ni, con una herramienta del hilo principal pendiente, CPU o estado R/D de un hijo marcado del intento. Un vigilante lo mata por la marca del intento y lo falla con el motivo `stall`, que se reintenta como cualquier fallo de rol (ADR-0057). Un dato ilegible cuenta como actividad.
 _Avoid_: colgado, timeout (el umbral es solo una parte)
 
 **Tope por intento**:

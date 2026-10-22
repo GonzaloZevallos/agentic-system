@@ -1635,7 +1635,7 @@ def test_a_stall_is_a_reason_of_its_own_and_never_external():
 
 def test_auto_resumable_is_none_for_an_epoch_whose_last_failure_is_a_stall():
     # Rejected input: a stalled role escalated as `failure`, and the poller must not
-    # retake it on its own the way it does an account limit (ADR-0056).
+    # retake it on its own the way it does an account limit (ADR-0057).
     alone = {"pause_log": [_failure_entry("stall"), _escalation_entry("failure")]}
     after_external = {
         "pause_log": [

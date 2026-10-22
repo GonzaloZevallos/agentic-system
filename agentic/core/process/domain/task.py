@@ -100,7 +100,7 @@ ChangeCategory = FindingCategory | Literal["definition"]
 # from the prose (issue #137) — `sdk` the harness breaking in a way none of the named
 # facts covers (narrowed by `account_limit`, `upstream` and `network`, ADR-0029), `other`
 # the residual nothing else names, `stall` an attempt that hung with nothing to wait for
-# and was killed by the watchdog (`domain/stall.py`, ADR-0056): a reason of its own, not
+# and was killed by the watchdog (`domain/stall.py`, ADR-0057): a reason of its own, not
 # an external one, so the poller never retakes it by itself.
 FailureReason = Literal[
     "schema",
