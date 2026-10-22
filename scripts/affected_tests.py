@@ -101,11 +101,6 @@ TABLE: tuple[Row, ...] = (
     ),
     Row("docs/adr/*", ("tests/test_adr_numbers.py",), "that test lists the ADR directory"),
     Row(
-        "agentic/core/knowledge/docs/adr/*",
-        ("tests/test_adr_numbers.py",),
-        "that test lists the ADR directory, and its guard counts this module's ADRs as read",
-    ),
-    Row(
         "tests/fixtures/langfuse_dashboards/*",
         (
             "tests/core/measurement/domain/test_dashboards.py",

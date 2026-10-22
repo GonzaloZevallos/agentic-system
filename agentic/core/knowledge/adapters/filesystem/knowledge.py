@@ -51,13 +51,14 @@ class FilesystemKnowledge:
 
     def read(self, root: Path | None = None) -> str:
         root = root or self.product_dir
-        return knowledge_index.build_index(
-            self._glossaries(root),
-            _read_dir(root / knowledge.PRODUCT_SUBDIR),
-            _read_dir(root / knowledge.ADR_SUBDIR),
-            self.brief(root),
-            None,
-        ).text
+        # Whole until the roles that read it can open an index (GH-292, `wiring-b`): a
+        # role without `Read` cannot follow a pointer. `build_index` is not yet on this path.
+        parts = [knowledge.fenced(knowledge.BRIEF, brief)] if (brief := self.brief(root)) else []
+        parts += [knowledge.fenced(path, text) for path, text in self._glossaries(root).items()]
+        for subdir in (knowledge.PRODUCT_SUBDIR, knowledge.ADR_SUBDIR):
+            files = _read_dir(root / subdir)
+            parts += [knowledge.fenced(f"{subdir}/{name}", files[name]) for name in sorted(files)]
+        return knowledge.HEADING + "\n\n" + "\n\n".join(parts) if parts else ""
 
     def brief(self, root: Path | None = None) -> str | None:
         """The product's `BRIEF.md`, or None when it has not written one yet
