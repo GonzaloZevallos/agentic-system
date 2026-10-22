@@ -23,6 +23,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
+from agentic.core.process.domain import rules
 from agentic.core.process.domain.task import RoleRun, TaskState
 
 from . import metrics
@@ -102,6 +103,9 @@ class TaskFigures:
     # The document's own `runs[]`, carried so `role_usage.by_role` reads the same
     # bucket `bucket_by_baseline` grouped (GH-292); empty for a document with none.
     runs: Sequence[RoleRun] = ()
+    # The cost estimate in force when the task closed (`rules.estimate_in_force`), `None`
+    # for a document from before estimates existed: no estimate, never a zero (ADR-0053).
+    estimate_usd: float | None = None
 
 
 def task_figures(document: ScorecardDocument) -> TaskFigures:
@@ -124,6 +128,7 @@ def task_figures(document: ScorecardDocument) -> TaskFigures:
         system_commit=document.get("system_commit"),
         system_baseline=document.get("system_baseline"),
         runs=document.get("runs", []),
+        estimate_usd=rules.estimate_in_force(document),
     )
 
 
@@ -220,6 +225,9 @@ class Scorecard:
     failures_by_reason: dict[str, int]
     time_to_merge_known: int
     judged: int
+    # Informative only (ADR-0053): the average of cost over the estimate in force, across the
+    # closed tasks that carry a positive estimate; `n/a` when none does. It enters no verdict.
+    actual_over_estimate: Figure = Figure(None, 0, 0)
 
 
 def build(figures: Sequence[TaskFigures]) -> Scorecard:
@@ -251,6 +259,11 @@ def build(figures: Sequence[TaskFigures]) -> Scorecard:
     rework_per_task = _average(
         values=[f.rework_usd for f in terminated], excluded=total - len(terminated)
     )
+    estimated = [f for f in figures if f.closed_at is not None and (f.estimate_usd or 0) > 0]
+    actual_over_estimate = _average(
+        values=[f.cost_usd / f.estimate_usd for f in estimated if f.estimate_usd],
+        excluded=total - len(estimated),
+    )
     by_reason: dict[str, int] = {}
     for f in terminated:
         for reason, count in f.failures_by_reason.items():
@@ -263,6 +276,7 @@ def build(figures: Sequence[TaskFigures]) -> Scorecard:
         failures_by_reason=by_reason,
         time_to_merge_known=sum(1 for f in judged if f.time_to_merge_seconds is not None),
         judged=len(judged),
+        actual_over_estimate=actual_over_estimate,
     )
 
 

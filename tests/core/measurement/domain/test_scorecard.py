@@ -411,3 +411,40 @@ def test_bucket_by_baseline_counts_and_excludes_an_unreadable_document():
     buckets, unreadable = scorecard.bucket_by_baseline(parsed, resolve=lambda sha: "pre-baseline")
     assert unreadable == 1
     assert sum(len(tasks) for tasks in buckets.values()) == 1
+
+
+# --- actual/estimate (ADR-0053): informative, read through `rules.estimate_in_force` ---
+
+
+def _closed(**overrides):
+    return scorecard.task_figures(doc(closed_at="t", delivery_outcome="merged", **overrides))
+
+
+def test_task_figures_reads_the_estimate_in_force_and_none_for_a_document_without_one():
+    assert scorecard.task_figures(doc()).estimate_usd is None
+    plan = {"cost_usd": 40.0, "files": 10}
+    assert scorecard.task_figures(doc(estimate=plan)).estimate_usd == 40.0
+    revised = doc(estimate=plan, estimate_revisions=[{"cost_usd": 80.0, "files": 20}])
+    assert scorecard.task_figures(revised).estimate_usd == 80.0
+
+
+def test_actual_over_estimate_averages_cost_over_the_estimate_of_the_closed_tasks_that_have_one():
+    figures = [
+        _closed(cost_usd=20.0, estimate={"cost_usd": 10.0, "files": 5}),
+        _closed(cost_usd=10.0, estimate={"cost_usd": 20.0, "files": 5}),
+        _closed(cost_usd=99.0),  # no estimate: out of the figure, never a zero or a division
+        scorecard.task_figures(doc(estimate={"cost_usd": 10.0, "files": 5})),  # not closed
+    ]
+
+    ratio = scorecard.build(figures).actual_over_estimate
+
+    assert ratio.value == pytest.approx(1.25)
+    assert (ratio.denominator, ratio.excluded) == (2, 2)
+
+
+def test_actual_over_estimate_is_n_a_when_no_closed_task_has_a_positive_estimate():
+    figures = [_closed(), _closed(estimate={"cost_usd": 0.0, "files": 1})]
+
+    ratio = scorecard.build(figures).actual_over_estimate
+
+    assert ratio.value is None and ratio.denominator == 0

@@ -2406,6 +2406,11 @@ def _print_scorecard(product: str, baseline: str, sc: scorecard.Scorecard) -> No
         f"({sc.rework_per_task.denominator} terminated, {sc.rework_per_task.excluded} excluded)"
     )
     print(f"  time to merge known for {sc.time_to_merge_known} of {sc.judged} judged deliveries")
+    print(
+        f"actual/estimate:   {_fmt_figure(sc.actual_over_estimate)} "
+        f"({sc.actual_over_estimate.denominator} closed with an estimate, "
+        f"{sc.actual_over_estimate.excluded} excluded)"
+    )
 
 
 def _print_role_usage(
