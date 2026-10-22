@@ -389,6 +389,14 @@ def invariants_markdown(state: TaskState) -> str:
     return "\n".join(f"{n}. {line}" for n, line in enumerate(lines, 1)) or "- none"
 
 
+def finished(status: Literal["discarded", "split"], at: str) -> TaskState:
+    """The patch that ends a task with no delivery: its `status` and `finished_at`, the
+    clock the Reflector's decision gate reads (ADR-0056). The only place the key is set."""
+    if status not in ("discarded", "split"):
+        raise ValueError(f"finished_at is for discarded and split tasks, not {status}")
+    return {"status": status, "finished_at": at}
+
+
 def escalation(cls: EscalationClass, reason: str) -> EscalationPatch:
     """The patch that escalates the task: `escalated`, the text for the human, and
     `escalation_class`, the closed reason `agentic.task.paused` groups pauses by. The

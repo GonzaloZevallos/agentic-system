@@ -15,6 +15,8 @@ depth is one. It escalates with the class `estimate` and only a human decision, 
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from agentic.shared.configuration import Configuration
 
 from ..domain import document, rules
@@ -69,7 +71,8 @@ async def split(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState
         )
     except (ValueError, OSError) as exc:
         return _stopped(current, "commenting the list of parts", exc, ports)
-    return finish(current, {"current_role": PJM.name, "status": "split"}, ports)
+    ended = rules.finished("split", datetime.now(UTC).isoformat(timespec="seconds"))
+    return finish(current, {"current_role": PJM.name, **ended}, ports)
 
 
 def _part_does_not_fit(task_id: str) -> TaskState:

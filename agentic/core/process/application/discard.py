@@ -9,9 +9,11 @@ No role runs here; it is the system talking to the human, which ADR-0001 allows.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from agentic.shared.configuration import Configuration
 
-from ..domain import document
+from ..domain import document, rules
 from ..domain.roles import PJM, PM
 from ..domain.task import TaskState
 from .ports import Ports
@@ -31,7 +33,11 @@ async def discard(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     reaped = release_task(ports, state["id"])
     return finish(
         state,
-        {"current_role": PJM.name, **({"reaped_at_cleanup": list(reaped)} if reaped else {})},
+        {
+            "current_role": PJM.name,
+            **rules.finished("discarded", datetime.now(UTC).isoformat(timespec="seconds")),
+            **({"reaped_at_cleanup": list(reaped)} if reaped else {}),
+        },
         ports,
     )
 

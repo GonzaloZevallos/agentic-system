@@ -128,6 +128,8 @@ def render(
         "questions_for_human": state.get("questions_for_human", []),
         "proposed_invariants": state.get("proposed_invariants", []),
         "discard_reason": state.get("discard_reason"),
+        # When it ended without a delivery (`rules.finished`), written only when set.
+        **({"finished_at": f} if (f := state.get("finished_at")) else {}),
         "branch": state.get("branch"),
         "pull_request": state.get("pull_request"),
         # The remote sha a delivery replaced (GH-204), written only when set so a document
