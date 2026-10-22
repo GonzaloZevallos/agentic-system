@@ -686,7 +686,7 @@ class TaskState(TaskInput, total=False):
     # one is in force. Grows only on a resumption with a decision.
     estimate_revisions: Annotated[list[EstimateRevision], last]
     # The new estimate a stopped task proposed (the human decides on it, never the task).
-    proposed_estimate: Annotated[float, last]
+    proposed_estimate: Annotated[float | None, last]
     # The files the pull request changed, recorded at close through `rules.delivered_files`.
     actual_files: Annotated[int, last]
     # The technical stage (ADR-0011): subtasks by id, each Developer patches its own.
