@@ -72,7 +72,7 @@ from ..domain.roles import (
     prompt_hash,
     reads_by_index,
     render,
-    standards_by_index,
+    whole_for,
 )
 from ..domain.suppressions import Forbidden
 from ..domain.task import WAITING_ON_HUMAN, EscalationClass, Failure, RoleRun, TaskState, apply
@@ -205,10 +205,11 @@ def context_for(
     standards: str = "",
     extra_sections: tuple[str, ...] = (),
     subtask_id: str | None = None,
+    design: str = "",
 ) -> str:
-    """The role's input: the standards and the product knowledge if the role reads
-    them, then the sections it declares plus `extra_sections` (a subtask's own), in
-    document order, that exist, and last the human's decisions, which every role reads:
+    """The role's input: the standards, the design standards and the product knowledge
+    if the role reads them, in that order, then the sections it declares plus
+    `extra_sections` (a subtask's own), in document order, that exist, and last the human's decisions, which every role reads:
     they hold for the whole task and override what they contradict.
 
     `subtask_id` is the reader's own plan subtask, when it has one (the Developer, the
@@ -219,7 +220,7 @@ def context_for(
     untouched. `None` (the default) keeps today's full reading, and so does an id the
     projection cannot use (`plan_view.for_reader`'s own degrade rule)."""
     sections = state.get("sections", {})
-    parts = [text for text in (standards, product_knowledge) if text]
+    parts = [text for text in (standards, design, product_knowledge) if text]
     for name in (*role.reads, *extra_sections, HUMAN):
         if name == ORIGINAL:
             request = document.demote(state["description"])
@@ -232,18 +233,21 @@ def context_for(
     return "\n\n".join(parts)
 
 
-def preamble(role: Role, ports: Ports, root: Path | None = None) -> tuple[str, str]:
-    """What the role reads before the task document: (standards, product knowledge),
-    as found in the checkout the role works in. The knowledge is what always goes
-    whole plus the area index; the standards are whole for a verifier and an index
-    entry for the Developer and the integrator (`standards_by_index`)."""
+def preamble(role: Role, ports: Ports, root: Path | None = None) -> tuple[str, str, str]:
+    """What the role reads before the task document: (standards, design standards,
+    product knowledge), as found in the checkout the role works in, one block per
+    criteria family the role has (`Role.criteria`). Whether a family goes whole or as an
+    index is `whole_for`'s: the engineering standards are whole for a verifier and an
+    index entry for the Developer and the integrator; the product knowledge is what
+    always goes whole plus the area index."""
     standards = (
-        ports.knowledge.standards(root, whole=not standards_by_index(role))
-        if role.reads_standards
+        ports.knowledge.standards(root, whole=whole_for(role, "engineering"))
+        if "engineering" in role.criteria
         else ""
     )
-    knowledge = ports.knowledge.read(root) if role.reads_knowledge else ""
-    return standards, knowledge
+    design = ports.knowledge.design(root) if "design" in role.criteria else ""
+    knowledge = ports.knowledge.read(root) if "product" in role.criteria else ""
+    return standards, design, knowledge
 
 
 def with_context(
@@ -263,9 +267,11 @@ def with_context(
     `subtask_id` reaches `context_for` unchanged, so the cold prompt trims the plan the
     same way the ordinary prompt would (issue #71): the exception this function exists
     for is the session, never the reading."""
-    standards, knowledge = preamble(role, ports, cwd)
+    standards, design, knowledge = preamble(role, ports, cwd)
     return (
-        context_for(state, role, knowledge, standards, extra_sections, subtask_id) + "\n\n" + text
+        context_for(state, role, knowledge, standards, extra_sections, subtask_id, design)
+        + "\n\n"
+        + text
     )
 
 
@@ -850,14 +856,12 @@ async def run_role(
     def write_index() -> None:
         # Before every attempt of the role, a resumed one that receives only a delta and
         # a retry included: the index points at files of this checkout as they are now.
-        ports.workspace.write_index(
-            workdir, ports.knowledge.index_files(workdir, ("product", "engineering"))
-        )
+        ports.workspace.write_index(workdir, ports.knowledge.index_files(workdir, role.criteria))
 
     if prompt is None:
-        standards, knowledge = preamble(role, ports, workdir)
+        standards, design, knowledge = preamble(role, ports, workdir)
         prompt = context_for(
-            state, role, knowledge, standards, extra_sections, state.get("subtask_id")
+            state, role, knowledge, standards, extra_sections, state.get("subtask_id"), design
         )
     try:
         output = await run_with_retry(

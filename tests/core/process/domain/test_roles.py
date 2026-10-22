@@ -399,24 +399,28 @@ def test_reads_by_index_needs_something_to_read_and_a_tool_to_open_it():
     )
 
     assert reads_by_index(PM) and reads_by_index(DEVELOPER) and reads_by_index(TECH_LEAD)
-    assert reads_by_index(TECH_LEAD_REVIEWER)  # standards only, with Read
+    # Standards only, with Read, but a verifier: it gets them whole, so nothing to index.
+    assert not reads_by_index(TECH_LEAD_REVIEWER)
     # Rejected: nothing to read, or no way to open what the index points at.
     assert not reads_by_index(PJM) and not reads_by_index(REFLECTOR)
     assert not reads_by_index(replace(PM, tools=()))
-    assert not reads_by_index(replace(DEVELOPER, reads_standards=False))
+    assert not reads_by_index(replace(DEVELOPER, criteria=()))
+    assert not reads_by_index(replace(DEVELOPER, criteria=("design",)))
 
 
 def test_only_the_developer_and_the_integrator_receive_the_standards_by_index():
-    from agentic.core.process.domain.roles import standards_by_index
+    from agentic.core.process.domain.roles import whole_for
 
-    by_index = {r.slug for r in ROLES if r.reads_standards and standards_by_index(r)}
+    by_index = {
+        r.slug for r in ROLES if "engineering" in r.criteria and not whole_for(r, "engineering")
+    }
     assert by_index == {"developer", "developer_integrator"}
 
 
 def test_every_verifier_receives_the_standards_whole():
-    from agentic.core.process.domain.roles import standards_by_index
+    from agentic.core.process.domain.roles import whole_for
 
-    verifiers = [r for r in ROLES if r.kind == "verifier" and r.reads_standards]
+    verifiers = [r for r in ROLES if r.kind == "verifier" and "engineering" in r.criteria]
     assert {r.slug for r in verifiers} >= {
         "tech_lead",
         "tech_lead_review",
@@ -424,14 +428,76 @@ def test_every_verifier_receives_the_standards_whole():
         "tech_lead_ephemeral",
         "tech_lead_interviewee",
     }
-    assert not any(standards_by_index(role) for role in verifiers)
+    assert all(whole_for(role, "engineering") for role in verifiers)
 
 
-def test_every_role_that_reads_knowledge_can_open_a_file():
+def test_the_product_family_is_never_whole_and_the_design_family_always_is():
+    from agentic.core.process.domain.roles import whole_for
+
+    assert not any(whole_for(role, "product") for role in ROLES)
+    assert all(whole_for(role, "design") for role in ROLES)
+
+
+def test_every_role_that_reads_a_criteria_family_can_open_a_file():
     # Invariant 4: an index points at files, so a role handed one has `Read`.
+    from agentic.core.process.domain.roles import reads_by_index
+
     for role in ROLES:
-        if role.reads_knowledge or role.reads_standards:
+        if reads_by_index(role):
             assert "Read" in role.tools, role.slug
+
+
+# Copied from the booleans this table replaced (`reads_knowledge` -> product,
+# `reads_standards` -> engineering), plus `design` for the design roles (ADR-0054). A
+# role that appears here with other families, or is missing, changes what it reads.
+EXPECTED_CRITERIA = {
+    "pjm": (),
+    "product_analyst_interviewer": ("product",),
+    "pm_interviewee": ("product",),
+    "product_analyst": ("product",),
+    "pm": ("product",),
+    "ux_designer": ("product", "design"),
+    "ux_lead": ("design",),
+    "ui_designer": ("product", "design"),
+    "ui_lead": ("design",),
+    "pm_consolidator": ("product",),
+    "ux_lead_final": ("design",),
+    "ui_lead_final": ("design",),
+    "pm_final": ("product",),
+    "product_analyst_bug": ("product",),
+    "pm_bug": ("product",),
+    "tech_lead_ephemeral": ("engineering", "product"),
+    "tech_lead_interviewee": ("engineering", "product"),
+    "pm_consultant": ("product",),
+    "tech_lead": ("engineering", "product"),
+    "tech_lead_ephemeral_platform": ("engineering", "product"),
+    "tech_lead_interviewee_platform": ("engineering", "product"),
+    "tech_lead_platform": ("engineering", "product"),
+    "tech_lead_ephemeral_stack": ("engineering", "product"),
+    "tech_lead_interviewee_stack": ("engineering", "product"),
+    "tech_lead_stack": ("engineering", "product"),
+    "tech_lead_review": ("engineering",),
+    "tech_lead_review_light": ("engineering",),
+    "landing_diagnoser": ("engineering",),
+    "developer": ("engineering",),
+    "developer_integrator": ("engineering",),
+    "reflector": (),
+}
+
+
+def test_every_role_reads_exactly_the_criteria_families_it_read_before():
+    assert {role.slug: role.criteria for role in ROLES} == EXPECTED_CRITERIA
+
+
+def test_the_process_side_literals_of_the_standards_file_equal_the_knowledge_constant():
+    from agentic.core.knowledge.domain import knowledge
+    from agentic.core.process.domain import rules
+    from agentic.core.process.domain.roles import _KNOWLEDGE_PATHS
+
+    assert knowledge.STANDARDS in _KNOWLEDGE_PATHS
+    assert rules.guarded_path(knowledge.STANDARDS, "T-1")
+    # The literal is the constant, not a near miss a rename would leave behind.
+    assert not rules.guarded_path("CODING_STANDARDS.md.bak", "T-1")
 
 
 @pytest.mark.parametrize("slug", PM_SIDE_SLUGS)

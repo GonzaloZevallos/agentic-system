@@ -51,6 +51,10 @@ PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 _PLACEHOLDER = re.compile(r"\{\{(\w+)\}\}")
 
 
+# The families of criteria documents a role may read (ADR-0054).
+Criteria = Literal["engineering", "product", "design"]
+
+
 @dataclass(frozen=True)
 class Prompt:
     text: str
@@ -75,8 +79,10 @@ class Role:
     # A role that lists itself reads its own previous section on a return. The human's
     # decisions (`HUMAN`) are not declared: every role reads them, last.
     reads: tuple[str, ...] = (ORIGINAL,)
-    # Product roles also receive the product knowledge, whole (ADR-0006).
-    reads_knowledge: bool = False
+    # The criteria families the role reads (ADR-0054): `product` is the Brief and the
+    # product knowledge (ADR-0006), `engineering` the coding standards (ADR-0012),
+    # `design` the design standards. How each reaches the role is `whole_for`'s business.
+    criteria: tuple[Criteria, ...] = ()
     # Budgets (README.md, 14): how hard the role thinks and how many turns it gets.
     effort: str = "medium"
     max_turns: int = 4
@@ -92,8 +98,6 @@ class Role:
     denied: tuple[str, ...] = ()
     skills: tuple[str, ...] = ()
     executes: bool = False
-    # Product roles also receive the engineering standards, whole (ADR-0012).
-    reads_standards: bool = False
 
     @property
     def runs_on(self) -> RoleKind:
@@ -102,18 +106,28 @@ class Role:
         return self.model_kind or self.kind
 
 
+def whole_for(role: Role, family: Criteria) -> bool:
+    """Whether the family reaches the role whole, in its prompt, or through the index.
+    The one place that decides it (ADR-0054). `design` is always whole: it is bounded by
+    the size cap and has no index. `engineering` is whole for every verifier, which judges
+    against it, and for a role that cannot open a file; the Developer and the integrator
+    get it through the index. `product` is never whole: it always arrives as what goes
+    whole plus the area index."""
+    if family == "design":
+        return True
+    if family == "engineering":
+        return "Read" not in role.tools or role.kind == "verifier"
+    return False
+
+
 def reads_by_index(role: Role) -> bool:
-    """Whether the role gets product knowledge or standards as an index, to open the
-    entries it needs with `Read`, instead of whole. The run materialises the index files
+    """Whether the role gets a family as an index, to open the entries it needs with
+    `Read`, instead of whole. The run materialises the index files of those families
     under the role's `cwd` before every attempt of such a role (`run_role`)."""
-    return (role.reads_knowledge or role.reads_standards) and "Read" in role.tools
-
-
-def standards_by_index(role: Role) -> bool:
-    """Whether the standards reach the role as an index. Only a role that is not a
-    verifier gets them that way (the Developer and the integrator): every `kind="verifier"`
-    role judges against the standards, so it reads them whole."""
-    return reads_by_index(role) and role.kind != "verifier"
+    return "Read" in role.tools and any(
+        family in ("product", "engineering") and not whole_for(role, family)
+        for family in role.criteria
+    )
 
 
 def render(raw: str, source: Path, **placeholders: object) -> Prompt:
@@ -212,7 +226,7 @@ PRODUCT_ANALYST_INTERVIEWER = Role(
     kind="actor",
     schema=InterviewTurn,
     reads=(ORIGINAL, "PjM"),
-    reads_knowledge=True,
+    criteria=("product",),
     tools=WRITE_DOCS,
     allowed=WRITE_DOCS_RULES,
     skills=("grilling", "domain-modeling"),
@@ -225,7 +239,7 @@ PM_INTERVIEWEE = Role(
     kind="verifier",
     schema=Answers,
     reads=(ORIGINAL,),
-    reads_knowledge=True,
+    criteria=("product",),
     tools=READ_KNOWLEDGE,
     allowed=READ_KNOWLEDGE_RULES,
     max_turns=PM_SIDE_TURNS,
@@ -245,7 +259,7 @@ PRODUCT_ANALYST = Role(
     kind="actor",
     schema=PRD,
     reads=(ORIGINAL, "PjM", PRD_INTERVIEW, "Product Analyst", "PM"),
-    reads_knowledge=True,
+    criteria=("product",),
     tools=READ_KNOWLEDGE,
     allowed=READ_KNOWLEDGE_RULES,
     max_turns=PM_SIDE_TURNS,
@@ -257,7 +271,7 @@ PM = Role(
     kind="verifier",
     schema=Verdict,
     reads=(ORIGINAL, PRD_INTERVIEW, "Product Analyst", "PM"),
-    reads_knowledge=True,
+    criteria=("product",),
     tools=READ_KNOWLEDGE,
     allowed=READ_KNOWLEDGE_RULES,
     max_turns=PM_SIDE_TURNS,
@@ -281,7 +295,7 @@ UX_DESIGNER = Role(
     kind="actor",
     schema=DesignDraft,
     reads=(ORIGINAL, "Product Analyst", "PM", "UX Designer"),
-    reads_knowledge=True,
+    criteria=("product", "design"),
     tools=READ_CODE,
     allowed=READ_CODE_RULES,
     max_turns=12,
@@ -293,6 +307,7 @@ UX_LEAD = Role(
     kind="verifier",
     schema=DesignReview,
     reads=(ORIGINAL, "Product Analyst", "PM", "UX Designer", "UX Lead"),
+    criteria=("design",),
     tools=READ_CODE,
     allowed=READ_CODE_RULES,
     max_turns=12,
@@ -304,7 +319,7 @@ UI_DESIGNER = Role(
     kind="actor",
     schema=DesignDraft,
     reads=(ORIGINAL, "Product Analyst", "PM", "UX Designer", "UX Lead", "UI Designer"),
-    reads_knowledge=True,
+    criteria=("product", "design"),
     tools=READ_CODE,
     allowed=READ_CODE_RULES,
     max_turns=12,
@@ -324,6 +339,7 @@ UI_LEAD = Role(
         "UI Designer",
         "UI Lead",
     ),
+    criteria=("design",),
     tools=READ_CODE,
     allowed=READ_CODE_RULES,
     max_turns=12,
@@ -449,8 +465,7 @@ TECH_LEAD_EPHEMERAL = Role(
     model_kind="actor",
     schema=SolutionTurn,
     reads=(ORIGINAL, "PM"),
-    reads_knowledge=True,
-    reads_standards=True,
+    criteria=("engineering", "product"),
     tools=WRITE_DOCS + ("Bash",),
     allowed=WRITE_DOCS_RULES + ("Bash(git log:*)",),
     skills=("grilling", "domain-modeling"),
@@ -463,8 +478,7 @@ TECH_LEAD_INTERVIEWEE = Role(
     kind="verifier",
     schema=TechAnswers,
     reads=(ORIGINAL, "PM"),
-    reads_knowledge=True,
-    reads_standards=True,
+    criteria=("engineering", "product"),
     tools=READ_CODE,
     allowed=READ_CODE_RULES,
     skills=("codebase-design", "domain-modeling"),
@@ -480,7 +494,7 @@ PM_CONSULTANT = Role(
     kind="verifier",
     schema=Consultation,
     reads=(ORIGINAL, PRD_INTERVIEW, "Product Analyst", "PM"),
-    reads_knowledge=True,
+    criteria=("product",),
     tools=READ_KNOWLEDGE,
     allowed=READ_KNOWLEDGE_RULES,
     max_turns=PM_SIDE_TURNS,
@@ -492,8 +506,7 @@ TECH_LEAD = Role(
     kind="verifier",
     schema=TechPlan,
     reads=(ORIGINAL, "PM", SOLUTION_INTERVIEW),
-    reads_knowledge=True,
-    reads_standards=True,
+    criteria=("engineering", "product"),
     tools=READ_CODE,
     allowed=READ_CODE_RULES,
     skills=("codebase-design", "domain-modeling"),
@@ -563,7 +576,7 @@ TECH_LEAD_REVIEWER = Role(
     kind="verifier",
     schema=Review,
     reads=(ORIGINAL, "PM", "Tech Lead", FINDINGS),
-    reads_standards=True,
+    criteria=("engineering",),
     tools=READ_CODE + ("Agent",),
     # Plus the product's checks, per task: `reviewer_for`.
     allowed=READ_CODE_RULES + ("Agent",),
@@ -609,7 +622,7 @@ DEVELOPER = Role(
     kind="actor",
     schema=Delivery,
     reads=(ORIGINAL, "PM", "Tech Lead", FINDINGS),
-    reads_standards=True,
+    criteria=("engineering",),
     tools=EXECUTE,
     denied=GIT_DENIED,
     # `resolving-merge-conflicts` was the integrator's alone (ADR-0013); this task's
@@ -628,7 +641,7 @@ DEVELOPER_INTEGRATOR = Role(
     kind="actor",
     schema=Delivery,
     reads=(ORIGINAL, "PM", "Tech Lead", FINDINGS),
-    reads_standards=True,
+    criteria=("engineering",),
     tools=EXECUTE,
     denied=GIT_DENIED,
     skills=("tdd", "resolving-merge-conflicts"),
