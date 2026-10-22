@@ -19,9 +19,9 @@ structurally identical to it on every key this module reads.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from agentic.core.process.domain.task import TaskState
 
@@ -99,6 +99,9 @@ class TaskFigures:
     time_to_merge_seconds: float | None
     system_commit: str | None
     system_baseline: str | None
+    # The document's own `runs[]`, carried so `role_usage.by_role` reads the same
+    # bucket `bucket_by_baseline` grouped (GH-292); empty for a document with none.
+    runs: Sequence[Mapping[str, Any]] = ()
 
 
 def task_figures(document: ScorecardDocument) -> TaskFigures:
@@ -120,6 +123,7 @@ def task_figures(document: ScorecardDocument) -> TaskFigures:
         time_to_merge_seconds=float(time_to_merge) if time_to_merge is not None else None,
         system_commit=document.get("system_commit"),
         system_baseline=document.get("system_baseline"),
+        runs=document.get("runs", []),
     )
 
 

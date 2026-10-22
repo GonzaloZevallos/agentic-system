@@ -45,7 +45,13 @@ from .core.measurement.adapters.langfuse.scores import LangfuseScores
 from .core.measurement.adapters.otel import telemetry
 from .core.measurement.adapters.otel.telemetry import InvocationKind
 from .core.measurement.application import dashboards as dashboards_app
-from .core.measurement.domain import evaluation, playbook_window, scorecard, task_scores
+from .core.measurement.domain import (
+    evaluation,
+    playbook_window,
+    role_usage,
+    scorecard,
+    task_scores,
+)
 from .core.measurement.domain import metrics as delivery_metrics
 from .core.process.adapters.filesystem import (
     FilesystemRunLock,
@@ -2393,6 +2399,25 @@ def _print_scorecard(product: str, baseline: str, sc: scorecard.Scorecard) -> No
     print(f"  time to merge known for {sc.time_to_merge_known} of {sc.judged} judged deliveries")
 
 
+def _print_role_usage(
+    product: str, baseline: str, tasks: list[tuple[str, scorecard.TaskFigures]]
+) -> None:
+    """The per-role breakdown of one baseline's runs (GH-292), read off the same
+    bucket the scorecard above it was built from. Token columns are counts, `cost`
+    is the recorded `cost_usd`; a document recorded before a field existed reads 0."""
+    usage = role_usage.by_role(run for _, figures in tasks for run in figures.runs)
+    print(f"-- per-role usage -- {product} / {baseline} --")
+    print(
+        f"{'role':<24}{'runs':>6}{'turns':>7}{'input':>10}{'cache_read':>13}"
+        f"{'cache_write':>13}{'output':>10}{'cost_usd':>11}"
+    )
+    for slug, u in usage.items():
+        print(
+            f"{slug:<24}{u.runs:>6}{u.turns:>7}{u.input_tokens:>10}{u.cache_read_tokens:>13}"
+            f"{u.cache_write_tokens:>13}{u.output_tokens:>10}{u.cost_usd:>11.4f}"
+        )
+
+
 async def _eval_compare(
     cfg: Configuration, ports: Ports, frm: str, to: str, system_repo: str | None
 ) -> None:
@@ -2426,6 +2451,8 @@ async def _eval_compare(
     _print_scorecard(product, to, to_sc)
     v = scorecard.verdict(frm_sc, frm, to_sc, to)
     print(f"verdict: {v.outcome} ({v.reason})")
+    _print_role_usage(product, frm, buckets[frm])
+    _print_role_usage(product, to, buckets[to])
 
     # The eval-set declaration is read on a warning path (ADR-0025's `no_brief`/
     # `brief_refusal` asymmetry): absent or malformed says so plainly and the
