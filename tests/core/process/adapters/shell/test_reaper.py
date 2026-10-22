@@ -11,6 +11,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -19,6 +20,7 @@ import pytest
 from agentic.core.process.adapters.shell import reaper as reaper_module
 from agentic.core.process.adapters.shell.reaper import ShellReaper
 from agentic.core.process.domain import reaping
+from agentic.core.process.domain.stall import ChildActivity
 
 PRODUCT = reaping.product_key("/work/a-product")
 
@@ -192,3 +194,90 @@ def test_the_reaper_never_signals_its_own_process(children):
         assert ShellReaper(PRODUCT).reap_task("GH-12") == ()
     finally:
         del os.environ[reaping.MARK_NAME]
+
+
+# -- child_activity (GH-299, ADR-0056) ----------------------------------------------
+#
+# The "CLI" of these tests is a marked process whose parent is this test process (the
+# orchestrator, `parent_pid`); the child it launches inherits the mark, as a tool the
+# CLI ran does.
+
+BUSY = "while True: pass"
+
+
+def spawn_cli(children, mark: str, grandchild: str | None) -> subprocess.Popen:
+    launch = f"subprocess.Popen([sys.executable, '-c', {grandchild!r}])" if grandchild else "None"
+    return spawn(children, f"import subprocess, time; {launch}; time.sleep(300)", mark)
+
+
+def activity(task: str = "GH-77", token: str = "t"):
+    return ShellReaper(PRODUCT).child_activity(task, 1, token, os.getpid())
+
+
+def test_child_activity_counts_cpu_of_a_marked_child_but_not_of_the_cli(children):
+    mark = mark_of("GH-77")
+    spawn_cli(children, mark, BUSY)
+    try:
+        deadline = time.monotonic() + 10
+        first = activity()
+        assert first is not None
+        grown = first
+        while time.monotonic() < deadline and grown.cpu_ticks == first.cpu_ticks:
+            time.sleep(0.2)
+            grown = activity()
+            assert grown is not None
+        assert grown.cpu_ticks > first.cpu_ticks
+    finally:
+        ShellReaper(PRODUCT).reap_task("GH-77")
+
+
+def test_child_activity_sees_a_running_child(children):
+    spawn_cli(children, mark_of("GH-77"), BUSY)
+    try:
+        deadline = time.monotonic() + 10
+        seen = activity()
+        while time.monotonic() < deadline and not (seen and seen.running):
+            time.sleep(0.05)
+            seen = activity()
+        assert seen is not None and seen.running
+    finally:
+        ShellReaper(PRODUCT).reap_task("GH-77")
+
+
+def test_child_activity_of_a_present_but_idle_child_is_flat_and_not_running(children):
+    spawn_cli(children, mark_of("GH-77"), OBEDIENT)
+    try:
+        time.sleep(0.5)
+        first, second = activity(), activity()
+        assert first is not None and second is not None
+        assert not first.running
+        assert first.cpu_ticks == second.cpu_ticks
+    finally:
+        ShellReaper(PRODUCT).reap_task("GH-77")
+
+
+def test_child_activity_ignores_the_cli_even_when_it_burns_cpu(children):
+    # Rejected input: the marked process whose parent is the orchestrator is the CLI,
+    # and its own CPU says nothing about a tool the model is waiting for.
+    spawn(children, "exec('while True: pass')", mark_of("GH-77"))
+    time.sleep(0.5)
+    assert activity() == ChildActivity(cpu_ticks=0, running=False)
+
+
+def test_child_activity_ignores_children_of_another_attempt_or_task_or_product(children):
+    spawn_cli(children, mark_of("GH-77", token="other"), BUSY)
+    spawn_cli(children, mark_of("GH-78"), BUSY)
+    spawn_cli(children, mark_of("GH-77", product=reaping.product_key("/work/b")), BUSY)
+    spawn_cli(children, None, BUSY)
+    try:
+        time.sleep(0.5)
+        assert activity() == ChildActivity(cpu_ticks=0, running=False)
+    finally:
+        for task in ("GH-77", "GH-78"):
+            ShellReaper(PRODUCT).reap_task(task)
+
+
+def test_child_activity_is_none_when_proc_cannot_be_read(monkeypatch, tmp_path):
+    # Unreadable is not "idle": the verdict reads None as activity (invariant 2).
+    monkeypatch.setattr(reaper_module, "_PROC", tmp_path / "missing")
+    assert activity() is None

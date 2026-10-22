@@ -49,6 +49,7 @@ from agentic.core.process.domain.ci import CiReport, CiUnreadable, Containment
 from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.playbook import Playbook
 from agentic.core.process.domain.reaping import ReapedProcess
+from agentic.core.process.domain.stall import ChildActivity
 from agentic.core.process.domain.roles import PROMPTS_DIR, Role
 from agentic.core.process.domain.rules import MergeFailure
 from agentic.core.process.domain.suppressions import Forbidden
@@ -1243,10 +1244,14 @@ class FakeReaper:
         *,
         reaped_runs: tuple[ReapedProcess, ...] = (),
         reaped_attempts: tuple[ReapedProcess, ...] = (),
+        activity: ChildActivity | None = ChildActivity(cpu_ticks=0, running=False),
     ) -> None:
         self.reaped = reaped
         self.reaped_runs = reaped_runs
         self.reaped_attempts = reaped_attempts
+        # What `child_activity` answers (GH-299); `None` is a scan that could not read.
+        self.activity = activity
+        self.scans = 0
         self.calls: list[tuple[str, str, int | None, str | None]] = []
 
     def reap_task(self, task_id: str) -> tuple[ReapedProcess, ...]:
@@ -1260,6 +1265,12 @@ class FakeReaper:
     def reap_attempt(self, task_id: str, run: int, token: str) -> tuple[ReapedProcess, ...]:
         self.calls.append(("attempt", task_id, run, token))
         return self.reaped_attempts
+
+    def child_activity(
+        self, task_id: str, run: int, token: str, parent_pid: int
+    ) -> ChildActivity | None:
+        self.scans += 1
+        return self.activity
 
 
 class FakeLauncher:

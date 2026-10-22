@@ -24,6 +24,7 @@ import signal
 import sys
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 from ...domain import reaping
 from ...domain.reaping import (
@@ -32,6 +33,7 @@ from ...domain.reaping import (
     ReapedProcess,
     ReapScope,
 )
+from ...domain.stall import ChildActivity
 
 _PROC = Path("/proc")
 _POLL_S = 0.05
@@ -40,12 +42,19 @@ _POLL_S = 0.05
 _Key = tuple[int, int]
 
 
-def _stat(pid: int) -> tuple[str, int]:
-    """State letter and starttime (field 22) of `pid`. The command is field 2, in
-    parentheses and free to hold spaces and parentheses, so it is cut at the last one."""
+class _Stat(NamedTuple):
+    state: str  # field 3
+    ppid: int  # field 4
+    cpu_ticks: int  # utime + stime, fields 14 and 15
+    started: int  # field 22
+
+
+def _stat(pid: int) -> _Stat:
+    """What `/proc/<pid>/stat` says of `pid`. The command is field 2, in parentheses and
+    free to hold spaces and parentheses, so it is cut at the last one."""
     text = (_PROC / str(pid) / "stat").read_text(encoding="utf-8", errors="replace")
     fields = text[text.rindex(")") + 2 :].split()
-    return fields[0], int(fields[19])
+    return _Stat(fields[0], int(fields[1]), int(fields[11]) + int(fields[12]), int(fields[19]))
 
 
 class ShellReaper:
@@ -66,6 +75,24 @@ class ShellReaper:
             return self._sequence(scope)
         except Exception as exc:  # the port never raises: whatever broke is an entry
             return (ReapedProcess(pid=0, command=type(exc).__name__, outcome="error"),)
+
+    def child_activity(
+        self, task_id: str, run: int, token: str, parent_pid: int
+    ) -> ChildActivity | None:
+        """What the attempt's marked processes are doing, the CLI left out: the one marked
+        process whose parent is `parent_pid`, the orchestrator (a CLI that waits on an API
+        is idle by nature, and one in a loop is not a tool the model is waiting for).
+        `None` when the scan could not be made; never raises (the verdict reads `None` as
+        activity, so a failed read never kills an attempt)."""
+        try:
+            census = self._census(ReapScope(self._product, task_id, run, token))
+        except Exception:
+            return None
+        children = [stat for _, stat in census.values() if stat.ppid != parent_pid]
+        return ChildActivity(
+            cpu_ticks=sum(stat.cpu_ticks for stat in children),
+            running=any(stat.state in {"R", "D"} for stat in children),
+        )
 
     def _sequence(self, scope: ReapScope) -> tuple[ReapedProcess, ...]:
         seen: dict[_Key, str] = {}
@@ -104,7 +131,11 @@ class ShellReaper:
 
     def _scan(self, scope: ReapScope) -> dict[_Key, str]:
         """The marked, live processes of `scope`: `(pid, starttime)` -> command."""
-        found: dict[_Key, str] = {}
+        return {key: command for key, (command, _) in self._census(scope).items()}
+
+    def _census(self, scope: ReapScope) -> dict[_Key, tuple[str, _Stat]]:
+        """`_scan` with the stat of each process as read."""
+        found: dict[_Key, tuple[str, _Stat]] = {}
         own = os.getpid()
         for name in os.listdir(_PROC):
             if not name.isdigit() or int(name) == own:
@@ -113,13 +144,13 @@ class ShellReaper:
             try:
                 if not reaping.matches((_PROC / name / "environ").read_bytes(), scope):
                     continue
-                state, started = _stat(pid)
-                if state in {"Z", "X"}:
+                stat = _stat(pid)
+                if stat.state in {"Z", "X"}:
                     continue
                 command = reaping.truncate_command((_PROC / name / "cmdline").read_bytes())
             except (OSError, ValueError, IndexError):
                 continue  # unreadable, gone or unparsable: not provably the scope's
-            found[(pid, started)] = command
+            found[(pid, stat.started)] = (command, stat)
         return found
 
     @staticmethod
@@ -130,7 +161,7 @@ class ShellReaper:
         except OSError:
             return
         try:
-            if _stat(pid)[1] != started:
+            if _stat(pid).started != started:
                 return
             if not reaping.matches((_PROC / str(pid) / "environ").read_bytes(), scope):
                 return
