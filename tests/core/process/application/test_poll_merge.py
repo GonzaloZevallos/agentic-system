@@ -269,6 +269,40 @@ def _facts_of(raw):
     return poll._merge_facts("GH-5", raw, _pr(), frozenset(), 5, MASTER)
 
 
+def _important(scope: str, subtask: str = "only") -> dict[str, str]:
+    return {
+        **_finding("important"),
+        "scope": scope,
+        "subtask": subtask,
+        "location": f"{scope}.py:1",
+    }
+
+
+def test_the_facts_split_the_important_rows_by_the_partition_and_read_the_pass_from_the_document():
+    raw = {
+        "subtasks": {"only": {"id": "only", "status": "approved"}},
+        "findings": [_important("subtask"), _important("plan"), _important("outside")],
+    }
+    facts = _facts_of(raw)
+    assert (facts.open_important, facts.open_outside, facts.important_pass_done) == (2, 1, False)
+
+    resolved = {"landing": [{"step": "fix_important", "resolved_at": "2026-10-14T00:00:00+00:00"}]}
+    assert _facts_of({**raw, **resolved}).important_pass_done is True
+    unresolved = {"landing": [{"step": "fix_important", "head": HEAD}]}
+    assert _facts_of({**raw, **unresolved}).important_pass_done is False
+    other = {"landing": [{"step": "fix", "resolved_at": "2026-10-14T00:00:00+00:00"}]}
+    assert _facts_of({**raw, **other}).important_pass_done is False
+
+
+def test_a_task_with_its_own_important_row_is_not_a_merge_candidate_until_the_pass_is_done():
+    ports = _ports(5, findings=[_important("subtask")])
+    assert _merges(ports)[0] == []
+    done = _ports(
+        5, findings=[_important("subtask")], landing=[{"step": "fix_important", "resolved_at": "t"}]
+    )
+    assert _merges(done)[0] == [5]
+
+
 def test_merge_failures_read_as_zero_when_absent_or_for_another_head():
     assert _facts_of({}).merge_failures == 0
     assert _facts_of({}).merge_failure is None

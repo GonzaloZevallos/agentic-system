@@ -1086,3 +1086,59 @@ def test_merge_pr_merge_unreachable_is_gh_unreadable_never_gh_rejected():
     assert raised.value.failure == "gh_unreadable"
     assert type(raised.value) is MergeCallFailed
     assert isinstance(raised.value.__cause__, TrackerUnreachable)
+
+
+class LabelRun(Recorder):
+    """`gh label list` answers `listed`; every other call answers an empty success."""
+
+    def __init__(self, listed: str):
+        super().__init__(stdout="")
+        self.listed = listed
+
+    def __call__(self, args, cwd, capture_output, text, check):
+        self.calls.append(args)
+        out = self.listed if args[:3] == ["gh", "label", "list"] else ""
+        return subprocess.CompletedProcess(args, 0, out, "")
+
+
+def test_ensure_label_that_exists_makes_exactly_the_list_call():
+    run = LabelRun(json.dumps([{"name": "bug"}, {"name": "needs-triage"}]))
+    GhTracker(Path("/p"), run).ensure_label("needs-triage")
+    assert run.calls == [["gh", "label", "list", "--limit", "1000", "--json", "name"]]
+
+
+def test_ensure_label_that_is_missing_is_created_without_force():
+    run = LabelRun(json.dumps([{"name": "bug"}]))
+    GhTracker(Path("/p"), run).ensure_label("needs-triage")
+    assert run.calls == [
+        ["gh", "label", "list", "--limit", "1000", "--json", "name"],
+        ["gh", "label", "create", "needs-triage"],
+    ]
+
+
+def test_ensure_label_compares_the_exact_name_locally():
+    run = LabelRun(json.dumps([{"name": "needs-triage-2"}, {"name": "Needs-Triage"}]))
+    GhTracker(Path("/p"), run).ensure_label("needs-triage")
+    assert run.calls[-1] == ["gh", "label", "create", "needs-triage"]
+
+
+@pytest.mark.parametrize("listed", ["not json", "{}", '["needs-triage"]', '[{"color": "x"}]'])
+def test_ensure_label_rejects_an_unreadable_list_without_creating(listed):
+    run = LabelRun(listed)
+    with pytest.raises(ValueError):
+        GhTracker(Path("/p"), run).ensure_label("needs-triage")
+    assert [call[:3] for call in run.calls] == [["gh", "label", "list"]]
+
+
+def test_ensure_label_never_searches_nor_forces():
+    for listed in ("[]", json.dumps([{"name": "needs-triage"}])):
+        run = LabelRun(listed)
+        GhTracker(Path("/p"), run).ensure_label("needs-triage")
+        assert not any(a in ("--search", "-S", "--force", "-f") for c in run.calls for a in c)
+
+
+def test_ensure_label_gh_failure_is_a_value_error_without_create():
+    run = Recorder(fail=True)
+    with pytest.raises(ValueError, match="gh label list failed: no auth"):
+        GhTracker(Path("/p"), run).ensure_label("needs-triage")
+    assert len(run.calls) == 1

@@ -27,6 +27,7 @@ LandingStepKind = Literal[
     "sync_master",
     "re_review",
     "fix",
+    "fix_important",
     "rerun",
     "file_followups_and_land",
     "renumber",
@@ -35,8 +36,9 @@ LandingStepKind = Literal[
 ]
 """What the landing does about a refusal: `wait` (the next tick decides again), `sync_master`
 (merge the upstream into the task branch), `re_review` (a Tech Lead review of the head),
-`fix` (a Developer pass on `units`), `rerun` (the CI or the checks, once per head),
-`file_followups_and_land` (file the important findings, then merge), `renumber` (rename the
+`fix` (a Developer pass on `units`), `fix_important` (the one final pass on the task's own
+open `important` findings, GH-294), `rerun` (the CI or the checks, once per head),
+`file_followups_and_land` (file the `outside` findings, then merge), `renumber` (rename the
 ADR whose number master took and rewrite the references inside the branch's own work,
 GH-229), `diagnose` (the
 terminal path: the landing diagnoser, then a restart) and `none` (nothing the system can
@@ -61,6 +63,8 @@ def run_kind_of(step: LandingStepKind | None, refusal: rules.MergeRefusal | None
     match step:
         case "rerun" | "file_followups_and_land":
             return "land_checks"
+        case "fix_important":
+            return "land_model"
         case _:
             return "land_model"
 
@@ -77,6 +81,10 @@ def run_kind_admits(
 
 LANDING_PASSES_MAX = 3
 """Model passes (`re_review`, `fix`, a conflicting `sync_master`) per task."""
+
+LANDING_IMPORTANT_PASSES_MAX = 1
+"""`fix_important` passes per task (GH-294), counted in `LandingSpent.important_passes` and
+charged to `LANDING_PASSES_MAX` not at all; declared, not measured."""
 
 LANDING_SYNCS_MAX = 6
 """Clean `sync_master` per task."""
@@ -130,6 +138,8 @@ class LandingSpent:
     renumbers: int = 0
     # `sync_master` entries closed with `lacks` equal to the current upstream sha (GH-267).
     unsynced_for_upstream: int = 0
+    # `fix_important` entries on the list (GH-294): the final pass's own counter.
+    important_passes: int = 0
 
 
 def landing_step(
@@ -137,10 +147,13 @@ def landing_step(
     facts: rules.MergeFacts,
     spent: LandingSpent,
     blocking_owners: tuple[str, ...],
+    *,
+    important_units: tuple[str, ...] = (),
 ) -> LandingStep:
     """The step for `refusal`. A model pass or a sync past its budget is the `diagnose`;
     a task already diagnosed has no step left (`none`). `blocking_owners` is the units that
-    own the open blocking records (`blocking_owners`)."""
+    own the open blocking records (`blocking_owners`); `important_units` the ones the final
+    important pass reopens (`important_owners`)."""
 
     def step(kind: LandingStepKind, units: tuple[str, ...] = ()) -> LandingStep:
         return LandingStep(kind, refusal, units)
@@ -165,6 +178,12 @@ def landing_step(
         case "open_findings_blocking":
             return pass_("fix", blocking_owners)
         case "open_findings":
+            if (
+                facts.open_important > 0
+                and not facts.important_pass_done
+                and spent.important_passes < LANDING_IMPORTANT_PASSES_MAX
+            ):
+                return step("fix_important", important_units)
             return step("file_followups_and_land")
         case "ci_failed":
             return step("rerun") if spent.reruns_on_head == 0 else pass_("fix", blocking_owners)
@@ -209,15 +228,23 @@ def blocking_owners(state: TaskState) -> tuple[str, ...]:
     them: the units a `fix` reopens, wherever the approval stands (a sibling's blocking
     record is not settled by the integration's approval). A name that is not a subtask of
     the document is no owner."""
-    known = state.get("subtasks", {})
     owners: list[str] = []
     for row in rules.open_findings(state):
         if row["severity"] != "blocking":
             continue
-        for name in row["subtask"].split(", "):
-            if name in known and name not in owners:
-                owners.append(name)
+        owners.extend(name for name in rules.row_owners(state, row) if name not in owners)
     return tuple(owners)
+
+
+def important_owners(state: TaskState) -> tuple[str, ...]:
+    """The units the final important pass reopens: the owners of the task's own open
+    `important` rows (`rules.important_partition`) and, when a `plan` row is open, the
+    reviewed unit. An `outside` row owns none."""
+    part = rules.important_partition(state)
+    units = list(part.owned)
+    if part.plan and (reviewed := rules.reviewed_unit_name(state)) and reviewed not in units:
+        units.append(reviewed)
+    return tuple(units)
 
 
 def review_carries(

@@ -5,7 +5,7 @@ from typing import get_args
 import pytest
 
 from agentic.core.process.application.ports import BranchPullRequest
-from agentic.core.process.domain import document, roles, rules, task
+from agentic.core.process.domain import ci, document, roles, rules, task
 from agentic.core.process.domain.adr_numbers import Renaming
 from agentic.core.process.domain.denials import denial_for
 from agentic.core.process.domain.roles import (
@@ -2742,3 +2742,228 @@ def test_the_adr_probe_gate_ignores_the_collision_fact_it_is_asked_to_derive():
     renaming = Renaming((("docs/adr/0004-x.md", "docs/adr/0010-x.md"),), {})
     for known in (None, renaming):
         assert rules.adr_probe_wanted(replace(_probe_facts(), adr_collision=known)) is True
+
+
+# GH-294 pin: with no `important` open the decision is what it was before the final
+# important pass existed. This table is written first and never edited by that change.
+
+PIN_HEAD = "a" * 40
+PIN_MASTER = "b" * 40
+
+
+def _pin_facts(**over) -> rules.MergeFacts:
+    base = rules.MergeFacts(
+        task_id="GH-9",
+        status="ready_for_review",
+        reviewed_unit_approved=True,
+        reviewed_head=PIN_HEAD,
+        open_blocking=0,
+        open_important=0,
+        pr_state="OPEN",
+        pr_head=PIN_HEAD,
+        in_eval_set=False,
+        touched_paths=("agentic/x.py",),
+        attempts=1,
+        checks_head=PIN_HEAD,
+        checks_master=PIN_MASTER,
+        checks_passed=True,
+        current_master=PIN_MASTER,
+    )
+    return replace(base, **over)
+
+
+_PIN_RED = ci.CiVerdict("red", ("t",), ())
+_PIN_PENDING = ci.CiVerdict("pending", (), ("t",))
+_PIN_CI = {"ci_required": ("t",), "ci_head": PIN_HEAD}
+
+NO_IMPORTANT_DECISIONS = [
+    ("no findings", {}, ("merge", None)),
+    ("only blocking", {"open_blocking": 2}, ("refuse", "open_findings_blocking")),
+    ("not ready", {"status": "developing"}, ("refuse", "not_ready")),
+    ("not approved", {"reviewed_unit_approved": False}, ("refuse", "not_approved")),
+    ("ci red", {**_PIN_CI, "ci_verdict": _PIN_RED}, ("refuse", "ci_failed")),
+    (
+        "ci pending, spent",
+        {**_PIN_CI, "ci_verdict": _PIN_PENDING, "ci_waited_s": ci.CI_WAIT_MAX_S},
+        ("refuse", "ci_missing"),
+    ),
+    (
+        "ci unreadable, spent",
+        {
+            **_PIN_CI,
+            "ci_unreadable": ci.CiUnreadable("gh_unavailable"),
+            "ci_waited_s": ci.CI_WAIT_MAX_S,
+        },
+        ("refuse", "ci_unreadable"),
+    ),
+    ("checks failed", {"checks_passed": False}, ("refuse", "checks_failed")),
+    (
+        "checks failed on a conflict",
+        {"checks_passed": False, "failed_step": "conflict"},
+        ("refuse", "checks_failed"),
+    ),
+    ("merge conflict", {"conflicts": True}, ("refuse", "merge_conflict")),
+    (
+        "adr number taken",
+        {"adr_collision": Renaming((("docs/adr/0000-x.md", "docs/adr/0001-x.md"),), {})},
+        ("refuse", "adr_number_taken"),
+    ),
+    (
+        "attempts exhausted",
+        {"checks_master": "d" * 40, "attempts": rules.MERGE_ATTEMPTS_MAX},
+        ("refuse", "attempts_exhausted"),
+    ),
+    (
+        "merge failed",
+        {"merge_failures": rules.MERGE_CALLS_MAX},
+        ("refuse", "merge_failed"),
+    ),
+    ("checks to run", {"checks_passed": None, "attempts": 0}, ("run_checks", None)),
+]
+
+
+@pytest.mark.parametrize(
+    ("over", "expected"),
+    [(o, e) for _, o, e in NO_IMPORTANT_DECISIONS],
+    ids=[n for n, _, _ in NO_IMPORTANT_DECISIONS],
+)
+def test_with_no_important_open_the_merge_decision_is_what_it_was(over, expected):
+    assert rules.auto_merge_decision(_pin_facts(**over)) == rules.MergeDecision(*expected)
+
+
+# GH-294: `reported_severity` and the partition of the open `important` findings.
+
+
+def test_a_blocking_lowered_for_no_evidence_keeps_what_the_reviewer_reported():
+    lowered, _ = rules.lower_unbacked_blocks([found(evidence="  ")])
+    (record,) = rules.finding_records("api", 1, lowered)
+    assert record["severity"] == "observation"
+    assert record["reported_severity"] == "blocking"
+
+
+def test_a_blocking_of_plan_scope_lowered_to_important_keeps_what_the_reviewer_reported():
+    lowered, _ = rules.lower_unbacked_blocks([found(scope="plan")])
+    (record,) = rules.finding_records("api", 1, lowered)
+    assert (record["severity"], record["reported_severity"]) == ("important", "blocking")
+
+
+def test_a_finding_the_system_did_not_lower_carries_no_reported_severity():
+    kept = [
+        found(),
+        found(claim="b", severity="important"),
+        found(claim="c", severity="important", scope="outside"),
+    ]
+    lowered, _ = rules.lower_unbacked_blocks(kept)
+    assert all("reported_severity" not in r for r in rules.finding_records("api", 1, lowered))
+    assert all("reported_severity" not in r for r in rules.finding_records("api", 1, kept))
+
+
+def _part(subtasks, *records):
+    """A document with `subtasks` (name -> status) and the raw records `(subtask, claim,
+    severity, scope)`, all open."""
+    return {
+        "subtasks": {name: {"status": status} for name, status in subtasks.items()},
+        "findings": [
+            {
+                "subtask": who,
+                "version": 1,
+                "location": "x.py:1",
+                "claim": claim,
+                "severity": severity,
+                "scope": scope,
+                "category": "spec-behaviour",
+                "status": "open",
+            }
+            for who, claim, severity, scope in records
+        ],
+    }
+
+
+def _claims(rows):
+    return [row["claim"] for row in rows]
+
+
+def test_the_partition_sorts_important_rows_by_scope_and_owner():
+    state = _part(
+        {"domain": "approved", "api": "approved", INTEGRATION: "approved"},
+        ("domain", "d", "important", "subtask"),
+        ("api, domain", "shared", "important", "subtask"),
+        ("api", "p", "important", "plan"),
+        ("api", "o", "important", "outside"),
+        ("api", "blocking one", "blocking", "subtask"),
+        ("api", "a note", "observation", "subtask"),
+    )
+    part = rules.important_partition(state)
+    assert {name: _claims(rows) for name, rows in part.owned.items()} == {
+        "domain": ["d", "shared"],
+        "api": ["shared"],
+    }
+    assert _claims(part.plan) == ["p"]
+    assert _claims(part.outside) == ["o"]
+
+
+def test_an_outside_row_is_never_owned_nor_plan():
+    state = _part(
+        {"api": "approved"},
+        ("api", "o", "important", "outside"),
+        ("zzz", "o2", "important", "outside"),
+    )
+    part = rules.important_partition(state)
+    assert part.owned == {} and part.plan == ()
+    assert _claims(part.outside) == ["o", "o2"]
+
+
+def test_a_row_whose_name_is_no_subtask_goes_to_the_reviewed_unit():
+    state = _part(
+        {"api": "approved", INTEGRATION: "approved"}, ("ghost", "g", "important", "subtask")
+    )
+    assert {n: _claims(r) for n, r in rules.important_partition(state).owned.items()} == {
+        INTEGRATION: ["g"]
+    }
+    single = _part({"api": "approved"}, ("ghost", "g", "important", "subtask"))
+    assert list(rules.important_partition(single).owned) == ["api"]
+
+
+def test_the_partition_reads_open_rows_only():
+    state = _part({"api": "approved"}, ("api", "d", "important", "subtask"))
+    state["settled_findings"] = ["x.py:1"]
+    part = rules.important_partition(state)
+    assert part.owned == {} and part.plan == () and part.outside == ()
+
+
+def test_a_document_with_an_outside_record_parses_and_folds():
+    state = _part({"api": "approved"}, ("api", "o", "important", "outside"))
+    parsed = document.parse(
+        document.render({**state, "id": "GH-1", "title": "t", "description": "d"})
+    )
+    assert _claims(rules.findings_rows(parsed)) == ["o"]
+    assert _claims(rules.open_findings(parsed)) == ["o"]
+
+
+def test_the_task_s_own_important_refuses_until_the_pass_or_the_follow_up():
+    refused = rules.MergeDecision("refuse", "open_findings")
+    merged = rules.MergeDecision("merge", None)
+    assert rules.auto_merge_decision(_pin_facts(open_important=1)) == refused
+    assert (
+        rules.auto_merge_decision(_pin_facts(open_important=1, important_pass_done=True)) == merged
+    )
+    # A document the landing closed before the pass existed lands as it did.
+    assert rules.auto_merge_decision(_pin_facts(open_important=1, followups_filed=True)) == merged
+
+
+def test_an_outside_row_refuses_until_the_follow_up_and_a_done_pass_does_not_cover_it():
+    refused = rules.MergeDecision("refuse", "open_findings")
+    assert rules.auto_merge_decision(_pin_facts(open_outside=1)) == refused
+    assert (
+        rules.auto_merge_decision(_pin_facts(open_outside=1, important_pass_done=True)) == refused
+    )
+    assert rules.auto_merge_decision(_pin_facts(open_outside=1, followups_filed=True)) == (
+        rules.MergeDecision("merge", None)
+    )
+
+
+def test_the_blocking_refusal_still_comes_before_the_important_ones():
+    facts = _pin_facts(open_blocking=1, open_important=1, open_outside=1)
+    assert rules.auto_merge_decision(facts) == rules.MergeDecision(
+        "refuse", "open_findings_blocking"
+    )

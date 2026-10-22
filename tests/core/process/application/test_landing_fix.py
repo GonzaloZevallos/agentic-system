@@ -64,10 +64,11 @@ def _candidates(ports) -> list[int]:
     return poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [])
 
 
-def test_an_important_finding_files_one_agentic_follow_up_and_the_next_decision_merges(tmp_path):
+def test_an_outside_finding_files_one_needs_triage_follow_up_and_the_next_decision_merges(tmp_path):
     ports = _ports(5)
     ports.documents.record_closure(
-        "GH-5", {"findings": [{**_finding("important"), "category": "standard-other"}]}
+        "GH-5",
+        {"findings": [{**_finding("important"), "category": "standard-other", "scope": "outside"}]},
     )
     assert _candidates(ports) == []
 
@@ -76,7 +77,8 @@ def test_an_important_finding_files_one_agentic_follow_up_and_the_next_decision_
     assert result.kind == "dispatched" and result.step == "file_followups_and_land"
     [(title, body)] = ports.tracker.opened_issues
     assert title == "Follow-up of #5: open important findings"
-    assert ports.tracker.opened_labels == ["agentic"]
+    assert ports.tracker.opened_labels == ["needs-triage"]
+    assert ports.tracker.created_labels == ["needs-triage"]
     assert body.splitlines()[0] == landing_rules.followup_marker("GH-5", 1)
     assert "a.py:1" in body and "wrong" in body
     assert _doc(ports)["followups_filed"] is True
@@ -86,7 +88,8 @@ def test_an_important_finding_files_one_agentic_follow_up_and_the_next_decision_
 def test_a_follow_up_already_open_for_the_task_is_not_filed_twice(tmp_path):
     ports = _ports(5)
     ports.documents.record_closure(
-        "GH-5", {"findings": [{**_finding("important"), "category": "standard-other"}]}
+        "GH-5",
+        {"findings": [{**_finding("important"), "category": "standard-other", "scope": "outside"}]},
     )
     ports.inbox._open_issues = [("u", landing_rules.followup_marker("GH-5", 1) + "\nold")]
 
@@ -99,7 +102,8 @@ def test_a_follow_up_already_open_for_the_task_is_not_filed_twice(tmp_path):
 def test_a_task_that_is_itself_a_follow_up_files_nothing_and_writes_the_rows_in_a_comment(tmp_path):
     ports = _ports(5, description=landing_rules.followup_marker("GH-5", 1) + "\nfrom a task")
     ports.documents.record_closure(
-        "GH-5", {"findings": [{**_finding("important"), "category": "standard-other"}]}
+        "GH-5",
+        {"findings": [{**_finding("important"), "category": "standard-other", "scope": "outside"}]},
     )
 
     _land(ports, tmp_path)
@@ -114,7 +118,8 @@ def test_a_follow_up_whose_marker_names_its_parent_files_nothing_and_comments_th
 ):
     ports = _ports(5, description=landing_rules.followup_marker("GH-3", 1) + "\nfrom GH-3")
     ports.documents.record_closure(
-        "GH-5", {"findings": [{**_finding("important"), "category": "standard-other"}]}
+        "GH-5",
+        {"findings": [{**_finding("important"), "category": "standard-other", "scope": "outside"}]},
     )
 
     _land(ports, tmp_path)
@@ -124,9 +129,9 @@ def test_a_follow_up_whose_marker_names_its_parent_files_nothing_and_comments_th
     assert landing_rules.marker_lineage(comment, "GH-5") == 2
 
 
-def _sibling(ports) -> None:
-    """Two subtasks and the integration: `a` owns the blocking finding, the integration
-    carries the approval."""
+def _sibling(ports, severity: str = "blocking", **row) -> None:
+    """Two subtasks and the integration: `a` owns the finding (blocking unless said
+    otherwise), the integration carries the approval."""
     ports.documents.save(
         {
             "id": "GH-5",
@@ -139,7 +144,9 @@ def _sibling(ports) -> None:
                 "a": {"id": "a", "status": "approved", "reviewed_head": HEAD},
                 "integration": {"id": "integration", "status": "approved", "reviewed_head": HEAD},
             },
-            "findings": [{**_finding("blocking"), "subtask": "a", "category": "spec-behaviour"}],
+            "findings": [
+                {**_finding(severity), "subtask": "a", "category": "spec-behaviour", **row}
+            ],
         }
     )
 
@@ -220,6 +227,7 @@ def test_the_executors_that_are_built_are_the_live_steps():
         "sync_master",
         "re_review",
         "fix",
+        "fix_important",
         "rerun",
         "file_followups_and_land",
         "renumber",
@@ -251,9 +259,282 @@ def test_land_without_a_launcher_logs_it_and_still_reopens(tmp_path):
     assert _doc(ports)["subtasks"]["a"]["status"] == "returned"
 
 
-@pytest.mark.parametrize("kind", ["fix", "rerun", "file_followups_and_land", "diagnose"])
+@pytest.mark.parametrize(
+    "kind", ["fix", "fix_important", "rerun", "file_followups_and_land", "diagnose"]
+)
 def test_every_live_step_has_an_executor(kind):
     assert callable(getattr(landing_fix, kind))
+
+
+# --- GH-294: the final important pass and the needs-triage follow-up ------------------------
+
+
+def _open_world(ports):
+    ports.tracker.prs[URL.format(5)] = _pr_open()
+
+
+def test_fix_important_reopens_the_owner_as_a_landing_entry_and_never_touches_the_pair(tmp_path):
+    ports = _ports()
+    _open_world(ports)
+    _sibling(ports, "important")
+    launcher = FakeLauncher()
+
+    result, _ = _land(ports, tmp_path, launcher)
+
+    assert result.kind == "dispatched" and result.step == "fix_important"
+    document = _doc(ports)
+    assert document["subtasks"]["a"]["status"] == "returned"
+    reason = document["subtasks"]["a"]["reason"]
+    assert reason.startswith("Open important findings (final pass before merge, not a return):")
+    assert "Unit `a`:" in reason and "a.py:1: wrong" in reason
+    assert document["subtasks"]["a"]["change_category"] == "spec-behaviour"
+    assert document["subtasks"]["integration"]["status"] == "pending"
+    [entry] = document["change_history"]
+    assert entry["by"] == "landing"
+    assert document["changes_requested"] == {"x": 1}
+    [recorded] = document["landing"]
+    assert recorded["step"] == "fix_important" and "cost_base" in recorded
+    [argv] = launcher.spawned
+    assert argv[:6] == ["agentic", "resume", "--issue", "5", "--yes", "--product-dir"]
+    assert ports.tracker.opened_issues == []
+
+
+def test_a_plan_scope_important_row_reopens_the_reviewed_unit(tmp_path):
+    ports = _ports()
+    _open_world(ports)
+    _sibling(ports, "important", scope="plan")
+
+    result, _ = _land(ports, tmp_path, FakeLauncher())
+
+    assert result.step == "fix_important"
+    document = _doc(ports)
+    assert document["subtasks"]["integration"]["status"] == "returned"
+    assert "Plan:" in document["subtasks"]["integration"]["reason"]
+    assert document["subtasks"]["a"]["status"] == "approved"
+
+
+def test_the_final_pass_runs_once_and_what_stays_open_after_it_is_left_to_the_merge(tmp_path):
+    ports = _ports()
+    _open_world(ports)
+    _sibling(ports, "important")
+    ports.documents.record_closure(
+        "GH-5", {"merge_checks": {"head": HEAD, "master": MASTER, "passed": True}}
+    )
+    driver = _Driver(ports, tmp_path, on_resume=_still_open)
+
+    _tick(ports, tmp_path, driver)
+    assert ports.tracker.merge_calls == []
+    _tick(ports, tmp_path, driver)
+
+    assert [a[1] for a in driver.spawned] == ["land", "resume", "merge"]
+    assert ports.tracker.opened_issues == []
+    assert ports.tracker.merge_calls == [(URL.format(5), NEW_HEAD)]
+    [(_, comment)] = ports.tracker.comments
+    assert "Accepted without a fix:" in comment and "`a.py:1`: wrong" in comment
+    document = _doc(ports)
+    assert document["changes_requested"] == {"x": 1}
+    assert [e["by"] for e in document["change_history"]] == ["landing"]
+
+
+def _still_open(ports) -> None:
+    """The Developer delivered but the important row stayed open (the reviewer kept it)."""
+    _redelivered(ports)
+    ports.documents.record_closure(
+        "GH-5",
+        {"findings": [{**_finding("important"), "subtask": "a", "category": "spec-behaviour"}]},
+    )
+
+
+def test_an_important_row_left_open_without_a_resolved_pass_goes_to_the_landing_not_a_second_pass(
+    tmp_path,
+):
+    ports = _ports()
+    _open_world(ports)
+    _sibling(ports, "important")
+    ports.documents.record_closure(
+        "GH-5",
+        {
+            "landing": [
+                {"head": "e" * 40, "step": "fix_important", "refusal": "open_findings", "at": NOW}
+            ]
+        },
+    )
+
+    result, _ = _land(ports, tmp_path, FakeLauncher())
+
+    assert result.step == "file_followups_and_land"
+    assert ports.tracker.opened_issues == []
+    assert _doc(ports)["followups_filed"] is True
+
+
+def test_the_follow_up_carries_only_the_outside_rows(tmp_path):
+    ports = _ports(5)
+    ports.documents.record_closure(
+        "GH-5",
+        {
+            "followups_filed": False,
+            "findings": [
+                {**_finding("important"), "scope": "outside", "category": "standard-other"},
+                {
+                    **_finding("important"),
+                    "location": "own.py:2",
+                    "claim": "own claim",
+                    "category": "standard-other",
+                },
+            ],
+            "landing": [
+                {
+                    "head": "e" * 40,
+                    "step": "fix_important",
+                    "refusal": "open_findings",
+                    "at": NOW,
+                    "resolved_at": NOW,
+                }
+            ],
+        },
+    )
+
+    result, _ = _land(ports, tmp_path)
+
+    assert result.step == "file_followups_and_land"
+    [(_, body)] = ports.tracker.opened_issues
+    assert "a.py:1" in body and "own.py:2" not in body
+
+
+def test_a_failing_label_degrades_the_follow_up_to_a_pull_request_comment(tmp_path):
+    ports = _ports(5)
+    ports.tracker.ensure_label_error = "gh label create failed"
+    ports.documents.record_closure(
+        "GH-5",
+        {"findings": [{**_finding("important"), "category": "standard-other", "scope": "outside"}]},
+    )
+
+    _, lines = _land(ports, tmp_path)
+
+    assert ports.tracker.opened_issues == []
+    [(task, comment)] = ports.tracker.comments
+    assert task == "GH-5" and landing_rules.marker_lineage(comment, "GH-5") == 1
+    assert any("issue not opened" in line for line in lines)
+    assert _doc(ports)["followups_filed"] is True
+
+
+def test_a_failing_open_issue_degrades_the_follow_up_to_a_comment(tmp_path, monkeypatch):
+    ports = _ports(5)
+    ports.documents.record_closure(
+        "GH-5",
+        {"findings": [{**_finding("important"), "category": "standard-other", "scope": "outside"}]},
+    )
+
+    def refuse(*_args, **_kwargs):
+        raise ValueError("gh issue create failed")
+
+    monkeypatch.setattr(ports.tracker, "open_issue", refuse)
+
+    _land(ports, tmp_path)
+
+    [(_, comment)] = ports.tracker.comments
+    assert "a.py:1" in comment
+    assert _doc(ports)["followups_filed"] is True
+
+
+def test_a_comment_that_fails_too_is_logged_and_the_follow_up_is_still_marked_filed(
+    tmp_path, monkeypatch
+):
+    ports = _ports(5)
+    ports.tracker.ensure_label_error = "boom"
+    ports.documents.record_closure(
+        "GH-5",
+        {"findings": [{**_finding("important"), "category": "standard-other", "scope": "outside"}]},
+    )
+
+    def refuse(*_args, **_kwargs):
+        raise ValueError("no comment either")
+
+    monkeypatch.setattr(ports.tracker, "comment", refuse)
+
+    _, lines = _land(ports, tmp_path)
+
+    assert any("comment failed" in line for line in lines)
+    assert _doc(ports)["followups_filed"] is True
+
+
+def test_no_path_of_the_landing_opens_an_issue_labelled_agentic(tmp_path, monkeypatch):
+    labels: list[str | None] = []
+    for variant in ("filed", "label_fails", "lineage"):
+        description = (
+            landing_rules.followup_marker("GH-3", 1) + "\nfrom GH-3" if variant == "lineage" else ""
+        )
+        ports = _ports(5, description=description)
+        if variant == "label_fails":
+            ports.tracker.ensure_label_error = "boom"
+        ports.documents.record_closure(
+            "GH-5",
+            {
+                "findings": [
+                    {**_finding("important"), "category": "standard-other", "scope": "outside"}
+                ]
+            },
+        )
+        _land(ports, tmp_path)
+        labels += ports.tracker.opened_labels
+    assert labels == ["needs-triage"]
+    assert not hasattr(landing_fix, "FOLLOWUP_LABEL")
+    assert landing_fix.TRIAGE_LABEL == "needs-triage"
+
+
+def test_a_follow_up_lineage_gets_the_pass_for_its_own_rows_and_a_comment_for_the_outside(
+    tmp_path,
+):
+    ports = _ports(5, description=landing_rules.followup_marker("GH-3", 1) + "\nfrom GH-3")
+    ports.documents.record_closure(
+        "GH-5",
+        {
+            "findings": [
+                {**_finding("important"), "category": "standard-other"},
+                {
+                    **_finding("important"),
+                    "location": "far.py:9",
+                    "claim": "far claim",
+                    "scope": "outside",
+                    "category": "standard-other",
+                },
+            ]
+        },
+    )
+
+    first, _ = _land(ports, tmp_path, FakeLauncher())
+    assert first.step == "fix_important"
+    assert ports.tracker.comments == []
+
+    ports.documents.record_closure(
+        "GH-5",
+        {
+            "landing": [{**e, "resolved_at": NOW} for e in landing_plan.entries(_doc(ports))],
+            "subtasks": {"only": {"id": "only", "status": "approved", "reviewed_head": HEAD}},
+            "status": "ready_for_review",
+        },
+    )
+    second, _ = _land(ports, tmp_path, FakeLauncher())
+
+    assert second.step == "file_followups_and_land"
+    assert ports.tracker.opened_issues == []
+    [(_, comment)] = ports.tracker.comments
+    assert "far.py:9" in comment and "a.py:1" not in comment
+    assert landing_rules.marker_lineage(comment, "GH-5") == 2
+
+
+def test_spent_counts_the_final_pass_apart_from_the_model_passes():
+    raw = {
+        "landing": [
+            {"head": "h", "step": "fix_important", "refusal": "open_findings", "at": NOW},
+            {"head": "h", "step": "fix", "refusal": "ci_failed", "at": NOW},
+        ]
+    }
+
+    spent = landing_plan.spent(raw, "h", None)
+
+    assert spent.important_passes == 1 and spent.passes == 1
+    assert landing_plan.spent({}, "h", None).important_passes == 0
 
 
 # --- diagnose: the terminal path (restart at depth 0, escalation from depth 1) -------------
@@ -436,7 +717,8 @@ def _redelivered(ports) -> None:
 def test_acceptance_an_important_finding_files_the_follow_up_then_the_task_merges(tmp_path):
     ports = _ports(5)
     ports.documents.record_closure(
-        "GH-5", {"findings": [{**_finding("important"), "category": "standard-other"}]}
+        "GH-5",
+        {"findings": [{**_finding("important"), "category": "standard-other", "scope": "outside"}]},
     )
     driver = _Driver(ports, tmp_path)
 
@@ -488,7 +770,7 @@ def test_acceptance_a_red_ci_that_turns_green_after_a_rerun_files_the_flake_and_
     [(title, body)] = ports.tracker.opened_issues
     assert title == "Flaky check: web"
     assert body.splitlines()[0] == landing_rules.flake_marker("web")
-    assert ports.tracker.opened_labels == ["agentic"]
+    assert ports.tracker.opened_labels == ["agentic"]  # the flake label is unchanged (ADR-0053)
 
 
 def test_acceptance_an_open_flake_issue_for_the_check_is_not_filed_twice(tmp_path):

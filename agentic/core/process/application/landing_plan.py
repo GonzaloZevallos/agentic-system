@@ -27,6 +27,7 @@ LIVE_STEPS: frozenset[LandingStepKind] = frozenset(
         "sync_master",
         "re_review",
         "fix",
+        "fix_important",
         "rerun",
         "file_followups_and_land",
         "renumber",
@@ -34,8 +35,9 @@ LIVE_STEPS: frozenset[LandingStepKind] = frozenset(
     }
 )
 """Every step has its executor: `landing_sync`'s (`sync_master`, `re_review`, `renumber`) and
-`landing_fix`'s (`fix`, `rerun`, `file_followups_and_land`, `diagnose`). A step outside the set
-is neither recorded nor spawned, so a refusal whose step is inert logs as it always did."""
+`landing_fix`'s (`fix`, `fix_important`, `rerun`, `file_followups_and_land`, `diagnose`). A
+step outside the set is neither recorded nor spawned, so a refusal whose step is inert logs
+as it always did."""
 
 
 def takes_action(kind: LandingStepKind, live: frozenset[LandingStepKind]) -> bool:
@@ -65,7 +67,8 @@ def spent(
     `sync_master` answering one of `landing.CONFLICTING_SYNC_REFUSALS` is the conflicting
     one, a model pass; it never counts as a clean sync. `unsynced_for_upstream` counts the
     entries closed with `lacks` equal to `upstream` (the round's master sha), by sha and never
-    by head (GH-267); without a sha it is 0."""
+    by head (GH-267); without a sha it is 0. `important_passes` counts the `fix_important`
+    entries (GH-294), which never enter `passes`."""
     done = entries(raw)
 
     def count(predicate: Callable[[dict[str, object]], bool]) -> int:
@@ -83,6 +86,7 @@ def spent(
         diagnosed=count(lambda e: e.get("step") == "diagnose" and e.get("delivered") is True) > 0,
         waited_s=waited_s,
         renumbers=count(lambda e: e.get("step") == "renumber"),
+        important_passes=count(lambda e: e.get("step") == "fix_important"),
         unsynced_for_upstream=(
             count(lambda e: e.get("lacks") == upstream) if upstream is not None else 0
         ),
@@ -96,6 +100,7 @@ def step_for(raw: TaskState, refusal: rules.MergeRefusal, facts: rules.MergeFact
         facts,
         spent(raw, facts.pr_head, facts.ci_waited_s, facts.current_master),
         landing.blocking_owners(raw),
+        important_units=landing.important_owners(raw),
     )
 
 
