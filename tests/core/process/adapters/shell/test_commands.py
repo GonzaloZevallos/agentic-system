@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from agentic.core.process.adapters.shell import ShellCommands, ShellReaper
+from agentic.core.process.adapters.shell import commands as commands_module
 from agentic.core.process.application.ports import CommandResult
 from agentic.core.process.domain import reaping
 from agentic.core.process.domain.reaping import ReapedProcess
@@ -152,10 +153,11 @@ def test_an_unmarked_escapee_in_the_checkout_is_stopped_by_its_cwd(commands, che
 
 
 def test_an_unmarked_escapee_outside_the_worktrees_root_is_left_alone(
-    commands, tmp_path, worktrees
+    commands, tmp_path, worktrees, monkeypatch
 ):
     """The rejection side: the cwd reap never reaches a process outside the root, so a
     check run elsewhere (the product's own server) keeps what it started unmarked."""
+    monkeypatch.setattr(commands_module, "_DRAIN_S", 0.5)  # the escapee holds the pipe
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     pidfile = elsewhere / "pid"
@@ -169,8 +171,9 @@ def test_an_unmarked_escapee_outside_the_worktrees_root_is_left_alone(
         os.close(fd)
 
 
-def test_without_a_reaper_the_setsid_escapee_outlives_the_check(worktrees, checkout):
+def test_without_a_reaper_the_setsid_escapee_outlives_the_check(worktrees, checkout, monkeypatch):
     """Control: what the reaper changes. It is reaped by the fixture teardown."""
+    monkeypatch.setattr(commands_module, "_DRAIN_S", 0.5)  # the escapee holds the pipe
     commands = ShellCommands(PRODUCT, _NoopReaper())
     pidfile = checkout / "pid"
     result, alive, fd = _run_watching(commands, checkout, _escapee(pidfile, SETSID), pidfile)
