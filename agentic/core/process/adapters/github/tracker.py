@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
+from typing import Literal
 
 from ...application.ports import (
     BranchPullRequest,
@@ -55,6 +56,13 @@ Run = Callable[..., subprocess.CompletedProcess[str]]
 # merge commit apart from an ordinary one by its parent count, never by its headline
 # (GH-136): GraphQL exposes it per commit, one page of one is enough since only the
 # count is read.
+# GitHub's `mergeable` values `PullRequest` carries (GH-326); any other reads as `None`.
+_MERGEABLE: dict[object, Literal["MERGEABLE", "CONFLICTING", "UNKNOWN"]] = {
+    "MERGEABLE": "MERGEABLE",
+    "CONFLICTING": "CONFLICTING",
+    "UNKNOWN": "UNKNOWN",
+}
+
 _PULL_REQUEST_QUERY = """
 query($owner: String!, $repo: String!, $number: Int!) {
   repository(owner: $owner, name: $repo) {
@@ -64,6 +72,8 @@ query($owner: String!, $repo: String!, $number: Int!) {
       mergedAt
       mergeCommit { oid }
       headRefOid
+      baseRefOid
+      mergeable
       commits(first: 250) {
         nodes {
           commit {
@@ -473,6 +483,8 @@ class GhTracker:
             merged_at=pull_request["mergedAt"],
             merge_commit=(pull_request.get("mergeCommit") or {}).get("oid"),
             head_oid=pull_request.get("headRefOid") or None,
+            mergeable=_MERGEABLE.get(pull_request.get("mergeable")),
+            base_oid=pull_request.get("baseRefOid") or None,
             commits=commits,
         )
 

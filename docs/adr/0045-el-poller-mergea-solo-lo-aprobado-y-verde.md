@@ -673,3 +673,13 @@ Decisión: `rules.LAND_HEADROOM = 1`. Un aterrizaje `land_model` puede arrancar 
 - Hueco aterrizaje-reanudación: `spawn_and_mark` escribe `resume_spawns`/`resume_spawned_at` y después espera, hasta `REGISTER_WAIT_S`, una entrada `(producto, tarea, kind="role")`; si vence, lo registra en una línea y termina. `_await_registration` gana `kind` y `product` opcionales; sin ellos, igual que antes. El registro sigue siendo la única fuente de `live`.
 - §8: las corridas vivas que cuentan pueden llegar a tope + 1 (con el tope por defecto de 1, dos sesiones), sólo por un aterrizaje o su reanudación; a lo sumo uno a la vez por máquina, acotado por tarea por `LANDING_PASSES_MAX` y `LANDING_SYNCS_MAX`. Un `sync_master` limpio retiene el cupo lo que dura su `agentic land`; no se parte en dos clases en esta tarea.
 - §7: sólo se mueve una línea de poll (`pause_waiting`); ninguna métrica, etiqueta, atributo ni clave de documento.
+
+## Adenda (2026-10-23): el conflicto tiene dos lecturas y un solo hecho (GH-326)
+
+Caso: el PR #324 (GH-320) quedó `CONFLICTING` en GitHub, que no corre los workflows de `pull_request` sobre un PR en conflicto; el CI nunca reportó y el poller esperó `CI_WAIT_MAX_S` como `ci_missing` antes de que `land` actuara. La sonda `merge-tree` de GH-255 no lo detectó; el material no dice si devolvió `False` sobre un master fresco, si midió contra un `upstream.sha` viejo o si `conflict_probe_wanted` era falso.
+
+Decisión: `MergeFacts.conflicts` sigue siendo un solo hecho, derivado en un solo lugar, `rules.merge_conflicts_from`. Es `True` cuando GitHub lee `CONFLICTING` y esa lectura se hizo sobre la cabeza (`head_oid`) y la punta de la base (`base_oid`) que el poller o el verbo están decidiendo (`same_commit` con `pr_head` y `current_master`); en cualquier otro caso (`MERGEABLE`, `UNKNOWN`, sin lectura, cabeza vieja, base distinta o ausente) vale lo que dio la sonda, sin cambios. `UNKNOWN` (GitHub aún calcula) no es un conflicto: se relee en la vuelta siguiente, sin espera añadida. `assess_merge` y `merge_task` pasan por la misma función, y el verbo la vuelve a consultar en su última mirada antes de `Tracker.merge`.
+
+- Sin valor nuevo en `MergeRefusal`: la negativa sigue siendo `merge_conflict`, fuera de `COMMENTED`, y `landing_step` no cambia. Cada línea de log de `merge_conflict` nombra su origen, `github` o `probe`: texto libre, no una etiqueta.
+- Un conflicto que GitHub ve y git no puede repetir `sync_master`; lo acota `LANDING_UNSYNCED_MAX` por sha de upstream.
+- §7: ninguna señal se mueve. §8: dos campos escalares más en una consulta GraphQL que ya se hace una vez por tarea y por vuelta; el costo sigue siendo proporcional a los PR abiertos.

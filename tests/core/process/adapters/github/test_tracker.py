@@ -255,6 +255,37 @@ def test_pull_request_reads_the_head_oid_and_maps_a_missing_one_to_none():
         assert without is not None and without.head_oid is None
 
 
+def _with_reading(stdout, **reading):
+    document = json.loads(stdout)
+    document["data"]["repository"]["pullRequest"].update(reading)
+    return json.dumps(document)
+
+
+def test_pull_request_reads_mergeable_and_base_oid_and_maps_anything_else_to_none():
+    """GH-326."""
+    plain = _graphql_pull_request("OPEN", None, "2026-09-20T23:00:00Z", [])
+    url = "https://github.com/o/r/pull/7"
+
+    def read(**reading):
+        run = Recorder(stdout=_with_reading(plain, **reading))
+        found = GhTracker(Path("/p"), run).pull_request(url)
+        assert found is not None
+        return found
+
+    for value in ("MERGEABLE", "CONFLICTING", "UNKNOWN"):
+        found = read(mergeable=value, baseRefOid="1234abc")
+        assert (found.mergeable, found.base_oid) == (value, "1234abc")
+    for value in ("DIRTY", "", None, 3):
+        assert read(mergeable=value, baseRefOid=None).mergeable is None
+    assert read(baseRefOid="").base_oid is None
+    missing = GhTracker(Path("/p"), Recorder(stdout=plain)).pull_request(url)
+    assert missing is not None and (missing.mergeable, missing.base_oid) == (None, None)
+    run = Recorder(stdout=plain)
+    GhTracker(Path("/p"), run).pull_request(url)
+    query = " ".join(run.calls[0])
+    assert "mergeable" in query and "baseRefOid" in query and "mergeStateStatus" not in query
+
+
 def test_pull_request_query_asks_for_the_head_oid():
     run = Recorder(stdout=_graphql_pull_request("OPEN", None, "2026-09-20T23:00:00Z", []))
     GhTracker(Path("/p"), run).pull_request("https://github.com/o/r/pull/9")

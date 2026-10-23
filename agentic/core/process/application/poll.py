@@ -25,7 +25,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import assert_never, get_args
+from typing import Literal, assert_never, get_args
 
 from agentic.shared.configuration import Configuration
 
@@ -370,6 +370,22 @@ def ci_wait_line(
     return f"agentic: poll: auto-merge #{number} -> waiting: ci {what} ({bound})"
 
 
+ConflictSource = Literal["github", "probe"]
+
+
+def read_conflicts(
+    ports: Ports, pull_request: PullRequest | None, head: str, master: str
+) -> tuple[bool | None, ConflictSource]:
+    """`MergeFacts.conflicts` for `head` on `master` (GH-326), shared by the poller and the
+    merge verb so both read it the same way: GitHub's reading when
+    `rules.merge_conflicts_from` takes it as a conflict -- git is then not asked -- and the
+    merge-tree probe otherwise. The source is log text, nothing else."""
+    if rules.merge_conflicts_from(pull_request, head, master, None) is True:
+        return True, "github"
+    probe = ports.workspace.merge_conflicts(head, master)
+    return rules.merge_conflicts_from(pull_request, head, master, probe), "probe"
+
+
 class StackUnreadable(Exception):
     """The task's base has no readable stack: this task's problem, never the round's."""
 
@@ -385,6 +401,8 @@ class MergeAssessment:
     pull_request: PullRequest | None
     # The conflict probe was asked and read `None` (GH-255): the decision is today's.
     conflict_unread: bool = False
+    # Where a `True` conflict was read (GH-326), for the log line only.
+    conflict_source: ConflictSource | None = None
 
 
 def assess_merge(
@@ -414,6 +432,7 @@ def assess_merge(
     facts = replace(facts, adr_collision=_adr_collision(ports, raw, facts, current_master))
     decision = rules.auto_merge_decision(replace(facts, ci_required=declared))
     unread = False
+    source: ConflictSource | None = None
     if (
         facts.pr_head is not None
         and not landing_plan.spent(raw, facts.pr_head, None).diagnosed
@@ -421,7 +440,7 @@ def assess_merge(
     ):
         # GH-255: a head that does not merge with master is a conflict before it is a CI
         # fact. Git is asked only now, with every git-free refusal ahead of it ruled out.
-        conflicts = ports.workspace.merge_conflicts(facts.pr_head, current_master)
+        conflicts, source = read_conflicts(ports, pull_request, facts.pr_head, current_master)
         unread = conflicts is None
         facts = replace(facts, conflicts=conflicts)
         decision = rules.auto_merge_decision(replace(facts, ci_required=declared))
@@ -431,7 +450,9 @@ def assess_merge(
         report = ports.tracker.ci_report(str(reference))
         facts = with_ci(facts, raw, declared, report)
         decision = rules.auto_merge_decision(facts)
-    return MergeAssessment(facts, decision, report, pull_request, unread)
+    return MergeAssessment(
+        facts, decision, report, pull_request, unread, source if facts.conflicts else None
+    )
 
 
 def _adr_collision(
@@ -547,6 +568,8 @@ def gather_merges(
             out.append(ci_wait_line(number, facts, report))
         elif decision.kind == "refuse":
             line = f"agentic: poll: auto-merge #{number} -> left to the human: {decision.reason}"
+            if decision.reason == "merge_conflict" and assessed.conflict_source is not None:
+                line += f" ({assessed.conflict_source})"
             if decision.reason == "checks_failed":
                 pr_head = pull_request.head_oid if pull_request is not None else None
                 summary = presubmit.failed_checks_summary(_recorded(raw, "merge_checks"), pr_head)
