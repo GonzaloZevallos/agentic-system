@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from agentic.core.process.adapters.github.tracker import pull_request_number
 from agentic.core.process.application import landing, landing_fix, landing_plan, poll
 from agentic.core.process.application.landing_sync import reopen
 from agentic.core.process.application.ports import (
@@ -1647,25 +1648,25 @@ def test_a_head_that_moved_after_the_decision_writes_nothing(tmp_path):
     ports = _escalated_by_max_turns(tmp_path)
     _answered(ports, "merge master in")
     ports, runner = _diagnoser(ports, _delivery())
-    reference = _doc(ports)["pull_request"]
-    real = type(ports.tracker).pull_request
     reads: list[int] = []
 
-    def moving(self, ref):
-        reads.append(1)
-        pull_request = real(self, ref)
-        if len(reads) > 1:
-            return dataclasses.replace(pull_request, head_oid="c" * 40)
-        return pull_request
+    class Moving(type(ports.tracker)):
+        def pull_request(self, reference):
+            pull_request_number(reference)
+            reads.append(1)
+            found = super().pull_request(reference)
+            if len(reads) > 1 and found is not None:
+                return dataclasses.replace(found, head_oid="c" * 40)  # pushed after the decision
+            return found
 
-    type(ports.tracker).pull_request = moving
-    try:
-        before = _doc(ports)
-        result, _ = _land_at(ports, tmp_path, LATER)
-    finally:
-        type(ports.tracker).pull_request = real
+    moving = Moving()
+    moving.__dict__.update(ports.tracker.__dict__)
+    ports = dataclasses.replace(ports, tracker=moving)
+    before = _doc(ports)
 
-    assert reference and result.reason == "head_moved"
+    result, _ = _land_at(ports, tmp_path, LATER)
+
+    assert result.reason == "head_moved"
     assert runner.calls == [] and _doc(ports) == before
     assert _doc(ports)["escalated"]
 
