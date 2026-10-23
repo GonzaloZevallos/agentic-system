@@ -11,8 +11,8 @@ half-written record. A dead or unreadable record is removed and the exclusive cr
 again; a live one is waited for, at `POLL_INTERVAL_S`, until `wait_s` is spent. Two waiters
 that both find the same dead record may both unlink it: the second unlink can take a record
 the first waiter has just written. The record is re-read right before the unlink to keep that
-window to a few instructions; it is not closed, and the cost of the rare double take is two measurements on one
-CPU, which the load averages in the table show.
+window to a few instructions; it is not closed, and the cost of the rare double take is two
+measurements on one CPU, which the load averages in the table show.
 """
 
 from __future__ import annotations
