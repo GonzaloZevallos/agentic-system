@@ -310,7 +310,7 @@ def _facts(**over: Any) -> rules.MergeFacts:
 
 
 def _spent(**over: Any) -> LandingSpent:
-    base = LandingSpent(passes=0, syncs=0, reruns_on_head=0, diagnosed=False, waited_s=None)
+    base = LandingSpent(passes=0, syncs=0, reruns_on_head=0, diagnoses=0, waited_s=None)
     return replace(base, **over)
 
 
@@ -320,7 +320,7 @@ EXHAUSTED: list[tuple[Any, dict[str, Any]]] = [
     ("not_approved", {"passes": landing.LANDING_PASSES_MAX}),
     ("open_findings_blocking", {"passes": landing.LANDING_PASSES_MAX}),
     ("attempts_exhausted", {"syncs": landing.LANDING_SYNCS_MAX}),
-    ("merge_conflict", {"passes": landing.LANDING_PASSES_MAX}),
+    ("merge_conflict", {"conflicting_syncs_for_upstream": landing.LANDING_CONFLICT_SYNCS_MAX}),
     ("merge_failed", {}),
     ("ci_missing", {"waited_s": 10**9}),
     ("ci_unreadable", {"waited_s": 10**9}),
@@ -362,7 +362,7 @@ def test_a_step_with_budget_left_is_not_touched_by_slicing():
 
 
 def test_a_diagnosed_task_has_no_step_left_whatever_the_slicing():
-    step = landing.landing_step("merge_failed", _facts(), _spent(diagnosed=True), (), slicing=SLICE)
+    step = landing.landing_step("merge_failed", _facts(), _spent(diagnoses=1), (), slicing=SLICE)
     assert step.kind == "none"
 
 
@@ -402,7 +402,7 @@ def test_passes_are_never_reset_by_a_land_slice():
             _entry("re_review", True),
         ]
     }
-    assert landing_plan.spent(raw, HEAD, None).passes == 3
+    assert landing_plan.spent(raw, HEAD, None).passes == 2
 
 
 def test_a_land_slice_entry_still_open_does_not_open_a_new_epoch():

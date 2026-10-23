@@ -18,7 +18,13 @@ from agentic.shared.configuration import Configuration
 from ..domain import landing, rules
 from ..domain.landing import LandingStep, LandingStepKind
 from ..domain.roles import Role
-from ..domain.task import INTEGRATION, TaskState
+from ..domain.task import (
+    INTEGRATION,
+    VERDICT_SYNC,
+    VERDICT_UNLANDABLE,
+    DiagnosisVerdict,
+    TaskState,
+)
 from .checkouts import task_base
 from .escalate import ESCALATED, NEEDS_HUMAN
 from .ports import GitError, IssueComment, Launcher, Ports, Upstream
@@ -61,20 +67,56 @@ def _conflicting(entry: Mapping[str, object]) -> bool:
     return entry.get("refusal") in landing.CONFLICTING_SYNC_REFUSALS
 
 
+def _readings(
+    epoch: Sequence[Mapping[str, object]], upstream: str | None
+) -> tuple[DiagnosisVerdict | None, int, bool]:
+    """What the diagnoses of the `epoch` read as, walked in order (GH-330): the latest
+    delivered one's verdict, the syncs that followed a `sync` verdict for `upstream`, and
+    whether the latest verdict is a `sync` for `upstream` that no `sync_master` has followed.
+    A `sync` verdict is served by the first `sync_master` for its sha after it; a `sync` for a
+    sha already served `LANDING_VERDICT_SYNCS_MAX` times, or with no sha, reads as
+    `unlandable`, and so does a delivered entry with no verdict."""
+    served: dict[str, int] = {}
+    waiting: set[str] = set()
+    last: DiagnosisVerdict | None = None
+    latest: str | None = None
+    for entry in epoch:
+        sha = entry.get("upstream")
+        if entry.get("step") == "sync_master" and isinstance(sha, str) and sha in waiting:
+            waiting.discard(sha)
+            served[sha] = served.get(sha, 0) + 1
+        if entry.get("step") != "diagnose" or entry.get("delivered") is not True:
+            continue
+        verdict = landing.verdict_of(entry.get("verdict"))
+        if (
+            verdict == VERDICT_SYNC
+            and isinstance(sha, str)
+            and served.get(sha, 0) < landing.LANDING_VERDICT_SYNCS_MAX
+        ):
+            last, latest = VERDICT_SYNC, sha
+            waiting = {sha}
+        else:
+            last, latest = VERDICT_UNLANDABLE, None
+            waiting = set()
+    due = upstream is not None and latest == upstream and latest in waiting
+    return last, served.get(upstream, 0) if upstream is not None else 0, due
+
+
 def spent(
     raw: Mapping[str, object],
     head: str | None,
     waited_s: float | None,
     upstream: str | None = None,
 ) -> landing.LandingSpent:
-    """The passes, clean syncs and reruns on `head` the `landing` list records. A
-    `sync_master` answering one of `landing.CONFLICTING_SYNC_REFUSALS` is the conflicting
-    one, a model pass; it never counts as a clean sync. `unsynced_for_upstream` counts the
-    entries closed with `lacks` equal to `upstream` (the round's master sha), by sha and never
-    by head (GH-267); without a sha it is 0. `syncs` and `unsynced_for_upstream` count only the
-    entries after the last resolved `land_slice` (`landing.sync_epoch`, GH-297); `passes` never
-    reset. `important_passes` counts the `fix_important`
-    entries (GH-294), which never enter `passes`."""
+    """The passes, syncs and reruns on `head` the `landing` list records. `passes` is the
+    `re_review` and `fix` entries and nothing else: a `sync_master` is never a pass (GH-330).
+    `syncs` counts every `sync_master`, and `conflicting_syncs_for_upstream` those answering one
+    of `landing.CONFLICTING_SYNC_REFUSALS` for `upstream` (the round's master sha). With the
+    entries closed with `lacks` equal to `upstream` (`unsynced_for_upstream`, GH-267) and the
+    `verdict_syncs_for_upstream` they are counted by sha and never by head; without a sha they
+    are 0. All of them and the diagnoses' readings (`last_verdict`, `verdict_sync_due`) count
+    only the entries after the last resolved `land_slice` (`landing.sync_epoch`, GH-297);
+    `passes` never reset. `important_passes` counts the `fix_important` entries (GH-294)."""
     done = entries(raw)
     epoch = landing.sync_epoch(done)
 
@@ -84,22 +126,27 @@ def spent(
     def count_epoch(predicate: Callable[[Mapping[str, object]], bool]) -> int:
         return sum(1 for entry in epoch if predicate(entry))
 
+    def for_upstream(entry: Mapping[str, object]) -> bool:
+        return upstream is not None and entry.get("upstream") == upstream
+
+    last_verdict, verdict_syncs, due = _readings(epoch, upstream)
     return landing.LandingSpent(
-        passes=count(
-            lambda e: (
-                e.get("step") in ("re_review", "fix")
-                or (e.get("step") == "sync_master" and _conflicting(e))
-            )
-        ),
-        syncs=count_epoch(lambda e: e.get("step") == "sync_master" and not _conflicting(e)),
+        passes=count(lambda e: e.get("step") in ("re_review", "fix")),
+        syncs=count_epoch(lambda e: e.get("step") == "sync_master"),
         reruns_on_head=count(lambda e: e.get("step") == "rerun" and e.get("head") == head),
-        diagnosed=count(lambda e: e.get("step") == "diagnose" and e.get("delivered") is True) > 0,
+        diagnoses=count(lambda e: e.get("step") == "diagnose" and e.get("delivered") is True),
         waited_s=waited_s,
         renumbers=count(lambda e: e.get("step") == "renumber"),
         important_passes=count(lambda e: e.get("step") == "fix_important"),
         unsynced_for_upstream=(
             count_epoch(lambda e: e.get("lacks") == upstream) if upstream is not None else 0
         ),
+        conflicting_syncs_for_upstream=count_epoch(
+            lambda e: e.get("step") == "sync_master" and _conflicting(e) and for_upstream(e)
+        ),
+        verdict_syncs_for_upstream=verdict_syncs,
+        verdict_sync_due=due,
+        last_verdict=last_verdict,
     )
 
 
@@ -290,7 +337,7 @@ def pending(
         return None
     gate = diagnose_gate(raw, step.kind, now)
     if (gate == "skip" and not (released and step.kind == "diagnose")) or (
-        landing.already_dispatched(entries(raw), facts.pr_head, step.kind)
+        landing.already_dispatched(entries(raw), facts.pr_head, step.kind, facts.current_master)
     ):
         return None
     return step

@@ -84,8 +84,8 @@ def test_the_literal_lists_the_refusal_right_after_pr_not_open():
 
 
 def test_the_landing_sends_the_refusal_to_diagnose_and_a_spent_task_has_none_left():
-    spent = LandingSpent(passes=0, syncs=0, reruns_on_head=0, diagnosed=False, waited_s=None)
+    spent = LandingSpent(passes=0, syncs=0, reruns_on_head=0, diagnoses=0, waited_s=None)
     step = landing.landing_step("adr_number_taken", _facts(adr_collision=AMBIGUOUS), spent, ())
     assert step == LandingStep("diagnose", "adr_number_taken")
-    done = replace(spent, diagnosed=True)
+    done = replace(spent, diagnoses=1)
     assert landing.landing_step("adr_number_taken", _facts(), done, ()).kind == "none"

@@ -110,9 +110,7 @@ def test_a_perf_refused_head_needs_no_conflict_probe_but_still_the_adr_read():
 def test_a_perf_refusal_is_in_the_closed_set_and_the_landing_leaves_it_to_the_human():
     assert "perf_unverified" in get_args(rules.MergeRefusal)
     facts = _facts(**_perf("unverified", HEAD))
-    spent = landing.LandingSpent(
-        passes=0, syncs=0, reruns_on_head=0, diagnosed=False, waited_s=None
-    )
+    spent = landing.LandingSpent(passes=0, syncs=0, reruns_on_head=0, diagnoses=0, waited_s=None)
     step = landing.landing_step("perf_unverified", facts, spent, ("api",))
     assert step == landing.LandingStep("none", "perf_unverified", ())
 

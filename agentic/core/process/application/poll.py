@@ -439,7 +439,7 @@ def assess_merge(
     source: ConflictSource | None = None
     if (
         facts.pr_head is not None
-        and not landing_plan.spent(raw, facts.pr_head, None).diagnosed
+        and not landing_plan.spent(raw, facts.pr_head, None).unlandable
         and rules.conflict_probe_wanted(replace(facts, ci_required=declared))
     ):
         # GH-255: a head that does not merge with master is a conflict before it is a CI

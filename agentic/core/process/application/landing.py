@@ -209,7 +209,7 @@ def _land(
         landing_fix.escalate_failed_diagnosis(context)
         return LandResult("dispatched", step=step.kind)
     if resumed is None and landing_rules.already_dispatched(
-        landing_plan.entries(current), head, step.kind
+        landing_plan.entries(current), head, step.kind, master
     ):
         log(f"agentic: land: {task_id}: {head} {step.kind}: already taken")
         return LandResult("skipped", "already_dispatched", step.kind)

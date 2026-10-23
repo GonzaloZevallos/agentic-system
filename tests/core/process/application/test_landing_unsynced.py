@@ -175,11 +175,16 @@ def test_two_unsynced_passes_for_the_current_upstream_make_the_step_a_diagnose()
     assert landing_plan.step_for(two, "attempts_exhausted", _facts(master)).kind == "diagnose"
 
 
-def test_a_busy_master_reaches_the_diagnose_through_passes_not_the_unsynced_count():
+def test_a_busy_master_gets_a_fresh_conflict_budget_per_sha_and_no_pass_is_charged():
     entries = [{**_lacking(f"{n}" * 40, f"{n}" * 40), "refusal": "merge_conflict"} for n in "123"]
     state = {"id": "GH-9", "title": "", "description": "", "landing": entries}
     master = "4" * 40
 
     assert landing_plan.spent(state, HEAD, None, master).unsynced_for_upstream == 0
-    assert landing_plan.spent(state, HEAD, None, master).passes == 3
-    assert landing_plan.step_for(state, "merge_conflict", _facts(master)).kind == "diagnose"
+    assert landing_plan.spent(state, HEAD, None, master).passes == 0
+    assert landing_plan.step_for(state, "merge_conflict", _facts(master)).kind == "sync_master"
+    # The same sha conflicting twice is the cap, whatever the passes.
+    twice = {**state, "landing": entries[:2]}
+    assert landing_plan.step_for(twice, "merge_conflict", _facts("2" * 40)).kind == "sync_master"
+    again = {**state, "landing": [*entries[:2], {**entries[1], "head": "d" * 40}]}
+    assert landing_plan.step_for(again, "merge_conflict", _facts("2" * 40)).kind == "diagnose"

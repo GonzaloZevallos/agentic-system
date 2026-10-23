@@ -13,6 +13,7 @@ from agentic.core.process.domain.landing import LandingSpent, LandingStep
 from agentic.core.process.domain.rules import MergeFacts
 from agentic.core.process.domain.task import (
     Carried,
+    DiagnosisVerdict,
     FailureReason,
     LandedSliceRef,
     LandingEntry,
@@ -45,7 +46,7 @@ def _facts(**over) -> MergeFacts:
 
 
 def _spent(**over) -> LandingSpent:
-    base = LandingSpent(passes=0, syncs=0, reruns_on_head=0, diagnosed=False, waited_s=None)
+    base = LandingSpent(passes=0, syncs=0, reruns_on_head=0, diagnoses=0, waited_s=None)
     return replace(base, **over)
 
 
@@ -99,7 +100,7 @@ def test_every_refusal_still_has_a_step_when_every_budget_is_spent(refusal):
 
 @pytest.mark.parametrize("refusal", get_args(rules.MergeRefusal))
 def test_a_diagnosed_task_has_nothing_left_to_do(refusal):
-    assert _step(refusal, _spent(diagnosed=True), owners=("api",)).kind == "none"
+    assert _step(refusal, _spent(diagnoses=1), owners=("api",)).kind == "none"
 
 
 def test_a_blocking_record_of_a_sibling_reopens_that_unit_not_the_approved_one():
@@ -122,23 +123,26 @@ def test_a_sync_that_would_exceed_the_budget_diagnoses_instead():
     assert _step("attempts_exhausted", _spent(syncs=landing.LANDING_SYNCS_MAX)).kind == "diagnose"
 
 
-def test_a_conflicting_checks_failure_syncs_and_needs_both_budgets():
+def test_a_conflicting_checks_failure_syncs_and_needs_the_sync_budgets():
     assert _step("checks_failed", failed_step="conflict").kind == "sync_master"
-    passes = _spent(passes=landing.LANDING_PASSES_MAX)
-    assert _step("checks_failed", passes, failed_step="conflict").kind == "diagnose"
+    capped = _spent(conflicting_syncs_for_upstream=landing.LANDING_CONFLICT_SYNCS_MAX)
+    assert _step("checks_failed", capped, failed_step="conflict").kind == "diagnose"
     syncs = _spent(syncs=landing.LANDING_SYNCS_MAX)
     assert _step("checks_failed", syncs, failed_step="conflict").kind == "diagnose"
 
 
 def test_a_definite_conflict_syncs_while_both_budgets_last_then_diagnoses():
     assert _step("merge_conflict").kind == "sync_master"
-    last = _spent(passes=landing.LANDING_PASSES_MAX - 1, syncs=landing.LANDING_SYNCS_MAX - 1)
+    last = _spent(
+        conflicting_syncs_for_upstream=landing.LANDING_CONFLICT_SYNCS_MAX - 1,
+        syncs=landing.LANDING_SYNCS_MAX - 1,
+    )
     assert _step("merge_conflict", last) == LandingStep("sync_master", "merge_conflict")
-    passes = _spent(passes=landing.LANDING_PASSES_MAX)
-    assert _step("merge_conflict", passes).kind == "diagnose"
+    capped = _spent(conflicting_syncs_for_upstream=landing.LANDING_CONFLICT_SYNCS_MAX)
+    assert _step("merge_conflict", capped).kind == "diagnose"
     syncs = _spent(syncs=landing.LANDING_SYNCS_MAX)
     assert _step("merge_conflict", syncs).kind == "diagnose"
-    assert _step("merge_conflict", _spent(diagnosed=True)).kind == "none"
+    assert _step("merge_conflict", _spent(diagnoses=1)).kind == "none"
 
 
 def test_the_refusals_that_make_a_sync_a_conflicting_one_are_the_two_conflict_reasons():
@@ -189,10 +193,10 @@ def test_a_review_is_carried_only_by_a_clean_merge_of_disjoint_paths(
 
 def test_a_step_is_dispatched_once_per_head():
     record = [{"head": HEAD, "step": "sync_master"}, {"head": "c" * 40, "step": "fix"}]
-    assert landing.already_dispatched(record, HEAD, "sync_master") is True
-    assert landing.already_dispatched(record, "d" * 40, "sync_master") is False
-    assert landing.already_dispatched(record, HEAD, "fix") is False
-    assert landing.already_dispatched([], HEAD, "fix") is False
+    assert landing.already_dispatched(record, HEAD, "sync_master", MASTER) is True
+    assert landing.already_dispatched(record, "d" * 40, "sync_master", MASTER) is False
+    assert landing.already_dispatched(record, HEAD, "fix", MASTER) is False
+    assert landing.already_dispatched([], HEAD, "fix", MASTER) is False
 
 
 def _state(entries, *statuses):
@@ -413,6 +417,7 @@ _SAMPLE: dict[object, object] = {
     bool: True,
     list[str]: ["a"],
     FailureReason: "account_limit",
+    DiagnosisVerdict: "sync",
 }
 
 
@@ -987,9 +992,10 @@ def test_merge_owner_knows_the_head_of_an_earlier_entry_and_nothing_without_fact
 
 def test_a_closed_unsynced_entry_is_not_a_dispatched_step():
     entries = [_sync_entry(closed_at="t", lacks=UPSTREAM)]
-    assert landing.already_dispatched(entries, HEAD, "sync_master") is False
-    assert landing.already_dispatched([_sync_entry()], HEAD, "sync_master") is True
-    assert landing.already_dispatched([_sync_entry(resolved_at="t")], HEAD, "sync_master") is True
+    assert landing.already_dispatched(entries, HEAD, "sync_master", UPSTREAM) is False
+    assert landing.already_dispatched([_sync_entry()], HEAD, "sync_master", UPSTREAM) is True
+    resolved = [_sync_entry(resolved_at="t")]
+    assert landing.already_dispatched(resolved, HEAD, "sync_master", UPSTREAM) is True
 
 
 def test_with_cost_base_writes_only_the_last_entry_and_only_when_it_matches():
@@ -1015,10 +1021,16 @@ def test_the_second_unsynced_pass_for_one_upstream_is_the_diagnose():
     assert _step("checks_failed", two, failed_step="conflict").kind == "diagnose"
 
 
-def test_a_busy_master_reaches_the_diagnose_only_through_the_pass_budget():
-    busy = _spent(passes=landing.LANDING_PASSES_MAX - 1, unsynced_for_upstream=0)
+def test_a_busy_master_reaches_the_diagnose_only_through_the_conflict_budget():
+    busy = _spent(
+        conflicting_syncs_for_upstream=landing.LANDING_CONFLICT_SYNCS_MAX - 1,
+        unsynced_for_upstream=0,
+    )
     assert _step("merge_conflict", busy).kind == "sync_master"
-    spent = _spent(passes=landing.LANDING_PASSES_MAX, unsynced_for_upstream=0)
+    spent = _spent(
+        conflicting_syncs_for_upstream=landing.LANDING_CONFLICT_SYNCS_MAX,
+        unsynced_for_upstream=0,
+    )
     assert _step("merge_conflict", spent).kind == "diagnose"
 
 
@@ -1058,7 +1070,7 @@ NO_IMPORTANT_STEPS = [
     ("adr number taken, ambiguous", "adr_number_taken", {}, {}, ("diagnose", ())),
     ("ci missing", "ci_missing", {}, {}, ("wait", ())),
     ("ci unreadable", "ci_unreadable", {}, {}, ("wait", ())),
-    ("diagnosed", "merge_conflict", {"diagnosed": True}, {}, ("none", ())),
+    ("diagnosed", "merge_conflict", {"diagnoses": 1}, {}, ("none", ())),
 ]
 
 
@@ -1109,7 +1121,7 @@ def test_outside_rows_alone_are_the_follow_up_and_never_the_pass():
 def test_the_pass_does_not_draw_on_the_landing_pass_budget():
     spent = _spent(passes=landing.LANDING_PASSES_MAX)
     assert _important(spent, open_important=1).kind == "fix_important"
-    assert _important(_spent(diagnosed=True), open_important=1).kind == "none"
+    assert _important(_spent(diagnoses=1), open_important=1).kind == "none"
 
 
 def test_the_pass_runs_a_model():
@@ -1313,4 +1325,4 @@ def test_diagnose_attempts_ignore_every_entry_up_to_and_including_a_released_one
 
 def test_a_released_entry_is_still_not_a_taken_step():
     entries = [_attempt("max_turns", released_at="T")]
-    assert not landing.already_dispatched(entries, HEAD, "diagnose")
+    assert not landing.already_dispatched(entries, HEAD, "diagnose", None)

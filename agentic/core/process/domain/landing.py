@@ -22,7 +22,9 @@ from .adr_numbers import Renaming
 from .document import HUMAN
 from .roles import LANDING_DIAGNOSER
 from .task import (
+    VERDICT_SYNC,
     Carried,
+    DiagnosisVerdict,
     FailureReason,
     LandedSliceRef,
     LandingEntry,
@@ -78,7 +80,8 @@ def run_kind_of(step: LandingStepKind | None, refusal: rules.MergeRefusal | None
     `sync_master` is always `land_model`, even a clean one: it reopens the task and spawns a
     resume when the merge overlaps the reviewed paths, conflicts at run time, or a sync or
     push fails, and none of that is known before it runs. `refusal` is kept for a step whose
-    kind may depend on it."""
+    kind may depend on it. A `sync_master` after a `sync` verdict of the diagnoser (GH-330) is
+    the same step and the same kind."""
     match step:
         case "rerun" | "file_followups_and_land":
             return "land_checks"
@@ -101,14 +104,27 @@ def run_kind_admits(
 
 
 LANDING_PASSES_MAX = 3
-"""Model passes (`re_review`, `fix`, a conflicting `sync_master`) per task."""
+"""Model passes per task, counted in `LandingSpent.passes`: `re_review` and `fix` only. A
+`sync_master`, conflicting or not, is never charged here (GH-330): master churn the task does
+not control must not spend the task's own budget for its reviews and fixes."""
+
+LANDING_CONFLICT_SYNCS_MAX = 2
+"""Conflicting `sync_master` (answering `CONFLICTING_SYNC_REFUSALS`) per upstream sha, counted
+in `LandingSpent.conflicting_syncs_for_upstream` inside the `sync_epoch`; declared, not measured.
+A new master sha starts a fresh budget. A verdict sync (`LANDING_VERDICT_SYNCS_MAX`) is exempt."""
+
+LANDING_VERDICT_SYNCS_MAX = 1
+"""`sync_master` per upstream sha that follows a `sync` verdict of the diagnoser, counted in
+`LandingSpent.verdict_syncs_for_upstream`; declared, not measured. A second diagnosis for the
+same sha reads as `unlandable`: the verdict is a guess, and it is trusted once."""
 
 LANDING_IMPORTANT_PASSES_MAX = 1
 """`fix_important` passes per task (GH-294), counted in `LandingSpent.important_passes` and
 charged to `LANDING_PASSES_MAX` not at all; declared, not measured."""
 
 LANDING_SYNCS_MAX = 6
-"""Clean `sync_master` per task."""
+"""`sync_master` of every kind per task, clean, conflicting or following a verdict, counted in
+`LandingSpent.syncs` inside the `sync_epoch`: the ceiling across master moves."""
 
 LANDING_RENUMBERS_MAX = 3
 """`renumber` steps per task (GH-229), counted from the `landing` list and charged neither to
@@ -147,15 +163,17 @@ class LandingStep:
 
 @dataclass(frozen=True)
 class LandingSpent:
-    """What the task document says is already spent: model `passes` and clean `syncs`
-    (counted from the `landing` list), `reruns_on_head` (entries of kind `rerun` on the
-    current head), whether the diagnosis ran, and the seconds waited on an undecidable
-    gate (`None`: no anchor); `renumbers` is the `renumber` entries on the list."""
+    """What the task document says is already spent: model `passes` (`re_review` and `fix`
+    only) and `syncs` of every kind (counted from the `landing` list), `reruns_on_head`
+    (entries of kind `rerun` on the current head), the delivered `diagnoses`, and the seconds
+    waited on an undecidable gate (`None`: no anchor); `renumbers` is the `renumber` entries on
+    the list."""
 
     passes: int
     syncs: int
     reruns_on_head: int
-    diagnosed: bool
+    # Delivered `diagnose` entries on the list; `last_verdict` is what the latest one reads as.
+    diagnoses: int
     waited_s: float | None
     # `renumber` entries across all heads (GH-229): the cap's own counter.
     renumbers: int = 0
@@ -163,6 +181,23 @@ class LandingSpent:
     unsynced_for_upstream: int = 0
     # `fix_important` entries on the list (GH-294): the final pass's own counter.
     important_passes: int = 0
+    # GH-330, all by the current upstream sha and inside the `sync_epoch`: conflicting syncs
+    # (`LANDING_CONFLICT_SYNCS_MAX`) and syncs that followed a `sync` verdict
+    # (`LANDING_VERDICT_SYNCS_MAX`).
+    conflicting_syncs_for_upstream: int = 0
+    verdict_syncs_for_upstream: int = 0
+    # The latest delivered diagnosis says `sync` for the current upstream sha and no
+    # `sync_master` for it has been recorded since.
+    verdict_sync_due: bool = False
+    # What the latest delivered diagnosis reads as (`None`: none, or none inside the epoch).
+    # A `sync` already served for its own sha, or without a sha to sync to, reads as
+    # `unlandable`; so does an entry written before verdicts existed.
+    last_verdict: DiagnosisVerdict | None = None
+
+    @property
+    def unlandable(self) -> bool:
+        """A diagnosis was delivered and the latest one does not name a sync: the human's."""
+        return self.diagnoses > 0 and self.last_verdict != VERDICT_SYNC
 
 
 def landing_step(
@@ -176,13 +211,16 @@ def landing_step(
 ) -> LandingStep:
     """The step for `refusal`. A model pass or a sync past its budget is the exhaustion: the
     `land_slice` when `slicing` is a `Slice`, else the `diagnose` carrying `slicing` as its
-    `restart_why` (`None`: as before GH-297). A task already diagnosed has no step left
-    (`none`). `blocking_owners` is the units that own the open blocking records
-    (`blocking_owners`); `important_units` the ones the final important pass reopens
-    (`important_owners`); `slicing` is what the exhaustion decides a slice from: a ready
-    `slice_or_restart` answer, or a provider of the `SliceInputs` that is called, and handed to
-    `slice_or_restart`, only when a budget has run out, so a healthy landing reads no git for
-    it. This is the only place `slice_or_restart` is called."""
+    `restart_why` (`None`: as before GH-297). A task whose latest diagnosis is `unlandable`
+    has no step left (`none`); one whose diagnosis said `sync` and has not been synced yet
+    (`verdict_sync_due`) gets the `sync_master` whatever the refusal, within the task-wide and
+    unsynced budgets and exempt from the per-sha conflict cap. `blocking_owners` is the units
+    that own the open blocking records (`blocking_owners`); `important_units` the ones the
+    final important pass reopens (`important_owners`); `slicing` is what the exhaustion
+    decides a slice from: a ready `slice_or_restart` answer, or a provider of the
+    `SliceInputs` that is called, and handed to `slice_or_restart`, only when a budget has run
+    out, so a healthy landing reads no git for it. This is the only place `slice_or_restart`
+    is called."""
 
     def step(kind: LandingStepKind, units: tuple[str, ...] = ()) -> LandingStep:
         return LandingStep(kind, refusal, units)
@@ -198,8 +236,10 @@ def landing_step(
     def pass_(kind: LandingStepKind, units: tuple[str, ...] = ()) -> LandingStep:
         return step(kind, units) if spent.passes < LANDING_PASSES_MAX else exhausted()
 
-    if spent.diagnosed:
+    if spent.unlandable:
         return step("none")
+    if spent.verdict_sync_due:
+        return _verdict_sync(step, exhausted, spent)
     match refusal:
         case "not_ready" | "pr_not_open" | "eval_set" | "perf_unverified":
             return step("none")
@@ -251,15 +291,43 @@ def _sync(
     *,
     conflicting: bool,
 ) -> LandingStep:
-    """`sync_master` while the sync budget lasts; a sync known to conflict is also a model
-    pass and needs that budget too."""
+    """`sync_master` while the sync budgets last: the task-wide one, the unsynced one and, for
+    a sync known to conflict, the per-sha conflict one. No pass budget is asked (GH-330)."""
     if (
         spent.syncs >= LANDING_SYNCS_MAX
         or spent.unsynced_for_upstream >= LANDING_UNSYNCED_MAX
-        or (conflicting and spent.passes >= LANDING_PASSES_MAX)
+        or (conflicting and spent.conflicting_syncs_for_upstream >= LANDING_CONFLICT_SYNCS_MAX)
     ):
         return exhausted()
     return step("sync_master")
+
+
+def _verdict_sync(
+    step: Callable[..., LandingStep], exhausted: Callable[[], LandingStep], spent: LandingSpent
+) -> LandingStep:
+    """The `sync_master` a `sync` verdict asks for: only the task-wide and the unsynced budgets
+    can refuse it, never the per-sha conflict one."""
+    if spent.syncs >= LANDING_SYNCS_MAX or spent.unsynced_for_upstream >= LANDING_UNSYNCED_MAX:
+        return exhausted()
+    return step("sync_master")
+
+
+def after_diagnosis(
+    verdict: DiagnosisVerdict | None, spent: LandingSpent, restart_depth: int
+) -> Literal["sync_master", "restart", "escalate"]:
+    """What a delivered diagnosis leads to, the only place a verdict becomes an action
+    (GH-330): `sync_master` for a `sync` verdict while the sha's verdict-sync budget and the
+    task-wide and unsynced ones last; otherwise `restart` while `restart_depth` is under
+    `RESTART_DEPTH_MAX`, else `escalate`. `unlandable` and a missing verdict (a document
+    written before verdicts) take the second path."""
+    if (
+        verdict == VERDICT_SYNC
+        and spent.verdict_syncs_for_upstream < LANDING_VERDICT_SYNCS_MAX
+        and spent.syncs < LANDING_SYNCS_MAX
+        and spent.unsynced_for_upstream < LANDING_UNSYNCED_MAX
+    ):
+        return "sync_master"
+    return "restart" if restart_depth < RESTART_DEPTH_MAX else "escalate"
 
 
 def blocking_owners(state: TaskState) -> tuple[str, ...]:
@@ -587,20 +655,31 @@ def renumber_carries(changes: Sequence[LineChange]) -> bool:
     )
 
 
-def already_dispatched(landing: Sequence[Mapping[str, object]], head: str, step: str) -> bool:
+def already_dispatched(
+    landing: Sequence[Mapping[str, object]], head: str, step: str, upstream: str | None
+) -> bool:
     """Whether `(head, step)` is already in the document's `landing` list: the idempotency
     key, written before the dispatch. A diagnose entry that never delivered is an attempt
     (`diagnose_retry`), not a taken step; so is a sync closed with `lacks` (GH-267), which
-    the unsynced budget counts instead. A `land_slice` is never taken for good (GH-297): an
-    open one is continued by its executor, a refused one is retried until
-    `SLICE_REFUSALS_MAX`, and a landed one leaves other units to land on the same head."""
-    return step != "land_slice" and any(
-        entry.get("head") == head
-        and entry.get("step") == step
-        and "lacks" not in entry
-        and (step != "diagnose" or entry.get("delivered") is True)
-        for entry in landing
-    )
+    the unsynced budget counts instead. A `sync_master` entry blocks only when its `upstream`
+    is also `upstream` (GH-330): a sync for an earlier master sha never blocks the one for the
+    current sha; an entry without an `upstream` (written before) blocks on its head. A delivered
+    diagnose whose verdict is `sync` never blocks: the next diagnosis is the second look at the
+    sha. A `land_slice` is never taken for good (GH-297): an open one is continued by its
+    executor, a refused one is retried until `SLICE_REFUSALS_MAX`, and a landed one leaves
+    other units to land on the same head."""
+
+    def taken(entry: Mapping[str, object]) -> bool:
+        if entry.get("head") != head or entry.get("step") != step or "lacks" in entry:
+            return False
+        if step == "diagnose":
+            return entry.get("delivered") is True and entry.get("verdict") != VERDICT_SYNC
+        if step == "sync_master":
+            recorded = entry.get("upstream")
+            return not isinstance(recorded, str) or recorded == upstream
+        return True
+
+    return step != "land_slice" and any(taken(entry) for entry in landing)
 
 
 def landing_open(state: TaskState) -> bool:
@@ -644,6 +723,8 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
         out["resume_spawned_at"] = spawned
     if isinstance(units := raw.get("slice_units"), list) and all(isinstance(u, str) for u in units):
         out["slice_units"] = [u for u in units if isinstance(u, str)]
+    if (verdict := verdict_of(raw.get("verdict"))) is not None:
+        out["verdict"] = verdict
     if isinstance(delivered := raw.get("delivered"), bool):
         out["delivered"] = delivered
     if isinstance(passed := raw.get("checks_passed"), bool):
@@ -661,6 +742,16 @@ def _failure_of(value: object) -> FailureReason | None:
     for reason in get_args(FailureReason):
         if value == reason:
             found: FailureReason = reason
+            return found
+    return None
+
+
+def verdict_of(value: object) -> DiagnosisVerdict | None:
+    """`value` as a `DiagnosisVerdict`, `None` when it is not one: the closed set is the
+    type's own, never a second list."""
+    for verdict in get_args(DiagnosisVerdict):
+        if value == verdict:
+            found: DiagnosisVerdict = verdict
             return found
     return None
 
