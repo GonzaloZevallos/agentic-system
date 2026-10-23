@@ -17,6 +17,7 @@ from typing import Any, Literal, Protocol
 
 from ..domain.ci import CiReport, CiUnreadable, Containment
 from ..domain.design import Design
+from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
@@ -424,6 +425,14 @@ class ProductStack(Protocol):
         `sample_app`/`compare` commands a design role reaches instead of a browser or
         an arbitrary URL. `None` when the product declares none, which is every
         product that has not handed the human a prototype yet -- never an error."""
+        ...
+
+    def performance(self, revision: str) -> dict[str, Scenario]:
+        """Scenario name -> its `seed`, `measure`, volume and limits (`core.knowledge`,
+        GH-318, ADR-0059), as the commit `revision` declares them, in file order. Empty when
+        the key is absent, which is every product that has not declared a budget. Read only
+        by `agentic perf`: never part of the checks, the presubmit or the merge gate. Raises
+        `ValueError` when the key is malformed."""
         ...
 
 
@@ -856,6 +865,12 @@ class Workspace(Protocol):
         not, there or not. Never raises for one that is absent."""
         ...
 
+    def checkout_names(self, prefix: str) -> list[str]:
+        """The names of the directories under `.agentic/worktrees/` that start with
+        `prefix` (GH-318: the `perf-*` a hard kill left behind), sorted; empty when there
+        are none. Filesystem only: no git."""
+        ...
+
     def contains(self, head: str, master: str) -> Containment:
         """Whether the commit `head` has the commit `master` among its ancestors (GH-216),
         after fetching both shas: `yes` or `no`, and `unknown` for anything that could not
@@ -869,6 +884,12 @@ class Workspace(Protocol):
         `None` anything that could not be read -- a sha that cannot be fetched, a git
         failure, a timeout, a missing git. Never raises, and never writes a worktree, a
         branch or the index. `None` is never a verdict: the caller treats it as unread."""
+        ...
+
+    def overlay(self, checkout: Path, sha: str, paths: Sequence[str]) -> None:
+        """Copies `paths` as the commit `sha` holds them into `checkout` (GH-318), so a
+        measurement can run scripts the code under test does not carry. Raises `GitError`
+        for a path the commit lacks or one that leaves the checkout."""
         ...
 
     def upstream(self) -> Upstream:
@@ -1296,6 +1317,29 @@ class ProcessReaper(Protocol):
         """What the attempt's marked processes are doing, the one marked process whose
         parent is `parent_pid` (the CLI) left out: their CPU time in all and whether any is
         running or in disk wait. `None` when it could not be read; never raises."""
+        ...
+
+
+class PerfRunner(Protocol):
+    """Runs one `seed`, `measure` or `setup` command of a performance scenario (GH-318,
+    ADR-0059) in `checkout`, with `extra_env` on top of a scrubbed environment, and returns
+    the `Run`. A non-zero exit and a timeout are a `Run` (`timed_out`), never an exception:
+    the verdict reads them."""
+
+    def run(
+        self, checkout: Path, command: str, extra_env: Mapping[str, str], timeout_s: float
+    ) -> Run: ...
+
+
+class PerfLock(Protocol):
+    """The machine-wide lock two measurements take so they never share a CPU (GH-318)."""
+
+    def acquire(self, wait_s: float) -> bool:
+        """Takes the lock, waiting at most `wait_s` seconds; `False` when it is held."""
+        ...
+
+    def release(self) -> None:
+        """Gives the lock back; harmless when it was never taken."""
         ...
 
 

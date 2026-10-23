@@ -172,3 +172,17 @@ def test_an_environment_is_marked_with_any_value_and_not_otherwise():
     assert not reaping.is_marked(environ("PATH=/usr/bin"))
     assert not reaping.is_marked(b"")
     assert not reaping.is_marked(environ(f"X{reaping.MARK_NAME}=1", f"{reaping.MARK_NAME}X=1"))
+
+
+def test_the_perf_scope_is_a_task_segment_no_task_id_can_be():
+    assert reaping.PERF_TASK == "perf"
+    value = reaping.mark("abc123def456", reaping.PERF_TASK, 9, "uuid")
+    assert reaping.parse_mark(value) == ("abc123def456", "perf", 9, "uuid")
+    own = ReapScope("abc123def456", reaping.PERF_TASK, 9, "uuid")
+    assert matches(marked(value), own)
+    assert not matches(marked(value), ReapScope("abc123def456", "GH-1", None, None))
+    assert not matches(marked(value), ReapScope("abc123def456", reaping.CHECK_TASK, None, None))
+    assert not matches(marked(value), ReapScope("abc123def456", reaping.PERF_TASK, 8, None))
+    assert not matches(marked(value), ReapScope("abc123def456", reaping.PERF_TASK, 9, "other"))
+    check = reaping.mark("abc123def456", reaping.CHECK_TASK, 9, "uuid")
+    assert not matches(marked(check), own)

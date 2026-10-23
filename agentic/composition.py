@@ -29,11 +29,13 @@ from .core.measurement.adapters.otel import telemetry
 from .core.measurement.domain.metrics import arm_label
 from .core.process.adapters.claude_sdk import ClaudeSdkRunner
 from .core.process.adapters.filesystem import FilesystemPrompts, FilesystemTaskDocuments
+from .core.process.adapters.filesystem.perf_lock import FilesystemPerfLock
 from .core.process.adapters.git import GitWorkspace
 from .core.process.adapters.git.workspace import WORKTREES
 from .core.process.adapters.github import GhInbox, GhTracker
 from .core.process.adapters.langgraph.graph import build_graph
 from .core.process.adapters.shell import ShellCommands, ShellReaper, ShellSampleApp
+from .core.process.adapters.shell.perf_runner import PerfShellRunner
 from .core.process.application.ports import Ports
 from .core.process.application.preflight import refuse_its_own_checkout
 from .core.process.application.reflect_run import SystemRepo
@@ -117,6 +119,16 @@ def default_ports(cfg: Configuration) -> Ports:
     # (issue #44).
     refuse_its_own_checkout(cfg, ports)
     return ports
+
+
+def perf_runner(cfg: Configuration, ports: Ports) -> PerfShellRunner:
+    """`agentic perf`'s runner (GH-318): its processes carry the product's own key, so the
+    reaper the ports hold finds them."""
+    return PerfShellRunner(reaping.product_key(str(cfg.product_dir.resolve())), ports.reaper)
+
+
+def perf_lock(cfg: Configuration) -> FilesystemPerfLock:
+    return FilesystemPerfLock(cfg.perf_lock_path)
 
 
 def system_repo() -> SystemRepo:

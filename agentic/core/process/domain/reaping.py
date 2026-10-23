@@ -32,6 +32,9 @@ COMMAND_MAX = 120
 # The task segment of a check's mark (GH-315): no task id is ever `check`.
 CHECK_TASK = "check"
 
+# The task segment of a performance command's mark (GH-318): no task id is ever `perf`.
+PERF_TASK = "perf"
+
 DELETED_SUFFIX = " (deleted)"
 
 ReapOutcome = Literal["term", "kill", "survived", "error"]
