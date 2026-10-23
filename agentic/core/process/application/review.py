@@ -141,7 +141,7 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
         "reason": reason,
         "change_category": category,
     }
-    if subtask.get("returned_by", "review") != "review":
+    if rules.return_section(state, subtask_id) != rules.review_section(subtask_id):
         # PM's early final validation (ADR-0040) or QA Performance (ADR-0060) was the open
         # return; this review is
         # now, so the next resumed Developer's delta, and the pass after this one's own

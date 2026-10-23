@@ -19,7 +19,7 @@ re-argumentan.
 
 ## 1. Roles
 
-18 roles agénticos más el humano, que actúa como aprobador y destino de escalados.
+19 roles agénticos más el humano, que actúa como aprobador y destino de escalados.
 
 ### Coordinación
 
@@ -908,7 +908,7 @@ enteramente de la asimetría de modelo y de prompt. Si no la tienen, sobran.
 
 ## 11. Orden de implementación
 
-Los 18 roles quedan en el diseño. Lo que se ordena es el orden en que se construyen.
+Los 19 roles quedan en el diseño. Lo que se ordena es el orden en que se construyen.
 
 **Regla**: cada rol nuevo tiene que mostrar que las cinco tareas salen **mejor con él que
 sin él**. Es lo que convierte la intuición de organigrama en una hipótesis que se puede

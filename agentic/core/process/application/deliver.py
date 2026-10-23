@@ -235,6 +235,18 @@ def _perf_unverified(state: TaskState) -> bool:
     return convened and verdict == "unverified"
 
 
+def _first_table(section: str) -> list[str]:
+    """The first run of consecutive `|` lines: the system's own measurement table, which
+    the node writes first. Any table the role writes after it is not copied."""
+    block: list[str] = []
+    for line in section.splitlines():
+        if line.startswith("|"):
+            block.append(line)
+        elif block:
+            break
+    return block
+
+
 def _perf_preface(state: TaskState) -> str:
     """The `Performance not verified` block (GH-318, ADR-0060), after `Criteria over cap`:
     the measurement table the node wrote into the QA Performance section -- its rows carry
@@ -243,7 +255,7 @@ def _perf_preface(state: TaskState) -> str:
     if not _perf_unverified(state):
         return ""
     section = state.get("sections", {}).get(_QA_PERFORMANCE_SECTION, "")
-    table = [line for line in section.splitlines() if line.startswith("|")]
+    table = _first_table(section)
     rows = "\n".join(table) if table else "No measurement table was recorded."
     return (
         "### Performance not verified\n\nQA Performance could not decide every budget "
