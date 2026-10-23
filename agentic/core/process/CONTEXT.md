@@ -29,6 +29,11 @@ _Campo_: de la organización de software humana
 Rol que produce: Product Analyst, UX Designer, UI Designer, Developer, Tech Writer, Reflector. En el código y en los prompts se llama `actor`.
 _Campo_: actor — Reflexion (Shinn 2023), que lo define junto a Evaluator y Self-Reflection; generator en Cobbe 2021 y Lightman 2023
 
+**Tech Writer**:
+Pensador independiente, sin validador propio (ADR-0058). Escribe los textos de cara a una persona que una feature con `touches_copy` toca, sobre el flujo y el diseño validados, y después de la implementación los revisa. Sus aprendizajes pasan por el Reflector como los de los demás roles.
+_Avoid_: redactor, copywriter (el rol revisa contra criterios del producto, no inventa una voz)
+_Campo_: technical writer / content designer — del diseño de contenido
+
 **UI Lead**:
 Validador de UI Designer (ADR-0040): valida el diseño de pantallas sobre el flujo validado y, en la validación final de PM, juzga las comparaciones.
 _Avoid_: Design Lead
@@ -95,7 +100,7 @@ Tramo del camino de feature entre Product Analyst y el PRD. Estrictamente secuen
 _Campo_: sin término de arte
 
 **PRD**:
-El texto de PM que gobierna el resto de la tarea: comportamiento, flujo, diseño y textos.
+El texto de PM que gobierna el resto de la tarea: comportamiento, flujo, diseño y, de los textos, lo que PM deja a la sección `Tech Writer` (ADR-0058).
 _Avoid_: spec, requerimientos, definición única (el nombre anterior del mismo término)
 _Campo_: de producto humano. `spec` en el mundo agéntico viene pegado a un flujo de archivos (GitHub Spec Kit: `/specify` → `/plan` → `/tasks`) que no es el nuestro
 
@@ -108,6 +113,15 @@ _Campo_: user flow — del diseño de interacción; el conteo de pasos contra la
 Lo que hace UX Lead para validar un flujo: recorre el prototipo del producto en un navegador, paso a paso por cada job, y compara con el flujo escrito. Cada hallazgo nombra la pantalla y el paso. Es su fuente propia: el UX Designer escribió el flujo sin recorrerlo.
 _Avoid_: revisión heurística (una lista de criterios sin navegar no es fuente propia)
 _Campo_: cognitive walkthrough — Wharton, Rieman, Lewis y Polson (1994). Donde el flujo pasa por una pantalla que el prototipo no tiene, ese tramo se evalúa sobre el texto y el hallazgo lo dice ("sin prototipo")
+
+**Revisión de textos**:
+Lo que hace Tech Writer después de la implementación, en el nodo `copy_review` y antes de la validación final: compara los textos del diff con los vigentes y con `WRITING_STANDARDS.md`. Sus hallazgos son `important` u `observation`, nunca bloqueantes: no devuelve ni forma par, y un importante se corrige en el pase final (ADR-0053), una sola vez por tarea. Solo ese nodo escribe y salda las filas de textos, que llevan el identificador `copy:<n>.<i>:<ubicación>`.
+_Avoid_: validación de textos (no valida ni devuelve), aprobación de textos
+_Campo_: content review / copy edit
+
+**Textos vigentes**:
+Lo que la revisión de textos compara contra el diff: la sección `Tech Writer`, intacta (el sistema nunca la reescribe), más una entrada aparte que calcula el sistema con los `proposed` de las filas de textos ya saldadas.
+_Campo_: sin término de arte
 
 **Diseño de pantallas**:
 Lo que UI Designer escribe sobre el flujo validado cuando la tarea toca UI: por cada pantalla que la tarea toca, qué pantalla del diseño del producto aplica (o cómo armar una nueva con sus componentes, si no existe), sus estados y lo que el PRD obliga a cambiar. Lo valida UI Lead, PM lo consolida en el PRD y cada brief de front nombra las suyas. La fidelidad que pide es igual a ojo: misma estructura, jerarquía, tipografía, colores, espaciado y componentes.
