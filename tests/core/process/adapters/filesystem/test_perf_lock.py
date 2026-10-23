@@ -109,3 +109,28 @@ def test_release_leaves_a_foreign_record_alone(tmp_path):
 
 def test_release_with_nothing_taken_is_harmless(tmp_path):
     lock_at(tmp_path / "perf.lock").release()
+
+
+def test_the_lock_path_never_shows_a_record_that_is_not_whole(tmp_path, monkeypatch):
+    path = tmp_path / "perf.lock"
+    seen = []
+    real_link = os.link
+
+    def checking_link(source, destination, *args, **kwargs):
+        seen.append(json.loads(open(source, encoding="utf-8").read())["pid"])  # whole at link time
+        real_link(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(os, "link", checking_link)
+    assert lock_at(path).acquire(0) is True
+    assert seen == [os.getpid()]
+    assert json.loads(path.read_text())["pid"] == os.getpid()
+    assert list(tmp_path.iterdir()) == [path]  # the private file is gone
+
+
+def test_a_refused_acquire_leaves_the_live_holders_record_and_no_private_file_behind(tmp_path):
+    path = tmp_path / "perf.lock"
+    write_record(path, os.getpid(), BOOT)
+    before = path.read_text()
+    assert lock_at(path).acquire(0) is False
+    assert path.read_text() == before
+    assert list(tmp_path.iterdir()) == [path]

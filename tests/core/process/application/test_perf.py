@@ -272,3 +272,21 @@ def test_the_product_being_the_repo_the_system_runs_from_is_refused(tmp_path, mo
     ports = ports_for(scenario(), workspace=workspace)
     with pytest.raises(PerfRefused, match="repository this package runs from"):
         run_perf(tmp_path, ports, FakePerfRunner(), FakePerfLock())
+
+
+def test_a_ref_typed_as_the_revision_is_reported_as_the_sha_the_checkout_resolved_to(tmp_path):
+    class Resolving(Workspace):
+        def full_head(self, path):
+            return (
+                "c0ffee" * 6 + "abcd"
+                if self.detached and path == self.checkout_path(self.detached[-1])
+                else "base"
+            )
+
+    workspace = Resolving()
+    ports = ports_for(scenario(), workspace=workspace)
+    runner = FakePerfRunner([Run(None, 0, False, 0, 0), seed(), *[good(50) for _ in range(5)]])
+    cfg = Configuration(product_dir=tmp_path)
+    _, report = perf("shop", None, "v1.2", (), ports, runner, FakePerfLock(), cfg)
+    assert report.code_sha == "c0ffee" * 6 + "abcd"
+    assert report.harness_sha == "base"

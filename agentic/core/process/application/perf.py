@@ -151,10 +151,13 @@ def perf(
         raise PerfRefused(str(exc)) from exc
     except ValueError as exc:
         raise PerfRefused(str(exc)) from exc
-    head = ports.workspace.full_head(config.product_dir)
+    try:
+        head = ports.workspace.full_head(config.product_dir)
+        paths = tuple(overlay)
+        _check_overlay(paths, head, ports, config)
+    except GitError as exc:
+        raise PerfRefused(f"could not read the product's git state: {exc}") from exc
     code = revision or head
-    paths = tuple(overlay)
-    _check_overlay(paths, head, ports, config)
     if not lock.acquire(config.perf_lock_wait_s):
         results = tuple(performance.busy(s) for s in selected)
         return PerfExit.INCONCLUSIVE, Report(results, head, code, paths)
@@ -164,6 +167,7 @@ def perf(
         _sweep(ports)
         try:
             checkout = ports.workspace.detached_checkout(name, code)
+            code = ports.workspace.full_head(checkout)  # a ref the human typed, as its sha
             if paths:
                 ports.workspace.overlay(checkout, head, paths)
         except GitError as exc:

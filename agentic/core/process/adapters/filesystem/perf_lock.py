@@ -5,12 +5,13 @@ the boot it ran in; `liveness.is_alive` decides whether that holder is still the
 rule the run lock and the registry use, so a record from another boot or from a dead pid is
 dead and is taken over.
 
-The file is created with `O_CREAT|O_EXCL`, so two processes never both think they took it. A
-dead or unreadable record is removed and the exclusive create tried again; a live one is
-waited for, at `POLL_INTERVAL_S`, until `wait_s` is spent. Two waiters that both find the same
-dead record may both unlink it: the second unlink can take a record the first waiter has just
-written. The record is re-read right before the unlink to keep that window to a few
-instructions; it is not closed, and the cost of the rare double take is two measurements on one
+The record is written whole to a private file and hard-linked to the lock path, which fails
+if the path exists, so two processes never both think they took it and a waiter never reads a
+half-written record. A dead or unreadable record is removed and the exclusive create tried
+again; a live one is waited for, at `POLL_INTERVAL_S`, until `wait_s` is spent. Two waiters
+that both find the same dead record may both unlink it: the second unlink can take a record
+the first waiter has just written. The record is re-read right before the unlink to keep that
+window to a few instructions; it is not closed, and the cost of the rare double take is two measurements on one
 CPU, which the load averages in the table show.
 """
 
@@ -24,6 +25,7 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 from .liveness import current_boot_id, is_alive
 
@@ -66,18 +68,23 @@ class FilesystemPerfLock:
                 self._path.unlink()
 
     def _create(self) -> bool:
-        try:
-            descriptor = os.open(self._path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-        except FileExistsError:
-            return False
+        """The record is written whole to a private file and then linked to the lock path:
+        `link` fails if the path exists, like `O_EXCL`, and the lock never shows a waiter an
+        empty file that it would read as unreadable and take from a live holder."""
         record = {
             "pid": os.getpid(),
             "boot_id": self._boot_id(),
             "host": socket.gethostname(),
             "started_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(record, handle)
+        private = self._path.with_name(f"{self._path.name}.{os.getpid()}.{uuid4().hex}")
+        private.write_text(json.dumps(record), encoding="utf-8")
+        try:
+            os.link(private, self._path)
+        except FileExistsError:
+            return False
+        finally:
+            private.unlink(missing_ok=True)
         return True
 
     def _read(self) -> tuple[int, str | None] | None:
