@@ -13,14 +13,14 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Literal, assert_never, cast
+from typing import Any, Literal, assert_never
 
 from agentic.shared.configuration import Configuration
 
 from ..domain import landing as landing_rules
 from ..domain.landing import LandingStepKind
 from ..domain.rules import RunKind
-from ..domain.task import TaskState, apply
+from ..domain.task import ReleasePatch, TaskState, apply
 from . import landing_fix, landing_plan, landing_slice, landing_sync
 from .checkouts import SetupFailed, task_checkout
 from .landing_plan import LandingContext
@@ -189,7 +189,7 @@ def _land(
         now: datetime | None = datetime.fromisoformat(clock())
     except ValueError:
         now = None
-    released: dict[str, Any] = {}
+    released: ReleasePatch = {}
     if step.kind == "diagnose" and raw.get("escalated"):
         outcome = landing_plan.release(ports, cfg, task_id, raw, number)
         if outcome.decision is None:
@@ -197,8 +197,7 @@ def _land(
         released = landing_rules.released(raw, outcome.decision, clock())
     # The document as the release leaves it: the gate and the entry below read this view, the
     # file keeps the escalation until everything else has agreed (head, merge).
-    patch = cast(TaskState, released)
-    current: TaskState = apply(raw, patch) if released else raw
+    current: TaskState = apply(raw, released) if released else raw
     gate = landing_plan.diagnose_gate(current, step.kind, now)
     if gate == "skip":
         log(f"agentic: land: {task_id}: {head} {step.kind}: diagnosis not due")
@@ -230,7 +229,7 @@ def _land(
     if released:
         # One write, in the same call that appends the entry and dispatches: the release
         # is never left undispatched (the head and the merge were checked above).
-        ports.documents.save(apply(state_from(dict(raw)), patch))
+        ports.documents.save(apply(state_from(dict(raw)), released))
         log(f"agentic: land: {task_id}: {head} diagnose: escalation released by a human decision")
     entry: dict[str, object] = {
         "head": head,

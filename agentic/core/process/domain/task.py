@@ -18,6 +18,7 @@ several nodes over a copy of the state and has to hand the parent what it added.
 from __future__ import annotations
 
 import operator
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import (
     Annotated,
@@ -530,6 +531,20 @@ class EscalationPatch(TypedDict):
     escalation_class: EscalationClass | None
 
 
+class ReleasePatch(TypedDict, total=False):
+    """What `landing.released` writes when a human's answer releases a landing escalation
+    (GH-328): the keys of `unescalated` plus the epoch's `landing` entries and the `Human`
+    section. Empty when there is nothing to release. A partial patch, so `apply` takes it
+    as a mapping, not as a whole `TaskState`."""
+
+    escalated: str | None
+    escalation_class: EscalationClass | None
+    status: Status
+    pause_log: list[PauseEntry]
+    landing: list[LandingEntry]
+    sections: dict[str, str]
+
+
 class FinishedPatch(TypedDict):
     """The two keys `rules.finished` writes together, spread into a bigger patch literal."""
 
@@ -912,8 +927,9 @@ def _reducers() -> dict[str, object]:
 REDUCERS = _reducers()
 
 
-def apply(state: TaskState, patch: TaskState) -> TaskState:
-    """`state` with `patch` folded in, reducer by reducer; plain fields are overridden."""
+def apply(state: TaskState, patch: Mapping[str, object]) -> TaskState:
+    """`state` with `patch` folded in, reducer by reducer; plain fields are overridden. A
+    patch is partial, so it is any mapping of keys, not a whole `TaskState`."""
     merged: dict[str, Any] = dict(state)
     for key, value in dict(patch).items():
         reducer = REDUCERS.get(key)

@@ -26,6 +26,7 @@ from .task import (
     FailureReason,
     LandedSliceRef,
     LandingEntry,
+    ReleasePatch,
     Subtask,
     SubtaskStatus,
     TaskState,
@@ -721,28 +722,36 @@ def unescalated(raw: Mapping[str, object]) -> dict[str, Any]:
     }
 
 
-def released(raw: Mapping[str, object], decision: str, at: str) -> dict[str, Any]:
+def released(raw: Mapping[str, object], decision: str, at: str) -> ReleasePatch:
     """The one patch that releases a landing escalation on a human's `decision` (GH-328):
     `unescalated`, `released_at` stamped on the last diagnose entry (so `diagnose_attempts`
     starts counting again from the next one), and the decision as one more `### Decision` of
     the `Human` section, which the Landing Diagnoser reads. Written for `task.apply`: the
     `pause_log` marker is appended by its reducer, `sections` merges, `landing` is replaced
-    whole. `{}` when the document is not escalated, so a second call writes nothing. Never
-    writes `cost_usd`. No other module builds it."""
+    whole. Typed as a `ReleasePatch` so `apply` takes it as it is. `{}` when the document is not
+    escalated, so a second call writes nothing. Never writes `cost_usd`. No other module
+    builds it."""
     reason = raw.get("escalated")
     if not reason:
         return {}
-    patch = unescalated(raw)
+    cleared = unescalated(raw)
     entries = raw.get("landing")
     written = (
-        [dict(e) for e in entries if isinstance(e, Mapping)] if isinstance(entries, list) else []
+        [entry_of(e) for e in entries if isinstance(e, Mapping)]
+        if isinstance(entries, list)
+        else []
     )
     last = max((i for i, e in enumerate(written) if e.get("step") == "diagnose"), default=None)
     if last is not None:
         written[last] = {**written[last], "released_at": at}
-    patch["landing"] = written
-    patch["sections"] = {HUMAN: rules.human_section(_with_sections(raw), str(reason), decision)}
-    return patch
+    return {
+        "escalated": cleared["escalated"],
+        "escalation_class": cleared["escalation_class"],
+        "status": cleared["status"],
+        "pause_log": cleared["pause_log"],
+        "landing": written,
+        "sections": {HUMAN: rules.human_section(_with_sections(raw), str(reason), decision)},
+    }
 
 
 def _with_sections(raw: Mapping[str, object]) -> TaskState:

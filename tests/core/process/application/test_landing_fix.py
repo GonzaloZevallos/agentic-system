@@ -1503,6 +1503,8 @@ def _diagnoser(ports, *results):
 
 def test_a_human_answer_releases_the_escalated_diagnose_and_the_role_reads_it(tmp_path):
     ports = _escalated_by_max_turns(tmp_path)
+    # Saved, not recorded as a closure: the fake lets a closure shadow what is saved.
+    ports.documents.save({**ports.documents.last, "sections": {"Tech Lead": "keep this plan"}})
     _answered(ports, "merge master in, resolve the one conflicted test file")
     ports, runner = _diagnoser(ports, _delivery())
     launcher = FakeLauncher()
@@ -1515,6 +1517,8 @@ def test_a_human_answer_releases_the_escalated_diagnose_and_the_role_reads_it(tm
     prompt = runner.calls[0]["prompt"]
     assert "merge master in, resolve the one conflicted test file" in prompt
     assert "### Decision 1" in doc["sections"]["Human"]
+    assert "keep this plan" in prompt  # the other sections reach the role too
+    assert doc["sections"]["Tech Lead"] == "keep this plan"  # the other sections survive
     assert not doc.get("escalated") and not doc.get("escalation_class")
     assert doc["pause_log"][-1] == {"kind": "resumed"}
     assert sum(entry["kind"] == "resumed" for entry in doc["pause_log"]) == 1
@@ -1550,6 +1554,7 @@ def test_a_second_failure_escalates_after_exactly_one_new_attempt(tmp_path):
 
     doc = _doc(ports)
     assert result.kind == "dispatched" and doc["escalation_class"] == "failure"
+    assert len(runner.calls) == len(_cut("max_turns"))  # one new attempt, no more
     assert [e.get("released_at") is not None for e in _diagnoses(ports)] == [True, False]
     assert len(landing_rules.diagnose_attempts(doc)) == 1
     assert len([t for _, t in ports.tracker.comments if t.startswith("Escalated: ")]) == 2
