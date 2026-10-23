@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from .cost_history import MIN_BUCKET, History, bucket_median, reference_usd
 from .coverage import BRIEF_FORM, MAPPED_FORM, NOT_TOUCHED, UNSATISFIABLE
-from .task import INTEGRATION, FindingCategory, FindingScope, Severity
+from .task import INTEGRATION, CopyCategory, FindingCategory, FindingScope, Severity
 
 TaskType = Literal["bug", "feature", "platform_enhancement"]
 SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -305,6 +305,48 @@ class DesignReview(RoleOutput):
     reason: str = Field(description="One line. On `returned`, what the thinker must fix")
     items: list[DesignItem] = Field(
         description="Every remark, blocking or observation; empty only when there is none"
+    )
+
+
+class CopyDraft(RoleOutput):
+    """Tech Writer's texts (README.md, 4): the content is the `markdown` itself, every
+    person-facing text of the change in the product's language and criteria. The next
+    roles read it as a section, not as data, and the system never rewrites it."""
+
+
+class CopyFinding(BaseModel):
+    """One thing Tech Writer's review found in a text of the diff. Never `blocking`: a
+    text does not return a subtask, and an `important` one is fixed inside the task."""
+
+    location: str = Field(description="`file:line`, or the file when it is the whole file")
+    claim: str = Field(description="What is wrong with the text, one sentence")
+    evidence: str = Field(
+        description="The line of the writing criteria or of the text Tech Writer wrote that "
+        "it breaks. Empty only on an `observation`"
+    )
+    proposed: str = Field(description="The corrected text, ready to paste; empty if none")
+    severity: Literal["important", "observation"] = Field(
+        description="`important`: should be fixed inside the task. `observation`: a remark"
+    )
+    scope: FindingScope = Field(
+        description="`subtask` when the branch under review can fix it; `plan` when it needs "
+        "a change to the plan; `outside` is work the task did not ask for"
+    )
+    category: CopyCategory
+
+
+class CopyReview(RoleOutput):
+    findings: list[CopyFinding] = Field(description="Every finding, most severe first")
+    settled: list[str] = Field(
+        default_factory=list,
+        description="Identifiers (`copy:<n>.<i>:<location>`) of the rows in the input that "
+        "this delivery settles: you looked and the text now meets the criteria. One per "
+        "line; empty when none. A row you do not repeat stays open",
+    )
+    proposed_standards: str = Field(
+        default="",
+        description="Only when the product has no writing criteria document: a starting "
+        "`WRITING_STANDARDS.md` for the product. Empty otherwise",
     )
 
 

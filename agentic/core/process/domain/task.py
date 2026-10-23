@@ -79,6 +79,11 @@ FindingCategory = Literal[
     "plan-invariant",
     "integration-crosscut",
 ]
+# What a text finding is about (the Tech Writer's review): `copy-unwritten` is a person-facing
+# text in the diff that Tech Writer never wrote, `copy-criteria-written` one it wrote that
+# breaks the product's writing criteria, `copy-criteria-changed` one the Developer changed
+# and that breaks them. Never a `FindingCategory`: the Tech Lead's review cannot return one.
+CopyCategory = Literal["copy-unwritten", "copy-criteria-written", "copy-criteria-changed"]
 # How much a finding weighs (ADR-0016): only a `blocking` one returns the subtask, and
 # only one the branch under review can fix; anything wider is the plan's.
 Severity = Literal["blocking", "important", "observation"]
@@ -546,9 +551,11 @@ class FindingRecord(TypedDict):
     claim: str
     severity: Severity
     scope: FindingScope
-    category: FindingCategory
+    category: FindingCategory | CopyCategory
     # `open` or `dismissed` as written; `fixed` is only ever derived.
     status: FindingStatus
+    # The corrected text a copy row proposes (`domain.copy`); absent on every other row.
+    proposed: NotRequired[str]
     # What the reviewer reported when the system lowered it (`lower_unbacked_blocks`); the key
     # is absent on a finding the system did not lower.
     reported_severity: NotRequired[Severity]
