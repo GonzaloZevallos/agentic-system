@@ -471,6 +471,23 @@ PM_FINAL = replace(
     max_turns=20,
 )
 
+# QA Performance (GH-318, ADR-0060): a validator whose own source is the system's
+# measurement. The node measures the integrated head and writes the table and the facts
+# into this role's own section, which the role reads; it reads the code to ground its own
+# findings and never runs anything: no role is granted `agentic perf` or any Bash, so the
+# only measurement there is, is the node's.
+QA_PERFORMANCE = Role(
+    name="QA Performance",
+    slug="qa_performance",
+    kind="verifier",
+    schema=Review,
+    reads=(ORIGINAL, "PM", "Tech Lead", FINDINGS, "QA Performance"),
+    criteria=("engineering",),
+    tools=("Read", "Glob", "Grep"),
+    allowed=("Read", "Glob", "Grep"),
+    max_turns=12,
+)
+
 # The bug path (README.md, 2; issue #65): the same two roles, without the interview.
 # The Product Analyst reproduces instead of interviewing: it reads the code and runs
 # the product's checks in the task's checkout, which is not executing (glossary:
@@ -771,6 +788,7 @@ ROLES = (
     UX_LEAD_FINAL,
     UI_LEAD_FINAL,
     PM_FINAL,
+    QA_PERFORMANCE,
     PRODUCT_ANALYST_BUG,
     PM_BUG,
     TECH_LEAD_EPHEMERAL,
@@ -821,6 +839,11 @@ PAIR_UI_LEAD = Pair(by=UI_LEAD, to=UI_DESIGNER)
 # that leads the plan and the subtask Tech Lead hands the claims to, never a lead's own
 # pair and never `pair_for`'s per-subtask one.
 PAIR_PM_TECH_LEAD = Pair(by=PM, to=TECH_LEAD)
+
+# QA Performance's return (GH-318, ADR-0060): the node reopens the integration -- or the
+# single subtask -- like PM's final validation does, so the pair is its own, to Tech Lead,
+# counted against the usual return limit on its own key.
+PAIR_QA_PERFORMANCE_TECH_LEAD = Pair(by=QA_PERFORMANCE, to=TECH_LEAD)
 
 
 def pair_for(subtask_id: str) -> Pair:

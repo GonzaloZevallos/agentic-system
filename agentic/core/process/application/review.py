@@ -140,8 +140,9 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
         "reason": reason,
         "change_category": category,
     }
-    if subtask.get("returned_by") == "final_validation":
-        # PM's early final validation (ADR-0040) was the open return; this review is
+    if subtask.get("returned_by", "review") != "review":
+        # PM's early final validation (ADR-0040) or QA Performance (ADR-0060) was the open
+        # return; this review is
         # now, so the next resumed Developer's delta, and the pass after this one's own
         # spec, must both come from this section (`rules.return_section`), not from
         # PM's. Written only to flip that case: every ordinary return keeps the subtask

@@ -29,6 +29,7 @@ from .roles import (
     PM_CONSOLIDATOR,
     PM_FINAL,
     PRODUCT_ANALYST,
+    QA_PERFORMANCE,
     SOLUTION_INTERVIEW,
     TECH_LEAD,
     TECH_WRITER,
@@ -66,6 +67,7 @@ from .task import (
     PauseEntry,
     PullRequest,
     ResumedPauseEntry,
+    ReturnedBy,
     ReviewKind,
     RoleRun,
     SettledRow,
@@ -1218,9 +1220,16 @@ def return_section(state: TaskState, subtask_id: str) -> str:
     reviewer's spec both come from this one function, never from `review_section`
     directly."""
     subtask = state.get("subtasks", {}).get(subtask_id, {})
-    if subtask.get("returned_by", "review") == "final_validation":
-        return PM_FINAL.name
-    return review_section(subtask_id)
+    returned_by: ReturnedBy = subtask.get("returned_by", "review")
+    match returned_by:
+        case "review":
+            return review_section(subtask_id)
+        case "final_validation":
+            return PM_FINAL.name
+        case "qa_performance":
+            return QA_PERFORMANCE.name
+        case _:
+            assert_never(returned_by)
 
 
 def returned_developer_delta(state: TaskState, subtask_id: str, branch: str, head: str) -> str:
@@ -1821,6 +1830,37 @@ def copy_review_due(state: TaskState) -> bool:
     return copy_idx is None or copy_idx < review_idx
 
 
+def qa_performance_due(state: TaskState) -> bool:
+    """Whether QA Performance (GH-318, ADR-0060) still has to run before `deliver`: the
+    plan convened performance (`TechPlan.performance`, the only source -- never the
+    branch's stack), every subtask is approved, and no run of the node whose verdict
+    approves or leaves the head unverified is newer than the latest approving review of
+    `integration` -- or of the single subtask, when there is no integration. A `returned`
+    run settles nothing: it reopens the subtask, and the review that approves it again is
+    newer than any run that came before. `False` for a plan that convened nothing, byte
+    for byte as today."""
+    if not state.get("performance") or not all_approved(state):
+        return False
+    subtasks = state.get("subtasks", {})
+    target = INTEGRATION if INTEGRATION in subtasks else next(iter(subtasks), None)
+    if target is None:
+        return False
+    review_idx = _latest_index(state, review_section(target))
+    if review_idx is None:
+        return True
+    settled_idx = None
+    for i, run in enumerate(state.get("runs", [])):
+        if (
+            run.get("section", run["role"]) == QA_PERFORMANCE.name
+            and run.get("perf_verdict") in _QA_PERFORMANCE_SETTLES
+        ):
+            settled_idx = i
+    return settled_idx is None or settled_idx < review_idx
+
+
+_QA_PERFORMANCE_SETTLES = frozenset(("approved", "unverified"))
+
+
 def after_integrate(state: TaskState) -> str | None:
     if state.get("escalated"):
         return None
@@ -1830,7 +1870,9 @@ def after_integrate(state: TaskState) -> str | None:
         return None
     if copy_review_due(state):
         return "copy_review"
-    return "final_validation" if final_validation_due(state) else "deliver"
+    if final_validation_due(state):
+        return "final_validation"
+    return "qa_performance" if qa_performance_due(state) else "deliver"
 
 
 def after_final_validation(state: TaskState) -> str | None:
@@ -1839,6 +1881,14 @@ def after_final_validation(state: TaskState) -> str | None:
     reopened subtask is exactly what `dispatched_subtasks` picks up, and the fan-in
     sends it back to its Developer like any other wave. No new predicate decides
     between the two -- `after_integrate` already does, from the same state."""
+    return None if state.get("escalated") else "integrate"
+
+
+def after_qa_performance(state: TaskState) -> str | None:
+    """Always back to the fan-in, like `after_final_validation`: on `approved` or
+    `unverified`, `qa_performance_due` now reads `False` and `after_integrate` falls
+    through to `deliver`; on `returned`, the reopened subtask is what `dispatched_subtasks`
+    picks up."""
     return None if state.get("escalated") else "integrate"
 
 
