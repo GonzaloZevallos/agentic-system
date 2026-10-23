@@ -256,6 +256,7 @@ def _merge_facts(
     failure = failures.get("failure")
     step = checks.get("failed_step")
     partition = rules.important_partition(raw)
+    perf_convened, perf_verdict, perf_head = rules.perf_merge_facts(raw)
     return rules.MergeFacts(
         task_id=task_id,
         status=raw.get("status"),
@@ -288,6 +289,9 @@ def _merge_facts(
             if checks.get("head") == pr_head and step in get_args(presubmit.FailedStep)
             else None
         ),
+        perf_convened=perf_convened,
+        perf_verdict=perf_verdict,
+        perf_head=perf_head,
     )
 
 

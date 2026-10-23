@@ -73,7 +73,8 @@ def test_every_refusal_the_decision_gives_is_in_the_closed_set_and_master_moved_
     ci_reasons = {"ci_failed", "ci_missing", "ci_unreadable"}
     # `merge_conflict` has its own table below: it needs `conflicts=True`, no `over` row.
     # The ADR collision's is given by `test_adr_refusal.py`.
-    others = {"master_moved", "merge_conflict", "adr_number_taken"}
+    # The performance gate's (GH-318) is given by `test_auto_merge_perf.py`.
+    others = {"master_moved", "merge_conflict", "adr_number_taken", "perf_unverified"}
     assert given | ci_reasons | others == set(get_args(rules.MergeRefusal))
 
 

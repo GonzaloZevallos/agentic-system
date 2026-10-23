@@ -84,6 +84,7 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             replaced_note,
             _guarded_preface(state, task.branch, ports),
             _criteria_preface(over),
+            _perf_preface(state),
         )
         if part
     )
@@ -137,6 +138,8 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     # next attempt hit "already exists".
     try:
         ready = f"{READY}{url}\n\nTask document: `{relative}`"
+        if _perf_unverified(state):
+            ready += f"\n\n{PERF_NOT_VERIFIED_LINE}"
         if replaced:
             ready += f"\n\n{replaced_note}"
         ports.tracker.comment(state["id"], ready)
@@ -214,6 +217,38 @@ def _criteria_preface(over: list[str]) -> str:
     return (
         "## Criteria over cap\n\nA criteria document of the product is past the line cap "
         f"(ADR-0055); cut it or split it by area:\n\n{listed}"
+    )
+
+
+PERF_NOT_VERIFIED_LINE = (
+    "Performance not verified: QA Performance could not decide every budget; see the pull "
+    "request body."
+)
+_QA_PERFORMANCE_SECTION = "QA Performance"
+
+
+def _perf_unverified(state: TaskState) -> bool:
+    """Whether the plan convened QA Performance and its latest run ended `unverified`: the
+    run counts as done and the delivery says so. `rules.perf_merge_facts` is the one reader
+    of both facts, so a task that is not convened never matches."""
+    convened, verdict, _ = rules.perf_merge_facts(state)
+    return convened and verdict == "unverified"
+
+
+def _perf_preface(state: TaskState) -> str:
+    """The `Performance not verified` block (GH-318, ADR-0060), after `Criteria over cap`:
+    the measurement table the node wrote into the QA Performance section -- its rows carry
+    each scenario's reason, spread and load averages -- under a fixed sentence. Nothing is
+    added for a task that is not convened or whose run was not `unverified`; no label."""
+    if not _perf_unverified(state):
+        return ""
+    section = state.get("sections", {}).get(_QA_PERFORMANCE_SECTION, "")
+    table = [line for line in section.splitlines() if line.startswith("|")]
+    rows = "\n".join(table) if table else "No measurement table was recorded."
+    return (
+        "### Performance not verified\n\nQA Performance could not decide every budget "
+        "(reason, spread and load averages per metric below), so the auto-merge is held and "
+        f"the pull request is left to the human:\n\n{rows}"
     )
 
 

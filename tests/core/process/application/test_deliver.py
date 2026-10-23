@@ -713,3 +713,80 @@ async def test_a_head_that_cannot_be_read_delivers_with_no_block(cfg):
 
     assert patch["status"] == "ready_for_review"
     assert ports.tracker.pull_requests[0][2] == NO_CRITERIA_BODY
+
+
+# --- GH-318: a convened task whose QA Performance run is `unverified` says so ------------
+
+QA_SECTION = (
+    "### Measurements\n\n"
+    "| scenario | metric | median | limit | outcome | reason | spread | load |\n"
+    "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
+    "| list | wall_ms | 180 | 200ms | inconclusive | spread | 0.45 | 0.3 -> 0.4 |\n\n"
+    "Not a table line."
+)
+PERF_PLAN = [
+    {
+        "name": "list",
+        "volume": 100,
+        "volume_unit": "rows",
+        "basis": "b",
+        "budgets": [
+            {"metric": "wall_ms", "limit": 200, "unit": "ms", "source": "issue", "basis": "b"}
+        ],
+    }
+]
+
+
+def _perf_state(verdict, *, performance=PERF_PLAN):
+    run = {
+        "role": "QA Performance",
+        "cost_usd": 0.1,
+        "perf_verdict": verdict,
+        "perf_head": "a" * 40,
+    }
+    return {
+        **TASK,
+        "performance": performance,
+        "runs": [run],
+        "sections": {**TASK["sections"], "QA Performance": QA_SECTION},
+    }
+
+
+async def test_an_unverified_convened_task_gets_the_heading_the_table_rows_and_a_comment(cfg):
+    ports = memory_ports()
+    await deliver(_perf_state("unverified"), cfg, ports)
+    body = ports.tracker.pull_requests[0][2]
+    assert "### Performance not verified" in body
+    assert "| list | wall_ms | 180 | 200ms | inconclusive | spread | 0.45 | 0.3 -> 0.4 |" in body
+    assert "Not a table line." not in body
+    assert body.index("### Performance not verified") < body.index("## PM")
+    notes = [text for _, text in ports.tracker.comments if "Performance not verified" in text]
+    assert len(notes) == 1 and notes[0].splitlines()[-1].startswith("Performance not verified")
+    assert sum(line.startswith("Performance not verified") for line in notes[0].splitlines()) == 1
+    assert ports.tracker.labels == [] and not any(ports.tracker.opened_labels)
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        _perf_state("approved"),
+        _perf_state("returned"),
+        _perf_state("unverified", performance=[]),
+    ],
+    ids=["approved", "returned", "not_convened"],
+)
+async def test_any_other_task_is_delivered_byte_for_byte_as_today(cfg, state):
+    ports = memory_ports()
+    await deliver(state, cfg, ports)
+    body = ports.tracker.pull_requests[0][2]
+    assert "Performance not verified" not in body
+    assert all("Performance not verified" not in text for _, text in ports.tracker.comments)
+    assert body == "## PM\n\n### Consolidated definition\n\nSix numbers."
+
+
+async def test_an_unverified_run_with_no_table_still_says_so(cfg):
+    state = _perf_state("unverified")
+    state["sections"] = TASK["sections"]
+    ports = memory_ports()
+    await deliver(state, cfg, ports)
+    assert "### Performance not verified" in ports.tracker.pull_requests[0][2]
