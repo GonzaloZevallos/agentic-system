@@ -626,3 +626,58 @@ def test_plan_limits_gives_the_volume_the_unit_and_the_limits_the_measurement_us
         "rows",
         {"list_ms": Limit(300.0, "ms"), "list_queries": Limit(3.0, "queries")},
     )
+
+
+def _budget(**over) -> dict:
+    return {
+        "metric": "list_ms",
+        "limit": 300,
+        "unit": "ms",
+        "source": "issue",
+        "basis": "the issue says 300 ms",
+        **over,
+    }
+
+
+@pytest.mark.parametrize(
+    ("scenario", "message"),
+    [
+        (_scenario(budgets=[_budget(unit="queries")]), "must end with"),
+        (_scenario(budgets=[_budget(metric="list_queries")]), "must end with"),
+        (_scenario(budgets=[_budget(limit=-1)]), "finite number, 0 or more"),
+        (_scenario(budgets=[_budget(limit=float("inf"))]), "finite number, 0 or more"),
+        (_scenario(budgets=[_budget(limit=float("nan"))]), "finite number, 0 or more"),
+        (_scenario(budgets=[_budget(basis="one\ntwo")]), "one non-empty line"),
+        (_scenario(budgets=[_budget(basis="  ")]), "one non-empty line"),
+        (_scenario(name="List Page"), "slug"),
+        (_scenario(volume=float("inf")), "positive finite"),
+        (_scenario(volume=-5), "positive finite"),
+    ],
+)
+def test_the_budget_and_scenario_checks_refuse_what_they_guard(scenario, message):
+    raw = {**_plan("m", "perf"), "estimated_cost_usd": 3, "estimated_files": 4}
+    with pytest.raises(ValueError, match=message):
+        schemas.validate(TechPlan, {**raw, "performance": [scenario]}, {})
+
+
+def test_a_convened_plan_reaches_the_document_and_a_plan_without_one_leaves_no_trace():
+    from pathlib import Path
+
+    from agentic.core.process.domain import document
+
+    fixture = Path(__file__).parents[3] / "fixtures" / "pre_performance_document.md"
+    state = document.parse(fixture.read_text())
+    plan = schemas.validate(
+        TechPlan,
+        {
+            **_plan("m", "perf"),
+            "estimated_cost_usd": 3,
+            "estimated_files": 4,
+            "performance": [_scenario()],
+        },
+        {},
+    )
+    convened = document.parse(document.render({**state, "performance": plan["performance"]}))
+    assert convened["performance"] == plan["performance"]
+    assert "performance" not in document.render(state)
+    assert "performance" not in document.render({**state, "performance": []})
