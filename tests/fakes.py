@@ -8,7 +8,7 @@ import threading
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from agentic.core.knowledge.domain import knowledge
 from agentic.core.process.adapters.github.tracker import pull_request_number
@@ -61,9 +61,6 @@ from agentic.core.process.domain.task import (
     TaskInput,
     TaskState,
 )
-
-if TYPE_CHECKING:
-    from agentic.core.process.adapters.shell import ShellCommands
 
 VOCAB = {"touches_ui": "UI", "touches_copy": "copy"}
 

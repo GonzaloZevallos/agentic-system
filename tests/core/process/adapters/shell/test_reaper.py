@@ -445,14 +445,26 @@ def test_a_process_whose_directory_was_deleted_is_not_a_checkouts(children, root
     assert alive(gone)
 
 
-def test_a_child_born_during_the_grace_inside_the_checkout_is_reaped_too(children, root):
+def test_a_child_born_during_the_grace_inside_the_checkout_is_reaped_too(
+    children, root, monkeypatch
+):
+    # The parent outlives TERM, so the sweep always waits out the whole grace: a long one
+    # lets a loaded machine get the child born before it ends.
+    monkeypatch.setattr(reaper_module, "REAP_GRACE_S", 5.0)
     cwd = checkout(root, "GH-7")
     code = (
         "import signal, subprocess, sys, time; "
         "signal.signal(signal.SIGTERM, lambda *a: subprocess.Popen("
-        "[sys.executable, '-c', 'import time; time.sleep(300)'])); time.sleep(300)"
+        "[sys.executable, '-c', 'import time; time.sleep(300)'])); "
+        "open('armed', 'w').close(); time.sleep(300)"
     )
     parent = spawn(children, code, None, cwd=cwd)
+    # `spawn`'s ready line comes before the handler exists; a TERM that beat the handler
+    # would kill the parent with no child born (a race seen on a slow CI runner).
+    deadline = time.monotonic() + 10
+    while not (cwd / "armed").exists():
+        assert time.monotonic() < deadline, "the handler was never installed"
+        time.sleep(0.01)
 
     reaped = ShellReaper(PRODUCT, root).reap_within([cwd])
 
