@@ -71,6 +71,7 @@ EXPECTED = {
     "merge_failed": "diagnose",
     "master_moved": "wait",
     "adr_number_taken": "diagnose",
+    "perf_unverified": "none",
 }
 
 

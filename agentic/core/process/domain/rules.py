@@ -3038,6 +3038,7 @@ MergeRefusal = Literal[
     "adr_number_taken",
     "not_approved",
     "head_not_reviewed",
+    "perf_unverified",
     "open_findings_blocking",
     "open_findings",
     "eval_set",
@@ -3063,6 +3064,10 @@ MergeRefusal = Literal[
 - `not_approved`: the reviewed unit (`reviewed_unit`) is not approved.
 - `head_not_reviewed`: the pull request head is not the one Tech Lead reviewed, or either
   is unknown.
+- `perf_unverified` (GH-318, ADR-0060): the plan convened QA Performance and the latest
+  QA Performance run is not `approved`, or it was not measured on the pull request's own head
+  (a missing or short sha fails closed). Right after `head_not_reviewed`, so a head nobody
+  reviewed is never reported as a performance problem. The landing leaves it to the human.
 - `open_findings_blocking`: a `blocking` finding is still open. Checked before
   `open_findings`: a blocking one is never filed as a follow-up (GH-239).
 - `open_findings`: an `important` finding of the task is still open with neither the final
@@ -3110,7 +3115,10 @@ class MergeFacts:
     `important_pass_done` says the final important pass was resolved and `followups_filed`
     that the landing filed or commented the follow-up for the `outside` ones. `conflicts`
     (GH-255) is whether the head conflicts with the current master: `None` unread, `False`
-    clean, `True` a definite conflict.
+    clean, `True` a definite conflict. The `perf_*` facts (GH-318, ADR-0060) come only from
+    `perf_merge_facts`: whether the plan convened QA Performance, the latest QA Performance
+    run's verdict and the full sha it measured; a `MergeFacts` built without them is not
+    convened, and decides as it always did.
     `ci_untrusted` (GH-239) is `None` when `touched_paths` is unknown and `True` when the
     diff touches the CI's own definition (`CI_DEFINITION_PREFIX`): a CI whose definition the
     change itself could have edited proves nothing, so it never decides `merge`.
@@ -3149,6 +3157,9 @@ class MergeFacts:
     conflicts: bool | None = None
     open_outside: int = 0
     important_pass_done: bool = False
+    perf_convened: bool = False
+    perf_verdict: str | None = None
+    perf_head: str | None = None
 
 
 @dataclass(frozen=True)
@@ -3160,6 +3171,27 @@ class MergeDecision:
 
     kind: Literal["merge", "run_checks", "wait", "refuse"]
     reason: MergeRefusal | None
+
+
+# The section QA Performance's runs carry: its role label, closed in ADR-0008 (GH-318).
+_QA_PERFORMANCE_SECTION = "QA Performance"
+
+
+def perf_merge_facts(state: TaskState) -> tuple[bool, str | None, str | None]:
+    """`(convened, verdict, head)` for `MergeFacts`, the only reader of them (GH-318,
+    ADR-0060). `convened` is the plan's own `performance` being non-empty -- never the
+    branch's stack. `verdict` and `head` are the latest QA Performance run's `perf_verdict`
+    and `perf_head`; `None` for both when the task has no such run, or its latest one carries
+    none. A task whose plan did not convene reads `(False, None, None)` whatever its runs say."""
+    if not state.get("performance"):
+        return (False, None, None)
+    latest = None
+    for run in state.get("runs", []):
+        if run.get("section", run["role"]) == _QA_PERFORMANCE_SECTION:
+            latest = run
+    if latest is None:
+        return (True, None, None)
+    return (True, latest.get("perf_verdict"), latest.get("perf_head"))
 
 
 def reviewed_unit(state: TaskState) -> Subtask | None:
@@ -3200,8 +3232,8 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     """The one place the conditions of an automatic merge live (GH-178, ADR-0045); no
     adapter, CLI or poller re-derives any of them. Checked in this order and refused at the
     first that fails: `not_ready`, `pr_not_open`, `adr_number_taken`, `not_approved`,
-    `head_not_reviewed`, `open_findings_blocking`, `open_findings`, `eval_set_unreadable`,
-    `eval_set`, `merge_conflict` (only when `conflicts is True`; unread or clean change
+    `head_not_reviewed`, `perf_unverified` (only when `perf_convened`), `open_findings_blocking`,
+    `open_findings`, `eval_set_unreadable`, `eval_set`, `merge_conflict` (only when `conflicts is True`; unread or clean change
     nothing), `merge_failed`, then, only when the product declares its CI (`ci_required`):
     `ci_unreadable`, a `wait` for a head that is not the reviewed one, `ci_failed` and
     `ci_missing`, a green and fresh CI being the `merge` itself (a green stale one goes on);
@@ -3226,6 +3258,12 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
         return MergeDecision("refuse", "not_approved")
     if not (full_commit_id(facts.pr_head) and same_commit(facts.reviewed_head, facts.pr_head)):
         return MergeDecision("refuse", "head_not_reviewed")
+    if facts.perf_convened and not (
+        facts.perf_verdict == "approved"
+        and full_commit_id(facts.perf_head)
+        and same_commit(facts.perf_head, facts.pr_head)
+    ):
+        return MergeDecision("refuse", "perf_unverified")
     if facts.open_blocking > 0:
         return MergeDecision("refuse", "open_findings_blocking")
     if (
