@@ -169,6 +169,7 @@ def perf(
         lock,
         config,
         clock,
+        head,
     )
     report = Report(tuple(measured), head, code, paths)
     return _exit(performance.overall(measured)), report
@@ -186,13 +187,16 @@ def measure_at(
     lock: PerfLock,
     config: Configuration,
     clock: Callable[[], float] = time.monotonic,
+    overlay_from: str | None = None,
 ) -> tuple[list[Result], str]:
     """The lifecycle the verb and QA Performance's node (ADR-0060) share: take the lock (up
     to `tries` tries of `lock_wait_s` each; every scenario is `busy` when none succeeds),
     sweep the stale `perf-*` checkouts, make a throwaway `perf-<uuid>` worktree at `code`,
     overlay the product's HEAD paths when asked, measure under the `perf_node_timeout_s`
     deadline and, however that ends, remove the worktree and release the lock. Returns the
-    results and the full sha measured (`code` itself when nothing was). Raises `PerfRefused`
+    `overlay_from` is the product revision the overlay paths are copied from: the verb passes
+    the head it validated them against.
+        results and the full sha measured (`code` itself when nothing was). Raises `PerfRefused`
     when the checkout could not be prepared. `PerfRunner.run` is called only here, only under
     the lock, and only with the throwaway worktree as its cwd."""
     if not any(lock.acquire(lock_wait_s) for _ in range(tries)):
@@ -205,7 +209,7 @@ def measure_at(
             checkout = ports.workspace.detached_checkout(name, code)
             code = ports.workspace.full_head(checkout)  # a ref the human typed, as its sha
             if overlay:
-                head = ports.workspace.full_head(config.product_dir)
+                head = overlay_from or ports.workspace.full_head(config.product_dir)
                 ports.workspace.overlay(checkout, head, tuple(overlay))
         except GitError as exc:
             raise PerfRefused(f"could not prepare the checkout of {code}: {exc}") from exc

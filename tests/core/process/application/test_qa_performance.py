@@ -8,6 +8,7 @@ import pytest
 
 from agentic.core.process.application.perf import PerfInterrupted
 from agentic.core.process.application.qa_performance import qa_performance
+from agentic.core.process.application.review import review
 from agentic.core.process.domain import roles, rules
 from agentic.core.process.domain.performance import Limit, Measurement, Run, Scenario
 from agentic.core.process.domain.task import INTEGRATION, apply
@@ -60,6 +61,7 @@ def state_of(**more) -> dict:
         "performance": [PLAN],
         "subtasks": {INTEGRATION: subtask},
         "subtask_id": INTEGRATION,
+        "runs": [{"role": "Tech Lead", "section": rules.review_section(INTEGRATION), "version": 1}],
         **more,
     }
 
@@ -95,6 +97,25 @@ async def test_every_budget_within_is_approved_on_the_measured_head_and_runs_bef
     assert "| list | list_ms | 50 | 100 | ms | within |" in after["sections"]["QA Performance"]
     assert len(perf.calls) == 6 and lock.released == 1
     assert role.slugs == ["qa_performance"]
+    assert not rules.qa_performance_due(after)
+
+
+async def test_every_measurement_call_comes_before_the_role_runner_is_called():
+    class Watching(ScriptedRunner):
+        seen: list[int] = []
+
+        async def run_once(self, role, prompt, **kwargs):
+            self.seen.append(len(perf.calls))
+            return await super().run_once(role, prompt, **kwargs)
+
+    perf = FakePerfRunner(measured(50))
+    role = Watching(qa_performance=[reviewed("approved")])
+    role.seen = []
+    ports = memory_ports(
+        role, stack=MemoryStack(performance=declared()), perf_runner=perf, perf_lock=FakePerfLock()
+    )
+    await qa_performance(state_of(), CFG, ports)
+    assert role.seen == [6]
 
 
 async def test_no_command_runs_in_the_task_checkout():
@@ -185,21 +206,27 @@ async def test_one_failed_try_then_success_measures():
     assert len(lock.acquired) == 2 and after["runs"][-1]["perf_verdict"] == "approved"
 
 
-async def test_an_interrupt_leaves_no_table_and_no_run():
+async def test_an_interrupt_leaves_no_table_no_run_no_lock_and_the_node_still_due():
     class Interrupted(FakePerfRunner):
         def run(self, checkout, command, extra_env, timeout_s):
             raise PerfInterrupted(15)
 
     state = state_of()
+    role, lock = approving(), FakePerfLock()
     ports = memory_ports(
-        approving(),
+        role,
         stack=MemoryStack(performance=declared()),
         perf_runner=Interrupted(),
-        perf_lock=FakePerfLock(),
+        perf_lock=lock,
     )
+    assert rules.qa_performance_due(state)
     with pytest.raises(PerfInterrupted):
         await qa_performance(state, CFG, ports)
-    assert "runs" not in state and "QA Performance" not in state["sections"]
+    assert role.calls == [] and ports.documents.saved == []
+    assert lock.released == 1
+    (made,) = ports.workspace.detached
+    assert ports.workspace.removed_checkouts[-1] == made
+    assert rules.qa_performance_due(state)
 
 
 async def test_a_blocking_finding_of_the_role_returns_even_when_every_budget_is_within():
@@ -219,3 +246,33 @@ async def test_the_pair_limit_escalates_with_the_table_and_the_close_the_pr_sent
     state = state_of(changes_requested={roles.PAIR_QA_PERFORMANCE_TECH_LEAD.key: 2})
     after, *_ = await go(state, measured(150))
     assert "re-filing the issue" in after["escalated"] and "| list_ms |" in after["escalated"]
+
+
+def reviewable(convened: bool, section: bool = True) -> dict:
+    state = state_of(performance=[PLAN] if convened else [])
+    state["subtasks"][INTEGRATION]["status"] = "delivered"
+    state["sections"]["QA Performance"] = "Measured head: x\n\n| UNIQUE-TABLE |" if section else ""
+    if not section:
+        del state["sections"]["QA Performance"]
+    return state
+
+
+async def reviewer_input(state):
+    runner = ScriptedRunner(tech_lead_review=[reviewed("approved")])
+    await review(state, CFG, memory_ports(runner))
+    (call,) = runner.calls
+    return call["prompt"], call["role"].allowed
+
+
+async def test_a_convened_integration_review_reads_the_latest_table_and_gains_no_tool():
+    with_table, tools = await reviewer_input(reviewable(True))
+    without, base_tools = await reviewer_input(reviewable(True, section=False))
+    assert "UNIQUE-TABLE" in with_table and "UNIQUE-TABLE" not in without
+    assert tools == base_tools and not any("perf" in tool for tool in tools)
+
+
+async def test_a_task_that_is_not_convened_reads_the_same_review_input_whatever_the_section():
+    stale, tools = await reviewer_input(reviewable(False))
+    clean, base_tools = await reviewer_input(reviewable(False, section=False))
+    assert "UNIQUE-TABLE" not in stale
+    assert stale == clean and tools == base_tools

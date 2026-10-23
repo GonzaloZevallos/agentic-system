@@ -30,7 +30,7 @@ from __future__ import annotations
 from agentic.shared.configuration import Configuration, experiment_snapshot
 
 from ..domain import ci, presubmit, rules
-from ..domain.roles import TECH_LEAD, pair_for, reviewer_for
+from ..domain.roles import QA_PERFORMANCE, TECH_LEAD, pair_for, reviewer_for
 from ..domain.task import WAITING_ON_HUMAN, TaskState, apply
 from .checkouts import SetupFailed, subtask_checkout, task_base
 from .ci_review import CI_SECTION, CiEvidence, read_ci
@@ -81,6 +81,7 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
             rules.developer_section(subtask_id),
             rules.return_section(state, subtask_id),
             *extra_ci,
+            *_perf_table(state, subtask_id),
         ),
         cwd=checkout.path,
         subtask=subtask_id,
@@ -167,3 +168,13 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
         patch = rules.logged(patch)
         patch["status"] = WAITING_ON_HUMAN
     return finish(state, patch, ports)
+
+
+def _perf_table(state: TaskState, subtask_id: str) -> tuple[str, ...]:
+    """The latest QA Performance section (GH-318, ADR-0060), only for the unit whose review
+    is the last before QA and only when the plan convened performance. Nothing otherwise, so
+    a task that is not convened reads exactly what it read before. It adds no tool: the
+    evidence that a performance finding is fixed is the node's re-measurement."""
+    if state.get("performance") and subtask_id == rules.reviewed_unit_name(state):
+        return (QA_PERFORMANCE.name,)
+    return ()
