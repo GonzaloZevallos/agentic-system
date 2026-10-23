@@ -139,6 +139,11 @@ def disagreements(state: TaskState, workspace: Workspace) -> list[str]:
     return problems
 
 
+def _text(body: str) -> str:
+    """A comment as the decision reads it: stripped, line endings normalised."""
+    return "\n".join(body.strip().splitlines())
+
+
 def human_decision(comments: Sequence[str]) -> str | None:
     """The human's decision: every comment after the system's last one, joined. The
     human may answer in several comments; all of them, and only them, enter. With no
@@ -146,10 +151,26 @@ def human_decision(comments: Sequence[str]) -> str | None:
     the system ever spoke is the task, not a decision."""
     after: list[str] | None = None
     for body in comments:
-        text = "\n".join(body.strip().splitlines())
+        text = _text(body)
         if text.startswith(SYSTEM_COMMENTS):
             after = []
         elif text and after is not None:
+            after.append(text)
+    return "\n\n".join(after or []) or None
+
+
+def decision_since(comments: Sequence[str], prefix: str) -> str | None:
+    """The human's decision on a landing escalation (GH-328): every comment after the last one
+    that starts with `prefix` (the escalation's), joined as `human_decision` joins them. A
+    comment of any other system prefix is dropped on its own and never resets the count, so
+    the poller's refusal comment after the escalation does not swallow the answer before it.
+    `None` when nothing follows. The only place a landing reads a decision off the issue."""
+    after: list[str] | None = None
+    for body in comments:
+        text = _text(body)
+        if text.startswith(prefix):
+            after = []
+        elif text and after is not None and not text.startswith(SYSTEM_COMMENTS):
             after.append(text)
     return "\n\n".join(after or []) or None
 

@@ -607,3 +607,34 @@ def test_the_answer_the_graph_resumes_with_carries_the_flag_only_when_given(cfg)
         "GH-12", stopped_at_the_estimate(), "checkpoint", cfg, decided("Go on."), estimate=200.0
     )
     assert given.answer() == {"decision": "Go on.", "estimate": 200.0}
+
+
+# --- GH-328: the decision a landing escalation reads ------------------------------------------
+
+
+def test_decision_since_survives_the_system_comments_that_come_after_the_escalation():
+    comments = ["Escalated: x", "merge master in", "Auto-merge refused: ci_missing"]
+    assert resume.decision_since(comments, "Escalated: ") == "merge master in"
+    assert resume.human_decision(comments) is None  # the role path is unchanged
+
+
+def test_decision_since_joins_every_human_comment_after_the_last_escalation():
+    comments = [
+        "Escalated: first",
+        "old answer",
+        "Escalated: second",
+        " merge master in ",
+        "Landing: sync_master",
+        "then fix the test\r\nfile",
+        "  ",
+    ]
+    assert resume.decision_since(comments, "Escalated: ") == (
+        "merge master in\n\nthen fix the test\nfile"
+    )
+
+
+def test_decision_since_is_none_without_a_human_comment_after_the_escalation():
+    assert resume.decision_since(["a human before", "Escalated: x"], "Escalated: ") is None
+    assert resume.decision_since(["Escalated: x", "Landing: rerun", "  "], "Escalated: ") is None
+    assert resume.decision_since(["Only the task says this"], "Escalated: ") is None
+    assert resume.decision_since([], "Escalated: ") is None

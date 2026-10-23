@@ -3263,3 +3263,10 @@ def test_poll_plan_crash_retakes_take_a_slot_from_resumes_and_launches():
         rules.PollAction("launch", 9),
     ]
     assert rules.poll_plan(crash_retakes=[4], available_slots=0, **plan).actions == []
+
+
+def test_task_spent_is_the_cost_plus_what_a_restart_carried():
+    assert rules.task_spent({"cost_usd": 3.0, "landing_cost_carried": 2.5}) == 5.5
+    assert rules.task_spent({"cost_usd": 3.0}) == 3.0
+    assert rules.task_spent({"landing_cost_carried": 2.0}) == 2.0
+    assert rules.task_spent({}) == 0.0

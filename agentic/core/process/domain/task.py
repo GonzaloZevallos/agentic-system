@@ -699,6 +699,9 @@ class LandingEntry(TypedDict, total=False):
     # reads and renders as before.
     delivered: bool
     failure: FailureReason
+    # GH-328, `diagnose` entries: when a human's decision released the escalation this entry's
+    # failure led to (`landing.released`). The retry calendar counts attempts after it.
+    released_at: str
     # GH-267, all optional: a document without them reads and renders as before.
     # `upstream` is the master sha a `sync_master` entry was dispatched for.
     upstream: str
