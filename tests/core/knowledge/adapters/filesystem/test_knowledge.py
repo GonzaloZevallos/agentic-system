@@ -333,4 +333,41 @@ def test_criteria_files_are_the_knowledge_constants(tmp_path):
     assert FilesystemKnowledge(tmp_path).criteria_files() == (
         domain.STANDARDS,
         domain.DESIGN_STANDARDS,
+        domain.WRITING_STANDARDS,
     )
+
+
+def test_writing_is_empty_without_the_file_and_fenced_whole_with_it(tmp_path):
+    knowledge = FilesystemKnowledge(tmp_path)
+    assert knowledge.writing() == ""
+    text = "# Writing\n\n## Voice\n\nPlain.\n"
+    (tmp_path / "WRITING_STANDARDS.md").write_text(text)
+    assert knowledge.writing() == (
+        "## Writing standards\n\n`WRITING_STANDARDS.md`:\n\n````markdown\n"
+        + text.strip()
+        + "\n````"
+    )
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "WRITING_STANDARDS.md").write_text("Tabs.\n")
+    assert "Tabs." in knowledge.writing(checkout)
+
+
+def test_writing_is_a_family_that_contributes_no_index_file(tmp_path):
+    _product(tmp_path)
+    (tmp_path / "WRITING_STANDARDS.md").write_text("# Writing\n\n## Voice\n\nPlain.\n")
+    knowledge = FilesystemKnowledge(tmp_path)
+    assert knowledge.index_files(None, ("writing",)) == {}
+    assert knowledge.index_files(None, ("product", "engineering", "writing")) == (
+        knowledge.index_files(None, FAMILIES)
+    )
+    assert "writing standards" not in knowledge.read().lower()
+
+
+def test_the_line_cap_measures_the_writing_standards_too(tmp_path):
+    from agentic.core.knowledge.domain import knowledge as domain
+
+    knowledge = FilesystemKnowledge(tmp_path)
+    assert domain.WRITING_STANDARDS in knowledge.criteria_files()
+    messages = knowledge.over_cap({"WRITING_STANDARDS.md": "x\n" * 301})
+    assert len(messages) == 1 and "WRITING_STANDARDS.md" in messages[0]

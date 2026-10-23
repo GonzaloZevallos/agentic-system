@@ -170,9 +170,11 @@ class MemoryKnowledge:
         brief: str | None = None,
         standards_index: str | None = None,
         design: str = "",
+        writing: str = "",
     ) -> None:
         self.text = text
         self.design_text = design
+        self.writing_text = writing
         # What `standards(whole=False)` returns when a test pins the two shapes apart; None
         # keeps one text for both, as every test written before the index did.
         self.standards_index_text = standards_index
@@ -192,6 +194,9 @@ class MemoryKnowledge:
 
     def design(self, root: Path | None = None) -> str:
         return self.design_text
+
+    def writing(self, root: Path | None = None) -> str:
+        return self.writing_text
 
     def criteria_files(self) -> tuple[str, ...]:
         return (knowledge.STANDARDS, knowledge.DESIGN_STANDARDS)

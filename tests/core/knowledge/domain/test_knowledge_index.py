@@ -223,11 +223,13 @@ def test_a_path_outside_the_areas_raises_naming_the_path():
         area_of("docs/adr/b.md"),
         area_of("CODING_STANDARDS.md"),
         area_of("DESIGN_STANDARDS.md"),
+        area_of("WRITING_STANDARDS.md"),
     ] == [
         "product",
         "adr",
         "standards",
         "design",
+        "writing",
     ]
     for path in (
         "docs/other/a.md",
@@ -235,10 +237,11 @@ def test_a_path_outside_the_areas_raises_naming_the_path():
         "docs/product",
         "src/CODING_STANDARDS.md",
         "src/DESIGN_STANDARDS.md",
+        "src/WRITING_STANDARDS.md",
     ):
         with pytest.raises(ValueError, match=path.replace(".", r"\.")):
             area_of(path)
-    assert knowledge_index.AREAS == ("product", "adr", "standards", "design")
+    assert knowledge_index.AREAS == ("product", "adr", "standards", "design", "writing")
 
 
 def test_a_glossary_off_the_always_list_is_refused_not_silently_dropped():
@@ -295,3 +298,12 @@ def test_the_design_area_adds_no_line_and_no_file_to_the_index():
     assert "design" not in built.areas
     assert not any("design" in path for path in built.files)
     assert "design" in knowledge_index.AREA_SUMMARY
+
+
+def test_the_writing_area_adds_no_line_and_no_file_to_the_index():
+    """The writing standards are served whole to two roles: the area is in the closed set,
+    and nothing lists entries under it."""
+    built = index()
+    assert "writing" not in built.areas
+    assert not any("writing" in path for path in built.files)
+    assert "writing" in knowledge_index.AREA_SUMMARY

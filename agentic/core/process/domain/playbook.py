@@ -26,8 +26,9 @@ from typing import Any, Literal, get_args
 
 import yaml
 
+from .copy import copy_location_parts
 from .schemas import TaskType
-from .task import INTEGRATION, FindingCategory
+from .task import INTEGRATION, CopyCategory, FindingCategory
 
 # At most this many items per role, and at most this many characters in one lesson: the
 # section rides in the role's system prompt, so both are hard.
@@ -39,8 +40,15 @@ CATEGORIES: tuple[str, ...] = get_args(FindingCategory)
 # (ADR-0056). `design` is a lead's remark, `human-decision` what a person decided on an
 # escalation, `definition` a return of the PRD. No `FindingCategory` is added: this is a
 # superset of it, and `ChangeCategory` already pairs `definition` with it the same way.
-LessonCategory = FindingCategory | Literal["design", "human-decision", "definition"]
-LESSON_CATEGORIES: tuple[str, ...] = (*CATEGORIES, "design", "human-decision", "definition")
+LessonCategory = FindingCategory | CopyCategory | Literal["design", "human-decision", "definition"]
+COPY_CATEGORIES: tuple[str, ...] = get_args(CopyCategory)
+LESSON_CATEGORIES: tuple[str, ...] = (
+    *CATEGORIES,
+    *COPY_CATEGORIES,
+    "design",
+    "human-decision",
+    "definition",
+)
 # The pair a review writes into `return_history` (`roles.pair_for`, a test pins the two
 # together): the returns the table attributes to a Developer or to Tech Lead come from it.
 REVIEW_PAIR = "Tech Lead→Developer"
@@ -59,8 +67,9 @@ RECORD_FILES = ("reflected", "rejected", "candidates", "archived")
 Source = Literal["return", "finding", "design", "human_decision"]
 # What the fact is, for attribution: a Tech Lead review (`review`), PM's early final
 # validation (`final_validation`, to the Developer of the subtask), PM's return of the
-# PRD (`definition`) or a lead's remark (`design`).
-Origin = Literal["review", "final_validation", "definition", "design"]
+# PRD (`definition`), a lead's remark (`design`) or a finding of Tech Writer's review of the
+# texts (`copy_review`).
+Origin = Literal["review", "final_validation", "definition", "design", "copy_review"]
 INTEGRATION_QUALIFIER = "integration"
 
 
@@ -69,6 +78,8 @@ def _owner(origin: str, task_type: str, category: str, qualifier: str) -> str:
         return "product_analyst"
     if origin == "design":
         return "ux_designer" if qualifier == "ux" else "ui_designer"
+    if origin == "copy_review" and category == "copy-criteria-written":
+        return "tech_writer"
     developer = "developer_integrator" if qualifier == INTEGRATION_QUALIFIER else "developer"
     if origin == "review" and category in _PLANNER:
         return "tech_lead_platform" if task_type == "platform_enhancement" else "tech_lead"
@@ -83,6 +94,7 @@ def _rows() -> dict[tuple[str, str, str, str], str]:
             ("final_validation", CATEGORIES, ("", INTEGRATION_QUALIFIER)),
             ("definition", ("definition",), ("",)),
             ("design", ("design",), ("ux", "ui")),
+            ("copy_review", COPY_CATEGORIES, ("", INTEGRATION_QUALIFIER)),
         ):
             for category in categories:
                 for qualifier in qualifiers:
@@ -95,6 +107,12 @@ def _rows() -> dict[tuple[str, str, str, str], str]:
 # qualifier is `integration` for the integrator's subtask, `ux`/`ui` for a lead's side.
 ACCOUNTABLE: dict[tuple[str, str, str, str], str] = _rows()
 PLAYBOOK_ROLES = frozenset(ACCOUNTABLE.values())
+
+
+def finding_origin(location: str) -> Origin:
+    """The origin of a findings row that is not PM's final validation, by its `location`: a
+    text finding of Tech Writer's review, or a Tech Lead review's."""
+    return "copy_review" if copy_location_parts(location) is not None else "review"
 
 
 def attribute(origin: Origin, task_type: str, category: str, qualifier: str = "") -> str | None:

@@ -93,7 +93,7 @@ FindingScope = Literal["subtask", "plan", "outside"]
 FindingStatus = Literal["open", "fixed", "dismissed"]
 # A return's category: a review's takes its first blocking finding's; PM's returns of
 # the definition, whose reason stays free text, are all `definition`.
-ChangeCategory = FindingCategory | Literal["definition"]
+ChangeCategory = FindingCategory | CopyCategory | Literal["definition"]
 # Why an attempt failed, decided at the raise site, never by parsing the error's text
 # (README.md, 14; the Medición glossary's `agentic.role.failures`): `schema` is a
 # structured output missing or invalid against the role's own schema, `check` a use

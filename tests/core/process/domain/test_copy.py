@@ -1,7 +1,7 @@
 """The Tech Writer's text findings: identifiers, records, owners, duplicates and the texts
 in force (`domain.copy`), and how the findings table reads them (`rules`)."""
 
-from agentic.core.process.domain import copy, rules
+from agentic.core.process.domain import copy, playbook, roles, rules
 from agentic.core.process.domain.schemas import CopyFinding, CopyReview
 from agentic.core.process.domain.task import INTEGRATION
 
@@ -132,7 +132,9 @@ def test_owners_are_only_the_subtasks_whose_diff_touched_the_file():
     state = state_with("api", "ui", INTEGRATION)
     owners = {"a.py": ["api"], "both.py": ["api", "ui"]}
     state = apply(state, 1, review(finding("a.py:1", "x"), finding("both.py:2", "y")), owners)
-    owned = {n: [r["claim"] for r in rows] for n, rows in rules.important_partition(state).owned.items()}
+    owned = {
+        n: [r["claim"] for r in rows] for n, rows in rules.important_partition(state).owned.items()
+    }
     assert owned == {"api": ["x", "y"], "ui": ["y"]}
     assert INTEGRATION not in owned
 
@@ -315,3 +317,48 @@ def test_copy_review_is_not_due_without_the_flag_or_before_every_subtask_is_appr
 def test_after_copy_review_returns_to_the_fan_in_unless_escalated():
     assert rules.after_copy_review({}) == "integrate"
     assert rules.after_copy_review({"escalated": "x"}) is None
+
+
+# --- attribution and roles -----------------------------------------------------------------
+
+
+def test_each_copy_category_is_attributable_to_the_role_that_owns_the_mistake():
+    for task_type in ("feature", "bug", "platform_enhancement"):
+        assert (
+            playbook.attribute("copy_review", task_type, "copy-criteria-written") == "tech_writer"
+        )
+        assert playbook.attribute("copy_review", task_type, "copy-unwritten") == "developer"
+        assert playbook.attribute("copy_review", task_type, "copy-criteria-changed") == "developer"
+        for category in ("copy-unwritten", "copy-criteria-changed"):
+            owner = playbook.attribute("copy_review", task_type, category, "integration")
+            assert owner == "developer_integrator"
+        written = playbook.attribute(
+            "copy_review", task_type, "copy-criteria-written", "integration"
+        )
+        assert written == "tech_writer"
+    assert "tech_writer" in playbook.PLAYBOOK_ROLES
+    assert playbook.attribute("review", "feature", "copy-unwritten") is None
+
+
+def test_a_findings_row_is_told_a_copy_row_by_its_identifier_alone():
+    assert playbook.finding_origin("copy:1.1:a.py:3") == "copy_review"
+    assert playbook.finding_origin("a.py:3") == "review"
+    assert playbook.finding_origin(copy.NO_WRITING_LOCATION) == "copy_review"
+    assert set(playbook.COPY_CATEGORIES) <= set(playbook.LESSON_CATEGORIES)
+
+
+def test_the_writing_family_reaches_only_the_two_writing_roles_and_always_whole():
+    assert roles.whole_for(roles.TECH_WRITER, "writing")
+    assert roles.whole_for(roles.TECH_WRITER_REVIEW, "writing")
+    assert {r.slug for r in roles.ROLES if "writing" in r.criteria} == {
+        "tech_writer",
+        "tech_writer_review",
+    }
+    assert roles.TECH_WRITER_REVIEW.kind == "verifier" and roles.TECH_WRITER.kind == "actor"
+    assert "Edit" not in roles.TECH_WRITER.tools + roles.TECH_WRITER_REVIEW.tools
+
+
+def test_the_roles_after_the_texts_read_them_and_the_plan_too():
+    for role in (roles.TECH_LEAD, roles.DEVELOPER, roles.DEVELOPER_INTEGRATOR):
+        assert "Tech Writer" in role.reads
+    assert "Tech Writer" in roles.TECH_LEAD_REVIEWER.reads

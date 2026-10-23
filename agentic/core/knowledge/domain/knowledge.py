@@ -42,6 +42,13 @@ STANDARDS_HEADING = "## Engineering standards"
 # without the file has an empty design block.
 DESIGN_STANDARDS = "DESIGN_STANDARDS.md"
 DESIGN_HEADING = "## Design standards"
+# The writing standards: the criteria of the two roles that write and review a product's
+# person-facing texts (voice, tone, register, vocabulary, length limits, patterns per kind
+# of text, and the message catalog when the product has one). A file at the product's root,
+# served whole, with no system default: a product without it has an empty block and the
+# role says so.
+WRITING_STANDARDS = "WRITING_STANDARDS.md"
+WRITING_HEADING = "## Writing standards"
 # A criteria document never grows silently: past this many lines it is reported, never
 # refused or rewritten (ADR-0055).
 CRITERIA_MAX_LINES = 300

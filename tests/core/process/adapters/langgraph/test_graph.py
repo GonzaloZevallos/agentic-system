@@ -161,6 +161,9 @@ class _Rooted:
     def design(self, root=None):
         return self.inner.design(self.root)
 
+    def writing(self, root=None):
+        return self.inner.writing(self.root)
+
     def criteria_files(self):
         return self.inner.criteria_files()
 

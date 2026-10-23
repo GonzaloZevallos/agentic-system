@@ -171,7 +171,11 @@ def _finding_facts(document: Mapping[str, Any], task_type: str) -> list[Fact]:
     for order, row in enumerate(rows):
         if row["status"] not in _LEARNABLE_STATUSES or row["scope"] not in _LEARNABLE_SCOPES:
             continue
-        origin: pb.Origin = "final_validation" if row["location"] == PM_FINAL.name else "review"
+        origin: pb.Origin = (
+            "final_validation"
+            if row["location"] == PM_FINAL.name
+            else pb.finding_origin(row["location"])
+        )
         for subtask in row["subtask"].split(", "):
             qualifier = pb.INTEGRATION_QUALIFIER if subtask == INTEGRATION else ""
             slug = pb.attribute(origin, task_type, row["category"], qualifier)

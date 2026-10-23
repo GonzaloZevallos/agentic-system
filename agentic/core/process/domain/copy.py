@@ -70,7 +70,7 @@ def _open_copy_rows(state: TaskState) -> list[FindingRecord]:
     ]
 
 
-def _real_key(row: Mapping[str, str]) -> tuple[str, str]:
+def _real_key(row: FindingRecord) -> tuple[str, str]:
     parts = copy_location_parts(row["location"])
     return _norm(parts[2] if parts else row["location"]), _norm(row["claim"])
 
@@ -99,17 +99,19 @@ def copy_records(
     open_rows = _open_copy_rows(state)
     by_identifier = {_norm(row["location"]): row["location"] for row in open_rows}
     settled = list(
-        dict.fromkeys(by_identifier[key] for item in review.settled if (key := _norm(item)) in by_identifier)
+        dict.fromkeys(
+            by_identifier[key] for item in review.settled if (key := _norm(item)) in by_identifier
+        )
     )
     closing = {_norm(item) for item in settled}
     still_open = [row for row in open_rows if _norm(row["location"]) not in closing]
     seen = {_real_key(row) for row in still_open}
     records: list[FindingRecord] = []
     for position, item in enumerate(review.findings, start=1):
-        key = (_norm(item.location), _norm(item.claim))
-        if key in seen:
+        found = (_norm(item.location), _norm(item.claim))
+        if found in seen:
             continue
-        seen.add(key)
+        seen.add(found)
         owners = owners_by_path.get(item.location.partition(":")[0], ())
         records.append(
             {
