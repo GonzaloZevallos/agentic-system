@@ -311,6 +311,11 @@ class ProductKnowledge(Protocol):
         the product has no `DESIGN_STANDARDS.md`. There is no default."""
         ...
 
+    def writing(self, root: Path | None = None) -> str:
+        """The product's writing standards, whole under their heading, or "" when the product
+        has no `WRITING_STANDARDS.md`. There is no default."""
+        ...
+
     def criteria_files(self) -> tuple[str, ...]:
         """The names of the criteria documents the product owns, at its root, that the
         line cap measures. The process side asks and never spells them (ADR-0010)."""

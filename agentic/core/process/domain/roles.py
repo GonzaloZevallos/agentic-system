@@ -27,6 +27,8 @@ from .schemas import (
     Classification,
     Consolidation,
     Consultation,
+    CopyDraft,
+    CopyReview,
     Delivery,
     DesignDraft,
     DesignReview,
@@ -52,7 +54,7 @@ _PLACEHOLDER = re.compile(r"\{\{(\w+)\}\}")
 
 
 # The families of criteria documents a role may read (ADR-0055).
-Criteria = Literal["engineering", "product", "design"]
+Criteria = Literal["engineering", "product", "design", "writing"]
 
 
 @dataclass(frozen=True)
@@ -81,7 +83,8 @@ class Role:
     reads: tuple[str, ...] = (ORIGINAL,)
     # The criteria families the role reads (ADR-0055): `product` is the Brief and the
     # product knowledge (ADR-0006), `engineering` the coding standards (ADR-0012),
-    # `design` the design standards. How each reaches the role is `whole_for`'s business.
+    # `design` the design standards, `writing` the writing standards. How each reaches the
+    # role is `whole_for`'s business.
     criteria: tuple[Criteria, ...] = ()
     # Budgets (README.md, 14): how hard the role thinks and how many turns it gets.
     effort: str = "medium"
@@ -108,12 +111,12 @@ class Role:
 
 def whole_for(role: Role, family: Criteria) -> bool:
     """Whether the family reaches the role whole, in its prompt, or through the index.
-    The one place that decides it (ADR-0055). `design` is always whole: it is bounded by
-    the size cap and has no index. `engineering` is whole for every verifier, which judges
-    against it, and for a role that cannot open a file; the Developer and the integrator
-    get it through the index. `product` is never whole: it always arrives as what goes
-    whole plus the area index."""
-    if family == "design":
+    The one place that decides it (ADR-0055). `design` and `writing` are always whole: they
+    are bounded by the size cap and have no index. `engineering` is whole for every
+    verifier, which judges against it, and for a role that cannot open a file; the
+    Developer and the integrator get it through the index. `product` is never whole: it
+    always arrives as what goes whole plus the area index."""
+    if family in ("design", "writing"):
         return True
     if family == "engineering":
         return "Read" not in role.tools or role.kind == "verifier"
@@ -368,6 +371,46 @@ PM_CONSOLIDATOR = replace(
     max_turns=20,
 )
 
+# The texts (README.md, 4): on a feature that touches copy, Tech Writer writes every
+# person-facing text of the change over the validated flow and design, and after the
+# implementation reviews that the texts in the diff are those and meet the product's
+# writing criteria. Read-only like the design roles; the review returns nothing and rates
+# its findings `important` or `observation` (`CopyReview`). `WRITING_STANDARDS.md` reaches
+# only these two, whole.
+TECH_WRITER = Role(
+    name="Tech Writer",
+    slug="tech_writer",
+    kind="actor",
+    schema=CopyDraft,
+    reads=(
+        ORIGINAL,
+        "Product Analyst",
+        "PM",
+        "UX Designer",
+        "UX Lead",
+        "UI Designer",
+        "UI Lead",
+        "PM: consolidation",
+        "Tech Writer",
+    ),
+    criteria=("product", "writing"),
+    tools=READ_CODE,
+    allowed=READ_CODE_RULES,
+    max_turns=12,
+)
+
+TECH_WRITER_REVIEW = Role(
+    name="Tech Writer: review",
+    slug="tech_writer_review",
+    kind="verifier",
+    schema=CopyReview,
+    reads=(ORIGINAL, "PM", "Tech Writer"),
+    criteria=("writing",),
+    tools=READ_CODE,
+    allowed=READ_CODE_RULES,
+    max_turns=12,
+)
+
 # PM's early, UI-only final validation (ADR-0040): the leads below walk the sample app
 # and judge the comparisons; PM decides and, on `returned`, hands Tech Lead the claims
 # the integration review must settle. `replace(UX_LEAD, ...)`/`replace(UI_LEAD,
@@ -505,7 +548,7 @@ TECH_LEAD = Role(
     slug="tech_lead",
     kind="verifier",
     schema=TechPlan,
-    reads=(ORIGINAL, "PM", SOLUTION_INTERVIEW),
+    reads=(ORIGINAL, "PM", SOLUTION_INTERVIEW, "Tech Writer"),
     criteria=("engineering", "product"),
     tools=READ_CODE,
     allowed=READ_CODE_RULES,
@@ -575,7 +618,7 @@ TECH_LEAD_REVIEWER = Role(
     slug="tech_lead_review",
     kind="verifier",
     schema=Review,
-    reads=(ORIGINAL, "PM", "Tech Lead", FINDINGS),
+    reads=(ORIGINAL, "PM", "Tech Lead", "Tech Writer", FINDINGS),
     criteria=("engineering",),
     tools=READ_CODE + ("Agent",),
     # Plus the product's checks, per task: `reviewer_for`.
@@ -621,7 +664,7 @@ DEVELOPER = Role(
     slug="developer",
     kind="actor",
     schema=Delivery,
-    reads=(ORIGINAL, "PM", "Tech Lead", FINDINGS),
+    reads=(ORIGINAL, "PM", "Tech Lead", "Tech Writer", FINDINGS),
     criteria=("engineering",),
     tools=EXECUTE,
     denied=GIT_DENIED,
@@ -640,7 +683,7 @@ DEVELOPER_INTEGRATOR = Role(
     slug="developer_integrator",
     kind="actor",
     schema=Delivery,
-    reads=(ORIGINAL, "PM", "Tech Lead", FINDINGS),
+    reads=(ORIGINAL, "PM", "Tech Lead", "Tech Writer", FINDINGS),
     criteria=("engineering",),
     tools=EXECUTE,
     denied=GIT_DENIED,
@@ -723,6 +766,8 @@ ROLES = (
     UI_DESIGNER,
     UI_LEAD,
     PM_CONSOLIDATOR,
+    TECH_WRITER,
+    TECH_WRITER_REVIEW,
     UX_LEAD_FINAL,
     UI_LEAD_FINAL,
     PM_FINAL,

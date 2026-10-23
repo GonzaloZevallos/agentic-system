@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
 
 from . import adr_numbers, ci, presubmit
+from .copy import copy_location_parts
 from .denials import denial_for
 from .document import HUMAN, demote
 from .reaping import ReapedProcess, ReapOutcome
@@ -30,6 +31,8 @@ from .roles import (
     PRODUCT_ANALYST,
     SOLUTION_INTERVIEW,
     TECH_LEAD,
+    TECH_WRITER,
+    TECH_WRITER_REVIEW,
     UI_DESIGNER,
     UI_LEAD,
     UI_LEAD_FINAL,
@@ -363,10 +366,17 @@ def findings_markdown(rows: list[FindingRecord]) -> str:
     )
     lines = [
         f"| {row['severity']} | {row['scope']} | {row['category']} "
-        f"| {row['subtask']} | `{row['location']}` | {_cell(row['claim'])} |"
+        f"| {row['subtask']} | `{_shown_location(row['location'])}` | {_cell(row['claim'])} |"
         for row in rows
     ]
     return "\n".join([head, *lines]) if lines else "None open."
+
+
+def _shown_location(location: str) -> str:
+    """A copy row is shown by the place it points at; its identifier is for the Tech
+    Writer's review alone."""
+    parts = copy_location_parts(location)
+    return location if parts is None else parts[2]
 
 
 def _cell(text: str) -> str:
@@ -564,6 +574,12 @@ def design_applies(state: TaskState) -> bool:
     return state.get("type") == "feature" and bool(state.get("flags", {}).get("touches_ui"))
 
 
+def copy_applies(state: TaskState) -> bool:
+    """Whether this task has its texts written and reviewed (README.md, 4): a feature, with
+    `touches_copy` among the validated flags. The only reader of that flag."""
+    return state.get("type") == "feature" and bool(state.get("flags", {}).get("touches_copy"))
+
+
 def _latest_index(state: TaskState, section: str) -> int | None:
     """The position, in `state["runs"]`, of the latest run that wrote `section`
     (`run.get("section", run["role"])`, the same key every version-counting reader of
@@ -635,10 +651,31 @@ def design_step(state: TaskState) -> str | None:
     since a PRD new enough to matter already reopened `ux_flow` first, and from there a
     fresh UX Designer run is what makes UI's own step stale in turn. Consolidation is
     last, due once both leads are satisfied and no `PM: consolidation` run is newer
-    than both of their approvals."""
-    if not design_applies(state):
+    than both of their approvals.
+
+    The last rung is the texts (`write_copy`, README.md 4): due on a feature that touches
+    copy once the design branch, when it applies, is done, and no `Tech Writer` run is
+    newer than the latest Product Analyst run and the latest consolidation. The name stays
+    though the ladder is no longer only the design's."""
+    if not (design_applies(state) or copy_applies(state)):
         return None
     prd_idx = _latest_index(state, PRODUCT_ANALYST.name)
+    if design_applies(state) and (step := _design_ladder(state, prd_idx)):
+        return step
+    if not copy_applies(state):
+        return None
+    writer_idx = _latest_index(state, TECH_WRITER.name)
+    newest = max(
+        (i for i in (prd_idx, _latest_index(state, PM_CONSOLIDATOR.name)) if i is not None),
+        default=None,
+    )
+    return (
+        "write_copy" if writer_idx is None or (newest is not None and writer_idx < newest) else None
+    )
+
+
+def _design_ladder(state: TaskState, prd_idx: int | None) -> str | None:
+    """The design rungs of `design_step`, in order, `None` once all are satisfied."""
     ux_idx = _latest_index(state, UX_DESIGNER.name)
     if ux_idx is None:
         return "ux_flow"
@@ -1703,6 +1740,12 @@ def after_consolidate(state: TaskState) -> str | None:
     return design_step(state) or "plan"
 
 
+def after_write_copy(state: TaskState) -> str | None:
+    """The texts are the last rung of `design_step`: a rerun of a design step the texts made
+    stale is not possible from here, so the ladder answers `None` and the plan follows."""
+    return None if state.get("escalated") else (design_step(state) or "plan")
+
+
 def after_plan(state: TaskState) -> str | None:
     """A plan that did not fit carries `parts` and goes to `split` (ADR-0054); any other
     goes to the fan-in. The only routing decision between the two."""
@@ -1748,6 +1791,25 @@ def final_validation_due(state: TaskState) -> bool:
     return not still_approving
 
 
+def copy_review_due(state: TaskState) -> bool:
+    """Whether Tech Writer's review of the texts still has to run before `deliver`: the task
+    has texts (`copy_applies`), every subtask is approved, and no `Tech Writer: review` run is
+    newer than the latest review of `integration` -- or of the single subtask. A fix after an
+    important finding is reviewed again, so the review is due again. `False` outside
+    `copy_applies`, byte for byte as today."""
+    if not copy_applies(state) or not all_approved(state):
+        return False
+    subtasks = state.get("subtasks", {})
+    target = INTEGRATION if INTEGRATION in subtasks else next(iter(subtasks), None)
+    if target is None:
+        return False
+    review_idx = _latest_index(state, review_section(target))
+    if review_idx is None:
+        return True
+    copy_idx = _latest_index(state, TECH_WRITER_REVIEW.name)
+    return copy_idx is None or copy_idx < review_idx
+
+
 def after_integrate(state: TaskState) -> str | None:
     if state.get("escalated"):
         return None
@@ -1755,6 +1817,8 @@ def after_integrate(state: TaskState) -> str | None:
         return "pipeline"
     if not all_approved(state):
         return None
+    if copy_review_due(state):
+        return "copy_review"
     return "final_validation" if final_validation_due(state) else "deliver"
 
 
@@ -1764,6 +1828,13 @@ def after_final_validation(state: TaskState) -> str | None:
     reopened subtask is exactly what `dispatched_subtasks` picks up, and the fan-in
     sends it back to its Developer like any other wave. No new predicate decides
     between the two -- `after_integrate` already does, from the same state."""
+    return None if state.get("escalated") else "integrate"
+
+
+def after_copy_review(state: TaskState) -> str | None:
+    """Always back to the fan-in, like `after_final_validation`: the review returns nothing,
+    so `after_integrate` reads the same state and goes on to the next step or reopens the
+    owner of an important finding."""
     return None if state.get("escalated") else "integrate"
 
 

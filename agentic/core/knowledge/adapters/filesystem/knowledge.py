@@ -73,7 +73,8 @@ class FilesystemKnowledge:
     def index_files(self, root: Path | None, families: Collection[str]) -> dict[str, str]:
         """The files `read` and `standards(whole=False)` point at, relative to `root`, for
         the criteria families a role has: the capability and ADR files for `product`, the
-        standards files for `engineering`. `design` is served whole and has no file."""
+        standards files for `engineering`. `design` and `writing` are served whole and have
+        no file."""
         return self._index(
             root, standards="engineering" in families, product="product" in families
         ).files
@@ -88,9 +89,19 @@ class FilesystemKnowledge:
             knowledge.DESIGN_HEADING + "\n\n" + knowledge.fenced(knowledge.DESIGN_STANDARDS, text)
         )
 
+    def writing(self, root: Path | None = None) -> str:
+        """The product's `WRITING_STANDARDS.md`, whole, or "" when it has none: the system
+        ships no default."""
+        text = _read((root or self.product_dir) / knowledge.WRITING_STANDARDS)
+        if text is None:
+            return ""
+        return (
+            knowledge.WRITING_HEADING + "\n\n" + knowledge.fenced(knowledge.WRITING_STANDARDS, text)
+        )
+
     def criteria_files(self) -> tuple[str, ...]:
         """The criteria documents the line cap measures (ADR-0055)."""
-        return (knowledge.STANDARDS, knowledge.DESIGN_STANDARDS)
+        return (knowledge.STANDARDS, knowledge.DESIGN_STANDARDS, knowledge.WRITING_STANDARDS)
 
     def over_cap(self, texts: dict[str, str]) -> list[str]:
         """The criteria documents past the line cap, one message each (ADR-0055)."""

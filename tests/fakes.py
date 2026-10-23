@@ -170,9 +170,11 @@ class MemoryKnowledge:
         brief: str | None = None,
         standards_index: str | None = None,
         design: str = "",
+        writing: str = "",
     ) -> None:
         self.text = text
         self.design_text = design
+        self.writing_text = writing
         # What `standards(whole=False)` returns when a test pins the two shapes apart; None
         # keeps one text for both, as every test written before the index did.
         self.standards_index_text = standards_index
@@ -192,6 +194,9 @@ class MemoryKnowledge:
 
     def design(self, root: Path | None = None) -> str:
         return self.design_text
+
+    def writing(self, root: Path | None = None) -> str:
+        return self.writing_text
 
     def criteria_files(self) -> tuple[str, ...]:
         return (knowledge.STANDARDS, knowledge.DESIGN_STANDARDS)
@@ -1714,3 +1719,47 @@ def real_commands() -> ShellCommands:
     """`ShellCommands` over real bash with a real reaper whose worktrees root reaches
     nothing: each check reaps its own mark, and no cwd reap can match."""
     return ShellCommands("tests", ShellReaper("tests", Path("/nonexistent/worktrees")))
+
+
+# The texts (README.md, 4): Tech Writer writes a plain `CopyDraft`, its review a `CopyReview`.
+
+
+def copy_draft(markdown: str = "### Texts\n\n- `Export` button: Export report.") -> RawResult:
+    return RawResult({"markdown": markdown}, 0.1)
+
+
+def copy_finding(
+    location: str = "src/x.py:12",
+    claim: str = "The error says `failed`, the criteria ask for what to do next",
+    severity: str = "important",
+    scope: str = "subtask",
+    category: str = "copy-criteria-written",
+    proposed: str = "Could not export. Try again.",
+    evidence: str = "Errors say what to do next.",
+) -> dict[str, str]:
+    return {
+        "location": location,
+        "claim": claim,
+        "evidence": evidence,
+        "proposed": proposed,
+        "severity": severity,
+        "scope": scope,
+        "category": category,
+    }
+
+
+def copy_reviewed(
+    findings: Sequence[dict[str, str]] = (),
+    settled: Sequence[str] = (),
+    proposed_standards: str = "",
+    cost: float = 0.2,
+) -> RawResult:
+    return RawResult(
+        {
+            "markdown": "### Review\n\nChecked the diff.",
+            "findings": list(findings),
+            "settled": list(settled),
+            "proposed_standards": proposed_standards,
+        },
+        cost,
+    )

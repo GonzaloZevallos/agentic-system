@@ -123,16 +123,25 @@ def expected_slug(origin: str, task_type: str, category: str, qualifier: str) ->
         return "product_analyst"
     if origin == "design":
         return "ux_designer" if qualifier == "ux" else "ui_designer"
+    if origin == "copy_review" and category == "copy-criteria-written":
+        return "tech_writer"
     if origin == "review" and category in PLANNER:
         return "tech_lead_platform" if task_type == "platform_enhancement" else "tech_lead"
     return "developer_integrator" if qualifier == "integration" else "developer"
 
 
 def test_the_table_has_a_row_for_every_origin_task_type_category_and_qualifier():
-    per_type = len(CATEGORIES) * 2 * 2 + 1 + 2  # review, final_validation, definition, design
+    # review, final_validation, definition, design, copy_review
+    per_type = len(CATEGORIES) * 2 * 2 + 1 + 2 + 3 * 2
     assert len(ACCOUNTABLE) == len(TASK_TYPES) * per_type
     assert {key[2] for key in ACCOUNTABLE if key[0] == "review"} == set(CATEGORIES)
-    assert {key[0] for key in ACCOUNTABLE} == {"review", "final_validation", "definition", "design"}
+    assert {key[0] for key in ACCOUNTABLE} == {
+        "review",
+        "final_validation",
+        "definition",
+        "design",
+        "copy_review",
+    }
 
 
 @pytest.mark.parametrize(("key", "slug"), sorted(ACCOUNTABLE.items()))

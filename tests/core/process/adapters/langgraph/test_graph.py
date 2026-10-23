@@ -161,6 +161,9 @@ class _Rooted:
     def design(self, root=None):
         return self.inner.design(self.root)
 
+    def writing(self, root=None):
+        return self.inner.writing(self.root)
+
     def criteria_files(self):
         return self.inner.criteria_files()
 
@@ -1086,9 +1089,11 @@ def test_exported_graph_uses_the_default_ports():
         "ui_screens",
         "design_review",
         "consolidate",
+        "write_copy",
         "plan",
         "pipeline",
         "integrate",
+        "copy_review",
         "final_validation",
         "deliver",
         "discard",

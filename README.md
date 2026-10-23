@@ -79,13 +79,15 @@ PjM clasifica
   → Data Analyst valida métricas
   → [si toca UI]    UX Designer define flujos    → UX Lead valida
   → [si toca UI]    UI Designer diseña sobre el flujo validado → UI Lead valida
-  → [si toca textos] Tech Writer escribe sobre flujo y diseño validados
   → PM consolida el PRD
+  → [si toca textos] Tech Writer escribe sobre flujo y diseño validados (ADR-0058)
   → QA Funcional (1ª pasada): observa el PRD, casos borde, casos de prueba
   → Tech Lead: análisis, pingpong, ajuste del plan de tests, subtareas
   → Developers en paralelo, cada uno con su revisión de Tech Lead pegada atrás
   → entre olas, el sistema: integración incremental y la ola siguiente
   → Developer integrador, bajo revisión de Tech Lead
+  → [si toca textos] Tech Writer revisa los textos del diff; sus importantes se corrigen en
+      el pase final (ADR-0053), sin devolver
   → [si toca UI] validación final de PM adelantada: consulta a UX Lead (recorrido de la
       app de muestra) y a UI Lead (comparaciones) → aprueba o devuelve a Tech Lead
   → QA 2ª pasada (funcional + seguridad/performance si fueron convocados)
@@ -98,9 +100,16 @@ descartó: el riesgo de que UI diseñe sobre un flujo que UX Lead después cambi
 que la velocidad ganada.
 
 **Implementado (etapa 1)**: PjM, Product Analyst con su entrevista a PM, PM, Tech Lead con
-el efímero, Developers y la revisión de Tech Lead, hasta el pull request. Data Analyst,
-Tech Writer y QA esperan a su etapa (§11); el resto de la validación de PM al cierre
+el efímero, Developers y la revisión de Tech Lead, hasta el pull request. Data Analyst
+y QA esperan a su etapa (§11); el resto de la validación de PM al cierre
 también, salvo la parte adelantada de abajo.
+
+**Implementado (etapa 4, ADR-0058)**: en tareas de feature con `touches_copy`, Tech Writer
+escribe los textos de la persona sobre el flujo y el diseño validados, último escalón de la
+definición, después de la consolidación de PM (PM no los consolida en el PRD: la fuente es la
+sección `Tech Writer`). Después de la implementación revisa los textos del diff contra lo que
+escribió y contra `WRITING_STANDARDS.md` del producto, sin devolver y sin par. Bug y platform
+enhancement no lo convocan.
 
 **Implementado (etapa 4, ADR-0040)**: en tareas de feature con `touches_ui`, UX Designer
 escribe el flujo, UX Lead lo valida con un recorrido del prototipo, UI Designer escribe el
@@ -289,7 +298,9 @@ del humano (#65).
 UX Lead, UI Lead y Tech Writer **no aprueban al cierre**. Esa regla existió y fue
 reemplazada: PM es el único que valida producto porque construyó el PRD junto con
 ellos. PM puede consultar a los leads, pero la aprobación es suya. Si el
-Developer se desvía del diseño o de los textos, es PM quien lo detecta y lo devuelve.
+Developer se desvía del diseño, es PM quien lo detecta y lo devuelve. Los textos son la
+excepción (ADR-0058): Tech Writer los revisa después de la implementación, sin aprobar ni
+devolver, y sus importantes se corrigen dentro de la tarea en el pase final (ADR-0053).
 
 ---
 
@@ -429,9 +440,21 @@ a PjM, y PjM reclasifica.
 ### Tech Writer
 
 - Independiente, no tiene validador propio.
-- Participa cuando el flag "toca textos" está marcado.
-- Escribe sobre flujo y diseño ya validados. Es el último de la etapa de definición.
-- No valida la implementación ni devuelve.
+- Participa cuando el flag "toca textos" (`touches_copy`) está marcado, solo en features.
+- Escribe todo texto de cara a una persona que la tarea toca (pantallas, estados, errores,
+  confirmaciones, nombres accesibles, mensajes de bot y de API) sobre flujo y diseño ya
+  validados. Es el último de la etapa de definición, después de la consolidación de PM.
+- Lee los criterios de escritura del producto, `WRITING_STANDARDS.md` (voz, tono, registro,
+  vocabulario, límites de largo y patrones por clase de texto), entero y sin default. Sin el
+  archivo lo dice y propone uno inicial como seguimiento en vez de inventar reglas.
+- Después de la implementación revisa los textos del diff: que sean los que escribió y que
+  cada texto nuevo o cambiado cumpla los criterios. Si el producto tiene catálogo de
+  mensajes, lo nombra el propio `WRITING_STANDARDS.md` y se revisa el del idioma de origen.
+- Sus hallazgos son `important` u `observation`, nunca bloqueantes. **No devuelve ni forma
+  par**: un importante se corrige en el pase final (ADR-0053), una sola vez por tarea.
+- Su sección nunca la reescribe el sistema; los textos corregidos viajan en una entrada
+  aparte con los `proposed` de las filas saldadas.
+- Sus aprendizajes pasan por el Reflector como los de los demás roles.
 
 ### Tech Lead
 
@@ -816,6 +839,10 @@ mergea solo lo que Tech Lead aprobó y los chequeos dejan verde, y ese merge es 
 Las tareas del set de evaluación nunca se mergean solas, así que el set sigue midiendo el
 veredicto del humano.
 
+**El Tech Writer todavía no se mide.** El set de cinco tareas no cambia con ADR-0058, y
+ninguna toca textos. La tarea candidata es una de apostrophe con `touches_copy` en un
+producto con `WRITING_STANDARDS.md`; si sustituye a una del set lo decide el humano.
+
 **Nota aparte.** Cada tarea deja anotado qué le faltó. No puntúa, pero dice qué prompt tocar
 sin ensuciar el número.
 
@@ -926,7 +953,7 @@ existe justamente para pagar ese costo solo donde compre calidad.
 | 4 | Frecuencia de cada reloj proactivo. Parcialmente resuelto para la revisión de stack (ADR-0034): sus señales de disparo y el verbo manual que las evalúa (`agentic stack review`, sección 14) ya existen; lo que sigue abierto es solo la **frecuencia** con la que la etapa 5 la agenda (y la de los demás relojes proactivos) | Etapa 5 |
 | 5 | Señales y umbrales de SRE/Ops para decidir que algo es bug, más deduplicación | SRE/Ops, etapa 5 |
 | 6 | ~~Lista de secciones que lee cada rol~~ **resuelto**: `Role.reads`, la entrada del rol son esas secciones completas. Cada rol nuevo declara la suya al entrar | — |
-| 7 | ~~UX Lead, UI Lead y Tech Writer en detalle~~ **parcialmente resuelto** (ADR-0040): UX Lead y UI Lead en detalle en §4, con el flujo, el recorrido, el diseño de pantallas y las comparaciones. Queda abierto: UI en bugs visuales, Tech Writer, y el resto de la validación final de PM, que entra con QA (etapa 2) | UI en bugs visuales y Tech Writer: etapa 4; el resto de la validación final: etapa 2 |
+| 7 | ~~UX Lead, UI Lead y Tech Writer en detalle~~ **parcialmente resuelto** (ADR-0040, ADR-0058): UX Lead y UI Lead en detalle en §4, con el flujo, el recorrido, el diseño de pantallas y las comparaciones; Tech Writer en detalle en §4, con los textos y su revisión. Queda abierto: UI en bugs visuales y el resto de la validación final de PM, que entra con QA (etapa 2) | UI en bugs visuales: etapa 4; el resto de la validación final: etapa 2 |
 | 8 | ~~Criterio de clasificación de PjM y qué hace si duda~~ **resuelto** (#46): el criterio es qué notaría un usuario del producto, no quién escribió el issue ni cuán técnico suena; vive en el prompt de PjM. Si encaja en dos tipos o en ninguno, `confidence: low` escala | — |
 | 9 | ~~Cuántos Tech Leads existen~~ **resuelto**: un rol, una instancia por tarea; el modo proactivo es el mismo rol. El efímero no es un rol de la lista, es el entrevistador de Tech Lead (ADR-0014) | — |
 | 10 | ~~Versionado de prompts~~ **resuelto**: `.md` por rol con overlay en el producto, hash por tarea (ADR-0005). Falta el versionado de **parámetros** de `Configuration` | Mejora del proceso de PjM |
@@ -960,6 +987,7 @@ Se anotan para no reintroducirlas por error.
 | UX entra en bugs de flujo | Un bug de flujo es funcional, lo valida PM |
 | PM y Data Analyst validan en paralelo | PM primero, Data Analyst después |
 | Tech Writer queda bajo PM | Tech Writer es independiente |
+| Tech Writer no valida la implementación | Revisa los textos del diff después de la implementación, sin devolver (ADR-0058) |
 | Cada rol recibe solo lo que produjo el rol previo | Cada rol declara la lista de secciones que lee |
 | El pingpong del Tech Lead es con un igual | El efímero usa modelo más capaz y prompt de adversario |
 | Los 17 roles se construyen todos y después se mide | Se construyen de a uno y cada uno se gana el lugar |

@@ -275,7 +275,11 @@ def preamble(role: Role, ports: Ports, root: Path | None = None) -> tuple[str, s
         if "engineering" in role.criteria
         else ""
     )
+    # The design and the writing standards share the one slot between the engineering standards
+    # and the product knowledge: a role has one of them, never both (`Role.criteria`).
     design = ports.knowledge.design(root) if "design" in role.criteria else ""
+    writing = ports.knowledge.writing(root) if "writing" in role.criteria else ""
+    design = "\n\n".join(filter(None, (design, writing)))
     knowledge = ports.knowledge.read(root) if "product" in role.criteria else ""
     return standards, design, knowledge
 
