@@ -8,6 +8,7 @@ nobody ran."""
 from __future__ import annotations
 
 import os
+import select
 import signal
 import subprocess
 import sys
@@ -40,9 +41,35 @@ def kill_group(pgid: int) -> None:
         pass
 
 
+class Children(list):
+    """The processes a test spawned, and the one deadline (`WAIT_DEADLINE_S` from the start of
+    the test) that bounds every wait of that test, the wait for a ready line or a pid line
+    included."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.deadline = time.monotonic() + WAIT_DEADLINE_S
+
+
+def read_line(child: subprocess.Popen, deadline: float, what: str) -> bytes:
+    """A line of the unbuffered stdout of `child`, or a failure naming its pid and what had
+    arrived when `deadline` ran out."""
+    assert child.stdout is not None
+    fd = child.stdout.fileno()
+    seen = b""
+    while not seen.endswith(b"\n"):
+        remaining = deadline - time.monotonic()
+        ready = select.select([fd], [], [], max(remaining, 0))[0] if remaining > 0 else []
+        assert ready, f"{what} of pid {child.pid} within {WAIT_DEADLINE_S}s; got {seen!r}"
+        byte = os.read(fd, 1)
+        assert byte, f"pid {child.pid} closed its stdout before {what}; got {seen!r}"
+        seen += byte
+    return seen.strip()
+
+
 @pytest.fixture
-def children() -> Iterator[list[subprocess.Popen]]:
-    spawned: list[subprocess.Popen] = []
+def children() -> Iterator[Children]:
+    spawned = Children()
     yield spawned
     # Each CLI leads its own session and process group (`spawn`), and a grandchild it
     # launched joins that group: the group is what reaches a grandchild no handle knows,
@@ -73,11 +100,11 @@ def spawn(children, code: str, value: str | None, cwd: Path | None = None) -> su
         env=env,
         cwd=cwd,
         stdout=subprocess.PIPE,
+        bufsize=0,  # no buffer between the pipe and `select` in `read_line`
         start_new_session=True,
     )
-    assert child.stdout is not None
-    assert child.stdout.readline().strip() == b"up"
     children.append(child)
+    assert read_line(child, children.deadline, "the ready line") == b"up"
     return child
 
 
@@ -257,8 +284,7 @@ def spawn_cli(
     child = spawn(children, f"import subprocess, time; {launch}; time.sleep(300)", mark)
     if not grandchild:
         return child, None
-    assert child.stdout is not None
-    line = child.stdout.readline().strip()
+    line = read_line(child, children.deadline, "the grandchild pid line")
     assert line.isdigit(), f"the CLI printed no grandchild pid: {line!r}"
     return child, int(line)
 
@@ -305,10 +331,6 @@ def wait_until_asleep(deadline: float, pid: int) -> None:
     wait_until(deadline, f"pid {pid} exists and sleeps", probe)
 
 
-def deadline_for_this_test() -> float:
-    return time.monotonic() + WAIT_DEADLINE_S
-
-
 def activity(task: str = "GH-77", token: str = "t"):
     return ShellReaper(PRODUCT, WORKTREES_ROOT).child_activity(task, 1, token, os.getpid())
 
@@ -318,7 +340,7 @@ def test_child_activity_counts_cpu_of_a_marked_child_but_not_of_the_cli(children
     _, busy = spawn_cli(children, mark, BUSY)
     assert busy is not None
     try:
-        deadline = deadline_for_this_test()
+        deadline = children.deadline
         first = activity()
         assert first is not None
         grown: list[ChildActivity | None] = [first]
@@ -341,7 +363,7 @@ def test_child_activity_sees_a_running_child(children):
             seen[0] = activity()
             return seen[0] is not None and seen[0].running, seen[0]
 
-        wait_until(deadline_for_this_test(), "the busy child shows as running", probe)
+        wait_until(children.deadline, "the busy child shows as running", probe)
     finally:
         ShellReaper(PRODUCT, WORKTREES_ROOT).reap_task("GH-77")
 
@@ -350,7 +372,7 @@ def test_child_activity_of_a_present_but_idle_child_is_flat_and_not_running(chil
     _, idle = spawn_cli(children, mark_of("GH-77"), OBEDIENT)
     assert idle is not None
     try:
-        wait_until_asleep(deadline_for_this_test(), idle)
+        wait_until_asleep(children.deadline, idle)
         first, second = activity(), activity()
         assert first is not None and second is not None
         assert not first.running
@@ -363,7 +385,7 @@ def test_child_activity_ignores_the_cli_even_when_it_burns_cpu(children):
     # Rejected input: the marked process whose parent is the orchestrator is the CLI,
     # and its own CPU says nothing about a tool the model is waiting for.
     cli = spawn(children, f"exec({BUSY!r})", mark_of("GH-77"))
-    wait_for_ticks(deadline_for_this_test(), cli.pid)
+    wait_for_ticks(children.deadline, cli.pid)
     assert activity() == ChildActivity(cpu_ticks=0, running=False)
 
 
@@ -371,7 +393,7 @@ def test_child_activity_ignores_children_of_another_attempt_or_task_or_product(c
     # Two of these grandchildren (the other product's and the unmarked one) are outside every
     # reap scope by design: they are what `child_activity` must ignore, and only the process
     # group of the `children` fixture takes them down.
-    deadline = deadline_for_this_test()
+    deadline = children.deadline
     busy = [
         spawn_cli(children, mark_of("GH-77", token="other"), BUSY)[1],
         spawn_cli(children, mark_of("GH-78"), BUSY)[1],
@@ -590,6 +612,7 @@ def test_a_child_born_during_the_grace_inside_the_checkout_is_reaped_too(
 # token in their command line, for what is still alive afterwards.
 
 SETTLE_S = 3.0
+KILL_WAIT_S = 10.0
 
 
 def cmdline_of(pid: int) -> bytes | None:
@@ -641,27 +664,24 @@ def detached_holder(token: str) -> subprocess.Popen:
     )
 
 
-def test_the_token_scan_finds_a_holder_and_kills_only_holders():
-    # The scanner the regression test trusts, on both inputs: the holder it must find and
-    # kill, and the bystander with another token it must leave alone.
-    token, other = uuid4().hex, uuid4().hex
-    holder, bystander = detached_holder(token), detached_holder(other)
+def test_a_run_of_the_child_activity_tests_leaves_no_busy_loop_behind(tmp_path):
+    if os.environ.get(TOKEN_ENV):
+        pytest.skip("this is the inner run: the guard that stops the test recursing into itself")
+    # Positive control: the scanner this test trusts finds a holder and kills it, and leaves a
+    # bystander (another token) alone. Without it, "no survivors" could mean "blind scan".
+    control, other = uuid4().hex, uuid4().hex
+    holder, bystander = detached_holder(control), detached_holder(other)
     try:
-        assert token_holders(token) == [holder.pid]
-        kill_token_holders(token)
-        assert holder.wait(timeout=10) == -signal.SIGKILL
-        assert token_holders(token) == []
+        assert token_holders(control) == [holder.pid]
+        kill_token_holders(control)
+        assert holder.wait(timeout=KILL_WAIT_S) == -signal.SIGKILL
+        assert token_holders(control) == []
         assert bystander.poll() is None
         assert token_holders(other) == [bystander.pid]
     finally:
         for process in (holder, bystander):
             process.kill()
             process.wait()
-
-
-def test_a_run_of_the_child_activity_tests_leaves_no_busy_loop_behind(tmp_path):
-    if os.environ.get(TOKEN_ENV):
-        pytest.skip("this is the inner run: the guard that stops the test recursing into itself")
     token = uuid4().hex
     junit = tmp_path / "j.xml"
     log_path = tmp_path / "inner.log"
