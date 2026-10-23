@@ -24,16 +24,18 @@ never by pulling, checking out, resetting or fast-forwarding the human's checkou
 from __future__ import annotations
 
 import contextlib
+import io
 import os
 import re
 import shutil
 import signal
 import subprocess
 import sys
+import tarfile
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from agentic.shared.configuration import LOGS_DIR, STATE_DIR, STATE_FILE
 
@@ -491,6 +493,14 @@ class GitWorkspace:
             shutil.rmtree(path, ignore_errors=True)
         self._run("worktree", "prune")
 
+    def checkout_names(self, prefix: str) -> list[str]:
+        root = self.product_dir / WORKTREES
+        if not root.is_dir():
+            return []
+        return sorted(
+            path.name for path in root.iterdir() if path.is_dir() and path.name.startswith(prefix)
+        )
+
     def _run_bounded(self, *args: str) -> None:
         subprocess.run(
             ["git", *args],
@@ -512,6 +522,32 @@ class GitWorkspace:
             text=True,
             timeout=MERGE_TREE_TIMEOUT_S,
         )
+
+    def overlay(self, checkout: Path, sha: str, paths: Sequence[str]) -> None:
+        """`git archive <sha> -- <paths>` extracted into `checkout` (GH-318). Only the named
+        paths, as that commit holds them, and only inside the checkout: a path that is empty,
+        absolute or climbs out is refused before git runs (an empty list would archive the
+        whole tree), and the extraction filter refuses a member that lands or links outside."""
+        if not paths:
+            raise GitError("git archive needs at least one path to overlay")
+        for relative in paths:
+            parts = PurePosixPath(relative).parts
+            if not relative or relative.startswith("/") or ".." in parts:
+                raise GitError(f"overlay path {relative!r} leaves the checkout")
+        result = subprocess.run(
+            ["git", "archive", "--format=tar", sha, "--", *paths],
+            cwd=self.product_dir,
+            env={**os.environ, **self.identity},
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            message = result.stderr.decode("utf-8", errors="replace").strip()
+            raise GitError(f"git archive {sha} -- {' '.join(paths)} failed: {message}")
+        try:
+            with tarfile.open(fileobj=io.BytesIO(result.stdout), mode="r:") as archive:
+                archive.extractall(checkout, filter="data")
+        except (tarfile.TarError, OSError) as exc:
+            raise GitError(f"overlaying {' '.join(paths)} from {sha} failed: {exc}") from exc
 
     def upstream(self) -> Upstream:
         """See `Workspace.upstream`. The only caller of `_fetch`; every failure of git, of

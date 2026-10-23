@@ -277,3 +277,37 @@ def test_decided_cap_is_on_by_default_and_is_not_an_arm():
     assert off.decided_cap is False
     # A switch for the human's counterfactual, never a label: the snapshot is blind to it.
     assert experiment_snapshot(off, "claude-sonnet-5") == {}
+
+
+def test_the_perf_settings_default_and_read_their_environment():
+    cfg = Configuration.from_sources(PRODUCT, {})
+    assert (cfg.perf_timeout_s, cfg.perf_node_timeout_s) == (1800, 3600)
+    assert (cfg.perf_lock_wait_s, cfg.perf_spread_max) == (1800, 0.25)
+    env = {"AGENTIC_PERF_TIMEOUT_S": "30", "AGENTIC_PERF_SPREAD_MAX": "0.1"}
+    cfg = Configuration.from_sources(PRODUCT, env)
+    assert (cfg.perf_timeout_s, cfg.perf_spread_max) == (30, 0.1)
+
+
+@pytest.mark.parametrize("name", ["perf_timeout_s", "perf_node_timeout_s", "perf_spread_max"])
+@pytest.mark.parametrize("bad", [0, -1])
+def test_the_perf_limits_must_be_positive(name, bad):
+    with pytest.raises(ValueError):
+        Configuration(product_dir=Path("/tmp/p"), **{name: bad})
+
+
+def test_perf_lock_wait_may_be_zero_but_not_negative():
+    assert Configuration(product_dir=Path("/tmp/p"), perf_lock_wait_s=0).perf_lock_wait_s == 0
+    with pytest.raises(ValueError):
+        Configuration(product_dir=Path("/tmp/p"), perf_lock_wait_s=-1)
+
+
+def test_perf_lock_path_defaults_under_xdg_state_home_outside_every_product(monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", "/tmp/state")
+    assert Configuration.from_sources(PRODUCT, {}).perf_lock_path == Path(
+        "/tmp/state/agentic/perf.lock"
+    )
+    monkeypatch.delenv("XDG_STATE_HOME")
+    monkeypatch.setattr(Path, "home", lambda: Path("/home/t"))
+    assert Configuration.from_sources(PRODUCT, {}).perf_lock_path == Path(
+        "/home/t/.local/state/agentic/perf.lock"
+    )

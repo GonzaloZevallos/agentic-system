@@ -154,6 +154,21 @@ class Configuration(BaseModel):
     # is what lets a test redirect it, the same way every other field already does, so
     # no test ever writes to the real registry.
     run_registry_dir: Path = Field(default_factory=lambda: _default_run_registry_dir())
+    # `agentic perf` (GH-318, ADR-0059). One command (`seed` or `measure`) is killed with
+    # its process group after `perf_timeout_s`, and the whole invocation after
+    # `perf_node_timeout_s`: what remains of it caps each command. The machine-wide lock is
+    # waited for at most `perf_lock_wait_s` (0 never waits) before every scenario is
+    # `inconclusive/busy`.
+    perf_timeout_s: float = Field(default=1800, gt=0)
+    perf_node_timeout_s: float = Field(default=3600, gt=0)
+    perf_lock_wait_s: float = Field(default=1800, ge=0)
+    # The widest (p90 - p10) / median a metric may show and still be judged. UNCALIBRATED:
+    # 0.25 is a first guess until the human's run over the old apostrophe commit settles it
+    # (ADR-0059); with five runs it is a range, not a percentile band.
+    perf_spread_max: float = Field(default=0.25, gt=0)
+    # The machine-wide lock two measurements take so they never share a CPU: outside every
+    # product, built like `run_registry_dir`.
+    perf_lock_path: Path = Field(default_factory=lambda: _default_perf_lock_path())
 
     @classmethod
     def from_sources(
@@ -255,6 +270,12 @@ def _default_run_registry_dir() -> Path:
     base = os.environ.get("XDG_STATE_HOME")
     root = Path(base) if base else Path.home() / ".local" / "state"
     return root / "agentic" / "runs"
+
+
+def _default_perf_lock_path() -> Path:
+    base = os.environ.get("XDG_STATE_HOME")
+    root = Path(base) if base else Path.home() / ".local" / "state"
+    return root / "agentic" / "perf.lock"
 
 
 def _from_env(raw: str, annotation: Any) -> Any:
