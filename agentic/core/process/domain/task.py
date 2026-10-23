@@ -530,6 +530,20 @@ class EscalationPatch(TypedDict):
     escalation_class: EscalationClass | None
 
 
+class ReleasePatch(TypedDict, total=False):
+    """What `landing.released` writes when a human's answer releases a landing escalation
+    (GH-328): the keys of `unescalated` plus the epoch's `landing` entries and the `Human`
+    section. Empty when there is nothing to release. A partial patch, so `apply` takes it
+    as a mapping, not as a whole `TaskState`."""
+
+    escalated: str | None
+    escalation_class: EscalationClass | None
+    status: Status
+    pause_log: list[PauseEntry]
+    landing: list[LandingEntry]
+    sections: dict[str, str]
+
+
 class FinishedPatch(TypedDict):
     """The two keys `rules.finished` writes together, spread into a bigger patch literal."""
 
@@ -699,6 +713,9 @@ class LandingEntry(TypedDict, total=False):
     # reads and renders as before.
     delivered: bool
     failure: FailureReason
+    # GH-328, `diagnose` entries: when a human's decision released the escalation this entry's
+    # failure led to (`landing.released`). The retry calendar counts attempts after it.
+    released_at: str
     # GH-267, all optional: a document without them reads and renders as before.
     # `upstream` is the master sha a `sync_master` entry was dispatched for.
     upstream: str
@@ -909,8 +926,9 @@ def _reducers() -> dict[str, object]:
 REDUCERS = _reducers()
 
 
-def apply(state: TaskState, patch: TaskState) -> TaskState:
-    """`state` with `patch` folded in, reducer by reducer; plain fields are overridden."""
+def apply(state: TaskState, patch: TaskState | ReleasePatch) -> TaskState:
+    """`state` with `patch` folded in, reducer by reducer; plain fields are overridden. The
+    patch is a `TaskState` or the partial `ReleasePatch`, so every key stays checked."""
     merged: dict[str, Any] = dict(state)
     for key, value in dict(patch).items():
         reducer = REDUCERS.get(key)

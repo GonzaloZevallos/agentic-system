@@ -1219,3 +1219,97 @@ def test_carry_over_reads_the_landed_slices_and_skips_what_it_cannot_read():
     assert carried is not None
     assert carried.landed == (LandedSliceRef(("a", "b"), "#7"),)
     assert landing.carry_over({"landed_slices": "junk"}) is None
+
+
+# --- GH-328: a human decision releases an escalated landing diagnose -------------------------
+
+
+def _escalated_doc(**over):
+    """A landing diagnose `escalate_failed_diagnosis` left: the shape `released` answers."""
+    raw = {
+        "id": "GH-5",
+        "status": "waiting_on_human",
+        "escalated": "Landing Diagnoser did not deliver after 1 attempt: max_turns",
+        "escalation_class": "failure",
+        "pull_request": "https://example.test/pull/5",
+        "landing": [
+            {"head": HEAD, "step": "fix", "at": AT.isoformat()},
+            _attempt("max_turns"),
+        ],
+        "pause_log": [{"kind": "escalation", "value": "failure"}],
+        "cost_usd": 4.0,
+    }
+    return {**raw, **over}
+
+
+def test_released_is_unescalated_plus_the_stamp_and_the_decision_as_the_human_section():
+    raw = _escalated_doc()
+    patch = landing.released(raw, "merge master in", "2026-10-23T07:00:00+00:00")
+
+    assert patch["escalated"] is None and patch["escalation_class"] is None
+    assert patch["status"] == "ready_for_review"
+    assert patch["pause_log"] == [{"kind": "resumed"}]
+    assert "cost_usd" not in patch
+    human = patch["sections"][document.HUMAN]
+    assert human.startswith("### Decision 1") and "merge master in" in human
+    assert raw["escalated"] in human
+    stamped = [e for e in patch["landing"] if e["step"] == "diagnose"]
+    assert [e.get("released_at") for e in stamped] == ["2026-10-23T07:00:00+00:00"]
+    assert "released_at" not in patch["landing"][0]
+    assert "released_at" not in raw["landing"][1]
+
+
+def test_released_stamps_only_the_last_diagnose_entry():
+    raw = _escalated_doc(
+        landing=[_attempt("account_limit"), {"head": HEAD, "step": "fix"}, _attempt("sdk")]
+    )
+    patch = landing.released(raw, "go", "T")
+    assert [e.get("released_at") for e in patch["landing"]] == [None, None, "T"]
+
+
+def test_released_answers_nothing_for_a_document_that_is_not_escalated():
+    assert landing.released(_escalated_doc(escalated=None), "go", "T") == {}
+    assert landing.released({}, "go", "T") == {}
+
+
+def test_two_releases_leave_one_decision_and_one_resumed_marker():
+    from agentic.core.process.domain.task import apply
+
+    raw = _escalated_doc()
+    once = apply(raw, landing.released(raw, "merge master in", "T"))
+    twice = apply(once, landing.released(once, "merge master in", "T"))
+
+    assert twice == once
+    assert once["sections"][document.HUMAN].count("### Decision ") == 1
+    assert once["pause_log"] == [{"kind": "escalation", "value": "failure"}, {"kind": "resumed"}]
+    assert not once["escalated"] and not once["escalation_class"]
+
+
+def test_released_numbers_a_second_decision_after_the_first():
+    raw = _escalated_doc(sections={"Human": "### Decision 1\n\nolder", "Other": "kept"})
+    from agentic.core.process.domain.task import apply
+
+    after = apply(raw, landing.released(raw, "newer", "T"))
+    assert after["sections"]["Other"] == "kept"
+    assert "### Decision 1\n\nolder" in after["sections"]["Human"]
+    assert "### Decision 2" in after["sections"]["Human"]
+
+
+def test_entry_of_keeps_released_at_only_as_text():
+    assert landing.entry_of({"released_at": "T"}) == {"released_at": "T"}
+    assert landing.entry_of({"released_at": 3}) == {}
+
+
+def test_diagnose_attempts_ignore_every_entry_up_to_and_including_a_released_one():
+    raw = {"landing": [_attempt("max_turns"), _attempt("max_turns", released_at="T")]}
+    assert landing.diagnose_attempts(raw) == []
+    assert landing.diagnose_retry(raw, AT) == "none"
+
+    later = {"landing": [*raw["landing"], _attempt("max_turns")]}
+    assert [e.get("released_at") for e in landing.diagnose_attempts(later)] == [None]
+    assert landing.diagnose_retry(later, AT) == "escalate"
+
+
+def test_a_released_entry_is_still_not_a_taken_step():
+    entries = [_attempt("max_turns", released_at="T")]
+    assert not landing.already_dispatched(entries, HEAD, "diagnose")

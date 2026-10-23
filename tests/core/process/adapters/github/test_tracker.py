@@ -1214,3 +1214,50 @@ def test_ensure_label_gh_failure_is_a_value_error_without_create():
     with pytest.raises(ValueError, match="gh label list failed: no auth"):
         GhTracker(Path("/p"), run).ensure_label("needs-triage")
     assert len(run.calls) == 1
+
+
+def _issue_json(**more):
+    return json.dumps(
+        {
+            "state": "OPEN",
+            "stateReason": "",
+            "blockedBy": {"nodes": [], "totalCount": 0},
+            "closedByPullRequestsReferences": [],
+            **more,
+        }
+    )
+
+
+def test_issue_state_reads_the_labels_of_the_issue():
+    run = Recorder(stdout=_issue_json(labels=[{"name": "agentic"}, {"name": "needs-human"}]))
+    state = GhTracker(Path("/p"), run).issue_state(20)
+    assert state.labels == ("agentic", "needs-human")
+    assert "labels" in run.calls[0][run.calls[0].index("--json") + 1].split(",")
+
+
+def test_issue_state_with_no_labels_reads_an_empty_tuple_and_a_missing_field_reads_none():
+    assert (
+        GhTracker(Path("/p"), Recorder(stdout=_issue_json(labels=[]))).issue_state(1).labels == ()
+    )
+    assert GhTracker(Path("/p"), Recorder(stdout=_issue_json())).issue_state(1).labels is None
+    junk = _issue_json(labels=[{"name": "ok"}, {"id": 3}])
+    assert GhTracker(Path("/p"), Recorder(stdout=junk)).issue_state(1).labels is None
+    assert (
+        GhTracker(Path("/p"), Recorder(stdout=_issue_json(labels="x"))).issue_state(1).labels
+        is None
+    )
+
+
+def test_the_fallback_read_of_an_old_gh_still_asks_for_the_labels():
+    class Run(Recorder):
+        def __call__(self, args, cwd, capture_output, text, check):
+            self.calls.append(args)
+            if "blockedBy" in args[args.index("--json") + 1]:
+                raise subprocess.CalledProcessError(1, args, stderr="Unknown JSON field: blockedBy")
+            old = {k: v for k, v in json.loads(_issue_json(labels=[])).items() if k != "blockedBy"}
+            return subprocess.CompletedProcess(args, 0, json.dumps(old), "")
+
+    run = Run()
+    state = GhTracker(Path("/p"), run).issue_state(20)
+    assert state.blocked_by is None and state.labels == ()
+    assert "labels" in run.calls[-1][run.calls[-1].index("--json") + 1].split(",")

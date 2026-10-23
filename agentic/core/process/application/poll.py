@@ -506,6 +506,7 @@ def gather_merges(
     live: frozenset[LandingStepKind] = landing_plan.LIVE_STEPS,
     now: datetime | None = None,
     busy: frozenset[str] = frozenset(),
+    cfg: Configuration | None = None,
 ) -> list[int]:
     """Every delivered, unclosed task `rules.auto_merge_decision` finds worth a merge
     child -- `merge` or `run_checks` -- and a line appended to `lines` for each one it
@@ -581,7 +582,13 @@ def gather_merges(
             if lands is not None and decision.reason is not None:
                 # Every refusal logged above asks `landing_step` what to do instead; only a
                 # built step not yet dispatched on this head is worth a `land` child.
-                step = landing_plan.pending(raw, decision.reason, facts, live, now)
+                released = (
+                    cfg is not None
+                    and bool(raw.get("escalated"))
+                    and landing_plan.step_for(raw, decision.reason, facts).kind == "diagnose"
+                    and landing_plan.release(ports, cfg, task_id, raw, number).decision is not None
+                )
+                step = landing_plan.pending(raw, decision.reason, facts, live, now, released)
                 if step is not None:
                     kind = landing_rules.run_kind_of(step.kind, decision.reason)
                     lands.append(rules.LandCandidate(number, kind))
@@ -1200,7 +1207,16 @@ def run_once(
         lands: list[rules.LandCandidate] = []
         if awaiting_merge(ports):
             merges = gather_merges(
-                ports, eval_set, upstream().sha, lock, merge_lines, lands, live_steps, now, busy
+                ports,
+                eval_set,
+                upstream().sha,
+                lock,
+                merge_lines,
+                lands,
+                live_steps,
+                now,
+                busy,
+                cfg,
             )
         notes = [*spend_notes, *_upstream_notes(upstream.cache_info().currsize > 0, upstream)]
         plan = rules.poll_plan(

@@ -26,6 +26,7 @@ from .task import (
     FailureReason,
     LandedSliceRef,
     LandingEntry,
+    ReleasePatch,
     Subtask,
     SubtaskStatus,
     TaskState,
@@ -617,7 +618,14 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
         out["at"] = at
     if isinstance(resolved := raw.get("resolved_at"), str):
         out["resolved_at"] = resolved
-    for key in ("upstream", "closed_at", "lacks", "slice_pull_request", "restart_why"):
+    for key in (
+        "upstream",
+        "closed_at",
+        "lacks",
+        "slice_pull_request",
+        "restart_why",
+        "released_at",
+    ):
         if isinstance(text := raw.get(key), str):
             out[key] = text
     if isinstance(cost := raw.get("cost_usd"), int | float) and not isinstance(cost, bool):
@@ -655,7 +663,8 @@ def _failure_of(value: object) -> FailureReason | None:
 
 def diagnose_attempts(raw: Mapping[str, object]) -> list[LandingEntry]:
     """The diagnose entries of the document's `landing` list that never delivered, after the
-    last one that did: the attempts the retry calendar counts, oldest first."""
+    last one that did or that a human's decision released (`released_at`, GH-328): the
+    attempts the retry calendar counts, oldest first."""
     entries = raw.get("landing")
     kept = (
         [entry_of(e) for e in entries if isinstance(e, Mapping)]
@@ -663,8 +672,8 @@ def diagnose_attempts(raw: Mapping[str, object]) -> list[LandingEntry]:
         else []
     )
     diagnoses = [e for e in kept if e.get("step") == "diagnose"]
-    delivered = [i for i, e in enumerate(diagnoses) if e.get("delivered")]
-    after = diagnoses[delivered[-1] + 1 :] if delivered else diagnoses
+    closed = [i for i, e in enumerate(diagnoses) if e.get("delivered") or e.get("released_at")]
+    after = diagnoses[closed[-1] + 1 :] if closed else diagnoses
     return [e for e in after if not e.get("delivered")]
 
 
@@ -711,6 +720,47 @@ def unescalated(raw: Mapping[str, object]) -> dict[str, Any]:
         "status": rules.resumed_status(view),
         "pause_log": [{"kind": "resumed"}],
     }
+
+
+def released(raw: Mapping[str, object], decision: str, at: str) -> ReleasePatch:
+    """The one patch that releases a landing escalation on a human's `decision` (GH-328):
+    `unescalated`, `released_at` stamped on the last diagnose entry (so `diagnose_attempts`
+    starts counting again from the next one), and the decision as one more `### Decision` of
+    the `Human` section, which the Landing Diagnoser reads. Written for `task.apply`: the
+    `pause_log` marker is appended by its reducer, `sections` merges, `landing` is replaced
+    whole. Typed as a `ReleasePatch` so `apply` takes it as it is. `{}` when the document is not
+    escalated, so a second call writes nothing. Never writes `cost_usd`. No other module
+    builds it."""
+    reason = raw.get("escalated")
+    if not reason:
+        return {}
+    cleared = unescalated(raw)
+    entries = raw.get("landing")
+    written = (
+        [entry_of(e) for e in entries if isinstance(e, Mapping)]
+        if isinstance(entries, list)
+        else []
+    )
+    last = max((i for i, e in enumerate(written) if e.get("step") == "diagnose"), default=None)
+    if last is not None:
+        written[last] = {**written[last], "released_at": at}
+    return {
+        "escalated": cleared["escalated"],
+        "escalation_class": cleared["escalation_class"],
+        "status": cleared["status"],
+        "pause_log": cleared["pause_log"],
+        "landing": written,
+        "sections": {HUMAN: rules.human_section(_with_sections(raw), str(reason), decision)},
+    }
+
+
+def _with_sections(raw: Mapping[str, object]) -> TaskState:
+    """`raw` as the state `rules.human_section` reads: its `sections` and questions only."""
+    state: TaskState = {"id": "", "title": "", "description": ""}
+    sections = raw.get("sections")
+    if isinstance(sections, Mapping):
+        state["sections"] = {str(k): v for k, v in sections.items() if isinstance(v, str)}
+    return state
 
 
 ESCALATED_COMMENT = "Escalated: "

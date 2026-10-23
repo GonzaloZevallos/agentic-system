@@ -1602,6 +1602,16 @@ def task_cap(ceiling: float, override: float | None) -> float:
     return max(ceiling, override or 0.0)
 
 
+def task_spent(state: Mapping[str, object]) -> float:
+    """What the task has spent against its cap: its own `cost_usd` plus the cost a landing
+    restart carried over (`landing_cost_carried`). The figure `run_role` measures against
+    `task_cap`, so every cap check over a document agrees with it (GH-328)."""
+    own, carried = state.get("cost_usd", 0.0), state.get("landing_cost_carried", 0.0)
+    return float(own if isinstance(own, int | float) else 0.0) + float(
+        carried if isinstance(carried, int | float) else 0.0
+    )
+
+
 def cap_reached(role_name: str, spent_usd: float, cap_usd: float) -> str:
     return f"{role_name} stopped by the task cap: {spent_usd:.2f} of {cap_usd:.2f} USD spent"
 
