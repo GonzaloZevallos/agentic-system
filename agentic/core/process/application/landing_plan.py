@@ -20,8 +20,9 @@ from ..domain.landing import LandingStep, LandingStepKind
 from ..domain.roles import Role
 from ..domain.task import INTEGRATION, TaskState
 from .checkouts import task_base
-from .escalate import ESCALATED
+from .escalate import ESCALATED, NEEDS_HUMAN
 from .ports import GitError, IssueComment, Launcher, Ports, Upstream
+from .run_role import task_cap
 
 LIVE_STEPS: frozenset[LandingStepKind] = frozenset(
     {
@@ -221,19 +222,75 @@ def stranded_now(ports: Ports, task_id: str, raw: Mapping[str, object]) -> bool:
     return stranded(raw, comments)
 
 
+ReleaseWhy = Literal["released", "waiting_on_human", "needs_restart", "task_cap"]
+"""Why an escalated landing diagnose is or is not released (GH-328): a human's decision
+released it, it waits for one (or for the label to go, or for an open issue), its shape is a
+restart only a human starts, or the task cap is spent. Closed: `land` maps each to its log
+line and its `LandResult.reason`."""
+
+
+@dataclass(frozen=True)
+class Release:
+    """`decision` is the human's answer when `why` is `released`, else `None`."""
+
+    decision: str | None
+    why: ReleaseWhy
+
+
+def _unreleased(why: ReleaseWhy) -> Release:
+    return Release(None, why)
+
+
+def release(ports: Ports, cfg: Configuration, task_id: str, raw: TaskState, number: int) -> Release:
+    """Whether a human's answer releases the escalated landing diagnose of `raw` (GH-328).
+    Only the shape `landing_fix.escalate_failed_diagnosis` leaves is releasable: class
+    `failure` with undelivered diagnose attempts; any other escalation (the depth-1 one, after
+    a delivered diagnosis) is the human's restart, and the tracker is not read for it. The
+    release needs every one of: a non-system comment after the last `Escalated:` comment
+    (`resume.decision_since`, the one reader), the issue open, its labels readable and without
+    `needs-human`, and the task under its cap (`rules.task_spent`, the figure `run_role`
+    measures). A tracker that cannot answer is a wait, never a release."""
+    from .resume import decision_since  # resume imports poll, which imports this module
+
+    if raw.get("escalation_class") != "failure" or not landing.diagnose_attempts(raw):
+        return _unreleased("needs_restart")
+    try:
+        comments = ports.tracker.timestamped_comments(task_id)
+    except (ValueError, OSError):
+        return _unreleased("waiting_on_human")
+    if not landing.escalated_after(comments, landing.diagnose_at(raw), ESCALATED):
+        return _unreleased("waiting_on_human")
+    decision = decision_since([comment.body for comment in comments], ESCALATED)
+    if decision is None:
+        return _unreleased("waiting_on_human")
+    try:
+        issue = ports.tracker.issue_state(number)
+    except (ValueError, OSError):
+        return _unreleased("waiting_on_human")
+    if issue.state != "OPEN" or issue.labels is None or NEEDS_HUMAN in issue.labels:
+        return _unreleased("waiting_on_human")
+    if rules.task_spent(raw) >= task_cap(cfg):
+        return _unreleased("task_cap")
+    return Release(decision, "released")
+
+
 def pending(
     raw: TaskState,
     refusal: rules.MergeRefusal,
     facts: rules.MergeFacts,
     live: frozenset[LandingStepKind],
     now: datetime | None = None,
+    released: bool = False,
 ) -> LandingStep | None:
-    """The step worth a `land` child: built (`live`) and not yet dispatched on this head."""
+    """The step worth a `land` child: built (`live`) and not yet dispatched on this head.
+    `released` (GH-328) says a human's answer released the escalated diagnose: the gate that
+    would skip it for the escalation is not asked."""
     step = step_for(raw, refusal, facts)
     if not takes_action(step.kind, live) or facts.pr_head is None:
         return None
-    if diagnose_gate(raw, step.kind, now) == "skip" or landing.already_dispatched(
-        entries(raw), facts.pr_head, step.kind
+    gate = diagnose_gate(raw, step.kind, now)
+    if (gate == "skip" and not (released and step.kind == "diagnose")) or (
+        landing.already_dispatched(entries(raw), facts.pr_head, step.kind)
     ):
         return None
     return step
