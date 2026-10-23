@@ -12,6 +12,7 @@ from typing import Any
 
 from agentic.core.knowledge.domain import knowledge
 from agentic.core.process.adapters.github.tracker import pull_request_number
+from agentic.core.process.adapters.shell import ShellCommands, ShellReaper
 from agentic.core.process.application.limits import RunLimits
 from agentic.core.process.application.ports import (
     AddedAdr,
@@ -1696,9 +1697,7 @@ def ruled(
     )
 
 
-def real_commands() -> Any:
+def real_commands() -> ShellCommands:
     """`ShellCommands` over real bash with a real reaper whose worktrees root reaches
     nothing: each check reaps its own mark, and no cwd reap can match."""
-    from agentic.core.process.adapters.shell import ShellCommands, ShellReaper
-
     return ShellCommands("tests", ShellReaper("tests", Path("/nonexistent/worktrees")))
