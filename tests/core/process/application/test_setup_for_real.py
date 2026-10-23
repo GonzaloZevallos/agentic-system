@@ -10,10 +10,9 @@ import pytest
 
 from agentic.core.knowledge.adapters.git import GitStack
 from agentic.core.process.adapters.git.workspace import GitWorkspace
-from agentic.core.process.adapters.shell.commands import ShellCommands
 from agentic.core.process.application.checkouts import SetupFailed, subtask_checkout
 from agentic.shared.configuration import Configuration
-from tests.fakes import memory_ports
+from tests.fakes import memory_ports, real_commands
 
 STACK = "setup:\n  mark: touch prepared.txt\nchecks:\n  tests: pytest\n"
 STATE = {"id": "GH-37", "subtasks": {"api": {"id": "api"}, "domain": {"id": "domain"}}}
@@ -46,7 +45,7 @@ def real(product):
         memory_ports(),
         workspace=GitWorkspace(product, cfg.git_identity),
         stack=GitStack(product),
-        commands=ShellCommands(),
+        commands=real_commands(),
     )
     return cfg, ports
 

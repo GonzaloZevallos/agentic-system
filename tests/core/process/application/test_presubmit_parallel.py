@@ -12,7 +12,6 @@ from pathlib import Path
 import pytest
 
 from agentic.core.process.adapters.git.workspace import GitWorkspace
-from agentic.core.process.adapters.shell.commands import ShellCommands
 from agentic.core.process.application.develop import develop
 from agentic.core.process.application.ports import CommandResult
 from agentic.core.process.application.presubmit import CheckoutPresubmit
@@ -24,6 +23,7 @@ from tests.fakes import (
     ScriptedRunner,
     delivered,
     memory_ports,
+    real_commands,
 )
 
 PATH = Path("/memory/worktrees/GH-1.api")
@@ -232,7 +232,7 @@ def checkout(tmp_path):
         (),
         {
             "workspace": GitWorkspace(tmp_path, Configuration(product_dir=tmp_path).git_identity),
-            "commands": ShellCommands(),
+            "commands": real_commands(),
         },
     )()
     before = ports.workspace.head(tmp_path)

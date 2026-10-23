@@ -1,5 +1,7 @@
 """Node evals against a real model. Excluded from CI: `uv run pytest -m llm`."""
 
+from pathlib import Path
+
 import pytest
 
 from agentic.core.process.adapters.claude_sdk import ClaudeSdkRunner
@@ -57,7 +59,9 @@ async def test_pjm_classifies(title, description, expected, tmp_path):
         retries=1,
         vocabulary={},
         cwd=tmp_path,
-        runner=ClaudeSdkRunner(reaper=ShellReaper("pjm-test"), product_key="pjm-test"),
+        runner=ClaudeSdkRunner(
+            reaper=ShellReaper("pjm-test", Path("/nonexistent/worktrees")), product_key="pjm-test"
+        ),
         owner_task="GH-1",
     )
     assert output.data["type"] == expected

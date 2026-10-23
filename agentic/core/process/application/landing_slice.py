@@ -23,6 +23,7 @@ from .checkouts import task_base
 from .landing_plan import LandingContext
 from .ports import GitError, MergeCallFailed, TrackerUnreachable
 from .presubmit import CheckoutPresubmit
+from .release import release_checkout
 from .resume import state_from
 
 
@@ -177,6 +178,7 @@ def _open(
         _refuse(context, None, f"git failed: {exc}")
         return None
     finally:
+        release_checkout(ports, ports.workspace.checkout_path(name))
         ports.workspace.remove_checkout(name)
     if not passed:
         _refuse(context, None, "the product's checks failed on the slice")

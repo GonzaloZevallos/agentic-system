@@ -1166,3 +1166,14 @@ def test_an_index_path_outside_the_excluded_directory_is_refused(product):
             ws.write_index(task.path, {bad: "x\n"})
     assert (task.path / "README.md").read_text() == "v0\n"
     assert ws.is_clean(task.path)
+
+
+def test_checkout_path_is_the_layout_detached_checkout_makes_without_touching_disk(product):
+    ws = GitWorkspace(product, IDENTITY)
+
+    expected = product / ".agentic" / "worktrees" / "merge-GH-7"
+    assert ws.checkout_path("merge-GH-7") == expected
+    assert not expected.exists(), "pure: asking the path creates nothing"
+    sha = git("rev-parse", "HEAD", cwd=product)
+    assert ws.detached_checkout("merge-GH-7", sha) == expected
+    assert expected.is_dir()

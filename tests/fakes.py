@@ -12,6 +12,7 @@ from typing import Any
 
 from agentic.core.knowledge.domain import knowledge
 from agentic.core.process.adapters.github.tracker import pull_request_number
+from agentic.core.process.adapters.shell import ShellCommands, ShellReaper
 from agentic.core.process.application.limits import RunLimits
 from agentic.core.process.application.ports import (
     AddedAdr,
@@ -486,6 +487,9 @@ class MemoryWorkspace:
     `rename_branch`; `checkouts` are the worktrees on disk."""
 
     ROOT = Path("/memory/worktrees")
+    # GH-315: when a test sets it, every removal appends `kind:name` to a list shared with a
+    # `FakeReaper`, so the order of reap and removal is observable.
+    journal: list[str] | None = None
 
     def __init__(self) -> None:
         # Path -> the repository it belongs to; a path outside it is in none.
@@ -647,6 +651,7 @@ class MemoryWorkspace:
         return Checkout(branch, path, base, created=created)
 
     def discard(self, path: Path) -> None:
+        self._noted("discard", path.name)
         self.discarded.append(path)
         self.on_disk.discard(path)
 
@@ -820,6 +825,7 @@ class MemoryWorkspace:
         return self.commit_dates.get(ref)
 
     def cleanup(self, task_id: str) -> None:
+        self._noted("cleanup", task_id)
         if self.cleanup_error is not None:
             raise GitError(self.cleanup_error)
         self.cleaned.append(task_id)
@@ -909,11 +915,19 @@ class MemoryWorkspace:
         self.diff_reads.append((base, head))
         return self.diff_paths
 
-    def detached_checkout(self, name: str, sha: str) -> Path:
-        self.detached.append(name)
+    def checkout_path(self, name: str) -> Path:
         return self.ROOT / name
 
+    def _noted(self, kind: str, name: str) -> None:
+        if self.journal is not None:
+            self.journal.append(f"{kind}:{name}")
+
+    def detached_checkout(self, name: str, sha: str) -> Path:
+        self.detached.append(name)
+        return self.checkout_path(name)
+
     def remove_checkout(self, name: str) -> None:
+        self._noted("remove", name)
         self.removed_checkouts.append(name)
 
     def branches(self, prefix: str) -> list[str]:
@@ -1258,6 +1272,16 @@ class FakeReaper:
         self.activity = activity
         self.scans = 0
         self.calls: list[tuple[str, str, int | None, str | None]] = []
+        # GH-315: what `reap_within` answers, and the paths of each call.
+        self.reaped_within: tuple[ReapedProcess, ...] = ()
+        self.within_calls: list[tuple[Path, ...]] = []
+        self.journal: list[str] | None = None
+
+    def reap_within(self, paths: Sequence[Path]) -> tuple[ReapedProcess, ...]:
+        self.within_calls.append(tuple(paths))
+        if self.journal is not None:
+            self.journal.extend(f"reap:{path.name}" for path in paths)
+        return self.reaped_within
 
     def reap_task(self, task_id: str) -> tuple[ReapedProcess, ...]:
         self.calls.append(("task", task_id, None, None))
@@ -1684,3 +1708,9 @@ def ruled(
         },
         cost,
     )
+
+
+def real_commands() -> ShellCommands:
+    """`ShellCommands` over real bash with a real reaper whose worktrees root reaches
+    nothing: each check reaps its own mark, and no cwd reap can match."""
+    return ShellCommands("tests", ShellReaper("tests", Path("/nonexistent/worktrees")))

@@ -123,3 +123,52 @@ def test_the_literal_check_refuses_a_second_writer():
         "a/runner.py": "x ROLE_PROCESS_OWNER",
     }
     assert mark_literal_violations(files, "a/reaping.py") == ["a/runner.py"]
+
+
+W = "/p/.agentic/worktrees"
+
+
+def test_a_cwd_inside_a_root_is_within_it_whole_segments_only():
+    roots = [f"{W}/GH-7"]
+    assert reaping.cwd_within(f"{W}/GH-7", roots)
+    assert reaping.cwd_within(f"{W}/GH-7/web", roots)
+    assert reaping.cwd_within(f"{W}/GH-7/web/node_modules/.bin", roots)
+
+
+def test_a_cwd_outside_every_root_is_not_within_any():
+    roots = [f"{W}/GH-7"]
+    assert not reaping.cwd_within(f"{W}/GH-70", roots), "a string prefix is not a segment"
+    assert not reaping.cwd_within(f"{W}/GH-70/web", roots)
+    assert not reaping.cwd_within(W, roots), "the parent is not inside the child"
+    assert not reaping.cwd_within("/p", roots)
+    assert not reaping.cwd_within("relative/GH-7", roots)
+
+
+def test_any_of_several_roots_takes_the_cwd():
+    assert reaping.cwd_within(f"{W}/GH-8/x", [f"{W}/GH-7", f"{W}/GH-8"])
+
+
+def test_a_deleted_cwd_is_never_within_a_root():
+    assert not reaping.cwd_within(f"{W}/GH-7 (deleted)", [f"{W}/GH-7"])
+    assert not reaping.cwd_within(f"{W}/GH-7/web (deleted)", [f"{W}/GH-7"])
+
+
+def test_no_roots_take_no_cwd():
+    assert not reaping.cwd_within(f"{W}/GH-7", [])
+    assert not reaping.cwd_within(f"{W}/GH-7", [""])
+
+
+def test_the_check_scope_is_a_task_segment_no_task_id_can_be():
+    assert reaping.CHECK_TASK == "check"
+    value = reaping.mark("abc123def456", reaping.CHECK_TASK, 9, "uuid")
+    assert matches(marked(value), ReapScope("abc123def456", reaping.CHECK_TASK, 9, None))
+    assert not matches(marked(value), ReapScope("abc123def456", "GH-1", None, None))
+
+
+def test_an_environment_is_marked_with_any_value_and_not_otherwise():
+    assert reaping.is_marked(marked("whatever"))
+    assert reaping.is_marked(marked(""))
+    assert reaping.is_marked(marked(reaping.mark("abc", "GH-1", 1, "t")))
+    assert not reaping.is_marked(environ("PATH=/usr/bin"))
+    assert not reaping.is_marked(b"")
+    assert not reaping.is_marked(environ(f"X{reaping.MARK_NAME}=1", f"{reaping.MARK_NAME}X=1"))

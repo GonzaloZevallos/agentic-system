@@ -35,6 +35,7 @@ from .ports import (
     Upstream,
 )
 from .presubmit import CheckoutPresubmit
+from .release import release_checkout
 
 # The refusals a human can act on, and so the only ones commented, once per (head, reason).
 COMMENTED: tuple[str, ...] = (
@@ -86,6 +87,7 @@ def merge_task(
     if raw is None or not reference:
         return MergeResult("stopped", "no_pull_request")
     ports.workspace.prune()
+    release_checkout(ports, ports.workspace.checkout_path(_name(task_id)))
     ports.workspace.remove_checkout(_name(task_id))
     master = upstream.sha
     if master is None:
@@ -255,6 +257,7 @@ def run_checks(
         log(f"agentic: merge: {task_id}: could not build the worktree: {exc}")
         failed_step = "worktree"
     finally:
+        release_checkout(ports, ports.workspace.checkout_path(name))
         ports.workspace.remove_checkout(name)
     # No declared check proves nothing: it cannot pass; a witness that says the checks ran
     # against another checkout makes them prove nothing either (`merge_checks_record`).

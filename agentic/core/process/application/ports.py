@@ -836,6 +836,11 @@ class Workspace(Protocol):
         is not (a pull request's head the local branch never saw). Never raises."""
         ...
 
+    def checkout_path(self, name: str) -> Path:
+        """Where the checkout `name` lives, `<product_dir>/.agentic/worktrees/<name>`
+        (GH-315): the one place the layout is computed. Pure: no git, no filesystem."""
+        ...
+
     def detached_checkout(self, name: str, sha: str) -> Path:
         """A throwaway worktree `.agentic/worktrees/<name>` detached at `sha` (GH-178);
         the caller removes it with `remove_checkout`. Raises `GitError`."""
@@ -1268,6 +1273,13 @@ class ProcessReaper(Protocol):
 
     def reap_attempt(self, task_id: str, run: int, token: str) -> tuple[ReapedProcess, ...]:
         """Only the processes of one attempt of a role."""
+        ...
+
+    def reap_within(self, paths: Sequence[Path]) -> tuple[ReapedProcess, ...]:
+        """Processes whose cwd is inside one of `paths` (GH-315). Only unmarked processes
+        (a marked one belongs to the mark reap); never the system, its ancestors or a
+        process with a controlling terminal; a path that is not strictly inside the
+        worktrees root the reaper was built with is dropped. Never raises."""
         ...
 
     def child_activity(

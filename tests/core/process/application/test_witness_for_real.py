@@ -13,11 +13,10 @@ import pytest
 
 from agentic.core.knowledge.adapters.git import GitStack
 from agentic.core.process.adapters.git.workspace import GitWorkspace
-from agentic.core.process.adapters.shell.commands import ShellCommands
 from agentic.core.process.application.checkouts import subtask_checkout
 from agentic.core.process.application.presubmit import CheckoutPresubmit
 from agentic.shared.configuration import Configuration
-from tests.fakes import memory_ports
+from tests.fakes import memory_ports, real_commands
 
 # A check that always passes, whatever the environment: the point of these two tests is
 # the witness alone, not the product's own checks.
@@ -52,7 +51,7 @@ def real(product):
         memory_ports(),
         workspace=GitWorkspace(product, cfg.git_identity),
         stack=GitStack(product),
-        commands=ShellCommands(),
+        commands=real_commands(),
     )
     return cfg, ports
 

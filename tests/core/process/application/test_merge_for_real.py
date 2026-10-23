@@ -18,14 +18,13 @@ from agentic.core.knowledge.adapters.git import GitStack
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.adapters.git.workspace import GitWorkspace
 from agentic.core.process.adapters.github.tracker import pull_request_number
-from agentic.core.process.adapters.shell.commands import ShellCommands
 from agentic.core.process.application import landing_plan
 from agentic.core.process.application.merge import merge_task
 from agentic.core.process.application.ports import MergeCallFailed, TrackerUnreachable, Upstream
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.task import PullRequest, PullRequestCommit
 from agentic.shared.configuration import Configuration
-from tests.fakes import MemoryTracker, memory_ports
+from tests.fakes import MemoryTracker, memory_ports, real_commands
 
 GREEN = "test -f feature.txt && test -f upstream.txt"
 # stderr carries one CSI escape and one tab. No single quote, so `World`'s `{checks!r}`
@@ -84,7 +83,7 @@ class World:
             memory_ports(),
             workspace=GitWorkspace(self.product, self.cfg.git_identity),
             stack=GitStack(self.product),
-            commands=ShellCommands(),
+            commands=real_commands(),
             documents=FilesystemTaskDocuments(self.product),
             tracker=self.tracker,
         )

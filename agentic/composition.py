@@ -30,6 +30,7 @@ from .core.measurement.domain.metrics import arm_label
 from .core.process.adapters.claude_sdk import ClaudeSdkRunner
 from .core.process.adapters.filesystem import FilesystemPrompts, FilesystemTaskDocuments
 from .core.process.adapters.git import GitWorkspace
+from .core.process.adapters.git.workspace import WORKTREES
 from .core.process.adapters.github import GhInbox, GhTracker
 from .core.process.adapters.langgraph.graph import build_graph
 from .core.process.adapters.shell import ShellCommands, ShellReaper, ShellSampleApp
@@ -134,7 +135,7 @@ def _ports(cfg: Configuration) -> Ports:
     # One reaper and one key for the runner (which marks and reaps each attempt) and for
     # `Ports` (which reaps on release): a mark is only found by the key it was built with.
     product_key = reaping.product_key(str(cfg.product_dir.resolve()))
-    reaper = ShellReaper(product_key)
+    reaper = ShellReaper(product_key, cfg.product_dir / WORKTREES)
     return Ports(
         # The roles get the configuration the run decided, never the one the human's
         # shell carries: the `AGENTIC_*` of this process are unset for them, which only
@@ -160,7 +161,7 @@ def _ports(cfg: Configuration) -> Ports:
         workspace=GitWorkspace(cfg.product_dir, cfg.git_identity),
         tracker=GhTracker(cfg.product_dir),
         stack=GitStack(cfg.product_dir),
-        commands=ShellCommands(),
+        commands=ShellCommands(product_key, reaper),
         sample_app=ShellSampleApp(),
         reaper=reaper,
     )
