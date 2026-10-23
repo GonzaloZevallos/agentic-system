@@ -58,6 +58,11 @@ PR y el preflight, nunca se rechaza ni se reescribe. Ver ADR-0055.
 _Avoid_: guía de estilo, design system (el sistema de diseño es el código; esto son los criterios)
 _Campo_: design standards
 
+**Estándares de escritura**:
+Los criterios con que el producto escribe sus textos de cara a una persona: voz, tono, registro, vocabulario (las palabras del glosario que van en pantalla), límites de largo y patrones por clase de texto, y el catálogo de mensajes si lo tiene. Viven en `WRITING_STANDARDS.md`, en la raíz del producto. Los leen enteros solo Tech Writer y su revisión; el sistema no trae un default y el archivo queda fuera del índice de conocimiento. Sin él, Tech Writer lo dice y propone uno inicial como seguimiento en vez de inventar reglas. Ver ADR-0058.
+_Avoid_: guía de estilo, voz de marca (es un documento de criterios, no una identidad)
+_Campo_: content style guide / writing standards
+
 **Nombre del producto**:
 Cómo se llama este producto, declarado por él en su stack. Es lo que etiqueta cada span y cada métrica de una corrida suya, así que dos productos nunca se suman en un panel. Se declara y no se deduce del checkout: el nombre del directorio cambia si alguien clona con otro nombre y el remoto cambia en un fork, mientras que un archivo versionado viaja con el repo. Es la única parte del stack que vale la del checkout y no la del commit base: dice quién es el repositorio, no qué regía en un commit.
 _Avoid_: slug, id de producto, service name (el `service.name` es del sistema, y es uno solo)

@@ -1407,6 +1407,7 @@ async def test_the_attempt_is_reaped_on_the_error_path_too(monkeypatch, tmp_path
 
 
 async def test_the_mark_never_reaches_the_shared_environment(monkeypatch, tmp_path):
+    monkeypatch.delenv(reaping.MARK_NAME, raising=False)
     fake_query(monkeypatch, [result()])
     runner = make_runner(env={"GIT_AUTHOR_NAME": "system"})
     await run_once(runner, tmp_path)
