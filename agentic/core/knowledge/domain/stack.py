@@ -54,7 +54,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from agentic.core.process.domain import performance as perf
 from agentic.core.process.domain.design import Design
@@ -366,21 +366,31 @@ def _limits(found: object, where: str) -> dict[str, perf.Limit]:
             not isinstance(entry, dict)
             or set(entry) != set(LIMIT_KEYS)
             or (number := _positive(entry["limit"])) is None
-            or not isinstance(entry["unit"], str)
-            or entry["unit"] not in perf.UNIT_SUFFIX
+            or (unit := _unit(entry["unit"])) is None
         ):
             raise ValueError(
                 f"{where}: expected {metric!r} under `limits` to be "
                 "{limit: a positive number, unit: ms|queries|kb}"
             )
-        suffix = perf.UNIT_SUFFIX[entry["unit"]]
+        suffix = perf.UNIT_SUFFIX[unit]
         if not isinstance(metric, str) or not metric.endswith(suffix) or metric == suffix:
             raise ValueError(
                 f"{where}: the metric {metric!r} under `limits` must end with {suffix}, "
-                f"the suffix of its unit {entry['unit']}"
+                f"the suffix of its unit {unit}"
             )
-        limits[metric] = perf.Limit(number, cast(perf.Unit, entry["unit"]))  # checked above
+        limits[metric] = perf.Limit(number, unit)
     return limits
+
+
+def _unit(value: object) -> perf.Unit | None:
+    """The limit unit a stack declared, or None for anything that is not one of the three."""
+    if value == "ms":
+        return "ms"
+    if value == "queries":
+        return "queries"
+    if value == "kb":
+        return "kb"
+    return None
 
 
 def _positive(value: object) -> float | None:
