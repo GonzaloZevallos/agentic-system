@@ -860,6 +860,12 @@ class Workspace(Protocol):
         not, there or not. Never raises for one that is absent."""
         ...
 
+    def checkout_names(self, prefix: str) -> list[str]:
+        """The names of the directories under `.agentic/worktrees/` that start with
+        `prefix` (GH-318: the `perf-*` a hard kill left behind), sorted; empty when there
+        are none. Filesystem only: no git."""
+        ...
+
     def contains(self, head: str, master: str) -> Containment:
         """Whether the commit `head` has the commit `master` among its ancestors (GH-216),
         after fetching both shas: `yes` or `no`, and `unknown` for anything that could not

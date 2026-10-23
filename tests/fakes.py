@@ -638,6 +638,10 @@ class MemoryWorkspace:
         self.diff_reads: list[tuple[str, str]] = []
         self.diff_paths: tuple[str, ...] = ()
         self.detached: list[str] = []
+        # GH-318: the names `checkout_names(prefix)` answers (the `perf-*` a hard kill left), and
+        # a text that makes `detached_checkout` raise it as a `GitError`.
+        self.stale_checkouts: list[str] = []
+        self.checkout_error: str | None = None
         self.removed_checkouts: list[str] = []
         # GH-318: each `overlay` call as (checkout, sha, paths).
         self.overlays: list[tuple[Path, str, tuple[str, ...]]] = []
@@ -934,11 +938,16 @@ class MemoryWorkspace:
             self.journal.append(f"{kind}:{name}")
 
     def detached_checkout(self, name: str, sha: str) -> Path:
+        if self.checkout_error is not None:
+            raise GitError(self.checkout_error)
         self.detached.append(name)
         return self.checkout_path(name)
 
     def overlay(self, checkout: Path, sha: str, paths: Sequence[str]) -> None:
         self.overlays.append((checkout, sha, tuple(paths)))
+
+    def checkout_names(self, prefix: str) -> list[str]:
+        return sorted(name for name in self.stale_checkouts if name.startswith(prefix))
 
     def remove_checkout(self, name: str) -> None:
         self._noted("remove", name)

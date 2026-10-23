@@ -493,6 +493,14 @@ class GitWorkspace:
             shutil.rmtree(path, ignore_errors=True)
         self._run("worktree", "prune")
 
+    def checkout_names(self, prefix: str) -> list[str]:
+        root = self.product_dir / WORKTREES
+        if not root.is_dir():
+            return []
+        return sorted(
+            path.name for path in root.iterdir() if path.is_dir() and path.name.startswith(prefix)
+        )
+
     def _run_bounded(self, *args: str) -> None:
         subprocess.run(
             ["git", *args],
