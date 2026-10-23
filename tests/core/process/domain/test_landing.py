@@ -1260,7 +1260,9 @@ def test_released_is_unescalated_plus_the_stamp_and_the_decision_as_the_human_se
 
 
 def test_released_stamps_only_the_last_diagnose_entry():
-    raw = _escalated_doc(landing=[_attempt("account_limit"), {"head": HEAD, "step": "fix"}, _attempt("sdk")])
+    raw = _escalated_doc(
+        landing=[_attempt("account_limit"), {"head": HEAD, "step": "fix"}, _attempt("sdk")]
+    )
     patch = landing.released(raw, "go", "T")
     assert [e.get("released_at") for e in patch["landing"]] == [None, None, "T"]
 

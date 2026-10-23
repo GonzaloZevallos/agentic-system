@@ -893,12 +893,15 @@ class IssueState:
     is the one place that decides it.
     `closing_merge_commit` is the merge commit of the pull request that closed this
     issue, when `gh` names one; `None` for an issue still open, one closed without a
-    linked pull request, or one whose pull request never merged."""
+    linked pull request, or one whose pull request never merged.
+    `labels` is the names of the issue's labels (GH-328); `None` when they could not be read,
+    which no caller may take for "none": an unread label set is not a removed `needs-human`."""
 
     state: Literal["OPEN", "CLOSED"]
     state_reason: str
     blocked_by: tuple[int, ...] | None
     closing_merge_commit: str | None
+    labels: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)

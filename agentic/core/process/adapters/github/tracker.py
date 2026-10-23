@@ -193,6 +193,20 @@ def issue_number(task_id: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def _label_names(raw: object) -> tuple[str, ...] | None:
+    """The label names of `gh issue view --json labels`; `None` when the field is absent or
+    any entry is not a named label, so an unreadable set is never taken for an empty one."""
+    if not isinstance(raw, list):
+        return None
+    names: list[str] = []
+    for item in raw:
+        name = item.get("name") if isinstance(item, dict) else None
+        if not isinstance(name, str):
+            return None
+        names.append(name)
+    return tuple(names)
+
+
 def _blocked_by(raw: dict | None) -> tuple[int, ...] | None:
     """`None` when `gh`'s own `blockedBy` field is absent from the response at all --
     the signal `IssueState.blocked_by`'s own docstring names -- never read apart from
@@ -421,7 +435,7 @@ class GhTracker:
         return sorted(item["number"] for item in json.loads(raw))
 
     def issue_state(self, number: int) -> IssueState:
-        fields = "state,stateReason,blockedBy,closedByPullRequestsReferences"
+        fields = "state,stateReason,blockedBy,closedByPullRequestsReferences,labels"
         try:
             raw = self._gh("issue", "view", str(number), "--json", fields)
         except TrackerCallFailed:
@@ -437,7 +451,7 @@ class GhTracker:
                 "view",
                 str(number),
                 "--json",
-                "state,stateReason,closedByPullRequestsReferences",
+                "state,stateReason,closedByPullRequestsReferences,labels",
             )
         data = json.loads(raw)
         closing_merge_commit = None
@@ -450,6 +464,7 @@ class GhTracker:
             state_reason=data.get("stateReason") or "",
             blocked_by=_blocked_by(data.get("blockedBy")),
             closing_merge_commit=closing_merge_commit,
+            labels=_label_names(data.get("labels")),
         )
 
     def pull_request(self, reference: str) -> PullRequest | None:
