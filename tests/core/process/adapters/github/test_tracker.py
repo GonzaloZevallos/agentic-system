@@ -1254,7 +1254,8 @@ def test_the_fallback_read_of_an_old_gh_still_asks_for_the_labels():
             self.calls.append(args)
             if "blockedBy" in args[args.index("--json") + 1]:
                 raise subprocess.CalledProcessError(1, args, stderr="Unknown JSON field: blockedBy")
-            return subprocess.CompletedProcess(args, 0, _issue_json(labels=[]), "")
+            old = {k: v for k, v in json.loads(_issue_json(labels=[])).items() if k != "blockedBy"}
+            return subprocess.CompletedProcess(args, 0, json.dumps(old), "")
 
     run = Run()
     state = GhTracker(Path("/p"), run).issue_state(20)
