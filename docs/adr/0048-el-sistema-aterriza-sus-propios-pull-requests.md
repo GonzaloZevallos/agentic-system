@@ -444,3 +444,43 @@ reiniciando en el último comentario del sistema.
 **Costo.** Por ronda, una lectura de comentarios y una del issue por cada documento escalado con la forma
 liberable; escala con esos documentos, no con todas las tareas. Un comentario ajeno puede liberar una tarea
 sin la etiqueta `needs-human` (comportamiento elegido).
+
+## Adenda (GH-330): un diagnóstico que nombra una sincronización sincroniza, no reinicia
+
+En GH-320 (PR #324) el diagnóstico dijo "fusioná origin/master y resolvé el conflicto de una línea" y aun
+así `diagnose` cerró el pull request y lanzó `run --fresh`: tiró $30.33 de trabajo aprobado. `diagnose` no
+leía qué decía el diagnóstico, y una sincronización con conflicto se cobraba contra `LANDING_PASSES_MAX`,
+el presupuesto propio de la tarea.
+
+**Tres contadores, todos por sha de master salvo el segundo.**
+- Sincronizaciones con conflicto por sha: `LANDING_CONFLICT_SYNCS_MAX = 2`.
+- Sincronizaciones por tarea, limpias o con conflicto: `LANDING_SYNCS_MAX = 6`.
+- Sincronizaciones de veredicto por sha: `LANDING_VERDICT_SYNCS_MAX = 1`, exentas del tope de conflictos.
+
+`LANDING_PASSES_MAX` cuenta ahora solo `re_review` y `fix`: el master que se mueve sin que la tarea haga
+nada ya no la agota. Una re-revisión que vuelve tras la sincronización sigue el retorno ordinario del
+grafo (fix), sin pase de aterrizaje y sin reinicio.
+
+**El veredicto.** La salida del Landing Diagnoser lleva `verdict`, `sync` o `unlandable`
+(`DiagnosisVerdict`, definido una vez en `domain/task.py`). La entrada `diagnose` lo guarda con el
+`upstream` contra el que se diagnosticó. `landing.after_diagnosis` es el único lugar donde un veredicto se
+vuelve acción (`sync_master`, `restart` o `escalate`); `diagnose()` no lee `reason` ni el Markdown. Con
+`sync` dentro del presupuesto no se cierra el pull request ni se lanza nada: la ronda siguiente de `land`
+despacha `sync_master` sobre el mismo head y el mismo pull request, también cuando la escalación la liberó
+una decisión humana (GH-328). Con `unlandable`, sin veredicto (documentos anteriores) o con un segundo
+`sync` para el mismo sha, rige el camino de siempre: reinicio a profundidad 0, escalación desde 1.
+
+**Orden.** `sync_master`, luego `land_slice`, luego `diagnose`, luego `after_diagnosis`. Reiniciar sigue
+siendo el último recurso.
+
+**El veredicto es una conjetura acotada.** El rol es de solo lectura y no puede probar la fusión. Un `sync`
+equivocado termina en una sincronización cerrada con `lacks` (`close_unsynced`, GH-267) y el diagnóstico
+siguiente para ese sha se lee como `unlandable`.
+
+**Peor caso por sha de master.** 2 sincronizaciones con conflicto, 1 diagnóstico, 1 sincronización de
+veredicto y 1 diagnóstico más que se lee como `unlandable`: 3 pases del Developer con sus revisiones y 2
+corridas del diagnosticador, y después un reinicio o una escalación. Es lineal en los movimientos de master
+y está acotado por las 6 sincronizaciones por tarea.
+
+**Sin reescritura.** Los conteos se recalculan desde la lista `landing`; ningún documento se reescribe. Una
+entrada `diagnose` sin `verdict`, o una `sync_master` sin `upstream`, se lee exactamente como antes.

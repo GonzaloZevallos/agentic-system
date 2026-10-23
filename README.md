@@ -851,6 +851,9 @@ mergea solo lo que Tech Lead aprobó y los chequeos dejan verde, y ese merge es 
 `auto_merged`, que no puntúa (ni como éxito ni como fracaso) y no entra en la autonomía.
 Las tareas del set de evaluación nunca se mergean solas, así que el set sigue midiendo el
 veredicto del humano.
+Cuando el merge se rechaza y el diagnóstico del aterrizaje concluye `sync` (basta fusionar el master
+actual en la rama y resolver los conflictos), el aterrizaje sincroniza ese mismo pull request en vez de
+reiniciar la tarea; reiniciar queda para cuando el trabajo aprobado no puede aterrizar (ADR-0048).
 
 **El Tech Writer todavía no se mide.** El set de cinco tareas no cambia con ADR-0058, y
 ninguna toca textos. La tarea candidata es una de apostrophe con `touches_copy` en un

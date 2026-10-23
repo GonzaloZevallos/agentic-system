@@ -137,7 +137,11 @@ def test_gh53_disjoint_paths_land_a_slice_then_the_main_pr_syncs_and_does_not_re
 
 def test_gh53_crossed_paths_restart_with_the_reason_no_clean_slice():
     runner = ScriptedRunner(
-        landing_diagnoser=[RawResult({"markdown": "### Why\n\nx", "reason": "r", "verdict": "unlandable"}, 0.1, 1, "s")]
+        landing_diagnoser=[
+            RawResult(
+                {"markdown": "### Why\n\nx", "reason": "r", "verdict": "unlandable"}, 0.1, 1, "s"
+            )
+        ]
     )
     ports = _world(frozenset({"a.py", "b.py", "c.py"}), runner)
 
@@ -152,7 +156,11 @@ def test_gh53_crossed_paths_restart_with_the_reason_no_clean_slice():
 
 def test_gh53_master_moving_over_the_units_own_paths_restarts_with_no_clean_slice():
     runner = ScriptedRunner(
-        landing_diagnoser=[RawResult({"markdown": "### Why\n\nx", "reason": "r", "verdict": "unlandable"}, 0.1, 1, "s")]
+        landing_diagnoser=[
+            RawResult(
+                {"markdown": "### Why\n\nx", "reason": "r", "verdict": "unlandable"}, 0.1, 1, "s"
+            )
+        ]
     )
     ports = _world(frozenset({"integration.py"}), runner)  # the integration paths are disjoint
     ports.workspace.moved = ("a.py", "b.py", "c.py")  # master changed what each unit changed

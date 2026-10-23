@@ -555,7 +555,11 @@ def _diagnosed(ports, tmp_path, launcher, **document):
         runner=ScriptedRunner(
             landing_diagnoser=[
                 RawResult(
-                    {"markdown": "### Why it does not land\n\nstale premise", "reason": "stale", "verdict": "unlandable"},
+                    {
+                        "markdown": "### Why it does not land\n\nstale premise",
+                        "reason": "stale",
+                        "verdict": "unlandable",
+                    },
                     0.4,
                     3,
                     "s",
@@ -591,7 +595,16 @@ def test_merge_failed_diagnoses_once_closes_the_pull_request_and_restarts_fresh(
         ports,
         runner=ScriptedRunner(
             landing_diagnoser=[
-                RawResult({"markdown": "### Why\n\nstale", "reason": "stale premise", "verdict": "unlandable"}, 0.4, 3, "s")
+                RawResult(
+                    {
+                        "markdown": "### Why\n\nstale",
+                        "reason": "stale premise",
+                        "verdict": "unlandable",
+                    },
+                    0.4,
+                    3,
+                    "s",
+                )
             ]
         ),
     )
@@ -870,7 +883,14 @@ def test_acceptance_merge_failed_is_diagnosed_the_pull_request_closed_and_a_fres
     ports = dataclasses.replace(
         ports,
         runner=ScriptedRunner(
-            landing_diagnoser=[RawResult({"markdown": "### Why\n\nx", "reason": "r", "verdict": "unlandable"}, 0.5, 2, "s")]
+            landing_diagnoser=[
+                RawResult(
+                    {"markdown": "### Why\n\nx", "reason": "r", "verdict": "unlandable"},
+                    0.5,
+                    2,
+                    "s",
+                )
+            ]
         ),
     )
     driver = _Driver(ports, tmp_path)
@@ -897,7 +917,14 @@ def test_acceptance_a_second_exhaustion_at_depth_one_escalates_and_files_nothing
     ports = dataclasses.replace(
         ports,
         runner=ScriptedRunner(
-            landing_diagnoser=[RawResult({"markdown": "### Why\n\nx", "reason": "r", "verdict": "unlandable"}, 0.5, 2, "s")]
+            landing_diagnoser=[
+                RawResult(
+                    {"markdown": "### Why\n\nx", "reason": "r", "verdict": "unlandable"},
+                    0.5,
+                    2,
+                    "s",
+                )
+            ]
         ),
     )
     driver = _Driver(ports, tmp_path)
@@ -945,7 +972,9 @@ def _cut(reason, times=2):
 
 
 def _delivery():
-    return RawResult({"markdown": "### Why\n\nx", "reason": "stale", "verdict": "unlandable"}, 0.4, 3, "s")
+    return RawResult(
+        {"markdown": "### Why\n\nx", "reason": "stale", "verdict": "unlandable"}, 0.4, 3, "s"
+    )
 
 
 def _diagnoses(ports):
