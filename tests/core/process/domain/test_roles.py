@@ -466,6 +466,7 @@ EXPECTED_CRITERIA = {
     "tech_writer_review": ("writing",),
     "ui_lead_final": ("design",),
     "pm_final": ("product",),
+    "qa_performance": ("engineering",),
     "product_analyst_bug": ("product",),
     "pm_bug": ("product",),
     "tech_lead_ephemeral": ("engineering", "product"),

@@ -201,7 +201,7 @@ def landing_step(
     if spent.diagnosed:
         return step("none")
     match refusal:
-        case "not_ready" | "pr_not_open" | "eval_set":
+        case "not_ready" | "pr_not_open" | "eval_set" | "perf_unverified":
             return step("none")
         case "eval_set_unreadable" | "ci_missing" | "ci_unreadable":
             waited = spent.waited_s
@@ -477,6 +477,7 @@ def slice_facts(
     owned = [
         row for row in rules.open_findings(state) if set(rules.row_owners(state, row)) & set(units)
     ]
+    perf_convened, perf_verdict, perf_head = rules.perf_merge_facts(state)
     return rules.MergeFacts(
         task_id=task_id,
         status=state.get("status"),
@@ -506,6 +507,9 @@ def slice_facts(
         ci_fresh=ci_fresh,
         ci_waited_s=ci_waited_s,
         followups_filed=followups_filed,
+        perf_convened=perf_convened,
+        perf_verdict=perf_verdict,
+        perf_head=perf_head,
     )
 
 

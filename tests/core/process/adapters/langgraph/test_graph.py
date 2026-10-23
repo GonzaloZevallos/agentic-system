@@ -1095,6 +1095,7 @@ def test_exported_graph_uses_the_default_ports():
         "integrate",
         "copy_review",
         "final_validation",
+        "qa_performance",
         "deliver",
         "discard",
         "split",

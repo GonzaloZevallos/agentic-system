@@ -30,7 +30,7 @@ from __future__ import annotations
 from agentic.shared.configuration import Configuration, experiment_snapshot
 
 from ..domain import ci, presubmit, rules
-from ..domain.roles import TECH_LEAD, pair_for, reviewer_for
+from ..domain.roles import QA_PERFORMANCE, TECH_LEAD, pair_for, reviewer_for
 from ..domain.task import WAITING_ON_HUMAN, TaskState, apply
 from .checkouts import SetupFailed, subtask_checkout, task_base
 from .ci_review import CI_SECTION, CiEvidence, read_ci
@@ -81,6 +81,7 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
             rules.developer_section(subtask_id),
             rules.return_section(state, subtask_id),
             *extra_ci,
+            *_perf_table(state, subtask_id),
         ),
         cwd=checkout.path,
         subtask=subtask_id,
@@ -140,13 +141,13 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
         "reason": reason,
         "change_category": category,
     }
-    if subtask.get("returned_by") == "final_validation":
-        # PM's early final validation (ADR-0040) was the open return; this review is
-        # now, so the next resumed Developer's delta, and the pass after this one's own
-        # spec, must both come from this section (`rules.return_section`), not from
-        # PM's. Written only to flip that case: every ordinary return keeps the subtask
-        # exactly as it always has, with no `returned_by` key at all (`.get`'s own
-        # `'review'` default already reads that the same way).
+    if rules.return_section(state, subtask_id) != rules.review_section(subtask_id):
+        # PM's early final validation (ADR-0040) or QA Performance (ADR-0060) was the open
+        # return; this review is now, so the next resumed Developer's delta, and the pass
+        # after this one's own spec, must both come from this section
+        # (`rules.return_section`), not from theirs. Written only to flip that case: an
+        # ordinary return keeps the subtask with no `returned_by` key at all, which
+        # `return_section` already reads as `'review'`.
         returned["returned_by"] = "review"
     patch = apply(patch, {"subtasks": {subtask_id: returned}})
     if remaining > 0:
@@ -166,3 +167,13 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
         patch = rules.logged(patch)
         patch["status"] = WAITING_ON_HUMAN
     return finish(state, patch, ports)
+
+
+def _perf_table(state: TaskState, subtask_id: str) -> tuple[str, ...]:
+    """The latest QA Performance section (GH-318, ADR-0060), only for the unit whose review
+    is the last before QA and only when the plan convened performance. Nothing otherwise, so
+    a task that is not convened reads exactly what it read before. It adds no tool: the
+    evidence that a performance finding is fixed is the node's re-measurement."""
+    if state.get("performance") and subtask_id == rules.reviewed_unit_name(state):
+        return (QA_PERFORMANCE.name,)
+    return ()

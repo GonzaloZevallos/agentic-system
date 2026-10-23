@@ -157,10 +157,50 @@ def perf(
         _check_overlay(paths, head, ports, config)
     except GitError as exc:
         raise PerfRefused(f"could not read the product's git state: {exc}") from exc
-    code = revision or head
-    if not lock.acquire(config.perf_lock_wait_s):
-        results = tuple(performance.busy(s) for s in selected)
-        return PerfExit.INCONCLUSIVE, Report(results, head, code, paths)
+    measured, code = measure_at(
+        revision or head,
+        selected,
+        setup,
+        paths,
+        config.perf_lock_wait_s,
+        1,
+        ports,
+        runner,
+        lock,
+        config,
+        clock,
+        head,
+    )
+    report = Report(tuple(measured), head, code, paths)
+    return _exit(performance.overall(measured)), report
+
+
+def measure_at(
+    code: str,
+    scenarios: Sequence[Scenario],
+    setup: Mapping[str, str],
+    overlay: Sequence[str],
+    lock_wait_s: float,
+    tries: int,
+    ports: Ports,
+    runner: PerfRunner,
+    lock: PerfLock,
+    config: Configuration,
+    clock: Callable[[], float] = time.monotonic,
+    overlay_from: str | None = None,
+) -> tuple[list[Result], str]:
+    """The lifecycle the verb and QA Performance's node (ADR-0060) share: take the lock (up
+    to `tries` tries of `lock_wait_s` each; every scenario is `busy` when none succeeds),
+    sweep the stale `perf-*` checkouts, make a throwaway `perf-<uuid>` worktree at `code`,
+    overlay the product's HEAD paths when asked, measure under the `perf_node_timeout_s`
+    deadline and, however that ends, remove the worktree and release the lock. Returns the
+    results and the full sha measured (`code` itself when nothing was). Raises `PerfRefused`
+    when the checkout could not be prepared. `overlay_from` is the product revision the
+    overlay paths are copied from: the verb passes the head it validated them against.
+    `PerfRunner.run` is called only here, only under the lock, and only with the throwaway
+    worktree as its cwd."""
+    if not any(lock.acquire(lock_wait_s) for _ in range(tries)):
+        return [performance.busy(s) for s in scenarios], code
     started = clock()
     name = f"{STALE_PREFIX}{uuid4().hex}"
     try:
@@ -168,12 +208,13 @@ def perf(
         try:
             checkout = ports.workspace.detached_checkout(name, code)
             code = ports.workspace.full_head(checkout)  # a ref the human typed, as its sha
-            if paths:
-                ports.workspace.overlay(checkout, head, paths)
+            if overlay:
+                head = overlay_from or ports.workspace.full_head(config.product_dir)
+                ports.workspace.overlay(checkout, head, tuple(overlay))
         except GitError as exc:
             raise PerfRefused(f"could not prepare the checkout of {code}: {exc}") from exc
         measured = measure_scenarios(
-            selected,
+            scenarios,
             checkout,
             setup,
             runner,
@@ -183,8 +224,7 @@ def perf(
     finally:
         ports.workspace.remove_checkout(name)
         lock.release()
-    report = Report(tuple(measured), head, code, paths)
-    return _exit(performance.overall(measured)), report
+    return measured, code
 
 
 def _selected(product: str, scenario: str | None, ports: Ports) -> list[Scenario]:

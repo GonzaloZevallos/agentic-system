@@ -29,6 +29,8 @@ from agentic.core.process.application.ports import (
     LaunchAttempt,
     ListedPullRequest,
     MergeCallFailed,
+    PerfLock,
+    PerfRunner,
     Ports,
     ProcessReaper,
     ProductKnowledge,
@@ -1399,6 +1401,8 @@ def memory_ports(
     sample_app: SampleApp | None = None,
     reaper: ProcessReaper | None = None,
     limits: RunLimits | None = None,
+    perf_runner: PerfRunner | None = None,
+    perf_lock: PerfLock | None = None,
 ) -> Ports:
     return Ports(
         runner=runner if runner is not None else ScriptedRunner(),
@@ -1414,6 +1418,8 @@ def memory_ports(
         sample_app=sample_app if sample_app is not None else MemorySampleApp(),
         reaper=reaper if reaper is not None else FakeReaper(),
         **({} if limits is None else {"limits": limits}),
+        perf_runner=perf_runner,
+        perf_lock=perf_lock,
     )
 
 

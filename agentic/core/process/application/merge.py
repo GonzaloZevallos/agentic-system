@@ -55,6 +55,7 @@ COMMENTED: tuple[str, ...] = (
     "ci_failed",
     "ci_missing",
     "ci_unreadable",
+    "perf_unverified",
 )
 
 LEFT_TO_HUMAN = "Left for the human to merge."
@@ -505,6 +506,14 @@ def _adr_evidence(facts: rules.MergeFacts) -> str:
     return ""
 
 
+def _perf_evidence(facts: rules.MergeFacts) -> str:
+    """What a `perf_unverified` refusal says, one fixed line from the structured facts: the
+    run's head when it differs from the pull request's, else its verdict (`none`: no run)."""
+    if facts.perf_verdict == "approved":
+        return f"measured {facts.perf_head or 'none'}, head {facts.pr_head}"
+    return f"verdict {facts.perf_verdict or 'none'}"
+
+
 def _summary_line(comment: str) -> str:
     """The line after the first of an `Auto-merge refused:` comment that names what
     failed, or "" when there is none (the comment goes straight to its closing sentence)."""
@@ -550,6 +559,8 @@ def _refuse(
             text = "\n\n".join(
                 part for part in (first, _ci_evidence(reason, facts), closing) if part
             )
+        if facts is not None and reason == "perf_unverified":
+            text = "\n\n".join(part for part in (first, _perf_evidence(facts), closing) if part)
         if reason == "merge_failed":
             advice = (
                 rules.MERGE_FAILURE_ADVICE[failure]

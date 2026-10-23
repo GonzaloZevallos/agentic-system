@@ -19,7 +19,7 @@ re-argumentan.
 
 ## 1. Roles
 
-18 roles agénticos más el humano, que actúa como aprobador y destino de escalados.
+19 roles agénticos más el humano, que actúa como aprobador y destino de escalados.
 
 ### Coordinación
 
@@ -55,7 +55,7 @@ Tech Lead nunca codea. Tiene dos modos: por tarea, y proactivo sobre el repo.
 | QA Lead | Siempre. Coordina y consolida un veredicto único |
 | QA Funcional | Siempre, en ambas pasadas |
 | QA Seguridad | 2ª pasada, si Tech Lead lo convoca |
-| QA Performance | 2ª pasada, si Tech Lead lo convoca |
+| QA Performance | 2ª pasada, si Tech Lead lo convoca. Existe por sí solo, sin QA Lead (ADR-0060; la medición es del ADR-0059) |
 
 ### Entradas automáticas
 
@@ -162,6 +162,11 @@ PjM clasifica → Tech Lead → Developers → QA verifica que el comportamiento
 ```
 
 Sin PM, sin flags, sin métricas. Cierra solo con aprobación de QA.
+
+QA Performance ya existe por sí solo en este camino (ADR-0060): si el plan de Tech Lead
+convoca rendimiento, el nodo corre después de la integración, antes de entregar, y su
+veredicto puede devolver la pieza o dejar el PR al humano. Un plan que no lo convoca no lo
+ve (la medición es del ADR-0059).
 
 Si QA detecta un cambio de comportamiento inesperado, devuelve a PjM. PjM **consulta** a PM
 si el cambio es aceptable:
@@ -576,6 +581,14 @@ terminar: faltar es fallo de rol y se reintenta con el error como entrada.
   que las métricas se registren y que el dashboard muestre lo definido.
 - QA Seguridad y QA Performance, si Tech Lead los convocó, definen sus casos sobre el código
   real, ejecutan, reportan y exploran.
+- **QA Performance existe por sí solo** (ADR-0060), antes que QA Lead: Tech Lead lo convoca
+  en el plan (`performance`: escenarios con volumen y presupuestos) cuando el costo de la
+  tarea crece con los datos o el tráfico, o el issue declara un presupuesto. El sistema mide
+  la pieza integrada (ADR-0059: `agentic perf`, en un worktree desechable, bajo el cerrojo),
+  compara cada presupuesto con una función pura y el rol lee la tabla; ningún rol corre la
+  medición. Su veredicto (`approved`, `returned`, `unverified`) puede devolver el trabajo a
+  la integración o retener el auto-merge (`perf_unverified`). No espera a QA Lead ni a QA
+  Funcional.
 - QA Lead consolida **un solo veredicto** con todos los hallazgos, aunque unos aprueben y
   otros rechacen, y enruta cada hallazgo: comportamiento → PM, técnico → Developer de la
   subtarea.
@@ -895,7 +908,7 @@ enteramente de la asimetría de modelo y de prompt. Si no la tienen, sobran.
 
 ## 11. Orden de implementación
 
-Los 18 roles quedan en el diseño. Lo que se ordena es el orden en que se construyen.
+Los 19 roles quedan en el diseño. Lo que se ordena es el orden en que se construyen.
 
 **Regla**: cada rol nuevo tiene que mostrar que las cinco tareas salen **mejor con él que
 sin él**. Es lo que convierte la intuición de organigrama en una hipótesis que se puede

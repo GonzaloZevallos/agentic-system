@@ -65,6 +65,17 @@ Write, in Markdown, using `###` headings and nothing above `###`:
    subtask into the task branch as it is approved, so merging is not integration work
    and a Developer is paid for this only when there is something here. Empty when
    merging is the whole job, which is the normal case.
+   Convene QA Performance, in the structured `performance` field, when the task's cost
+   scales with data or traffic, or when the issue states a performance budget: each
+   scenario has a `name`, a `volume` with its `volume_unit` (`rows`, `days`, `months` or
+   `years`), a one-line `basis`, and `budgets` of `metric` (ending `_ms`, `_queries` or
+   `_kb`), `limit`, `unit` (`ms`, `queries`, `kb`), `source` and a one-line `basis`.
+   `source` is `issue` when the request states the number, `proposed` when you set it:
+   a proposed number is fixed now, with its basis, and nothing changes any budget after
+   the plan. A convened plan includes the subtask that writes the scenario: the `seed`
+   and `measure` commands and the `.agentic/stack.yaml` `performance` declaration whose
+   limits and volume equal the plan's. Leave `performance` empty when neither applies:
+   most tasks convene nothing.
 6. `### For the next role`: what every Developer must know before starting: conventions
    of this repo, commands to run tests and the linter, what not to touch, and which
    existing tests are the proof that behaviour did not change. The checks the product
@@ -122,6 +133,8 @@ Everything goes in the structured output, in one call:
   live in the Markdown with their reason.
 - `integration`: `### Integration` as one string, what the integrating Developer has to
   do beyond merging; an empty string when merging is the whole job.
+- `performance`: the scenarios QA Performance measures, as above; empty when not
+  convened.
 - `estimated_cost_usd` and `estimated_files`: the two numbers of `### Estimate`.
 - `markdown`: the full section above, in Markdown.
 </Output>

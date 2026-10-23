@@ -116,6 +116,11 @@ TABLE: tuple[Row, ...] = (
         "the dashboard definitions and the recorded columns are checked against the golden "
         "catalogue of Langfuse's schema",
     ),
+    Row(
+        "tests/fixtures/pre_performance_document.md",
+        ("tests/core/process/domain/test_schemas.py",),
+        "an old task document that must still parse with no performance scenarios",
+    ),
 )
 # Paths no test reads (the guard asserts it); a change to them selects nothing.
 IGNORE: tuple[str, ...] = (

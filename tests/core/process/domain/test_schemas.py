@@ -509,3 +509,175 @@ def test_the_plan_schema_leaves_subtasks_and_parts_optional_for_the_model():
     plan = schemas.json_schema(schemas.TechPlan, VOCAB)
     assert "parts" in plan["properties"]
     assert "subtasks" not in plan.get("required", []) and "parts" not in plan.get("required", [])
+
+
+# --- QA Performance convening (GH-318, ADR-0060) ---------------------------------------
+
+
+def _scenario(**over) -> dict:
+    return {
+        "name": "list",
+        "volume": 50000,
+        "volume_unit": "rows",
+        "basis": "the issue's largest account",
+        **over,
+        "budgets": over.get(
+            "budgets",
+            [
+                {
+                    "metric": "list_ms",
+                    "limit": 300,
+                    "unit": "ms",
+                    "source": "issue",
+                    "basis": "the issue says 300 ms",
+                },
+                {
+                    "metric": "list_queries",
+                    "limit": 3,
+                    "unit": "queries",
+                    "source": "proposed",
+                    "basis": "one query per level plus the page",
+                },
+            ],
+        ),
+    }
+
+
+def test_an_old_plan_without_performance_parses_with_it_empty():
+    old = _plan("m", "api")
+    assert "performance" not in old
+    assert (
+        schemas.validate(TechPlan, {**old, "estimated_cost_usd": 3, "estimated_files": 4}, {})[
+            "performance"
+        ]
+        == []
+    )
+
+
+def test_an_old_task_document_parses_with_its_runs_unchanged():
+    from pathlib import Path
+
+    from agentic.core.process.domain import document
+
+    raw = (Path(__file__).parents[3] / "fixtures" / "pre_performance_document.md").read_text()
+    state = document.parse(raw)
+    assert "performance" not in state
+    assert state["runs"] and all(
+        "perf_verdict" not in run and "perf_head" not in run for run in state["runs"]
+    )
+    assert document.parse(document.render(state))["runs"] == state["runs"]
+
+
+def test_a_convened_plan_round_trips_through_validate():
+    raw = {
+        **_plan("m", "perf"),
+        "estimated_cost_usd": 3,
+        "estimated_files": 4,
+        "performance": [_scenario()],
+    }
+    data = schemas.validate(TechPlan, raw, {})
+    assert data["performance"] == raw["performance"]
+    assert schemas.validate(TechPlan, {**raw, "performance": data["performance"]}, {}) == data
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"volume_unit": "weeks"},
+        {
+            "budgets": [
+                {"metric": "m_ms", "limit": 1, "unit": "seconds", "source": "issue", "basis": "b"}
+            ]
+        },
+        {
+            "budgets": [
+                {"metric": "m_ms", "limit": 1, "unit": "ms", "source": "guess", "basis": "b"}
+            ]
+        },
+        {"budgets": []},
+        {"volume": 0},
+        {"volume": float("nan")},
+        {"basis": "two\nlines"},
+    ],
+)
+def test_a_scenario_with_a_bad_unit_source_volume_or_basis_is_refused(bad):
+    raw = {**_plan("m", "perf"), "estimated_cost_usd": 3, "estimated_files": 4}
+    with pytest.raises(ValueError):
+        schemas.validate(TechPlan, {**raw, "performance": [_scenario(**bad)]}, {})
+
+
+def test_a_plan_cannot_name_a_scenario_or_a_metric_twice():
+    raw = {**_plan("m", "perf"), "estimated_cost_usd": 3, "estimated_files": 4}
+    with pytest.raises(ValueError, match="twice"):
+        schemas.validate(TechPlan, {**raw, "performance": [_scenario(), _scenario()]}, {})
+    budget = _scenario()["budgets"][0]
+    with pytest.raises(ValueError, match="twice"):
+        schemas.validate(
+            TechPlan, {**raw, "performance": [_scenario(budgets=[budget, budget])]}, {}
+        )
+
+
+def test_plan_limits_gives_the_volume_the_unit_and_the_limits_the_measurement_uses():
+    from agentic.core.process.domain.performance import Limit
+
+    scenario = schemas.PerfScenario.model_validate(_scenario())
+    assert schemas.plan_limits(scenario) == (
+        50000.0,
+        "rows",
+        {"list_ms": Limit(300.0, "ms"), "list_queries": Limit(3.0, "queries")},
+    )
+
+
+def _budget(**over) -> dict:
+    return {
+        "metric": "list_ms",
+        "limit": 300,
+        "unit": "ms",
+        "source": "issue",
+        "basis": "the issue says 300 ms",
+        **over,
+    }
+
+
+@pytest.mark.parametrize(
+    ("scenario", "message"),
+    [
+        (_scenario(budgets=[_budget(unit="queries")]), "must end with"),
+        (_scenario(budgets=[_budget(metric="list_queries")]), "must end with"),
+        (_scenario(budgets=[_budget(limit=-1)]), "finite number, 0 or more"),
+        (_scenario(budgets=[_budget(limit=float("inf"))]), "finite number, 0 or more"),
+        (_scenario(budgets=[_budget(limit=float("nan"))]), "finite number, 0 or more"),
+        (_scenario(budgets=[_budget(basis="one\ntwo")]), "one non-empty line"),
+        (_scenario(budgets=[_budget(basis="  ")]), "one non-empty line"),
+        (_scenario(name="List Page"), "slug"),
+        (_scenario(volume=float("inf")), "positive finite"),
+        (_scenario(volume=-5), "positive finite"),
+    ],
+)
+def test_the_budget_and_scenario_checks_refuse_what_they_guard(scenario, message):
+    raw = {**_plan("m", "perf"), "estimated_cost_usd": 3, "estimated_files": 4}
+    with pytest.raises(ValueError, match=message):
+        schemas.validate(TechPlan, {**raw, "performance": [scenario]}, {})
+
+
+def test_a_convened_plan_reaches_the_document_and_a_plan_without_one_leaves_no_trace():
+    from pathlib import Path
+
+    from agentic.core.process.domain import document
+
+    fixture = Path(__file__).parents[3] / "fixtures" / "pre_performance_document.md"
+    state = document.parse(fixture.read_text())
+    plan = schemas.validate(
+        TechPlan,
+        {
+            **_plan("m", "perf"),
+            "estimated_cost_usd": 3,
+            "estimated_files": 4,
+            "performance": [_scenario()],
+        },
+        {},
+    )
+    convened = document.parse(document.render({**state, "performance": plan["performance"]}))
+    assert convened["performance"] == plan["performance"]
+    assert "performance" not in document.render(state)
+    assert "performance" not in document.render({**state, "performance": []})

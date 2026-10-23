@@ -29,6 +29,7 @@ from .roles import (
     PM_CONSOLIDATOR,
     PM_FINAL,
     PRODUCT_ANALYST,
+    QA_PERFORMANCE,
     SOLUTION_INTERVIEW,
     TECH_LEAD,
     TECH_WRITER,
@@ -66,6 +67,7 @@ from .task import (
     PauseEntry,
     PullRequest,
     ResumedPauseEntry,
+    ReturnedBy,
     ReviewKind,
     RoleRun,
     SettledRow,
@@ -208,6 +210,7 @@ def findings_rows(state: TaskState) -> list[FindingRecord]:
     an `important` at the same key keeps it open, whatever order they were appended in."""
     settled = {_norm(location) for location in state.get("settled_findings", [])}
     approved = _approved_versions(state)
+    qa_approved = qa_approved_version(state)
     rows: dict[tuple[str, str], FindingRecord] = {}
     open_records: dict[tuple[str, str], list[FindingRecord]] = {}
     for record in state.get("findings", []):
@@ -223,11 +226,41 @@ def findings_rows(state: TaskState) -> list[FindingRecord]:
         if row["status"] == "open"
         and (
             _norm(row["location"]) in settled
-            or all(_covered(record, key, approved) for record in open_records[key])
+            or all(
+                _covered(record, key, approved) or qa_settles(record, qa_approved)
+                for record in open_records[key]
+            )
         )
         else row
         for key, row in rows.items()
     ]
+
+
+def qa_approved_version(state: TaskState) -> int:
+    """The version of the latest approving QA Performance run, `0` when there is none. The
+    only reader of that fact for the fold: `qa_settles` is the writer's one decision."""
+    return max(
+        (
+            run.get("version", 1)
+            for run in state.get("runs", [])
+            if run.get("section", run["role"]) == QA_PERFORMANCE.name
+            and run.get("perf_verdict") == "approved"
+        ),
+        default=0,
+    )
+
+
+def qa_settles(record: FindingRecord, approved_version: int) -> bool:
+    """The named fold writer of QA Performance (GH-318, ADR-0060, ADR-0015 addendum): an
+    approving run settles every record at its own location, `QA Performance`, from a version
+    below its own -- whatever the severity or scope, since its rows are plan-scoped and the
+    system built them from numbers the same run has just measured again. A later return
+    writes records at a higher version, so it reopens the row. `settled_on_approval` does
+    not know these rows and is unchanged."""
+    return (
+        _norm(record["location"]) == _norm(QA_PERFORMANCE.name)
+        and record["version"] < approved_version
+    )
 
 
 def _approved_versions(state: TaskState) -> dict[tuple[str, tuple[str, str]], int]:
@@ -1218,9 +1251,16 @@ def return_section(state: TaskState, subtask_id: str) -> str:
     reviewer's spec both come from this one function, never from `review_section`
     directly."""
     subtask = state.get("subtasks", {}).get(subtask_id, {})
-    if subtask.get("returned_by", "review") == "final_validation":
-        return PM_FINAL.name
-    return review_section(subtask_id)
+    returned_by: ReturnedBy = subtask.get("returned_by", "review")
+    match returned_by:
+        case "review":
+            return review_section(subtask_id)
+        case "final_validation":
+            return PM_FINAL.name
+        case "qa_performance":
+            return QA_PERFORMANCE.name
+        case _:
+            assert_never(returned_by)
 
 
 def returned_developer_delta(state: TaskState, subtask_id: str, branch: str, head: str) -> str:
@@ -1821,6 +1861,37 @@ def copy_review_due(state: TaskState) -> bool:
     return copy_idx is None or copy_idx < review_idx
 
 
+def qa_performance_due(state: TaskState) -> bool:
+    """Whether QA Performance (GH-318, ADR-0060) still has to run before `deliver`: the
+    plan convened performance (`TechPlan.performance`, the only source -- never the
+    branch's stack), every subtask is approved, and no run of the node whose verdict
+    approves or leaves the head unverified is newer than the latest approving review of
+    `integration` -- or of the single subtask, when there is no integration. A `returned`
+    run settles nothing: it reopens the subtask, and the review that approves it again is
+    newer than any run that came before. `False` for a plan that convened nothing, byte
+    for byte as today."""
+    if not state.get("performance") or not all_approved(state):
+        return False
+    subtasks = state.get("subtasks", {})
+    target = INTEGRATION if INTEGRATION in subtasks else next(iter(subtasks), None)
+    if target is None:
+        return False
+    review_idx = _latest_index(state, review_section(target))
+    if review_idx is None:
+        return True
+    settled_idx = None
+    for i, run in enumerate(state.get("runs", [])):
+        if (
+            run.get("section", run["role"]) == QA_PERFORMANCE.name
+            and run.get("perf_verdict") in _QA_PERFORMANCE_SETTLES
+        ):
+            settled_idx = i
+    return settled_idx is None or settled_idx < review_idx
+
+
+_QA_PERFORMANCE_SETTLES = frozenset(("approved", "unverified"))
+
+
 def after_integrate(state: TaskState) -> str | None:
     if state.get("escalated"):
         return None
@@ -1830,7 +1901,9 @@ def after_integrate(state: TaskState) -> str | None:
         return None
     if copy_review_due(state):
         return "copy_review"
-    return "final_validation" if final_validation_due(state) else "deliver"
+    if final_validation_due(state):
+        return "final_validation"
+    return "qa_performance" if qa_performance_due(state) else "deliver"
 
 
 def after_final_validation(state: TaskState) -> str | None:
@@ -1839,6 +1912,14 @@ def after_final_validation(state: TaskState) -> str | None:
     reopened subtask is exactly what `dispatched_subtasks` picks up, and the fan-in
     sends it back to its Developer like any other wave. No new predicate decides
     between the two -- `after_integrate` already does, from the same state."""
+    return None if state.get("escalated") else "integrate"
+
+
+def after_qa_performance(state: TaskState) -> str | None:
+    """Always back to the fan-in, like `after_final_validation`: on `approved` or
+    `unverified`, `qa_performance_due` now reads `False` and `after_integrate` falls
+    through to `deliver`; on `returned`, the reopened subtask is what `dispatched_subtasks`
+    picks up."""
     return None if state.get("escalated") else "integrate"
 
 
@@ -3038,6 +3119,7 @@ MergeRefusal = Literal[
     "adr_number_taken",
     "not_approved",
     "head_not_reviewed",
+    "perf_unverified",
     "open_findings_blocking",
     "open_findings",
     "eval_set",
@@ -3063,6 +3145,10 @@ MergeRefusal = Literal[
 - `not_approved`: the reviewed unit (`reviewed_unit`) is not approved.
 - `head_not_reviewed`: the pull request head is not the one Tech Lead reviewed, or either
   is unknown.
+- `perf_unverified` (GH-318, ADR-0060): the plan convened QA Performance and the latest
+  QA Performance run is not `approved`, or it was not measured on the pull request's own head
+  (a missing or short sha fails closed). Right after `head_not_reviewed`, so a head nobody
+  reviewed is never reported as a performance problem. The landing leaves it to the human.
 - `open_findings_blocking`: a `blocking` finding is still open. Checked before
   `open_findings`: a blocking one is never filed as a follow-up (GH-239).
 - `open_findings`: an `important` finding of the task is still open with neither the final
@@ -3110,7 +3196,10 @@ class MergeFacts:
     `important_pass_done` says the final important pass was resolved and `followups_filed`
     that the landing filed or commented the follow-up for the `outside` ones. `conflicts`
     (GH-255) is whether the head conflicts with the current master: `None` unread, `False`
-    clean, `True` a definite conflict.
+    clean, `True` a definite conflict. The `perf_*` facts (GH-318, ADR-0060) come only from
+    `perf_merge_facts`: whether the plan convened QA Performance, the latest QA Performance
+    run's verdict and the full sha it measured; a `MergeFacts` built without them is not
+    convened, and decides as it always did.
     `ci_untrusted` (GH-239) is `None` when `touched_paths` is unknown and `True` when the
     diff touches the CI's own definition (`CI_DEFINITION_PREFIX`): a CI whose definition the
     change itself could have edited proves nothing, so it never decides `merge`.
@@ -3149,6 +3238,9 @@ class MergeFacts:
     conflicts: bool | None = None
     open_outside: int = 0
     important_pass_done: bool = False
+    perf_convened: bool = False
+    perf_verdict: Literal["approved", "returned", "unverified"] | None = None
+    perf_head: str | None = None
 
 
 @dataclass(frozen=True)
@@ -3160,6 +3252,29 @@ class MergeDecision:
 
     kind: Literal["merge", "run_checks", "wait", "refuse"]
     reason: MergeRefusal | None
+
+
+# The section QA Performance's runs carry: its role label, closed in ADR-0008 (GH-318).
+_QA_PERFORMANCE_SECTION = "QA Performance"
+
+
+def perf_merge_facts(
+    state: TaskState,
+) -> tuple[bool, Literal["approved", "returned", "unverified"] | None, str | None]:
+    """`(convened, verdict, head)` for `MergeFacts`, the only reader of them (GH-318,
+    ADR-0060). `convened` is the plan's own `performance` being non-empty -- never the
+    branch's stack. `verdict` and `head` are the latest QA Performance run's `perf_verdict`
+    and `perf_head`; `None` for both when the task has no such run, or its latest one carries
+    none. A task whose plan did not convene reads `(False, None, None)` whatever its runs say."""
+    if not state.get("performance"):
+        return (False, None, None)
+    latest = None
+    for run in state.get("runs", []):
+        if run.get("section", run["role"]) == _QA_PERFORMANCE_SECTION:
+            latest = run
+    if latest is None:
+        return (True, None, None)
+    return (True, latest.get("perf_verdict"), latest.get("perf_head"))
 
 
 def reviewed_unit(state: TaskState) -> Subtask | None:
@@ -3200,10 +3315,11 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     """The one place the conditions of an automatic merge live (GH-178, ADR-0045); no
     adapter, CLI or poller re-derives any of them. Checked in this order and refused at the
     first that fails: `not_ready`, `pr_not_open`, `adr_number_taken`, `not_approved`,
-    `head_not_reviewed`, `open_findings_blocking`, `open_findings`, `eval_set_unreadable`,
-    `eval_set`, `merge_conflict` (only when `conflicts is True`; unread or clean change
-    nothing), `merge_failed`, then, only when the product declares its CI (`ci_required`):
-    `ci_unreadable`, a `wait` for a head that is not the reviewed one, `ci_failed` and
+    `head_not_reviewed`, `perf_unverified` (only when `perf_convened`), `open_findings_blocking`,
+    `open_findings`, `eval_set_unreadable`, `eval_set`, `merge_conflict` (only when
+    `conflicts is True`; unread or clean change nothing), `merge_failed`, then, only when the
+    product declares its CI (`ci_required`): `ci_unreadable`, a `wait` for a head that is not the
+    reviewed one, `ci_failed` and
     `ci_missing`, a green and fresh CI being the `merge` itself (a green stale one goes on);
     then `checks_failed` (only when the recorded checks cover this head on this master;
     otherwise the next check) and
@@ -3226,6 +3342,12 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
         return MergeDecision("refuse", "not_approved")
     if not (full_commit_id(facts.pr_head) and same_commit(facts.reviewed_head, facts.pr_head)):
         return MergeDecision("refuse", "head_not_reviewed")
+    if facts.perf_convened and not (
+        facts.perf_verdict == "approved"
+        and full_commit_id(facts.perf_head)
+        and same_commit(facts.perf_head, facts.pr_head)
+    ):
+        return MergeDecision("refuse", "perf_unverified")
     if facts.open_blocking > 0:
         return MergeDecision("refuse", "open_findings_blocking")
     if (
