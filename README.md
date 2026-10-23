@@ -19,7 +19,7 @@ re-argumentan.
 
 ## 1. Roles
 
-18 roles agénticos más el humano, que actúa como aprobador y destino de escalados.
+19 roles agénticos más el humano, que actúa como aprobador y destino de escalados.
 
 ### Coordinación
 

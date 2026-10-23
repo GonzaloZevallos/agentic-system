@@ -15,9 +15,10 @@ from pathlib import Path
 import pytest
 
 from agentic.core.process.application.develop import develop
+from agentic.core.process.application.plan import plan
 from agentic.core.process.application.qa_performance import qa_performance
 from agentic.core.process.application.review import review
-from agentic.core.process.domain import rules
+from agentic.core.process.domain import document, rules
 from agentic.core.process.domain.performance import Limit, Measurement, Run, Scenario
 from agentic.core.process.domain.rules import MergeFacts
 from agentic.core.process.domain.task import INTEGRATION, TaskState, apply
@@ -29,6 +30,7 @@ from tests.fakes import (
     MemoryWorkspace,
     ScriptedRunner,
     delivered,
+    planned,
     memory_ports,
     reviewed,
 )
@@ -203,3 +205,34 @@ async def test_a_task_that_convened_nothing_takes_the_old_path_and_measures_noth
     assert route == ["deliver"]
     assert role.slugs == [] and perf.calls == []
     assert rules.perf_merge_facts(final) == (False, None, None)
+
+
+async def test_a_convened_plan_reaches_the_state_survives_the_document_and_drives_the_node():
+    """The step before the integration: Tech Lead's plan carries `performance`, `plan`
+    lands it in the state, the task document round-trips it, and the fan-in's routing
+    reads 'convened' from it once the subtask is approved."""
+    result = planned()
+    assert isinstance(result.structured_output, dict)
+    result.structured_output["performance"] = [PLAN]
+    task = {
+        "id": "GH-1",
+        "title": "Perf",
+        "description": "d",
+        "type": "feature",
+        "sections": {"PM": "### Consolidated definition\n\nx"},
+    }
+    cfg = Configuration(product_dir=MemoryWorkspace.ROOT, skip_ephemeral=True)
+    state = apply(task, await plan(task, cfg, memory_ports(ScriptedRunner(tech_lead=[result]))))
+    assert state["performance"] == [PLAN]
+    assert document.parse(document.render(state))["performance"] == [PLAN]
+    assert rules.after_integrate(state) == "pipeline"  # the subtask is still to build
+
+    unit = state["subtasks"]["api"]
+    state["subtasks"]["api"] = {**unit, "status": "approved", "branch": "agentic/GH-1"}
+    state["runs"] = [{"role": "Tech Lead", "section": rules.review_section("api"), "version": 1}]
+    assert rules.after_integrate(state) == "qa_performance"
+    route, final = await drive(
+        state, ScriptedRunner(qa_performance=[reviewed("approved")]), FakePerfRunner(measured(40))
+    )
+    assert route == ["qa_performance", "deliver"]
+    assert rules.perf_merge_facts(final)[:2] == (True, "approved")
