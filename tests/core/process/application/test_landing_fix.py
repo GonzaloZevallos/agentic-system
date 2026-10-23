@@ -555,7 +555,7 @@ def _diagnosed(ports, tmp_path, launcher, **document):
         runner=ScriptedRunner(
             landing_diagnoser=[
                 RawResult(
-                    {"markdown": "### Why it does not land\n\nstale premise", "reason": "stale"},
+                    {"markdown": "### Why it does not land\n\nstale premise", "reason": "stale", "verdict": "unlandable"},
                     0.4,
                     3,
                     "s",
@@ -591,7 +591,7 @@ def test_merge_failed_diagnoses_once_closes_the_pull_request_and_restarts_fresh(
         ports,
         runner=ScriptedRunner(
             landing_diagnoser=[
-                RawResult({"markdown": "### Why\n\nstale", "reason": "stale premise"}, 0.4, 3, "s")
+                RawResult({"markdown": "### Why\n\nstale", "reason": "stale premise", "verdict": "unlandable"}, 0.4, 3, "s")
             ]
         ),
     )
@@ -870,7 +870,7 @@ def test_acceptance_merge_failed_is_diagnosed_the_pull_request_closed_and_a_fres
     ports = dataclasses.replace(
         ports,
         runner=ScriptedRunner(
-            landing_diagnoser=[RawResult({"markdown": "### Why\n\nx", "reason": "r"}, 0.5, 2, "s")]
+            landing_diagnoser=[RawResult({"markdown": "### Why\n\nx", "reason": "r", "verdict": "unlandable"}, 0.5, 2, "s")]
         ),
     )
     driver = _Driver(ports, tmp_path)
@@ -897,7 +897,7 @@ def test_acceptance_a_second_exhaustion_at_depth_one_escalates_and_files_nothing
     ports = dataclasses.replace(
         ports,
         runner=ScriptedRunner(
-            landing_diagnoser=[RawResult({"markdown": "### Why\n\nx", "reason": "r"}, 0.5, 2, "s")]
+            landing_diagnoser=[RawResult({"markdown": "### Why\n\nx", "reason": "r", "verdict": "unlandable"}, 0.5, 2, "s")]
         ),
     )
     driver = _Driver(ports, tmp_path)
@@ -945,7 +945,7 @@ def _cut(reason, times=2):
 
 
 def _delivery():
-    return RawResult({"markdown": "### Why\n\nx", "reason": "stale"}, 0.4, 3, "s")
+    return RawResult({"markdown": "### Why\n\nx", "reason": "stale", "verdict": "unlandable"}, 0.4, 3, "s")
 
 
 def _diagnoses(ports):
@@ -1741,3 +1741,36 @@ def test_a_refusal_that_maps_to_another_step_is_not_released(tmp_path):
     assert after["pause_log"] == before["pause_log"]
     assert after["escalated"] == before["escalated"]
     assert not any("released_at" in entry for entry in _diagnoses(ports))
+
+
+def test_a_released_diagnose_that_delivers_a_sync_verdict_closes_and_spawns_nothing(tmp_path):
+    """GH-330: the escalation a human released ends in the same decision as any delivery."""
+    ports = _escalated_by_max_turns(tmp_path)
+    _answered(ports, "merge master in, resolve the one conflicted test file")
+    sync = RawResult(
+        {
+            "markdown": "### Why\n\nOne conflicted line.",
+            "reason": "merge origin/master",
+            "verdict": "sync",
+        },
+        0.4,
+        3,
+        "s",
+    )
+    ports, _ = _diagnoser(ports, sync)
+    launcher = FakeLauncher()
+
+    result, _ = _land_at(ports, tmp_path, LATER, launcher)
+
+    assert result.kind == "dispatched" and result.step == "diagnose"
+    delivered = [e for e in _diagnoses(ports) if e.get("delivered")]
+    assert [(e["verdict"], e["upstream"]) for e in delivered] == [("sync", MASTER)]
+    assert ports.tracker.closed_pull_requests == [] and launcher.spawned == []
+    assert not _doc(ports).get("landing_restarts")
+    assert "landing_restarts" not in ports.documents.closures.get("GH-5", {})
+    assert not _doc(ports).get("escalated")
+
+    again, _ = _land_at(ports, tmp_path, LATER, launcher)
+
+    assert again.step == "sync_master"
+    assert _doc(ports)["landing"][-1]["head"] == HEAD

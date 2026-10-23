@@ -237,8 +237,9 @@ def _land(
         "refusal": step.refusal,
         "at": clock(),
     }
-    if step.kind == "sync_master" and upstream.sha is not None:
-        # What the sync is for: `deliver` resolves it only if the head holds this sha.
+    if step.kind in ("sync_master", "diagnose") and upstream.sha is not None:
+        # A sync: what it is for, `deliver` resolves it only if the head holds this sha. A
+        # diagnosis: the master it is made against, which its `sync` verdict is served for.
         entry["upstream"] = upstream.sha
     if step.kind == "land_slice":
         entry["slice_units"] = list(step.units)

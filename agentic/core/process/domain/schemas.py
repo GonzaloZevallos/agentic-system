@@ -27,7 +27,14 @@ from pydantic import BaseModel, Field, model_validator
 from .cost_history import MIN_BUCKET, History, bucket_median, reference_usd
 from .coverage import BRIEF_FORM, MAPPED_FORM, NOT_TOUCHED, UNSATISFIABLE
 from .performance import UNIT_SUFFIX, Limit, Unit, VolumeUnit
-from .task import INTEGRATION, CopyCategory, FindingCategory, FindingScope, Severity
+from .task import (
+    INTEGRATION,
+    CopyCategory,
+    DiagnosisVerdict,
+    FindingCategory,
+    FindingScope,
+    Severity,
+)
 
 TaskType = Literal["bug", "feature", "platform_enhancement"]
 SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -595,6 +602,12 @@ class LandingDiagnosis(RoleOutput):
     reason: str = Field(
         description="One line, why this pull request cannot land, in terms a fresh run "
         "can act on: what to do differently, not what went wrong in general"
+    )
+    verdict: DiagnosisVerdict = Field(
+        description="`sync` when merging the current base into the existing branch and "
+        "resolving the conflicts would land the approved work; `unlandable` when the "
+        "approved work itself cannot land. The system acts on this field alone, never on "
+        "`reason`"
     )
 
 
