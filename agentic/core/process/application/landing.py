@@ -20,12 +20,13 @@ from agentic.shared.configuration import Configuration
 from ..domain import landing as landing_rules
 from ..domain.landing import LandingStepKind
 from ..domain.rules import RunKind
-from ..domain.task import TaskState
+from ..domain.task import TaskState, apply
 from . import landing_fix, landing_plan, landing_slice, landing_sync
 from .checkouts import SetupFailed, task_checkout
 from .landing_plan import LandingContext
 from .poll import StackUnreadable, assess_merge
 from .ports import GitError, Launcher, Ports, RunLock, Upstream
+from .resume import state_from
 
 
 @dataclass(frozen=True)
@@ -188,7 +189,16 @@ def _land(
         now: datetime | None = datetime.fromisoformat(clock())
     except ValueError:
         now = None
-    gate = landing_plan.diagnose_gate(raw, step.kind, now)
+    released: dict[str, Any] = {}
+    if step.kind == "diagnose" and raw.get("escalated"):
+        outcome = landing_plan.release(ports, cfg, task_id, raw, number)
+        if outcome.decision is None:
+            return _waiting_on_human(task_id, head, outcome.why, log)
+        released = landing_rules.released(raw, outcome.decision, clock())
+    # The document as the release leaves it: the gate and the entry below read this view, the
+    # file keeps the escalation until everything else has agreed (head, merge).
+    current: TaskState = apply(raw, released) if released else raw
+    gate = landing_plan.diagnose_gate(current, step.kind, now)
     if gate == "skip":
         log(f"agentic: land: {task_id}: {head} {step.kind}: diagnosis not due")
         return LandResult("skipped", "diagnose_waiting", step.kind)
@@ -199,7 +209,7 @@ def _land(
         landing_fix.escalate_failed_diagnosis(context)
         return LandResult("dispatched", step=step.kind)
     if resumed is None and landing_rules.already_dispatched(
-        landing_plan.entries(raw), head, step.kind
+        landing_plan.entries(current), head, step.kind
     ):
         log(f"agentic: land: {task_id}: {head} {step.kind}: already taken")
         return LandResult("skipped", "already_dispatched", step.kind)
@@ -216,6 +226,11 @@ def _land(
     if again is None or again.head_oid != head:
         log(f"agentic: land: {task_id}: head moved since the decision ({head})")
         return LandResult("skipped", "head_moved", step.kind)
+    if released:
+        # One write, in the same call that appends the entry and dispatches: the release
+        # is never left undispatched (the head and the merge were checked above).
+        ports.documents.save(apply(state_from(raw), released))
+        log(f"agentic: land: {task_id}: {head} diagnose: escalation released by a human decision")
     entry: dict[str, object] = {
         "head": head,
         "step": step.kind,
@@ -232,7 +247,9 @@ def _land(
         if integration_work:
             entry["integration_work"] = True
     if resumed is None:
-        ports.documents.record_closure(task_id, {"landing": [*landing_plan.entries(raw), entry]})
+        ports.documents.record_closure(
+            task_id, {"landing": [*landing_plan.entries(current), entry]}
+        )
     context = LandingContext(
         task_id,
         cfg,
@@ -257,6 +274,34 @@ def _land(
         log(f"agentic: land: {task_id}: {head} {step.kind}: git failed: {exc}")
         return LandResult("stopped", f"git_error: {exc}", step.kind)
     return LandResult("dispatched", step=step.kind)
+
+
+_WAITING_ON: dict[landing_plan.ReleaseWhy, tuple[str, str]] = {
+    "waiting_on_human": (
+        "escalated_waiting_on_human",
+        "a human comment after the Escalated: comment, the needs-human label removed, "
+        "the issue open",
+    ),
+    "needs_restart": (
+        "escalated_needs_restart",
+        "restart it with `agentic run --fresh`: a comment does not release this one",
+    ),
+    "task_cap": ("escalated_task_cap", "raise the task budget: the task cap is spent"),
+    "released": ("escalated_waiting_on_human", ""),
+}
+
+
+def _waiting_on_human(
+    task_id: str,
+    head: str,
+    why: landing_plan.ReleaseWhy,
+    log: Callable[[str], None],
+) -> LandResult:
+    """An escalated diagnose that stays escalated (GH-328): nothing is written, and the line
+    says what releases it instead of reading as a retry that is waiting."""
+    reason, needs = _WAITING_ON[why]
+    log(f"agentic: land: {task_id}: {head} diagnose: escalated, waiting on a human ({needs})")
+    return LandResult("skipped", reason, "diagnose")
 
 
 MERGING_STEPS: frozenset[LandingStepKind] = frozenset({"sync_master", "re_review", "renumber"})

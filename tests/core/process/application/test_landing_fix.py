@@ -1464,3 +1464,274 @@ def test_the_reason_for_any_other_row_is_what_it_always_was():
         "Open important findings (final pass before merge, not a return):\n"
         "Unit `api`:\n- x.py:1: wrong"
     )
+
+
+# --- GH-328: a human decision releases an escalated landing diagnose ----------------------------
+
+ESCALATED_AT = START + timedelta(minutes=5)
+ANSWERED_AT = START + timedelta(minutes=47)
+LATER = START + timedelta(hours=2)
+
+
+def _escalated_by_max_turns(tmp_path, **document):
+    """GH-320 as the landing left it: the Diagnoser failed with `max_turns` and the task is
+    escalated with `needs-human`, one undelivered attempt on the entry."""
+    runner = ScriptedRunner(landing_diagnoser=_cut("max_turns"))
+    ports = _merge_failed(_ports(5), runner, **document)
+    _land_at(ports, tmp_path, START)
+    assert _doc(ports)["escalation_class"] == "failure"
+    return ports
+
+
+def _answered(ports, *bodies, labels=(), state="OPEN"):
+    """The issue as GH-320's was: the system's `Escalated:` comment, then what the human wrote."""
+    from agentic.core.process.application.ports import IssueState
+
+    stamps = [ESCALATED_AT, *(ANSWERED_AT for _ in bodies)]
+    ports.tracker.timestamped["GH-5"] = [
+        IssueComment(body, at.isoformat())
+        for body, at in zip(["Escalated: Landing Diagnoser did not deliver", *bodies], stamps)
+    ]
+    ports.tracker.states[5] = IssueState(state, "", (), None, labels)
+
+
+def _diagnoser(ports, *results):
+    runner = ScriptedRunner(landing_diagnoser=list(results))
+    return dataclasses.replace(ports, runner=runner), runner
+
+
+def test_a_human_answer_releases_the_escalated_diagnose_and_the_role_reads_it(tmp_path):
+    ports = _escalated_by_max_turns(tmp_path)
+    _answered(ports, "merge master in, resolve the one conflicted test file")
+    ports, runner = _diagnoser(ports, _delivery())
+    launcher = FakeLauncher()
+
+    result, lines = _land_at(ports, tmp_path, LATER, launcher)
+
+    doc = _doc(ports)
+    assert result.kind == "dispatched" and result.step == "diagnose"
+    assert len(runner.calls) == 1
+    prompt = runner.calls[0]["prompt"]
+    assert "merge master in, resolve the one conflicted test file" in prompt
+    assert "### Decision 1" in doc["sections"]["Human"]
+    assert not doc.get("escalated") and not doc.get("escalation_class")
+    assert doc["pause_log"][-1] == {"kind": "resumed"}
+    assert sum(entry["kind"] == "resumed" for entry in doc["pause_log"]) == 1
+    assert [e.get("released_at") for e in _diagnoses(ports)][0] == LATER.isoformat()
+    assert any("escalation released by a human decision" in line for line in lines)
+    assert launcher.spawned[0][:3] == ["agentic", "run", "--issue"]  # delivered at depth 0
+
+
+def test_an_escalated_diagnose_with_no_answer_waits_and_names_the_human(tmp_path):
+    ports = _escalated_by_max_turns(tmp_path)
+    ports, runner = _diagnoser(ports)
+    _answered(ports)  # only the system's own comment
+    before = _doc(ports)
+
+    result, lines = _land_at(ports, tmp_path, LATER)
+
+    assert (result.kind, result.reason, result.step) == (
+        "skipped",
+        "escalated_waiting_on_human",
+        "diagnose",
+    )
+    assert any("diagnose: escalated, waiting on a human" in line for line in lines)
+    assert not any("not due" in line or "already taken" in line for line in lines)
+    assert runner.calls == [] and _doc(ports) == before
+
+
+def test_a_second_failure_escalates_after_exactly_one_new_attempt(tmp_path):
+    ports = _escalated_by_max_turns(tmp_path)
+    _answered(ports, "merge master in")
+    ports, runner = _diagnoser(ports, *_cut("max_turns"))
+
+    result, _ = _land_at(ports, tmp_path, LATER)
+
+    doc = _doc(ports)
+    assert result.kind == "dispatched" and doc["escalation_class"] == "failure"
+    assert [e.get("released_at") is not None for e in _diagnoses(ports)] == [True, False]
+    assert len(landing_rules.diagnose_attempts(doc)) == 1
+    assert len([t for _, t in ports.tracker.comments if t.startswith("Escalated: ")]) == 2
+    calls = len(runner.calls)
+
+    again, lines = _land_at(ports, tmp_path, LATER + timedelta(minutes=5))
+
+    assert again.reason == "escalated_waiting_on_human" and len(runner.calls) == calls
+    assert len([t for _, t in ports.tracker.comments if t.startswith("Escalated: ")]) == 2
+
+
+@pytest.mark.parametrize(
+    ("answer", "world"),
+    [
+        ("merge master in", dict(labels=("needs-human",))),
+        ("merge master in", dict(labels=None)),
+        ("merge master in", dict(state="CLOSED")),
+    ],
+    ids=["label_still_there", "labels_unreadable", "issue_closed"],
+)
+def test_a_comment_leaves_the_task_escalated_while_a_condition_fails(tmp_path, answer, world):
+    ports = _escalated_by_max_turns(tmp_path)
+    _answered(ports, answer, **world)
+    ports, runner = _diagnoser(ports)
+    before = _doc(ports)
+
+    result, _ = _land_at(ports, tmp_path, LATER)
+
+    assert result.reason == "escalated_waiting_on_human"
+    assert runner.calls == [] and _doc(ports) == before
+
+
+def test_a_tracker_error_leaves_the_task_escalated(tmp_path):
+    ports = _escalated_by_max_turns(tmp_path)
+    _answered(ports, "merge master in")
+    ports.tracker.state_errors.add(5)
+    before = _doc(ports)
+
+    result, _ = _land_at(ports, tmp_path, LATER)
+
+    assert result.reason == "escalated_waiting_on_human" and _doc(ports) == before
+
+
+def test_a_spent_cap_leaves_it_escalated_without_a_comment(tmp_path):
+    ports = _escalated_by_max_turns(tmp_path, landing_cost_carried=300.0)
+    _answered(ports, "merge master in")
+    comments = list(ports.tracker.comments)
+    before = _doc(ports)
+
+    result, _ = _land_at(ports, tmp_path, LATER)
+
+    assert result.reason == "escalated_task_cap"
+    assert ports.tracker.comments == comments and _doc(ports) == before
+
+
+def test_an_escalation_that_has_no_attempt_to_retry_is_a_restart_not_a_release(tmp_path):
+    """The shape `release` refuses: class `failure` and the diagnose step chosen, but no
+    undelivered attempt behind it. (After a *delivered* diagnosis `landing_step` answers
+    `none`, so `land` never gets here for the depth-1 escalation: its log is as it was.)"""
+    ports = _merge_failed(
+        _ports(5),
+        ScriptedRunner(),
+        escalated="stale premise",
+        escalation_class="failure",
+    )
+    _answered(ports, "merge master in")
+    before = _doc(ports)
+
+    result, lines = _land_at(ports, tmp_path, LATER)
+
+    assert result.reason == "escalated_needs_restart"
+    assert any("agentic run --fresh" in line for line in lines)
+    assert _doc(ports) == before
+
+
+def test_a_depth_one_escalation_after_a_delivered_diagnosis_keeps_todays_answer(tmp_path):
+    delivered = {"head": HEAD, "step": "diagnose", "at": NOW, "delivered": True}
+    ports = _merge_failed(
+        _ports(5),
+        ScriptedRunner(),
+        landing=[delivered],
+        landing_restarts=1,
+        escalated="stale premise",
+        escalation_class="failure",
+        status="waiting_on_human",
+    )
+    _answered(ports, "merge master in")
+    before = _doc(ports)
+
+    result, _ = _land_at(ports, tmp_path, LATER)
+
+    assert result.reason == "not_live" and _doc(ports) == before
+
+
+def test_a_head_that_moved_after_the_decision_writes_nothing(tmp_path):
+    ports = _escalated_by_max_turns(tmp_path)
+    _answered(ports, "merge master in")
+    ports, runner = _diagnoser(ports, _delivery())
+    reference = _doc(ports)["pull_request"]
+    real = type(ports.tracker).pull_request
+    reads: list[int] = []
+
+    def moving(self, ref):
+        reads.append(1)
+        pull_request = real(self, ref)
+        if len(reads) > 1:
+            return dataclasses.replace(pull_request, head_oid="c" * 40)
+        return pull_request
+
+    type(ports.tracker).pull_request = moving
+    try:
+        before = _doc(ports)
+        result, _ = _land_at(ports, tmp_path, LATER)
+    finally:
+        type(ports.tracker).pull_request = real
+
+    assert reference and result.reason == "head_moved"
+    assert runner.calls == [] and _doc(ports) == before
+    assert _doc(ports)["escalated"]
+
+
+def test_the_cap_the_release_checks_is_the_spent_figure_the_diagnoser_run_receives(
+    tmp_path, monkeypatch
+):
+    from agentic.core.process.application import run_role
+
+    ports = _escalated_by_max_turns(tmp_path, landing_cost_carried=7.0, cost_usd=2.0)
+    _answered(ports, "merge master in")
+    ports, _ = _diagnoser(ports, _delivery())
+    seen: list[float] = []
+    real = run_role.run_with_retry
+
+    async def spy(*args, **kwargs):
+        seen.append(kwargs["spent_usd"])
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(run_role, "run_with_retry", spy)
+    expected = rules.task_spent(_doc(ports))
+
+    _land_at(ports, tmp_path, LATER)
+
+    assert seen and seen[0] == expected
+
+
+def _round(ports, tmp_path, now):
+    from tests.core.process.application.test_poll import _Locks
+
+    lands: list[rules.LandCandidate] = []
+    poll.gather_merges(
+        ports, frozenset(), MASTER, _Locks(), [], lands=lands, now=now, cfg=_cfg(tmp_path)
+    )
+    return lands
+
+
+def test_the_poller_offers_a_released_diagnose_as_a_model_spending_land(tmp_path):
+    ports = _escalated_by_max_turns(tmp_path)
+    _answered(ports, "merge master in")
+
+    assert _round(ports, tmp_path, LATER) == [rules.LandCandidate(5, "land_model")]
+
+
+def test_the_poller_offers_nothing_for_an_unanswered_escalated_diagnose(tmp_path):
+    ports = _escalated_by_max_turns(tmp_path)
+    _answered(ports)
+    assert _round(ports, tmp_path, LATER) == []
+    _answered(ports, "merge master in", labels=("needs-human",))
+    assert _round(ports, tmp_path, LATER) == []
+
+
+def test_a_refusal_that_maps_to_another_step_is_not_released(tmp_path):
+    ports = _escalated_by_max_turns(tmp_path)
+    _answered(ports, "merge master in")
+    ports.workspace.conflict_answers[(HEAD, MASTER)] = True
+    ports.documents.record_closure("GH-5", {"merge_failures": None})
+    before = _doc(ports)
+
+    result, _ = _land_at(ports, tmp_path, LATER)
+
+    # Today's behaviour for that step holds: the sync is dispatched as it always was...
+    assert (result.kind, result.step) == ("dispatched", "sync_master")
+    # ...and nothing of the release was written: no decision, no marker, no stamp.
+    after = _doc(ports)
+    assert after.get("sections") == before.get("sections")
+    assert after["pause_log"] == before["pause_log"]
+    assert after["escalated"] == before["escalated"]
+    assert not any("released_at" in entry for entry in _diagnoses(ports))
