@@ -35,6 +35,13 @@ change forces the full form. Absent they read as `{}` and `()`. Present and empt
 `[]`, or a key with no value) is a half-written declaration and fails at load, so leave the
 key out to declare none; a wrong shape fails too.
 
+**`performance`**: optional (GH-318, ADR-0058). A mapping of scenario name to the `seed` and
+`measure` one-line commands, the `volume` and its `volume_unit` (`rows|days|months|years`)
+they must run against, and the `limits` of its metrics (`{limit, unit: ms|queries|kb}`; the
+metric's name ends with its unit's suffix). Read only by `agentic perf`: it never joins
+`checks`, the presubmit, `affected_checks`, `ci` or the merge gate. Absent it reads as `{}`;
+present and empty, or any shape that is not that, fails at load like `design`.
+
 The name is the one part that is not read at the task's base. It says *who* the repository
 is, not what held at a commit: read at the base, a task older than the key would resume
 into a run with no name, and a rename mid-task would split one task's samples across two
@@ -49,6 +56,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from agentic.core.process.domain import performance as perf
 from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.suppressions import Forbidden
 
@@ -69,6 +77,7 @@ KEYS = (
     "forbidden",
     "design",
     "ci",
+    "performance",
 )
 # The token an affected-only command carries where the task's base sha goes (ADR-0046).
 BASE_TOKEN = "{base}"
@@ -80,6 +89,10 @@ EMPTY_DECLARATION = "is declared empty; leave the key out to declare none"
 DESIGN_KEYS = ("prototype", "entry", "sample_app", "compare")
 # The name is a label value in Prometheus and a variable in the dashboard: a slug keeps
 # one product from arriving under two spellings and keeps the panels' regexes honest.
+# Every sub-key one `performance` scenario declares, and the two of each limit (GH-318).
+PERFORMANCE_KEYS = ("seed", "measure", "volume", "volume_unit", "limits")
+LIMIT_KEYS = ("limit", "unit")
+VOLUME_UNITS = ("rows", "days", "months", "years")
 SLUG = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 
 
@@ -289,6 +302,90 @@ def design(data: object, source: object) -> Design | None:
         sample_app=_design_command(found, source, "sample_app"),
         compare=_design_command(found, source, "compare"),
     )
+
+
+def performance(data: object, source: object) -> dict[str, perf.Scenario]:
+    """Scenario name -> its declaration, in the file's order (GH-318). Empty when the key is
+    absent. Every refusal is a `ValueError` naming the source, the scenario and the key, so
+    a broken declaration fails at load and not in the middle of a measurement."""
+    declared = _declared(data, source)
+    if "performance" not in declared:
+        return {}
+    found = _declared_nonempty(declared, source, "performance")
+    if not isinstance(found, dict):
+        raise ValueError(f"{source}: expected `performance`, a mapping of scenarios")
+    scenarios: dict[str, perf.Scenario] = {}
+    for name, body in found.items():
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"{source}: expected a non-empty scenario name under `performance`")
+        scenarios[name] = _scenario(name, body, source)
+    return scenarios
+
+
+def _scenario(name: str, body: object, source: object) -> perf.Scenario:
+    where = f"{source}: scenario {name!r} under `performance`"
+    if not isinstance(body, dict):
+        raise ValueError(f"{where} is not a mapping")
+    if unknown := [key for key in body if key not in PERFORMANCE_KEYS]:
+        raise ValueError(
+            f"{where} has unknown key(s) {', '.join(sorted(map(str, unknown)))}; "
+            f"expected {PERFORMANCE_KEYS}"
+        )
+    if missing := [key for key in PERFORMANCE_KEYS if key not in body]:
+        raise ValueError(f"{where} lacks `{missing[0]}`")
+    commands: dict[str, str] = {}
+    for key in ("seed", "measure"):
+        command = body[key]
+        if not isinstance(command, str):
+            raise ValueError(f"{where}: expected a command for `{key}`, a one-line string")
+        if reason := perf.command_refusal(command):
+            raise ValueError(f"{where}: `{key}` is refused: {reason}")
+        commands[key] = command.strip()
+    volume = _positive(body["volume"])
+    if volume is None:
+        raise ValueError(f"{where}: expected `volume` to be a positive number")
+    unit = body["volume_unit"]
+    if unit not in VOLUME_UNITS:
+        raise ValueError(f"{where}: expected `volume_unit` to be one of {', '.join(VOLUME_UNITS)}")
+    return perf.Scenario(
+        name=name,
+        seed=commands["seed"],
+        measure=commands["measure"],
+        volume=volume,
+        volume_unit=unit,
+        limits=_limits(body["limits"], where),
+    )
+
+
+def _limits(found: object, where: str) -> dict[str, perf.Limit]:
+    if not isinstance(found, dict) or not found:
+        raise ValueError(f"{where}: expected `limits`, a non-empty mapping of metrics")
+    limits: dict[str, perf.Limit] = {}
+    for metric, entry in found.items():
+        if (
+            not isinstance(entry, dict)
+            or set(entry) != set(LIMIT_KEYS)
+            or (number := _positive(entry["limit"])) is None
+            or entry["unit"] not in perf.UNIT_SUFFIX
+        ):
+            raise ValueError(
+                f"{where}: expected {metric!r} under `limits` to be "
+                "{limit: a positive number, unit: ms|queries|kb}"
+            )
+        suffix = perf.UNIT_SUFFIX[entry["unit"]]
+        if not isinstance(metric, str) or not metric.endswith(suffix) or metric == suffix:
+            raise ValueError(
+                f"{where}: the metric {metric!r} under `limits` must end with {suffix}, "
+                f"the suffix of its unit {entry['unit']}"
+            )
+        limits[metric] = perf.Limit(number, entry["unit"])
+    return limits
+
+
+def _positive(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value) if 0 < value < float("inf") else None
 
 
 def _design_command(found: dict[str, Any], source: object, key: str) -> str | None:

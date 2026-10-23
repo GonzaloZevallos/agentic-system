@@ -48,6 +48,7 @@ from agentic.core.process.application.ports import (
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.ci import CiReport, CiUnreadable, Containment
 from agentic.core.process.domain.design import Design
+from agentic.core.process.domain.performance import Run, Scenario
 from agentic.core.process.domain.playbook import Playbook
 from agentic.core.process.domain.reaping import ReapedProcess
 from agentic.core.process.domain.roles import PROMPTS_DIR, Role
@@ -265,6 +266,7 @@ class MemoryStack:
         ci: dict[str, tuple[str, ...]] | tuple[str, ...] | None = None,
         affected_checks: dict[str, str] | None = None,
         affected_fallback: tuple[str, ...] = (),
+        performance: dict[str, Scenario] | None = None,
     ) -> None:
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -302,6 +304,9 @@ class MemoryStack:
         # its own file says otherwise.
         self.declared_affected_checks = {} if affected_checks is None else affected_checks
         self.declared_affected_fallback = affected_fallback
+        # Empty is a product with no performance budget (GH-318), every product until its own
+        # file declares one.
+        self.declared_performance = {} if performance is None else performance
         self.revisions: list[str] = []
 
     def checks(self, revision: str) -> dict[str, str]:
@@ -325,6 +330,10 @@ class MemoryStack:
     def affected_checks(self, revision: str) -> dict[str, str]:
         # Not tracked in `revisions` either, `witness`'s own reason.
         return self.declared_affected_checks
+
+    def performance(self, revision: str) -> dict[str, Scenario]:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_performance
 
     def affected_fallback(self, revision: str) -> tuple[str, ...]:
         # Not tracked in `revisions` either, `witness`'s own reason.
@@ -630,6 +639,8 @@ class MemoryWorkspace:
         self.diff_paths: tuple[str, ...] = ()
         self.detached: list[str] = []
         self.removed_checkouts: list[str] = []
+        # GH-318: each `overlay` call as (checkout, sha, paths).
+        self.overlays: list[tuple[Path, str, tuple[str, ...]]] = []
 
     def repository_at(self, path: Path) -> Path | None:
         return self.repositories.get(Path(path))
@@ -925,6 +936,9 @@ class MemoryWorkspace:
     def detached_checkout(self, name: str, sha: str) -> Path:
         self.detached.append(name)
         return self.checkout_path(name)
+
+    def overlay(self, checkout: Path, sha: str, paths: Sequence[str]) -> None:
+        self.overlays.append((checkout, sha, tuple(paths)))
 
     def remove_checkout(self, name: str) -> None:
         self._noted("remove", name)
@@ -1249,6 +1263,37 @@ class MemoryRunRegistry:
         self.spend_calls.append(since)
         runs = [r for mine in self.published.values() for r in mine if r.ended_at >= since]
         return runs, list(self.spend_notes)
+
+
+class FakePerfRunner:
+    """GH-318: records each `run` as `(checkout, command, extra_env, timeout_s)` and answers
+    the next `Run` of `script`, or a clean empty one; never starts a process."""
+
+    def __init__(self, script: Sequence[Run] = ()) -> None:
+        self.script = list(script)
+        self.calls: list[tuple[Path, str, dict[str, str], float]] = []
+
+    def run(
+        self, checkout: Path, command: str, extra_env: Mapping[str, str], timeout_s: float
+    ) -> Run:
+        self.calls.append((checkout, command, dict(extra_env), timeout_s))
+        return self.script.pop(0) if self.script else Run(None, 0, False, None, None)
+
+
+class FakePerfLock:
+    """GH-318: `acquire` answers `available` and counts; `release` counts."""
+
+    def __init__(self, available: bool = True) -> None:
+        self.available = available
+        self.acquired: list[float] = []
+        self.released = 0
+
+    def acquire(self, wait_s: float) -> bool:
+        self.acquired.append(wait_s)
+        return self.available
+
+    def release(self) -> None:
+        self.released += 1
 
 
 class FakeReaper:

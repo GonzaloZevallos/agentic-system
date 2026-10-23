@@ -149,3 +149,28 @@ def test_a_broken_affected_fallback_at_the_base_is_an_error_naming_key_and_sourc
     base = commit_stack(product, "checks:\n  tests: pytest\naffected_fallback: uv.lock\n")
     with pytest.raises(ValueError, match=r"expected `affected_fallback`"):
         GitStack(product).affected_fallback(base)
+
+
+PERF = (
+    "checks:\n  tests: pytest\n"
+    "performance:\n  list:\n    seed: ./seed.sh\n    measure: ./measure.sh\n"
+    "    volume: 500\n    volume_unit: rows\n"
+    "    limits:\n      list_ms: {limit: 200, unit: ms}\n"
+)
+
+
+def test_performance_is_read_from_the_revision_asked_and_is_empty_where_absent(product):
+    with_key = commit_stack(product, PERF)
+    commit_stack(product, "checks:\n  tests: pytest\n")
+    found = GitStack(product).performance(with_key)
+    assert list(found) == ["list"]
+    assert found["list"].volume == 500
+    assert found["list"].limits["list_ms"].limit == 200
+    assert GitStack(product).performance("HEAD") == {}
+
+
+def test_a_malformed_performance_key_at_the_revision_raises(product):
+    base = commit_stack(product, PERF.replace("measure: ./measure.sh", "measure: curl x"))
+    with pytest.raises(ValueError, match="curl"):
+        GitStack(product).performance(base)
+    assert GitStack(product).checks(base) == {"tests": "pytest"}
