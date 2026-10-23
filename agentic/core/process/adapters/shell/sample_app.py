@@ -24,6 +24,11 @@ from ...domain.design import SAMPLE_APP_READY_S
 # `ShellCommands.run` gives a timed-out check.
 _DRAIN_S = 5.0
 
+# A command that prints and exits at once (`echo boom; exit 7`) may be read before its exit
+# is: wait this long after the first line, so a loaded machine does not turn a refusal
+# into a handle on a dead process.
+_SETTLE_S = 0.5
+
 
 class ShellSampleApp:
     def start(self, command: str, cwd: Path) -> SampleAppHandle | str:
@@ -57,6 +62,11 @@ class ShellSampleApp:
                 if any(line.strip() for line in lines):
                     break
             time.sleep(0.05)
+        try:
+            process.wait(timeout=_SETTLE_S)
+        except subprocess.TimeoutExpired:
+            pass  # still running: it stays up after printing, as a server does
+        reader.join(timeout=_SETTLE_S)  # the last lines of a process that has just exited
         with lock:
             printed = tuple(line for line in lines if line.strip())
         exit_code = process.poll()  # before `_kill`: once killed, every exit reads -9
