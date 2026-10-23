@@ -12,7 +12,7 @@ from agentic.core.process.application import landing_plan, merge, resume
 from agentic.core.process.application.ports import CommandResult, GitError, Upstream
 from tests.core.process.application.test_poll import _cfg
 from tests.core.process.application.test_poll_merge import HEAD, MASTER, _merges, _ports
-from tests.fakes import MemoryCommands, MemoryStack
+from tests.fakes import FakeReaper, MemoryCommands, MemoryStack, MemoryWorkspace
 
 CHECKS = {"lint": "run lint", "tests": "run tests"}
 
@@ -236,3 +236,16 @@ def test_the_landing_comment_is_not_posted_for_a_key_the_landing_list_already_ho
     ports = _failing_world(tmp_path, taken)
     _run(ports, tmp_path)
     assert not any(text.startswith("Landing: ") for _, text in ports.tracker.comments)
+
+
+def test_the_merge_checkout_is_reaped_before_each_removal_of_it(tmp_path):
+    ports = _world(tmp_path)
+    journal: list[str] = []
+    assert isinstance(ports.workspace, MemoryWorkspace) and isinstance(ports.reaper, FakeReaper)
+    ports.workspace.journal = journal
+    ports.reaper.journal = journal
+
+    _run(ports, tmp_path)
+
+    # The stale one from a killed attempt first, the one this run made in the `finally`.
+    assert journal == ["reap:merge-GH-5", "remove:merge-GH-5"] * 2

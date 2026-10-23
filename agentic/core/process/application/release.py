@@ -12,19 +12,44 @@ caller's, exactly as it was before."""
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+from ..domain import reaping
 from ..domain.reaping import ReapedProcess
 from .ports import Ports
 
+# The scratch checkouts a merge and a landing slice make beside a task's worktrees (GH-178).
+SCRATCH_PREFIXES = ("merge", "slice")
+
 
 def release_processes(ports: Ports, task_id: str, run: int) -> tuple[ReapedProcess, ...]:
-    """What the dead run `run` of `task_id` left alive, stopped."""
-    return ports.reaper.reap_run(task_id, run)
+    """What the dead run `run` of `task_id` left alive, stopped: its roles' scope and the
+    checks it ran (GH-315), which carry their own mark."""
+    return ports.reaper.reap_run(task_id, run) + ports.reaper.reap_run(reaping.CHECK_TASK, run)
+
+
+def release_checkout(ports: Ports, path: Path) -> tuple[ReapedProcess, ...]:
+    """Stops the unmarked processes still running in the checkout `path`, before the
+    caller removes it (GH-315). The only thing application code calls before it takes a
+    checkout out. What it stopped is one line on stderr."""
+    reaped = ports.reaper.reap_within([path])
+    if line := summary(reaped):
+        print(f"release: {path.name}: {line}", file=sys.stderr)
+    return reaped
 
 
 def release_task(ports: Ports, task_id: str) -> tuple[ReapedProcess, ...]:
-    """Stops every marked process of the task, then removes its worktrees. Returns what
-    was reaped; a `GitError` from the removal propagates unchanged."""
+    """Stops every marked process of the task, then whatever still runs in one of its
+    checkouts, then removes them. Returns what was reaped; a `GitError` from the removal
+    propagates unchanged."""
     reaped = ports.reaper.reap_task(task_id)
+    scratch = [f"{prefix}-{task_id}" for prefix in SCRATCH_PREFIXES]
+    paths = [*ports.workspace.worktrees(task_id), *map(ports.workspace.checkout_path, scratch)]
+    for path in paths:
+        reaped += release_checkout(ports, path)
+    for name in scratch:
+        ports.workspace.remove_checkout(name)
     ports.workspace.cleanup(task_id)
     return reaped
 

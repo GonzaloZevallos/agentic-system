@@ -12,7 +12,7 @@ from agentic.core.process.domain.ci import CiCheck, CiReport
 from agentic.core.process.domain.task import PullRequest
 from tests.core.process.application.test_poll import _cfg
 from tests.core.process.application.test_poll_merge import HEAD, MASTER, URL, _HeldLocks, _ports
-from tests.fakes import FakeLauncher, MemoryWorkspace, ScriptedRunner
+from tests.fakes import FakeLauncher, FakeReaper, MemoryWorkspace, ScriptedRunner
 
 SLICE_URL = URL.format(9)
 SLICE_HEAD = "5" * 40
@@ -278,3 +278,15 @@ def test_a_refused_slice_is_closed_and_its_set_is_excluded_after_two_refusals():
     assert all(e["closed_at"] and "resolved_at" not in e for e in slices)
     assert third.step == "land_slice"  # {a, b} is excluded: the smaller prefix is next
     assert ports.tracker.merge_calls == []
+
+
+def test_the_slice_checkout_is_reaped_before_it_is_removed():
+    ports = _world(frozenset({"integration.py"}))
+    journal: list[str] = []
+    assert isinstance(ports.workspace, MemoryWorkspace) and isinstance(ports.reaper, FakeReaper)
+    ports.workspace.journal = journal
+    ports.reaper.journal = journal
+
+    _land(ports, FakeLauncher())
+
+    assert journal == ["reap:slice-GH-5", "remove:slice-GH-5"]

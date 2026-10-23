@@ -111,6 +111,46 @@ documento; el sistema escribe una línea más en stderr por sobreviviente.
    evidencia; que falte la reproducción es una observación (ADR-0016).
 7. **Un intento cancelado pierde su registro `reaped`.** El reap en sí corre hasta el final.
 
+## Adenda GH-315: lo que un check o una tarea dejan en un checkout
+
+Un servidor de e2e lanzado por el `webServer` de Playwright dentro de un check sobrevivía
+al check cortado por el timeout y a su worktree borrado. Los checks no llevaban marca, así
+que ni el reap por marca ni el de la corrida los encontraban. Cambia esto:
+
+- **Los checks del sistema llevan marca.** Cada `ShellCommands.run` toma la marca
+  `producto/check/<pid>/<uuid>` y la reapea en un `finally`, por cualquier salida. El
+  scope `check` es el de `reaping.CHECK_TASK`; ningún id de tarea se llama así.
+- **"Coincidir por cwd" se toma ahora**, y la razón de descartarlo ya no vale: los checks
+  llevan marca, y la regla por cwd solo alcanza procesos **sin** marca, sin terminal de
+  control, que no sean el propio del sistema ni un ancestro, y cuyo cwd resuelto cae
+  estrictamente dentro de un checkout de `.agentic/worktrees/`. Corre al quitar un checkout
+  (`release.release_checkout`, único verbo que la aplicación llama antes de quitar uno) y
+  en el timeout de un check. La comparación es por segmentos de la ruta resuelta, nunca por
+  prefijo de texto, y un cwd que termina en ` (deleted)` no coincide.
+- **El constructor de `ShellReaper` toma la clave del producto y el `worktrees_root`.** Toda
+  raíz que no resuelva estrictamente dentro de él se descarta, quien llame: el servidor de
+  producción local (`:8000`) queda fuera de alcance.
+- **`release_task` barre cada checkout de la tarea** (los de `worktrees(task_id)` y los
+  scratch `merge-<tarea>` y `slice-<tarea>`) antes de quitarlos, así que un descarte tras un
+  merge cortado no deja nada. `merge`, `landing_slice` y `checkouts` llaman a
+  `release_checkout` justo antes de cada quita. `release_processes` reapea además el scope
+  `check` de la corrida muerta.
+- **Colateral aceptado:** un proceso sin marca y sin terminal que un Developer o una persona
+  dejó en un checkout que se quita, o en el de un check que venció, muere con él.
+- **El scope `check` ensancha el riesgo de reuso de pid** (ya aceptado en el mismo boot) a
+  otras tareas del mismo producto: la marca de un check no nombra la tarea.
+- **Sigue sin cubrirse:** fugas anteriores a este arreglo; cwd `(deleted)`; productos sin
+  poller; corridas muertas en otro boot o con boot desconocido; y una fuga sin marca de un
+  check que terminó normal, que espera a que se quite su checkout.
+- **Brecha del poller:** la rama de registro muerto de `gather_retakes` (`poll.py`) no
+  filtra por el `kind` del registro, pero `interrupted_run` descarta antes toda tarea con
+  `pull_request`, y toda corrida de `merge` o `land` la tiene. Esos registros no llegan a
+  `release_processes`; los checks de un merge muerto se barren en el siguiente `merge_task`
+  (por el cwd de `merge-<tarea>`) o al cerrar la tarea. No se cambió el poller.
+- **Única señal nueva:** una línea `reaper: stopped <pid> <comando> (<resultado>)` en stderr
+  por proceso detenido, más `release: <checkout>: reaped ...` de `release_checkout`. No hay
+  métrica, etiqueta ni atributo de span nuevos; `reaped_at_cleanup` conserva su forma.
+
 ## Gate result
 
 **Pasó.** `uv run pytest -m llm tests/llm/test_role_process_mark.py -v -s`, con el CLI

@@ -1602,8 +1602,13 @@ def test_gather_retakes_reaps_a_same_boot_death_by_its_pid_and_says_so_on_its_li
         ports, _Locks(_dead_lock("GH-30", boot_id="boot-now")), "boot-now"
     )
 
-    assert reaper.calls == [("run", "GH-30", 777, None)]  # never `reap_task`
-    assert lines[0].endswith("; reaped 1 process: `uv run sample_app.py` (kill)")
+    assert reaper.calls == [
+        ("run", "GH-30", 777, None),
+        ("run", "check", 777, None),
+    ]  # never `reap_task`
+    assert lines[0].endswith(
+        "; reaped 2 processes: `uv run sample_app.py` (kill), `uv run sample_app.py` (kill)"
+    )
 
 
 def test_gather_retakes_says_nothing_extra_when_the_reap_found_nothing():
@@ -1615,7 +1620,7 @@ def test_gather_retakes_says_nothing_extra_when_the_reap_found_nothing():
         ports, _Locks(_dead_lock("GH-30", boot_id="boot-now")), "boot-now"
     )
 
-    assert reaper.calls == [("run", "GH-30", 777, None)]
+    assert reaper.calls == [("run", "GH-30", 777, None), ("run", "check", 777, None)]
     assert "reaped" not in lines[0]
 
 
@@ -1849,8 +1854,10 @@ def test_gather_retakes_reaps_a_same_boot_crash_left_to_the_human():
     _open_task(ports)
     ports.tracker.timestamped["GH-30"] = _crash_comments("abc123", "abc123")
     (_, lines), _ = _gather_crash(ports, _Locks(_crashed_lock("GH-30")))
-    assert reaper.calls == [("run", "GH-30", 777, None)]
-    assert lines[0].endswith("; reaped 1 process: `uv run sample_app.py` (kill)")
+    assert reaper.calls == [("run", "GH-30", 777, None), ("run", "check", 777, None)]
+    assert lines[0].endswith(
+        "; reaped 2 processes: `uv run sample_app.py` (kill), `uv run sample_app.py` (kill)"
+    )
 
 
 def test_a_crash_mark_on_a_task_that_is_not_interrupted_retakes_nothing():
