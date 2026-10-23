@@ -410,3 +410,37 @@ las unidades y sin modelo. Un aterrizaje sano no paga nada.
 - Si las rutas del integrador no se pueden armar, el resultado es `no_clean_slice`.
 - Un SIGKILL entre el merge del tramo y su registro deja un pull request de tramo abierto; la entrada
   guarda `slice_pull_request` para cerrarlo en la vuelta siguiente.
+
+## Adenda (GH-328): una decisión humana libera el `diagnose` escalado
+
+Un `diagnose` que `landing_fix.escalate_failed_diagnosis` escaló (clase `failure`, con intentos sin
+entregar) no tenía vuelta: `diagnose_gate` respondía `skip` mientras `escalated` estuviera puesto y ninguna
+entrada llamaba a `unescalated`. Ahora la respuesta de una persona en el issue lo libera.
+
+**Condiciones (todas).** Un comentario que no es del sistema después del último `Escalated:`
+(`resume.decision_since`, el único lector); el issue `OPEN`; las etiquetas legibles y sin `needs-human` (una
+etiqueta que nunca se puso cuenta como quitada); y `rules.task_spent` por debajo del tope de la tarea. Un
+tracker que no contesta no libera. La decisión se decide solo cuando `step_for` eligió `diagnose` para la
+cabeza actual, y se escribe en la misma llamada de `land` que agrega la entrada y despacha, después de las
+comprobaciones de cabeza movida y merge ajeno: ningún camino deja un documento liberado sin despachar.
+
+**Qué escribe.** `landing.released` es el único constructor del parche: `unescalated`, `released_at` en la
+última entrada `diagnose` (los intentos se cuentan desde la siguiente, así que `diagnose_retry` no escala sin
+un intento nuevo) y la decisión como un `### Decision N` más de la sección `Human`, que el Landing Diagnoser
+lee. Dos aplicaciones dejan una sola decisión y una sola marca `resumed`.
+
+**Sin respuesta.** Un `diagnose` escalado ya no registra `diagnosis not due` ni `already taken`: dice
+`escalated, waiting on a human (...)` con lo que lo libera, y `LandResult.reason` es
+`escalated_waiting_on_human`, `escalated_needs_restart` o `escalated_task_cap`.
+
+**Lo que no cambia.** La escalación de profundidad >= 1, posterior a un diagnóstico entregado, sigue siendo
+de la persona (`run --fresh`): un comentario no la libera. El tope de turnos del rol es el mismo
+(`max_turns=12`), así que un segundo fallo escala tras exactamente un intento nuevo. Una decisión que pide
+un merge la lee el Diagnoser como insumo de un reinicio, no se ejecuta: un diagnóstico entregado a
+profundidad 0 cierra el pull request y reinicia con `run --fresh`. El aterrizaje lee la decisión desde el
+último `Escalated:` e ignora los comentarios del sistema; la ruta de roles (`human_decision`) sigue
+reiniciando en el último comentario del sistema.
+
+**Costo.** Por ronda, una lectura de comentarios y una del issue por cada documento escalado con la forma
+liberable; escala con esos documentos, no con todas las tareas. Un comentario ajeno puede liberar una tarea
+sin la etiqueta `needs-human` (comportamiento elegido).

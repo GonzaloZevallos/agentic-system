@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Literal, assert_never
+from typing import Any, Literal, assert_never, cast
 
 from agentic.shared.configuration import Configuration
 
@@ -197,7 +197,8 @@ def _land(
         released = landing_rules.released(raw, outcome.decision, clock())
     # The document as the release leaves it: the gate and the entry below read this view, the
     # file keeps the escalation until everything else has agreed (head, merge).
-    current: TaskState = apply(raw, released) if released else raw
+    patch = cast(TaskState, released)
+    current: TaskState = apply(raw, patch) if released else raw
     gate = landing_plan.diagnose_gate(current, step.kind, now)
     if gate == "skip":
         log(f"agentic: land: {task_id}: {head} {step.kind}: diagnosis not due")
@@ -229,7 +230,7 @@ def _land(
     if released:
         # One write, in the same call that appends the entry and dispatches: the release
         # is never left undispatched (the head and the merge were checked above).
-        ports.documents.save(apply(state_from(raw), released))
+        ports.documents.save(apply(state_from(dict(raw)), patch))
         log(f"agentic: land: {task_id}: {head} diagnose: escalation released by a human decision")
     entry: dict[str, object] = {
         "head": head,

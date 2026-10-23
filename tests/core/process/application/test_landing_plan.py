@@ -112,8 +112,13 @@ def _escalated(**over) -> dict:
         "escalation_class": "failure",
         "pull_request": "https://github.com/o/r/pull/5",
         "landing": [
-            {"head": HEAD, "step": "diagnose", "refusal": "merge_failed", "at": ATTEMPT_AT,
-             "failure": "max_turns"}
+            {
+                "head": HEAD,
+                "step": "diagnose",
+                "refusal": "merge_failed",
+                "at": ATTEMPT_AT,
+                "failure": "max_turns",
+            }
         ],
         "cost_usd": 4.0,
     }
@@ -140,7 +145,8 @@ def _world(
 ):
     ports = memory_ports(tracker=_ReadingTracker())
     ports.tracker.timestamped["GH-5"] = [
-        IssueComment(body, (ESCALATED_AT, ANSWERED_AT)[min(i, 1)]) for i, body in enumerate(comments)
+        IssueComment(body, (ESCALATED_AT, ANSWERED_AT)[min(i, 1)])
+        for i, body in enumerate(comments)
     ]
     ports.tracker.states[5] = IssueState(state, "", (), None, labels)
     return ports
