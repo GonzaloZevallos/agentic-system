@@ -120,7 +120,7 @@ def test_a_conflicting_head_under_a_red_ci_is_a_conflict_that_never_reads_the_ci
     found, lines = _merges(ports)
 
     assert found == []
-    assert lines == ["agentic: poll: auto-merge #5 -> left to the human: merge_conflict"]
+    assert lines == ["agentic: poll: auto-merge #5 -> left to the human: merge_conflict (probe)"]
     assert ports.tracker.ci_reads == []
     assert ports.workspace.conflict_probes == [(HEAD, MASTER)]
 

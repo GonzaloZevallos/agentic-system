@@ -214,7 +214,10 @@ class PullRequest:
     when it never merged (ADR-0038). `head_oid` is the sha of the pull request's final
     head commit, `None` when `gh` did not say: the exact commit an automatic merge is
     decided on and `Tracker.merge` is pinned to, and what `delivery_outcome` compares
-    the document's `auto_merge_head` against (ADR-0045)."""
+    the document's `auto_merge_head` against (ADR-0045). `mergeable` is GitHub's own reading
+    of whether the head merges into the base (`None` when `gh` said nothing recognised) and
+    `base_oid` the base tip that reading was made against (GH-326): only
+    `rules.merge_conflicts_from` turns them into a fact."""
 
     state: Literal["OPEN", "MERGED", "CLOSED"]
     created_at: str
@@ -222,6 +225,8 @@ class PullRequest:
     commits: tuple[PullRequestCommit, ...]
     merge_commit: str | None = None
     head_oid: str | None = None
+    mergeable: Literal["MERGEABLE", "CONFLICTING", "UNKNOWN"] | None = None
+    base_oid: str | None = None
 
 
 def add(current: float, new: float) -> float:

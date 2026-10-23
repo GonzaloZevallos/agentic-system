@@ -25,7 +25,14 @@ from ..domain.task import PullRequest, TaskState
 from . import adr_collision, landing_flakes, landing_plan
 from .checkouts import task_base
 from .delivered import files_patch
-from .poll import AUTO_MERGE_REFUSED, AUTO_MERGED, LANDING, _merge_facts, with_ci
+from .poll import (
+    AUTO_MERGE_REFUSED,
+    AUTO_MERGED,
+    LANDING,
+    _merge_facts,
+    read_conflicts,
+    with_ci,
+)
 from .ports import (
     CommandResult,
     GitError,
@@ -124,8 +131,15 @@ def merge_task(
 
     def decide(document: TaskState) -> rules.MergeFacts:
         base_facts = _facts(task_id, document, pull_request, eval_set, number, master, touched)
+        # GitHub's reading of a conflict on this head and master (GH-326), git-free; the
+        # probe is the last look's, immediately before the merge call.
+        github = rules.merge_conflicts_from(pull_request, head, master, None)
         return with_ci(
-            replace(base_facts, adr_collision=collision), document, declared, report, fresh
+            replace(base_facts, adr_collision=collision, conflicts=github),
+            document,
+            declared,
+            report,
+            fresh,
         )
 
     facts = decide(raw)
@@ -140,6 +154,8 @@ def merge_task(
         decision = rules.auto_merge_decision(facts)
     if decision.kind == "refuse":
         assert decision.reason is not None
+        if decision.reason == "merge_conflict":
+            log(f"agentic: merge: {task_id}: {head} conflicts with master {master} (github)")
         failure = facts.merge_failure if decision.reason == "merge_failed" else None
         return _refuse(task_id, head, decision.reason, ports, failure=failure, facts=facts)
     if decision.kind != "merge" or head is None:
@@ -148,7 +164,17 @@ def merge_task(
     landing_flakes.file_flakes(ports, task_id, head, landing_flakes.rerun_checks_on(raw, head), log)
     relied = _ci_links(report, declared) if _merges_on_ci(facts) else None
     return _merge(
-        task_id, number, str(reference), head, ports, facts, clock, log, relied, bool(declared)
+        task_id,
+        number,
+        str(reference),
+        head,
+        ports,
+        facts,
+        clock,
+        log,
+        relied,
+        bool(declared),
+        pull_request,
     )
 
 
@@ -304,6 +330,7 @@ def _merge(
     log: Callable[[str], None],
     relied: list[dict[str, str]] | None = None,
     ci_declared: bool = False,
+    pull_request: PullRequest | None = None,
 ) -> MergeResult:
     """`relied` is the CI links a merge on the CI rested on (None: it rested on the local
     checks); `ci_declared` says the product declares its CI, which is the only case that
@@ -320,8 +347,9 @@ def _merge(
     # GH-255: the last look at the merge itself. A head that conflicts with this master is
     # refused with nothing written (no intent, no failure count, no comment: `merge_conflict`
     # is not in `COMMENTED`) and `Tracker.merge` is never called. Unread changes nothing.
-    if ports.workspace.merge_conflicts(head, master) is True:
-        log(f"agentic: merge: {task_id}: {head} conflicts with master {master}")
+    conflicts, source = read_conflicts(ports, pull_request, head, master)
+    if conflicts is True:
+        log(f"agentic: merge: {task_id}: {head} conflicts with master {master} ({source})")
         return MergeResult("refused", "merge_conflict")
     # The intent, immediately before the merge call: after a crash the document still
     # shows the system meant to merge this head (`delivery_outcome` reads it). The method

@@ -64,6 +64,7 @@ from .task import (
     FinishedPatch,
     MergeOutcome,
     PauseEntry,
+    PullRequest,
     ResumedPauseEntry,
     ReviewKind,
     RoleRun,
@@ -3246,6 +3247,28 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     if facts.attempts >= MERGE_ATTEMPTS_MAX:
         return MergeDecision("refuse", "attempts_exhausted")
     return MergeDecision("run_checks", None)
+
+
+def merge_conflicts_from(
+    pull_request: PullRequest | None,
+    pr_head: str | None,
+    current_master: str | None,
+    probe: bool | None,
+) -> bool | None:
+    """The only place GitHub's mergeability becomes a fact (GH-326): `MergeFacts.conflicts`
+    from the two readings of it. GitHub's `CONFLICTING` counts, `True` whatever the probe
+    says, only when it was read on the head (`head_oid`) and on the base tip (`base_oid`)
+    this decision is made on (`pr_head`, `current_master`). Anything else -- `MERGEABLE`,
+    `UNKNOWN` (still computing: read again on the next poll), no reading, a stale head, a
+    different or absent base tip -- is the `probe`'s value, unchanged."""
+    if (
+        pull_request is not None
+        and pull_request.mergeable == "CONFLICTING"
+        and same_commit(pull_request.head_oid, pr_head)
+        and same_commit(pull_request.base_oid, current_master)
+    ):
+        return True
+    return probe
 
 
 def conflict_probe_wanted(facts: MergeFacts) -> bool:
