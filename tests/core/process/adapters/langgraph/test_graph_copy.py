@@ -5,6 +5,7 @@ any other task goes through the nodes it always did."""
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 
 import pytest
 from langgraph.types import Command
@@ -48,6 +49,29 @@ from tests.fakes import (
 )
 
 pytestmark = pytest.mark.anyio
+
+# sha256[:16] of every prompt this scenario hands its roles (the product directory
+# replaced by TMP), measured at 2e8b7d9, before the Tech Writer: the rendering today.
+TODAYS_PROMPTS = [
+    "0e6577edeacb6edb",
+    "72d73d6fa29dc6d8",
+    "18265170ebae82a7",
+    "dd639b81a27b5656",
+    "8860baa4974a826f",
+    "15ff94b957022042",
+    "f265d7c2937c133f",
+    "4e32760b61f29107",
+    "3d8e8943bfbcc855",
+    "259dbea222e5ec88",
+    "ee3a706fc545db3b",
+    "b98a4471bb12b37d",
+    "1100e9b51ee48d53",
+    "05b4da22f14d7947",
+    "25b3c8fc137f9d32",
+    "27c14992def4ca06",
+    "983429e4371d2542",
+    "d9a4ed4d5b0d5c62",
+]
 
 COPY = {"touches_ui": False, "touches_copy": True}
 OFF = {"touches_ui": True, "touches_copy": False}
@@ -171,6 +195,13 @@ async def test_a_feature_with_touches_ui_and_no_touches_copy_goes_through_today_
     assert plain.slugs[i : i + len(DESIGN_SLUGS)] == DESIGN_SLUGS
     assert not {"tech_writer", "tech_writer_review"} & set(plain.slugs)
     assert [c["prompt"] for c in plain.calls] == [c["prompt"] for c in with_criteria.calls]
+    # And against the rendering before this role existed, so a change that reached every
+    # role the same way cannot pass. Re-pin only when a prompt changes on purpose.
+    digests = [
+        hashlib.sha256(c["prompt"].replace(str(tmp_path), "TMP").encode()).hexdigest()[:16]
+        for c in plain.calls
+    ]
+    assert digests == TODAYS_PROMPTS
     # No role of that task is handed anything of the writing family: today's rendering.
     for call in plain.calls:
         assert "Tech Writer" not in call["prompt"] and "WRITING_STANDARDS" not in call["prompt"]

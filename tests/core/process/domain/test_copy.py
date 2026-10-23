@@ -25,8 +25,10 @@ def review(*findings, settled=(), standards=""):
     )
 
 
-def apply(state, n, rev, owners=None, fallback="api"):
-    records, settled = copy.copy_records(state, n, rev, owners or {}, fallback)
+def apply(state, n, rev, owners=None, fallback="api", standards_missing=False):
+    records, settled = copy.copy_records(
+        state, n, rev, owners or {}, fallback, standards_missing=standards_missing
+    )
     return {
         **state,
         "findings": [*state.get("findings", []), *records],
@@ -141,14 +143,19 @@ def test_owners_are_only_the_subtasks_whose_diff_touched_the_file():
 
 def test_missing_standards_make_exactly_one_outside_row_after_two_passes():
     state = state_with("api")
-    state = apply(state, 1, review(standards="# Writing\n- short"))
-    state = apply(state, 2, review(standards="# Writing\n- short"))
+    state = apply(state, 1, review(standards="# Writing\n- short"), standards_missing=True)
+    state = apply(state, 2, review(standards="# Writing\n- short"), standards_missing=True)
     part = rules.important_partition(state)
     assert [(r["location"], r["claim"]) for r in part.outside] == [
         (copy.NO_WRITING_LOCATION, copy.NO_WRITING_CLAIM)
     ]
     assert part.outside[0]["proposed"] == "# Writing\n- short"
     assert part.outside[0]["scope"] == "outside"
+
+
+def test_a_product_with_the_standards_gets_no_row_even_if_the_review_proposes_some():
+    records, _ = copy.copy_records({}, 1, review(standards="# Writing"), {}, "api")
+    assert records == []
 
 
 def test_no_standards_row_is_added_when_the_caller_says_the_file_is_missing():

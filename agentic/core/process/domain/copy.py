@@ -93,9 +93,9 @@ def copy_records(
     a pass never duplicates a defect that is still there. `settled` keeps only the
     identifiers of open copy rows, so a Tech Lead location closes nothing.
 
-    The product without writing criteria (`standards_missing`, or a `proposed_standards`
-    in the review) adds the fixed row once: `important`, scope `outside`, its `proposed`
-    the starting document."""
+    The product without writing criteria (`standards_missing`) adds the fixed row once:
+    `important`, scope `outside`, its `proposed` the starting document the review gave in
+    `proposed_standards`. A product that has the file never gets the row."""
     open_rows = _open_copy_rows(state)
     by_identifier = {_norm(row["location"]): row["location"] for row in open_rows}
     settled = list(
@@ -128,9 +128,7 @@ def copy_records(
                 "proposed": item.proposed,
             }
         )
-    if (standards_missing or review.proposed_standards.strip()) and not any(
-        row["location"] == NO_WRITING_LOCATION for row in still_open
-    ):
+    if standards_missing and not any(row["location"] == NO_WRITING_LOCATION for row in still_open):
         records.append(
             {
                 "subtask": fallback_unit,
