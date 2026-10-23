@@ -4,8 +4,14 @@ any other task goes through the nodes it always did."""
 
 from __future__ import annotations
 
-import pytest
+import dataclasses
 
+import pytest
+from langgraph.types import Command
+
+from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
+from agentic.core.process.application import landing, merge, poll, resume
+from agentic.core.process.application.ports import Upstream
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.copy import (
     NO_WRITING_CLAIM,
@@ -17,11 +23,16 @@ from agentic.core.process.domain.task import INTEGRATION
 from tests.core.process.adapters.langgraph.test_graph import (
     DESIGN_SLUGS,
     Fakes,
+    compiled,
+    raised,
     run_graph,
     script_for,
     technical,
 )
+from tests.core.process.application.test_poll import _cfg, _Locks
+from tests.core.process.application.test_poll_merge import HEAD, MASTER, URL, _HeldLocks, _pr
 from tests.fakes import (
+    FakeLauncher,
     consolidation,
     copy_draft,
     copy_finding,
@@ -30,6 +41,7 @@ from tests.fakes import (
     design_draft,
     design_findings,
     final_validation,
+    memory_ports,
     planned,
     reviewed,
     verdict,
@@ -38,6 +50,7 @@ from tests.fakes import (
 pytestmark = pytest.mark.anyio
 
 COPY = {"touches_ui": False, "touches_copy": True}
+OFF = {"touches_ui": True, "touches_copy": False}
 TEXTS = "### Texts\n\n- `Export` button: Export report."
 
 
@@ -131,9 +144,9 @@ async def test_a_feature_with_touches_ui_and_no_touches_copy_goes_through_today_
     """Byte-equality outside `copy_applies`: the same nodes, and the same input for every
     role whether or not the product has writing criteria, which only the two text roles read."""
 
-    def scripted():
+    def scripted(flags):
         return script_for(
-            pm=[verdict("approved", flags={"touches_ui": True, "touches_copy": False})],
+            pm=[verdict("approved", flags=flags)],
             ux_designer=[design_draft()],
             ux_lead=[design_findings("approved")],
             ui_designer=[design_draft()],
@@ -148,7 +161,7 @@ async def test_a_feature_with_touches_ui_and_no_touches_copy_goes_through_today_
     other = tmp_path / "with-criteria"
     other.mkdir()
     (other / "WRITING_STANDARDS.md").write_text("# Writing\n\nErrors say what to do next.\n")
-    plain, with_criteria = scripted(), scripted()
+    plain, with_criteria = scripted(OFF), scripted(OFF)
     await run_graph(plain, config)
     await run_graph(
         with_criteria, {"configurable": {**config["configurable"], "product_dir": str(other)}}
@@ -158,6 +171,10 @@ async def test_a_feature_with_touches_ui_and_no_touches_copy_goes_through_today_
     assert plain.slugs[i : i + len(DESIGN_SLUGS)] == DESIGN_SLUGS
     assert not {"tech_writer", "tech_writer_review"} & set(plain.slugs)
     assert [c["prompt"] for c in plain.calls] == [c["prompt"] for c in with_criteria.calls]
+    # No role of that task is handed anything of the writing family: today's rendering.
+    for call in plain.calls:
+        assert "Tech Writer" not in call["prompt"] and "WRITING_STANDARDS" not in call["prompt"]
+        assert "Errors say" not in call["prompt"]
 
 
 def test_the_texts_are_the_last_step_of_the_definition_ladder():
@@ -172,3 +189,190 @@ def test_the_texts_are_the_last_step_of_the_definition_ladder():
         == "plan"
     )
     assert rules.after_write_copy({**state, "escalated": True}) is None
+
+
+# --- The lifecycle past `deliver` (ADR-0053): the landing reads the saved document ----------
+
+NOW = "2026-10-14T00:00:00+00:00"
+NEW_HEAD = "d" * 40
+UPSTREAM = Upstream("origin/master", MASTER, None)
+
+
+def _landing_ports(tmp_path, fakes):
+    """The landing's ports over the document the graph saved and the tracker and workspace
+    it ran with: the pull request open on `HEAD`, every unit approved on it, checks green."""
+    ports = memory_ports(
+        documents=FilesystemTaskDocuments(tmp_path),
+        workspace=fakes.workspace,
+        tracker=fakes.tracker,
+    )
+    ports.workspace.upstream_answer = UPSTREAM
+    ports.workspace.conflict_answers[(HEAD, MASTER)] = False
+    _on_head(ports, HEAD)
+    return ports
+
+
+def _on_head(ports, head):
+    """`deliver` on `head`: the pull request there, the units approved on it, checks green."""
+    document = ports.documents.load("GH-1") or {}
+    ports.tracker.prs[URL.format(1)] = dataclasses.replace(_pr(), head_oid=head)
+    ports.documents.save(
+        {
+            **document,
+            "pull_request": URL.format(1),
+            "subtasks": {
+                name: {**unit, "status": "approved", "reviewed_head": head}
+                for name, unit in document["subtasks"].items()
+            },
+            "merge_checks": {"head": head, "master": MASTER, "passed": True},
+        }
+    )
+
+
+def _candidates(ports) -> list[int]:
+    return poll.gather_merges(ports, frozenset(), MASTER, _Locks(), [])
+
+
+def _land(ports, tmp_path, launcher):
+    lines: list[str] = []
+    result = landing.land(
+        "GH-1",
+        _cfg(tmp_path),
+        ports,
+        _HeldLocks(),
+        UPSTREAM,
+        frozenset(),
+        lines.append,
+        clock=lambda: NOW,
+        launcher=launcher,
+        argv0="agentic",
+    )
+    return result
+
+
+async def _resume_graph(script, config, tmp_path, fakes, ports):
+    """`agentic resume` on the reopened document, as the landing spawns it."""
+    fakes.workspace.existing_branches["agentic/GH-1"] = (HEAD, "base0")
+    state = resume.from_document("GH-1", ports)
+    app = compiled(script, fakes=fakes)
+    await app.aupdate_state(config, state, as_node="escalate")
+    return await app.ainvoke(Command(resume={"decision": None}), config=raised(config))
+
+
+def _merge(ports, tmp_path):
+    merge.merge_task(
+        "GH-1",
+        1,
+        _cfg(tmp_path),
+        ports,
+        UPSTREAM,
+        frozenset(),
+        lambda line: None,
+        clock=lambda: NOW,
+    )
+
+
+def _settled(document):
+    return [r for r in document["findings"] if copy_location_parts(r["location"])]
+
+
+def _lifecycle_script(reviews):
+    return _copy_script(
+        reviews,
+        developer=[delivered("api"), delivered("api again")],
+        tech_lead_review=[reviewed("approved")] * 4,
+    )
+
+
+async def _delivered(config, tmp_path, script, standards=True):
+    if standards:
+        (tmp_path / "WRITING_STANDARDS.md").write_text("# Writing\n\nErrors say what to do next.\n")
+    fakes = Fakes()
+    fakes.workspace.diff_paths = ("src/x.py",)
+    final = await run_graph(script, config, fakes=fakes)
+    return final, fakes, _landing_ports(tmp_path, fakes)
+
+
+async def test_a_copy_important_blocks_the_merge_until_the_owner_fixes_it_and_a_review_settles(
+    config, tmp_path
+):
+    script = _lifecycle_script(
+        [copy_reviewed([copy_finding()]), copy_reviewed(settled=["copy:1.1:src/x.py:12"])]
+    )
+    first, fakes, ports = await _delivered(config, tmp_path, script)
+    assert _candidates(ports) == []
+    launcher = FakeLauncher()
+
+    assert _land(ports, tmp_path, launcher).step == "fix_important"
+
+    document = ports.documents.load("GH-1")
+    assert {n: u["status"] for n, u in document["subtasks"].items()} == {"api": "returned"}
+    reason = document["subtasks"]["api"]["reason"]
+    assert "src/x.py:12" in reason and "Could not export. Try again." in reason
+    assert "copy:" not in reason
+    assert document["changes_requested"] == {} or not document.get("changes_requested")
+    final = await _resume_graph(script, config, tmp_path, fakes, ports)
+
+    assert script.slugs.count("tech_writer_review") == 2
+    assert script.slugs.count("tech_writer") == 1
+    assert final["sections"]["Tech Writer"] == first["sections"]["Tech Writer"] == TEXTS
+    (row,) = _settled(final)
+    assert row["location"] == "copy:1.1:src/x.py:12"
+    assert "copy:1.1:src/x.py:12" in final["settled_findings"]
+    assert rules.open_findings(final) == []
+    _on_head(ports, NEW_HEAD)
+    assert _candidates(ports) == [1]
+    _merge(ports, tmp_path)
+    assert fakes.tracker.merge_calls == [(URL.format(1), NEW_HEAD)]
+    assert not final.get("escalated")
+
+
+async def test_a_review_that_raises_a_new_important_every_pass_costs_one_fix_and_one_second_pass(
+    config, tmp_path
+):
+    script = _lifecycle_script(
+        [
+            copy_reviewed([copy_finding()]),
+            copy_reviewed(
+                [copy_finding(location="src/x.py:13", claim="Another vague error")],
+                settled=["copy:1.1:src/x.py:12"],
+            ),
+            copy_reviewed([copy_finding(location="src/x.py:14", claim="Yet another")]),
+        ]
+    )
+    first, fakes, ports = await _delivered(config, tmp_path, script)
+    launcher = FakeLauncher()
+    assert _land(ports, tmp_path, launcher).step == "fix_important"
+
+    final = await _resume_graph(script, config, tmp_path, fakes, ports)
+
+    assert script.slugs.count("tech_writer_review") == 2
+    assert [r["location"] for r in rules.open_findings(final)] == ["copy:2.1:src/x.py:13"]
+    _on_head(ports, NEW_HEAD)
+    assert _candidates(ports) == [1]
+    assert _land(ports, tmp_path, launcher).step != "fix_important"
+    assert len(launcher.spawned) == 1
+    _merge(ports, tmp_path)
+    assert fakes.tracker.merge_calls == [(URL.format(1), NEW_HEAD)]
+    assert not final.get("escalated")
+
+
+async def test_a_product_without_criteria_files_its_follow_up_and_merges_without_a_human(
+    config, tmp_path
+):
+    script = _lifecycle_script(
+        [copy_reviewed(settled=[], proposed_standards="# Writing\n\nVoice.")]
+    )
+    final, fakes, ports = await _delivered(config, tmp_path, script, standards=False)
+    assert not final.get("escalated") and _candidates(ports) == []
+
+    assert _land(ports, tmp_path, FakeLauncher()).step == "file_followups_and_land"
+
+    [(title, body)] = fakes.tracker.opened_issues
+    assert title == "Follow-up of #1: open important findings"
+    assert "WRITING_STANDARDS.md" in body
+    assert fakes.tracker.opened_labels == ["needs-triage"]
+    assert _candidates(ports) == [1]
+    _merge(ports, tmp_path)
+    assert fakes.tracker.merge_calls == [(URL.format(1), HEAD)]
+    assert not (ports.documents.load("GH-1") or {}).get("escalated")
