@@ -163,6 +163,10 @@ def render(
         "subtasks": {sid: _recorded(sub) for sid, sub in state.get("subtasks", {}).items()},
         "invariants": state.get("invariants", []),
         "integration_brief": state.get("integration_brief", ""),
+        # The scenarios the plan convened QA Performance for (GH-318, ADR-0060), written
+        # only when there are some, so a document of a plan that convenes none is
+        # byte-identical to one written before.
+        **({"performance": p} if (p := state.get("performance")) else {}),
         # Every finding of every review, raw: the `Tech Lead: findings` section below is
         # the folded, open half of this, which is what the next role reads (issue #42).
         "findings": state.get("findings", []),

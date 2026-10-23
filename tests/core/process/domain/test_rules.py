@@ -3270,3 +3270,30 @@ def test_task_spent_is_the_cost_plus_what_a_restart_carried():
     assert rules.task_spent({"cost_usd": 3.0}) == 3.0
     assert rules.task_spent({"landing_cost_carried": 2.0}) == 2.0
     assert rules.task_spent({}) == 0.0
+
+
+def test_after_integrate_for_a_plan_that_convenes_no_performance_is_what_it_always_was():
+    """Golden (GH-318 invariant 1): a state with no `performance` -- every document written
+    before QA Performance -- walks the same ladder the node was added into."""
+    review = rules.review_section("api")
+    plain = {"type": "feature", "flags": {}, "subtasks": {"api": {"status": "approved"}}}
+    assert rules.after_integrate({**plain, "runs": [run("Tech Lead", review)]}) == "deliver"
+    assert rules.after_integrate({**plain, "performance": []}) == "deliver"
+    design = {
+        **UX_FLAGS,
+        "subtasks": {"api": {"status": "approved"}},
+        "runs": [run("Tech Lead", review)],
+    }
+    assert rules.after_integrate(design) == "final_validation"
+    assert rules.after_integrate(
+        {**design, "runs": [*design["runs"], run(roles.PM_FINAL.name)]}
+    ) == ("deliver")
+    assert rules.after_integrate({"subtasks": {"api": {"status": "pending"}}}) == "pipeline"
+
+
+def test_a_review_can_be_returned_by_qa_performance_and_an_absent_value_is_review():
+    from typing import get_args
+
+    assert "qa_performance" in get_args(task.ReturnedBy)
+    assert {"status": "returned"}.get("returned_by", "review") == "review"
+    assert {"perf_verdict", "perf_head"} <= set(task.RoleRun.__annotations__)

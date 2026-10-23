@@ -144,3 +144,5 @@ que sigue siendo comparable. No se agrega, mueve ni renombra ninguna métrica, e
 span, ni se renombra ninguna clave del documento: la única clave nueva es
 `approval_settled`, que se escribe sólo si no está vacía, por lo que un documento sin ella
 se renderiza igual byte a byte.
+
+**Addendum (GH-318, ADR-0060).** Un escritor más del pliegue: una corrida aprobatoria de QA Performance asienta toda fila abierta con ubicación `QA Performance`. `settled_on_approval` no cambia; el escritor y su motivo están en el ADR-0060.

@@ -17,6 +17,7 @@ tags instead of an array, five times in a row in one case. Lists nested in objec
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Callable
 from typing import Any, Literal, get_args
@@ -25,6 +26,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from .cost_history import MIN_BUCKET, History, bucket_median, reference_usd
 from .coverage import BRIEF_FORM, MAPPED_FORM, NOT_TOUCHED, UNSATISFIABLE
+from .performance import UNIT_SUFFIX, Limit, Unit, VolumeUnit
 from .task import INTEGRATION, CopyCategory, FindingCategory, FindingScope, Severity
 
 TaskType = Literal["bug", "feature", "platform_enhancement"]
@@ -381,6 +383,77 @@ class FinalValidation(RoleOutput):
     )
 
 
+class PerfBudget(BaseModel):
+    """One limit of a QA Performance scenario (GH-318, ADR-0060). `source` says whose
+    number it is: `issue`, stated by the request, or `proposed`, set by the Tech Lead now,
+    with its `basis`. Fixed at planning: nothing edits it afterwards."""
+
+    metric: str = Field(
+        description="The metric the scenario's `measure` prints, ending with the unit's "
+        "suffix: `_ms`, `_queries` or `_kb`, e.g. `list_ms`"
+    )
+    limit: float = Field(description="The most the metric may be, in `unit`")
+    unit: Unit = Field(description="`ms`, `queries` or `kb`")
+    source: Literal["issue", "proposed"] = Field(
+        description="`issue` when the request states this number, `proposed` when you set it"
+    )
+    basis: str = Field(description="One line: where the number comes from")
+
+    @model_validator(mode="after")
+    def _check(self) -> PerfBudget:
+        if not self.metric.endswith(UNIT_SUFFIX[self.unit]):
+            raise ValueError(
+                f"metric {self.metric!r} must end with {UNIT_SUFFIX[self.unit]!r} for the unit "
+                f"{self.unit!r}"
+            )
+        if not math.isfinite(self.limit) or self.limit < 0:
+            raise ValueError(f"the limit of {self.metric!r} must be a finite number, 0 or more")
+        _one_line(self.basis, f"the basis of {self.metric!r}")
+        return self
+
+
+class PerfScenario(BaseModel):
+    """A scenario the Tech Lead convenes QA Performance for (GH-318, ADR-0060): the data
+    volume the system measures at and the budgets it judges. The commands that seed and
+    measure come from the stack's `performance` key at the integrated head; these numbers
+    come only from the plan."""
+
+    name: str = Field(description="Slug, unique in the plan: the name in the stack's `performance`")
+    volume: float = Field(description="The data volume to measure at, a positive number")
+    volume_unit: VolumeUnit = Field(description="`rows`, `days`, `months` or `years`")
+    basis: str = Field(description="One line: why this volume is the one that matters")
+    budgets: list[PerfBudget] = Field(description="At least one budget")
+
+    @model_validator(mode="after")
+    def _check(self) -> PerfScenario:
+        if not SLUG.match(self.name):
+            raise ValueError(f"scenario name {self.name!r} must be a slug")
+        if not math.isfinite(self.volume) or self.volume <= 0:
+            raise ValueError(f"the volume of {self.name!r} must be a positive finite number")
+        _one_line(self.basis, f"the basis of {self.name!r}")
+        if not self.budgets:
+            raise ValueError(f"scenario {self.name!r} has no budget")
+        metrics = [b.metric for b in self.budgets]
+        if len(set(metrics)) != len(metrics):
+            raise ValueError(f"scenario {self.name!r} names a metric twice")
+        return self
+
+
+def _one_line(text: str, what: str) -> None:
+    if not text.strip() or "\n" in text.strip():
+        raise ValueError(f"{what} must be one non-empty line")
+
+
+def plan_limits(scenario: PerfScenario) -> tuple[float, VolumeUnit, dict[str, Limit]]:
+    """The volume, its unit and the limits by metric a measurement of `scenario` uses: the
+    plan's numbers, the only ones a verdict compares against (GH-318 invariant 3)."""
+    return (
+        scenario.volume,
+        scenario.volume_unit,
+        {b.metric: Limit(b.limit, b.unit) for b in scenario.budgets},
+    )
+
+
 class TechPlan(RoleOutput):
     estimated_cost_usd: float = Field(
         description="The TOTAL cost of the task in USD, from its start to its merge, "
@@ -415,6 +488,19 @@ class TechPlan(RoleOutput):
         "merging their branches, when the plan already knows of something. An empty "
         "string when merging is enough: then no integrator runs",
     )
+    performance: list[PerfScenario] = Field(
+        default_factory=list,
+        description="Convenes QA Performance (ADR-0060) for a task whose cost scales with "
+        "data or traffic, or whose issue states a performance budget: the scenarios to "
+        "measure, each with its volume and budgets. Empty when not convened",
+    )
+
+    @model_validator(mode="after")
+    def _scenarios_once(self) -> TechPlan:
+        names = [s.name for s in self.performance]
+        if len(set(names)) != len(names):
+            raise ValueError("the plan names a performance scenario twice")
+        return self
 
 
 class StackProposal(RoleOutput):

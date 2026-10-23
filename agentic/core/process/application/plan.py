@@ -128,6 +128,8 @@ def _delivered(
     if output is not None:
         written["invariants"] = output.data["invariants"]
         written["integration_brief"] = output.data["integration"].strip()
+        if output.data.get("performance"):
+            written["performance"] = output.data["performance"]
         written["estimate"] = {
             "cost_usd": output.data["estimated_cost_usd"],
             "files": output.data["estimated_files"],

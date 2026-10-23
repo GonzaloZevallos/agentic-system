@@ -58,8 +58,9 @@ SubtaskStatus = Literal["pending", "delivered", "approved", "returned"]
 # back to, including every document written before this key existed; `final_validation`
 # only while PM's early, UI-only final validation is the open return -- `review.py`
 # resets it to `review` the moment it reviews the subtask again, so a second, ordinary
-# return never misreads as PM's.
-ReturnedBy = Literal["review", "final_validation"]
+# return never misreads as PM's. `qa_performance` (GH-318, ADR-0060) is the same for the
+# system's performance node: the open return only while that node's verdict is it.
+ReturnedBy = Literal["review", "final_validation", "qa_performance"]
 # Why a review finding blocks, as a closed list (ADR-0016): `standard-*` is a hard
 # violation of a documented standard, `spec-*` a gap against the brief or the
 # definition, `process-*` a delivery that is not one, `plan-calibration` a threshold or
@@ -489,6 +490,11 @@ class RoleRun(TypedDict):
     # Written only when something was reaped, so a document with no leak renders as it
     # always did; read with `.get("reaped", [])`.
     reaped: NotRequired[list[ReapedProcess]]
+    # QA Performance's node verdict (GH-318, ADR-0060) and the full sha of the head it
+    # measured: written only on that role's runs, so every existing run reads without them
+    # (`.get`). The merge gate reads the pair; nothing else does.
+    perf_verdict: NotRequired[Literal["approved", "returned", "unverified"]]
+    perf_head: NotRequired[str]
 
 
 class InterviewStats(TypedDict):
@@ -816,6 +822,10 @@ class TaskState(TaskInput, total=False):
     # Rules of the plan every subtask honours (issue #42): the one channel between
     # reviews that works in the first wave, since it is written before anyone codes.
     invariants: list[str]
+    # The performance scenarios the plan convened QA Performance for (GH-318, ADR-0060),
+    # `PerfScenario` dumped; absent or empty when not convened. The only source of
+    # "convened": never the branch's stack.
+    performance: list[dict[str, Any]]
     # What the plan says has to be done to make the subtasks work together beyond
     # merging them; empty when merging is enough and no integrator runs.
     integration_brief: str
