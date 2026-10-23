@@ -1361,3 +1361,8 @@ class Ports:
     # nothing outside it to talk to (`limits.py`). It rides here because `Ports` is
     # what a use case receives.
     limits: RunLimits = field(default_factory=RunLimits)
+    # QA Performance's node (GH-318, ADR-0060) measures through these two and a use case
+    # cannot build them: `None` for a product no convened task runs on. A node that finds
+    # none fails loudly instead of measuring with a stand-in.
+    perf_runner: PerfRunner | None = None
+    perf_lock: PerfLock | None = None

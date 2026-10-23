@@ -176,6 +176,8 @@ def _ports(cfg: Configuration) -> Ports:
         commands=ShellCommands(product_key, reaper),
         sample_app=ShellSampleApp(),
         reaper=reaper,
+        perf_runner=PerfShellRunner(product_key, reaper),
+        perf_lock=FilesystemPerfLock(cfg.perf_lock_path),
     )
 
 

@@ -16,12 +16,11 @@ You have no tool that runs a measurement and none is coming: the only measuremen
 is the system's, and a number you compute in your head is not evidence.
 
 <Task>
-1. Take every fact of the kind **missing at head** or **limits mismatch** (and **limits
-   loosened**) and report it as a finding with `severity: blocking`, `scope: plan`,
-   `category: spec-scope`, location `QA Performance`, and the system-provided claim text
+1. Take every fact of the kind **missing at head** or **limits mismatch** and report it as
+   a finding with `severity: blocking`, `scope: plan`, `category: spec-scope`, location `QA Performance`, and the system-provided claim text
    verbatim, and the table row or fact it comes from as `evidence`. Do not reword it,
    shorten it or add to it.
-2. Take every budget that is `over` and report it as a finding with `severity: blocking`,
+2. Take every fact of the kind **limits loosened** and every budget that is `over` and report it as a finding with `severity: blocking`,
    `scope: plan`, `category: standard-other`, location `QA Performance`, the claim text
    verbatim.
 3. An `inconclusive` result is not a finding: it never blocks and it is not yours to

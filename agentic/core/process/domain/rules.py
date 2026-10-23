@@ -210,6 +210,7 @@ def findings_rows(state: TaskState) -> list[FindingRecord]:
     an `important` at the same key keeps it open, whatever order they were appended in."""
     settled = {_norm(location) for location in state.get("settled_findings", [])}
     approved = _approved_versions(state)
+    qa_approved = qa_approved_version(state)
     rows: dict[tuple[str, str], FindingRecord] = {}
     open_records: dict[tuple[str, str], list[FindingRecord]] = {}
     for record in state.get("findings", []):
@@ -225,11 +226,41 @@ def findings_rows(state: TaskState) -> list[FindingRecord]:
         if row["status"] == "open"
         and (
             _norm(row["location"]) in settled
-            or all(_covered(record, key, approved) for record in open_records[key])
+            or all(
+                _covered(record, key, approved) or qa_settles(record, qa_approved)
+                for record in open_records[key]
+            )
         )
         else row
         for key, row in rows.items()
     ]
+
+
+def qa_approved_version(state: TaskState) -> int:
+    """The version of the latest approving QA Performance run, `0` when there is none. The
+    only reader of that fact for the fold: `qa_settles` is the writer's one decision."""
+    return max(
+        (
+            run.get("version", 1)
+            for run in state.get("runs", [])
+            if run.get("section", run["role"]) == QA_PERFORMANCE.name
+            and run.get("perf_verdict") == "approved"
+        ),
+        default=0,
+    )
+
+
+def qa_settles(record: FindingRecord, approved_version: int) -> bool:
+    """The named fold writer of QA Performance (GH-318, ADR-0060, ADR-0015 addendum): an
+    approving run settles every record at its own location, `QA Performance`, from a version
+    below its own -- whatever the severity or scope, since its rows are plan-scoped and the
+    system built them from numbers the same run has just measured again. A later return
+    writes records at a higher version, so it reopens the row. `settled_on_approval` does
+    not know these rows and is unchanged."""
+    return (
+        _norm(record["location"]) == _norm(QA_PERFORMANCE.name)
+        and record["version"] < approved_version
+    )
 
 
 def _approved_versions(state: TaskState) -> dict[tuple[str, tuple[str, str]], int]:
