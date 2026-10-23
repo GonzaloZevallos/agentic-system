@@ -30,8 +30,8 @@ from tests.fakes import (
     MemoryWorkspace,
     ScriptedRunner,
     delivered,
-    planned,
     memory_ports,
+    planned,
     reviewed,
 )
 
