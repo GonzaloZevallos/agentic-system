@@ -114,8 +114,8 @@ def whole_for(role: Role, family: Criteria) -> bool:
     The one place that decides it (ADR-0055). `design` and `writing` are always whole: they
     are bounded by the size cap and have no index. `engineering` is whole for every
     verifier, which judges against it, and for a role that cannot open a file; the
-    Developer and the integrator get it through the index. `product` is never whole: it always arrives as what goes
-    whole plus the area index."""
+    Developer and the integrator get it through the index. `product` is never whole: it
+    always arrives as what goes whole plus the area index."""
     if family in ("design", "writing"):
         return True
     if family == "engineering":
