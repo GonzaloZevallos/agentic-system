@@ -1407,6 +1407,9 @@ async def test_the_attempt_is_reaped_on_the_error_path_too(monkeypatch, tmp_path
 
 
 async def test_the_mark_never_reaches_the_shared_environment(monkeypatch, tmp_path):
+    # A suite run from inside a marked process (a role's checks) inherits the mark; the test
+    # is about what the runner adds, so it starts without one.
+    monkeypatch.delenv(reaping.MARK_NAME, raising=False)
     fake_query(monkeypatch, [result()])
     runner = make_runner(env={"GIT_AUTHOR_NAME": "system"})
     await run_once(runner, tmp_path)
