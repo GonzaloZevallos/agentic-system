@@ -28,7 +28,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from functools import partial
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal, NoReturn, cast
 
 import anyio
 import yaml
@@ -63,6 +63,7 @@ from .core.process.adapters.git.workspace import GitError
 from .core.process.adapters.langgraph.graph import ESCALATE
 from .core.process.adapters.shell import inhibitor
 from .core.process.application import archive, reflect_run, release
+from .core.process.application import perf as perfmod
 from .core.process.application import poll as pollmod
 from .core.process.application import resume as resuming
 from .core.process.application.delivered import files_patch
@@ -462,6 +463,26 @@ def main() -> None:
         help="reach back to tasks closed on or after this day (the first run reflects "
         "nothing older than itself otherwise)",
     )
+    perf_parser = sub.add_parser(
+        "perf",
+        help="measure a product against the performance budgets its stack declares "
+        "(GH-318, ADR-0058); exits 0 within, 1 over, 2 inconclusive, 3 refused",
+    )
+    perf_parser.add_argument("product", help="the product's name, as its stack declares it")
+    perf_parser.add_argument("scenario", nargs="?", help="one scenario; default every one")
+    perf_parser.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
+    perf_parser.add_argument(
+        "--revision", metavar="SHA", help="the code under test (default HEAD); the harness is HEAD"
+    )
+    perf_parser.add_argument(
+        "--overlay",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="copy PATH from the product's HEAD into the measured checkout (repeatable)",
+    )
+    # Only this instance: a bad flag on `perf` is a refusal (3), on every other verb it stays 2.
+    perf_parser.error = partial(_perf_usage_error, perf_parser)
     for command in (run, resume):
         command.add_argument("--product-dir", help="root of the product repo (AGENTIC_PRODUCT_DIR)")
         command.add_argument(
@@ -472,8 +493,15 @@ def main() -> None:
             action="store_true",
             help="detach from this session (setsid), print the pid and the log path, and exit",
         )
-    args = parser.parse_args()
+    # `parse_args` minus its last line: the root parser reports a flag a subparser did not
+    # recognise, so `perf` has to get it back to answer with its own exit code.
+    args, unrecognized = parser.parse_known_args()
+    if unrecognized:
+        owner = perf_parser if args.command == "perf" else parser
+        owner.error(f"unrecognized arguments: {' '.join(unrecognized)}")
 
+    if args.command == "perf":
+        sys.exit(_perf_main(args))
     if args.command == "run":
         if args.issue is None and (args.title is None or args.description is None):
             run.error("give a title and a description, or --issue N")
@@ -687,6 +715,82 @@ def main() -> None:
         anyio.run(_signal_guarded, *guard_args)
     except CannotStart as exc:
         parser.exit(exc.code, f"agentic: {exc}\n")
+
+
+def _perf_usage_error(parser: argparse.ArgumentParser, message: str) -> NoReturn:
+    parser.print_usage(sys.stderr)
+    parser.exit(int(perfmod.PerfExit.REFUSED), f"agentic perf: error: {message}\n")
+
+
+def _perf_main(args: argparse.Namespace) -> int:
+    """`agentic perf`: no preflight, no graph, no span. SIGTERM and SIGHUP raise
+    `PerfInterrupted` for the run only, so the `finally` of `perf` removes the worktree and
+    releases the lock; the previous handlers come back on exit."""
+    if args.product_dir:
+        os.environ[ENV_PREFIX + "PRODUCT_DIR"] = args.product_dir
+    previous = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGHUP)}
+
+    def interrupted(signum: int, _frame: object) -> NoReturn:
+        raise perfmod.PerfInterrupted(signum)
+
+    try:
+        for number in previous:
+            signal.signal(number, interrupted)
+        cfg = Configuration.from_sources({}, os.environ)
+        if not cfg.agentic_dir.is_dir():
+            raise perfmod.PerfRefused(f"{cfg.product_dir} is not a product repo: no .agentic/")
+        ports = default_ports(cfg)
+        runner = composition.perf_runner(cfg, ports)
+        lock = composition.perf_lock(cfg)
+        code, report = perfmod.perf(
+            args.product, args.scenario, args.revision, args.overlay, ports, runner, lock, cfg
+        )
+    except perfmod.PerfInterrupted as exc:
+        print(f"agentic perf: {exc}", file=sys.stderr)
+        return 128 + exc.signum
+    except (MissingProductDir, ValueError, OSError) as exc:  # PerfRefused is a ValueError
+        print(f"agentic perf: {exc}", file=sys.stderr)
+        return int(perfmod.PerfExit.REFUSED)
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+    _print_perf(report)
+    return int(code)
+
+
+def _print_perf(report: perfmod.Report) -> None:
+    overlay = ", ".join(report.overlay) or "none"
+    print(f"harness {report.harness_sha}  code {report.code_sha}  overlay {overlay}")
+    rows = [("scenario", "metric", "median", "spread", "limit", "verdict", "reason", "load")]
+    for result in report.results:
+        reason = result.reason or "-"
+        if result.reason == "timeout" and not result.started:
+            reason = "timeout (not started)"
+        load = f"{_round(result.load_before)}/{_round(result.load_after)}"
+        for metric in result.metrics:
+            limit = f"{metric.limit.limit:g}{metric.limit.unit}"
+            median, spread = _round(metric.median), _round(metric.spread)
+            rows.append(
+                (
+                    result.scenario,
+                    metric.metric,
+                    median,
+                    spread,
+                    limit,
+                    metric.outcome,
+                    reason,
+                    load,
+                )
+            )
+    widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
+    for row in rows:
+        print(
+            "  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True)).rstrip()
+        )
+
+
+def _round(value: float | None) -> str:
+    return "-" if value is None else f"{value:.2f}"
 
 
 @dataclass
