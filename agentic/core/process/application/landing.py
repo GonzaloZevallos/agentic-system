@@ -20,7 +20,7 @@ from agentic.shared.configuration import Configuration
 from ..domain import landing as landing_rules
 from ..domain.landing import LandingStepKind
 from ..domain.rules import RunKind
-from ..domain.task import ReleasePatch, TaskState, apply
+from ..domain.task import UPSTREAM_KEY, ReleasePatch, TaskState, apply
 from . import landing_fix, landing_plan, landing_slice, landing_sync
 from .checkouts import SetupFailed, task_checkout
 from .landing_plan import LandingContext
@@ -240,7 +240,7 @@ def _land(
     if step.kind in ("sync_master", "diagnose") and upstream.sha is not None:
         # A sync: what it is for, `deliver` resolves it only if the head holds this sha. A
         # diagnosis: the master it is made against, which its `sync` verdict is served for.
-        entry["upstream"] = upstream.sha
+        entry[UPSTREAM_KEY] = upstream.sha
     if step.kind == "land_slice":
         entry["slice_units"] = list(step.units)
     if step.restart_why is not None:

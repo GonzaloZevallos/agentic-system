@@ -15,7 +15,7 @@ from ..domain import landing as landing_rules
 from ..domain import presubmit, rules
 from ..domain.copy import copy_location_parts
 from ..domain.roles import LANDING_DIAGNOSER
-from ..domain.task import ChangeCategory, FindingRecord, TaskState, apply
+from ..domain.task import VERDICT_KEY, ChangeCategory, FindingRecord, TaskState, apply
 from . import escalate, landing_plan, landing_sync, merge
 from .checkouts import task_base
 from .landing_plan import LandingContext
@@ -378,22 +378,23 @@ def diagnose(context: LandingContext) -> None:
         return
     saved = apply(raw, patch)
     context.ports.documents.save(saved)
-    verdict = landing_rules.verdict_of(output.data.get("verdict"))
+    verdict = landing_rules.verdict_of(output.data.get(VERDICT_KEY))
     # Before anything else happens: a close or a spawn that fails must not read as undone.
-    _stamp(context, delivered=True, **({} if verdict is None else {"verdict": verdict}))
+    _stamp(context, delivered=True, **({} if verdict is None else {VERDICT_KEY: verdict}))
     reason = str(output.data.get("reason", ""))
     depth = landing_rules.restart_depth(raw)
     # The one decision: `after_diagnosis` alone turns the verdict into an action, never the
     # reason or the Markdown (GH-330).
     stamped = context.ports.documents.load(context.task_id) or {}
     spent = landing_plan.spent(stamped, context.head, None, context.upstream.sha)
-    if landing_rules.after_diagnosis(verdict, spent, depth) == "sync_master":
+    action = landing_rules.after_diagnosis(verdict, spent, depth)
+    if action == "sync_master":
         context.log(
             f"agentic: land: {context.task_id}: diagnose: verdict {verdict}, "
             "the next round syncs master on this pull request"
         )
         return
-    if depth >= landing_rules.RESTART_DEPTH_MAX:
+    if action == "escalate":
         _escalate(context, reason)
         return
     try:

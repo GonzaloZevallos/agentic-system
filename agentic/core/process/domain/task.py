@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from typing import (
     Annotated,
     Any,
+    Final,
     Literal,
     NotRequired,
     TypedDict,
@@ -127,6 +128,10 @@ FailureReason = Literal[
 DiagnosisVerdict = Literal["sync", "unlandable"]
 VERDICT_SYNC: DiagnosisVerdict = "sync"
 VERDICT_UNLANDABLE: DiagnosisVerdict = "unlandable"
+# The keys of a `diagnose` entry that carry the verdict and the master sha it was made against,
+# defined once for the same reason (they are also `LandingEntry` fields).
+VERDICT_KEY: Final = "verdict"
+UPSTREAM_KEY: Final = "upstream"
 # Which review this is (ADR-0016; `rules.review_kind`): `first` until a return sends the
 # subtask back, `incremental` (ADR-0015) after that, `integration` for the fan-in's own
 # subtask always. What `agentic.review.findings` groups by alongside the finding itself.

@@ -22,6 +22,8 @@ from .adr_numbers import Renaming
 from .document import HUMAN
 from .roles import LANDING_DIAGNOSER
 from .task import (
+    UPSTREAM_KEY,
+    VERDICT_KEY,
     VERDICT_SYNC,
     Carried,
     DiagnosisVerdict,
@@ -322,6 +324,7 @@ def after_diagnosis(
     written before verdicts) take the second path."""
     if (
         verdict == VERDICT_SYNC
+        and spent.verdict_sync_due
         and spent.verdict_syncs_for_upstream < LANDING_VERDICT_SYNCS_MAX
         and spent.syncs < LANDING_SYNCS_MAX
         and spent.unsynced_for_upstream < LANDING_UNSYNCED_MAX
@@ -673,9 +676,9 @@ def already_dispatched(
         if entry.get("head") != head or entry.get("step") != step or "lacks" in entry:
             return False
         if step == "diagnose":
-            return entry.get("delivered") is True and entry.get("verdict") != VERDICT_SYNC
+            return entry.get("delivered") is True and entry.get(VERDICT_KEY) != VERDICT_SYNC
         if step == "sync_master":
-            recorded = entry.get("upstream")
+            recorded = entry.get(UPSTREAM_KEY)
             return not isinstance(recorded, str) or recorded == upstream
         return True
 
@@ -702,7 +705,7 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
     if isinstance(resolved := raw.get("resolved_at"), str):
         out["resolved_at"] = resolved
     for key in (
-        "upstream",
+        UPSTREAM_KEY,
         "closed_at",
         "lacks",
         "slice_pull_request",
@@ -723,8 +726,8 @@ def entry_of(raw: Mapping[str, object]) -> LandingEntry:
         out["resume_spawned_at"] = spawned
     if isinstance(units := raw.get("slice_units"), list) and all(isinstance(u, str) for u in units):
         out["slice_units"] = [u for u in units if isinstance(u, str)]
-    if (verdict := verdict_of(raw.get("verdict"))) is not None:
-        out["verdict"] = verdict
+    if (verdict := verdict_of(raw.get(VERDICT_KEY))) is not None:
+        out[VERDICT_KEY] = verdict
     if isinstance(delivered := raw.get("delivered"), bool):
         out["delivered"] = delivered
     if isinstance(passed := raw.get("checks_passed"), bool):
@@ -1104,7 +1107,7 @@ def sync_verdict(
     whether the delivered head holds the entry's `upstream`. `not_a_sync` for another step or an
     entry without a string `upstream` (written before this rule: it keeps resolving as it did).
     Only `True` is `synced`; `False` and `None` (unreadable) are `unsynced`. Pure: no git."""
-    if entry.get("step") != "sync_master" or not isinstance(entry.get("upstream"), str):
+    if entry.get("step") != "sync_master" or not isinstance(entry.get(UPSTREAM_KEY), str):
         return "not_a_sync"
     return "synced" if contains is True else "unsynced"
 
@@ -1122,7 +1125,7 @@ def merge_owner(
         return "none"
     known = [upstream, head]
     for entry in entries:
-        known.extend(v for v in (entry.get("upstream"), entry.get("head")) if isinstance(v, str))
+        known.extend(v for v in (entry.get(UPSTREAM_KEY), entry.get("head")) if isinstance(v, str))
     return "system" if any(rules.same_commit(merge_head, k) for k in known) else "foreign"
 
 

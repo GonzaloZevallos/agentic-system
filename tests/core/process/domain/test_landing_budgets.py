@@ -124,12 +124,19 @@ def test_an_unlandable_or_unmarked_diagnosis_leaves_no_step(refusal, last):
 
 
 def test_after_diagnosis_syncs_once_per_sha_then_restarts_or_escalates():
-    fresh = _spent(diagnoses=1)
+    fresh = _spent(diagnoses=1, verdict_sync_due=True)
     assert landing.after_diagnosis(VERDICT_SYNC, fresh, 0) == "sync_master"
     assert landing.after_diagnosis(VERDICT_SYNC, fresh, landing.RESTART_DEPTH_MAX) == "sync_master"
     served = _spent(diagnoses=2, verdict_syncs_for_upstream=landing.LANDING_VERDICT_SYNCS_MAX)
     assert landing.after_diagnosis(VERDICT_SYNC, served, 0) == "restart"
     assert landing.after_diagnosis(VERDICT_SYNC, served, landing.RESTART_DEPTH_MAX) == "escalate"
+
+
+def test_after_diagnosis_rejects_a_sync_the_document_does_not_read_as_due():
+    # A second `sync` for a sha with no sync between them reads as unlandable in the document.
+    unread = _spent(diagnoses=2, verdict_sync_due=False)
+    assert landing.after_diagnosis(VERDICT_SYNC, unread, 0) == "restart"
+    assert landing.after_diagnosis(VERDICT_SYNC, unread, landing.RESTART_DEPTH_MAX) == "escalate"
 
 
 @pytest.mark.parametrize("verdict", [VERDICT_UNLANDABLE, None])
@@ -140,12 +147,16 @@ def test_after_diagnosis_restarts_at_depth_zero_and_escalates_deeper(verdict):
 
 def test_after_diagnosis_does_not_sync_past_the_task_wide_or_the_unsynced_budget():
     assert (
-        landing.after_diagnosis(VERDICT_SYNC, _spent(syncs=landing.LANDING_SYNCS_MAX), 0)
+        landing.after_diagnosis(
+            VERDICT_SYNC, _spent(syncs=landing.LANDING_SYNCS_MAX, verdict_sync_due=True), 0
+        )
         == "restart"
     )
     assert (
         landing.after_diagnosis(
-            VERDICT_SYNC, _spent(unsynced_for_upstream=landing.LANDING_UNSYNCED_MAX), 0
+            VERDICT_SYNC,
+            _spent(unsynced_for_upstream=landing.LANDING_UNSYNCED_MAX, verdict_sync_due=True),
+            0,
         )
         == "restart"
     )

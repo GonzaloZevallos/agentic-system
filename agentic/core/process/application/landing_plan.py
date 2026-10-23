@@ -20,6 +20,8 @@ from ..domain.landing import LandingStep, LandingStepKind
 from ..domain.roles import Role
 from ..domain.task import (
     INTEGRATION,
+    UPSTREAM_KEY,
+    VERDICT_KEY,
     VERDICT_SYNC,
     VERDICT_UNLANDABLE,
     DiagnosisVerdict,
@@ -74,25 +76,27 @@ def _readings(
     delivered one's verdict, the syncs that followed a `sync` verdict for `upstream`, and
     whether the latest verdict is a `sync` for `upstream` that no `sync_master` has followed.
     A `sync` verdict is served by the first `sync_master` for its sha after it; a `sync` for a
-    sha already served `LANDING_VERDICT_SYNCS_MAX` times, or with no sha, reads as
-    `unlandable`, and so does a delivered entry with no verdict."""
+    sha that already had `LANDING_VERDICT_SYNCS_MAX` of them (served or not), or with no sha,
+    reads as `unlandable`, and so does a delivered entry with no verdict."""
     served: dict[str, int] = {}
+    seen: dict[str, int] = {}
     waiting: set[str] = set()
     last: DiagnosisVerdict | None = None
     latest: str | None = None
     for entry in epoch:
-        sha = entry.get("upstream")
+        sha = entry.get(UPSTREAM_KEY)
         if entry.get("step") == "sync_master" and isinstance(sha, str) and sha in waiting:
             waiting.discard(sha)
             served[sha] = served.get(sha, 0) + 1
         if entry.get("step") != "diagnose" or entry.get("delivered") is not True:
             continue
-        verdict = landing.verdict_of(entry.get("verdict"))
+        verdict = landing.verdict_of(entry.get(VERDICT_KEY))
         if (
             verdict == VERDICT_SYNC
             and isinstance(sha, str)
-            and served.get(sha, 0) < landing.LANDING_VERDICT_SYNCS_MAX
+            and seen.get(sha, 0) < landing.LANDING_VERDICT_SYNCS_MAX
         ):
+            seen[sha] = seen.get(sha, 0) + 1
             last, latest = VERDICT_SYNC, sha
             waiting = {sha}
         else:
@@ -127,7 +131,7 @@ def spent(
         return sum(1 for entry in epoch if predicate(entry))
 
     def for_upstream(entry: Mapping[str, object]) -> bool:
-        return upstream is not None and entry.get("upstream") == upstream
+        return upstream is not None and entry.get(UPSTREAM_KEY) == upstream
 
     last_verdict, verdict_syncs, due = _readings(epoch, upstream)
     return landing.LandingSpent(

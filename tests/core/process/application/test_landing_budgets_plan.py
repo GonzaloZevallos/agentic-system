@@ -110,6 +110,14 @@ def test_a_second_diagnosis_for_a_served_sha_reads_as_unlandable_whatever_it_say
     assert spent.diagnoses == 2
 
 
+def test_a_second_sync_verdict_with_no_sync_between_reads_as_unlandable():
+    entries = [_diagnose(VERDICT_SYNC, MASTER), _diagnose(VERDICT_SYNC, MASTER)]
+    spent = _spent(entries)
+    assert spent.last_verdict == VERDICT_UNLANDABLE
+    assert spent.unlandable and not spent.verdict_sync_due
+    assert _spent(entries[:1]).verdict_sync_due
+
+
 def test_a_verdict_sync_closed_with_lacks_makes_the_next_diagnosis_unlandable():
     closed = _sync(MASTER, lacks=MASTER, closed_at="t")
     entries = [_diagnose(VERDICT_SYNC, MASTER), closed, _diagnose(VERDICT_SYNC, MASTER)]
