@@ -97,7 +97,21 @@ documento; el sistema escribe una línea más en stderr por sobreviviente.
 ## Riesgos conocidos
 
 1. **La compuerta.** Solo el spike verifica que la marca sobrevive al tool Bash del CLI
-   real. Si falla, el reaper no sirve y la fuga sigue. Resultado en `## Adenda GH-315: lo que un check o una tarea dejan en un checkout
+   real. Si falla, el reaper no sirve y la fuga sigue. Resultado en `## Gate result`.
+2. **Escapes.** `env -i`, `systemd-run`, contenedores y procesos que cambian de privilegio
+   pierden u ocultan la marca.
+3. **Ventana tras un corte duro.** Una corrida matada por falta de memoria deja sus procesos
+   vivos hasta la próxima ronda del poller, 60 segundos como máximo; un producto sin poller
+   los deja hasta `--fresh`, `deliver` o `discard`. Un lock de otro host nunca se sondea.
+4. **Reuso de pid.** Un pid reutilizado dentro del mismo arranque por una corrida nueva de la
+   misma tarea, entre la lectura del poller y el reap, coincidiría.
+5. **Secretos.** Una línea de comandos puede contener secretos. El corte a 120 caracteres lo
+   limita, no lo elimina.
+6. **El spike no se puede reproducir por quien revisa.** La salida pegada abajo es la
+   evidencia; que falte la reproducción es una observación (ADR-0016).
+7. **Un intento cancelado pierde su registro `reaped`.** El reap en sí corre hasta el final.
+
+## Adenda GH-315: lo que un check o una tarea dejan en un checkout
 
 Un servidor de e2e lanzado por el `webServer` de Playwright dentro de un check sobrevivía
 al check cortado por el timeout y a su worktree borrado. Los checks no llevaban marca, así
@@ -136,20 +150,6 @@ que ni el reap por marca ni el de la corrida los encontraban. Cambia esto:
 - **Única señal nueva:** una línea `reaper: stopped <pid> <comando> (<resultado>)` en stderr
   por proceso detenido, más `release: <checkout>: reaped ...` de `release_checkout`. No hay
   métrica, etiqueta ni atributo de span nuevos; `reaped_at_cleanup` conserva su forma.
-
-## Gate result`.
-2. **Escapes.** `env -i`, `systemd-run`, contenedores y procesos que cambian de privilegio
-   pierden u ocultan la marca.
-3. **Ventana tras un corte duro.** Una corrida matada por falta de memoria deja sus procesos
-   vivos hasta la próxima ronda del poller, 60 segundos como máximo; un producto sin poller
-   los deja hasta `--fresh`, `deliver` o `discard`. Un lock de otro host nunca se sondea.
-4. **Reuso de pid.** Un pid reutilizado dentro del mismo arranque por una corrida nueva de la
-   misma tarea, entre la lectura del poller y el reap, coincidiría.
-5. **Secretos.** Una línea de comandos puede contener secretos. El corte a 120 caracteres lo
-   limita, no lo elimina.
-6. **El spike no se puede reproducir por quien revisa.** La salida pegada abajo es la
-   evidencia; que falte la reproducción es una observación (ADR-0016).
-7. **Un intento cancelado pierde su registro `reaped`.** El reap en sí corre hasta el final.
 
 ## Gate result
 
