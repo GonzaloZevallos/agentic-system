@@ -194,11 +194,11 @@ def measure_at(
     sweep the stale `perf-*` checkouts, make a throwaway `perf-<uuid>` worktree at `code`,
     overlay the product's HEAD paths when asked, measure under the `perf_node_timeout_s`
     deadline and, however that ends, remove the worktree and release the lock. Returns the
-    `overlay_from` is the product revision the overlay paths are copied from: the verb passes
-    the head it validated them against.
-        results and the full sha measured (`code` itself when nothing was). Raises `PerfRefused`
-    when the checkout could not be prepared. `PerfRunner.run` is called only here, only under
-    the lock, and only with the throwaway worktree as its cwd."""
+    results and the full sha measured (`code` itself when nothing was). Raises `PerfRefused`
+    when the checkout could not be prepared. `overlay_from` is the product revision the
+    overlay paths are copied from: the verb passes the head it validated them against.
+    `PerfRunner.run` is called only here, only under the lock, and only with the throwaway
+    worktree as its cwd."""
     if not any(lock.acquire(lock_wait_s) for _ in range(tries)):
         return [performance.busy(s) for s in scenarios], code
     started = clock()
