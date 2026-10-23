@@ -424,7 +424,7 @@ class ProductStack(Protocol):
 
     def performance(self, revision: str) -> dict[str, Scenario]:
         """Scenario name -> its `seed`, `measure`, volume and limits (`core.knowledge`,
-        GH-318, ADR-0058), as the commit `revision` declares them, in file order. Empty when
+        GH-318, ADR-0059), as the commit `revision` declares them, in file order. Empty when
         the key is absent, which is every product that has not declared a budget. Read only
         by `agentic perf`: never part of the checks, the presubmit or the merge gate. Raises
         `ValueError` when the key is malformed."""
@@ -1314,7 +1314,7 @@ class ProcessReaper(Protocol):
 
 class PerfRunner(Protocol):
     """Runs one `seed`, `measure` or `setup` command of a performance scenario (GH-318,
-    ADR-0058) in `checkout`, with `extra_env` on top of a scrubbed environment, and returns
+    ADR-0059) in `checkout`, with `extra_env` on top of a scrubbed environment, and returns
     the `Run`. A non-zero exit and a timeout are a `Run` (`timed_out`), never an exception:
     the verdict reads them."""
 

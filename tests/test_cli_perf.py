@@ -1,4 +1,4 @@
-"""`agentic perf` through `cli.main` (GH-318, ADR-0058): one test per exit code, the usage
+"""`agentic perf` through `cli.main` (GH-318, ADR-0059): one test per exit code, the usage
 error that only this verb overrides, a product tree left byte for byte as it was, and a
 SIGTERM that leaves no worktree and no lock. The runner is a fake, the repository real."""
 

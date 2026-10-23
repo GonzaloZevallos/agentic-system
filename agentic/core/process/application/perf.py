@@ -1,4 +1,4 @@
-"""`agentic perf` (GH-318, ADR-0058): measure a product against the performance budgets its own
+"""`agentic perf` (GH-318, ADR-0059): measure a product against the performance budgets its own
 stack declares, with no task and no role.
 
 `measure_scenarios` is the measuring itself over a runner and a clock; `perf` is the verb

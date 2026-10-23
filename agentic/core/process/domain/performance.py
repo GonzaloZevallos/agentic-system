@@ -1,4 +1,4 @@
-"""Performance measurement, pure (GH-318, ADR-0058): the types, the contract of a `measure`
+"""Performance measurement, pure (GH-318, ADR-0059): the types, the contract of a `measure`
 command, every statistic and the verdict. Nothing here touches a process, a file or a clock.
 
 **The `measure` contract.** A product's `measure` command prints, as the last non-empty

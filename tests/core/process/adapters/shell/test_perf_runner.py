@@ -1,5 +1,5 @@
 """`PerfShellRunner` against small fake commands in `tmp_path` checkouts under a worktrees
-root, with the real `ShellReaper` (GH-318, ADR-0058): what the command gets in its
+root, with the real `ShellReaper` (GH-318, ADR-0059): what the command gets in its
 environment, where it runs, what it leaves, and what the runner leaves of itself."""
 
 import os
@@ -295,7 +295,7 @@ def test_a_setsid_double_fork_is_gone_when_run_returns(runner, checkout):
 
 
 def test_a_child_that_cds_away_and_drops_the_environment_survives_the_known_gap(runner, checkout):
-    """Pinned (ADR-0058): what is stopped is what carries the mark or has its cwd in the
+    """Pinned (ADR-0059): what is stopped is what carries the mark or has its cwd in the
     checkout. This child has neither, and the runner cannot find it. The test kills it."""
     pidfile = checkout / "pid"
     command = (

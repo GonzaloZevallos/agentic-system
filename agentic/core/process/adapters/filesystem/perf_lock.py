@@ -1,5 +1,5 @@
 """`PerfLock` over one file: the machine-wide lock that keeps two measurements off the same
-CPU (GH-318, ADR-0058). Unlike `FilesystemRunLock` (one file per task, under the product),
+CPU (GH-318, ADR-0059). Unlike `FilesystemRunLock` (one file per task, under the product),
 this is one file for the whole machine, and its holder is named by a record of its pid and
 the boot it ran in; `liveness.is_alive` decides whether that holder is still there, the same
 rule the run lock and the registry use, so a record from another boot or from a dead pid is

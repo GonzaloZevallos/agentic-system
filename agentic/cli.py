@@ -466,7 +466,7 @@ def main() -> None:
     perf_parser = sub.add_parser(
         "perf",
         help="measure a product against the performance budgets its stack declares "
-        "(GH-318, ADR-0058); exits 0 within, 1 over, 2 inconclusive, 3 refused",
+        "(GH-318, ADR-0059); exits 0 within, 1 over, 2 inconclusive, 3 refused",
     )
     perf_parser.add_argument("product", help="the product's name, as its stack declares it")
     perf_parser.add_argument("scenario", nargs="?", help="one scenario; default every one")

@@ -75,7 +75,7 @@ checks:
 #
 # ci: [check]
 #
-# `performance`: optional (GH-318, ADR-0058). Scenarios `agentic perf <product>` measures
+# `performance`: optional (GH-318, ADR-0059). Scenarios `agentic perf <product>` measures
 # against absolute limits, with a realistic data volume. They never join `checks`: the
 # presubmit, `affected_checks`, `ci` and the merge gate do not see them. `seed` and
 # `measure` are one-line commands (no `git push`, `gh`, `curl` or `wget`) that run in a

@@ -1,5 +1,5 @@
 """`PerfRunner` over bash: one `seed`, `measure` or perf `setup` command of a product, run by
-the system in a throwaway checkout (GH-318, ADR-0058).
+the system in a throwaway checkout (GH-318, ADR-0059).
 
 **What the command gets.** An environment built from nothing, never the system's: `PATH`,
 every `LANG`/`LC_*` and `TZ` copied from the system's, the checkout's `.venv` when it has one
@@ -15,7 +15,7 @@ and, however it ends, the session is killed and the reaper stops what is left. T
 exactly: what is stopped is what carries the command's mark, or is unmarked with its cwd
 inside the checkout, at the moment of the reap. A child that drops the environment
 (`env -i`) and leaves the checkout (`cd /`) is neither, and survives the verb: a known gap
-the tests pin and ADR-0058 lists.
+the tests pin and ADR-0059 lists.
 
 **What comes back.** A `Run`, always: a non-zero exit and a timeout are fields of it, never
 an exception. A timed-out command has no measurement (its output is cut). The one-minute

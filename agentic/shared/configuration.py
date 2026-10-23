@@ -154,7 +154,7 @@ class Configuration(BaseModel):
     # is what lets a test redirect it, the same way every other field already does, so
     # no test ever writes to the real registry.
     run_registry_dir: Path = Field(default_factory=lambda: _default_run_registry_dir())
-    # `agentic perf` (GH-318, ADR-0058). One command (`seed` or `measure`) is killed with
+    # `agentic perf` (GH-318, ADR-0059). One command (`seed` or `measure`) is killed with
     # its process group after `perf_timeout_s`, and the whole invocation after
     # `perf_node_timeout_s`: what remains of it caps each command. The machine-wide lock is
     # waited for at most `perf_lock_wait_s` (0 never waits) before every scenario is
@@ -164,7 +164,7 @@ class Configuration(BaseModel):
     perf_lock_wait_s: float = Field(default=1800, ge=0)
     # The widest (p90 - p10) / median a metric may show and still be judged. UNCALIBRATED:
     # 0.25 is a first guess until the human's run over the old apostrophe commit settles it
-    # (ADR-0058); with five runs it is a range, not a percentile band.
+    # (ADR-0059); with five runs it is a range, not a percentile band.
     perf_spread_max: float = Field(default=0.25, gt=0)
     # The machine-wide lock two measurements take so they never share a CPU: outside every
     # product, built like `run_registry_dir`.

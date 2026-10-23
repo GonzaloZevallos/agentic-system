@@ -35,7 +35,7 @@ change forces the full form. Absent they read as `{}` and `()`. Present and empt
 `[]`, or a key with no value) is a half-written declaration and fails at load, so leave the
 key out to declare none; a wrong shape fails too.
 
-**`performance`**: optional (GH-318, ADR-0058). A mapping of scenario name to the `seed` and
+**`performance`**: optional (GH-318, ADR-0059). A mapping of scenario name to the `seed` and
 `measure` one-line commands, the `volume` and its `volume_unit` (`rows|days|months|years`)
 they must run against, and the `limits` of its metrics (`{limit, unit: ms|queries|kb}`; the
 metric's name ends with its unit's suffix). Read only by `agentic perf`: it never joins

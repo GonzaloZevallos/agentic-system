@@ -1,4 +1,4 @@
-"""`measure_scenarios` and `perf` (GH-318, ADR-0058) over a fake runner, a fake lock, a fake
+"""`measure_scenarios` and `perf` (GH-318, ADR-0059) over a fake runner, a fake lock, a fake
 clock and the in-memory workspace and stack: no process, no git, no real time."""
 
 from __future__ import annotations
