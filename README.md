@@ -737,7 +737,7 @@ Forma del repo del producto:
 | `.agentic/tasks/` | Documento único por tarea, registro crudo del trabajo | Los roles, sección por sección |
 | `.agentic/prompts/` | Overrides de prompts por rol, si los hay (ADR-0005) | PjM |
 | `.agentic/flags.yaml` | Vocabulario de flags del producto, pisa el default del sistema | Humano, después PM |
-| `.agentic/stack.yaml` | Lo que el producto declara de sí mismo: `product`, el nombre con que se etiqueta cada corrida suya (#47); `checks`, los comandos con que declara que su código está sano; y `setup`, opcional, lo que prepara un checkout recién creado. Obligatorio: sin él el sistema no arranca (ADR-0016, adendas; ADR-0011, adenda tercera) | Humano |
+| `.agentic/stack.yaml` | Lo que el producto declara de sí mismo: `product`, el nombre con que se etiqueta cada corrida suya (#47); `checks`, los comandos con que declara que su código está sano; `setup`, opcional, lo que prepara un checkout recién creado; y `performance`, opcional, escenarios con presupuestos absolutos que `agentic perf <producto> [escenario]` mide sin tarea ni rol (GH-318, ADR-0058; nunca se mezclan con `checks`). Obligatorio: sin él el sistema no arranca (ADR-0016, adendas; ADR-0011, adenda tercera) | Humano |
 | `.agentic/state.sqlite` | Checkpointer del grafo, fuera del control de versiones (ADR-0003) | El sistema |
 | `.agentic/worktrees/` | Un worktree por subtarea, fuera del control de versiones (ADR-0011) | El sistema |
 | rama `agentic/<tarea>` | La rama de tarea: entrevistas, ADRs, código integrado. Termina en un pull request (ADR-0011) | Los roles |

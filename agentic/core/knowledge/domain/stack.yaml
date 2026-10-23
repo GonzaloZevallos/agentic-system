@@ -74,3 +74,20 @@ checks:
 # run reads as red; list a matrix job by each of its expanded names, `name (value)`.
 #
 # ci: [check]
+#
+# `performance`: optional (GH-318, ADR-0058). Scenarios `agentic perf <product>` measures
+# against absolute limits, with a realistic data volume. They never join `checks`: the
+# presubmit, `affected_checks`, `ci` and the merge gate do not see them. `seed` and
+# `measure` are one-line commands (no `git push`, `gh`, `curl` or `wget`) that run in a
+# throwaway checkout with a scrubbed environment and receive `PERF_VOLUME` and
+# `PERF_VOLUME_UNIT`. `measure` prints, as its last line, one JSON object and never
+# judges: {"volume": 1000, "volume_unit": "rows", "metrics": {"list_ms": 12.5}}. A limit's
+# key ends in its unit: `_ms`, `_queries` or `_kb`.
+#
+# performance:
+#   list_orders:
+#     seed: python scripts/seed.py
+#     measure: python scripts/measure_list.py
+#     volume: 10000
+#     volume_unit: rows              # rows | days | months | years
+#     limits: {list_ms: {limit: 300, unit: ms}, list_queries: {limit: 4, unit: queries}}
