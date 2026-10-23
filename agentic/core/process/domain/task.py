@@ -18,7 +18,6 @@ several nodes over a copy of the state and has to hand the parent what it added.
 from __future__ import annotations
 
 import operator
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import (
     Annotated,
@@ -927,9 +926,9 @@ def _reducers() -> dict[str, object]:
 REDUCERS = _reducers()
 
 
-def apply(state: TaskState, patch: Mapping[str, object]) -> TaskState:
-    """`state` with `patch` folded in, reducer by reducer; plain fields are overridden. A
-    patch is partial, so it is any mapping of keys, not a whole `TaskState`."""
+def apply(state: TaskState, patch: TaskState | ReleasePatch) -> TaskState:
+    """`state` with `patch` folded in, reducer by reducer; plain fields are overridden. The
+    patch is a `TaskState` or the partial `ReleasePatch`, so every key stays checked."""
     merged: dict[str, Any] = dict(state)
     for key, value in dict(patch).items():
         reducer = REDUCERS.get(key)
