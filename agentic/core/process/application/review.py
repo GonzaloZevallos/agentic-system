@@ -143,12 +143,11 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
     }
     if rules.return_section(state, subtask_id) != rules.review_section(subtask_id):
         # PM's early final validation (ADR-0040) or QA Performance (ADR-0060) was the open
-        # return; this review is
-        # now, so the next resumed Developer's delta, and the pass after this one's own
-        # spec, must both come from this section (`rules.return_section`), not from
-        # PM's. Written only to flip that case: every ordinary return keeps the subtask
-        # exactly as it always has, with no `returned_by` key at all (`.get`'s own
-        # `'review'` default already reads that the same way).
+        # return; this review is now, so the next resumed Developer's delta, and the pass
+        # after this one's own spec, must both come from this section
+        # (`rules.return_section`), not from theirs. Written only to flip that case: an
+        # ordinary return keeps the subtask with no `returned_by` key at all, which
+        # `return_section` already reads as `'review'`.
         returned["returned_by"] = "review"
     patch = apply(patch, {"subtasks": {subtask_id: returned}})
     if remaining > 0:
