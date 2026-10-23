@@ -3158,7 +3158,7 @@ class MergeFacts:
     open_outside: int = 0
     important_pass_done: bool = False
     perf_convened: bool = False
-    perf_verdict: str | None = None
+    perf_verdict: Literal["approved", "returned", "unverified"] | None = None
     perf_head: str | None = None
 
 
@@ -3177,7 +3177,9 @@ class MergeDecision:
 _QA_PERFORMANCE_SECTION = "QA Performance"
 
 
-def perf_merge_facts(state: TaskState) -> tuple[bool, str | None, str | None]:
+def perf_merge_facts(
+    state: TaskState,
+) -> tuple[bool, Literal["approved", "returned", "unverified"] | None, str | None]:
     """`(convened, verdict, head)` for `MergeFacts`, the only reader of them (GH-318,
     ADR-0060). `convened` is the plan's own `performance` being non-empty -- never the
     branch's stack. `verdict` and `head` are the latest QA Performance run's `perf_verdict`
