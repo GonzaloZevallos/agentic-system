@@ -8,7 +8,7 @@ import threading
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from agentic.core.knowledge.domain import knowledge
 from agentic.core.process.adapters.github.tracker import pull_request_number
@@ -60,6 +60,9 @@ from agentic.core.process.domain.task import (
     TaskInput,
     TaskState,
 )
+
+if TYPE_CHECKING:
+    from agentic.core.process.adapters.shell import ShellCommands
 
 VOCAB = {"touches_ui": "UI", "touches_copy": "copy"}
 
@@ -1709,7 +1712,7 @@ def ruled(
     )
 
 
-def real_commands() -> Any:
+def real_commands() -> ShellCommands:
     """`ShellCommands` over real bash with a real reaper whose worktrees root reaches
     nothing: each check reaps its own mark, and no cwd reap can match."""
     from agentic.core.process.adapters.shell import ShellCommands, ShellReaper
