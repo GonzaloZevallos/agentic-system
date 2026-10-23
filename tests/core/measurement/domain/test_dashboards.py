@@ -455,9 +455,11 @@ def test_every_widget_is_placed_in_time_by_the_end_of_its_task():
 # them), as built before GH-283, for each product. A widget whose planned row moves breaks it.
 # Re-pinned once by GH-299: the failure-reason family iterates `FailureReason`, so the new
 # `stall` reason adds itself to the one row that lists the reasons (nothing else moved).
+# Re-pinned again by GH-319: the role-cost and returns families iterate `ROLES` and
+# `ChangeCategory`, so the Tech Writer roles and the copy categories add their score names.
 UNCHANGED_ROWS = {
-    "agentic-system": "3f8f2e983581c37a3b9f047644af59c9d560cebfef880e0a40c7da7fb43116a3",
-    "apostrophe": "5dd60eace563f758f10088b408aa608726d8f69ff9c639e707feaa715aca7ffc",
+    "agentic-system": "236120ac062198d41be498d10dddb6174d4b3794f7f58641ac970554247918bf",
+    "apostrophe": "8cf705854c12656b8df8afc3c6c962ae25aef9d68c122147ecb288f8f940aba8",
 }
 
 

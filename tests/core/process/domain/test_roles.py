@@ -462,6 +462,8 @@ EXPECTED_CRITERIA = {
     "ui_lead": ("design",),
     "pm_consolidator": ("product",),
     "ux_lead_final": ("design",),
+    "tech_writer": ("product", "writing"),
+    "tech_writer_review": ("writing",),
     "ui_lead_final": ("design",),
     "pm_final": ("product",),
     "product_analyst_bug": ("product",),
