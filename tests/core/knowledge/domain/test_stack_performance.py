@@ -107,6 +107,7 @@ def _limits(limits: Any) -> dict[str, Any]:
         (declared(volume=True), "`volume`"),
         (declared(volume="many"), "`volume`"),
         (declared(volume=float("inf")), "`volume`"),
+        (declared(volume=10**400), "`volume`"),
         (declared(volume_unit="weeks"), "`volume_unit`"),
         (declared(volume_unit=None), "`volume_unit`"),
         (_limits({}), "`limits`"),
@@ -121,6 +122,8 @@ def _limits(limits: Any) -> dict[str, Any]:
         (_limits({"list_ms": {"limit": True, "unit": "ms"}}), "'list_ms'"),
         (_limits({"list_ms": {"limit": "200", "unit": "ms"}}), "'list_ms'"),
         (_limits({"list_ms": {"limit": 200, "unit": "s"}}), "'list_ms'"),
+        (_limits({"list_ms": {"limit": 200, "unit": ["ms"]}}), "'list_ms'"),
+        (_limits({"list_ms": {"limit": 10**400, "unit": "ms"}}), "'list_ms'"),
         # the metric's name must end with its unit's suffix
         (_limits({"list_ms": {"limit": 5, "unit": "queries"}}), "_queries"),
         (_limits({"list": {"limit": 5, "unit": "ms"}}), "_ms"),

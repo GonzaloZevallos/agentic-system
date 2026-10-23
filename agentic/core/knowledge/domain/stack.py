@@ -54,7 +54,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from agentic.core.process.domain import performance as perf
 from agentic.core.process.domain.design import Design
@@ -366,6 +366,7 @@ def _limits(found: object, where: str) -> dict[str, perf.Limit]:
             not isinstance(entry, dict)
             or set(entry) != set(LIMIT_KEYS)
             or (number := _positive(entry["limit"])) is None
+            or not isinstance(entry["unit"], str)
             or entry["unit"] not in perf.UNIT_SUFFIX
         ):
             raise ValueError(
@@ -378,14 +379,18 @@ def _limits(found: object, where: str) -> dict[str, perf.Limit]:
                 f"{where}: the metric {metric!r} under `limits` must end with {suffix}, "
                 f"the suffix of its unit {entry['unit']}"
             )
-        limits[metric] = perf.Limit(number, entry["unit"])
+        limits[metric] = perf.Limit(number, cast(perf.Unit, entry["unit"]))  # checked above
     return limits
 
 
 def _positive(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
-    return float(value) if 0 < value < float("inf") else None
+    try:
+        number = float(value)
+    except OverflowError:  # an int too big for a float
+        return None
+    return number if 0 < number < float("inf") else None
 
 
 def _design_command(found: dict[str, Any], source: object, key: str) -> str | None:

@@ -47,9 +47,12 @@ volumen de datos realista. Esta primera parte entrega la medición y el verbo; l
   `inconclusive/busy`, sin worktree.
 - **Worktree desechable** `perf-<uuid>`, quitado en `finally`. Al tomar el lock se barren los
   `perf-*` que un kill duro dejó (se detienen sus procesos por cwd y se quitan).
-- **Presupuesto del nodo.** `perf_node_timeout_s` (3600 s) acota toda la invocación y
-  `perf_timeout_s` (1800 s) cada comando, topado por lo que queda; un escenario que no alcanza
-  a empezar es `timeout (not started)`. Un timeout nunca es una excepción.
+- **Presupuesto del nodo.** `perf_node_timeout_s` (3600 s) acota la medición una vez que se
+  tiene el lock, y `perf_timeout_s` (1800 s) cada comando, topado por lo que queda; un
+  escenario que no alcanza a empezar es `timeout (not started)`. La espera del lock viene
+  antes y solo la acota `perf_lock_wait_s`: el tiempo total de la invocación es, como mucho,
+  `perf_lock_wait_s + perf_node_timeout_s` (5400 s por defecto). Un timeout nunca es una
+  excepción.
 - **Sin observabilidad nueva:** `agentic perf` no agrega span, métrica ni etiqueta (§7).
 
 ## Seguridad y costo (§8)
@@ -58,7 +61,15 @@ El sistema ejecuta, como el usuario del host, los `seed`, `measure` y `setup` qu
 producto declara. Reciben el checkout de un worktree desechable, un home de rascado y la red
 abierta, pero ninguna credencial del sistema. Solo corren cuando una persona invoca
 `agentic perf`. Costo por invocación: un setup y, por escenario, una siembra y 5 a 14
-mediciones, acotado por `perf_node_timeout_s`; no se llama a ningún modelo.
+mediciones, acotado por `perf_node_timeout_s` una vez tomado el lock, más a lo sumo
+`perf_lock_wait_s` de espera; no se llama a ningún modelo.
+
+`--revision` y `--overlay` los usa quien corre el CLI, como el usuario del host. `--revision`
+alcanza cualquier commit del repo del propio producto. `--overlay` copia solo rutas
+confirmadas en el HEAD del producto (`git archive`), tras rechazar las rutas vacías,
+absolutas, con `..`, fuera del producto o ausentes del HEAD; la extracción usa
+`filter="data"`, que rechaza miembros o enlaces que caigan o apunten fuera del checkout.
+Ningún rol puede alcanzar ninguno de los dos en esta parte.
 
 ## Riesgos conocidos
 

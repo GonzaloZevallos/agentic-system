@@ -280,7 +280,10 @@ def _worst(outcomes: Sequence[Outcome]) -> Outcome:
 def _number(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
-    number = float(value)
+    try:
+        number = float(value)
+    except OverflowError:  # an int too big for a float
+        return None
     return number if math.isfinite(number) else None
 
 

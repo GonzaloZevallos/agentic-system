@@ -95,6 +95,7 @@ def test_parse_line_accepts_the_contract(stdout: str, expected: Measurement) -> 
         '{"metrics": {"a_ms": -Infinity}}',
         '{"metrics": {"a_ms": 1e999}}',
         '{"metrics": {"a_ms": true}}',
+        '{"metrics": {"a_ms": ' + "9" * 400 + "}}",  # an int that does not fit a float
         '{"metrics": {"a_ms": "5"}}',
         '{"metrics": {"a_ms": null}}',
         '{"metrics": {"a_ms": -1}}',
@@ -107,6 +108,12 @@ def test_parse_line_accepts_the_contract(stdout: str, expected: Measurement) -> 
 )
 def test_parse_line_rejects_what_is_not_the_contract(stdout: str) -> None:
     assert perf.parse_line(stdout) is None
+
+
+def test_a_volume_that_does_not_fit_a_float_is_a_missing_volume_not_an_exception() -> None:
+    found = perf.parse_line('{"volume": ' + "9" * 400 + ', "volume_unit": "rows", "metrics": {}}')
+    assert found is not None
+    assert found.volume is None
 
 
 # --- percentiles and spread via verdict -------------------------------------------------
