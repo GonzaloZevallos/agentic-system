@@ -12,8 +12,10 @@ import signal
 import subprocess
 import sys
 import time
-from collections.abc import Iterator
+import xml.etree.ElementTree as ET
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -22,20 +24,36 @@ from agentic.core.process.adapters.shell.reaper import ShellReaper
 from agentic.core.process.domain import reaping
 from agentic.core.process.domain.stall import ChildActivity
 
-PRODUCT = reaping.product_key("/work/a-product")
+# One product key per pytest process: a reap here cannot name the marked children of another
+# suite running at the same time on this machine, nor can `child_activity` count their CPU.
+PRODUCT = reaping.product_key(f"/work/a-product/{uuid4().hex}")
 WORKTREES_ROOT = Path("/nonexistent/worktrees")
 
 STUBBORN = "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(300)"
 OBEDIENT = "import time; time.sleep(300)"
 
 
+def kill_group(pgid: int) -> None:
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
 @pytest.fixture
 def children() -> Iterator[list[subprocess.Popen]]:
     spawned: list[subprocess.Popen] = []
     yield spawned
+    # Each CLI leads its own session and process group (`spawn`), and a grandchild it
+    # launched joins that group: the group is what reaches a grandchild no handle knows,
+    # also when the CLI is already gone. Test-local: the production reaper never kills a
+    # process group (ADR-0052).
     for child in spawned:
-        if child.poll() is None:
-            child.kill()
+        kill_group(child.pid)
+    for child in spawned:
+        if child.stdout is not None:
+            child.stdout.close()
+    for child in spawned:
         child.wait()
 
 
@@ -204,12 +222,91 @@ def test_the_reaper_never_signals_its_own_process(children):
 # orchestrator, `parent_pid`); the child it launches inherits the mark, as a tool the
 # CLI ran does.
 
-BUSY = "while True: pass"
+# What every wait of these tests may take, in all: one deadline per test, shared by its waits.
+WAIT_DEADLINE_S = 30.0
+POLL_S = 0.05
+
+# The token rides in the command line of every busy loop, so a survivor can be found (and
+# told from anything else) by `/proc/*/cmdline`. The regression test's inner run gets a
+# fresh one through the environment.
+TOKEN_ENV = "AGENTIC_REAPER_TEST_TOKEN"
+RUN_TOKEN = os.environ.get(TOKEN_ENV) or uuid4().hex
+BUSY = f"while True: pass  # {RUN_TOKEN}"
+
+# The tests the regression test runs in a pytest of their own, and what that run may take:
+# a deadline per test plus a minute for the interpreter and the collection.
+INNER_TESTS = (
+    "test_child_activity_ignores_children_of_another_attempt_or_task_or_product",
+    "test_child_activity_counts_cpu_of_a_marked_child_but_not_of_the_cli",
+)
+INNER_TIMEOUT_S = len(INNER_TESTS) * WAIT_DEADLINE_S + 60
 
 
-def spawn_cli(children, mark: str, grandchild: str | None) -> subprocess.Popen:
-    launch = f"subprocess.Popen([sys.executable, '-c', {grandchild!r}])" if grandchild else "None"
-    return spawn(children, f"import subprocess, time; {launch}; time.sleep(300)", mark)
+def spawn_cli(
+    children, mark: str | None, grandchild: str | None
+) -> tuple[subprocess.Popen, int | None]:
+    """A marked CLI and, when `grandchild` is code, the pid of the process it launched. The
+    grandchild has no stdin and no stdout (the CLI's pipe must not outlive the CLI), and the
+    CLI prints its pid once it exists."""
+    launch = (
+        f"g = subprocess.Popen([sys.executable, '-c', {grandchild!r}], "
+        "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL); print(g.pid, flush=True)"
+        if grandchild
+        else "pass"
+    )
+    child = spawn(children, f"import subprocess, time; {launch}; time.sleep(300)", mark)
+    if not grandchild:
+        return child, None
+    assert child.stdout is not None
+    line = child.stdout.readline().strip()
+    assert line.isdigit(), f"the CLI printed no grandchild pid: {line!r}"
+    return child, int(line)
+
+
+def wait_until(deadline: float, what: str, probe: Callable[[], tuple[bool, object]]) -> None:
+    """Poll `probe` until it says done; past `deadline` the test fails, naming the last thing
+    seen. A wait is never a skip and never a fixed sleep."""
+    while True:
+        done, seen = probe()
+        if done:
+            return
+        assert time.monotonic() < deadline, f"{what} within {WAIT_DEADLINE_S}s; last seen: {seen}"
+        time.sleep(POLL_S)
+
+
+def wait_for_ticks(deadline: float, pid: int, at_least: int = 1) -> None:
+    """Wait for `pid` to have run `at_least` clock ticks: it exists, is scheduled, and
+    burns CPU."""
+    seen: list[object] = [None]
+
+    def probe() -> tuple[bool, object]:
+        try:
+            stat = reaper_module._stat(pid)
+        except (OSError, ValueError):
+            seen[0] = "no /proc entry"
+            return False, seen[0]
+        seen[0] = f"state {stat.state}, ticks {stat.cpu_ticks}"
+        return stat.cpu_ticks >= at_least, seen[0]
+
+    wait_until(deadline, f"pid {pid} has {at_least}+ cpu ticks", probe)
+
+
+def wait_until_asleep(deadline: float, pid: int) -> None:
+    """Wait for `pid` to exist and be asleep: a fresh interpreter is runnable while it starts
+    up, and an idle child is one that has got past that."""
+
+    def probe() -> tuple[bool, object]:
+        try:
+            state = reaper_module._stat(pid).state
+        except (OSError, ValueError):
+            return False, "no /proc entry"
+        return state == "S", f"state {state}"
+
+    wait_until(deadline, f"pid {pid} exists and sleeps", probe)
+
+
+def deadline_for_this_test() -> float:
+    return time.monotonic() + WAIT_DEADLINE_S
 
 
 def activity(task: str = "GH-77", token: str = "t"):
@@ -218,17 +315,19 @@ def activity(task: str = "GH-77", token: str = "t"):
 
 def test_child_activity_counts_cpu_of_a_marked_child_but_not_of_the_cli(children):
     mark = mark_of("GH-77")
-    spawn_cli(children, mark, BUSY)
+    _, busy = spawn_cli(children, mark, BUSY)
+    assert busy is not None
     try:
-        deadline = time.monotonic() + 10
+        deadline = deadline_for_this_test()
         first = activity()
         assert first is not None
-        grown = first
-        while time.monotonic() < deadline and grown.cpu_ticks == first.cpu_ticks:
-            time.sleep(0.2)
-            grown = activity()
-            assert grown is not None
-        assert grown.cpu_ticks > first.cpu_ticks
+        grown: list[ChildActivity | None] = [first]
+
+        def probe() -> tuple[bool, object]:
+            grown[0] = activity()
+            return grown[0] is not None and grown[0].cpu_ticks > first.cpu_ticks, grown[0]
+
+        wait_until(deadline, f"the ticks of the busy child {busy} grow past {first}", probe)
     finally:
         ShellReaper(PRODUCT, WORKTREES_ROOT).reap_task("GH-77")
 
@@ -236,20 +335,22 @@ def test_child_activity_counts_cpu_of_a_marked_child_but_not_of_the_cli(children
 def test_child_activity_sees_a_running_child(children):
     spawn_cli(children, mark_of("GH-77"), BUSY)
     try:
-        deadline = time.monotonic() + 10
-        seen = activity()
-        while time.monotonic() < deadline and not (seen and seen.running):
-            time.sleep(0.05)
-            seen = activity()
-        assert seen is not None and seen.running
+        seen: list[ChildActivity | None] = [None]
+
+        def probe() -> tuple[bool, object]:
+            seen[0] = activity()
+            return seen[0] is not None and seen[0].running, seen[0]
+
+        wait_until(deadline_for_this_test(), "the busy child shows as running", probe)
     finally:
         ShellReaper(PRODUCT, WORKTREES_ROOT).reap_task("GH-77")
 
 
 def test_child_activity_of_a_present_but_idle_child_is_flat_and_not_running(children):
-    spawn_cli(children, mark_of("GH-77"), OBEDIENT)
+    _, idle = spawn_cli(children, mark_of("GH-77"), OBEDIENT)
+    assert idle is not None
     try:
-        time.sleep(0.5)
+        wait_until_asleep(deadline_for_this_test(), idle)
         first, second = activity(), activity()
         assert first is not None and second is not None
         assert not first.running
@@ -261,18 +362,26 @@ def test_child_activity_of_a_present_but_idle_child_is_flat_and_not_running(chil
 def test_child_activity_ignores_the_cli_even_when_it_burns_cpu(children):
     # Rejected input: the marked process whose parent is the orchestrator is the CLI,
     # and its own CPU says nothing about a tool the model is waiting for.
-    spawn(children, "exec('while True: pass')", mark_of("GH-77"))
-    time.sleep(0.5)
+    cli = spawn(children, f"exec({BUSY!r})", mark_of("GH-77"))
+    wait_for_ticks(deadline_for_this_test(), cli.pid)
     assert activity() == ChildActivity(cpu_ticks=0, running=False)
 
 
 def test_child_activity_ignores_children_of_another_attempt_or_task_or_product(children):
-    spawn_cli(children, mark_of("GH-77", token="other"), BUSY)
-    spawn_cli(children, mark_of("GH-78"), BUSY)
-    spawn_cli(children, mark_of("GH-77", product=reaping.product_key("/work/b")), BUSY)
-    spawn_cli(children, None, BUSY)
+    # Two of these grandchildren (the other product's and the unmarked one) are outside every
+    # reap scope by design: they are what `child_activity` must ignore, and only the process
+    # group of the `children` fixture takes them down.
+    deadline = deadline_for_this_test()
+    busy = [
+        spawn_cli(children, mark_of("GH-77", token="other"), BUSY)[1],
+        spawn_cli(children, mark_of("GH-78"), BUSY)[1],
+        spawn_cli(children, mark_of("GH-77", product=reaping.product_key("/work/b")), BUSY)[1],
+        spawn_cli(children, None, BUSY)[1],
+    ]
     try:
-        time.sleep(0.5)
+        for pid in busy:
+            assert pid is not None
+            wait_for_ticks(deadline, pid)
         assert activity() == ChildActivity(cpu_ticks=0, running=False)
     finally:
         for task in ("GH-77", "GH-78"):
@@ -471,3 +580,132 @@ def test_a_child_born_during_the_grace_inside_the_checkout_is_reaped_too(
     assert parent.pid in {e["pid"] for e in reaped}
     assert len(reaped) == 2
     assert all(e["outcome"] in {"term", "kill"} for e in reaped)
+
+
+# -- the suite leaves nothing behind (GH-322) ----------------------------------------
+#
+# GH-315's teardown only saw processes whose cwd was under a `tmp_path` root; the busy-loop
+# grandchildren of `spawn_cli` kept the real worktree as cwd and outlived the suite. The
+# regression test runs the tests that start them in a pytest of its own and looks, by the
+# token in their command line, for what is still alive afterwards.
+
+SETTLE_S = 3.0
+
+
+def cmdline_of(pid: int) -> bytes | None:
+    try:
+        return Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError:  # gone, or not ours to read
+        return None
+
+
+def token_holders(token: str) -> list[int]:
+    """The pids (this one excluded) whose command line carries `token`."""
+    needle = token.encode()
+    holders = []
+    for name in os.listdir("/proc"):
+        if not name.isdigit() or int(name) == os.getpid():
+            continue
+        cmdline = cmdline_of(int(name))
+        if cmdline is not None and needle in cmdline:
+            holders.append(int(name))
+    return holders
+
+
+def kill_token_holders(token: str) -> None:
+    """SIGKILL every holder of `token`, through a pidfd and only after the pidfd is open and
+    the command line still has the token: the pid cannot have been reused by then. Never
+    `pkill`, never a bare command text."""
+    needle = token.encode()
+    for pid in token_holders(token):
+        try:
+            fd = os.pidfd_open(pid)
+        except OSError:
+            continue
+        try:
+            cmdline = cmdline_of(pid)
+            if cmdline is not None and needle in cmdline:
+                signal.pidfd_send_signal(fd, signal.SIGKILL)
+        except OSError:
+            pass
+        finally:
+            os.close(fd)
+
+
+def detached_holder(token: str) -> subprocess.Popen:
+    return subprocess.Popen(
+        [sys.executable, "-c", f"import time; time.sleep(300)  # {token}"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
+def test_the_token_scan_finds_a_holder_and_kills_only_holders():
+    # The scanner the regression test trusts, on both inputs: the holder it must find and
+    # kill, and the bystander with another token it must leave alone.
+    token, other = uuid4().hex, uuid4().hex
+    holder, bystander = detached_holder(token), detached_holder(other)
+    try:
+        assert token_holders(token) == [holder.pid]
+        kill_token_holders(token)
+        assert holder.wait(timeout=10) == -signal.SIGKILL
+        assert token_holders(token) == []
+        assert bystander.poll() is None
+        assert token_holders(other) == [bystander.pid]
+    finally:
+        for process in (holder, bystander):
+            process.kill()
+            process.wait()
+
+
+def test_a_run_of_the_child_activity_tests_leaves_no_busy_loop_behind(tmp_path):
+    if os.environ.get(TOKEN_ENV):
+        pytest.skip("this is the inner run: the guard that stops the test recursing into itself")
+    token = uuid4().hex
+    junit = tmp_path / "j.xml"
+    log_path = tmp_path / "inner.log"
+    command = [
+        sys.executable,
+        "-m",
+        "pytest",
+        *(f"{__file__}::{name}" for name in INNER_TESTS),
+        "-p",
+        "no:cacheprovider",
+        f"--junitxml={junit}",
+    ]
+    timed_out = False
+    survivors: dict[int, bytes | None] = {}
+    with log_path.open("wb") as log:
+        inner = subprocess.Popen(
+            command,
+            env={**os.environ, TOKEN_ENV: token},
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        try:
+            try:
+                inner.wait(timeout=INNER_TIMEOUT_S)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+        finally:
+            # Whatever happened above, the inner run's group goes, then the survivors.
+            kill_group(inner.pid)
+            inner.wait()
+            settle = time.monotonic() + SETTLE_S
+            survivors = {pid: cmdline_of(pid) for pid in token_holders(token)}
+            while survivors and time.monotonic() < settle:
+                time.sleep(POLL_S)
+                survivors = {pid: cmdline_of(pid) for pid in token_holders(token)}
+            kill_token_holders(token)
+
+    output = log_path.read_text(errors="replace")[-2000:]
+    assert not timed_out, f"inner run timed out after {INNER_TIMEOUT_S}s:\n{output}"
+    assert inner.returncode == 0, f"inner run failed ({inner.returncode}):\n{output}"
+    root = ET.parse(junit).getroot()
+    suite = root if root.tag == "testsuite" else root.find("testsuite")
+    assert suite is not None
+    counts = {k: int(suite.get(k, "-1")) for k in ("tests", "failures", "errors", "skipped")}
+    assert counts == {"tests": len(INNER_TESTS), "failures": 0, "errors": 0, "skipped": 0}, output
+    assert not survivors, f"processes of the inner run outlived it: {survivors}"
