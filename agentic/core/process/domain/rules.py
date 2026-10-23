@@ -3234,8 +3234,9 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     first that fails: `not_ready`, `pr_not_open`, `adr_number_taken`, `not_approved`,
     `head_not_reviewed`, `perf_unverified` (only when `perf_convened`), `open_findings_blocking`,
     `open_findings`, `eval_set_unreadable`, `eval_set`, `merge_conflict` (only when
-    `conflicts is True`; unread or clean change nothing), `merge_failed`, then, only when the product declares its CI
-    (`ci_required`): `ci_unreadable`, a `wait` for a head that is not the reviewed one, `ci_failed` and
+    `conflicts is True`; unread or clean change nothing), `merge_failed`, then, only when the
+    product declares its CI (`ci_required`): `ci_unreadable`, a `wait` for a head that is not the
+    reviewed one, `ci_failed` and
     `ci_missing`, a green and fresh CI being the `merge` itself (a green stale one goes on);
     then `checks_failed` (only when the recorded checks cover this head on this master;
     otherwise the next check) and
