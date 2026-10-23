@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from typing import (
     Annotated,
     Any,
+    Final,
     Literal,
     NotRequired,
     TypedDict,
@@ -120,6 +121,17 @@ FailureReason = Literal[
     "stall",
     "other",
 ]
+# What the Landing Diagnoser says about an approved pull request the landing could not land
+# (ADR-0048): `sync` (the work lands once master is merged into its branch) or `unlandable`
+# (the approved work itself cannot land). Closed, and defined only here: every reader and writer
+# of a `diagnose` entry's `verdict` imports these and writes no literal.
+DiagnosisVerdict = Literal["sync", "unlandable"]
+VERDICT_SYNC: DiagnosisVerdict = "sync"
+VERDICT_UNLANDABLE: DiagnosisVerdict = "unlandable"
+# The keys of a `diagnose` entry that carry the verdict and the master sha it was made against,
+# defined once for the same reason (they are also `LandingEntry` fields).
+VERDICT_KEY: Final = "verdict"
+UPSTREAM_KEY: Final = "upstream"
 # Which review this is (ADR-0016; `rules.review_kind`): `first` until a return sends the
 # subtask back, `incremental` (ADR-0015) after that, `integration` for the fan-in's own
 # subtask always. What `agentic.review.findings` groups by alongside the finding itself.
@@ -723,8 +735,12 @@ class LandingEntry(TypedDict, total=False):
     # failure led to (`landing.released`). The retry calendar counts attempts after it.
     released_at: str
     # GH-267, all optional: a document without them reads and renders as before.
-    # `upstream` is the master sha a `sync_master` entry was dispatched for.
+    # `upstream` is the master sha a `sync_master` entry was dispatched for; on a `diagnose`
+    # entry it is the master sha the diagnosis was made against.
     upstream: str
+    # `diagnose` entries: what the diagnoser concluded (`DiagnosisVerdict`). A delivered
+    # entry without one reads as `unlandable`.
+    verdict: DiagnosisVerdict
     # When a pass was closed without succeeding (`landing.close_unsynced`).
     closed_at: str
     # The upstream sha the delivered head did not contain.

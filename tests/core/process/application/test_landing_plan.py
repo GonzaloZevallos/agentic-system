@@ -20,9 +20,9 @@ def _sync(refusal: str) -> dict:
 
 
 @pytest.mark.parametrize("refusal", landing.CONFLICTING_SYNC_REFUSALS)
-def test_a_conflicting_sync_counts_as_a_pass_and_never_as_a_clean_sync(refusal):
+def test_a_conflicting_sync_is_a_sync_of_its_own_and_never_a_pass(refusal):
     spent = landing_plan.spent({"landing": [_sync(refusal)]}, HEAD, None)
-    assert (spent.passes, spent.syncs) == (1, 0)
+    assert (spent.passes, spent.syncs) == (0, 1)
 
 
 def test_a_sync_answering_anything_else_is_a_clean_one():
@@ -30,11 +30,14 @@ def test_a_sync_answering_anything_else_is_a_clean_one():
     assert (spent.passes, spent.syncs) == (0, 1)
 
 
-def test_the_loop_of_three_conflicting_syncs_reaches_the_diagnose():
-    entries = [_sync("merge_conflict"), _sync("checks_failed"), _sync("merge_conflict")]
+def test_the_loop_of_two_conflicting_syncs_for_one_sha_reaches_the_diagnose():
+    entries = [
+        {**_sync("merge_conflict"), "upstream": "b" * 40},
+        {**_sync("checks_failed"), "upstream": "b" * 40},
+    ]
     raw = {"landing": entries}
-    spent = landing_plan.spent(raw, HEAD, None)
-    assert (spent.passes, spent.syncs) == (3, 0)
+    spent = landing_plan.spent(raw, HEAD, None, "b" * 40)
+    assert (spent.passes, spent.syncs, spent.conflicting_syncs_for_upstream) == (0, 2, 2)
     facts = rules.MergeFacts(
         task_id="GH-9",
         status="ready_for_review",
@@ -65,21 +68,20 @@ def _diagnose(**more) -> dict:
 
 def test_only_a_delivered_diagnosis_counts_as_diagnosed():
     attempt = _diagnose(failure="account_limit")
-    assert not landing_plan.spent({"landing": [attempt]}, HEAD, None).diagnosed
-    assert landing_plan.spent(
-        {"landing": [attempt, _diagnose(delivered=True)]}, HEAD, None
-    ).diagnosed
+    assert landing_plan.spent({"landing": [attempt]}, HEAD, None).diagnoses == 0
+    both = {"landing": [attempt, _diagnose(delivered=True)]}
+    assert landing_plan.spent(both, HEAD, None).diagnoses == 1
 
 
 def test_a_redelivery_keeps_the_diagnosis_counted():
     resolved = landing.resolve_open([_diagnose(delivered=True)], "2026-10-15T13:00:00+00:00", 3.0)
-    assert landing_plan.spent({"landing": resolved}, HEAD, None).diagnosed
+    assert landing_plan.spent({"landing": resolved}, HEAD, None).diagnoses == 1
 
 
 def test_an_undelivered_diagnose_entry_is_not_a_dispatched_step():
-    assert not landing.already_dispatched([_diagnose(failure="sdk")], HEAD, "diagnose")
-    assert landing.already_dispatched([_diagnose(delivered=True)], HEAD, "diagnose")
-    assert landing.already_dispatched([{**_sync("x"), "step": "fix"}], HEAD, "fix")
+    assert not landing.already_dispatched([_diagnose(failure="sdk")], HEAD, "diagnose", None)
+    assert landing.already_dispatched([_diagnose(delivered=True)], HEAD, "diagnose", None)
+    assert landing.already_dispatched([{**_sync("x"), "step": "fix"}], HEAD, "fix", None)
 
 
 def test_the_gate_skips_a_retry_that_is_not_due_and_an_escalation_already_made():

@@ -20,7 +20,7 @@ from agentic.shared.configuration import Configuration
 from ..domain import landing as landing_rules
 from ..domain.landing import LandingStepKind
 from ..domain.rules import RunKind
-from ..domain.task import ReleasePatch, TaskState, apply
+from ..domain.task import UPSTREAM_KEY, ReleasePatch, TaskState, apply
 from . import landing_fix, landing_plan, landing_slice, landing_sync
 from .checkouts import SetupFailed, task_checkout
 from .landing_plan import LandingContext
@@ -209,7 +209,7 @@ def _land(
         landing_fix.escalate_failed_diagnosis(context)
         return LandResult("dispatched", step=step.kind)
     if resumed is None and landing_rules.already_dispatched(
-        landing_plan.entries(current), head, step.kind
+        landing_plan.entries(current), head, step.kind, master
     ):
         log(f"agentic: land: {task_id}: {head} {step.kind}: already taken")
         return LandResult("skipped", "already_dispatched", step.kind)
@@ -237,9 +237,10 @@ def _land(
         "refusal": step.refusal,
         "at": clock(),
     }
-    if step.kind == "sync_master" and upstream.sha is not None:
-        # What the sync is for: `deliver` resolves it only if the head holds this sha.
-        entry["upstream"] = upstream.sha
+    if step.kind in ("sync_master", "diagnose") and upstream.sha is not None:
+        # A sync: what it is for, `deliver` resolves it only if the head holds this sha. A
+        # diagnosis: the master it is made against, which its `sync` verdict is served for.
+        entry[UPSTREAM_KEY] = upstream.sha
     if step.kind == "land_slice":
         entry["slice_units"] = list(step.units)
     if step.restart_why is not None:

@@ -38,7 +38,7 @@ def _facts(collision) -> MergeFacts:
 
 
 def _spent(**over) -> LandingSpent:
-    base = LandingSpent(passes=0, syncs=0, reruns_on_head=0, diagnosed=False, waited_s=None)
+    base = LandingSpent(passes=0, syncs=0, reruns_on_head=0, diagnoses=0, waited_s=None)
     return replace(base, **over)
 
 
@@ -67,7 +67,7 @@ def test_a_renumber_is_not_charged_to_passes_or_syncs():
 
 
 def test_a_diagnosed_task_has_no_renumber_left():
-    assert _step(RENAMING, _spent(diagnosed=True)).kind == "none"
+    assert _step(RENAMING, _spent(diagnoses=1)).kind == "none"
 
 
 DOC = LineChange("docs/adr/0050-x.md", "see ADR-0049", "see ADR-0050")

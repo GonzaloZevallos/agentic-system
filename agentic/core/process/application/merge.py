@@ -587,7 +587,10 @@ def _refuse(
             # the key, and not when the comment is already on the issue (the step may not
             # have been recorded yet).
             taken = landing_rules.already_dispatched(
-                landing_plan.entries(ports.documents.load(task_id) or {}), head, step.kind
+                landing_plan.entries(ports.documents.load(task_id) or {}),
+                head,
+                step.kind,
+                facts.current_master if facts is not None else None,
             )
             if not taken and not any(
                 body.splitlines()[:1] == [line] for body in ports.tracker.issue_comments(task_id)

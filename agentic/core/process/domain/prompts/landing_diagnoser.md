@@ -24,7 +24,19 @@ Write, in Markdown, using `###` headings and nothing above `###`:
    different order or way, what to read first, what not to repeat. Written for someone
    who has not seen this task's history.
 
-Put in `reason` one line that says the same as the first heading.
+3. `verdict`, the one word the system acts on:
+   - `sync` when merging the current main line into the existing branch and resolving the
+     conflicts would land the approved work: the work itself is sound and only the
+     conflict stands in the way. The system then syncs the same branch and pull request and
+     re-reviews only the conflict resolution; nothing is closed or restarted.
+   - `unlandable` when the approved work itself cannot land: a finding never settled, a
+     check that fails on the work itself, a plan premise the code refutes.
+   You are read-only and cannot try the merge, so `sync` is your best judgement of what the
+   diff and the git history show, not a promise. If the conflict needs the work redone
+   rather than reconciled, say `unlandable`. The system never reads `reason` or your
+   Markdown to choose; only `verdict` counts.
+
+Put in `reason` one line that says the same as the first heading, for the human who reads it.
 </Task>
 
 <Hard Limits>
