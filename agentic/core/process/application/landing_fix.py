@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 
 from ..domain import landing as landing_rules
 from ..domain import presubmit, rules
+from ..domain.copy import copy_location_parts
 from ..domain.roles import LANDING_DIAGNOSER
 from ..domain.task import ChangeCategory, FindingRecord, TaskState, apply
 from . import escalate, landing_plan, landing_sync, merge
@@ -107,6 +108,17 @@ def _reopen_and_resume(
     _resume(context)
 
 
+def _reason_line(row: FindingRecord) -> str:
+    """One row of the reason. A text row names the place it points at and the corrected text
+    to apply, never its identifier; any other row reads `location: claim`, as ever."""
+    parts = copy_location_parts(row["location"])
+    if parts is None:
+        return f"- {row['location']}: {row['claim']}"
+    line = f"- {parts[2]}: {row['claim']}"
+    proposed = row.get("proposed", "").strip()
+    return f"{line} Corrected text: {proposed}" if proposed else line
+
+
 def _important_reason(raw: TaskState) -> tuple[str, ChangeCategory]:
     """The reason the final important pass hands the Developer: the task's own open
     `important` rows by unit, then the plan-scope ones, from the one partition."""
@@ -115,11 +127,11 @@ def _important_reason(raw: TaskState) -> tuple[str, ChangeCategory]:
     rows: list[FindingRecord] = []
     for unit, owned in part.owned.items():
         lines.append(f"Unit `{unit}`:")
-        lines.extend(f"- {row['location']}: {row['claim']}" for row in owned)
+        lines.extend(_reason_line(row) for row in owned)
         rows.extend(owned)
     if part.plan:
         lines.append("Plan:")
-        lines.extend(f"- {row['location']}: {row['claim']}" for row in part.plan)
+        lines.extend(_reason_line(row) for row in part.plan)
         rows.extend(part.plan)
     category: ChangeCategory = rows[0]["category"] if rows else "process-suite-red"
     return "\n".join(lines), category

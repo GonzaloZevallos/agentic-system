@@ -1426,3 +1426,41 @@ def test_the_restart_at_the_depth_limit_still_escalates_without_the_notice(tmp_p
 
     assert launcher.spawned == [] and _restart_comments(ports) == []
     assert ports.tracker.labels == [("GH-5", "needs-human")]
+
+
+def _important_row(location: str, **extra) -> dict:
+    return {
+        "subtask": "api",
+        "version": 1,
+        "location": location,
+        "claim": "wrong",
+        "severity": "important",
+        "scope": "subtask",
+        "category": "copy-criteria-written" if location.startswith("copy:") else "spec-behaviour",
+        "status": "open",
+        **extra,
+    }
+
+
+def test_the_reason_for_a_text_row_shows_the_real_path_and_the_corrected_text():
+    state = {
+        "id": "GH-5",
+        "subtasks": {"api": {"status": "approved"}},
+        "findings": [_important_row("copy:1.1:src/x.py:12", proposed="Could not export.")],
+    }
+    reason, category = landing_fix._important_reason(state)
+    assert "- src/x.py:12: wrong Corrected text: Could not export." in reason
+    assert "copy:" not in reason and category == "copy-criteria-written"
+
+
+def test_the_reason_for_any_other_row_is_what_it_always_was():
+    state = {
+        "id": "GH-5",
+        "subtasks": {"api": {"status": "approved"}},
+        "findings": [_important_row("x.py:1")],
+    }
+    reason, _ = landing_fix._important_reason(state)
+    assert reason == (
+        "Open important findings (final pass before merge, not a return):\n"
+        "Unit `api`:\n- x.py:1: wrong"
+    )

@@ -47,6 +47,7 @@ from langgraph.types import Send, interrupt
 from agentic.shared.configuration import Configuration
 
 from ...application.classify import classify
+from ...application.copy import copy_review, write_copy
 from ...application.define import define
 from ...application.deliver import deliver
 from ...application.design import consolidate, design_review, ui_screens, ux_flow, ux_walk
@@ -73,6 +74,8 @@ from ...domain.roles import (
     PRODUCT_ANALYST,
     TECH_LEAD,
     TECH_LEAD_REVIEWER,
+    TECH_WRITER,
+    TECH_WRITER_REVIEW,
     UI_DESIGNER,
     UI_LEAD,
     UX_DESIGNER,
@@ -264,6 +267,9 @@ def build_graph(
     graph.add_node("ui_screens", _node(ui_screens, UI_DESIGNER, shared, telemetry, arm_for))
     graph.add_node("design_review", _node(design_review, UI_LEAD, shared, telemetry, arm_for))
     graph.add_node("consolidate", _node(consolidate, PM_CONSOLIDATOR, shared, telemetry, arm_for))
+    # The texts (README.md, 4): `write_copy` is the last rung of `rules.design_step`, so it is
+    # reached by the same routing as the design nodes and goes on to the plan.
+    graph.add_node("write_copy", _node(write_copy, TECH_WRITER, shared, telemetry, arm_for))
     graph.add_node("plan", _node(plan, TECH_LEAD, shared, telemetry, arm_for))
     graph.add_node(PIPELINE, _branch_node(shared, telemetry, arm_for))
     graph.add_node(INTEGRATE, _system_node(integrate, shared))
@@ -276,6 +282,12 @@ def build_graph(
     # `run_role` call, and `PM_FINAL` is the one that decides this node's own verdict.
     graph.add_node(
         "final_validation", _node(final_validation, PM_FINAL, shared, telemetry, arm_for)
+    )
+    # Tech Writer's review of the texts in the integrated piece: reached from
+    # `after_integrate` through `rules.copy_review_due`, back to the fan-in like the final
+    # validation, with no return of its own.
+    graph.add_node(
+        "copy_review", _node(copy_review, TECH_WRITER_REVIEW, shared, telemetry, arm_for)
     )
     graph.add_node("deliver", _system_node(deliver, shared))
     graph.add_node("discard", _system_node(discard, shared))
@@ -292,27 +304,32 @@ def build_graph(
     graph.add_conditional_edges(
         "validate",
         _route(rules.after_validate),
-        ["define", "diagnose", "ux_flow", "plan", "discard", ESCALATE],
+        ["define", "diagnose", "ux_flow", "write_copy", "plan", "discard", ESCALATE],
     )
     graph.add_conditional_edges(
-        "ux_flow", _route(rules.after_ux_flow), ["ux_walk", "plan", ESCALATE]
+        "ux_flow", _route(rules.after_ux_flow), ["ux_walk", "write_copy", "plan", ESCALATE]
     )
     graph.add_conditional_edges(
-        "ux_walk", _route(rules.after_ux_walk), ["ux_flow", "ui_screens", "plan", ESCALATE]
+        "ux_walk",
+        _route(rules.after_ux_walk),
+        ["ux_flow", "ui_screens", "write_copy", "plan", ESCALATE],
     )
     graph.add_conditional_edges(
-        "ui_screens", _route(rules.after_ui_screens), ["design_review", "plan", ESCALATE]
+        "ui_screens",
+        _route(rules.after_ui_screens),
+        ["design_review", "write_copy", "plan", ESCALATE],
     )
     graph.add_conditional_edges(
         "design_review",
         _route(rules.after_design_review),
-        ["ui_screens", "consolidate", "plan", ESCALATE],
+        ["ui_screens", "consolidate", "write_copy", "plan", ESCALATE],
     )
     graph.add_conditional_edges(
         "consolidate",
         _route(rules.after_consolidate),
-        ["define", "ux_flow", "plan", ESCALATE],
+        ["define", "ux_flow", "write_copy", "plan", ESCALATE],
     )
+    graph.add_conditional_edges("write_copy", _route(rules.after_write_copy), ["plan", ESCALATE])
     graph.add_conditional_edges("plan", _route(rules.after_plan), [INTEGRATE, "split", ESCALATE])
     graph.add_conditional_edges("split", _route(rules.after_split), [END, ESCALATE])
     # Every branch of the wave comes back here, once, however many were sent.
@@ -320,7 +337,10 @@ def build_graph(
     graph.add_conditional_edges(
         INTEGRATE,
         _fanout(rules.after_integrate),
-        [PIPELINE, "final_validation", "deliver", ESCALATE, END],
+        [PIPELINE, "copy_review", "final_validation", "deliver", ESCALATE, END],
+    )
+    graph.add_conditional_edges(
+        "copy_review", _route(rules.after_copy_review), [INTEGRATE, ESCALATE]
     )
     graph.add_conditional_edges(
         "final_validation", _route(rules.after_final_validation), [INTEGRATE, ESCALATE]
@@ -341,6 +361,7 @@ def build_graph(
             "ui_screens",
             "design_review",
             "consolidate",
+            "write_copy",
             "plan",
             INTEGRATE,
             "deliver",

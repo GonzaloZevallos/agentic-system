@@ -1740,6 +1740,12 @@ def after_consolidate(state: TaskState) -> str | None:
     return design_step(state) or "plan"
 
 
+def after_write_copy(state: TaskState) -> str | None:
+    """The texts are the last rung of `design_step`: a rerun of a design step the texts made
+    stale is not possible from here, so the ladder answers `None` and the plan follows."""
+    return None if state.get("escalated") else (design_step(state) or "plan")
+
+
 def after_plan(state: TaskState) -> str | None:
     """A plan that did not fit carries `parts` and goes to `split` (ADR-0054); any other
     goes to the fan-in. The only routing decision between the two."""
