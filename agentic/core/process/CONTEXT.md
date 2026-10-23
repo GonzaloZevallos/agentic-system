@@ -8,7 +8,7 @@ el dominio central del sistema: los otros dos contextos lo conocen, él no los c
 ### Actores
 
 **Rol**:
-Un agente con responsabilidad fija dentro del proceso. Hay 18.
+Un agente con responsabilidad fija dentro del proceso. Hay 19.
 _Avoid_: agente (a secas, cuando se habla de uno concreto)
 _Campo_: role — CrewAI, como atributo de su Agent; el resto del campo dice `agent` a secas
 
@@ -38,6 +38,11 @@ _Campo_: technical writer / content designer — del diseño de contenido
 Validador de UI Designer (ADR-0040): valida el diseño de pantallas sobre el flujo validado y, en la validación final de PM, juzga las comparaciones.
 _Avoid_: Design Lead
 _Campo_: sin término de arte
+
+**QA Performance**:
+Validador cuya fuente propia es la medición del sistema: el sistema mide la pieza integrada contra los presupuestos del plan (ADR-0059) y el rol lee la tabla, no corre ningún comando. Lo convoca Tech Lead en el plan (`performance`), existe por sí solo sin QA Lead, y su veredicto (`approved`, `returned`, `unverified`) puede devolver el trabajo a la integración o dejar el auto-merge en manos del humano (ADR-0060).
+_Avoid_: QA Lead, benchmark
+_Campo_: sin término de arte; lo más cerca es el performance gate de un pipeline de CI, que compara una medición con un umbral pero no tiene un rol que la lea
 
 **Ejecutar**:
 Escribir archivos del producto y correr comandos sin aprobación por comando. Solo Developer ejecuta, dentro de una jaula: su checkout, un tope de costo y lo que el sistema le niega aun así. Correr los chequeos del producto sin escribir no es ejecutar: Tech Lead, al revisar, lee el código y el diff y corre los chequeos sobre el test que respalda una objeción, y los entrevistadores escriben únicamente el glosario y los ADRs.
@@ -276,7 +281,7 @@ _Avoid_: comentario, issue
 _Campo_: finding — de auditoría y seguridad de nube (AWS Security Finding Format), no de code review: SARIF dice result, que es el dato, y GitHub dice alert, que es la presentación
 
 **Tabla de hallazgos**:
-Los hallazgos de todas las revisiones de una tarea, cada uno con su estado: abierto, arreglado o descartado. Una fila es un lugar más una afirmación, y el veredicto de la primera vez es el que queda: una revisión posterior no relitiga lo que otra ya descartó. Una fila se cierra sólo porque un revisor la dio por saldada; dejar de nombrarla no la cierra, porque una revisión incremental tiene instrucción de no volver a mirar lo que ya aprobó. La única excepción es la aprobación: aprobar una subtarea cierra los bloqueantes previos de esa misma subtarea que la revisión no vuelve a levantar (ADR-0015, adenda de GH-201). La leen el revisor, el Developer y el integrador, en la sección del documento, que lleva las abiertas; el registro crudo de todas las pasadas vive en el frontmatter. La escribe el sistema en el fan-in, que es el único lugar que ve todas las ramas de una ola; cada revisión solo agrega. Muere con la tarea.
+Los hallazgos de todas las revisiones de una tarea, cada uno con su estado: abierto, arreglado o descartado. Una fila es un lugar más una afirmación, y el veredicto de la primera vez es el que queda: una revisión posterior no relitiga lo que otra ya descartó. Una fila se cierra sólo porque un revisor la dio por saldada; dejar de nombrarla no la cierra, porque una revisión incremental tiene instrucción de no volver a mirar lo que ya aprobó. La única excepción es la aprobación: aprobar una subtarea cierra los bloqueantes previos de esa misma subtarea que la revisión no vuelve a levantar (ADR-0015, adenda de GH-201); la otra es una corrida aprobatoria de QA Performance, que asienta las filas abiertas de su propia ubicación, porque ninguna revisión posterior las vuelve a levantar (ADR-0060). La leen el revisor, el Developer y el integrador, en la sección del documento, que lleva las abiertas; el registro crudo de todas las pasadas vive en el frontmatter. La escribe el sistema en el fan-in, que es el único lugar que ve todas las ramas de una ola; cada revisión solo agrega. Muere con la tarea.
 _Avoid_: backlog, lista de issues, deuda
 _Campo_: sin término de arte; lo más cerca es la lista de alerts de GitHub code scanning, que vive en el repositorio y no muere con el cambio que la abrió
 

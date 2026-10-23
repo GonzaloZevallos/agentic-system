@@ -39,6 +39,16 @@ Solo lo que emite el sistema, identificado como `service.name: agentic-system`:
 - Los labels que antes segmentaban una métrica (`product`, `system_baseline`, `arm`,
   `system_version`, `type`, `role`, `model`) siguen siendo atributos del span, sin
   cambios: eso es justamente lo que ya eran (ADR-0008, adenda).
+- **QA Performance** (ADR-0060). El conjunto cerrado de etiquetas de rol (`Role.name`,
+  ADR-0008) gana `QA Performance`: el span `invoke_agent QA Performance` y su corrida
+  aparecen sólo en una tarea cuyo plan convocó rendimiento (`TechPlan.performance` no vacío);
+  una tarea que no lo convoca no emite ni la etiqueta ni el span. Las corridas del nodo
+  llevan `perf_verdict` (`approved | returned | unverified`) y `perf_head` en el documento.
+  La decisión de auto-merge (ADR-0045) gana la razón de rechazo cerrada `perf_unverified`:
+  se convocó rendimiento y la última corrida de QA Performance no es `approved` sobre la
+  cabeza del PR. El aterrizaje la deja al humano (sin paso ni reinicio) y el comentario de
+  rechazo, una vez por (cabeza, razón), suma una línea fija con el veredicto o con las dos
+  cabezas.
 
 El `product` sale de lo que el producto declara en su `.agentic/stack.yaml`, no del nombre
 del directorio ni del remoto de git: se mide el sistema, no el producto, y un span sin
