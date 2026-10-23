@@ -457,9 +457,10 @@ def test_every_widget_is_placed_in_time_by_the_end_of_its_task():
 # `stall` reason adds itself to the one row that lists the reasons (nothing else moved).
 # Re-pinned again by GH-319: the role-cost and returns families iterate `ROLES` and
 # `ChangeCategory`, so the Tech Writer roles and the copy categories add their score names.
+# Re-pinned by GH-321: QA Performance joins `ROLES`, so its role-cost score names join the row.
 UNCHANGED_ROWS = {
-    "agentic-system": "236120ac062198d41be498d10dddb6174d4b3794f7f58641ac970554247918bf",
-    "apostrophe": "8cf705854c12656b8df8afc3c6c962ae25aef9d68c122147ecb288f8f940aba8",
+    "agentic-system": "be8c04a96d1e1c057dfb565fc229ae4d652ce1541844e376ab7288ff968a4bfd",
+    "apostrophe": "c5f45a0bcc19ef521df9d178e63078f069e4d70dbada073738218a1ef4d68404",
 }
 
 

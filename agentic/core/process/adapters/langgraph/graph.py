@@ -61,6 +61,7 @@ from ...application.limits import RunLimits
 from ...application.plan import plan
 from ...application.ports import Ports
 from ...application.preflight import product_name
+from ...application.qa_performance import qa_performance
 from ...application.review import review
 from ...application.split import split
 from ...application.validate_prd import validate_prd
@@ -72,6 +73,7 @@ from ...domain.roles import (
     PM_CONSOLIDATOR,
     PM_FINAL,
     PRODUCT_ANALYST,
+    QA_PERFORMANCE,
     TECH_LEAD,
     TECH_LEAD_REVIEWER,
     TECH_WRITER,
@@ -289,6 +291,12 @@ def build_graph(
     graph.add_node(
         "copy_review", _node(copy_review, TECH_WRITER_REVIEW, shared, telemetry, arm_for)
     )
+    # QA Performance (GH-318, ADR-0060): reached through `rules.qa_performance_due`, from
+    # `after_integrate`, back to the fan-in like the final validation. Never visited by a
+    # plan that convened no performance.
+    graph.add_node(
+        "qa_performance", _node(qa_performance, QA_PERFORMANCE, shared, telemetry, arm_for)
+    )
     graph.add_node("deliver", _system_node(deliver, shared))
     graph.add_node("discard", _system_node(discard, shared))
     graph.add_node("split", _system_node(split, shared))
@@ -337,13 +345,16 @@ def build_graph(
     graph.add_conditional_edges(
         INTEGRATE,
         _fanout(rules.after_integrate),
-        [PIPELINE, "copy_review", "final_validation", "deliver", ESCALATE, END],
+        [PIPELINE, "copy_review", "final_validation", "qa_performance", "deliver", ESCALATE, END],
     )
     graph.add_conditional_edges(
         "copy_review", _route(rules.after_copy_review), [INTEGRATE, ESCALATE]
     )
     graph.add_conditional_edges(
         "final_validation", _route(rules.after_final_validation), [INTEGRATE, ESCALATE]
+    )
+    graph.add_conditional_edges(
+        "qa_performance", _route(rules.after_qa_performance), [INTEGRATE, ESCALATE]
     )
     graph.add_conditional_edges("deliver", _route(rules.after_deliver), [END, ESCALATE])
     graph.add_conditional_edges("discard", _route(rules.after_discard), [END, ESCALATE])
