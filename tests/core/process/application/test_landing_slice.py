@@ -298,3 +298,36 @@ def test_the_slice_checkout_is_reaped_before_it_is_removed():
     _land(ports, FakeLauncher())
 
     assert journal == ["reap:slice-GH-5", "remove:slice-GH-5"]
+
+
+def test_a_slice_that_pushes_a_criteria_document_past_its_cap_is_refused_not_merged():
+    """GH-334: the incident (apostrophe PR #357) was a slice merge; the slice's decision
+    reads the criteria regression like the main pull request's."""
+    from agentic.core.knowledge.domain import knowledge
+    from tests.fakes import MERGE_BASE
+
+    ports = _world(frozenset({"integration.py"}))
+    cap = knowledge.CRITERIA_MAX_LINES
+    ports.workspace.files[(MERGE_BASE, knowledge.DESIGN_STANDARDS)] = "x\n" * (cap - 5)
+    ports.workspace.files[(SLICE_HEAD, knowledge.DESIGN_STANDARDS)] = "x\n" * (cap + 5)
+
+    _land(ports)
+
+    entry = _doc(ports)["landing"][-1]
+    assert entry["step"] == "land_slice" and entry["closed_at"] and "resolved_at" not in entry
+    assert ports.tracker.merge_calls == []
+    assert ports.tracker.closed_pull_requests == [SLICE_URL]
+
+
+def test_a_slice_that_leaves_an_over_cap_document_as_it_was_still_merges():
+    from agentic.core.knowledge.domain import knowledge
+    from tests.fakes import MERGE_BASE
+
+    ports = _world(frozenset({"integration.py"}))
+    cap = knowledge.CRITERIA_MAX_LINES
+    ports.workspace.files[(MERGE_BASE, knowledge.DESIGN_STANDARDS)] = "x\n" * (cap + 20)
+    ports.workspace.files[(SLICE_HEAD, knowledge.DESIGN_STANDARDS)] = "x\n" * (cap + 20)
+
+    _land(ports)
+
+    assert ports.tracker.merge_calls == [(SLICE_URL, SLICE_HEAD)]

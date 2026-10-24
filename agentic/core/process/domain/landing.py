@@ -28,6 +28,7 @@ from .task import (
     Carried,
     DiagnosisVerdict,
     FailureReason,
+    LandedSlice,
     LandedSliceRef,
     LandingEntry,
     ReleasePatch,
@@ -512,8 +513,8 @@ def abandoned_by_slices(
     *,
     pr_abandoned: bool,
     status: str | None,
-    escalated: object,
-    pull_request: object,
+    escalated: str | None,
+    pull_request: str | None,
     abandoned_ref: str,
 ) -> Literal["close", "rerun"] | None:
     """What the poller does with a task whose pull request was read closed unmerged
@@ -536,12 +537,12 @@ def abandoned_by_slices(
     return None
 
 
-def slice_refs(landed: object) -> list[str]:
+def slice_refs(landed: Sequence[LandedSlice] | None) -> list[str]:
     """The pull requests of the slices in a `landed_slices` list, in the order they landed;
     the unit ids of a record that kept no pull request. Whatever a hand-edited document holds
     that is not a record is skipped."""
     refs: list[str] = []
-    for item in landed if isinstance(landed, list) else []:
+    for item in landed or ():
         if not isinstance(item, Mapping):
             continue
         reference, units = item.get("pull_request"), item.get("units")
