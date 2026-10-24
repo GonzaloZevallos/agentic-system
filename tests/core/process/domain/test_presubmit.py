@@ -282,3 +282,35 @@ def test_a_rerun_that_stopped_before_the_checks_ran_stands_as_it_is():
     previous = {"passed": False, "failed_step": "checks", "checks": [_entry("tests", False)]}
     rerun = {"passed": False, "failed_step": "conflict", "checks": []}
     assert presubmit.rerun_record(previous, rerun) == rerun
+
+
+# -- criteria documents the delivery makes longer than the cap (GH-334) --------------
+
+REGRESSION = "`DESIGN_STANDARDS.md`: 611 lines (cap 300), 290 at the base; cut the file"
+
+
+def test_a_delivery_with_a_criteria_regression_is_refused_with_the_message():
+    reason = presubmit.refusal(True, True, [result()], [REGRESSION])
+    assert reason is not None
+    assert "DESIGN_STANDARDS.md" in reason and "611" in reason and "cap 300" in reason
+
+
+def test_a_delivery_without_regressions_is_untouched_by_the_new_input():
+    assert presubmit.refusal(True, True, [result()], []) is None
+    assert presubmit.refusal(True, True, [result()]) is None
+
+
+def test_a_regression_and_a_red_check_are_both_in_the_one_reason():
+    red = result("lint", "ruff check .", False, "E501")
+    reason = presubmit.refusal(True, True, [red], [REGRESSION])
+    assert "`lint` failed" in reason and "DESIGN_STANDARDS.md" in reason
+
+
+def test_a_missing_commit_leads_over_a_regression():
+    assert "no commit on the branch" in presubmit.refusal(False, True, [], [REGRESSION])
+
+
+def test_the_regression_is_written_in_the_developers_section_when_the_gate_lets_it_through():
+    text = presubmit.checks_markdown("abc123", [result()], regressions=[REGRESSION])
+    assert "DESIGN_STANDARDS.md" in text and "611" in text
+    assert "DESIGN_STANDARDS" not in presubmit.checks_markdown("abc123", [result()])

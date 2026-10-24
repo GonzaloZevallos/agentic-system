@@ -101,20 +101,39 @@ class WitnessResult(TypedDict):
     passed: bool
 
 
-def refusal(moved: bool, clean: bool, results: Sequence[CheckResult]) -> str | None:
+def refusal(
+    moved: bool,
+    clean: bool,
+    results: Sequence[CheckResult],
+    regressions: Sequence[str] = (),
+) -> str | None:
     """Why this delivery is not one yet, or None. A branch where nothing was committed,
-    or with changes left, is refused before any check is read."""
+    or with changes left, is refused before any check is read. `regressions` are the
+    criteria documents the head pushes past their line cap (GH-334); they refuse on the same
+    budget as the checks and share their reason."""
     if not moved:
         return NO_COMMIT
     if not clean:
         return UNCOMMITTED
     failed = [r for r in results if not r["passed"]]
-    if not failed:
-        return None
-    parts = ["the product's checks fail on your head; fix them, commit, and deliver again."]
-    for r in failed:
-        parts.append(f"`{r['name']}` failed: `{r['command']}`\n\n```text\n{tail(r['output'])}\n```")
-    return "\n\n".join(parts)
+    parts: list[str] = []
+    if failed:
+        parts.append("the product's checks fail on your head; fix them, commit, and deliver again.")
+        for r in failed:
+            parts.append(
+                f"`{r['name']}` failed: `{r['command']}`\n\n```text\n{tail(r['output'])}\n```"
+            )
+    if regressions:
+        parts.append(_regressions_text(regressions))
+    return "\n\n".join(parts) or None
+
+
+def _regressions_text(regressions: Sequence[str]) -> str:
+    return (
+        "your head makes a criteria document longer past its line cap; the merge refuses it, "
+        "so cut it or split it, commit, and deliver again:\n"
+        + "\n".join(f"- {message}" for message in regressions)
+    )
 
 
 def affected_command(command: str, base: str) -> str:
@@ -229,6 +248,7 @@ def checks_markdown(
     witness: WitnessResult | None = None,
     *,
     base: str | None = None,
+    regressions: Sequence[str] = (),
 ) -> str:
     """The checks as the Developer's section opens with them: written by the system, so
     the reviewer reads what ran, not what the Developer says ran (ADR-0016, addendum).
@@ -240,7 +260,10 @@ def checks_markdown(
     fourth check: it carries no `agentic.presubmit.checks` label of its own.
 
     A mode column and one line on what `affected-only` means appear only when some row
-    carries a `mode`; `base` names what that selection was measured against."""
+    carries a `mode`; `base` names what that selection was measured against.
+
+    `regressions`, when the last look found some, are listed after the checks: a delivery
+    the gate let through after its refusals still shows what it leaves over the cap."""
     moded = any("mode" in r for r in results)
     if moded:
         header = "| Check | Command | Mode | Result |\n|---|---|---|---|\n"
@@ -270,6 +293,8 @@ def checks_markdown(
             f"Checkout witness (not a check): `{witness['command']}`, {verdict}. "
             f"It printed:\n\n```text\n{tail(witness['output'])}\n```"
         )
+    if regressions:
+        parts.append(_regressions_text(regressions))
     for r in results:
         if not r["passed"]:
             parts.append(f"`{r['name']}`, last lines:\n\n```text\n{tail(r['output'])}\n```")
