@@ -548,6 +548,14 @@ class EscalationPatch(TypedDict):
     escalation_class: EscalationClass | None
 
 
+class SlicesClosedPatch(TypedDict):
+    """What `record_closure` writes to close a task its slices carried to master (GH-334):
+    the time and the slices' pull requests. Never a `delivery_outcome`."""
+
+    closed_at: str
+    closed_by_slices: list[str]
+
+
 class ReleasePatch(TypedDict, total=False):
     """What `landing.released` writes when a human's answer releases a landing escalation
     (GH-328): the keys of `unescalated` plus the epoch's `landing` entries and the `Human`

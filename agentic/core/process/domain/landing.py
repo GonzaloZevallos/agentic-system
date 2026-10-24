@@ -31,6 +31,7 @@ from .task import (
     LandedSliceRef,
     LandingEntry,
     ReleasePatch,
+    SlicesClosedPatch,
     Subtask,
     SubtaskStatus,
     TaskState,
@@ -528,7 +529,23 @@ def abandoned_by_slices(
     return None
 
 
-def slices_closed(refs: Sequence[str], at: str) -> TaskState:
+def slice_refs(landed: object) -> list[str]:
+    """The pull requests of the slices in a `landed_slices` list, in the order they landed;
+    the unit ids of a record that kept no pull request. Whatever a hand-edited document holds
+    that is not a record is skipped."""
+    refs: list[str] = []
+    for item in landed if isinstance(landed, list) else []:
+        if not isinstance(item, Mapping):
+            continue
+        reference, units = item.get("pull_request"), item.get("units")
+        if isinstance(reference, str) and reference:
+            refs.append(reference)
+        elif isinstance(units, list):
+            refs.extend(unit for unit in units if isinstance(unit, str))
+    return refs
+
+
+def slices_closed(refs: Sequence[str], at: str) -> SlicesClosedPatch:
     """The document patch that closes a task whose every unit landed through slices (GH-334):
     `closed_at` and `closed_by_slices` (the slices' pull requests). Never `delivery_outcome`:
     nobody judged a delivery, so no reader may count it as one."""
