@@ -318,7 +318,7 @@ _Avoid_: terminada, cerrada (todavía no lo está)
 _Campo_: ready for review — GitHub, el estado de un pull request que sale de draft
 
 **Cierre**:
-PjM da por terminada la tarea: aprobada, con las aprobaciones del tipo, o descartada, cuando PM dictamina que el comportamiento es el esperado, o partida, cuando el plan no cabe y se reparte en issues encadenados.
+PjM da por terminada la tarea: aprobada, con las aprobaciones del tipo, o descartada, cuando PM dictamina que el comportamiento es el esperado, o partida, cuando el plan no cabe y se reparte en issues encadenados, o solo tracker, cuando lo único que queda es trabajo del tracker y se le deja una lista al humano.
 _Campo_: sin término de arte
 
 **Descartado**:
@@ -329,6 +329,16 @@ _Campo_: won't fix, works as intended — resoluciones de los trackers (Bugzilla
 **Partida**:
 El final de una tarea cuyo plan no cabe (más de 150 USD o de 40 archivos, o por encima del p90 de su balde; ADR-0054): no construye nada. Abre un issue por parte, encadenados con `Blocked by:` y con la etiqueta `agentic`, cada uno con su propio pull request chico; comenta la lista en el issue original y termina la corrida sin pull request, y no se relanza. Es un final, no una pausa: no se reanuda. Una parte nunca se parte de nuevo: si su plan tampoco cabe, escala con la clase `estimate` y una decisión del humano la construye entera.
 _Avoid_: descartado (acá sí hay algo que construir, en las partes), dividida (la unidad es la parte, no la tarea), subtarea (esas se construyen dentro de una tarea; las partes son tareas)
+_Campo_: sin término de arte
+
+**Solo tracker**:
+El final de una tarea cuyo plan es solo trabajo del tracker (sin subtareas, sin partes, con una lista y cero archivos; ADR-0062): el sistema comenta la lista una vez en el issue, con un marcador de contenido, y termina la corrida sin llamar a un rol, sin pull request y sin resultado de entrega (`tracker_only`). Es un final, no una pausa: no se reanuda, salvo que el comentario haya fallado, y entonces vuelve a este nodo, nunca al plan.
+_Avoid_: descartado (acá sí hay algo que hacer, pero lo hace el humano), partida (no se abren issues)
+_Campo_: sin término de arte
+
+**Trabajo de tracker**:
+Lo que el humano debe hacer en el tracker del producto (cerrar, retitular o comentar issues) porque ningún rol tiene `gh`: una lista de casillas en un comentario del issue. Nunca es una subtarea; junto a subtareas viaja con la entrega, y esa tarea no cierra su propio issue.
+_Avoid_: subtarea (esas las construye un Developer), tarea de tracker
 _Campo_: sin término de arte
 
 **Escalado**:

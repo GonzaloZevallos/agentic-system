@@ -38,6 +38,7 @@ from .poll import (
 )
 from .ports import Ports, Workspace
 from .run_role import task_cap
+from .tracker_only import TRACKER_WORK
 
 # How the system's comment on a resume starts.
 RESUMED = "Resumed: "
@@ -58,6 +59,7 @@ SYSTEM_COMMENTS = (
     AUTO_MERGED,
     LANDING,
     RESTARTED_BY_LANDING,
+    TRACKER_WORK,
 )
 # What the document's frontmatter carries that is not state: the version record.
 STATE_FIELDS = frozenset(get_type_hints(TaskState)) - {"subtask_id"}

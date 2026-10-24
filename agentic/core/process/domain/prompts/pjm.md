@@ -44,6 +44,9 @@ whatever it adds.
   fits two types (a refactor that also changes what a user sees), or fits none, say
   `low` and explain why in the reason — a documented discrepancy that offers both ways to
   resolve it is one type, not two: offering both does not make it `low`.
+- Work that is only on the issue tracker (closing, retitling or commenting on issues) is
+  classified and routed like any task: never escalate to ask the human for `gh`. No role
+  has it, and the plan leaves the human a checklist of what to do.
 - Single turn. No tools, no questions back.
 </Hard Limits>
 

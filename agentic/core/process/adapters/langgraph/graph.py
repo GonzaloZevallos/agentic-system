@@ -64,6 +64,7 @@ from ...application.preflight import product_name
 from ...application.qa_performance import qa_performance
 from ...application.review import review
 from ...application.split import split
+from ...application.tracker_only import tracker_only
 from ...application.validate_prd import validate_prd
 from ...domain import rules
 from ...domain.roles import (
@@ -300,6 +301,7 @@ def build_graph(
     graph.add_node("deliver", _system_node(deliver, shared))
     graph.add_node("discard", _system_node(discard, shared))
     graph.add_node("split", _system_node(split, shared))
+    graph.add_node("tracker_only", _system_node(tracker_only, shared))
     graph.add_node(ESCALATE, _system_node(escalate, shared))
     graph.add_node(PAUSE, pause)
 
@@ -338,8 +340,11 @@ def build_graph(
         ["define", "ux_flow", "write_copy", "plan", ESCALATE],
     )
     graph.add_conditional_edges("write_copy", _route(rules.after_write_copy), ["plan", ESCALATE])
-    graph.add_conditional_edges("plan", _route(rules.after_plan), [INTEGRATE, "split", ESCALATE])
+    graph.add_conditional_edges(
+        "plan", _route(rules.after_plan), [INTEGRATE, "split", "tracker_only", ESCALATE]
+    )
     graph.add_conditional_edges("split", _route(rules.after_split), [END, ESCALATE])
+    graph.add_conditional_edges("tracker_only", _route(rules.after_tracker_only), [END, ESCALATE])
     # Every branch of the wave comes back here, once, however many were sent.
     graph.add_edge(PIPELINE, INTEGRATE)
     graph.add_conditional_edges(
@@ -378,6 +383,7 @@ def build_graph(
             "deliver",
             "discard",
             "split",
+            "tracker_only",
             ESCALATE,
             END,
         ],

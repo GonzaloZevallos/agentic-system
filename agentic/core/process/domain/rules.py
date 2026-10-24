@@ -1815,9 +1815,7 @@ def tracker_only_plan(state: TaskState) -> bool:
     """The third plan shape (GH-336): no subtasks, no parts and a checklist for the human.
     The one place the shape is decided; a checklist next to subtasks rides the delivery."""
     return bool(
-        state.get("tracker_checklist")
-        and not state.get("subtasks")
-        and not state.get("parts")
+        state.get("tracker_checklist") and not state.get("subtasks") and not state.get("parts")
     )
 
 
