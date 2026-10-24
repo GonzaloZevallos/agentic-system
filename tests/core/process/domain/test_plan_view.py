@@ -297,3 +297,25 @@ def test_with_parts_block_leaves_a_section_with_its_own_block_untouched():
 def test_with_parts_block_ignores_a_heading_inside_a_code_fence():
     section = "### Solution\n\n```\n### Parts\n```\n"
     assert plan_view.NOTE_PARTS in plan_view.with_parts_block(section, PARTS)
+
+
+CHECKLIST = ["Post the verdict table on #307", "Close the follow-ups that are done"]
+
+
+def test_with_tracker_block_lists_the_checklist_for_the_human():
+    out = plan_view.with_tracker_block("### Solution\n\nx", CHECKLIST)
+    assert out == (
+        "### Solution\n\nx\n\n### Tracker work for the human\n\n"
+        "- Post the verdict table on #307\n- Close the follow-ups that are done"
+    )
+
+
+def test_with_tracker_block_renders_nothing_for_an_empty_checklist():
+    assert plan_view.with_tracker_block("### Solution\n\nx", []) == "### Solution\n\nx"
+
+
+def test_with_tracker_block_keeps_a_section_with_its_own_heading_and_ignores_fences():
+    own = "### Solution\n\n### Tracker work for the human\n\n- mine"
+    assert plan_view.with_tracker_block(own, CHECKLIST) == own
+    fenced = "### Solution\n\n```\n### Tracker work for the human\n```\n"
+    assert "- Close the follow-ups" in plan_view.with_tracker_block(fenced, CHECKLIST)

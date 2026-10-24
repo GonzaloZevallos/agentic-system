@@ -833,6 +833,9 @@ class TaskState(TaskInput, total=False):
     # The parts of a plan that did not fit (ADR-0054), in order; `rules.after_plan` routes a
     # state holding any to `split`. Cleared when a human waives the fit on a resumption.
     parts: Annotated[list[PartRecord], last]
+    # What the human must do on the issue tracker (GH-336), one line per item, written by the
+    # plan; replaced whole when a plan is written again. Absent when the plan has none.
+    tracker_checklist: Annotated[list[str], last]
     # The issue URL of each part already opened, keyed by the part's number as text: written
     # part by part, so a `gh` cut in the middle resumes without opening a part twice.
     split_issues: Annotated[dict[str, str], merge]

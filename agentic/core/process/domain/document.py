@@ -189,6 +189,10 @@ def render(
         # The partition of a plan that did not fit (ADR-0054), written only when set.
         **({"parts": e} if (e := state.get("parts")) else {}),
         **({"split_issues": e} if (e := state.get("split_issues")) else {}),
+        # What the human must do on the issue tracker (GH-336), written only when non-empty so
+        # a document of a plan without one is byte-identical to one written before. Read back
+        # by `parse` under the same name: the state's key is the frontmatter's.
+        **({"tracker_checklist": e} if (e := state.get("tracker_checklist")) else {}),
         **({"fit_waived": True} if state.get("fit_waived") else {}),
         "prompts": state.get("prompts", {}),
         # The playbook section hash each role first ran with, and any later one

@@ -1227,3 +1227,19 @@ def test_record_closure_refuses_a_list_key_missing_from_record_keys_when_it_is_a
     assert "findings" not in document.RECORD_KEYS
     with pytest.raises(ValueError, match="findings"):
         document.record_closure(raw, {"findings": [{"id": "F2"}]})
+
+
+_CHECKLIST = ["Post the verdict table on #307", "Close the follow-ups that are done"]
+
+
+def test_a_state_without_a_tracker_checklist_renders_byte_identical():
+    """GH-336: the key is written only when non-empty."""
+    bare = document.render(_bare())
+    assert "tracker_checklist" not in bare
+    assert document.render(_bare(tracker_checklist=[])) == bare
+
+
+def test_the_tracker_checklist_renders_and_parses_back_equal():
+    text = document.render(_bare(tracker_checklist=_CHECKLIST))
+    assert document.parse(text)["tracker_checklist"] == _CHECKLIST
+    assert document.render(document.parse(text) | {"sections": {}}) == text
