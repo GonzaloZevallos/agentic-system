@@ -31,6 +31,7 @@ from .poll import (
     LANDING,
     _merge_facts,
     read_conflicts,
+    read_criteria,
     with_ci,
 )
 from .ports import (
@@ -56,6 +57,8 @@ COMMENTED: tuple[str, ...] = (
     "ci_missing",
     "ci_unreadable",
     "perf_unverified",
+    "criteria_over_cap",
+    "criteria_unreadable",
 )
 
 LEFT_TO_HUMAN = "Left for the human to merge."
@@ -130,18 +133,27 @@ def merge_task(
         if isinstance(report, ci.CiReport) and head is not None:
             fresh = ci.ci_fresh(report.base_sha, master, ports.workspace.contains(head, master))
 
+    criteria: list[tuple[str, ...] | None] = []
+
     def decide(document: TaskState) -> rules.MergeFacts:
         base_facts = _facts(task_id, document, pull_request, eval_set, number, master, touched)
         # GitHub's reading of a conflict on this head and master (GH-326), git-free; the
         # probe is the last look's, immediately before the merge call.
         github = rules.merge_conflicts_from(pull_request, head, master, None)
-        return with_ci(
+        facts = with_ci(
             replace(base_facts, adr_collision=collision, conflicts=github),
             document,
             declared,
             report,
             fresh,
         )
+        # GH-334: the criteria caps, read once on this one master and only when no refusal
+        # ahead of them has already ruled the pull request out.
+        if head is not None and (criteria or rules.criteria_probe_wanted(facts)):
+            if not criteria:
+                criteria.append(read_criteria(ports, head, master))
+            facts = replace(facts, criteria_regressed=criteria[0])
+        return facts
 
     facts = decide(raw)
     decision = rules.auto_merge_decision(facts)
@@ -514,6 +526,12 @@ def _perf_evidence(facts: rules.MergeFacts) -> str:
     return f"verdict {facts.perf_verdict or 'none'}"
 
 
+def _criteria_evidence(facts: rules.MergeFacts) -> str:
+    """What a `criteria_over_cap` refusal says: the messages `knowledge` wrote, one per
+    line (file, count, cap), and nothing this module counted. An unreadable read has none."""
+    return "\n".join(f"- {message}" for message in facts.criteria_regressed or ())
+
+
 def _summary_line(comment: str) -> str:
     """The line after the first of an `Auto-merge refused:` comment that names what
     failed, or "" when there is none (the comment goes straight to its closing sentence)."""
@@ -561,6 +579,8 @@ def _refuse(
             )
         if facts is not None and reason == "perf_unverified":
             text = "\n\n".join(part for part in (first, _perf_evidence(facts), closing) if part)
+        if facts is not None and reason == "criteria_over_cap":
+            text = "\n\n".join(part for part in (first, _criteria_evidence(facts), closing) if part)
         if reason == "merge_failed":
             advice = (
                 rules.MERGE_FAILURE_ADVICE[failure]

@@ -35,7 +35,7 @@ from ..domain.adr_numbers import Ambiguous, Renaming
 from ..domain.boot import boot_verdict
 from ..domain.landing import LandingStepKind
 from ..domain.task import INTEGRATION, PullRequest, TaskState, apply
-from . import adr_collision, landing_plan, reflect_run, release
+from . import adr_collision, landing_plan, preflight, reflect_run, release
 from . import escalate as escalate_module
 from .checkouts import task_base
 from .ports import (
@@ -390,6 +390,22 @@ def read_conflicts(
     return rules.merge_conflicts_from(pull_request, head, master, probe), "probe"
 
 
+def read_criteria(ports: Ports, head: str, master: str) -> tuple[str, ...] | None:
+    """`MergeFacts.criteria_regressed` for `head` against `master` (GH-334), shared by the
+    poller and the merge verb: what the head adds past the criteria caps compared with the
+    merge base, a local git fact. `merge_base` raises when either sha is unavailable, so a
+    document the base lacks (counts 0) is never mistaken for one that could not be read:
+    any `GitError` is `None`, unreadable, which the decision refuses."""
+    try:
+        base = ports.workspace.merge_base(head, master)
+        return tuple(preflight.criteria_regressed(ports, base, head))
+    except GitError:
+        return None
+
+
+CRITERIA_JOIN = " | "
+
+
 class StackUnreadable(Exception):
     """The task's base has no readable stack: this task's problem, never the round's."""
 
@@ -443,6 +459,15 @@ def assess_merge(
         raise StackUnreadable(str(exc)) from exc
     facts = replace(facts, adr_collision=_adr_collision(ports, raw, facts, current_master))
     decision = rules.auto_merge_decision(replace(facts, ci_required=declared))
+    if facts.pr_head is not None and rules.criteria_probe_wanted(
+        replace(facts, ci_required=declared)
+    ):
+        # GH-334: a head that grows a criteria document past its cap is refused before the
+        # findings, the conflict and the CI. Git is asked only now, like the conflict probe.
+        facts = replace(
+            facts, criteria_regressed=read_criteria(ports, facts.pr_head, current_master)
+        )
+        decision = rules.auto_merge_decision(replace(facts, ci_required=declared))
     unread = False
     source: ConflictSource | None = None
     if (
@@ -664,6 +689,8 @@ def gather_merges(
                 pr_head = pull_request.head_oid if pull_request is not None else None
                 summary = presubmit.failed_checks_summary(_recorded(raw, "merge_checks"), pr_head)
                 line += f" ({summary})" if summary else ""
+            if decision.reason == "criteria_over_cap":
+                line += f" ({CRITERIA_JOIN.join(facts.criteria_regressed or ())})"
             if decision.reason == "ci_failed" and facts.ci_verdict is not None:
                 names = ", ".join(check.name for check in facts.ci_verdict.failing)
                 line += f" ({names})"

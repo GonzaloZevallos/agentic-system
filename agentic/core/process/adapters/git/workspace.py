@@ -385,6 +385,11 @@ class GitWorkspace:
             return "unknown"
         return {0: "yes", 1: "no"}.get(result.returncode, "unknown")
 
+    def merge_base(self, left: str, right: str) -> str:
+        if not (self.fetch_commit(left) and self.fetch_commit(right)):
+            raise GitError(f"git merge-base {left} {right} failed: a commit is not available")
+        return self._git("merge-base", left, right)
+
     def merge_conflicts(self, head: str, master: str) -> bool | None:
         """See `Workspace.merge_conflicts`: both shas are fetched first, then `git
         merge-tree --write-tree` merges them in the object database alone -- no worktree,

@@ -884,6 +884,13 @@ class Workspace(Protocol):
         raises, and `unknown` is never `yes`: the caller counts it as stale."""
         ...
 
+    def merge_base(self, left: str, right: str) -> str:
+        """The full sha of the best common ancestor of the commits `left` and `right`
+        (GH-334), after fetching both shas: where a pull request branched from the master it
+        would merge into. Raises `GitError` when either sha cannot be fetched or git fails, so
+        a caller can tell an unreadable base from a file the base does not hold."""
+        ...
+
     def merge_conflicts(self, head: str, master: str) -> bool | None:
         """Whether the commit `head` conflicts when merged with the commit `master` (GH-255),
         after fetching both shas: `True` is a definite conflict, `False` a clean merge, and
