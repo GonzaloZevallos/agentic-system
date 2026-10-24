@@ -24,7 +24,7 @@ from ..domain.task import UPSTREAM_KEY, ReleasePatch, TaskState, apply
 from . import landing_fix, landing_plan, landing_slice, landing_sync
 from .checkouts import SetupFailed, task_checkout
 from .landing_plan import LandingContext
-from .poll import StackUnreadable, assess_merge
+from .poll import Abandoned, StackUnreadable, assess_merge
 from .ports import GitError, Launcher, Ports, RunLock, Upstream
 from .resume import state_from
 
@@ -146,7 +146,7 @@ def _land(
         assessed = assess_merge(ports, task_id, raw, number, eval_set, master)
     except StackUnreadable as exc:
         return LandResult("stopped", f"stack_unreadable: {exc}")
-    if assessed is None:
+    if isinstance(assessed, Abandoned):
         return LandResult("skipped", "pr_abandoned")
     decision, facts = assessed.decision, assessed.facts
     if decision.kind != "refuse" or decision.reason is None:

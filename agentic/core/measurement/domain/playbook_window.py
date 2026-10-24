@@ -78,8 +78,8 @@ class CheckProposal:
 
 
 def _eligible(document: Mapping[str, Any], slug: str) -> bool:
-    if not document.get("closed_at"):
-        return False
+    if not document.get("closed_at") or document.get("closed_by_slices"):
+        return False  # a task its slices closed (GH-334) is no delivery of this playbook
     if metrics.arm_label(document.get("experiment") or {}) != "default":
         return False
     return slug not in (document.get("playbooks_changed") or {})
