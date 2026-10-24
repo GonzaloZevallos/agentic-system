@@ -306,23 +306,24 @@ def test_brief_refusal_matches_case_insensitively_and_strips_one_trailing_colon(
     assert knowledge.brief_refusal(shouted) is None
 
 
-def test_brief_refusal_rejects_over_the_word_cap():
+def test_brief_refusal_accepts_a_long_brief_with_the_four_sections():
+    # GH-334: the Brief has no size limit, only a shape.
     long_job = "- " + " ".join(f"word{i}" for i in range(600))
-    over_cap = VALID_BRIEF.replace(
+    long_brief = VALID_BRIEF.replace(
         "- When a member skips two weeks, I want a flag, so I can call them.", long_job
     )
-    reason = knowledge.brief_refusal(over_cap)
-    assert reason is not None
-    assert "words (cap 500)" in reason and "BRIEF.md" in reason
+    assert len(long_brief.split()) > 600
+    assert knowledge.brief_refusal(long_brief) is None
 
 
-def test_brief_refusal_strips_fenced_blocks_before_counting_words():
-    fenced_code = "```\n" + " ".join(f"word{i}" for i in range(600)) + "\n```\n"
-    padded = VALID_BRIEF.replace(
-        "Gym owners cannot tell if a member is about to churn.",
-        "Gym owners cannot tell if a member is about to churn.\n\n" + fenced_code,
+def test_brief_refusal_still_rejects_a_long_brief_missing_a_section():
+    long_job = "- " + " ".join(f"word{i}" for i in range(600))
+    long_brief = VALID_BRIEF.replace(
+        "- When a member skips two weeks, I want a flag, so I can call them.", long_job
     )
-    assert knowledge.brief_refusal(padded) is None
+    missing = long_brief.replace("## Out of scope\n\nPayment processing.\n", "")
+    reason = knowledge.brief_refusal(missing)
+    assert reason is not None and "Out of scope" in reason
 
 
 def _lines(count: int) -> str:

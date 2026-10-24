@@ -70,15 +70,11 @@ BRIEF_HEADINGS = (
     "## Constraints",
     "## Out of scope",
 )
-# One page. A constant, not a guess: `preflight` spends nothing before this is checked,
-# and every role that reads the product knowledge pays this cost on every call (ADR-0025).
-BRIEF_MAX_WORDS = 500
 # What a human copies into `BRIEF.md` and commits: a shipped, valid example, the same
 # `TEMPLATE`/`not_declared` pattern `stack.py` already uses (ADR-0016, second addendum).
 DEFAULT_BRIEF_TEMPLATE = Path(__file__).resolve().parent / "brief.md"
 
 _BRIEF_HEADING_LINE = re.compile(r"^##[ \t]+(?P<title>.*?)[ \t]*$", re.M)
-_FENCED_BLOCK = re.compile(r"^```.*?^```[ \t]*$", re.M | re.S)
 
 _SLUG = SLUG  # one slug rule for the whole system: capabilities, subtasks
 _H2 = re.compile(r"^## ", re.M)
@@ -321,16 +317,10 @@ def _has_content(section: str) -> bool:
     return any(line.strip() for line in section.split("\n"))
 
 
-def _brief_word_count(text: str) -> int:
-    """`len(text.split())` over the text with fenced code blocks stripped first, so a
-    pasted snippet does not count against the cap it is quoting."""
-    return len(_FENCED_BLOCK.sub("", text).split())
-
-
 def brief_refusal(text: str) -> str | None:
     """Why `BRIEF.md` cannot be used, or None when its shape is valid (ADR-0025): the
     four headings present as top-level `##` lines, each followed by at least one
-    non-whitespace line, and the whole file under `BRIEF_MAX_WORDS`. A pure function
+    non-whitespace line. The Brief has no size limit (ADR-0061). A pure function
     over text -- no filesystem, no port -- so `cli.py` is free to join it with whatever
     read `ProductKnowledge.brief` returns."""
     sections = _brief_sections(text)
@@ -345,7 +335,4 @@ def brief_refusal(text: str) -> str | None:
             f"{BRIEF} is missing or empty: {', '.join(missing)}. All four sections are "
             f"mandatory, each with at least one line of content:\n\n{template}"
         )
-    words = _brief_word_count(text)
-    if words > BRIEF_MAX_WORDS:
-        return f"{BRIEF}: {words} words (cap {BRIEF_MAX_WORDS}). Trim it to one page:\n\n{template}"
     return None

@@ -231,9 +231,9 @@ le da nada que nombrar.
 
 `ISSUE_BODY_MAX_CHARS = 60_000`, debajo de los 65_536 de GitHub con lugar para el
 marcador y el encabezado de señales, con un rechazo puro en el dominio que nombra el
-conteo de bytes y el tamaño de cada pieza —la forma que `knowledge.brief_refusal` usa
-para `BRIEF_MAX_WORDS`, porque un rechazo que nombra el número es diagnosticable y la
-salida distinta de cero de `gh` no lo es—. `open_issue` escribe el cuerpo a un archivo
+conteo de bytes y el tamaño de cada pieza —la forma que `knowledge.brief_refusal` usaba
+para su tope de palabras, hoy retirado (ADR-0061), porque un rechazo que nombra el número es
+diagnosticable y la salida distinta de cero de `gh` no lo es—. `open_issue` escribe el cuerpo a un archivo
 temporal y pasa `--body-file`, así el único límite que puede morder es el de GitHub y
 nunca el de argv.
 

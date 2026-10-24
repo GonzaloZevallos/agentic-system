@@ -54,3 +54,9 @@ vacía no cambia ninguna salida.
 - Mover las reglas de diseño de apostrophe a su `DESIGN_STANDARDS.md`, con un issue de
   apostrophe. Este repo no lo hace.
 - Extender `rules.guarded_path` a `DESIGN_STANDARDS.md`: issue de seguimiento.
+
+## Adenda (GH-334)
+
+El aviso al arrancar se mantiene (`cli._warn_over_cap`, sin cambios). Lo que se agrega: una
+entrega o un merge que hace **crecer** un documento por encima de `CRITERIA_MAX_LINES` se
+rechaza. Ver ADR-0061.

@@ -35,7 +35,7 @@ mantiene a un futuro Developer afuera de todos modos es el prompt y la revisión
 jaula — el mismo registro que la primera adenda de ADR-0011 ya usó para la identidad de git:
 una regla de dependencias impide una clase de error, no todas.
 
-## Las cuatro secciones, el tope, y el conjunto de aceptación
+## Las cuatro secciones y el conjunto de aceptación
 
 `BRIEF_HEADINGS` es su propia tupla en `core/knowledge/domain/knowledge.py` — **Problema y
 quién lo tiene**, **Jobs**, **Restricciones**, **Fuera de alcance** —, deliberadamente sin
@@ -56,12 +56,8 @@ port, con el conjunto de aceptación/rechazo enumerado caso por caso en
 - Cada sección necesita **al menos una línea no vacía** antes del próximo `##` o el fin del
   archivo — comparación por línea, no por substring, que dejaría pasar el caso
   presente-y-vacío que el pedido explícitamente rechaza.
-- El tope de palabras cuenta sobre el texto con los bloques de código (```` ``` ````)
-  quitados primero, encabezados incluidos: `BRIEF_MAX_WORDS = 500`, una constante y no un
-  cálculo — `preflight` no gasta nada antes de este chequeo, y cada rol `reads_knowledge`
-  paga este costo en cada llamada (~2% de los ~24k palabras que ADR-0017 midió para todo el
-  ensamblado).
-- El rechazo imprime `N words (cap 500)` y nombra el archivo; el aviso de ausencia y el
+- El Brief no tiene tope de tamaño (ADR-0061): solo se valida su forma.
+- El rechazo nombra el archivo y las secciones que faltan; el aviso de ausencia y el
   rechazo de forma imprimen **la plantilla completa, verbatim** — el mismo patrón
   `stack.TEMPLATE`/`not_declared` (ADR-0016, segunda adenda): lo que el humano copia es
   exactamente un archivo válido, nunca una cadena que se desincroniza de la validación real.
@@ -79,7 +75,7 @@ sobre gym-saas — el producto sobre el que se mide el set de evaluación (READM
 día del merge. `no_brief(ports)` entra entonces a la lista `for warn in (unfixed_stage0,
 no_setup, no_brief)` de `cli.py`, impresa en ambos comandos.
 
-Un Brief **presente y roto** (forma mal hecha, o sobre el tope) es distinto: `run` lo
+Un Brief **presente y roto** (forma mal hecha) es distinto: `run` lo
 rechaza (`raise ValueError`, capturado por el mismo `except (MissingProductDir, ValueError,
 OSError)` que ya cierra `main` con código 2) y `resume` solo lo imprime y sigue. La razón es
 ADR-0003: un humano editando su propio archivo no puede varar **cada tarea pausada** en la
@@ -152,19 +148,23 @@ checkout, ADR-0024, usa para no mover `prompts.fingerprint`). `prompts.fingerpri
 rompe en esta subtarea — la rompe la otra, `rename`, y lo dice en su propia ADR-0026 y en el
 cuerpo del pull request que la trae.
 
+## Adenda (GH-334)
+
+El Brief ya no tiene tope de palabras: el dueño decidió el 2026-10-24 que `BRIEF.md` no
+tiene límite de tamaño. Se conserva solo el chequeo de las cuatro secciones. Ver ADR-0061.
+
 ## Las costuras
 
 - `tests/core/knowledge/domain/test_knowledge.py`: el veredicto puro, con el conjunto de
   aceptación/rechazo enumerado caso por caso (encabezado ausente, presente-y-vacío,
-  `###` que no cuenta, orden libre, dos puntos y mayúsculas normalizados, tope de palabras,
-  bloques de código descontados) y `assemble` con el Brief primero.
+  `###` que no cuenta, orden libre, dos puntos y mayúsculas normalizados, y
+  un Brief largo con las cuatro secciones que se acepta) y `assemble` con el Brief primero.
 - `tests/core/process/application/test_context_golden.py`: sin cambios de producción — sigue
   byte a byte igual, porque `MemoryKnowledge.read()` devuelve texto ya armado y nunca pasa
   por `assemble`; se le agrega `.brief()` solo para cumplir el protocolo `ProductKnowledge`.
-- `tests/test_cli.py` (la costura de `agentic run`/`resume`): seis casos de punta a punta
+- `tests/test_cli.py` (la costura de `agentic run`/`resume`): cinco casos de punta a punta
   contra un repo real — ausente en `run` y en `resume` (aviso, la corrida sigue), roto en
-  `run` (código 2), roto en `resume` (aviso, la corrida sigue), sobre el tope en `run`
-  (código 2), y válido (silencio).
+  `run` (código 2), roto en `resume` (aviso, la corrida sigue), y válido (silencio).
 
 ## Opciones descartadas
 

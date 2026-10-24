@@ -54,7 +54,8 @@ Los criterios de diseño del producto: reglas de iconos y texto, captura de dise
 UX y UI deben respetar. Viven en `DESIGN_STANDARDS.md`, en la raíz del producto. Los leen
 entero los cuatro roles de diseño (UX Designer, UX Lead, UI Designer y UI Lead). El sistema
 no trae un default: sin el archivo no se entrega nada. Pasar de 300 líneas se avisa en el
-PR y el preflight, nunca se rechaza ni se reescribe. Ver ADR-0055.
+arranque; una entrega o un merge que lo hace crecer por encima del tope se rechaza. Ver
+ADR-0055 y ADR-0061.
 _Avoid_: guía de estilo, design system (el sistema de diseño es el código; esto son los criterios)
 _Campo_: design standards
 
