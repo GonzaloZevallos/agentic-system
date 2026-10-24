@@ -1252,3 +1252,16 @@ def test_the_tracker_checklist_record_is_written_only_when_set_and_read_back():
     posted = {"at": "2026-10-24T10:00:00+00:00", "hash": "0123456789ab"}
     text = document.render(_bare(tracker_checklist=_CHECKLIST, tracker_checklist_posted=posted))
     assert document.parse(text)["tracker_checklist_posted"] == posted
+
+
+def test_record_closure_replaces_the_tracker_record_the_document_wrote_as_a_block():
+    """`render` writes `tracker_checklist_posted` as a block; the poller's closure replaces it
+    with the flow line instead of refusing the surgery (GH-336)."""
+    raw = document.render(
+        _bare(tracker_checklist_posted={"at": "2026-10-24T00:00:00+00:00", "hash": "a" * 12})
+    )
+    assert "\ntracker_checklist_posted:\n" in raw
+    newer = {"at": "2026-10-25T00:00:00+00:00", "hash": "b" * 12}
+    once = document.record_closure(raw, {"tracker_checklist_posted": newer})
+    assert document.parse(once)["tracker_checklist_posted"] == newer
+    assert once.count("\ntracker_checklist_posted:") == 1

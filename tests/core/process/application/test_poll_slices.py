@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 
 from agentic.core.process.adapters.git.workspace import GitWorkspace
-from agentic.core.process.application import poll
+from agentic.core.process.application import poll, tracker_only
 from agentic.core.process.application.ports import RunRegistration, Upstream
 from agentic.core.process.domain.task import PullRequest
 from tests.core.process.application.test_poll import ESCALATED_AT, _cfg, _Locks, _round
@@ -190,3 +190,88 @@ def test_with_a_real_repo_the_renamed_unit_branches_still_resolve_and_the_task_c
     poll.gather_merges(ports, frozenset(), master, _Locks(), lines, cfg=_cfg(repo), reruns=[])
     assert lines == ["agentic: poll: #5 -> closed: every unit landed through slices (#350)"]
     assert ports.documents.closures["GH-5"]["closed_by_slices"] == [SLICE_PR]
+
+
+CHECKLIST = ["close #12 as duplicate", "retitle #13"]
+
+
+def _with_checklist(ports, **more):
+    ports.documents.save({**ports.documents.load("GH-5"), "tracker_checklist": CHECKLIST, **more})
+
+
+def _checklist_comments(ports) -> list[str]:
+    return [text for _, text in ports.tracker.comments if text.startswith("Tracker work for you: ")]
+
+
+def test_a_checklist_is_posted_once_over_two_ticks_and_no_run_is_launched(tmp_path):
+    ports = _ports({A, B})
+    _with_checklist(ports)
+    reruns: list[int] = []
+    _, lines = _gather(ports, tmp_path, reruns)
+    assert _gather(ports, tmp_path, reruns) == ([], [])  # closed: skipped
+    assert lines == [
+        "agentic: poll: #5 -> closed: every unit landed through slices (#350);"
+        " tracker checklist posted"
+    ]
+    assert len(_checklist_comments(ports)) == 1
+    assert "- [ ] close #12 as duplicate" in _checklist_comments(ports)[0]
+    assert reruns == []
+    closure = ports.documents.closures["GH-5"]
+    assert set(closure) == {"closed_at", "closed_by_slices", "tracker_checklist_posted"}
+    assert "delivery_outcome" not in closure
+    assert set(closure["tracker_checklist_posted"]) == {"at", "hash"}
+
+
+def test_a_comment_that_fails_closes_nothing_and_the_next_tick_posts_it_once(tmp_path):
+    ports = _ports({A, B})
+    _with_checklist(ports)
+    ports.tracker.comment_failures = 1
+    _, lines = _gather(ports, tmp_path)
+    assert lines == ["agentic: poll: #5 -> checklist not posted: gh issue failed: scripted"]
+    assert "GH-5" not in ports.documents.closures
+    _, again = _gather(ports, tmp_path)
+    assert again[0].endswith("tracker checklist posted")
+    assert len(_checklist_comments(ports)) == 1
+    assert "closed_at" in ports.documents.closures["GH-5"]
+
+
+def test_a_closure_that_fails_after_the_comment_posts_no_second_comment(tmp_path):
+    ports = _ports({A, B})
+    _with_checklist(ports)
+    record = ports.documents.record_closure
+    failing = [True]
+
+    def flaky(task_id, values):
+        if failing.pop() if failing else False:
+            raise OSError("disk full")
+        return record(task_id, values)
+
+    ports.documents.record_closure = flaky
+    _, lines = _gather(ports, tmp_path)
+    assert lines == ["agentic: poll: #5 -> not closed: disk full"]
+    assert len(_checklist_comments(ports)) == 1
+    _gather(ports, tmp_path)
+    assert len(_checklist_comments(ports)) == 1
+    assert "closed_at" in ports.documents.closures["GH-5"]
+
+
+def test_a_recorded_hash_reads_nothing_from_github(tmp_path):
+    ports = _ports({A, B})
+    posted = tracker_only.post_tracker_checklist(ports, "GH-5", CHECKLIST, None)
+    reads: list[str] = []
+    read = ports.tracker.issue_comments
+    ports.tracker.issue_comments = lambda task_id: reads.append(task_id) or read(task_id)
+    _with_checklist(ports, tracker_checklist_posted=posted)
+    _, lines = _gather(ports, tmp_path)
+    assert reads == []
+    assert len(_checklist_comments(ports)) == 1
+    assert lines == ["agentic: poll: #5 -> closed: every unit landed through slices (#350)"]
+
+
+def test_a_checklist_does_not_hide_the_slices_left_from_the_fresh_run(tmp_path):
+    ports = _ports({A})
+    _with_checklist(ports)
+    reruns: list[int] = []
+    _gather(ports, tmp_path, reruns)
+    assert reruns == [5]
+    assert _checklist_comments(ports) == []
