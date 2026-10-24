@@ -16,7 +16,7 @@ and writes the files.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -162,6 +162,19 @@ def check_slug(capability: str) -> None:
         )
 
 
+def _line_count(text: str) -> int:
+    """The one place a criteria document's lines are counted."""
+    return len(text.splitlines())
+
+
+def _cap_message(name: str, count: int, note: str = "") -> str:
+    """The one text of the cap: file, count and cap, then what to do about it."""
+    return (
+        f"`{name}`: {count} lines (cap {CRITERIA_MAX_LINES}){note}; cut the file or split it "
+        "into `## ` sections"
+    )
+
+
 def criteria_over_cap(texts: dict[str, str]) -> list[str]:
     """One message per criteria document strictly over `CRITERIA_MAX_LINES`, in input order.
 
@@ -169,10 +182,22 @@ def criteria_over_cap(texts: dict[str, str]) -> list[str]:
     or system-default file is never measured, and the caller never passes it. Lines are
     counted per document, never summed across them."""
     return [
-        f"`{name}`: {count} lines (cap {CRITERIA_MAX_LINES}); cut the file or split it into "
-        "`## ` sections"
+        _cap_message(name, count)
         for name, text in texts.items()
-        if (count := len(text.splitlines())) > CRITERIA_MAX_LINES
+        if (count := _line_count(text)) > CRITERIA_MAX_LINES
+    ]
+
+
+def criteria_regressions(base: Mapping[str, str], head: Mapping[str, str]) -> list[str]:
+    """One message per criteria document of `head` that is over the cap and longer than at
+    `base`, in `head`'s order (GH-334): the verdict on a delivery, which is judged by what
+    it adds and not by the state it inherited. A document absent from `base` counts 0; one
+    absent from `head` (deleted) is not measured. The cap is per document."""
+    return [
+        _cap_message(name, count, f", {before} at the base")
+        for name, text in head.items()
+        if (count := _line_count(text)) > CRITERIA_MAX_LINES
+        and count > (before := _line_count(base[name]) if name in base else 0)
     ]
 
 
