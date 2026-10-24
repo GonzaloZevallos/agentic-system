@@ -790,3 +790,86 @@ async def test_an_unverified_run_with_no_table_still_says_so(cfg):
     ports = memory_ports()
     await deliver(state, cfg, ports)
     assert "### Performance not verified" in ports.tracker.pull_requests[0][2]
+
+
+# --- GH-336: a plan with a tracker checklist posts it, then opens the PR without Closes ---
+
+CHECKLIST = ["Post the verdict table on #12", "Close the follow-ups that are done"]
+WITH_CHECKLIST = {**TASK, "tracker_checklist": CHECKLIST}
+
+
+def _resumed(state, patch):
+    """What the graph hands the node after a resume: the escalation cleared."""
+    merged = {**state, **patch}
+    resumed = {**merged, **rules.resumed(merged, None)}
+    resumed.pop("pause_log", None)
+    return resumed
+
+
+async def test_a_checklist_is_posted_once_before_a_pull_request_that_does_not_close_the_issue(cfg):
+    ports = memory_ports()
+    patch = await deliver(WITH_CHECKLIST, cfg, ports)
+
+    posted = [text for _, text in ports.tracker.comments if text.startswith("Tracker work for you")]
+    assert len(posted) == 1
+    # The checklist comment comes first; the "Ready for review" one follows the pull request.
+    assert ports.tracker.comments[0][1].startswith("Tracker work for you")
+    assert ports.tracker.comments[1][1].startswith("Ready for review")
+    assert ports.tracker.closes_issue_calls == [False]
+    assert len(ports.tracker.pull_requests) == 1
+    assert patch["tracker_checklist_posted"]["hash"] == rules.tracker_hash(CHECKLIST)
+    assert ports.documents.saved[0]["tracker_checklist_posted"] == patch["tracker_checklist_posted"]
+
+
+async def test_a_task_without_a_checklist_opens_its_pull_request_as_ever(cfg):
+    ports = memory_ports()
+    patch = await deliver(TASK, cfg, ports)
+
+    assert ports.tracker.closes_issue_calls == [True]
+    assert "tracker_checklist_posted" not in patch
+    assert all(not text.startswith("Tracker work for you") for _, text in ports.tracker.comments)
+
+
+async def test_a_failing_checklist_comment_opens_no_pull_request_and_a_resume_posts_both_once(cfg):
+    ports = memory_ports()
+    ports.tracker.comment_failures = 1
+    first = await deliver(WITH_CHECKLIST, cfg, ports)
+
+    assert first["escalation_class"] == "failure" and first["status"] == "waiting_on_human"
+    assert "tracker checklist" in first["escalated"]
+    assert ports.tracker.pull_requests == [] and ports.tracker.closes_issue_calls == []
+    assert "tracker_checklist_posted" not in first
+
+    second = await deliver(_resumed(WITH_CHECKLIST, first), cfg, ports)
+    assert second["pull_request"] == "https://github.com/o/r/pull/7"
+    tracker_comments = [t for _, t in ports.tracker.comments if t.startswith("Tracker work")]
+    assert len(tracker_comments) == 1
+    assert len(ports.tracker.pull_requests) == 1
+    assert ports.tracker.closes_issue_calls == [False]
+
+
+async def test_a_failing_pull_request_after_the_checklist_does_not_post_it_again(cfg):
+    ports = memory_ports()
+    ports.tracker.open_failures = 1
+    first = await deliver(WITH_CHECKLIST, cfg, ports)
+
+    assert "gh pr create failed" in first["escalated"]
+    assert first["tracker_checklist_posted"]["hash"] == rules.tracker_hash(CHECKLIST)
+
+    second = await deliver(_resumed(WITH_CHECKLIST, first), cfg, ports)
+    assert second["pull_request"] == "https://github.com/o/r/pull/7"
+    tracker_comments = [t for _, t in ports.tracker.comments if t.startswith("Tracker work")]
+    assert len(tracker_comments) == 1
+    assert len(ports.tracker.pull_requests) == 1
+
+
+async def test_a_lost_record_does_not_post_the_checklist_twice_because_of_the_marker(cfg):
+    ports = memory_ports()
+    ports.tracker.open_failures = 1
+    first = await deliver(WITH_CHECKLIST, cfg, ports)
+    without_record = {k: v for k, v in first.items() if k != "tracker_checklist_posted"}
+    lost = _resumed(WITH_CHECKLIST, without_record)
+
+    await deliver(lost, cfg, ports)
+    tracker_comments = [t for _, t in ports.tracker.comments if t.startswith("Tracker work")]
+    assert len(tracker_comments) == 1
