@@ -5,6 +5,7 @@ Pure functions over the task state, so each one is a unit test and not a graph r
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 from collections.abc import Callable, Mapping, Sequence
@@ -434,11 +435,13 @@ def invariants_markdown(state: TaskState) -> str:
     return "\n".join(f"{n}. {line}" for n, line in enumerate(lines, 1)) or "- none"
 
 
-def finished(status: Literal["discarded", "split"], at: str) -> FinishedPatch:
+def finished(status: Literal["discarded", "split", "tracker_only"], at: str) -> FinishedPatch:
     """The patch that ends a task with no delivery: its `status` and `finished_at`, the
     clock the Reflector's decision gate reads (ADR-0056). The only place the key is set."""
-    if status not in ("discarded", "split"):
-        raise ValueError(f"finished_at is for discarded and split tasks, not {status}")
+    if status not in ("discarded", "split", "tracker_only"):
+        raise ValueError(
+            f"finished_at is for discarded, split and tracker_only tasks, not {status}"
+        )
     return {"status": status, "finished_at": at}
 
 
@@ -1798,11 +1801,22 @@ def after_write_copy(state: TaskState) -> str | None:
 
 
 def after_plan(state: TaskState) -> str | None:
-    """A plan that did not fit carries `parts` and goes to `split` (ADR-0054); any other
-    goes to the fan-in. The only routing decision between the two."""
+    """A plan that did not fit carries `parts` and goes to `split` (ADR-0054); a plan whose
+    only work is on the tracker (GH-336) goes to `tracker_only`; any other goes to the
+    fan-in. The only routing decision between the three."""
     if state.get("escalated"):
         return None
-    return "split" if state.get("parts") else "integrate"
+    if state.get("parts"):
+        return "split"
+    return "tracker_only" if tracker_only_plan(state) else "integrate"
+
+
+def tracker_only_plan(state: TaskState) -> bool:
+    """The third plan shape (GH-336): no subtasks, no parts and a checklist for the human.
+    The one place the shape is decided; a checklist next to subtasks rides the delivery."""
+    return bool(
+        state.get("tracker_checklist") and not state.get("subtasks") and not state.get("parts")
+    )
 
 
 def after_develop(state: TaskState) -> str | None:
@@ -1942,6 +1956,12 @@ def after_split(state: TaskState) -> str | None:
     return None
 
 
+def after_tracker_only(state: TaskState) -> str | None:
+    """The end of the tracker-only road: nothing follows, and an escalation (the comment
+    failed) ends the run paused, like `split`'s."""
+    return None
+
+
 def run_ended(status: Status) -> bool:
     """Whether the Corrida (the whole task, ADR-0003) ended: delivered
     (`ready_for_review`) or discarded (issue #65). Every other status, including a
@@ -1951,7 +1971,7 @@ def run_ended(status: Status) -> bool:
     twice would otherwise leave two samples of its accumulated total. `"crashed"` is
     not a `Status`: the CLI fabricates it only for its own telemetry when a process
     dies mid-run, so it cannot appear in this predicate's own type."""
-    return status in ("ready_for_review", "discarded", "split")
+    return status in ("ready_for_review", "discarded", "split", "tracker_only")
 
 
 # Pause and resume (ADR-0003): an escalation pauses the task; the human's answer resumes
@@ -1970,6 +1990,8 @@ def resumed_status(state: TaskState) -> Status:
         return "discarded"
     if state.get("status") == "split":
         return "split"  # the same: an end, not a pause
+    if state.get("status") == "tracker_only":
+        return "tracker_only"  # the same: the checklist is posted, the human has it
     subtasks = state.get("subtasks", {})
     if subtasks:
         started = any(sub.get("status") != "pending" for sub in subtasks.values())
@@ -2106,8 +2128,12 @@ def resume_target(state: TaskState) -> str | None:
         return None
     if state.get("status") == "split":
         return None  # an end like a pull request: the parts are other tasks now
+    if state.get("status") == "tracker_only":
+        return None  # an end: the checklist is with the human
     if state.get("parts") and not state.get("subtasks"):
         return "split"  # paused while opening the parts: finish them, do not plan again
+    if tracker_only_plan(state):
+        return "tracker_only"  # paused before the checklist was posted: post it, do not plan
     if state.get("subtasks"):
         # Once there is a plan every road goes through the fan-in, which decides the
         # wave from the same facts: nothing here has to know about waves. Nothing to
@@ -2497,7 +2523,13 @@ CRASH_RETAKE_TOTAL_MAX = 6
 
 # The statuses where a run has nothing left to retake: the work is delivered, ruled
 # out, or waiting on a human's answer.
-_NOT_INTERRUPTED_STATUSES = ("ready_for_review", "discarded", "split", "waiting_on_human")
+_NOT_INTERRUPTED_STATUSES = (
+    "ready_for_review",
+    "discarded",
+    "split",
+    "tracker_only",
+    "waiting_on_human",
+)
 
 
 def crash_version_key(version: str | None) -> str | None:
@@ -3620,6 +3652,19 @@ def split_part_of(body: str) -> tuple[str, int] | None:
     with a marker is a part of a partition, and a part never splits again."""
     match = _SPLIT_MARKER.search(body)
     return (match.group(1), int(match.group(2))) if match else None
+
+
+def tracker_hash(items: Sequence[str]) -> str:
+    """The first twelve hex digits of the sha256 of the stripped items joined by newlines:
+    what tells one checklist from another (GH-336)."""
+    text = "\n".join(item.strip() for item in items)
+    return hashlib.sha256(text.encode()).hexdigest()[:12]
+
+
+def tracker_marker(task_id: str, items: Sequence[str]) -> str:
+    """The marker the checklist comment ends with: an HTML comment naming the task and the
+    hash of the items, so "already posted" is never decided from the task id alone."""
+    return f"<!-- agentic-tracker: {task_id} {tracker_hash(items)} -->"
 
 
 def estimate_cap(cost_usd: float) -> float:

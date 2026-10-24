@@ -511,6 +511,81 @@ def test_the_plan_schema_leaves_subtasks_and_parts_optional_for_the_model():
     assert "subtasks" not in plan.get("required", []) and "parts" not in plan.get("required", [])
 
 
+# --- The third shape: work that only touches the tracker (GH-336) ----------------------
+
+CHECKLIST = ["Post the verdict table on #307", "Close the follow-ups that are done"]
+
+
+def _tracker_only(files=0, cost=2.0, checklist=None, **more):
+    return {
+        "markdown": "### Solution",
+        "estimated_cost_usd": cost,
+        "estimated_files": files,
+        "subtasks": [],
+        "parts": [],
+        "tracker_checklist": CHECKLIST if checklist is None else checklist,
+        **more,
+    }
+
+
+def test_a_plan_whose_only_work_is_on_the_tracker_is_accepted_without_the_estimate_checks():
+    # A bucket with a high median and a reference that would refuse a tiny estimate: none of
+    # the fit, the reference or the median is consulted for the zero-file shape.
+    check = schemas.plan_check_for(_history(1, [400] * 5), 0.0)
+    check(_tracker_only(cost=0.5))  # does not raise
+
+
+def test_the_tracker_shape_refuses_a_positive_file_count():
+    check = schemas.plan_check_for(_history(1, []), 0.0)
+    with pytest.raises(ValueError, match="tracker.*estimated_files must be 0"):
+        check(_tracker_only(files=2))
+
+
+def test_the_tracker_shape_still_answers_for_what_the_task_already_spent():
+    with pytest.raises(ValueError, match="already spent"):
+        schemas.plan_check_for(_history(1, []), 5.0)(_tracker_only(cost=2.0))
+
+
+def test_a_checklist_next_to_parts_is_refused():
+    check = schemas.plan_check_for(_history(1, []), 0.0)
+    with pytest.raises(ValueError, match="parts.*plans itself|each part plans itself"):
+        check(_split(400.0, 90, tracker_checklist=CHECKLIST))
+
+
+def test_a_plan_with_no_subtasks_no_parts_and_no_checklist_is_still_refused():
+    check = schemas.plan_check_for(_history(1, []), 0.0)
+    with pytest.raises(ValueError, match="at least one subtask"):
+        check(_tracker_only(checklist=[]))
+    with pytest.raises(ValueError, match="at least one subtask"):
+        check({**_tracker_only(), "tracker_checklist": None})
+
+
+def test_zero_files_stay_refused_for_a_plan_with_subtasks_even_with_a_checklist():
+    check = schemas.plan_check_for(_history(1, []), 0.0)
+    with pytest.raises(ValueError, match="at least one file"):
+        check({**_estimated(20.0, 0), "tracker_checklist": CHECKLIST})
+    check({**_estimated(20.0, 3), "tracker_checklist": CHECKLIST})  # does not raise
+
+
+def test_a_checklist_item_must_be_one_line():
+    for bad in ("", "two\nlines"):
+        with pytest.raises(ValueError, match="one non-empty line"):
+            schemas.TechPlan.model_validate(
+                {
+                    "markdown": "m",
+                    "estimated_cost_usd": 1,
+                    "estimated_files": 0,
+                    "tracker_checklist": [bad],
+                }
+            )
+
+
+def test_the_plan_schema_leaves_the_checklist_optional_for_the_model():
+    plan = schemas.json_schema(schemas.TechPlan, VOCAB)
+    assert "tracker_checklist" in plan["properties"]
+    assert "tracker_checklist" not in plan.get("required", [])
+
+
 # --- QA Performance convening (GH-318, ADR-0060) ---------------------------------------
 
 

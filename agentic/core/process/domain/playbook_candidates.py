@@ -402,10 +402,10 @@ def decision_count(document: Mapping[str, Any]) -> int:
 
 def _decision_clock(document: Mapping[str, Any], closed_escalations: Collection[str]) -> str:
     """When a task ended without a kept delivery, or `""` when it did not (yet):
-    `discarded` and `split` by `finished_at`, a closed pull request by `closed_at`, an
-    escalation whose issue is closed by the end of its last run."""
+    `discarded`, `split` and `tracker_only` by `finished_at`, a closed pull request by
+    `closed_at`, an escalation whose issue is closed by the end of its last run."""
     status = document.get("status")
-    if status in ("discarded", "split"):
+    if status in ("discarded", "split", "tracker_only"):
         return str(document.get("finished_at") or "")
     if document.get("closed_at") and document.get("delivery_outcome") == "closed":
         return str(document["closed_at"])

@@ -79,3 +79,10 @@ def test_the_record_files_and_summaries_are_not_playbooks(tmp_path):
     (tmp_path / ".agentic/playbooks/summaries").mkdir()
     (tmp_path / ".agentic/playbooks/summaries/10.md").write_text("# summary")
     assert FilesystemPrompts(tmp_path).playbook(DEVELOPER) == Playbook(slug="developer")
+
+
+def test_the_pjm_prompt_never_escalates_to_ask_for_gh_on_tracker_only_work(tmp_path):
+    """GH-336: the rule is present in the prompt the PjM is rendered from."""
+    raw, _ = FilesystemPrompts(tmp_path).raw(PJM)
+    assert "only on the issue tracker" in raw
+    assert "never escalate to ask the human for `gh`" in raw

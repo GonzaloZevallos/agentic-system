@@ -484,3 +484,14 @@ def test_a_task_closed_by_its_slices_counts_as_no_delivery():
     assert closed.closed_at is None and closed.delivery_outcome is None
     built = scorecard.build([*judged("merged", 2), closed])
     assert built.autonomy.denominator == 2
+
+
+def test_a_tracker_only_document_does_not_crash_the_scorecard_and_counts_as_excluded():
+    """GH-336: `tracker_only` is outside `SCOREABLE_STATUSES` and `TERMINATED_STATUSES`,
+    the same as `split` (ADR-0062: a known gap); it is counted in `excluded`."""
+    ended = scorecard.task_figures(
+        doc(id="GH-307", status="tracker_only", tracker_checklist=["Close #12"])
+    )
+    card = scorecard.build([ended, *judged("merged", 1)])
+    assert card.cost_per_delivery.denominator == 1 and card.cost_per_delivery.excluded == 1
+    assert card.own_failures_per_task.excluded == 1

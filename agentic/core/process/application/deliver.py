@@ -22,6 +22,7 @@ from .ports import BranchPullRequest, GitError, Ports
 from .preflight import over_cap
 from .release import release_task
 from .run_role import finish
+from .tracker_only import post_tracker_checklist
 
 # How the delivery comment starts: a resume looks past the system's comments.
 READY = "Ready for review: "
@@ -68,6 +69,23 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             pass
         case _:
             assert_never(plan.kind)
+    # A plan with a tracker checklist tells the human before the pull request exists, and the
+    # pull request then leaves the issue open (GH-336, ADR-0062). None of this runs without one.
+    checklist = state.get("tracker_checklist", [])
+    posted: TaskState = {}
+    if checklist:
+        try:
+            record_posted = post_tracker_checklist(
+                ports, state["id"], checklist, state.get("tracker_checklist_posted")
+            )
+        except (ValueError, OSError) as failed:
+            return finish(
+                state, _undelivered("tracker checklist comment failed", failed, state, None), ports
+            )
+        if record_posted:
+            posted = {"tracker_checklist_posted": record_posted}
+            state = {**state, **posted}
+            finish(state, posted, ports)
     replaced = rules.replace_record(recorded, plan, kept)
     # Only the key's own value moves: a state with no replace keeps being the very object
     # the node received, and is written as it always has been.
@@ -119,10 +137,12 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         step = "gh pr create failed"
         # A pull request the task already has is kept: the push alone re-delivers it.
         url = state.get("pull_request") or ports.tracker.open_pull_request(
-            state["id"], task.branch, state["title"], body.text
+            state["id"], task.branch, state["title"], body.text, closes_issue=not checklist
         )
     except (GitError, ValueError) as failed:
-        return finish(state, {**_undelivered(step, failed, state, replaced), **record}, ports)
+        return finish(
+            state, {**_undelivered(step, failed, state, replaced), **record, **posted}, ports
+        )
     patch: TaskState = {
         "status": "ready_for_review",
         "pull_request": url,
@@ -131,6 +151,7 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         "pushed_head": pushed_head,
         "pushed_at": pushed_at,
         **record,
+        **posted,
         **({"criteria_over_cap": over} if over else {}),
         **({"landing": state["landing"]} if state.get("landing") else {}),
     }

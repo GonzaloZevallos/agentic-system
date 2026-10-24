@@ -13,6 +13,7 @@ from tests.fakes import (
     memory_ports,
     planned,
     planned_parts,
+    planned_tracker_only,
     questions,
     tech_answers,
 )
@@ -183,3 +184,49 @@ async def test_a_task_with_a_waived_fit_is_planned_whole_and_never_split(arm, tm
 
     assert "parts" not in patch and list(patch["subtasks"]) == ["api"]
     assert "waived" in patch["failures"][0]["error"]
+
+
+# The tracker-only rule reaches both rendered Tech Lead prompts (GH-336): the plan schema no
+# longer says "every task changes a file", so the prompt is where the rule is taught.
+
+
+@pytest.mark.parametrize("task_type", ["feature", "platform_enhancement"])
+async def test_both_rendered_tech_lead_prompts_teach_the_tracker_only_rule(task_type, tmp_path):
+    slug = "tech_lead_platform" if task_type == "platform_enhancement" else "tech_lead"
+    runner = ScriptedRunner(**{slug: [planned()]})
+    await plan({**TASK, "type": task_type}, cold(tmp_path), memory_ports(runner))
+
+    prompt = " ".join(runner.calls[0]["system_prompt"].split())
+    assert "task changes at least one file unless its only work is on the tracker" in prompt
+    assert "`tracker_checklist`, no subtasks, no parts and `estimated_files: 0`" in prompt
+    assert "Tracker work never becomes a subtask" in prompt
+    assert "every task changes one" not in prompt
+
+
+async def test_a_tracker_only_plan_is_delivered_with_its_checklist_and_no_subtasks(tmp_path):
+    items = ["Post the verdict table on #307", "Close the follow-ups that are done"]
+    runner = ScriptedRunner(tech_lead=[planned_tracker_only(items)])
+    patch = await plan(TASK, cold(tmp_path), memory_ports(runner))
+
+    assert patch["status"] == "planned"
+    assert patch["tracker_checklist"] == items
+    assert patch["estimate"] == {"cost_usd": 2.0, "files": 0}
+    assert "subtasks" not in patch and "parts" not in patch
+    assert "### Tracker work for the human" in patch["sections"]["Tech Lead"]
+    assert "### Subtasks" not in patch["sections"]["Tech Lead"]
+
+
+async def test_a_checklist_next_to_subtasks_is_stored_and_the_subtasks_still_are(tmp_path):
+    runner = ScriptedRunner(tech_lead=[planned(tracker_checklist=["Close #9"])])
+    patch = await plan(TASK, cold(tmp_path), memory_ports(runner))
+
+    assert patch["tracker_checklist"] == ["Close #9"]
+    assert list(patch["subtasks"]) == ["api"]
+    assert "### Tracker work for the human" in patch["sections"]["Tech Lead"]
+    assert "### Subtasks" in patch["sections"]["Tech Lead"]
+
+
+async def test_a_plan_without_a_checklist_stores_none_and_adds_no_block(tmp_path):
+    patch = await plan(TASK, cold(tmp_path), memory_ports(ScriptedRunner(tech_lead=[planned()])))
+    assert "tracker_checklist" not in patch
+    assert "Tracker work" not in patch["sections"]["Tech Lead"]

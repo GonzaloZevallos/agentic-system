@@ -1,3 +1,4 @@
+import re
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast, get_args
@@ -616,8 +617,8 @@ def test_spent_by_phase_sums_the_runs_by_section_and_keeps_what_they_miss():
     assert rules.spent_by_phase({"runs": runs, "cost_usd": 12.5})["other"] == 1.0
 
 
-def test_run_ended_is_true_only_for_ready_for_review_discarded_and_split():
-    ended = {"ready_for_review", "discarded", "split"}
+def test_run_ended_is_true_only_for_ready_for_review_discarded_split_and_tracker_only():
+    ended = {"ready_for_review", "discarded", "split", "tracker_only"}
     for status in get_args(task.Status):
         assert rules.run_ended(status) is (status in ended)
 
@@ -3297,3 +3298,57 @@ def test_a_review_can_be_returned_by_qa_performance_and_an_absent_value_is_revie
     assert "qa_performance" in get_args(task.ReturnedBy)
     assert {"status": "returned"}.get("returned_by", "review") == "review"
     assert {"perf_verdict", "perf_head"} <= set(task.RoleRun.__annotations__)
+
+
+CHECKLIST = ["Close #12 as a duplicate", "Retitle #14 to 'Triage the rest'"]
+TRACKER_PLAN = {"status": "planned", "type": "feature", "tracker_checklist": CHECKLIST}
+
+
+def test_tracker_marker_names_the_task_and_a_hash_of_the_stripped_items():
+    marker = rules.tracker_marker("GH-307", CHECKLIST)
+    assert re.fullmatch(r"<!-- agentic-tracker: GH-307 [0-9a-f]{12} -->", marker)
+    assert marker == rules.tracker_marker("GH-307", [f"  {i} " for i in CHECKLIST])
+    assert marker != rules.tracker_marker("GH-307", CHECKLIST[:1])
+    assert marker != rules.tracker_marker("GH-307", CHECKLIST[::-1])
+    assert rules.tracker_hash(CHECKLIST) in marker
+
+
+def test_after_plan_routes_a_plan_of_only_a_checklist_to_tracker_only():
+    assert rules.after_plan(TRACKER_PLAN) == "tracker_only"
+    assert rules.after_plan({**TRACKER_PLAN, "escalated": "x"}) is None
+    # Not the shape: subtasks (the checklist rides the delivery), parts, or no checklist.
+    assert rules.after_plan({**TRACKER_PLAN, "subtasks": {"a": {"status": "pending"}}}) == (
+        "integrate"
+    )
+    assert rules.after_plan({**TRACKER_PLAN, "parts": PARTS}) == "split"
+    assert rules.after_plan({**TRACKER_PLAN, "tracker_checklist": []}) == "integrate"
+    assert rules.after_tracker_only({"status": "tracker_only"}) is None
+
+
+def test_tracker_only_is_an_end_with_nothing_to_resume():
+    done = {"status": "tracker_only", "type": "feature", "tracker_checklist": CHECKLIST}
+    assert rules.resumed_status(done) == "tracker_only"
+    assert rules.resume_target({**done, **rules.resumed(done, None)}) is None
+    assert rules.finished("tracker_only", "2026-10-24T10:00:00+00:00") == {
+        "status": "tracker_only",
+        "finished_at": "2026-10-24T10:00:00+00:00",
+    }
+    with pytest.raises(ValueError):
+        rules.finished(cast(Any, "ready_for_review"), "now")
+
+
+def test_a_tracker_only_task_paused_after_the_plan_or_on_a_failed_comment_resumes_into_it():
+    paused = {
+        "status": "waiting_on_human",
+        "type": "feature",
+        "tracker_checklist": CHECKLIST,
+        **rules.escalation("failure", "tracker only: commenting failed"),
+    }
+    resumed = task.apply(paused, rules.resumed(paused, None))
+    assert rules.resume_target(resumed) == "tracker_only"
+    # Paused right after the plan (no failed comment): the same road, never `plan`.
+    after_plan = {**TRACKER_PLAN, "status": "planned"}
+    assert rules.resume_target(after_plan) == "tracker_only"
+    # A task with a pull request is over, whatever the checklist says.
+    delivered = {**after_plan, "pull_request": "https://github.com/o/r/pull/3"}
+    assert rules.resume_target(delivered) is None

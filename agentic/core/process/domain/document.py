@@ -65,9 +65,18 @@ SUBTASK_RECORDED_AS = {"change_category": "return_category"}
 # `landed_slices` is the landing's own list of slices it merged ahead of the task's pull
 # request (GH-297): written whole through `record_closure` every time one lands.
 # `closed_by_slices` (GH-334) is the list of those slices' pull requests, written with the
-# task's `closed_at` when every unit landed through them.
+# task's `closed_at` when every unit landed through them. `tracker_checklist_posted`
+# (GH-336) is the `{at, hash}` record of the checklist comment: `render` writes it as a block
+# when a run posted it, and the poller's closure replaces it whole.
 RECORD_KEYS: frozenset[str] = frozenset(
-    {"landing", "pause_log", "escalated", "landed_slices", "closed_by_slices"}
+    {
+        "landing",
+        "pause_log",
+        "escalated",
+        "landed_slices",
+        "closed_by_slices",
+        "tracker_checklist_posted",
+    }
 )
 _LANDING_PLACEHOLDER = "<landing-flow-line>"
 # The record keys `render` writes as one flow line, swapped in for a placeholder: a list the
@@ -189,6 +198,11 @@ def render(
         # The partition of a plan that did not fit (ADR-0054), written only when set.
         **({"parts": e} if (e := state.get("parts")) else {}),
         **({"split_issues": e} if (e := state.get("split_issues")) else {}),
+        # What the human must do on the issue tracker (GH-336), written only when non-empty so
+        # a document of a plan without one is byte-identical to one written before. Read back
+        # by `parse` under the same name: the state's key is the frontmatter's.
+        **({"tracker_checklist": e} if (e := state.get("tracker_checklist")) else {}),
+        **({"tracker_checklist_posted": e} if (e := state.get("tracker_checklist_posted")) else {}),
         **({"fit_waived": True} if state.get("fit_waived") else {}),
         "prompts": state.get("prompts", {}),
         # The playbook section hash each role first ran with, and any later one

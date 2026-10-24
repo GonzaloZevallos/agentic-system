@@ -35,7 +35,7 @@ from ..domain.adr_numbers import Ambiguous, Renaming
 from ..domain.boot import boot_verdict
 from ..domain.landing import LandingStepKind
 from ..domain.task import INTEGRATION, PullRequest, TaskState, apply
-from . import adr_collision, landing_plan, preflight, reflect_run, release
+from . import adr_collision, landing_plan, preflight, reflect_run, release, tracker_only
 from . import escalate as escalate_module
 from .checkouts import task_base
 from .ports import (
@@ -534,16 +534,30 @@ def _abandoned_by_slices(
     )
     if verdict == "close":
         refs = landing_rules.slice_refs(landed)
+        patch: dict[str, object] = dict(landing_rules.slices_closed(refs, now.isoformat()))
+        posted = False
+        if items := raw.get("tracker_checklist"):
+            # The checklist comes before the closure and its record rides in the same
+            # write (GH-336): a comment that fails leaves the document open for the next tick.
+            try:
+                record = tracker_only.post_tracker_checklist(
+                    ports, task_id, items, raw.get("tracker_checklist_posted")
+                )
+            except (ValueError, OSError) as exc:
+                out.append(f"agentic: poll: #{number} -> checklist not posted: {exc}")
+                return
+            if record is not None:
+                patch["tracker_checklist_posted"] = record
+                posted = True
         try:
-            ports.documents.record_closure(
-                task_id, landing_rules.slices_closed(refs, now.isoformat())
-            )
+            ports.documents.record_closure(task_id, patch)
         except (ValueError, OSError) as exc:
             out.append(f"agentic: poll: #{number} -> not closed: {exc}")
             return
         labels = ", ".join(landing_rules.pull_request_label(ref) for ref in refs)
         out.append(
             f"agentic: poll: #{number} -> closed: every unit landed through slices ({labels})"
+            + ("; tracker checklist posted" if posted else "")
         )
     elif verdict == "rerun" and reruns is not None:
         left = ", ".join(unit for unit in units if ancestry[unit] is False)

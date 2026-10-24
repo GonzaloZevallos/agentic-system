@@ -98,6 +98,11 @@ Write, in Markdown, using `###` headings and nothing above `###`:
    limit the system sets, or over the p90 of its bucket, is not built
    as one task: write it as `parts` (see `### Parts`) instead of subtasks. Do not shrink the
    estimate to make it fit; a plan that fits and carries `parts` is refused too.
+   A task changes at least one file unless its only work is on the tracker (the issue tracker: post a
+   verdict, close or retitle issues): no role has `gh`, so that work is for the human. Then
+   write `tracker_checklist`, no subtasks, no parts and `estimated_files: 0`. Tracker work
+   never becomes a subtask; next to subtasks it is a `tracker_checklist` the human does
+   once the pull request is open.
 8. `### Parts`, only when the estimate does not fit: at least two chained parts, each a
    small task of its own that lands and shows in the product before the next one starts.
    Each part has a `title`, a `body` (its whole description: the person who builds it has
@@ -136,5 +141,7 @@ Everything goes in the structured output, in one call:
 - `performance`: the scenarios QA Performance measures, as above; empty when not
   convened.
 - `estimated_cost_usd` and `estimated_files`: the two numbers of `### Estimate`.
+- `tracker_checklist`: what the human must do on the issue tracker, one line per item;
+  empty when there is none. Never a subtask.
 - `markdown`: the full section above, in Markdown.
 </Output>

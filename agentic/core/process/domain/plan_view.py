@@ -147,6 +147,25 @@ def with_parts_block(section: str, parts: Sequence[PartRecord]) -> str:
     return f"{section.rstrip()}\n\n### Parts\n\n{NOTE_PARTS}\n\n{blocks}"
 
 
+_TRACKER_HEADING = re.compile(r"^### Tracker work for the human[ \t]*$", re.M)
+TRACKER_TITLE = "Tracker work for the human"
+
+
+def with_tracker_block(section: str, checklist: Sequence[str]) -> str:
+    """`section` with a `### Tracker work for the human` list built from the structured
+    `checklist` (GH-336), so the human reading the plan finds what is theirs to do on the
+    tracker. Nothing when the checklist is empty, and unchanged when the model's own markdown
+    already has that heading outside a code fence: the comment on the issue is written from
+    the structured list, not from this prose."""
+    if not checklist:
+        return section
+    fenced = _fenced_ranges(section)
+    if any(not _in_fenced(m.start(), fenced) for m in _TRACKER_HEADING.finditer(section)):
+        return section
+    items = "\n".join(f"- {item}" for item in checklist)
+    return f"{section.rstrip()}\n\n### {TRACKER_TITLE}\n\n{items}"
+
+
 def _part_brief(number: int, part: PartRecord) -> str:
     depends_on = ", ".join(f"part {d}" for d in part["depends_on"]) or "nothing"
     return f"#### Part {number}: {part['title']}\n\n{part['body']}\n\nDepends on: {depends_on}."

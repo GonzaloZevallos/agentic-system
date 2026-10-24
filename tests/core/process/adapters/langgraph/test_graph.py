@@ -1102,6 +1102,7 @@ def test_exported_graph_uses_the_default_ports():
         "deliver",
         "discard",
         "split",
+        "tracker_only",
         "escalate",
         "pause",
     }

@@ -1227,3 +1227,41 @@ def test_record_closure_refuses_a_list_key_missing_from_record_keys_when_it_is_a
     assert "findings" not in document.RECORD_KEYS
     with pytest.raises(ValueError, match="findings"):
         document.record_closure(raw, {"findings": [{"id": "F2"}]})
+
+
+_CHECKLIST = ["Post the verdict table on #307", "Close the follow-ups that are done"]
+
+
+def test_a_state_without_a_tracker_checklist_renders_byte_identical():
+    """GH-336: the key is written only when non-empty."""
+    bare = document.render(_bare())
+    assert "tracker_checklist" not in bare
+    assert document.render(_bare(tracker_checklist=[])) == bare
+
+
+def test_the_tracker_checklist_renders_and_parses_back_equal():
+    text = document.render(_bare(tracker_checklist=_CHECKLIST))
+    assert document.parse(text)["tracker_checklist"] == _CHECKLIST
+    assert document.render(document.parse(text) | {"sections": {}}) == text
+
+
+def test_the_tracker_checklist_record_is_written_only_when_set_and_read_back():
+    """GH-336: `tracker_checklist_posted` has the same discipline as the checklist."""
+    bare = document.render(_bare())
+    assert "tracker_checklist_posted" not in bare
+    posted = {"at": "2026-10-24T10:00:00+00:00", "hash": "0123456789ab"}
+    text = document.render(_bare(tracker_checklist=_CHECKLIST, tracker_checklist_posted=posted))
+    assert document.parse(text)["tracker_checklist_posted"] == posted
+
+
+def test_record_closure_replaces_the_tracker_record_the_document_wrote_as_a_block():
+    """`render` writes `tracker_checklist_posted` as a block; the poller's closure replaces it
+    with the flow line instead of refusing the surgery (GH-336)."""
+    raw = document.render(
+        _bare(tracker_checklist_posted={"at": "2026-10-24T00:00:00+00:00", "hash": "a" * 12})
+    )
+    assert "\ntracker_checklist_posted:\n" in raw
+    newer = {"at": "2026-10-25T00:00:00+00:00", "hash": "b" * 12}
+    once = document.record_closure(raw, {"tracker_checklist_posted": newer})
+    assert document.parse(once)["tracker_checklist_posted"] == newer
+    assert once.count("\ntracker_checklist_posted:") == 1

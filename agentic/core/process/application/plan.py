@@ -135,6 +135,12 @@ def _delivered(
             "files": output.data["estimated_files"],
         }
         written["status"] = "planned"
+        if output.data.get("tracker_checklist"):
+            # What the human must do on the tracker (GH-336); it may sit next to subtasks.
+            written["tracker_checklist"] = list(output.data["tracker_checklist"])
+            written["sections"][section] = plan_view.with_tracker_block(
+                written["sections"][section], written["tracker_checklist"]
+            )
         reviewer_model = cfg.model_for(TECH_LEAD_REVIEWER.slug, TECH_LEAD_REVIEWER.kind)
         written["experiment"] = experiment_snapshot(cfg, reviewer_model)
         if output.data.get("parts"):
@@ -144,6 +150,9 @@ def _delivered(
             written["sections"][section] = plan_view.with_parts_block(
                 written["sections"][section], written["parts"]
             )
+            return written
+        if not output.data["subtasks"]:
+            # Tracker work only (GH-336): the plan check let it through with no subtasks.
             return written
         written["subtasks"] = {s["id"]: _pending(s) for s in output.data["subtasks"]}
         written["sections"][section] = plan_view.with_subtasks_block(

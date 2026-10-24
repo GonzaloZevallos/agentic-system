@@ -1516,6 +1516,7 @@ def planned(
     integration: str = "",
     estimated_cost_usd: float = 20.0,
     estimated_files: int = 5,
+    tracker_checklist: Sequence[str] = (),
 ) -> RawResult:
     items: list[dict[str, object]] = [
         {"id": "api", "title": "API", "brief": "Build it.", "seams": ["GET /x"]},
@@ -1532,6 +1533,32 @@ def planned(
             "integration": integration,
             "estimated_cost_usd": estimated_cost_usd,
             "estimated_files": estimated_files,
+            **({"tracker_checklist": list(tracker_checklist)} if tracker_checklist else {}),
+        },
+        cost,
+        2,
+        session,
+    )
+
+
+def planned_tracker_only(
+    checklist: Sequence[str],
+    *,
+    cost: float = 0.3,
+    session: str = "tl",
+    estimated_cost_usd: float = 2.0,
+) -> RawResult:
+    """A Tech Lead plan whose only work is on the issue tracker (GH-336): a checklist, no
+    subtasks, no parts and no file."""
+    return RawResult(
+        {
+            "markdown": "### Solution\n\nThe work is on the tracker.",
+            "subtasks": [],
+            "invariants": [],
+            "integration": "",
+            "estimated_cost_usd": estimated_cost_usd,
+            "estimated_files": 0,
+            "tracker_checklist": list(checklist),
         },
         cost,
         2,
