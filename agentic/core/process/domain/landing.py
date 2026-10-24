@@ -498,6 +498,43 @@ def slice_landed(units: Iterable[str], ancestry: Mapping[str, bool]) -> bool:
     return bool(names) and all(ancestry.get(name) is True for name in names)
 
 
+def abandoned_by_slices(
+    units: Sequence[str],
+    ancestry: Mapping[str, bool | None],
+    *,
+    pr_abandoned: bool,
+    status: str | None,
+    escalated: object,
+    pull_request: object,
+    abandoned_ref: str,
+) -> Literal["close", "rerun"] | None:
+    """What the poller does with a task whose pull request was read closed unmerged
+    (`pr_abandoned`) and which landed slices (GH-334). `units` are the plan's subtasks,
+    `integration` excluded; `ancestry` says per unit whether its `reviewed_head` is an
+    ancestor of master (`None`: git could not be read). Git's word, never `landed_slices`
+    alone: any unit with unread ancestry, or no unit at all, decides nothing, so an unread
+    ancestry never closes. `close` when every unit landed. `rerun` otherwise, only for a
+    task still `ready_for_review`, not escalated, whose document points at the very pull
+    request read closed; a task a person or another path moved on is left alone."""
+    if not pr_abandoned or not units:
+        return None
+    states = [ancestry.get(unit) for unit in units]
+    if any(state is None for state in states):
+        return None
+    if all(state is True for state in states):
+        return "close"
+    if status == "ready_for_review" and not escalated and pull_request == abandoned_ref:
+        return "rerun"
+    return None
+
+
+def slices_closed(refs: Sequence[str], at: str) -> TaskState:
+    """The document patch that closes a task whose every unit landed through slices (GH-334):
+    `closed_at` and `closed_by_slices` (the slices' pull requests). Never `delivery_outcome`:
+    nobody judged a delivery, so no reader may count it as one."""
+    return {"closed_at": at, "closed_by_slices": list(refs)}
+
+
 def slice_facts(
     slice_: Slice,
     state: TaskState,

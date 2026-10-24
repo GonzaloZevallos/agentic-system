@@ -891,6 +891,10 @@ class TaskState(TaskInput, total=False):
     # The slices the landing merged ahead of the task's pull request (GH-297, ADR-0048):
     # one record per slice, appended whole through `record_closure`. Optional, read with `.get`.
     landed_slices: list[LandedSlice]
+    # The pull requests of the slices that carried every unit to master when the task's own
+    # pull request was closed unmerged (GH-334): written with `closed_at`, never with a
+    # `delivery_outcome`. Optional, read with `.get`.
+    closed_by_slices: list[str]
     # What an interviewee could not decide (ADR-0014); escalates with the task.
     questions_for_human: list[str]
     # What the ephemeral interviewer proposed for the deliverable that follows

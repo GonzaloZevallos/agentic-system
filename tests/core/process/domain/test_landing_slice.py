@@ -462,3 +462,69 @@ def test_the_new_entry_keys_survive_reading_and_a_document_without_them_reads_as
         "head": HEAD,
         "step": "fix",
     }
+
+
+# --- abandoned_by_slices (GH-334) ----------------------------------------------------------
+
+PR = "https://github.com/o/r/pull/344"
+
+
+def _abandoned(units=("a", "b"), ancestry=None, **over):
+    base: dict[str, Any] = {
+        "pr_abandoned": True,
+        "status": "ready_for_review",
+        "escalated": "",
+        "pull_request": PR,
+        "abandoned_ref": PR,
+    }
+    given = {"a": True, "b": True} if ancestry is None else ancestry
+    return landing.abandoned_by_slices(units, given, **{**base, **over})
+
+
+def test_a_pull_request_that_is_not_abandoned_decides_nothing():
+    assert _abandoned(pr_abandoned=False) is None
+    assert _abandoned(pr_abandoned=False, ancestry={"a": True, "b": False}) is None
+
+
+def test_a_task_with_no_unit_decides_nothing():
+    assert _abandoned(units=(), ancestry={}) is None
+
+
+def test_every_unit_an_ancestor_of_master_closes_the_task():
+    assert _abandoned() == "close"
+
+
+def test_a_unit_that_is_not_an_ancestor_gets_a_fresh_run():
+    assert _abandoned(ancestry={"a": True, "b": False}) == "rerun"
+
+
+def test_ancestry_that_was_not_read_never_closes_nor_reruns():
+    assert _abandoned(ancestry={"a": True, "b": None}) is None
+    assert _abandoned(ancestry={"a": False, "b": None}) is None
+    assert _abandoned(ancestry={"a": True}) is None
+
+
+def test_a_fresh_run_is_refused_when_the_task_is_escalated():
+    assert _abandoned(ancestry={"a": True, "b": False}, escalated="Landing failed") is None
+
+
+def test_a_fresh_run_is_refused_when_the_status_is_not_ready_for_review():
+    assert _abandoned(ancestry={"a": True, "b": False}, status="developing") is None
+
+
+def test_a_fresh_run_is_refused_when_the_document_points_at_another_pull_request():
+    other = "https://github.com/o/r/pull/999"
+    assert _abandoned(ancestry={"a": True, "b": False}, pull_request=other) is None
+
+
+def test_a_close_does_not_ask_for_status_or_escalation():
+    assert _abandoned(status="developing", escalated="x") == "close"
+
+
+def test_the_slice_close_patch_names_the_pull_requests_and_the_time():
+    patch = landing.slices_closed(["https://github.com/o/r/pull/350"], "2026-10-24T10:00:00+00:00")
+    assert patch == {
+        "closed_at": "2026-10-24T10:00:00+00:00",
+        "closed_by_slices": ["https://github.com/o/r/pull/350"],
+    }
+    assert "delivery_outcome" not in patch
