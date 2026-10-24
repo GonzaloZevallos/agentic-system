@@ -244,7 +244,14 @@ def landing_step(
     if spent.verdict_sync_due:
         return _verdict_sync(step, exhausted, spent)
     match refusal:
-        case "not_ready" | "pr_not_open" | "eval_set" | "perf_unverified":
+        case (
+            "not_ready"
+            | "pr_not_open"
+            | "eval_set"
+            | "perf_unverified"
+            | "criteria_over_cap"
+            | "criteria_unreadable"
+        ):
             return step("none")
         case "eval_set_unreadable" | "ci_missing" | "ci_unreadable":
             waited = spent.waited_s

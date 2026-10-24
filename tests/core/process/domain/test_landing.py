@@ -73,6 +73,8 @@ EXPECTED = {
     "master_moved": "wait",
     "adr_number_taken": "diagnose",
     "perf_unverified": "none",
+    "criteria_over_cap": "none",
+    "criteria_unreadable": "none",
 }
 
 
