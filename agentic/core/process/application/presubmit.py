@@ -17,6 +17,7 @@ from ..domain.presubmit import AffectedPlan, CheckResult, Mode, WitnessResult
 from ..domain.task import TaskState
 from .checkouts import task_base
 from .ports import GitError, Ports
+from .preflight import criteria_regressed
 
 
 def declared_checks(state: TaskState, ports: Ports) -> dict[str, str]:
@@ -40,6 +41,7 @@ class CheckoutPresubmit:
         witness: str | None = None,
         parallel: bool = False,
         affected: AffectedPlan | None = None,
+        criteria_base: str | None = None,
     ):
         self.ports = ports
         self.path = path
@@ -60,6 +62,11 @@ class CheckoutPresubmit:
         # default so every existing construction site, `merge.py`'s included, compiles
         # and behaves untouched.
         self.affected = affected
+        # The commit the delivery is measured against for the criteria line caps (GH-334),
+        # the task's base like the affected plan's, or None: no document is read and the
+        # gate is the one of before. Keyword-only, so the merge gate's own construction
+        # (which judges regressions in its decision, not here) is untouched.
+        self.criteria_base = criteria_base
         # The checks that failed in their full form on this instance: they never run
         # their affected form again, even after they later pass in full. A new Developer
         # run builds a new instance and starts on affected-only again.
@@ -71,6 +78,8 @@ class CheckoutPresubmit:
         # What the last look saw: the head and the checks, None until a check ran.
         self.head: str | None = None
         self.results: list[CheckResult] | None = None
+        # The criteria documents the last look found pushed past their cap by this head.
+        self.regressions: list[str] = []
         # What the witness said the last time it ran, for `markdown()`; None when no
         # witness is declared, or none has run yet.
         self.witness_result: WitnessResult | None = None
@@ -114,6 +123,7 @@ class CheckoutPresubmit:
             else:
                 results = self._run_under_plan(plan, self._modes(plan, head))
             self.head, self.results = head, results
+            self.regressions = self._criteria_regressions(head)
             self.invocations.append(self.results)
         # A witness disagreement leads, on its own capped budget: `refusals`/`REFUSALS`
         # stay for the checks alone, so a bad witness declaration cannot spend the
@@ -123,7 +133,9 @@ class CheckoutPresubmit:
             return presubmit.witness_refused(witness_reason)
         # A check that ran twice is decided by its last row, never by the affected one
         # the full rerun superseded.
-        reason = presubmit.refusal(moved, clean, presubmit.final_results(self.results or []))
+        reason = presubmit.refusal(
+            moved, clean, presubmit.final_results(self.results or []), self.regressions
+        )
         if reason is None or self.refusals >= presubmit.REFUSALS:
             return None
         self.refusals += 1
@@ -188,7 +200,20 @@ class CheckoutPresubmit:
         if self.results is None or self.head is None:
             return None
         base = self.affected.base if self.affected is not None else None
-        return presubmit.checks_markdown(self.head, self.results, self.witness_result, base=base)
+        return presubmit.checks_markdown(
+            self.head, self.results, self.witness_result, base=base, regressions=self.regressions
+        )
+
+    def _criteria_regressions(self, head: str) -> list[str]:
+        """What this head adds past the criteria caps, against the base this gate was given.
+        An unreadable document reports nothing: the merge decision is the guarantee, and an
+        early warning that cannot read must not block a delivery."""
+        if self.criteria_base is None:
+            return []
+        try:
+            return criteria_regressed(self.ports, self.criteria_base, head)
+        except GitError:
+            return []
 
     def _run_witness(self, command: str) -> str | None:
         checkout = self.path.resolve()

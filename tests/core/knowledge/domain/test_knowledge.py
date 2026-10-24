@@ -358,3 +358,56 @@ def test_messages_follow_the_input_order_and_skip_the_documents_within_the_cap()
     }
     messages = knowledge.criteria_over_cap(texts)
     assert [m.split()[0].strip("`:") for m in messages] == [knowledge.DESIGN_STANDARDS, "OTHER.md"]
+
+
+def test_a_new_document_under_the_cap_is_no_regression():
+    assert knowledge.criteria_regressions({}, {knowledge.STANDARDS: _lines(300)}) == []
+
+
+def test_a_new_document_over_the_cap_is_a_regression_from_zero():
+    (message,) = knowledge.criteria_regressions({}, {knowledge.DESIGN_STANDARDS: _lines(305)})
+    assert knowledge.DESIGN_STANDARDS in message
+    assert "305" in message and "0 at the base" in message and "cap 300" in message
+
+
+def test_a_document_that_grows_past_the_cap_is_a_regression_naming_both_counts():
+    base = {knowledge.STANDARDS: _lines(290)}
+    (message,) = knowledge.criteria_regressions(base, {knowledge.STANDARDS: _lines(301)})
+    assert knowledge.STANDARDS in message and "301" in message and "290" in message
+
+
+def test_a_document_already_over_the_cap_and_unchanged_is_not_a_regression():
+    both = {knowledge.STANDARDS: _lines(611)}
+    assert knowledge.criteria_regressions(both, both) == []
+
+
+def test_a_document_that_shrinks_but_stays_over_the_cap_is_not_a_regression():
+    base = {knowledge.STANDARDS: _lines(611)}
+    assert knowledge.criteria_regressions(base, {knowledge.STANDARDS: _lines(400)}) == []
+
+
+def test_a_document_over_the_cap_that_grows_further_is_a_regression():
+    base = {knowledge.STANDARDS: _lines(611)}
+    assert len(knowledge.criteria_regressions(base, {knowledge.STANDARDS: _lines(612)})) == 1
+
+
+def test_a_product_without_criteria_files_has_no_regressions():
+    assert knowledge.criteria_regressions({}, {}) == []
+
+
+def test_a_document_deleted_at_the_head_is_not_measured():
+    assert knowledge.criteria_regressions({knowledge.STANDARDS: _lines(611)}, {}) == []
+
+
+def test_splitting_one_document_into_two_over_the_cap_refuses_both():
+    base = {"BIG.md": _lines(610)}
+    head = {"A.md": _lines(305), "B.md": _lines(305)}
+    messages = knowledge.criteria_regressions(base, head)
+    assert [m.split()[0].strip("`:") for m in messages] == ["A.md", "B.md"]
+
+
+def test_the_over_cap_message_is_the_one_the_run_start_prints():
+    """One text for the cap (invariant 1): the regression names the same file and count."""
+    (over,) = knowledge.criteria_over_cap({"A.md": _lines(305)})
+    (regression,) = knowledge.criteria_regressions({}, {"A.md": _lines(305)})
+    assert regression.startswith(over.split(";")[0])

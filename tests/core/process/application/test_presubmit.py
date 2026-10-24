@@ -3,9 +3,9 @@ metrics that read it (`agentic.presubmit.checks`, `.duration`)."""
 
 from pathlib import Path
 
-from agentic.core.process.application.ports import CommandResult
+from agentic.core.process.application.ports import CommandResult, GitError
 from agentic.core.process.application.presubmit import CheckoutPresubmit
-from tests.fakes import MemoryCommands, MemoryWorkspace
+from tests.fakes import MemoryCommands, MemoryWorkspace, memory_ports
 
 PATH = Path("/memory/worktrees/GH-1.api")
 
@@ -47,3 +47,73 @@ def test_a_call_before_a_commit_leaves_no_invocation():
     gate, _ = presubmit(MemoryCommands(), workspace)
     reason = gate()
     assert reason is not None and gate.invocations == []
+
+
+# -- criteria documents the delivery makes longer than the cap (GH-334) --------------
+
+
+def _lines(count: int) -> str:
+    return "".join(f"rule {n}\n" for n in range(count))
+
+
+class UnreadableWorkspace(MemoryWorkspace):
+    def show(self, ref: str, relative: str) -> str | None:
+        raise GitError("cannot read")
+
+
+def criteria_gate(workspace: MemoryWorkspace | None = None, *, base: str | None = "base") -> tuple:
+    workspace = workspace or MemoryWorkspace()
+    workspace.moved.add(PATH)
+    ports = memory_ports()
+    ports = type(
+        "Ports",
+        (),
+        {"workspace": workspace, "commands": MemoryCommands(), "knowledge": ports.knowledge},
+    )()
+    gate = CheckoutPresubmit(ports, PATH, "base", {"tests": "pytest"}, 30.0, criteria_base=base)
+    return gate, workspace
+
+
+def put(workspace: MemoryWorkspace, ref: str, name: str, count: int) -> None:
+    workspace.files[(ref, name)] = _lines(count)
+
+
+def test_a_delivery_that_grows_a_criteria_document_past_the_cap_is_refused_with_file_and_count():
+    gate, workspace = criteria_gate()
+    put(workspace, "base", "DESIGN_STANDARDS.md", 290)
+    put(workspace, "head1", "DESIGN_STANDARDS.md", 611)
+    reason = gate()
+    assert reason is not None
+    assert "DESIGN_STANDARDS.md" in reason and "611" in reason and "290" in reason
+
+
+def test_a_regression_spends_the_same_budget_and_then_shows_in_the_developers_section():
+    gate, workspace = criteria_gate()
+    put(workspace, "base", "DESIGN_STANDARDS.md", 290)
+    for head in ("head1", "head2", "head3"):
+        put(workspace, head, "DESIGN_STANDARDS.md", 611)
+    assert gate() is not None and gate() is not None  # REFUSALS
+    assert gate() is None  # the budget is spent: let through
+    markdown = gate.markdown()
+    assert markdown is not None and "DESIGN_STANDARDS.md" in markdown and "611" in markdown
+
+
+def test_a_delivery_that_leaves_an_already_over_cap_document_alone_is_not_refused():
+    gate, workspace = criteria_gate()
+    put(workspace, "base", "DESIGN_STANDARDS.md", 611)
+    put(workspace, "head1", "DESIGN_STANDARDS.md", 611)
+    assert gate() is None
+    markdown = gate.markdown()
+    assert markdown is not None and "DESIGN_STANDARDS" not in markdown
+
+
+def test_a_gate_given_no_criteria_base_reads_no_document():
+    gate, workspace = criteria_gate(base=None)
+    put(workspace, "head1", "DESIGN_STANDARDS.md", 611)
+    assert gate() is None
+
+
+def test_a_git_error_while_reading_the_documents_reports_no_regression():
+    """The merge decision is the guarantee; the early warning never blocks on a failed read."""
+    gate, _ = criteria_gate(UnreadableWorkspace())
+    assert gate() is None

@@ -327,6 +327,12 @@ class ProductKnowledge(Protocol):
         text and holds only files the product has."""
         ...
 
+    def regressions(self, base_texts: dict[str, str], head_texts: dict[str, str]) -> list[str]:
+        """One message per criteria document over the line cap at the head and longer than
+        at the base (GH-334). Both are file name -> text and hold only files that exist
+        there; a file absent at the base counts 0."""
+        ...
+
     def standards(self, root: Path | None = None, whole: bool = True) -> str:
         """The engineering standards (ADR-0012). `whole` is the caller's choice: every
         verifier reads them whole, the Developer and the integrator through the index
