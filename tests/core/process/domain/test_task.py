@@ -55,6 +55,7 @@ def test_reducers_are_read_from_the_annotations():
         "actual_files",
         "parts",
         "tracker_checklist",
+        "tracker_checklist_posted",
         "split_issues",
         "fit_waived",
         "proposed_invariants",

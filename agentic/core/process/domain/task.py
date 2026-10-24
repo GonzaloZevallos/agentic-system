@@ -49,6 +49,9 @@ Status = Literal[
     # A task whose plan did not fit (ADR-0054): it built nothing and opened chained issues
     # instead, one per part. An end like `discarded`, with no pull request.
     "split",
+    # A task whose plan is only work on the issue tracker (GH-336): the checklist is posted
+    # for the human and the run ends with no pull request. An end like `split`.
+    "tracker_only",
 ]
 WAITING_ON_HUMAN: Status = "waiting_on_human"
 # The system's own subtask: the integrator joins the others on the task branch
@@ -573,7 +576,7 @@ class ReleasePatch(TypedDict, total=False):
 class FinishedPatch(TypedDict):
     """The two keys `rules.finished` writes together, spread into a bigger patch literal."""
 
-    status: Literal["discarded", "split"]
+    status: Literal["discarded", "split", "tracker_only"]
     finished_at: str
 
 
@@ -782,6 +785,14 @@ class EstimateRevision(TypedDict):
     source: Literal["human", "proposed"]
 
 
+class TrackerPosted(TypedDict):
+    """The record that the tracker checklist was posted (GH-336): `at` the ISO time and the
+    `hash` of the items (`rules.tracker_hash`)."""
+
+    at: str
+    hash: str
+
+
 class PartRecord(TypedDict):
     """One part of a split plan as the document keeps it (ADR-0054): the issue the
     partition opens. `depends_on` holds the numbers (1 is the first) of earlier parts."""
@@ -836,6 +847,9 @@ class TaskState(TaskInput, total=False):
     # What the human must do on the issue tracker (GH-336), one line per item, written by the
     # plan; replaced whole when a plan is written again. Absent when the plan has none.
     tracker_checklist: Annotated[list[str], last]
+    # The checklist comment, once posted (GH-336): when and the hash of the items it carried.
+    # Written after the comment succeeded; the poller reads it to skip reading GitHub.
+    tracker_checklist_posted: Annotated[TrackerPosted, last]
     # The issue URL of each part already opened, keyed by the part's number as text: written
     # part by part, so a `gh` cut in the middle resumes without opening a part twice.
     split_issues: Annotated[dict[str, str], merge]

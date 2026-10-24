@@ -193,6 +193,7 @@ def render(
         # a document of a plan without one is byte-identical to one written before. Read back
         # by `parse` under the same name: the state's key is the frontmatter's.
         **({"tracker_checklist": e} if (e := state.get("tracker_checklist")) else {}),
+        **({"tracker_checklist_posted": e} if (e := state.get("tracker_checklist_posted")) else {}),
         **({"fit_waived": True} if state.get("fit_waived") else {}),
         "prompts": state.get("prompts", {}),
         # The playbook section hash each role first ran with, and any later one

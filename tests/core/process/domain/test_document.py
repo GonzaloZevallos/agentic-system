@@ -1243,3 +1243,12 @@ def test_the_tracker_checklist_renders_and_parses_back_equal():
     text = document.render(_bare(tracker_checklist=_CHECKLIST))
     assert document.parse(text)["tracker_checklist"] == _CHECKLIST
     assert document.render(document.parse(text) | {"sections": {}}) == text
+
+
+def test_the_tracker_checklist_record_is_written_only_when_set_and_read_back():
+    """GH-336: `tracker_checklist_posted` has the same discipline as the checklist."""
+    bare = document.render(_bare())
+    assert "tracker_checklist_posted" not in bare
+    posted = {"at": "2026-10-24T10:00:00+00:00", "hash": "0123456789ab"}
+    text = document.render(_bare(tracker_checklist=_CHECKLIST, tracker_checklist_posted=posted))
+    assert document.parse(text)["tracker_checklist_posted"] == posted
