@@ -107,6 +107,10 @@ class FilesystemKnowledge:
         """The criteria documents past the line cap, one message each (ADR-0055)."""
         return knowledge.criteria_over_cap(texts)
 
+    def regressions(self, base_texts: dict[str, str], head_texts: dict[str, str]) -> list[str]:
+        """The criteria documents a delivery pushes past the line cap (GH-334)."""
+        return knowledge.criteria_regressions(base_texts, head_texts)
+
     def brief(self, root: Path | None = None) -> str | None:
         """The product's `BRIEF.md`, or None when it has not written one yet
         (ADR-0025). No system default: unlike `standards`, absent is a fact `cli.py`

@@ -65,6 +65,8 @@ from agentic.core.process.domain.task import (
     TaskState,
 )
 
+# What `MemoryWorkspace.merge_base` answers for a pair a test did not script (GH-334).
+MERGE_BASE = "e" * 40
 VOCAB = {"touches_ui": "UI", "touches_copy": "copy"}
 
 
@@ -206,6 +208,9 @@ class MemoryKnowledge:
 
     def over_cap(self, texts: dict[str, str]) -> list[str]:
         return knowledge.criteria_over_cap(texts)
+
+    def regressions(self, base_texts: dict[str, str], head_texts: dict[str, str]) -> list[str]:
+        return knowledge.criteria_regressions(base_texts, head_texts)
 
     def standards(self, root: Path | None = None, whole: bool = True) -> str:
         self.standards_from = root
@@ -582,6 +587,11 @@ class MemoryWorkspace:
         # `None`, unread -- and each ask, in order. (`conflicts` is the merge-refusal set.)
         self.conflict_answers: dict[tuple[str, str], bool | None] = {}
         self.conflict_probes: list[tuple[str, str]] = []
+        # GH-334: `merge_base`'s answer per `(left, right)` -- an unscripted pair answers
+        # `MERGE_BASE` -- and each ask; `merge_base_error` makes it raise `GitError`.
+        self.merge_bases: dict[tuple[str, str], str] = {}
+        self.merge_base_asks: list[tuple[str, str]] = []
+        self.merge_base_error: str | None = None
         # The `lease` every `push` received, in order (the failed ones too); `remote_tips`
         # is what `remote_tip` answers per branch (absent is `None`, the remote has none),
         # `remote_tip_error` makes it raise `GitError`, and `remote_tip_calls` is each ask.
@@ -983,6 +993,12 @@ class MemoryWorkspace:
     def contains(self, head: str, master: str) -> Containment:
         self.contains_calls.append((head, master))
         return self.containment.get((head, master), self.contains_answer)
+
+    def merge_base(self, left: str, right: str) -> str:
+        self.merge_base_asks.append((left, right))
+        if self.merge_base_error is not None:
+            raise GitError(self.merge_base_error)
+        return self.merge_bases.get((left, right), MERGE_BASE)
 
     def merge_conflicts(self, head: str, master: str) -> bool | None:
         self.conflict_probes.append((head, master))

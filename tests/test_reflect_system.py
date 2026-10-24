@@ -215,3 +215,17 @@ def test_the_poller_launches_reflect_for_a_closed_escalation_and_not_for_an_open
     lines = poll.reflect_lines(cfg, ports, launcher, "agentic")
     assert lines == ["agentic: poll: reflect 1 task(s) -> pid 4242"]
     assert launcher.spawned == [["agentic", "reflect", "--all", "--product-dir", str(tmp_path)]]
+
+
+def test_a_task_closed_by_its_slices_is_not_a_decision_to_reflect_on(tmp_path):
+    ports = memory_ports()
+    _started(ports)
+    _escalated(ports, 7, OPEN)
+    closed = {"status": "ready_for_review", "closed_at": "2026-10-05T10:00:00+00:00"}
+    ports.documents.record_closure("GH-7", {**closed, "delivery_outcome": "closed"})
+    cfg = Configuration(product_dir=tmp_path)
+    assert [d["id"] for d in reflect_run.pending(cfg, ports)] == ["GH-7"]  # a judged close
+    ports.documents.record_closure(
+        "GH-7", {"delivery_outcome": None, "closed_by_slices": ["https://x/pull/3"]}
+    )
+    assert reflect_run.pending(cfg, ports) == []

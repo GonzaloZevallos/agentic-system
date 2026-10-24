@@ -306,23 +306,24 @@ def test_brief_refusal_matches_case_insensitively_and_strips_one_trailing_colon(
     assert knowledge.brief_refusal(shouted) is None
 
 
-def test_brief_refusal_rejects_over_the_word_cap():
+def test_brief_refusal_accepts_a_long_brief_with_the_four_sections():
+    # GH-334: the Brief has no size limit, only a shape.
     long_job = "- " + " ".join(f"word{i}" for i in range(600))
-    over_cap = VALID_BRIEF.replace(
+    long_brief = VALID_BRIEF.replace(
         "- When a member skips two weeks, I want a flag, so I can call them.", long_job
     )
-    reason = knowledge.brief_refusal(over_cap)
-    assert reason is not None
-    assert "words (cap 500)" in reason and "BRIEF.md" in reason
+    assert len(long_brief.split()) > 600
+    assert knowledge.brief_refusal(long_brief) is None
 
 
-def test_brief_refusal_strips_fenced_blocks_before_counting_words():
-    fenced_code = "```\n" + " ".join(f"word{i}" for i in range(600)) + "\n```\n"
-    padded = VALID_BRIEF.replace(
-        "Gym owners cannot tell if a member is about to churn.",
-        "Gym owners cannot tell if a member is about to churn.\n\n" + fenced_code,
+def test_brief_refusal_still_rejects_a_long_brief_missing_a_section():
+    long_job = "- " + " ".join(f"word{i}" for i in range(600))
+    long_brief = VALID_BRIEF.replace(
+        "- When a member skips two weeks, I want a flag, so I can call them.", long_job
     )
-    assert knowledge.brief_refusal(padded) is None
+    missing = long_brief.replace("## Out of scope\n\nPayment processing.\n", "")
+    reason = knowledge.brief_refusal(missing)
+    assert reason is not None and "Out of scope" in reason
 
 
 def _lines(count: int) -> str:
@@ -357,3 +358,56 @@ def test_messages_follow_the_input_order_and_skip_the_documents_within_the_cap()
     }
     messages = knowledge.criteria_over_cap(texts)
     assert [m.split()[0].strip("`:") for m in messages] == [knowledge.DESIGN_STANDARDS, "OTHER.md"]
+
+
+def test_a_new_document_under_the_cap_is_no_regression():
+    assert knowledge.criteria_regressions({}, {knowledge.STANDARDS: _lines(300)}) == []
+
+
+def test_a_new_document_over_the_cap_is_a_regression_from_zero():
+    (message,) = knowledge.criteria_regressions({}, {knowledge.DESIGN_STANDARDS: _lines(305)})
+    assert knowledge.DESIGN_STANDARDS in message
+    assert "305" in message and "0 at the base" in message and "cap 300" in message
+
+
+def test_a_document_that_grows_past_the_cap_is_a_regression_naming_both_counts():
+    base = {knowledge.STANDARDS: _lines(290)}
+    (message,) = knowledge.criteria_regressions(base, {knowledge.STANDARDS: _lines(301)})
+    assert knowledge.STANDARDS in message and "301" in message and "290" in message
+
+
+def test_a_document_already_over_the_cap_and_unchanged_is_not_a_regression():
+    both = {knowledge.STANDARDS: _lines(611)}
+    assert knowledge.criteria_regressions(both, both) == []
+
+
+def test_a_document_that_shrinks_but_stays_over_the_cap_is_not_a_regression():
+    base = {knowledge.STANDARDS: _lines(611)}
+    assert knowledge.criteria_regressions(base, {knowledge.STANDARDS: _lines(400)}) == []
+
+
+def test_a_document_over_the_cap_that_grows_further_is_a_regression():
+    base = {knowledge.STANDARDS: _lines(611)}
+    assert len(knowledge.criteria_regressions(base, {knowledge.STANDARDS: _lines(612)})) == 1
+
+
+def test_a_product_without_criteria_files_has_no_regressions():
+    assert knowledge.criteria_regressions({}, {}) == []
+
+
+def test_a_document_deleted_at_the_head_is_not_measured():
+    assert knowledge.criteria_regressions({knowledge.STANDARDS: _lines(611)}, {}) == []
+
+
+def test_splitting_one_document_into_two_over_the_cap_refuses_both():
+    base = {"BIG.md": _lines(610)}
+    head = {"A.md": _lines(305), "B.md": _lines(305)}
+    messages = knowledge.criteria_regressions(base, head)
+    assert [m.split()[0].strip("`:") for m in messages] == ["A.md", "B.md"]
+
+
+def test_the_over_cap_message_is_the_one_the_run_start_prints():
+    """One text for the cap (invariant 1): the regression names the same file and count."""
+    (over,) = knowledge.criteria_over_cap({"A.md": _lines(305)})
+    (regression,) = knowledge.criteria_regressions({}, {"A.md": _lines(305)})
+    assert regression.startswith(over.split(";")[0])

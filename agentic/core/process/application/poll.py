@@ -34,8 +34,8 @@ from ..domain import landing as landing_rules
 from ..domain.adr_numbers import Ambiguous, Renaming
 from ..domain.boot import boot_verdict
 from ..domain.landing import LandingStepKind
-from ..domain.task import PullRequest, TaskState, apply
-from . import adr_collision, landing_plan, reflect_run, release
+from ..domain.task import INTEGRATION, PullRequest, TaskState, apply
+from . import adr_collision, landing_plan, preflight, reflect_run, release
 from . import escalate as escalate_module
 from .checkouts import task_base
 from .ports import (
@@ -390,6 +390,22 @@ def read_conflicts(
     return rules.merge_conflicts_from(pull_request, head, master, probe), "probe"
 
 
+def read_criteria(ports: Ports, head: str, master: str) -> tuple[str, ...] | None:
+    """`MergeFacts.criteria_regressed` for `head` against `master` (GH-334), shared by the
+    poller and the merge verb: what the head adds past the criteria caps compared with the
+    merge base, a local git fact. `merge_base` raises when either sha is unavailable, so a
+    document the base lacks (counts 0) is never mistaken for one that could not be read:
+    any `GitError` is `None`, unreadable, which the decision refuses."""
+    try:
+        base = ports.workspace.merge_base(head, master)
+        return tuple(preflight.criteria_regressed(ports, base, head))
+    except GitError:
+        return None
+
+
+CRITERIA_JOIN = " | "
+
+
 class StackUnreadable(Exception):
     """The task's base has no readable stack: this task's problem, never the round's."""
 
@@ -409,6 +425,14 @@ class MergeAssessment:
     conflict_source: ConflictSource | None = None
 
 
+@dataclass(frozen=True)
+class Abandoned:
+    """A pull request read closed unmerged (`rules.pr_abandoned`): nothing to merge. The read
+    it carries is the only one made for that task this round (GH-334)."""
+
+    pull_request: PullRequest
+
+
 def assess_merge(
     ports: Ports,
     task_id: str,
@@ -416,9 +440,9 @@ def assess_merge(
     number: int,
     eval_set: frozenset[int] | None,
     current_master: str,
-) -> MergeAssessment | None:
+) -> MergeAssessment | Abandoned:
     """`rules.auto_merge_decision` over the facts the poller has, shared by `gather_merges`
-    and `landing.land` so both decide the same way. `None` for a pull request closed
+    and `landing.land` so both decide the same way. `Abandoned` for a pull request closed
     unmerged; an unreadable one reads as not open; `StackUnreadable` for a base the stack
     cannot be read at. The pull request is read here, once."""
     reference = raw.get("pull_request")
@@ -427,7 +451,7 @@ def assess_merge(
     except (ValueError, OSError):
         pull_request = None  # reads as not open: refused by the decision, with its line
     if pull_request is not None and rules.pr_abandoned(pull_request.state):
-        return None
+        return Abandoned(pull_request)
     facts = _merge_facts(task_id, raw, pull_request, eval_set, number, current_master)
     try:
         declared = ports.stack.ci(task_base(raw, ports))
@@ -435,6 +459,15 @@ def assess_merge(
         raise StackUnreadable(str(exc)) from exc
     facts = replace(facts, adr_collision=_adr_collision(ports, raw, facts, current_master))
     decision = rules.auto_merge_decision(replace(facts, ci_required=declared))
+    if facts.pr_head is not None and rules.criteria_probe_wanted(
+        replace(facts, ci_required=declared)
+    ):
+        # GH-334: a head that grows a criteria document past its cap is refused before the
+        # findings, the conflict and the CI. Git is asked only now, like the conflict probe.
+        facts = replace(
+            facts, criteria_regressed=read_criteria(ports, facts.pr_head, current_master)
+        )
+        decision = rules.auto_merge_decision(replace(facts, ci_required=declared))
     unread = False
     source: ConflictSource | None = None
     if (
@@ -457,6 +490,65 @@ def assess_merge(
     return MergeAssessment(
         facts, decision, report, pull_request, unread, source if facts.conflicts else None
     )
+
+
+def _abandoned_by_slices(
+    ports: Ports,
+    cfg: Configuration,
+    task_id: str,
+    raw: TaskState,
+    number: int,
+    reference: str,
+    master: str,
+    now: datetime,
+    out: list[str],
+    reruns: list[int] | None,
+) -> None:
+    """A task whose pull request closed unmerged and which landed slices (GH-334): git's
+    ancestry of each unit's `reviewed_head` on `master` decides (`landing.abandoned_by_slices`).
+    Every unit landed: the document closes (`closed_at`, `closed_by_slices`, never a
+    `delivery_outcome`). Work left: the issue is a candidate for a fresh run. A task with no
+    `landed_slices` record reads no git at all."""
+    landed = raw.get("landed_slices")
+    if not landed:
+        return
+    units = [name for name in raw.get("subtasks", {}) if name != INTEGRATION]
+    heads = landing_plan.reviewed_heads(raw, units)
+    ancestry: dict[str, bool | None] = {}
+    for unit in units:
+        if unit not in heads:
+            ancestry[unit] = False
+            continue
+        try:
+            ancestry[unit] = ports.workspace.is_ancestor(cfg.product_dir, heads[unit], master)
+        except GitError:
+            ancestry[unit] = None
+    verdict = landing_rules.abandoned_by_slices(
+        units,
+        ancestry,
+        pr_abandoned=True,
+        status=raw.get("status"),
+        escalated=raw.get("escalated"),
+        pull_request=raw.get("pull_request"),
+        abandoned_ref=reference,
+    )
+    if verdict == "close":
+        refs = landing_rules.slice_refs(landed)
+        try:
+            ports.documents.record_closure(
+                task_id, landing_rules.slices_closed(refs, now.isoformat())
+            )
+        except (ValueError, OSError) as exc:
+            out.append(f"agentic: poll: #{number} -> not closed: {exc}")
+            return
+        labels = ", ".join(landing_rules.pull_request_label(ref) for ref in refs)
+        out.append(
+            f"agentic: poll: #{number} -> closed: every unit landed through slices ({labels})"
+        )
+    elif verdict == "rerun" and reruns is not None:
+        left = ", ".join(unit for unit in units if ancestry[unit] is False)
+        reruns.append(number)
+        out.append(f"agentic: poll: #{number} -> fresh run: slices left {left}")
 
 
 def _adr_collision(
@@ -511,6 +603,7 @@ def gather_merges(
     now: datetime | None = None,
     busy: frozenset[str] = frozenset(),
     cfg: Configuration | None = None,
+    reruns: list[int] | None = None,
 ) -> list[int]:
     """Every delivered, unclosed task `rules.auto_merge_decision` finds worth a merge
     child -- `merge` or `run_checks` -- and a line appended to `lines` for each one it
@@ -533,7 +626,9 @@ def gather_merges(
     `not_ready` task whose reopened landing lost its resume child (`landing.resume_owed` at
     `now`, the round's time) is a `lands` candidate too (GH-242), as is a stranded diagnose;
     both have no step, so they are `land_model`. A task is in `found` or in `lands`, never
-    both."""
+    both. A task whose pull request closed unmerged after slices landed for it (`cfg` given)
+    is closed in its document when git says every unit landed, or its issue goes into
+    `reruns` (when given) when work is left; each says so in one line (GH-334)."""
     out = lines if lines is not None else []
     now = now or datetime.now(UTC)
     if current_master is None:
@@ -558,8 +653,23 @@ def gather_merges(
                 f"agentic: poll: auto-merge #{number} -> left to the human: stack_unreadable"
             )
             continue
-        if assessed is None:
-            continue  # closed unmerged: nothing to merge, nothing to say, nothing written
+        if isinstance(assessed, Abandoned):
+            # Closed unmerged: nothing to merge. Silent and unwritten unless slices landed
+            # for it (GH-334), which this very read decides, without asking the tracker again.
+            if cfg is not None:
+                _abandoned_by_slices(
+                    ports,
+                    cfg,
+                    task_id,
+                    raw,
+                    number,
+                    str(reference),
+                    current_master,
+                    now,
+                    out,
+                    reruns,
+                )
+            continue
         facts, decision, report, pull_request = (
             assessed.facts,
             assessed.decision,
@@ -579,6 +689,8 @@ def gather_merges(
                 pr_head = pull_request.head_oid if pull_request is not None else None
                 summary = presubmit.failed_checks_summary(_recorded(raw, "merge_checks"), pr_head)
                 line += f" ({summary})" if summary else ""
+            if decision.reason == "criteria_over_cap":
+                line += f" ({CRITERIA_JOIN.join(facts.criteria_regressed or ())})"
             if decision.reason == "ci_failed" and facts.ci_verdict is not None:
                 names = ", ".join(check.name for check in facts.ci_verdict.failing)
                 line += f" ({names})"
@@ -981,6 +1093,7 @@ def execute(
     sleep: Callable[[float], None] = time.sleep,
     land_kinds: Mapping[int, rules.RunKind] | None = None,
     crash_retakes: Mapping[int, CrashRetake] | None = None,
+    reruns: frozenset[int] = frozenset(),
 ) -> list[str]:
     """Carries out this round's actions, in the order `rules.poll_plan` already fixed:
     a detached `agentic close|resume|run` child each, through `launcher.spawn` alone --
@@ -1002,7 +1115,10 @@ def execute(
     candidates of this round; an issue not in it is `land_model`, the kind that counts).
     A `retake` whose `reason` is `crash` (GH-308) posts `RETAKEN_AFTER_CRASH` with the text
     `rules.crash_retake_comment` formats from `crash_retakes[issue]`, counted by
-    `gather_retakes` and never here; a reboot retake is as it was."""
+    `gather_retakes` and never here; a reboot retake is as it was. A `launch` of an issue in
+    `reruns` (a task whose slices landed with work left, GH-334) is a fresh run, `run
+    --fresh`: the same archive-and-start-over the landing's restart spawns, on the launch's
+    own calendar."""
     product = ports.stack.product()
     product_dir = str(cfg.product_dir)
     total_attempts = len(rules.LAUNCH_SCHEDULE)
@@ -1084,7 +1200,8 @@ def execute(
             lines.append(f"agentic: poll: land #{action.issue} -> pid {pid}")
         elif action.kind == "launch":
             registry.record_launch(product, action.issue, now)
-            argv = _argv(argv0, "run", action.issue, product_dir, "--detach")
+            fresh = ("--fresh",) if action.issue in reruns else ()
+            argv = _argv(argv0, "run", action.issue, product_dir, *fresh, "--detach")
             try:
                 pid = launcher.spawn(argv)
             except OSError as exc:
@@ -1209,6 +1326,7 @@ def run_once(
         merges: list[int] = []
         merge_lines: list[str] = []
         lands: list[rules.LandCandidate] = []
+        reruns: list[int] = []
         if awaiting_merge(ports):
             merges = gather_merges(
                 ports,
@@ -1221,6 +1339,20 @@ def run_once(
                 now,
                 busy,
                 cfg,
+                reruns,
+            )
+        for number in reruns:
+            # A fresh run is a launch of an issue that already has a document: the launch
+            # calendar is what keeps a child that never registered from restarting every round.
+            attempt = registry.launch_attempts(product, number)
+            launches.append(
+                rules.LaunchCandidate(
+                    number,
+                    False,
+                    attempt.since if attempt is not None else None,
+                    attempt.prior if attempt is not None else 0,
+                    len(rules.LAUNCH_SCHEDULE),
+                )
             )
         notes = [*spend_notes, *_upstream_notes(upstream.cache_info().currsize > 0, upstream)]
         plan = rules.poll_plan(
@@ -1249,6 +1381,7 @@ def run_once(
             sleep,
             {c.issue: c.kind for c in lands},
             crash_retakes,
+            frozenset(reruns),
         )
         deferral_lines = [deferred_line(d) for d in plan.deferred]
     # Outside the registry's exclusive section: reflecting takes no slot of the cap and

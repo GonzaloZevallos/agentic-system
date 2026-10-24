@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from ..domain.task import TaskState
 from . import landing_plan
 from .checkouts import task_base
 from .landing_plan import LandingContext
+from .poll import read_criteria
 from .ports import GitError, MergeCallFailed, TrackerUnreachable
 from .presubmit import CheckoutPresubmit
 from .release import release_checkout
@@ -269,6 +271,10 @@ def _decide(
         ci_unreadable=ci_unreadable,
         ci_waited_s=ci_waited_s,
     )
+    if rules.criteria_probe_wanted(facts):
+        # GH-334: a slice is a merge like any other; it must not push a criteria document
+        # past its cap either (the incident, apostrophe PR #357, was a slice merge).
+        facts = replace(facts, criteria_regressed=read_criteria(ports, head, master))
     decision = rules.auto_merge_decision(facts)
     if decision.kind == "wait":
         context.log(f"agentic: land: {context.task_id}: slice waits for its CI")

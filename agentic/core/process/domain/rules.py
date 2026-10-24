@@ -3120,6 +3120,8 @@ MergeRefusal = Literal[
     "not_approved",
     "head_not_reviewed",
     "perf_unverified",
+    "criteria_over_cap",
+    "criteria_unreadable",
     "open_findings_blocking",
     "open_findings",
     "eval_set",
@@ -3149,6 +3151,13 @@ MergeRefusal = Literal[
   QA Performance run is not `approved`, or it was not measured on the pull request's own head
   (a missing or short sha fails closed). Right after `head_not_reviewed`, so a head nobody
   reviewed is never reported as a performance problem. The landing leaves it to the human.
+- `criteria_over_cap` (GH-334): the head puts a criteria document past `CRITERIA_MAX_LINES`
+  while making it longer than the merge base had it (`MergeFacts.criteria_regressed`, the
+  messages naming file and count). The state master already holds is not refused, only what
+  the pull request adds. Right after `perf_unverified`, before any finding. Left to the human.
+- `criteria_unreadable` (GH-334): the criteria documents could not be read at the merge base
+  or the head (`criteria_regressed is None`), so nothing proves the head adds no excess. Fails
+  closed, same place and same landing step.
 - `open_findings_blocking`: a `blocking` finding is still open. Checked before
   `open_findings`: a blocking one is never filed as a follow-up (GH-239).
 - `open_findings`: an `important` finding of the task is still open with neither the final
@@ -3199,7 +3208,10 @@ class MergeFacts:
     clean, `True` a definite conflict. The `perf_*` facts (GH-318, ADR-0060) come only from
     `perf_merge_facts`: whether the plan convened QA Performance, the latest QA Performance
     run's verdict and the full sha it measured; a `MergeFacts` built without them is not
-    convened, and decides as it always did.
+    convened, and decides as it always did. `criteria_regressed` (GH-334) is the messages of the
+    criteria documents the head pushes past their cap (`application.preflight.criteria_regressed`
+    against the merge base): `()` none, which is also what a `MergeFacts` built without it
+    reads, and `None` unreadable.
     `ci_untrusted` (GH-239) is `None` when `touched_paths` is unknown and `True` when the
     diff touches the CI's own definition (`CI_DEFINITION_PREFIX`): a CI whose definition the
     change itself could have edited proves nothing, so it never decides `merge`.
@@ -3241,6 +3253,7 @@ class MergeFacts:
     perf_convened: bool = False
     perf_verdict: Literal["approved", "returned", "unverified"] | None = None
     perf_head: str | None = None
+    criteria_regressed: tuple[str, ...] | None = ()
 
 
 @dataclass(frozen=True)
@@ -3315,7 +3328,8 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     """The one place the conditions of an automatic merge live (GH-178, ADR-0045); no
     adapter, CLI or poller re-derives any of them. Checked in this order and refused at the
     first that fails: `not_ready`, `pr_not_open`, `adr_number_taken`, `not_approved`,
-    `head_not_reviewed`, `perf_unverified` (only when `perf_convened`), `open_findings_blocking`,
+    `head_not_reviewed`, `perf_unverified` (only when `perf_convened`), `criteria_unreadable`
+    (`criteria_regressed is None`), `criteria_over_cap` (it is not empty), `open_findings_blocking`,
     `open_findings`, `eval_set_unreadable`, `eval_set`, `merge_conflict` (only when
     `conflicts is True`; unread or clean change nothing), `merge_failed`, then, only when the
     product declares its CI (`ci_required`): `ci_unreadable`, a `wait` for a head that is not the
@@ -3348,6 +3362,10 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
         and same_commit(facts.perf_head, facts.pr_head)
     ):
         return MergeDecision("refuse", "perf_unverified")
+    if facts.criteria_regressed is None:
+        return MergeDecision("refuse", "criteria_unreadable")
+    if facts.criteria_regressed:
+        return MergeDecision("refuse", "criteria_over_cap")
     if facts.open_blocking > 0:
         return MergeDecision("refuse", "open_findings_blocking")
     if (
@@ -3410,6 +3428,16 @@ def conflict_probe_wanted(facts: MergeFacts) -> bool:
     when no refusal ahead of the conflict already rules the pull request out."""
     return auto_merge_decision(replace(facts, conflicts=True)) == MergeDecision(
         "refuse", "merge_conflict"
+    )
+
+
+def criteria_probe_wanted(facts: MergeFacts) -> bool:
+    """Whether the criteria read is worth running for `facts` (GH-334): the only answer to
+    that question, derived from the order of `auto_merge_decision`. It is worth it exactly
+    when a regression would be the decision, that is, when no refusal ahead of
+    `criteria_over_cap` already rules the pull request out."""
+    return auto_merge_decision(replace(facts, criteria_regressed=("x",))) == MergeDecision(
+        "refuse", "criteria_over_cap"
     )
 
 

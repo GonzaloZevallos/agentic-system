@@ -16,7 +16,7 @@ and writes the files.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -70,15 +70,11 @@ BRIEF_HEADINGS = (
     "## Constraints",
     "## Out of scope",
 )
-# One page. A constant, not a guess: `preflight` spends nothing before this is checked,
-# and every role that reads the product knowledge pays this cost on every call (ADR-0025).
-BRIEF_MAX_WORDS = 500
 # What a human copies into `BRIEF.md` and commits: a shipped, valid example, the same
 # `TEMPLATE`/`not_declared` pattern `stack.py` already uses (ADR-0016, second addendum).
 DEFAULT_BRIEF_TEMPLATE = Path(__file__).resolve().parent / "brief.md"
 
 _BRIEF_HEADING_LINE = re.compile(r"^##[ \t]+(?P<title>.*?)[ \t]*$", re.M)
-_FENCED_BLOCK = re.compile(r"^```.*?^```[ \t]*$", re.M | re.S)
 
 _SLUG = SLUG  # one slug rule for the whole system: capabilities, subtasks
 _H2 = re.compile(r"^## ", re.M)
@@ -162,6 +158,19 @@ def check_slug(capability: str) -> None:
         )
 
 
+def _line_count(text: str) -> int:
+    """The one place a criteria document's lines are counted."""
+    return len(text.splitlines())
+
+
+def _cap_message(name: str, count: int, note: str = "") -> str:
+    """The one text of the cap: file, count and cap, then what to do about it."""
+    return (
+        f"`{name}`: {count} lines (cap {CRITERIA_MAX_LINES}){note}; cut the file or split it "
+        "into `## ` sections"
+    )
+
+
 def criteria_over_cap(texts: dict[str, str]) -> list[str]:
     """One message per criteria document strictly over `CRITERIA_MAX_LINES`, in input order.
 
@@ -169,10 +178,22 @@ def criteria_over_cap(texts: dict[str, str]) -> list[str]:
     or system-default file is never measured, and the caller never passes it. Lines are
     counted per document, never summed across them."""
     return [
-        f"`{name}`: {count} lines (cap {CRITERIA_MAX_LINES}); cut the file or split it into "
-        "`## ` sections"
+        _cap_message(name, count)
         for name, text in texts.items()
-        if (count := len(text.splitlines())) > CRITERIA_MAX_LINES
+        if (count := _line_count(text)) > CRITERIA_MAX_LINES
+    ]
+
+
+def criteria_regressions(base: Mapping[str, str], head: Mapping[str, str]) -> list[str]:
+    """One message per criteria document of `head` that is over the cap and longer than at
+    `base`, in `head`'s order (GH-334): the verdict on a delivery, which is judged by what
+    it adds and not by the state it inherited. A document absent from `base` counts 0; one
+    absent from `head` (deleted) is not measured. The cap is per document."""
+    return [
+        _cap_message(name, count, f", {before} at the base")
+        for name, text in head.items()
+        if (count := _line_count(text)) > CRITERIA_MAX_LINES
+        and count > (before := _line_count(base[name]) if name in base else 0)
     ]
 
 
@@ -321,16 +342,10 @@ def _has_content(section: str) -> bool:
     return any(line.strip() for line in section.split("\n"))
 
 
-def _brief_word_count(text: str) -> int:
-    """`len(text.split())` over the text with fenced code blocks stripped first, so a
-    pasted snippet does not count against the cap it is quoting."""
-    return len(_FENCED_BLOCK.sub("", text).split())
-
-
 def brief_refusal(text: str) -> str | None:
     """Why `BRIEF.md` cannot be used, or None when its shape is valid (ADR-0025): the
     four headings present as top-level `##` lines, each followed by at least one
-    non-whitespace line, and the whole file under `BRIEF_MAX_WORDS`. A pure function
+    non-whitespace line. The Brief has no size limit (ADR-0061). A pure function
     over text -- no filesystem, no port -- so `cli.py` is free to join it with whatever
     read `ProductKnowledge.brief` returns."""
     sections = _brief_sections(text)
@@ -345,7 +360,4 @@ def brief_refusal(text: str) -> str | None:
             f"{BRIEF} is missing or empty: {', '.join(missing)}. All four sections are "
             f"mandatory, each with at least one line of content:\n\n{template}"
         )
-    words = _brief_word_count(text)
-    if words > BRIEF_MAX_WORDS:
-        return f"{BRIEF}: {words} words (cap {BRIEF_MAX_WORDS}). Trim it to one page:\n\n{template}"
     return None

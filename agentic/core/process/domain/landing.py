@@ -28,9 +28,11 @@ from .task import (
     Carried,
     DiagnosisVerdict,
     FailureReason,
+    LandedSlice,
     LandedSliceRef,
     LandingEntry,
     ReleasePatch,
+    SlicesClosedPatch,
     Subtask,
     SubtaskStatus,
     TaskState,
@@ -243,7 +245,14 @@ def landing_step(
     if spent.verdict_sync_due:
         return _verdict_sync(step, exhausted, spent)
     match refusal:
-        case "not_ready" | "pr_not_open" | "eval_set" | "perf_unverified":
+        case (
+            "not_ready"
+            | "pr_not_open"
+            | "eval_set"
+            | "perf_unverified"
+            | "criteria_over_cap"
+            | "criteria_unreadable"
+        ):
             return step("none")
         case "eval_set_unreadable" | "ci_missing" | "ci_unreadable":
             waited = spent.waited_s
@@ -496,6 +505,59 @@ def slice_landed(units: Iterable[str], ancestry: Mapping[str, bool]) -> bool:
     ancestry was not read, or no unit at all, has not landed."""
     names = tuple(units)
     return bool(names) and all(ancestry.get(name) is True for name in names)
+
+
+def abandoned_by_slices(
+    units: Sequence[str],
+    ancestry: Mapping[str, bool | None],
+    *,
+    pr_abandoned: bool,
+    status: str | None,
+    escalated: str | None,
+    pull_request: str | None,
+    abandoned_ref: str,
+) -> Literal["close", "rerun"] | None:
+    """What the poller does with a task whose pull request was read closed unmerged
+    (`pr_abandoned`) and which landed slices (GH-334). `units` are the plan's subtasks,
+    `integration` excluded; `ancestry` says per unit whether its `reviewed_head` is an
+    ancestor of master (`None`: git could not be read). Git's word, never `landed_slices`
+    alone: any unit with unread ancestry, or no unit at all, decides nothing, so an unread
+    ancestry never closes. `close` when every unit landed. `rerun` otherwise, only for a
+    task still `ready_for_review`, not escalated, whose document points at the very pull
+    request read closed; a task a person or another path moved on is left alone."""
+    if not pr_abandoned or not units:
+        return None
+    states = [ancestry.get(unit) for unit in units]
+    if any(state is None for state in states):
+        return None
+    if all(state is True for state in states):
+        return "close"
+    if status == "ready_for_review" and not escalated and pull_request == abandoned_ref:
+        return "rerun"
+    return None
+
+
+def slice_refs(landed: Sequence[LandedSlice] | None) -> list[str]:
+    """The pull requests of the slices in a `landed_slices` list, in the order they landed;
+    the unit ids of a record that kept no pull request. Whatever a hand-edited document holds
+    that is not a record is skipped."""
+    refs: list[str] = []
+    for item in landed or ():
+        if not isinstance(item, Mapping):
+            continue
+        reference, units = item.get("pull_request"), item.get("units")
+        if isinstance(reference, str) and reference:
+            refs.append(reference)
+        elif isinstance(units, list):
+            refs.extend(unit for unit in units if isinstance(unit, str))
+    return refs
+
+
+def slices_closed(refs: Sequence[str], at: str) -> SlicesClosedPatch:
+    """The document patch that closes a task whose every unit landed through slices (GH-334):
+    `closed_at` and `closed_by_slices` (the slices' pull requests). Never `delivery_outcome`:
+    nobody judged a delivery, so no reader may count it as one."""
+    return {"closed_at": at, "closed_by_slices": list(refs)}
 
 
 def slice_facts(

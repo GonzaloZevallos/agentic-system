@@ -327,6 +327,12 @@ class ProductKnowledge(Protocol):
         text and holds only files the product has."""
         ...
 
+    def regressions(self, base_texts: dict[str, str], head_texts: dict[str, str]) -> list[str]:
+        """One message per criteria document over the line cap at the head and longer than
+        at the base (GH-334). Both are file name -> text and hold only files that exist
+        there; a file absent at the base counts 0."""
+        ...
+
     def standards(self, root: Path | None = None, whole: bool = True) -> str:
         """The engineering standards (ADR-0012). `whole` is the caller's choice: every
         verifier reads them whole, the Developer and the integrator through the index
@@ -876,6 +882,13 @@ class Workspace(Protocol):
         after fetching both shas: `yes` or `no`, and `unknown` for anything that could not
         be read -- a sha that cannot be fetched, a git failure, a missing git. Never
         raises, and `unknown` is never `yes`: the caller counts it as stale."""
+        ...
+
+    def merge_base(self, left: str, right: str) -> str:
+        """The full sha of the best common ancestor of the commits `left` and `right`
+        (GH-334), after fetching both shas: where a pull request branched from the master it
+        would merge into. Raises `GitError` when either sha cannot be fetched or git fails, so
+        a caller can tell an unreadable base from a file the base does not hold."""
         ...
 
     def merge_conflicts(self, head: str, master: str) -> bool | None:

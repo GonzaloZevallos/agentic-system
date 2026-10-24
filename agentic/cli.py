@@ -580,7 +580,7 @@ def main() -> None:
                 if (warning := no_forbidden(ports, "HEAD")) is not None:
                     print(f"agentic: {warning}", file=sys.stderr)
                 _warn_over_cap(ports, "HEAD")
-                # A malformed or over-cap Brief refuses `run` outright (ADR-0025): an
+                # A malformed Brief refuses `run` outright (ADR-0025): an
                 # absent one is `no_brief`'s fact above, never this one's.
                 if (problem := brief_refusal(ports)) is not None:
                     raise ValueError(problem)
@@ -600,7 +600,7 @@ def main() -> None:
             if (warning := no_forbidden(ports, base)) is not None:
                 print(f"agentic: {warning}", file=sys.stderr)
             _warn_over_cap(ports, base)
-            # A malformed or over-cap Brief only prints on `resume` and the run
+            # A malformed Brief only prints on `resume` and the run
             # proceeds: a human's edit to his own file must never strand every paused
             # task at the boot gate with no task named (ADR-0003; ADR-0025).
             if (problem := brief_refusal(ports)) is not None:

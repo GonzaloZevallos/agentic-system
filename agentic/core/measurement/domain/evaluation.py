@@ -169,6 +169,11 @@ AUTO_MERGED_REASON = (
 )
 
 
+# Why a task its slices carried to master has no score (GH-334): the system closed it, and
+# nobody judged a delivery -- never `False`.
+SLICES_REASON = "closed because every unit landed through slices (GH-334): no delivery was judged"
+
+
 @dataclass(frozen=True)
 class Score:
     """README.md 9's binary score for one task. `value` is `True` for a pull request
@@ -189,6 +194,8 @@ def score(document: TaskDocument, issue: int) -> Score:
     if not document.get("closed_at"):
         return Score(None, f"`agentic close --issue {issue}` has not run yet")
     outcome = document.get("delivery_outcome")
+    if outcome is None and document.get("closed_by_slices"):
+        return Score(None, SLICES_REASON)
     if outcome in LANDED_UNJUDGED:
         return Score(None, AUTO_MERGED_REASON)
     return Score(document.get("delivery_outcome") == "merged", None)

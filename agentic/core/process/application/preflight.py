@@ -126,19 +126,31 @@ def no_setup(ports: Ports) -> str | None:
     )
 
 
-def over_cap(ports: Ports, revision: str = "HEAD") -> list[str]:
-    """One message per criteria file the product holds at `revision` past the line cap
-    (GH-295, ADR-0055). A file that is absent or was deleted at `revision` reads None and
-    is never measured; the count itself is `knowledge`'s alone. Never a refusal: what to do
-    with the messages is the caller's."""
-    # The names come from the knowledge port, which owns them (ADR-0010, invariant 5); the
-    # system default of the standards is no file of the product's and is never read.
-    texts = {
+def criteria_texts(ports: Ports, revision: str) -> dict[str, str]:
+    """The criteria documents the product holds at `revision`, file name -> text. A file
+    that is absent or was deleted at `revision` reads None and is left out, so it is never
+    measured. The names come from the knowledge port, which owns them (ADR-0010, invariant
+    5); the system default of the standards is no file of the product's and is never read."""
+    return {
         name: text
         for name in ports.knowledge.criteria_files()
         if (text := ports.workspace.show(revision, name)) is not None
     }
-    return ports.knowledge.over_cap(texts)
+
+
+def over_cap(ports: Ports, revision: str = "HEAD") -> list[str]:
+    """One message per criteria file the product holds at `revision` past the line cap
+    (GH-295, ADR-0055); the count itself is `knowledge`'s alone. Never a refusal: what to
+    do with the messages is the caller's."""
+    return ports.knowledge.over_cap(criteria_texts(ports, revision))
+
+
+def criteria_regressed(ports: Ports, base: str, head: str) -> list[str]:
+    """One message per criteria file that is over the cap at `head` and longer than at
+    `base` (GH-334): the verdict the delivery gate and the merge decision share, the
+    count and the cap being `knowledge`'s alone. A `GitError` from either read goes to the
+    caller, which knows whether an unread document may pass."""
+    return ports.knowledge.regressions(criteria_texts(ports, base), criteria_texts(ports, head))
 
 
 def no_forbidden(ports: Ports, revision: str) -> str | None:

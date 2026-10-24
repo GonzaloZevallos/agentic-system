@@ -424,3 +424,34 @@ def test_exactly_the_cap_is_not_over_it():
     ports = memory_ports()
     ports.workspace.files[("HEAD", "CODING_STANDARDS.md")] = _lines(300)
     assert module.over_cap(ports) == []
+
+
+# -- criteria documents that a delivery makes longer than the cap (GH-334) -----------
+
+
+def test_a_document_grown_past_the_cap_between_base_and_head_is_a_regression():
+    ports = memory_ports()
+    ports.workspace.files[("base", "DESIGN_STANDARDS.md")] = _lines(290)
+    ports.workspace.files[("head", "DESIGN_STANDARDS.md")] = _lines(301)
+    (message,) = module.criteria_regressed(ports, "base", "head")
+    assert "DESIGN_STANDARDS.md" in message and "301" in message and "290" in message
+
+
+def test_a_document_absent_at_the_base_counts_zero_and_one_over_the_cap_is_refused():
+    ports = memory_ports()
+    ports.workspace.files[("head", "DESIGN_STANDARDS.md")] = _lines(305)
+    (message,) = module.criteria_regressed(ports, "base", "head")
+    assert "DESIGN_STANDARDS.md" in message
+
+
+def test_a_document_already_over_the_cap_at_the_base_and_not_longer_is_no_regression():
+    ports = memory_ports()
+    ports.workspace.files[("base", "DESIGN_STANDARDS.md")] = _lines(611)
+    ports.workspace.files[("head", "DESIGN_STANDARDS.md")] = _lines(611)
+    assert module.criteria_regressed(ports, "base", "head") == []
+
+
+def test_criteria_texts_skips_the_files_absent_at_the_revision():
+    ports = memory_ports()
+    ports.workspace.files[("abc", "DESIGN_STANDARDS.md")] = _lines(3)
+    assert module.criteria_texts(ports, "abc") == {"DESIGN_STANDARDS.md": _lines(3)}

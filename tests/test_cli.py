@@ -747,19 +747,29 @@ def test_a_malformed_brief_is_printed_on_resume_and_it_proceeds(monkeypatch, tmp
     assert seen["fn"] is cli._resume  # a warning, not a refusal: the resume proceeds
 
 
-def test_an_over_cap_brief_refuses_a_run_by_word_count(monkeypatch, tmp_path, capsys):
-    over_cap = VALID_BRIEF.replace(
+def test_a_long_brief_and_an_over_cap_criteria_file_do_not_refuse_a_run(
+    monkeypatch, tmp_path, capsys
+):
+    """GH-334, the apostrophe case: a 562-word valid BRIEF.md and a 611-line
+    DESIGN_STANDARDS.md at HEAD. The Brief has no cap; the criteria file is said."""
+    long_brief = VALID_BRIEF.replace(
         "Gym owners cannot tell who is about to churn.",
-        " ".join(f"word{i}" for i in range(600)),
+        " ".join(f"word{i}" for i in range(524)),
     )
+    assert len(long_brief.split()) == 562
     root = product(tmp_path, "p")
-    (root / "BRIEF.md").write_text(over_cap)
+    (root / "BRIEF.md").write_text(long_brief)
+    _commit_file(root, "DESIGN_STANDARDS.md", 611)
     monkeypatch.setattr(cli, "unfixed_stage0", lambda ports: None)
+    seen = capture_run(monkeypatch)
     monkeypatch.setattr("sys.argv", ["agentic", "run", "t", "d", "--product-dir", str(root)])
-    with pytest.raises(SystemExit) as info:
-        cli.main()
-    assert info.value.code == 2
-    assert "words (cap 500)" in capsys.readouterr().err
+
+    cli.main()  # raises on a refusal
+
+    error = capsys.readouterr().err
+    assert "agentic: `DESIGN_STANDARDS.md`: 611 lines (cap 300)" in error
+    assert "words" not in error
+    assert seen["task"]["title"] == "t"
 
 
 class FakeLock:

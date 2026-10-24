@@ -125,7 +125,9 @@ def task_figures(document: ScorecardDocument) -> TaskFigures:
         rework_usd=metrics.rework_cost_usd(document),
         failures_by_reason=metrics.failures_by_reason(document.get("failures", [])),
         status=document.get("status", "open"),
-        closed_at=document.get("closed_at"),
+        # A task its slices carried to master (GH-334) was closed without anyone judging a
+        # delivery: it counts as no delivery here, whatever else is read off it.
+        closed_at=None if document.get("closed_by_slices") else document.get("closed_at"),
         delivery_outcome=document.get("delivery_outcome"),
         human_commits=int(human_commits) if human_commits is not None else None,
         human_lines_changed=int(human_lines) if human_lines is not None else None,

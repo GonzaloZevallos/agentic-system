@@ -64,7 +64,11 @@ SUBTASK_RECORDED_AS = {"change_category": "return_category"}
 # diagnose rewrites in place (GH-257): the log whole, the escalation cleared.
 # `landed_slices` is the landing's own list of slices it merged ahead of the task's pull
 # request (GH-297): written whole through `record_closure` every time one lands.
-RECORD_KEYS: frozenset[str] = frozenset({"landing", "pause_log", "escalated", "landed_slices"})
+# `closed_by_slices` (GH-334) is the list of those slices' pull requests, written with the
+# task's `closed_at` when every unit landed through them.
+RECORD_KEYS: frozenset[str] = frozenset(
+    {"landing", "pause_log", "escalated", "landed_slices", "closed_by_slices"}
+)
 _LANDING_PLACEHOLDER = "<landing-flow-line>"
 # The record keys `render` writes as one flow line, swapped in for a placeholder: a list the
 # landing keeps about itself, which `record_closure` then replaces whole (GH-242, GH-297).

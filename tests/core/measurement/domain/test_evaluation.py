@@ -295,3 +295,8 @@ def test_a_role_that_ran_in_only_one_group_is_named_in_neither_list():
 def test_identical_groups_diverge_nowhere():
     a = [doc(prompts={"developer": "h1"}, playbooks={"developer": "pb"})]
     assert evaluation.fingerprint_divergence([a, a]) == ((), ())
+
+
+def test_a_task_closed_by_its_slices_has_no_score_not_a_failing_one():
+    document = {"closed_at": "t", "closed_by_slices": ["https://x/pull/3"]}
+    assert evaluation.score(document, 5) == evaluation.Score(None, evaluation.SLICES_REASON)

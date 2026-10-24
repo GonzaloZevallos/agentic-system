@@ -170,6 +170,9 @@ class _Rooted:
     def over_cap(self, texts):
         return self.inner.over_cap(texts)
 
+    def regressions(self, base_texts, head_texts):
+        return self.inner.regressions(base_texts, head_texts)
+
     def standards(self, root=None, whole=True):
         return self.inner.standards(self.root, whole)
 
