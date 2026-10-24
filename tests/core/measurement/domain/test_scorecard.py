@@ -477,3 +477,10 @@ def test_the_figures_are_n_a_when_no_closed_document_has_a_positive_estimate():
 
     assert card.cost_over_estimate.value is None and card.cost_over_estimate.denominator == 0
     assert card.files_over_estimate.value is None and card.files_over_estimate.denominator == 0
+
+
+def test_a_task_closed_by_its_slices_counts_as_no_delivery():
+    closed = scorecard.task_figures(doc(closed_at="t", closed_by_slices=["https://x/pull/3"]))
+    assert closed.closed_at is None and closed.delivery_outcome is None
+    built = scorecard.build([*judged("merged", 2), closed])
+    assert built.autonomy.denominator == 2

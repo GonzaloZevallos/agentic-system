@@ -363,3 +363,8 @@ def test_eval_compare_is_not_recommended_otherwise():
     comparisons = window.compare(boundary(3, 3), playbook(item("developer-1")))
 
     assert "agentic eval compare" not in summary(comparisons, gained=2)
+
+
+def test_a_task_closed_by_its_slices_is_left_out_of_the_segments():
+    sliced = {**task(1), "closed_by_slices": ["https://x/pull/3"]}
+    assert [t["id"] for s in window.segments([task(0), sliced], SLUG) for t in s.tasks] == ["GH-0"]
