@@ -502,11 +502,25 @@ class TechPlan(RoleOutput):
         "measure, each with its volume and budgets. Empty when not convened",
     )
 
+    tracker_checklist: list[str] = Field(
+        default_factory=list,
+        description="What the human must do on the issue tracker (post a verdict, close or "
+        "retitle issues), one line per item. Never a subtask: no role has `gh`. A task whose "
+        "only work is this has no subtasks, no parts and `estimated_files: 0`; it may also sit "
+        "next to subtasks. Empty when there is none",
+    )
+
     @model_validator(mode="after")
     def _scenarios_once(self) -> TechPlan:
         names = [s.name for s in self.performance]
         if len(set(names)) != len(names):
             raise ValueError("the plan names a performance scenario twice")
+        return self
+
+    @model_validator(mode="after")
+    def _checklist_lines(self) -> TechPlan:
+        for item in self.tracker_checklist:
+            _one_line(item, "a tracker checklist item")
         return self
 
 
@@ -789,6 +803,24 @@ def parts_check(parts: list[dict[str, Any]]) -> None:
                 )
 
 
+def _tracker_only_check(data: dict[str, Any], spent_usd: float) -> None:
+    """Shape (C): the plan's only work is on the issue tracker. It changes no file, so a
+    positive `estimated_files` contradicts the checklist; the cost keeps the same floor as
+    every other shape."""
+    if data["estimated_files"] != 0:
+        raise ValueError(
+            f"a plan whose only work is on the tracker changes no file: estimated_files must "
+            f"be 0, this one says {data['estimated_files']}. If the task changes files, write "
+            "subtasks and keep the checklist next to them"
+        )
+    cost = data["estimated_cost_usd"]
+    if cost < spent_usd:
+        raise ValueError(
+            f"estimated_cost_usd {cost:.2f} is below what the task already spent "
+            f"{spent_usd:.2f}: the estimate is the TOTAL cost, spent included"
+        )
+
+
 def plan_check_for(
     history: History, spent_usd: float, *, fit_waived: bool = False
 ) -> Callable[[dict[str, Any]], None]:
@@ -797,10 +829,14 @@ def plan_check_for(
     the fit -- never carried in the task state. Each refusal is a legible reason: it is
     what the retry reads.
 
-    A plan has exactly one of two shapes. (A) subtasks, no parts, and an estimate that
+    A plan has exactly one of three shapes. (A) subtasks, no parts, and an estimate that
     fits -- or a waived fit. (B) parts, no subtasks, an estimate that does not fit, and no
     waiver. `rules.estimate_fits` decides which, over the history's reference for the
-    bucket of the plan's own size: its subtasks in (A), its parts in (B)."""
+    bucket of the plan's own size: its subtasks in (A), its parts in (B). (C) no subtasks,
+    no parts, a non-empty `tracker_checklist` and `estimated_files == 0` (GH-336): the
+    only work is on the issue tracker, so there is nothing to fit and no reference to
+    consult. A checklist next to subtasks (A) is allowed and changes nothing here; next to
+    parts it is refused, each part plans itself."""
 
     # `rules` imports this module for `TaskType`, so the one function that decides the fit
     # is imported where it is used, never copied here (ADR-0054).
@@ -814,6 +850,15 @@ def plan_check_for(
                 "a plan holds subtasks or parts, never both: a plan that does not fit "
                 "is split into parts and builds nothing itself"
             )
+        checklist = data.get("tracker_checklist") or []
+        if checklist and parts:
+            raise ValueError(
+                "a plan with parts carries no tracker_checklist: each part plans itself, "
+                "and puts its own tracker work in its own checklist"
+            )
+        if checklist and not subtasks:
+            _tracker_only_check(data, spent_usd)
+            return
         if parts:
             parts_check(parts)
         else:
