@@ -337,7 +337,7 @@ _Avoid_: descartado (acá sí hay algo que hacer, pero lo hace el humano), parti
 _Campo_: sin término de arte
 
 **Trabajo de tracker**:
-Lo que el humano debe hacer en el tracker del producto (cerrar, retitular o comentar issues) porque ningún rol tiene `gh`: una lista de casillas en un comentario del issue. Nunca es una subtarea; junto a subtareas viaja con la entrega, y esa tarea no cierra su propio issue.
+Lo que el humano debe hacer en el tracker del producto (cerrar, retitular o comentar issues) porque ningún rol tiene `gh`: una lista de casillas en un comentario del issue. Nunca es una subtarea; junto a subtareas viaja con la entrega, y esa tarea no cierra su propio issue. Si el comentario falla en la entrega, el pull request se abre igual con la lista acotada en el cuerpo y en el comentario de listo, sin registro (en solo tracker, en cambio, escala y se reanuda en el nodo; ADR-0062).
 _Avoid_: subtarea (esas las construye un Developer), tarea de tracker
 _Campo_: sin término de arte
 

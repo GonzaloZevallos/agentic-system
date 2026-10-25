@@ -7,6 +7,7 @@ No role runs here; it is the system talking to the human, which ADR-0001 allows.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import assert_never
@@ -26,6 +27,8 @@ from .tracker_only import post_tracker_checklist
 
 # How the delivery comment starts: a resume looks past the system's comments.
 READY = "Ready for review: "
+
+_LOG = logging.getLogger(__name__)
 
 
 async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
@@ -71,21 +74,31 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             assert_never(plan.kind)
     # A plan with a tracker checklist tells the human before the pull request exists, and the
     # pull request then leaves the issue open (GH-336, ADR-0062). None of this runs without one.
+    # Bookkeeping never strands a finished branch (GH-342): each guard below keeps the pull
+    # request coming and leaves a `step: ExceptionClass` line in `lapses`.
     checklist = state.get("tracker_checklist", [])
     posted: TaskState = {}
+    lapses: list[str] = []
+    unconfirmed = ""
     if checklist:
         try:
             record_posted = post_tracker_checklist(
                 ports, state["id"], checklist, state.get("tracker_checklist_posted")
             )
-        except (ValueError, OSError) as failed:
-            return finish(
-                state, _undelivered("tracker checklist comment failed", failed, state, None), ports
-            )
+        except Exception as failed:
+            # No record is written, so a resume asks again; the list rides in the body and
+            # in the ready comment meanwhile, bounded and without the marker.
+            record_posted = None
+            _lapsed(lapses, "tracker checklist comment", failed)
+            unconfirmed = rules.tracker_failure_block(checklist, type(failed).__name__, relative)
         if record_posted:
             posted = {"tracker_checklist_posted": record_posted}
             state = {**state, **posted}
-            finish(state, posted, ports)
+            try:
+                finish(state, posted, ports)
+            except Exception as failed:
+                # The comment is on the issue and the record travels in the terminal patch.
+                _lapsed(lapses, "tracker record save", failed)
     replaced = rules.replace_record(recorded, plan, kept)
     # Only the key's own value moves: a state with no replace keeps being the very object
     # the node received, and is written as it always has been.
@@ -103,6 +116,7 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             _guarded_preface(state, task.branch, ports),
             _criteria_preface(over),
             _perf_preface(state),
+            unconfirmed,
         )
         if part
     )
@@ -163,19 +177,40 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             ready += f"\n\n{PERF_NOT_VERIFIED_LINE}"
         if replaced:
             ready += f"\n\n{replaced_note}"
+        if unconfirmed:
+            ready += f"\n\n{unconfirmed}"
         ports.tracker.comment(state["id"], ready)
-    except ValueError:
-        pass
+    except Exception as failed:
+        _lapsed(lapses, "ready comment", failed)
     try:
         reaped = release_task(ports, state["id"])
-    except GitError:
+    except Exception as failed:
         reaped = ()
+        _lapsed(lapses, "release task", failed)
     if reaped:
         patch["reaped_at_cleanup"] = list(reaped)
+    if lapses:
+        patch = _with_lapses(patch, lapses)
     done = finish(state, patch, ports)
     if state.get("landing"):
         ports.documents.record_closure(state["id"], {"landing": state["landing"]})
     return done
+
+
+def _lapsed(lapses: list[str], step: str, failed: Exception) -> None:
+    """Notes a bookkeeping step that failed after the branch was ready: the line for the
+    task document and the traceback for the process log. Never the exception text, which
+    can carry what the tracker answered."""
+    lapses.append(f"{step}: {type(failed).__name__}")
+    _LOG.warning("delivery: %s failed; delivering anyway", step, exc_info=failed)
+
+
+def _with_lapses(patch: TaskState, lapses: list[str]) -> TaskState:
+    """The terminal patch with the lapses in the task document's log, once: one `lapse`
+    entry per line in `pause_log` (`rules.logged`). They are neither attempts nor
+    escalations, so `failures` -- what the measurement counts -- and the poller's reading of
+    the epoch are left alone."""
+    return rules.logged(patch, lapses=lapses)
 
 
 def _closed_landing(

@@ -46,3 +46,25 @@ lista se comporta igual que antes.
   GH-307, se comporta como hasta ahora.
 - Que PjM y el Tech Lead dejen de pedir `gh` no lo prueba ningún test, solo que la regla esté
   en el prompt; la primera tarea real de solo tracker es la evidencia.
+
+## Addendum (GH-342): el registro vacío y la entrega que no se cae
+
+**Causa.** `tracker_checklist_posted` es un canal de reducción del grafo: arranca en `{}` para
+toda tarea, no en "ausente". `post_tracker_checklist` trataba todo valor distinto de `None`
+como un registro completo y fallaba con `KeyError: 'hash'` en `deliver` (GH-346). Ahora un
+solo lector, `rules.tracker_posted`, devuelve el registro solo si `at` y `hash` son cadenas;
+`{}`, un registro sin `hash` o cualquier otra cosa significa "nada publicado".
+
+**Los dos caminos, lado a lado.**
+
+- `tracker_only` no tiene pull request: un comentario fallido escala con `failure` y la
+  reanudación vuelve al nodo.
+- `deliver` abre el pull request igual. La lista, acotada (20 ítems de 200 caracteres y un
+  puntero al documento, `rules.tracker_failure_block`), va en el prefacio del cuerpo, si el
+  pull request se abre en esa entrega, y en el comentario "Ready for review". No se escribe
+  registro, así que el marcador y el hash siguen siendo la idempotencia. Un fallo del
+  guardado intermedio, del comentario de listo o de `release_task` no termina el nodo: queda
+  una línea `paso: Clase` en el `pause_log`.
+
+Límite: si una re-entrega ocurre mientras `gh` no deja comentar, la lista no llega ni al cuerpo
+ni al issue; queda en el documento de la tarea.

@@ -8,9 +8,12 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from agentic.core.process.adapters.git.workspace import GitWorkspace
 from agentic.core.process.application import poll, tracker_only
 from agentic.core.process.application.ports import RunRegistration, Upstream
+from agentic.core.process.domain import rules
 from agentic.core.process.domain.task import PullRequest
 from tests.core.process.application.test_poll import ESCALATED_AT, _cfg, _Locks, _round
 from tests.core.process.application.test_poll_merge import HEAD, MASTER, URL, _pr, _ready
@@ -275,3 +278,15 @@ def test_a_checklist_does_not_hide_the_slices_left_from_the_fresh_run(tmp_path):
     _gather(ports, tmp_path, reruns)
     assert reruns == [5]
     assert _checklist_comments(ports) == []
+
+
+@pytest.mark.parametrize("record", [{}, "absent"])
+def test_an_empty_or_absent_record_posts_once_and_closes_with_the_record(tmp_path, record):
+    ports = _ports({A, B})
+    _with_checklist(ports, **({} if record == "absent" else {"tracker_checklist_posted": record}))
+    _, lines = _gather(ports, tmp_path)
+    assert lines[0].endswith("tracker checklist posted")
+    assert len(_checklist_comments(ports)) == 1
+    closure = ports.documents.closures["GH-5"]
+    assert "closed_at" in closure
+    assert closure["tracker_checklist_posted"]["hash"] == rules.tracker_hash(CHECKLIST)

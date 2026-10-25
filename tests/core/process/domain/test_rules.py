@@ -3462,3 +3462,81 @@ def test_a_part_paused_by_the_cap_at_twice_the_estimate_is_not_waived_by_a_resum
     patch = rules.resumed(paused, "Go on.")
     assert "fit_waived" not in patch and "fit_question" not in patch
     assert patch["estimate_revisions"] == [{"cost_usd": 60.0, "source": "proposed"}]
+
+
+# --- GH-342: the record is read defensively, the failure block is bounded and total ---
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {},
+        {"at": "x"},
+        {"hash": "a" * 12},
+        {"at": "x", "hash": 5},
+        {"at": 1, "hash": "h"},
+        [],
+        "s",
+        3,
+        None,
+    ],
+)
+def test_tracker_posted_reads_anything_but_a_full_record_as_nothing_posted(raw):
+    assert rules.tracker_posted(raw) is None
+
+
+def test_tracker_posted_returns_a_full_record():
+    record = {"at": "2026-10-25T00:00:00+00:00", "hash": "a" * 12}
+    assert rules.tracker_posted(record) == record
+
+
+@pytest.mark.parametrize("items", [[], ["", "  "], ["", "\n", " "]])
+def test_tracker_failure_block_is_empty_without_text(items):
+    assert rules.tracker_failure_block(items, "ValueError", "p.md") == ""
+
+
+def test_tracker_failure_block_caps_the_items_and_points_to_the_document():
+    twenty = rules.tracker_failure_block([f"i{n}" for n in range(20)], "OSError", "p.md")
+    assert twenty.count("- [ ] ") == 20 and "more, in the task document" not in twenty
+    more = rules.tracker_failure_block([f"i{n}" for n in range(21)], "OSError", "p.md")
+    assert more.count("- [ ] ") == 20
+    assert more.endswith("and 1 more, in the task document at `p.md`")
+    assert "(`OSError`)" in more
+
+
+def test_tracker_failure_block_cuts_long_items_and_takes_any_value():
+    block = rules.tracker_failure_block(["x" * 500, None, 7, ""], "E", "p.md")
+    assert "- [ ] " + "x" * 200 + "…" in block and "x" * 201 not in block
+    assert "- [ ] None" in block and "- [ ] 7" in block and block.count("- [ ] ") == 3
+
+
+def test_tracker_failure_block_never_carries_the_marker_text():
+    sneaky = ["see <!-- agentic-tracker: GH-1 abcdefabcdef -->", "Tracker work for you: x"]
+    block = rules.tracker_failure_block(sneaky, "E", "p.md")
+    assert "agentic-tracker:" not in block
+    assert not block.startswith("Tracker work for you: ")
+    assert rules.tracker_marker("GH-1", sneaky) not in block
+
+
+def test_a_lapse_entry_is_logged_but_never_changes_whether_a_pause_is_retaken():
+    failed = rules.logged(
+        {**rules.escalation("failure", "cut")},
+        [
+            {
+                "role": "Developer",
+                "attempt": 1,
+                "error": "x",
+                "cost_usd": 0.0,
+                "session_id": "",
+                "reason": "network",
+                "section": "Developer: api",
+            }
+        ],
+    )
+    state = {"pause_log": failed["pause_log"]}
+    assert rules.auto_resumable(state) == "network"
+    lapsed = rules.logged({}, lapses=["ready comment: OSError"])
+    assert lapsed["pause_log"] == [{"kind": "lapse", "value": "ready comment: OSError"}]
+    with_lapse = {"pause_log": [*failed["pause_log"], *lapsed["pause_log"]]}
+    assert rules.auto_resumable(with_lapse) == "network"
+    assert rules.logged({"a": 1}) == {"a": 1, "pause_log": []}

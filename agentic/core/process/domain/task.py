@@ -701,7 +701,16 @@ class FailurePauseEntry(TypedDict):
     section: str
 
 
-PauseEntry = ResumedPauseEntry | EscalationPauseEntry | FailurePauseEntry
+class LapsePauseEntry(TypedDict):
+    """A bookkeeping step that failed after the work was done (GH-342), as `step:
+    ExceptionClass`. Not an attempt and not an escalation: no reader of the epoch counts it,
+    so it never changes whether a pause is retaken."""
+
+    kind: Literal["lapse"]
+    value: str
+
+
+PauseEntry = ResumedPauseEntry | EscalationPauseEntry | FailurePauseEntry | LapsePauseEntry
 
 
 class SettledRow(TypedDict):

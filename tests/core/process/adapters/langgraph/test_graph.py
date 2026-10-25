@@ -247,6 +247,23 @@ async def test_definition_stage_then_delivery(config, tmp_path):
     assert doc["pull_request"] == final["pull_request"]
 
 
+async def test_a_plan_with_a_tracker_checklist_delivers_through_the_graph_with_an_empty_start(
+    config,
+):
+    """GH-342: the reducer channel starts at `{}`, which the delivery used to subscript."""
+    items = ["Post the verdict table on #1", "Close the follow-ups"]
+    fakes = Fakes()
+    script = script_for(**technical(tech_lead=[planned(tracker_checklist=items)]))
+    final = await run_graph(script, config, fakes=fakes)
+
+    assert final["status"] == "ready_for_review"
+    assert final["pull_request"].endswith("/pull/7")
+    assert fakes.tracker.closes_issue_calls == [False]
+    posted = [t for _, t in fakes.tracker.comments if t.startswith("Tracker work for you: ")]
+    assert len(posted) == 1
+    assert final["tracker_checklist_posted"]["hash"] == rules.tracker_hash(items)
+
+
 # The definition-side design branch (ADR-0040): only reached when PM validates with
 # `touches_ui` set, between PM's own validation and the plan.
 

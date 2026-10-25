@@ -32,16 +32,19 @@ _EARLIER = re.compile(r"<!-- agentic-tracker: (\S+) [0-9a-f]{12} -->")
 
 
 def post_tracker_checklist(
-    ports: Ports, task_id: str, items: Sequence[str], recorded: TrackerPosted | None
+    ports: Ports, task_id: str, items: Sequence[str], recorded: object
 ) -> TrackerPosted | None:
     """Posts the checklist unless it is already there, and returns the record to keep.
 
+    `recorded` is whatever the state held: `rules.tracker_posted` reads it, so `{}` (the graph
+    channel's start value), a partial record or nothing at all means "nothing posted yet".
     `None` when `recorded` holds this hash: nothing is read and nothing is posted. Otherwise
     the issue's comments are read once; the comment is posted only if none carries the
     marker of these items, and the record is returned after that succeeded, never before.
     Raises `ValueError`/`OSError` from the tracker; nothing is recorded then."""
     hash_ = rules.tracker_hash(items)
-    if recorded is not None and recorded["hash"] == hash_:
+    held = rules.tracker_posted(recorded)
+    if held is not None and held["hash"] == hash_:
         return None
     marker = rules.tracker_marker(task_id, items)
     comments = ports.tracker.issue_comments(task_id)

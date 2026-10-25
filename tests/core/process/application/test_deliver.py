@@ -830,22 +830,111 @@ async def test_a_task_without_a_checklist_opens_its_pull_request_as_ever(cfg):
     assert all(not text.startswith("Tracker work for you") for _, text in ports.tracker.comments)
 
 
-async def test_a_failing_checklist_comment_opens_no_pull_request_and_a_resume_posts_both_once(cfg):
+async def test_a_failing_checklist_comment_still_opens_the_pull_request_with_the_list(cfg):
     ports = memory_ports()
     ports.tracker.comment_failures = 1
-    first = await deliver(WITH_CHECKLIST, cfg, ports)
+    patch = await deliver(WITH_CHECKLIST, cfg, ports)
 
-    assert first["escalation_class"] == "failure" and first["status"] == "waiting_on_human"
-    assert "tracker checklist" in first["escalated"]
-    assert ports.tracker.pull_requests == [] and ports.tracker.closes_issue_calls == []
-    assert "tracker_checklist_posted" not in first
-
-    second = await deliver(_resumed(WITH_CHECKLIST, first), cfg, ports)
-    assert second["pull_request"] == "https://github.com/o/r/pull/7"
-    tracker_comments = [t for _, t in ports.tracker.comments if t.startswith("Tracker work")]
-    assert len(tracker_comments) == 1
-    assert len(ports.tracker.pull_requests) == 1
+    assert patch["status"] == "ready_for_review" and "escalation_class" not in patch
     assert ports.tracker.closes_issue_calls == [False]
+    body = ports.tracker.pull_requests[0][2]
+    (ready,) = [t for _, t in ports.tracker.comments if t.startswith("Ready for review")]
+    for text in (body, ready):
+        assert "could not be confirmed (`ValueError`)" in text
+        assert "- [ ] Post the verdict table on #12" in text
+        assert "agentic-tracker:" not in text and "scripted" not in text
+    assert "tracker_checklist_posted" not in patch
+    assert "tracker_checklist_posted" not in ports.documents.saved[0]
+    assert [e["value"] for e in patch["pause_log"]] == ["tracker checklist comment: ValueError"]
+
+
+@pytest.mark.parametrize("record", [{}, None, "absent"])
+async def test_an_empty_or_absent_record_posts_the_list_once(cfg, record):
+    state = dict(WITH_CHECKLIST)
+    if record != "absent":
+        state["tracker_checklist_posted"] = record
+    ports = memory_ports()
+    patch = await deliver(state, cfg, ports)
+
+    posted = [t for _, t in ports.tracker.comments if t.startswith("Tracker work for you: ")]
+    assert len(posted) == 1
+    assert ports.tracker.closes_issue_calls == [False]
+    assert patch["tracker_checklist_posted"]["hash"] == rules.tracker_hash(CHECKLIST)
+
+
+async def test_a_failing_mid_flow_save_keeps_the_record_and_tells_the_human_nothing(cfg):
+    ports = memory_ports()
+    real = ports.documents.save
+    calls = []
+
+    def save(state):
+        calls.append(state)
+        if len(calls) == 1:
+            raise OSError("disk")
+        return real(state)
+
+    ports.documents.save = save
+    patch = await deliver(WITH_CHECKLIST, cfg, ports)
+
+    assert patch["status"] == "ready_for_review"
+    assert patch["tracker_checklist_posted"]["hash"] == rules.tracker_hash(CHECKLIST)
+    assert all("could not be confirmed" not in t for _, t in ports.tracker.comments)
+    assert all("could not be confirmed" not in b for *_, b in ports.tracker.pull_requests)
+    assert len([t for _, t in ports.tracker.comments if t.startswith("Tracker work")]) == 1
+    assert [e["value"] for e in patch["pause_log"]] == ["tracker record save: OSError"]
+
+
+async def test_a_hundred_item_list_in_a_failed_comment_keeps_the_body_bounded(cfg):
+    items = [f"item {i} " + "x" * 400 for i in range(100)]
+    sections = {"PM": "### Definition\n\nSix numbers.", "Tech Lead": "### Plan\n\nHex."}
+    state = {**TASK, "sections": sections, "tracker_checklist": items}
+    ports = memory_ports()
+    ports.tracker.comment_failures = 1
+    await deliver(state, cfg, ports)
+
+    body = ports.tracker.pull_requests[0][2]
+    assert github_length(body) <= GITHUB_LIMIT
+    assert "and 80 more, in the task document at" in body
+    assert "item 20 " not in body and "item 19 " in body
+    assert "## PM\n\n" + sections["PM"] in body
+    assert "## Tech Lead\n\n" + sections["Tech Lead"] in body
+    assert "Full sections" not in body
+
+
+async def test_a_redelivery_with_a_failing_comment_leaves_the_body_alone(cfg):
+    ports = memory_ports()
+    ports.tracker.comment_failures = 1
+    state = {**WITH_CHECKLIST, "pull_request": "https://github.com/o/r/pull/3"}
+    patch = await deliver(state, cfg, ports)
+
+    assert ports.tracker.pull_requests == []
+    (ready,) = [t for _, t in ports.tracker.comments if t.startswith("Ready for review")]
+    assert "could not be confirmed" in ready
+    assert "tracker_checklist_posted" not in patch
+
+
+async def test_an_oserror_from_the_ready_comment_and_from_release_still_ends_ready(cfg):
+    ports = memory_ports()
+    real = ports.tracker.comment
+
+    def comment(task_id, text):
+        if text.startswith("Ready for review"):
+            raise OSError("gh down")
+        return real(task_id, text)
+
+    def cleanup(task_id):
+        raise OSError("disk")
+
+    ports.tracker.comment = comment
+    ports.workspace.cleanup = cleanup
+    patch = await deliver(WITH_CHECKLIST, cfg, ports)
+
+    assert patch["status"] == "ready_for_review" and patch["pull_request"]
+    assert ports.documents.saved[-1]["pull_request"] == patch["pull_request"]
+    assert [e["value"] for e in patch["pause_log"]] == [
+        "ready comment: OSError",
+        "release task: OSError",
+    ]
 
 
 async def test_a_failing_pull_request_after_the_checklist_does_not_post_it_again(cfg):
