@@ -56,6 +56,7 @@ async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
     if transcript is None:
         return finish(state, patch, ports)
     interviewed = apply(state, patch)
+    part_of = _part_of(state)
     output, written = await run_role(
         interviewed,
         spec.author,
@@ -66,14 +67,17 @@ async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
         resume=transcript.sessions.get(spec.author_side.slug),
         proposed_invariants=_proposed(state, spec, transcript.invariants),
         cost_history=history.text(),
-        split_part=_split_part(state),
+        split_part=rules.split_part_text(part_of),
+        parts_remedy=rules.parts_remedy_text(part_of),
+        parts_step=rules.parts_step_text(part_of),
+        parts_field=rules.parts_field_text(part_of),
     )
     return finish(state, apply(patch, _delivered(cfg, output, written, spec.author.name)), ports)
 
 
-def _split_part(state: TaskState) -> str:
-    """The prompt's `{{split_part}}` slot: empty unless the task is a part of a split."""
-    return rules.split_part_text(rules.split_part_of(state.get("description", "")))
+def _part_of(state: TaskState) -> tuple[str, int] | None:
+    """The `(task id, part)` of a task that is a part of a split, else `None`."""
+    return rules.split_part_of(state.get("description", ""))
 
 
 def _estimate_check(state: TaskState, history: cost_history.History) -> Check:
@@ -102,6 +106,7 @@ async def _plan_cold(
     path makes right before its own Tech Lead call -- kept here for the same reason,
     not special-cased away."""
     ports.workspace.commit_all(cwd, f"{state['id']}: solution interview")
+    part_of = _part_of(state)
     output, written = await run_role(
         state,
         spec.author,
@@ -111,7 +116,10 @@ async def _plan_cold(
         cwd=cwd,
         proposed_invariants=_SKIPPED_PROPOSAL,
         cost_history=history.text(),
-        split_part=_split_part(state),
+        split_part=rules.split_part_text(part_of),
+        parts_remedy=rules.parts_remedy_text(part_of),
+        parts_step=rules.parts_step_text(part_of),
+        parts_field=rules.parts_field_text(part_of),
     )
     return finish(state, _delivered(cfg, output, written, spec.author.name), ports)
 

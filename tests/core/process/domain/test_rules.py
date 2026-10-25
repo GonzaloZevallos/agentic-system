@@ -2889,6 +2889,23 @@ def test_a_part_is_told_it_is_part_n_of_x_and_to_write_subtasks_only():
     assert "write parts" not in text
 
 
+def test_the_parts_wording_is_the_original_for_a_task_that_is_not_a_part():
+    assert rules.parts_remedy_text(None).startswith("as one task: write it as `parts`")
+    assert rules.parts_step_text(None).startswith("8. `### Parts`")
+    assert rules.parts_field_text(None).startswith("- `parts`: one entry per part")
+
+
+def test_the_parts_wording_of_a_part_never_offers_parts_as_the_remedy():
+    part = ("GH-316", 2)
+    assert rules.parts_step_text(part) == ""
+    for text in (rules.parts_remedy_text(part), rules.parts_field_text(part)):
+        assert "write it as `parts`" not in text
+        assert "instead of subtasks" not in text
+        assert "ONLY when the" not in text
+    assert "subtasks anyway" in rules.parts_remedy_text(part)
+    assert "always empty" in rules.parts_field_text(part)
+
+
 def test_split_is_an_end_with_nothing_to_resume():
     done = {"status": "split", "type": "feature", "parts": PARTS}
     assert rules.resumed_status(done) == "split"

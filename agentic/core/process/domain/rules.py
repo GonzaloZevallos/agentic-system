@@ -3670,6 +3670,52 @@ def split_part_text(part_of: tuple[str, int] | None) -> str:
     )
 
 
+# The Tech Lead prompts' instructions to split an over-the-line plan into `parts`, kept
+# here as the wording of a task that is not a part, so a part never reads them: a part
+# is never split again (ADR-0054). Each is the exact text the prompt carried before it
+# became a placeholder, so a task that is not a part renders it byte for byte.
+_PARTS_REMEDY = (
+    "as one task: write it as `parts` (see `### Parts`) instead of subtasks. Do not shrink the\n"
+    "   estimate to make it fit; a plan that fits and carries `parts` is refused too."
+)
+_PARTS_STEP = (
+    "8. `### Parts`, only when the estimate does not fit: at least two chained parts, each a\n"
+    "   small task of its own that lands and shows in the product before the next one starts.\n"
+    "   Each part has a `title`, a `body` (its whole description: the person who builds it has\n"
+    "   not seen this plan) and `depends_on`, the numbers of EARLIER parts (1 is the first).\n"
+    "   Write no subtasks then, and `### Subtasks` is not needed. A part is never split again.\n"
+    "   If the section `## Human` says the human decided to build this task whole, write\n"
+    "   subtasks and no parts."
+)
+_PARTS_FIELD = (
+    "- `parts`: one entry per part with `title`, `body` and `depends_on`, ONLY when the\n"
+    "  estimate does not fit; then `subtasks` is empty. Empty when the plan fits."
+)
+
+
+def parts_remedy_text(part_of: tuple[str, int] | None) -> str:
+    """The end of the prompt's sentence on a plan over the size limit: for a task that is
+    not a part, to write `parts`; for a part, to write its subtasks anyway."""
+    if part_of is None:
+        return _PARTS_REMEDY
+    return (
+        "without the human's decision: write your subtasks anyway and do not shrink the\n"
+        "   estimate to make it fit; the system asks the human whether to build it whole."
+    )
+
+
+def parts_step_text(part_of: tuple[str, int] | None) -> str:
+    """The prompt's step on writing `### Parts`: empty for a part, which never has one."""
+    return _PARTS_STEP if part_of is None else ""
+
+
+def parts_field_text(part_of: tuple[str, int] | None) -> str:
+    """The prompt's line on the `parts` output field: for a part, that it stays empty."""
+    if part_of is None:
+        return _PARTS_FIELD
+    return "- `parts`: always empty, because this task is a part and a part is never split again."
+
+
 def tracker_hash(items: Sequence[str]) -> str:
     """The first twelve hex digits of the sha256 of the stripped items joined by newlines:
     what tells one checklist from another (GH-336)."""

@@ -326,6 +326,46 @@ def test_a_filled_slot_reaches_the_rendered_prompt(tmp_path):
     assert "{{" not in text
 
 
+REMEDY_SENTENCES = (
+    "write it as `parts` (see `### Parts`) instead of subtasks",
+    "a plan that fits and carries `parts` is refused too",
+    "8. `### Parts`, only when the estimate does not fit",
+    "- `parts`: one entry per part with `title`, `body` and `depends_on`, ONLY when the",
+)
+
+
+def part_values(part_of):
+    return {
+        **PLACEHOLDERS,
+        "split_part": rules.split_part_text(part_of),
+        "parts_remedy": rules.parts_remedy_text(part_of),
+        "parts_step": rules.parts_step_text(part_of),
+        "parts_field": rules.parts_field_text(part_of),
+    }
+
+
+@pytest.mark.parametrize("slug", ["tech_lead", "tech_lead_platform"])
+def test_a_part_reads_no_sentence_that_offers_parts_as_the_remedy(slug, tmp_path):
+    role = next(r for r in ROLES if r.slug == slug)
+    cfg = Configuration(product_dir=tmp_path)
+    text = load_prompt(role, cfg, memory_ports(), {}, **part_values(("GH-316", 2))).text
+    assert "{{" not in text
+    assert "GH-316" in text
+    for sentence in REMEDY_SENTENCES:
+        assert sentence not in text
+    assert "write subtasks only" in text
+
+
+@pytest.mark.parametrize("slug", ["tech_lead", "tech_lead_platform"])
+def test_a_task_that_is_not_a_part_still_reads_the_parts_instructions(slug, tmp_path):
+    role = next(r for r in ROLES if r.slug == slug)
+    cfg = Configuration(product_dir=tmp_path)
+    text = load_prompt(role, cfg, memory_ports(), {}, **part_values(None)).text
+    for sentence in REMEDY_SENTENCES:
+        assert sentence in text
+    assert text == load_prompt(role, cfg, memory_ports(), {}, **PLACEHOLDERS).text
+
+
 def test_the_stack_prompt_has_no_split_part_slot():
     role = next(r for r in ROLES if r.slug == "tech_lead_stack")
     raw, _ = memory_ports().prompts.raw(role)
