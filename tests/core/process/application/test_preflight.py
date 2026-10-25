@@ -376,6 +376,7 @@ def part_values(part_of):
         "parts_remedy": rules.parts_remedy_text(part_of),
         "parts_step": rules.parts_step_text(part_of),
         "parts_field": rules.parts_field_text(part_of),
+        "tracker_with_parts": rules.TRACKER_WITH_PARTS,
     }
 
 
@@ -576,3 +577,21 @@ def test_criteria_texts_skips_the_files_absent_at_the_revision():
     ports = memory_ports()
     ports.workspace.files[("abc", "DESIGN_STANDARDS.md")] = _lines(3)
     assert module.criteria_texts(ports, "abc") == {"DESIGN_STANDARDS.md": _lines(3)}
+
+
+@pytest.mark.parametrize("slug", ["tech_lead", "tech_lead_platform"])
+@pytest.mark.parametrize("part_of", [None, ("GH-316", 2)])
+def test_both_tech_lead_prompts_render_the_one_text_on_tracker_work_with_parts(
+    slug, part_of, tmp_path
+):
+    """With the parts step empty (a part) and with the normal one, the rule on where tracker
+    work goes is there, whole, from the one constant; and nothing asks the Tech Lead to
+    write the re-point item itself: the system derives it."""
+    role = next(r for r in ROLES if r.slug == slug)
+    text = load_prompt(
+        role, Configuration(product_dir=tmp_path), memory_ports(), {}, **part_values(part_of)
+    ).text
+    assert "{{" not in text
+    assert rules.TRACKER_WITH_PARTS in text
+    assert "so do not write those\n   items" in text
+    assert "re-point" not in text.replace(rules.TRACKER_WITH_PARTS, "")

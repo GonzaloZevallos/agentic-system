@@ -67,6 +67,7 @@ from .task import (
     FinishedPatch,
     LapsePauseEntry,
     MergeOutcome,
+    PartRecord,
     PauseEntry,
     PullRequest,
     ResumedPauseEntry,
@@ -1816,7 +1817,8 @@ def after_plan(state: TaskState) -> str | None:
 
 def tracker_only_plan(state: TaskState) -> bool:
     """The third plan shape (GH-336): no subtasks, no parts and a checklist for the human.
-    The one place the shape is decided; a checklist next to subtasks rides the delivery."""
+    The one place the shape is decided; a checklist next to subtasks rides the delivery, and
+    next to parts the split posts it (GH-350), so neither is this shape."""
     return bool(
         state.get("tracker_checklist") and not state.get("subtasks") and not state.get("parts")
     )
@@ -3793,6 +3795,17 @@ _PARTS_REMEDY = (
     "as one task: write it as `parts` (see `### Parts`) instead of subtasks. Do not shrink the\n"
     "   estimate to make it fit; a plan that fits and carries `parts` is refused too."
 )
+# Where tracker work goes when a plan has parts (GH-350), the one text that states it: both
+# Tech Lead prompts render it and the validator's refusal of `subtasks` next to `parts`
+# appends it, so the three never drift. A multi-line passage, indented like the prompt line
+# its placeholder sits on.
+TRACKER_WITH_PARTS = (
+    "When you split, tracker work for this task stays in `tracker_checklist` and the split\n"
+    "   posts it on this issue. The system itself lists every open issue whose first line says\n"
+    "   `Blocked by: #<this issue>`, with the part to re-point it to, so do not write those\n"
+    "   items. Add only other tracker work, such as native blockers you know about. A part's own\n"
+    "   tracker work goes in that part's body."
+)
 _PARTS_STEP = (
     "8. `### Parts`, only when the estimate does not fit: at least two chained parts, each a\n"
     "   small task of its own that lands and shows in the product before the next one starts.\n"
@@ -3829,6 +3842,60 @@ def parts_field_text(part_of: tuple[str, int] | None) -> str:
     if part_of is None:
         return _PARTS_FIELD
     return "- `parts`: always empty, because this task is a part and a part is never split again."
+
+
+SPLIT_TRACKER_ITEMS = 10
+
+
+def last_part_numbers(parts: Sequence[PartRecord]) -> list[int]:
+    """The parts no other part depends on (1 is the first), in order: where an issue that
+    waited on the whole task has to wait instead, so it starts when the split is done."""
+    needed = {dep for part in parts for dep in part["depends_on"]}
+    return [n for n in range(1, len(parts) + 1) if n not in needed]
+
+
+def split_tracker_items(
+    task_issue: int | None,
+    open_issues: Sequence[tuple[str, str]],
+    part_urls: Sequence[str],
+    last_parts: Sequence[int],
+) -> list[str]:
+    """The checklist items the system itself derives for a split (GH-350, ADR-0062): one per
+    open issue, other than the parts, whose first line says `Blocked by:` the task's own
+    issue -- the task ends `split` and never closes, so that issue would wait for ever.
+    The human closes the task's issue or re-points the blocked one to the last part(s)
+    (`last_parts`, 1-based numbers into `part_urls`); the system edits no issue.
+
+    Pure over what the split already read. `[]` for a task with no issue. Ordered by issue
+    number, never by URL; items use numbers only, one line each, so they pass the checks of
+    a Tech Lead item. At most `SPLIT_TRACKER_ITEMS`, then one line counting the rest."""
+    if task_issue is None:
+        return []
+    parts = set(part_urls)
+    blocked = sorted(
+        number
+        for url, body in open_issues
+        if url not in parts
+        and task_issue in blockers_from_body(body)
+        and (number := _url_issue_number(url)) is not None
+    )
+    targets = ", ".join(f"#{_url_issue_number(part_urls[n - 1])}" for n in last_parts)
+    items = [
+        f"#{n} is blocked by #{task_issue}, which this split does not close: "
+        f"close #{task_issue} or re-point #{n} to {targets}"
+        for n in blocked[:SPLIT_TRACKER_ITEMS]
+    ]
+    if len(blocked) > SPLIT_TRACKER_ITEMS:
+        items.append(
+            f"and {len(blocked) - SPLIT_TRACKER_ITEMS} more issues blocked by #{task_issue}: "
+            f'run gh issue list --search "Blocked by: #{task_issue}"'
+        )
+    return items
+
+
+def _url_issue_number(url: str) -> int | None:
+    tail = url.rstrip("/").rsplit("/", 1)[-1]
+    return int(tail) if tail.isdigit() else None
 
 
 def tracker_hash(items: Sequence[str]) -> str:

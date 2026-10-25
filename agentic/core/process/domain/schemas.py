@@ -870,13 +870,17 @@ def plan_check_for(
     bucket of the plan's own size: its subtasks in (A), its parts in (B). (C) no subtasks,
     no parts, a non-empty `tracker_checklist` and `estimated_files == 0` (GH-336): the
     only work is on the issue tracker, so there is nothing to fit and no reference to
-    consult. A checklist next to subtasks (A) is allowed and changes nothing here; next to
-    parts it is refused, each part plans itself.
+    consult. A checklist next to subtasks (A) or next to parts (B) is allowed and changes
+    nothing here: its items were checked one by one when the plan was read, and next to parts
+    the split posts it on the issue (GH-350).
 
     A task that is itself a part (`part_of`, the `(task id, part)` of its marker) is never
     split again: any `parts` is refused first, with the rule and no remedy that names
     parts, and subtasks over the line are not refused here -- the plan stage asks the human
     once instead (`plan_fits` decides, ADR-0054)."""
+
+    # `rules` imports this module, so the one text is imported where it is used.
+    from .rules import TRACKER_WITH_PARTS
 
     def check(data: dict[str, Any]) -> None:
         parts = data.get("parts") or []
@@ -889,15 +893,10 @@ def plan_check_for(
         if parts and subtasks:
             raise ValueError(
                 "a plan holds subtasks or parts, never both: a plan that does not fit "
-                "is split into parts and builds nothing itself"
+                "is split into parts and builds nothing itself, so drop `subtasks` (the "
+                f"parts carry the work). {TRACKER_WITH_PARTS}"
             )
-        checklist = data.get("tracker_checklist") or []
-        if checklist and parts:
-            raise ValueError(
-                "a plan with parts carries no tracker_checklist: each part plans itself, "
-                "and puts its own tracker work in its own checklist"
-            )
-        if checklist and not subtasks:
+        if data.get("tracker_checklist") and not subtasks and not parts:
             _tracker_only_check(data, spent_usd)
             return
         if parts:

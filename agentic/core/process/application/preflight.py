@@ -31,6 +31,7 @@ PLACEHOLDERS = {
     "parts_remedy": rules.parts_remedy_text(None),
     "parts_step": rules.parts_step_text(None),
     "parts_field": rules.parts_field_text(None),
+    "tracker_with_parts": rules.TRACKER_WITH_PARTS,
     # `pjm.md` names it (ADR-0019); the real value `classify.py` passes at runtime is
     # `product_name(ports)`, not this generic stand-in, which only has to render.
     "product": "product",
