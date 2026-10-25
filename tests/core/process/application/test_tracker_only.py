@@ -151,3 +151,27 @@ async def test_a_reconstructed_paused_document_resumes_into_the_node_and_a_recor
     again = memory_ports()
     out = await tracker_only(rebuilt_done, cfg(tmp_path), again)
     assert again.tracker.comments == [] and out["status"] == "tracker_only"
+
+
+@pytest.mark.parametrize("recorded", [{}, {"at": "x"}])
+def test_an_empty_or_partial_record_is_nothing_posted_and_posts_once(recorded):
+    ports = memory_ports()
+    record = post_tracker_checklist(ports, "GH-307", ITEMS, recorded)
+    assert record is not None and record["hash"] == rules.tracker_hash(ITEMS)
+    assert len(ports.tracker.comments) == 1
+
+
+def test_a_ready_comment_carrying_the_failure_block_does_not_stop_the_post():
+    ports = memory_ports()
+    block = rules.tracker_failure_block(ITEMS, "OSError", "p.md")
+    ports.tracker.earlier = [f"Ready for review: https://x/pull/1\n\n{block}"]
+    assert post_tracker_checklist(ports, "GH-307", ITEMS, {}) is not None
+    assert len(ports.tracker.comments) == 1
+
+
+async def test_the_node_with_an_empty_record_posts_and_ends_tracker_only(tmp_path):
+    ports = memory_ports()
+    patch = await tracker_only({**STATE, "tracker_checklist_posted": {}}, cfg(tmp_path), ports)
+    assert len(ports.tracker.comments) == 1
+    assert patch["status"] == "tracker_only"
+    assert patch["tracker_checklist_posted"]["hash"] == rules.tracker_hash(ITEMS)
