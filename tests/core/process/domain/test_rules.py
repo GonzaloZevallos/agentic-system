@@ -3423,6 +3423,55 @@ def test_the_fit_question_offers_no_way_to_stop_by_resuming():
         assert not any("resume" in line and "do not resume" not in line for line in stops)
 
 
+def _fit(cost, reference=None, files=44):
+    return FitDecision(False, cost, files, reference)
+
+
+@pytest.mark.parametrize(
+    ("fit", "builds"),
+    [
+        (_fit(300.0), True),
+        (_fit(300.004), False),
+        (_fit(300.01), False),
+        (_fit(160.0, reference=300.0), True),
+        (_fit(160.0, reference=300.01), False),
+        (_fit(20.0, reference=None, files=500), True),
+        (_fit(500.0, reference=None), False),
+    ],
+)
+def test_a_part_builds_whole_up_to_twice_the_line_on_the_larger_figure(fit, builds):
+    assert rules.part_builds_whole(fit) is builds
+
+
+def test_part_whole_line_quotes_the_figures_the_rule_and_ends_with_the_marker():
+    line = rules.part_whole_line("GH-346", ("GH-316", 2), _fit(200.0, reference=250.5, files=44))
+    limit = rules.PART_WHOLE_FACTOR * rules.SPLIT_COST_USD
+    assert "part 2 of GH-316" in line and "without asking" in line
+    assert "200.00 USD and 44 files" in line and "reference is 250.50 USD" in line
+    assert f"up to {limit} USD" in line and "task cap and the estimate cap still apply" in line
+    assert line.endswith("<!-- agentic-part-whole: GH-346 200.00 44 -->")
+    assert "no reference" in rules.part_whole_line("GH-346", ("GH-316", 2), _fit(200.0))
+
+
+def test_a_part_is_told_the_real_rule_with_the_limit_from_the_constants():
+    text = rules.split_part_text(("GH-316", 2))
+    limit = rules.PART_WHOLE_FACTOR * rules.SPLIT_COST_USD
+    assert f"up to {limit} USD" in text and "without asking" in text
+    assert "larger of your estimate and the history's reference" in text
+    assert "asks the human" in text and "whether to build the part whole" not in text
+
+
+def test_a_resume_of_a_part_that_never_asked_does_not_write_fit_waived():
+    state = {
+        "status": "waiting_on_human",
+        "type": "feature",
+        "subtasks": {"S1": {"status": "pending"}},
+        **rules.escalation("estimate", "the task passed twice its estimate"),
+    }
+    patch = rules.resumed(state, "go on")
+    assert "fit_waived" not in patch and "fit_question" not in patch
+
+
 def test_part_over_line_is_one_estimate_escalation_marked_fit_question_with_no_proposal():
     patch = rules.part_over_line("GH-338", PART_OF, GH_338_FIT)
     assert patch["escalation_class"] == "estimate" and patch["fit_question"] is True

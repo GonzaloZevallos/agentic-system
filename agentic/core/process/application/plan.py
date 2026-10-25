@@ -31,6 +31,10 @@ from .ports import Ports
 from .reflect_run import closed_documents
 from .run_role import Check, Output, finish, run_role
 
+# How the comment that says a part is built whole without asking starts: a resume looks past
+# the system's comments (`resume.SYSTEM_COMMENTS`).
+PART_BUILT_WHOLE = "Part built whole: "
+
 # The ephemeral-arm skip path's own value for the existing `{{proposed_invariants}}`
 # placeholder (issue #28): no prompt file is edited -- doing so would move
 # `prompts.fingerprint` for both arms and every future task (ADR-0005, ADR-0008) -- so
@@ -73,7 +77,9 @@ async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
         parts_field=rules.parts_field_text(part_of),
     )
     delivered = apply(patch, _delivered(cfg, output, written, spec.author.name))
-    return finish(state, _after_delivery(state, delivered, part_of, output, history), ports)
+    judged, built_whole = _after_delivery(state, delivered, part_of, output, history)
+    _tell_built_whole(ports, state["id"], part_of, built_whole)
+    return finish(state, judged, ports)
 
 
 def _part_of(state: TaskState) -> tuple[str, int] | None:
@@ -99,17 +105,46 @@ def _after_delivery(
     part_of: tuple[str, int] | None,
     output: Output | None,
     history: cost_history.History,
-) -> TaskState:
-    """The one place a part's plan is judged over the line (ADR-0054), on both arms: a
-    part that delivered subtasks the fit does not accept, with no waiver, keeps its plan
-    and pauses once to ask the human whether to build it whole. Anything else is left as
-    it is; `schemas.plan_fits` decides, so the text quotes the figures the check used."""
+) -> tuple[TaskState, schemas.FitDecision | None]:
+    """The one place a part's plan is judged over the line (ADR-0054), on both arms. Pure:
+    it returns the patch and, when the system builds the part whole by itself, the decision
+    that says so (the patch is then unchanged: no escalation, no `fit_question`, no
+    `fit_waived`; only a human's waiver is state, this one is evaluated again on every
+    delivered plan). A part that delivered subtasks the fit does not accept, with no waiver
+    and over what `rules.part_builds_whole` allows, keeps its plan and pauses once to ask
+    the human whether to build it whole. Anything else is left as it is;
+    `schemas.plan_fits` decides, so the text quotes the figures the check used."""
     if output is None or part_of is None or state.get("fit_waived") or not patch.get("subtasks"):
-        return patch
+        return patch, None
     fit = schemas.plan_fits(output.data, history)
     if fit.fits:
-        return patch
-    return apply(patch, rules.part_over_line(state["id"], part_of, fit))
+        return patch, None
+    if rules.part_builds_whole(fit):
+        return patch, fit
+    return apply(patch, rules.part_over_line(state["id"], part_of, fit)), None
+
+
+def _tell_built_whole(
+    ports: Ports,
+    task_id: str,
+    part_of: tuple[str, int] | None,
+    fit: schemas.FitDecision | None,
+) -> None:
+    """Tells the issue, once, that a part is built whole without asking (the receptor
+    pattern of `tracker_only`): the comments are read first and the line is posted only if
+    none carries its content marker, so a retry or a resumed run does not repeat it. A
+    tracker that fails does not stop the part: it goes on and the line is missing."""
+    if part_of is None or fit is None:
+        return
+    try:
+        marker = rules.part_whole_marker(task_id, fit)
+        if any(marker in body for body in ports.tracker.issue_comments(task_id)):
+            return
+        ports.tracker.comment(
+            task_id, PART_BUILT_WHOLE + rules.part_whole_line(task_id, part_of, fit)
+        )
+    except (ValueError, OSError):
+        return
 
 
 async def _plan_cold(
@@ -147,7 +182,9 @@ async def _plan_cold(
         parts_field=rules.parts_field_text(part_of),
     )
     delivered = _delivered(cfg, output, written, spec.author.name)
-    return finish(state, _after_delivery(state, delivered, part_of, output, history), ports)
+    judged, built_whole = _after_delivery(state, delivered, part_of, output, history)
+    _tell_built_whole(ports, state["id"], part_of, built_whole)
+    return finish(state, judged, ports)
 
 
 def _delivered(

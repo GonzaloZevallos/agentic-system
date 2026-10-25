@@ -4,8 +4,9 @@ both arms, and a plan that fits is delivered with its `estimate`."""
 
 import pytest
 
-from agentic.core.process.application.plan import plan
+from agentic.core.process.application.plan import PART_BUILT_WHOLE, plan
 from agentic.core.process.domain import rules
+from agentic.core.process.domain.schemas import FitDecision
 from agentic.core.process.domain.task import apply
 from agentic.shared.configuration import Configuration
 from tests.core.process.application.test_preflight import ORIGINAL_PARTS_WORDING
@@ -252,7 +253,7 @@ def arm_of(arm, tmp_path, *scripted):
 def over_the_line_by_reference(ports):
     """The GH-338 shape: the plan declares a small estimate, but the history of tasks with
     this many subtasks says one task of that size costs more than the limit."""
-    ports.documents.saved.extend(closed(f"OLD-{i}", 300.0) for i in range(6))
+    ports.documents.saved.extend(closed(f"OLD-{i}", 400.0) for i in range(6))
     return ports
 
 
@@ -359,3 +360,70 @@ async def test_the_tech_lead_of_a_task_that_is_not_a_part_reads_the_original_par
         assert wording in whole
         assert wording not in part
     assert "{{" not in whole and "{{" not in part
+
+
+@pytest.mark.parametrize("arm", ["cold", "interview"])
+async def test_a_part_at_twice_the_line_is_built_whole_with_one_line_on_the_issue(arm, tmp_path):
+    runner, cfg = arm_of(arm, tmp_path, planned(estimated_cost_usd=300.0, estimated_files=44))
+    ports = memory_ports(runner)
+    patch = await plan(PART, cfg, ports)
+
+    assert "escalated" not in patch and "fit_question" not in patch and "fit_waived" not in patch
+    assert list(patch["subtasks"]) == ["api"]
+    assert rules.after_plan(apply(PART, patch)) == "integrate"
+    [(task_id, line)] = ports.tracker.comments
+    assert task_id == "GH-346" and line.startswith(PART_BUILT_WHOLE)
+    assert "300.00 USD and 44 files" in line
+    assert rules.part_whole_marker("GH-346", FitDecision(False, 300.0, 44, None)) in line
+
+
+@pytest.mark.parametrize("arm", ["cold", "interview"])
+async def test_a_second_plan_of_the_same_part_posts_no_second_line(arm, tmp_path):
+    plans = [planned(estimated_cost_usd=300.0), planned(estimated_cost_usd=300.0)]
+    if arm == "cold":
+        runner, cfg = arm_of(arm, tmp_path, *plans)
+    else:
+        runner = ScriptedRunner(
+            **{ASK: [questions(1, session="e1"), questions(done=True, session="e1")] * 2},
+            **{ANSWER: [tech_answers(1, session="t1")] * 2},
+            tech_lead=plans,
+        )
+        cfg = interviewed(tmp_path)
+    ports = memory_ports(runner)
+    await plan(PART, cfg, ports)
+    again = await plan(PART, cfg, ports)
+
+    assert len(ports.tracker.comments) == 1
+    assert "escalated" not in again and "fit_waived" not in again
+
+
+@pytest.mark.parametrize("arm", ["cold", "interview"])
+@pytest.mark.parametrize("cost", [300.004, 300.01])
+async def test_a_part_just_over_twice_the_line_still_asks(arm, cost, tmp_path):
+    runner, cfg = arm_of(arm, tmp_path, planned(estimated_cost_usd=cost))
+    ports = memory_ports(runner)
+    patch = await plan(PART, cfg, ports)
+
+    assert patch["escalation_class"] == "estimate" and patch["fit_question"] is True
+    assert "fit_waived" not in patch
+    assert ports.tracker.comments == []
+
+
+@pytest.mark.parametrize("arm", ["cold", "interview"])
+async def test_a_part_over_twice_the_line_by_reference_still_asks(arm, tmp_path):
+    runner, cfg = arm_of(arm, tmp_path, planned(estimated_cost_usd=200.0))
+    patch = await plan(PART, cfg, over_the_line_by_reference(memory_ports(runner)))
+
+    assert patch["fit_question"] is True
+
+
+@pytest.mark.parametrize("arm", ["cold", "interview"])
+async def test_a_tracker_that_fails_does_not_stop_a_part_built_whole(arm, tmp_path):
+    runner, cfg = arm_of(arm, tmp_path, planned(estimated_cost_usd=250.0))
+    ports = memory_ports(runner)
+    ports.tracker.comment_failures = 1
+    patch = await plan(PART, cfg, ports)
+
+    assert "escalated" not in patch and "fit_question" not in patch
+    assert list(patch["subtasks"]) == ["api"]
+    assert ports.tracker.comments == []

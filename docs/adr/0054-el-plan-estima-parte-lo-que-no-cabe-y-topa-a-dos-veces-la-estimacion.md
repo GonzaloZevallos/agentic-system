@@ -83,3 +83,42 @@ intentos y una escalada (GH-338, GH-346).
   pidiendo una decisión humana, y los topes de tarea y de dos veces la estimación siguen.
 - **La huella se mueve una vez.** El placeholder nuevo cambia `prompts.fingerprint` para
   todas las tareas, sean partes o no (ADR-0005, ADR-0008).
+
+## Adenda (2026-10-25): una parte se construye entera sin preguntar hasta el doble de la línea (GH-346)
+
+El humano respondió "construirla entera" las cuatro veces que la pregunta de una parte llegó
+(GH-338, GH-346, GH-340, GH-347), y cada una detuvo el cupo de la cola hasta que alguien
+contestó.
+
+- **La regla del dueño.** La línea de costo es de 150 USD. Una parte cuyo plan pasa la línea
+  se construye entera sin preguntar mientras el mayor entre el costo declarado y la
+  referencia del historial no pase el doble (2 × 150 = 300 USD; 300,00 construye, 300,004
+  pregunta). Por encima del doble pregunta como hasta ahora (`rules.part_over_line`): es un
+  plan para mirar, no un tamaño para perdonar. Los archivos no topan esta regla.
+  `rules.part_builds_whole` es la única función que compara el costo o la referencia contra
+  el doble de la línea; el factor es `PART_WHOLE_FACTOR`, distinto de `ESTIMATE_CAP_FACTOR`.
+- **El sistema no escribe `fit_waived`.** `fit_waived` sigue significando "el humano dijo
+  construirla entera" y solo lo escribe `rules.resumed`. La renuncia del sistema no deja
+  estado y se evalúa de nuevo sobre cada plan entregado: una parte que se vuelve a planificar
+  a 900 USD vuelve a preguntar. `plan._after_delivery` sigue siendo pura y devuelve el parche
+  y la decisión; `plan._tell_built_whole` avisa.
+- **El aviso.** Una línea en el issue, con el prefijo `Part built whole: ` (registrado en
+  `resume.SYSTEM_COMMENTS`, para que ninguna reanudación la lea como decisión del humano), la
+  estimación, la referencia, los archivos y la regla, y al final el marcador de contenido
+  `<!-- agentic-part-whole: tarea costo archivos -->`. Se busca entre los comentarios antes de
+  postear (el patrón receptor de `tracker_only`), así un reintento no la repite; si el
+  tracker falla, la parte sigue sin aviso.
+- **Corrección.** "No puede gastar más: construir por encima de la línea sigue pidiendo una
+  decisión humana" vale ahora solo por encima del doble de la línea.
+- **El marcador es una entrada (estándar 8).** Quien puede editar un issue de la bandeja
+  puede, con el marcador, lograr que una parte se construya sin preguntar hasta 300 USD. La
+  renuncia no exime de ningún tope: siguen el tope de tarea, el tope por estimación (dos
+  veces la estimación) y el tope por intento.
+- **Señal.** `agentic.task.paused="estimate"` y `escalation_class="estimate"` cuentan menos
+  pausas de partes: solo las que pasan el doble. No se agrega etiqueta ni métrica.
+- **Texto al Tech Lead.** `rules.split_part_text` dice la regla real, con el límite tomado de
+  las constantes; estima con honestidad, sin encoger ni inflar para elegir camino. La huella
+  de los prompts no se mueve: es el valor de un placeholder.
+- **Riesgos conocidos.** Con el tope de tarea por defecto (250 USD), una parte entre 250 y
+  300 puede frenar a mitad de obra en ese tope. Sin referencia en el historial decide solo el
+  costo declarado: la estimación vuelve a ser su propio juez. La cantidad de archivos no topa.
