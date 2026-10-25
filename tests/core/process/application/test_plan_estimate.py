@@ -230,3 +230,118 @@ async def test_a_plan_without_a_checklist_stores_none_and_adds_no_block(tmp_path
     patch = await plan(TASK, cold(tmp_path), memory_ports(ScriptedRunner(tech_lead=[planned()])))
     assert "tracker_checklist" not in patch
     assert "Tracker work" not in patch["sections"]["Tech Lead"]
+
+
+# A task that is a part of a split (ADR-0054, GH-338 and GH-346): the Tech Lead is told so,
+# a part never gets `parts` as a remedy, and a part over the line asks the human once.
+
+PART = {
+    **TASK,
+    "id": "GH-346",
+    "description": f"Second half.\n\n{rules.split_marker('GH-316', 2)}",
+}
+
+
+def arm_of(arm, tmp_path, *scripted):
+    if arm == "cold":
+        return ScriptedRunner(tech_lead=list(scripted)), cold(tmp_path)
+    return interview_runner(*scripted), interviewed(tmp_path)
+
+
+def over_the_line_by_reference(ports):
+    """The GH-338 shape: the plan declares a small estimate, but the history of tasks with
+    this many subtasks says one task of that size costs more than the limit."""
+    ports.documents.saved.extend(closed(f"OLD-{i}", 300.0) for i in range(6))
+    return ports
+
+
+@pytest.mark.parametrize("arm", ["cold", "interview"])
+async def test_a_part_over_the_line_asks_once_and_keeps_its_plan(arm, tmp_path):
+    runner, cfg = arm_of(arm, tmp_path, planned(estimated_cost_usd=200.0))
+    patch = await plan(PART, cfg, over_the_line_by_reference(memory_ports(runner)))
+
+    assert runner.slugs.count("tech_lead") == 1
+    assert patch["escalation_class"] == "estimate"
+    assert patch["fit_question"] is True
+    assert "proposed_estimate" not in patch
+    assert list(patch["subtasks"]) == ["api"]
+    assert "part 2 of GH-316" in patch["escalated"] and "not planned" in patch["escalated"]
+    assert [e["kind"] for e in patch["pause_log"]].count("escalation") == 1
+    assert patch["failures"] == []
+
+
+@pytest.mark.parametrize("arm", ["cold", "interview"])
+async def test_the_resume_of_a_part_over_the_line_builds_it_whole_without_planning_again(
+    arm, tmp_path
+):
+    runner, cfg = arm_of(arm, tmp_path, planned(estimated_cost_usd=200.0))
+    patch = await plan(PART, cfg, over_the_line_by_reference(memory_ports(runner)))
+    paused = apply(PART, patch)
+    calls = len(runner.calls)
+
+    assert rules.auto_resumable(paused) is None
+    resumed = apply(paused, rules.resumed(paused, "build it whole"))
+
+    assert resumed["fit_waived"] is True and resumed["fit_question"] is False
+    assert rules.resume_target(resumed) == "integrate"
+    assert len(runner.calls) == calls
+
+
+@pytest.mark.parametrize("arm", ["cold", "interview"])
+async def test_a_part_whose_plan_fits_goes_on_with_no_escalation(arm, tmp_path):
+    runner, cfg = arm_of(arm, tmp_path, planned())
+    patch = await plan(PART, cfg, memory_ports(runner))
+
+    assert "escalated" not in patch and "fit_question" not in patch
+    assert rules.after_plan(apply(PART, patch)) == "integrate"
+
+
+@pytest.mark.parametrize("arm", ["cold", "interview"])
+async def test_a_part_with_the_fit_waived_is_not_asked_again(arm, tmp_path):
+    runner, cfg = arm_of(arm, tmp_path, planned(estimated_cost_usd=200.0))
+    waived = {**PART, "fit_waived": True}
+    patch = await plan(waived, cfg, over_the_line_by_reference(memory_ports(runner)))
+
+    assert "escalated" not in patch and list(patch["subtasks"]) == ["api"]
+
+
+@pytest.mark.parametrize("arm", ["cold", "interview"])
+async def test_a_task_that_is_not_a_part_over_the_line_by_reference_is_still_refused(
+    arm, tmp_path
+):
+    runner, cfg = arm_of(
+        arm, tmp_path, planned(estimated_cost_usd=200.0), planned_parts()
+    )
+    patch = await plan(TASK, cfg, over_the_line_by_reference(memory_ports(runner)))
+
+    assert "fit_question" not in patch
+    assert "does not fit" in patch["failures"][0]["error"]
+
+
+@pytest.mark.parametrize("arm", ["cold", "interview"])
+async def test_the_refusal_of_parts_on_a_part_says_subtasks_only_and_never_names_parts_as_the_remedy(
+    arm, tmp_path
+):
+    """GH-346: parts plus a checklist on a part. The retry reads the rule, not 'write parts'."""
+    with_checklist = planned_parts()
+    with_checklist.structured_output["tracker_checklist"] = ["Close the old board."]
+    runner, cfg = arm_of(arm, tmp_path, with_checklist, planned())
+    patch = await plan(PART, cfg, memory_ports(runner))
+
+    error = patch["failures"][0]["error"]
+    assert "part 2 of GH-316" in error and "write subtasks only" in error
+    assert "tracker_checklist" not in error
+    assert runner.slugs.count("tech_lead") == 2
+    assert list(patch["subtasks"]) == ["api"]
+
+
+@pytest.mark.parametrize("arm", ["cold", "interview"])
+async def test_the_tech_lead_of_a_part_is_told_it_is_one(arm, tmp_path):
+    part_runner, cfg = arm_of(arm, tmp_path, planned())
+    await plan(PART, cfg, memory_ports(part_runner))
+    whole_runner, cfg = arm_of(arm, tmp_path, planned())
+    await plan(TASK, cfg, memory_ports(whole_runner))
+
+    told = part_runner.calls[-1]["system_prompt"]
+    assert "part 2 of task GH-316" in told and "never split again" in told
+    assert "part 2" not in whole_runner.calls[-1]["system_prompt"]
