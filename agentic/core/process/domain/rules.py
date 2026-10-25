@@ -3696,6 +3696,10 @@ def replaced_note(sha: str, prs: Sequence[_BranchPullRequest], branch: str) -> s
 SPLIT_COST_USD = 150
 SPLIT_FILES = 40
 ESTIMATE_CAP_FACTOR = 2
+# How far over the cost line a part of a split is still built whole without asking
+# (ADR-0054, addendum): twice the line. A separate constant from the cap's factor, which
+# answers another question.
+PART_WHOLE_FACTOR = 2
 
 
 def estimate_fits(cost_usd: float, files: int, reference_usd: float | None) -> bool:
@@ -3725,19 +3729,59 @@ def split_part_of(body: str) -> tuple[str, int] | None:
     return (match.group(1), int(match.group(2))) if match else None
 
 
+def part_builds_whole(fit: FitDecision) -> bool:
+    """Whether a part whose plan is over the size line is built whole without asking the
+    human (ADR-0054, addendum): the larger of the declared cost and the history's reference
+    is at most `PART_WHOLE_FACTOR` times the cost line. Raw figures, no rounding; the number
+    of files never caps this rule. The one place that compares them against that limit."""
+    return max(fit.cost_usd, fit.reference_usd or 0.0) <= PART_WHOLE_FACTOR * SPLIT_COST_USD
+
+
+def part_whole_marker(task_id: str, fit: FitDecision) -> str:
+    """The content marker of the line `part_whole_line` ends with: the task and the figures
+    it quotes, so the system looks for it among the issue's comments before it posts."""
+    return f"<!-- agentic-part-whole: {task_id} {fit.cost_usd:.2f} {fit.files} -->"
+
+
+def part_whole_line(task_id: str, part_of: tuple[str, int], fit: FitDecision) -> str:
+    """The one line the system posts on the issue when it builds a part whole without asking:
+    which part, the figures the decision used, the rule with its limit, the caps that still
+    apply, and the content marker. It has no prefix: `plan.PART_BUILT_WHOLE`, which
+    `resume.SYSTEM_COMMENTS` registers, is prepended where it is posted, so a resume never
+    reads the line as the human's decision."""
+    origin, number = part_of
+    reference = (
+        f"the history's reference is {fit.reference_usd:.2f} USD"
+        if fit.reference_usd is not None
+        else "the history has no reference for this many subtasks"
+    )
+    limit = PART_WHOLE_FACTOR * SPLIT_COST_USD
+    return (
+        f"{task_id} is part {number} of {origin} and is built whole without asking. "
+        f"Its plan declares {fit.cost_usd:.2f} USD and {fit.files} files, and {reference}. "
+        f"A part is built whole up to {limit} USD on the larger of the two; above it, the "
+        "system asks the human. The task cap and the estimate cap still apply.\n\n"
+        f"{part_whole_marker(task_id, fit)}"
+    )
+
+
 def split_part_text(part_of: tuple[str, int] | None) -> str:
     """What the planning Tech Lead is told about its task being a part of a partition
     (ADR-0054): empty for a task that is not one. A part is never split again, so the text
-    asks for subtasks only and, when they are over the size limit, for an honest estimate:
-    the system asks the human whether to build the part whole."""
+    asks for subtasks only and states the real rule, with the figure taken from the
+    constants: up to `PART_WHOLE_FACTOR` times the cost line, on the larger of the estimate
+    and the history's reference, the system builds the part whole without asking."""
     if part_of is None:
         return ""
     task_id, part = part_of
+    limit = PART_WHOLE_FACTOR * SPLIT_COST_USD
     return (
         f"This task is part {part} of task {task_id}. A part is never split again: write "
         "subtasks only and never `parts`. If your subtasks are over the size limit, write "
-        "them anyway and estimate honestly, because the system then asks the human whether "
-        "to build the part whole; do not shrink the estimate to avoid that."
+        f"them anyway: up to {limit} USD, on the larger of your estimate and the history's "
+        "reference, the system builds the part whole without asking; above it, the system "
+        "asks the human. In both cases estimate honestly; do not shrink the estimate or inflate "
+        "it to pick a path."
     )
 
 

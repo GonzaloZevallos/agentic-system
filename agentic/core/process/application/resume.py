@@ -27,6 +27,7 @@ from .archive import STARTED_OVER
 from .deliver import READY
 from .discard import DISCARDED
 from .escalate import ESCALATED, NEEDS_HUMAN
+from .plan import PART_BUILT_WHOLE
 from .poll import (
     AUTO_MERGE_REFUSED,
     AUTO_MERGED,
@@ -60,6 +61,7 @@ SYSTEM_COMMENTS = (
     LANDING,
     RESTARTED_BY_LANDING,
     TRACKER_WORK,
+    PART_BUILT_WHOLE,
 )
 # What the document's frontmatter carries that is not state: the version record.
 STATE_FIELDS = frozenset(get_type_hints(TaskState)) - {"subtask_id"}

@@ -3,6 +3,7 @@
 import pytest
 
 from agentic.core.process.application import resume
+from agentic.core.process.application.plan import PART_BUILT_WHOLE
 from agentic.core.process.domain import document, legacy_names, roles, rules, schemas
 from agentic.shared.configuration import Configuration
 from tests.fakes import memory_ports
@@ -221,6 +222,14 @@ def test_the_decision_is_everything_the_human_said_after_the_system_last_spoke()
     assert resume.human_decision(["Escalated: x", "Keep it\r\nsimple."]) == "Keep it\nsimple."
     assert resume.human_decision(["Discussed before any run."]) is None
     assert resume.human_decision([]) is None
+
+
+def test_the_decision_reads_past_the_line_that_says_a_part_is_built_whole():
+    marker = "<!-- agentic-part-whole: GH-346 300.00 44 -->"
+    line = f"{PART_BUILT_WHOLE}GH-346 is part 2 of GH-316.\n\n{marker}"
+    assert PART_BUILT_WHOLE in resume.SYSTEM_COMMENTS
+    assert resume.human_decision(["Escalated: x", line, "Use USD."]) == "Use USD."
+    assert resume.human_decision(["Escalated: x", "Use USD.", line]) is None
 
 
 def test_the_decision_skips_a_started_over_comment_too():
