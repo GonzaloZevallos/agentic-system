@@ -77,8 +77,8 @@ O(min(bytes del corpus, presupuesto) × 2,23), retenida durante la vida del poll
 ## Lo que queda fuera del adaptador
 
 En la ronda 2 del perfil (0,70 s inflado por el perfilador), cada ítem es un seguimiento con
-alcance `outside`: `reflect_run.gather` (`gh pr list` y dos `git show`, no corre con los
-fakes), `decision_count` (0,002 s), `_closed_escalations` (≈0 s) y `lock.read` en
+alcance `outside`: `reflect_run.gather` (`gh pr list` y dos `git show`: no se midió, los
+fakes no lo ejercitan), `decision_count` (0,002 s), `_closed_escalations` (≈0 s) y `lock.read` en
 `gather_retakes` (≈0 s). Ninguno es hoy significativo frente a la copia y el `stat`; el
 siguiente costo real sería memoizar `ids()` (8 %) o dar a los escaneos un resumen en vez del
 documento completo.
