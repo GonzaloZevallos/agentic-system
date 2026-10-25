@@ -792,7 +792,7 @@ async def test_an_unverified_run_with_no_table_still_says_so(cfg):
     assert "### Performance not verified" in ports.tracker.pull_requests[0][2]
 
 
-# --- GH-336: a plan with a tracker checklist posts it, then opens the PR without Closes ---
+# --- GH-336: a plan with a tracker checklist posts it, then opens the PR (GH-344: it closes the issue) ---
 
 CHECKLIST = ["Post the verdict table on #12", "Close the follow-ups that are done"]
 WITH_CHECKLIST = {**TASK, "tracker_checklist": CHECKLIST}
@@ -806,7 +806,7 @@ def _resumed(state, patch):
     return resumed
 
 
-async def test_a_checklist_is_posted_once_before_a_pull_request_that_does_not_close_the_issue(cfg):
+async def test_a_checklist_is_posted_once_before_the_pull_request_that_closes_the_issue(cfg):
     ports = memory_ports()
     patch = await deliver(WITH_CHECKLIST, cfg, ports)
 
@@ -815,7 +815,7 @@ async def test_a_checklist_is_posted_once_before_a_pull_request_that_does_not_cl
     # The checklist comment comes first; the "Ready for review" one follows the pull request.
     assert ports.tracker.comments[0][1].startswith("Tracker work for you")
     assert ports.tracker.comments[1][1].startswith("Ready for review")
-    assert ports.tracker.closes_issue_calls == [False]
+    assert ports.tracker.closes_issue_calls == [True]  # GH-344: was [False] (ADR-0062 §4)
     assert len(ports.tracker.pull_requests) == 1
     assert patch["tracker_checklist_posted"]["hash"] == rules.tracker_hash(CHECKLIST)
     assert ports.documents.saved[0]["tracker_checklist_posted"] == patch["tracker_checklist_posted"]
@@ -836,7 +836,7 @@ async def test_a_failing_checklist_comment_still_opens_the_pull_request_with_the
     patch = await deliver(WITH_CHECKLIST, cfg, ports)
 
     assert patch["status"] == "ready_for_review" and "escalation_class" not in patch
-    assert ports.tracker.closes_issue_calls == [False]
+    assert ports.tracker.closes_issue_calls == [True]  # GH-344: was [False] (ADR-0062 §4)
     body = ports.tracker.pull_requests[0][2]
     (ready,) = [t for _, t in ports.tracker.comments if t.startswith("Ready for review")]
     for text in (body, ready):
@@ -858,7 +858,7 @@ async def test_an_empty_or_absent_record_posts_the_list_once(cfg, record):
 
     posted = [t for _, t in ports.tracker.comments if t.startswith("Tracker work for you: ")]
     assert len(posted) == 1
-    assert ports.tracker.closes_issue_calls == [False]
+    assert ports.tracker.closes_issue_calls == [True]  # GH-344: was [False] (ADR-0062 §4)
     assert patch["tracker_checklist_posted"]["hash"] == rules.tracker_hash(CHECKLIST)
 
 
@@ -962,3 +962,23 @@ async def test_a_lost_record_does_not_post_the_checklist_twice_because_of_the_ma
     await deliver(lost, cfg, ports)
     tracker_comments = [t for _, t in ports.tracker.comments if t.startswith("Tracker work")]
     assert len(tracker_comments) == 1
+
+
+# --- GH-344: the delivery pull request always closes its issue ---
+
+
+@pytest.mark.parametrize("checklist", [False, True])
+@pytest.mark.parametrize("over_cap", [False, True])
+async def test_the_delivery_pull_request_closes_its_issue_whatever_the_body_carries(
+    cfg, over_cap, checklist
+):
+    ports = memory_ports()
+    if over_cap:
+        ports.workspace.files[("HEAD", "CODING_STANDARDS.md")] = _doc(200)
+        ports.workspace.files[(BRANCH_REF, "CODING_STANDARDS.md")] = _doc(301)
+
+    patch = await deliver(WITH_CHECKLIST if checklist else TASK, cfg, ports)
+
+    assert patch["status"] == "ready_for_review"
+    assert ports.tracker.closes_issue_calls == [True]
+    assert ("## Criteria over cap" in ports.tracker.pull_requests[0][2]) is over_cap

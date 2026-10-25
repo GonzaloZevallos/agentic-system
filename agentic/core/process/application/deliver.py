@@ -151,7 +151,7 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         step = "gh pr create failed"
         # A pull request the task already has is kept: the push alone re-delivers it.
         url = state.get("pull_request") or ports.tracker.open_pull_request(
-            state["id"], task.branch, state["title"], body.text, closes_issue=not checklist
+            state["id"], task.branch, state["title"], body.text, closes_issue=True
         )
     except (GitError, ValueError) as failed:
         return finish(
