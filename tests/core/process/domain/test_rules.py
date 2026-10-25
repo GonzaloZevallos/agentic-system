@@ -21,7 +21,7 @@ from agentic.core.process.domain.roles import (
     PRODUCT_ANALYST_BUG,
     TECH_LEAD_EPHEMERAL,
 )
-from agentic.core.process.domain.schemas import TaskType
+from agentic.core.process.domain.schemas import FitDecision, TaskType
 from agentic.core.process.domain.task import INTEGRATION, Carried
 
 PAIR = PAIR_PM_PA
@@ -3385,3 +3385,80 @@ def test_a_tracker_only_task_paused_after_the_plan_or_on_a_failed_comment_resume
     # A task with a pull request is over, whatever the checklist says.
     delivered = {**after_plan, "pull_request": "https://github.com/o/r/pull/3"}
     assert rules.resume_target(delivered) is None
+
+
+# A part whose plan is over the line asks once (GH-338): "build it whole or stop".
+
+PART_OF = ("GH-316", 2)
+GH_338_FIT = FitDecision(False, 20.0, 4, 200.0)
+
+
+def test_the_fit_question_of_the_gh_338_shape_quotes_its_figures_and_blames_the_reference():
+    text = rules.fit_question_text("GH-338", PART_OF, GH_338_FIT)
+    assert "part 2 of GH-316" in text and "never split again" in text
+    assert "20.00 USD and 4 files" in text and "200.00 USD" in text
+    assert "the history's reference is over the 150 USD limit" in text
+    assert "declared cost is over" not in text and "declared files are over" not in text
+    assert "not planned" in text and "leave it open" in text and "do not resume" in text
+    assert "completed without a merge leaves the parts behind it blocked" in text
+
+
+def test_the_fit_question_names_a_missing_reference_and_the_limit_the_declaration_crossed():
+    text = rules.fit_question_text("GH-9", PART_OF, FitDecision(False, 400.0, 90, None))
+    assert "no reference for this many subtasks" in text
+    assert "declared cost is over the 150 USD limit" in text
+    assert "declared files are over the 40 file limit" in text
+
+
+def test_the_fit_question_without_figures_says_they_are_not_known():
+    text = rules.fit_question_text("GH-9", PART_OF, None)
+    assert "not known" in text and "never split again" in text
+
+
+def test_the_fit_question_offers_no_way_to_stop_by_resuming():
+    for fit in (GH_338_FIT, None):
+        lines = rules.fit_question_text("GH-9", PART_OF, fit).splitlines()
+        stops = [line for line in lines if line.startswith("- Stop")]
+        assert len(stops) == 2
+        assert not any("resume" in line and "do not resume" not in line for line in stops)
+
+
+def test_part_over_line_is_one_estimate_escalation_marked_fit_question_with_no_proposal():
+    patch = rules.part_over_line("GH-338", PART_OF, GH_338_FIT)
+    assert patch["escalation_class"] == "estimate" and patch["fit_question"] is True
+    assert patch["escalated"] == rules.fit_question_text("GH-338", PART_OF, GH_338_FIT)
+    assert patch["status"] == "waiting_on_human" and patch["current_role"] == "PjM"
+    assert "proposed_estimate" not in patch
+    assert patch["pause_log"] == [{"kind": "escalation", "value": "estimate"}]
+
+
+def test_a_part_paused_over_the_line_and_resumed_with_a_comment_waives_the_fit():
+    subtasks = {"S1": {"status": "pending"}}
+    paused = {
+        "status": "planned",
+        "type": "feature",
+        "subtasks": subtasks,
+        "estimate": {"cost_usd": 20.0, "files": 4},
+        **rules.part_over_line("GH-338", PART_OF, GH_338_FIT),
+    }
+    paused = task.apply({}, paused)
+    patch = rules.resumed(paused, "Build it whole.")
+    assert patch["fit_waived"] is True and patch["fit_question"] is False
+    # The plan is kept: nothing plans again.
+    assert patch["status"] == "planned"
+    assert rules.resume_target(task.apply(paused, patch)) == "integrate"
+    assert "estimate_revisions" not in patch
+
+
+def test_a_part_paused_by_the_cap_at_twice_the_estimate_is_not_waived_by_a_resume():
+    paused = {
+        "status": "waiting_on_human",
+        "type": "feature",
+        "subtasks": {"S1": {"status": "pending"}},
+        "estimate": {"cost_usd": 20.0, "files": 4},
+        "proposed_estimate": 60.0,
+        **rules.escalation("estimate", "the task passed twice its estimate"),
+    }
+    patch = rules.resumed(paused, "Go on.")
+    assert "fit_waived" not in patch and "fit_question" not in patch
+    assert patch["estimate_revisions"] == [{"cost_usd": 60.0, "source": "proposed"}]
