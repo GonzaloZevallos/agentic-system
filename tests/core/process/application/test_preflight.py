@@ -293,6 +293,43 @@ def test_placeholders_carry_an_empty_split_part_slot():
     assert PLACEHOLDERS["split_part"] == ""
 
 
+# The three passages as the prompts carried them before they became placeholders (git
+# 63d29be), typed here on purpose and not read from `rules`: this is what a typo in the
+# `rules` constants is compared against.
+ORIGINAL_PARTS_WORDING = {
+    "{{parts_remedy}}": (
+        "as one task: write it as `parts` (see `### Parts`) instead of subtasks. Do not shrink the"
+        "\n"
+        "   estimate to make it fit; a plan that fits and carries `parts` is refused too."
+    ),
+    "{{parts_step}}": (
+        "8. `### Parts`, only when the estimate does not fit: at least two chained parts, each a\n"
+        "   small task of its own that lands and shows in the product before the next one starts.\n"
+        "   Each part has a `title`, a `body` (its whole description: the person who builds it has"
+        "\n"
+        "   not seen this plan) and `depends_on`, the numbers of EARLIER parts (1 is the first).\n"
+        "   Write no subtasks then, and `### Subtasks` is not needed. A part is never split again."
+        "\n"
+        "   If the section `## Human` says the human decided to build this task whole, write\n"
+        "   subtasks and no parts."
+    ),
+    "{{parts_field}}": (
+        "- `parts`: one entry per part with `title`, `body` and `depends_on`, ONLY when the\n"
+        "  estimate does not fit; then `subtasks` is empty. Empty when the plan fits."
+    ),
+}
+
+
+def before_this_change(raw: str) -> str:
+    """The prompt file as it was: no slot line, the original wording where the
+    placeholders now stand."""
+    before = raw.replace("{{split_part}}\n", "")
+    for placeholder, wording in ORIGINAL_PARTS_WORDING.items():
+        assert before.count(placeholder) == 1
+        before = before.replace(placeholder, wording)
+    return before
+
+
 @pytest.mark.parametrize("slug", ["tech_lead", "tech_lead_platform"])
 def test_the_planning_prompts_differ_from_before_only_by_the_empty_slot(slug, tmp_path):
     """`{{split_part}}` sits on a line of its own in each planning Tech Lead prompt, so
@@ -302,9 +339,7 @@ def test_the_planning_prompts_differ_from_before_only_by_the_empty_slot(slug, tm
     ports = memory_ports()
     raw, _ = ports.prompts.raw(role)
     assert raw.count("{{split_part}}\n") == 1
-    before_ports = memory_ports(
-        prompts=MemoryPrompts(**{slug: raw.replace("{{split_part}}\n", "")})
-    )
+    before_ports = memory_ports(prompts=MemoryPrompts(**{slug: before_this_change(raw)}))
 
     after = load_prompt(role, cfg, ports, {}, **PLACEHOLDERS).text.split("\n")
     before = load_prompt(role, cfg, before_ports, {}, **PLACEHOLDERS).text.split("\n")
