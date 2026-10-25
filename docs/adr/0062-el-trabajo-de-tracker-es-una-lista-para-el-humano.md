@@ -114,6 +114,9 @@ un merge cuyo PR no traía `Closes #N` dejaba el issue abierto hasta que un huma
   `report_failures` (por defecto `True`: `agentic close --all` no cambia); el poller lo pasa
   en `False`. Un cierre que falla o una cola ilegible reintenta en silencio en la vuelta
   siguiente; una falla persistente se ve en el issue abierto y en `agentic close --all`.
+  Eso incluye una falla de transporte de la lectura de la cola: el barrido no corta la vuelta,
+  y la lectura de `gather_launches` que le sigue falla igual y la termina como siempre (el
+  adaptador `gh` imprime su propia línea en cada lectura caída, así que aparece dos veces).
   Una vuelta sin nada nuevo sigue imprimiendo `nothing to do this round`.
 - **Costo:** un `gh issue list` más por vuelta (además del de `gather_launches`), lineal en
   los issues `agentic` abiertos, más un `gh issue close` por cada cierre.

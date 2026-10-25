@@ -5191,7 +5191,7 @@ def _poll_over_a_real_tracker(tmp_path, stderr, returncode=1, failing=1):
 
 @pytest.mark.anyio
 async def test_poll_the_incident_one_failed_round_then_the_next_round_retries(tmp_path, capsys):
-    poll, calls, sleeps = _poll_over_a_real_tracker(tmp_path, _UNREACHABLE_STDERR)
+    poll, calls, sleeps = _poll_over_a_real_tracker(tmp_path, _UNREACHABLE_STDERR, failing=2)
 
     with pytest.raises(_Stop):  # only the sentinel escapes: the poller lived through round 1
         await poll
@@ -5200,7 +5200,8 @@ async def test_poll_the_incident_one_failed_round_then_the_next_round_retries(tm
     first = calls[0]
     assert sum(1 for call in calls if call == first) >= 2  # round 2 made the same read again
     lines = capsys.readouterr().out.splitlines()
-    assert sum(1 for line in lines if line.startswith("agentic: gh ")) == 1  # run_gh's line
+    # run_gh's line, once for the silent sweep read and once for the launch read that ends it
+    assert sum(1 for line in lines if line.startswith("agentic: gh ")) == 2
     assert sum(1 for line in lines if "round ended early" in line) == 1
     assert not any("githubstatus" in line or "api.github.com" in line for line in lines)
 
