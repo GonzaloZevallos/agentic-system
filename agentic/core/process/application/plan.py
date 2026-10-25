@@ -17,7 +17,7 @@ from pathlib import Path
 
 from agentic.shared.configuration import Configuration, experiment_snapshot
 
-from ..domain import cost_history, plan_view, schemas
+from ..domain import cost_history, plan_view, rules, schemas
 from ..domain.roles import (
     INTERVIEW_SOLUTION,
     INTERVIEW_SOLUTION_PLATFORM,
@@ -66,8 +66,14 @@ async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
         resume=transcript.sessions.get(spec.author_side.slug),
         proposed_invariants=_proposed(state, spec, transcript.invariants),
         cost_history=history.text(),
+        split_part=_split_part(state),
     )
     return finish(state, apply(patch, _delivered(cfg, output, written, spec.author.name)), ports)
+
+
+def _split_part(state: TaskState) -> str:
+    """The prompt's `{{split_part}}` slot: empty unless the task is a part of a split."""
+    return rules.split_part_text(rules.split_part_of(state.get("description", "")))
 
 
 def _estimate_check(state: TaskState, history: cost_history.History) -> Check:
@@ -105,6 +111,7 @@ async def _plan_cold(
         cwd=cwd,
         proposed_invariants=_SKIPPED_PROPOSAL,
         cost_history=history.text(),
+        split_part=_split_part(state),
     )
     return finish(state, _delivered(cfg, output, written, spec.author.name), ports)
 
