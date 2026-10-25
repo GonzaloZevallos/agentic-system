@@ -956,38 +956,83 @@ def _merge_commit_for(ports: Ports, blocker: int, closing_merge_commit: str | No
     return closing_merge_commit
 
 
-def _blocker_resolved(
+_Verdict = Literal["resolved", "open", "unknown"] | rules.BlockerReason
+
+
+def _blocker_verdict(
     cfg: Configuration, ports: Ports, blocker: int, upstream: Callable[[], Upstream]
-) -> bool:
+) -> _Verdict:
+    """How one blocker stands. Every resolution path sits behind `state == "CLOSED"`: an
+    open issue never resolves. A `COMPLETED` issue resolves on a merge commit in the
+    upstream, or (GH-344, no merge commit of its own) on a status the system recorded:
+    `closed_by_slices` with every unit's `reviewed_head` an ancestor of the upstream, or
+    `tracker_only`, where there was no pull request and nothing to merge. Never prose."""
     state = ports.tracker.issue_state(blocker)
     if state.state != "CLOSED":
-        return False
-    merge_commit = _merge_commit_for(ports, blocker, state.closing_merge_commit)
+        return "open"
+    if state.state_reason not in ("COMPLETED", "NOT_PLANNED"):
+        return "unknown"
+    if state.state_reason == "NOT_PLANNED":
+        return "resolved"
     # The fetched tip, never local `HEAD` (GH-180): a merge on the remote that nobody
     # pulled is merged. `upstream` is asked only here, when a merge commit is to be
     # judged, and is memoised per round by `run_once`: at most one fetch.
-    merged = merge_commit is not None and ports.workspace.is_ancestor(
-        cfg.product_dir, merge_commit, ref=upstream().sha or "HEAD"
-    )
-    return rules.blocker_resolved(state.state_reason, merged)
+    merge_commit = _merge_commit_for(ports, blocker, state.closing_merge_commit)
+    if merge_commit is not None:
+        tip = upstream().sha
+        merged = ports.workspace.is_ancestor(cfg.product_dir, merge_commit, ref=tip or "HEAD")
+        if merged:
+            return "resolved"
+        # With no fetched tip the judgement fell back to local `HEAD`, and the round already
+        # carries the upstream note: that is doubt, not a verdict on the merge.
+        return "merge_not_in_upstream" if tip else "unknown"
+    document = ports.documents.load(ports.inbox.task_id(blocker)) or {}
+    if document.get("status") == "tracker_only":
+        return "resolved" if rules.blocker_resolved(state.state_reason, True) else "unknown"
+    heads = rules.slices_landed_heads(document)
+    if heads is None:
+        return "no_merge_recorded"
+    tip = upstream().sha
+    if all(ports.workspace.is_ancestor(cfg.product_dir, h, ref=tip or "HEAD") for h in heads):
+        return "resolved"
+    return "slices_not_in_upstream" if tip else "unknown"
 
 
 def _blocked(
     cfg: Configuration, ports: Ports, number: int, upstream: Callable[[], Upstream]
-) -> bool:
-    """Whether `number` still has an unresolved blocker. Any doubt -- an unknown git
-    object, a `gh` failure, a blocker whose own `stateReason` this function does not
-    recognize, or a real git failure (`GitError` out of `Workspace.is_ancestor`,
-    `ValueError`/`OSError` out of a `gh` call that is not merely "unknown field") --
-    reads as blocked (Tech Lead plan: "ante la duda, no lanza"). A `GitError` escaping
-    here would otherwise end the whole `_poll` loop, which has no handler of its own
-    (the blocking finding this closes): one candidate's git trouble must cost that
-    candidate's own launch, never the round, and never the process."""
+) -> rules.BlockerReport:
+    """What `number`'s blockers come to; the launch predicate is `bool(report)`. Any
+    doubt -- an unknown git object, a `gh` failure, a blocker whose own `stateReason` this
+    function does not recognize, or a real git failure (`GitError` out of
+    `Workspace.is_ancestor`, `ValueError`/`OSError` out of a `gh` call that is not merely
+    "unknown field") -- puts that blocker in `unknown`, which blocks (Tech Lead plan: "ante
+    la duda, no lanza"). A `GitError` escaping here would otherwise end the whole `_poll`
+    loop, which has no handler of its own (the blocking finding this closes): one
+    candidate's git trouble must cost that candidate's own launch, never the round, and
+    never the process. When the blockers themselves cannot be read the candidate is its
+    own `unknown` entry, so the report still blocks."""
     try:
         blockers = _blocker_numbers(ports, number)
-        return not all(_blocker_resolved(cfg, ports, b, upstream) for b in blockers)
     except (ValueError, OSError, KeyError, GitError):
-        return True
+        return rules.BlockerReport(unknown=(number,))
+    open_: list[int] = []
+    closed: list[tuple[int, rules.BlockerReason]] = []
+    unknown: list[int] = []
+    for blocker in blockers:
+        try:
+            verdict = _blocker_verdict(cfg, ports, blocker, upstream)
+        except (ValueError, OSError, KeyError, GitError):
+            verdict = "unknown"
+        match verdict:
+            case "resolved":
+                pass
+            case "open":
+                open_.append(blocker)
+            case "unknown":
+                unknown.append(blocker)
+            case reason:
+                closed.append((blocker, reason))
+    return rules.BlockerReport(tuple(open_), tuple(closed), tuple(unknown))
 
 
 def gather_launches(
@@ -995,13 +1040,15 @@ def gather_launches(
     ports: Ports,
     registry: RunRegistry,
     upstream: Callable[[], Upstream] | None = None,
+    reports: list[rules.BlockerReport] | None = None,
 ) -> list[rules.LaunchCandidate]:
     """Every open `agentic`-labelled issue with no document yet (no run, so nothing
     delivered and no pull request either): `rules.poll_plan`'s own launch candidates,
     with each one's own launch-attempt schedule (`registry.launch_attempts`) so a
     launch that never registered a run does not relaunch every round. An issue that
     now has a document clears its own stale attempt record (`registry.clear_launch`):
-    it is no longer a candidate at all."""
+    it is no longer a candidate at all. Each candidate's `BlockerReport` is appended to
+    `reports` when given (GH-344), for the queue-blocked line."""
     upstream = upstream or functools.cache(ports.workspace.upstream)
     product = ports.stack.product()
     launches: list[rules.LaunchCandidate] = []
@@ -1010,12 +1057,14 @@ def gather_launches(
         if ports.documents.load(task_id) is not None:
             registry.clear_launch(product, number)
             continue
-        blocked = _blocked(cfg, ports, number, upstream)
+        report = _blocked(cfg, ports, number, upstream)
+        if reports is not None:
+            reports.append(report)
         attempt = registry.launch_attempts(product, number)
         since = attempt.since if attempt is not None else None
         prior = attempt.prior if attempt is not None else 0
         launches.append(
-            rules.LaunchCandidate(number, blocked, since, prior, len(rules.LAUNCH_SCHEDULE))
+            rules.LaunchCandidate(number, bool(report), since, prior, len(rules.LAUNCH_SCHEDULE))
         )
     return launches
 
@@ -1336,7 +1385,8 @@ def run_once(
             spent, covered = rules.trailing_spend(machine, now)
             pace = rules.SpendPace(spent, covered, live, cfg.spend_pace_usd_per_h)
         upstream = functools.cache(ports.workspace.upstream)
-        launches = gather_launches(cfg, ports, registry, upstream)
+        blocker_reports: list[rules.BlockerReport] = []
+        launches = gather_launches(cfg, ports, registry, upstream, blocker_reports)
         merges: list[int] = []
         merge_lines: list[str] = []
         lands: list[rules.LandCandidate] = []
@@ -1356,6 +1406,7 @@ def run_once(
                 reruns,
             )
         for number in reruns:
+            blocker_reports.append(rules.BlockerReport())
             # A fresh run is a launch of an issue that already has a document: the launch
             # calendar is what keeps a child that never registered from restarting every round.
             attempt = registry.launch_attempts(product, number)
@@ -1402,4 +1453,5 @@ def run_once(
     # touches no task.
     lines += reflect_lines(cfg, ports, launcher, argv0)
     lines = [*human_lines, *merge_lines, *lines, *deferral_lines]
-    return [*notes, *(lines or ["agentic: poll: nothing to do this round"])]
+    idle = rules.queue_blocked_line(blocker_reports) or "agentic: poll: nothing to do this round"
+    return [*notes, *(lines or [idle])]

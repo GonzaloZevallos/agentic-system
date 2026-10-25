@@ -3966,11 +3966,12 @@ def slices_landed_heads(document: TaskState) -> tuple[str, ...] | None:
     re-verifies. `None` when nothing was recorded, there are no units, or a unit has no head."""
     if not document.get("closed_by_slices"):
         return None
-    units = [name for name in document.get("subtasks", {}) if name != INTEGRATION]
-    heads = [document["subtasks"][name].get("reviewed_head") for name in units]
-    if not heads or not all(isinstance(head, str) and head for head in heads):
+    subtasks = document.get("subtasks", {})
+    heads = [subtasks[name].get("reviewed_head") for name in subtasks if name != INTEGRATION]
+    landed = tuple(head for head in heads if isinstance(head, str) and head)
+    if not heads or len(landed) != len(heads):
         return None
-    return tuple(heads)
+    return landed
 
 
 def queue_blocked_line(reports: Sequence[BlockerReport]) -> str | None:

@@ -3607,7 +3607,9 @@ def test_the_queue_blocked_line_names_a_shared_blocker_once():
 
 def test_the_queue_blocked_line_is_silent_when_a_candidate_could_launch_or_none_exist():
     assert rules.queue_blocked_line([]) is None
-    assert rules.queue_blocked_line([_closed(4, "no_merge_recorded"), rules.BlockerReport()]) is None
+    assert (
+        rules.queue_blocked_line([_closed(4, "no_merge_recorded"), rules.BlockerReport()]) is None
+    )
 
 
 def test_the_queue_blocked_line_is_silent_when_no_blocker_is_a_closed_one():
