@@ -53,3 +53,33 @@ rol estima hoy, así que el tamaño se descubre construyendo. Decisión del due�
 - Si el PR de una parte se cierra sin fusionar, la cadena queda detenida hasta que el
   humano decida.
 - Cada parte repite la entrevista de solución.
+
+## Adenda (2026-10-25): una parte lo sabe de entrada y pregunta una sola vez (GH-340)
+
+La tarea que es parte de una partición se enteraba de que lo era por rechazos mecánicos
+("escribe partes" a una parte, luego "una parte no lleva checklist"), y cada uno costaba dos
+intentos y una escalada (GH-338, GH-346).
+
+- **Se le dice de entrada.** `rules.split_part_of` es la única función que lee el marcador;
+  `plan` la llama una vez y pasa el resultado al chequeo del plan
+  (`schemas.plan_check_for(part_of=…)`) y al prompt del Tech Lead (`{{split_part}}`). A una
+  parte se le rechaza `parts` primero, con la regla y sin nombrar `parts` como remedio.
+- **Pregunta una sola vez, después de entregar.** Un plan de subtareas de una parte que no
+  cabe ya no se rechaza: `plan._after_delivery`, usada por la entrevista y por
+  `skip_ephemeral`, llama a `schemas.plan_fits` y, si no cabe y no hay renuncia, deja el plan
+  y escala una vez con la clase `estimate` (`rules.part_over_line`, marcada con
+  `fit_question`). Reanudar no vuelve a planificar: va a `integrate`.
+- **La renuncia va atada a la pregunta.** `rules.resumed` pone `fit_waived` solo si
+  `fit_question` está puesta (o por la cláusula heredada `estimate` + `parts`), nunca por el
+  tope a dos veces la estimación. Cualquier reanudación con comentario construye la parte
+  entera; detenerla es no reanudar, y el texto (`rules.fit_question_text`) lo dice, con
+  "no planificada" como el cierre que libera a las partes que dependen de ella. `--estimate`
+  se rechaza en esa pausa; sin comentario se repite la pregunta.
+- **Señal.** `agentic.task.paused="estimate"` y `escalation_class` ahora cuentan también una
+  parte fuera de la línea. No se agrega etiqueta; distinguirla es leer `fit_question` en el
+  documento.
+- **El marcador es una entrada (estándar 8).** Quien puede editar el issue puede apagar la
+  partición de esa tarea. No puede gastar más: construir por encima de la línea sigue
+  pidiendo una decisión humana, y los topes de tarea y de dos veces la estimación siguen.
+- **La huella se mueve una vez.** El placeholder nuevo cambia `prompts.fingerprint` para
+  todas las tareas, sean partes o no (ADR-0005, ADR-0008).

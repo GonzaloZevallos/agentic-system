@@ -327,7 +327,7 @@ _Avoid_: rechazado, cerrado (el que cierra es el humano), wontfix (la etiqueta d
 _Campo_: won't fix, works as intended — resoluciones de los trackers (Bugzilla `WONTFIX` y `WORKSFORME`, Chromium `WontFix` y `WorkingAsIntended`). Acá es un estado de la tarea, no una resolución del issue
 
 **Partida**:
-El final de una tarea cuyo plan no cabe (más de 150 USD o de 40 archivos, o por encima del p90 de su balde; ADR-0054): no construye nada. Abre un issue por parte, encadenados con `Blocked by:` y con la etiqueta `agentic`, cada uno con su propio pull request chico; comenta la lista en el issue original y termina la corrida sin pull request, y no se relanza. Es un final, no una pausa: no se reanuda. Una parte nunca se parte de nuevo: si su plan tampoco cabe, escala con la clase `estimate` y una decisión del humano la construye entera.
+El final de una tarea cuyo plan no cabe (más de 150 USD o de 40 archivos, o por encima del p90 de su balde; ADR-0054): no construye nada. Abre un issue por parte, encadenados con `Blocked by:` y con la etiqueta `agentic`, cada uno con su propio pull request chico; comenta la lista en el issue original y termina la corrida sin pull request, y no se relanza. Es un final, no una pausa: no se reanuda. Una parte nunca se parte de nuevo: se le dice de entrada que lo es y escribe solo subtareas; si su plan tampoco cabe, la pregunta "construirla entera o detenerla" se hace una sola vez, con el plan guardado, y escala con la clase `estimate`.
 _Avoid_: descartado (acá sí hay algo que construir, en las partes), dividida (la unidad es la parte, no la tarea), subtarea (esas se construyen dentro de una tarea; las partes son tareas)
 _Campo_: sin término de arte
 
@@ -342,7 +342,7 @@ _Avoid_: subtarea (esas las construye un Developer), tarea de tracker
 _Campo_: sin término de arte
 
 **Escalado**:
-Lo que un rol, un par o el tope dejan dicho cuando la tarea no puede seguir sin el humano, con las preguntas si las hay. El sistema lo entrega al humano en el issue y pausa la tarea: queda esperando con su estado guardado, sin gastar, y se retoma desde el mismo punto. Son ocho las situaciones que lo provocan (su clase de escalado): PjM no puede clasificarla, un par llegó a su límite, un rol falló dos veces o la entrega del propio sistema a GitHub falló, se alcanzó el tope de tarea, quedaron preguntas para el humano, una subtarea no pudo mergear su dependencia, el setup del producto falló en un checkout, o la estimación del plan no cabe (ADR-0054). El motivo viaja como texto libre para el humano; cuál de las ocho situaciones fue, además, como dato cerrado (Clase de escalado).
+Lo que un rol, un par o el tope dejan dicho cuando la tarea no puede seguir sin el humano, con las preguntas si las hay. El sistema lo entrega al humano en el issue y pausa la tarea: queda esperando con su estado guardado, sin gastar, y se retoma desde el mismo punto. Son ocho las situaciones que lo provocan (su clase de escalado): PjM no puede clasificarla, un par llegó a su límite, un rol falló dos veces o la entrega del propio sistema a GitHub falló, se alcanzó el tope de tarea, quedaron preguntas para el humano, una subtarea no pudo mergear su dependencia, el setup del producto falló en un checkout, o la estimación del plan no cabe, o una parte no cabe (ADR-0054). El motivo viaja como texto libre para el humano; cuál de las ocho situaciones fue, además, como dato cerrado (Clase de escalado).
 _Avoid_: causa, pausa, bloqueo, espera
 _Campo_: escalation — de soporte y operaciones, no del campo agéntico; ahí el mecanismo es interrupt (LangGraph): frena el grafo, expone un valor al cliente y se reanuda con `Command(resume=...)`
 
@@ -352,7 +352,7 @@ _Avoid_: motivo de escalado, tipo de escalado (para la clase)
 _Campo_: sin término de arte
 
 **Reanudación**:
-La tarea sigue desde donde se pausó. Hace falta una decisión del humano cuando hay preguntas abiertas, un par llegó a su límite o la estimación no cabe (`estimate`: ni el sondeo ni el sondeo periódico la reanudan; solo una decisión, que además deja la revisión de la estimación), y con ella el contador de ese par vuelve a cero; un tope alcanzado o un fallo de rol se reanudan sin decisión, y una corrida interrumpida también. Nada se reanuda bajo un tope ya gastado. Si el estado guardado se perdió, se reconstruye desde el documento de tarea, cruzado con git.
+La tarea sigue desde donde se pausó. Hace falta una decisión del humano cuando hay preguntas abiertas, un par llegó a su límite o la estimación no cabe (`estimate`: ni el sondeo ni el sondeo periódico la reanudan; solo una decisión, que además deja la revisión de la estimación), y con ella el contador de ese par vuelve a cero; la pregunta de una parte que no cabe se hace una sola vez y cualquier reanudación con comentario la construye entera sin planificar de nuevo (detenerla es no reanudar: cerrar el issue como no planificado libera a las partes que dependen de ella); un tope alcanzado o un fallo de rol se reanudan sin decisión, y una corrida interrumpida también. Nada se reanuda bajo un tope ya gastado. Si el estado guardado se perdió, se reconstruye desde el documento de tarea, cruzado con git.
 _Avoid_: reintento (eso es tras un fallo de rol), relanzar (eso es empezar de cero)
 _Campo_: resume — estándar (LangGraph, Temporal, el Claude Agent SDK)
 

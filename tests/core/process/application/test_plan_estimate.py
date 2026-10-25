@@ -306,12 +306,8 @@ async def test_a_part_with_the_fit_waived_is_not_asked_again(arm, tmp_path):
 
 
 @pytest.mark.parametrize("arm", ["cold", "interview"])
-async def test_a_task_that_is_not_a_part_over_the_line_by_reference_is_still_refused(
-    arm, tmp_path
-):
-    runner, cfg = arm_of(
-        arm, tmp_path, planned(estimated_cost_usd=200.0), planned_parts()
-    )
+async def test_a_task_that_is_not_a_part_over_the_line_by_reference_is_still_refused(arm, tmp_path):
+    runner, cfg = arm_of(arm, tmp_path, planned(estimated_cost_usd=200.0), planned_parts())
     patch = await plan(TASK, cfg, over_the_line_by_reference(memory_ports(runner)))
 
     assert "fit_question" not in patch
@@ -319,9 +315,7 @@ async def test_a_task_that_is_not_a_part_over_the_line_by_reference_is_still_ref
 
 
 @pytest.mark.parametrize("arm", ["cold", "interview"])
-async def test_the_refusal_of_parts_on_a_part_says_subtasks_only_and_never_names_parts_as_the_remedy(
-    arm, tmp_path
-):
+async def test_the_refusal_of_parts_on_a_part_says_subtasks_only(arm, tmp_path):
     """GH-346: parts plus a checklist on a part. The retry reads the rule, not 'write parts'."""
     with_checklist = planned_parts()
     with_checklist.structured_output["tracker_checklist"] = ["Close the old board."]
