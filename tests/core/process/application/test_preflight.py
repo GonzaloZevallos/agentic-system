@@ -298,15 +298,18 @@ def test_placeholders_carry_an_empty_split_part_slot():
 # `rules` constants is compared against.
 ORIGINAL_PARTS_WORDING = {
     "{{parts_remedy}}": (
-        "as one task: write it as `parts` (see `### Parts`) instead of subtasks. Do not shrink the\n"
+        "as one task: write it as `parts` (see `### Parts`) instead of subtasks. Do not shrink the"
+        "\n"
         "   estimate to make it fit; a plan that fits and carries `parts` is refused too."
     ),
     "{{parts_step}}": (
         "8. `### Parts`, only when the estimate does not fit: at least two chained parts, each a\n"
         "   small task of its own that lands and shows in the product before the next one starts.\n"
-        "   Each part has a `title`, a `body` (its whole description: the person who builds it has\n"
+        "   Each part has a `title`, a `body` (its whole description: the person who builds it has"
+        "\n"
         "   not seen this plan) and `depends_on`, the numbers of EARLIER parts (1 is the first).\n"
-        "   Write no subtasks then, and `### Subtasks` is not needed. A part is never split again.\n"
+        "   Write no subtasks then, and `### Subtasks` is not needed. A part is never split again."
+        "\n"
         "   If the section `## Human` says the human decided to build this task whole, write\n"
         "   subtasks and no parts."
     ),
