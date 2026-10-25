@@ -127,3 +127,23 @@ un merge cuyo PR no traía `Closes #N` dejaba el issue abierto hasta que un huma
   el PR guardado (`state.get("pull_request") or open_pull_request(...)`), así que nunca
   volvió a pasar por `open_pull_request`. No se reescriben cuerpos de PR: lo cubre el barrido.
   Un test fija que la entrega de un split part con checklist abre con `closes_issue=True`.
+
+## Addendum (GH-350): el split también publica la lista
+
+Un plan con `parts` y `tracker_checklist` (apostrophe #378: reapuntar el `Blocked by:` de
+#379) se rechazaba con una instrucción que ningún campo podía cumplir, porque una parte no
+tiene checklist: el reintento repetía el plan y la tarea escalaba.
+
+- **Decisión:** el validador acepta `parts` junto a `tracker_checklist` (los ítems pasan los
+  mismos chequeos de ítem). `split` guarda, junto con la URL de la última parte, la lista del
+  plan seguida de los ítems que `rules.split_tracker_items` deriva por cada issue abierto, que
+  no sea una parte, cuya primera línea diga `Blocked by: #<esta tarea>` (tope de 10 y una
+  línea "and N more"). Después la publica con `post_tracker_checklist` en el issue original,
+  antes del comentario `Split:`. Una reanudación reutiliza la lista guardada y no la recompone.
+- **El humano reaparta:** el sistema no edita ningún issue ni bloqueador nativo; el ítem dice
+  "cerrá #T o reapuntá #N a la última parte". `rules.TRACKER_WITH_PARTS` es el único texto que
+  dice adónde va el trabajo de tracker de un plan con partes, y lo renderizan ambos prompts
+  del Tech Lead y el mensaje del validador.
+- **Límites conocidos:** un issue bloqueado solo por la relación nativa de GitHub no se
+  detecta (lo cubren los ítems del Tech Lead); `open_issues` es un `gh issue list` acotado, y
+  un repo con más issues abiertos que ese tope puede ocultar uno bloqueado.

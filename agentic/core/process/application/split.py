@@ -47,6 +47,10 @@ async def split(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState
         return finish(state, rules.part_over_line(task_id, part_of, None), ports)
     parts = state.get("parts", [])
     current = state
+    # What the node returns besides the end: the graph's channels take the checklist and its
+    # record from the patch, never from the document `finish` saved (invariant: the record's
+    # hash is that of the checklist in the same state).
+    carried: TaskState = {}
     try:
         open_bodies = list(ports.inbox.open_issues())
     except (ValueError, OSError) as exc:
@@ -72,6 +76,7 @@ async def split(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState
             )
             if items:
                 patch["tracker_checklist"] = items
+                carried["tracker_checklist"] = items
         finish(current, patch, ports)  # saved as soon as the part exists
         current = apply(current, patch)
     if items := current.get("tracker_checklist"):
@@ -85,6 +90,7 @@ async def split(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState
             posted: TaskState = {"tracker_checklist_posted": record}
             finish(current, posted, ports)  # saved before the split comment can fail
             current = apply(current, posted)
+            carried.update(posted)
     issues = current.get("split_issues", {})
     listed = "\n".join(
         f"{n}. {parts[n - 1]['title']}: {issues[str(n)]}" for n in range(1, len(parts) + 1)
@@ -100,7 +106,7 @@ async def split(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState
     except (ValueError, OSError) as exc:
         return _stopped(current, "commenting the list of parts", exc, ports, _LEFT_COMMENT)
     ended = rules.finished("split", datetime.now(UTC).isoformat(timespec="seconds"))
-    return finish(current, {"current_role": PJM.name, **ended}, ports)
+    return finish(current, {"current_role": PJM.name, **carried, **ended}, ports)
 
 
 def _checklist(

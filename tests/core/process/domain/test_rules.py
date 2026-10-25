@@ -6,7 +6,7 @@ from typing import Any, cast, get_args
 import pytest
 
 from agentic.core.process.application.ports import BranchPullRequest
-from agentic.core.process.domain import ci, document, roles, rules, task
+from agentic.core.process.domain import ci, document, roles, rules, schemas, task
 from agentic.core.process.domain.adr_numbers import Renaming
 from agentic.core.process.domain.denials import denial_for
 from agentic.core.process.domain.roles import (
@@ -21,7 +21,6 @@ from agentic.core.process.domain.roles import (
     PRODUCT_ANALYST_BUG,
     TECH_LEAD_EPHEMERAL,
 )
-from agentic.core.process.domain import schemas
 from agentic.core.process.domain.schemas import FitDecision, TaskType
 from agentic.core.process.domain.task import INTEGRATION, Carried
 
