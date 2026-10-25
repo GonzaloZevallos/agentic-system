@@ -1564,7 +1564,17 @@ def test_a_comment_failing_with_any_other_value_error_still_escapes():
 
 
 class _ReadsStall(MemoryTracker):
+    """The first `queue()` read of a round is the GH-348 sweep's, outside the registry's lock;
+    the stall this scenario is about is the one inside it, from the second read on."""
+
+    def __init__(self):
+        super().__init__()
+        self.queue_reads = 0
+
     def queue(self):
+        self.queue_reads += 1
+        if self.queue_reads == 1:
+            return []
         raise TrackerTimedOut("gh issue list timed out after 60 s")
 
     def list_pull_requests(self):

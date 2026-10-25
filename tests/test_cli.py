@@ -5148,10 +5148,11 @@ async def test_poll_every_other_failure_still_escapes_the_loop(monkeypatch, tmp_
         await _poll_with(tmp_path, sleep)
 
 
-def _poll_over_a_real_tracker(tmp_path, stderr, returncode=1):
+def _poll_over_a_real_tracker(tmp_path, stderr, returncode=1, failing=1):
     """`_poll` over the real `run_once`, a real `GhTracker` and the real `run_gh`; the
-    injected `run` fails the first `gh` call of round 1 with `stderr` and answers every
-    other call with an empty list."""
+    injected `run` fails the first `failing` `gh` calls with `stderr` and answers every
+    other call with an empty list. The first call is the GH-348 sweep's read, which swallows
+    a plain `ValueError` (the launch read after it fails again), so that case fails two."""
     import subprocess
     from pathlib import Path
 
@@ -5163,7 +5164,7 @@ def _poll_over_a_real_tracker(tmp_path, stderr, returncode=1):
 
     def run(args, cwd, capture_output, text, check):
         calls.append(args)
-        if len(calls) == 1:
+        if len(calls) <= failing:
             raise subprocess.CalledProcessError(returncode, args, stderr=stderr)
         return subprocess.CompletedProcess(args, 0, "[]", "")
 
@@ -5206,7 +5207,7 @@ async def test_poll_the_incident_one_failed_round_then_the_next_round_retries(tm
 
 @pytest.mark.anyio
 async def test_poll_control_the_same_failure_with_bad_credentials_ends_the_poller(tmp_path):
-    poll, _, sleeps = _poll_over_a_real_tracker(tmp_path, "HTTP 401: Bad credentials")
+    poll, _, sleeps = _poll_over_a_real_tracker(tmp_path, "HTTP 401: Bad credentials", failing=2)
 
     with pytest.raises(ValueError, match="Bad credentials") as raised:
         await poll

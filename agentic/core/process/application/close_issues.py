@@ -11,7 +11,7 @@ The poller runs the same sweep every round (GH-348), reporting only the closes.
 from __future__ import annotations
 
 from ..domain import rules
-from .ports import Ports
+from .ports import Ports, TrackerCallFailed
 
 
 def sweep(ports: Ports, *, report_failures: bool = True) -> list[str]:
@@ -22,6 +22,8 @@ def sweep(ports: Ports, *, report_failures: bool = True) -> list[str]:
         numbers = ports.tracker.queue()
     except (ValueError, OSError) as failed:
         if not report_failures:
+            if isinstance(failed, TrackerCallFailed):
+                raise  # the poller's own handler ends the round early, as for any read
             return []
         return [f"agentic: close: issue sweep skipped: {type(failed).__name__}"]
     lines: list[str] = []

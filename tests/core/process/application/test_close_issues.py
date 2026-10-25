@@ -4,6 +4,7 @@
 import pytest
 
 from agentic.core.process.application import close_issues
+from agentic.core.process.application.ports import TrackerUnreachable
 from tests.fakes import memory_ports
 
 MERGED = {"delivery_outcome": "merged", "merge_commit": "a" * 40}
@@ -109,3 +110,12 @@ def test_without_failure_reports_an_unreadable_queue_says_nothing():
     ports.tracker.queue_error = OSError("gh missing")
     assert close_issues.sweep(ports, report_failures=False) == []
     assert ports.tracker.closed_issues == []
+
+
+def test_without_failure_reports_a_transport_failure_of_the_queue_read_still_escapes():
+    """The poller's own handler ends the round early on it, as for any other read."""
+    ports = _ports({339: MERGED}, [339])
+    ports.tracker.queue_error = TrackerUnreachable("gh issue list could not reach GitHub")
+    with pytest.raises(TrackerUnreachable):
+        close_issues.sweep(ports, report_failures=False)
+    assert close_issues.sweep(ports) == ["agentic: close: issue sweep skipped: TrackerUnreachable"]
