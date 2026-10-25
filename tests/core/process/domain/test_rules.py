@@ -2873,6 +2873,22 @@ def test_split_part_of_reads_no_marker_from_text_that_only_resembles_one():
     assert rules.split_part_of("agentic-split: GH-12 part 3") is None
 
 
+def test_a_task_that_is_not_a_part_gets_no_split_part_text():
+    assert rules.split_part_text(None) == ""
+
+
+def test_a_part_is_told_it_is_part_n_of_x_and_to_write_subtasks_only():
+    text = rules.split_part_text(("GH-316", 2))
+    assert "part 2" in text
+    assert "GH-316" in text
+    assert "write subtasks only" in text
+    assert "estimate honestly" in text
+    # It names `parts` only to forbid it: never as the remedy.
+    assert "never `parts`" in text
+    assert "write it as `parts`" not in text
+    assert "write parts" not in text
+
+
 def test_split_is_an_end_with_nothing_to_resume():
     done = {"status": "split", "type": "feature", "parts": PARTS}
     assert rules.resumed_status(done) == "split"

@@ -1,5 +1,6 @@
 """The refusal that costs nothing: a run whose product is the checkout running it."""
 
+import difflib
 import re
 from dataclasses import replace
 from pathlib import Path
@@ -21,9 +22,12 @@ from agentic.core.process.application.preflight import (
     product_name,
     unfixed_stage0,
 )
+from agentic.core.process.application.run_role import load_prompt
+from agentic.core.process.domain import rules
+from agentic.core.process.domain.roles import ROLES
 from agentic.core.process.domain.suppressions import Forbidden
 from agentic.shared.configuration import Configuration
-from tests.fakes import MemoryStack, memory_ports
+from tests.fakes import MemoryPrompts, MemoryStack, memory_ports
 
 PRODUCT = Path("/repos/product")
 
@@ -279,11 +283,53 @@ def test_preflight_renders_the_light_reviewers_prompt_too(stage0):
     """The review-arm subtask (issue #28) adds `tech_lead_review_light` to `ROLES`;
     `preflight` renders every role's prompt with `PLACEHOLDERS` alone, so a placeholder
     the new prompt would need outside that set fails here, not mid-task."""
-    from agentic.core.process.domain.roles import ROLES
 
     ports = ports_where(**{str(stage0): "/sys/.git", str(PRODUCT): "/repos/product/.git"})
     preflight(Configuration(product_dir=PRODUCT), ports)  # no ValueError: every prompt renders
     assert "tech_lead_review_light" in {role.slug for role in ROLES}
+
+
+def test_placeholders_carry_an_empty_split_part_slot():
+    assert PLACEHOLDERS["split_part"] == ""
+
+
+@pytest.mark.parametrize("slug", ["tech_lead", "tech_lead_platform"])
+def test_the_planning_prompts_differ_from_before_only_by_the_empty_slot(slug, tmp_path):
+    """`{{split_part}}` sits on a line of its own in each planning Tech Lead prompt, so
+    for a task that is not a part the render is what it was, plus one empty line."""
+    role = next(r for r in ROLES if r.slug == slug)
+    cfg = Configuration(product_dir=tmp_path)
+    ports = memory_ports()
+    raw, _ = ports.prompts.raw(role)
+    assert raw.count("{{split_part}}\n") == 1
+    before_ports = memory_ports(
+        prompts=MemoryPrompts(**{slug: raw.replace("{{split_part}}\n", "")})
+    )
+
+    after = load_prompt(role, cfg, ports, {}, **PLACEHOLDERS).text.split("\n")
+    before = load_prompt(role, cfg, before_ports, {}, **PLACEHOLDERS).text.split("\n")
+
+    changes = [
+        op for op in difflib.SequenceMatcher(None, before, after).get_opcodes() if op[0] != "equal"
+    ]
+    assert len(changes) == 1
+    tag, i1, i2, j1, j2 = changes[0]
+    assert (tag, before[i1:i2], after[j1:j2]) == ("insert", [], [""])
+
+
+def test_a_filled_slot_reaches_the_rendered_prompt(tmp_path):
+
+    role = next(r for r in ROLES if r.slug == "tech_lead_platform")
+    values = {**PLACEHOLDERS, "split_part": rules.split_part_text(("GH-316", 2))}
+    text = load_prompt(role, Configuration(product_dir=tmp_path), memory_ports(), {}, **values).text
+    assert "GH-316" in text
+    assert "{{" not in text
+
+
+def test_the_stack_prompt_has_no_split_part_slot():
+    role = next(r for r in ROLES if r.slug == "tech_lead_stack")
+    raw, _ = memory_ports().prompts.raw(role)
+    assert "{{split_part}}" not in raw
 
 
 def test_the_label_falls_back_instead_of_killing_a_node_already_running():

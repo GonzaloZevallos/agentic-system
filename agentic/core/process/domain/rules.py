@@ -3654,6 +3654,22 @@ def split_part_of(body: str) -> tuple[str, int] | None:
     return (match.group(1), int(match.group(2))) if match else None
 
 
+def split_part_text(part_of: tuple[str, int] | None) -> str:
+    """What the planning Tech Lead is told about its task being a part of a partition
+    (ADR-0054): empty for a task that is not one. A part is never split again, so the text
+    asks for subtasks only and, when they are over the size limit, for an honest estimate:
+    the system asks the human whether to build the part whole."""
+    if part_of is None:
+        return ""
+    task_id, part = part_of
+    return (
+        f"This task is part {part} of task {task_id}. A part is never split again: write "
+        "subtasks only and never `parts`. If your subtasks are over the size limit, write "
+        "them anyway and estimate honestly, because the system then asks the human whether "
+        "to build the part whole; do not shrink the estimate to avoid that."
+    )
+
+
 def tracker_hash(items: Sequence[str]) -> str:
     """The first twelve hex digits of the sha256 of the stripped items joined by newlines:
     what tells one checklist from another (GH-336)."""

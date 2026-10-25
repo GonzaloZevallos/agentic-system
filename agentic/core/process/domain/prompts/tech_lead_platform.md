@@ -110,6 +110,7 @@ Write, in Markdown, using `###` headings and nothing above `###`:
    Write no subtasks then, and `### Subtasks` is not needed. A part is never split again.
    If the section `## Human` says the human decided to build this task whole, write
    subtasks and no parts.
+{{split_part}}
 </Task>
 
 <Hard Limits>
