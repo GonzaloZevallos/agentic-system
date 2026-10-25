@@ -1046,6 +1046,10 @@ class MemoryTracker:
         # GH-137: the poller's own candidate pool, and the structured facts per issue
         # number a test scripts with `states`.
         self._queue: list[int] = []
+        # GH-344: the task ids `close_issue` closed, and the exceptions it raises first.
+        self.closed_issues: list[str] = []
+        self.close_issue_failures: list[Exception] = []
+        self.queue_error: Exception | None = None
         self.states: dict[int, IssueState] = {}
         # GH-137 blocking finding: a number here makes `issue_state` raise `ValueError`
         # (`gh`'s own failure shape, `GhTracker._gh`) instead of answering, so a
@@ -1230,7 +1234,14 @@ class MemoryTracker:
         return self.issue_created.get(task_id)
 
     def queue(self) -> list[int]:
+        if self.queue_error is not None:
+            raise self.queue_error
         return sorted(self._queue)
+
+    def close_issue(self, task_id: str) -> None:
+        if self.close_issue_failures:
+            raise self.close_issue_failures.pop(0)
+        self.closed_issues.append(task_id)
 
     def issue_state(self, number: int) -> IssueState:
         if number in self.state_errors:

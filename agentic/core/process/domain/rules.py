@@ -3929,3 +3929,81 @@ def delivered_files(changed_files: int) -> dict[str, int]:
     """The patch that records how many files the pull request changed, the actual the
     estimate is compared with. The only place that names the key."""
     return {"actual_files": changed_files}
+
+
+# GH-344 blocker-resolution: a closed task that landed through slices resolves a blocker
+# with no merge commit of its own, and a stalled queue says which closed issues stall it.
+# `poll` judges each blocker (git and `gh` are its I/O) and hands the verdicts here.
+
+BlockerReason = Literal["no_merge_recorded", "merge_not_in_upstream", "slices_not_in_upstream"]
+
+_BLOCKER_REASON_TEXT: dict[BlockerReason, str] = {
+    "no_merge_recorded": "no merge recorded",
+    "merge_not_in_upstream": "merge not in upstream",
+    "slices_not_in_upstream": "slices not in upstream",
+}
+
+
+@dataclass(frozen=True)
+class BlockerReport:
+    """What one candidate's blockers came to: `open` ones still open, `closed_unresolved`
+    ones closed but with nothing the system can rest a resolution on (and why), and
+    `unknown` ones (or the candidate itself, when its blockers could not be read) whose
+    judgement failed. The launch predicate is `bool(report)`: any field blocks."""
+
+    open: tuple[int, ...] = ()
+    closed_unresolved: tuple[tuple[int, BlockerReason], ...] = ()
+    unknown: tuple[int, ...] = ()
+
+    def __bool__(self) -> bool:
+        return bool(self.open or self.closed_unresolved or self.unknown)
+
+
+def slices_landed_heads(document: TaskState) -> tuple[str, ...] | None:
+    """The `reviewed_head` of every unit but the integration one, when the document is
+    closed through slices (`closed_by_slices`, written by `landing.close_patch` only after
+    each of these was found an ancestor of the upstream): the heads a blocker check
+    re-verifies. `None` when nothing was recorded, there are no units, or a unit has no head."""
+    if not document.get("closed_by_slices"):
+        return None
+    subtasks = document.get("subtasks", {})
+    heads = [subtasks[name].get("reviewed_head") for name in subtasks if name != INTEGRATION]
+    landed = tuple(head for head in heads if isinstance(head, str) and head)
+    if not heads or len(landed) != len(heads):
+        return None
+    return landed
+
+
+def queue_blocked_line(reports: Sequence[BlockerReport]) -> str | None:
+    """The one line that replaces `nothing to do this round` when every candidate is
+    blocked and some are blocked by a closed issue the system cannot resolve. Reason texts
+    come from the codes, never from `gh`. A candidate with only `unknown` blockers adds no
+    mention and does not suppress the line."""
+    if not reports or not all(reports) or not any(r.closed_unresolved for r in reports):
+        return None
+    reasons: dict[int, BlockerReason] = {}
+    for report in reports:
+        for number, reason in report.closed_unresolved:
+            reasons.setdefault(number, reason)
+    named = ", ".join(f"#{n} ({_BLOCKER_REASON_TEXT[reasons[n]]})" for n in sorted(reasons))
+    return f"agentic: poll: queue blocked by closed issues it cannot resolve: {named}"
+
+
+# --- GH-344 close-after-merge ---
+# The one place that says when a task's still-open issue is closed by the system
+# (ADR-0062, addendum GH-344). Every other module asks `close_after_merge`.
+
+_MERGED_OUTCOMES = frozenset({"merged", "merged_with_changes", "auto_merged"})
+
+
+def close_after_merge(document: Mapping[str, object]) -> bool:
+    """Whether the system closes this task's issue as completed. The caller already knows
+    the issue is open. True for a merged outcome with a recorded merge commit, or for slices
+    that closed the task (`closed_by_slices`). Never for `closed`, a missing outcome,
+    `tracker_only` or a split: those either merged nothing or are the human's to close. It
+    does not read `closed_at`, so a failed close is retried until the issue reads closed."""
+    commit = document.get("merge_commit")
+    if document.get("delivery_outcome") in _MERGED_OUTCOMES and isinstance(commit, str) and commit:
+        return True
+    slices = document.get("closed_by_slices")
+    return isinstance(slices, list) and bool(slices)

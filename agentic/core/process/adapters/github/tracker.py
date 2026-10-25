@@ -308,6 +308,10 @@ class GhTracker:
         if (number := issue_number(task_id)) is not None:
             self._gh("issue", "comment", str(number), "--body", text)
 
+    def close_issue(self, task_id: str) -> None:
+        if (number := issue_number(task_id)) is not None:
+            self._gh("issue", "close", str(number), "--reason", "completed")
+
     def label(self, task_id: str, label: str) -> None:
         if (number := issue_number(task_id)) is not None:
             self._gh("issue", "edit", str(number), "--add-label", label)

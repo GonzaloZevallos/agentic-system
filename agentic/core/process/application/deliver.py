@@ -72,8 +72,9 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             pass
         case _:
             assert_never(plan.kind)
-    # A plan with a tracker checklist tells the human before the pull request exists, and the
-    # pull request then leaves the issue open (GH-336, ADR-0062). None of this runs without one.
+    # A plan with a tracker checklist tells the human before the pull request exists; the pull
+    # request closes the issue all the same (GH-336, ADR-0062, addendum GH-344). None of this
+    # runs without one.
     # Bookkeeping never strands a finished branch (GH-342): each guard below keeps the pull
     # request coming and leaves a `step: ExceptionClass` line in `lapses`.
     checklist = state.get("tracker_checklist", [])
@@ -151,7 +152,7 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         step = "gh pr create failed"
         # A pull request the task already has is kept: the push alone re-delivers it.
         url = state.get("pull_request") or ports.tracker.open_pull_request(
-            state["id"], task.branch, state["title"], body.text, closes_issue=not checklist
+            state["id"], task.branch, state["title"], body.text, closes_issue=True
         )
     except (GitError, ValueError) as failed:
         return finish(

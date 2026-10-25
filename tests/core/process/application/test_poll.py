@@ -1867,3 +1867,151 @@ def test_a_crash_mark_on_a_task_that_is_not_interrupted_retakes_nothing():
     locks = _Locks({**_crashed_lock("GH-30"), **_crashed_lock("GH-31")})
     (result, crash) = _gather_crash(ports, locks)
     assert result == ([], []) and crash == {}
+
+
+# GH-344 blocker-resolution: blockers settled by slices or by a tracker-only task, and the
+# line that says why a whole queue is stalled.
+
+NOT_LAUNCHED = "agentic: poll: nothing to do this round"
+BLOCKED_PREFIX = "agentic: poll: queue blocked by closed issues it cannot resolve: "
+
+
+def _blocked_candidate(ports, blocker_state: IssueState, document: dict | None, number=5):
+    ports.tracker._queue = [number]
+    ports.tracker.states[number] = IssueState("OPEN", "", (3,), None)
+    ports.tracker.states[3] = blocker_state
+    if document is not None:
+        ports.documents.save({"id": "GH-3", **document})
+    ports.workspace.upstream_answer = Upstream("origin/master", "f00dcafe", None)
+
+
+def _sliced_document(**over) -> dict:
+    return {
+        "closed_by_slices": ["#10", "#11"],
+        "subtasks": {
+            "api": {"reviewed_head": "aaa111"},
+            "ui": {"reviewed_head": "bbb222"},
+            "integration": {"reviewed_head": "ccc333"},
+        },
+        **over,
+    }
+
+
+def _go(tmp_path, ports) -> tuple[list[str], FakeLauncher]:
+    launcher = FakeLauncher()
+    lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(), launcher, ESCALATED_AT)
+    return lines, launcher
+
+
+def test_a_task_closed_through_slices_resolves_when_every_slice_head_is_in_the_upstream(tmp_path):
+    ports = memory_ports()
+    _blocked_candidate(ports, IssueState("CLOSED", "COMPLETED", None, None), _sliced_document())
+    ports.workspace.ancestors = {"aaa111", "bbb222"}
+    lines, _ = _go(tmp_path, ports)
+    assert lines == ["agentic: poll: launch #5 -> pid 4242"]
+    assert {ref for _, _, ref in ports.workspace.ancestor_checks} == {"f00dcafe"}
+
+
+def test_a_task_closed_through_slices_stays_a_blocker_when_one_head_is_not_in_the_upstream(
+    tmp_path,
+):
+    ports = memory_ports()
+    _blocked_candidate(ports, IssueState("CLOSED", "COMPLETED", None, None), _sliced_document())
+    ports.workspace.ancestors = {"aaa111"}
+    lines, launcher = _go(tmp_path, ports)
+    assert launcher.spawned == []
+    assert lines == [BLOCKED_PREFIX + "#3 (slices not in upstream)"]
+
+
+def test_a_slice_close_with_no_units_recorded_is_a_blocker_with_no_merge(tmp_path):
+    ports = memory_ports()
+    document = _sliced_document(subtasks={})
+    _blocked_candidate(ports, IssueState("CLOSED", "COMPLETED", None, None), document)
+    lines, launcher = _go(tmp_path, ports)
+    assert launcher.spawned == []
+    assert lines == [BLOCKED_PREFIX + "#3 (no merge recorded)"]
+
+
+def test_a_closed_task_with_no_document_merge_or_slices_names_no_merge_recorded(tmp_path):
+    ports = memory_ports()
+    _blocked_candidate(ports, IssueState("CLOSED", "COMPLETED", None, None), None)
+    lines, _ = _go(tmp_path, ports)
+    assert lines == [BLOCKED_PREFIX + "#3 (no merge recorded)"]
+
+
+def test_a_merge_that_the_upstream_cannot_see_names_merge_not_in_upstream(tmp_path):
+    ports = memory_ports()
+    _blocked_candidate(ports, IssueState("CLOSED", "COMPLETED", None, "aaa111"), None)
+    lines, _ = _go(tmp_path, ports)
+    assert lines == [BLOCKED_PREFIX + "#3 (merge not in upstream)"]
+
+
+def test_a_tracker_only_task_closed_as_completed_resolves_with_no_ancestor_check(tmp_path):
+    ports = memory_ports()
+    _blocked_candidate(
+        ports, IssueState("CLOSED", "COMPLETED", None, None), {"status": "tracker_only"}
+    )
+    lines, _ = _go(tmp_path, ports)
+    assert lines == ["agentic: poll: launch #5 -> pid 4242"]
+    assert ports.workspace.ancestor_checks == []
+
+
+def test_a_tracker_only_task_closed_as_not_planned_resolves_as_before(tmp_path):
+    ports = memory_ports()
+    _blocked_candidate(
+        ports, IssueState("CLOSED", "NOT_PLANNED", None, None), {"status": "tracker_only"}
+    )
+    lines, _ = _go(tmp_path, ports)
+    assert lines == ["agentic: poll: launch #5 -> pid 4242"]
+
+
+def test_a_tracker_only_task_still_open_never_resolves(tmp_path):
+    ports = memory_ports()
+    _blocked_candidate(ports, IssueState("OPEN", "", None, None), {"status": "tracker_only"})
+    lines, launcher = _go(tmp_path, ports)
+    assert launcher.spawned == []
+    assert lines == [NOT_LAUNCHED]
+
+
+def test_a_slice_close_on_an_open_issue_never_resolves(tmp_path):
+    ports = memory_ports()
+    _blocked_candidate(ports, IssueState("OPEN", "", None, None), _sliced_document())
+    ports.workspace.ancestors = {"aaa111", "bbb222"}
+    lines, launcher = _go(tmp_path, ports)
+    assert launcher.spawned == []
+    assert lines == [NOT_LAUNCHED]
+
+
+def test_a_closed_blocker_with_an_unrecognised_state_reason_says_nothing_about_it(tmp_path):
+    ports = memory_ports()
+    _blocked_candidate(ports, IssueState("CLOSED", "SOME_FUTURE", None, None), None)
+    lines, launcher = _go(tmp_path, ports)
+    assert launcher.spawned == []
+    assert lines == [NOT_LAUNCHED]
+
+
+def test_a_candidate_with_an_unreadable_blocker_leaves_out_only_its_own_mention(tmp_path):
+    ports = memory_ports()
+    _blocked_candidate(ports, IssueState("CLOSED", "COMPLETED", None, None), None)
+    ports.tracker._queue = [5, 6]
+    ports.tracker.states[6] = IssueState("OPEN", "", (8,), None)  # 8 has no scripted state
+    lines, launcher = _go(tmp_path, ports)
+    assert launcher.spawned == []
+    assert lines == [BLOCKED_PREFIX + "#3 (no merge recorded)"]
+
+
+def test_a_queue_with_one_candidate_that_can_launch_prints_no_blocked_line(tmp_path):
+    ports = memory_ports()
+    _blocked_candidate(ports, IssueState("CLOSED", "COMPLETED", None, None), None)
+    ports.tracker._queue = [5, 6]
+    ports.tracker.states[6] = IssueState("OPEN", "", (), None)
+    _seed_body(ports, 6)
+    lines, _ = _go(tmp_path, ports)
+    assert lines == ["agentic: poll: launch #6 -> pid 4242"]
+
+
+def test_a_queue_blocked_only_by_open_issues_still_says_nothing_to_do(tmp_path):
+    ports = memory_ports()
+    _blocked_candidate(ports, IssueState("OPEN", "", None, None), None)
+    lines, _ = _go(tmp_path, ports)
+    assert lines == [NOT_LAUNCHED]

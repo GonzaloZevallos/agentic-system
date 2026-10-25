@@ -68,3 +68,34 @@ solo lector, `rules.tracker_posted`, devuelve el registro solo si `at` y `hash` 
 
 Límite: si una re-entrega ocurre mientras `gh` no deja comentar, la lista no llega ni al cuerpo
 ni al issue; queda en el documento de la tarea.
+
+## Addendum (GH-344): el trabajo de tracker no retiene el issue
+
+**Causa.** El punto 4 hacía que una tarea fusionada con lista dejara su issue abierto hasta que
+el humano lo cerrara. Todo issue con `Blocked by:` apuntando a él quedaba detenido, y la cola
+se paró una hora en apostrophe (#339 y #346 bloqueaban a #340, #347, #349 y, por ellos, #350 a
+#354). El humano decidió que el trabajo de tracker pendiente nunca debe bloquear la cola.
+
+**Decisión del humano. Reemplaza el punto 4 y solo el punto 4.**
+
+- **Una tarea con `tracker_checklist` cuyo pull request se fusiona cierra su issue como
+  completado.** La lista queda como comentario en el issue cerrado y los issues que dependen
+  de él lanzan. Hacer la lista sigue siendo del humano; ya no es condición de nada.
+- **El pull request de entrega lleva `Closes #N` también con lista.** `deliver` deja de pasar
+  `closes_issue=not checklist`. El pull request de una rebanada sigue sin cerrar el issue
+  (`closes_issue=False`, GH-297).
+- **Si el pull request no lleva la línea o el issue sigue abierto tras el merge, lo cierra el
+  sistema** en el barrido de `agentic close --all`, como `completed`, un paso aparte
+  independiente de `closed_at` que se repite hasta que el issue figure `CLOSED`
+  (`rules.close_after_merge`, sin cláusula de lista pendiente). Solo para los desenlaces
+  `merged`, `merged_with_changes` y `auto_merged` con `merge_commit`, o un `closed_by_slices`.
+  Es la primera vez que el proceso hijo del poller escribe en el issue de un producto.
+- **Sin cambios:** los puntos 1, 2, 3 y 5. El comentario de la lista se postea antes de abrir
+  el pull request, así que está en el issue cuando se cierra. `tracker_only` no tiene pull
+  request ni merge: el sistema no cierra su issue, lo cierra el humano al terminar la lista.
+  Un documento de `tracker_only` con el issue cerrado como `COMPLETED` resuelve a quien lo
+  bloquea sin exigir un commit de merge.
+
+**Consecuencias.** Un issue cerrado ya no prueba que el trabajo de tracker se hizo: la
+lista del comentario es el único registro y el humano la lee cuando le toca. Los issues ya
+detenidos (#339, #346) se cierran en el primer barrido posterior a este cambio.

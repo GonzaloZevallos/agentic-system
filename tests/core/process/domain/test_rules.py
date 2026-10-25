@@ -3540,3 +3540,119 @@ def test_a_lapse_entry_is_logged_but_never_changes_whether_a_pause_is_retaken():
     with_lapse = {"pause_log": [*failed["pause_log"], *lapsed["pause_log"]]}
     assert rules.auto_resumable(with_lapse) == "network"
     assert rules.logged({"a": 1}) == {"a": 1, "pause_log": []}
+
+
+# GH-344 blocker-resolution: a blocker settled by slices, and the queue-blocked line.
+
+
+def _sliced(**over):
+    document = {
+        "closed_by_slices": ["#10", "#11"],
+        "subtasks": {
+            "api": {"reviewed_head": "aaa111"},
+            "ui": {"reviewed_head": "bbb222"},
+            "integration": {"reviewed_head": "ccc333"},
+        },
+    }
+    return {**document, **over}
+
+
+def test_slices_landed_heads_are_the_units_heads_without_the_integration_unit():
+    assert rules.slices_landed_heads(_sliced()) == ("aaa111", "bbb222")
+
+
+# --- GH-344 close-after-merge ---
+
+
+@pytest.mark.parametrize("outcome", ["merged", "merged_with_changes", "auto_merged"])
+def test_a_merged_outcome_with_a_merge_commit_closes_the_issue(outcome):
+    assert rules.close_after_merge({"delivery_outcome": outcome, "merge_commit": "a" * 40})
+
+
+@pytest.mark.parametrize("outcome", ["merged", "merged_with_changes", "auto_merged"])
+@pytest.mark.parametrize("commit", [None, "", 7])
+def test_a_merged_outcome_without_a_merge_commit_does_not_close_the_issue(outcome, commit):
+    document = {"delivery_outcome": outcome, **({} if commit is None else {"merge_commit": commit})}
+    assert not rules.close_after_merge(document)
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        _sliced(closed_by_slices=[]),
+        {k: v for k, v in _sliced().items() if k != "closed_by_slices"},
+        _sliced(subtasks={}),
+        _sliced(subtasks={"integration": {"reviewed_head": "ccc333"}}),
+        _sliced(subtasks={"api": {"reviewed_head": "aaa111"}, "ui": {}}),
+        _sliced(subtasks={"api": {"reviewed_head": "aaa111"}, "ui": {"reviewed_head": ""}}),
+    ],
+)
+def test_slices_landed_heads_is_none_without_a_recorded_close_or_a_head_per_unit(document):
+    assert rules.slices_landed_heads(document) is None
+
+
+def test_a_blocker_report_is_truthy_when_any_field_is_non_empty():
+    assert not rules.BlockerReport((), (), ())
+    assert rules.BlockerReport((3,), (), ())
+    assert rules.BlockerReport((), ((3, "no_merge_recorded"),), ())
+    assert rules.BlockerReport((), (), (3,))
+
+
+def _closed(number, reason):
+    return rules.BlockerReport((), ((number, reason),), ())
+
+
+def test_the_queue_blocked_line_names_each_closed_blocker_with_its_reason_code_text():
+    reports = [
+        _closed(9, "merge_not_in_upstream"),
+        _closed(4, "no_merge_recorded"),
+        _closed(7, "slices_not_in_upstream"),
+    ]
+    assert rules.queue_blocked_line(reports) == (
+        "agentic: poll: queue blocked by closed issues it cannot resolve: "
+        "#4 (no merge recorded), #7 (slices not in upstream), #9 (merge not in upstream)"
+    )
+
+
+def test_the_queue_blocked_line_names_a_shared_blocker_once():
+    reports = [_closed(4, "no_merge_recorded"), _closed(4, "no_merge_recorded")]
+    line = rules.queue_blocked_line(reports)
+    assert line is not None and line.count("#4") == 1
+
+
+def test_the_queue_blocked_line_is_silent_when_a_candidate_could_launch_or_none_exist():
+    assert rules.queue_blocked_line([]) is None
+    assert (
+        rules.queue_blocked_line([_closed(4, "no_merge_recorded"), rules.BlockerReport()]) is None
+    )
+
+
+def test_the_queue_blocked_line_is_silent_when_no_blocker_is_a_closed_one():
+    assert rules.queue_blocked_line([rules.BlockerReport((3,), (), ())]) is None
+    assert rules.queue_blocked_line([rules.BlockerReport((), (), (3,))]) is None
+
+
+def test_an_unknown_only_candidate_adds_nothing_and_does_not_suppress_the_line():
+    reports = [_closed(4, "no_merge_recorded"), rules.BlockerReport((), (), (8,))]
+    line = rules.queue_blocked_line(reports)
+    assert line is not None and "#4" in line and "#8" not in line
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        {"delivery_outcome": "closed", "merge_commit": "a" * 40},
+        {"merge_commit": "a" * 40},
+        {"status": "tracker_only", "closed_at": "t"},
+        {"status": "split", "merge_commit": "a" * 40},
+        {"closed_by_slices": []},
+        {"closed_by_slices": None},
+        {},
+    ],
+)
+def test_anything_but_a_merge_or_closed_slices_does_not_close_the_issue(document):
+    assert not rules.close_after_merge(document)
+
+
+def test_closed_slices_close_the_issue_without_a_merge_commit():
+    assert rules.close_after_merge({"closed_by_slices": ["https://github.com/o/r/pull/3"]})

@@ -258,7 +258,7 @@ async def test_a_plan_with_a_tracker_checklist_delivers_through_the_graph_with_a
 
     assert final["status"] == "ready_for_review"
     assert final["pull_request"].endswith("/pull/7")
-    assert fakes.tracker.closes_issue_calls == [False]
+    assert fakes.tracker.closes_issue_calls == [True]  # GH-344: was [False] (ADR-0062 §4)
     posted = [t for _, t in fakes.tracker.comments if t.startswith("Tracker work for you: ")]
     assert len(posted) == 1
     assert final["tracker_checklist_posted"]["hash"] == rules.tracker_hash(items)
