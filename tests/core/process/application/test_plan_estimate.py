@@ -8,6 +8,7 @@ from agentic.core.process.application.plan import plan
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.task import apply
 from agentic.shared.configuration import Configuration
+from tests.core.process.application.test_preflight import ORIGINAL_PARTS_WORDING
 from tests.fakes import (
     ScriptedRunner,
     memory_ports,
@@ -339,3 +340,22 @@ async def test_the_tech_lead_of_a_part_is_told_it_is_one(arm, tmp_path):
     told = part_runner.calls[-1]["system_prompt"]
     assert "part 2 of task GH-316" in told and "never split again" in told
     assert "part 2" not in whole_runner.calls[-1]["system_prompt"]
+
+
+@pytest.mark.parametrize("arm", ["cold", "interview"])
+async def test_the_tech_lead_of_a_task_that_is_not_a_part_reads_the_original_parts_wording(
+    arm, tmp_path
+):
+    """The three passages the plan stage fills in for a task that is not a part are the
+    ones the prompt carried before (typed in `ORIGINAL_PARTS_WORDING`, git 63d29be), and a
+    part reads none of them."""
+    whole_runner, cfg = arm_of(arm, tmp_path, planned())
+    await plan(TASK, cfg, memory_ports(whole_runner))
+    part_runner, cfg = arm_of(arm, tmp_path, planned())
+    await plan(PART, cfg, memory_ports(part_runner))
+
+    whole, part = whole_runner.calls[-1]["system_prompt"], part_runner.calls[-1]["system_prompt"]
+    for wording in ORIGINAL_PARTS_WORDING.values():
+        assert wording in whole
+        assert wording not in part
+    assert "{{" not in whole and "{{" not in part
