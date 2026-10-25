@@ -1,6 +1,6 @@
 import pytest
 
-from agentic.core.process.domain import schemas
+from agentic.core.process.domain import rules, schemas
 from agentic.core.process.domain.schemas import (
     PRD,
     Answers,
@@ -470,8 +470,11 @@ def test_a_split_is_judged_on_the_declared_estimate_when_the_bucket_is_too_thin(
 
 def test_a_plan_with_both_subtasks_and_parts_is_refused():
     check = schemas.plan_check_for(_history(1, []), 0.0)
-    with pytest.raises(ValueError, match="subtasks or parts, never both"):
+    with pytest.raises(ValueError, match="subtasks or parts, never both") as e:
         check({**_split(400.0, 90), "subtasks": _plan("x", "a")["subtasks"]})
+    # It names the field to drop and where tracker work goes, so the retry can comply.
+    assert "drop `subtasks`" in str(e.value)
+    assert rules.TRACKER_WITH_PARTS in str(e.value)
 
 
 def test_a_split_needs_at_least_two_parts():
@@ -546,10 +549,30 @@ def test_the_tracker_shape_still_answers_for_what_the_task_already_spent():
         schemas.plan_check_for(_history(1, []), 5.0)(_tracker_only(cost=2.0))
 
 
-def test_a_checklist_next_to_parts_is_refused():
+def test_a_checklist_next_to_parts_is_accepted_as_a_split_with_tracker_work():
+    # The apostrophe #378 shape: the split posts the list; a part has no checklist to hold it.
     check = schemas.plan_check_for(_history(1, []), 0.0)
-    with pytest.raises(ValueError, match="parts.*plans itself|each part plans itself"):
-        check(_split(400.0, 90, tracker_checklist=CHECKLIST))
+    check(_split(400.0, 90, tracker_checklist=CHECKLIST))  # does not raise
+
+
+def test_parts_with_a_checklist_still_answer_to_the_cost_and_file_rules():
+    check = schemas.plan_check_for(_history(1, []), 0.0)
+    with pytest.raises(ValueError, match="at least one file"):
+        check(_split(400.0, 0, tracker_checklist=CHECKLIST))
+    with pytest.raises(ValueError, match="at least two parts"):
+        check(_split(400.0, 90, parts=[_part()], tracker_checklist=CHECKLIST))
+    with pytest.raises(ValueError, match="already spent"):
+        schemas.plan_check_for(_history(1, []), 500.0)(
+            _split(400.0, 90, tracker_checklist=CHECKLIST)
+        )
+
+
+def test_a_bad_checklist_item_next_to_parts_is_refused():
+    plan = _split(400.0, 90, tracker_checklist=["Post the verdict\nand close it"])
+    with pytest.raises(ValueError, match="one non-empty line"):
+        schemas.validate(schemas.TechPlan, plan, {})
+    good = _split(400.0, 90, tracker_checklist=CHECKLIST)
+    assert schemas.validate(schemas.TechPlan, good, {})["tracker_checklist"] == CHECKLIST
 
 
 def test_a_plan_with_no_subtasks_no_parts_and_no_checklist_is_still_refused():

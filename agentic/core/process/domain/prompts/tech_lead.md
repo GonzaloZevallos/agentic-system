@@ -100,6 +100,7 @@ Write, in Markdown, using `###` headings and nothing above `###`:
    write `tracker_checklist`, no subtasks, no parts and `estimated_files: 0`. Tracker work
    never becomes a subtask; next to subtasks it is a `tracker_checklist` the human does
    once the pull request is open.
+   {{tracker_with_parts}}
 {{parts_step}}
 {{split_part}}
 </Task>

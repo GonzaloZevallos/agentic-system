@@ -337,7 +337,7 @@ _Avoid_: descartado (acá sí hay algo que hacer, pero lo hace el humano), parti
 _Campo_: sin término de arte
 
 **Trabajo de tracker**:
-Lo que el humano debe hacer en el tracker del producto (cerrar, retitular o comentar issues) porque ningún rol tiene `gh`: una lista de casillas en un comentario del issue. Nunca es una subtarea; junto a subtareas viaja con la entrega, y esa tarea cierra su issue al fusionarse como cualquier otra: la lista queda de comentario en el issue cerrado y no retiene a lo que depende de él (ADR-0062, addendum de GH-344). Si el comentario falla en la entrega, el pull request se abre igual con la lista acotada en el cuerpo y en el comentario de listo, sin registro (en solo tracker, en cambio, escala y se reanuda en el nodo; ADR-0062).
+Lo que el humano debe hacer en el tracker del producto (cerrar, retitular o comentar issues) porque ningún rol tiene `gh`: una lista de casillas en un comentario del issue. Nunca es una subtarea; junto a subtareas viaja con la entrega, y esa tarea cierra su issue al fusionarse como cualquier otra: la lista queda de comentario en el issue cerrado y no retiene a lo que depende de él (ADR-0062, addendum de GH-344). Si el comentario falla en la entrega, el pull request se abre igual con la lista acotada en el cuerpo y en el comentario de listo, sin registro (en solo tracker, en cambio, escala y se reanuda en el nodo; ADR-0062). Junto a partes, el split publica la lista en el issue original, más los ítems que el sistema agrega por cada issue abierto que sigue bloqueado por esa tarea; reapuntarlos queda a cargo del humano (ADR-0062, addendum de GH-350).
 _Avoid_: subtarea (esas las construye un Developer), tarea de tracker
 _Campo_: sin término de arte
 

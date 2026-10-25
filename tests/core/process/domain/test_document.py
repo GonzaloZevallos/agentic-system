@@ -1254,6 +1254,29 @@ def test_the_tracker_checklist_record_is_written_only_when_set_and_read_back():
     assert document.parse(text)["tracker_checklist_posted"] == posted
 
 
+def test_a_split_task_writes_and_reads_back_its_checklist_and_record():
+    """GH-350: the split saves the composed list, then the record of its post; a resume
+    reads both back from the document, equal."""
+    parts = [
+        {"title": "One", "body": "b", "depends_on": []},
+        {"title": "Two", "body": "b", "depends_on": [1]},
+    ]
+    items = [*_CHECKLIST, "#77 is blocked by #53, which this split does not close: close #53"]
+    posted = {"at": "2026-10-25T10:00:00+00:00", "hash": rules.tracker_hash(items)}
+    state = _bare(
+        parts=parts,
+        split_issues={"1": "https://github.com/o/r/issues/101"},
+        status="planned",
+    )
+    saved = task.apply(state, {"split_issues": {"2": "https://github.com/o/r/issues/102"}})
+    saved = task.apply(saved, {"tracker_checklist": items})
+    saved = task.apply(saved, {"tracker_checklist_posted": posted})
+    parsed = document.parse(document.render(saved))
+    assert parsed["tracker_checklist"] == items
+    assert parsed["tracker_checklist_posted"] == posted
+    assert parsed["split_issues"] == saved["split_issues"]
+
+
 def test_record_closure_replaces_the_tracker_record_the_document_wrote_as_a_block():
     """`render` writes `tracker_checklist_posted` as a block; the poller's closure replaces it
     with the flow line instead of refusing the surgery (GH-336)."""

@@ -6,7 +6,8 @@ from datetime import datetime
 
 import pytest
 
-from agentic.core.process.application.split import split
+from agentic.core.process.application.split import SPLIT, split
+from agentic.core.process.application.tracker_only import TRACKER_WORK
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.task import apply
 from agentic.shared.configuration import Configuration
@@ -146,3 +147,159 @@ def test_the_reader_of_blockers_loses_every_blocker_after_the_first_line():
     # `rules.blockers_from_body` reads the first non-empty line only.
     assert rules.blockers_from_body("Blocked by: #1\nBlocked by: #2\n\nbody") == (1,)
     assert rules.blockers_from_body("Blocked by: #1, #2\n\nbody") == (1, 2)
+
+
+# The split posts the tracker checklist (GH-350, ADR-0062): the Tech Lead's items, then one
+# the system derives for each open issue still blocked by the task that will never close.
+BLOCKED = ("https://github.com/o/r/issues/77", "Blocked by: #53\n\nWaits for the whole task.")
+WITH_CHECKLIST = {**STATE, "tracker_checklist": ["Close #12 as superseded"]}
+
+
+def checklist_comments(ports):
+    return [text for _, text in ports.tracker.comments if text.startswith(TRACKER_WORK)]
+
+
+def split_comments(ports):
+    return [text for _, text in ports.tracker.comments if text.startswith(SPLIT)]
+
+
+def ports_with_a_blocked_issue():
+    ports = ports_with_numbered_issues()
+    ports.inbox._open_issues = [BLOCKED]
+    return ports
+
+
+async def test_a_split_posts_the_checklist_with_the_derived_items_before_the_split_comment(
+    tmp_path,
+):
+    ports = ports_with_a_blocked_issue()
+    patch = await split(WITH_CHECKLIST, Configuration(product_dir=tmp_path), ports)
+
+    assert patch["status"] == "split"
+    (posted,) = checklist_comments(ports)
+    assert "- [ ] Close #12 as superseded" in posted
+    # The last part is the fourth: nothing depends on it, so its issue is #104.
+    assert (
+        "- [ ] #77 is blocked by #53, which this split does not close: "
+        "close #53 or re-point #77 to #104"
+    ) in posted
+    assert [text.split(":")[0] for _, text in ports.tracker.comments] == [
+        TRACKER_WORK.split(":")[0],
+        SPLIT.split(":")[0],
+    ]
+    saved = ports.documents.saved[-1]
+    assert saved["tracker_checklist"][0] == "Close #12 as superseded"
+    assert len(saved["tracker_checklist"]) == 2
+    assert saved["tracker_checklist_posted"]["hash"] == rules.tracker_hash(
+        saved["tracker_checklist"]
+    )
+    assert rules.tracker_marker("GH-53", saved["tracker_checklist"]) in posted
+
+
+async def test_a_split_without_a_checklist_and_without_blocked_issues_posts_only_the_split(
+    tmp_path,
+):
+    ports = ports_with_numbered_issues()
+    ports.inbox._open_issues = [("https://github.com/o/r/issues/5", "Blocked by: #9\n\nx")]
+    patch = await split(STATE, Configuration(product_dir=tmp_path), ports)
+
+    assert patch["status"] == "split"
+    assert len(ports.tracker.comments) == 1 and checklist_comments(ports) == []
+    assert "tracker_checklist" not in patch and "tracker_checklist_posted" not in patch
+    assert "tracker_checklist" not in ports.documents.saved[-1]
+
+
+async def test_the_system_items_alone_are_a_checklist_when_the_plan_wrote_none(tmp_path):
+    ports = ports_with_a_blocked_issue()
+    await split(STATE, Configuration(product_dir=tmp_path), ports)
+
+    (posted,) = checklist_comments(ports)
+    assert posted.count("- [ ]") == 1 and "#77 is blocked by #53" in posted
+
+
+async def test_a_task_without_an_issue_number_derives_nothing(tmp_path):
+    ports = ports_with_a_blocked_issue()
+    state = {**STATE, "id": "local-1", "tracker_checklist": ["Close #12"]}
+    await split(state, Configuration(product_dir=tmp_path), ports)
+
+    (posted,) = checklist_comments(ports)
+    assert posted.count("- [ ]") == 1
+
+
+async def test_a_failed_checklist_post_resumes_with_one_checklist_and_one_split_comment(tmp_path):
+    cfg = Configuration(product_dir=tmp_path)
+    first = ports_with_a_blocked_issue()
+    first.tracker.comment_failures = 1  # the checklist is the first comment
+    cut = await split(WITH_CHECKLIST, cfg, first)
+
+    assert cut["escalation_class"] == "failure" and "tracker checklist" in cut["escalated"]
+    assert len(first.tracker.opened_issues) == 4 and first.tracker.comments == []
+    paused = apply(first.documents.saved[-1], cut)
+    assert len(paused["tracker_checklist"]) == 2  # saved before it was posted
+    assert "tracker_checklist_posted" not in paused
+
+    again = ports_with_a_blocked_issue()
+    again.tracker.issue_numbers_from = 201  # a recomposition would show: it must not happen
+    done = await split(apply(paused, rules.resumed(paused, None)), cfg, again)
+
+    assert done["status"] == "split" and again.tracker.opened_issues == []
+    assert len(checklist_comments(again)) == 1 and len(split_comments(again)) == 1
+    assert "#77 is blocked by #53" in checklist_comments(again)[0]
+
+
+async def test_a_failed_split_comment_after_the_checklist_resumes_without_posting_it_again(
+    tmp_path,
+):
+    cfg = Configuration(product_dir=tmp_path)
+    first = ports_with_a_blocked_issue()
+    real = first.tracker.comment
+
+    def comment(task_id, text):
+        if text.startswith(SPLIT):
+            raise ValueError("gh: boom")
+        real(task_id, text)
+
+    first.tracker.comment = comment
+    cut = await split(WITH_CHECKLIST, cfg, first)
+
+    assert cut["escalation_class"] == "failure" and "split comment" in cut["escalated"]
+    assert len(checklist_comments(first)) == 1
+    paused = apply(first.documents.saved[-1], cut)
+    assert paused["tracker_checklist_posted"]["hash"] == rules.tracker_hash(
+        paused["tracker_checklist"]
+    )
+
+    again = ports_with_a_blocked_issue()
+    again.tracker.earlier = [checklist_comments(first)[0]]  # what the issue already holds
+    done = await split(apply(paused, rules.resumed(paused, None)), cfg, again)
+
+    assert done["status"] == "split"
+    assert checklist_comments(again) == [] and len(split_comments(again)) == 1
+
+
+async def test_a_resume_that_lost_the_posted_record_finds_the_marker_and_posts_nothing_again(
+    tmp_path,
+):
+    cfg = Configuration(product_dir=tmp_path)
+    first = ports_with_a_blocked_issue()
+    real = first.tracker.comment
+
+    def comment(task_id, text):
+        if text.startswith(SPLIT):
+            raise ValueError("gh: boom")
+        real(task_id, text)
+
+    first.tracker.comment = comment
+    cut = await split(WITH_CHECKLIST, cfg, first)
+    paused = apply(first.documents.saved[-1], cut)
+    lost = {k: v for k, v in paused.items() if k != "tracker_checklist_posted"}
+
+    again = ports_with_a_blocked_issue()
+    again.tracker.earlier = [checklist_comments(first)[0]]
+    done = await split(apply(lost, rules.resumed(lost, None)), cfg, again)
+
+    assert done["status"] == "split"
+    assert checklist_comments(again) == [] and len(split_comments(again)) == 1
+    assert again.documents.saved[-1]["tracker_checklist_posted"]["hash"] == rules.tracker_hash(
+        paused["tracker_checklist"]
+    )

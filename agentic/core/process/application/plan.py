@@ -75,6 +75,7 @@ async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
         parts_remedy=rules.parts_remedy_text(part_of),
         parts_step=rules.parts_step_text(part_of),
         parts_field=rules.parts_field_text(part_of),
+        tracker_with_parts=rules.TRACKER_WITH_PARTS,
     )
     delivered = apply(patch, _delivered(cfg, output, written, spec.author.name))
     judged, built_whole = _after_delivery(state, delivered, part_of, output, history)
@@ -180,6 +181,7 @@ async def _plan_cold(
         parts_remedy=rules.parts_remedy_text(part_of),
         parts_step=rules.parts_step_text(part_of),
         parts_field=rules.parts_field_text(part_of),
+        tracker_with_parts=rules.TRACKER_WITH_PARTS,
     )
     delivered = _delivered(cfg, output, written, spec.author.name)
     judged, built_whole = _after_delivery(state, delivered, part_of, output, history)

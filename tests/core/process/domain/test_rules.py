@@ -6,7 +6,7 @@ from typing import Any, cast, get_args
 import pytest
 
 from agentic.core.process.application.ports import BranchPullRequest
-from agentic.core.process.domain import ci, document, roles, rules, task
+from agentic.core.process.domain import ci, document, roles, rules, schemas, task
 from agentic.core.process.domain.adr_numbers import Renaming
 from agentic.core.process.domain.denials import denial_for
 from agentic.core.process.domain.roles import (
@@ -2904,6 +2904,88 @@ def test_the_parts_wording_of_a_part_never_offers_parts_as_the_remedy():
         assert "ONLY when the" not in text
     assert "subtasks anyway" in rules.parts_remedy_text(part)
     assert "always empty" in rules.parts_field_text(part)
+
+
+def _issue(number: int, first_line: str) -> tuple[str, str]:
+    return (f"https://github.com/o/r/issues/{number}", f"{first_line}\n\nbody")
+
+
+SPLIT_PART_URLS = ["https://github.com/o/r/issues/101", "https://github.com/o/r/issues/102"]
+
+
+def test_split_tracker_items_is_empty_for_a_task_without_an_issue():
+    assert (
+        rules.split_tracker_items(None, [_issue(7, "Blocked by: #5")], SPLIT_PART_URLS, [2]) == []
+    )
+
+
+def test_split_tracker_items_is_empty_when_no_open_issue_is_blocked_by_the_task():
+    issues = [
+        _issue(7, "Blocked by: #6"),
+        _issue(8, "Fix the thing"),
+        _issue(9, "x\nBlocked by: #5"),
+    ]
+    assert rules.split_tracker_items(5, issues, SPLIT_PART_URLS, [2]) == []
+
+
+def test_split_tracker_items_names_each_blocked_issue_and_the_last_part_ordered_by_number():
+    issues = [_issue(30, "Blocked by: #4, #5"), _issue(12, "Blocked by: #5"), _issue(8, "Other")]
+    assert rules.split_tracker_items(5, issues, SPLIT_PART_URLS, [2]) == [
+        "#12 is blocked by #5, which this split does not close: close #5 or re-point #12 to #102",
+        "#30 is blocked by #5, which this split does not close: close #5 or re-point #30 to #102",
+    ]
+
+
+def test_split_tracker_items_names_every_part_nothing_depends_on():
+    items = rules.split_tracker_items(5, [_issue(12, "Blocked by: #5")], SPLIT_PART_URLS, [1, 2])
+    assert items == [
+        "#12 is blocked by #5, which this split does not close: close #5 or re-point #12 "
+        "to #101, #102"
+    ]
+
+
+def test_split_tracker_items_leaves_out_the_parts_themselves():
+    # A part blocked by the task's own number is the system's issue, never the human's.
+    issues = [(SPLIT_PART_URLS[1], "Blocked by: #5\n\nbody"), _issue(12, "Blocked by: #5")]
+    items = rules.split_tracker_items(5, issues, SPLIT_PART_URLS, [2])
+    assert len(items) == 1 and items[0].startswith("#12 ")
+
+
+def test_split_tracker_items_caps_at_ten_and_counts_the_rest():
+    issues = [_issue(200 + n, "Blocked by: #5") for n in range(14)]
+    items = rules.split_tracker_items(5, issues, SPLIT_PART_URLS, [2])
+    assert len(items) == 11
+    assert [i.split()[0] for i in items[:10]] == [f"#{200 + n}" for n in range(10)]
+    assert (
+        items[10] == 'and 4 more issues blocked by #5: run gh issue list --search "Blocked by: #5"'
+    )
+    exactly = rules.split_tracker_items(5, issues[:10], SPLIT_PART_URLS, [2])
+    assert len(exactly) == 10 and not exactly[-1].startswith("and ")
+
+
+def test_split_tracker_items_pass_the_item_checks_of_a_tech_lead_item():
+    issues = [_issue(200 + n, "Blocked by: #5") for n in range(14)]
+    items = rules.split_tracker_items(5, issues, SPLIT_PART_URLS, [1, 2])
+    plan = {
+        "markdown": "### Solution",
+        "estimated_cost_usd": 2.0,
+        "estimated_files": 0,
+        "tracker_checklist": items,
+    }
+    assert schemas.validate(schemas.TechPlan, plan, {})["tracker_checklist"] == items
+    assert all("http" not in item for item in items)
+
+
+def test_the_last_parts_are_the_ones_no_other_part_depends_on():
+    parts = [{"depends_on": []}, {"depends_on": [1]}, {"depends_on": [1]}, {"depends_on": [2, 3]}]
+    assert rules.last_part_numbers(cast(Any, parts)) == [4]
+    assert rules.last_part_numbers(cast(Any, parts[:3])) == [2, 3]
+
+
+def test_tracker_with_parts_states_where_the_work_goes():
+    text = rules.TRACKER_WITH_PARTS
+    assert "tracker_checklist" in text and "Blocked by:" in text
+    assert "do not write" in text and "part's own" in text
 
 
 def test_split_is_an_end_with_nothing_to_resume():
