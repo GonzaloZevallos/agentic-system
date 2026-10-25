@@ -856,6 +856,9 @@ class TaskState(TaskInput, total=False):
     # A human decided the task builds whole although its estimate does not fit; the plan
     # check then accepts a plan that does not fit and refuses a split one.
     fit_waived: Annotated[bool, last]
+    # The pause of a part whose plan is over the line (`rules.part_over_line`): the question
+    # is "build it whole or stop". Set with the pause, written False when it is answered.
+    fit_question: Annotated[bool, last]
     # The files the pull request changed, recorded at close through `rules.delivered_files`.
     actual_files: Annotated[int, last]
     # The technical stage (ADR-0011): subtasks by id, each Developer patches its own.

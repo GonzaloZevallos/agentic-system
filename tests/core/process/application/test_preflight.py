@@ -1,5 +1,6 @@
 """The refusal that costs nothing: a run whose product is the checkout running it."""
 
+import difflib
 import re
 from dataclasses import replace
 from pathlib import Path
@@ -21,9 +22,12 @@ from agentic.core.process.application.preflight import (
     product_name,
     unfixed_stage0,
 )
+from agentic.core.process.application.run_role import load_prompt
+from agentic.core.process.domain import rules
+from agentic.core.process.domain.roles import ROLES
 from agentic.core.process.domain.suppressions import Forbidden
 from agentic.shared.configuration import Configuration
-from tests.fakes import MemoryStack, memory_ports
+from tests.fakes import MemoryPrompts, MemoryStack, memory_ports
 
 PRODUCT = Path("/repos/product")
 
@@ -279,11 +283,128 @@ def test_preflight_renders_the_light_reviewers_prompt_too(stage0):
     """The review-arm subtask (issue #28) adds `tech_lead_review_light` to `ROLES`;
     `preflight` renders every role's prompt with `PLACEHOLDERS` alone, so a placeholder
     the new prompt would need outside that set fails here, not mid-task."""
-    from agentic.core.process.domain.roles import ROLES
 
     ports = ports_where(**{str(stage0): "/sys/.git", str(PRODUCT): "/repos/product/.git"})
     preflight(Configuration(product_dir=PRODUCT), ports)  # no ValueError: every prompt renders
     assert "tech_lead_review_light" in {role.slug for role in ROLES}
+
+
+def test_placeholders_carry_an_empty_split_part_slot():
+    assert PLACEHOLDERS["split_part"] == ""
+
+
+# The three passages as the prompts carried them before they became placeholders (git
+# 63d29be), typed here on purpose and not read from `rules`: this is what a typo in the
+# `rules` constants is compared against.
+ORIGINAL_PARTS_WORDING = {
+    "{{parts_remedy}}": (
+        "as one task: write it as `parts` (see `### Parts`) instead of subtasks. Do not shrink the"
+        "\n"
+        "   estimate to make it fit; a plan that fits and carries `parts` is refused too."
+    ),
+    "{{parts_step}}": (
+        "8. `### Parts`, only when the estimate does not fit: at least two chained parts, each a\n"
+        "   small task of its own that lands and shows in the product before the next one starts.\n"
+        "   Each part has a `title`, a `body` (its whole description: the person who builds it has"
+        "\n"
+        "   not seen this plan) and `depends_on`, the numbers of EARLIER parts (1 is the first).\n"
+        "   Write no subtasks then, and `### Subtasks` is not needed. A part is never split again."
+        "\n"
+        "   If the section `## Human` says the human decided to build this task whole, write\n"
+        "   subtasks and no parts."
+    ),
+    "{{parts_field}}": (
+        "- `parts`: one entry per part with `title`, `body` and `depends_on`, ONLY when the\n"
+        "  estimate does not fit; then `subtasks` is empty. Empty when the plan fits."
+    ),
+}
+
+
+def before_this_change(raw: str) -> str:
+    """The prompt file as it was: no slot line, the original wording where the
+    placeholders now stand."""
+    before = raw.replace("{{split_part}}\n", "")
+    for placeholder, wording in ORIGINAL_PARTS_WORDING.items():
+        assert before.count(placeholder) == 1
+        before = before.replace(placeholder, wording)
+    return before
+
+
+@pytest.mark.parametrize("slug", ["tech_lead", "tech_lead_platform"])
+def test_the_planning_prompts_differ_from_before_only_by_the_empty_slot(slug, tmp_path):
+    """`{{split_part}}` sits on a line of its own in each planning Tech Lead prompt, so
+    for a task that is not a part the render is what it was, plus one empty line."""
+    role = next(r for r in ROLES if r.slug == slug)
+    cfg = Configuration(product_dir=tmp_path)
+    ports = memory_ports()
+    raw, _ = ports.prompts.raw(role)
+    assert raw.count("{{split_part}}\n") == 1
+    before_ports = memory_ports(prompts=MemoryPrompts(**{slug: before_this_change(raw)}))
+
+    after = load_prompt(role, cfg, ports, {}, **PLACEHOLDERS).text.split("\n")
+    before = load_prompt(role, cfg, before_ports, {}, **PLACEHOLDERS).text.split("\n")
+
+    changes = [
+        op for op in difflib.SequenceMatcher(None, before, after).get_opcodes() if op[0] != "equal"
+    ]
+    assert len(changes) == 1
+    tag, i1, i2, j1, j2 = changes[0]
+    assert (tag, before[i1:i2], after[j1:j2]) == ("insert", [], [""])
+
+
+def test_a_filled_slot_reaches_the_rendered_prompt(tmp_path):
+
+    role = next(r for r in ROLES if r.slug == "tech_lead_platform")
+    values = {**PLACEHOLDERS, "split_part": rules.split_part_text(("GH-316", 2))}
+    text = load_prompt(role, Configuration(product_dir=tmp_path), memory_ports(), {}, **values).text
+    assert "GH-316" in text
+    assert "{{" not in text
+
+
+REMEDY_SENTENCES = (
+    "write it as `parts` (see `### Parts`) instead of subtasks",
+    "a plan that fits and carries `parts` is refused too",
+    "8. `### Parts`, only when the estimate does not fit",
+    "- `parts`: one entry per part with `title`, `body` and `depends_on`, ONLY when the",
+)
+
+
+def part_values(part_of):
+    return {
+        **PLACEHOLDERS,
+        "split_part": rules.split_part_text(part_of),
+        "parts_remedy": rules.parts_remedy_text(part_of),
+        "parts_step": rules.parts_step_text(part_of),
+        "parts_field": rules.parts_field_text(part_of),
+    }
+
+
+@pytest.mark.parametrize("slug", ["tech_lead", "tech_lead_platform"])
+def test_a_part_reads_no_sentence_that_offers_parts_as_the_remedy(slug, tmp_path):
+    role = next(r for r in ROLES if r.slug == slug)
+    cfg = Configuration(product_dir=tmp_path)
+    text = load_prompt(role, cfg, memory_ports(), {}, **part_values(("GH-316", 2))).text
+    assert "{{" not in text
+    assert "GH-316" in text
+    for sentence in REMEDY_SENTENCES:
+        assert sentence not in text
+    assert "write subtasks only" in text
+
+
+@pytest.mark.parametrize("slug", ["tech_lead", "tech_lead_platform"])
+def test_a_task_that_is_not_a_part_still_reads_the_parts_instructions(slug, tmp_path):
+    role = next(r for r in ROLES if r.slug == slug)
+    cfg = Configuration(product_dir=tmp_path)
+    text = load_prompt(role, cfg, memory_ports(), {}, **part_values(None)).text
+    for sentence in REMEDY_SENTENCES:
+        assert sentence in text
+    assert text == load_prompt(role, cfg, memory_ports(), {}, **PLACEHOLDERS).text
+
+
+def test_the_stack_prompt_has_no_split_part_slot():
+    role = next(r for r in ROLES if r.slug == "tech_lead_stack")
+    raw, _ = memory_ports().prompts.raw(role)
+    assert "{{split_part}}" not in raw
 
 
 def test_the_label_falls_back_instead_of_killing_a_node_already_running():

@@ -26,6 +26,7 @@ from .roles import (
     PAIR_PM_TECH_LEAD,
     PAIR_UI_LEAD,
     PAIR_UX_LEAD,
+    PJM,
     PM,
     PM_CONSOLIDATOR,
     PM_FINAL,
@@ -45,7 +46,7 @@ from .roles import (
     Pair,
     Role,
 )
-from .schemas import TaskType
+from .schemas import FitDecision, TaskType
 from .task import (
     INTEGRATION,
     WAITING_ON_HUMAN,
@@ -2044,6 +2045,64 @@ def human_section(state: TaskState, reason: str | None, decision: str) -> str:
     return f"{previous}\n\n{entry}".strip()
 
 
+def fit_question_text(task_id: str, part_of: tuple[str, int], fit: FitDecision | None) -> str:
+    """What the human reads when a part's plan is over the line: the figures the decision
+    used (`FitDecision`), the limits, which one was crossed, and the three ways out. No way
+    out stops the task by resuming it: stopping is the absence of a resume."""
+    origin, number = part_of
+    head = f"{task_id} is part {number} of {origin}; a part is never split again. "
+    if fit is None:
+        figures = "The plan's figures are not known, so which limit it crossed is not either. "
+    else:
+        reference = (
+            f"the history's reference for this many subtasks is {fit.reference_usd:.2f} USD"
+            if fit.reference_usd is not None
+            else "the history has no reference for this many subtasks"
+        )
+        limits = f"{SPLIT_COST_USD} USD and {SPLIT_FILES} files"
+        crossed: list[str] = []
+        if fit.reference_usd is not None and fit.reference_usd > max(fit.cost_usd, SPLIT_COST_USD):
+            crossed.append(f"the history's reference is over the {SPLIT_COST_USD} USD limit")
+        elif fit.cost_usd > SPLIT_COST_USD:
+            crossed.append(f"the declared cost is over the {SPLIT_COST_USD} USD limit")
+        if fit.files > SPLIT_FILES:
+            crossed.append(f"the declared files are over the {SPLIT_FILES} file limit")
+        verdict = (
+            "; ".join(crossed)
+            if crossed
+            else "it is over the line by the larger of the declared cost and the reference"
+        )
+        figures = (
+            f"Its plan declares {fit.cost_usd:.2f} USD and {fit.files} files, and {reference}. "
+            f"One task holds at most {limits}: {verdict}. "
+        )
+    return (
+        f"{head}{figures}Choose one:\n"
+        "- Build it whole: comment on the issue and resume; the plan is kept and built as "
+        "one task.\n"
+        "- Stop and release the parts that depend on it: close the issue as not planned.\n"
+        "- Stop and hold them: leave it open and do not resume.\n"
+        "Closing the issue as completed without a merge leaves the parts behind it "
+        "blocked. Any resume builds it whole."
+    )
+
+
+def part_over_line(
+    task_id: str, part_of: tuple[str, int], fit: FitDecision | None
+) -> dict[str, Any]:
+    """The patch that pauses a part whose plan is over the line: one `estimate` escalation
+    asking "build it whole or stop", marked by `fit_question` so only its resume waives the
+    fit. It carries no `proposed_estimate`; the plan is kept."""
+    return logged(
+        {
+            "current_role": PJM.name,
+            "status": WAITING_ON_HUMAN,
+            **escalation("estimate", fit_question_text(task_id, part_of, fit)),
+            "fit_question": True,
+        }
+    )
+
+
 def resumed(
     state: TaskState, decision: str | None, estimate: float | None = None
 ) -> dict[str, Any]:
@@ -2069,6 +2128,12 @@ def resumed(
     decided = bool(decision and decision.strip())
     if decided:
         patch["sections"] = {HUMAN: human_section(state, reason, decision or "")}
+    if state.get("fit_question"):
+        # A part whose plan is over the line asked "build it whole or stop"; any resume
+        # answers "build it whole" (stopping is not resuming). Written explicitly: a `last`
+        # reducer ignores a missing key. Only this pause waives, never the cap's.
+        patch["fit_waived"] = True
+        patch["fit_question"] = False
     if state.get("escalation_class") == "estimate" and state.get("parts"):
         # A part of a split does not fit and the human decided on it (ADR-0054): the plan
         # is made again as one task, and a second partition is refused.
@@ -3652,6 +3717,68 @@ def split_part_of(body: str) -> tuple[str, int] | None:
     with a marker is a part of a partition, and a part never splits again."""
     match = _SPLIT_MARKER.search(body)
     return (match.group(1), int(match.group(2))) if match else None
+
+
+def split_part_text(part_of: tuple[str, int] | None) -> str:
+    """What the planning Tech Lead is told about its task being a part of a partition
+    (ADR-0054): empty for a task that is not one. A part is never split again, so the text
+    asks for subtasks only and, when they are over the size limit, for an honest estimate:
+    the system asks the human whether to build the part whole."""
+    if part_of is None:
+        return ""
+    task_id, part = part_of
+    return (
+        f"This task is part {part} of task {task_id}. A part is never split again: write "
+        "subtasks only and never `parts`. If your subtasks are over the size limit, write "
+        "them anyway and estimate honestly, because the system then asks the human whether "
+        "to build the part whole; do not shrink the estimate to avoid that."
+    )
+
+
+# The Tech Lead prompts' instructions to split an over-the-line plan into `parts`, kept
+# here as the wording of a task that is not a part, so a part never reads them: a part
+# is never split again (ADR-0054). Each is the exact text the prompt carried before it
+# became a placeholder, so a task that is not a part renders it byte for byte.
+_PARTS_REMEDY = (
+    "as one task: write it as `parts` (see `### Parts`) instead of subtasks. Do not shrink the\n"
+    "   estimate to make it fit; a plan that fits and carries `parts` is refused too."
+)
+_PARTS_STEP = (
+    "8. `### Parts`, only when the estimate does not fit: at least two chained parts, each a\n"
+    "   small task of its own that lands and shows in the product before the next one starts.\n"
+    "   Each part has a `title`, a `body` (its whole description: the person who builds it has\n"
+    "   not seen this plan) and `depends_on`, the numbers of EARLIER parts (1 is the first).\n"
+    "   Write no subtasks then, and `### Subtasks` is not needed. A part is never split again.\n"
+    "   If the section `## Human` says the human decided to build this task whole, write\n"
+    "   subtasks and no parts."
+)
+_PARTS_FIELD = (
+    "- `parts`: one entry per part with `title`, `body` and `depends_on`, ONLY when the\n"
+    "  estimate does not fit; then `subtasks` is empty. Empty when the plan fits."
+)
+
+
+def parts_remedy_text(part_of: tuple[str, int] | None) -> str:
+    """The end of the prompt's sentence on a plan over the size limit: for a task that is
+    not a part, to write `parts`; for a part, to write its subtasks anyway."""
+    if part_of is None:
+        return _PARTS_REMEDY
+    return (
+        "without the human's decision: write your subtasks anyway and do not shrink the\n"
+        "   estimate to make it fit; the system asks the human whether to build it whole."
+    )
+
+
+def parts_step_text(part_of: tuple[str, int] | None) -> str:
+    """The prompt's step on writing `### Parts`: empty for a part, which never has one."""
+    return _PARTS_STEP if part_of is None else ""
+
+
+def parts_field_text(part_of: tuple[str, int] | None) -> str:
+    """The prompt's line on the `parts` output field: for a part, that it stays empty."""
+    if part_of is None:
+        return _PARTS_FIELD
+    return "- `parts`: always empty, because this task is a part and a part is never split again."
 
 
 def tracker_hash(items: Sequence[str]) -> str:

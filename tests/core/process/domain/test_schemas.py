@@ -756,3 +756,67 @@ def test_a_convened_plan_reaches_the_document_and_a_plan_without_one_leaves_no_t
     assert convened["performance"] == plan["performance"]
     assert "performance" not in document.render(state)
     assert "performance" not in document.render({**state, "performance": []})
+
+
+# A task that is itself a part (GH-338, GH-346): never split again, so `parts` is refused
+# first with the rule and no remedy that names parts, and an over-the-line subtask plan is
+# left to the plan stage, which asks the human once.
+
+PART_OF = ("GH-316", 2)
+# Median 10, p90 200: a declared 20 USD is over the line by the reference alone.
+HIGH_REFERENCE = [10, 10, 10, 10, 200, 200, 200]
+
+
+def test_a_part_that_writes_parts_and_a_checklist_is_told_to_write_subtasks_only():
+    # The GH-346 shape: the checklist refusal is never reached.
+    check = schemas.plan_check_for(_history(1, []), 0.0, part_of=PART_OF)
+    with pytest.raises(ValueError, match="part 2 of GH-316.*never split again.*subtasks only") as e:
+        check(_split(400.0, 90, tracker_checklist=CHECKLIST))
+    assert "write parts" not in str(e.value)
+    with pytest.raises(ValueError, match="subtasks only"):
+        check(_split(20.0, 3))  # parts that would fit too: refused all the same
+    with pytest.raises(ValueError, match="subtasks only"):
+        check({**_estimated(20.0, 3), "parts": _split(20.0, 3)["parts"]})  # both shapes
+
+
+def test_a_part_with_subtasks_over_the_line_by_the_reference_alone_passes_the_check():
+    # The GH-338 shape: 20 USD, 4 files, refused only by the history's reference.
+    history = _history(1, HIGH_REFERENCE)
+    plan = _estimated(20.0, 4)
+    with pytest.raises(ValueError, match="does not fit.*write parts"):
+        schemas.plan_check_for(history, 0.0)(plan)  # today's text, with part_of=None
+    schemas.plan_check_for(history, 0.0, part_of=PART_OF)(plan)  # does not raise
+    # A cost of 400 USD and 90 files pass on a part as well: the stage asks, the check does not.
+    schemas.plan_check_for(history, 0.0, part_of=PART_OF)(_estimated(400.0, 90))
+
+
+def test_a_part_keeps_every_other_refusal():
+    check = schemas.plan_check_for(_history(1, HIGH_REFERENCE), 30.0, part_of=PART_OF)
+    with pytest.raises(ValueError, match="already spent"):
+        check(_estimated(20.0, 4))
+    with pytest.raises(ValueError, match="median"):
+        schemas.plan_check_for(_history(1, [400] * 5), 0.0, part_of=PART_OF)(_estimated(20.0, 4))
+    with pytest.raises(ValueError, match="at least one file"):
+        schemas.plan_check_for(_history(1, []), 0.0, part_of=PART_OF)(_estimated(20.0, 0))
+
+
+def test_plan_fits_carries_the_figures_it_decided_on():
+    history = _history(1, HIGH_REFERENCE)
+    fit = schemas.plan_fits(_estimated(20.0, 4), history)
+    assert fit == schemas.FitDecision(False, 20.0, 4, 200.0)
+    own = schemas.plan_fits(_estimated(20.0, 4), _history(1, []))
+    assert own == schemas.FitDecision(True, 20.0, 4, None)
+    assert schemas.plan_fits(_estimated(20.0, 41), _history(1, [])).fits is False
+    # The size is the number of parts when the plan has them.
+    assert schemas.plan_fits(_split(400.0, 90), _history(2, [10] * 5)).reference_usd == 10.0
+
+
+def test_the_plan_schema_does_not_offer_parts_to_a_task_that_is_a_part():
+    # GH-340 invariant 2: the schema reaches every Tech Lead, a part's included, so
+    # its descriptions may not name `parts` as the answer to a plan over the line
+    # without saying that a part never uses it.
+    props = schemas.json_schema(schemas.TechPlan, VOCAB)["properties"]
+    for name in ("subtasks", "parts"):
+        text = props[name]["description"]
+        assert "never" in text and "part of a split" in text, name
+    assert "Empty ONLY when" not in props["subtasks"]["description"]

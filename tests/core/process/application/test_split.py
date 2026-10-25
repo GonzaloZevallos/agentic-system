@@ -104,6 +104,9 @@ async def test_a_part_of_a_partition_never_splits_again_and_escalates_estimate(t
     assert ports.tracker.opened_issues == [] and ports.tracker.comments == []
     assert patch["escalation_class"] == "estimate" and patch["status"] == "waiting_on_human"
     assert "never split again" in patch["escalated"]
+    # The same pause the plan stage raises (`rules.part_over_line`), figures unknown.
+    assert patch["fit_question"] is True and "not known" in patch["escalated"]
+    assert "proposed_estimate" not in patch
     # A human decision waives the fit and the plan is made again, whole.
     paused = apply(part, patch)
     resumption = rules.resumed(paused, "Build it whole.")

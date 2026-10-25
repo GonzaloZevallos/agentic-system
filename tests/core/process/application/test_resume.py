@@ -3,7 +3,7 @@
 import pytest
 
 from agentic.core.process.application import resume
-from agentic.core.process.domain import document, legacy_names, roles, rules
+from agentic.core.process.domain import document, legacy_names, roles, rules, schemas
 from agentic.shared.configuration import Configuration
 from tests.fakes import memory_ports
 
@@ -638,3 +638,65 @@ def test_decision_since_is_none_without_a_human_comment_after_the_escalation():
     assert resume.decision_since(["Escalated: x", "Landing: rerun", "  "], "Escalated: ") is None
     assert resume.decision_since(["Only the task says this"], "Escalated: ") is None
     assert resume.decision_since([], "Escalated: ") is None
+
+
+# A part whose plan is over the line asked "build it whole or stop" (ADR-0054): the pause is
+# the plan stage's `rules.part_over_line`, kept with its subtasks, and a resume builds it whole.
+
+
+def asked_to_build_whole():
+    figures = schemas.FitDecision(False, 20.0, 5, 300.0)
+    return {
+        "id": "GH-338",
+        "title": "Second half",
+        "description": f"Second half.\n\n{rules.split_marker('GH-316', 2)}",
+        "type": "feature",
+        "cost_usd": 3.0,
+        "estimate": {"cost_usd": 20.0, "files": 5},
+        "subtasks": {"api": sub("api", "pending", None, None)},
+        **rules.part_over_line("GH-338", ("GH-316", 2), figures),
+    }
+
+
+def test_a_comment_on_the_part_over_the_line_builds_it_whole_through_the_fan_in(cfg):
+    r = resume.prepare(
+        "GH-338",
+        asked_to_build_whole(),
+        "checkpoint",
+        cfg,
+        decided("Build it whole."),
+    )
+    assert r.target == "integrate"
+    assert r.resumed["fit_waived"] is True and r.resumed["fit_question"] is False
+    assert r.resumed.get("estimate_revisions") is None
+    assert r.resumed["estimate"] == {"cost_usd": 20.0, "files": 5}
+
+
+def test_the_estimate_flag_on_the_part_over_the_line_is_refused(cfg):
+    with pytest.raises(ValueError, match="build the part whole.*comment on the issue and resume"):
+        resume.prepare(
+            "GH-338",
+            asked_to_build_whole(),
+            "checkpoint",
+            cfg,
+            decided("Build it whole."),
+            estimate=200.0,
+        )
+
+
+def test_no_comment_on_the_part_over_the_line_repeats_the_question_and_never_resumes(cfg):
+    state = asked_to_build_whole()
+    with pytest.raises(resume.WaitingOnHuman) as asked:
+        resume.prepare("GH-338", state, "checkpoint", cfg, decided())
+    message = str(asked.value)
+    assert "not planned" in message and "do not resume" in message
+    assert message == state["escalated"]
+
+
+def test_the_cap_at_twice_the_estimate_keeps_its_message_and_its_flag_usage(cfg):
+    with pytest.raises(resume.WaitingOnHuman) as stopped:
+        resume.prepare("GH-12", stopped_at_the_estimate(), "checkpoint", cfg, decided())
+    assert str(stopped.value) == (
+        "GH-12: the estimate does not fit; decide in comments on the issue "
+        "whether to go on, with which estimate, or to stop, then resume"
+    )

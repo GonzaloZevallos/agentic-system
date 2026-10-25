@@ -5,7 +5,7 @@ import pytest
 import yaml
 
 from agentic.core.process.application import resume
-from agentic.core.process.domain import document, legacy_names, presubmit, roles, rules
+from agentic.core.process.domain import document, legacy_names, presubmit, roles, rules, task
 from agentic.core.process.domain import landing as landing_rules
 from tests.gh150_stranded import GH150_STRANDED
 
@@ -1265,3 +1265,17 @@ def test_record_closure_replaces_the_tracker_record_the_document_wrote_as_a_bloc
     once = document.record_closure(raw, {"tracker_checklist_posted": newer})
     assert document.parse(once)["tracker_checklist_posted"] == newer
     assert once.count("\ntracker_checklist_posted:") == 1
+
+
+def test_the_document_of_a_part_over_the_line_round_trips_fit_question_until_it_is_resumed():
+    """A part paused by `rules.part_over_line` writes `fit_question`; the resume writes it
+    False, so the next document has no key and keeps `fit_waived`."""
+    base = {"id": "GH-9", "title": "t", "description": "d", "type": "feature", "sections": {}}
+    paused = task.apply(base, rules.part_over_line("GH-9", ("GH-3", 2), None))
+    parsed = document.parse(document.render(paused))
+    assert parsed["fit_question"] is True and "fit_question" in resume.STATE_FIELDS
+    assert "fit_question" not in document.parse(document.render(base))
+    answered = task.apply(paused, rules.resumed(paused, "Build it whole."))
+    text = document.render(answered)
+    assert "fit_question" not in text
+    assert document.parse(text)["fit_waived"] is True

@@ -201,6 +201,11 @@ def prepare(
             f"(escalation class `estimate`); {task_id} is paused for "
             f"`{paused.get('escalation_class') or 'another reason'}`"
         )
+    if estimate is not None and paused.get("fit_question"):
+        raise ValueError(
+            f"{task_id} is paused asking whether to build the part whole, not for an "
+            "estimate: --estimate does not apply; comment on the issue and resume"
+        )
     decision = None
     if pending:
         resumed, target = paused, ", ".join(pending)
@@ -211,6 +216,10 @@ def prepare(
                 f"{task_id} waits on {len(paused['questions_for_human'])} question(s): "
                 "answer them in comments on the issue, then resume"
             )
+        if decision is None and paused.get("fit_question"):
+            # A part over the line asked once (ADR-0054): without a comment the question is
+            # repeated as it was asked, and stopping stays the absence of a resume.
+            raise WaitingOnHuman(_fit_question(task_id, paused))
         if decision is None and estimate is None and paused.get("escalation_class") == "estimate":
             # Never retaken on its own (ADR-0054): the estimate in force changes only on a
             # resumption that carries a human decision.
@@ -253,6 +262,15 @@ def prepare(
         interrupted=bool(pending),
         estimate=estimate,
     )
+
+
+def _fit_question(task_id: str, paused: TaskState) -> str:
+    """The question a part over the line asked: the escalation's own text, which
+    `rules.fit_question_text` wrote; rebuilt from the marker if the state lost it."""
+    if asked := paused.get("escalated"):
+        return asked
+    part_of = rules.split_part_of(paused.get("description", "")) or (task_id, 0)
+    return rules.fit_question_text(task_id, part_of, None)
 
 
 def _refuse_spent_estimate(task_id: str, resumed: TaskState, spent: float) -> None:

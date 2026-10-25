@@ -6,6 +6,7 @@ from __future__ import annotations
 from agentic.shared.configuration import Configuration
 from agentic.shared.stage0 import CHECKOUT
 
+from ..domain import rules
 from ..domain.roles import ROLES
 from .checkouts import task_base
 from .ports import Ports
@@ -25,6 +26,11 @@ PLACEHOLDERS = {
     "proposed_invariants": "- none",
     "cost_history": "- none",
     "checks": "- `tests`: `<the product's own command>`",
+    "split_part": "",
+    # The wording of a task that is not a part, so the gate renders the prompt as it ships.
+    "parts_remedy": rules.parts_remedy_text(None),
+    "parts_step": rules.parts_step_text(None),
+    "parts_field": rules.parts_field_text(None),
     # `pjm.md` names it (ADR-0019); the real value `classify.py` passes at runtime is
     # `product_name(ports)`, not this generic stand-in, which only has to render.
     "product": "product",

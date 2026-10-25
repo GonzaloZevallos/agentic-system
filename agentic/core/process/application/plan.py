@@ -17,7 +17,7 @@ from pathlib import Path
 
 from agentic.shared.configuration import Configuration, experiment_snapshot
 
-from ..domain import cost_history, plan_view, schemas
+from ..domain import cost_history, plan_view, rules, schemas
 from ..domain.roles import (
     INTERVIEW_SOLUTION,
     INTERVIEW_SOLUTION_PLATFORM,
@@ -56,25 +56,60 @@ async def plan(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
     if transcript is None:
         return finish(state, patch, ports)
     interviewed = apply(state, patch)
+    part_of = _part_of(state)
     output, written = await run_role(
         interviewed,
         spec.author,
         cfg,
         ports,
-        check=_estimate_check(interviewed, history),
+        check=_estimate_check(interviewed, history, part_of),
         cwd=task.path,
         resume=transcript.sessions.get(spec.author_side.slug),
         proposed_invariants=_proposed(state, spec, transcript.invariants),
         cost_history=history.text(),
+        split_part=rules.split_part_text(part_of),
+        parts_remedy=rules.parts_remedy_text(part_of),
+        parts_step=rules.parts_step_text(part_of),
+        parts_field=rules.parts_field_text(part_of),
     )
-    return finish(state, apply(patch, _delivered(cfg, output, written, spec.author.name)), ports)
+    delivered = apply(patch, _delivered(cfg, output, written, spec.author.name))
+    return finish(state, _after_delivery(state, delivered, part_of, output, history), ports)
 
 
-def _estimate_check(state: TaskState, history: cost_history.History) -> Check:
+def _part_of(state: TaskState) -> tuple[str, int] | None:
+    """The `(task id, part)` of a task that is a part of a split, else `None`."""
+    return rules.split_part_of(state.get("description", ""))
+
+
+def _estimate_check(
+    state: TaskState, history: cost_history.History, part_of: tuple[str, int] | None
+) -> Check:
     """The plan check both arms share: the structural one plus the estimate's refusals,
-    which read the history and what the task has spent so far (ADR-0054)."""
+    which read the history, what the task has spent so far and whether the task is a part
+    (ADR-0054)."""
     spent = state.get("cost_usd", 0.0) + state.get("landing_cost_carried", 0.0)
-    return schemas.plan_check_for(history, spent, fit_waived=bool(state.get("fit_waived")))
+    return schemas.plan_check_for(
+        history, spent, fit_waived=bool(state.get("fit_waived")), part_of=part_of
+    )
+
+
+def _after_delivery(
+    state: TaskState,
+    patch: TaskState,
+    part_of: tuple[str, int] | None,
+    output: Output | None,
+    history: cost_history.History,
+) -> TaskState:
+    """The one place a part's plan is judged over the line (ADR-0054), on both arms: a
+    part that delivered subtasks the fit does not accept, with no waiver, keeps its plan
+    and pauses once to ask the human whether to build it whole. Anything else is left as
+    it is; `schemas.plan_fits` decides, so the text quotes the figures the check used."""
+    if output is None or part_of is None or state.get("fit_waived") or not patch.get("subtasks"):
+        return patch
+    fit = schemas.plan_fits(output.data, history)
+    if fit.fits:
+        return patch
+    return apply(patch, rules.part_over_line(state["id"], part_of, fit))
 
 
 async def _plan_cold(
@@ -96,17 +131,23 @@ async def _plan_cold(
     path makes right before its own Tech Lead call -- kept here for the same reason,
     not special-cased away."""
     ports.workspace.commit_all(cwd, f"{state['id']}: solution interview")
+    part_of = _part_of(state)
     output, written = await run_role(
         state,
         spec.author,
         cfg,
         ports,
-        check=_estimate_check(state, history),
+        check=_estimate_check(state, history, part_of),
         cwd=cwd,
         proposed_invariants=_SKIPPED_PROPOSAL,
         cost_history=history.text(),
+        split_part=rules.split_part_text(part_of),
+        parts_remedy=rules.parts_remedy_text(part_of),
+        parts_step=rules.parts_step_text(part_of),
+        parts_field=rules.parts_field_text(part_of),
     )
-    return finish(state, _delivered(cfg, output, written, spec.author.name), ports)
+    delivered = _delivered(cfg, output, written, spec.author.name)
+    return finish(state, _after_delivery(state, delivered, part_of, output, history), ports)
 
 
 def _delivered(
