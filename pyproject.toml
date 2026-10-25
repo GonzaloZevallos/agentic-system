@@ -69,6 +69,7 @@ files = [
     "agentic/core/process/application/perf.py",
     "agentic/core/process/application/presubmit.py",
     "agentic/core/process/application/release.py",
+    "agentic/core/process/application/close_issues.py",
     "agentic/core/process/application/landing.py",
     "agentic/core/process/application/landing_plan.py",
     "agentic/core/process/application/landing_sync.py",

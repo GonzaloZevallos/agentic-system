@@ -988,7 +988,7 @@ def _blocker_verdict(
         return "merge_not_in_upstream" if tip else "unknown"
     document = ports.documents.load(ports.inbox.task_id(blocker)) or {}
     if document.get("status") == "tracker_only":
-        return "resolved" if rules.blocker_resolved(state.state_reason, True) else "unknown"
+        return "resolved"  # COMPLETED here: the stateReason triage above already ran
     heads = rules.slices_landed_heads(document)
     if heads is None:
         return "no_merge_recorded"
