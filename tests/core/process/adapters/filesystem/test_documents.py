@@ -1,7 +1,15 @@
+import os
+import threading
+import time
 from pathlib import Path
 
+import pytest
+
+from agentic import composition
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
+from agentic.core.process.adapters.filesystem import documents as filesystem_documents
 from agentic.core.process.adapters.filesystem.documents import system_commit
+from agentic.core.process.domain import document
 
 
 def test_save_then_load_in_the_product_repo(tmp_path):
@@ -156,3 +164,269 @@ def test_load_reads_the_product_copy_not_the_one_a_delivery_committed_on_the_bra
 
     loaded = FilesystemTaskDocuments(product).load("GH-1")
     assert loaded is not None and loaded["status"] == "integrating"
+
+
+# --- the parse cache (ADR-0063) ---------------------------------------------------------
+
+HOUR_NS = 3_600 * 1_000_000_000
+
+
+def _aged():
+    """A clock an hour ahead of the filesystem's: every file written now is old enough to
+    be cached, the way a closed document is for a poller that has run for a while."""
+    return time.time_ns() + HOUR_NS
+
+
+@pytest.fixture
+def parses(monkeypatch):
+    """Every `document.parse` call, in order, by the source path it was handed."""
+    calls: list[object] = []
+    real = document.parse
+
+    def spy(raw, source="document"):
+        calls.append(source)
+        return real(raw, source)
+
+    monkeypatch.setattr(document, "parse", spy)
+    return calls
+
+
+def _doc(task_id="T-1", description="d", **more):
+    return {"id": task_id, "title": "t", "description": description, **more}
+
+
+def _touch_later():
+    time.sleep(0.02)  # past the filesystem's coarse timestamp tick
+
+
+def test_an_unchanged_aged_document_is_parsed_once(tmp_path, parses):
+    documents = FilesystemTaskDocuments(tmp_path, clock=_aged)
+    documents.save(_doc())
+
+    first = documents.load("T-1")
+    second = documents.load("T-1")
+
+    assert first == second and len(parses) == 1
+
+
+def test_a_rewrite_of_the_same_size_with_the_mtime_restored_is_seen(tmp_path, parses):
+    documents = FilesystemTaskDocuments(tmp_path, clock=_aged)
+    path = documents.save(_doc(description="aaaa"))
+    assert documents.load("T-1")["description"] == "aaaa"
+    before = path.stat()
+    _touch_later()
+
+    path.write_text(path.read_text(encoding="utf-8").replace("aaaa", "bbbb"), encoding="utf-8")
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+    assert path.stat().st_size == before.st_size
+    assert documents.load("T-1")["description"] == "bbbb"
+    assert len(parses) == 2
+
+
+def test_record_closure_after_a_cached_load_is_visible(tmp_path):
+    documents = FilesystemTaskDocuments(tmp_path, clock=_aged)
+    documents.save(_doc())
+    assert "closed_at" not in documents.load("T-1")
+    _touch_later()
+
+    documents.record_closure("T-1", {"closed_at": "2026-09-21T10:00:00Z"})
+
+    assert documents.load("T-1")["closed_at"] == "2026-09-21T10:00:00Z"
+
+
+def test_a_file_inside_the_racy_window_is_parsed_on_every_load(tmp_path, parses):
+    path = FilesystemTaskDocuments(tmp_path).save(_doc())
+    ctime = path.stat().st_ctime_ns
+    documents = FilesystemTaskDocuments(tmp_path, clock=lambda: ctime + 1_000_000_000)
+
+    documents.load("T-1")
+    documents.load("T-1")
+
+    assert len(parses) == 2
+
+
+def test_a_file_exactly_at_the_window_is_cached(tmp_path, parses):
+    path = FilesystemTaskDocuments(tmp_path).save(_doc())
+    ctime = path.stat().st_ctime_ns
+    documents = FilesystemTaskDocuments(tmp_path, clock=lambda: ctime + 2_000_000_000)
+
+    documents.load("T-1")
+    documents.load("T-1")
+
+    assert len(parses) == 1
+
+
+def test_a_ctime_in_the_future_is_never_cached(tmp_path, parses):
+    path = FilesystemTaskDocuments(tmp_path).save(_doc())
+    ctime = path.stat().st_ctime_ns
+    documents = FilesystemTaskDocuments(tmp_path, clock=lambda: ctime - HOUR_NS)
+
+    documents.load("T-1")
+    documents.load("T-1")
+
+    assert len(parses) == 2
+
+
+def test_mutating_what_load_returned_changes_nothing_for_the_next_load(tmp_path):
+    documents = FilesystemTaskDocuments(tmp_path, clock=_aged)
+    documents.save(_doc(sections={"PjM": "ok"}))
+
+    for _ in range(2):  # the miss that stores, then the hit that copies
+        loaded = documents.load("T-1")
+        loaded["sections"]["PjM"] = "mutated"
+        loaded["extra"] = 1
+        assert documents.load("T-1")["sections"] == {"PjM": "ok"}
+        assert "extra" not in documents.load("T-1")
+
+
+def test_a_missing_file_is_none_until_it_is_written(tmp_path):
+    documents = FilesystemTaskDocuments(tmp_path, clock=_aged)
+
+    assert documents.load("T-1") is None
+    documents.save(_doc())
+
+    assert documents.load("T-1")["id"] == "T-1"
+
+
+def test_a_malformed_file_raises_on_every_load(tmp_path, parses):
+    documents = FilesystemTaskDocuments(tmp_path, clock=_aged)
+    path = documents.path_for("T-1")
+    path.parent.mkdir(parents=True)
+    path.write_text("no frontmatter here", encoding="utf-8")
+
+    for _ in range(2):
+        with pytest.raises(ValueError, match="missing frontmatter"):
+            documents.load("T-1")
+
+    assert len(parses) == 2
+
+
+def test_a_document_over_the_remaining_budget_is_returned_but_not_admitted(
+    tmp_path, parses, monkeypatch
+):
+    documents = FilesystemTaskDocuments(tmp_path, clock=_aged)
+    big = documents.save(_doc("BIG", description="x" * 2000))
+    small = documents.save(_doc("SMALL"))
+    monkeypatch.setattr(filesystem_documents, "BUDGET", small.stat().st_size + 10)
+
+    assert documents.load("SMALL")["id"] == "SMALL"
+    assert documents.load("BIG")["description"] == "x" * 2000
+    assert documents.load("BIG")["description"] == "x" * 2000
+    assert documents.load("SMALL")["id"] == "SMALL"
+
+    # BIG parsed on both loads (never admitted) and never evicted SMALL, parsed once.
+    assert [Path(str(source)).stem for source in parses] == ["SMALL", "BIG", "BIG"]
+    assert big.stat().st_size > small.stat().st_size + 10
+
+
+def test_a_deleted_document_is_pruned_by_ids_and_gives_its_bytes_back(tmp_path, parses):
+    documents = FilesystemTaskDocuments(tmp_path, clock=_aged)
+    gone = documents.save(_doc("GONE"))
+    documents.save(_doc("KEPT"))
+    documents.load("GONE")
+    documents.load("KEPT")
+    admitted = documents._admitted
+    size = gone.stat().st_size
+
+    gone.unlink()
+
+    assert documents.ids() == ["KEPT"]
+    assert documents._admitted == admitted - size
+    assert set(documents._entries) == {"KEPT"}
+
+
+def test_load_of_a_vanished_file_drops_its_entry(tmp_path):
+    documents = FilesystemTaskDocuments(tmp_path, clock=_aged)
+    path = documents.save(_doc())
+    documents.load("T-1")
+    path.unlink()
+
+    assert documents.load("T-1") is None
+    assert documents._entries == {} and documents._admitted == 0
+
+
+def test_eight_threads_saving_loading_and_listing_see_their_own_writes(tmp_path):
+    documents = FilesystemTaskDocuments(tmp_path, clock=_aged)
+    errors: list[BaseException] = []
+
+    def work(n: int) -> None:
+        try:
+            for i in range(25):
+                # Another size each time: the aged clock bypasses the racy window, so
+                # the key alone must tell the rewrites apart.
+                text = "y" * (i + 1)
+                documents.save(_doc(f"T-{n}", description=text))
+                assert documents.load(f"T-{n}")["description"] == text
+                assert f"T-{n}" in documents.ids()
+                try:
+                    documents.load(f"T-{(n + 1) % 8}")
+                except ValueError:
+                    pass  # `save` truncates in place: a neighbour caught mid-write, as before
+        except BaseException as exc:  # noqa: BLE001 - reported on the main thread
+            errors.append(exc)
+
+    threads = [threading.Thread(target=work, args=(n,)) for n in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    assert documents._admitted == sum(entry.size for entry in documents._entries.values())
+
+
+class _OsProxy:
+    """The `os` the adapter sees, with `fstat` interposed for one descriptor: the second
+    `fstat` of the file under test fires `between` first. The global `os.fstat` is never
+    touched."""
+
+    def __init__(self, target: Path, between):
+        self._target = str(target)
+        self._between = between
+        self._fd: int | None = None
+        self.calls = 0
+        self.fired = False
+
+    def __getattr__(self, name):
+        return getattr(os, name)
+
+    def open(self, path, *args, **kwargs):
+        fd = os.open(path, *args, **kwargs)
+        if str(path) == self._target and self._fd is None:
+            self._fd = fd
+        return fd
+
+    def fstat(self, fd):
+        if fd == self._fd:
+            self.calls += 1
+            if self.calls == 2 and not self.fired:
+                self.fired = True
+                self._between()
+        return os.fstat(fd)
+
+
+def test_a_write_between_the_two_fstats_is_not_cached(tmp_path, monkeypatch, parses):
+    documents = FilesystemTaskDocuments(tmp_path, clock=_aged)
+    path = documents.save(_doc(description="old"))
+
+    def rewrite():
+        path.write_text(path.read_text(encoding="utf-8").replace("old", "newer"), encoding="utf-8")
+
+    proxy = _OsProxy(path, rewrite)
+    monkeypatch.setattr(filesystem_documents, "os", proxy)
+
+    documents.load("T-1")  # raced: must not be stored
+    assert proxy.fired
+    assert documents._entries == {}
+    assert documents.load("T-1")["description"] == "newer"
+    assert documents.load("T-1")["description"] == "newer"
+    assert len(parses) == 2  # the raced read, then one that did store
+
+
+def test_composition_builds_the_adapter_without_a_clock():
+    source = Path(composition.__file__).read_text(encoding="utf-8")
+    call = source[source.index("FilesystemTaskDocuments(") :]
+    call = call[: call.index("),\n")]
+
+    assert "clock" not in call
