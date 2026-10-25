@@ -10,7 +10,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +34,24 @@ class _Entry:
     key: _Key
     size: int
     data: dict[str, Any]
+
+
+_ATOMS = frozenset({str, int, float, bool, type(None), datetime, date})
+
+
+def _clone(value: Any) -> Any:
+    """`copy.deepcopy` for what `document.parse` returns: dicts and lists are rebuilt,
+    immutable scalars are shared, and anything else (a set from a YAML tag, say) falls
+    back to `deepcopy`. The profile in ADR-0063 showed `deepcopy`'s memo bookkeeping was
+    the whole cost of a cache hit; exact-type dispatch keeps this loop cheap."""
+    kind = type(value)
+    if kind is dict:
+        return {key: item if type(item) in _ATOMS else _clone(item) for key, item in value.items()}
+    if kind is list:
+        return [item if type(item) in _ATOMS else _clone(item) for item in value]
+    if kind in _ATOMS:
+        return value
+    return copy.deepcopy(value)
 
 
 def _key(info: os.stat_result) -> _Key:
@@ -131,7 +149,7 @@ class FilesystemTaskDocuments:
             with self._lock:
                 seen = self._entries.get(task_id)
             if seen is not None and seen.key == key:
-                return copy.deepcopy(seen.data)
+                return _clone(seen.data)
             with open(fd, encoding="utf-8", closefd=False) as handle:
                 text = handle.read()
             try:
@@ -142,13 +160,21 @@ class FilesystemTaskDocuments:
             os.close(fd)
         parsed = document.parse(text, path)
         if second is not None and _key(second) == key and self._settled(first):
-            self._store(task_id, seen, _Entry(key, first.st_size, copy.deepcopy(parsed)))
+            if self._fits(task_id, first.st_size):
+                self._store(task_id, seen, _Entry(key, first.st_size, _clone(parsed)))
         return parsed
 
     def _settled(self, info: os.stat_result) -> bool:
         """Old enough to trust the key: a ctime in the future or inside the racy window
         is never cached."""
         return self.clock() - info.st_ctime_ns >= RACY_WINDOW_NS
+
+    def _fits(self, task_id: str, size: int) -> bool:
+        """Whether `size` bytes would be admitted now: asked before the copy is made, so a
+        document that does not fit costs no copy. `_store` asks again under its own lock."""
+        with self._lock:
+            current = self._entries.get(task_id)
+            return self._admitted - (current.size if current else 0) + size <= BUDGET
 
     def _store(self, task_id: str, seen: _Entry | None, entry: _Entry) -> None:
         with self._lock:

@@ -270,13 +270,17 @@ def test_a_ctime_in_the_future_is_never_cached(tmp_path, parses):
 
 def test_mutating_what_load_returned_changes_nothing_for_the_next_load(tmp_path):
     documents = FilesystemTaskDocuments(tmp_path, clock=_aged)
-    documents.save(_doc(sections={"PjM": "ok"}))
+    entry = {"head": "a" * 40, "step": "re_review", "refusal": "head_not_reviewed", "at": "t"}
+    documents.save(_doc(sections={"PjM": "ok"}, landing=[entry]))
 
     for _ in range(2):  # the miss that stores, then the hit that copies
         loaded = documents.load("T-1")
         loaded["sections"]["PjM"] = "mutated"
+        loaded["landing"][0]["step"] = "mutated"
+        loaded["landing"].append({})
         loaded["extra"] = 1
         assert documents.load("T-1")["sections"] == {"PjM": "ok"}
+        assert documents.load("T-1")["landing"] == [entry]
         assert "extra" not in documents.load("T-1")
 
 
