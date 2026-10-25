@@ -3929,3 +3929,23 @@ def delivered_files(changed_files: int) -> dict[str, int]:
     """The patch that records how many files the pull request changed, the actual the
     estimate is compared with. The only place that names the key."""
     return {"actual_files": changed_files}
+
+
+# --- GH-344 close-after-merge ---
+# The one place that says when a task's still-open issue is closed by the system
+# (ADR-0062, addendum GH-344). Every other module asks `close_after_merge`.
+
+_MERGED_OUTCOMES = frozenset({"merged", "merged_with_changes", "auto_merged"})
+
+
+def close_after_merge(document: Mapping[str, object]) -> bool:
+    """Whether the system closes this task's issue as completed. The caller already knows
+    the issue is open. True for a merged outcome with a recorded merge commit, or for slices
+    that closed the task (`closed_by_slices`). Never for `closed`, a missing outcome,
+    `tracker_only` or a split: those either merged nothing or are the human's to close. It
+    does not read `closed_at`, so a failed close is retried until the issue reads closed."""
+    commit = document.get("merge_commit")
+    if document.get("delivery_outcome") in _MERGED_OUTCOMES and isinstance(commit, str) and commit:
+        return True
+    slices = document.get("closed_by_slices")
+    return isinstance(slices, list) and bool(slices)

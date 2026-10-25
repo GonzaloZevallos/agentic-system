@@ -792,7 +792,7 @@ async def test_an_unverified_run_with_no_table_still_says_so(cfg):
     assert "### Performance not verified" in ports.tracker.pull_requests[0][2]
 
 
-# --- GH-336: a plan with a tracker checklist posts it, then opens the PR (GH-344: it closes the issue) ---
+# --- GH-336: a plan with a tracker checklist posts it, then opens the PR (GH-344: it closes) ---
 
 CHECKLIST = ["Post the verdict table on #12", "Close the follow-ups that are done"]
 WITH_CHECKLIST = {**TASK, "tracker_checklist": CHECKLIST}

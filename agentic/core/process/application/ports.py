@@ -987,6 +987,12 @@ class Tracker(Protocol):
         not the task's own pull request."""
         ...
 
+    def close_issue(self, task_id: str) -> None:
+        """Closes the task's issue as completed (GH-344): the system's own answer to a
+        pull request that merged without closing it. Raises `ValueError`/`OSError` when the
+        platform cannot do it; a task with no issue is ignored, like the other calls."""
+        ...
+
     def open_issue(self, title: str, body: str, *, label: str | None = None) -> str:
         """Open a new issue and return its URL (ADR-0034): the stack review's own way
         of telling the human, with no task id to key off of. It passes no `label`: the

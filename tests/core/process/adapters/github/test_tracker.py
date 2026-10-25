@@ -149,6 +149,23 @@ def test_a_task_without_an_issue_writes_nothing_to_the_issue():
     assert run.calls == []
 
 
+def test_close_issue_closes_the_issue_as_completed_through_gh():
+    run = Recorder()
+    GhTracker(Path("/p"), run).close_issue("GH-12")
+    assert run.calls == [["gh", "issue", "close", "12", "--reason", "completed"]]
+
+
+def test_close_issue_of_a_task_without_an_issue_calls_nothing():
+    run = Recorder()
+    GhTracker(Path("/p"), run).close_issue("T-abc")
+    assert run.calls == []
+
+
+def test_a_failed_close_issue_is_a_value_error():
+    with pytest.raises(ValueError):
+        GhTracker(Path("/p"), Recorder(fail=True)).close_issue("GH-12")
+
+
 def test_gh_failures_are_value_errors():
     with pytest.raises(ValueError, match="gh pr create failed: no auth"):
         GhTracker(Path("/p"), Recorder(fail=True)).open_pull_request("T-1", "b", "t", "x")
