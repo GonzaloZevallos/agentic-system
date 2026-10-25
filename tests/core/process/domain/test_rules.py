@@ -3561,6 +3561,21 @@ def test_slices_landed_heads_are_the_units_heads_without_the_integration_unit():
     assert rules.slices_landed_heads(_sliced()) == ("aaa111", "bbb222")
 
 
+# --- GH-344 close-after-merge ---
+
+
+@pytest.mark.parametrize("outcome", ["merged", "merged_with_changes", "auto_merged"])
+def test_a_merged_outcome_with_a_merge_commit_closes_the_issue(outcome):
+    assert rules.close_after_merge({"delivery_outcome": outcome, "merge_commit": "a" * 40})
+
+
+@pytest.mark.parametrize("outcome", ["merged", "merged_with_changes", "auto_merged"])
+@pytest.mark.parametrize("commit", [None, "", 7])
+def test_a_merged_outcome_without_a_merge_commit_does_not_close_the_issue(outcome, commit):
+    document = {"delivery_outcome": outcome, **({} if commit is None else {"merge_commit": commit})}
+    assert not rules.close_after_merge(document)
+
+
 @pytest.mark.parametrize(
     "document",
     [
@@ -3621,3 +3636,23 @@ def test_an_unknown_only_candidate_adds_nothing_and_does_not_suppress_the_line()
     reports = [_closed(4, "no_merge_recorded"), rules.BlockerReport((), (), (8,))]
     line = rules.queue_blocked_line(reports)
     assert line is not None and "#4" in line and "#8" not in line
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        {"delivery_outcome": "closed", "merge_commit": "a" * 40},
+        {"merge_commit": "a" * 40},
+        {"status": "tracker_only", "closed_at": "t"},
+        {"status": "split", "merge_commit": "a" * 40},
+        {"closed_by_slices": []},
+        {"closed_by_slices": None},
+        {},
+    ],
+)
+def test_anything_but_a_merge_or_closed_slices_does_not_close_the_issue(document):
+    assert not rules.close_after_merge(document)
+
+
+def test_closed_slices_close_the_issue_without_a_merge_commit():
+    assert rules.close_after_merge({"closed_by_slices": ["https://github.com/o/r/pull/3"]})

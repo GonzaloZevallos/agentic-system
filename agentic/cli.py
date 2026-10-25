@@ -62,7 +62,7 @@ from .core.process.adapters.filesystem import (
 from .core.process.adapters.git.workspace import GitError
 from .core.process.adapters.langgraph.graph import ESCALATE
 from .core.process.adapters.shell import inhibitor
-from .core.process.application import archive, reflect_run, release
+from .core.process.application import archive, close_issues, reflect_run, release
 from .core.process.application import perf as perfmod
 from .core.process.application import poll as pollmod
 from .core.process.application import resume as resuming
@@ -1888,6 +1888,8 @@ async def _close_all(cfg: Configuration, ports: Ports) -> None:
                 stopped = True
     if task_ids and readable == 0:
         raise CannotStart("no document could be read")
+    for line in close_issues.sweep(ports):  # GH-344: an issue left open after its merge
+        print(line)
     print(f"agentic: closed {len(closed)}: {', '.join(closed) or '(none)'}")
     if backfilled:
         print(f"agentic: backfilled {len(backfilled)}: {', '.join(backfilled)}")
