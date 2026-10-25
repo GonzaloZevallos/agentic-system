@@ -58,6 +58,7 @@ def test_reducers_are_read_from_the_annotations():
         "tracker_checklist_posted",
         "split_issues",
         "fit_waived",
+        "fit_question",
         "proposed_invariants",
         "experiment",
         "pause_log",

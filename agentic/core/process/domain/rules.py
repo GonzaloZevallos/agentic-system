@@ -11,7 +11,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
+from typing import Any, Literal, NamedTuple, Protocol, assert_never, cast, get_args
 
 from . import adr_numbers, ci, presubmit
 from .copy import copy_location_parts
@@ -26,6 +26,7 @@ from .roles import (
     PAIR_PM_TECH_LEAD,
     PAIR_UI_LEAD,
     PAIR_UX_LEAD,
+    PJM,
     PM,
     PM_CONSOLIDATOR,
     PM_FINAL,
@@ -45,7 +46,7 @@ from .roles import (
     Pair,
     Role,
 )
-from .schemas import TaskType
+from .schemas import FitDecision, TaskType
 from .task import (
     INTEGRATION,
     WAITING_ON_HUMAN,
@@ -2044,6 +2045,65 @@ def human_section(state: TaskState, reason: str | None, decision: str) -> str:
     return f"{previous}\n\n{entry}".strip()
 
 
+def fit_question_text(task_id: str, part_of: tuple[str, int], fit: FitDecision | None) -> str:
+    """What the human reads when a part's plan is over the line: the figures the decision
+    used (`FitDecision`), the limits, which one was crossed, and the three ways out. No way
+    out stops the task by resuming it: stopping is the absence of a resume."""
+    origin, number = part_of
+    head = f"{task_id} is part {number} of {origin}; a part is never split again. "
+    if fit is None:
+        figures = "The plan's figures are not known, so which limit it crossed is not either. "
+    else:
+        reference = (
+            f"the history's reference for this many subtasks is {fit.reference_usd:.2f} USD"
+            if fit.reference_usd is not None
+            else "the history has no reference for this many subtasks"
+        )
+        limits = f"{SPLIT_COST_USD} USD and {SPLIT_FILES} files"
+        crossed: list[str] = []
+        if fit.reference_usd is not None and fit.reference_usd > max(fit.cost_usd, SPLIT_COST_USD):
+            crossed.append(f"the history's reference is over the {SPLIT_COST_USD} USD limit")
+        elif fit.cost_usd > SPLIT_COST_USD:
+            crossed.append(f"the declared cost is over the {SPLIT_COST_USD} USD limit")
+        if fit.files > SPLIT_FILES:
+            crossed.append(f"the declared files are over the {SPLIT_FILES} file limit")
+        verdict = (
+            "; ".join(crossed)
+            if crossed
+            else "it is over the line by the larger of the declared cost and the reference"
+        )
+        figures = (
+            f"Its plan declares {fit.cost_usd:.2f} USD and {fit.files} files, and {reference}. "
+            f"One task holds at most {limits}: {verdict}. "
+        )
+    return (
+        f"{head}{figures}Decide, in a comment on the issue:\n"
+        "- Build it whole: comment on the issue and resume; the plan is kept and built as "
+        "one task.\n"
+        "- Stop and release the parts that depend on it: close the issue as not planned.\n"
+        "- Stop and hold them: leave it open and do not resume.\n"
+        "Closing the issue as completed without a merge leaves the parts behind it "
+        "blocked. Any resume builds it whole."
+    )
+
+
+def part_over_line(task_id: str, part_of: tuple[str, int], fit: FitDecision | None) -> TaskState:
+    """The patch that pauses a part whose plan is over the line: one `estimate` escalation
+    asking "build it whole or stop", marked by `fit_question` so only its resume waives the
+    fit. It carries no `proposed_estimate`; the plan is kept."""
+    return cast(
+        TaskState,
+        logged(
+            {
+                "current_role": PJM.name,
+                "status": WAITING_ON_HUMAN,
+                **escalation("estimate", fit_question_text(task_id, part_of, fit)),
+                "fit_question": True,
+            }
+        ),
+    )
+
+
 def resumed(
     state: TaskState, decision: str | None, estimate: float | None = None
 ) -> dict[str, Any]:
@@ -2069,6 +2129,12 @@ def resumed(
     decided = bool(decision and decision.strip())
     if decided:
         patch["sections"] = {HUMAN: human_section(state, reason, decision or "")}
+    if state.get("fit_question"):
+        # A part whose plan is over the line asked "build it whole or stop"; any resume
+        # answers "build it whole" (stopping is not resuming). Written explicitly: a `last`
+        # reducer ignores a missing key. Only this pause waives, never the cap's.
+        patch["fit_waived"] = True
+        patch["fit_question"] = False
     if state.get("escalation_class") == "estimate" and state.get("parts"):
         # A part of a split does not fit and the human decided on it (ADR-0054): the plan
         # is made again as one task, and a second partition is refused.

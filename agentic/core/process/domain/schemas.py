@@ -20,6 +20,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, Field, model_validator
@@ -821,8 +822,39 @@ def _tracker_only_check(data: dict[str, Any], spent_usd: float) -> None:
         )
 
 
+@dataclass(frozen=True)
+class FitDecision:
+    """Whether a plan's estimate fits one task, with the figures the decision used: the
+    declared cost and files and the history's reference, so a text about the decision
+    quotes what was decided on and never recomputes it (ADR-0054)."""
+
+    fits: bool
+    cost_usd: float
+    files: int
+    reference_usd: float | None
+
+
+def plan_fits(data: dict[str, Any], history: History) -> FitDecision:
+    """The one place that decides whether a plan's estimate fits one task: the larger of
+    the declared cost and the history's reference for the plan's own size (its parts, else
+    its subtasks) against the limits `rules.estimate_fits` holds."""
+
+    # `rules` imports this module for `TaskType`, so the one function that decides the fit
+    # is imported where it is used, never copied here (ADR-0054).
+    from .rules import estimate_fits
+
+    cost, files = data["estimated_cost_usd"], data["estimated_files"]
+    size = len(data.get("parts") or []) or len(data.get("subtasks") or [])
+    reference = reference_usd(history, size)
+    return FitDecision(estimate_fits(cost, files, reference), cost, files, reference)
+
+
 def plan_check_for(
-    history: History, spent_usd: float, *, fit_waived: bool = False
+    history: History,
+    spent_usd: float,
+    *,
+    fit_waived: bool = False,
+    part_of: tuple[str, int] | None = None,
 ) -> Callable[[dict[str, Any]], None]:
     """The plan check with the refusals that need context (ADR-0054), built by the plan
     stage from the cost history, what the task already spent and whether a human waived
@@ -836,15 +868,21 @@ def plan_check_for(
     no parts, a non-empty `tracker_checklist` and `estimated_files == 0` (GH-336): the
     only work is on the issue tracker, so there is nothing to fit and no reference to
     consult. A checklist next to subtasks (A) is allowed and changes nothing here; next to
-    parts it is refused, each part plans itself."""
+    parts it is refused, each part plans itself.
 
-    # `rules` imports this module for `TaskType`, so the one function that decides the fit
-    # is imported where it is used, never copied here (ADR-0054).
-    from .rules import estimate_fits
+    A task that is itself a part (`part_of`, the `(task id, part)` of its marker) is never
+    split again: any `parts` is refused first, with the rule and no remedy that names
+    parts, and subtasks over the line are not refused here -- the plan stage asks the human
+    once instead (`plan_fits` decides, ADR-0054)."""
 
     def check(data: dict[str, Any]) -> None:
         parts = data.get("parts") or []
         subtasks = data.get("subtasks") or []
+        if parts and part_of is not None:
+            raise ValueError(
+                f"this task is part {part_of[1]} of {part_of[0]}; a part is never split "
+                "again: write subtasks only, and drop `parts`"
+            )
         if parts and subtasks:
             raise ValueError(
                 "a plan holds subtasks or parts, never both: a plan that does not fit "
@@ -871,8 +909,7 @@ def plan_check_for(
                 f"estimated_cost_usd {cost:.2f} is below what the task already spent "
                 f"{spent_usd:.2f}: the estimate is the TOTAL cost, spent included"
             )
-        size = len(parts) if parts else len(subtasks)
-        fits = estimate_fits(cost, files, reference_usd(history, size))
+        fits = plan_fits(data, history).fits
         if parts:
             if fit_waived:
                 raise ValueError(
@@ -885,7 +922,7 @@ def plan_check_for(
                     "and no parts; a task is split only when it does not fit"
                 )
             return
-        if not fits and not fit_waived:
+        if not fits and not fit_waived and part_of is None:
             raise ValueError(
                 f"the estimate ({cost:.2f} USD, {files} files) does not fit one task "
                 "(or the history's reference for this size does not): write parts, "

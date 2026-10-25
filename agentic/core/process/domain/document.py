@@ -204,6 +204,7 @@ def render(
         **({"tracker_checklist": e} if (e := state.get("tracker_checklist")) else {}),
         **({"tracker_checklist_posted": e} if (e := state.get("tracker_checklist_posted")) else {}),
         **({"fit_waived": True} if state.get("fit_waived") else {}),
+        **({"fit_question": True} if state.get("fit_question") else {}),
         "prompts": state.get("prompts", {}),
         # The playbook section hash each role first ran with, and any later one
         # (ADR-0043), written under their own names and only when non-empty, so a task

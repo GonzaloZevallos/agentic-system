@@ -10,8 +10,8 @@ part is opened, and every part opened is recorded in `split_issues` at once. A r
 therefore completes what is missing and opens nothing twice.
 
 A task that is itself a part (its own description carries a marker) never splits again:
-depth is one. It escalates with the class `estimate` and only a human decision, which
-`rules.resumed` turns into a waived fit, plans it whole."""
+depth is one. The plan stage asks the human before a part gets here; if one does, it
+escalates as `rules.part_over_line` does, and a human decision builds it whole."""
 
 from __future__ import annotations
 
@@ -33,8 +33,9 @@ SPLIT = "Split: "
 
 async def split(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
     task_id = state["id"]
-    if rules.split_part_of(state.get("description", "")) is not None:
-        return finish(state, _part_does_not_fit(task_id), ports)
+    if (part_of := rules.split_part_of(state.get("description", ""))) is not None:
+        # Defensive: the plan stage asks the human before a part reaches here.
+        return finish(state, rules.part_over_line(task_id, part_of, None), ports)
     parts = state.get("parts", [])
     current = state
     try:
@@ -73,21 +74,6 @@ async def split(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState
         return _stopped(current, "commenting the list of parts", exc, ports)
     ended = rules.finished("split", datetime.now(UTC).isoformat(timespec="seconds"))
     return finish(current, {"current_role": PJM.name, **ended}, ports)
-
-
-def _part_does_not_fit(task_id: str) -> TaskState:
-    return rules.logged(
-        {
-            "current_role": PJM.name,
-            "status": WAITING_ON_HUMAN,
-            **rules.escalation(
-                "estimate",
-                f"{task_id} is itself a part of a split and its plan does not fit either; a "
-                "part is never split again. Decide in a comment whether to build it whole "
-                "anyway, or to stop, then resume",
-            ),
-        }
-    )
 
 
 def _stopped(state: TaskState, step: str, exc: Exception, ports: Ports) -> TaskState:
