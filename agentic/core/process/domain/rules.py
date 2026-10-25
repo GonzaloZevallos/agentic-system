@@ -11,7 +11,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, NamedTuple, Protocol, assert_never, cast, get_args
+from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
 
 from . import adr_numbers, ci, presubmit
 from .copy import copy_location_parts
@@ -2077,7 +2077,7 @@ def fit_question_text(task_id: str, part_of: tuple[str, int], fit: FitDecision |
             f"One task holds at most {limits}: {verdict}. "
         )
     return (
-        f"{head}{figures}Decide, in a comment on the issue:\n"
+        f"{head}{figures}Choose one:\n"
         "- Build it whole: comment on the issue and resume; the plan is kept and built as "
         "one task.\n"
         "- Stop and release the parts that depend on it: close the issue as not planned.\n"
@@ -2087,20 +2087,19 @@ def fit_question_text(task_id: str, part_of: tuple[str, int], fit: FitDecision |
     )
 
 
-def part_over_line(task_id: str, part_of: tuple[str, int], fit: FitDecision | None) -> TaskState:
+def part_over_line(
+    task_id: str, part_of: tuple[str, int], fit: FitDecision | None
+) -> dict[str, Any]:
     """The patch that pauses a part whose plan is over the line: one `estimate` escalation
     asking "build it whole or stop", marked by `fit_question` so only its resume waives the
     fit. It carries no `proposed_estimate`; the plan is kept."""
-    return cast(
-        TaskState,
-        logged(
-            {
-                "current_role": PJM.name,
-                "status": WAITING_ON_HUMAN,
-                **escalation("estimate", fit_question_text(task_id, part_of, fit)),
-                "fit_question": True,
-            }
-        ),
+    return logged(
+        {
+            "current_role": PJM.name,
+            "status": WAITING_ON_HUMAN,
+            **escalation("estimate", fit_question_text(task_id, part_of, fit)),
+            "fit_question": True,
+        }
     )
 
 
