@@ -821,6 +821,27 @@ async def test_a_checklist_is_posted_once_before_the_pull_request_that_closes_th
     assert ports.documents.saved[0]["tracker_checklist_posted"] == patch["tracker_checklist_posted"]
 
 
+async def test_a_split_part_with_a_checklist_opens_its_pull_request_with_the_closing_line(cfg):
+    """GH-348, apostrophe #377's shape: a split part (issue #340, part 3 of GH-301) with a
+    tracker checklist and criteria over the cap. The body was opened by pre-GH-344 code with
+    `closes_issue=not checklist`; today every delivery closes."""
+    part = {
+        **WITH_CHECKLIST,
+        "id": "GH-340",
+        "description": "Part 3.\n\n<!-- agentic-split: GH-301 part 3 -->",
+    }
+    ports = memory_ports()
+    ports.workspace.files[("HEAD", "CODING_STANDARDS.md")] = _doc(200)
+    ports.workspace.files[(rules.task_branch("GH-340"), "CODING_STANDARDS.md")] = _doc(301)
+
+    patch = await deliver(part, cfg, ports)
+
+    assert patch["status"] == "ready_for_review"
+    assert ports.tracker.closes_issue_calls == [True]
+    assert ports.tracker.pull_requests[0][0] == rules.task_branch("GH-340")
+    assert "## Criteria over cap" in ports.tracker.pull_requests[0][2]
+
+
 async def test_a_task_without_a_checklist_opens_its_pull_request_as_ever(cfg):
     ports = memory_ports()
     patch = await deliver(TASK, cfg, ports)

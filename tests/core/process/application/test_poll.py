@@ -1564,7 +1564,17 @@ def test_a_comment_failing_with_any_other_value_error_still_escapes():
 
 
 class _ReadsStall(MemoryTracker):
+    """The first `queue()` read of a round is the GH-348 sweep's, outside the registry's lock;
+    the stall this scenario is about is the one inside it, from the second read on."""
+
+    def __init__(self):
+        super().__init__()
+        self.queue_reads = 0
+
     def queue(self):
+        self.queue_reads += 1
+        if self.queue_reads == 1:
+            return []
         raise TrackerTimedOut("gh issue list timed out after 60 s")
 
     def list_pull_requests(self):
@@ -2015,3 +2025,86 @@ def test_a_queue_blocked_only_by_open_issues_still_says_nothing_to_do(tmp_path):
     _blocked_candidate(ports, IssueState("OPEN", "", None, None), None)
     lines, _ = _go(tmp_path, ports)
     assert lines == [NOT_LAUNCHED]
+
+
+# --- GH-348: the GH-344 sweep runs on every round, with no human command ---
+
+IDLE = "agentic: poll: nothing to do this round"
+MERGED_TASK = {
+    "delivery_outcome": "auto_merged",
+    "merge_commit": "7a22ebfd" + "0" * 32,
+    "closed_at": "2026-10-25T14:44:55Z",
+    "pull_request": "https://github.com/o/r/pull/377",
+}
+
+
+def test_a_round_closes_the_open_issue_of_a_merged_task_whose_pull_request_had_no_closing_line(
+    tmp_path,
+):
+    """Apostrophe #377's shape: merged, `merge_commit` recorded, the issue still open."""
+    ports = memory_ports()
+    ports.documents.save({"id": "GH-340", **MERGED_TASK})
+    ports.tracker._queue = [340]
+
+    lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(), FakeLauncher(), ESCALATED_AT)
+
+    assert ports.tracker.closed_issues == ["GH-340"]
+    assert lines == ["agentic: close: GH-340: issue closed"]
+
+
+def test_a_failing_close_leaves_the_round_idle_and_is_retried_silently(tmp_path):
+    ports = memory_ports()
+    ports.documents.save({"id": "GH-340", **MERGED_TASK})
+    ports.tracker._queue = [340]
+    ports.tracker.close_issue_failures = [ValueError("gh issue close failed"), OSError("no gh")]
+    cfg, registry, launcher = _cfg(tmp_path), MemoryRunRegistry(), FakeLauncher()
+
+    first = _round(cfg, ports, registry, launcher, ESCALATED_AT)
+    second = _round(cfg, ports, registry, launcher, ESCALATED_AT)
+    third = _round(cfg, ports, registry, launcher, ESCALATED_AT)
+
+    assert first == [IDLE] and second == [IDLE]
+    assert third == ["agentic: close: GH-340: issue closed"]
+    assert ports.tracker.closed_issues == ["GH-340"]
+
+
+def test_a_round_does_not_close_the_issue_of_a_task_that_has_not_merged(tmp_path):
+    ports = memory_ports()
+    ports.documents.save({"id": "GH-340", "pull_request": MERGED_TASK["pull_request"]})
+    ports.documents.save({"id": "GH-341", "delivery_outcome": "closed", "merge_commit": "a" * 40})
+    ports.tracker._queue = [340, 341]
+    _seed_body(ports, 340)
+    _seed_body(ports, 341)
+    ports.tracker.states[340] = IssueState("OPEN", "", None, None)
+    ports.tracker.states[341] = IssueState("OPEN", "", None, None)
+
+    lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(), FakeLauncher(), ESCALATED_AT)
+
+    assert ports.tracker.closed_issues == []
+    assert not any("close:" in line for line in lines)
+
+
+class _ClosingTracker(MemoryTracker):
+    """Records how many times the registry's exclusive section had been entered at each close."""
+
+    def __init__(self, registry: MemoryRunRegistry):
+        super().__init__()
+        self.registry = registry
+        self.entries_at_close: list[int] = []
+
+    def close_issue(self, task_id: str) -> None:
+        self.entries_at_close.append(self.registry.exclusive_entries)
+        super().close_issue(task_id)
+
+
+def test_the_sweep_runs_before_the_registrys_exclusive_section(tmp_path):
+    registry = MemoryRunRegistry()
+    tracker = _ClosingTracker(registry)
+    ports = memory_ports(tracker=tracker)
+    ports.documents.save({"id": "GH-340", **MERGED_TASK})
+    tracker._queue = [340]
+
+    _round(_cfg(tmp_path), ports, registry, FakeLauncher(), ESCALATED_AT)
+
+    assert tracker.entries_at_close == [0]
+    assert registry.exclusive_entries == 1
