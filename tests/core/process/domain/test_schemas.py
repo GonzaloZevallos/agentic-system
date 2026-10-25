@@ -809,3 +809,14 @@ def test_plan_fits_carries_the_figures_it_decided_on():
     assert schemas.plan_fits(_estimated(20.0, 41), _history(1, [])).fits is False
     # The size is the number of parts when the plan has them.
     assert schemas.plan_fits(_split(400.0, 90), _history(2, [10] * 5)).reference_usd == 10.0
+
+
+def test_the_plan_schema_does_not_offer_parts_to_a_task_that_is_a_part():
+    # GH-340 invariant 2: the schema reaches every Tech Lead, a part's included, so
+    # its descriptions may not name `parts` as the answer to a plan over the line
+    # without saying that a part never uses it.
+    props = schemas.json_schema(schemas.TechPlan, VOCAB)["properties"]
+    for name in ("subtasks", "parts"):
+        text = props[name]["description"]
+        assert "never" in text and "part of a split" in text, name
+    assert "Empty ONLY when" not in props["subtasks"]["description"]

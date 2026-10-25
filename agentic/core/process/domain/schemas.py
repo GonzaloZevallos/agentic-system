@@ -474,14 +474,17 @@ class TechPlan(RoleOutput):
     )
     subtasks: list[Subtask] = Field(
         default_factory=list,
-        description="The subtasks, in the order to start them. Empty ONLY when the estimate "
-        "does not fit and `parts` holds the split",
+        description="The subtasks, in the order to start them. A task that is a part of a "
+        "split always writes subtasks, never `parts`, whatever its estimate; otherwise empty "
+        "only when `parts` holds the split",
     )
     parts: list[Part] = Field(
         default_factory=list,
-        description="When the estimate does not fit (over the size limit the system sets, or the "
-        "history's reference says so): at least two chained parts, each a small task of its "
-        "own, in the order to build them, and no subtasks. Empty when the plan fits",
+        description="Only for a task that is not itself a part of a split, and only when the "
+        "estimate does not fit (over the size limit the system sets, or the history's "
+        "reference says so): at least two chained parts, each a small task of its own, in the "
+        "order to build them, and no subtasks. A part of a split never writes `parts`. Empty "
+        "when the plan fits",
     )
     invariants: list[str] = Field(
         default_factory=list,
