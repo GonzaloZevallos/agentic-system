@@ -65,6 +65,7 @@ from .task import (
     FindingCategory,
     FindingRecord,
     FinishedPatch,
+    LapsePauseEntry,
     MergeOutcome,
     PauseEntry,
     PullRequest,
@@ -2270,7 +2271,9 @@ ACCOUNT_LIMIT_HOURLY: tuple[int, ...] = (60,) * 168
 ACCOUNT_LIMIT_PERSISTED = "account limit persisted 7 days"
 
 
-def logged(patch: dict[str, Any], failures: Sequence[Failure] = ()) -> dict[str, Any]:
+def logged(
+    patch: dict[str, Any], failures: Sequence[Failure] = (), lapses: Sequence[str] = ()
+) -> dict[str, Any]:
     """Every escalation composes with this (issue #137): the one place a `pause_log`
     entry is appended, so `rules.escalation` and `rules.unmergeable` stay exactly as
     they are and no call site ever merges a `pause_log` key by hand with `|`. Reads
@@ -2281,7 +2284,8 @@ def logged(patch: dict[str, Any], failures: Sequence[Failure] = ()) -> dict[str,
     each, in the order they failed, before the `"escalation"` entry that followed them.
     A legacy `Failure` with no `reason` logs as `"other"`: a motive this ambiguous
     about its own cause must never read as `account_limit` and ease into an automatic
-    retry."""
+    retry. `lapses` (GH-342) are bookkeeping steps that failed after the work was done, one
+    `"lapse"` entry each, after the failures: no reader of the epoch counts them."""
     entries: list[PauseEntry] = [
         FailurePauseEntry(
             kind="failure", value=f.get("reason", "other"), section=f.get("section", "")
@@ -2290,6 +2294,7 @@ def logged(patch: dict[str, Any], failures: Sequence[Failure] = ()) -> dict[str,
     ]
     if (cls := patch.get("escalation_class")) is not None:
         entries.append(EscalationPauseEntry(kind="escalation", value=cls))
+    entries.extend(LapsePauseEntry(kind="lapse", value=line) for line in lapses)
     return {**patch, "pause_log": entries}
 
 

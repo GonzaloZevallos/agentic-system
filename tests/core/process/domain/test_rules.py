@@ -3516,3 +3516,27 @@ def test_tracker_failure_block_never_carries_the_marker_text():
     assert "agentic-tracker:" not in block
     assert not block.startswith("Tracker work for you: ")
     assert rules.tracker_marker("GH-1", sneaky) not in block
+
+
+def test_a_lapse_entry_is_logged_but_never_changes_whether_a_pause_is_retaken():
+    failed = rules.logged(
+        {**rules.escalation("failure", "cut")},
+        [
+            {
+                "role": "Developer",
+                "attempt": 1,
+                "error": "x",
+                "cost_usd": 0.0,
+                "session_id": "",
+                "reason": "network",
+                "section": "Developer: api",
+            }
+        ],
+    )
+    state = {"pause_log": failed["pause_log"]}
+    assert rules.auto_resumable(state) == "network"
+    lapsed = rules.logged({}, lapses=["ready comment: OSError"])
+    assert lapsed["pause_log"] == [{"kind": "lapse", "value": "ready comment: OSError"}]
+    with_lapse = {"pause_log": [*failed["pause_log"], *lapsed["pause_log"]]}
+    assert rules.auto_resumable(with_lapse) == "network"
+    assert rules.logged({"a": 1}) == {"a": 1, "pause_log": []}

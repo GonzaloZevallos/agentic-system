@@ -845,7 +845,7 @@ async def test_a_failing_checklist_comment_still_opens_the_pull_request_with_the
         assert "agentic-tracker:" not in text and "scripted" not in text
     assert "tracker_checklist_posted" not in patch
     assert "tracker_checklist_posted" not in ports.documents.saved[0]
-    assert [e["section"] for e in patch["pause_log"]] == ["tracker checklist comment: ValueError"]
+    assert [e["value"] for e in patch["pause_log"]] == ["tracker checklist comment: ValueError"]
 
 
 @pytest.mark.parametrize("record", [{}, None, "absent"])
@@ -881,12 +881,13 @@ async def test_a_failing_mid_flow_save_keeps_the_record_and_tells_the_human_noth
     assert all("could not be confirmed" not in t for _, t in ports.tracker.comments)
     assert all("could not be confirmed" not in b for *_, b in ports.tracker.pull_requests)
     assert len([t for _, t in ports.tracker.comments if t.startswith("Tracker work")]) == 1
-    assert [e["section"] for e in patch["pause_log"]] == ["tracker record save: OSError"]
+    assert [e["value"] for e in patch["pause_log"]] == ["tracker record save: OSError"]
 
 
 async def test_a_hundred_item_list_in_a_failed_comment_keeps_the_body_bounded(cfg):
     items = [f"item {i} " + "x" * 400 for i in range(100)]
-    state = {**_big_state(), "tracker_checklist": items}
+    sections = {"PM": "### Definition\n\nSix numbers.", "Tech Lead": "### Plan\n\nHex."}
+    state = {**TASK, "sections": sections, "tracker_checklist": items}
     ports = memory_ports()
     ports.tracker.comment_failures = 1
     await deliver(state, cfg, ports)
@@ -895,7 +896,9 @@ async def test_a_hundred_item_list_in_a_failed_comment_keeps_the_body_bounded(cf
     assert github_length(body) <= GITHUB_LIMIT
     assert "and 80 more, in the task document at" in body
     assert "item 20 " not in body and "item 19 " in body
-    assert state["sections"]["PM"] in body or "Full sections" in body
+    assert "## PM\n\n" + sections["PM"] in body
+    assert "## Tech Lead\n\n" + sections["Tech Lead"] in body
+    assert "Full sections" not in body
 
 
 async def test_a_redelivery_with_a_failing_comment_leaves_the_body_alone(cfg):
@@ -928,7 +931,7 @@ async def test_an_oserror_from_the_ready_comment_and_from_release_still_ends_rea
 
     assert patch["status"] == "ready_for_review" and patch["pull_request"]
     assert ports.documents.saved[-1]["pull_request"] == patch["pull_request"]
-    assert [e["section"] for e in patch["pause_log"]] == [
+    assert [e["value"] for e in patch["pause_log"]] == [
         "ready comment: OSError",
         "release task: OSError",
     ]

@@ -17,7 +17,7 @@ from agentic.shared.configuration import Configuration
 from ..domain import document, landing, rules
 from ..domain.pull_request import BoundedBody, bounded_body
 from ..domain.roles import DEVELOPER_INTEGRATOR, PJM, PM, TECH_LEAD
-from ..domain.task import WAITING_ON_HUMAN, Failure, TaskState
+from ..domain.task import WAITING_ON_HUMAN, TaskState
 from .checkouts import SetupFailed, task_base, task_checkout
 from .ports import BranchPullRequest, GitError, Ports
 from .preflight import over_cap
@@ -206,22 +206,11 @@ def _lapsed(lapses: list[str], step: str, failed: Exception) -> None:
 
 
 def _with_lapses(patch: TaskState, lapses: list[str]) -> TaskState:
-    """The terminal patch with the lapses in the task document's log, once: one `other`
-    failure entry per line in `pause_log` (`rules.logged`), the line in its `section`. They
-    are not attempts, so `failures` -- what the measurement counts -- is left alone."""
-    entries = [
-        Failure(
-            role=PJM.name,
-            attempt=1,
-            error=line,
-            cost_usd=0.0,
-            session_id="",
-            reason="other",
-            section=line,
-        )
-        for line in lapses
-    ]
-    return rules.logged(patch, entries)
+    """The terminal patch with the lapses in the task document's log, once: one `lapse`
+    entry per line in `pause_log` (`rules.logged`). They are neither attempts nor
+    escalations, so `failures` -- what the measurement counts -- and the poller's reading of
+    the epoch are left alone."""
+    return rules.logged(patch, lapses=lapses)
 
 
 def _closed_landing(
