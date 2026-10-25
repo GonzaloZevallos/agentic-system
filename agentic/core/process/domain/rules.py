@@ -77,6 +77,7 @@ from .task import (
     Subtask,
     TaskInput,
     TaskState,
+    TrackerPosted,
 )
 
 # The category the system stamps on PM's returns of the PRD (ADR-0016).
@@ -3792,6 +3793,59 @@ def tracker_marker(task_id: str, items: Sequence[str]) -> str:
     """The marker the checklist comment ends with: an HTML comment naming the task and the
     hash of the items, so "already posted" is never decided from the task id alone."""
     return f"<!-- agentic-tracker: {task_id} {tracker_hash(items)} -->"
+
+
+def tracker_posted(raw: object) -> TrackerPosted | None:
+    """The `tracker_checklist_posted` record, or `None` for "nothing posted yet" (GH-342).
+
+    The graph channel is a reducer one, so it starts at `TrackerPosted()` == `{}` for every
+    task, and a document from before GH-336 has no key at all: neither is a record. Only a
+    dict whose `at` and `hash` are both strings is one. Stricter than `estimate_in_force`
+    on purpose: truthiness lets a partial record through, and the caller then subscripts
+    `["hash"]` on it. This is the one reader; no code subscripts the raw value."""
+    if not isinstance(raw, dict):
+        return None
+    at, hash_ = raw.get("at"), raw.get("hash")
+    if isinstance(at, str) and isinstance(hash_, str):
+        return {"at": at, "hash": hash_}
+    return None
+
+
+TRACKER_FAILURE_ITEMS = 20
+TRACKER_FAILURE_ITEM_CHARS = 200
+
+
+def tracker_failure_block(items: Sequence[object], exc_class: str, relative: str) -> str:
+    """The bounded list a delivery carries when the checklist comment could not be
+    confirmed (GH-342, ADR-0062 addendum); `''` when no item has text.
+
+    Total over any item value: each is coerced with `str()`, its whitespace collapsed so a
+    line stays a line, empty ones skipped; at most `TRACKER_FAILURE_ITEMS` items of
+    `TRACKER_FAILURE_ITEM_CHARS` characters, then a pointer to the task document. It names
+    the exception class only, and carries nothing that could pass for the checklist
+    comment: the `agentic-tracker:` marker text is defused in the items."""
+    texts = [" ".join(str(item).split()) for item in items]
+    texts = [_MARKER_TEXT.sub("agentic-tracker :", text) for text in texts if text]
+    if not texts:
+        return ""
+    lines = [
+        f"- [ ] {_cut(text, TRACKER_FAILURE_ITEM_CHARS)}" for text in texts[:TRACKER_FAILURE_ITEMS]
+    ]
+    block = (
+        f"The tracker checklist comment could not be confirmed (`{exc_class}`); if it is not "
+        "on the issue, this is your list:\n\n" + "\n".join(lines)
+    )
+    omitted = len(texts) - TRACKER_FAILURE_ITEMS
+    if omitted > 0:
+        block += f"\n\nand {omitted} more, in the task document at `{relative}`"
+    return block
+
+
+_MARKER_TEXT = re.compile(r"agentic-tracker:", re.IGNORECASE)
+
+
+def _cut(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[:limit].rstrip() + "…"
 
 
 def estimate_cap(cost_usd: float) -> float:
