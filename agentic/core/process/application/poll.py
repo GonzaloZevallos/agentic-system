@@ -35,7 +35,15 @@ from ..domain.adr_numbers import Ambiguous, Renaming
 from ..domain.boot import boot_verdict
 from ..domain.landing import LandingStepKind
 from ..domain.task import INTEGRATION, PullRequest, TaskState, apply
-from . import adr_collision, landing_plan, preflight, reflect_run, release, tracker_only
+from . import (
+    adr_collision,
+    close_issues,
+    landing_plan,
+    preflight,
+    reflect_run,
+    release,
+    tracker_only,
+)
 from . import escalate as escalate_module
 from .checkouts import task_base
 from .ports import (
@@ -1353,8 +1361,14 @@ def run_once(
     round's output, and `nothing to do this round` is printed only when there is nothing
     at all to say. `system_version` (GH-308) is the non-memoising read of the stage0 version
     that keys the count of crash retakes, injected by `cli` and called only when some lock
-    record carries a crash mark."""
+    record carries a crash mark. The GH-344 issue sweep (`close_issues.sweep`) runs first,
+    right after the closes are gathered and outside `registry.exclusive()`: its `issue
+    closed` lines open the round's output, and a failed close or unreadable queue says
+    nothing (the next round retries)."""
     closes = gather_closes(ports)
+    # GH-348: before the launches, so a dependent sees its blocker CLOSED this same round;
+    # outside the exclusive section, since it takes no slot. Only the closes are said.
+    swept = close_issues.sweep(ports, report_failures=False)
     resumes = gather_resumes(ports, now)
     crash_retakes: dict[int, CrashRetake] = {}
     retakes, human_lines = gather_retakes(
@@ -1452,6 +1466,6 @@ def run_once(
     # Outside the registry's exclusive section: reflecting takes no slot of the cap and
     # touches no task.
     lines += reflect_lines(cfg, ports, launcher, argv0)
-    lines = [*human_lines, *merge_lines, *lines, *deferral_lines]
+    lines = [*swept, *human_lines, *merge_lines, *lines, *deferral_lines]
     idle = rules.queue_blocked_line(blocker_reports) or "agentic: poll: nothing to do this round"
     return [*notes, *(lines or [idle])]

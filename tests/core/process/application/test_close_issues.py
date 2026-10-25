@@ -92,3 +92,20 @@ def test_an_unreadable_queue_skips_the_sweep_without_raising():
     ports.tracker.queue_error = ValueError("gh issue list failed")
     assert close_issues.sweep(ports) == ["agentic: close: issue sweep skipped: ValueError"]
     assert ports.tracker.closed_issues == []
+
+
+def test_without_failure_reports_a_failed_close_says_nothing_and_a_closed_one_still_does():
+    ports = _ports({5: MERGED, 6: MERGED}, [5, 6])
+    ports.tracker.close_issue_failures = [OSError("no gh")]
+
+    lines = close_issues.sweep(ports, report_failures=False)
+
+    assert lines == ["agentic: close: GH-6: issue closed"]
+    assert ports.tracker.closed_issues == ["GH-6"]
+
+
+def test_without_failure_reports_an_unreadable_queue_says_nothing():
+    ports = _ports({339: MERGED}, [339])
+    ports.tracker.queue_error = OSError("gh missing")
+    assert close_issues.sweep(ports, report_failures=False) == []
+    assert ports.tracker.closed_issues == []

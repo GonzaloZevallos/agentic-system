@@ -99,3 +99,28 @@ se paró una hora en apostrophe (#339 y #346 bloqueaban a #340, #347, #349 y, po
 **Consecuencias.** Un issue cerrado ya no prueba que el trabajo de tracker se hizo: la
 lista del comentario es el único registro y el humano la lee cuando le toca. Los issues ya
 detenidos (#339, #346) se cierran en el primer barrido posterior a este cambio.
+
+## Addendum (GH-348): el poller corre el barrido en cada vuelta
+
+El barrido de GH-344 (`close_issues.sweep`) solo corría desde `agentic close --all`, así que
+un merge cuyo PR no traía `Closes #N` dejaba el issue abierto hasta que un humano lo cerraba
+(apostrophe #340, PR #377: tres horas, con todo lo que dependía de él bloqueado).
+
+- **Qué cambia:** `poll.run_once` llama al barrido en cada vuelta, justo después de
+  `gather_closes` y antes de `gather_launches`, fuera de `registry.exclusive()`. Va antes de
+  los lanzamientos para que un dependiente vea a su bloqueador `CLOSED` en la misma vuelta.
+  Solo decide `rules.close_after_merge`.
+- **Qué imprime:** solo `agentic: close: GH-N: issue closed`. `sweep` suma
+  `report_failures` (por defecto `True`: `agentic close --all` no cambia); el poller lo pasa
+  en `False`. Un cierre que falla o una cola ilegible reintenta en silencio en la vuelta
+  siguiente; una falla persistente se ve en el issue abierto y en `agentic close --all`.
+  Una vuelta sin nada nuevo sigue imprimiendo `nothing to do this round`.
+- **Costo:** un `gh issue list` más por vuelta (además del de `gather_launches`), lineal en
+  los issues `agentic` abiertos, más un `gh issue close` por cada cierre.
+- **Sin cambios:** un documento con `closed_at` pero sin `merge_commit` (anterior a este
+  ADR 0062) sigue necesitando `agentic close --all` para el backfill.
+- **Causa raíz de #377:** lo abrió un proceso que aún corría código anterior a b5c6653
+  (`closes_issue=not checklist`, y GH-340 tiene `tracker_checklist`). La re-entrega conservó
+  el PR guardado (`state.get("pull_request") or open_pull_request(...)`), así que nunca
+  volvió a pasar por `open_pull_request`. No se reescriben cuerpos de PR: lo cubre el barrido.
+  Un test fija que la entrega de un split part con checklist abre con `closes_issue=True`.
