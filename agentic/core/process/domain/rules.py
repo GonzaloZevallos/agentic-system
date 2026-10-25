@@ -3929,3 +3929,60 @@ def delivered_files(changed_files: int) -> dict[str, int]:
     """The patch that records how many files the pull request changed, the actual the
     estimate is compared with. The only place that names the key."""
     return {"actual_files": changed_files}
+
+
+# GH-344 blocker-resolution: a closed task that landed through slices resolves a blocker
+# with no merge commit of its own, and a stalled queue says which closed issues stall it.
+# `poll` judges each blocker (git and `gh` are its I/O) and hands the verdicts here.
+
+BlockerReason = Literal["no_merge_recorded", "merge_not_in_upstream", "slices_not_in_upstream"]
+
+_BLOCKER_REASON_TEXT: dict[BlockerReason, str] = {
+    "no_merge_recorded": "no merge recorded",
+    "merge_not_in_upstream": "merge not in upstream",
+    "slices_not_in_upstream": "slices not in upstream",
+}
+
+
+@dataclass(frozen=True)
+class BlockerReport:
+    """What one candidate's blockers came to: `open` ones still open, `closed_unresolved`
+    ones closed but with nothing the system can rest a resolution on (and why), and
+    `unknown` ones (or the candidate itself, when its blockers could not be read) whose
+    judgement failed. The launch predicate is `bool(report)`: any field blocks."""
+
+    open: tuple[int, ...] = ()
+    closed_unresolved: tuple[tuple[int, BlockerReason], ...] = ()
+    unknown: tuple[int, ...] = ()
+
+    def __bool__(self) -> bool:
+        return bool(self.open or self.closed_unresolved or self.unknown)
+
+
+def slices_landed_heads(document: TaskState) -> tuple[str, ...] | None:
+    """The `reviewed_head` of every unit but the integration one, when the document is
+    closed through slices (`closed_by_slices`, written by `landing.close_patch` only after
+    each of these was found an ancestor of the upstream): the heads a blocker check
+    re-verifies. `None` when nothing was recorded, there are no units, or a unit has no head."""
+    if not document.get("closed_by_slices"):
+        return None
+    units = [name for name in document.get("subtasks", {}) if name != INTEGRATION]
+    heads = [document["subtasks"][name].get("reviewed_head") for name in units]
+    if not heads or not all(isinstance(head, str) and head for head in heads):
+        return None
+    return tuple(heads)
+
+
+def queue_blocked_line(reports: Sequence[BlockerReport]) -> str | None:
+    """The one line that replaces `nothing to do this round` when every candidate is
+    blocked and some are blocked by a closed issue the system cannot resolve. Reason texts
+    come from the codes, never from `gh`. A candidate with only `unknown` blockers adds no
+    mention and does not suppress the line."""
+    if not reports or not all(reports) or not any(r.closed_unresolved for r in reports):
+        return None
+    reasons: dict[int, BlockerReason] = {}
+    for report in reports:
+        for number, reason in report.closed_unresolved:
+            reasons.setdefault(number, reason)
+    named = ", ".join(f"#{n} ({_BLOCKER_REASON_TEXT[reasons[n]]})" for n in sorted(reasons))
+    return f"agentic: poll: queue blocked by closed issues it cannot resolve: {named}"
