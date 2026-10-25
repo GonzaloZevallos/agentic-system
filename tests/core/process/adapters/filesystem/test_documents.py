@@ -367,7 +367,7 @@ def test_eight_threads_saving_loading_and_listing_see_their_own_writes(tmp_path)
                     documents.load(f"T-{(n + 1) % 8}")
                 except ValueError:
                     pass  # `save` truncates in place: a neighbour caught mid-write, as before
-        except BaseException as exc:  # noqa: BLE001 - reported on the main thread
+        except BaseException as exc:  # reported on the main thread
             errors.append(exc)
 
     threads = [threading.Thread(target=work, args=(n,)) for n in range(8)]
@@ -428,9 +428,21 @@ def test_a_write_between_the_two_fstats_is_not_cached(tmp_path, monkeypatch, par
     assert len(parses) == 2  # the raced read, then one that did store
 
 
-def test_composition_builds_the_adapter_without_a_clock():
-    source = Path(composition.__file__).read_text(encoding="utf-8")
+def _adapter_call(source: str) -> str:
+    """The text of the `FilesystemTaskDocuments(...)` construction in `source`."""
     call = source[source.index("FilesystemTaskDocuments(") :]
-    call = call[: call.index("),\n")]
+    return call[: call.index("),\n")]
 
-    assert "clock" not in call
+
+def _passes_clock(source: str) -> bool:
+    return "clock" in _adapter_call(source)
+
+
+def test_composition_builds_the_adapter_without_a_clock():
+    assert not _passes_clock(Path(composition.__file__).read_text(encoding="utf-8"))
+
+
+def test_the_clock_guard_rejects_a_construction_that_passes_one():
+    source = "documents=FilesystemTaskDocuments(\n    cfg.product_dir,\n    clock=lambda: 0,\n),\n"
+
+    assert _passes_clock(source)
