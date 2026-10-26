@@ -74,7 +74,7 @@ import importlib
 import re
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Protocol, TypeGuard
 
 from agentic.core.process.domain import performance as perf
 from agentic.core.process.domain.design import Design
@@ -429,10 +429,15 @@ def _has(tree: _Tree, names: tuple[str, ...]) -> bool:
     return False
 
 
+def _is_tree(value: object) -> TypeGuard[_Tree]:
+    """Whether one parsed item is itself a sub-pattern: it holds `data`, its items."""
+    return hasattr(value, "data")
+
+
 def _parts(value: object) -> list[_Tree]:
     """Every sub-pattern one parsed item holds, however the opcode nests it."""
-    if hasattr(value, "data"):
-        return [cast(_Tree, value)]
+    if _is_tree(value):
+        return [value]
     if isinstance(value, tuple | list):
         return [part for item in value for part in _parts(item)]
     return []
