@@ -644,3 +644,22 @@ candidates:
   sources:
   - finding
   added_at: '2026-10-26T06:09:50.342+00:00'
+- slug: developer
+  category: process-suite-red
+  lesson: When you add a member to a shared enum, a graph node or a registry, search the tests for pinned digests and expected sets that enumerate it, and update them in the same change.
+  confidence: medium
+  seen_in:
+  - GH-358
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T10:46:27.971+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: Put the brief's non-code deliverables (ADR, addenda, glossary entries) in your delivery checklist next to the tests, and confirm each is in the diff before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-358
+  sources:
+  - finding
+  added_at: '2026-10-26T10:46:27.971+00:00'
