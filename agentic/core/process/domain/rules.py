@@ -2008,7 +2008,7 @@ def full_checks_return(state: TaskState, record: FullChecksRecord, limit: int) -
     names = _failed_names(record)
     short = record["head"][:7]
     reason = f"full_checks failed on the integrated head {short}: {', '.join(names)}"
-    patch: TaskState = {
+    patch: dict[str, Any] = {
         "full_checks": record,
         "subtasks": {
             target: {
@@ -2038,8 +2038,8 @@ def full_checks_return(state: TaskState, record: FullChecksRecord, limit: int) -
         patch["change_history"] = [change_entry(pair, "process-suite-red", reason)]
     else:
         stopped = logged({**escalation("returns", limit_reached(pair, limit, reason))})
-        patch = cast(TaskState, {**patch, **stopped, "status": WAITING_ON_HUMAN})
-    return patch
+        patch = {**patch, **stopped, "status": WAITING_ON_HUMAN}
+    return cast(TaskState, patch)
 
 
 def full_checks_cover(
@@ -2068,7 +2068,7 @@ def full_checks_heal(
         )
         stopped = logged({**escalation("system_delivery", reason)})
         return cast(TaskState, {**stopped, "status": WAITING_ON_HUMAN})
-    return {"task_head": head, "full_checks_healed": head}
+    return cast(TaskState, {"task_head": head, "full_checks_healed": head})
 
 
 def after_full_checks(state: TaskState) -> str | None:
