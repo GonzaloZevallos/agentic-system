@@ -146,3 +146,14 @@ span, ni se renombra ninguna clave del documento: la única clave nueva es
 se renderiza igual byte a byte.
 
 **Addendum (GH-318, ADR-0060).** Un escritor más del pliegue: una corrida aprobatoria de QA Performance asienta toda fila abierta con ubicación `QA Performance`. `settled_on_approval` no cambia; el escritor y su motivo están en el ADR-0060.
+
+## Adenda (2026-10-26): `full_checks_settles` asienta las filas de la corrida completa (GH-358)
+
+Otra excepción a "una fila se cierra sólo porque un revisor la dio por saldada", la segunda
+del sistema junto con la de QA Performance (ADR-0060): una fila cuya ubicación empieza por
+`full_checks:` la levanta el nodo `full_checks` (ADR-0064), no un revisor, y la cierra
+únicamente una corrida pasada de ese nodo de versión mayor. Ninguna aprobación la cierra, y
+`settled_on_approval` queda igual. `rules.full_checks_settles` es la escritora nombrada de
+la tabla para esto, como `qa_settles` lo es para QA Performance: el único lugar que decide
+cuándo una fila levantada por el sistema está saldada.
+
