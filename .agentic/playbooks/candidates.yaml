@@ -1,0 +1,47 @@
+candidates:
+- slug: developer
+  category: standard-architecture
+  lesson: 'Keep domain decisions in the domain rule: do not pre-filter or triage a value in the application layer so the rule only sees a subset; route every case through the rule and its tests.'
+  confidence: medium
+  seen_in:
+  - GH-344
+  sources:
+  - finding
+  added_at: '2026-10-26T03:20:14.796+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When a change alters per-round cost (more calls per candidate, a dropped short-circuit), state the cost and its scaling in the plan note, not only in a docstring.
+  confidence: medium
+  seen_in:
+  - GH-344
+  sources:
+  - finding
+  added_at: '2026-10-26T03:20:14.796+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When a function's contract or the plan says it never raises or stays silent, list every exception each call can throw and swallow them all. Never write a test that pins a raise against the invariant.
+  confidence: medium
+  seen_in:
+  - GH-348
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T03:20:14.796+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: Make each test exercise the exact integration point the brief names, through the real entry point, and assert a result that could fail; never a check that passes for any non-empty value.
+  confidence: medium
+  seen_in:
+  - GH-352
+  sources:
+  - finding
+  added_at: '2026-10-26T03:20:14.796+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: Before planning around an existing function's error handling, read its except clauses and what they do with unexpected exceptions; test through the real function, not a monkeypatched stand-in.
+  confidence: low
+  seen_in:
+  - GH-352
+  sources:
+  - finding
+  added_at: '2026-10-26T03:20:14.796+00:00'
