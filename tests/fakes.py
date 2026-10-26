@@ -1091,6 +1091,11 @@ class MemoryTracker:
         # every `rerun_failed_ci` and the run links it answers, its `ValueError` text and
         # every reference `close_pull_request` closed.
         self.opened_labels: list[str | None] = []
+        # `(reference, text)` of every `comment_on_issue` that succeeded, and the calls
+        # (0-based, failed ones counted) that raise `ValueError` instead.
+        self.commented_issues: list[tuple[str, str]] = []
+        self.comment_on_issue_calls = 0
+        self.comment_on_issue_fails_on: set[int] = set()
         self.rerun_calls: list[tuple[str, str]] = []
         self.failed_runs: list[str] = []
         self.rerun_error: str | None = None
@@ -1216,6 +1221,16 @@ class MemoryTracker:
         return (
             f"https://github.com/o/r/issues/{self.issue_numbers_from + len(self.opened_issues) - 1}"
         )
+
+    def comment_on_issue(self, reference: str, text: str) -> None:
+        """Records `(reference, text)` of each comment on an issue by its reference.
+        `comment_on_issue_fails_on` lists the calls (0-based, failed ones counted) that
+        raise `ValueError`, `gh`'s own failure shape; a failed call records nothing."""
+        call = self.comment_on_issue_calls
+        self.comment_on_issue_calls += 1
+        if call in self.comment_on_issue_fails_on:
+            raise ValueError("gh issue comment failed: scripted")
+        self.commented_issues.append((reference, text))
 
     def rerun_failed_ci(self, reference: str, head: str) -> list[str]:
         """GH-239: the runs of `head` that failed, rerun. Scripted by `failed_runs`; a bad
