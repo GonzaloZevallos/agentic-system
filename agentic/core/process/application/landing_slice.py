@@ -133,6 +133,7 @@ def _checks_pass(
             failed_step, setup_failure = "setup", (step, text)
             break
     else:
+        ports.workspace.record_setup_tree(path)
         declared = dict(ports.stack.checks(base))
         gate = CheckoutPresubmit(
             ports,

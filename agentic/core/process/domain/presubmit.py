@@ -79,6 +79,10 @@ class CheckResult(TypedDict):
     # Which form ran, set by the system under an `AffectedPlan` and never by the model;
     # absent when the product declares no affected form.
     mode: NotRequired[Mode]
+    # True on a row the system took from a stored pass instead of running the check
+    # (ADR-0065). Set by the system on read, never stored and never by the model; absent
+    # on a row that ran.
+    reused: NotRequired[bool]
 
 
 @dataclass(frozen=True)

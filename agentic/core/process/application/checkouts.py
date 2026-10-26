@@ -78,4 +78,6 @@ def _prepared(checkout: Checkout, state: TaskState, cfg: Configuration, ports: P
             ports.workspace.discard(checkout.path)
             said = presubmit.said(result.output, result.timed_out, cfg.check_timeout_s)
             raise SetupFailed(checkout.branch, step, command, said)
+    # Setup passed on this tree: the record a stored pass needs (ADR-0065).
+    ports.workspace.record_setup_tree(checkout.path)
     return checkout

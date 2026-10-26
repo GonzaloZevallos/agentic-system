@@ -72,6 +72,12 @@ _PLAIN = ("-c", "core.quotepath=off")
 _NUMBER = re.compile("[0-9]{4}")
 
 
+# Where the tree a checkout's setup ran on is recorded, in the worktree's own git dir
+# (ADR-0065); the Bash denial of the run-check tool names it.
+SETUP_TREE_FILE = "agentic-setup-tree"
+_OBJECT_ID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+
+
 class GitWorkspace:
     def __init__(self, product_dir: Path, identity: Mapping[str, str]):
         # `identity` is `Configuration.git_identity`, handed in by the composition root:
@@ -138,6 +144,28 @@ class GitWorkspace:
 
     def full_head(self, path: Path) -> str:
         return self._git("rev-parse", "HEAD", cwd=path)
+
+    def tree(self, path: Path) -> str:
+        return self._git("rev-parse", "HEAD^{tree}", cwd=path)
+
+    def record_setup_tree(self, path: Path) -> None:
+        self._setup_tree_file(path).write_text(self.tree(path) + "\n", encoding="utf-8")
+
+    def setup_tree(self, path: Path) -> str | None:
+        try:
+            recorded = self._setup_tree_file(path).read_text(encoding="utf-8").strip()
+        except (OSError, GitError):
+            return None
+        # Only an object id reaches git below: a record is a file under the checkout's git
+        # dir, but nothing here trusts it to be one.
+        if not _OBJECT_ID.fullmatch(recorded):
+            return None
+        kind = self._run("cat-file", "-t", recorded, cwd=path)
+        return recorded if kind.returncode == 0 and kind.stdout.strip() == "tree" else None
+
+    def _setup_tree_file(self, path: Path) -> Path:
+        located = Path(self._git("rev-parse", "--git-path", SETUP_TREE_FILE, cwd=path))
+        return located if located.is_absolute() else path / located
 
     def is_clean(self, path: Path) -> bool:
         return not self._git("status", "--porcelain", cwd=path)

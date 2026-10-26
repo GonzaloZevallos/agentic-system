@@ -19,6 +19,7 @@ from ..domain.ci import CiReport, CiUnreadable, Containment
 from ..domain.design import Design
 from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
+from ..domain.presubmit import CheckResult
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
 from ..domain.rules import LandWait, MergeFailure, RunKind, SpendRun, motive
@@ -661,6 +662,21 @@ class Workspace(Protocol):
         """The full object id of HEAD in `path`; read-only. `head` keeps its short form."""
         ...
 
+    def tree(self, path: Path) -> str:
+        """The id of `HEAD^{tree}` in the checkout at `path` (ADR-0065): what the code is,
+        whichever commits led to it. Read-only; the key of a reusable result."""
+        ...
+
+    def record_setup_tree(self, path: Path) -> None:
+        """Remember, in the checkout's own git dir (never in its files), the tree the
+        product's setup has just run on. Called once, after every setup step passed."""
+        ...
+
+    def setup_tree(self, path: Path) -> str | None:
+        """The tree `record_setup_tree` wrote for the checkout at `path`, or `None` when
+        there is no record or it does not name a tree object (`git cat-file -t`)."""
+        ...
+
     def is_clean(self, path: Path) -> bool:
         """No uncommitted change, tracked or untracked, under the checkout at `path`."""
         ...
@@ -1245,6 +1261,23 @@ class LaunchAttempt:
     prior: int
 
 
+class CheckResults(Protocol):
+    """The machine's store of passing check results (ADR-0065), keyed by
+    `domain.check_results.check_key`. Only the presubmit and the run-check tool use it."""
+
+    def get(self, key: str, now: float) -> CheckResult | None:
+        """The stored pass for `key`, or `None`. An entry that is missing, unreadable,
+        not signed by this machine's secret or older than `MAX_AGE_S` at `now` is a miss;
+        a read never raises."""
+        ...
+
+    def put(self, key: str, row: CheckResult, now: float) -> None:
+        """Store `row`, a pass, under `key` as of `now`; a row that did not pass is not
+        stored. The output is stored as it is given: cut it before. Entries older than
+        `MAX_AGE_S` and the oldest above the entry limit are pruned."""
+        ...
+
+
 class RunRegistry(Protocol):
     """How many `agentic` invocations are alive on this machine right now, across every
     product (GH-137), and the poller's own record of a launch attempt that has not
@@ -1426,3 +1459,6 @@ class Ports:
     # none fails loudly instead of measuring with a stand-in.
     perf_runner: PerfRunner | None = None
     perf_lock: PerfLock | None = None
+    # The machine's store of passing check results (ADR-0065). `None` stores and reuses
+    # nothing, which is how every checkout ran before it existed.
+    check_results: CheckResults | None = None

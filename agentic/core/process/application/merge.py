@@ -329,6 +329,7 @@ def _setup(
         result = ports.commands.run(path, command, cfg.check_timeout_s)
         if not result.passed:
             return step, result
+    ports.workspace.record_setup_tree(path)
     return None
 
 

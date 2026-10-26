@@ -16,6 +16,7 @@ from typing import NamedTuple
 
 from agentic.core.process.application.limits import RunLimits
 from agentic.core.process.application.ports import (
+    CheckResults,
     Commands,
     FlagVocabulary,
     Inbox,
@@ -39,6 +40,7 @@ from tests.fakes import (
     FakePerfLock,
     FakePerfRunner,
     FakeReaper,
+    MemoryCheckResults,
     MemoryCommands,
     MemoryDocuments,
     MemoryFlags,
@@ -65,6 +67,7 @@ _sample_app: SampleApp = MemorySampleApp()
 _workspace: Workspace = MemoryWorkspace()
 _tracker: Tracker = MemoryTracker()
 _registry: RunRegistry = MemoryRunRegistry()
+_check_results: CheckResults = MemoryCheckResults()
 _launcher: Launcher = FakeLauncher()
 _reaper: ProcessReaper = FakeReaper()
 _perf_runner: PerfRunner = FakePerfRunner()
@@ -86,6 +89,7 @@ def ports_of_doubles() -> Ports:
         sample_app=_sample_app,
         reaper=_reaper,
         limits=RunLimits(),
+        check_results=_check_results,
     )
 
 
@@ -103,6 +107,7 @@ COVERED: dict[str, type] = {
     "Workspace": MemoryWorkspace,
     "Tracker": MemoryTracker,
     "RunRegistry": MemoryRunRegistry,
+    "CheckResults": MemoryCheckResults,
     "Launcher": FakeLauncher,
     "ProcessReaper": FakeReaper,
     "PerfRunner": FakePerfRunner,
