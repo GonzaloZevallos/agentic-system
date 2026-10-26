@@ -8,10 +8,16 @@ map is the reviewer's starting list, a claim the review still verifies on the di
 
 Accepted lines:
 
-- `invariant N: <path>:<line>[, <path>:<line>…]`
+- `invariant N: <path>:<line>[-<last>][ (<comment>)][, <path>:<line>…]`: a location is a
+  line or a range of lines, each one may carry one trailing comment in parentheses, and
+  the commas inside a comment do not separate locations
 - `invariant N: unsatisfiable, see Decisions`
 - `invariant N: not touched by this subtask: <one phrase>`
 - `brief: <item> -> <path>:<line>[, …]` (rendered, never checked)
+
+`classify` holds the whole grammar of the body of an `invariant N:` line, and the reason a
+body was refused; nothing else reads the shape of a body. `EXAMPLE` is the map the prompts
+quote to the Developer.
 
 Parsing is lenient in two ways: surrounding whitespace is stripped and the word
 `invariant` matches in any case. An out-of-range or duplicate number is ignored."""
@@ -27,14 +33,38 @@ NOT_TOUCHED = "not touched by this subtask"
 # How many times one run may be refused for a map that leaves an invariant out; the
 # counter lives in `application/coverage_guard.py`, the cap here with the format.
 REFUSALS = 1
+# How many refused lines the refusal quotes; the rest are counted.
+_QUOTED = 3
 
-MAPPED_FORM = "invariant N: <path>:<line>[, <path>:<line>…]"
+MAPPED_FORM = "invariant N: <path>:<line>[-<last>][ (<comment>)][, <path>:<line>…]"
 BRIEF_FORM = "brief: <item> -> <path>:<line>[, …]"
 UNSATISFIABLE_FORM = f"invariant N: {UNSATISFIABLE}"
 NOT_TOUCHED_FORM = f"invariant N: {NOT_TOUCHED}: <one phrase>"
+# The complete map the refusal, the schema and the Developer prompt quote; the prompt
+# carries it as a literal fenced block that a test pins against this constant.
+EXAMPLE = (
+    "invariant 1: src/app/main:42\n"
+    "invariant 2: tests/app/main_test:10-24 (new test, inserted before the helper)\n"
+    f"invariant 3: {NOT_TOUCHED}: only the prompts change\n"
+    "brief: add the parser -> src/app/main:30-60"
+)
 
 _INVARIANT = re.compile(r"invariant\s+(\d+)\s*:\s*(.*)", re.IGNORECASE)
-_LOCATION = re.compile(r"\S+:\d+")
+# The body of an `invariant N:` line, used by `classify` alone. `_PLAIN` is the original
+# location, kept so that no line accepted before the range and the comment is refused now.
+_PLAIN = re.compile(r"\S+:\d+")
+# A comment holds no parentheses of its own, except an empty `()` such as `parse()`.
+_COMMENT = r"\((?:[^()]|\(\))*\)"
+_TOKEN = re.compile(rf"(?P<path>\S+?):(?P<start>\d+)(?:-(?P<end>\d+))?(?:\s*{_COMMENT})?")
+_AFTER_COMMENT = re.compile(rf"\S+?:\d+(?:-\d+)?\s*{_COMMENT}\s*\S.*")
+# Slips with one mechanical fix: they are never accepted, only shown corrected.
+_SLIPS = (
+    (re.compile(r"(?<=\d)\s*[–—]\s*(?=\d)"), "-"),
+    (re.compile(r"(?<=\d)\.\.(?=\d)"), "-"),
+    (re.compile(r"(?<=[:\-])L(?=\d)"), ""),
+    (re.compile(r"#L(?=\d)"), ":"),
+    (re.compile(r"(?<=\d)\.(?=\s*(?:,|$))"), ""),
+)
 _BRIEF = re.compile(r"brief:\s*\S.*->\s*\S.*")
 
 Kind = Literal["mapped", "unsatisfiable", "not_touched", "brief"]
@@ -50,20 +80,42 @@ class Entry:
 
 
 @dataclass(frozen=True)
+class Refusal:
+    """Why `classify` refused a body. `corrected` is the body with the one mechanical slip
+    fixed, built from the Developer's own text and itself accepted; `None` when the fix
+    would be a guess at the location."""
+
+    reason: str
+    corrected: str | None = None
+
+
+@dataclass(frozen=True)
+class Rejected:
+    """A line of a valid invariant number that `classify` refused, verbatim."""
+
+    number: int
+    text: str
+    refusal: Refusal
+
+
+@dataclass(frozen=True)
 class Parsed:
     """`entries` are the accepted lines in emitted order; `missing` the numbers in
     `1..count` with no accepted line, and `malformed` those among them that had a line
-    which was not one of the accepted forms."""
+    which was not one of the accepted forms. `refused` is every refused line of a number
+    in `1..count`, in emitted order."""
 
     entries: tuple[Entry, ...]
     missing: tuple[int, ...]
     malformed: tuple[int, ...]
+    refused: tuple[Rejected, ...] = ()
 
 
 def parse(lines: object, count: int) -> Parsed:
     """The one parser. `lines` is what the delivery's `coverage` field held: a string of
     lines or a list of them. Anything else, or a non-string item, reads as no line."""
     entries: list[Entry] = []
+    refused: list[Rejected] = []
     covered: set[int] = set()
     seen: set[int] = set()
     for line in _split(lines):
@@ -76,12 +128,15 @@ def parse(lines: object, count: int) -> Parsed:
         if not 1 <= number <= count:
             continue
         seen.add(number)
-        kind = _kind(invariant.group(2).strip())
-        if kind is not None and number not in covered:
+        kind = classify(invariant.group(2))
+        if isinstance(kind, Refusal):
+            refused.append(Rejected(number, line, kind))
+        elif number not in covered:
             covered.add(number)
             entries.append(Entry(kind, number, line))
     missing = tuple(n for n in range(1, count + 1) if n not in covered)
-    return Parsed(tuple(entries), missing, tuple(n for n in missing if n in seen))
+    malformed = tuple(n for n in missing if n in seen)
+    return Parsed(tuple(entries), missing, malformed, tuple(refused))
 
 
 def missing_invariants(tool_input: object, count: int) -> str | None:
@@ -99,11 +154,30 @@ def missing_invariants(tool_input: object, count: int) -> str | None:
     if parsed.malformed:
         bad = ", ".join(str(n) for n in parsed.malformed)
         reason += f" The line for {bad} is malformed."
+    quoted = [r for r in parsed.refused if r.number in parsed.missing]
+    if quoted:
+        reason += _quote(quoted)
     return (
         f"{reason} Map every plan invariant, one line each, in one of these forms: "
         f"`{MAPPED_FORM}`, `{UNSATISFIABLE_FORM}`, `{NOT_TOUCHED_FORM}`. "
-        "An invariant with no location is work still to do."
+        "An invariant with no location is work still to do. For example:\n"
+        f"{EXAMPLE}"
     )
+
+
+def _quote(refused: list[Rejected]) -> str:
+    parts = [" Refused:"]
+    for item in refused[:_QUOTED]:
+        parts.append(f"\n- `{item.text}`: {item.refusal.reason}.")
+        if item.refusal.corrected is not None:
+            parts.append(f" Shape it as `invariant {item.number}: {item.refusal.corrected}`.")
+    if len(refused) > _QUOTED:
+        parts.append(f"\n- and {len(refused) - _QUOTED} more.")
+    parts.append(
+        "\nA corrected shape fixes the shape only: the location must be your own, "
+        "the one in your diff."
+    )
+    return "".join(parts)
 
 
 def render(lines: object, count: int) -> str | None:
@@ -130,13 +204,85 @@ def _numbers(parsed: Parsed, kind: Kind) -> list[int]:
     return sorted(e.number for e in parsed.entries if e.kind == kind and e.number is not None)
 
 
-def _kind(body: str) -> Kind | None:
+def classify(body: str) -> Kind | Refusal:
+    """The grammar of the body of an `invariant N:` line, and the reason when it is not
+    one. The unsatisfiable form and the not-touched form are exact; their phrase is never
+    read. Anything else is a comma-separated list of locations, `<path>:<line>` or
+    `<path>:<first>-<last>`, each with at most one trailing `( … )` comment; the commas
+    and the locations inside a comment do not count, and commas separate locations
+    only outside parentheses. An empty `()` inside a comment is text, not a nested one."""
+    body = body.strip()
+    if not body:
+        return Refusal("nothing follows the colon; give a form below")
     if body == UNSATISFIABLE:
         return "unsatisfiable"
     if body.startswith(f"{NOT_TOUCHED}:"):
-        return "not_touched" if body[len(NOT_TOUCHED) + 1 :].strip() else None
-    tokens = [token.strip() for token in body.split(",")]
-    return "mapped" if all(_LOCATION.fullmatch(token) for token in tokens) else None
+        if body[len(NOT_TOUCHED) + 1 :].strip():
+            return "not_touched"
+        return Refusal(f"`{NOT_TOUCHED}:` needs its phrase, why the diff does not touch it")
+    if all(_PLAIN.fullmatch(token.strip()) for token in body.split(",")):
+        return "mapped"
+    tokens: list[str] = []
+    current: list[str] = []
+    flat: list[str] = []
+    depth = 0
+    nested = stray = False
+    skip = False
+    for at, char in enumerate(body):
+        if skip:
+            skip = False
+            continue
+        shown = char
+        if char == "(" and body[at + 1 : at + 2] == ")":
+            flat.append("()")
+            current.append("()")
+            skip = True
+            continue
+        if char == "(":
+            nested = nested or depth > 0
+            shown = "[" if depth else "("
+            depth += 1
+        elif char == ")":
+            stray = stray or depth == 0
+            depth = max(depth - 1, 0)
+            shown = "]" if depth else ")"
+        flat.append(shown)
+        if char == "," and depth == 0:
+            tokens.append("".join(current))
+            current = []
+        else:
+            current.append(char)
+    tokens.append("".join(current))
+    unbalanced = stray or depth > 0
+    reason: str | None = None
+    if unbalanced:
+        reason = "the parentheses are unbalanced; a comment opens with ( and closes with )"
+    elif nested:
+        reason = "parentheses inside a comment; a comment holds none of its own"
+    else:
+        for token in map(str.strip, tokens):
+            location = _TOKEN.fullmatch(token)
+            if location is None:
+                reason = (
+                    "an empty entry between commas"
+                    if not token
+                    else "a comment with no location in front of it"
+                    if token.startswith("(")
+                    else f"text after the closing parenthesis of `{token}`; one comment, last"
+                    if _AFTER_COMMENT.fullmatch(token)
+                    else f"`{token}` is not a `<path>:<line>` or `<path>:<first>-<last>` location"
+                )
+            elif location["end"] and int(location["end"]) < int(location["start"]):
+                reason = f"the range in `{token}` ends before it starts"
+            if reason is not None:
+                break
+    if reason is None:
+        return "mapped"
+    candidate = body if unbalanced else "".join(flat)
+    for slip, fix in _SLIPS:
+        candidate = slip.sub(fix, candidate)
+    fixed = candidate != body and classify(candidate) == "mapped"
+    return Refusal(reason, candidate if fixed else None)
 
 
 def _split(lines: object) -> list[str]:

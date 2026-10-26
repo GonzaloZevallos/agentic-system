@@ -26,7 +26,7 @@ from typing import Any, Literal, get_args
 from pydantic import BaseModel, Field, model_validator
 
 from .cost_history import MIN_BUCKET, History, bucket_median, reference_usd
-from .coverage import BRIEF_FORM, MAPPED_FORM, NOT_TOUCHED, UNSATISFIABLE
+from .coverage import BRIEF_FORM, EXAMPLE, MAPPED_FORM, NOT_TOUCHED, UNSATISFIABLE
 from .performance import UNIT_SUFFIX, Limit, Unit, VolumeUnit
 from .task import (
     INTEGRATION,
@@ -562,7 +562,7 @@ class Delivery(RoleOutput):
         "locations in your diff that satisfy it. Forms: "
         f"`{MAPPED_FORM}`, `invariant N: {UNSATISFIABLE}`, "
         f"`invariant N: {NOT_TOUCHED}: <one phrase>`, "
-        f"`{BRIEF_FORM}`. An item with no location is work still to "
+        f"`{BRIEF_FORM}`. For example:\n{EXAMPLE}\nAn item with no location is work still to "
         "do. Empty only when the plan has no invariants and the brief has no items, and "
         "always empty on the integration subtask",
         json_schema_extra={"lines_required": True},
