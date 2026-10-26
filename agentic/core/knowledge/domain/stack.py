@@ -72,8 +72,9 @@ from __future__ import annotations
 
 import importlib
 import re
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, cast
 
 from agentic.core.process.domain import performance as perf
 from agentic.core.process.domain.design import Design
@@ -360,6 +361,25 @@ def _rerun_form(name: str, body: object, source: object) -> RerunForm:
 _REPEATS = ("MAX_REPEAT", "MIN_REPEAT", "POSSESSIVE_REPEAT")
 
 
+class _Tree(Protocol):
+    """The part of `re._parser.SubPattern` the scanner reads: its items, each an opcode and
+    its argument. The standard library ships no stub for the private module, so this is the
+    shape the walk below is typed against, not `Any`."""
+
+    @property
+    def data(self) -> Sequence[tuple[object, object]]: ...
+
+
+class _Parsed(_Tree, Protocol):
+    @property
+    def state(self) -> _State: ...
+
+
+class _State(Protocol):
+    @property
+    def groups(self) -> int: ...
+
+
 def _test_id_refusal(pattern: str) -> str | None:
     """Why a product's `test_id` may not run inside the system, or None. Structural, over the
     parse tree of `re._parser` (the standard library's own, so what is checked is what runs):
@@ -374,7 +394,7 @@ def _test_id_refusal(pattern: str) -> str | None:
     parser = importlib.import_module("re._parser")
     try:
         re.compile(pattern)
-        parsed = parser.parse(pattern)
+        parsed: _Parsed = parser.parse(pattern)
     except (re.error, RecursionError, OverflowError) as exc:
         return f"does not compile: {exc}"
     if parsed.state.groups != 2:
@@ -384,12 +404,12 @@ def _test_id_refusal(pattern: str) -> str | None:
     return _catastrophic(parsed)
 
 
-def _catastrophic(tree: Any) -> str | None:
+def _catastrophic(tree: _Tree) -> str | None:
     for opcode, value in tree.data:
         name = str(opcode)
-        children = [part for part in _parts(value) if hasattr(part, "data")]
+        children = _parts(value)
         if name in _REPEATS:
-            body = value[2]
+            body = _parts(value)[-1]
             if _has(body, _REPEATS):
                 return "has a quantified group that contains a quantifier; write it without one"
             if _has(body, ("BRANCH",)):
@@ -400,19 +420,19 @@ def _catastrophic(tree: Any) -> str | None:
     return None
 
 
-def _has(tree: Any, names: tuple[str, ...]) -> bool:
+def _has(tree: _Tree, names: tuple[str, ...]) -> bool:
     for opcode, value in tree.data:
         if str(opcode) in names:
             return True
-        if any(_has(part, names) for part in _parts(value) if hasattr(part, "data")):
+        if any(_has(part, names) for part in _parts(value)):
             return True
     return False
 
 
-def _parts(value: Any) -> list[Any]:
+def _parts(value: object) -> list[_Tree]:
     """Every sub-pattern one parsed item holds, however the opcode nests it."""
     if hasattr(value, "data"):
-        return [value]
+        return [cast(_Tree, value)]
     if isinstance(value, tuple | list):
         return [part for item in value for part in _parts(item)]
     return []
