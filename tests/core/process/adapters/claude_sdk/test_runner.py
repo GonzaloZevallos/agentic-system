@@ -1085,6 +1085,7 @@ async def test_attemptfailed_carries_deliveries_on_an_sdk_exception(monkeypatch,
 async def test_a_presubmit_denial_is_counted_on_the_raw_result(monkeypatch, tmp_path):
     class FakePresubmit:
         timeout_s = 1.0
+        wait_max_s = 0.0
 
         def __call__(self):
             return "suite red"
@@ -1115,6 +1116,7 @@ async def test_a_presubmit_denial_during_a_failed_attempt_still_reaches_attemptf
 ):
     class FakePresubmit:
         timeout_s = 1.0
+        wait_max_s = 0.0
 
         def __call__(self):
             return "suite red"
@@ -1151,6 +1153,7 @@ async def test_the_presubmit_becomes_a_hook_on_the_delivery_call(monkeypatch, tm
 
     class FakePresubmit:
         timeout_s = 300.0
+        wait_max_s = 0.0
 
         def __call__(self):
             return None
@@ -1355,6 +1358,7 @@ def test_options_for_tech_lead_reviewer_is_pinned(tmp_path):
 def test_options_for_wires_the_guard_ahead_of_the_presubmit(tmp_path):
     class FakePresubmit:
         timeout_s = 1.0
+        wait_max_s = 0.0
 
         def __call__(self):
             return "suite red"
@@ -1796,6 +1800,7 @@ async def test_an_idle_child_or_no_pending_main_thread_tool_does_not_hold_the_at
 
 class SlowPresubmit:
     timeout_s = 1500.0
+    wait_max_s = 0.0
 
     def __init__(self) -> None:
         self.release = threading.Event()

@@ -18,6 +18,7 @@ from pathlib import Path
 
 from ..domain import ci, presubmit, rules
 from ..domain import landing as landing_rules
+from ..domain.check_schedule import CheckPriority
 from ..domain.task import TaskState
 from . import landing_plan
 from .checkouts import task_base
@@ -140,6 +141,8 @@ def _checks_pass(
             "",
             declared,
             cfg.check_timeout_s,
+            priority=CheckPriority.LAND,
+            wait_max_s=cfg.check_wait_max_s,
             witness=ports.stack.witness(base),
             parallel=ports.stack.parallel_checks(base),
         )

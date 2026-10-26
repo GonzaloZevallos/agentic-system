@@ -22,6 +22,7 @@ from pydantic import TypeAdapter
 from agentic.shared.configuration import Configuration
 
 from ..domain import presubmit, rules
+from ..domain.check_schedule import CheckPriority
 from ..domain.roles import DEVELOPER_INTEGRATOR
 from ..domain.task import WAITING_ON_HUMAN, FullCheckEntry, FullChecksRecord, TaskState
 from .checkouts import SetupFailed, task_base, task_checkout
@@ -50,6 +51,8 @@ async def full_checks(state: TaskState, cfg: Configuration, ports: Ports) -> Tas
         _NOTHING_BEFORE,
         declared,
         cfg.check_timeout_s,
+        priority=CheckPriority.INTEGRATION,
+        wait_max_s=cfg.check_wait_max_s,
         witness=ports.stack.witness(base),
         parallel=ports.stack.parallel_checks(base),
     )

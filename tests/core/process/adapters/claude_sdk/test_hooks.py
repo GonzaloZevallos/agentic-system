@@ -220,6 +220,7 @@ async def test_the_edit_hook_with_no_forbidden_declared_denies_no_suppression(tm
 
 class FakePresubmit:
     timeout_s = 120.0
+    wait_max_s = 900.0
 
     def __init__(self, *reasons):
         self.reasons = list(reasons)
@@ -239,6 +240,20 @@ async def test_the_presubmit_answers_the_delivery_call():
     assert presubmit.calls == 2
     (hooked,) = [m for m in matchers["PreToolUse"] if m.matcher == hooks.DELIVERY_TOOL]
     assert hooked.timeout >= presubmit.timeout_s
+
+
+async def test_the_delivery_hook_budget_covers_the_wait_for_a_share_as_well_as_the_checks():
+    """GH-361: the wait is no part of `timeout_s`, so the hook adds it on its own; a hook
+    that cut off at `timeout_s` would kill a gate still queued behind closer-to-done runs."""
+    matchers = hooks.hooks_for(DEVELOPER, CWD, FakePresubmit())
+    (hooked,) = [m for m in matchers["PreToolUse"] if m.matcher == hooks.DELIVERY_TOOL]
+    assert hooked.timeout == hooks.GUARD_TIMEOUT_S + 120.0 + 900.0
+
+
+def test_the_share_hold_margin_is_the_hooks_own_guard_budget():
+    from agentic.core.process.application.presubmit import HOLD_MARGIN_S
+
+    assert HOLD_MARGIN_S == hooks.GUARD_TIMEOUT_S
 
 
 class FakeGuard:

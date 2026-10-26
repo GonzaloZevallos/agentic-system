@@ -181,9 +181,11 @@ class AttemptFailed(Exception):
 class Presubmit(Protocol):
     """Asked when a role hands back its delivery, before the delivery counts: a reason
     refuses it, and the model gets the reason and delivers again (glossary: Puerta de
-    entrega). Blocking: it may run the product's checks, within `timeout_s`."""
+    entrega). Blocking: it may run the product's checks, within `timeout_s`, after waiting
+    at most `wait_max_s` for a share of the machine's cores (GH-361)."""
 
     timeout_s: float
+    wait_max_s: float
 
     def __call__(self) -> str | None: ...
 

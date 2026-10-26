@@ -15,8 +15,10 @@ from agentic.core.process.adapters.git.workspace import GitWorkspace
 from agentic.core.process.application.develop import develop
 from agentic.core.process.application.ports import CommandResult
 from agentic.core.process.application.presubmit import CheckoutPresubmit
+from agentic.core.process.domain.check_schedule import CheckPriority
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
+    FakeCheckScheduler,
     MemoryCommands,
     MemoryStack,
     MemoryWorkspace,
@@ -39,9 +41,20 @@ def gate(
 ) -> CheckoutPresubmit:
     workspace = MemoryWorkspace()
     workspace.moved.add(PATH)  # a commit landed: `head` now differs from `before`
-    ports = type("Ports", (), {"workspace": workspace, "commands": commands})()
+    ports = type(
+        "Ports",
+        (),
+        {"workspace": workspace, "commands": commands, "check_scheduler": FakeCheckScheduler()},
+    )()
     return CheckoutPresubmit(
-        ports, PATH, "base", checks or CHECKS, 30.0, witness=witness, parallel=parallel
+        ports,
+        PATH,
+        "base",
+        checks or CHECKS,
+        30.0,
+        witness=witness,
+        parallel=parallel,
+        priority=CheckPriority.SUBTASK,
     )
 
 
@@ -233,6 +246,7 @@ def checkout(tmp_path):
         {
             "workspace": GitWorkspace(tmp_path, Configuration(product_dir=tmp_path).git_identity),
             "commands": real_commands(),
+            "check_scheduler": FakeCheckScheduler(),
         },
     )()
     before = ports.workspace.head(tmp_path)
@@ -246,7 +260,9 @@ def checkout(tmp_path):
 def test_the_real_shell_gate_runs_quick_checks_in_declared_order_in_both_modes(checkout, parallel):
     ports, path, before = checkout
     checks = {"first": "echo one; sleep 0.2", "second": "echo two", "third": "exit 3"}
-    gate_ = CheckoutPresubmit(ports, path, before, checks, 20.0, parallel=parallel)
+    gate_ = CheckoutPresubmit(
+        ports, path, before, checks, 20.0, parallel=parallel, priority=CheckPriority.SUBTASK
+    )
     reason = gate_()
     assert reason is not None and "`third` failed" in reason
     results = gate_.results or []
@@ -268,6 +284,8 @@ def test_the_real_shell_runs_concurrent_checks_at_the_same_time(checkout):
         )
 
     checks = {"left": meet("l.flag", "r.flag"), "right": meet("r.flag", "l.flag")}
-    gate_ = CheckoutPresubmit(ports, path, before, checks, 20.0, parallel=True)
+    gate_ = CheckoutPresubmit(
+        ports, path, before, checks, 20.0, parallel=True, priority=CheckPriority.SUBTASK
+    )
     assert gate_() is None
     assert [c["passed"] for c in gate_.results or []] == [True, True]

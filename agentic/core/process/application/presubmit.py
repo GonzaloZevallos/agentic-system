@@ -13,11 +13,17 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from ..domain import presubmit
+from ..domain.check_schedule import WAIT_MAX_S, CheckPriority
 from ..domain.presubmit import AffectedPlan, CheckResult, Mode, WitnessResult
 from ..domain.task import TaskState
 from .checkouts import task_base
-from .ports import GitError, Ports
+from .ports import CheckRequest, GitError, Grant, Ports
 from .preflight import criteria_regressed
+
+# The delivery hook's own guard budget (`hooks.GUARD_TIMEOUT_S`, pinned equal by a test): a
+# share is held that much past the checks' timeout, so the ledger never drops it before the
+# hook gives up.
+HOLD_MARGIN_S = 30.0
 
 
 def declared_checks(state: TaskState, ports: Ports) -> dict[str, str]:
@@ -57,6 +63,8 @@ class CheckoutPresubmit:
         checks: dict[str, str],
         check_timeout_s: float,
         *,
+        priority: CheckPriority,
+        wait_max_s: float = WAIT_MAX_S,
         witness: str | None = None,
         parallel: bool = False,
         affected: AffectedPlan | None = None,
@@ -72,6 +80,16 @@ class CheckoutPresubmit:
         # checkout). Keyword-only with this default so every existing construction
         # site compiles untouched.
         self.witness = witness
+        # How close to done this gate is (GH-361): required, so no construction site can
+        # forget to say, and with no default so none can fall back to a wrong one.
+        self.priority = priority
+        # The most the gate waits for a share over its whole life, `check_wait_max_s`.
+        self._wait_max_s = wait_max_s
+        # What the scheduler gave the last time the gate ran: `None` until one did. The
+        # first `enqueued_at` and the token stay with the instance, so a gate refused and
+        # retried keeps one place in the queue (ADR-0065); `waited_s` is the total wait.
+        self.grant: Grant | None = None
+        self.waited_s = 0.0
         # The product's `parallel_checks`: run the declared checks concurrently. False
         # (the default) is the serial gate of before, byte for byte; keyword-only so
         # every existing construction site compiles untouched.
@@ -124,6 +142,12 @@ class CheckoutPresubmit:
         base = self.check_timeout_s * max(len(self.checks), 1)
         return base + (self.check_timeout_s if self.witness else 0)
 
+    @property
+    def wait_max_s(self) -> float:
+        """The configured wait for a share. Not part of `timeout_s`: the checks' clock
+        starts after the grant, and the delivery hook adds this on its own."""
+        return self._wait_max_s
+
     def __call__(self) -> str | None:
         workspace = self.ports.workspace
         head = workspace.head(self.path)
@@ -134,16 +158,7 @@ class CheckoutPresubmit:
         # spawned on a call that refuses for a missing commit or an unclean tree.
         witness_reason = None
         if moved and clean:
-            if self.witness is not None:
-                witness_reason = self._run_witness(self.witness)
-            plan = self.affected
-            if plan is None:
-                results = self._run_unplanned()
-            else:
-                results = self._run_under_plan(plan, self._modes(plan, head))
-            self.head, self.results = head, results
-            self.regressions = self._criteria_regressions(head)
-            self.invocations.append(self.results)
+            witness_reason = self._run_holding_a_share(head)
         # A witness disagreement leads, on its own capped budget: `refusals`/`REFUSALS`
         # stay for the checks alone, so a bad witness declaration cannot spend the
         # budget the working gate needs. The checks below still ran either way.
@@ -159,6 +174,38 @@ class CheckoutPresubmit:
             return None
         self.refusals += 1
         return presubmit.refused(reason, self.refusals)
+
+    def _run_holding_a_share(self, head: str) -> str | None:
+        """The witness and the checks, under a share of the machine's cores: the only place
+        a gate acquires, and `__call__` the only caller (invariant of ADR-0065). The share is
+        given back whatever happens inside, and the time spent waiting for it is over before
+        any command starts, so it is never part of a check's timeout."""
+        request = CheckRequest(
+            self.priority,
+            wait_max_s=max(self._wait_max_s - self.waited_s, 0.0),
+            expires_after_s=self.timeout_s + HOLD_MARGIN_S,
+            enqueued_at=self.grant.enqueued_at if self.grant else None,
+            token=self.grant.token if self.grant else None,
+        )
+        scheduler = self.ports.check_scheduler
+        grant = scheduler.acquire(request)
+        self.grant = grant
+        self.waited_s += grant.wait_s
+        try:
+            witness_reason = None
+            if self.witness is not None:
+                witness_reason = self._run_witness(self.witness)
+            plan = self.affected
+            if plan is None:
+                results = self._run_unplanned()
+            else:
+                results = self._run_under_plan(plan, self._modes(plan, head))
+            self.head, self.results = head, results
+            self.regressions = self._criteria_regressions(head)
+            self.invocations.append(self.results)
+            return witness_reason
+        finally:
+            scheduler.release(grant)
 
     def _modes(self, plan: AffectedPlan, head: str) -> dict[str, Mode]:
         """Which form each check runs under the plan. A changed-paths lookup that fails

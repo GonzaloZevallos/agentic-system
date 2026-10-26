@@ -8,7 +8,8 @@ from pathlib import Path
 
 from agentic.core.process.application.ports import CommandResult
 from agentic.core.process.application.presubmit import CheckoutPresubmit
-from tests.fakes import MemoryCommands, MemoryWorkspace
+from agentic.core.process.domain.check_schedule import CheckPriority
+from tests.fakes import FakeCheckScheduler, MemoryCommands, MemoryWorkspace
 
 PATH = Path("/memory/worktrees/GH-41.api")
 
@@ -16,8 +17,20 @@ PATH = Path("/memory/worktrees/GH-41.api")
 def presubmit(commands: MemoryCommands, witness: str | None = None) -> CheckoutPresubmit:
     workspace = MemoryWorkspace()
     workspace.moved.add(PATH)  # a commit landed: `head` now differs from `before`
-    ports = type("Ports", (), {"workspace": workspace, "commands": commands})()
-    return CheckoutPresubmit(ports, PATH, "base", {"tests": "pytest"}, 30.0, witness=witness)
+    ports = type(
+        "Ports",
+        (),
+        {"workspace": workspace, "commands": commands, "check_scheduler": FakeCheckScheduler()},
+    )()
+    return CheckoutPresubmit(
+        ports,
+        PATH,
+        "base",
+        {"tests": "pytest"},
+        30.0,
+        witness=witness,
+        priority=CheckPriority.SUBTASK,
+    )
 
 
 def test_no_witness_runs_no_extra_command_and_leaves_no_markdown_line():
@@ -88,7 +101,19 @@ def test_no_command_is_spawned_before_a_commit_or_on_a_dirty_tree():
     workspace = MemoryWorkspace()  # never added to `moved`: nothing was committed
     commands = MemoryCommands()
     commands.queues["echo ok"] = [CommandResult(0, str(PATH))]
-    ports = type("Ports", (), {"workspace": workspace, "commands": commands})()
-    gate = CheckoutPresubmit(ports, PATH, "base", {"tests": "pytest"}, 30.0, witness="echo ok")
+    ports = type(
+        "Ports",
+        (),
+        {"workspace": workspace, "commands": commands, "check_scheduler": FakeCheckScheduler()},
+    )()
+    gate = CheckoutPresubmit(
+        ports,
+        PATH,
+        "base",
+        {"tests": "pytest"},
+        30.0,
+        witness="echo ok",
+        priority=CheckPriority.SUBTASK,
+    )
     reason = gate()
     assert reason is not None and commands.ran == [] and gate.witness_refusals == 0

@@ -21,6 +21,7 @@ from agentic.shared.configuration import Configuration
 
 from ..domain import adr_numbers, ci, presubmit, rules
 from ..domain import landing as landing_rules
+from ..domain.check_schedule import CheckPriority
 from ..domain.task import PullRequest, TaskState
 from . import adr_collision, landing_flakes, landing_plan
 from .checkouts import task_base
@@ -288,6 +289,8 @@ def run_checks(
                 _NOTHING_BEFORE,
                 checks,
                 cfg.check_timeout_s,
+                priority=CheckPriority.LAND,
+                wait_max_s=cfg.check_wait_max_s,
                 witness=ports.stack.witness(base),
                 parallel=ports.stack.parallel_checks(base),
             )

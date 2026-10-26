@@ -16,6 +16,7 @@ from __future__ import annotations
 from agentic.shared.configuration import Configuration
 
 from ..domain import coverage, presubmit, rules
+from ..domain.check_schedule import CheckPriority
 from ..domain.presubmit import AffectedPlan
 from ..domain.roles import DEVELOPER, DEVELOPER_INTEGRATOR
 from ..domain.task import INTEGRATION, TaskState
@@ -103,6 +104,8 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         before,
         fast,
         cfg.check_timeout_s,
+        priority=CheckPriority.SUBTASK,
+        wait_max_s=cfg.check_wait_max_s,
         witness=ports.stack.witness(task_base(state, ports)),
         parallel=ports.stack.parallel_checks(task_base(state, ports)),
         affected=plan,
