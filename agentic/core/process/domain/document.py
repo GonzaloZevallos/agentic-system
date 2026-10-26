@@ -67,7 +67,8 @@ SUBTASK_RECORDED_AS = {"change_category": "return_category"}
 # `closed_by_slices` (GH-334) is the list of those slices' pull requests, written with the
 # task's `closed_at` when every unit landed through them. `tracker_checklist_posted`
 # (GH-336) is the `{at, hash}` record of the checklist comment: `render` writes it as a block
-# when a run posted it, and the poller's closure replaces it whole.
+# when a run posted it, and the poller's closure replaces it whole. `flake_comments`
+# (ADR-0066) is the list of flake issues the landing already commented on for this task.
 RECORD_KEYS: frozenset[str] = frozenset(
     {
         "landing",
@@ -77,6 +78,7 @@ RECORD_KEYS: frozenset[str] = frozenset(
         "closed_by_slices",
         "tracker_checklist_posted",
         "full_checks",
+        "flake_comments",
     }
 )
 _LANDING_PLACEHOLDER = "<landing-flow-line>"
