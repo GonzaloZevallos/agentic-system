@@ -141,6 +141,48 @@ def test_open_issue_uses_body_file_and_sends_no_label(tmp_path, monkeypatch):
     assert not Path(written["path"]).exists()
 
 
+def test_comment_on_issue_sends_the_text_in_a_file_to_the_referenced_issue():
+    written = {}
+
+    class RecordingRun(Recorder):
+        def __call__(self, args, cwd, capture_output, text, check):
+            self.calls.append(args)
+            path = args[args.index("--body-file") + 1]
+            written["path"] = path
+            written["body"] = Path(path).read_text(encoding="utf-8")
+            return subprocess.CompletedProcess(args, 0, "", "")
+
+    run = RecordingRun()
+    text = "flake `tests` seen 😀\n" + "x" * 10_000
+    GhTracker(Path("/p"), run).comment_on_issue("https://github.com/o/r/issues/9", text)
+    [call] = run.calls
+    assert call[:4] == ["gh", "issue", "comment", "https://github.com/o/r/issues/9"]
+    assert "--body-file" in call and "--body" not in call
+    assert written["body"] == text
+    assert not any(text in argument for argument in call)
+    # The temp file does not outlive the call.
+    assert not Path(written["path"]).exists()
+
+
+def test_comment_on_issue_accepts_a_bare_issue_number_reference():
+    run = Recorder(stdout="")
+    GhTracker(Path("/p"), run).comment_on_issue("42", "x")
+    [call] = run.calls
+    assert call[:4] == ["gh", "issue", "comment", "42"]
+
+
+def test_comment_on_issue_raises_value_error_when_gh_fails_and_removes_its_file():
+    seen = {}
+
+    def run(args, cwd, capture_output, text, check):
+        seen["path"] = args[args.index("--body-file") + 1]
+        raise subprocess.CalledProcessError(1, args, stderr="issue not found")
+
+    with pytest.raises(ValueError, match="gh issue comment failed: issue not found"):
+        GhTracker(Path("/p"), run).comment_on_issue("https://github.com/o/r/issues/9", "x")
+    assert not Path(seen["path"]).exists()
+
+
 def test_a_task_without_an_issue_writes_nothing_to_the_issue():
     run = Recorder()
     tracker = GhTracker(Path("/p"), run)

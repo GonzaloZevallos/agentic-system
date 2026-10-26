@@ -1062,6 +1062,13 @@ class Tracker(Protocol):
         queue's own label. Any state a reader needs goes in `title` instead."""
         ...
 
+    def comment_on_issue(self, reference: str, text: str) -> None:
+        """Comments `text` on the issue at `reference`: the URL or number `open_issue`
+        answers, and the first element of each `Inbox.open_issue_bodies()` pair. Not
+        `comment`, which writes on the task's own issue by its task id. Raises
+        `ValueError` when the platform refuses or cannot be reached, as `open_issue`."""
+        ...
+
     def rerun_failed_ci(self, reference: str, head: str) -> list[str]:
         """Re-runs the failed CI runs of commit `head` of the pull request at `reference`
         (GH-239) and returns the URL of each run it asked to re-run, none when no run on
