@@ -285,14 +285,16 @@ def _findings_counts(findings: list[FindingRecord]) -> dict[str, int]:
 def _presubmit_arrays(
     invocations: list[list[CheckResult]],
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """`agentic.presubmit.checks` (one `"check/result/final=count"` cell per invocation
-    of the delivery gate that ran the checks) and `agentic.presubmit.duration` (one
-    `"check=seconds"` entry per check per invocation, unaggregated across invocations
-    since a duration cannot be summed into a count without losing the figure a panel
-    would want). A check that ran twice in one invocation (an affected-only run and the
-    full rerun, ADR-0046) is its final row's status and the sum of its rows' seconds;
-    with one row per check, which is every product that declares no affected form, this
-    is what it always was."""
+    """`agentic.presubmit.checks` (one `"check/result/final/reused=count"` cell per
+    invocation of the delivery gate that ran the checks; `reused` is the closed boolean
+    label of a row the system took from a stored pass, ADR-0065) and
+    `agentic.presubmit.duration` (one `"check=seconds"` entry per check per invocation,
+    unaggregated across invocations since a duration cannot be summed into a count
+    without losing the figure a panel would want). A check that ran twice in one
+    invocation (an affected-only run and the full rerun, ADR-0046) is its final row's
+    status and the sum of its rows' seconds; with one row per check, which is every
+    product that declares no affected form, this is what it always was. A reused row is
+    counted but never sampled: a check with only reused rows has no duration entry."""
     last = len(invocations) - 1
     counts: dict[str, int] = {}
     durations: list[str] = []
@@ -301,9 +303,11 @@ def _presubmit_arrays(
         seconds = check_durations(results)
         for check in final_results(results):
             result = "green" if check["passed"] else "red"
-            cell = f"{check['name']}/{result}/{final}"
+            reused = check.get("reused", False)
+            cell = f"{check['name']}/{result}/{final}/{reused}"
             counts[cell] = counts.get(cell, 0) + 1
-            durations.append(f"{check['name']}={seconds[check['name']]}")
+            if check["name"] in seconds:
+                durations.append(f"{check['name']}={seconds[check['name']]}")
     return _counts(counts), tuple(durations)
 
 
@@ -485,7 +489,8 @@ class RoleRun(Run):
         if invocations := patch.get("presubmit_checks"):
             checks, durations = _presubmit_arrays(invocations)
             attributes["agentic.presubmit.checks"] = checks
-            attributes["agentic.presubmit.duration"] = durations
+            if durations:
+                attributes["agentic.presubmit.duration"] = durations
         if (gate := _last_gate(patch)) is not None:
             attributes |= _gate_attributes(gate)
         if stats := patch.get("interview_stats"):

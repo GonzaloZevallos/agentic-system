@@ -184,6 +184,9 @@ class Configuration(BaseModel):
     check_share_max_subtask: int | None = Field(default=None, ge=1)
     check_wait_max_s: float = Field(default=1800, ge=0)
     check_ledger_dir: Path = Field(default_factory=lambda: _default_check_ledger_dir())
+    # The machine's store of passing check results (ADR-0065): outside every checkout and
+    # shared by every product, built like `run_registry_dir`.
+    check_results_dir: Path = Field(default_factory=lambda: _default_check_results_dir())
 
     @classmethod
     def from_sources(
@@ -285,6 +288,12 @@ def _default_run_registry_dir() -> Path:
     base = os.environ.get("XDG_STATE_HOME")
     root = Path(base) if base else Path.home() / ".local" / "state"
     return root / "agentic" / "runs"
+
+
+def _default_check_results_dir() -> Path:
+    base = os.environ.get("XDG_STATE_HOME")
+    root = Path(base) if base else Path.home() / ".local" / "state"
+    return root / "agentic" / "check-results"
 
 
 def _default_perf_lock_path() -> Path:

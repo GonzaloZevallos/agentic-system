@@ -880,7 +880,7 @@ def test_presubmit_checks_leave_one_array_entry_per_invocation_only_the_last_fin
         run.finish({"presubmit_checks": invocations, "cost_usd": 0.3})
     span = spans.get_finished_spans()[-1]
     checks = span.attributes["agentic.presubmit.checks"]
-    assert sorted(checks) == ["tests/green/True=1", "tests/red/False=2"]
+    assert sorted(checks) == ["tests/green/True/False=1", "tests/red/False/False=2"]
     assert sorted(span.attributes["agentic.presubmit.duration"]) == [
         "tests=0.9",
         "tests=1.0",
@@ -902,8 +902,8 @@ def test_a_check_with_two_rows_counts_its_final_status_and_sums_its_duration(spa
         run.finish({"presubmit_checks": invocations, "cost_usd": 0.3})
     span = spans.get_finished_spans()[-1]
     assert sorted(span.attributes["agentic.presubmit.checks"]) == [
-        "lint/green/True=1",
-        "tests/green/True=1",
+        "lint/green/True/False=1",
+        "tests/green/True/False=1",
     ]
     assert list(span.attributes["agentic.presubmit.duration"]) == ["tests=5.0", "lint=0.5"]
 
@@ -918,7 +918,33 @@ def test_a_check_red_in_its_final_row_counts_red(spans):
     with telemetry.role_span("Developer", "developer", "gym-saas", arm="default") as run:
         run.finish({"presubmit_checks": invocations, "cost_usd": 0.3})
     span = spans.get_finished_spans()[-1]
-    assert list(span.attributes["agentic.presubmit.checks"]) == ["tests/red/True=1"]
+    assert list(span.attributes["agentic.presubmit.checks"]) == ["tests/red/True/False=1"]
+
+
+def test_a_reused_row_is_counted_with_the_reused_label_and_leaves_no_duration_sample(spans):
+    invocations = [
+        [
+            _check(passed=True, duration_s=30.0) | {"reused": True},
+            _check(name="lint", command="ruff check .", passed=True, duration_s=0.5),
+        ]
+    ]
+    with telemetry.role_span("Developer", "developer", "gym-saas", arm="default") as run:
+        run.finish({"presubmit_checks": invocations, "cost_usd": 0.3})
+    attributes = spans.get_finished_spans()[-1].attributes
+    assert sorted(attributes["agentic.presubmit.checks"]) == [
+        "lint/green/True/False=1",
+        "tests/green/True/True=1",
+    ]
+    assert list(attributes["agentic.presubmit.duration"]) == ["lint=0.5"]
+
+
+def test_a_run_of_only_reused_rows_emits_checks_but_no_duration_sample(spans):
+    invocations = [[_check(duration_s=30.0) | {"reused": True}]]
+    with telemetry.role_span("Developer", "developer", "gym-saas", arm="default") as run:
+        run.finish({"presubmit_checks": invocations, "cost_usd": 0.3})
+    attributes = spans.get_finished_spans()[-1].attributes
+    assert list(attributes["agentic.presubmit.checks"]) == ["tests/green/True/True=1"]
+    assert "agentic.presubmit.duration" not in attributes
 
 
 def test_a_mode_on_a_row_changes_neither_the_cells_nor_the_durations(spans):

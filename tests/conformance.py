@@ -16,6 +16,7 @@ from typing import NamedTuple
 
 from agentic.core.process.application.limits import RunLimits
 from agentic.core.process.application.ports import (
+    CheckResults,
     CheckScheduler,
     Commands,
     FlagVocabulary,
@@ -41,6 +42,7 @@ from tests.fakes import (
     FakePerfLock,
     FakePerfRunner,
     FakeReaper,
+    MemoryCheckResults,
     MemoryCommands,
     MemoryDocuments,
     MemoryFlags,
@@ -67,6 +69,7 @@ _sample_app: SampleApp = MemorySampleApp()
 _workspace: Workspace = MemoryWorkspace()
 _tracker: Tracker = MemoryTracker()
 _registry: RunRegistry = MemoryRunRegistry()
+_check_results: CheckResults = MemoryCheckResults()
 _launcher: Launcher = FakeLauncher()
 _reaper: ProcessReaper = FakeReaper()
 _perf_runner: PerfRunner = FakePerfRunner()
@@ -90,6 +93,7 @@ def ports_of_doubles() -> Ports:
         reaper=_reaper,
         check_scheduler=_check_scheduler,
         limits=RunLimits(),
+        check_results=_check_results,
     )
 
 
@@ -107,6 +111,7 @@ COVERED: dict[str, type] = {
     "Workspace": MemoryWorkspace,
     "Tracker": MemoryTracker,
     "RunRegistry": MemoryRunRegistry,
+    "CheckResults": MemoryCheckResults,
     "Launcher": FakeLauncher,
     "ProcessReaper": FakeReaper,
     "PerfRunner": FakePerfRunner,
@@ -135,6 +140,10 @@ UNCOVERED: dict[str, Uncovered] = {
             ("tests/core/process/adapters/claude_sdk/test_hooks.py", "FakePresubmit"),
             ("tests/core/process/adapters/claude_sdk/test_runner.py", "FakePresubmit"),
         ),
+        _INLINE,
+    ),
+    "CheckTool": Uncovered(
+        (("tests/core/process/adapters/claude_sdk/test_run_check_tool.py", "SlowTool"),),
         _INLINE,
     ),
     "SchemaGuard": Uncovered(

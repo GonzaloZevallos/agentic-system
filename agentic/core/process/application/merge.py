@@ -43,7 +43,7 @@ from .ports import (
     TrackerUnreachable,
     Upstream,
 )
-from .presubmit import CheckoutPresubmit
+from .presubmit import CheckoutPresubmit, reuse_of
 from .release import release_checkout
 
 # The refusals a human can act on, and so the only ones commented, once per (head, reason).
@@ -293,6 +293,7 @@ def run_checks(
                 wait_max_s=cfg.check_wait_max_s,
                 witness=ports.stack.witness(base),
                 parallel=ports.stack.parallel_checks(base),
+                reuse=reuse_of(ports, base),
             )
             gate()
     except GitError as exc:
@@ -333,6 +334,7 @@ def _setup(
         result = ports.commands.run(path, command, cfg.check_timeout_s)
         if not result.passed:
             return step, result
+    ports.workspace.record_setup_tree(path)
     return None
 
 

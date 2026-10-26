@@ -178,3 +178,25 @@ async def test_a_setup_that_fails_on_a_new_checkout_escalates_like_deliver():
     patch = await full_checks(state_of(), CFG, ports)
     assert patch["escalation_class"] == "setup"
     assert [command for _, command in commands.ran] == ["make env"]
+
+
+async def test_a_second_run_on_the_same_tree_reuses_the_pass_and_runs_no_command():
+    from tests.fakes import MemoryCheckResults
+
+    commands, store = MemoryCommands(), MemoryCheckResults()
+    ports = memory_ports(
+        stack=MemoryStack(checks=CHECKS, delivery_checks=("tests",)),
+        commands=commands,
+        check_results=store,
+    )
+    first = await full_checks(state_of(), CFG, ports)
+    assert [command for _, command in commands.ran] == ["pytest", "ruff check ."]
+    second = await full_checks(state_of(), CFG, ports)
+    assert [command for _, command in commands.ran] == ["pytest", "ruff check ."]
+    assert all("reused" not in row for row in first["full_checks"]["results"])
+    assert second["full_checks"]["passed"] is True
+    assert second["full_checks"]["results"] == [
+        {"name": "tests", "passed": True, "reused": True},
+        {"name": "lint", "passed": True, "reused": True},
+    ]
+    assert "tests (reused)" in second["sections"]["Full checks"]

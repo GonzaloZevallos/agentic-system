@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from agentic.shared.configuration import Configuration
 
+from ..domain import check_results as reuse_rules
 from ..domain import coverage, presubmit, rules
 from ..domain.check_schedule import CheckPriority
 from ..domain.presubmit import AffectedPlan
@@ -23,7 +24,8 @@ from ..domain.task import INTEGRATION, TaskState
 from .checkouts import SetupFailed, subtask_checkout, task_base
 from .coverage_guard import InvariantCoverageGuard
 from .ports import Ports
-from .presubmit import CheckoutPresubmit, declared_checks, fast_tier
+from .presubmit import CheckoutPresubmit, declared_checks, fast_tier, reuse_of
+from .run_check import RunCheck
 from .run_role import finish, run_role, with_context
 
 
@@ -110,6 +112,31 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         parallel=ports.stack.parallel_checks(task_base(state, ports)),
         affected=plan,
         criteria_base=base,
+        reuse=reuse_of(ports, base),
+    )
+    # The `run_check` tool (ADR-0065): every declared check, not only the fast tier, over a
+    # presubmit of its own that shares the gate's checkout, witness, budget and `Reuse`, so
+    # the key it stores under is the key the gate reads. A product with no store composed,
+    # or a `+dirty` stage0 (no fingerprint: today's `commands.run` calls, exactly, and a
+    # reuse the tool's description would promise in vain), gets no tool.
+    reuse = delivery_presubmit.reuse
+    check_tool = (
+        RunCheck(
+            CheckoutPresubmit(
+                ports,
+                checkout.path,
+                before,
+                checks,
+                cfg.check_timeout_s,
+                witness=ports.stack.witness(base),
+                reuse=reuse,
+            )
+        )
+        if reuse is not None
+        and reuse_rules.fingerprint(reuse.setup, reuse.stage0_version, cfg.check_timeout_s)
+        is not None
+        and checks
+        else None
     )
     # The product's own declared suppression cage (issue #38), at the task's base like
     # every other key here, never the branch's own: keyword-only through `run_role`, so
@@ -170,6 +197,7 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         presubmit=delivery_presubmit,
         delivery_check=InvariantCoverageGuard(mapped) if mapped else None,
         forbidden=forbidden,
+        check_tool=check_tool,
         tiers=presubmit.tier_section(list(fast), [n for n in checks if n not in fast])
         if fast_names
         else "",
