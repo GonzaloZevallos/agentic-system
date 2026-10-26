@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import functools
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Literal, assert_never, get_args
@@ -784,6 +784,18 @@ def gather_resumes(ports: Ports, now: datetime) -> list[rules.ResumeCandidate]:
     return resumes
 
 
+def gather_closeness(ports: Ports, issues: Iterable[int]) -> dict[int, int]:
+    """The `rules.closeness` rank of each issue's task document, read once, for the order
+    `rules.poll_plan` starts retakes and resumes in (GH-362). An issue with no document is
+    left out: `poll_plan` ranks a missing key 0."""
+    ranks: dict[int, int] = {}
+    for issue in set(issues):
+        raw = ports.documents.load(ports.inbox.task_id(issue))
+        if raw is not None:
+            ranks[issue] = rules.closeness(raw)
+    return ranks
+
+
 def escalate_persisted_limits(
     cfg: Configuration, ports: Ports, resumes: Sequence[rules.ResumeCandidate]
 ) -> list[str]:
@@ -1375,6 +1387,7 @@ def run_once(
         ports, lock, current_boot, system_version=system_version, crash=crash_retakes
     )
     human_lines += escalate_persisted_limits(cfg, ports, resumes)
+    ranks = gather_closeness(ports, [*retakes, *crash_retakes, *(r.issue for r in resumes)])
     # Outside the lock, and only with pacing on: pacing off reads and writes nothing.
     fresh, skipped = _recent_spend(ports, now) if cfg.spend_pacing else ([], 0)
     with registry.exclusive():
@@ -1447,6 +1460,7 @@ def run_once(
             live_exempt=exempt_live,
             pace=pace,
             land_slots=max(cfg.max_concurrent_runs + rules.LAND_HEADROOM - live, 0),
+            closeness=ranks,
         )
         lines = execute(
             plan.actions,

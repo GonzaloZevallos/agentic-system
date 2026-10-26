@@ -1709,6 +1709,24 @@ def phase_of(section: str) -> str:
     return "definition"
 
 
+CLOSENESS: tuple[str, ...] = ("launch", *PHASES, "delivered", "land")
+"""How close to merge a counted start is, nearest last (ADR-0045 addendum, GH-362; glossary:
+Cercanía): a fresh launch, then each phase in `PHASES` order, then a task with a pull request,
+then a land. The phases are never listed again, so one appended to `PHASES` is ranked by it."""
+
+
+def closeness(state: TaskState) -> int:
+    """The task's rank in `CLOSENESS`. A pull request makes it `delivered`; otherwise it is the
+    furthest phase any run reached (not the last: a return to plan after development stays
+    development); a task with no runs is in the first phase."""
+    if state.get("pull_request"):
+        return CLOSENESS.index("delivered")
+    reached = (
+        CLOSENESS.index(phase_of(run.get("section", run["role"]))) for run in state.get("runs", [])
+    )
+    return max(reached, default=CLOSENESS.index(PHASES[0]))
+
+
 def spent_by_phase(state: TaskState) -> dict[str, float]:
     """The task's cost by phase, summing its runs by section; `other` is what the runs do
     not hold, the failed attempts that escalated, when there is any."""
@@ -3014,13 +3032,15 @@ def poll_plan(
     live_exempt: int = 0,
     land_slots: int | None = None,
     crash_retakes: Sequence[int] = (),
+    closeness: Mapping[int, int] = {},
 ) -> PollPlan:
     """This round's actions, in the order the Tech Lead plan fixes: every close first
-    (merging freed the slot it used, if any, so closing never spends one); then every
-    `retakes` issue (a run a reboot interrupted, `interrupted_run`), lowest first,
-    while `available_slots` lasts; then the due resumes, lowest first, with what is
-    left; at most one launch, the lowest-numbered issue with every blocker resolved and
-    its own wait (if any) elapsed -- and only when no eligible pause anywhere in the
+    (merging freed the slot it used, if any, so closing never spends one); then what
+    counts against the cap, nearest to merge first (`closeness`, below): every `retakes`
+    and `crash_retakes` issue (a run a reboot interrupted, `interrupted_run`, or one that
+    raised) and the due resumes, together, while `available_slots` lasts; at most one launch,
+    the lowest-numbered issue with every blocker resolved and its own wait (if any) elapsed
+    -- and only when no eligible pause anywhere in the
     product is still waiting out its own calendar (its own next slot has not arrived
     yet, but one is still scheduled), whether or not a slot is free for it. A pause
     whose calendar is spent (`resume_exhausted`) does not count as "still waiting": it
@@ -3035,22 +3055,32 @@ def poll_plan(
     to check. A merge child runs no model, so `counts_against_cap` is false for it: it takes
     no slot, and a round with every slot taken still starts it (GH-263, ADR-0045 addendum).
 
+    `closeness` (GH-362, Cercanía) maps an issue to its `rules.closeness` rank; a missing
+    key is rank 0 and an empty mapping makes every rank tie. Retakes and due resumes are
+    started in `(-rank, kind, issue)` order, a retake before a resume at a tie, and the
+    land competes at the rank of `CLOSENESS` "land", so it goes first in `actions`.
+
     `lands` (GH-239) are the issues whose refusal has a built landing step not yet taken on
     their head (`landing_step`; `wait` and `none` are never among them), each with the kind
     its child registers under. A `land_model` land can spend a model, so it counts: at most
-    one, the lowest, goes after the due resumes and before the launch (GH-270), and it may
-    use the reserved slot (`LAND_HEADROOM`). `land_slots` is how many counted children
-    fit with the headroom (`None`: `available_slots`, no headroom). With `R` the retakes
-    and resumes started this round, `slots_left = max(available_slots - R, 0)` and
-    `L = land_slots - R`:
+    one, the lowest, goes before the launch (GH-270), and it may use the reserved slot
+    (`LAND_HEADROOM`). `land_slots` is how many counted children fit with the headroom
+    (`None`: `available_slots`, no headroom). With `A = available_slots`, `H = land_slots`
+    and `n` the retakes and due resumes that could start:
 
-    - `slots_left > 0`, `L > 0`: the land starts, takes one of `slots_left`; the launch
-      sees one fewer.
-    - `slots_left == 0`, `L > 0`: the land starts on the headroom and takes nothing.
-    - `L <= 0`: `Deferred(no_slot)`.
+    | case | land | retakes and resumes, in rank order | the launch sees |
+    |---|---|---|---|
+    | `account_paused` | `Deferred(pause_waiting)` | `min(n, A)`, regular | `A - started` |
+    | `H <= 0` | `Deferred(no_slot)` | none | 0 |
+    | `H > 0`, `A > n` | regular slot | all `n`, regular | `A - n - 1` |
+    | `H > 0`, `A <= n`, `H > A` | headroom | `A`, regular | 0 |
+    | `H > 0`, `A <= n`, `H == A` | regular slot | `A - 1`, regular | 0 |
 
-    While `account_paused` holds, every `land_model` land is `Deferred(pause_waiting)`
-    instead; pacing never gates a land. A `land_checks` land counts as the merge does not.
+    (`H <= 0` takes no slot at all, so only an `H` of 0 with an `A` of 0 reaches it in
+    production: `run_once` passes `H = A + 1`, or `H = A = 0`.) Retakes and resumes never
+    use the headroom, and at most one land starts per round. While `account_paused` holds,
+    every `land_model` land is `Deferred(pause_waiting)` instead; pacing never gates a land.
+    A `land_checks` land counts as the merge does not.
 
     The children that do not count (`merge`, `land_checks`) are bounded together instead:
     `live_exempt` is how many are live on the machine right now, and at most one is live
@@ -3070,35 +3100,49 @@ def poll_plan(
     actions = [PollAction("close", issue) for issue in sorted(closes)]
     received_slots = available_slots
 
-    ordered_retakes = sorted(
-        [(issue, "reboot") for issue in retakes] + [(issue, "crash") for issue in crash_retakes]
-    )
-    retaken = ordered_retakes[: max(available_slots, 0)]
-    actions.extend(
-        PollAction("retake", issue, reason="crash" if why == "crash" else "reboot")
-        for issue, why in retaken
-    )
-    available_slots = max(available_slots - len(retaken), 0)
-
-    due_resumes = sorted(
-        (r for r in resumes if not resume_exhausted(r) and retake_due(r, now) is not None),
-        key=lambda r: r.issue,
-    )
-    taken = due_resumes[: max(available_slots, 0)]
-    actions.extend(PollAction("resume", r.issue) for r in taken)
-
-    slots_left = max(available_slots - len(taken), 0)
-    deferred: list[Deferred] = []
+    due_resumes = [r for r in resumes if not resume_exhausted(r) and retake_due(r, now) is not None]
     model_lands = sorted(c.issue for c in lands if counts_against_cap(c.kind))
-    started = len(retaken) + len(taken)
-    land_room = (received_slots if land_slots is None else land_slots) - started
-    if account_paused(resumes, now):
+    paused = account_paused(resumes, now)
+    land_total = received_slots if land_slots is None else land_slots
+    land_starts = bool(model_lands) and not paused and land_total > 0
+
+    # Rank order: the nearest to merge first; at a tie a retake goes before a resume, then
+    # the lowest issue (crash before reboot only when the same issue is both).
+    starts: list[tuple[tuple[int, int, int, str], PollAction]] = [
+        (
+            (-closeness.get(issue, 0), 0, issue, why),
+            PollAction("retake", issue, reason="crash" if why == "crash" else "reboot"),
+        )
+        for issue, why in [(i, "reboot") for i in retakes] + [(i, "crash") for i in crash_retakes]
+    ]
+    starts += [
+        ((-closeness.get(r.issue, 0), 1, r.issue, ""), PollAction("resume", r.issue))
+        for r in due_resumes
+    ]
+    # The land takes a plain slot unless the starts below it would use them all; then it
+    # takes the headroom if there is one. Retakes and resumes never use the headroom.
+    land_on_headroom = land_starts and len(starts) >= received_slots and land_total > received_slots
+    land_plain = land_starts and not land_on_headroom
+    if land_starts:
+        starts.append(
+            ((-CLOSENESS.index("land"), 2, model_lands[0], ""), PollAction("land", model_lands[0]))
+        )
+    plain_for_starts = max(received_slots - (1 if land_plain else 0), 0)
+    started = 0
+    for _, action in sorted(starts, key=lambda start: start[0]):
+        if action.kind == "land":
+            actions.append(action)
+        elif started < plain_for_starts:
+            actions.append(action)
+            started += 1
+    slots_left = max(received_slots - started - (1 if land_plain else 0), 0)
+
+    deferred: list[Deferred] = []
+    if paused:
         deferred.extend(Deferred("land", issue, "pause_waiting") for issue in model_lands)
         model_lands = []
-    elif model_lands and land_room > 0:
-        actions.append(PollAction("land", model_lands[0]))
+    elif land_starts:
         model_lands = model_lands[1:]
-        slots_left = max(slots_left - 1, 0)
     deferred.extend(Deferred("land", issue, "no_slot") for issue in model_lands)
 
     some_resume_still_waiting = any(
@@ -3123,7 +3167,7 @@ def poll_plan(
             or paced_launch_fits(
                 spent_usd=pace.spent_usd,
                 covered_s=pace.covered_s,
-                live_runs=pace.live_runs + len(retaken) + len(taken),
+                live_runs=pace.live_runs + started,
                 ceiling=pace.live_runs + received_slots,
                 pace_usd_per_h=pace.pace_usd_per_h,
             )

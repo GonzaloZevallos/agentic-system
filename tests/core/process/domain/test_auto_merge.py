@@ -575,7 +575,7 @@ def test_a_model_land_takes_the_plain_slot_and_blocks_the_launch_when_one_is_fre
 def test_a_due_resume_takes_the_plain_slot_and_the_land_starts_on_the_headroom():
     due = _resume(since=NOW - timedelta(days=1), prior=1)
     plan = _plan(available_slots=1, land_slots=2, resumes=[due], lands=MODEL_LAND, launches=LAUNCH)
-    assert plan.actions == [rules.PollAction("resume", 3), rules.PollAction("land", 4)]
+    assert plan.actions == [rules.PollAction("land", 4), rules.PollAction("resume", 3)]
     assert plan.deferred == []
 
 
@@ -590,10 +590,10 @@ def test_with_cap_plus_one_already_live_the_land_is_deferred_no_slot():
     assert plan.deferred == [rules.Deferred("land", 4, "no_slot")]
 
 
-def test_a_retake_spends_the_headroom_before_the_land_does():
+def test_without_headroom_a_land_outranks_a_retake():
     plan = _plan(available_slots=1, land_slots=1, retakes=[2], lands=MODEL_LAND)
-    assert plan.actions == [rules.PollAction("retake", 2)]
-    assert plan.deferred == [rules.Deferred("land", 4, "no_slot")]
+    assert plan.actions == [rules.PollAction("land", 4)]
+    assert plan.deferred == []
 
 
 def test_without_land_slots_the_land_follows_the_plain_slots():
