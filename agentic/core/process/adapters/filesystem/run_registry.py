@@ -31,6 +31,7 @@ from .liveness import current_boot_id, is_alive
 _LOCK_NAME = ".lock"
 _LAUNCHES_DIR = "launches"
 _SPEND_DIR = "spend"
+_WAITING_DIR = "waiting"
 
 
 class FilesystemRunRegistry:
@@ -169,6 +170,62 @@ class FilesystemRunRegistry:
     def _spend_path(self, root: Path) -> Path:
         key = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:12]
         return self.dir / _SPEND_DIR / f"{key}.json"
+
+    # -- land waits (GH-362) ------------------------------------------------------------
+
+    def publish_land_wait(
+        self,
+        root: Path,
+        product: str,
+        issues: Sequence[int],
+        since: datetime | None,
+        now: datetime,
+    ) -> None:
+        resolved = root.resolve()
+        path = self._land_wait_path(resolved)
+        if not issues:
+            path.unlink(missing_ok=True)
+            return
+        record = {
+            "product": product,
+            "root": str(resolved),
+            "written_at": now.isoformat(),
+            "boot_id": self._boot_id(),
+            "since": (now if since is None else since).isoformat(),
+            "issues": sorted(issues),
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _replace_json(path, record)
+
+    def land_waits(self, now: datetime) -> tuple[list[rules.LandWait], list[str]]:
+        directory = self.dir / _WAITING_DIR
+        if not directory.is_dir():
+            return [], []
+        current = self._boot_id()
+        waits: list[rules.LandWait] = []
+        notes: list[str] = []
+        for path in sorted(directory.glob("*.json")):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                written_at = datetime.fromisoformat(data["written_at"])
+                since = datetime.fromisoformat(data["since"])
+                issues = tuple(int(n) for n in data["issues"])
+                product, root = str(data["product"]), str(data["root"])
+                boot = data.get("boot_id")
+                if written_at.tzinfo is None or since.tzinfo is None:
+                    raise ValueError("naive instant")
+            except (OSError, ValueError, KeyError, TypeError):
+                notes.append(f"agentic: poll: land wait file {path.name} unreadable, skipped")
+                continue
+            if boot is not None and current is not None and boot != current:
+                continue
+            if now - written_at > rules.LAND_WAIT_TTL:
+                continue
+            waits.append(rules.LandWait(product, rules.root_key(root), written_at, since, issues))
+        return waits, notes
+
+    def _land_wait_path(self, root: Path) -> Path:
+        return self.dir / _WAITING_DIR / f"{rules.root_key(str(root))}.json"
 
     @staticmethod
     def _read_spend_file(path: Path, since: datetime) -> tuple[list[rules.SpendRun], list[str]]:

@@ -95,15 +95,19 @@ def test_every_mypy_file_exists():
 # that assigns them to their ports (GH-227, the 2026-10-08 addendum to ADR-0021). Nothing else
 # under `tests/` is checked, so nothing else is admitted.
 MYPY_TEST_ENTRIES = frozenset({"tests/fakes.py", "tests/conformance.py"})
+# The one script the scope admits: the read-only poller-journal measure (GH-362). Other
+# scripts are not checked, so none is admitted.
+MYPY_SCRIPT_ENTRIES = frozenset({"scripts/poll_waits.py"})
 
 
 def _outside_scope(entries: list[str]) -> list[str]:
     """The entries that are neither `agentic` itself, nor under `agentic/`, nor one of
-    `MYPY_TEST_ENTRIES`."""
+    `MYPY_TEST_ENTRIES` or `MYPY_SCRIPT_ENTRIES`."""
+    admitted = MYPY_TEST_ENTRIES | MYPY_SCRIPT_ENTRIES
     return [
         entry
         for entry in entries
-        if not (entry == "agentic" or entry.startswith("agentic/") or entry in MYPY_TEST_ENTRIES)
+        if not (entry == "agentic" or entry.startswith("agentic/") or entry in admitted)
     ]
 
 
@@ -118,6 +122,19 @@ def test_the_guard_admits_the_named_doubles_and_refuses_any_other_test_file():
         "tests/other.py",
         "tests",
     ]
+
+
+def test_the_guard_admits_the_named_script_and_refuses_any_other_script():
+    assert _outside_scope(["scripts/poll_waits.py"]) == []
+    assert _outside_scope(["scripts/poll_waits.py", "scripts/affected_tests.py", "scripts"]) == [
+        "scripts/affected_tests.py",
+        "scripts",
+    ]
+
+
+def test_the_script_entries_in_mypy_files_are_exactly_the_named_set():
+    entries = {entry for entry in _mypy_files() if entry.startswith("scripts")}
+    assert entries == MYPY_SCRIPT_ENTRIES
 
 
 def test_the_test_entries_in_mypy_files_are_exactly_the_named_set():

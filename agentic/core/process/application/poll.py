@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import functools
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Literal, assert_never, get_args
@@ -784,6 +784,18 @@ def gather_resumes(ports: Ports, now: datetime) -> list[rules.ResumeCandidate]:
     return resumes
 
 
+def gather_closeness(ports: Ports, issues: Iterable[int]) -> dict[int, int]:
+    """The `rules.closeness` rank of each issue's task document, read once, for the order
+    `rules.poll_plan` starts retakes and resumes in (GH-362). An issue with no document is
+    left out: `poll_plan` ranks a missing key 0."""
+    ranks: dict[int, int] = {}
+    for issue in set(issues):
+        raw = ports.documents.load(ports.inbox.task_id(issue))
+        if raw is not None:
+            ranks[issue] = rules.closeness(raw)
+    return ranks
+
+
 def escalate_persisted_limits(
     cfg: Configuration, ports: Ports, resumes: Sequence[rules.ResumeCandidate]
 ) -> list[str]:
@@ -1319,8 +1331,9 @@ def _upstream_notes(asked: bool, upstream: Callable[[], Upstream]) -> list[str]:
 def deferred_line(deferred: rules.Deferred) -> str:
     """The poll line for a merge or land `rules.poll_plan` held back: built from the plan's
     own `Deferred`, never from a second slot count (GH-263). The reason is printed as it is:
-    `no_slot`, `exempt_busy` or, for a land held by an account-limit pause, `pause_waiting`
-    (GH-270)."""
+    `no_slot`, `exempt_busy`, `pause_waiting` for a land held by an account-limit pause
+    (GH-270) or `land_queued` for one yielding to an earlier wait of another product
+    (GH-362)."""
     return f"agentic: poll: {deferred.kind} #{deferred.issue} waits: {deferred.reason}"
 
 
@@ -1375,6 +1388,7 @@ def run_once(
         ports, lock, current_boot, system_version=system_version, crash=crash_retakes
     )
     human_lines += escalate_persisted_limits(cfg, ports, resumes)
+    ranks = gather_closeness(ports, [*retakes, *crash_retakes, *(r.issue for r in resumes)])
     # Outside the lock, and only with pacing on: pacing off reads and writes nothing.
     fresh, skipped = _recent_spend(ports, now) if cfg.spend_pacing else ([], 0)
     with registry.exclusive():
@@ -1433,7 +1447,18 @@ def run_once(
                     len(rules.LAUNCH_SCHEDULE),
                 )
             )
-        notes = [*spend_notes, *_upstream_notes(upstream.cache_info().currsize > 0, upstream)]
+        tasks_root = (cfg.product_dir / document.TASKS_SUBDIR).resolve()
+        own_key = rules.root_key(str(tasks_root))
+        waits, wait_notes = registry.land_waits(now)
+        # A product never holds itself: only another root's fresh record holds this round.
+        others = [w for w in waits if w.root_key != own_key]
+        others_landing = bool(others)
+        previous = next((w.since for w in waits if w.root_key == own_key), None)
+        notes = [
+            *spend_notes,
+            *wait_notes,
+            *_upstream_notes(upstream.cache_info().currsize > 0, upstream),
+        ]
         plan = rules.poll_plan(
             closes=closes,
             resumes=resumes,
@@ -1447,6 +1472,19 @@ def run_once(
             live_exempt=exempt_live,
             pace=pace,
             land_slots=max(cfg.max_concurrent_runs + rules.LAND_HEADROOM - live, 0),
+            closeness=ranks,
+            others_landing=others_landing,
+            earlier_land_wait=rules.land_queued_behind(previous, own_key, others),
+        )
+        # Right after the decision and before `execute`, so no exit path leaves the previous
+        # round's record in place: a round with no waiting land removes it.
+        waiting_lands = sorted(d.issue for d in plan.deferred if rules.holds_launches(d))
+        registry.publish_land_wait(
+            tasks_root,
+            product,
+            waiting_lands,
+            rules.land_wait_since(previous, bool(waiting_lands), now),
+            now,
         )
         lines = execute(
             plan.actions,

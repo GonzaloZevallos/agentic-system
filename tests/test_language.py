@@ -60,6 +60,8 @@ TYPES = {
     "Lección": playbook.Item,
     "Arranque": boot,
     "Aterrizaje": landing,
+    "Cercanía": rules.closeness,
+    "Espera de aterrizaje": rules.holds_launches,
 }
 
 # Glossary term -> (the domain module, the name of the constant) that models it, for a term a
