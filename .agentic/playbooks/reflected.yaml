@@ -226,3 +226,5 @@ tasks:
       item_id: developer-2
       tasks:
       - GH-342
+  GH-363@review:
+    cost_usd: 0.0426
