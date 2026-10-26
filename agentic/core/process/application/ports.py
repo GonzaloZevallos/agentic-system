@@ -19,7 +19,7 @@ from ..domain.ci import CiReport, CiUnreadable, Containment
 from ..domain.design import Design
 from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
-from ..domain.presubmit import CheckResult
+from ..domain.presubmit import CheckResult, RerunForm
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
 from ..domain.rules import LandWait, MergeFailure, RunKind, SpendRun, motive
@@ -425,6 +425,13 @@ class ProductStack(Protocol):
         """The names of the checks the delivery gate runs, the fast tier, in the file's
         order (`core.knowledge`), as the commit `revision` declares them. Empty when the
         product declares no tiers, which is the gate of today, byte for byte."""
+        ...
+
+    def rerun_checks(self, revision: str) -> dict[str, RerunForm]:
+        """Check name -> its failed-tests-only form (`core.knowledge`, ADR-0066), as the
+        commit `revision` declares them. Empty when the product declares none, which is the
+        gate of today. Raises `ValueError` when the key is malformed, or declared by a
+        product with no `delivery_checks`."""
         ...
 
     def forbidden(self, revision: str) -> Sequence[Forbidden]:
@@ -1060,6 +1067,13 @@ class Tracker(Protocol):
         word. The landing (GH-239, ADR-0048) is the caller that passes one, `agentic`, for
         the follow-ups and flakes it files, which the product repo always has: it is the
         queue's own label. Any state a reader needs goes in `title` instead."""
+        ...
+
+    def comment_on_issue(self, reference: str, text: str) -> None:
+        """Comments `text` on the issue at `reference`: the URL or number `open_issue`
+        answers, and the first element of each `Inbox.open_issue_bodies()` pair. Not
+        `comment`, which writes on the task's own issue by its task id. Raises
+        `ValueError` when the platform refuses or cannot be reached, as `open_issue`."""
         ...
 
     def rerun_failed_ci(self, reference: str, head: str) -> list[str]:

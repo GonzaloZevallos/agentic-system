@@ -44,8 +44,11 @@ class RunCheck:
     @property
     def timeout_s(self) -> float:
         """The longest one call may take: every declared check could be asked for, and the
-        witness runs before it (ADR-0065's `MCP_TOOL_TIMEOUT` assumption)."""
-        return self.gate.check_timeout_s * (len(self.gate.checks) + 1)
+        witness runs before it (ADR-0065's `MCP_TOOL_TIMEOUT` assumption), plus the one
+        rerun the gate's own allowance gives each declared check (ADR-0066), so the harness
+        never kills a call that is inside one."""
+        checks = len(self.gate.checks)
+        return self.gate.check_timeout_s * (checks + 1 + checks)
 
     def __call__(self, name: str) -> str:
         return run_check.render(self.run(name))

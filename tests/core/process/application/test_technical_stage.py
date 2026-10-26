@@ -919,7 +919,7 @@ def developing(ports, subtasks=("api", "domain")):
 
 async def test_the_presubmit_runs_the_checks_declared_at_the_tasks_base_and_records_them(cfg):
     checks = {"tests": "uv run pytest", "lint": "ruff check ."}
-    commands = MemoryCommands(**{"ruff check .": [CommandResult(1, "E501 line too long")]})
+    commands = MemoryCommands(**{"ruff check .": [CommandResult(1, "E501 line too long")] * 2})
     runner = ScriptedRunner(developer=[delivered()])
     ports = memory_ports(runner, stack=MemoryStack(checks), commands=commands)
     state, checkout = developing(ports)
@@ -932,7 +932,10 @@ async def test_the_presubmit_runs_the_checks_declared_at_the_tasks_base_and_reco
     (reason,) = runner.refused
     assert "(1 of 2)" in reason and "`lint` failed: `ruff check .`" in reason
     assert "E501 line too long" in reason
-    assert commands.ran == [(checkout.path, c) for c in [*checks.values(), *checks.values()]]
+    # The red lint ran once more inside the first gate call (ADR-0066), then both once more.
+    first, second = list(checks.values()), list(checks.values())
+    first.insert(2, "ruff check .")
+    assert commands.ran == [(checkout.path, c) for c in [*first, *second]]
     section = patch["sections"]["Developer: api"]
     assert section.startswith("### Checks\n\nRun by the system on `head")
     assert "| `lint` | `ruff check .` | passed |" in section
@@ -941,7 +944,7 @@ async def test_the_presubmit_runs_the_checks_declared_at_the_tasks_base_and_reco
 
 
 async def test_the_presubmit_refuses_twice_then_lets_the_reviewer_see_the_red(cfg):
-    red = [CommandResult(1, "1 failed")] * 3
+    red = [CommandResult(1, "1 failed")] * 6
     runner = ScriptedRunner(developer=[delivered()])
     ports = memory_ports(runner, commands=MemoryCommands(pytest=red))
     state, _ = developing(ports)

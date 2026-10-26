@@ -855,7 +855,7 @@ def test_acceptance_failed_local_checks_that_stay_red_are_fixed_then_merge(tmp_p
     from tests.fakes import MemoryCommands
 
     ports = dataclasses.replace(
-        _local_world(), commands=MemoryCommands(t=[CommandResult(1, "boom again")])
+        _local_world(), commands=MemoryCommands(t=[CommandResult(1, "boom again")] * 2)
     )
     driver = _Driver(ports, tmp_path, on_resume=_redelivered)
 

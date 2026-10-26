@@ -54,7 +54,7 @@ from agentic.core.process.domain.ci import CiReport, CiUnreadable, Containment
 from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.performance import Run, Scenario
 from agentic.core.process.domain.playbook import Playbook
-from agentic.core.process.domain.presubmit import CheckResult
+from agentic.core.process.domain.presubmit import CheckResult, RerunForm
 from agentic.core.process.domain.reaping import ReapedProcess
 from agentic.core.process.domain.roles import PROMPTS_DIR, Role
 from agentic.core.process.domain.rules import MergeFailure
@@ -283,6 +283,7 @@ class MemoryStack:
         affected_fallback: tuple[str, ...] = (),
         performance: dict[str, Scenario] | None = None,
         delivery_checks: tuple[str, ...] = (),
+        rerun_checks: dict[str, RerunForm] | None = None,
     ) -> None:
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -322,6 +323,8 @@ class MemoryStack:
         self.declared_affected_fallback = affected_fallback
         # Empty is a product with no tiers: every delivery runs all of `checks`.
         self.declared_delivery_checks = delivery_checks
+        # Empty is a product with no failed-tests-only form (ADR-0066), the gate of today.
+        self.declared_rerun_checks = {} if rerun_checks is None else rerun_checks
         # Empty is a product with no performance budget (GH-318), every product until its own
         # file declares one.
         self.declared_performance = {} if performance is None else performance
@@ -360,6 +363,10 @@ class MemoryStack:
     def delivery_checks(self, revision: str) -> tuple[str, ...]:
         # Not tracked in `revisions` either, `witness`'s own reason.
         return self.declared_delivery_checks
+
+    def rerun_checks(self, revision: str) -> dict[str, RerunForm]:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_rerun_checks
 
     def forbidden(self, revision: str) -> list[Forbidden]:
         # Not tracked in `revisions` either, `witness`'s own reason.
@@ -1084,6 +1091,11 @@ class MemoryTracker:
         # every `rerun_failed_ci` and the run links it answers, its `ValueError` text and
         # every reference `close_pull_request` closed.
         self.opened_labels: list[str | None] = []
+        # `(reference, text)` of every `comment_on_issue` that succeeded, and the calls
+        # (0-based, failed ones counted) that raise `ValueError` instead.
+        self.commented_issues: list[tuple[str, str]] = []
+        self.comment_on_issue_calls = 0
+        self.comment_on_issue_fails_on: set[int] = set()
         self.rerun_calls: list[tuple[str, str]] = []
         self.failed_runs: list[str] = []
         self.rerun_error: str | None = None
@@ -1209,6 +1221,16 @@ class MemoryTracker:
         return (
             f"https://github.com/o/r/issues/{self.issue_numbers_from + len(self.opened_issues) - 1}"
         )
+
+    def comment_on_issue(self, reference: str, text: str) -> None:
+        """Records `(reference, text)` of each comment on an issue by its reference.
+        `comment_on_issue_fails_on` lists the calls (0-based, failed ones counted) that
+        raise `ValueError`, `gh`'s own failure shape; a failed call records nothing."""
+        call = self.comment_on_issue_calls
+        self.comment_on_issue_calls += 1
+        if call in self.comment_on_issue_fails_on:
+            raise ValueError("gh issue comment failed: scripted")
+        self.commented_issues.append((reference, text))
 
     def rerun_failed_ci(self, reference: str, head: str) -> list[str]:
         """GH-239: the runs of `head` that failed, rerun. Scripted by `failed_runs`; a bad

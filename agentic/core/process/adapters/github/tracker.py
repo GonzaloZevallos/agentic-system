@@ -264,6 +264,17 @@ class GhTracker:
         finally:
             Path(path).unlink(missing_ok=True)
 
+    def comment_on_issue(self, reference: str, text: str) -> None:
+        # `--body-file`, as `open_issue`: the text carries ids from product output, and
+        # the one limit that can bite is GitHub's own, never argv's (ADR-0034).
+        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as h:
+            h.write(text)
+            path = h.name
+        try:
+            self._gh("issue", "comment", reference, "--body-file", path)
+        finally:
+            Path(path).unlink(missing_ok=True)
+
     def rerun_failed_ci(self, reference: str, head: str) -> list[str]:
         pull_request_number(reference)  # rejected before any `gh` call, as `merge` does
         runs = self._json_list(

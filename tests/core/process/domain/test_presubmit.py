@@ -374,3 +374,38 @@ def test_a_rerun_record_keeps_the_mark_of_the_entries_it_carries():
         {"name": "lint", "passed": True, "reused": True},
         {"name": "tests", "passed": True, "reused": True},
     ]
+
+
+def test_merge_checks_record_passes_a_flake_and_marks_it_and_marks_a_double_red():
+    """The rerun rows of ADR-0066 decide by the last row per check: a flake passes the
+    record, flagged, and a check red twice stays failed with the rerun's tail."""
+    flake_rows = [
+        result("tests", "pytest", False, "boom"),
+        {**result("tests", "pytest", True, "ok"), "rerun": True},
+    ]
+    passed = presubmit.merge_checks_record(
+        head="h",
+        master="m",
+        duration_s=1.0,
+        declared={"tests": "pytest"},
+        results=flake_rows,
+        witness=None,
+    )
+    assert passed["passed"] is True and "failed_step" not in passed
+    assert passed["checks"] == [{"name": "tests", "passed": True, "flake": True}]
+    twice = [
+        result("tests", "pytest", False, "first"),
+        {**result("tests", "pytest", False, "second"), "rerun": True},
+    ]
+    failed = presubmit.merge_checks_record(
+        head="h",
+        master="m",
+        duration_s=1.0,
+        declared={"tests": "pytest"},
+        results=twice,
+        witness=None,
+    )
+    assert failed["passed"] is False and failed["failed_step"] == "checks"
+    assert failed["checks"] == [
+        {"name": "tests", "passed": False, "tail": ["second"], "rerun": True}
+    ]

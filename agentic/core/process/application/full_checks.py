@@ -53,6 +53,7 @@ async def full_checks(state: TaskState, cfg: Configuration, ports: Ports) -> Tas
         witness=ports.stack.witness(base),
         parallel=ports.stack.parallel_checks(base),
         reuse=reuse_of(ports, base),
+        flake_gate="full_checks",
     )
     head = workspace.full_head(task.path)
     started = time.monotonic()
@@ -76,12 +77,15 @@ async def full_checks(state: TaskState, cfg: Configuration, ports: Ports) -> Tas
     if record["passed"]:
         patch: TaskState = {"full_checks": record}
         reused = {entry["name"] for entry in record["results"] if entry.get("reused")}
-        shown = [f"{name} (reused)" if name in reused else name for name in declared]
+        flaked = {entry["name"] for entry in record["results"] if entry.get("flake")}
+        shown = [_shown(name, reused, flaked) for name in declared]
         text = f"Passed on `{head}`: {', '.join(shown)}."
     else:
         patch = rules.full_checks_return(state, record, cfg.max_changes_requested_per_pair)
         text = text or f"Failed on `{head}`: no check output was recorded."
     patch["sections"] = _section(state, record["version"], text)
+    if flakes := gate.flakes():
+        patch["flakes"] = flakes
     return finish(state, patch, ports)
 
 
@@ -103,16 +107,26 @@ def _record(
     return record
 
 
+def _shown(name: str, reused: set[str], flaked: set[str]) -> str:
+    """A check in the passing section: a reused one says so, and a flake says `flake` (red
+    on its first run, green on the one rerun), never plain passed (ADR-0066)."""
+    marks = [mark for mark, held in (("reused", name in reused), ("flake", name in flaked)) if held]
+    return f"{name} ({', '.join(marks)})" if marks else name
+
+
 def _without_output(entries: list[FullCheckEntry]) -> list[FullCheckEntry]:
     """The name and verdict of each check: the record holds no command output (the `tail` the
     merge record keeps is free text); the `Full checks` section is where it is read. A reused
-    row keeps its `reused: true` (ADR-0065)."""
-    return [
-        {"name": entry["name"], "passed": entry["passed"], "reused": True}
-        if entry.get("reused")
-        else {"name": entry["name"], "passed": entry["passed"]}
-        for entry in entries
-    ]
+    row keeps its `reused: true` (ADR-0065) and a flaked one its `flake: true` (ADR-0066)."""
+    kept: list[FullCheckEntry] = []
+    for entry in entries:
+        row: FullCheckEntry = {"name": entry["name"], "passed": entry["passed"]}
+        if entry.get("reused"):
+            row["reused"] = True
+        if entry.get("flake"):
+            row["flake"] = True
+        kept.append(row)
+    return kept
 
 
 def _section(state: TaskState, version: int, text: str) -> dict[str, str]:

@@ -110,6 +110,8 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         affected=plan,
         criteria_base=base,
         reuse=reuse_of(ports, base),
+        rerun_forms=ports.stack.rerun_checks(base),
+        flake_gate="delivery",
     )
     # The `run_check` tool (ADR-0065): every declared check, not only the fast tier, over a
     # presubmit of its own that shares the gate's checkout, witness, budget and `Reuse`, so
@@ -218,6 +220,11 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         # Measurement only (like `subtask_id`): read once by the adapter for
         # `agentic.presubmit.checks`/`.duration`, never persisted.
         patch["presubmit_checks"] = delivery_presubmit.invocations
+    if flakes := delivery_presubmit.flakes():
+        # ADR-0066: the checks that went red and then passed on the gate's one rerun. A
+        # persisted key, merged by `add_flakes` at the fan-in so a re-delivery of the same head
+        # adds nothing; recording it never changes the delivery.
+        patch["flakes"] = flakes
 
     # The system decides the dependency landed, never the model's own word for it
     # (README.md's own rule for this task): a marker scan runs only on a delivery whose

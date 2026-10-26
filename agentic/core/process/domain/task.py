@@ -31,7 +31,7 @@ from typing import (
     get_type_hints,
 )
 
-from .presubmit import CheckResult
+from .presubmit import FAILED_IDS_MAX, CheckResult, FlakeGate
 from .reaping import ReapedProcess
 
 Status = Literal[
@@ -267,6 +267,39 @@ def first[T](current: dict[str, T] | None, update: dict[str, T] | None) -> dict[
     """The earliest write per key wins: a key already there is never overwritten, a new
     key is added. For a value that is a fact about the first time something happened."""
     return {**(update or {}), **(current or {})}
+
+
+class FlakeRecord(TypedDict):
+    """One flake of a task (ADR-0066): a check that went red and then green on its one rerun,
+    at a head, seen by a gate. `tests` are the ids `failed_ids` parsed from the first failure,
+    empty when it named none. No other free text: it feeds a tracker comment."""
+
+    check: str
+    head: str
+    gate: FlakeGate
+    tests: list[str]
+
+
+def _flake_key(record: FlakeRecord) -> tuple[str, str, str]:
+    return (record["check"], record["head"], record["gate"])
+
+
+def add_flakes(existing: list[FlakeRecord], new: list[FlakeRecord]) -> list[FlakeRecord]:
+    """The flakes of `existing` and `new` as one list: one record per `(check, head, gate)`,
+    its `tests` the two sides' ids as a sorted set capped at `FAILED_IDS_MAX` (sorted, because
+    first-seen order would differ with the side that arrives first), the output sorted by key.
+    Idempotent and commutative, so parallel branches that saw the same flake merge to one
+    record, whichever lands first. The only way `flakes` is ever written."""
+    joined: dict[tuple[str, str, str], FlakeRecord] = {}
+    for record in (*existing, *new):
+        key = _flake_key(record)
+        if key not in joined:
+            joined[key] = {**record, "tests": []}
+        known = joined[key]["tests"]
+        known.extend(t for t in record["tests"] if t not in known)
+    for record in joined.values():
+        record["tests"] = sorted(record["tests"])[:FAILED_IDS_MAX]
+    return [joined[key] for key in sorted(joined)]
 
 
 class TaskInput(TypedDict):
@@ -824,6 +857,9 @@ class FullCheckEntry(TypedDict):
     # True when the system took the pass from a stored one instead of running the check
     # (ADR-0065); absent on a check that ran.
     reused: NotRequired[bool]
+    # True when the check was red and green on its one rerun (ADR-0066): a flake passes, and
+    # the record says `flake`, never plain passed. Absent on every other check.
+    flake: NotRequired[bool]
 
 
 class FullChecksRecord(TypedDict):
@@ -1021,6 +1057,10 @@ class TaskState(TaskInput, total=False):
     # docstring): every lead's remark and every consolidation observation, read with
     # `.get("design_items", [])` since a document written before this task has none.
     design_items: Annotated[list[DesignItemRecord], operator.add]
+    # The flakes this task observed (ADR-0066), `add_flakes`: deduplicated on
+    # `(check, head, gate)` so parallel branches merge their observations without repeating
+    # them. Read with `.get("flakes", [])`: a document written before this field has none.
+    flakes: Annotated[list[FlakeRecord], add_flakes]
 
 
 def _reducers() -> dict[str, object]:
@@ -1085,6 +1125,15 @@ def delta(before: TaskState, after: TaskState) -> TaskState:
         elif reducer is first:
             if added := {k: v for k, v in value.items() if k not in old}:
                 patch[key] = added
+        elif reducer is add_flakes:
+            old_tests = {_flake_key(r): r["tests"] for r in old}
+            if grown := [
+                r
+                for r in value
+                if _flake_key(r) not in old_tests
+                or any(t not in old_tests[_flake_key(r)] for t in r["tests"])
+            ]:
+                patch[key] = grown
         elif reducer is merge:
             if changed := {k: v for k, v in value.items() if k not in old or old[k] != v}:
                 patch[key] = changed

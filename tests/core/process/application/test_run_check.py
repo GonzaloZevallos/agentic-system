@@ -148,7 +148,8 @@ def test_a_failed_comparison_of_trees_is_not_recorded_and_never_raises():
 
 def test_the_timeout_of_one_call_covers_every_declared_check_and_the_witness():
     handler, _, _, _ = tool(witness="witness")
-    assert handler.timeout_s == 30.0 * 3
+    # Two checks and the witness, and the one rerun each check may take (ADR-0066).
+    assert handler.timeout_s == 30.0 * (2 + 1 + 2)
 
 
 def gate_over(ports, **kwargs) -> CheckoutPresubmit:

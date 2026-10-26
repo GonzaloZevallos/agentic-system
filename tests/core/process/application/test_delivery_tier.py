@@ -175,7 +175,7 @@ async def test_the_delivery_record_names_the_tier_that_ran(cfg):
 
 
 async def test_a_red_fast_check_still_refuses_the_delivery(cfg):
-    red = [CommandResult(1, "1 failed")] * 3
+    red = [CommandResult(1, "1 failed")] * 6
     runner = ScriptedRunner(developer=[delivered()])
     stack = MemoryStack(checks=CHECKS, delivery_checks=("tests",))
     ports = memory_ports(runner, stack=stack, commands=MemoryCommands(pytest=red))

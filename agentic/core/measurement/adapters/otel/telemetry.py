@@ -40,7 +40,12 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
-from agentic.core.process.domain.presubmit import CheckResult, check_durations, final_results
+from agentic.core.process.domain.presubmit import (
+    CheckResult,
+    check_durations,
+    final_results,
+    outcomes,
+)
 from agentic.core.process.domain.task import FindingRecord, TaskState, delta
 from agentic.core.process.domain.task import RoleRun as RoleRunRecord
 from agentic.shared.stage0 import CHECKOUT
@@ -285,26 +290,29 @@ def _findings_counts(findings: list[FindingRecord]) -> dict[str, int]:
 def _presubmit_arrays(
     invocations: list[list[CheckResult]],
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """`agentic.presubmit.checks` (one `"check/result/final/reused=count"` cell per
+    """`agentic.presubmit.checks` (one `"check/result/final/reused/outcome=count"` cell per
     invocation of the delivery gate that ran the checks; `reused` is the closed boolean
-    label of a row the system took from a stored pass, ADR-0065) and
+    label of a row the system took from a stored pass, ADR-0065, and `outcome` the closed
+    `pass|flake|fail` of the check's one rerun, ADR-0066 -- never a test id) and
     `agentic.presubmit.duration` (one `"check=seconds"` entry per check per invocation,
     unaggregated across invocations since a duration cannot be summed into a count
     without losing the figure a panel would want). A check that ran twice in one
     invocation (an affected-only run and the full rerun, ADR-0046) is its final row's
     status and the sum of its rows' seconds; with one row per check, which is every
     product that declares no affected form, this is what it always was. A reused row is
-    counted but never sampled: a check with only reused rows has no duration entry."""
+    counted but never sampled: a check with only reused rows has no duration entry, and a
+    rerun row (ADR-0066) is never sampled either."""
     last = len(invocations) - 1
     counts: dict[str, int] = {}
     durations: list[str] = []
     for index, results in enumerate(invocations):
         final = index == last
         seconds = check_durations(results)
+        verdicts = outcomes(results)
         for check in final_results(results):
             result = "green" if check["passed"] else "red"
             reused = check.get("reused", False)
-            cell = f"{check['name']}/{result}/{final}/{reused}"
+            cell = f"{check['name']}/{result}/{final}/{reused}/{verdicts[check['name']]}"
             counts[cell] = counts.get(cell, 0) + 1
             if check["name"] in seconds:
                 durations.append(f"{check['name']}={seconds[check['name']]}")

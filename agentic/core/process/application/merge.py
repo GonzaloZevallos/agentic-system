@@ -21,7 +21,7 @@ from agentic.shared.configuration import Configuration
 
 from ..domain import adr_numbers, ci, presubmit, rules
 from ..domain import landing as landing_rules
-from ..domain.task import PullRequest, TaskState
+from ..domain.task import PullRequest, TaskState, add_flakes
 from . import adr_collision, landing_flakes, landing_plan
 from .checkouts import task_base
 from .delivered import files_patch
@@ -175,6 +175,7 @@ def merge_task(
         return MergeResult("stopped", "no_decision")
     # A check that failed on this head, was rerun by the landing and now passes is flaky.
     landing_flakes.file_flakes(ports, task_id, head, landing_flakes.rerun_checks_on(raw, head), log)
+    landing_flakes.file_task_flakes(ports, task_id, raw, log)
     relied = _ci_links(report, declared) if _merges_on_ci(facts) else None
     return _merge(
         task_id,
@@ -291,6 +292,7 @@ def run_checks(
                 witness=ports.stack.witness(base),
                 parallel=ports.stack.parallel_checks(base),
                 reuse=reuse_of(ports, base),
+                flake_gate="merge",
             )
             gate()
     except GitError as exc:
@@ -315,7 +317,10 @@ def run_checks(
     if only is not None and isinstance(previous, Mapping):
         # Only the failed checks ran: the rest stay as the earlier run recorded them.
         record = presubmit.rerun_record(previous, record)
-    ports.documents.record_closure(task_id, {"merge_checks": record})
+    closure: dict[str, object] = {"merge_checks": record}
+    if gate is not None and (flakes := gate.flakes()):
+        closure["flakes"] = add_flakes(raw.get("flakes", []), flakes)
+    ports.documents.record_closure(task_id, closure)
     shown = presubmit.failed_checks_markdown(record, head, neutralise=False)
     for number, line in enumerate(shown.splitlines()):
         log(f"agentic: merge: {task_id}: {line}" if number == 0 else f"    {line}")

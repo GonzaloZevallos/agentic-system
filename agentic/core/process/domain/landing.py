@@ -197,6 +197,10 @@ class LandingSpent:
     # A `sync` already served for its own sha, or without a sha to sync to, reads as
     # `unlandable`; so does an entry written before verdicts existed.
     last_verdict: DiagnosisVerdict | None = None
+    # The recorded `merge_checks` of the current head holds a red check whose last row is the
+    # gate's own rerun (ADR-0066): the failure already repeated, so the landing's `rerun` would
+    # be a third run. `False` for a record written before the gate reran, which keeps `rerun`.
+    checks_rerun_on_head: bool = False
 
     @property
     def unlandable(self) -> bool:
@@ -276,6 +280,8 @@ def landing_step(
         case "checks_failed":
             if facts.failed_step == "conflict":
                 return _sync(step, exhausted, spent, conflicting=True)
+            if spent.checks_rerun_on_head:
+                return pass_("fix", blocking_owners)
             return step("rerun") if spent.reruns_on_head == 0 else pass_("fix", blocking_owners)
         case "merge_conflict":
             return _sync(step, exhausted, spent, conflicting=True)

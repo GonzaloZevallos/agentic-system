@@ -221,7 +221,7 @@ def test_a_really_failing_check_reaches_the_record_and_the_log_with_its_sanitize
     assert doc["merge_checks"]["failed_step"] == "checks"
     # The fixture declares a single check; the tail is a list of lines, tab expanded.
     assert doc["merge_checks"]["checks"] == [
-        {"name": "tests", "passed": False, "tail": ["boom    !"]}
+        {"name": "tests", "passed": False, "tail": ["boom    !"], "rerun": True}
     ]
     assert not any("\x1b" in line for line in doc["merge_checks"]["checks"][0]["tail"])
     assert doc["merge_checks"]["passed"] is False

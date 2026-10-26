@@ -83,6 +83,97 @@ class CheckResult(TypedDict):
     # (ADR-0065). Set by the system on read, never stored and never by the model; absent
     # on a row that ran.
     reused: NotRequired[bool]
+    # True on a row produced by the one rerun of a red check (ADR-0066). Set by the system,
+    # never by the model; never stored in the check-result store; absent on a first run.
+    rerun: NotRequired[bool]
+    # True on a row whose command hit `check_timeout_s`: a fact, so the rerun rule never
+    # reads prose to decide that a timed-out check is not rerun.
+    timed_out: NotRequired[bool]
+
+
+FlakeVerdict = Literal["pass", "flake", "fail"]
+# Which gate ran a check: the Developer's delivery gate, the merge gate (and the landing's
+# slice gate), or `full_checks` (ADR-0066).
+FlakeGate = Literal["delivery", "merge", "full_checks"]
+# The last 64 KB of a check's output is all `failed_ids` reads (pytest's short summary and
+# Playwright's failed list sit at the end), and 50 ids is all it returns: both bound the
+# cost of a product-declared pattern.
+FAILED_IDS_TAIL_BYTES = 65536
+FAILED_IDS_MAX = 50
+
+
+@dataclass(frozen=True)
+class RerunForm:
+    """A product's "failed tests only" form of one check (`rerun_checks`, ADR-0066): the
+    command that reruns just the failed tests, and the regex whose single group names a
+    failed test in the check's output. Validated when the stack is parsed."""
+
+    command: str
+    test_id: str
+
+
+def flake_verdict(first: CheckResult, rerun: CheckResult | None) -> FlakeVerdict:
+    """The one decision on a check at a gate (ADR-0066, invariant): `pass` when it was green
+    the first time, `flake` when it was red and the rerun was green, `fail` otherwise. A
+    timed-out first row is never rerun, so a rerun handed alongside it cannot save it."""
+    if first["passed"]:
+        return "pass"
+    if rerun is not None and rerun["passed"] and not first.get("timed_out", False):
+        return "flake"
+    return "fail"
+
+
+def failed_ids(output: str, pattern: str) -> tuple[str, ...]:
+    """The test ids a failing check's output names: group 1 of `pattern`, over at most the
+    last `FAILED_IDS_TAIL_BYTES` bytes, deduplicated in order, at most `FAILED_IDS_MAX`.
+    The only function that runs a product-declared pattern. A pattern that does not compile
+    names nothing, which is a full rerun: the safe side."""
+    tail = output[-FAILED_IDS_TAIL_BYTES:].encode("utf-8", "replace")[-FAILED_IDS_TAIL_BYTES:]
+    text = tail.decode("utf-8", "ignore")
+    try:
+        matches = re.finditer(pattern, text)
+        ids: list[str] = []
+        for match in matches:
+            found = match.group(1)
+            if found and found not in ids:
+                ids.append(found)
+                if len(ids) == FAILED_IDS_MAX:
+                    break
+    except (re.error, IndexError):
+        return ()
+    return tuple(ids)
+
+
+def rerun_command(
+    full_command: str, first: CheckResult, form: RerunForm | None, gate: FlakeGate
+) -> str | None:
+    """The command that reruns a red check, or None when it is not rerun at all: a green
+    row, a `timed_out` one and a rerun row never are. The product's form runs only at the
+    delivery gate, only when it exists and `failed_ids` found at least one id in the
+    failure; every other case reruns the full command (ADR-0066)."""
+    if first["passed"] or first.get("timed_out", False) or first.get("rerun", False):
+        return None
+    if gate == "delivery" and form is not None and failed_ids(first["output"], form.test_id):
+        return form.command
+    return full_command
+
+
+def outcomes(rows: Sequence[CheckResult]) -> dict[str, FlakeVerdict]:
+    """The verdict of each check in `rows`, in first-seen order: a check whose last row is
+    its rerun is judged by `flake_verdict(the row before it, the rerun)`; every other check
+    by its last row alone. The only reader that turns rows into `pass | flake | fail`, so
+    the Markdown, the record and the signal cannot disagree (ADR-0066)."""
+    grouped: dict[str, list[CheckResult]] = {}
+    for row in rows:
+        grouped.setdefault(row["name"], []).append(row)
+    verdicts: dict[str, FlakeVerdict] = {}
+    for name, group in grouped.items():
+        last = group[-1]
+        if last.get("rerun", False) and len(group) > 1:
+            verdicts[name] = flake_verdict(group[-2], last)
+        else:
+            verdicts[name] = flake_verdict(last, None)
+    return verdicts
 
 
 @dataclass(frozen=True)
@@ -179,10 +270,12 @@ def final_results(rows: Sequence[CheckResult]) -> list[CheckResult]:
 def check_durations(rows: Sequence[CheckResult]) -> dict[str, float]:
     """Seconds spent per check name, summed over its rows; a row without one counts zero.
     A reused row never ran, so it adds nothing and a check with only reused rows has no
-    entry (ADR-0065): its stored duration is another run's, not a sample of this one."""
+    entry (ADR-0065): its stored duration is another run's, not a sample of this one. A
+    rerun row (ADR-0066) is a second run of the same check, not a sample of the first: it
+    adds nothing either."""
     totals: dict[str, float] = {}
     for row in rows:
-        if row.get("reused"):
+        if row.get("reused") or row.get("rerun"):
             continue
         totals[row["name"]] = totals.get(row["name"], 0.0) + row.get("duration_s", 0.0)
     return totals
@@ -277,9 +370,14 @@ def checks_markdown(
         header = "| Check | Command | Mode | Result |\n|---|---|---|---|\n"
     else:
         header = "| Check | Command | Result |\n|---|---|---|\n"
+    verdicts = outcomes(results)
     rows = []
     for r in results:
         outcome = "passed" if r["passed"] else "**failed**"
+        if r.get("rerun"):
+            # The one rerun of a red check (ADR-0066): green is a flake, never plain passed.
+            outcome = "flake" if verdicts[r["name"]] == "flake" else "**failed**"
+            outcome += " (rerun)"
         if r.get("reused"):
             outcome += " (reused)"
         cells = [f"`{r['name']}`", f"`{r['command']}`"]
@@ -305,6 +403,13 @@ def checks_markdown(
         )
     if regressions:
         parts.append(_regressions_text(regressions))
+    flaked = [name for name, verdict in verdicts.items() if verdict == "flake"]
+    if flaked:
+        names = ", ".join(f"`{name}`" for name in flaked)
+        parts.append(
+            f"Flake: {names} failed and then passed on the system's one rerun; the delivery "
+            "passes and the flake is recorded (ADR-0066)."
+        )
     for r in results:
         if not r["passed"]:
             parts.append(f"`{r['name']}`, last lines:\n\n```text\n{tail(r['output'])}\n```")
@@ -370,27 +475,38 @@ def merge_checks_record(
     which) never passed. `setup_failure` is the failing setup step's name and what it
     said. The tails are the only text taken from a command: sanitized and capped here,
     displayed and never parsed."""
+    # A check decides by its last row: a flake's first row is red and its rerun green.
+    decided = final_results(results or [])
     passed = (
         failed_step not in _EARLY_STEPS
         and bool(declared)
         and results is not None
-        and all(result["passed"] for result in results)
+        and all(result["passed"] for result in decided)
         and (witness is None or witness["passed"])
     )
-    by_name = {result["name"]: result for result in results or []}
+    by_name = {result["name"]: result for result in decided}
+    verdicts = outcomes(results or [])
     entries: list[dict[str, object]] = []
     for name in declared:
         found = by_name.get(name)
         if found is None:
             entries.append({"name": name, "passed": False})
         elif found["passed"]:
-            entries.append(
-                {"name": name, "passed": True, "reused": True}
-                if found.get("reused")
-                else {"name": name, "passed": True}
-            )
+            entry: dict[str, object] = {"name": name, "passed": True}
+            if found.get("reused"):
+                entry["reused"] = True
+            if verdicts[name] == "flake":
+                entry["flake"] = True
+            entries.append(entry)
         else:
-            entries.append({"name": name, "passed": False, "tail": _tail_of(found["output"])})
+            failed: dict[str, object] = {
+                "name": name,
+                "passed": False,
+                "tail": _tail_of(found["output"]),
+            }
+            if found.get("rerun"):
+                failed["rerun"] = True
+            entries.append(failed)
     if witness is not None and not witness["passed"]:
         entries.append(
             {"name": _WITNESS_ENTRY, "passed": False, "tail": _tail_of(witness["output"])}
@@ -413,7 +529,7 @@ def merge_checks_record(
 def _derived_step(declared: Mapping[str, str], results: Sequence[CheckResult] | None) -> FailedStep:
     if not declared:
         return "no_checks"
-    if results is None or not all(result["passed"] for result in results):
+    if results is None or not all(result["passed"] for result in final_results(results)):
         return "checks"
     return "witness"
 
