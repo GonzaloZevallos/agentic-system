@@ -474,3 +474,35 @@ def test_affected_is_keyword_only_so_double_star_is_the_only_route_for_a_plan():
         "`affected` must stay keyword-only: that is what makes `**` the only way to pass a "
         "plan without writing `affected=`, which the guard refuses"
     )
+
+
+def test_a_merge_gate_on_a_tree_a_developer_gate_already_passed_reuses_that_pass():
+    """ADR-0065: the merged tree equal to a checked one runs nothing; any other tree runs."""
+    from agentic.core.process.application.presubmit import CheckoutPresubmit, reuse_of
+    from tests.fakes import MemoryCheckResults
+
+    store, commands = MemoryCheckResults(), MemoryCommands()
+    ports = memory_ports(
+        tracker=MemoryTracker(),
+        stack=MemoryStack(checks=CHECKS),
+        commands=commands,
+        check_results=store,
+    )
+    cfg = Configuration(product_dir=ports.workspace.ROOT)
+    merged = ports.workspace.checkout_path(merge._name("GH-7"))
+    # The Developer's gate, in its own checkout, on the same tree the merge will build.
+    developer = ports.workspace.ROOT / "GH-7.api"
+    ports.workspace.trees[developer] = "tree:integrated"
+    ports.workspace.moved.add(developer)
+    ports.workspace.record_setup_tree(developer)
+    reuse = reuse_of(ports, "base")
+    CheckoutPresubmit(ports, developer, "base", dict(CHECKS), cfg.check_timeout_s, reuse=reuse)()
+    assert len(commands.ran) == 2
+    ports.documents.save({"id": "GH-7", "status": "ready_for_review"})
+    ports.workspace.trees[merged] = "tree:integrated"
+    merge.run_checks("GH-7", {}, HEAD, MASTER, "base", cfg, ports, None, lambda _: None)
+    assert len(commands.ran) == 2  # the merge gate ran nothing
+    assert ports.documents.load("GH-7")["merge_checks"]["passed"] is True
+    ports.workspace.trees[merged] = "tree:other"  # any other merged tree runs everything
+    merge.run_checks("GH-7", {}, HEAD, MASTER, "base", cfg, ports, None, lambda _: None)
+    assert len(commands.ran) == 4

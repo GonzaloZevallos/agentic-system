@@ -26,7 +26,7 @@ from ..domain.roles import DEVELOPER_INTEGRATOR
 from ..domain.task import WAITING_ON_HUMAN, FullCheckEntry, FullChecksRecord, TaskState
 from .checkouts import SetupFailed, task_base, task_checkout
 from .ports import Ports
-from .presubmit import CheckoutPresubmit
+from .presubmit import CheckoutPresubmit, reuse_of
 from .run_role import finish
 
 SECTION = "Full checks"
@@ -52,6 +52,7 @@ async def full_checks(state: TaskState, cfg: Configuration, ports: Ports) -> Tas
         cfg.check_timeout_s,
         witness=ports.stack.witness(base),
         parallel=ports.stack.parallel_checks(base),
+        reuse=reuse_of(ports, base),
     )
     head = workspace.full_head(task.path)
     started = time.monotonic()

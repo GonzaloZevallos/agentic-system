@@ -68,7 +68,9 @@ def test_a_changed_tree_runs_again():
 def test_a_changed_command_runs_again():
     commands, store = MemoryCommands(), MemoryCheckResults()
     assert build(commands=commands, store=store)() is None
-    assert build(commands=commands, store=store, checks={"tests": "pytest -x"}, path=OTHER)() is None
+    assert (
+        build(commands=commands, store=store, checks={"tests": "pytest -x"}, path=OTHER)() is None
+    )
     assert ran(commands) == ["pytest", "pytest -x"]
 
 

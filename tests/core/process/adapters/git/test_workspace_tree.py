@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from agentic.core.process.adapters.git import GitWorkspace
+from agentic.core.process.application.ports import GitError
 from agentic.shared.configuration import Configuration
 
 IDENTITY = Configuration(product_dir=Path("/tmp/p")).git_identity
@@ -92,3 +93,16 @@ def test_recording_where_git_cannot_answer_does_not_raise_and_leaves_no_record(t
     elsewhere.mkdir()
     ws.record_setup_tree(elsewhere)
     assert ws.setup_tree(elsewhere) is None
+
+
+def test_tree_changes_names_what_differs_between_two_trees_and_refuses_an_unknown_one(product):
+    ws = GitWorkspace(product, IDENTITY)
+    old = ws.tree(product)
+    (product / "seed.txt").write_text("v1\n")
+    (product / "pkg").mkdir()
+    (product / "pkg" / "uv.lock").write_text("lock\n")
+    ws.commit_all(product, "v1")
+    assert set(ws.tree_changes(product, old, ws.tree(product))) == {"seed.txt", "pkg/uv.lock"}
+    assert ws.tree_changes(product, old, old) == ()
+    with pytest.raises(GitError):
+        ws.tree_changes(product, old, "0" * 40)

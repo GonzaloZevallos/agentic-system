@@ -22,7 +22,7 @@ from ..domain.task import INTEGRATION, TaskState
 from .checkouts import SetupFailed, subtask_checkout, task_base
 from .coverage_guard import InvariantCoverageGuard
 from .ports import Ports
-from .presubmit import CheckoutPresubmit, declared_checks, fast_tier
+from .presubmit import CheckoutPresubmit, declared_checks, fast_tier, reuse_of
 from .run_role import finish, run_role, with_context
 
 
@@ -107,6 +107,7 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         parallel=ports.stack.parallel_checks(task_base(state, ports)),
         affected=plan,
         criteria_base=base,
+        reuse=reuse_of(ports, base),
     )
     # The product's own declared suppression cage (issue #38), at the task's base like
     # every other key here, never the branch's own: keyword-only through `run_role`, so
