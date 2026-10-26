@@ -160,9 +160,13 @@ def _checks_pass(
     if gate is not None and (flakes := gate.flakes()):
         # ADR-0066: a flake on the slice is recorded like the merge gate's, and never changes
         # the verdict; the `merge_checks` record itself stays the main pull request's.
-        ports.documents.record_closure(
-            context.task_id, {"flakes": add_flakes(raw.get("flakes", []), flakes)}
-        )
+        try:
+            ports.documents.record_closure(
+                context.task_id, {"flakes": add_flakes(raw.get("flakes", []), flakes)}
+            )
+        except (ValueError, OSError) as exc:
+            # Invariant 8: recording a flake never refuses or delays a slice that passed.
+            context.log(f"agentic: land: {context.task_id}: flake not recorded: {exc}")
     return record.get("passed") is True
 
 

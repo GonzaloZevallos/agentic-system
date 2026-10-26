@@ -331,3 +331,58 @@ def test_a_slice_that_leaves_an_over_cap_document_as_it_was_still_merges():
     _land(ports)
 
     assert ports.tracker.merge_calls == [(SLICE_URL, SLICE_HEAD)]
+
+
+def _flaky_slice_world():
+    """The slice world with one declared check that goes red, then green on its one rerun."""
+    from tests.fakes import CommandResult, MemoryCommands, MemoryStack
+
+    ports = _world(frozenset({"integration.py"}))
+    red = CommandResult(1, "FAILED tests/a.py::one\n")
+    return dataclasses.replace(
+        ports,
+        stack=MemoryStack(checks={"tests": "run tests"}),
+        commands=MemoryCommands(**{"run tests": [red, CommandResult(0, "ok")]}),
+    )
+
+
+def test_a_flake_at_the_slice_gate_is_recorded_and_the_slice_still_lands():
+    ports = _flaky_slice_world()
+
+    _land(ports, FakeLauncher())
+
+    assert ports.tracker.merge_calls == [(SLICE_URL, SLICE_HEAD)]
+    [record] = _doc(ports)["flakes"]
+    assert (record["check"], record["gate"], record["tests"]) == ("tests", "merge", [])
+    assert [c for _, c in ports.commands.ran].count("run tests") == 2
+
+
+def test_a_flake_record_that_cannot_be_written_never_refuses_the_slice():
+    """Invariant 8: a document that refuses the flake write is logged and skipped."""
+    ports = _flaky_slice_world()
+    real = ports.documents.record_closure
+
+    def refusing(task_id, changes):
+        if "flakes" in changes:
+            raise OSError("disk full")
+        real(task_id, changes)
+
+    ports.documents.record_closure = refusing  # type: ignore[method-assign]
+    lines: list[str] = []
+
+    landing.land(
+        "GH-5",
+        _cfg(Path("/nonexistent")),
+        ports,
+        _HeldLocks(),
+        Upstream("origin/master", MASTER, None),
+        frozenset(),
+        lines.append,
+        clock=lambda: NOW,
+        launcher=FakeLauncher(),
+        resume=lambda number: 777,
+    )
+
+    assert ports.tracker.merge_calls == [(SLICE_URL, SLICE_HEAD)]
+    assert any("flake not recorded: disk full" in line for line in lines)
+    assert "flakes" not in _doc(ports)

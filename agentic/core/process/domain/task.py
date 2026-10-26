@@ -857,6 +857,9 @@ class FullCheckEntry(TypedDict):
     # True when the system took the pass from a stored one instead of running the check
     # (ADR-0065); absent on a check that ran.
     reused: NotRequired[bool]
+    # True when the check was red and green on its one rerun (ADR-0066): a flake passes, and
+    # the record says `flake`, never plain passed. Absent on every other check.
+    flake: NotRequired[bool]
 
 
 class FullChecksRecord(TypedDict):

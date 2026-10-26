@@ -140,6 +140,10 @@ async def test_a_flake_in_full_checks_passes_and_is_recorded(cfg):
 
     patch = await full_checks(state_of(), CFG, ports)
     assert patch["full_checks"]["passed"] is True
+    # Invariant 2: the record and the section say flake, never plain passed.
+    [entry] = [e for e in patch["full_checks"]["results"] if e["name"] == "tests"]
+    assert entry.get("flake") is True
+    assert "tests (flake)" in patch["sections"]["Full checks"]
     [record] = patch["flakes"]
     assert (record["check"], record["gate"], record["tests"]) == ("tests", "full_checks", [])
     # The full command again, never the form: only a full run covers the suite.
