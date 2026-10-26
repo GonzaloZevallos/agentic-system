@@ -11,7 +11,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
+from typing import Any, Literal, NamedTuple, Protocol, assert_never, cast, get_args
 
 from . import adr_numbers, ci, presubmit
 from .copy import copy_location_parts
@@ -45,6 +45,7 @@ from .roles import (
     Interview,
     Pair,
     Role,
+    pair_for,
 )
 from .schemas import FitDecision, TaskType
 from .task import (
@@ -65,6 +66,7 @@ from .task import (
     FindingCategory,
     FindingRecord,
     FinishedPatch,
+    FullChecksRecord,
     LapsePauseEntry,
     MergeOutcome,
     PartRecord,
@@ -191,6 +193,10 @@ def _record(subtask_id: str, version: int, item: dict[str, Any]) -> FindingRecor
     return record
 
 
+# Where a `full_checks` finding row sits: `full_checks:<check>`, never a file of the diff.
+FULL_CHECKS_PREFIX = "full_checks:"
+
+
 def findings_rows(state: TaskState) -> list[FindingRecord]:
     """The table: one row per `location` + `claim`, in the order it was first raised, and
     `subtask` on a row names every subtask whose review raised it.
@@ -216,6 +222,7 @@ def findings_rows(state: TaskState) -> list[FindingRecord]:
     settled = {_norm(location) for location in state.get("settled_findings", [])}
     approved = _approved_versions(state)
     qa_approved = qa_approved_version(state)
+    green = full_checks_green_version(state)
     rows: dict[tuple[str, str], FindingRecord] = {}
     open_records: dict[tuple[str, str], list[FindingRecord]] = {}
     for record in state.get("findings", []):
@@ -232,7 +239,9 @@ def findings_rows(state: TaskState) -> list[FindingRecord]:
         and (
             _norm(row["location"]) in settled
             or all(
-                _covered(record, key, approved) or qa_settles(record, qa_approved)
+                _covered(record, key, approved)
+                or qa_settles(record, qa_approved)
+                or full_checks_settles(record, green)
                 for record in open_records[key]
             )
         )
@@ -265,6 +274,25 @@ def qa_settles(record: FindingRecord, approved_version: int) -> bool:
     return (
         _norm(record["location"]) == _norm(QA_PERFORMANCE.name)
         and record["version"] < approved_version
+    )
+
+
+def full_checks_green_version(state: TaskState) -> int:
+    """The version of the latest `full_checks` run when it passed, `0` otherwise (no run, or
+    the latest one red). The only reader of that fact for the fold: `full_checks_settles` is
+    the writer's one decision."""
+    recorded = state.get("full_checks")
+    return recorded["version"] if recorded and recorded["passed"] else 0
+
+
+def full_checks_settles(record: FindingRecord, green_version: int) -> bool:
+    """The named fold writer of the full-tier run (GH-358, ADR-0015 addendum): a passed run
+    settles every record at a `full_checks:<check>` location from a version below its own.
+    Only a green run does -- a review approval never closes one -- and a later red run
+    writes records at a higher version and drops `green_version` back to `0`, so the rows
+    reopen. `settled_on_approval` does not know these rows and is unchanged."""
+    return _norm(record["location"]).startswith(FULL_CHECKS_PREFIX) and (
+        record["version"] < green_version
     )
 
 
@@ -1243,6 +1271,9 @@ def developer_section(subtask_id: str) -> str:
 
 
 REVIEW_PREFIX = f"{TECH_LEAD.name}: review "
+# The system node that runs the whole suite once on the integrated head (GH-358): the section
+# it writes, and the one a Developer returned by it reads its delta from.
+FULL_CHECKS = "Full checks"
 
 
 def review_section(subtask_id: str) -> str:
@@ -1266,6 +1297,8 @@ def return_section(state: TaskState, subtask_id: str) -> str:
             return PM_FINAL.name
         case "qa_performance":
             return QA_PERFORMANCE.name
+        case "full_checks":
+            return FULL_CHECKS
         case _:
             assert_never(returned_by)
 
@@ -1911,6 +1944,18 @@ def qa_performance_due(state: TaskState) -> bool:
 _QA_PERFORMANCE_SETTLES = frozenset(("approved", "unverified"))
 
 
+def full_checks_due(state: TaskState) -> bool:
+    """Whether the whole suite still has to run once on the integrated head (GH-358): the
+    product declares tiers (the fan-in stamped `task_head`, which a product without
+    `delivery_checks` never has) and there is no passed record of that head. A head the
+    task moved since -- a return, a landing pass -- is a head nobody ran the suite on."""
+    head = state.get("task_head")
+    if not head:
+        return False
+    recorded = state.get("full_checks")
+    return not (recorded and recorded["passed"] and same_commit(recorded["head"], head))
+
+
 def after_integrate(state: TaskState) -> str | None:
     if state.get("escalated"):
         return None
@@ -1918,6 +1963,8 @@ def after_integrate(state: TaskState) -> str | None:
         return "pipeline"
     if not all_approved(state):
         return None
+    if full_checks_due(state):
+        return "full_checks"
     if copy_review_due(state):
         return "copy_review"
     if final_validation_due(state):
@@ -1942,6 +1989,95 @@ def after_qa_performance(state: TaskState) -> str | None:
     return None if state.get("escalated") else "integrate"
 
 
+def _failed_names(record: FullChecksRecord) -> list[str]:
+    """The checks a run failed, in the order recorded; the step it stopped at when it failed
+    before any check ran (a worktree, a setup), and `checks` when it says nothing else."""
+    names = [entry["name"] for entry in record["results"] if not entry["passed"]]
+    return names or [record.get("failed_step") or "checks"]
+
+
+def full_checks_return(state: TaskState, record: FullChecksRecord, limit: int) -> TaskState:
+    """The patch of a red `full_checks` run (GH-358), modelled on QA Performance's return:
+    the integration (the single subtask when there is none) reopens with `returned_by:
+    "full_checks"`, one blocking `plan` row per failed check at `full_checks:<check>` with a
+    fixed claim, and the return counts on `pair_for(target)`; at its limit the same patch
+    escalates as a pair at its limit. The record travels with it, so the state and the
+    document hold the run the rows came from."""
+    subtasks = state.get("subtasks", {})
+    target = INTEGRATION if INTEGRATION in subtasks else next(iter(subtasks))
+    names = _failed_names(record)
+    short = record["head"][:7]
+    reason = f"full_checks failed on the integrated head {short}: {', '.join(names)}"
+    patch: TaskState = {
+        "full_checks": record,
+        "subtasks": {
+            target: {
+                **subtasks[target],
+                "status": "returned",
+                "reason": reason,
+                "returned_by": "full_checks",
+            }
+        },
+        "findings": [
+            {
+                "subtask": target,
+                "version": record["version"],
+                "location": f"{FULL_CHECKS_PREFIX}{name}",
+                "claim": f"{name} failed on the integrated head {short}",
+                "severity": "blocking",
+                "scope": "plan",
+                "category": "process-suite-red",
+                "status": "open",
+            }
+            for name in names
+        ],
+    }
+    pair = pair_for(target)
+    if remaining_changes(state, pair, limit) > 0:
+        patch["changes_requested"] = record_return(state, pair)
+        patch["change_history"] = [change_entry(pair, "process-suite-red", reason)]
+    else:
+        stopped = logged({**escalation("returns", limit_reached(pair, limit, reason))})
+        patch = cast(TaskState, {**patch, **stopped, "status": WAITING_ON_HUMAN})
+    return patch
+
+
+def full_checks_cover(
+    record: FullChecksRecord | None, differs: bool
+) -> Literal["ok", "missing", "stale"]:
+    """What `deliver` may do for a tiered product (GH-358): `missing` when no passed record
+    exists, `stale` when one does but its head differs from HEAD in more than the task's own
+    document (`differs`), `ok` otherwise. Only `ok` pushes."""
+    if record is None or not record["passed"]:
+        return "missing"
+    return "stale" if differs else "ok"
+
+
+def full_checks_heal(
+    state: TaskState, head: str, verdict: Literal["missing", "stale"]
+) -> TaskState:
+    """The patch of a `deliver` refused for want of a covering record (GH-358): the first
+    refusal on `head` stamps it as the task's head and as healed, and the fan-in runs the
+    suite on it (`after_deliver`); a second refusal on the same head escalates with the
+    `system_delivery` class, so the task can never loop silently. The stale record stays:
+    `full_checks_due` compares heads, and a patch cannot drop a key."""
+    if same_commit(state.get("full_checks_healed"), head):
+        reason = (
+            f"deliver refused twice to push {head[:7]}: its full_checks record is {verdict}, "
+            "and running the suite again on that head did not cover it. Nothing was pushed."
+        )
+        stopped = logged({**escalation("system_delivery", reason)})
+        return cast(TaskState, {**stopped, "status": WAITING_ON_HUMAN})
+    return {"task_head": head, "full_checks_healed": head}
+
+
+def after_full_checks(state: TaskState) -> str | None:
+    """Always back to the fan-in, like `after_qa_performance`: on a green run
+    `full_checks_due` now reads `False` and `after_integrate` goes on; on a red one the
+    reopened subtask is what `dispatched_subtasks` picks up."""
+    return None if state.get("escalated") else "integrate"
+
+
 def after_copy_review(state: TaskState) -> str | None:
     """Always back to the fan-in, like `after_final_validation`: the review returns nothing,
     so `after_integrate` reads the same state and goes on to the next step or reopens the
@@ -1950,7 +2086,16 @@ def after_copy_review(state: TaskState) -> str | None:
 
 
 def after_deliver(state: TaskState) -> str | None:
-    return None
+    """Back to the fan-in only when `deliver` refused to push for lack of a passed full run
+    and healed (`full_checks_heal` wrote `full_checks_healed` for the head the suite is
+    still due on); every other end of `deliver` is the end of the run, as it always was."""
+    if state.get("escalated") or not full_checks_due(state):
+        return None
+    return (
+        "integrate"
+        if same_commit(state.get("full_checks_healed"), state.get("task_head"))
+        else None
+    )
 
 
 def after_discard(state: TaskState) -> str | None:
