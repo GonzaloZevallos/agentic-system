@@ -158,6 +158,24 @@ def rerun_command(
     return full_command
 
 
+def outcomes(rows: Sequence[CheckResult]) -> dict[str, FlakeVerdict]:
+    """The verdict of each check in `rows`, in first-seen order: a check whose last row is
+    its rerun is judged by `flake_verdict(the row before it, the rerun)`; every other check
+    by its last row alone. The only reader that turns rows into `pass | flake | fail`, so
+    the Markdown, the record and the signal cannot disagree (ADR-0066)."""
+    grouped: dict[str, list[CheckResult]] = {}
+    for row in rows:
+        grouped.setdefault(row["name"], []).append(row)
+    verdicts: dict[str, FlakeVerdict] = {}
+    for name, group in grouped.items():
+        last = group[-1]
+        if last.get("rerun", False) and len(group) > 1:
+            verdicts[name] = flake_verdict(group[-2], last)
+        else:
+            verdicts[name] = flake_verdict(last, None)
+    return verdicts
+
+
 @dataclass(frozen=True)
 class AffectedPlan:
     """The affected-only forms a product declares, with the base they are measured
@@ -252,10 +270,12 @@ def final_results(rows: Sequence[CheckResult]) -> list[CheckResult]:
 def check_durations(rows: Sequence[CheckResult]) -> dict[str, float]:
     """Seconds spent per check name, summed over its rows; a row without one counts zero.
     A reused row never ran, so it adds nothing and a check with only reused rows has no
-    entry (ADR-0065): its stored duration is another run's, not a sample of this one."""
+    entry (ADR-0065): its stored duration is another run's, not a sample of this one. A
+    rerun row (ADR-0066) is a second run of the same check, not a sample of the first: it
+    adds nothing either."""
     totals: dict[str, float] = {}
     for row in rows:
-        if row.get("reused"):
+        if row.get("reused") or row.get("rerun"):
             continue
         totals[row["name"]] = totals.get(row["name"], 0.0) + row.get("duration_s", 0.0)
     return totals
@@ -350,9 +370,14 @@ def checks_markdown(
         header = "| Check | Command | Mode | Result |\n|---|---|---|---|\n"
     else:
         header = "| Check | Command | Result |\n|---|---|---|\n"
+    verdicts = outcomes(results)
     rows = []
     for r in results:
         outcome = "passed" if r["passed"] else "**failed**"
+        if r.get("rerun"):
+            # The one rerun of a red check (ADR-0066): green is a flake, never plain passed.
+            outcome = "flake" if verdicts[r["name"]] == "flake" else "**failed**"
+            outcome += " (rerun)"
         if r.get("reused"):
             outcome += " (reused)"
         cells = [f"`{r['name']}`", f"`{r['command']}`"]
@@ -378,6 +403,13 @@ def checks_markdown(
         )
     if regressions:
         parts.append(_regressions_text(regressions))
+    flaked = [name for name, verdict in verdicts.items() if verdict == "flake"]
+    if flaked:
+        names = ", ".join(f"`{name}`" for name in flaked)
+        parts.append(
+            f"Flake: {names} failed and then passed on the system's one rerun; the delivery "
+            "passes and the flake is recorded (ADR-0066)."
+        )
     for r in results:
         if not r["passed"]:
             parts.append(f"`{r['name']}`, last lines:\n\n```text\n{tail(r['output'])}\n```")
@@ -443,27 +475,38 @@ def merge_checks_record(
     which) never passed. `setup_failure` is the failing setup step's name and what it
     said. The tails are the only text taken from a command: sanitized and capped here,
     displayed and never parsed."""
+    # A check decides by its last row: a flake's first row is red and its rerun green.
+    decided = final_results(results or [])
     passed = (
         failed_step not in _EARLY_STEPS
         and bool(declared)
         and results is not None
-        and all(result["passed"] for result in results)
+        and all(result["passed"] for result in decided)
         and (witness is None or witness["passed"])
     )
-    by_name = {result["name"]: result for result in results or []}
+    by_name = {result["name"]: result for result in decided}
+    verdicts = outcomes(results or [])
     entries: list[dict[str, object]] = []
     for name in declared:
         found = by_name.get(name)
         if found is None:
             entries.append({"name": name, "passed": False})
         elif found["passed"]:
-            entries.append(
-                {"name": name, "passed": True, "reused": True}
-                if found.get("reused")
-                else {"name": name, "passed": True}
-            )
+            entry: dict[str, object] = {"name": name, "passed": True}
+            if found.get("reused"):
+                entry["reused"] = True
+            if verdicts[name] == "flake":
+                entry["flake"] = True
+            entries.append(entry)
         else:
-            entries.append({"name": name, "passed": False, "tail": _tail_of(found["output"])})
+            failed: dict[str, object] = {
+                "name": name,
+                "passed": False,
+                "tail": _tail_of(found["output"]),
+            }
+            if found.get("rerun"):
+                failed["rerun"] = True
+            entries.append(failed)
     if witness is not None and not witness["passed"]:
         entries.append(
             {"name": _WITNESS_ENTRY, "passed": False, "tail": _tail_of(witness["output"])}
@@ -486,7 +529,7 @@ def merge_checks_record(
 def _derived_step(declared: Mapping[str, str], results: Sequence[CheckResult] | None) -> FailedStep:
     if not declared:
         return "no_checks"
-    if results is None or not all(result["passed"] for result in results):
+    if results is None or not all(result["passed"] for result in final_results(results)):
         return "checks"
     return "witness"
 

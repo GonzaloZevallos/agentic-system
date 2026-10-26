@@ -106,11 +106,12 @@ def test_serial_with_the_same_fake_never_overlaps():
 
 
 def test_a_failing_check_still_refuses_in_parallel_mode():
-    commands = MemoryCommands(**{"ruff check .": [CommandResult(1, "E501 too long")]})
+    commands = MemoryCommands(**{"ruff check .": [CommandResult(1, "E501 too long")] * 2})
     gate_ = gate(commands, parallel=True)
     reason = gate_()
     assert reason is not None and "`lint` failed" in reason and "E501 too long" in reason
-    assert [c["passed"] for c in gate_.results or []] == [True, False, True]
+    # The red check's rerun row sits right after it, and decides.
+    assert [c["passed"] for c in gate_.results or []] == [True, False, False, True]
     assert gate_.refusals == 1
 
 
@@ -152,10 +153,10 @@ def test_a_timed_out_check_does_not_stop_the_others_results():
 @pytest.mark.parametrize(
     ("parallel", "witness", "expected"),
     [
-        (False, None, 90.0),  # today's formula: one budget per check
-        (False, "echo w", 120.0),
-        (True, None, 30.0),  # concurrent: the slowest check bounds the call
-        (True, "echo w", 60.0),  # plus the witness, which runs first and alone
+        (False, None, 180.0),  # one budget per check, and one more for its possible rerun
+        (False, "echo w", 210.0),
+        (True, None, 60.0),  # concurrent: the slowest check and its rerun bound the call
+        (True, "echo w", 90.0),  # plus the witness, which runs first and alone
     ],
 )
 def test_timeout_s_per_mode_with_and_without_a_witness(parallel, witness, expected):
@@ -250,8 +251,9 @@ def test_the_real_shell_gate_runs_quick_checks_in_declared_order_in_both_modes(c
     reason = gate_()
     assert reason is not None and "`third` failed" in reason
     results = gate_.results or []
-    assert [c["name"] for c in results] == ["first", "second", "third"]
-    assert [c["passed"] for c in results] == [True, True, False]
+    # `third` is red, so it is run once more right after itself (ADR-0066).
+    assert [c["name"] for c in results] == ["first", "second", "third", "third"]
+    assert [c["passed"] for c in results] == [True, True, False, False]
     assert "one" in results[0]["output"] and "two" in results[1]["output"]
     assert results[0]["duration_s"] >= 0.2
 

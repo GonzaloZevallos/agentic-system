@@ -869,7 +869,7 @@ def test_presubmit_checks_leave_one_array_entry_per_invocation_only_the_last_fin
         run.finish({"presubmit_checks": invocations, "cost_usd": 0.3})
     span = spans.get_finished_spans()[-1]
     checks = span.attributes["agentic.presubmit.checks"]
-    assert sorted(checks) == ["tests/green/True/False=1", "tests/red/False/False=2"]
+    assert sorted(checks) == ["tests/green/True/False/pass=1", "tests/red/False/False/fail=2"]
     assert sorted(span.attributes["agentic.presubmit.duration"]) == [
         "tests=0.9",
         "tests=1.0",
@@ -891,8 +891,8 @@ def test_a_check_with_two_rows_counts_its_final_status_and_sums_its_duration(spa
         run.finish({"presubmit_checks": invocations, "cost_usd": 0.3})
     span = spans.get_finished_spans()[-1]
     assert sorted(span.attributes["agentic.presubmit.checks"]) == [
-        "lint/green/True/False=1",
-        "tests/green/True/False=1",
+        "lint/green/True/False/pass=1",
+        "tests/green/True/False/pass=1",
     ]
     assert list(span.attributes["agentic.presubmit.duration"]) == ["tests=5.0", "lint=0.5"]
 
@@ -907,7 +907,7 @@ def test_a_check_red_in_its_final_row_counts_red(spans):
     with telemetry.role_span("Developer", "developer", "gym-saas", arm="default") as run:
         run.finish({"presubmit_checks": invocations, "cost_usd": 0.3})
     span = spans.get_finished_spans()[-1]
-    assert list(span.attributes["agentic.presubmit.checks"]) == ["tests/red/True/False=1"]
+    assert list(span.attributes["agentic.presubmit.checks"]) == ["tests/red/True/False/fail=1"]
 
 
 def test_a_reused_row_is_counted_with_the_reused_label_and_leaves_no_duration_sample(spans):
@@ -921,8 +921,8 @@ def test_a_reused_row_is_counted_with_the_reused_label_and_leaves_no_duration_sa
         run.finish({"presubmit_checks": invocations, "cost_usd": 0.3})
     attributes = spans.get_finished_spans()[-1].attributes
     assert sorted(attributes["agentic.presubmit.checks"]) == [
-        "lint/green/True/False=1",
-        "tests/green/True/True=1",
+        "lint/green/True/False/pass=1",
+        "tests/green/True/True/pass=1",
     ]
     assert list(attributes["agentic.presubmit.duration"]) == ["lint=0.5"]
 
@@ -932,7 +932,7 @@ def test_a_run_of_only_reused_rows_emits_checks_but_no_duration_sample(spans):
     with telemetry.role_span("Developer", "developer", "gym-saas", arm="default") as run:
         run.finish({"presubmit_checks": invocations, "cost_usd": 0.3})
     attributes = spans.get_finished_spans()[-1].attributes
-    assert list(attributes["agentic.presubmit.checks"]) == ["tests/green/True/True=1"]
+    assert list(attributes["agentic.presubmit.checks"]) == ["tests/green/True/True/pass=1"]
     assert "agentic.presubmit.duration" not in attributes
 
 
@@ -1137,3 +1137,28 @@ def test_role_finish_stamps_the_playbook_hashes_only_when_there_are_some(spans):
         )
     attributes = spans.get_finished_spans()[-1].attributes
     assert attributes["agentic.role.playbook_hash"] == ("pb1",)
+
+
+def test_a_flaked_check_is_green_with_the_flake_outcome_and_its_rerun_is_not_sampled(spans):
+    """Red then green on the one rerun (ADR-0066): the check's cell says `flake`, its
+    duration is the first run's alone, and no test id reaches a label."""
+    invocations = [
+        [
+            {**_check(passed=False, duration_s=4.0), "output": "FAILED tests/test_a.py::t1"},
+            {**_check(passed=True, duration_s=2.0), "rerun": True},
+            _check(name="lint", command="ruff check .", passed=False, duration_s=1.0),
+            {
+                **_check(name="lint", command="ruff check .", passed=False, duration_s=1.0),
+                "rerun": True,
+            },
+        ]
+    ]
+    with telemetry.role_span("Developer", "developer", "gym-saas", arm="default") as run:
+        run.finish({"presubmit_checks": invocations, "cost_usd": 0.3})
+    span = spans.get_finished_spans()[-1]
+    assert sorted(span.attributes["agentic.presubmit.checks"]) == [
+        "lint/red/True/False/fail=1",
+        "tests/green/True/False/flake=1",
+    ]
+    assert list(span.attributes["agentic.presubmit.duration"]) == ["tests=4.0", "lint=1.0"]
+    assert "test_a" not in " ".join(span.attributes["agentic.presubmit.checks"])

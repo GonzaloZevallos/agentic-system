@@ -103,13 +103,13 @@ def test_a_dirty_stage0_runs_exactly_as_before_and_never_touches_the_store():
 
 
 def test_a_failure_is_not_stored_and_the_next_call_runs_again():
-    commands = MemoryCommands(pytest=[CommandResult(1, "1 failed"), CommandResult(0, "ok")])
+    commands = MemoryCommands(pytest=[CommandResult(1, "1 failed")] * 2 + [CommandResult(0, "ok")])
     store = MemoryCheckResults()
     failing = build(commands=commands, store=store)
     assert failing() is not None
     assert store.puts == []
     assert build(commands=commands, store=store, path=OTHER)() is None
-    assert ran(commands) == ["pytest", "pytest"]
+    assert ran(commands) == ["pytest", "pytest", "pytest"]  # red, its rerun, then a new call
     assert len(store.puts) == 1  # only the pass
 
 
