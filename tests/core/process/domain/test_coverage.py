@@ -190,6 +190,7 @@ ACCEPTED_BEFORE = [
     "invariant 1: not touched by this subtask: a; b: c",
     "invariant 1: app/(group)/page.tsx:12",
     "invariant 1: a.py:12:5",
+    "invariant 1: x:1(b:2,c):3",
     f"invariant 1: {UNSATISFIABLE}",
 ]
 
@@ -374,5 +375,6 @@ def test_the_developer_prompt_quotes_the_forms_and_one_example_equal_to_the_cons
     for form in (MAPPED_FORM, UNSATISFIABLE_FORM, NOT_TOUCHED_FORM, BRIEF_FORM):
         assert f"`{form}`" in prompt
     blocks = re.findall(r"```\n(.*?)\n```", prompt, re.DOTALL)
-    assert EXAMPLE in blocks
+    assert blocks == [EXAMPLE]
+    assert "range of lines" in prompt and "one comment in parentheses" in prompt
     assert parse(blocks[blocks.index(EXAMPLE)], 3).missing == ()
