@@ -665,6 +665,20 @@ class Workspace(Protocol):
         """No uncommitted change, tracked or untracked, under the checkout at `path`."""
         ...
 
+    def differs_outside(self, path: Path, verified: str, head: str, excluded: str) -> bool:
+        """Whether `head` differs from `verified` in anything but the path `excluded`
+        (GH-358): `git diff --quiet <verified> <head> -- . ':!<excluded>'` is not quiet. The
+        question behind a full-tier record covering a head: only the task's own document may
+        have moved since the suite ran. Raises `GitError` for anything but git's two answers
+        (an unknown commit, for one)."""
+        ...
+
+    def restore_clean(self, path: Path) -> None:
+        """Puts the checkout at `path` back as its head holds it (GH-358): `git checkout --
+        .`, then `git clean -fd`, never `-x`, so a tracked file a check edited and an
+        untracked one it wrote are gone and the ignored environment stays."""
+        ...
+
     def is_committed(self, path: Path) -> bool:
         """No change to a **tracked** file under `path`. The looser one, and the question
         behind the `+dirty` of a system version (ADR-0008): a scratch file git never

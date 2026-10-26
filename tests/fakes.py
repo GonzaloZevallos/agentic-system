@@ -527,6 +527,10 @@ class MemoryWorkspace:
         self.indexes: dict[Path, dict[str, str]] = {}
         self.dirty: set[Path] = set()
         self.uncommitted: set[Path] = set()
+        # GH-358: what `differs_outside` answers, and each call; `restore_clean` calls.
+        self.outside_differs = False
+        self.outside_reads: list[tuple[Path, str, str, str]] = []
+        self.restored: list[Path] = []
         self.commits: list[tuple[Path, str]] = []
         self.merges: list[tuple[Path, str]] = []
         # Branches whose merge does not apply, as a real conflict would.
@@ -714,6 +718,15 @@ class MemoryWorkspace:
 
     def is_clean(self, path: Path) -> bool:
         return path not in self.dirty and path not in self.uncommitted
+
+    def differs_outside(self, path: Path, verified: str, head: str, excluded: str) -> bool:
+        self.outside_reads.append((path, verified, head, excluded))
+        return self.outside_differs
+
+    def restore_clean(self, path: Path) -> None:
+        self.restored.append(path)
+        self.dirty.discard(path)
+        self.uncommitted.discard(path)
 
     def is_committed(self, path: Path) -> bool:
         return path not in self.uncommitted
