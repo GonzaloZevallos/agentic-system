@@ -74,14 +74,30 @@ subtask brief. Build it from what you already did, not from a new reading pass. 
 item by item is the self-check: an item with no location is work still to do, not
 something to deliver. The forms, quoted exactly:
 
-- `invariant N: <path>:<line>[, <path>:<line>…]`, the locations in your diff that
-  satisfy it.
+- `invariant N: <path>:<line>[-<last>][ (<comment>)][, <path>:<line>…]`, the locations in
+  your diff that satisfy it. A location is a line or a range of lines (`a.py:10-24`, the
+  last line not before the first), and each may carry one comment in parentheses at its
+  end; the commas inside the comment do not separate locations and the comment holds no
+  parentheses of its own.
 - `invariant N: not touched by this subtask: <one phrase>`, when the invariant governs
   code your subtask's diff does not touch. The phrase says why.
 - `invariant N: unsatisfiable, see Decisions`, only for an invariant that cannot hold as
   written, with the evidenced record the `### Decisions and assumptions` rule below
   requires. It is never a way to say "not mine".
 - `brief: <item> -> <path>:<line>[, …]`, one per item of the brief.
+
+A complete map for a plan with three invariants, one plain location, one range with a
+comment, one invariant not touched and one brief item:
+
+```
+invariant 1: src/app.py:42
+invariant 2: tests/test_app.py:10-24 (new test, inserted before the helper)
+invariant 3: not touched by this subtask: only the prompts change
+brief: add the parser -> src/app.py:30-60
+```
+
+When a line is refused, the refusal shows it corrected where the slip is mechanical; that
+fixes the shape only, and the location stays the one in your diff.
 
 On a return, re-emit the whole map against the current head, because line numbers move.
 The system refuses, once, a delivery whose map leaves out an invariant. With no plan
@@ -129,12 +145,9 @@ Then write, in Markdown, using `###` headings and nothing above `###`:
 Everything goes in the structured output, in one call, after your last commit:
 
 - `summary`: a few lines for the reviewer.
-- `coverage`: the coverage map from the step above, one line per entry, in the forms
-  `invariant N: <path>:<line>[, <path>:<line>…]`,
-  `invariant N: not touched by this subtask: <one phrase>`,
-  `invariant N: unsatisfiable, see Decisions` and
-  `brief: <item> -> <path>:<line>[, …]`. Empty only when the plan has no invariants and
-  your brief has no items, and always empty on the `integration` subtask.
+- `coverage`: the coverage map from the step above, one line per entry, in the forms and
+  the example given there. Empty only when the plan has no invariants and your brief has
+  no items, and always empty on the `integration` subtask.
 - `assumptions`: the decisions from that section, one per line in a single string; an
   empty string if none.
 - `markdown`: the full section above, in Markdown.
