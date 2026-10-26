@@ -23,3 +23,21 @@ tasks:
     cost_usd: 0.0365
   GH-226@review:
     cost_usd: 0.0
+  GH-223@review:
+    cost_usd: 0.0533
+  GH-239@review:
+    cost_usd: 0.1859
+    applied:
+    - op: add
+      slug: developer
+      category: standard-other
+      lesson: When you create a module, add it to the type-checked file registry in the same change and run the declared type check on it explicitly before you deliver.
+      item_id: ''
+      tasks:
+      - GH-239
+  GH-238@review:
+    cost_usd: 0.0314
+  GH-242@review:
+    cost_usd: 0.0617
+  GH-249@review:
+    cost_usd: 0.0517

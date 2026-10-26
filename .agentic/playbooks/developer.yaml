@@ -1,0 +1,9 @@
+items:
+- id: developer-1
+  lesson: When you create a module, add it to the type-checked file registry in the same change and run the declared type check on it explicitly before you deliver.
+  category: standard-other
+  since: bbcedf92
+  seen_in:
+  - GH-239
+  added_at: '2026-10-26T05:51:14.504+00:00'
+  last_applied: '2026-10-26T05:51:14.504+00:00'

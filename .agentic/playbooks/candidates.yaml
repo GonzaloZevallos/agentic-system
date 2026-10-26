@@ -63,3 +63,80 @@ candidates:
   sources:
   - finding
   added_at: '2026-10-26T05:47:34.052+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: Before delivering, list each literal requirement in the brief (required message text, wording, location) and confirm it sits where the brief says, e.g. in the assertion message, not in a code comment.
+  confidence: medium
+  seen_in:
+  - GH-223
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T05:51:14.504+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: Check the import diff against the brief's allowed-imports list before delivering; do not add any import, even a typing helper, that the brief does not name.
+  confidence: medium
+  seen_in:
+  - GH-223
+  sources:
+  - finding
+  added_at: '2026-10-26T05:51:14.504+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: Build every item the brief lists before you deliver; never leave a declared verb, path or executor as an inert or logged no-op, and say plainly what is not done instead of delivering it as done.
+  confidence: medium
+  seen_in:
+  - GH-239
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T05:51:14.504+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: Write the acceptance tests at the exact seams the brief names, such as the poller tick or the CLI verb, ending in an observable effect; a test through an inner function does not count.
+  confidence: medium
+  seen_in:
+  - GH-239
+  sources:
+  - finding
+  added_at: '2026-10-26T05:51:14.504+00:00'
+- slug: developer_integrator
+  category: standard-typing-silenced
+  lesson: Never add a type-ignore, cast or Any to silence the checker; reuse an existing narrowing or fix the annotation, and count the suppressions before and after your change.
+  confidence: medium
+  seen_in:
+  - GH-239
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T05:51:14.504+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before delivering, grep your diff for each invariant the Coverage map claims, in the exact form the brief requires (for example .get versus subscript), and fix any mismatch.
+  confidence: medium
+  seen_in:
+  - GH-242
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T05:51:14.504+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: Write the brief's listed tests first and watch them fail. Make each assertion as strict as the brief's wording, for example byte-identical, not a filtered comparison.
+  confidence: low
+  seen_in:
+  - GH-242
+  sources:
+  - finding
+  added_at: '2026-10-26T05:51:14.504+00:00'
+- slug: developer
+  category: standard-seams
+  lesson: Edit only files named in the brief's Seams line, tests and guards included. If the base is already red on a guard, leave it unchanged and report the failing output to the Tech Lead.
+  confidence: medium
+  seen_in:
+  - GH-249
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T05:51:14.504+00:00'
