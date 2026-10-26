@@ -68,6 +68,7 @@ class HookOrderRunner:
 
 class CountingPresubmit:
     timeout_s = 1.0
+    wait_max_s = 0.0
 
     def __init__(self) -> None:
         self.runs = 0
