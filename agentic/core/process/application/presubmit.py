@@ -88,7 +88,7 @@ class CheckoutPresubmit:
         self._wait_max_s = wait_max_s
         # What the scheduler gave the last time the gate ran: `None` until one did. The
         # first `enqueued_at` and the token stay with the instance, so a gate refused and
-        # retried keeps one place in the queue (ADR-0065); `waited_s` is the total wait.
+        # retried keeps one place in the queue (ADR-0066); `waited_s` is the total wait.
         self.grant: Grant | None = None
         self.waited_s = 0.0
         # The product's `parallel_checks`: run the declared checks concurrently. False
@@ -186,7 +186,7 @@ class CheckoutPresubmit:
 
     def _run_holding_a_share(self, head: str) -> str | None:
         """The witness and the checks, under a share of the machine's cores: the only place
-        a gate acquires, and `__call__` the only caller (invariant of ADR-0065). The share is
+        a gate acquires, and `__call__` the only caller (invariant of ADR-0066). The share is
         given back whatever happens inside, and the time spent waiting for it is over before
         any command starts, so it is never part of a check's timeout."""
         request = CheckRequest(

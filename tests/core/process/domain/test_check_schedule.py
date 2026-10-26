@@ -1,5 +1,5 @@
 """`check_schedule`: how many cores a gate gets and who goes first, as pure functions over a
-snapshot of the ledger (GH-361, ADR-0065). With 16 cores the reserve is 4, a subtask gate is
+snapshot of the ledger (GH-361, ADR-0066). With 16 cores the reserve is 4, a subtask gate is
 capped at 6 and integration and land at 12."""
 
 from dataclasses import replace
@@ -161,7 +161,7 @@ def test_alive_needs_a_live_pid_and_an_unexpired_entry():
 
 
 def test_the_module_reads_neither_the_clock_nor_the_machine():
-    """The core count and the time arrive as arguments (ADR-0065): importing `os` or `time`
+    """The core count and the time arrive as arguments (ADR-0066): importing `os` or `time`
     would let the rules read them behind the caller's back."""
     import ast
 

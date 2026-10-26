@@ -1,4 +1,4 @@
-"""`FilesystemCheckLedger`: the machine-wide ledger of shares (GH-361, ADR-0065). Everything
+"""`FilesystemCheckLedger`: the machine-wide ledger of shares (GH-361, ADR-0066). Everything
 runs in a temporary directory with a fake liveness, clock, sleep and reaper: no `/proc`, no
 real state directory, no second process."""
 

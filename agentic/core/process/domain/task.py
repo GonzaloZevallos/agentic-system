@@ -395,7 +395,7 @@ class Failure(TypedDict):
 
 
 class GateRecord(TypedDict, total=False):
-    """One invocation of a check gate that ran its checks (GH-361, ADR-0065): the wait for a
+    """One invocation of a check gate that ran its checks (GH-361, ADR-0066): the wait for a
     share of the machine's cores kept apart from the run. `started_at` is the UTC ISO time the
     gate asked for its share; `wait_s` what this call spent waiting for it and `run_s` what
     the witness and the checks took after the grant, so a check's `duration_s` stays pure run

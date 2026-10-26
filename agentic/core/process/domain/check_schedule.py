@@ -1,4 +1,4 @@
-"""Who may start a check suite and with how many cores (GH-361, ADR-0065).
+"""Who may start a check suite and with how many cores (GH-361, ADR-0066).
 
 Every check suite assumes it owns the machine, so several gates at once multiply their
 workers. The scheduler gives each gate a share of the machine's cores before it starts and
