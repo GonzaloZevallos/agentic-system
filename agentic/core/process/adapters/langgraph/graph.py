@@ -56,6 +56,7 @@ from ...application.diagnose import diagnose
 from ...application.discard import discard
 from ...application.escalate import escalate
 from ...application.final_validation import final_validation
+from ...application.full_checks import full_checks
 from ...application.integrate import integrate
 from ...application.limits import RunLimits
 from ...application.plan import plan
@@ -298,6 +299,11 @@ def build_graph(
     graph.add_node(
         "qa_performance", _node(qa_performance, QA_PERFORMANCE, shared, telemetry, arm_for)
     )
+    # The whole suite, once, on the integrated head (GH-358): no role and no model cost, a
+    # system node like `deliver`. Reached through `rules.full_checks_due` from
+    # `after_integrate`, only for a product that declares `delivery_checks`, and always back to
+    # the fan-in.
+    graph.add_node("full_checks", _system_node(full_checks, shared))
     graph.add_node("deliver", _system_node(deliver, shared))
     graph.add_node("discard", _system_node(discard, shared))
     graph.add_node("split", _system_node(split, shared))
@@ -350,7 +356,19 @@ def build_graph(
     graph.add_conditional_edges(
         INTEGRATE,
         _fanout(rules.after_integrate),
-        [PIPELINE, "copy_review", "final_validation", "qa_performance", "deliver", ESCALATE, END],
+        [
+            PIPELINE,
+            "full_checks",
+            "copy_review",
+            "final_validation",
+            "qa_performance",
+            "deliver",
+            ESCALATE,
+            END,
+        ],
+    )
+    graph.add_conditional_edges(
+        "full_checks", _route(rules.after_full_checks), [INTEGRATE, ESCALATE]
     )
     graph.add_conditional_edges(
         "copy_review", _route(rules.after_copy_review), [INTEGRATE, ESCALATE]
@@ -361,7 +379,7 @@ def build_graph(
     graph.add_conditional_edges(
         "qa_performance", _route(rules.after_qa_performance), [INTEGRATE, ESCALATE]
     )
-    graph.add_conditional_edges("deliver", _route(rules.after_deliver), [END, ESCALATE])
+    graph.add_conditional_edges("deliver", _route(rules.after_deliver), [INTEGRATE, END, ESCALATE])
     graph.add_conditional_edges("discard", _route(rules.after_discard), [END, ESCALATE])
     graph.add_edge(ESCALATE, PAUSE)
     graph.add_conditional_edges(

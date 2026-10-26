@@ -310,14 +310,23 @@ def with_context(
 
 
 def load_prompt(
-    role: Role, cfg: Configuration, ports: Ports, vocabulary: dict[str, str], **placeholders: object
+    role: Role,
+    cfg: Configuration,
+    ports: Ports,
+    vocabulary: dict[str, str],
+    *,
+    tiers: str = "",
+    **placeholders: object,
 ) -> Prompt:
     """The role's system prompt, overlay applied, with the limits and the vocabulary in.
 
     The role's playbook (ADR-0043) is appended after the placeholders are filled, so it
     never goes through them. With none, the prompt is exactly what `render` made; with
     one, the hash covers the raw text and the section, so a playbook change is a prompt
-    change for comparison."""
+    change for comparison. `tiers` is the system-written section of a product that declares
+    `delivery_checks` (GH-358, `presubmit.tier_section`), appended after the playbook the same
+    way and covered by the hash the same way; empty, the prompt and its hash are what they
+    were."""
     raw, source = ports.prompts.raw(role)
     rendered = render(
         raw,
@@ -328,13 +337,14 @@ def load_prompt(
         **placeholders,
     )
     text = playbook.section(ports.prompts.playbook(role))
-    if not text:
+    if not text and not tiers:
         return rendered
+    appended = "\n\n".join(part for part in (text, tiers) if part)
     return Prompt(
-        text=rendered.text + "\n\n" + text,
-        hash=prompt_hash(raw + "\n" + text),
+        text=rendered.text + "\n\n" + appended,
+        hash=prompt_hash(raw + "\n" + appended),
         source=source,
-        playbook=prompt_hash(text),
+        playbook=prompt_hash(text) if text else "",
     )
 
 
@@ -897,6 +907,7 @@ async def run_role(
     presubmit: Presubmit | None = None,
     delivery_check: SchemaGuard | None = None,
     forbidden: Sequence[Forbidden] | None = None,
+    tiers: str = "",
     **placeholders: object,
 ) -> tuple[Output | None, TaskState]:
     """Run a role and build the state patch. On `RoleFailure`, or when the task cap
@@ -918,7 +929,7 @@ async def run_role(
     session again."""
     section = section or role.name
     vocabulary = ports.flags.load()
-    loaded = load_prompt(role, cfg, ports, vocabulary, **placeholders)
+    loaded = load_prompt(role, cfg, ports, vocabulary, tiers=tiers, **placeholders)
     patch: TaskState = {
         "current_role": role.name,
         "prompts": {role.slug: loaded.hash},

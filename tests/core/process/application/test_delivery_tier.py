@@ -83,3 +83,108 @@ async def test_an_escalated_fan_in_stamps_nothing(cfg):
     ports = memory_ports(stack=MemoryStack(checks=CHECKS, delivery_checks=("tests",)))
     patch = await integrate({**TASK, "escalated": "stuck"}, cfg, ports)
     assert "task_head" not in patch
+
+
+# `develop`: the gate and the brief of a Developer under tiers.
+
+from agentic.core.process.domain.roles import DEVELOPER, DEVELOPER_INTEGRATOR, prompt_hash  # noqa: E402
+from agentic.core.process.domain.task import INTEGRATION  # noqa: E402
+from tests.fakes import CommandResult, MemoryCommands, ScriptedRunner, delivered  # noqa: E402
+
+AFFECTED = {"tests": "pytest --affected {base}", "e2e": "playwright --affected {base}"}
+
+
+def building(ports, subtask_id="api"):
+    state = {
+        **TASK,
+        "subtasks": {
+            "api": {**sub("api", "pending"), "branch": "", "base": ""},
+            "domain": {**sub("domain", "pending"), "branch": "", "base": ""},
+        },
+        "subtask_id": subtask_id,
+    }
+    checkout = ports.workspace.subtask_checkout("GH-12", "api")
+    ports.workspace.moved.add(checkout.path)
+    ports.workspace.existing_branches["agentic/GH-12"] = ("head", "base0")
+    return state, checkout
+
+
+async def test_a_tiered_delivery_runs_only_the_fast_checks(cfg):
+    runner = ScriptedRunner(developer=[delivered()])
+    stack = MemoryStack(checks=CHECKS, delivery_checks=("tests", "lint"))
+    ports = memory_ports(runner, stack=stack)
+    state, checkout = building(ports)
+    await develop(state, cfg, ports)
+    assert ports.commands.ran == [(checkout.path, "pytest"), (checkout.path, "ruff")]
+
+
+async def test_the_affected_forms_of_checks_outside_the_fast_tier_are_never_run(cfg):
+    runner = ScriptedRunner(developer=[delivered()])
+    stack = MemoryStack(checks=CHECKS, delivery_checks=("tests", "lint"), affected_checks=AFFECTED)
+    ports = memory_ports(runner, stack=stack)
+    state, _ = building(ports)
+    ports.workspace.diff_paths = ("src/a.py",)
+    await develop(state, cfg, ports)
+    ran = [command for _, command in ports.commands.ran]
+    assert not any("playwright" in command for command in ran)
+    assert any("--affected" in command for command in ran)
+
+
+async def test_the_developer_is_told_the_tiers_in_a_section_the_hash_covers(cfg):
+    runner = ScriptedRunner(developer=[delivered()])
+    stack = MemoryStack(checks=CHECKS, delivery_checks=("tests", "lint"))
+    ports = memory_ports(runner, stack=stack)
+    state, _ = building(ports)
+    patch = await develop(state, cfg, ports)
+    system = runner.calls[0]["system_prompt"]
+    section = presubmit.tier_section(["tests", "lint"], ["e2e"])
+    assert system.endswith("\n\n" + section)
+    raw, _ = ports.prompts.raw(DEVELOPER)
+    assert patch["prompts"][DEVELOPER.slug] == prompt_hash(raw + "\n" + section)
+    assert "`e2e`" in section
+
+
+async def test_the_integrator_is_told_the_tiers_the_same_way(cfg):
+    runner = ScriptedRunner(developer_integrator=[delivered()])
+    stack = MemoryStack(checks=CHECKS, delivery_checks=("tests",))
+    ports = memory_ports(runner, stack=stack)
+    state, _ = building(ports)
+    state["subtasks"][INTEGRATION] = {**sub(INTEGRATION, "pending"), "branch": "", "base": ""}
+    ports.workspace.moved.add(ports.workspace.task_checkout("GH-12").path)
+    patch = await develop({**state, "subtask_id": INTEGRATION}, cfg, ports)
+    section = presubmit.tier_section(["tests"], ["lint", "e2e"])
+    assert runner.calls[0]["system_prompt"].endswith("\n\n" + section)
+    raw, _ = ports.prompts.raw(DEVELOPER_INTEGRATOR)
+    assert patch["prompts"][DEVELOPER_INTEGRATOR.slug] == prompt_hash(raw + "\n" + section)
+
+
+async def test_the_delivery_record_names_the_tier_that_ran(cfg):
+    runner = ScriptedRunner(developer=[delivered()])
+    stack = MemoryStack(checks=CHECKS, delivery_checks=("tests",))
+    ports = memory_ports(runner, stack=stack)
+    state, _ = building(ports)
+    patch = await develop(state, cfg, ports)
+    section = patch["sections"]["Developer: api"]
+    assert "Delivery tier: fast (`tests`)" in section
+
+
+async def test_a_red_fast_check_still_refuses_the_delivery(cfg):
+    red = [CommandResult(1, "1 failed")] * 3
+    runner = ScriptedRunner(developer=[delivered()])
+    stack = MemoryStack(checks=CHECKS, delivery_checks=("tests",))
+    ports = memory_ports(runner, stack=stack, commands=MemoryCommands(pytest=red))
+    state, _ = building(ports)
+    await develop(state, cfg, ports)
+    assert len(runner.refused) == 2 and "`tests` failed" in runner.refused[0]
+
+
+async def test_a_product_with_no_tiers_has_todays_prompt_hash_record_and_checks(cfg):
+    runner = ScriptedRunner(developer=[delivered()])
+    ports = memory_ports(runner, stack=MemoryStack(checks=CHECKS))
+    state, checkout = building(ports)
+    patch = await develop(state, cfg, ports)
+    raw, _ = ports.prompts.raw(DEVELOPER)
+    assert patch["prompts"][DEVELOPER.slug] == prompt_hash(raw)
+    assert "Delivery checks" not in runner.calls[0]["system_prompt"]
+    assert "Delivery tier" not in patch["sections"]["Developer: api"]
+    assert ports.commands.ran == [(checkout.path, c) for c in CHECKS.values()]

@@ -22,7 +22,7 @@ from ..domain.task import INTEGRATION, TaskState
 from .checkouts import SetupFailed, subtask_checkout, task_base
 from .coverage_guard import InvariantCoverageGuard
 from .ports import Ports
-from .presubmit import CheckoutPresubmit, declared_checks
+from .presubmit import CheckoutPresubmit, declared_checks, fast_tier
 from .run_role import finish, run_role, with_context
 
 
@@ -79,11 +79,19 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     notice_text = "\n\n".join(notices)
     before = ports.workspace.head(checkout.path)
     checks = declared_checks(state, ports)
+    # The delivery gate runs the fast tier of a product that declares one (GH-358), the same
+    # narrowing `presubmit.delivery_checks` makes over the checks already read here; all of
+    # them otherwise. The prompt keeps listing every declared check: the product's.
+    base = task_base(state, ports)
+    fast_names = ports.stack.delivery_checks(base)
+    fast = fast_tier(checks, fast_names)
     # The affected-only forms (ADR-0046), read at the task's base like every other key
     # and measured against that same base, which only `task_base` computes. A product
-    # that declares none gets no plan: the gate of before, byte for byte.
-    base = task_base(state, ports)
-    affected_commands = ports.stack.affected_checks(base)
+    # that declares none gets no plan: the gate of before, byte for byte. Only the checks
+    # the gate runs are in the plan: a check outside the fast tier never runs here.
+    affected_commands = {
+        name: command for name, command in ports.stack.affected_checks(base).items() if name in fast
+    }
     plan = (
         AffectedPlan(base, affected_commands, ports.stack.affected_fallback(base))
         if affected_commands
@@ -93,7 +101,7 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         ports,
         checkout.path,
         before,
-        checks,
+        fast,
         cfg.check_timeout_s,
         witness=ports.stack.witness(task_base(state, ports)),
         parallel=ports.stack.parallel_checks(task_base(state, ports)),
@@ -159,6 +167,9 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         presubmit=delivery_presubmit,
         delivery_check=InvariantCoverageGuard(mapped) if mapped else None,
         forbidden=forbidden,
+        tiers=presubmit.tier_section(list(fast), [n for n in checks if n not in fast])
+        if fast_names
+        else "",
         subtask=subtask_id,
         invariants=rules.invariants_markdown(state),
         branches=_branches(state),
@@ -169,6 +180,8 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         lead = [rules.cold_fallback_note()] if output.cold_fallback else []
         if record is not None:
             lead.append(record)
+            if fast_names:
+                lead.append(f"Delivery tier: fast ({', '.join(f'`{name}`' for name in fast)})")
         block = coverage.render(output.data.get("coverage", []), mapped)
         if lead or block:
             text = [*lead, output.text, *([block] if block else [])]
