@@ -26,6 +26,25 @@ def declared_checks(state: TaskState, ports: Ports) -> dict[str, str]:
     return ports.stack.checks(task_base(state, ports))
 
 
+def delivery_checks(state: TaskState, ports: Ports) -> dict[str, str]:
+    """The checks a delivery gate runs (GH-358): `declared_checks` narrowed to the product's
+    `delivery_checks` at the task's base, or all of them for a product that declares no
+    tiers. The merge gate and the `full_checks` node never ask: they read `declared_checks`
+    whole."""
+    return fast_tier(
+        declared_checks(state, ports), ports.stack.delivery_checks(task_base(state, ports))
+    )
+
+
+def fast_tier(declared: dict[str, str], fast: tuple[str, ...]) -> dict[str, str]:
+    """`declared` kept to the names in `fast`, in the order `declared` has them; all of it
+    when `fast` is empty, which is a product with no tiers. For a caller that already holds
+    the declared checks and must not read the stack for them twice."""
+    if not fast:
+        return declared
+    return {name: command for name, command in declared.items() if name in fast}
+
+
 class CheckoutPresubmit:
     """The `Presubmit` over one Developer's checkout. One per Developer run: the
     refusals it has left carry over to the retry."""
