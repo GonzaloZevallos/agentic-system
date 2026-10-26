@@ -166,6 +166,16 @@ def test_an_entry_with_a_reused_pid_is_dropped_at_its_expiry_without_a_reap(tmp_
     assert world.events == []  # a live pid is never reaped: it may be a live gate of ours
 
 
+def test_an_entry_of_an_earlier_boot_is_dropped_without_reaping_its_pid(tmp_path):
+    world = World(tmp_path)
+    world.ledger(1, boot="boot-old").acquire(request())  # recorded before a reboot
+    world.live.add(1)  # the same pid now belongs to something else in this boot
+    grant = world.ledger(2).acquire(request())
+    assert grant.share == 6
+    assert world.events == []  # reaping by that pid could kill a live gate's checks
+    assert [e["pid"] for e in world.entries()] == [2]
+
+
 def test_another_products_dead_entry_stays_until_it_expires(tmp_path):
     world = World(tmp_path)
     other = world.ledger(1, product="other")

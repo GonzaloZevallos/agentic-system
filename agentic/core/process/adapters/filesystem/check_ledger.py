@@ -208,6 +208,8 @@ class FilesystemCheckLedger:
                 continue
             if self._is_alive(entry.pid, entry.boot_id):
                 continue  # past its lease with a live pid, maybe a reused one: never reaped
+            if entry.boot_id is not None and entry.boot_id != self._boot_id():
+                continue  # an earlier boot: nothing survives, its pid may be a live gate's
             if not self._reaped(entry) and not expired:
                 kept.append(entry)  # a process survived the reap: the cores stay booked
         return kept
