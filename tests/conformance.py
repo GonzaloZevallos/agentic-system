@@ -16,6 +16,7 @@ from typing import NamedTuple
 
 from agentic.core.process.application.limits import RunLimits
 from agentic.core.process.application.ports import (
+    CheckScheduler,
     Commands,
     FlagVocabulary,
     Inbox,
@@ -35,6 +36,7 @@ from agentic.core.process.application.ports import (
     Workspace,
 )
 from tests.fakes import (
+    FakeCheckScheduler,
     FakeLauncher,
     FakePerfLock,
     FakePerfRunner,
@@ -69,6 +71,7 @@ _launcher: Launcher = FakeLauncher()
 _reaper: ProcessReaper = FakeReaper()
 _perf_runner: PerfRunner = FakePerfRunner()
 _perf_lock: PerfLock = FakePerfLock()
+_check_scheduler: CheckScheduler = FakeCheckScheduler()
 
 
 def ports_of_doubles() -> Ports:
@@ -85,6 +88,7 @@ def ports_of_doubles() -> Ports:
         commands=_commands,
         sample_app=_sample_app,
         reaper=_reaper,
+        check_scheduler=_check_scheduler,
         limits=RunLimits(),
     )
 
@@ -107,6 +111,7 @@ COVERED: dict[str, type] = {
     "ProcessReaper": FakeReaper,
     "PerfRunner": FakePerfRunner,
     "PerfLock": FakePerfLock,
+    "CheckScheduler": FakeCheckScheduler,
 }
 
 

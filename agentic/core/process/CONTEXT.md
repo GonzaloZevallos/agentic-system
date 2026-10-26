@@ -79,6 +79,11 @@ Por dónde una tarea cerrada entra a una reflexión (ADR-0056). `Gate` es `revie
 _Avoid_: filtro de elegibilidad, cola
 _Campo_: sin término de arte
 
+**Cupo de chequeo**:
+Los núcleos que una puerta de entrega tiene reservados mientras corre sus chequeos, anotados en un ledger compartido por toda la máquina (ADR-0065). Una cuarta parte de los núcleos es una reserva que sólo usan las puertas más cercanas a terminar (aterrizaje e integración); una puerta de subtarea nunca la toca. Cuando la espera se agota, la puerta toma el cupo mínimo y queda marcada como vencida: se anota por encima de la cota, sin quitarle nada a la reserva. Lo que espera un cupo no cuenta contra el timeout de los chequeos.
+_Avoid_: slot, permiso, cuota
+_Campo_: semáforo contando entre procesos (Dijkstra) con prioridades y envejecimiento; la reserva es la de un scheduler de lotes (Slurm, `reserved cores`)
+
 **Playbook**:
 Las lecciones de un rol en un producto, a lo sumo 12, como datos versionados en el repo del producto; entra al prompt del rol como una sección propia después de rellenar los placeholders. Solo cambia por deltas (agregar, fusionar, sumar una cita, retirar), nunca reescrito entero. Lo que `keep` no deja pasar espera en `candidates.yaml`, y lo que dejó de aplicar se archiva en `archived.yaml` sin borrarse. Con un playbook vacío el prompt y su hash son los de siempre.
 _Avoid_: memoria, guía de estilo, contexto aprendido

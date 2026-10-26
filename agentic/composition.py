@@ -29,6 +29,7 @@ from .core.measurement.adapters.otel import telemetry
 from .core.measurement.domain.metrics import arm_label
 from .core.process.adapters.claude_sdk import ClaudeSdkRunner
 from .core.process.adapters.filesystem import FilesystemPrompts, FilesystemTaskDocuments
+from .core.process.adapters.filesystem.check_ledger import FilesystemCheckLedger
 from .core.process.adapters.filesystem.perf_lock import FilesystemPerfLock
 from .core.process.adapters.git import GitWorkspace
 from .core.process.adapters.git.workspace import WORKTREES
@@ -40,6 +41,7 @@ from .core.process.application.ports import Ports
 from .core.process.application.preflight import refuse_its_own_checkout
 from .core.process.application.reflect_run import SystemRepo
 from .core.process.domain import reaping
+from .core.process.domain.check_schedule import Limits
 from .shared.configuration import STATE_FILE, Configuration, state_file_for
 from .shared.environment import own_configuration_unset
 
@@ -148,6 +150,13 @@ def _ports(cfg: Configuration) -> Ports:
     # `Ports` (which reaps on release): a mark is only found by the key it was built with.
     product_key = reaping.product_key(str(cfg.product_dir.resolve()))
     reaper = ShellReaper(product_key, cfg.product_dir / WORKTREES)
+    limits = Limits(
+        cores=cfg.check_cores,
+        share_min=cfg.check_share_min,
+        share_max=cfg.check_share_max,
+        share_max_subtask=cfg.check_share_max_subtask,
+        wait_max_s=cfg.check_wait_max_s,
+    )
     return Ports(
         # The roles get the configuration the run decided, never the one the human's
         # shell carries: the `AGENTIC_*` of this process are unset for them, which only
@@ -176,6 +185,7 @@ def _ports(cfg: Configuration) -> Ports:
         commands=ShellCommands(product_key, reaper),
         sample_app=ShellSampleApp(),
         reaper=reaper,
+        check_scheduler=FilesystemCheckLedger(cfg.check_ledger_dir, product_key, reaper, limits),
         perf_runner=PerfShellRunner(product_key, reaper),
         perf_lock=FilesystemPerfLock(cfg.perf_lock_path),
     )

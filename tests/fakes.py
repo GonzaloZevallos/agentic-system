@@ -19,10 +19,13 @@ from agentic.core.process.application.ports import (
     AddedLine,
     BranchPullRequest,
     Checkout,
+    CheckRequest,
+    CheckScheduler,
     CommandResult,
     Commands,
     FlagVocabulary,
     GitError,
+    Grant,
     Inbox,
     IssueComment,
     IssueState,
@@ -1387,6 +1390,29 @@ class FakePerfLock:
         self.released += 1
 
 
+class FakeCheckScheduler:
+    """GH-361: grants at once and never waits. `share` is what every grant holds; `overdue`
+    and `wait_s` are what it reports. `requests` and `released` record, in order, every
+    `acquire` and every `release`. The grant keeps the request's first `enqueued_at` and
+    token, so a gate that passes them back is seen to do so."""
+
+    def __init__(self, share: int = 4, *, overdue: bool = False, wait_s: float = 0.0) -> None:
+        self.share = share
+        self.overdue = overdue
+        self.wait_s = wait_s
+        self.requests: list[CheckRequest] = []
+        self.released: list[Grant] = []
+
+    def acquire(self, request: CheckRequest) -> Grant:
+        self.requests.append(request)
+        enqueued_at = 0.0 if request.enqueued_at is None else request.enqueued_at
+        token = request.token or f"fake-{len(self.requests)}"
+        return Grant(self.share, self.wait_s, 0, self.overdue, enqueued_at, token)
+
+    def release(self, grant: Grant) -> None:
+        self.released.append(grant)
+
+
 class FakeReaper:
     """GH-282: records every reap it was asked for, as `(scope, task_id, run, token)`, and
     answers the tuple it was configured with, the same for every scope, never touching a
@@ -1475,6 +1501,7 @@ def memory_ports(
     commands: Commands | None = None,
     sample_app: SampleApp | None = None,
     reaper: ProcessReaper | None = None,
+    check_scheduler: CheckScheduler | None = None,
     limits: RunLimits | None = None,
     perf_runner: PerfRunner | None = None,
     perf_lock: PerfLock | None = None,
@@ -1492,6 +1519,7 @@ def memory_ports(
         commands=commands if commands is not None else MemoryCommands(),
         sample_app=sample_app if sample_app is not None else MemorySampleApp(),
         reaper=reaper if reaper is not None else FakeReaper(),
+        check_scheduler=check_scheduler if check_scheduler is not None else FakeCheckScheduler(),
         **({} if limits is None else {"limits": limits}),
         perf_runner=perf_runner,
         perf_lock=perf_lock,

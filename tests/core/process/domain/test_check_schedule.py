@@ -3,6 +3,7 @@ snapshot of the ledger (GH-361, ADR-0065). With 16 cores the reserve is 4, a sub
 capped at 6 and integration and land at 12."""
 
 from dataclasses import replace
+from pathlib import Path
 
 from agentic.core.process.domain.check_schedule import (
     AGING_S,
@@ -33,7 +34,12 @@ def request(priority=SUBTASK, token="me", enqueued_at=NOW, pid=200):
 
 
 def test_limits_derive_reserve_and_caps_from_the_cores():
-    assert (LIMITS.reserve, LIMITS.cap(SUBTASK), LIMITS.cap(LAND), LIMITS.share_min) == (4, 6, 12, 2)
+    assert (LIMITS.reserve, LIMITS.cap(SUBTASK), LIMITS.cap(LAND), LIMITS.share_min) == (
+        4,
+        6,
+        12,
+        2,
+    )
     assert Limits(cores=2).reserve == 1  # at least 1
     assert Limits(cores=1).reserve == 0  # but never the whole machine
     assert Limits(cores=16, share_max=8, share_max_subtask=3).cap(SUBTASK) == 3
@@ -68,7 +74,9 @@ def test_a_subtask_never_gets_the_reserve_with_or_without_a_land():
 
 def test_a_land_may_use_the_reserve_and_waits_below_the_minimum():
     assert decide([holder("a", 6), holder("b", 6)], request(LAND), NOW, LIMITS).share == 4
-    assert not decide([holder("a", 6), holder("b", 6), holder("c", 3)], request(LAND), NOW, LIMITS).granted
+    assert not decide(
+        [holder("a", 6), holder("b", 6), holder("c", 3)], request(LAND), NOW, LIMITS
+    ).granted
 
 
 def test_booked_shares_never_pass_the_cores_across_a_sequence_of_grants():
@@ -87,7 +95,9 @@ def test_order_is_land_then_integration_then_subtask():
     assert decide([*held, *queue], request(INTEGRATION, "i", NOW - 50), NOW, LIMITS).granted
     assert not decide([*held, *queue], request(SUBTASK, "s", NOW - 100), NOW, LIMITS).granted
     # a subtask behind an integration waiter is not the head, even with cores to spare
-    assert not decide([waiter("i", INTEGRATION, NOW - 50)], request(SUBTASK, "s", NOW - 100), NOW, LIMITS).granted
+    assert not decide(
+        [waiter("i", INTEGRATION, NOW - 50)], request(SUBTASK, "s", NOW - 100), NOW, LIMITS
+    ).granted
 
 
 def test_at_equal_rank_the_earlier_enqueued_goes_first_then_the_lower_pid():
@@ -148,3 +158,24 @@ def test_alive_needs_a_live_pid_and_an_unexpired_entry():
     assert not alive(entry, NOW, lambda pid, boot: False)
     assert not alive(entry, entry.expires_at, lambda pid, boot: True)  # expires AT, not after
     assert alive(entry, entry.expires_at - 1, lambda pid, boot: pid == 100 and boot == "boot")
+
+
+def test_the_module_reads_neither_the_clock_nor_the_machine():
+    """The core count and the time arrive as arguments (ADR-0065): importing `os` or `time`
+    would let the rules read them behind the caller's back."""
+    import ast
+
+    from agentic.core.process.domain import check_schedule
+
+    tree = ast.parse(Path(check_schedule.__file__).read_text(encoding="utf-8"))
+    imported = {
+        alias.name.split(".")[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    } | {
+        (node.module or "").split(".")[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+    }
+    assert not imported & {"os", "time", "datetime"}
