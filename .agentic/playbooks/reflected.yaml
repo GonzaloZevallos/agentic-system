@@ -265,3 +265,5 @@ tasks:
       item_id: developer-3
       tasks:
       - GH-359
+  GH-360@review:
+    cost_usd: 0.1061

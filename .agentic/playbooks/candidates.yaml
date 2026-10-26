@@ -663,3 +663,23 @@ candidates:
   sources:
   - finding
   added_at: '2026-10-26T10:46:27.971+00:00'
+- slug: developer_integrator
+  category: plan-invariant
+  lesson: When an invariant says a state must be recorded and shown distinctly, trace its marker through every layer (merge, record schema, rendered text) and assert each one in the test, not only the outcome.
+  confidence: medium
+  seen_in:
+  - GH-360
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T16:38:52.546+00:00'
+- slug: developer_integrator
+  category: standard-typing-silenced
+  lesson: Never add a cast, bare ignore or override to turn the type check green while fixing a review row; give the value a precise type at its source, using a TypeGuard or a runtime-checkable isinstance.
+  confidence: medium
+  seen_in:
+  - GH-360
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T16:38:52.546+00:00'
