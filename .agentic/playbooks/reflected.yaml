@@ -60,3 +60,13 @@ tasks:
       item_id: developer-1
       tasks:
       - GH-255
+  GH-257@review:
+    cost_usd: 0.0526
+  GH-259@review:
+    cost_usd: 0.0522
+  GH-229@review:
+    cost_usd: 0.0719
+  GH-263@review:
+    cost_usd: 0.0791
+  GH-262@review:
+    cost_usd: 0.035

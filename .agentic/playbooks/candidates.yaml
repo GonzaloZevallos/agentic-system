@@ -150,3 +150,79 @@ candidates:
   - finding
   - return
   added_at: '2026-10-26T05:53:33.193+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: When code reads or migrates existing data, build the test fixture from a real trimmed sample, not a hand-built dict, and run its output through the next consumer in the chain.
+  confidence: medium
+  seen_in:
+  - GH-257
+  sources:
+  - finding
+  added_at: '2026-10-26T05:55:19.701+00:00'
+- slug: developer
+  category: standard-other
+  lesson: Take time from the injected clock everywhere in a flow; do not call the wall clock in one branch while the rest of the flow uses the injected one, even if the result is not acted on.
+  confidence: medium
+  seen_in:
+  - GH-257
+  sources:
+  - finding
+  added_at: '2026-10-26T05:55:19.701+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When a plan invariant says every test uses a shared fixture, grep the whole test tree for the old hand-built builder and convert all its users. If one cannot be converted, record the invariant as unsatisfiable.
+  confidence: medium
+  seen_in:
+  - GH-259
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T05:55:19.701+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before delivering, grep your diff for logic the plan's invariants reserve to one module, such as parsing or computing a value, and call that module. Fill each Coverage line from the grep, not from memory.
+  confidence: medium
+  seen_in:
+  - GH-229
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T05:55:19.701+00:00'
+- slug: developer
+  category: standard-other
+  lesson: When your code adds a read or call on a hot path, such as every tick or every round, compare it with the cost the plan declares. Update the plan's cost section, not only an ADR, or flag the gap.
+  confidence: medium
+  seen_in:
+  - GH-229
+  sources:
+  - finding
+  added_at: '2026-10-26T05:55:19.701+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: For each invariant the plan states, find the call site that enforces it and check that every value it needs is passed there; a value computed and then discarded breaks it. Add a test at the entry point.
+  confidence: medium
+  seen_in:
+  - GH-263
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T05:55:19.701+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: For each behaviour the brief says stays unchanged or is newly wired, write a test that fails if you revert it. Assert every spawn or output, not only the last one.
+  confidence: medium
+  seen_in:
+  - GH-263
+  sources:
+  - finding
+  added_at: '2026-10-26T05:55:19.701+00:00'
+- slug: developer_integrator
+  category: plan-invariant
+  lesson: Before classifying a step as cheap or slot-free, read every path it can take at run time, including reopen, conflict and failure paths, and confirm none starts a model pass.
+  confidence: medium
+  seen_in:
+  - GH-263
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T05:55:19.701+00:00'
