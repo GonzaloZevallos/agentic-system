@@ -366,3 +366,79 @@ candidates:
   sources:
   - finding
   added_at: '2026-10-26T06:00:11.904+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: Before delivering, list every numbered build item of the brief and check each against the diff (code, prompts, port, glossary, scorecard); do not deliver while any item is missing or partly done.
+  confidence: medium
+  seen_in:
+  - GH-293
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T06:01:44.851+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Keep a value that an invariant confines to one module out of prompts, descriptions and other files; if an invariant cannot hold, record the command run and its output under Decisions and Coverage as claimed unsatisfiable.
+  confidence: medium
+  seen_in:
+  - GH-293
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T06:01:44.851+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When a value travels from the CLI to the graph, test the seam past the intermediate step, to the state the graph continues with, with and without the value; a test that stops at prepare lets a dropped value pass green.
+  confidence: medium
+  seen_in:
+  - GH-293
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T06:01:44.851+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: When you add a filter or condition with several parts, write a test per part where only that part matches and the result must still be rejected, so dropping any part fails a test.
+  confidence: medium
+  seen_in:
+  - GH-301
+  sources:
+  - finding
+  added_at: '2026-10-26T06:01:44.851+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: When a test or allowlist maps an entry to a covering test, check that the named test actually drives that call site; do not point entries at an unrelated test.
+  confidence: medium
+  seen_in:
+  - GH-304
+  sources:
+  - finding
+  added_at: '2026-10-26T06:01:44.851+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When the brief says a guard must fail on a missing dependency, do not skip it with skipif; make it fail loudly, since a skip silently turns the guard off.
+  confidence: medium
+  seen_in:
+  - GH-304
+  sources:
+  - finding
+  added_at: '2026-10-26T06:01:44.851+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before delivering, check each plan invariant against your diff, grep for the forbidden pattern, and cite the evidence in Coverage instead of marking an invariant 'Not touched'.
+  confidence: medium
+  seen_in:
+  - GH-297
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T06:01:44.851+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: Write a test for every scenario the brief or plan names, including refusal, wait and failure paths, and make each test force the exact condition it claims to cover.
+  confidence: medium
+  seen_in:
+  - GH-297
+  sources:
+  - finding
+  added_at: '2026-10-26T06:01:44.851+00:00'

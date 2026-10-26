@@ -108,3 +108,13 @@ tasks:
     cost_usd: 0.0969
   GH-294@review:
     cost_usd: 0.0438
+  GH-293@review:
+    cost_usd: 0.1471
+  GH-301@review:
+    cost_usd: 0.0379
+  GH-304@review:
+    cost_usd: 0.0462
+  GH-297@review:
+    cost_usd: 0.0839
+  GH-298@review:
+    cost_usd: 0.0318
