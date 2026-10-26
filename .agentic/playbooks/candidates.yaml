@@ -45,3 +45,21 @@ candidates:
   sources:
   - finding
   added_at: '2026-10-26T03:20:14.796+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: When the brief asks for a command and its verbatim output, run it and paste the full unedited output with the exact command in the hand-off; never paraphrase or trim it to a tail.
+  confidence: medium
+  seen_in:
+  - GH-214
+  sources:
+  - finding
+  added_at: '2026-10-26T05:47:34.052+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: Reread every rule you write into a note or template for its literal meaning, and make its test assert the behaviour the rule describes, not just that the wording is present.
+  confidence: low
+  seen_in:
+  - GH-221
+  sources:
+  - finding
+  added_at: '2026-10-26T05:47:34.052+00:00'
