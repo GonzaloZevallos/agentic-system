@@ -11,7 +11,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, NamedTuple, Protocol, assert_never, cast, get_args
+from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
 
 from . import adr_numbers, ci, presubmit
 from .copy import copy_location_parts
@@ -219,7 +219,12 @@ def findings_rows(state: TaskState) -> list[FindingRecord]:
     and an open row an approval covers closes only when *every* open record of its key is
     covered, record by record (`_covered`), so a later regression, a sister's re-raise or
     an `important` at the same key keeps it open, whatever order they were appended in."""
-    settled = {_norm(location) for location in state.get("settled_findings", [])}
+    # A reviewer's word never closes a `full_checks:` row: only `full_checks_settles` does.
+    settled = {
+        norm
+        for location in state.get("settled_findings", [])
+        if not (norm := _norm(location)).startswith(FULL_CHECKS_PREFIX)
+    }
     approved = _approved_versions(state)
     qa_approved = qa_approved_version(state)
     green = full_checks_green_version(state)
@@ -1996,7 +2001,7 @@ def _failed_names(record: FullChecksRecord) -> list[str]:
     return names or [record.get("failed_step") or "checks"]
 
 
-def full_checks_return(state: TaskState, record: FullChecksRecord, limit: int) -> TaskState:
+def full_checks_return(state: TaskState, record: FullChecksRecord, limit: int) -> dict[str, Any]:
     """The patch of a red `full_checks` run (GH-358), modelled on QA Performance's return:
     the integration (the single subtask when there is none) reopens with `returned_by:
     "full_checks"`, one blocking `plan` row per failed check at `full_checks:<check>` with a
@@ -2039,7 +2044,7 @@ def full_checks_return(state: TaskState, record: FullChecksRecord, limit: int) -
     else:
         stopped = logged({**escalation("returns", limit_reached(pair, limit, reason))})
         patch = {**patch, **stopped, "status": WAITING_ON_HUMAN}
-    return cast(TaskState, patch)
+    return patch
 
 
 def full_checks_cover(
@@ -2055,7 +2060,7 @@ def full_checks_cover(
 
 def full_checks_heal(
     state: TaskState, head: str, verdict: Literal["missing", "stale"]
-) -> TaskState:
+) -> dict[str, Any]:
     """The patch of a `deliver` refused for want of a covering record (GH-358): the first
     refusal on `head` stamps it as the task's head and as healed, and the fan-in runs the
     suite on it (`after_deliver`); a second refusal on the same head escalates with the
@@ -2067,8 +2072,8 @@ def full_checks_heal(
             "and running the suite again on that head did not cover it. Nothing was pushed."
         )
         stopped = logged({**escalation("system_delivery", reason)})
-        return cast(TaskState, {**stopped, "status": WAITING_ON_HUMAN})
-    return cast(TaskState, {"task_head": head, "full_checks_healed": head})
+        return {**stopped, "status": WAITING_ON_HUMAN}
+    return {"task_head": head, "full_checks_healed": head}
 
 
 def after_full_checks(state: TaskState) -> str | None:

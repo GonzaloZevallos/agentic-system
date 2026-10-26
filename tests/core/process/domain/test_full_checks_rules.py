@@ -194,6 +194,15 @@ def test_an_approving_review_alone_leaves_the_rows_open():
     assert statuses(approved) == [(2, "open")]
 
 
+def test_a_reviewers_settled_list_never_closes_a_full_checks_row():
+    red = state(task_head=HEAD)
+    red = apply(red, rules.full_checks_return(red, RED, 3))
+    claimed = apply(red, {"settled_findings": ["full_checks:types"]})
+    assert statuses(claimed) == [(2, "open")]
+    green = apply(claimed, {"full_checks": record(MOVED, version=3)})
+    assert statuses(green) == [(2, "fixed")]
+
+
 def test_the_writer_settles_only_its_own_locations_and_only_from_a_lower_version():
     row = {"location": "Full_checks:  Types", "version": 2}
     assert rules.full_checks_settles(row, 3)
