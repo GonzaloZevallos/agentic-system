@@ -14,10 +14,25 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Sequence
 
+from agentic.shared.stage0 import CHECKOUT
+
 from ..domain import check_results, run_check
 from ..domain.run_check import CheckRun
-from .ports import GitError
+from .ports import GitError, Ports
 from .presubmit import CheckoutPresubmit
+
+
+def stage0_version(ports: Ports) -> str:
+    """The full sha of the system this run executes from, `+dirty` when its tracked files
+    carry uncommitted changes or when git cannot say (ADR-0065: such a version has no
+    fingerprint, so it neither reads nor stores)."""
+    try:
+        if ports.workspace.repository_at(CHECKOUT) is None:
+            return f"unknown{check_results.DIRTY}"
+        sha = ports.workspace.full_head(CHECKOUT)
+        return sha if ports.workspace.is_committed(CHECKOUT) else f"{sha}{check_results.DIRTY}"
+    except (GitError, OSError):
+        return f"unknown{check_results.DIRTY}"
 
 
 class RunCheck:
@@ -117,4 +132,3 @@ class RunCheck:
         except (GitError, OSError):
             return True
         return check_results.env_drifted(paths, self.setup)
-

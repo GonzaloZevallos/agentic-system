@@ -51,9 +51,18 @@ por `CheckoutPresubmit._run`: ahí se decide una sola vez.
 - **Supuesto de determinismo.** Reutilizar por contenido supone que el chequeo es
   determinista sobre ese árbol y ese entorno. Un chequeo flaky que pasó una vez sigue verde
   hasta 24 h sobre el mismo árbol; es el costo aceptado.
-- **`MCP_TOOL_TIMEOUT`.** _(Lo completa la subtarea `run-check-tool`: el supuesto sobre el
-  tiempo máximo de la herramienta `run_check`, su única medición manual y la versión del
-  CLI.)_
+- **`run_check` y `MCP_TOOL_TIMEOUT`.** El Developer y su integrador reciben una herramienta
+  MCP en proceso, `run_check(name)`: corre un chequeo ya declarado, por el mismo
+  `CheckoutPresubmit._run`, y guarda un pase bajo las mismas condiciones que `__call__`. La
+  instrucción de correr a mano sólo lo que se tocó vive en la descripción de la herramienta,
+  no en el prompt del sistema, así que el prompt y su hash de un producto sin niveles no
+  cambian. El CLI espera por defecto un tiempo fijo a una llamada MCP; el intento que lleva la
+  herramienta pone `MCP_TOOL_TIMEOUT` (ms) en su propio `options.env`, a `check_timeout_s ×
+  (chequeos declarados + 1)`. **Supuesto sin verificar:** no se midió a mano que una llamada
+  más larga que el valor por defecto del CLI complete (versión del CLI instalada al escribir
+  esto: 2.1.310, SDK 0.2.159). Peor caso si es falso: una corrida que el CLI corta y que no se
+  reutiliza, nunca un falso verde. Para medirlo: un producto de prueba con un chequeo que
+  duerma más que el valor por defecto, y una llamada a `run_check` sobre él.
 - **Rechazado.** Guardar el resultado sólo en el documento de tarea (no cruza ramas ni
   pasos de merge); un `cache_inputs` que cada producto declare (pide que cada producto
   enumere todo lo que un chequeo lee, y un olvido es un falso verde); reutilizar fallos

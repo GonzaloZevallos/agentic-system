@@ -22,7 +22,9 @@ from ..domain.task import INTEGRATION, TaskState
 from .checkouts import SetupFailed, subtask_checkout, task_base
 from .coverage_guard import InvariantCoverageGuard
 from .ports import Ports
+from .preflight import product_name
 from .presubmit import CheckoutPresubmit, declared_checks, fast_tier
+from .run_check import RunCheck, stage0_version
 from .run_role import finish, run_role, with_context
 
 
@@ -108,6 +110,26 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         affected=plan,
         criteria_base=base,
     )
+    # The `run_check` tool (ADR-0065): every declared check, not only the fast tier, over a
+    # presubmit of its own that shares the gate's checkout, witness and budget. A product
+    # with no store composed gets no tool: there is nothing for it to record into.
+    check_tool = (
+        RunCheck(
+            CheckoutPresubmit(
+                ports,
+                checkout.path,
+                before,
+                checks,
+                cfg.check_timeout_s,
+                witness=ports.stack.witness(base),
+            ),
+            product=product_name(ports),
+            stage0=stage0_version(ports),
+            setup=list(ports.stack.setup(base).values()),
+        )
+        if ports.check_results is not None and checks
+        else None
+    )
     # The product's own declared suppression cage (issue #38), at the task's base like
     # every other key here, never the branch's own: keyword-only through `run_role`, so
     # every other caller of it is untouched. `None`/empty is the explicit no-op, wired
@@ -167,6 +189,7 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         presubmit=delivery_presubmit,
         delivery_check=InvariantCoverageGuard(mapped) if mapped else None,
         forbidden=forbidden,
+        check_tool=check_tool,
         tiers=presubmit.tier_section(list(fast), [n for n in checks if n not in fast])
         if fast_names
         else "",
