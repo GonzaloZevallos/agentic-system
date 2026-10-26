@@ -76,6 +76,10 @@ frescura. Un árbol de merge igual a uno chequeado reutiliza; cualquier otro cor
 
 ## Consecuencias
 
-Quedan fuera de esta subtarea la lectura y escritura en `CheckoutPresubmit`, el marcado
-`reused` en los registros y la herramienta `run_check`: esta ADR fija el almacén y la clave
-que ellas leen.
+`CheckoutPresubmit` lee el almacén en `_run` y escribe solo en `__call__` (o en el
+manejador de `run_check`), con las condiciones de arriba; los registros `merge_checks` y
+`full_checks`, el bloque de checks del Developer y la señal `agentic.presubmit.checks`
+marcan `reused`, y las filas reutilizadas nunca entran en una muestra de duración. La
+herramienta `run_check` comparte con la puerta la misma `Reuse`, así que lo que guarda es lo
+que la puerta lee. Un producto con un stage0 `+dirty` no recibe la herramienta y corre
+exactamente los comandos de antes.

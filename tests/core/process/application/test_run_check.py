@@ -194,3 +194,13 @@ def test_a_dirty_tree_never_reads_the_pass_stored_for_an_earlier_clean_one():
     run = handler.run("tests")
     assert not run.reused and commands.ran == [(PATH, "pytest")] * 2
     assert run.unrecorded == "the tree is not clean"
+
+
+def test_a_store_that_cannot_be_written_is_reported_and_never_raises():
+    class Full(MemoryCheckResults):
+        def put(self, key, row, now):
+            raise OSError("disk full")
+
+    handler, _, _, _ = tool(store=Full())
+    run = handler.run("tests")
+    assert run.passed and run.unrecorded == "the store could not be written"

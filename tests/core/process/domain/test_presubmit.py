@@ -330,10 +330,12 @@ def test_a_reused_row_says_so_next_to_its_check_and_a_row_that_ran_does_not():
 
 
 def test_a_reused_row_keeps_its_mark_in_the_mode_table_too():
-    rows = [{**_reused(), "mode": "full"}, {**result("lint"), "mode": "full"}]
+    rows = [{**_reused(), "mode": "full"}, {**result("lint", "ruff ."), "mode": "full"}]
     text = presubmit.checks_markdown("abc123", rows, base="b4s3")
     assert "| `tests` | `pytest` | full | passed (reused) |" in text
-    assert "| `lint` | `ruff .` | full | passed |" not in text
+    # The row that ran is rendered, and rendered unmarked: the row is really in the table.
+    assert "| `lint` | `ruff .` | full | passed |" in text
+    assert "| `lint` | `ruff .` | full | passed (reused) |" not in text
 
 
 def test_durations_leave_out_a_reused_row_and_a_check_with_only_reused_rows_has_none():

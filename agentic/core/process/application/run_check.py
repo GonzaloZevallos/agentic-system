@@ -85,7 +85,11 @@ class RunCheck:
             store=store is not None,
         )
         if reason is None and not reused and store is not None and key is not None:
-            store.put(key, row, self.clock())
+            try:
+                store.put(key, row, self.clock())
+            except OSError:
+                # As at the gate: a store that cannot be written is only a miss later.
+                reason = "the store could not be written"
         return CheckRun(
             name,
             passed=passed,
