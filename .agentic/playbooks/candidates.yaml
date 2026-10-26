@@ -549,3 +549,60 @@ candidates:
   sources:
   - finding
   added_at: '2026-10-26T06:06:02.292+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Do not edit existing test cases to fit new behavior. Keep every pre-existing case passing unchanged. If an edit is unavoidable, record the old test's failing command output and name the invariant.
+  confidence: medium
+  seen_in:
+  - GH-321
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T06:08:12.379+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before you deliver, grep the codebase for every direct read of a state field the brief says to access through a helper. Route each read, including lines you rewrote, through that helper.
+  confidence: low
+  seen_in:
+  - GH-321
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T06:08:12.379+00:00'
+- slug: developer_integrator
+  category: plan-invariant
+  lesson: Before you deliver, check each plan invariant with a grep or command over the whole branch. If one cannot hold, record the invariant, the command, its output and your shipped version under Integration.
+  confidence: medium
+  seen_in:
+  - GH-330
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T06:08:12.379+00:00'
+- slug: tech_lead_platform
+  category: integration-crosscut
+  lesson: When a brief adds a rule or gate, list every path that reaches the same decision (for example slice merges as well as whole-task merges) and check that each one feeds the rule its inputs.
+  confidence: medium
+  seen_in:
+  - GH-334
+  sources:
+  - finding
+  added_at: '2026-10-26T06:08:12.379+00:00'
+- slug: developer_integrator
+  category: standard-typing-silenced
+  lesson: Do not type a field as object when the state type already types it. Use the precise type at the signature, and review the merged branch for widened parameters left by the slices.
+  confidence: medium
+  seen_in:
+  - GH-334
+  sources:
+  - finding
+  added_at: '2026-10-26T06:08:12.379+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When a flow can retry or resume after a partial failure, trace each path and make log lines and status messages report only what that path actually did, matching your stated decision.
+  confidence: low
+  seen_in:
+  - GH-336
+  sources:
+  - finding
+  added_at: '2026-10-26T06:08:12.379+00:00'
