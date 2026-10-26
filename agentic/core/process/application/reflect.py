@@ -9,9 +9,13 @@ reach the model; with none, the model is never called. What the model proposes g
 through `playbook.apply`, the curator, which is code: it decides which deltas apply.
 
 This function writes nothing: not to disk, not to the closed document, not to an issue or
-a checkpoint. The caller (the `reflect` verb) owns every write. Any failure, the role's
-or an unexpected exception, is returned as a failed result and never raised, so a
-reflection can never fail, escalate or reopen a task.
+a checkpoint. The caller (the `reflect` verb) owns every write. A failure of the role (the
+harness raising, or the role returning no output) is returned as a failed result, so a
+reflection can never fail, escalate or reopen a task. The code around the model call is
+not under that net: the output is schema-validated and `playbook.apply` raises nothing,
+so a bug there propagates and stops the run loudly instead of looking like a failed
+attempt. `OSError` and `GitError` are raised too: the environment failed, and the verb
+stops its batch on them without counting an attempt.
 """
 
 from __future__ import annotations
@@ -29,7 +33,7 @@ from ..domain import rules
 from ..domain.document import HUMAN
 from ..domain.roles import PM_FINAL, REFLECTOR, prompt_hash
 from ..domain.task import INTEGRATION, TaskState
-from .ports import Ports
+from .ports import GitError, Ports
 from .run_role import Escalating, run_role
 
 # A text longer than this is cut in the reflector's input, with a note: the lessons live in
@@ -123,11 +127,11 @@ def backings_of(
 
 def _closed(document: Mapping[str, Any], gate: pc.Gate) -> bool:
     """Whether the document is one of the two doors' (ADR-0056): `review`, a closed one
-    with a delivery a person kept; `decision`, one that ended without it (discarded, split,
-    tracker_only, a closed pull request or an escalation whose issue closed; the poller
-    checked which)."""
+    with a delivery that landed (`pc.reflectable`); `decision`, one that ended without it
+    (discarded, split, tracker_only, a closed pull request or an escalation whose issue
+    closed; the poller checked which)."""
     if gate == "review":
-        return bool(document.get("closed_at")) and document.get("delivery_outcome") in pc.KEPT
+        return pc.reflectable(document)
     return bool(document.get("closed_at")) or document.get("status") in (
         "discarded",
         "split",
@@ -339,14 +343,10 @@ async def reflect_task(
     is the door the task came through (the `review` gate reads the four sources; `decision`,
     only the human's decisions) and `decisions` how many `### Decision` blocks an earlier
     reflection of it already read."""
-    task_id = str(document.get("id") or "")
     shelves = (tuple(candidates), tuple(archived))
-    try:
-        return await _reflect(
-            cfg, ports, document, (gate, decisions), playbooks, rejected, now, shelves
-        )
-    except Exception as error:  # by contract: a reflection never raises into a task
-        return Reflected(task_id, failed=True, error=f"{type(error).__name__}: {error}")
+    return await _reflect(
+        cfg, ports, document, (gate, decisions), playbooks, rejected, now, shelves
+    )
 
 
 async def _reflect(
@@ -375,6 +375,10 @@ async def _reflect(
         output, patch = await run_role(state, REFLECTOR, capped, ports, prompt=message)
     except Escalating as exc:  # pragma: no cover -- `run_role` converts these itself
         return Reflected(task_id, cost_usd=exc.cost_usd, failed=True, error=str(exc))
+    except (OSError, GitError):
+        raise  # the environment, not the role: `reflect_run.reflect` stops the batch on it
+    except Exception as error:  # the harness failed (the role's own failure): a retry
+        return Reflected(task_id, failed=True, error=f"{type(error).__name__}: {error}")
     if output is None:
         return Reflected(
             task_id,

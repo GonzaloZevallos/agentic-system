@@ -74,6 +74,11 @@ El rol que, con una tarea ya cerrada, lee sus devoluciones, hallazgos, observaci
 _Avoid_: PjM (el que mejora el proceso en el diseño original), curador (como si fuera un rol: es código), crítico
 _Campo_: reflector — ACE, Agentic Context Engineering (Zhang et al., 2025), que lo separa del curador; Reflexion (Shinn 2023) llama self-reflection a lo que un agente se dice sobre su propio intento
 
+**Puerta del Reflector**:
+Por dónde una tarea cerrada entra a una reflexión (ADR-0056). `Gate` es `review` o `decision`; `Door` es un documento con su gate. `review` admite toda entrega que aterrizó (`merged`, `merged_with_changes`, `auto_merged`) y cuenta desde su `closed_at`; `decision` admite solo las decisiones humanas de una tarea que terminó sin entrega (descartada, dividida, PR cerrado, escalada con el issue cerrado) y cuenta desde el fin de la tarea. Cada puerta cuenta desde `started_at` del ledger; sin ledger, desde `first_pass_floor`: la N-ésima más reciente de las dos puertas, con N = `reflect_max_tasks_per_run`.
+_Avoid_: filtro de elegibilidad, cola
+_Campo_: sin término de arte
+
 **Playbook**:
 Las lecciones de un rol en un producto, a lo sumo 12, como datos versionados en el repo del producto; entra al prompt del rol como una sección propia después de rellenar los placeholders. Solo cambia por deltas (agregar, fusionar, sumar una cita, retirar), nunca reescrito entero. Lo que `keep` no deja pasar espera en `candidates.yaml`, y lo que dejó de aplicar se archiva en `archived.yaml` sin borrarse. Con un playbook vacío el prompt y su hash son los de siempre.
 _Avoid_: memoria, guía de estilo, contexto aprendido

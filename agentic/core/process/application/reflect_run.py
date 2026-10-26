@@ -160,37 +160,55 @@ def _todo(
     since: str | None,
     task_id: str | None,
     known: Known | None = None,
-    now: str = "",
-) -> tuple[list[Door], Known | None]:
-    """The documents to reflect through each door, review first, each oldest first. Cheap
-    first: with no document a person kept and none that carries a decision, nothing is
-    asked of `gh` or git at all."""
-    everyone = _documents(ports, task_id)
-    kept = [d for d in everyone if d.get("closed_at") and d.get("delivery_outcome") in pc.KEPT]
-    asked = [d for d in everyone if pc.decision_count(d)]
-    if not kept and not asked:
-        return [], known
+) -> tuple[list[Door], Known | None, str]:
+    """The documents to reflect through each door, review first, each oldest first, and the
+    threshold they were counted from. Cheap first: with no document that landed and none
+    that carries a decision, nothing is asked of `gh` or git at all. With neither a ledger
+    nor `since`, the threshold is `first_pass_floor` over every document of both doors: the
+    `reflect_max_tasks_per_run` most recent ones, never `now`."""
+    pool = _documents(ports, None)
+    landed = [d for d in pool if pc.reflectable(d)]
+    asked = [d for d in pool if pc.decision_count(d)]
+    if not landed and not asked:
+        return [], known, ""
     known = known or gather(cfg, ports)
     ledger = known.ledger
-    threshold = ledger.started_at or now
-    review = pc.eligible(kept, ledger.done_keys, threshold, since, gate="review")
-    decision = pc.eligible(
-        asked,
+    first_pass = not ledger.started_at and since is None
+    mine = [d for d in asked if task_id is None or d.get("id") == task_id]
+    escalations = _closed_escalations(ports, asked if first_pass else mine)
+    floor = ""
+    if first_pass:
+        clocks = [
+            *(pc.clock(d, "review") for d in landed),
+            *(pc.clock(d, "decision", escalations) for d in asked),
+        ]
+        floor = pc.first_pass_floor(clocks, cfg.reflect_max_tasks_per_run)
+    threshold = since or ledger.started_at or floor
+    review = pc.eligible(
+        [d for d in landed if task_id is None or d.get("id") == task_id],
         ledger.done_keys,
+        ledger.started_at,
         threshold,
-        since,
+        gate="review",
+    )
+    decision = pc.eligible(
+        mine,
+        ledger.done_keys,
+        ledger.started_at,
+        threshold,
         gate="decision",
-        closed_escalations=_closed_escalations(ports, asked),
+        closed_escalations=escalations,
         decisions_read=ledger.decisions_read,
     )
-    return [*((d, "review") for d in review), *((d, "decision") for d in decision)], known
+    doors: list[Door] = [*((d, "review") for d in review), *((d, "decision") for d in decision)]
+    return doors, known, threshold
 
 
 def pending(
     cfg: Configuration, ports: Ports, *, since: str | None = None, task_id: str | None = None
 ) -> list[Mapping[str, Any]]:
     """The documents `reflect` would reflect on, oldest first by door."""
-    doors, _ = _todo(cfg, ports, since=since, task_id=task_id)
+    doors, _, _ = _todo(cfg, ports, since=since, task_id=task_id)
     return [document for document, _ in doors]
 
 
@@ -419,12 +437,11 @@ async def reflect(
     one open pull request."""
     known = gather(cfg, ports)
     first = not known.ledger.started_at
-    started = known.ledger.started_at or now
-    todo, _ = _todo(cfg, ports, since=since, task_id=task_id, known=known, now=now)
-    batch, left = (
-        todo[: cfg.reflect_max_tasks_per_run],
-        max(len(todo) - cfg.reflect_max_tasks_per_run, 0),
-    )
+    todo, _, threshold = _todo(cfg, ports, since=since, task_id=task_id, known=known)
+    # A first pass never starts the clock at `now` while a document says where it began:
+    # `since` when given, else `first_pass_floor`, which is what `_todo` counted from.
+    started = known.ledger.started_at or since or threshold or now
+    batch = todo[: cfg.reflect_max_tasks_per_run]
     if not first and not batch and not _unfiled(known.ledger.tasks):
         return Outcome(0, 0)
 
@@ -450,25 +467,38 @@ async def reflect(
     archived = tuple(pc.parse_archived(_read(ports, BRANCH, pc.ARCHIVED_FILE)))
     before = (dict(read), candidates, archived)
     tasks = dict(base.tasks)
+    reflected = 0
     for document, gate in batch:
         key = pc.ledger_key(str(document["id"]), gate)
         before_entry = tasks.get(key)
-        result = await reflect_task(
-            cfg,
-            ports,
-            {**document, "status": "closed"},
-            playbooks,
-            known.rejected,
-            now=now,
-            candidates=candidates,
-            archived=archived,
-            gate=gate,
-            decisions=before_entry.decisions if before_entry else 0,
-        )
+        try:
+            result = await reflect_task(
+                cfg,
+                ports,
+                {**document, "status": "closed"},
+                playbooks,
+                known.rejected,
+                now=now,
+                candidates=candidates,
+                archived=archived,
+                gate=gate,
+                decisions=before_entry.decisions if before_entry else 0,
+            )
+        except (OSError, GitError) as exc:
+            # The environment failed, not the model: no entry, no attempt. The documents
+            # that finished are written below; this one and the rest wait for the next run.
+            # Anything else is a bug and propagates, with the ledger unwritten.
+            print(
+                f"agentic: reflect: {document['id']} stopped by {type(exc).__name__}; "
+                "its cost was not recorded",
+                file=sys.stderr,
+            )
+            break
         playbooks.update(result.playbooks)
         candidates = candidates if result.candidates is None else result.candidates
         archived = archived if result.archived is None else result.archived
         tasks[key] = _entry(result, before_entry, pc.decision_count(document))
+        reflected += 1
     _file_system(system, tasks)
     documents = _documents(ports, None)
     archived = _archive_stale(documents, tasks, playbooks, archived, now)
@@ -492,7 +522,7 @@ async def reflect(
         _write(checkout.path, pc.ARCHIVED_FILE, pc.render_archived(archived))
     _write(checkout.path, pc.LEDGER_FILE, pc.render_ledger(ledger))
     _write(checkout.path, pc.REJECTED_FILE, pc.render_rejected(known.rejected))
-    sha = ports.workspace.commit_all(checkout.path, _message(len(batch), first))
+    sha = ports.workspace.commit_all(checkout.path, _message(reflected, first))
 
     open_pr = known.open_pr
     url = open_pr.url if open_pr else ""
@@ -508,7 +538,7 @@ async def reflect(
         text = open_pr.body.partition(pc.MARKER)[0].rstrip() or INTRO
         ports.tracker.update_pull_request_body(open_pr.number, _body(text, summary, record))
     _say_reaped(release_task(ports, TASK_ID))
-    return Outcome(len(batch), left, url)
+    return Outcome(reflected, max(len(todo) - reflected, 0), url)
 
 
 def _say_reaped(reaped: tuple[ReapedProcess, ...]) -> None:

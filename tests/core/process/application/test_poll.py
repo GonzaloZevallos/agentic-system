@@ -679,9 +679,19 @@ def test_the_poller_launches_reflect_only_when_a_kept_closed_task_awaits(tmp_pat
     assert lines == ["agentic: poll: reflect 1 task(s) -> pid 4242"]
 
 
+def test_the_poller_launches_reflect_for_a_product_with_no_ledger_and_a_closed_task(tmp_path):
+    """The first pass starts without a person (ADR-0056 addendum): no clock yet is not
+    nothing to do when a delivery already landed."""
+    ports = _reflect_ports(tmp_path, "", closed=True)
+    launcher = FakeLauncher()
+    lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(), launcher, ESCALATED_AT)
+    assert launcher.spawned == [["agentic", "reflect", "--all", "--product-dir", str(tmp_path)]]
+    assert lines == ["agentic: poll: reflect 1 task(s) -> pid 4242"]
+
+
 def test_the_poller_does_not_launch_reflect_with_nothing_eligible(tmp_path):
-    # No clock yet, a closed task before it, and no closed task at all: never a launch.
-    for started_at, closed in (("", True), ("2026-10-07T00:00:00+00:00", True), ("x", False)):
+    # A closed task before the clock, and no closed task at all: never a launch.
+    for started_at, closed in (("2026-10-07T00:00:00+00:00", True), ("x", False), ("", False)):
         ports = _reflect_ports(tmp_path, started_at, closed)
         launcher = FakeLauncher()
         lines = _round(_cfg(tmp_path), ports, MemoryRunRegistry(), launcher, ESCALATED_AT)
@@ -2042,7 +2052,7 @@ def test_a_round_closes_the_open_issue_of_a_merged_task_whose_pull_request_had_n
     tmp_path,
 ):
     """Apostrophe #377's shape: merged, `merge_commit` recorded, the issue still open."""
-    ports = memory_ports()
+    ports = _reflect_ports(tmp_path, "2026-12-01T00:00:00+00:00", closed=False)
     ports.documents.save({"id": "GH-340", **MERGED_TASK})
     ports.tracker._queue = [340]
 
@@ -2053,7 +2063,7 @@ def test_a_round_closes_the_open_issue_of_a_merged_task_whose_pull_request_had_n
 
 
 def test_a_failing_close_leaves_the_round_idle_and_is_retried_silently(tmp_path):
-    ports = memory_ports()
+    ports = _reflect_ports(tmp_path, "2026-12-01T00:00:00+00:00", closed=False)
     ports.documents.save({"id": "GH-340", **MERGED_TASK})
     ports.tracker._queue = [340]
     ports.tracker.close_issue_failures = [ValueError("gh issue close failed"), OSError("no gh")]

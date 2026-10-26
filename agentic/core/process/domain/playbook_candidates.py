@@ -25,13 +25,17 @@ import yaml
 
 from . import playbook as pb
 from .document import HUMAN
+from .stack_signals import MERGED_OUTCOMES
 
 MARKER = "<!-- agentic:playbook -->"
-# Closed task documents whose delivery a person kept: a closed pull request taught
-# nothing about the code that merged. `auto_merged` is left out on purpose: no human
-# endorsed that delivery (ADR-0045). Declared here, not imported from measurement
-# (ADR-0010); a test keeps it equal to `metrics.OUTCOME_CLASS`'s `human_kept`.
+# What the scorecard counts as a delivery a person kept (ADR-0045): a test keeps it equal
+# to `metrics.OUTCOME_CLASS`'s `human_kept`. Declared here, not imported from measurement
+# (ADR-0010). It is not the review door's filter.
 KEPT = ("merged", "merged_with_changes")
+# What the review door admits: every delivery that landed, `auto_merged` included. The
+# human check moved from the delivery to the lesson, which reaches a prompt only through a
+# playbook PR a person merges (ADR-0056 addendum, ADR-0043).
+REFLECTABLE = MERGED_OUTCOMES
 # Reflected tasks that make a summary due, and the files this module owns beside the
 # playbooks (`playbook.RECORD_FILES` names the same four).
 SUMMARY_EVERY = 10
@@ -420,6 +424,33 @@ def _decision_clock(document: Mapping[str, Any], closed_escalations: Collection[
     return ""
 
 
+def reflectable(document: Mapping[str, Any]) -> bool:
+    """Whether the review door admits the document: it closed with a delivery that landed
+    (`REFLECTABLE`). The one place that reads the outcome; every reader calls it."""
+    return bool(document.get("closed_at")) and document.get("delivery_outcome") in REFLECTABLE
+
+
+def clock(
+    document: Mapping[str, Any], gate: Gate, closed_escalations: Collection[str] = frozenset()
+) -> str:
+    """When the document counts through `gate`, or `""` when the door does not admit it
+    (yet). `review`: its `closed_at` once it is `reflectable`. `decision`: the end of a
+    task that carries a `### Decision` and ended without a kept delivery."""
+    if gate == "review":
+        return str(document["closed_at"]) if reflectable(document) else ""
+    return _decision_clock(document, closed_escalations) if decision_count(document) else ""
+
+
+def first_pass_floor(clocks: Sequence[str], n: int) -> str:
+    """Where a product with no ledger starts counting: the `n`-th most recent non-empty
+    clock (the oldest one when there are fewer), or `""` when there is none. Counted, not
+    dated: a first pass is as many documents as one run reflects, whatever the traffic."""
+    recent = sorted((c for c in clocks if c), reverse=True)
+    if not recent or n < 1:
+        return ""
+    return recent[min(n, len(recent)) - 1]
+
+
 def eligible(
     documents: Sequence[Mapping[str, Any]],
     reflected_ids: Collection[str],
@@ -431,12 +462,12 @@ def eligible(
     decisions_read: Mapping[str, int] | None = None,
 ) -> list[Mapping[str, Any]]:
     """The documents worth a reflection through `gate`, oldest first, closed on or after
-    `since` (else after `started_at`) and not reflected yet. With neither `since` nor
-    `started_at` nothing is eligible: the first run only starts the clock, it never reaches
-    back (backfill is explicit, `--since`). `reflected_ids` are ledger keys (a bare id is
+    `since` (else after `started_at`) and not reflected yet. With neither nothing is
+    eligible: a first pass on a product with no ledger reaches back to `first_pass_floor`,
+    which the caller passes as `since`. `reflected_ids` are ledger keys (a bare id is
     `@review`); no I/O: whether an escalation's issue is closed is `closed_escalations`.
 
-    - `review`: `closed_at` and a delivery a person kept (`KEPT`).
+    - `review`: `closed_at` and a delivery that landed (`reflectable`).
     - `decision`: it has a `### Decision`, ended without a kept delivery (`_decision_clock`),
       and is new or has more decisions than the key had read (`decisions_read`)."""
     threshold = since or started_at
@@ -447,19 +478,13 @@ def eligible(
     clocked: list[tuple[str, Mapping[str, Any]]] = []
     for d in documents:
         key = ledger_key(str(d.get("id") or ""), gate)
+        when = clock(d, gate, closed_escalations)
         if gate == "review":
-            clock = (
-                str(d["closed_at"])
-                if d.get("closed_at") and d.get("delivery_outcome") in KEPT
-                else ""
-            )
             fresh = key not in done
         else:
-            count = decision_count(d)
-            clock = _decision_clock(d, closed_escalations) if count else ""
-            fresh = key not in done or count > read.get(key, 0)
-        if clock and clock >= threshold and fresh:
-            clocked.append((clock, d))
+            fresh = key not in done or decision_count(d) > read.get(key, 0)
+        if when and when >= threshold and fresh:
+            clocked.append((when, d))
     return [d for _, d in sorted(clocked, key=lambda pair: pair[0])]
 
 

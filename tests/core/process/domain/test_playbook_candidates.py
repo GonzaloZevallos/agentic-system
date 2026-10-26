@@ -9,6 +9,7 @@ import pytest
 
 from agentic.core.process.domain import playbook as pb
 from agentic.core.process.domain import playbook_candidates as pc
+from agentic.core.process.domain.stack_signals import MERGED_OUTCOMES
 
 LESSON = "Run every declared check before delivering, not only the single test file."
 OTHER = "Name the seam a test exercises in its docstring."
@@ -181,15 +182,67 @@ def test_a_summary_is_due_every_ten_reflected_tasks(count, due):
     assert pc.summary_due(count) is due
 
 
-def test_an_auto_merged_delivery_is_never_a_kept_candidate():
-    from agentic.core.process.domain import playbook_candidates as pc
-
+def test_an_auto_merged_delivery_is_eligible_through_the_review_door():
     docs = [
-        {"id": "GH-1", "closed_at": "2026-10-06T00:00:00", "delivery_outcome": "auto_merged"},
-        {"id": "GH-2", "closed_at": "2026-10-06T00:00:00", "delivery_outcome": "merged"},
+        document("GH-1", "2026-10-06T00:00:00", "auto_merged"),
+        document("GH-2", "2026-10-06T00:00:00", "merged"),
+        document("GH-3", "2026-10-06T00:00:00", "closed"),  # no delivery landed: not this door
     ]
     names = [d["id"] for d in pc.eligible(docs, [], "2026-10-01", None)]
-    assert names == ["GH-2"]
+    assert names == ["GH-1", "GH-2"]
+    assert "auto_merged" not in pc.KEPT  # what the scorecard counts is untouched
+
+
+def test_the_review_door_admits_the_outcomes_stack_signals_calls_merged():
+    assert pc.REFLECTABLE is MERGED_OUTCOMES
+
+
+@pytest.mark.parametrize("outcome", ["merged", "merged_with_changes", "auto_merged"])
+def test_a_delivery_that_landed_is_reflectable(outcome):
+    assert pc.reflectable(document("GH-1", "2026-10-06T00:00:00", outcome))
+
+
+@pytest.mark.parametrize(
+    "doc",
+    [
+        document("GH-1", "2026-10-06T00:00:00", "closed"),
+        document("GH-2", None),
+        {"id": "GH-3", "delivery_outcome": "merged"},
+        {"id": "GH-4", "closed_at": "2026-10-06T00:00:00"},
+    ],
+)
+def test_a_close_without_a_landed_delivery_or_an_open_document_is_not_reflectable(doc):
+    assert not pc.reflectable(doc)
+
+
+def test_the_clock_of_each_door_is_empty_when_the_door_does_not_admit_the_document():
+    landed = document("GH-1", "2026-10-06T00:00:00", "auto_merged")
+    assert pc.clock(landed, "review") == "2026-10-06T00:00:00"
+    assert pc.clock(landed, "decision") == ""  # no `### Decision`
+    assert pc.clock(document("GH-2", "2026-10-06T00:00:00", "closed"), "review") == ""
+    asked = {
+        "id": "GH-3",
+        "status": "discarded",
+        "finished_at": "2026-10-07T00:00:00",
+        "sections": {"Human": "### Decision 1\n\nuse snake_case"},
+    }
+    assert pc.clock(asked, "decision") == "2026-10-07T00:00:00"
+    assert pc.clock(asked, "review") == ""
+
+
+@pytest.mark.parametrize(
+    ("clocks", "n", "floor"),
+    [
+        ([], 5, ""),  # none
+        (["", ""], 5, ""),  # only empty clocks
+        (["2026-10-03", "2026-10-01"], 5, "2026-10-01"),  # fewer than n: the oldest
+        (["2026-10-02", "2026-10-06", "2026-10-04", "2026-10-01"], 2, "2026-10-04"),  # more
+        (["2026-10-05", "2026-10-05", "2026-10-05", "2026-10-01"], 2, "2026-10-05"),  # ties
+        (["2026-10-05", "2026-10-02"], 0, ""),  # a cap of nothing reaches back to nothing
+    ],
+)
+def test_first_pass_floor_is_the_nth_most_recent_clock(clocks, n, floor):
+    assert pc.first_pass_floor(clocks, n) == floor
 
 
 # ---- the ledger across ADR-0056 ---------------------------------------------------------

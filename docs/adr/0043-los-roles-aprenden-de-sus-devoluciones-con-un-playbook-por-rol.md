@@ -127,8 +127,8 @@ cuerpo del PR dice que cada lección debe leerse antes de fusionar.
 
 A lo sumo `reflect_max_tasks_per_run` (5) tareas × 2 intentos × 1 USD = 10 USD por
 invocación. La cota diaria es esa por la cantidad de ciclos del poller que encontraron
-tareas elegibles. La primera corrida no refleja nada anterior a `started_at`; el relleno es
-explícito con `--since`. `reflect` no emite métricas (la precedente es ADR-0034): su costo
+tareas elegibles. La primera corrida de un producto sin ledger llega hasta `first_pass_floor`, no hasta
+`now` (adenda de ADR-0056); el relleno más profundo sigue siendo explícito con `--since`. `reflect` no emite métricas (la precedente es ADR-0034): su costo
 queda en `reflected.yaml` y en el bloque del PR.
 
 ## Riesgos conocidos
