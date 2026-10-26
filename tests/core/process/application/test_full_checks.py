@@ -105,7 +105,7 @@ async def test_a_green_run_of_a_later_version_follows_the_previous_record():
 
 
 async def test_a_red_run_keeps_no_command_output_in_the_record_only_in_the_section():
-    commands = MemoryCommands(**{"ruff check .": [CommandResult(1, "E501 line too long")]})
+    commands = MemoryCommands(**{"ruff check .": [CommandResult(1, "E501 line too long")] * 2})
     patch = await full_checks(state_of(), CFG, ports_of(commands))
     assert patch["full_checks"]["results"] == [
         {"name": "tests", "passed": True},
@@ -116,7 +116,7 @@ async def test_a_red_run_keeps_no_command_output_in_the_record_only_in_the_secti
 
 
 async def test_a_red_run_reopens_the_integration_with_a_row_per_failed_check_and_the_section():
-    commands = MemoryCommands(**{"ruff check .": [CommandResult(1, "E501 line too long")]})
+    commands = MemoryCommands(**{"ruff check .": [CommandResult(1, "E501 line too long")] * 2})
     ports = ports_of(commands)
     patch = await full_checks(state_of(), CFG, ports)
     reopened = patch["subtasks"][INTEGRATION]
@@ -137,7 +137,7 @@ async def test_a_red_run_reopens_the_integration_with_a_row_per_failed_check_and
 
 
 async def test_a_red_run_at_the_pair_limit_escalates_instead_of_reopening_forever():
-    commands = MemoryCommands(**{"pytest": [CommandResult(1, "1 failed")]})
+    commands = MemoryCommands(**{"pytest": [CommandResult(1, "1 failed")] * 2})
     limited = Configuration(product_dir=MemoryWorkspace.ROOT, max_changes_requested_per_pair=0)
     patch = await full_checks(state_of(), limited, ports_of(commands))
     assert patch["escalated"]
@@ -146,7 +146,7 @@ async def test_a_red_run_at_the_pair_limit_escalates_instead_of_reopening_foreve
 
 
 async def test_a_check_that_dirties_the_tree_leaves_it_clean_green_or_red():
-    for queue in ({}, {"pytest": [CommandResult(1, "boom")]}):
+    for queue in ({}, {"pytest": [CommandResult(1, "boom")] * 2}):
         workspace = MemoryWorkspace()
         ports = memory_ports(
             stack=MemoryStack(checks=CHECKS, delivery_checks=("tests",)),

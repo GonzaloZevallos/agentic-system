@@ -50,7 +50,9 @@ def _record(ports):
 
 
 def test_one_failing_check_is_named_with_its_tail_in_the_record_the_log_and_the_comment(tmp_path):
-    ports = _world(tmp_path, MemoryCommands(**{"run tests": [CommandResult(1, "ran\nFAILED x\n")]}))
+    ports = _world(
+        tmp_path, MemoryCommands(**{"run tests": [CommandResult(1, "ran\nFAILED x\n")] * 2})
+    )
 
     result, logged = _run(ports, tmp_path)
 
@@ -59,7 +61,7 @@ def test_one_failing_check_is_named_with_its_tail_in_the_record_the_log_and_the_
     assert record["passed"] is False and record["failed_step"] == "checks"
     assert record["checks"] == [
         {"name": "lint", "passed": True},
-        {"name": "tests", "passed": False, "tail": ["ran", "FAILED x"]},
+        {"name": "tests", "passed": False, "tail": ["ran", "FAILED x"], "rerun": True},
     ]
     assert any("Failed: tests" in line for line in logged)
     assert "    FAILED x" in logged
@@ -71,18 +73,18 @@ def test_one_failing_check_is_named_with_its_tail_in_the_record_the_log_and_the_
 
 
 def test_two_runs_with_different_failing_checks_comment_twice_and_other_tails_once(tmp_path):
-    ports = _world(tmp_path, MemoryCommands(**{"run tests": [CommandResult(1, "one")]}))
+    ports = _world(tmp_path, MemoryCommands(**{"run tests": [CommandResult(1, "one")] * 2}))
     _run(ports, tmp_path)
     ports.documents.record_closure("GH-5", {"merge_attempts": {"head": HEAD, "count": 0}})
     ports.documents.record_closure("GH-5", {"merge_checks": {"head": "x", "passed": True}})
-    ports.commands.queues = {"run tests": [CommandResult(1, "another tail")]}
+    ports.commands.queues = {"run tests": [CommandResult(1, "another tail")] * 2}
     _run(ports, tmp_path)
     assert len(ports.tracker.comments) == 1  # same failing checks, other tail: silent
     ports.documents.record_closure("GH-5", {"merge_attempts": {"head": HEAD, "count": 0}})
     ports.documents.record_closure("GH-5", {"merge_checks": {"head": "x", "passed": True}})
     ports.commands.queues = {
-        "run lint": [CommandResult(1, "lint says")],
-        "run tests": [CommandResult(1, "t")],
+        "run lint": [CommandResult(1, "lint says")] * 2,
+        "run tests": [CommandResult(1, "t")] * 2,
     }
     _run(ports, tmp_path)
 
@@ -169,7 +171,7 @@ LEFT = "Left for the human to merge."
 
 
 def _failing_world(tmp_path, landing=None):
-    ports = _world(tmp_path, MemoryCommands(**{"run tests": [CommandResult(1, "FAILED x\n")]}))
+    ports = _world(tmp_path, MemoryCommands(**{"run tests": [CommandResult(1, "FAILED x\n")] * 2}))
     if landing is not None:
         ports.documents.record_closure("GH-5", {"landing": landing})
     return ports

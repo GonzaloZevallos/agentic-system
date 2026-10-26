@@ -127,7 +127,7 @@ async def test_a_tiered_delivery_runs_the_fast_tier_then_the_full_suite_once_bef
 
 
 async def test_a_red_full_run_reopens_loops_back_through_review_and_delivers_when_green(config):
-    commands = MemoryCommands(playwright=[CommandResult(1, "e2e failed")])
+    commands = MemoryCommands(playwright=[CommandResult(1, "e2e failed")] * 2)
     stack = MemoryStack(checks=CHECKS, delivery_checks=FAST)
     script = script_for(
         **technical(
@@ -142,7 +142,7 @@ async def test_a_red_full_run_reopens_loops_back_through_review_and_delivers_whe
     assert final["full_checks"]["version"] == 2 and final["full_checks"]["passed"] is True
     ran = commands_run(commands)
     # The suite ran twice, once per head; every delivery gate in between ran fast only.
-    assert ran.count("playwright") == 2
+    assert ran.count("playwright") == 3  # red, its rerun, then green on the next head
     assert ran[-3:] == ["pytest", "ruff", "playwright"]
     assert [c["slug"] for c in script.calls].count("developer") == 2
     assert [c["slug"] for c in script.calls].count("tech_lead_review") == 2
