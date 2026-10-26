@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
+from ..domain.check_schedule import CheckPriority
 from ..domain.ci import CiReport, CiUnreadable, Containment
 from ..domain.design import Design
 from ..domain.performance import Run, Scenario
@@ -1404,6 +1405,50 @@ class PerfLock(Protocol):
 
 
 @dataclass(frozen=True)
+class CheckRequest:
+    """A gate asking for a share of the machine's cores (GH-361, ADR-0065). `enqueued_at`
+    and `token` are `None` on the gate's first call and are the grant's on every later one,
+    so a gate keeps its place in the queue across calls. `wait_max_s` is how long this call
+    may wait; `expires_after_s` is how long the share may be held before the ledger drops
+    it, whatever its holder says."""
+
+    priority: CheckPriority
+    wait_max_s: float
+    expires_after_s: float
+    enqueued_at: float | None = None
+    token: str | None = None
+
+
+@dataclass(frozen=True)
+class Grant:
+    """What a gate holds while it runs checks. `wait_s` is the time this call spent waiting
+    (never part of any check's timeout); `peers` the holders of a share when it was granted;
+    `overdue` that the wait ran out and the share is the minimum, booked beyond the bound."""
+
+    share: int
+    wait_s: float
+    peers: int
+    overdue: bool
+    enqueued_at: float
+    token: str
+
+
+class CheckScheduler(Protocol):
+    """Bounds the CPU demand of the check suites that run at once on this machine, across
+    products and processes. A gate takes a share before it starts and gives it back when it
+    ends."""
+
+    def acquire(self, request: CheckRequest) -> Grant:
+        """Waits for a share, at most `request.wait_max_s`; then takes one anyway, the
+        minimum and marked overdue, rather than never starting."""
+        ...
+
+    def release(self, grant: Grant) -> None:
+        """Gives the share back; harmless when it was already given back."""
+        ...
+
+
+@dataclass(frozen=True)
 class Ports:
     runner: RoleRunner
     documents: TaskDocuments
@@ -1417,6 +1462,8 @@ class Ports:
     commands: Commands
     sample_app: SampleApp
     reaper: ProcessReaper
+    # The machine-wide scheduler of check suites (GH-361): the only way a gate gets cores.
+    check_scheduler: CheckScheduler
     # Not a port: the run as a process, shared by every branch of a fan-out, with
     # nothing outside it to talk to (`limits.py`). It rides here because `Ports` is
     # what a use case receives.
