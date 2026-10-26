@@ -196,6 +196,11 @@ En el código se llama `LAND_HEADROOM`.
 _Avoid_: exento, slot extra, cupo libre
 _Campo_: sin término de arte
 
+**Cercanía**:
+Qué tan cerca de aterrizar está una tarea: el orden en que el poller arranca lo que cuenta contra el tope en una vuelta (reanudaciones, retomas y aterrizajes con modelo; el lanzamiento va último). Se ordena launch < definition < plan < development < review < delivered < land: una tarea con pull request está en `delivered`, una sin ella está en la fase más avanzada que alcanzó una de sus corridas (la más lejana, no la última), y una sin corridas está en `definition`. En el código es `rules.closeness`, un índice en `rules.CLOSENESS`; a igual cercanía decide el número de issue.
+_Avoid_: prioridad, urgencia, proximidad
+_Campo_: sin término de arte
+
 **Revisión de stack**:
 Lo que corre `agentic stack review`: Tech Lead en modo proactivo con el efímero como adversario, sobre un producto, sin tarea detrás — sin PjM, sin issue del que vino, sin rama, sin documento bajo `.agentic/tasks/`. Nunca cambia el stack directo: siempre termina en un issue de platform enhancement del producto, sin la etiqueta `agentic`, con el diff propuesto a `.agentic/stack.yaml`, el `CODING_STANDARDS.md` completo y el borrador del ADR del producto que explica la elección contra el Brief. Sin Brief no decide: termina en un issue `needs-info` que lo pide, y no propone nada (ADR-0025). Una propuesta que el propio camino dejó abierta bloquea una nueva hasta que el humano actúe (ADR-0034).
 _Avoid_: cambio de stack, migración (ninguna corrida cambia código: siempre propone)
