@@ -125,14 +125,27 @@ async def test_the_cap_reflects_five_of_eight_and_leaves_the_default_branch_and_
     assert tracker.labels == [] and tracker.comments == []
 
 
-async def test_the_first_run_writes_started_at_and_reflects_nothing(tmp_path, capsys):
-    root, cfg, ports, tracker = product(tmp_path, 3)
+async def test_the_first_run_of_a_product_with_nothing_closed_only_starts_the_clock(
+    tmp_path, capsys
+):
+    root, cfg, ports, tracker = product(tmp_path, 0)
     await cli._reflect(cfg, ports, None, None)
     assert "reflected 0, 0 left for the next run" in capsys.readouterr().out
     ledger = pc.parse_ledger(git(root, "show", f"agentic/playbook:{pc.LEDGER_FILE}"))
     assert ledger.started_at and not ledger.tasks
     assert ports.runner.calls == []
     assert len(tracker.pull_requests) == 1
+
+
+async def test_the_first_run_with_closed_tasks_reflects_them_and_starts_the_clock_at_the_floor(
+    tmp_path, capsys
+):
+    root, cfg, ports, _tracker = product(tmp_path, 3)
+    await cli._reflect(cfg, ports, None, None)
+    assert "reflected 3, 0 left for the next run" in capsys.readouterr().out
+    ledger = pc.parse_ledger(git(root, "show", f"agentic/playbook:{pc.LEDGER_FILE}"))
+    assert ledger.started_at == CLOSED.format(day=1)
+    assert list(ledger.tasks) == [f"GH-{n}@review" for n in range(1, 4)]
 
 
 async def test_a_pr_closed_unmerged_is_never_asked_twice_and_its_lesson_is_refused(
@@ -163,21 +176,24 @@ async def test_a_pr_closed_unmerged_is_never_asked_twice_and_its_lesson_is_refus
     assert not reflect_run.pending(cfg, ports)
 
 
-async def test_an_auto_merged_task_is_neither_reflected_nor_counted_as_kept(tmp_path, capsys):
-    """ADR-0045: an auto-merged delivery landed without a human verdict, so there is
-    nothing a person kept to learn from; `pc.KEPT` holds only `human_kept` outcomes."""
+async def test_an_auto_merged_task_is_reflected_like_a_merged_one(tmp_path, capsys):
+    """ADR-0056 addendum: the review door admits every delivery that landed. `pc.KEPT`
+    stays what the scorecard counts as kept by a person, so `auto_merged` is not in it."""
     root, cfg, ports, _tracker = product(tmp_path, 2)
     ports.documents.record_closure(
         "GH-2", {"closed_at": CLOSED.format(day=2), "delivery_outcome": "auto_merged"}
     )
     git(root, "add", "-A")
     git(root, "commit", "-qm", "GH-2 auto-merged")
-    assert "auto_merged" not in pc.KEPT
-    assert [d["id"] for d in reflect_run.pending(cfg, ports, since="2026-10-01")] == ["GH-1"]
+    assert "auto_merged" not in pc.KEPT and "auto_merged" in pc.REFLECTABLE
+    pending = reflect_run.pending(cfg, ports, since="2026-10-01")
+    assert [d["id"] for d in pending] == ["GH-1", "GH-2"]
     await cli._reflect(cfg, ports, None, "2026-10-01")
-    assert "reflected 1, 0 left for the next run" in capsys.readouterr().out
+    assert "reflected 2, 0 left for the next run" in capsys.readouterr().out
     ledger = pc.parse_ledger(git(root, "show", f"agentic/playbook:{pc.LEDGER_FILE}"))
-    assert list(ledger.tasks) == ["GH-1@review"]
+    assert list(ledger.tasks) == ["GH-1@review", "GH-2@review"]
+    assert ledger.started_at == "2026-10-01"
+    assert not reflect_run.pending(cfg, ports)
 
 
 async def test_a_replaced_candidate_branch_is_pushed_on_a_lease_at_the_tip_remote_tip_read(
