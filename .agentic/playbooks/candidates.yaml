@@ -606,3 +606,41 @@ candidates:
   sources:
   - finding
   added_at: '2026-10-26T06:08:12.379+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: 'For every guard or checker test you write, add a negative case: feed it an input it must reject and assert it fails. A guard that only ever runs on the real passing input proves nothing.'
+  confidence: medium
+  seen_in:
+  - GH-338
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T06:09:50.342+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: When the brief states an invariant about text a task sees, grep every prompt, schema and refusal text for the old wording and replace it for that case. Do not add a slot next to text that contradicts it.
+  confidence: medium
+  seen_in:
+  - GH-340
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T06:09:50.342+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: When the brief asks that a render equal the old one, compare it with the original text frozen in the test. Do not compare it with a render built from the new constants, or a typo in them passes.
+  confidence: medium
+  seen_in:
+  - GH-340
+  sources:
+  - finding
+  added_at: '2026-10-26T06:09:50.342+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: Before you write to shared state (a log, counter or epoch record) in a new path, find every reader of that state and check the new entries do not change their behaviour on paths outside the brief.
+  confidence: medium
+  seen_in:
+  - GH-342
+  sources:
+  - finding
+  added_at: '2026-10-26T06:09:50.342+00:00'

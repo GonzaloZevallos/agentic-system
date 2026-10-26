@@ -204,3 +204,25 @@ tasks:
       item_id: developer-3
       tasks:
       - GH-336
+  GH-338@review:
+    cost_usd: 0.059
+  GH-340@review:
+    cost_usd: 0.0798
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-typing-silenced
+      lesson: ''
+      item_id: developer-3
+      tasks:
+      - GH-340
+  GH-342@review:
+    cost_usd: 0.0395
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-342
