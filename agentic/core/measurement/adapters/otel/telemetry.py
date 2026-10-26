@@ -41,7 +41,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from agentic.core.process.domain.presubmit import CheckResult, check_durations, final_results
-from agentic.core.process.domain.task import FindingRecord, TaskState, delta
+from agentic.core.process.domain.task import FindingRecord, GateRecord, TaskState, delta
 from agentic.core.process.domain.task import RoleRun as RoleRunRecord
 from agentic.shared.stage0 import CHECKOUT
 
@@ -307,6 +307,33 @@ def _presubmit_arrays(
     return _counts(counts), tuple(durations)
 
 
+def _last_gate(patch: TaskState) -> GateRecord | None:
+    """The record of the last gate invocation this patch ran the checks under (GH-361): the
+    last one of the Developer run's `gates`, or the `full_checks` record's own `gate`; None
+    when no share was taken."""
+    runs = patch.get("runs", [])
+    if runs and (gates := runs[-1].get("gates")):
+        return gates[-1]
+    return patch.get("full_checks", {}).get("gate")
+
+
+def _gate_attributes(gate: GateRecord) -> dict[str, float | int | str | bool]:
+    """`agentic.presubmit.wait_s/.share/.peers/.priority/.overdue`: closed values only, each
+    set when the record holds it (a record written by an older system holds none)."""
+    attributes: dict[str, float | int | str | bool] = {}
+    if "wait_s" in gate:
+        attributes["agentic.presubmit.wait_s"] = gate["wait_s"]
+    if "share" in gate:
+        attributes["agentic.presubmit.share"] = gate["share"]
+    if "peers" in gate:
+        attributes["agentic.presubmit.peers"] = gate["peers"]
+    if "priority" in gate:
+        attributes["agentic.presubmit.priority"] = gate["priority"]
+    if "overdue" in gate:
+        attributes["agentic.presubmit.overdue"] = gate["overdue"]
+    return attributes
+
+
 @dataclass
 class Run:
     """A span plus its clock. `finish` is called by the adapter that has the patch."""
@@ -459,6 +486,8 @@ class RoleRun(Run):
             checks, durations = _presubmit_arrays(invocations)
             attributes["agentic.presubmit.checks"] = checks
             attributes["agentic.presubmit.duration"] = durations
+        if (gate := _last_gate(patch)) is not None:
+            attributes |= _gate_attributes(gate)
         if stats := patch.get("interview_stats"):
             attributes["agentic.interview.rounds"] = stats["rounds"]
             attributes["agentic.interview.questions"] = _counts(

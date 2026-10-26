@@ -365,6 +365,7 @@ def merge_checks_record(
     witness: WitnessResult | None,
     failed_step: FailedStep | None = None,
     setup_failure: tuple[str, str] | None = None,
+    gate: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """The whole `merge_checks` mapping of one run (ADR-0045): the four keys it always
     had, `checks` (one entry per declared check, in declared order, the failing ones with
@@ -408,6 +409,9 @@ def merge_checks_record(
     }
     if not passed:
         record["failed_step"] = failed_step or _derived_step(declared, results)
+    if gate is not None:
+        # The wait for a share apart from the run (GH-361); absent when no grant was taken.
+        record["gate"] = dict(gate)
     return record
 
 

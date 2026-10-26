@@ -156,6 +156,7 @@ def _checks_pass(
         witness=gate.witness_result if gate is not None else None,
         failed_step=failed_step,
         setup_failure=setup_failure,
+        gate=gate.gate if gate is not None else None,
     )
     return record.get("passed") is True
 
