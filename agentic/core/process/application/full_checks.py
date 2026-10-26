@@ -75,7 +75,9 @@ async def full_checks(state: TaskState, cfg: Configuration, ports: Ports) -> Tas
     text = presubmit.failed_checks_markdown(merged, head, neutralise=False)
     if record["passed"]:
         patch: TaskState = {"full_checks": record}
-        text = f"Passed on `{head}`: {', '.join(declared)}."
+        reused = {entry["name"] for entry in record["results"] if entry.get("reused")}
+        shown = [f"{name} (reused)" if name in reused else name for name in declared]
+        text = f"Passed on `{head}`: {', '.join(shown)}."
     else:
         patch = rules.full_checks_return(state, record, cfg.max_changes_requested_per_pair)
         text = text or f"Failed on `{head}`: no check output was recorded."
@@ -103,8 +105,14 @@ def _record(
 
 def _without_output(entries: list[FullCheckEntry]) -> list[FullCheckEntry]:
     """The name and verdict of each check: the record holds no command output (the `tail` the
-    merge record keeps is free text); the `Full checks` section is where it is read."""
-    return [{"name": entry["name"], "passed": entry["passed"]} for entry in entries]
+    merge record keeps is free text); the `Full checks` section is where it is read. A reused
+    row keeps its `reused: true` (ADR-0065)."""
+    return [
+        {"name": entry["name"], "passed": entry["passed"], "reused": True}
+        if entry.get("reused")
+        else {"name": entry["name"], "passed": entry["passed"]}
+        for entry in entries
+    ]
 
 
 def _section(state: TaskState, version: int, text: str) -> dict[str, str]:

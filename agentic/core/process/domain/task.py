@@ -821,6 +821,9 @@ class FullCheckEntry(TypedDict):
 
     name: str
     passed: bool
+    # True when the system took the pass from a stored one instead of running the check
+    # (ADR-0065); absent on a check that ran.
+    reused: NotRequired[bool]
 
 
 class FullChecksRecord(TypedDict):

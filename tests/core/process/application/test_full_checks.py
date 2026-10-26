@@ -195,3 +195,8 @@ async def test_a_second_run_on_the_same_tree_reuses_the_pass_and_runs_no_command
     assert [command for _, command in commands.ran] == ["pytest", "ruff check ."]
     assert all("reused" not in row for row in first["full_checks"]["results"])
     assert second["full_checks"]["passed"] is True
+    assert second["full_checks"]["results"] == [
+        {"name": "tests", "passed": True, "reused": True},
+        {"name": "lint", "passed": True, "reused": True},
+    ]
+    assert "tests (reused)" in second["sections"]["Full checks"]

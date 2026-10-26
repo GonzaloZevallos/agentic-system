@@ -177,9 +177,13 @@ def final_results(rows: Sequence[CheckResult]) -> list[CheckResult]:
 
 
 def check_durations(rows: Sequence[CheckResult]) -> dict[str, float]:
-    """Seconds spent per check name, summed over its rows; a row without one counts zero."""
+    """Seconds spent per check name, summed over its rows; a row without one counts zero.
+    A reused row never ran, so it adds nothing and a check with only reused rows has no
+    entry (ADR-0065): its stored duration is another run's, not a sample of this one."""
     totals: dict[str, float] = {}
     for row in rows:
+        if row.get("reused"):
+            continue
         totals[row["name"]] = totals.get(row["name"], 0.0) + row.get("duration_s", 0.0)
     return totals
 
@@ -276,6 +280,8 @@ def checks_markdown(
     rows = []
     for r in results:
         outcome = "passed" if r["passed"] else "**failed**"
+        if r.get("reused"):
+            outcome += " (reused)"
         cells = [f"`{r['name']}`", f"`{r['command']}`"]
         if moded:
             cells.append(r.get("mode", "-"))
@@ -378,7 +384,11 @@ def merge_checks_record(
         if found is None:
             entries.append({"name": name, "passed": False})
         elif found["passed"]:
-            entries.append({"name": name, "passed": True})
+            entries.append(
+                {"name": name, "passed": True, "reused": True}
+                if found.get("reused")
+                else {"name": name, "passed": True}
+            )
         else:
             entries.append({"name": name, "passed": False, "tail": _tail_of(found["output"])})
     if witness is not None and not witness["passed"]:
