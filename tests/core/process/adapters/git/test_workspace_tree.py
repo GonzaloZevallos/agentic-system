@@ -23,7 +23,7 @@ def product(tmp_path):
     repo = tmp_path / "product"
     repo.mkdir()
     git("init", "-q", "-b", "master", cwd=repo)
-    (repo / "README.md").write_text("v0\n")
+    (repo / "seed.txt").write_text("v0\n")
     git("add", "-A", cwd=repo)
     git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "v0", cwd=repo)
     return repo
@@ -37,7 +37,7 @@ def test_tree_is_head_caret_tree_and_follows_the_content_not_the_commit(product)
     git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "e",
         cwd=product)  # fmt: skip
     assert ws.tree(product) == before
-    (product / "README.md").write_text("v1\n")
+    (product / "seed.txt").write_text("v1\n")
     ws.commit_all(product, "v1")
     assert ws.tree(product) != before
 
