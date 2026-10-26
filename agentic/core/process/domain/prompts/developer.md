@@ -75,7 +75,7 @@ item by item is the self-check: an item with no location is work still to do, no
 something to deliver. The forms, quoted exactly:
 
 - `invariant N: <path>:<line>[-<last>][ (<comment>)][, <path>:<line>…]`, the locations in
-  your diff that satisfy it. A location is a line or a range of lines (`a.py:10-24`, the
+  your diff that satisfy it. A location is a line or a range of lines (`src/app/main:10-24`, the
   last line not before the first), and each may carry one comment in parentheses at its
   end; the commas inside the comment do not separate locations and the comment holds no
   parentheses of its own.
@@ -90,10 +90,10 @@ A complete map for a plan with three invariants, one plain location, one range w
 comment, one invariant not touched and one brief item:
 
 ```
-invariant 1: src/app.py:42
-invariant 2: tests/test_app.py:10-24 (new test, inserted before the helper)
+invariant 1: src/app/main:42
+invariant 2: tests/app/main_test:10-24 (new test, inserted before the helper)
 invariant 3: not touched by this subtask: only the prompts change
-brief: add the parser -> src/app.py:30-60
+brief: add the parser -> src/app/main:30-60
 ```
 
 When a line is refused, the refusal shows it corrected where the slip is mechanical; that

@@ -43,10 +43,10 @@ NOT_TOUCHED_FORM = f"invariant N: {NOT_TOUCHED}: <one phrase>"
 # The complete map the refusal, the schema and the Developer prompt quote; the prompt
 # carries it as a literal fenced block that a test pins against this constant.
 EXAMPLE = (
-    "invariant 1: src/app.py:42\n"
-    "invariant 2: tests/test_app.py:10-24 (new test, inserted before the helper)\n"
+    "invariant 1: src/app/main:42\n"
+    "invariant 2: tests/app/main_test:10-24 (new test, inserted before the helper)\n"
     f"invariant 3: {NOT_TOUCHED}: only the prompts change\n"
-    "brief: add the parser -> src/app.py:30-60"
+    "brief: add the parser -> src/app/main:30-60"
 )
 
 _INVARIANT = re.compile(r"invariant\s+(\d+)\s*:\s*(.*)", re.IGNORECASE)
