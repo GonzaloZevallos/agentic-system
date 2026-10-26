@@ -1446,7 +1446,17 @@ def run_once(
                     len(rules.LAUNCH_SCHEDULE),
                 )
             )
-        notes = [*spend_notes, *_upstream_notes(upstream.cache_info().currsize > 0, upstream)]
+        tasks_root = (cfg.product_dir / document.TASKS_SUBDIR).resolve()
+        own_key = rules.root_key(str(tasks_root))
+        waits, wait_notes = registry.land_waits(now)
+        # A product never holds itself: only another root's fresh record holds this round.
+        others_landing = any(w.root_key != own_key for w in waits)
+        previous = next((w.since for w in waits if w.root_key == own_key), None)
+        notes = [
+            *spend_notes,
+            *wait_notes,
+            *_upstream_notes(upstream.cache_info().currsize > 0, upstream),
+        ]
         plan = rules.poll_plan(
             closes=closes,
             resumes=resumes,
@@ -1461,6 +1471,17 @@ def run_once(
             pace=pace,
             land_slots=max(cfg.max_concurrent_runs + rules.LAND_HEADROOM - live, 0),
             closeness=ranks,
+            others_landing=others_landing,
+        )
+        # Right after the decision and before `execute`, so no exit path leaves the previous
+        # round's record in place: a round with no waiting land removes it.
+        waiting_lands = sorted(d.issue for d in plan.deferred if rules.holds_launches(d))
+        registry.publish_land_wait(
+            tasks_root,
+            product,
+            waiting_lands,
+            rules.land_wait_since(previous, bool(waiting_lands), now),
+            now,
         )
         lines = execute(
             plan.actions,

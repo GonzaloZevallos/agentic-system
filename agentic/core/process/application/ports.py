@@ -21,7 +21,7 @@ from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
-from ..domain.rules import MergeFailure, RunKind, SpendRun, motive
+from ..domain.rules import LandWait, MergeFailure, RunKind, SpendRun, motive
 from ..domain.stall import ChildActivity
 from ..domain.suppressions import Forbidden
 from ..domain.task import (
@@ -1285,6 +1285,27 @@ class RunRegistry(Protocol):
         """Every product's published runs that ended at or after `since`, from the spend
         files under this registry only -- never from another product's directory --
         and the notes of the files or entries it skipped."""
+        ...
+
+    def land_waits(self, now: datetime) -> tuple[list[LandWait], list[str]]:
+        """Every product's published Espera de aterrizaje (GH-362) that is still fresh at
+        `now`, and a note per file it could not read. It filters for staleness only -- a
+        record older than `rules.LAND_WAIT_TTL` or written under another boot -- and decides
+        nothing: whether a record holds anything is `rules.poll_plan`'s."""
+        ...
+
+    def publish_land_wait(
+        self,
+        root: Path,
+        product: str,
+        issues: Sequence[int],
+        since: datetime | None,
+        now: datetime,
+    ) -> None:
+        """Write this poller's own wait record, keyed by the resolved `root`, whole and
+        replaced atomically: the `issues` whose land waits for a slot, `since` when the wait
+        began (`now` when `None`). Empty `issues` remove the record. Called under
+        `exclusive()`; `waiting/` is created only when something is published."""
         ...
 
 

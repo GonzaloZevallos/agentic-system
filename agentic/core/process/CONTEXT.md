@@ -191,9 +191,15 @@ _Avoid_: corrida libre, non-counting run
 _Campo_: sin término de arte
 
 **Cupo reservado para aterrizaje**:
-El único cupo por encima del tope de concurrencia que sólo puede usar un aterrizaje que gasta modelo (`land_model`) de una tarea entregada: ni un lanzamiento, ni una reanudación, ni una retoma lo usan. Lo ocupa el aterrizaje mientras vive y, después, la reanudación que lanzó, que el aterrizaje espera ver registrada antes de terminar; así las corridas vivas que cuentan llegan a lo sumo al tope más uno. No es una exención: el aterrizaje y su reanudación cuentan. No arranca mientras una pausa por límite de cuenta del mismo producto espera su calendario.
+El único cupo por encima del tope de concurrencia que sólo puede usar un aterrizaje que gasta modelo (`land_model`) de una tarea entregada: ni un lanzamiento, ni una reanudación, ni una retoma lo usan. Lo ocupa el aterrizaje mientras vive y, después, la reanudación que lanzó, que el aterrizaje espera ver registrada antes de terminar; así las corridas vivas que cuentan llegan a lo sumo al tope más uno. No es una exención: el aterrizaje y su reanudación cuentan. No arranca mientras una pausa por límite de cuenta del mismo producto espera su calendario. Lo que ve el resto de los productos mientras ese aterrizaje espera es la Espera de aterrizaje.
 En el código se llama `LAND_HEADROOM`.
 _Avoid_: exento, slot extra, cupo libre
+_Campo_: sin término de arte
+
+**Espera de aterrizaje**:
+El hecho que un producto publica en el registro de corridas mientras un aterrizaje con modelo (`land_model`) suyo espera cupo (`Deferred` `no_slot`): lo reescribe cada vuelta del poller y lo borra la primera vuelta sin esa espera. Vence solo, sin que su escritor lo limpie, a los 15 minutos (`rules.LAND_WAIT_TTL`) o con otro arranque de la máquina, así que un poller muerto no retiene a nadie. Mientras otro producto tiene una vigente, este no arranca nada que cuente contra el tope por debajo de un aterrizaje (lanzamientos, reanudaciones, retomas); los aterrizajes, los cierres, los hijos exentos y las corridas lanzadas a mano no se retienen. Un producto nunca se retiene a sí mismo.
+En el código es `rules.holds_launches` (qué `Deferred` la abre) y `rules.LandWait` (lo publicado).
+_Avoid_: reserva, bloqueo, cola de aterrizaje
 _Campo_: sin término de arte
 
 **Cercanía**:

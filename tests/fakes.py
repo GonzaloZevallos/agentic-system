@@ -1267,6 +1267,10 @@ class MemoryRunRegistry:
         self.publish_calls: list[tuple[Path, str, list[rules.SpendRun], datetime]] = []
         self.spend_calls: list[datetime] = []
         self.spend_notes: list[str] = []
+        # GH-362: the published land waits by resolved root, and every call made.
+        self.land_wait_records: dict[Path, tuple[str, datetime, datetime, tuple[int, ...]]] = {}
+        self.land_wait_notes: list[str] = []
+        self.land_wait_publishes: list[tuple[Path, str, tuple[int, ...], datetime | None]] = []
 
     def register(self, product: str, task_id: str, kind: rules.RunKind = "role") -> None:
         self.registered.append((product, task_id))
@@ -1306,6 +1310,30 @@ class MemoryRunRegistry:
         self.spend_calls.append(since)
         runs = [r for mine in self.published.values() for r in mine if r.ended_at >= since]
         return runs, list(self.spend_notes)
+
+    def publish_land_wait(
+        self,
+        root: Path,
+        product: str,
+        issues: Sequence[int],
+        since: datetime | None,
+        now: datetime,
+    ) -> None:
+        root = root.resolve()
+        self.land_wait_publishes.append((root, product, tuple(issues), since))
+        if not issues:
+            self.land_wait_records.pop(root, None)
+            return
+        began = now if since is None else since
+        self.land_wait_records[root] = (product, now, began, tuple(sorted(issues)))
+
+    def land_waits(self, now: datetime) -> tuple[list[rules.LandWait], list[str]]:
+        waits = [
+            rules.LandWait(product, rules.root_key(str(root)), written_at, since, issues)
+            for root, (product, written_at, since, issues) in self.land_wait_records.items()
+            if now - written_at <= rules.LAND_WAIT_TTL
+        ]
+        return waits, list(self.land_wait_notes)
 
 
 class FakePerfRunner:

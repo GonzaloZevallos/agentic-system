@@ -683,3 +683,27 @@ Decisión: `MergeFacts.conflicts` sigue siendo un solo hecho, derivado en un sol
 - Sin valor nuevo en `MergeRefusal`: la negativa sigue siendo `merge_conflict`, fuera de `COMMENTED`, y `landing_step` no cambia. Cada línea de log de `merge_conflict` nombra su origen, `github` o `probe`: texto libre, no una etiqueta.
 - Un conflicto que GitHub ve y git no puede repetir `sync_master`; lo acota `LANDING_UNSYNCED_MAX` por sha de upstream.
 - §7: ninguna señal se mueve. §8: dos campos escalares más en una consulta GraphQL que ya se hace una vez por tarea y por vuelta; el costo sigue siendo proporcional a los PR abiertos.
+
+## Adenda (2026-10-26): terminar antes de empezar (GH-362)
+
+Caso: desde 2026-10-12 el poller de apostrophe escribió `land #N waits: no_slot` 139 veces, y el 25 de octubre el aterrizaje de agentic-system #352 esperó mientras corridas de apostrophe llenaban cada cupo. El Cupo reservado de GH-270 es de un producto: el poller de A no ve que el de B llena la máquina mientras un aterrizaje de A espera. Esta adenda enmienda la de GH-270; no cambia `counts_against_cap` ni `LAND_HEADROOM`.
+
+Decisión, dos reglas del plan:
+
+- **Espera de aterrizaje.** Cada poller, con el `plan.deferred` de la vuelta, publica en el registro de corridas qué aterrizajes `land_model` suyos esperan cupo (`holds_launches`: sólo `Deferred("land", _, "no_slot")`; `exempt_busy` y `pause_waiting` nunca publican). La escritura va dentro de `registry.exclusive()`, justo después de `poll_plan` y antes de `execute`, así que ninguna salida deja el registro de la vuelta anterior: una vuelta sin espera borra el archivo. El archivo es `waiting/<sha256(raíz de tareas resuelta)[:12]>.json` con `{product, root, written_at, boot_id, since, issues}`, entero, junto a `launches/` y `spend/`. Mientras otra raíz tenga un registro fresco, `poll_plan(others_landing=True)` retiene todo arranque que cuenta y está por debajo de un aterrizaje: lanzamientos, reanudaciones y retomas de cualquier fase. Los aterrizajes, los cierres y los hijos exentos no se retienen; un producto nunca se retiene a sí mismo (compara su clave de raíz).
+- **Vencimiento sin que el escritor lo limpie.** El adaptador descarta un registro más viejo que `rules.LAND_WAIT_TTL` (15 min), uno de otro `boot_id` y uno ilegible (con una nota); no decide nada más: si un registro retiene algo lo decide `rules.poll_plan`. Un poller muerto nunca retiene a otro por más de 15 minutos, y uno vivo reescribe cada vuelta.
+- **Cercanía.** `rules.CLOSENESS = ("launch", *PHASES, "delivered", "land")` y `rules.closeness(state)`; `poll_plan` arranca retomas y reanudaciones en orden `(-rango, tipo, issue)`, la retoma antes que la reanudación a igual rango, y el aterrizaje compite con el rango de `land`. Con un `run_once` de producción (`H = A + 1` o `H = A = 0`) arrancan los mismos hijos que antes y sólo cambia el orden de las acciones. Reparto del cupo, con `A = available_slots`, `H = land_slots` y `n` las retomas y reanudaciones que podrían arrancar:
+
+  | caso | aterrizaje | retomas y reanudaciones, en orden de rango | el lanzamiento ve |
+  |---|---|---|---|
+  | `account_paused` | `Deferred(pause_waiting)` | `min(n, A)`, plano | `A - started` |
+  | `H <= 0` | `Deferred(no_slot)` | ninguna | 0 |
+  | `H > 0`, `A > n` | cupo plano | las `n`, plano | `A - n - 1` |
+  | `H > 0`, `A <= n`, `H > A` | cupo reservado | `A`, plano | 0 |
+  | `H > 0`, `A <= n`, `H == A` | cupo plano | `A - 1`, plano | 0 |
+
+  Retomas y reanudaciones nunca usan el cupo reservado y a lo sumo un aterrizaje arranca por vuelta.
+- **Aterrizaje contra aterrizaje.** Pendiente: el orden entre aterrizajes de distintos productos lo fija la subtarea siguiente (`land-queue`) y se escribe aquí.
+- **Costo asumido.** Un producto con varios aterrizajes seguidos retiene los arranques de los otros mientras dure su cola; es el precio de terminar antes de empezar.
+- **Fuera de alcance.** La serialización de los hijos exentos (`exempt_busy`, adenda de GH-263) no cambia; una corrida lanzada a mano nunca se retiene ni se rechaza, sólo cuenta en `registry.live()` contra el tope; y esta adenda no afirma que el tiempo hasta el merge mejore: lo que mide `scripts/poll_waits.py` es la espera del aterrizaje en el diario del poller.
+- **§7.** No se agrega, mueve ni quita ninguna métrica, span, etiqueta, clave del documento ni prompt; lo nuevo es el archivo `waiting/` del registro, fuera de todo repo. **§8.** Un archivo más por producto; el costo por vuelta es lineal en el número de productos (dos o tres) y no crece con los datos.

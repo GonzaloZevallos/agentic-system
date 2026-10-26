@@ -2995,6 +2995,56 @@ class Deferred:
     reason: Literal["no_slot", "exempt_busy", "pause_waiting"]
 
 
+def holds_launches(deferred: Deferred) -> bool:
+    """Whether this deferral opens an Espera de aterrizaje (ADR-0045 addendum, GH-362): the
+    product's poller publishes it, and the other products hold every counted start below a
+    land while it lasts. Only a `land` that waits for a slot does: `exempt_busy` is the
+    serialisation of the children that take no slot, and `pause_waiting` waits on the
+    account's calendar, which another product's start does not lengthen."""
+    match deferred.reason:
+        case "no_slot":
+            return deferred.kind == "land"
+        case "exempt_busy" | "pause_waiting":
+            return False
+        case _:
+            assert_never(deferred.reason)
+
+
+LAND_WAIT_TTL = timedelta(minutes=15)
+"""How long a published Espera de aterrizaje holds the other products after its writer last
+rewrote it: a poller that died never holds anyone for longer (GH-362). A poller rewrites it
+every round while its land waits, so a live one never lets it expire."""
+
+
+@dataclass(frozen=True)
+class LandWait:
+    """The fact one product's poller publishes while a land of its own waits for a slot:
+    `root_key` names the tasks root of the writer (`root_key`), `since` when the wait began
+    and `issues` the lands that wait."""
+
+    product: str
+    root_key: str
+    written_at: datetime
+    since: datetime
+    issues: tuple[int, ...]
+
+
+def root_key(root: str) -> str:
+    """The twelve hex digits that name one poller's tasks root (the resolved path) in the
+    registry's per-product files. The one place the key is computed, so a poller recognises
+    its own record."""
+    return hashlib.sha256(root.encode("utf-8")).hexdigest()[:12]
+
+
+def land_wait_since(previous: datetime | None, waiting: bool, now: datetime) -> datetime | None:
+    """When the wait this round publishes began: `None` when no land waits (the record is
+    removed), the `since` of the poller's own previous, still fresh record when it had one,
+    otherwise `now`."""
+    if not waiting:
+        return None
+    return now if previous is None else previous
+
+
 @dataclass(frozen=True)
 class PollPlan:
     """What `poll_plan` decides: the `actions` in the order to carry them out, and what it
@@ -3033,6 +3083,7 @@ def poll_plan(
     land_slots: int | None = None,
     crash_retakes: Sequence[int] = (),
     closeness: Mapping[int, int] = {},
+    others_landing: bool = False,
 ) -> PollPlan:
     """This round's actions, in the order the Tech Lead plan fixes: every close first
     (merging freed the slot it used, if any, so closing never spends one); then what
@@ -3059,6 +3110,11 @@ def poll_plan(
     key is rank 0 and an empty mapping makes every rank tie. Retakes and due resumes are
     started in `(-rank, kind, issue)` order, a retake before a resume at a tie, and the
     land competes at the rank of `CLOSENESS` "land", so it goes first in `actions`.
+
+    `others_landing` (GH-362, Espera de aterrizaje) is true while another product has a fresh
+    published wait for a land: every start ranked below a land is held, that is every launch,
+    resume and retake, whatever its phase. Lands, closes and the children that take no slot
+    are untouched, and nothing held leaves a deferral.
 
     `lands` (GH-239) are the issues whose refusal has a built landing step not yet taken on
     their head (`landing_step`; `wait` and `none` are never among them), each with the kind
@@ -3119,6 +3175,8 @@ def poll_plan(
         ((-closeness.get(r.issue, 0), 1, r.issue, ""), PollAction("resume", r.issue))
         for r in due_resumes
     ]
+    if others_landing:
+        starts = []
     # The land takes a plain slot unless the starts below it would use them all; then it
     # takes the headroom if there is one. Retakes and resumes never use the headroom.
     land_on_headroom = land_starts and len(starts) >= received_slots and land_total > received_slots
@@ -3148,7 +3206,7 @@ def poll_plan(
     some_resume_still_waiting = any(
         not resume_exhausted(r) and retake_due(r, now) is None for r in resumes
     )
-    if slots_left > 0 and not some_resume_still_waiting:
+    if slots_left > 0 and not some_resume_still_waiting and not others_landing:
         ready = sorted(
             (
                 c

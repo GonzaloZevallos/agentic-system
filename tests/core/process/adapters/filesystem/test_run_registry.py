@@ -11,8 +11,11 @@ import socket
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from agentic.core.process.adapters.filesystem.run_registry import FilesystemRunRegistry
 from agentic.core.process.application.ports import LaunchAttempt, RunRegistration
+from agentic.core.process.domain import rules
 from agentic.core.process.domain.rules import SpendRun
 
 DEAD_PID = 999_999_999
@@ -350,3 +353,108 @@ def test_a_failed_write_leaves_neither_a_record_nor_a_temp_file(tmp_path, monkey
     else:
         raise AssertionError("the OSError must reach the caller")
     assert list(registry.dir.iterdir()) == []
+
+
+# -- land waits (GH-362, Espera de aterrizaje) ----------------------------------------------
+
+WAIT_NOW = datetime(2026, 10, 26, 12, 0, tzinfo=UTC)
+
+
+def _waiting_files(registry: FilesystemRunRegistry) -> list[Path]:
+    return sorted((registry.dir / "waiting").glob("*.json"))
+
+
+def test_a_published_land_wait_is_read_back_whole(tmp_path):
+    registry = FilesystemRunRegistry(tmp_path / "runs", boot_id=lambda: "boot-1")
+    began = WAIT_NOW - timedelta(minutes=3)
+
+    registry.publish_land_wait(tmp_path / "tasks", "apostrophe", [7, 5], began, WAIT_NOW)
+
+    key = hashlib.sha256(str((tmp_path / "tasks").resolve()).encode()).hexdigest()[:12]
+    assert [p.name for p in _waiting_files(registry)] == [f"{key}.json"]
+    waits, notes = registry.land_waits(WAIT_NOW)
+    assert notes == []
+    assert waits == [
+        rules.LandWait("apostrophe", key, WAIT_NOW, began, (5, 7)),
+    ]
+
+
+def test_a_land_wait_without_a_since_begins_now(tmp_path):
+    registry = FilesystemRunRegistry(tmp_path / "runs", boot_id=lambda: "boot-1")
+
+    registry.publish_land_wait(tmp_path / "tasks", "p", [5], None, WAIT_NOW)
+
+    assert [w.since for w in registry.land_waits(WAIT_NOW)[0]] == [WAIT_NOW]
+
+
+def test_nothing_is_created_by_reading_land_waits(tmp_path):
+    registry = FilesystemRunRegistry(tmp_path / "runs")
+
+    assert registry.land_waits(WAIT_NOW) == ([], [])
+    assert not (tmp_path / "runs").exists()
+
+
+def test_a_land_wait_older_than_the_ttl_is_dropped_and_one_at_the_ttl_is_kept(tmp_path):
+    registry = FilesystemRunRegistry(tmp_path / "runs", boot_id=lambda: "boot-1")
+    registry.publish_land_wait(tmp_path / "tasks", "p", [5], None, WAIT_NOW)
+
+    assert registry.land_waits(WAIT_NOW + rules.LAND_WAIT_TTL)[0] != []
+    assert registry.land_waits(WAIT_NOW + rules.LAND_WAIT_TTL + timedelta(seconds=1)) == ([], [])
+
+
+def test_a_land_wait_written_under_another_boot_is_dropped(tmp_path):
+    before = FilesystemRunRegistry(tmp_path / "runs", boot_id=lambda: "boot-1")
+    before.publish_land_wait(tmp_path / "tasks", "p", [5], None, WAIT_NOW)
+    after = FilesystemRunRegistry(tmp_path / "runs", boot_id=lambda: "boot-2")
+
+    assert before.land_waits(WAIT_NOW)[0] != []
+    assert after.land_waits(WAIT_NOW) == ([], [])
+
+
+def test_a_land_wait_with_no_boot_id_is_kept_only_while_fresh(tmp_path):
+    registry = FilesystemRunRegistry(tmp_path / "runs", boot_id=lambda: None)
+    registry.publish_land_wait(tmp_path / "tasks", "p", [5], None, WAIT_NOW)
+
+    assert registry.land_waits(WAIT_NOW)[0] != []
+    assert registry.land_waits(WAIT_NOW + timedelta(hours=1)) == ([], [])
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["not json", "{}", '{"product": "p", "root": "r", "written_at": "x", "since": "x"}', "[]"],
+)
+def test_an_unreadable_land_wait_file_is_skipped_with_a_note_and_the_others_still_read(
+    tmp_path, content
+):
+    registry = FilesystemRunRegistry(tmp_path / "runs", boot_id=lambda: "boot-1")
+    registry.publish_land_wait(tmp_path / "tasks", "good", [5], None, WAIT_NOW)
+    (tmp_path / "runs" / "waiting" / "broken.json").write_text(content, encoding="utf-8")
+
+    waits, notes = registry.land_waits(WAIT_NOW)
+
+    assert [w.product for w in waits] == ["good"]
+    assert notes == ["agentic: poll: land wait file broken.json unreadable, skipped"]
+
+
+def test_publishing_no_issues_removes_the_record_and_is_a_no_op_without_one(tmp_path):
+    registry = FilesystemRunRegistry(tmp_path / "runs", boot_id=lambda: "boot-1")
+    registry.publish_land_wait(tmp_path / "tasks", "p", [], None, WAIT_NOW)
+    assert not (tmp_path / "runs" / "waiting").exists()
+
+    registry.publish_land_wait(tmp_path / "tasks", "p", [5], None, WAIT_NOW)
+    registry.publish_land_wait(tmp_path / "tasks", "p", [], None, WAIT_NOW)
+
+    assert _waiting_files(registry) == []
+    assert registry.land_waits(WAIT_NOW) == ([], [])
+
+
+def test_two_roots_publish_two_records_and_each_rewrite_replaces_its_own(tmp_path):
+    registry = FilesystemRunRegistry(tmp_path / "runs", boot_id=lambda: "boot-1")
+    registry.publish_land_wait(tmp_path / "a", "a", [1], None, WAIT_NOW)
+    registry.publish_land_wait(tmp_path / "b", "b", [2], None, WAIT_NOW)
+    registry.publish_land_wait(tmp_path / "a", "a", [3], None, WAIT_NOW)
+
+    assert sorted((w.product, w.issues) for w in registry.land_waits(WAIT_NOW)[0]) == [
+        ("a", (3,)),
+        ("b", (2,)),
+    ]
