@@ -53,6 +53,7 @@ async def full_checks(state: TaskState, cfg: Configuration, ports: Ports) -> Tas
         witness=ports.stack.witness(base),
         parallel=ports.stack.parallel_checks(base),
         reuse=reuse_of(ports, base),
+        flake_gate="full_checks",
     )
     head = workspace.full_head(task.path)
     started = time.monotonic()
@@ -82,6 +83,8 @@ async def full_checks(state: TaskState, cfg: Configuration, ports: Ports) -> Tas
         patch = rules.full_checks_return(state, record, cfg.max_changes_requested_per_pair)
         text = text or f"Failed on `{head}`: no check output was recorded."
     patch["sections"] = _section(state, record["version"], text)
+    if flakes := gate.flakes():
+        patch["flakes"] = flakes
     return finish(state, patch, ports)
 
 

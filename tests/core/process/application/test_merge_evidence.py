@@ -190,13 +190,14 @@ def test_a_refusal_whose_step_is_none_is_left_to_the_human(tmp_path):
 def test_a_refusal_with_a_step_is_never_left_to_the_human_and_names_the_step_once(
     tmp_path, monkeypatch
 ):
-    monkeypatch.setattr(landing_plan, "LIVE_STEPS", frozenset({"rerun"}))
+    # The gate reran the red check itself (ADR-0066), so the landing goes straight to a fix.
+    monkeypatch.setattr(landing_plan, "LIVE_STEPS", frozenset({"fix"}))
     ports = _failing_world(tmp_path)
     _run(ports, tmp_path)
     _run(ports, tmp_path)
     texts = [text for _, text in ports.tracker.comments]
     assert not any(LEFT in text for text in texts)
-    assert [t for t in texts if t.startswith("Landing: ")] == [f"Landing: {HEAD} rerun"]
+    assert [t for t in texts if t.startswith("Landing: ")] == [f"Landing: {HEAD} fix"]
 
 
 def test_a_refusal_with_an_unbuilt_step_posts_no_landing_comment_and_no_hand_off(tmp_path):

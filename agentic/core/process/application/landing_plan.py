@@ -151,6 +151,21 @@ def spent(
         verdict_syncs_for_upstream=verdict_syncs,
         verdict_sync_due=due,
         last_verdict=last_verdict,
+        checks_rerun_on_head=_gate_reran(raw, head),
+    )
+
+
+def _gate_reran(raw: Mapping[str, object], head: str | None) -> bool:
+    """The recorded `merge_checks` is of `head` and holds a red check whose last row is the
+    gate's own rerun (ADR-0066). Tolerant of a record from before the rerun, which has no
+    marker, and of one that is not the shape the merge writes."""
+    record = raw.get("merge_checks")
+    if head is None or not isinstance(record, Mapping) or record.get("head") != head:
+        return False
+    checks = record.get("checks")
+    return isinstance(checks, list) and any(
+        isinstance(entry, Mapping) and entry.get("passed") is False and entry.get("rerun") is True
+        for entry in checks
     )
 
 

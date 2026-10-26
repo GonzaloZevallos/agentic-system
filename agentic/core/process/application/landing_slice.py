@@ -18,7 +18,7 @@ from pathlib import Path
 
 from ..domain import ci, presubmit, rules
 from ..domain import landing as landing_rules
-from ..domain.task import TaskState
+from ..domain.task import TaskState, add_flakes
 from . import landing_plan
 from .checkouts import task_base
 from .landing_plan import LandingContext
@@ -144,6 +144,7 @@ def _checks_pass(
             witness=ports.stack.witness(base),
             parallel=ports.stack.parallel_checks(base),
             reuse=reuse_of(ports, base),
+            flake_gate="merge",
         )
         gate()
     record = presubmit.merge_checks_record(
@@ -156,6 +157,12 @@ def _checks_pass(
         failed_step=failed_step,
         setup_failure=setup_failure,
     )
+    if gate is not None and (flakes := gate.flakes()):
+        # ADR-0066: a flake on the slice is recorded like the merge gate's, and never changes
+        # the verdict; the `merge_checks` record itself stays the main pull request's.
+        ports.documents.record_closure(
+            context.task_id, {"flakes": add_flakes(raw.get("flakes", []), flakes)}
+        )
     return record.get("passed") is True
 
 
