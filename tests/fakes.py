@@ -54,7 +54,7 @@ from agentic.core.process.domain.ci import CiReport, CiUnreadable, Containment
 from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.performance import Run, Scenario
 from agentic.core.process.domain.playbook import Playbook
-from agentic.core.process.domain.presubmit import CheckResult
+from agentic.core.process.domain.presubmit import CheckResult, RerunForm
 from agentic.core.process.domain.reaping import ReapedProcess
 from agentic.core.process.domain.roles import PROMPTS_DIR, Role
 from agentic.core.process.domain.rules import MergeFailure
@@ -283,6 +283,7 @@ class MemoryStack:
         affected_fallback: tuple[str, ...] = (),
         performance: dict[str, Scenario] | None = None,
         delivery_checks: tuple[str, ...] = (),
+        rerun_checks: dict[str, RerunForm] | None = None,
     ) -> None:
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -322,6 +323,8 @@ class MemoryStack:
         self.declared_affected_fallback = affected_fallback
         # Empty is a product with no tiers: every delivery runs all of `checks`.
         self.declared_delivery_checks = delivery_checks
+        # Empty is a product with no failed-tests-only form (ADR-0066), the gate of today.
+        self.declared_rerun_checks = {} if rerun_checks is None else rerun_checks
         # Empty is a product with no performance budget (GH-318), every product until its own
         # file declares one.
         self.declared_performance = {} if performance is None else performance
@@ -360,6 +363,10 @@ class MemoryStack:
     def delivery_checks(self, revision: str) -> tuple[str, ...]:
         # Not tracked in `revisions` either, `witness`'s own reason.
         return self.declared_delivery_checks
+
+    def rerun_checks(self, revision: str) -> dict[str, RerunForm]:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_rerun_checks
 
     def forbidden(self, revision: str) -> list[Forbidden]:
         # Not tracked in `revisions` either, `witness`'s own reason.

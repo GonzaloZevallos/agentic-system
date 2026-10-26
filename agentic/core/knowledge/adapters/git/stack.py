@@ -9,6 +9,7 @@ import yaml
 
 from ....process.domain.design import Design
 from ....process.domain.performance import Scenario
+from ....process.domain.presubmit import RerunForm
 from ....process.domain.suppressions import Forbidden
 from ...domain import stack
 
@@ -48,6 +49,10 @@ class GitStack:
     def delivery_checks(self, revision: str) -> tuple[str, ...]:
         data, source = self._declaration(revision)
         return stack.delivery_checks(data, source)
+
+    def rerun_checks(self, revision: str) -> dict[str, RerunForm]:
+        data, source = self._declaration(revision)
+        return stack.rerun_checks(data, source)
 
     def forbidden(self, revision: str) -> tuple[Forbidden, ...]:
         data, source = self._declaration(revision)

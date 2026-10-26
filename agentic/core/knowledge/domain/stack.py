@@ -43,6 +43,16 @@ list equal to all of `checks` is valid (tiers are on, and the full tier is the r
 affected forms). Present and empty, a non-list, a blank or non-string entry, a duplicate and
 a name that is not under `checks` all fail at load.
 
+**`rerun_checks`**: optional (ADR-0066). A mapping of a check's name, which must also be under
+`checks`, to `{command, test_id}`: the "failed tests only" form of the check and the regex whose
+single group names a failed test in its output. Only the delivery gate runs the form, and only
+after a failure whose output `test_id` found at least one id in; every other rerun is the check's
+own command. A form requires `delivery_checks`, so the full run on the integrated head that
+tier guarantees always covers what the form skipped. The regex runs inside the system's process,
+so it is validated here: it compiles, has exactly one group, is at most 200 characters, has no
+quantified group that contains a quantifier and no alternation inside a quantified group (the
+shapes that backtrack catastrophically). Absent it reads as `{}`: the gate of today.
+
 **`performance`**: optional (GH-318, ADR-0059). A mapping of scenario name to the `seed` and
 `measure` one-line commands, the `volume` and its `volume_unit` (`rows|days|months|years`)
 they must run against, and the `limits` of its metrics (`{limit, unit: ms|queries|kb}`; the
@@ -60,12 +70,15 @@ which is why it is declared and not guessed.
 
 from __future__ import annotations
 
+import importlib
 import re
 from pathlib import Path
 from typing import Any
 
 from agentic.core.process.domain import performance as perf
 from agentic.core.process.domain.design import Design
+from agentic.core.process.domain.presubmit import FlakeGate as FlakeGate
+from agentic.core.process.domain.presubmit import RerunForm
 from agentic.core.process.domain.suppressions import Forbidden
 
 # What a product copies to start, shown by the error when it declared nothing. It is a
@@ -87,6 +100,7 @@ KEYS = (
     "design",
     "ci",
     "performance",
+    "rerun_checks",
 )
 # The token an affected-only command carries where the task's base sha goes (ADR-0046).
 BASE_TOKEN = "{base}"
@@ -102,6 +116,9 @@ DESIGN_KEYS = ("prototype", "entry", "sample_app", "compare")
 PERFORMANCE_KEYS = ("seed", "measure", "volume", "volume_unit", "limits")
 LIMIT_KEYS = ("limit", "unit")
 VOLUME_UNITS = ("rows", "days", "months", "years")
+# Every sub-key one `rerun_checks` entry declares, and the longest `test_id` it accepts (ADR-0066).
+RERUN_KEYS = ("command", "test_id")
+TEST_ID_MAX_LENGTH = 200
 SLUG = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 
 
@@ -288,6 +305,117 @@ def delivery_checks(data: object, source: object) -> tuple[str, ...]:
                 f"`checks`; expected one of {', '.join(known)}"
             )
     return tuple(names)
+
+
+def rerun_checks(data: object, source: object) -> dict[str, RerunForm]:
+    """Check name -> its failed-tests-only form, in the file's order (ADR-0066).
+
+    Empty when the product declares none. Present, every entry is `{command, test_id}`, its
+    check is declared under `checks`, the product declares `delivery_checks`, and `test_id`
+    passes `_test_id_refusal`. Every shape that is not that fails at load, naming the key."""
+    declared = _declared(data, source)
+    if "rerun_checks" not in declared:
+        return {}
+    found = _declared_nonempty(declared, source, "rerun_checks")
+    if not isinstance(found, dict):
+        raise ValueError(f"{source}: expected `rerun_checks`, a mapping of checks to forms")
+    if not delivery_checks(data, source):
+        raise ValueError(
+            f"{source}: `rerun_checks` requires `delivery_checks`: a form skips tests, and "
+            "only the full run on the integrated head that tier guarantees covers them"
+        )
+    known = _commands(declared, source, "checks")
+    forms: dict[str, RerunForm] = {}
+    for name, body in found.items():
+        if name not in known:
+            raise ValueError(
+                f"{source}: {name!r} under `rerun_checks` is not a check declared under "
+                f"`checks`; expected one of {', '.join(known)}"
+            )
+        forms[name] = _rerun_form(name, body, source)
+    return forms
+
+
+def _rerun_form(name: str, body: object, source: object) -> RerunForm:
+    where = f"{source}: {name!r} under `rerun_checks`"
+    if not isinstance(body, dict):
+        raise ValueError(f"{where} is not a mapping of {RERUN_KEYS}")
+    if unknown := [key for key in body if key not in RERUN_KEYS]:
+        raise ValueError(
+            f"{source}: unknown key(s) {', '.join(sorted(map(str, unknown)))} under "
+            f"`rerun_checks`; expected {RERUN_KEYS}"
+        )
+    for key in RERUN_KEYS:
+        value = body.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{where}: expected a non-empty `{key}`, which goes with the other")
+    pattern = body["test_id"]
+    if reason := _test_id_refusal(pattern):
+        raise ValueError(f"{where}: `test_id` {reason}")
+    return RerunForm(command=body["command"].strip(), test_id=pattern)
+
+
+# The opcodes of `re._parser` that repeat what they hold, and the one that picks between
+# alternatives: the only two shapes `_test_id_refusal` looks for.
+_REPEATS = ("MAX_REPEAT", "MIN_REPEAT", "POSSESSIVE_REPEAT")
+
+
+def _test_id_refusal(pattern: str) -> str | None:
+    """Why a product's `test_id` may not run inside the system, or None. Structural, over the
+    parse tree of `re._parser` (the standard library's own, so what is checked is what runs):
+    a pattern that does not compile; one without exactly one capturing group; one longer than
+    `TEST_ID_MAX_LENGTH`; a quantified group whose body contains another quantifier (`(a+)+`)
+    or an alternation (`(a|ab)+`), the two shapes that backtrack catastrophically. Plain
+    quantifiers (`\\S+`) and alternation outside a quantified group stay legal."""
+    if len(pattern) > TEST_ID_MAX_LENGTH:
+        return (
+            f"is {len(pattern)} characters long; expected at most {TEST_ID_MAX_LENGTH} characters"
+        )
+    parser = importlib.import_module("re._parser")
+    try:
+        re.compile(pattern)
+        parsed = parser.parse(pattern)
+    except (re.error, RecursionError, OverflowError) as exc:
+        return f"does not compile: {exc}"
+    if parsed.state.groups != 2:
+        return (
+            f"has {parsed.state.groups - 1} capturing groups; expected exactly one capturing group"
+        )
+    return _catastrophic(parsed)
+
+
+def _catastrophic(tree: Any) -> str | None:
+    for opcode, value in tree.data:
+        name = str(opcode)
+        children = [part for part in _parts(value) if hasattr(part, "data")]
+        if name in _REPEATS:
+            body = value[2]
+            if _has(body, _REPEATS):
+                return "has a quantified group that contains a quantifier; write it without one"
+            if _has(body, ("BRANCH",)):
+                return "has an alternation inside a quantified group; write it without one"
+        for child in children:
+            if (found := _catastrophic(child)) is not None:
+                return found
+    return None
+
+
+def _has(tree: Any, names: tuple[str, ...]) -> bool:
+    for opcode, value in tree.data:
+        if str(opcode) in names:
+            return True
+        if any(_has(part, names) for part in _parts(value) if hasattr(part, "data")):
+            return True
+    return False
+
+
+def _parts(value: Any) -> list[Any]:
+    """Every sub-pattern one parsed item holds, however the opcode nests it."""
+    if hasattr(value, "data"):
+        return [value]
+    if isinstance(value, tuple | list):
+        return [part for item in value for part in _parts(item)]
+    return []
 
 
 def forbidden(data: object, source: object) -> tuple[Forbidden, ...]:

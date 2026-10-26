@@ -19,7 +19,7 @@ from ..domain.ci import CiReport, CiUnreadable, Containment
 from ..domain.design import Design
 from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
-from ..domain.presubmit import CheckResult
+from ..domain.presubmit import CheckResult, RerunForm
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
 from ..domain.rules import LandWait, MergeFailure, RunKind, SpendRun, motive
@@ -425,6 +425,13 @@ class ProductStack(Protocol):
         """The names of the checks the delivery gate runs, the fast tier, in the file's
         order (`core.knowledge`), as the commit `revision` declares them. Empty when the
         product declares no tiers, which is the gate of today, byte for byte."""
+        ...
+
+    def rerun_checks(self, revision: str) -> dict[str, RerunForm]:
+        """Check name -> its failed-tests-only form (`core.knowledge`, ADR-0066), as the
+        commit `revision` declares them. Empty when the product declares none, which is the
+        gate of today. Raises `ValueError` when the key is malformed, or declared by a
+        product with no `delivery_checks`."""
         ...
 
     def forbidden(self, revision: str) -> Sequence[Forbidden]:

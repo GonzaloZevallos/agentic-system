@@ -83,6 +83,79 @@ class CheckResult(TypedDict):
     # (ADR-0065). Set by the system on read, never stored and never by the model; absent
     # on a row that ran.
     reused: NotRequired[bool]
+    # True on a row produced by the one rerun of a red check (ADR-0066). Set by the system,
+    # never by the model; never stored in the check-result store; absent on a first run.
+    rerun: NotRequired[bool]
+    # True on a row whose command hit `check_timeout_s`: a fact, so the rerun rule never
+    # reads prose to decide that a timed-out check is not rerun.
+    timed_out: NotRequired[bool]
+
+
+FlakeVerdict = Literal["pass", "flake", "fail"]
+# Which gate ran a check: the Developer's delivery gate, the merge gate (and the landing's
+# slice gate), or `full_checks` (ADR-0066).
+FlakeGate = Literal["delivery", "merge", "full_checks"]
+# The last 64 KB of a check's output is all `failed_ids` reads (pytest's short summary and
+# Playwright's failed list sit at the end), and 50 ids is all it returns: both bound the
+# cost of a product-declared pattern.
+FAILED_IDS_TAIL_BYTES = 65536
+FAILED_IDS_MAX = 50
+
+
+@dataclass(frozen=True)
+class RerunForm:
+    """A product's "failed tests only" form of one check (`rerun_checks`, ADR-0066): the
+    command that reruns just the failed tests, and the regex whose single group names a
+    failed test in the check's output. Validated when the stack is parsed."""
+
+    command: str
+    test_id: str
+
+
+def flake_verdict(first: CheckResult, rerun: CheckResult | None) -> FlakeVerdict:
+    """The one decision on a check at a gate (ADR-0066, invariant): `pass` when it was green
+    the first time, `flake` when it was red and the rerun was green, `fail` otherwise. A
+    timed-out first row is never rerun, so a rerun handed alongside it cannot save it."""
+    if first["passed"]:
+        return "pass"
+    if rerun is not None and rerun["passed"] and not first.get("timed_out", False):
+        return "flake"
+    return "fail"
+
+
+def failed_ids(output: str, pattern: str) -> tuple[str, ...]:
+    """The test ids a failing check's output names: group 1 of `pattern`, over at most the
+    last `FAILED_IDS_TAIL_BYTES` bytes, deduplicated in order, at most `FAILED_IDS_MAX`.
+    The only function that runs a product-declared pattern. A pattern that does not compile
+    names nothing, which is a full rerun: the safe side."""
+    tail = output[-FAILED_IDS_TAIL_BYTES:].encode("utf-8", "replace")[-FAILED_IDS_TAIL_BYTES:]
+    text = tail.decode("utf-8", "ignore")
+    try:
+        matches = re.finditer(pattern, text)
+        ids: list[str] = []
+        for match in matches:
+            found = match.group(1)
+            if found and found not in ids:
+                ids.append(found)
+                if len(ids) == FAILED_IDS_MAX:
+                    break
+    except (re.error, IndexError):
+        return ()
+    return tuple(ids)
+
+
+def rerun_command(
+    full_command: str, first: CheckResult, form: RerunForm | None, gate: FlakeGate
+) -> str | None:
+    """The command that reruns a red check, or None when it is not rerun at all: a green
+    row, a `timed_out` one and a rerun row never are. The product's form runs only at the
+    delivery gate, only when it exists and `failed_ids` found at least one id in the
+    failure; every other case reruns the full command (ADR-0066)."""
+    if first["passed"] or first.get("timed_out", False) or first.get("rerun", False):
+        return None
+    if gate == "delivery" and form is not None and failed_ids(first["output"], form.test_id):
+        return form.command
+    return full_command
 
 
 @dataclass(frozen=True)
