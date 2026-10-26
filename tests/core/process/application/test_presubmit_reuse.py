@@ -5,6 +5,7 @@ from pathlib import Path
 
 from agentic.core.process.application.ports import CommandResult, GitError
 from agentic.core.process.application.presubmit import CheckoutPresubmit, Reuse
+from agentic.core.process.domain.check_schedule import CheckPriority
 from agentic.core.process.domain.presubmit import AffectedPlan
 from tests.fakes import MemoryCheckResults, MemoryCommands, MemoryWorkspace, memory_ports
 
@@ -35,6 +36,7 @@ def build(
         workspace=workspace,
         check_results=store if store is not None else MemoryCheckResults(),
     )
+    options.setdefault("priority", CheckPriority.SUBTASK)
     return CheckoutPresubmit(
         ports, path, "base", checks or {"tests": "pytest"}, 30.0, reuse=reuse, **options
     )

@@ -128,6 +128,8 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
                 before,
                 checks,
                 cfg.check_timeout_s,
+                priority=CheckPriority.SUBTASK,
+                wait_max_s=cfg.check_wait_max_s,
                 witness=ports.stack.witness(base),
                 reuse=reuse,
             )
