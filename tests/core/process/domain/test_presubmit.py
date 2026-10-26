@@ -314,3 +314,63 @@ def test_the_regression_is_written_in_the_developers_section_when_the_gate_lets_
     text = presubmit.checks_markdown("abc123", [result()], regressions=[REGRESSION])
     assert "DESIGN_STANDARDS.md" in text and "611" in text
     assert "DESIGN_STANDARDS" not in presubmit.checks_markdown("abc123", [result()])
+
+
+# -- rows the system took from a stored pass (ADR-0065) -------------------------------
+
+
+def _reused(name="tests"):
+    return {**result(name), "duration_s": 99.0, "reused": True}
+
+
+def test_a_reused_row_says_so_next_to_its_check_and_a_row_that_ran_does_not():
+    text = presubmit.checks_markdown("abc123", [_reused(), result("lint", "ruff .")])
+    assert "| `tests` | `pytest` | passed (reused) |" in text
+    assert "| `lint` | `ruff .` | passed |" in text
+
+
+def test_a_reused_row_keeps_its_mark_in_the_mode_table_too():
+    rows = [{**_reused(), "mode": "full"}, {**result("lint", "ruff ."), "mode": "full"}]
+    text = presubmit.checks_markdown("abc123", rows, base="b4s3")
+    assert "| `tests` | `pytest` | full | passed (reused) |" in text
+    # The row that ran is rendered, and rendered unmarked: the row is really in the table.
+    assert "| `lint` | `ruff .` | full | passed |" in text
+    assert "| `lint` | `ruff .` | full | passed (reused) |" not in text
+
+
+def test_durations_leave_out_a_reused_row_and_a_check_with_only_reused_rows_has_none():
+    rows = [
+        {**result("tests"), "duration_s": 1.5},
+        _reused("tests"),
+        _reused("lint"),
+    ]
+    assert presubmit.check_durations(rows) == {"tests": 1.5}
+
+
+def test_the_merge_record_marks_a_reused_entry_and_leaves_one_that_ran_unmarked():
+    record = presubmit.merge_checks_record(
+        head="a" * 40,
+        master="b" * 40,
+        duration_s=1.0,
+        declared={"tests": "pytest", "lint": "ruff ."},
+        results=[_reused("tests"), result("lint", "ruff .")],
+        witness=None,
+    )
+    assert record["checks"] == [
+        {"name": "tests", "passed": True, "reused": True},
+        {"name": "lint", "passed": True},
+    ]
+
+
+def test_a_rerun_record_keeps_the_mark_of_the_entries_it_carries():
+    previous = {
+        "passed": False,
+        "failed_step": "checks",
+        "checks": [{"name": "lint", "passed": True, "reused": True}, _entry("tests", False)],
+    }
+    rerun = {"passed": True, "checks": [{"name": "tests", "passed": True, "reused": True}]}
+    record = presubmit.rerun_record(previous, rerun)
+    assert record["checks"] == [
+        {"name": "lint", "passed": True, "reused": True},
+        {"name": "tests", "passed": True, "reused": True},
+    ]

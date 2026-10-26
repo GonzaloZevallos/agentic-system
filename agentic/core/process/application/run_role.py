@@ -88,7 +88,7 @@ from ..domain.task import (
 )
 from .closed import closed_documents
 from .limits import RunLimits
-from .ports import AttemptFailed, Ports, Presubmit, RoleRunner, SchemaGuard
+from .ports import AttemptFailed, CheckTool, Ports, Presubmit, RoleRunner, SchemaGuard
 from .schema_guard import RoleSchemaGuard
 
 Check = Callable[[dict], None]
@@ -390,6 +390,7 @@ async def run_with_retry(
     presubmit: Presubmit | None = None,
     delivery_check: SchemaGuard | None = None,
     forbidden: Sequence[Forbidden] | None = None,
+    check_tool: CheckTool | None = None,
     limits: RunLimits | None = None,
     section: str | None = None,
     cold_prompt: str | None = None,
@@ -504,6 +505,7 @@ async def run_with_retry(
                     presubmit=presubmit,
                     guard=guard,
                     forbidden=forbidden,
+                    check_tool=check_tool,
                 )
                 ended_at = _now_iso()
         except AttemptFailed as exc:
@@ -634,6 +636,7 @@ async def _attempt(
     presubmit: Presubmit | None = None,
     guard: SchemaGuard | None = None,
     forbidden: Sequence[Forbidden] | None = None,
+    check_tool: CheckTool | None = None,
 ) -> Output:
     result = await runner.run_once(
         role,
@@ -648,6 +651,7 @@ async def _attempt(
         presubmit=presubmit,
         guard=guard,
         forbidden=forbidden,
+        check_tool=check_tool,
     )
     cost, session = result.cost_usd, result.session_id
     if result.structured_output is None:
@@ -907,6 +911,7 @@ async def run_role(
     presubmit: Presubmit | None = None,
     delivery_check: SchemaGuard | None = None,
     forbidden: Sequence[Forbidden] | None = None,
+    check_tool: CheckTool | None = None,
     tiers: str = "",
     **placeholders: object,
 ) -> tuple[Output | None, TaskState]:
@@ -969,6 +974,7 @@ async def run_role(
             presubmit=presubmit,
             delivery_check=delivery_check,
             forbidden=forbidden,
+            check_tool=check_tool,
             limits=ports.limits,
             section=section,
             cold_prompt=cold_prompt,

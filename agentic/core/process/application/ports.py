@@ -19,6 +19,7 @@ from ..domain.ci import CiReport, CiUnreadable, Containment
 from ..domain.design import Design
 from ..domain.performance import Run, Scenario
 from ..domain.playbook import Playbook
+from ..domain.presubmit import CheckResult
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
 from ..domain.rules import LandWait, MergeFailure, RunKind, SpendRun, motive
@@ -187,6 +188,18 @@ class Presubmit(Protocol):
     def __call__(self) -> str | None: ...
 
 
+class CheckTool(Protocol):
+    """The Developer's `run_check` tool (ADR-0065, GH-359): given the name the model chose,
+    runs that declared check through the system and answers with the text the model reads.
+    Blocking, within `timeout_s` for one call; the harness runs it off the event loop.
+    `names` are the declared checks, all of them."""
+
+    names: tuple[str, ...]
+    timeout_s: float
+
+    def __call__(self, name: str) -> str: ...
+
+
 class SchemaGuard(Protocol):
     """Asked with the model's own `tool_input` before its structured-output call even
     reaches the CLI's own rejection (glossary: Guarda de esquema; ADR-0011, fifth
@@ -219,7 +232,9 @@ class RoleRunner(Protocol):
     the product's own declared suppressions (issue #38): an Edit or a Write that adds
     one of them is denied with that rule's own `reason`, never the system's words.
     `None` or empty is the explicit no-op -- the cage is installed and denies nothing,
-    the same shape `presubmit`/`guard` absent already have.
+    the same shape `presubmit`/`guard` absent already have. `check_tool`, when given,
+    is the `run_check` tool the Developer and its integrator may call (ADR-0065); every
+    other role runs with no tool beyond its built-ins.
 
     `owner_task` is the parent task's id, never a subtask's (GH-282, ADR-0052): the mark
     every process of this attempt carries, so its leftovers can be found and stopped when
@@ -240,6 +255,7 @@ class RoleRunner(Protocol):
         presubmit: Presubmit | None = None,
         guard: SchemaGuard | None = None,
         forbidden: Sequence[Forbidden] | None = None,
+        check_tool: CheckTool | None = None,
     ) -> RawResult: ...
 
 
@@ -659,6 +675,28 @@ class Workspace(Protocol):
 
     def full_head(self, path: Path) -> str:
         """The full object id of HEAD in `path`; read-only. `head` keeps its short form."""
+        ...
+
+    def tree(self, path: Path) -> str:
+        """The id of `HEAD^{tree}` in the checkout at `path` (ADR-0065): what the code is,
+        whichever commits led to it. Read-only; the key of a reusable result."""
+        ...
+
+    def record_setup_tree(self, path: Path) -> None:
+        """Remember, in the checkout's own git dir (never in its files), the tree the
+        product's setup has just run on. Called once, after every setup step passed. Best
+        effort: when it cannot write, no record exists and no pass is stored; it never raises."""
+        ...
+
+    def setup_tree(self, path: Path) -> str | None:
+        """The tree `record_setup_tree` wrote for the checkout at `path`, or `None` when
+        there is no record or it does not name a tree object (`git cat-file -t`)."""
+        ...
+
+    def tree_changes(self, path: Path, old: str, new: str) -> tuple[str, ...]:
+        """The paths whose content differs between the trees `old` and `new` (ADR-0065),
+        read from the checkout at `path`: `git diff --name-only --no-renames`, a rename
+        naming both of its paths. Raises `GitError` when git cannot say (an unknown tree)."""
         ...
 
     def is_clean(self, path: Path) -> bool:
@@ -1245,6 +1283,23 @@ class LaunchAttempt:
     prior: int
 
 
+class CheckResults(Protocol):
+    """The machine's store of passing check results (ADR-0065), keyed by
+    `domain.check_results.check_key`. Only the presubmit and the run-check tool use it."""
+
+    def get(self, key: str, now: float) -> CheckResult | None:
+        """The stored pass for `key`, or `None`. An entry that is missing, unreadable,
+        not signed by this machine's secret or older than `MAX_AGE_S` at `now` is a miss;
+        a read never raises."""
+        ...
+
+    def put(self, key: str, row: CheckResult, now: float) -> None:
+        """Store `row`, a pass, under `key` as of `now`; a row that did not pass is not
+        stored. The output is stored as it is given: cut it before. Entries older than
+        `MAX_AGE_S` and the oldest above the entry limit are pruned."""
+        ...
+
+
 class RunRegistry(Protocol):
     """How many `agentic` invocations are alive on this machine right now, across every
     product (GH-137), and the poller's own record of a launch attempt that has not
@@ -1426,3 +1481,6 @@ class Ports:
     # none fails loudly instead of measuring with a stand-in.
     perf_runner: PerfRunner | None = None
     perf_lock: PerfLock | None = None
+    # The machine's store of passing check results (ADR-0065). `None` stores and reuses
+    # nothing, which is how every checkout ran before it existed.
+    check_results: CheckResults | None = None

@@ -10,14 +10,18 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 
+from agentic.shared.stage0 import CHECKOUT
+
+from ..domain import check_results as reuse_rules
 from ..domain import presubmit
 from ..domain.presubmit import AffectedPlan, CheckResult, Mode, WitnessResult
 from ..domain.task import TaskState
 from .checkouts import task_base
 from .ports import GitError, Ports
-from .preflight import criteria_regressed
+from .preflight import criteria_regressed, product_name
 
 
 def declared_checks(state: TaskState, ports: Ports) -> dict[str, str]:
@@ -45,6 +49,40 @@ def fast_tier(declared: dict[str, str], fast: tuple[str, ...]) -> dict[str, str]
     return {name: command for name, command in declared.items() if name in fast}
 
 
+@dataclass(frozen=True)
+class Reuse:
+    """What a presubmit needs to key a stored pass (ADR-0065) besides the checkout's own
+    tree: the product, the setup commands the checkout was prepared with, in the order the
+    base declares them, and the version of the system doing the checking. A version that
+    ends `+dirty` names no code, so it neither reads nor writes."""
+
+    product: str
+    setup: tuple[str, ...]
+    stage0_version: str
+
+
+def reuse_of(ports: Ports, base: str) -> Reuse | None:
+    """The `Reuse` for a gate over a checkout of `base`: None for ports with no store, which
+    is the gate of before. The stage0 version is the full sha of the checkout the system
+    runs from, `+dirty` when it has uncommitted changes or git cannot name it."""
+    if ports.check_results is None:
+        return None
+    return Reuse(
+        product_name(ports),
+        tuple(ports.stack.setup(base).values()),
+        _stage0_version(ports),
+    )
+
+
+def _stage0_version(ports: Ports) -> str:
+    try:
+        sha = ports.workspace.full_head(CHECKOUT)
+        committed = ports.workspace.is_committed(CHECKOUT)
+    except (GitError, OSError):
+        return reuse_rules.DIRTY
+    return sha if committed else f"{sha}{reuse_rules.DIRTY}"
+
+
 class CheckoutPresubmit:
     """The `Presubmit` over one Developer's checkout. One per Developer run: the
     refusals it has left carry over to the retry."""
@@ -61,6 +99,7 @@ class CheckoutPresubmit:
         parallel: bool = False,
         affected: AffectedPlan | None = None,
         criteria_base: str | None = None,
+        reuse: Reuse | None = None,
     ):
         self.ports = ports
         self.path = path
@@ -86,6 +125,14 @@ class CheckoutPresubmit:
         # gate is the one of before. Keyword-only, so the merge gate's own construction
         # (which judges regressions in its decision, not here) is untouched.
         self.criteria_base = criteria_base
+        # What keys a stored pass (ADR-0065), or None: every check runs, as before.
+        # Keyword-only with this default so every construction site compiles untouched.
+        self.reuse = reuse
+        # Set once per call on a clean, moved tree (`_prepare_reuse`): the tree, the
+        # environment fingerprint, and whether this checkout may store what it runs.
+        self._tree: str | None = None
+        self._fingerprint: str | None = None
+        self._may_write = False
         # The checks that failed in their full form on this instance: they never run
         # their affected form again, even after they later pass in full. A new Developer
         # run builds a new instance and starts on affected-only again.
@@ -134,6 +181,7 @@ class CheckoutPresubmit:
         # spawned on a call that refuses for a missing commit or an unclean tree.
         witness_reason = None
         if moved and clean:
+            self._prepare_reuse()
             if self.witness is not None:
                 witness_reason = self._run_witness(self.witness)
             plan = self.affected
@@ -144,6 +192,10 @@ class CheckoutPresubmit:
             self.head, self.results = head, results
             self.regressions = self._criteria_regressions(head)
             self.invocations.append(self.results)
+            # A pass is stored only after the witness had its say in this same call: a
+            # checkout the witness doubts proves nothing about the tree.
+            if self.witness is None or witness_reason is None:
+                self._store_passes(results)
         # A witness disagreement leads, on its own capped budget: `refusals`/`REFUSALS`
         # stay for the checks alone, so a bad witness declaration cannot spend the
         # budget the working gate needs. The checks below still ran either way.
@@ -247,7 +299,73 @@ class CheckoutPresubmit:
         }
         return reason
 
+    def _prepare_reuse(self, eligible: bool = True) -> None:
+        """Decide, once per call, what this clean tree may read from and write to the store.
+        Reading needs the tree and a fingerprint; writing also needs a record that setup
+        ran on a tree whose environment inputs this one did not change. `eligible` is false
+        for a tree that is dirty or has no commit: it only clears what an earlier call set."""
+        self._tree = self._fingerprint = None
+        self._may_write = False
+        reuse = self.reuse
+        if not eligible or reuse is None or self.ports.check_results is None:
+            return
+        fingerprint = reuse_rules.fingerprint(
+            reuse.setup, reuse.stage0_version, self.check_timeout_s
+        )
+        if fingerprint is None:
+            return
+        workspace = self.ports.workspace
+        try:
+            tree = workspace.tree(self.path)
+        except (GitError, OSError):
+            return
+        self._tree, self._fingerprint = tree, fingerprint
+        try:
+            recorded = workspace.setup_tree(self.path)
+            self._may_write = recorded is not None and not reuse_rules.env_drifted(
+                workspace.tree_changes(self.path, recorded, tree), reuse.setup
+            )
+        except (GitError, OSError):
+            self._may_write = False
+
+    def _key(self, name: str, command: str) -> str | None:
+        reuse = self.reuse
+        if reuse is None or self._tree is None or self._fingerprint is None:
+            return None
+        return reuse_rules.check_key(reuse.product, name, command, self._tree, self._fingerprint)
+
+    def _stored(self, name: str, command: str, mode: Mode | None) -> CheckResult | None:
+        """The pass stored for this exact check on this tree, as a row marked reused."""
+        key = self._key(name, command)
+        store = self.ports.check_results if key is not None else None
+        if key is None or store is None:
+            return None
+        row = store.get(key, time.time())
+        if row is None or row["passed"] is not True:
+            return None
+        row.pop("mode", None)
+        if mode is not None:
+            row["mode"] = mode
+        row["reused"] = True
+        return row
+
+    def _store_passes(self, results: list[CheckResult]) -> None:
+        store = self.ports.check_results if self._may_write else None
+        if store is None:
+            return
+        for row in results:
+            key = self._key(row["name"], row["command"])
+            if key is None or not row["passed"] or row.get("reused"):
+                continue
+            try:
+                store.put(key, row, time.time())
+            except OSError:
+                # A store that cannot be written is only a miss the next time.
+                return
+
     def _run(self, name: str, command: str, mode: Mode | None = None) -> CheckResult:
+        if (stored := self._stored(name, command, mode)) is not None:
+            return stored
         started = time.monotonic()
         result = self.ports.commands.run(self.path, command, self.check_timeout_s)
         duration_s = time.monotonic() - started

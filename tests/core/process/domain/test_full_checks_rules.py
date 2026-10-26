@@ -311,3 +311,9 @@ def test_tier_section_without_a_rest_says_the_full_run_is_the_same_checks_withou
 @pytest.mark.parametrize("fast", [[], ["tests"]])
 def test_tier_section_is_deterministic(fast):
     assert tier_section(fast, ["e2e"]) == tier_section(list(fast), ["e2e"])
+
+
+def test_tier_section_says_the_full_suite_reuses_a_pass_only_on_the_developers_own_tree():
+    assert "reuses your pass only when the integrated tree is yours" in " ".join(
+        tier_section(["tests"], ["e2e"]).split()
+    )

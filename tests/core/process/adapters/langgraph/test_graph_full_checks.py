@@ -95,6 +95,7 @@ def build(script, stack, commands, fakes=None):
             stack=stack,
             commands=commands,
             sample_app=MemorySampleApp(),
+            check_results=None,  # these tests pin the tiers, not the reuse of a pass
         )
 
     graph = build_graph(ports_for, NoTelemetry(), arm_for=composition._arm_for)

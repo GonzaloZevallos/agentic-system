@@ -19,6 +19,7 @@ from agentic.core.process.application.ports import (
     AddedLine,
     BranchPullRequest,
     Checkout,
+    CheckResults,
     CommandResult,
     Commands,
     FlagVocabulary,
@@ -47,11 +48,13 @@ from agentic.core.process.application.ports import (
     UpstreamMerge,
     Workspace,
 )
+from agentic.core.process.domain import check_results as check_results_domain
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.ci import CiReport, CiUnreadable, Containment
 from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.performance import Run, Scenario
 from agentic.core.process.domain.playbook import Playbook
+from agentic.core.process.domain.presubmit import CheckResult
 from agentic.core.process.domain.reaping import ReapedProcess
 from agentic.core.process.domain.roles import PROMPTS_DIR, Role
 from agentic.core.process.domain.rules import MergeFailure
@@ -527,6 +530,14 @@ class MemoryWorkspace:
         self.indexes: dict[Path, dict[str, str]] = {}
         self.dirty: set[Path] = set()
         self.uncommitted: set[Path] = set()
+        # ADR-0065: the tree a checkout holds (scripted per path; `tree:<path>` otherwise),
+        # the setup-tree records `record_setup_tree` made and each call in order.
+        self.trees: dict[Path, str] = {}
+        self.setup_trees: dict[Path, str] = {}
+        self.setup_records: list[Path] = []
+        # What `tree_changes` answers between the setup tree and the head, and each call.
+        self.tree_paths: tuple[str, ...] = ()
+        self.tree_reads: list[tuple[Path, str, str]] = []
         # GH-358: what `differs_outside` answers, and each call; `restore_clean` calls.
         self.outside_differs = False
         self.outside_reads: list[tuple[Path, str, str, str]] = []
@@ -715,6 +726,20 @@ class MemoryWorkspace:
         if self.track_commits and self.branch_commits:
             return self.branch_commits[-1].sha
         return self.head(path)
+
+    def tree(self, path: Path) -> str:
+        return self.trees.get(path, f"tree:{path}")
+
+    def record_setup_tree(self, path: Path) -> None:
+        self.setup_records.append(path)
+        self.setup_trees[path] = self.tree(path)
+
+    def setup_tree(self, path: Path) -> str | None:
+        return self.setup_trees.get(path)
+
+    def tree_changes(self, path: Path, old: str, new: str) -> tuple[str, ...]:
+        self.tree_reads.append((path, old, new))
+        return self.tree_paths
 
     def is_clean(self, path: Path) -> bool:
         return path not in self.dirty and path not in self.uncommitted
@@ -1269,6 +1294,29 @@ class MemoryTracker:
         return self.states[number]
 
 
+class MemoryCheckResults:
+    """ADR-0065: the store as a dict. It keeps the rule the real one keeps -- only a pass is
+    stored, an entry older than `MAX_AGE_S` is a miss -- and records every call, so a test
+    reads what the gate looked up and what it wrote."""
+
+    def __init__(self) -> None:
+        self.entries: dict[str, tuple[CheckResult, float]] = {}
+        self.gets: list[tuple[str, float]] = []
+        self.puts: list[tuple[str, CheckResult, float]] = []
+
+    def get(self, key: str, now: float) -> CheckResult | None:
+        self.gets.append((key, now))
+        found = self.entries.get(key)
+        if found is None or not check_results_domain.is_fresh(found[1], now):
+            return None
+        return found[0].copy()
+
+    def put(self, key: str, row: CheckResult, now: float) -> None:
+        self.puts.append((key, row, now))
+        if row["passed"]:
+            self.entries[key] = (row, now)
+
+
 class MemoryRunRegistry:
     """GH-137: no real pid, no real file. `live` answers whatever a test pre-loads in
     `entries`, since this fake never actually forks a second process to be alive."""
@@ -1478,6 +1526,7 @@ def memory_ports(
     limits: RunLimits | None = None,
     perf_runner: PerfRunner | None = None,
     perf_lock: PerfLock | None = None,
+    check_results: CheckResults | None = None,
 ) -> Ports:
     return Ports(
         runner=runner if runner is not None else ScriptedRunner(),
@@ -1495,6 +1544,7 @@ def memory_ports(
         **({} if limits is None else {"limits": limits}),
         perf_runner=perf_runner,
         perf_lock=perf_lock,
+        check_results=check_results,
     )
 
 

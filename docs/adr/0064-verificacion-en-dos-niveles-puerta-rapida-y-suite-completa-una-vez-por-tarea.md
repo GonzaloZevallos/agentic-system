@@ -87,3 +87,5 @@ escribió el código roto, y su cota es un supuesto.
 
 Esta tarea no corre bajo sus propios niveles: la clave se lee en la base. La declaración de
 apostrophe (todo salvo e2e, y formas afectadas) es un seguimiento fuera de esta tarea.
+
+**Addendum 2026-10-26.** El punto «Rechazado por ahora» sobre reutilizar un registro `full_checks` en la puerta de merge lo reemplaza ADR-0065: la frescura se decide por contenido (árbol, comando y entorno).

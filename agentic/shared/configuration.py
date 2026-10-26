@@ -169,6 +169,9 @@ class Configuration(BaseModel):
     # The machine-wide lock two measurements take so they never share a CPU: outside every
     # product, built like `run_registry_dir`.
     perf_lock_path: Path = Field(default_factory=lambda: _default_perf_lock_path())
+    # The machine's store of passing check results (ADR-0065): outside every checkout and
+    # shared by every product, built like `run_registry_dir`.
+    check_results_dir: Path = Field(default_factory=lambda: _default_check_results_dir())
 
     @classmethod
     def from_sources(
@@ -270,6 +273,12 @@ def _default_run_registry_dir() -> Path:
     base = os.environ.get("XDG_STATE_HOME")
     root = Path(base) if base else Path.home() / ".local" / "state"
     return root / "agentic" / "runs"
+
+
+def _default_check_results_dir() -> Path:
+    base = os.environ.get("XDG_STATE_HOME")
+    root = Path(base) if base else Path.home() / ".local" / "state"
+    return root / "agentic" / "check-results"
 
 
 def _default_perf_lock_path() -> Path:

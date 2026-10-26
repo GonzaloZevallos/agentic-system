@@ -17,8 +17,12 @@ Skills come from the one plugin pinned as a submodule under
 `agentic/plugins/` (ADR-0013); `setting_sources=[]` keeps the user's own plugins,
 settings and CLAUDE.md out. It does not keep their MCP servers out: those come from
 the user's Claude Code config, not from settings, and `strict_mcp_config=True` is what
-stops the CLI from loading them. No role declares an MCP tool, and inherited ones cost
-~233k tokens of tool definitions reread on every call, 67% of a run (issue #18).
+stops the CLI from loading them. Only the Developer and its integrator declare an MCP
+tool, `run_check` (ADR-0065; `check_server.py`), in-process and handed over by `develop`;
+every other role keeps `mcp_servers={}`. Inherited ones cost ~233k tokens of tool
+definitions reread on every call, 67% of a run (issue #18). The attempt that carries the
+tool also carries `MCP_TOOL_TIMEOUT` in its own `options.env`, so a call as long as a suite
+is not cut by the CLI's default.
 
 The runner's `env` reaches every role's process on top of the inherited environment:
 the system's git identity travels there (ADR-0011, addendum), so a role that commits
@@ -79,6 +83,7 @@ from agentic.shared.environment import trace_id_of, with_resource_marker
 
 from ...application.ports import (
     AttemptFailed,
+    CheckTool,
     Presubmit,
     ProcessReaper,
     RawResult,
@@ -105,6 +110,7 @@ from ...domain.stall import (
 from ...domain.suppressions import Forbidden
 from ..plugins import PLUGIN, PLUGIN_DIR
 from ..telemetry import NoTelemetry, Telemetry
+from .check_server import SERVER, TIMEOUT_ENV, check_server, tool_timeout_ms
 from .hooks import DELIVERY_TOOL, HookActivity, TurnCount, hooks_for
 from .printer import Printer
 from .schema import inline_refs
@@ -152,6 +158,8 @@ def options_for(
     forbidden: Sequence[Forbidden] | None = None,
     owner_mark: str | None = None,
     hook_activity: HookActivity | None = None,
+    check_tool: CheckTool | None = None,
+    check_results_dir: Path | None = None,
 ) -> ClaudeAgentOptions:
     tools, allowed = list(role.tools), list(role.allowed)
     if role.skills and SKILL_TOOL not in tools:
@@ -177,7 +185,8 @@ def options_for(
         max_turns=role.max_turns,
         output_format={"type": "json_schema", "schema": inline_refs(json_schema)},
         setting_sources=[],  # ignore project CLAUDE.md and settings
-        mcp_servers={},  # and only these: none (see the module docstring)
+        # None but the Developer's `run_check` (see the module docstring)
+        mcp_servers={SERVER: check_server(check_tool, hook_activity)} if check_tool else {},
         strict_mcp_config=True,
         # Deltas as they are generated; without an observer nobody would read them.
         include_partial_messages=partial,
@@ -189,7 +198,10 @@ def options_for(
         # `resource_attributes` is the ambient `os.environ` value, never `env` (the
         # runner's own git-identity overlay, which does not carry it in production) --
         # composing off `env` would overwrite whatever the real process inherited.
-        env=_child_env(env, role, traceparent, resource_attributes, owner_mark),
+        env={
+            **_child_env(env, role, traceparent, resource_attributes, owner_mark),
+            **({TIMEOUT_ENV: tool_timeout_ms(check_tool)} if check_tool else {}),
+        },
         hooks=hooks_for(
             role,
             cwd,
@@ -200,6 +212,7 @@ def options_for(
             guard,
             forbidden,
             hook_activity,
+            check_results_dir,
         )
         or None,
         # A role that executes runs under `bypassPermissions`, which already shadows
@@ -273,6 +286,7 @@ class ClaudeSdkRunner:
         product_key: str,
         stall_timeout_s: float = 2400.0,
         clock: Callable[[], float] = time.monotonic,
+        check_results_dir: Path | None = None,
     ):
         # `verbose` streams each role's generation to `stream` (stderr by default).
         # `env` is added to every role's process: the git identity, for one.
@@ -289,6 +303,9 @@ class ClaudeSdkRunner:
         self.product_key = product_key
         self.stall_timeout_s = stall_timeout_s
         self.clock = clock
+        # The machine's store of check results (ADR-0065): a role that executes may not
+        # read or write it (`hooks.store_path_denial`).
+        self.check_results_dir = check_results_dir
 
     async def run_once(
         self,
@@ -305,6 +322,7 @@ class ClaudeSdkRunner:
         presubmit: Presubmit | None = None,
         guard: SchemaGuard | None = None,
         forbidden: Sequence[Forbidden] | None = None,
+        check_tool: CheckTool | None = None,
     ) -> RawResult:
         """One attempt, marked with `owner_task` (the parent task, never a subtask) and a
         token of its own, and reaped once its stream is closed, whichever way it ended."""
@@ -325,6 +343,7 @@ class ClaudeSdkRunner:
                 presubmit=presubmit,
                 guard=guard,
                 forbidden=forbidden,
+                check_tool=check_tool,
             )
         except AttemptFailed as exc:
             exc.reaped = list(await self._reap(owner_task, token))
@@ -365,6 +384,7 @@ class ClaudeSdkRunner:
         presubmit: Presubmit | None,
         guard: SchemaGuard | None,
         forbidden: Sequence[Forbidden] | None,
+        check_tool: CheckTool | None,
     ) -> RawResult:
         denials = 0
         notice_firings = 0
@@ -436,6 +456,8 @@ class ClaudeSdkRunner:
             forbidden=forbidden,
             owner_mark=owner_mark,
             hook_activity=hooks,
+            check_tool=check_tool,
+            check_results_dir=self.check_results_dir,
         )
 
         result: ResultMessage | None = None

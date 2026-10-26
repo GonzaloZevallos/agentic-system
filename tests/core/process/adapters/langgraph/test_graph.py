@@ -145,6 +145,9 @@ def compiled(
             # The product is no repository and the checkouts are names: nothing to run.
             stack=stack or MemoryStack(),
             commands=MemoryCommands(),
+            # These tests pin the flow, not the reuse of a pass: no machine store, so a
+            # pass one run stored cannot show up as a reused row in the next run's prompt.
+            check_results=None,
             sample_app=sample_app,
             **({"inbox": inbox} if inbox is not None else {}),
         )

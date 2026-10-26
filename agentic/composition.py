@@ -29,6 +29,7 @@ from .core.measurement.adapters.otel import telemetry
 from .core.measurement.domain.metrics import arm_label
 from .core.process.adapters.claude_sdk import ClaudeSdkRunner
 from .core.process.adapters.filesystem import FilesystemPrompts, FilesystemTaskDocuments
+from .core.process.adapters.filesystem.check_results import FilesystemCheckResults
 from .core.process.adapters.filesystem.perf_lock import FilesystemPerfLock
 from .core.process.adapters.git import GitWorkspace
 from .core.process.adapters.git.workspace import WORKTREES
@@ -160,6 +161,7 @@ def _ports(cfg: Configuration) -> Ports:
             reaper=reaper,
             product_key=product_key,
             stall_timeout_s=cfg.stall_timeout_s,
+            check_results_dir=cfg.check_results_dir,
         ),
         documents=FilesystemTaskDocuments(
             cfg.product_dir,
@@ -178,6 +180,7 @@ def _ports(cfg: Configuration) -> Ports:
         reaper=reaper,
         perf_runner=PerfShellRunner(product_key, reaper),
         perf_lock=FilesystemPerfLock(cfg.perf_lock_path),
+        check_results=FilesystemCheckResults(cfg.check_results_dir),
     )
 
 

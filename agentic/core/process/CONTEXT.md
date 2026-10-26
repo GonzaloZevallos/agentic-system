@@ -256,6 +256,12 @@ La corrida de todos los `checks` del producto, sin forma afectada, una sola vez 
 En el código se llama `full_checks`, el nodo y el registro del frontmatter.
 _Avoid_: suite final, gate completo
 
+**Resultado reutilizable**:
+El resultado de un chequeo que pasó, guardado bajo el nombre del chequeo, su comando exacto, el árbol (`HEAD^{tree}`) de un checkout limpio sobre el que corrió y una huella de su entorno (comandos de setup, versión de stage0, presupuesto). Cualquier puerta, de entrega, de merge o de aterrizaje, que pida el mismo chequeo con la misma clave toma ese pase en vez de correrlo de nuevo. Sólo se guardan pases, sobre árbol limpio, sin que el entorno haya derivado desde el setup, y valen 24 h; un fallo nunca se reutiliza, porque puede ser flaky. Lo firma un secreto de la máquina: una entrada sin firma válida es como si no existiera.
+En el código se llama `check_key` y `env_drifted` (dominio, `domain/check_results.py`), `CheckResults`, el port, y `FilesystemCheckResults`, el almacén; una fila reutilizada lleva `reused: true`.
+_Avoid_: caché de chequeos (un resultado no se invalida por tiempo sino por contenido), memoización
+_Campo_: content-addressable build cache — Bazel remote cache, Nix; acá la acción es un chequeo y su entrada, el árbol de código más el entorno
+
 **Testigo del checkout**:
 El comando con que un producto dice dónde vive el código que sus chequeos acaban de medir: la Puerta de entrega lo corre en el checkout del Developer, antes de los chequeos y dentro de la misma mirada (hay commit y el árbol está limpio), y exige que la última línea no vacía de su salida sea una ruta absoluta que, resuelta, caiga adentro de ese checkout. Lo declara el producto en su stack, es opcional, y un producto que no lo declara tiene la puerta de siempre, byte a byte. Afirma menos de lo que parece y eso está escrito: prueba que el testigo, corrido en el mismo checkout y con el mismo entorno que reciben los chequeos, resolvió adentro; no prueba nada sobre el proceso que corrió `pytest` un minuto antes. Rechaza una sola vez, con su propio contador: el presupuesto de rechazos de los chequeos no se toca. Un desacuerdo que la puerta dejó pasar queda igual escrito en la sección del Developer, que es lo único que cruza hacia el revisor.
 En el código se llama `witness`, la clave del stack, y `witness_refusal`, el veredicto puro en `domain/presubmit.py`.
