@@ -678,6 +678,12 @@ class Workspace(Protocol):
         there is no record or it does not name a tree object (`git cat-file -t`)."""
         ...
 
+    def tree_changes(self, path: Path, old: str, new: str) -> tuple[str, ...]:
+        """The paths whose content differs between the trees `old` and `new` (ADR-0065),
+        read from the checkout at `path`: `git diff --name-only --no-renames`, a rename
+        naming both of its paths. Raises `GitError` when git cannot say (an unknown tree)."""
+        ...
+
     def is_clean(self, path: Path) -> bool:
         """No uncommitted change, tracked or untracked, under the checkout at `path`."""
         ...

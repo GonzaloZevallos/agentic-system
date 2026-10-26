@@ -535,6 +535,9 @@ class MemoryWorkspace:
         self.trees: dict[Path, str] = {}
         self.setup_trees: dict[Path, str] = {}
         self.setup_records: list[Path] = []
+        # What `tree_changes` answers between the setup tree and the head, and each call.
+        self.tree_paths: tuple[str, ...] = ()
+        self.tree_reads: list[tuple[Path, str, str]] = []
         # GH-358: what `differs_outside` answers, and each call; `restore_clean` calls.
         self.outside_differs = False
         self.outside_reads: list[tuple[Path, str, str, str]] = []
@@ -733,6 +736,10 @@ class MemoryWorkspace:
 
     def setup_tree(self, path: Path) -> str | None:
         return self.setup_trees.get(path)
+
+    def tree_changes(self, path: Path, old: str, new: str) -> tuple[str, ...]:
+        self.tree_reads.append((path, old, new))
+        return self.tree_paths
 
     def is_clean(self, path: Path) -> bool:
         return path not in self.dirty and path not in self.uncommitted

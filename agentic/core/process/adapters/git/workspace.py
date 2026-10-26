@@ -173,6 +173,14 @@ class GitWorkspace:
         located = Path(self._git("rev-parse", "--git-path", SETUP_TREE_FILE, cwd=path))
         return located if located.is_absolute() else path / located
 
+    def tree_changes(self, path: Path, old: str, new: str) -> tuple[str, ...]:
+        # Two dots, and trees: `base...head` needs commits and a merge base, and what is
+        # asked is only what differs between two contents.
+        result = self._run("diff", "--name-only", "--no-renames", "-z", old, new, cwd=path)
+        if result.returncode != 0:
+            raise GitError(f"git diff {old} {new} failed: {result.stderr.strip()}")
+        return tuple(name for name in result.stdout.split("\0") if name)
+
     def is_clean(self, path: Path) -> bool:
         return not self._git("status", "--porcelain", cwd=path)
 
