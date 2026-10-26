@@ -10,8 +10,17 @@ from agentic.core.process.application.develop import develop
 from agentic.core.process.application.integrate import integrate
 from agentic.core.process.application.presubmit import delivery_checks
 from agentic.core.process.domain import presubmit
+from agentic.core.process.domain.roles import DEVELOPER, DEVELOPER_INTEGRATOR, prompt_hash
+from agentic.core.process.domain.task import INTEGRATION
 from agentic.shared.configuration import Configuration
-from tests.fakes import MemoryStack, memory_ports
+from tests.fakes import (
+    CommandResult,
+    MemoryCommands,
+    MemoryStack,
+    ScriptedRunner,
+    delivered,
+    memory_ports,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -87,9 +96,6 @@ async def test_an_escalated_fan_in_stamps_nothing(cfg):
 
 # `develop`: the gate and the brief of a Developer under tiers.
 
-from agentic.core.process.domain.roles import DEVELOPER, DEVELOPER_INTEGRATOR, prompt_hash  # noqa: E402
-from agentic.core.process.domain.task import INTEGRATION  # noqa: E402
-from tests.fakes import CommandResult, MemoryCommands, ScriptedRunner, delivered  # noqa: E402
 
 AFFECTED = {"tests": "pytest --affected {base}", "e2e": "playwright --affected {base}"}
 
