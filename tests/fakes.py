@@ -673,6 +673,10 @@ class MemoryWorkspace:
         self.fetched_commits: list[str] = []
         self.diff_reads: list[tuple[str, str]] = []
         self.diff_paths: tuple[str, ...] = ()
+        # ADR-0065: what `changed_between_trees` answers (the paths that moved since the
+        # setup tree), and each call.
+        self.tree_diff_paths: tuple[str, ...] = ()
+        self.tree_diff_reads: list[tuple[str, str]] = []
         self.detached: list[str] = []
         # GH-318: the names `checkout_names(prefix)` answers (the `perf-*` a hard kill left), and
         # a text that makes `detached_checkout` raise it as a `GitError`.
@@ -984,6 +988,10 @@ class MemoryWorkspace:
     def changed_paths(self, base: str, head: str) -> tuple[str, ...]:
         self.diff_reads.append((base, head))
         return self.diff_paths
+
+    def changed_between_trees(self, old: str, new: str) -> tuple[str, ...]:
+        self.tree_diff_reads.append((old, new))
+        return self.tree_diff_paths
 
     def checkout_path(self, name: str) -> Path:
         return self.ROOT / name

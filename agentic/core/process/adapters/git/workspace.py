@@ -462,6 +462,10 @@ class GitWorkspace:
         out = self._git("diff", "--name-only", f"{base}...{head}")
         return tuple(line for line in out.splitlines() if line)
 
+    def changed_between_trees(self, old: str, new: str) -> tuple[str, ...]:
+        out = self._git("diff", "--name-only", old, new)
+        return tuple(line for line in out.splitlines() if line)
+
     def added_adrs(self, master: str, head: str) -> tuple[AddedAdr, ...]:
         # `--no-renames`: a file renamed into `docs/adr` is an addition of its new path
         # whatever `diff.renames` the machine has. The marker is a control character no

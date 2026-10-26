@@ -188,6 +188,18 @@ class Presubmit(Protocol):
     def __call__(self) -> str | None: ...
 
 
+class CheckTool(Protocol):
+    """The Developer's `run_check` tool (ADR-0065, GH-359): given the name the model chose,
+    runs that declared check through the system and answers with the text the model reads.
+    Blocking, within `timeout_s` for one call; the harness runs it off the event loop.
+    `names` are the declared checks, all of them."""
+
+    names: tuple[str, ...]
+    timeout_s: float
+
+    def __call__(self, name: str) -> str: ...
+
+
 class SchemaGuard(Protocol):
     """Asked with the model's own `tool_input` before its structured-output call even
     reaches the CLI's own rejection (glossary: Guarda de esquema; ADR-0011, fifth
@@ -220,7 +232,9 @@ class RoleRunner(Protocol):
     the product's own declared suppressions (issue #38): an Edit or a Write that adds
     one of them is denied with that rule's own `reason`, never the system's words.
     `None` or empty is the explicit no-op -- the cage is installed and denies nothing,
-    the same shape `presubmit`/`guard` absent already have.
+    the same shape `presubmit`/`guard` absent already have. `check_tool`, when given,
+    is the `run_check` tool the Developer and its integrator may call (ADR-0065); every
+    other role runs with no tool beyond its built-ins.
 
     `owner_task` is the parent task's id, never a subtask's (GH-282, ADR-0052): the mark
     every process of this attempt carries, so its leftovers can be found and stopped when
@@ -241,6 +255,7 @@ class RoleRunner(Protocol):
         presubmit: Presubmit | None = None,
         guard: SchemaGuard | None = None,
         forbidden: Sequence[Forbidden] | None = None,
+        check_tool: CheckTool | None = None,
     ) -> RawResult: ...
 
 
@@ -680,6 +695,12 @@ class Workspace(Protocol):
 
     def is_clean(self, path: Path) -> bool:
         """No uncommitted change, tracked or untracked, under the checkout at `path`."""
+        ...
+
+    def changed_between_trees(self, old: str, new: str) -> tuple[str, ...]:
+        """The paths whose content differs between the trees `old` and `new`
+        (`git diff --name-only <old> <new>`; `changed_paths` takes commits and cannot).
+        Raises `GitError` when either is not a tree."""
         ...
 
     def differs_outside(self, path: Path, verified: str, head: str, excluded: str) -> bool:
