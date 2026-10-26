@@ -161,6 +161,53 @@ def test_an_account_limit_resumes_once_its_own_wait_elapses_not_before(tmp_path)
     assert ports.tracker.comments == [("GH-19", "Auto-resumed: account limit")]
 
 
+def _paused_account_limit(ports, number: int, runs: list[dict]) -> None:
+    task_id = f"GH-{number}"
+    ports.documents.save(
+        _paused(
+            task_id,
+            "Developer failed 2 times: API Error: 429",
+            [
+                {"kind": "failure", "value": "account_limit", "section": "Developer"},
+                {"kind": "failure", "value": "account_limit", "section": "Developer"},
+                {"kind": "escalation", "value": "failure"},
+            ],
+            runs=runs,
+        )
+    )
+    ports.tracker.timestamped[task_id] = [
+        IssueComment(
+            body="Escalated: Developer failed 2 times: API Error: 429",
+            created_at="2026-10-02T19:30:00Z",
+        )
+    ]
+
+
+def test_run_once_resumes_the_task_closest_to_merge_when_one_slot_is_free(tmp_path):
+    # GH-362: the ranks `rules.closeness` reads from each task document reach `poll_plan`.
+    # #19 (lower number) has no runs, #20 has reached development: with one slot, #20 goes.
+    ports = memory_ports()
+    _paused_account_limit(ports, 19, [])
+    _paused_account_limit(
+        ports, 20, [{"role": "Developer", "section": "Developer: api", "cost_usd": 1.0}]
+    )
+    launcher = FakeLauncher()
+    due = ESCALATED_AT + timedelta(minutes=16)
+    lines = _round(_cfg(tmp_path, max_concurrent_runs=1), ports, MemoryRunRegistry(), launcher, due)
+    assert lines == ["agentic: poll: resume #20 -> pid 4242"]
+    assert [argv[3] for argv in launcher.spawned] == ["20"]
+
+
+def test_run_once_with_equal_ranks_resumes_the_lowest_issue(tmp_path):
+    ports = memory_ports()
+    _paused_account_limit(ports, 19, [])
+    _paused_account_limit(ports, 20, [])
+    launcher = FakeLauncher()
+    due = ESCALATED_AT + timedelta(minutes=16)
+    _round(_cfg(tmp_path, max_concurrent_runs=1), ports, MemoryRunRegistry(), launcher, due)
+    assert [argv[3] for argv in launcher.spawned] == ["19"]
+
+
 def test_a_questions_escalation_never_auto_resumes_however_long_it_waits(tmp_path):
     ports = memory_ports()
     ports.documents.save(
