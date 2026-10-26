@@ -141,7 +141,12 @@ def test_return_section_refuses_a_value_outside_the_closed_set():
     bad = {"subtasks": {"api": {"status": "returned", "returned_by": "somebody_else"}}}
     with pytest.raises(AssertionError):
         rules.return_section(bad, "api")
-    assert set(ReturnedBy.__args__) == {"review", "final_validation", "qa_performance"}
+    assert set(ReturnedBy.__args__) == {
+        "review",
+        "final_validation",
+        "qa_performance",
+        "full_checks",
+    }
 
 
 def test_the_review_schema_is_unchanged_by_the_new_pair():

@@ -511,3 +511,25 @@ def rerun_record(previous: Mapping[str, object], rerun: Mapping[str, object]) ->
     else:
         record["failed_step"] = rerun.get("failed_step") or previous.get("failed_step") or "checks"
     return record
+
+
+def tier_section(fast: Sequence[str], rest: Sequence[str]) -> str:
+    """The section `develop` appends to a Developer's prompt for a product that declares
+    tiers (GH-358): the delivery gate runs only `fast`, the rest -- and `fast` without
+    affected forms -- runs once on the integrated head. Written by the system, never by the
+    shared template, so a product without tiers renders today's text. `rest` may be empty."""
+    fast_names = ", ".join(fast)
+    if rest:
+        later = (
+            f"`{', '.join(rest)}`, and `{fast_names}` without affected forms, run once on the "
+            "integrated head"
+        )
+    else:
+        later = f"`{fast_names}` without affected forms run once on the integrated head"
+    return (
+        "### Delivery checks\n\n"
+        f"This product runs two tiers. The delivery gate runs only `{fast_names}`. "
+        f"The full suite runs once per task: {later}, before the pull request opens. "
+        "You must not run the full suite yourself. This supersedes the sentence above saying "
+        "that every check runs at delivery."
+    )

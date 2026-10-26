@@ -76,12 +76,13 @@ RECORD_KEYS: frozenset[str] = frozenset(
         "landed_slices",
         "closed_by_slices",
         "tracker_checklist_posted",
+        "full_checks",
     }
 )
 _LANDING_PLACEHOLDER = "<landing-flow-line>"
 # The record keys `render` writes as one flow line, swapped in for a placeholder: a list the
 # landing keeps about itself, which `record_closure` then replaces whole (GH-242, GH-297).
-_FLOW_KEYS = ("landing", "landed_slices")
+_FLOW_KEYS = ("landing", "landed_slices", "full_checks")
 
 
 def _recorded(subtask: dict[str, Any]) -> dict[str, Any]:
@@ -168,6 +169,12 @@ def render(
         **({"landing": _LANDING_PLACEHOLDER} if state.get("landing") else {}),
         # The slices the landing merged ahead of the pull request (GH-297): the same shape.
         **({"landed_slices": _LANDING_PLACEHOLDER} if state.get("landed_slices") else {}),
+        # The full-tier run (GH-358): the integrated head, its record (one flow line) and the
+        # head `deliver` last refused, each written only when set, so a product without tiers
+        # gets today's document.
+        **({"task_head": h} if (h := state.get("task_head")) else {}),
+        **({"full_checks": _LANDING_PLACEHOLDER} if state.get("full_checks") else {}),
+        **({"full_checks_healed": h} if (h := state.get("full_checks_healed")) else {}),
         **({"adr_renumbered": r} if (r := state.get("adr_renumbered")) else {}),
         **({"auto_merge_guarded": g} if (g := state.get("auto_merge_guarded")) else {}),
         **({"followups_filed": True} if state.get("followups_filed") else {}),
