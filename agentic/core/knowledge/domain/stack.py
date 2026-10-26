@@ -35,6 +35,14 @@ change forces the full form. Absent they read as `{}` and `()`. Present and empt
 `[]`, or a key with no value) is a half-written declaration and fails at load, so leave the
 key out to declare none; a wrong shape fails too.
 
+**`delivery_checks`**: optional, the fast tier of the two-tier gate. A list of the names of
+checks, each also under `checks`, that the delivery gate runs at every subtask delivery; the
+rest of `checks` runs once per task, on the integrated head, before the pull request opens.
+Absent it reads as `()`: no tiers, every delivery runs all of `checks` as it always has. A
+list equal to all of `checks` is valid (tiers are on, and the full tier is the run without
+affected forms). Present and empty, a non-list, a blank or non-string entry, a duplicate and
+a name that is not under `checks` all fail at load.
+
 **`performance`**: optional (GH-318, ADR-0059). A mapping of scenario name to the `seed` and
 `measure` one-line commands, the `volume` and its `volume_unit` (`rows|days|months|years`)
 they must run against, and the `limits` of its metrics (`{limit, unit: ms|queries|kb}`; the
@@ -74,6 +82,7 @@ KEYS = (
     "parallel_checks",
     "affected_checks",
     "affected_fallback",
+    "delivery_checks",
     "forbidden",
     "design",
     "ci",
@@ -249,6 +258,36 @@ def affected_fallback(data: object, source: object) -> tuple[str, ...]:
             f"{source}: expected `affected_fallback` to be a list of non-blank glob strings"
         )
     return tuple(glob.strip() for glob in found)
+
+
+def delivery_checks(data: object, source: object) -> tuple[str, ...]:
+    """The names of the checks the delivery gate runs, the fast tier, in the file's order.
+
+    Absent is `()`: no tiers, the gate of today. Present, it is a non-empty list of distinct
+    non-blank names, every one a check declared under `checks`: a name that is not one would
+    never run, and the product would believe its gate did. A list equal to all of `checks`
+    is valid. Every shape that is not that fails at load, naming the key."""
+    declared = _declared(data, source)
+    if "delivery_checks" not in declared:
+        return ()
+    found = _declared_nonempty(declared, source, "delivery_checks")
+    if not isinstance(found, list):
+        raise ValueError(f"{source}: expected `delivery_checks`, a list of check names")
+    names: list[str] = []
+    for item in found:
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError(f"{source}: expected non-blank check names under `delivery_checks`")
+        names.append(item.strip())
+    known = _commands(declared, source, "checks")
+    for position, name in enumerate(names):
+        if name in names[:position]:
+            raise ValueError(f"{source}: {name!r} is declared twice under `delivery_checks`")
+        if name not in known:
+            raise ValueError(
+                f"{source}: {name!r} under `delivery_checks` is not a check declared under "
+                f"`checks`; expected one of {', '.join(known)}"
+            )
+    return tuple(names)
 
 
 def forbidden(data: object, source: object) -> tuple[Forbidden, ...]:

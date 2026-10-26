@@ -279,6 +279,7 @@ class MemoryStack:
         affected_checks: dict[str, str] | None = None,
         affected_fallback: tuple[str, ...] = (),
         performance: dict[str, Scenario] | None = None,
+        delivery_checks: tuple[str, ...] = (),
     ) -> None:
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -316,6 +317,8 @@ class MemoryStack:
         # its own file says otherwise.
         self.declared_affected_checks = {} if affected_checks is None else affected_checks
         self.declared_affected_fallback = affected_fallback
+        # Empty is a product with no tiers: every delivery runs all of `checks`.
+        self.declared_delivery_checks = delivery_checks
         # Empty is a product with no performance budget (GH-318), every product until its own
         # file declares one.
         self.declared_performance = {} if performance is None else performance
@@ -350,6 +353,10 @@ class MemoryStack:
     def affected_fallback(self, revision: str) -> tuple[str, ...]:
         # Not tracked in `revisions` either, `witness`'s own reason.
         return self.declared_affected_fallback
+
+    def delivery_checks(self, revision: str) -> tuple[str, ...]:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_delivery_checks
 
     def forbidden(self, revision: str) -> list[Forbidden]:
         # Not tracked in `revisions` either, `witness`'s own reason.

@@ -405,6 +405,12 @@ class ProductStack(Protocol):
         when the product declares none."""
         ...
 
+    def delivery_checks(self, revision: str) -> tuple[str, ...]:
+        """The names of the checks the delivery gate runs, the fast tier, in the file's
+        order (`core.knowledge`), as the commit `revision` declares them. Empty when the
+        product declares no tiers, which is the gate of today, byte for byte."""
+        ...
+
     def forbidden(self, revision: str) -> Sequence[Forbidden]:
         """The suppressions this product forbids a Developer's Edit or Write from
         adding (`core.knowledge`, issue #38), in file order: first declared rule wins.

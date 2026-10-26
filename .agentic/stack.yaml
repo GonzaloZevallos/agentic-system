@@ -59,6 +59,13 @@ affected_fallback:
   - ".github/*"
   - "scripts/*"
   - .env.example
+# `delivery_checks`: the fast tier, the checks every subtask delivery runs. All four names are
+# listed, so the tier is the whole of `checks` and what changes is the form: the delivery gate
+# may use the affected form of `tests` above, and the full tier is pytest without it, run once
+# per task on the integrated head, before the pull request opens. The merge gate still runs
+# all of `checks`. Read at a task's base, like every key here: it governs from the task after
+# the merge.
+delivery_checks: [tests, lint, format, types]
 witness: uv run python -c "import agentic, pathlib; print(pathlib.Path(agentic.__file__).resolve().parent)"
 forbidden:
   - pattern: '#\s*(type:\s*ignore|noqa)\b'
