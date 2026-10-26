@@ -501,3 +501,51 @@ candidates:
   sources:
   - finding
   added_at: '2026-10-26T06:04:30.076+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: For tests that start processes, add a teardown that reaps everything they spawn, indirect descendants included, so a failing test cannot leak one. Check that each Coverage row points at code that does it.
+  confidence: medium
+  seen_in:
+  - GH-315
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T06:06:02.292+00:00'
+- slug: developer
+  category: process-suite-red
+  lesson: When a change adds work to a path every task runs, run the full declared suite or measure durations before you deliver. Do not hand over a head whose full check timed out and was never green.
+  confidence: medium
+  seen_in:
+  - GH-315
+  sources:
+  - finding
+  added_at: '2026-10-26T06:06:02.292+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: When the brief says behaviour is unchanged versus today's rendering, compare against a baseline captured from the base commit, not two runs of the current branch.
+  confidence: medium
+  seen_in:
+  - GH-319
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T06:06:02.292+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before you deliver, walk each invariant in the plan against your diff. For every wait, confirm one deadline that fails bounds it from before the first spawn, taken from a named constant, with no numeric literal.
+  confidence: medium
+  seen_in:
+  - GH-322
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T06:06:02.292+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: List every artifact the brief requires, including PR evidence such as a base-commit probe run, and where each test must live. Produce each one and put it where the brief says before you deliver.
+  confidence: low
+  seen_in:
+  - GH-322
+  sources:
+  - finding
+  added_at: '2026-10-26T06:06:02.292+00:00'

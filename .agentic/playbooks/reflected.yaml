@@ -128,3 +128,36 @@ tasks:
     cost_usd: 0.034
   GH-308@review:
     cost_usd: 0.0346
+  GH-315@review:
+    cost_usd: 0.0943
+  GH-319@review:
+    cost_usd: 0.0897
+    applied:
+    - op: add
+      slug: developer
+      category: spec-missing-test
+      lesson: Before you deliver, list each acceptance criterion and full-path scenario in the brief and name the test that asserts it at the declared seam, through to its final outcome, not only the first steps.
+      item_id: ''
+      tasks:
+      - GH-319
+  GH-322@review:
+    cost_usd: 0.0611
+  GH-326@review:
+    cost_usd: 0.033
+  GH-328@review:
+    cost_usd: 0.0603
+    applied:
+    - op: add
+      slug: developer
+      category: standard-typing-silenced
+      lesson: Never use cast, a bare ignore or an override to satisfy the type checker. Give the data a precise type at its source, and do not widen a shared signature, which only moves the silencing to every caller.
+      item_id: ''
+      tasks:
+      - GH-328
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-328
