@@ -140,3 +140,13 @@ candidates:
   - finding
   - return
   added_at: '2026-10-26T05:51:14.504+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before delivering, trace every subprocess or I/O call a new verb reaches through helpers and check each against the plan's invariants (e.g. timeouts); make the test spy on all of them, not only the main call.
+  confidence: medium
+  seen_in:
+  - GH-255
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T05:53:33.193+00:00'

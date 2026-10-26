@@ -1,6 +1,6 @@
 started_at: '2026-10-25T11:49:24.156+00:00'
-summaries: 1
-summarised: 10
+summaries: 2
+summarised: 20
 tasks:
   GH-344@review:
     cost_usd: 0.0846
@@ -41,3 +41,22 @@ tasks:
     cost_usd: 0.0617
   GH-249@review:
     cost_usd: 0.0517
+  GH-250@review:
+    cost_usd: 0.0
+  GH-246@review:
+    cost_usd: 0.037
+    decisions: 1
+  GH-243@review:
+    cost_usd: 0.0323
+  GH-227@review:
+    cost_usd: 0.0372
+  GH-255@review:
+    cost_usd: 0.0597
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-other
+      lesson: ''
+      item_id: developer-1
+      tasks:
+      - GH-255
