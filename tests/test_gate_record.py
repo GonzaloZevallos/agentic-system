@@ -13,7 +13,7 @@ from agentic.core.measurement.adapters.otel import telemetry
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
 from agentic.core.process.application.develop import develop
 from agentic.core.process.application.full_checks import full_checks
-from agentic.core.process.domain import document
+from agentic.core.process.domain import document, presubmit
 from agentic.shared.configuration import Configuration
 from tests.core.process.application.test_delivery_tier import TASK, building
 from tests.core.process.application.test_full_checks import state_of
@@ -133,6 +133,40 @@ def test_a_gate_record_with_only_some_keys_loads_as_written(tmp_path):
         }
     )
     assert documents.load("T-1")["runs"][0]["gates"] == [{"wait_s": 4.0}]
+
+
+def _merge_checks(**more):
+    return presubmit.merge_checks_record(
+        head="abc",
+        master="def",
+        duration_s=2.5,
+        declared={"tests": "pytest"},
+        results=[
+            {"name": "tests", "command": "pytest", "passed": True, "output": "", "duration_s": 1.0}
+        ],
+        witness=None,
+        **more,
+    )
+
+
+def test_the_merge_record_gate_round_trips_through_the_document_on_disk(tmp_path):
+    documents = FilesystemTaskDocuments(tmp_path)
+    documents.save({"id": "T-1", "title": "t", "description": "d"})
+    gate = GATE | {"priority": "land"}
+    record = _merge_checks(gate=gate)
+    assert record["gate"] == gate
+    documents.record_closure("T-1", {"merge_checks": record})
+    assert documents.load("T-1")["merge_checks"] == record
+
+
+def test_a_merge_record_written_without_a_gate_loads_without_one(tmp_path):
+    documents = FilesystemTaskDocuments(tmp_path)
+    documents.save({"id": "T-1", "title": "t", "description": "d"})
+    record = _merge_checks()
+    assert "gate" not in record
+    documents.record_closure("T-1", {"merge_checks": record})
+    loaded = documents.load("T-1")["merge_checks"]
+    assert loaded == record and "gate" not in loaded
 
 
 # -- who writes the record -------------------------------------------------------------
