@@ -1331,8 +1331,9 @@ def _upstream_notes(asked: bool, upstream: Callable[[], Upstream]) -> list[str]:
 def deferred_line(deferred: rules.Deferred) -> str:
     """The poll line for a merge or land `rules.poll_plan` held back: built from the plan's
     own `Deferred`, never from a second slot count (GH-263). The reason is printed as it is:
-    `no_slot`, `exempt_busy` or, for a land held by an account-limit pause, `pause_waiting`
-    (GH-270)."""
+    `no_slot`, `exempt_busy`, `pause_waiting` for a land held by an account-limit pause
+    (GH-270) or `land_queued` for one yielding to an earlier wait of another product
+    (GH-362)."""
     return f"agentic: poll: {deferred.kind} #{deferred.issue} waits: {deferred.reason}"
 
 
@@ -1450,7 +1451,8 @@ def run_once(
         own_key = rules.root_key(str(tasks_root))
         waits, wait_notes = registry.land_waits(now)
         # A product never holds itself: only another root's fresh record holds this round.
-        others_landing = any(w.root_key != own_key for w in waits)
+        others = [w for w in waits if w.root_key != own_key]
+        others_landing = bool(others)
         previous = next((w.since for w in waits if w.root_key == own_key), None)
         notes = [
             *spend_notes,
@@ -1472,6 +1474,7 @@ def run_once(
             land_slots=max(cfg.max_concurrent_runs + rules.LAND_HEADROOM - live, 0),
             closeness=ranks,
             others_landing=others_landing,
+            earlier_land_wait=rules.land_queued_behind(previous, own_key, others),
         )
         # Right after the decision and before `execute`, so no exit path leaves the previous
         # round's record in place: a round with no waiting land removes it.

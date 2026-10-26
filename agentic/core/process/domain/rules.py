@@ -2986,23 +2986,26 @@ class LandCandidate:
 class Deferred:
     """A merge or land `poll_plan` held back this round, and why: `no_slot` (a `land_model`
     child needs a slot and none is left, headroom included), `exempt_busy` (the one exempt
-    child the machine allows is already live, or this round already starts one) or
+    child the machine allows is already live, or this round already starts one),
     `pause_waiting` (a `land_model` land while this product has an `account_limit` pause
-    still waiting out its calendar: the land would spend the session the pause protects)."""
+    still waiting out its calendar: the land would spend the session the pause protects) or
+    `land_queued` (a `land_model` land with a slot to start in, yielding to another product's
+    land whose wait began earlier: first come, first landed, GH-362)."""
 
     kind: Literal["merge", "land"]
     issue: int
-    reason: Literal["no_slot", "exempt_busy", "pause_waiting"]
+    reason: Literal["no_slot", "land_queued", "exempt_busy", "pause_waiting"]
 
 
 def holds_launches(deferred: Deferred) -> bool:
     """Whether this deferral opens an Espera de aterrizaje (ADR-0045 addendum, GH-362): the
     product's poller publishes it, and the other products hold every counted start below a
-    land while it lasts. Only a `land` that waits for a slot does: `exempt_busy` is the
-    serialisation of the children that take no slot, and `pause_waiting` waits on the
+    land while it lasts. Only a `land` that waits does, for a slot (`no_slot`) or for an earlier
+    wait of another product (`land_queued`): `exempt_busy` is the serialisation of the children
+    that take no slot, and `pause_waiting` waits on the
     account's calendar, which another product's start does not lengthen."""
     match deferred.reason:
-        case "no_slot":
+        case "no_slot" | "land_queued":
             return deferred.kind == "land"
         case "exempt_busy" | "pause_waiting":
             return False
@@ -3034,6 +3037,19 @@ def root_key(root: str) -> str:
     registry's per-product files. The one place the key is computed, so a poller recognises
     its own record."""
     return hashlib.sha256(root.encode("utf-8")).hexdigest()[:12]
+
+
+def land_queued_behind(
+    own_since: datetime | None, own_key: str, others: Sequence[LandWait]
+) -> bool:
+    """Whether this product's land yields to another product's published wait (GH-362, first
+    come, first landed): some record of `others` (the fresh records of the other roots) began
+    earlier than this product's own wait (`own_since`), a tie going to the lower `root_key`.
+    A product with no wait of its own yet (`None`) is behind any fresh record. The oldest
+    wait is behind none, so it always starts first once a slot is free."""
+    if own_since is None:
+        return bool(others)
+    return any((w.since, w.root_key) < (own_since, own_key) for w in others)
 
 
 def land_wait_since(previous: datetime | None, waiting: bool, now: datetime) -> datetime | None:
@@ -3084,6 +3100,7 @@ def poll_plan(
     crash_retakes: Sequence[int] = (),
     closeness: Mapping[int, int] = {},
     others_landing: bool = False,
+    earlier_land_wait: bool = False,
 ) -> PollPlan:
     """This round's actions, in the order the Tech Lead plan fixes: every close first
     (merging freed the slot it used, if any, so closing never spends one); then what
@@ -3115,6 +3132,11 @@ def poll_plan(
     published wait for a land: every start ranked below a land is held, that is every launch,
     resume and retake, whatever its phase. Lands, closes and the children that take no slot
     are untouched, and nothing held leaves a deferral.
+
+    `earlier_land_wait` (GH-362, `land_queued_behind`) is true while another product's wait
+    for a land began earlier than this product's own: the `land_model` land that would start
+    is `Deferred(land_queued)` instead and takes no slot, and the next one waits for a slot as
+    ever. The `account_paused` row wins (`pause_waiting`), and the exempt children are untouched.
 
     `lands` (GH-239) are the issues whose refusal has a built landing step not yet taken on
     their head (`landing_step`; `wait` and `none` are never among them), each with the kind
@@ -3160,7 +3182,9 @@ def poll_plan(
     model_lands = sorted(c.issue for c in lands if counts_against_cap(c.kind))
     paused = account_paused(resumes, now)
     land_total = received_slots if land_slots is None else land_slots
-    land_starts = bool(model_lands) and not paused and land_total > 0
+    land_ready = bool(model_lands) and not paused and land_total > 0
+    land_queued = land_ready and earlier_land_wait
+    land_starts = land_ready and not land_queued
 
     # Rank order: the nearest to merge first; at a tie a retake goes before a resume, then
     # the lowest issue (crash before reboot only when the same issue is both).
@@ -3200,6 +3224,9 @@ def poll_plan(
         deferred.extend(Deferred("land", issue, "pause_waiting") for issue in model_lands)
         model_lands = []
     elif land_starts:
+        model_lands = model_lands[1:]
+    elif land_queued:
+        deferred.append(Deferred("land", model_lands[0], "land_queued"))
         model_lands = model_lands[1:]
     deferred.extend(Deferred("land", issue, "no_slot") for issue in model_lands)
 

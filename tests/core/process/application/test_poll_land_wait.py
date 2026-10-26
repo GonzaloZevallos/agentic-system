@@ -103,3 +103,87 @@ def test_the_notes_of_an_unreadable_wait_file_open_the_round_output(tmp_path):
     lines = _lines(b_cfg, b_ports, registry, FakeLauncher())
 
     assert lines[0] == "agentic: poll: land wait file x.json unreadable, skipped"
+
+
+# First come, first landed (GH-362): two products owing a model land, one headroom between them.
+T0 = ESCALATED_AT
+T1 = T0 + timedelta(minutes=2)
+T2 = T0 + timedelta(minutes=4)
+T3 = T0 + timedelta(minutes=6)
+
+
+def _two_land_products(tmp_path):
+    """Both products owe a model land (issue 5), both with cap 2, and three role children
+    hold the cap and the headroom on one shared registry."""
+    a_ports = dataclasses.replace(_owed_lands(), stack=MemoryStack(product="a"))
+    b_ports = dataclasses.replace(_owed_lands(), stack=MemoryStack(product="b"))
+    registry = MemoryRunRegistry([_child("role", f"GH-{n}", "x", pid=n) for n in (1, 2, 3)])
+    a_cfg = _cfg(tmp_path / "a", max_concurrent_runs=2)
+    b_cfg = _cfg(tmp_path / "b", max_concurrent_runs=2)
+    return a_ports, b_ports, registry, a_cfg, b_cfg
+
+
+def _since_of(registry, product):
+    (wait,) = [w for w in registry.land_waits(T2)[0] if w.product == product]
+    return wait.since
+
+
+def test_the_later_wait_yields_the_land_and_the_earlier_one_starts_first(tmp_path):
+    a_ports, b_ports, registry, a_cfg, b_cfg = _two_land_products(tmp_path)
+    a_launcher, b_launcher = FakeLauncher(), FakeLauncher()
+    assert _only_lands(_lines(a_cfg, a_ports, registry, a_launcher, T0)) == [A_WAITS]
+
+    registry.entries.pop()  # one slot is free: the headroom could take a land
+    queued = _lines(b_cfg, b_ports, registry, b_launcher, T1)
+    assert b_launcher.spawned == []
+    assert _only_lands(queued) == ["agentic: poll: land #5 waits: land_queued"]
+
+    started = _lines(a_cfg, a_ports, registry, a_launcher, T2)
+    assert a_launcher.spawned == [_land_argv(5, tmp_path / "a")]
+    assert _only_lands(started) == ["agentic: poll: land #5 -> pid 4242"]
+
+    after = _lines(b_cfg, b_ports, registry, b_launcher, T3)
+    assert b_launcher.spawned == [_land_argv(5, tmp_path / "b")]
+    assert _only_lands(after) == ["agentic: poll: land #5 -> pid 4242"]
+    assert registry.land_waits(T3) == ([], [])
+
+
+def test_a_queued_land_publishes_a_record_that_keeps_its_place_in_line(tmp_path):
+    a_ports, b_ports, registry, a_cfg, b_cfg = _two_land_products(tmp_path)
+    _lines(a_cfg, a_ports, registry, FakeLauncher(), T0)
+    registry.entries.pop()
+
+    _lines(b_cfg, b_ports, registry, FakeLauncher(), T1)
+    _lines(b_cfg, b_ports, registry, FakeLauncher(), T2)
+
+    assert _since_of(registry, "b") == T1
+    assert _since_of(registry, "a") == T0
+
+
+def test_the_oldest_wait_is_never_queued_so_two_waiting_products_do_not_deadlock(tmp_path):
+    a_ports, b_ports, registry, a_cfg, b_cfg = _two_land_products(tmp_path)
+    # B waited first this time: it has the earlier record, A the later one.
+    _lines(b_cfg, b_ports, registry, FakeLauncher(), T0)
+    _lines(a_cfg, a_ports, registry, FakeLauncher(), T1)
+    registry.entries.pop()
+    a_launcher, b_launcher = FakeLauncher(), FakeLauncher()
+
+    a_lines = _lines(a_cfg, a_ports, registry, a_launcher, T2)
+    b_lines = _lines(b_cfg, b_ports, registry, b_launcher, T2)
+
+    assert _only_lands(a_lines) == ["agentic: poll: land #5 waits: land_queued"]
+    assert _only_lands(b_lines) == ["agentic: poll: land #5 -> pid 4242"]
+    assert b_launcher.spawned == [_land_argv(5, tmp_path / "b")]
+
+
+def test_a_queued_record_that_expired_frees_the_land_of_the_other_product(tmp_path):
+    a_ports, b_ports, registry, a_cfg, b_cfg = _two_land_products(tmp_path)
+    _lines(a_cfg, a_ports, registry, FakeLauncher(), T0)  # A's poller then dies
+    registry.entries.pop()
+    later = T0 + rules.LAND_WAIT_TTL + timedelta(seconds=1)
+    launcher = FakeLauncher()
+
+    lines = _lines(b_cfg, b_ports, registry, launcher, later)
+
+    assert launcher.spawned == [_land_argv(5, tmp_path / "b")]
+    assert _only_lands(lines) == ["agentic: poll: land #5 -> pid 4242"]

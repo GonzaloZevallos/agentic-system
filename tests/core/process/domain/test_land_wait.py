@@ -23,7 +23,7 @@ def _plan(**kwargs) -> rules.PollPlan:
 
 
 # Every value `Deferred.reason` can take, classed: a new reason fails here until it is.
-HOLDS = {"no_slot": True, "exempt_busy": False, "pause_waiting": False}
+HOLDS = {"no_slot": True, "land_queued": True, "exempt_busy": False, "pause_waiting": False}
 
 
 def test_every_deferred_reason_is_classed_explicitly():
@@ -93,3 +93,90 @@ def test_a_wait_with_no_previous_record_starts_now():
 
 def test_no_waiting_land_means_no_record_whatever_the_previous_was():
     assert rules.land_wait_since(NOW - timedelta(minutes=5), False, NOW) is None
+
+
+# First come, first landed (GH-362, land against land): the older wait starts first.
+OLDER = NOW - timedelta(minutes=10)
+
+
+def _wait(key: str, since: datetime) -> rules.LandWait:
+    return rules.LandWait("p", key, NOW, since, (1,))
+
+
+def test_a_product_is_behind_a_wait_that_began_earlier():
+    assert rules.land_queued_behind(NOW, "bbb", [_wait("aaa", OLDER)]) is True
+
+
+def test_a_product_is_not_behind_a_wait_that_began_later():
+    assert rules.land_queued_behind(OLDER, "bbb", [_wait("aaa", NOW)]) is False
+
+
+def test_a_tie_on_since_goes_to_the_lower_root_key():
+    assert rules.land_queued_behind(NOW, "bbb", [_wait("aaa", NOW)]) is True
+    assert rules.land_queued_behind(NOW, "aaa", [_wait("bbb", NOW)]) is False
+
+
+def test_a_product_with_no_wait_of_its_own_is_behind_any_record():
+    assert rules.land_queued_behind(None, "aaa", [_wait("bbb", NOW)]) is True
+
+
+def test_nobody_is_behind_when_there_is_no_other_record():
+    assert rules.land_queued_behind(None, "aaa", []) is False
+    assert rules.land_queued_behind(NOW, "aaa", []) is False
+
+
+def test_the_oldest_of_several_waits_is_behind_none_of_them():
+    waits = [_wait("a", OLDER), _wait("b", NOW), _wait("c", NOW + timedelta(minutes=1))]
+    assert [
+        rules.land_queued_behind(w.since, w.root_key, [o for o in waits if o is not w])
+        for w in waits
+    ] == [False, True, True]
+
+
+def test_a_land_queued_behind_an_earlier_wait_is_deferred_not_started():
+    plan = _plan(available_slots=2, land_slots=3, lands=MODEL_LAND, earlier_land_wait=True)
+    assert plan.actions == []
+    assert plan.deferred == [rules.Deferred("land", 4, "land_queued")]
+
+
+def test_a_land_queued_takes_no_slot_so_it_is_not_counted_against_a_retake():
+    plan = _plan(
+        available_slots=1, land_slots=2, lands=MODEL_LAND, retakes=[2], earlier_land_wait=True
+    )
+    assert plan.actions == [rules.PollAction("retake", 2, reason="reboot")]
+
+
+def test_only_the_land_that_would_start_is_queued_and_the_next_waits_for_a_slot():
+    lands = [rules.LandCandidate(4, "land_model"), rules.LandCandidate(6, "land_model")]
+    plan = _plan(available_slots=2, land_slots=3, lands=lands, earlier_land_wait=True)
+    assert plan.deferred == [
+        rules.Deferred("land", 4, "land_queued"),
+        rules.Deferred("land", 6, "no_slot"),
+    ]
+
+
+def test_a_queued_land_does_not_hold_the_exempt_children():
+    plan = _plan(
+        available_slots=2,
+        land_slots=3,
+        lands=[*MODEL_LAND, rules.LandCandidate(7, "land_checks")],
+        merges=[6],
+        earlier_land_wait=True,
+    )
+    assert plan.actions == [rules.PollAction("merge", 6)]
+    assert rules.Deferred("land", 4, "land_queued") in plan.deferred
+
+
+def test_a_land_with_no_earlier_wait_starts_as_before():
+    plan = _plan(available_slots=2, land_slots=3, lands=MODEL_LAND, earlier_land_wait=False)
+    assert plan.actions == [rules.PollAction("land", 4)]
+
+
+def test_a_paused_account_defers_the_land_as_pause_waiting_even_when_queued():
+    paused = rules.ResumeCandidate(
+        issue=3, reason="account_limit", since=NOW - timedelta(minutes=1), prior=0, limit=5
+    )
+    plan = _plan(
+        available_slots=2, land_slots=3, lands=MODEL_LAND, resumes=[paused], earlier_land_wait=True
+    )
+    assert plan.deferred == [rules.Deferred("land", 4, "pause_waiting")]
