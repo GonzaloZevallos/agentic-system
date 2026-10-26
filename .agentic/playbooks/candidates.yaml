@@ -302,3 +302,30 @@ candidates:
   sources:
   - finding
   added_at: '2026-10-26T05:57:46.127+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: In verification write-ups, limit each claim to what you observed, label the rest as inferred, and say when pasted payloads or output were re-rendered rather than verbatim.
+  confidence: medium
+  seen_in:
+  - GH-276
+  sources:
+  - finding
+  added_at: '2026-10-26T05:59:20.946+00:00'
+- slug: developer_integrator
+  category: standard-other
+  lesson: After integrating subtasks, check that every module the branch adds is in the type-checked file registry, and run the declared type check on the integrated branch before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-282
+  sources:
+  - finding
+  added_at: '2026-10-26T05:59:20.946+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: 'Before you deliver, check that each new test assertion can fail: change the behaviour under test, or look at fixtures that force a result, and confirm the assertion would catch the change.'
+  confidence: medium
+  seen_in:
+  - GH-283
+  sources:
+  - finding
+  added_at: '2026-10-26T05:59:20.946+00:00'

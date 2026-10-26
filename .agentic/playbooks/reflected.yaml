@@ -80,3 +80,21 @@ tasks:
     cost_usd: 0.0515
   GH-274@review:
     cost_usd: 0.0931
+  GH-272@review:
+    cost_usd: 0.0
+  GH-276@review:
+    cost_usd: 0.0578
+  GH-278@review:
+    cost_usd: 0.0
+  GH-282@review:
+    cost_usd: 0.0435
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-other
+      lesson: ''
+      item_id: developer-1
+      tasks:
+      - GH-282
+  GH-283@review:
+    cost_usd: 0.0399
