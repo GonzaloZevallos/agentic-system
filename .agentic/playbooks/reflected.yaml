@@ -228,3 +228,13 @@ tasks:
       - GH-342
   GH-363@review:
     cost_usd: 0.0426
+  GH-362@review:
+    cost_usd: 0.0882
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-362

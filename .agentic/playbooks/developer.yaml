@@ -18,8 +18,9 @@ items:
   - GH-328
   - GH-321
   - GH-342
+  - GH-362
   added_at: '2026-10-26T06:06:02.292+00:00'
-  last_applied: '2026-10-26T06:09:50.342+00:00'
+  last_applied: '2026-10-26T10:31:49.357+00:00'
 - id: developer-3
   lesson: Never use cast, a bare ignore or an override to satisfy the type checker. Give the data a precise type at its source, and do not widen a shared signature, which only moves the silencing to every caller.
   category: standard-typing-silenced
