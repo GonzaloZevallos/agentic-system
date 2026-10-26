@@ -187,3 +187,33 @@ def _sign(directory, key, written_at, row):
     message = json.dumps([key, written_at, row], sort_keys=True, separators=(",", ":"))
     secret = (directory / ".key").read_bytes()
     return hmac.new(secret, message.encode(), hashlib.sha256).hexdigest()
+
+
+def test_an_overflowing_or_deeply_nested_entry_is_a_miss_not_an_exception(tmp_path):
+    store = FilesystemCheckResults(tmp_path)
+    store.put(KEY, ROW, NOW)
+    entry = tmp_path / f"{KEY}.json"
+    good = json.loads(entry.read_text())
+    entry.write_text(
+        '{"written_at": ' + "9" * 400 + ', "row": ' + json.dumps(good["row"]) + ', "mac": "x"}'
+    )
+    assert store.get(KEY, NOW) is None
+    entry.write_text("[" * 200_000)
+    assert store.get(KEY, NOW) is None
+
+
+def test_an_integer_now_still_round_trips(tmp_path):
+    store = FilesystemCheckResults(tmp_path)
+    store.put(KEY, ROW, 1_000_000)
+    assert store.get(KEY, 1_000_001) == ROW
+
+
+def test_a_row_with_a_wrongly_typed_optional_field_is_a_miss(tmp_path):
+    store = FilesystemCheckResults(tmp_path)
+    store.put(KEY, ROW, NOW)
+    entry = tmp_path / f"{KEY}.json"
+    data = json.loads(entry.read_text())
+    data["row"]["duration_s"] = "slow"
+    data["mac"] = _sign(tmp_path, KEY, data["written_at"], data["row"])
+    entry.write_text(json.dumps(data))
+    assert store.get(KEY, NOW) is None

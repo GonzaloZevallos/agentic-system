@@ -669,7 +669,8 @@ class Workspace(Protocol):
 
     def record_setup_tree(self, path: Path) -> None:
         """Remember, in the checkout's own git dir (never in its files), the tree the
-        product's setup has just run on. Called once, after every setup step passed."""
+        product's setup has just run on. Called once, after every setup step passed. Best
+        effort: when it cannot write, no record exists and no pass is stored; it never raises."""
         ...
 
     def setup_tree(self, path: Path) -> str | None:

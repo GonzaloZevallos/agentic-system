@@ -84,3 +84,11 @@ def test_a_commit_id_in_the_record_is_not_a_tree(product):
     path = product / record if not record.is_absolute() else record
     path.write_text(git("rev-parse", "HEAD", cwd=product))
     assert ws.setup_tree(product) is None
+
+
+def test_recording_where_git_cannot_answer_does_not_raise_and_leaves_no_record(tmp_path):
+    ws = GitWorkspace(tmp_path, IDENTITY)
+    elsewhere = tmp_path / "not-a-repo"
+    elsewhere.mkdir()
+    ws.record_setup_tree(elsewhere)
+    assert ws.setup_tree(elsewhere) is None

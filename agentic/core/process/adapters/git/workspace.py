@@ -149,7 +149,13 @@ class GitWorkspace:
         return self._git("rev-parse", "HEAD^{tree}", cwd=path)
 
     def record_setup_tree(self, path: Path) -> None:
-        self._setup_tree_file(path).write_text(self.tree(path) + "\n", encoding="utf-8")
+        # Best effort: a record that could not be written is a record that is missing, and
+        # a missing record already means "no pass is stored" (ADR-0065). It must never
+        # fail the checkout whose setup just passed.
+        try:
+            self._setup_tree_file(path).write_text(self.tree(path) + "\n", encoding="utf-8")
+        except (OSError, GitError):
+            return
 
     def setup_tree(self, path: Path) -> str | None:
         try:

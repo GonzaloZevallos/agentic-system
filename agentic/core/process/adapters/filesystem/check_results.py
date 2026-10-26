@@ -19,7 +19,6 @@ import os
 import re
 import tempfile
 from pathlib import Path
-from typing import cast
 
 from ...domain import check_results as domain
 from ...domain.presubmit import CheckResult
@@ -46,7 +45,15 @@ class FilesystemCheckResults:
             if not domain.is_fresh(float(written_at), now):
                 return None
             return _row_of(row)
-        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            TypeError,
+            AttributeError,
+            OverflowError,
+            RecursionError,
+        ):
             return None
 
     def put(self, key: str, row: CheckResult, now: float) -> None:
@@ -56,6 +63,8 @@ class FilesystemCheckResults:
             # Only a pass is ever stored (ADR-0065): a failure may be flaky, so the
             # store refuses it however it got here.
             return
+        # `get` signs `float(written_at)`: an int `now` must sign as the float it reads back.
+        now = float(now)
         self.dir.mkdir(parents=True, exist_ok=True)
         secret = self._secret(create=True)
         if secret is None:
@@ -151,13 +160,26 @@ def _verified(secret: bytes, key: str, written_at: object, row: object, mac: obj
 
 
 def _row_of(row: object) -> CheckResult | None:
+    """The row an entry holds, rebuilt field by field: a row that is not exactly a pass
+    with the types a `CheckResult` has is a miss."""
     if not isinstance(row, dict):
         return None
-    if not (
-        isinstance(row.get("name"), str)
-        and isinstance(row.get("command"), str)
-        and row.get("passed") is True
-        and isinstance(row.get("output"), str)
-    ):
+    name, command, output = row.get("name"), row.get("command"), row.get("output")
+    if not (isinstance(name, str) and isinstance(command, str) and isinstance(output, str)):
         return None
-    return cast(CheckResult, row)
+    if row.get("passed") is not True:
+        return None
+    result: CheckResult = {"name": name, "command": command, "passed": True, "output": output}
+    if "duration_s" in row:
+        duration = row["duration_s"]
+        if isinstance(duration, bool) or not isinstance(duration, int | float):
+            return None
+        result["duration_s"] = float(duration)
+    if "mode" in row:
+        if row["mode"] == "full":
+            result["mode"] = "full"
+        elif row["mode"] == "affected-only":
+            result["mode"] = "affected-only"
+        else:
+            return None
+    return result
