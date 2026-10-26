@@ -57,6 +57,15 @@ min cuando pasa) y el modelo es apenas el 6 % del tiempo de una sesión de Devel
   de merge reutilice un registro `full_checks` verde cuando master no se movió. Ambos ahorran
   más y piden decidir la frescura del registro; quedan como seguimiento.
 
+- **Señales (estándar 7).** Una sola señal nueva en la familia de documentos: el registro
+  `full_checks` del frontmatter, sin texto libre (la salida de un chequeo fallido va sólo a
+  la sección `Full checks`, no al registro). Sin span nuevo. Pero la clase de escalada
+  `system_delivery` es un valor nuevo del atributo `agentic.task.paused` del span de la
+  tarea y una familia nueva `escalations.system_delivery` en la fila de escaladas del
+  tablero; ambos cambian de forma y quedan fijados en `test_dashboards.py`. El costo por
+  entrega no cambia (el nodo no gasta modelo) y el retrabajo de las corridas rojas lo cuenta
+  el `change_history` existente.
+
 ## Costo y efecto estimado
 
 Por tarea: `D × rápido + (1 + R + L) × completo + R × (Developer + revisión)`, con D

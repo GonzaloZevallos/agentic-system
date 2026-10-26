@@ -92,12 +92,18 @@ def _record(
         "passed": merged["passed"] is True,
         "duration_s": float(str(merged["duration_s"])),
         "declared": dict(declared),
-        "results": _ENTRIES.validate_python(merged["checks"]),
+        "results": _without_output(_ENTRIES.validate_python(merged["checks"])),
         "witness": dict(gate.witness_result) if gate.witness_result is not None else None,
     }
     if not record["passed"]:
         record["failed_step"] = str(merged["failed_step"])
     return record
+
+
+def _without_output(entries: list[FullCheckEntry]) -> list[FullCheckEntry]:
+    """The name and verdict of each check: the record holds no command output (the `tail` the
+    merge record keeps is free text); the `Full checks` section is where it is read."""
+    return [{"name": entry["name"], "passed": entry["passed"]} for entry in entries]
 
 
 def _section(state: TaskState, version: int, text: str) -> dict[str, str]:

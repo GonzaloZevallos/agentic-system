@@ -16,7 +16,7 @@ LATER = "c" * 40
 def entry(name, passed=True):
     if passed:
         return {"name": name, "passed": True}
-    return {"name": name, "passed": False, "tail": ["boom"]}
+    return {"name": name, "passed": False}
 
 
 def record(head=HEAD, passed=True, version=1, failed=(), failed_step=None):

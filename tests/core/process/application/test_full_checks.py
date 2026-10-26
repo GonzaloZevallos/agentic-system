@@ -104,6 +104,17 @@ async def test_a_green_run_of_a_later_version_follows_the_previous_record():
     assert rules.full_checks_green_version(apply(state_of(), patch)) == 3
 
 
+async def test_a_red_run_keeps_no_command_output_in_the_record_only_in_the_section():
+    commands = MemoryCommands(**{"ruff check .": [CommandResult(1, "E501 line too long")]})
+    patch = await full_checks(state_of(), CFG, ports_of(commands))
+    assert patch["full_checks"]["results"] == [
+        {"name": "tests", "passed": True},
+        {"name": "lint", "passed": False},
+    ]
+    assert "E501" not in repr(patch["full_checks"])
+    assert "E501" in patch["sections"]["Full checks"]
+
+
 async def test_a_red_run_reopens_the_integration_with_a_row_per_failed_check_and_the_section():
     commands = MemoryCommands(**{"ruff check .": [CommandResult(1, "E501 line too long")]})
     ports = ports_of(commands)

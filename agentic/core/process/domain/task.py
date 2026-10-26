@@ -816,19 +816,18 @@ class PartRecord(TypedDict):
 
 
 class FullCheckEntry(TypedDict):
-    """One check of a `full_checks` run, as `presubmit.merge_checks_record` writes its
-    `checks`: the name, whether it passed, and the failing one's `tail` (lines of output)."""
+    """One check of a `full_checks` run: its name and whether it passed. Unlike
+    `merge_checks`, no `tail`: command output goes only into the `Full checks` section."""
 
     name: str
     passed: bool
-    tail: NotRequired[list[str]]
 
 
 class FullChecksRecord(TypedDict):
     """The frontmatter record of one `full_checks` run (GH-358): the whole suite on the
     integrated head, once per task. Shaped like `merge_checks` (ADR-0045) plus `version`, which
     names the run so a finding row it raised closes only because a later, green one passed.
-    `failed_step` is written only when the run did not pass. No free text but the tails."""
+    `failed_step` is written only when the run did not pass. No free text in any field."""
 
     version: int
     head: str
