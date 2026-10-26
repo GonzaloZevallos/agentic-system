@@ -13,7 +13,10 @@ import pytest
 
 from agentic.core.process.adapters.filesystem.prompts import FilesystemPrompts
 from agentic.core.process.application import poll, reflect_run
+from agentic.core.process.application import reflect as reflect_module
 from agentic.core.process.application.ports import IssueState
+from agentic.core.process.application.preflight import PLACEHOLDERS
+from agentic.core.process.application.run_role import load_prompt
 from agentic.core.process.domain import playbook as pb
 from agentic.core.process.domain import playbook_candidates as pc
 from agentic.core.process.domain.roles import DEVELOPER, prompt_hash
@@ -95,7 +98,7 @@ async def test_an_environmental_failure_stops_the_batch_and_costs_no_attempt(tmp
         reflection(add_delta("GH-3"), cost=0.3),
     ]
     outcome = await run(cfg, ports, since=SINCE)
-    assert outcome.reflected == 3  # the batch size; the stopped ones simply have no entry
+    assert outcome.reflected == 1 and outcome.left == 2  # only what finished counts
     assert "GH-2 stopped by OSError; its cost was not recorded" in capsys.readouterr().err
     assert list(ledger_of(root).tasks) == ["GH-1@review"]
     assert ids(reflect_run.pending(cfg, ports)) == ["GH-2", "GH-3"]
@@ -136,10 +139,32 @@ async def test_the_poller_starts_a_product_with_no_ledger_and_the_lesson_reaches
     assert ledger_of(root).started_at == CLOSED.format(day=4)  # 2: the floor, never now
     assert reflect_run.pending(cfg, ports) == []  # 3: the rest of the pass is done
 
-    # 4: the person merges the playbook PR; the default branch then reads the file.
-    empty = FilesystemPrompts(root).playbook(DEVELOPER)
+    # 4: the person merges the playbook PR; the prompt the role is rendered with then
+    # carries the lesson, and its hash moves.
+    def prompt():
+        return load_prompt(DEVELOPER, cfg, ports, ports.flags.load(), **PLACEHOLDERS)
+
+    empty = prompt()
+    assert empty.playbook == ""
     git(root, "merge", "-q", "--ff-only", reflect_run.BRANCH)
-    merged = FilesystemPrompts(root).playbook(DEVELOPER)
-    section = pb.section(merged)
-    assert LESSON in section and not pb.section(empty)
-    assert prompt_hash(section) != prompt_hash("empty")
+    merged = prompt()
+    section = pb.section(FilesystemPrompts(root).playbook(DEVELOPER))
+    assert LESSON in section
+    assert merged.text == empty.text + "\n\n" + section
+    assert merged.hash != empty.hash
+    assert merged.playbook == prompt_hash(section)
+
+
+async def test_a_bug_inside_the_reflection_is_not_a_failed_attempt(tmp_path, monkeypatch):
+    """The net of `reflect_task` is the role's own failure: a bug in the code that folds
+    the model's deltas stops the run and writes no ledger entry or attempt."""
+    root, cfg, ports, tracker = product(tmp_path, 2)
+
+    def broken(*args, **kwargs):
+        raise KeyError("a bug")
+
+    monkeypatch.setattr(reflect_module, "_fold", broken)
+    with pytest.raises(KeyError):
+        await run(cfg, ports, since=SINCE)
+    assert pc.LEDGER_FILE not in git(root, "ls-tree", "-r", "--name-only", reflect_run.BRANCH)
+    assert tracker.pull_requests == []

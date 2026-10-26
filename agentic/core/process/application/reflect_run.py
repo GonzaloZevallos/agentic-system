@@ -441,10 +441,7 @@ async def reflect(
     # A first pass never starts the clock at `now` while a document says where it began:
     # `since` when given, else `first_pass_floor`, which is what `_todo` counted from.
     started = known.ledger.started_at or since or threshold or now
-    batch, left = (
-        todo[: cfg.reflect_max_tasks_per_run],
-        max(len(todo) - cfg.reflect_max_tasks_per_run, 0),
-    )
+    batch = todo[: cfg.reflect_max_tasks_per_run]
     if not first and not batch and not _unfiled(known.ledger.tasks):
         return Outcome(0, 0)
 
@@ -470,6 +467,7 @@ async def reflect(
     archived = tuple(pc.parse_archived(_read(ports, BRANCH, pc.ARCHIVED_FILE)))
     before = (dict(read), candidates, archived)
     tasks = dict(base.tasks)
+    reflected = 0
     for document, gate in batch:
         key = pc.ledger_key(str(document["id"]), gate)
         before_entry = tasks.get(key)
@@ -500,6 +498,7 @@ async def reflect(
         candidates = candidates if result.candidates is None else result.candidates
         archived = archived if result.archived is None else result.archived
         tasks[key] = _entry(result, before_entry, pc.decision_count(document))
+        reflected += 1
     _file_system(system, tasks)
     documents = _documents(ports, None)
     archived = _archive_stale(documents, tasks, playbooks, archived, now)
@@ -523,7 +522,7 @@ async def reflect(
         _write(checkout.path, pc.ARCHIVED_FILE, pc.render_archived(archived))
     _write(checkout.path, pc.LEDGER_FILE, pc.render_ledger(ledger))
     _write(checkout.path, pc.REJECTED_FILE, pc.render_rejected(known.rejected))
-    sha = ports.workspace.commit_all(checkout.path, _message(len(batch), first))
+    sha = ports.workspace.commit_all(checkout.path, _message(reflected, first))
 
     open_pr = known.open_pr
     url = open_pr.url if open_pr else ""
@@ -539,7 +538,7 @@ async def reflect(
         text = open_pr.body.partition(pc.MARKER)[0].rstrip() or INTRO
         ports.tracker.update_pull_request_body(open_pr.number, _body(text, summary, record))
     _say_reaped(release_task(ports, TASK_ID))
-    return Outcome(len(batch), left, url)
+    return Outcome(reflected, max(len(todo) - reflected, 0), url)
 
 
 def _say_reaped(reaped: tuple[ReapedProcess, ...]) -> None:
