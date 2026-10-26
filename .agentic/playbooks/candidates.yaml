@@ -442,3 +442,62 @@ candidates:
   sources:
   - finding
   added_at: '2026-10-26T06:01:44.851+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before delivering, test each plan invariant with a grep or test for the pattern it forbids. If the brief conflicts with an invariant, find an allowed source or write the unsatisfiability record with evidence.
+  confidence: medium
+  seen_in:
+  - GH-295
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T06:04:30.076+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: For every guard or refusal rule, write a test with the input it must refuse, including a padded or partly valid input, not only inputs that satisfy it.
+  confidence: medium
+  seen_in:
+  - GH-296
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T06:04:30.076+00:00'
+- slug: developer
+  category: process-suite-red
+  lesson: Run any test that touches git remotes, branches or other shared state several times with the full suite before delivering, and make it deterministic by resetting both sides of that state.
+  confidence: medium
+  seen_in:
+  - GH-296
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T06:04:30.076+00:00'
+- slug: developer_integrator
+  category: standard-typing-silenced
+  lesson: Never add typing.cast or a bare type-ignore to quiet mypy; give the value its real type or widen the callee's signature, and grep your diff for new casts before delivering.
+  confidence: medium
+  seen_in:
+  - GH-296
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T06:04:30.076+00:00'
+- slug: developer
+  category: standard-seams
+  lesson: Never edit a pin, digest or guard test outside your declared seams; if your change breaks one, record the failing assertion and the before/after content under Decisions and assumptions.
+  confidence: medium
+  seen_in:
+  - GH-299
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T06:04:30.076+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: Build concurrency the way the brief names it (e.g. a task group), and await or join every background task you cancel, so its exceptions surface and nothing outlives the attempt.
+  confidence: low
+  seen_in:
+  - GH-299
+  sources:
+  - finding
+  added_at: '2026-10-26T06:04:30.076+00:00'
