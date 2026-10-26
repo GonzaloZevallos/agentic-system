@@ -90,7 +90,7 @@ def product(tmp_path: Path, tasks: int) -> tuple[Path, Configuration, Ports, Mem
             f"GH-{n}", {"closed_at": CLOSED.format(day=n), "delivery_outcome": "merged"}
         )
     git(root, "add", "-A")
-    git(root, "commit", "-qm", "closed tasks")
+    git(root, "commit", "-qm", "closed tasks", "--allow-empty")
     tracker = MemoryTracker()
     ports = memory_ports(
         ScriptedRunner(reflector=[reflection(add_delta(f"GH-{n}"), cost=0.3) for n in range(1, 9)]),

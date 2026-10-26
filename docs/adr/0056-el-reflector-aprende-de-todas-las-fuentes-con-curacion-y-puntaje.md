@@ -62,3 +62,28 @@ tareas reflejadas.
   señal, y tras 20 tareas se archiva. La recurrencia del error la restaura.
 - Un stage0 viejo rechazaría las claves opcionales nuevas de un ítem; esos archivos los
   escribe solo el código nuevo.
+
+## Adenda (2026-10-25): toda entrega que aterrizó, y una primera pasada que arranca sola
+
+El Reflector nunca corrió en ningún producto, por dos causas, y esta adenda las corrige.
+
+- **La puerta `review` admite toda entrega que aterrizó** (`MERGED_OUTCOMES`, incluido
+  `auto_merged`), con un único predicado, `playbook_candidates.reflectable`, que leen la
+  elegibilidad, `reflect_run` y `reflect`. `KEPT` no cambia: sigue siendo lo que el
+  cuadro de mando cuenta como conservado por una persona (ADR-0045). La objeción de
+  ADR-0045 (nadie respaldó esa entrega) la responde ADR-0043: el control humano pasa de la
+  entrega a la lección, que llega a un prompt solo por un PR de playbook que una persona
+  mergea.
+- **Sin ledger, la primera pasada llega hasta `first_pass_floor`**: la N-ésima clave más
+  reciente de las dos puertas, con N = `reflect_max_tasks_per_run`. Se cuenta, no se
+  fecha: apostrophe cierra unas 3 tareas por día, y 14 días serían unas 40 reflexiones y 8
+  corridas antes de que una persona vea una lección; con N = el tope, la primera pasada es
+  exactamente una corrida. El ledger arranca en ese piso. El poller no cambia: lanza
+  `reflect` cuando `pending` no está vacío.
+- **`--since` sin ledger arranca el ledger en `since`**, nunca en `now`.
+- **Un fallo del entorno** (`OSError`, `GitError`) frena el lote, escribe lo que terminó y
+  no deja entrada ni consume `REFLECT_ATTEMPTS`; una línea en stderr nombra el documento.
+  Cualquier otra excepción es un bug y se propaga con el ledger sin escribir. Solo un fallo
+  del rol consume intentos.
+- **Costo**: cerca de 1 USD por tarea cerrada por cualquiera de las dos puertas, lineal con
+  el tráfico (unos 3 USD por día en apostrophe). Lo acota la corrida, no el día.

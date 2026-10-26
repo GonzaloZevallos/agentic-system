@@ -125,9 +125,9 @@ def backings_of(
 
 def _closed(document: Mapping[str, Any], gate: pc.Gate) -> bool:
     """Whether the document is one of the two doors' (ADR-0056): `review`, a closed one
-    with a delivery that landed (`pc.reflectable`); `decision`, one that ended without it (discarded, split,
-    tracker_only, a closed pull request or an escalation whose issue closed; the poller
-    checked which)."""
+    with a delivery that landed (`pc.reflectable`); `decision`, one that ended without it
+    (discarded, split, tracker_only, a closed pull request or an escalation whose issue
+    closed; the poller checked which)."""
     if gate == "review":
         return pc.reflectable(document)
     return bool(document.get("closed_at")) or document.get("status") in (
