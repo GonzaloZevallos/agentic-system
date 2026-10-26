@@ -329,3 +329,40 @@ candidates:
   sources:
   - finding
   added_at: '2026-10-26T05:59:20.946+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before you claim a plan invariant is 'not touched', run the tests that exercise it, and re-check it whenever you change what a shared reader or function returns to other roles.
+  confidence: medium
+  seen_in:
+  - GH-292
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T06:00:11.904+00:00'
+- slug: developer
+  category: standard-seams
+  lesson: Do not edit guard, selector or enforcement files outside the declared seam. If the brief forces such an edit, record it under Decisions and assumptions with the command and its output.
+  confidence: medium
+  seen_in:
+  - GH-292
+  sources:
+  - finding
+  added_at: '2026-10-26T06:00:11.904+00:00'
+- slug: developer_integrator
+  category: standard-typing-silenced
+  lesson: Type a field with the concrete type the code already knows and imports, not a widened Mapping[str, Any], and fix it in the same change instead of leaving it noted as unfixed.
+  confidence: medium
+  seen_in:
+  - GH-292
+  sources:
+  - finding
+  added_at: '2026-10-26T06:00:11.904+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: When code forwards an argument such as cwd to a collaborator, add a test asserting the argument arrives, and check that the test double does not silently discard it.
+  confidence: low
+  seen_in:
+  - GH-294
+  sources:
+  - finding
+  added_at: '2026-10-26T06:00:11.904+00:00'
