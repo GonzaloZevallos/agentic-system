@@ -299,14 +299,15 @@ class CheckoutPresubmit:
         }
         return reason
 
-    def _prepare_reuse(self) -> None:
+    def _prepare_reuse(self, eligible: bool = True) -> None:
         """Decide, once per call, what this clean tree may read from and write to the store.
         Reading needs the tree and a fingerprint; writing also needs a record that setup
-        ran on a tree whose environment inputs this one did not change."""
+        ran on a tree whose environment inputs this one did not change. `eligible` is false
+        for a tree that is dirty or has no commit: it only clears what an earlier call set."""
         self._tree = self._fingerprint = None
         self._may_write = False
         reuse = self.reuse
-        if reuse is None or self.ports.check_results is None:
+        if not eligible or reuse is None or self.ports.check_results is None:
             return
         fingerprint = reuse_rules.fingerprint(
             reuse.setup, reuse.stage0_version, self.check_timeout_s

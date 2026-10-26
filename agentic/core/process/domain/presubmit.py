@@ -544,6 +544,7 @@ def tier_section(fast: Sequence[str], rest: Sequence[str]) -> str:
         "### Delivery checks\n\n"
         f"This product runs two tiers. The delivery gate runs only `{fast_names}`. "
         f"The full suite runs once per task: {later}, before the pull request opens. "
-        "You must not run the full suite yourself. This supersedes the sentence above saying "
+        "You must not run the full suite yourself. The full suite reuses your pass only when "
+        "the integrated tree is yours. This supersedes the sentence above saying "
         "that every check runs at delivery."
     )

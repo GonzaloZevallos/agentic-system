@@ -125,6 +125,18 @@ SWITCH = (
 )
 GIT_PATH = "a path inside `.git/`: the repository's internals are not yours to edit."
 OUTSIDE_PATH = "a path outside your working directory: edit only your checkout."
+STORE_PATH = (
+    "the system's store of check results is not yours to read or edit: run a check "
+    "through `run_check`."
+)
+STORE_COMMAND = (
+    "the system's store of check results, its `.key` and the setup record "
+    "`agentic-setup-tree` are not yours to touch: run a check through `run_check`."
+)
+STORE_TOOLS = ("Read", "Edit", "Write", "Glob", "Grep")
+# What a Bash command may not name, by string: the store's directory, its secret and the
+# record of the tree the setup ran on (ADR-0065).
+STORE_WORDS = (".key", "agentic-setup-tree")
 
 
 @dataclass
@@ -196,6 +208,28 @@ def path_denial(file_path: str, cwd: Path, relative_to: Path | None = None) -> s
     return None
 
 
+def store_path_denial(tool_input: dict[str, Any], cwd: Path, store: Path | None) -> str | None:
+    """Why a `Read`/`Edit`/`Write`/`Glob`/`Grep` may not look at the check-result store, or
+    None: any path it names that resolves under `store` (ADR-0065)."""
+    if store is None:
+        return None
+    root = store.resolve()
+    for field in ("file_path", "path", "notebook_path"):
+        value = tool_input.get(field)
+        if isinstance(value, str) and value:
+            candidate = Path(value) if Path(value).is_absolute() else cwd / value
+            if candidate.resolve().is_relative_to(root):
+                return _DENIED + STORE_PATH
+    return None
+
+
+def store_command_denial(command: str, store: Path | None) -> str | None:
+    """Why the Bash `command` may not run, or None: it names the store's directory, its
+    `.key` or the `agentic-setup-tree` record, anywhere in the string (ADR-0065)."""
+    words = list(STORE_WORDS) + ([str(store)] if store is not None else [])
+    return _DENIED + STORE_COMMAND if any(word in command for word in words) else None
+
+
 def forbidden_denial(
     file_path: str, before: str, after: str, forbidden: Sequence[Forbidden]
 ) -> str | None:
@@ -217,6 +251,7 @@ def hooks_for(
     guard: SchemaGuard | None = None,
     forbidden: Sequence[Forbidden] | None = None,
     activity: HookActivity | None = None,
+    store: Path | None = None,
 ) -> dict[str, list[HookMatcher]]:
     """The hooks of one run: the cage for a role that executes, the schema guard and
     the presubmit sharing one matcher on the delivery tool when either is given, and
@@ -233,11 +268,19 @@ def hooks_for(
     matchers: list[HookMatcher] = []
     if role.executes:
         matchers += [
-            HookMatcher(matcher="Bash", hooks=[_bash(cwd)], timeout=GUARD_TIMEOUT_S),
+            HookMatcher(matcher="Bash", hooks=[_bash(cwd, store)], timeout=GUARD_TIMEOUT_S),
             HookMatcher(
                 matcher="Edit|Write", hooks=[_edit(cwd, forbidden or ())], timeout=GUARD_TIMEOUT_S
             ),
         ]
+        if store is not None:
+            matchers.append(
+                HookMatcher(
+                    matcher="|".join(STORE_TOOLS),
+                    hooks=[_store(cwd, store)],
+                    timeout=GUARD_TIMEOUT_S,
+                )
+            )
     if guard is not None or presubmit is not None:
         matchers.append(
             HookMatcher(
@@ -261,7 +304,17 @@ def hooks_for(
 # -- the callbacks ---------------------------------------------------------------
 
 
-def _bash(cwd: Path) -> HookCallback:
+def _store(cwd: Path, store: Path) -> HookCallback:
+    async def hook(
+        data: HookInput, tool_use_id: str | None, context: HookContext
+    ) -> HookJSONOutput:
+        reason = store_path_denial(_tool_input(data), _where(data, cwd), store)
+        return _deny(reason) if reason else {}
+
+    return hook
+
+
+def _bash(cwd: Path, store: Path | None = None) -> HookCallback:
     # Resolved once, here, for every Bash call this role's run will ever make --
     # `signals.denial`'s own checkout boundary (ADR-0011, eighth addendum). `cwd`
     # itself stays unresolved: it is what the git branch keeps comparing against.
@@ -272,7 +325,9 @@ def _bash(cwd: Path) -> HookCallback:
     ) -> HookJSONOutput:
         tool_input = _tool_input(data)
         command = str(tool_input.get("command", ""))
-        reason = git_denial(command, cwd, _where(data, cwd), checkout)
+        reason = git_denial(command, cwd, _where(data, cwd), checkout) or store_command_denial(
+            command, store
+        )
         return _deny(reason) if reason else {}
 
     return hook

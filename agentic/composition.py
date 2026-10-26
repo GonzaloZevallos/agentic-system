@@ -161,6 +161,7 @@ def _ports(cfg: Configuration) -> Ports:
             reaper=reaper,
             product_key=product_key,
             stall_timeout_s=cfg.stall_timeout_s,
+            check_results_dir=cfg.check_results_dir,
         ),
         documents=FilesystemTaskDocuments(
             cfg.product_dir,

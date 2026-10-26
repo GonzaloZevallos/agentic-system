@@ -194,3 +194,37 @@ async def test_a_product_with_no_tiers_has_todays_prompt_hash_record_and_checks(
     assert "Delivery checks" not in runner.calls[0]["system_prompt"]
     assert "Delivery tier" not in patch["sections"]["Developer: api"]
     assert ports.commands.ran == [(checkout.path, c) for c in CHECKS.values()]
+
+
+# `run_check` (ADR-0065): offered to a Developer only where a pass can be stored and reused.
+
+
+async def test_the_developer_gets_the_run_check_tool_when_the_system_has_a_fingerprint(cfg):
+    from tests.fakes import MemoryCheckResults
+
+    runner = ScriptedRunner(developer=[delivered()])
+    ports = memory_ports(
+        runner, stack=MemoryStack(checks=CHECKS), check_results=MemoryCheckResults()
+    )
+    state, _ = building(ports)
+    await develop(state, cfg, ports)
+    assert runner.calls[0]["check_tool"] is not None
+
+
+async def test_a_dirty_stage0_offers_no_tool_and_runs_exactly_todays_commands(cfg):
+    from agentic.shared.stage0 import CHECKOUT
+    from tests.fakes import MemoryCheckResults
+
+    runner = ScriptedRunner(developer=[delivered()])
+    ports = memory_ports(
+        runner, stack=MemoryStack(checks=CHECKS), check_results=MemoryCheckResults()
+    )
+    ports.workspace.uncommitted.add(CHECKOUT)  # stage0 is +dirty
+    state, checkout = building(ports)
+    await develop(state, cfg, ports)
+    assert runner.calls[0]["check_tool"] is None
+    assert ports.commands.ran == [
+        (checkout.path, "pytest"),
+        (checkout.path, "ruff"),
+        (checkout.path, "playwright"),
+    ]
