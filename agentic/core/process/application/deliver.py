@@ -72,6 +72,11 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             pass
         case _:
             assert_never(plan.kind)
+    # A tiered product pushes only what a full run covers (GH-358): this is the last point
+    # before anything is posted, committed or pushed, so a refusal leaves no trace.
+    refused = _uncovered(state, task.path, relative, ports)
+    if refused is not None:
+        return finish(state, refused, ports)
     # A plan with a tracker checklist tells the human before the pull request exists; the pull
     # request closes the issue all the same (GH-336, ADR-0062, addendum GH-344). None of this
     # runs without one.
@@ -196,6 +201,31 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     if state.get("landing"):
         ports.documents.record_closure(state["id"], {"landing": state["landing"]})
     return done
+
+
+def _uncovered(state: TaskState, path: Path, relative: str, ports: Ports) -> TaskState | None:
+    """The patch of a refused delivery, or None when the push may go on. Only a product that
+    declares `delivery_checks` is asked: a passed `full_checks` record must exist whose head
+    differs from HEAD in nothing but this task's own document (`differs_outside`). A missing
+    or stale record pushes nothing and heals (`rules.full_checks_heal`); a head that cannot be
+    read is a failure the human resumes, never a push."""
+    if not ports.stack.delivery_checks(task_base(state, ports)):
+        return None
+    recorded = state.get("full_checks")
+    try:
+        head = ports.workspace.full_head(path)
+        differs = (
+            recorded is not None
+            and recorded["passed"]
+            and not rules.same_commit(recorded["head"], head)
+            and ports.workspace.differs_outside(path, recorded["head"], head, relative)
+        )
+    except (GitError, ValueError) as failed:
+        return _undelivered("full checks cover read failed", failed, state, None)
+    verdict = rules.full_checks_cover(recorded, differs)
+    if verdict == "ok":
+        return None
+    return rules.full_checks_heal(state, head, verdict)
 
 
 def _lapsed(lapses: list[str], step: str, failed: Exception) -> None:

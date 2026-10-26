@@ -1150,6 +1150,7 @@ def test_exported_graph_uses_the_default_ports():
         "plan",
         "pipeline",
         "integrate",
+        "full_checks",
         "copy_review",
         "final_validation",
         "qa_performance",

@@ -158,7 +158,8 @@ def test_the_merge_targets_the_pull_request_never_the_issue_number(world):
     world.merge()
 
     assert world.tracker.merge_calls == [(URL, world.head)]
-    assert "209" not in repr(world.tracker.merge_calls)
+    # The head is a sha that may hold "209" by chance: look only at what names the target.
+    assert all(target == URL for target, _ in world.tracker.merge_calls)
     assert world.doc()["delivery_outcome"] == "auto_merged"
 
 

@@ -49,6 +49,15 @@ checks:
 #   - uv.lock
 #   - tests/conftest.py
 #
+# `delivery_checks`: optional. The fast tier of a two-tier gate: a list of names under
+# `checks`, the ones every subtask delivery runs. The rest of `checks` runs once per task,
+# on the integrated head, before the pull request opens, and the merge gate still runs all
+# of them. Absent, every delivery runs all of `checks`. A list equal to all of `checks` is
+# valid: the full tier is then the run without `affected_checks`. A duplicate, an unknown
+# name or an empty list fails to load.
+#
+# delivery_checks: [tests]
+#
 # `forbidden`: optional. A list of rules the Edit/Write hook denies a Developer from
 # adding: each names a `pattern`, the `extensions` it applies to, and the `reason` a
 # denial carries verbatim. One that was already in the file is not the task's. What a

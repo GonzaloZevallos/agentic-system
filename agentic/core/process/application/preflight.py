@@ -67,8 +67,8 @@ def declared_stack(ports: Ports, revision: str = "HEAD") -> dict[str, str]:
 
     HEAD by default, the commit a task starting now would be measured against; there is
     no task yet at preflight. `checks`, `witness`, `parallel_checks`, `affected_checks`,
-    `affected_fallback` (ADR-0046), `forbidden` and `design` are all loaded here for
-    validation only, so a broken one fails here and not when a worktree is born or a
+    `affected_fallback` (ADR-0046), `delivery_checks`, `forbidden` and `design` are all loaded
+    here for validation only, so a broken one fails here and not when a worktree is born or a
     Developer delivers halfway through the run (issues #36, #37, #38; ADR-0040) -- the
     return expression stays `setup`'s alone, so `no_setup`'s warning does not move."""
     ports.stack.checks(revision)
@@ -76,6 +76,7 @@ def declared_stack(ports: Ports, revision: str = "HEAD") -> dict[str, str]:
     ports.stack.parallel_checks(revision)
     ports.stack.affected_checks(revision)
     ports.stack.affected_fallback(revision)
+    ports.stack.delivery_checks(revision)
     ports.stack.forbidden(revision)
     ports.stack.design(revision)
     ports.stack.ci(revision)

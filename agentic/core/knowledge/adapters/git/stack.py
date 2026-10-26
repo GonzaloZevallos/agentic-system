@@ -45,6 +45,10 @@ class GitStack:
         data, source = self._declaration(revision)
         return stack.affected_fallback(data, source)
 
+    def delivery_checks(self, revision: str) -> tuple[str, ...]:
+        data, source = self._declaration(revision)
+        return stack.delivery_checks(data, source)
+
     def forbidden(self, revision: str) -> tuple[Forbidden, ...]:
         data, source = self._declaration(revision)
         return stack.forbidden(data, source)

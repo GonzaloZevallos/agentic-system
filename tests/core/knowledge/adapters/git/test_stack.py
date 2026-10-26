@@ -151,6 +151,23 @@ def test_a_broken_affected_fallback_at_the_base_is_an_error_naming_key_and_sourc
         GitStack(product).affected_fallback(base)
 
 
+def test_delivery_checks_are_read_from_the_base_commit(product):
+    base = commit_stack(
+        product, "checks:\n  tests: pytest\n  lint: ruff\ndelivery_checks: [lint]\n"
+    )
+    commit_stack(product, "checks:\n  tests: pytest\n  lint: ruff\n")
+    assert GitStack(product).delivery_checks(base) == ("lint",)
+    assert GitStack(product).delivery_checks("HEAD") == ()
+
+
+def test_a_broken_delivery_checks_at_the_base_is_an_error_naming_key_and_source(product):
+    base = commit_stack(product, "checks:\n  tests: pytest\ndelivery_checks: [e2e]\n")
+    with pytest.raises(
+        ValueError, match=rf"{base}:.agentic/stack.yaml.*'e2e'.*delivery_checks.*`checks`"
+    ):
+        GitStack(product).delivery_checks(base)
+
+
 PERF = (
     "checks:\n  tests: pytest\n"
     "performance:\n  list:\n    seed: ./seed.sh\n    measure: ./measure.sh\n"

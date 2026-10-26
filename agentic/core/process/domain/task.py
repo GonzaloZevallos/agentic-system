@@ -63,8 +63,9 @@ SubtaskStatus = Literal["pending", "delivered", "approved", "returned"]
 # only while PM's early, UI-only final validation is the open return -- `review.py`
 # resets it to `review` the moment it reviews the subtask again, so a second, ordinary
 # return never misreads as PM's. `qa_performance` (GH-318, ADR-0060) is the same for the
-# system's performance node: the open return only while that node's verdict is it.
-ReturnedBy = Literal["review", "final_validation", "qa_performance"]
+# system's performance node: the open return only while that node's verdict is it, and so is
+# `full_checks` (GH-358) for the node that runs the whole suite once on the integrated head.
+ReturnedBy = Literal["review", "final_validation", "qa_performance", "full_checks"]
 # Why a review finding blocks, as a closed list (ADR-0016): `standard-*` is a hard
 # violation of a documented standard, `spec-*` a gap against the brief or the
 # definition, `process-*` a delivery that is not one, `plan-calibration` a threshold or
@@ -150,7 +151,9 @@ ReviewKind = Literal["first", "incremental", "integration"]
 # cap) is not here: it stops one attempt, not the task, so it is a `FailureReason`. An
 # account limit (HTTP 429, `FailureReason`'s `account_limit`) lands here too, as
 # `failure`: it still pauses the task like any other role failure (ADR-0029); only the
-# reason series tells the two apart.
+# reason series tells the two apart. `system_delivery` (GH-358) is `deliver` refusing twice, on
+# the same head, to push a tiered product's branch without a passed `full_checks` record: the
+# system's own plumbing failing to deliver, not a role and not a return.
 EscalationClass = Literal[
     "classification",
     "returns",
@@ -160,6 +163,7 @@ EscalationClass = Literal[
     "unmergeable",
     "setup",
     "estimate",
+    "system_delivery",
 ]
 
 
@@ -811,6 +815,30 @@ class PartRecord(TypedDict):
     depends_on: list[int]
 
 
+class FullCheckEntry(TypedDict):
+    """One check of a `full_checks` run: its name and whether it passed. Unlike
+    `merge_checks`, no `tail`: command output goes only into the `Full checks` section."""
+
+    name: str
+    passed: bool
+
+
+class FullChecksRecord(TypedDict):
+    """The frontmatter record of one `full_checks` run (GH-358): the whole suite on the
+    integrated head, once per task. Shaped like `merge_checks` (ADR-0045) plus `version`, which
+    names the run so a finding row it raised closes only because a later, green one passed.
+    `failed_step` is written only when the run did not pass. No free text in any field."""
+
+    version: int
+    head: str
+    passed: bool
+    duration_s: float
+    declared: dict[str, str]
+    results: list[FullCheckEntry]
+    witness: dict[str, Any] | None
+    failed_step: NotRequired[str]
+
+
 class TaskState(TaskInput, total=False):
     type: str
     status: Annotated[Status, last]
@@ -894,6 +922,15 @@ class TaskState(TaskInput, total=False):
     # derived from the subtask's status at read time. Applied per record by
     # `rules.findings_rows`, after `settled_findings`.
     approval_settled: Annotated[list[SettledRow], operator.add]
+    # The head of the task branch the fan-in last integrated (GH-358), stamped only for a
+    # product that declares `delivery_checks`; absent otherwise. `rules.full_checks_due`
+    # compares the record's head with it. Persisted in the frontmatter.
+    task_head: str
+    # The latest `full_checks` run (GH-358), persisted as one flow line; absent until one ran.
+    full_checks: FullChecksRecord
+    # The head `deliver` last refused to push for lack of a passed record (GH-358): a second
+    # refusal on the same head escalates instead of looping (`rules.full_checks_heal`).
+    full_checks_healed: str
     # The task branch, and the pull request once delivered.
     branch: str
     pull_request: str | None

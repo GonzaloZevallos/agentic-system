@@ -142,6 +142,17 @@ class GitWorkspace:
     def is_clean(self, path: Path) -> bool:
         return not self._git("status", "--porcelain", cwd=path)
 
+    def differs_outside(self, path: Path, verified: str, head: str, excluded: str) -> bool:
+        result = self._run("diff", "--quiet", verified, head, "--", ".", f":!{excluded}", cwd=path)
+        # `--quiet` exits 0 for no difference and 1 for one; anything else is git failing.
+        if result.returncode not in (0, 1):
+            raise GitError(f"git diff {verified} {head} failed: {result.stderr.strip()}")
+        return result.returncode == 1
+
+    def restore_clean(self, path: Path) -> None:
+        self._git("checkout", "--", ".", cwd=path)
+        self._git("clean", "-fd", cwd=path)
+
     def is_committed(self, path: Path) -> bool:
         # The same flags `system_version` uses, so the two never disagree about a tree.
         return not self._git("status", "--porcelain", "--untracked-files=no", cwd=path)

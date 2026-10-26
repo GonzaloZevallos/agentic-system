@@ -279,6 +279,7 @@ class MemoryStack:
         affected_checks: dict[str, str] | None = None,
         affected_fallback: tuple[str, ...] = (),
         performance: dict[str, Scenario] | None = None,
+        delivery_checks: tuple[str, ...] = (),
     ) -> None:
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -316,6 +317,8 @@ class MemoryStack:
         # its own file says otherwise.
         self.declared_affected_checks = {} if affected_checks is None else affected_checks
         self.declared_affected_fallback = affected_fallback
+        # Empty is a product with no tiers: every delivery runs all of `checks`.
+        self.declared_delivery_checks = delivery_checks
         # Empty is a product with no performance budget (GH-318), every product until its own
         # file declares one.
         self.declared_performance = {} if performance is None else performance
@@ -350,6 +353,10 @@ class MemoryStack:
     def affected_fallback(self, revision: str) -> tuple[str, ...]:
         # Not tracked in `revisions` either, `witness`'s own reason.
         return self.declared_affected_fallback
+
+    def delivery_checks(self, revision: str) -> tuple[str, ...]:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_delivery_checks
 
     def forbidden(self, revision: str) -> list[Forbidden]:
         # Not tracked in `revisions` either, `witness`'s own reason.
@@ -520,6 +527,10 @@ class MemoryWorkspace:
         self.indexes: dict[Path, dict[str, str]] = {}
         self.dirty: set[Path] = set()
         self.uncommitted: set[Path] = set()
+        # GH-358: what `differs_outside` answers, and each call; `restore_clean` calls.
+        self.outside_differs = False
+        self.outside_reads: list[tuple[Path, str, str, str]] = []
+        self.restored: list[Path] = []
         self.commits: list[tuple[Path, str]] = []
         self.merges: list[tuple[Path, str]] = []
         # Branches whose merge does not apply, as a real conflict would.
@@ -707,6 +718,15 @@ class MemoryWorkspace:
 
     def is_clean(self, path: Path) -> bool:
         return path not in self.dirty and path not in self.uncommitted
+
+    def differs_outside(self, path: Path, verified: str, head: str, excluded: str) -> bool:
+        self.outside_reads.append((path, verified, head, excluded))
+        return self.outside_differs
+
+    def restore_clean(self, path: Path) -> None:
+        self.restored.append(path)
+        self.dirty.discard(path)
+        self.uncommitted.discard(path)
 
     def is_committed(self, path: Path) -> bool:
         return path not in self.uncommitted

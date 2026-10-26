@@ -37,7 +37,7 @@ from agentic.shared.configuration import Configuration
 from ..domain import rules
 from ..domain.roles import DEVELOPER
 from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, Subtask, TaskState, apply
-from .checkouts import SetupFailed, subtask_checkout, task_checkout
+from .checkouts import SetupFailed, subtask_checkout, task_base, task_checkout
 from .ports import Checkout, Ports
 from .run_role import finish
 
@@ -64,6 +64,12 @@ async def integrate(state: TaskState, cfg: Configuration, ports: Ports) -> TaskS
         conflicts = _merge_approved(state, task.path, ports)
         if (integration := _integration(state, conflicts, task)) is not None:
             patch = apply(patch, {"subtasks": {INTEGRATION: integration}})
+        # A product that declares tiers is told the head the whole suite must cover (GH-358):
+        # stamped on every pass, a resumed one included, after the merges and before the
+        # next role, so the node that runs the suite and the delivery that pushes it compare
+        # against what this pass left. Nothing is written for a product with no tiers.
+        if ports.stack.delivery_checks(task_base(state, ports)):
+            patch["task_head"] = ports.workspace.full_head(task.path)
         current = apply(state, patch)
         for subtask_id in rules.dispatched_subtasks(current):
             subtask_checkout(current, subtask_id, cfg, ports)

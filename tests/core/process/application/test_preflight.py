@@ -499,6 +499,36 @@ def test_a_broken_affected_checks_also_refuses_at_a_tasks_base(stage0):
         declared_stack(replace(ports, stack=BrokenAffectedChecksStack()), "abc123")
 
 
+class BrokenDeliveryChecksStack(MemoryStack):
+    """A stack whose base declares a `delivery_checks` name that is no check, read by the
+    real domain function, so the message is the one a product would see."""
+
+    def delivery_checks(self, revision: str) -> tuple[str, ...]:
+        return stack.delivery_checks(
+            {"checks": {"tests": "pytest"}, "delivery_checks": ["e2e"]}, "stack.yaml"
+        )
+
+
+def test_a_broken_delivery_checks_refuses_before_spending(stage0):
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    with pytest.raises(ValueError, match=r"'e2e' under `delivery_checks`"):
+        preflight(
+            Configuration(product_dir=PRODUCT), replace(ports, stack=BrokenDeliveryChecksStack())
+        )
+
+
+def test_a_broken_delivery_checks_also_refuses_at_a_tasks_base(stage0):
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    with pytest.raises(ValueError, match=r"'e2e' under `delivery_checks`"):
+        declared_stack(replace(ports, stack=BrokenDeliveryChecksStack()), "abc123")
+
+
+def test_a_stack_with_delivery_checks_passes_preflight(stage0):
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    stack = MemoryStack(delivery_checks=("tests",))
+    preflight(Configuration(product_dir=PRODUCT), replace(ports, stack=stack))
+
+
 def test_a_stack_with_the_affected_keys_passes_and_keeps_its_setup_as_the_answer(stage0):
     ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
     stack = MemoryStack(

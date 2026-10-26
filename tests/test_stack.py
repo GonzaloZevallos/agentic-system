@@ -178,6 +178,12 @@ def test_the_declared_parallel_checks_is_a_bool_the_gate_can_read():
     assert "ADR-0044" in STACK_YAML.read_text(encoding="utf-8")
 
 
+def test_the_declared_delivery_checks_are_this_repos_four_checks_in_order():
+    """This repo's own fast tier, read through the domain exactly as `GitStack` would."""
+    data = yaml.safe_load(STACK_YAML.read_text(encoding="utf-8"))
+    assert stack.delivery_checks(data, STACK_YAML) == ("tests", "lint", "format", "types")
+
+
 def unknown_ci_names(declared: tuple[str, ...], workflow: dict[str, Any]) -> list[str]:
     """What is wrong with the `ci` names a stack declares, against the jobs of a workflow
     (GH-216): a name must be exactly a job's `name:` (its id when it has none), and a job

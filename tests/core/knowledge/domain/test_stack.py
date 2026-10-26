@@ -463,3 +463,79 @@ def test_the_template_keeps_both_affected_keys_commented_out_and_explained():
     assert "# affected_checks:" in text and "# affected_fallback:" in text
     assert stack.affected_checks(data, stack.TEMPLATE) == {}
     assert stack.affected_fallback(data, stack.TEMPLATE) == ()
+
+
+# -- `delivery_checks`: the fast tier of the two-tier gate -------------------------------
+
+
+def test_a_product_that_declares_no_delivery_checks_has_no_tiers():
+    assert stack.delivery_checks({"checks": CHECKS}, "x") == ()
+
+
+def test_delivery_checks_reads_the_names_stripped_in_the_files_order():
+    declared = {"checks": CHECKS, "delivery_checks": ["  lint", "tests "]}
+    assert stack.delivery_checks(declared, "x") == ("lint", "tests")
+
+
+def test_delivery_checks_equal_to_all_of_checks_is_valid():
+    declared = {"checks": CHECKS, "delivery_checks": ["tests", "lint"]}
+    assert stack.delivery_checks(declared, "x") == ("tests", "lint")
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["tests", {"tests": "pytest"}, 3, True],
+    ids=["string", "mapping", "int", "bool"],
+)
+def test_delivery_checks_that_is_not_a_list_is_an_error(value):
+    declared = {"checks": CHECKS, "delivery_checks": value}
+    with pytest.raises(ValueError, match=r"stack.yaml: expected `delivery_checks`.*list"):
+        stack.delivery_checks(declared, "stack.yaml")
+
+
+@pytest.mark.parametrize("value", [[], None], ids=["empty-list", "null"])
+def test_an_empty_delivery_checks_is_declared_empty_naming_key_and_source(value):
+    declared = {"checks": CHECKS, "delivery_checks": value}
+    with pytest.raises(ValueError) as refused:
+        stack.delivery_checks(declared, "stack.yaml")
+    message = str(refused.value)
+    assert "stack.yaml" in message and "`delivery_checks`" in message
+    assert stack.EMPTY_DECLARATION in message
+
+
+@pytest.mark.parametrize(
+    "value",
+    [[""], ["  "], ["tests", None], [3], [["tests"]], [{"tests": 1}]],
+    ids=["empty", "spaces", "null-item", "int-item", "list-item", "map-item"],
+)
+def test_a_delivery_check_that_is_not_a_non_blank_string_is_an_error(value):
+    declared = {"checks": CHECKS, "delivery_checks": value}
+    with pytest.raises(ValueError, match=r"stack.yaml: expected non-blank.*`delivery_checks`"):
+        stack.delivery_checks(declared, "stack.yaml")
+
+
+def test_a_delivery_check_declared_twice_is_an_error():
+    declared = {"checks": CHECKS, "delivery_checks": ["tests", " tests"]}
+    with pytest.raises(ValueError, match=r"stack.yaml: .*'tests'.*twice.*`delivery_checks`"):
+        stack.delivery_checks(declared, "stack.yaml")
+
+
+def test_a_delivery_check_that_is_not_a_declared_check_is_an_error_listing_the_known_ones():
+    declared = {"checks": CHECKS, "delivery_checks": ["tests", "e2e"]}
+    with pytest.raises(
+        ValueError, match=r"stack.yaml: .*'e2e'.*`delivery_checks`.*`checks`.*tests, lint"
+    ):
+        stack.delivery_checks(declared, "stack.yaml")
+
+
+def test_delivery_checks_is_declarable_and_not_taken_for_a_typo():
+    declared = {"checks": CHECKS, "delivery_checks": ["lint"]}
+    assert stack.checks(declared, "x") == CHECKS
+
+
+def test_the_template_keeps_delivery_checks_commented_out_and_explained():
+    text = stack.TEMPLATE.read_text(encoding="utf-8")
+    data = yaml.safe_load(text)
+    assert "delivery_checks" not in data
+    assert "# delivery_checks:" in text
+    assert stack.delivery_checks(data, stack.TEMPLATE) == ()
