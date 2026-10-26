@@ -137,6 +137,10 @@ UNCOVERED: dict[str, Uncovered] = {
         ),
         _INLINE,
     ),
+    "CheckTool": Uncovered(
+        (("tests/core/process/adapters/claude_sdk/test_run_check_tool.py", "SlowTool"),),
+        _INLINE,
+    ),
     "SchemaGuard": Uncovered(
         (
             ("tests/core/process/adapters/claude_sdk/test_hooks.py", "FakeGuard"),
