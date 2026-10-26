@@ -158,8 +158,13 @@ def workers_env(workers: int) -> dict[str, str]:
 
 
 def affected_prefix(command: str) -> str:
-    """The literal text before the base token, for the reviewer's `Bash(prefix:*)` rule."""
-    return command.split(BASE_TOKEN, 1)[0].rstrip()
+    """The literal text before the first token the system fills in (`{base}`, or `{workers}`
+    when it comes first), for the reviewer's `Bash(prefix:*)` rule: text past a token that is
+    substituted before the run would never match what runs."""
+    if BASE_TOKEN not in command:
+        return command.rstrip()
+    cuts = [i for i in (command.find(BASE_TOKEN), command.find(WORKERS_TOKEN)) if i >= 0]
+    return command[: min(cuts)].rstrip()
 
 
 def check_modes(
