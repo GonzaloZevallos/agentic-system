@@ -193,6 +193,13 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         # Measurement only (like `subtask_id`): read once by the adapter for
         # `agentic.presubmit.checks`/`.duration`, never persisted.
         patch["presubmit_checks"] = delivery_presubmit.invocations
+    if delivery_presubmit.gates and patch.get("runs"):
+        # The wait for a share apart from the run (GH-361): persisted on the run this
+        # delivery wrote, one record per invocation that ran the checks.
+        patch["runs"] = [
+            *patch["runs"][:-1],
+            {**patch["runs"][-1], "gates": list(delivery_presubmit.gates)},
+        ]
 
     # The system decides the dependency landed, never the model's own word for it
     # (README.md's own rule for this task): a marker scan runs only on a delivery whose

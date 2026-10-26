@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from pathlib import Path
 
 from ..domain import presubmit
 from ..domain.check_schedule import WAIT_MAX_S, CheckPriority
 from ..domain.presubmit import AffectedPlan, CheckResult, Mode, WitnessResult
-from ..domain.task import TaskState
+from ..domain.task import GateRecord, TaskState
 from .checkouts import task_base
 from .ports import CheckRequest, GitError, Grant, Ports
 from .preflight import criteria_regressed
@@ -125,6 +126,9 @@ class CheckoutPresubmit:
         # invocation with only the last one `final` (a Developer run may deliver,
         # get refused, and try again more than once).
         self.invocations: list[list[CheckResult]] = []
+        # The wait and the run of each of those invocations, apart (GH-361): one record per
+        # entry of `invocations`, in the same order.
+        self.gates: list[GateRecord] = []
 
     @property
     def timeout_s(self) -> float:
@@ -147,6 +151,11 @@ class CheckoutPresubmit:
         """The configured wait for a share. Not part of `timeout_s`: the checks' clock
         starts after the grant, and the delivery hook adds this on its own."""
         return self._wait_max_s
+
+    @property
+    def gate(self) -> GateRecord | None:
+        """The record of the last invocation that ran the checks, or None when none did."""
+        return self.gates[-1] if self.gates else None
 
     def __call__(self) -> str | None:
         workspace = self.ports.workspace
@@ -188,9 +197,12 @@ class CheckoutPresubmit:
             token=self.grant.token if self.grant else None,
         )
         scheduler = self.ports.check_scheduler
+        asked_at = datetime.now(UTC).isoformat(timespec="milliseconds")
         grant = scheduler.acquire(request)
         self.grant = grant
         self.waited_s += grant.wait_s
+        # The run's own clock starts after the grant: the wait is `grant.wait_s`, never in it.
+        granted = time.monotonic()
         try:
             witness_reason = None
             if self.witness is not None:
@@ -203,6 +215,17 @@ class CheckoutPresubmit:
             self.head, self.results = head, results
             self.regressions = self._criteria_regressions(head)
             self.invocations.append(self.results)
+            self.gates.append(
+                {
+                    "started_at": asked_at,
+                    "wait_s": round(grant.wait_s, 3),
+                    "run_s": round(time.monotonic() - granted, 3),
+                    "share": grant.share,
+                    "peers": grant.peers,
+                    "priority": self.priority.value,
+                    "overdue": grant.overdue,
+                }
+            )
             return witness_reason
         finally:
             scheduler.release(grant)

@@ -72,6 +72,7 @@ async def full_checks(state: TaskState, cfg: Configuration, ports: Ports) -> Tas
         declared=declared,
         results=gate.results,
         witness=gate.witness_result,
+        gate=gate.gate,
     )
     record = _record(state, merged, declared, gate)
     text = presubmit.failed_checks_markdown(merged, head, neutralise=False)
@@ -100,6 +101,8 @@ def _record(
     }
     if not record["passed"]:
         record["failed_step"] = str(merged["failed_step"])
+    if (taken := gate.gate) is not None:
+        record["gate"] = taken
     return record
 
 
