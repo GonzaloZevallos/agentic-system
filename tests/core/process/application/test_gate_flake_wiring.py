@@ -175,3 +175,18 @@ async def test_a_first_run_that_stopped_early_passes_in_the_form_at_delivery_but
     full = await full_checks(state_of(), CFG, ports_of(red_suite, rerun_checks={"tests": FORM}))
     assert full["full_checks"]["passed"] is False
     assert "pytest --lf" not in [c for _, c in red_suite.ran]
+
+
+def test_the_flakes_survive_a_save_and_the_merge_gate_may_replace_them_whole():
+    """`render` persists `flakes` after a delivery, so the next save does not lose them; the
+    closure that adds the merge gate's flake rewrites the record whole."""
+    from agentic.core.process.domain import document
+
+    record = {"check": "tests", "head": "h1", "gate": "delivery", "tests": []}
+    raw = document.render(
+        {"id": "GH-1", "title": "t", "description": "d", "type": "feature", "flakes": [record]}
+    )
+    assert document.parse(raw)["flakes"] == [record]
+    more = {"check": "lint", "head": "h2", "gate": "merge", "tests": []}
+    written = document.record_closure(raw, {"flakes": [record, more]})
+    assert document.parse(written)["flakes"] == [record, more]
