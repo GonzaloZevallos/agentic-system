@@ -467,7 +467,17 @@ class Commands(Protocol):
     """Runs a product's command in a checkout, as a shell would, for the system itself:
     the presubmit. Never fails for a non-zero exit; that is the result."""
 
-    def run(self, cwd: Path, command: str, timeout_s: float) -> CommandResult: ...
+    def run(
+        self,
+        cwd: Path,
+        command: str,
+        timeout_s: float,
+        *,
+        env: Mapping[str, str] | None = None,
+    ) -> CommandResult:
+        """`env` is laid over the check's environment (GH-361: the worker count of the
+        gate's share); the system's own marks always win over it."""
+        ...
 
 
 class Inbox(Protocol):

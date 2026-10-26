@@ -27,6 +27,7 @@ TAIL_LINES = 30
 # can never be measured by the selection that file declares.
 STACK_FILE = ".agentic/stack.yaml"
 BASE_TOKEN = "{base}"
+WORKERS_TOKEN = "{workers}"
 # What `merge_checks` keeps of one failing command's output (GH-212): the last
 # `TAIL_LINES` lines, then the last `MERGE_TAIL_CHARS` characters of those. The comment the
 # poller posts about it never grows past `MERGE_COMMENT_MAX` (GitHub's own limit is 65536).
@@ -140,6 +141,20 @@ def affected_command(command: str, base: str) -> str:
     """The affected form with the base in it. `replace`, never `format`: a command is
     shell text and may carry braces of its own."""
     return command.replace(BASE_TOKEN, base)
+
+
+def workers_command(command: str, workers: int) -> str:
+    """The command with its `{workers}` sized to the gate's share (GH-361). `replace`, never
+    `format`, for the same reason as `affected_command`, which runs first: `{base}`, then
+    `{workers}`. A command that declares none comes back as it went in."""
+    return command.replace(WORKERS_TOKEN, str(workers))
+
+
+def workers_env(workers: int) -> dict[str, str]:
+    """What every command of a granted gate gets in its environment: the count, for a check
+    that reads it, and the one pytest-xdist reads for `-n auto`. Never an `AGENTIC_*` name:
+    `without_own_configuration` strips that prefix from a check's environment."""
+    return {"CHECK_WORKERS": str(workers), "PYTEST_XDIST_AUTO_NUM_WORKERS": str(workers)}
 
 
 def affected_prefix(command: str) -> str:

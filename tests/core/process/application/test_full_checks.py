@@ -56,10 +56,10 @@ class Messy(MemoryCommands):
         super().__init__(**queues)
         self.workspace = workspace
 
-    def run(self, cwd, command, timeout_s):
+    def run(self, cwd, command, timeout_s, *, env=None):
         self.workspace.dirty.add(cwd)
         self.workspace.uncommitted.add(cwd)
-        return super().run(cwd, command, timeout_s)
+        return super().run(cwd, command, timeout_s, env=env)
 
 
 async def test_every_declared_check_runs_in_full_with_no_affected_command():

@@ -123,7 +123,7 @@ def test_a_conflict_a_setup_step_and_a_worktree_error_each_record_where_it_stopp
 def test_a_runner_that_raises_oserror_writes_no_merge_checks(tmp_path, monkeypatch):
     ports = _world(tmp_path)
 
-    def raising(cwd, command, timeout_s):
+    def raising(cwd, command, timeout_s, *, env=None):
         raise OSError("boom")
 
     monkeypatch.setattr(ports.commands, "run", raising)

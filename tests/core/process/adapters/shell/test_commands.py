@@ -210,6 +210,27 @@ def test_the_systems_own_virtualenv_does_not_reach_the_command(commands, checkou
     assert "venv=[]" in result.output
 
 
+def test_the_env_given_reaches_the_command_over_what_it_inherited(commands, checkout, monkeypatch):
+    monkeypatch.setenv("CHECK_WORKERS", "99")
+    env = {"CHECK_WORKERS": "6", "PYTEST_XDIST_AUTO_NUM_WORKERS": "6"}
+    result = commands.run(
+        checkout, 'echo "w=$CHECK_WORKERS x=$PYTEST_XDIST_AUTO_NUM_WORKERS"', 10, env=env
+    )
+    assert "w=6 x=6" in result.output
+
+
+def test_a_command_run_without_env_sees_none_of_the_grants_variables(commands, checkout):
+    result = commands.run(checkout, 'echo "w=[$CHECK_WORKERS]"', 10)
+    assert "w=[]" in result.output
+
+
+def test_the_reaping_mark_wins_over_a_mark_in_the_env(commands, checkout):
+    forged = {reaping.MARK_NAME: "other/check/1/forged"}
+    result = commands.run(checkout, f'echo "m=${reaping.MARK_NAME}"', 10, env=forged)
+    assert f"m={PRODUCT}/check/{os.getpid()}/" in result.output
+    assert "forged" not in result.output
+
+
 def test_a_command_runs_in_the_checkout_and_keeps_both_streams(commands, checkout):
     (checkout / "marker").write_text("")
     result = commands.run(checkout, "ls && echo oops >&2 && exit 3", timeout_s=10)

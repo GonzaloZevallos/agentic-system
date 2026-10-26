@@ -131,9 +131,9 @@ def test_the_share_is_acquired_before_any_command_runs():
             return super().acquire(request)
 
     class Spy(MemoryCommands):
-        def run(self, cwd, command, timeout_s):
+        def run(self, cwd, command, timeout_s, *, env=None):
             order.append(command)
-            return super().run(cwd, command, timeout_s)
+            return super().run(cwd, command, timeout_s, env=env)
 
     gate = gate_over(Journal(), Spy(), witness="witness")
     gate()

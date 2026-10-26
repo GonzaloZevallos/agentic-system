@@ -247,6 +247,7 @@ class CheckoutPresubmit:
         check already failed in full on this instance."""
         rows: list[CheckResult] = []
         if mode == "affected-only" and name not in self.stuck_full:
+            # `{base}` first, then `{workers}`: the order the substitution is defined in.
             form = presubmit.affected_command(plan.commands[name], plan.base)
             first = self._run(name, form, "affected-only")
             rows.append(first)
@@ -283,7 +284,10 @@ class CheckoutPresubmit:
 
     def _run_witness(self, command: str) -> str | None:
         checkout = self.path.resolve()
-        result = self.ports.commands.run(self.path, command, self.check_timeout_s)
+        # The witness gets the grant's environment but its command is never substituted.
+        result = self.ports.commands.run(
+            self.path, command, self.check_timeout_s, env=self._grant_env()
+        )
         reason = presubmit.witness_refusal(
             command, result.output, result.exit_code, result.timed_out, checkout
         )
@@ -294,9 +298,24 @@ class CheckoutPresubmit:
         }
         return reason
 
+    def _grant_env(self) -> dict[str, str] | None:
+        """The worker count of the share held, as the environment of every command; None
+        without a grant, which is the call of before."""
+        return None if self.grant is None else presubmit.workers_env(self.grant.share)
+
+    def _sized(self, command: str) -> str:
+        """`{workers}` in a declared command, sized to the share held; the command as it is
+        without a grant or without the placeholder."""
+        if self.grant is None:
+            return command
+        return presubmit.workers_command(command, self.grant.share)
+
     def _run(self, name: str, command: str, mode: Mode | None = None) -> CheckResult:
         started = time.monotonic()
-        result = self.ports.commands.run(self.path, command, self.check_timeout_s)
+        command = self._sized(command)
+        result = self.ports.commands.run(
+            self.path, command, self.check_timeout_s, env=self._grant_env()
+        )
         duration_s = time.monotonic() - started
         output = presubmit.said(result.output, result.timed_out, self.check_timeout_s)
         row: CheckResult = {

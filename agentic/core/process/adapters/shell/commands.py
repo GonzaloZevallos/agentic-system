@@ -23,6 +23,7 @@ import os
 import signal
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from uuid import uuid4
 
@@ -40,14 +41,26 @@ class ShellCommands:
         self._product = product_key
         self._reaper = reaper
 
-    def run(self, cwd: Path, command: str, timeout_s: float) -> CommandResult:
+    def run(
+        self,
+        cwd: Path,
+        command: str,
+        timeout_s: float,
+        *,
+        env: Mapping[str, str] | None = None,
+    ) -> CommandResult:
         token = uuid4().hex
-        env = without_own_configuration(without_own_toolchain(os.environ))
-        env[reaping.MARK_NAME] = reaping.mark(self._product, reaping.CHECK_TASK, os.getpid(), token)
+        child_env = without_own_configuration(without_own_toolchain(os.environ))
+        # The grant's variables go over the cleaned environment and under the mark: whatever
+        # the caller passes, the check is reaped by the token this run minted.
+        child_env.update(env or {})
+        child_env[reaping.MARK_NAME] = reaping.mark(
+            self._product, reaping.CHECK_TASK, os.getpid(), token
+        )
         process = subprocess.Popen(
             ["bash", "-c", command],
             cwd=cwd,
-            env=env,
+            env=child_env,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,

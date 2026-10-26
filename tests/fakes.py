@@ -405,6 +405,8 @@ class MemoryCommands:
     ) -> None:
         self.queues = {k: list(v) for k, v in queues.items()}
         self.ran: list[tuple[Path, str]] = []
+        # The `env` each run received, parallel to `ran`: None when the caller passed none.
+        self.envs: list[Mapping[str, str] | None] = []
         self.holds = holds or {}
         self.raises = raises or set()
         self.in_flight = 0
@@ -417,9 +419,17 @@ class MemoryCommands:
         with self._changed:
             return self._changed.wait_for(predicate, timeout_s)
 
-    def run(self, cwd: Path, command: str, timeout_s: float) -> CommandResult:
+    def run(
+        self,
+        cwd: Path,
+        command: str,
+        timeout_s: float,
+        *,
+        env: Mapping[str, str] | None = None,
+    ) -> CommandResult:
         with self._changed:
             self.ran.append((cwd, command))
+            self.envs.append(env)
             self.in_flight += 1
             self.high_water = max(self.high_water, self.in_flight)
             self._changed.notify_all()
