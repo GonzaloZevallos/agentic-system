@@ -226,3 +226,79 @@ candidates:
   - finding
   - return
   added_at: '2026-10-26T05:55:19.701+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: Before delivering, list each place the brief names (every branch, caller or variant of a change) and confirm each one is changed. Do not stop after fixing the main path.
+  confidence: medium
+  seen_in:
+  - GH-267
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T05:57:46.127+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: For every seam or test case the brief declares, write a test that runs the real components together and asserts the exact outcome the brief states. Do not call an inner function directly.
+  confidence: medium
+  seen_in:
+  - GH-267
+  sources:
+  - finding
+  added_at: '2026-10-26T05:57:46.127+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When code waits on a process it spawned, list the locks and registrations the waiter holds that the child needs, release them before the wait, and add a test showing they are free during it.
+  confidence: medium
+  seen_in:
+  - GH-270
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T05:57:46.127+00:00'
+- slug: developer
+  category: standard-typing-silenced
+  lesson: Keep precise types where the shape is known; do not widen a return or parameter to Any or Mapping[str, Any], because that stops the type check from catching None and key errors.
+  confidence: medium
+  seen_in:
+  - GH-273
+  sources:
+  - finding
+  added_at: '2026-10-26T05:57:46.127+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: Before you mark a question favorable, check the assumption the verdict depends on, and state it as unverified when you cannot; if the brief asks for evidence from the UI, get it there.
+  confidence: medium
+  seen_in:
+  - GH-273
+  sources:
+  - finding
+  added_at: '2026-10-26T05:57:46.127+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: 'Before delivering, re-check every plan invariant against the artefact: titles must state the grain the widget counts, and each table cell must hold the real value, not a note.'
+  confidence: medium
+  seen_in:
+  - GH-274
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T05:57:46.127+00:00'
+- slug: developer
+  category: spec-missing-test
+  lesson: For every guard that refuses an input, write a test at the declared seam that feeds it that input and asserts the refusal and that nothing was changed; skipped opt-in tests do not count.
+  confidence: medium
+  seen_in:
+  - GH-274
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-26T05:57:46.127+00:00'
+- slug: developer
+  category: spec-scope
+  lesson: When the brief asks for live evidence, run the commands on the current head for every product named and paste the full output verbatim into your section; do not cite stale files.
+  confidence: medium
+  seen_in:
+  - GH-274
+  sources:
+  - finding
+  added_at: '2026-10-26T05:57:46.127+00:00'
