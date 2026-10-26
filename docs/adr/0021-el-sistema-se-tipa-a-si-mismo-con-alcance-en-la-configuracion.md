@@ -215,3 +215,12 @@ Esta adenda reemplaza, por nombre, la frase «`tests/` queda fuera del alcance d
 - **Qué se verifica.** Una deriva entre un doble y su protocolo de `ports.py` deja a `uv run mypy` en rojo. Una prueba lo demuestra sobre una copia con una firma alterada, en un paquete que no se llama `tests`, con un control positivo que sale verde. Una prueba de inventario exige que todo protocolo de `ports.py` figure como cubierto o no cubierto. Otra exige que los parámetros de `memory_ports` sean los campos de `Ports`.
 - **Riesgo residual.** `Presubmit`, `SchemaGuard` y `RunLock` no tienen doble en `tests/fakes.py`: sus suplentes viven en archivos de test fuera del alcance, y sólo se comprueba por nombre que declaran los miembros del protocolo, sin chequeo de tipos. Los archivos de test que usan los dobles siguen sin chequearse: una llamada mal tipada a un doble no la ve mypy.
 - **Lo que no cambia.** Ningún archivo de `agentic/` se toca, ni ninguna señal, prompt o `prompts.fingerprint`. La puerta de CI declarada en `.agentic/stack.yaml` y `.github/**` tampoco se tocan.
+
+## Adenda (2026-10-26, GH-362): `scripts/poll_waits.py` entra al alcance, fuera de `agentic/` y de `tests/`
+
+Esta adenda completa la de GH-227 con un tercer lugar de entradas; el resto de este ADR sigue igual.
+
+- **El alcance.** `[tool.mypy] files` incluye ahora una entrada bajo `scripts/`: `scripts/poll_waits.py`, el lector de sólo lectura del journal del poller (GH-362). Ningún otro archivo de `scripts/` entra.
+- **Por qué.** Es un script con función `main(argv, stdin)` y funciones puras de parseo que se prueban en `tests/test_poll_waits.py`; tiparlo cuesta poco y evita una deriva silenciosa del formato que lee.
+- **La regla para otro script.** Igual que para un tercer archivo de `tests/`: se agrega a `files` y a `MYPY_SCRIPT_ENTRIES`, la lista del guardia de `tests/test_stack.py` en el mismo diff que lo deja en verde. Se aplican las prohibiciones de este ADR: nada de `cast`, ignores sin código, `noqa` ni overrides.
+- **Lo que no cambia.** Ninguna señal, prompt ni `prompts.fingerprint`.

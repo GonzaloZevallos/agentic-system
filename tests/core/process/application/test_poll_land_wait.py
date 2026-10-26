@@ -85,15 +85,18 @@ def test_a_record_older_than_the_ttl_holds_nothing(tmp_path):
 def test_a_product_never_holds_itself(tmp_path):
     a_ports, _, registry, a_cfg, _ = _two_products(tmp_path)
     _lines(a_cfg, a_ports, registry, FakeLauncher())
-    registry.entries.pop()
+    registry.entries.clear()  # every slot is free: the land and a launch both fit
     a_ports.tracker._queue = [9]
     a_ports.tracker.states[9] = IssueState("OPEN", "", None, None)
     _seed_body(a_ports, 9)
     launcher = FakeLauncher()
 
-    _lines(a_cfg, a_ports, registry, launcher)
+    lines = _lines(a_cfg, a_ports, registry, launcher)
 
     assert _land_argv(5, tmp_path / "a") in launcher.spawned
+    # Its own wait record is still fresh when the round reads it: if the product held itself,
+    # the launch would be held (GH-362, integration).
+    assert "agentic: poll: launch #9 -> pid 4242" in lines
 
 
 def test_the_notes_of_an_unreadable_wait_file_open_the_round_output(tmp_path):
