@@ -167,17 +167,14 @@ def _touches_stack(world: World) -> None:
     world.ports.workspace.diff_paths = (".agentic/stack.yaml", "src/app.py")
 
 
-def _touched_unknown(world: World) -> None:
+def _env_drift_in_gain(world: World) -> None:
     world.ports.workspace.diff_paths = ("src/app.py",)
     world.ports.stack.declared_setup = {"setup": "uv sync"}
     world.ports.workspace.gains[(OLD, NEW)] = ("uv.lock",)
 
 
 def _broken_declaration(world: World) -> None:
-    def broken(revision: str) -> tuple[str, ...]:
-        raise ValueError("stack.yaml: '*' under `merge_inert` is refused")
-
-    world.ports.stack.merge_inert = broken  # type: ignore[method-assign]
+    world.ports.stack.merge_inert_error = "stack.yaml: '*' under `merge_inert` is refused"
 
 
 DOUBTS = [
@@ -187,7 +184,7 @@ DOUBTS = [
     _empty,
     _stack_unreadable,
     _touches_stack,
-    _touched_unknown,
+    _env_drift_in_gain,
     _broken_declaration,
 ]
 

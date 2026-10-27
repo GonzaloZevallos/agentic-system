@@ -328,6 +328,8 @@ class MemoryStack:
         self.declared_rerun_checks = {} if rerun_checks is None else rerun_checks
         # Empty is a product that declares no `merge_inert`: the merge gate of today.
         self.declared_merge_inert = merge_inert
+        # A text that makes `merge_inert` raise it as a `ValueError`, the way a broken key does.
+        self.merge_inert_error: str | None = None
         # Empty is a product with no performance budget (GH-318), every product until its own
         # file declares one.
         self.declared_performance = {} if performance is None else performance
@@ -373,6 +375,8 @@ class MemoryStack:
 
     def merge_inert(self, revision: str) -> tuple[str, ...]:
         # Not tracked in `revisions` either, `witness`'s own reason.
+        if self.merge_inert_error is not None:
+            raise ValueError(self.merge_inert_error)
         return self.declared_merge_inert
 
     def forbidden(self, revision: str) -> list[Forbidden]:
