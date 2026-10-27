@@ -21,7 +21,7 @@ from ..domain.presubmit import AffectedPlan
 from ..domain.roles import DEVELOPER, DEVELOPER_INTEGRATOR
 from ..domain.task import INTEGRATION, TaskState
 from .checkouts import SetupFailed, subtask_checkout, task_base
-from .coverage_guard import InvariantCoverageGuard
+from .coverage_guard import InvariantCoverageGuard, checkout_view
 from .ports import Ports
 from .presubmit import CheckoutPresubmit, declared_checks, fast_tier, reuse_of
 from .run_check import RunCheck
@@ -194,7 +194,11 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         prompt=prompt,
         cold_prompt=cold_prompt,
         presubmit=delivery_presubmit,
-        delivery_check=InvariantCoverageGuard(mapped) if mapped else None,
+        delivery_check=InvariantCoverageGuard(
+            mapped, checkout_view(ports.workspace, checkout.path, base, before)
+        )
+        if mapped
+        else None,
         forbidden=forbidden,
         check_tool=check_tool,
         tiers=presubmit.tier_section(list(fast), [n for n in checks if n not in fast])
