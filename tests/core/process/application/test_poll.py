@@ -4,7 +4,7 @@ real clock. `run_once` is synchronous: no graph, no role, nothing to await."""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
@@ -2189,3 +2189,129 @@ def test_the_same_issue_with_no_document_is_still_a_launch_candidate(tmp_path):
     _seed_body(ports, 30)
     launches = poll.gather_launches(_cfg(tmp_path), ports, MemoryRunRegistry())
     assert [launch.issue for launch in launches] == [30]
+
+
+# --- GH-381: an account_limit pause is retaken at the reset its failure stated ----------
+
+BA = timezone(timedelta(hours=-3))
+RESET_0540 = datetime(2026, 10, 27, 5, 40, tzinfo=BA)
+
+
+def _failure(resets_at: str | None) -> dict:
+    entry = {"kind": "failure", "value": "account_limit", "section": "Developer"}
+    return {**entry, "resets_at": resets_at} if resets_at is not None else entry
+
+
+def _paused_with_reset(ports, log: list[dict], comments: list[IssueComment] | None = None) -> None:
+    ports.documents.save(
+        _paused(
+            "GH-373",
+            "Developer failed 2 times: You've hit your session limit",
+            log,
+        )
+    )
+    ports.tracker.timestamped["GH-373"] = comments or [
+        IssueComment(
+            body="Escalated: Developer failed 2 times: You've hit your session limit",
+            created_at="2026-10-27T01:05:00-03:00",
+        )
+    ]
+
+
+def _escalation() -> dict:
+    return {"kind": "escalation", "value": "failure"}
+
+
+def test_gh373_replay_waits_for_the_stated_reset_then_resumes_and_launches_nothing_before(
+    tmp_path,
+):
+    ports = memory_ports()
+    _paused_with_reset(ports, [_failure("2026-10-27T05:40:00-03:00"), _escalation()])
+    ports.tracker._queue = [30]
+    _seed_body(ports, 30)
+    registry, launcher, cfg = MemoryRunRegistry(), FakeLauncher(), _cfg(tmp_path)
+
+    for before in (
+        datetime(2026, 10, 27, 1, 21, tzinfo=BA),  # past the calendar's first slot
+        datetime(2026, 10, 27, 3, 30, tzinfo=BA),
+        RESET_0540 - timedelta(seconds=1),
+    ):
+        lines = _round(cfg, ports, registry, launcher, before)
+        assert lines == ["agentic: poll: nothing to do this round"]
+        assert launcher.spawned == []
+
+    lines = _round(cfg, ports, registry, launcher, RESET_0540)
+    assert lines[0] == "agentic: poll: resume #373 -> pid 4242"
+    assert [argv[1:4] for argv in launcher.spawned][0] == ["resume", "--issue", "373"]
+    assert ports.tracker.comments == [("GH-373", "Auto-resumed: account limit")]
+
+
+@pytest.mark.parametrize("order", [("05:40", "10:40"), ("10:40", "05:40")])
+def test_the_latest_stated_reset_of_the_epoch_decides_whichever_order_it_was_logged(order):
+    ports = memory_ports()
+    log = [_failure(f"2026-10-27T{hhmm}:00-03:00") for hhmm in order] + [_escalation()]
+    _paused_with_reset(ports, log)
+    (candidate,) = poll.gather_resumes(ports, RESET_0540)
+    assert candidate.resets_at == datetime(2026, 10, 27, 10, 40, tzinfo=BA)
+    assert not candidate.retaken
+
+
+def test_a_failure_without_a_stated_reset_is_ignored_and_none_at_all_is_no_hint():
+    ports = memory_ports()
+    _paused_with_reset(
+        ports, [_failure(None), _failure("2026-10-27T05:40:00-03:00"), _escalation()]
+    )
+    assert poll.gather_resumes(ports, RESET_0540)[0].resets_at == RESET_0540
+    _paused_with_reset(ports, [_failure(None), _failure(None), _escalation()])
+    assert poll.gather_resumes(ports, RESET_0540)[0].resets_at is None
+
+
+def test_an_unreadable_stated_reset_is_no_hint():
+    ports = memory_ports()
+    _paused_with_reset(
+        ports, [_failure("tomorrow-ish"), _failure("2026-10-27T05:40:00"), _escalation()]
+    )
+    assert poll.gather_resumes(ports, RESET_0540)[0].resets_at is None
+
+
+def test_only_the_current_epoch_stated_reset_counts():
+    ports = memory_ports()
+    old = _failure("2026-10-27T10:40:00-03:00")
+    resumed = {"kind": "resumed", "value": "auto"}
+    log = [old, _escalation(), resumed, _failure(None), _escalation()]
+    _paused_with_reset(ports, log)
+    assert poll.gather_resumes(ports, RESET_0540)[0].resets_at is None
+    new = _failure("2026-10-27T05:40:00-03:00")
+    _paused_with_reset(ports, [old, _escalation(), resumed, new, _escalation()])
+    assert poll.gather_resumes(ports, RESET_0540)[0].resets_at == RESET_0540
+
+
+def test_a_retake_after_the_escalated_comment_marks_the_pause_retaken():
+    ports = memory_ports()
+    escalated = IssueComment(body="Escalated: x", created_at="2026-10-27T01:05:00-03:00")
+    retake = IssueComment(
+        body="Auto-resumed: account limit", created_at="2026-10-27T05:40:00-03:00"
+    )
+    _paused_with_reset(
+        ports, [_failure("2026-10-27T05:40:00-03:00"), _escalation()], [escalated, retake]
+    )
+    (candidate,) = poll.gather_resumes(ports, RESET_0540)
+    assert candidate.retaken
+    # A retake before the Escalated comment belongs to an earlier pause.
+    older = IssueComment(body="Auto-resumed: account limit", created_at="2026-10-26T20:00:00-03:00")
+    _paused_with_reset(
+        ports, [_failure("2026-10-27T05:40:00-03:00"), _escalation()], [older, escalated]
+    )
+    assert not poll.gather_resumes(ports, RESET_0540)[0].retaken
+
+
+def test_a_non_account_limit_pause_carries_no_stated_reset():
+    ports = memory_ports()
+    upstream = {
+        "kind": "failure",
+        "value": "upstream",
+        "section": "Developer",
+        "resets_at": "2026-10-27T05:40:00-03:00",
+    }
+    _paused_with_reset(ports, [upstream, _escalation()])
+    assert poll.gather_resumes(ports, RESET_0540)[0].resets_at is None

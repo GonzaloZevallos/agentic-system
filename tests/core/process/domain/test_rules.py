@@ -1,6 +1,6 @@
 import re
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any, cast, get_args
 
 import pytest
@@ -3797,3 +3797,126 @@ def test_a_pass_before_the_pull_request_does_not_make_the_task_delivered():
     }
     assert rules.CLOSENESS[rules.closeness(state)] != "delivered"
     assert rules.CLOSENESS[rules.closeness({**state, "pull_request": "u"})] == "delivered"
+
+
+# --- GH-381: an account_limit pause is retaken at the reset its failure stated -----------
+
+BA = timezone(timedelta(hours=-3))
+ESCALATED_0105 = datetime(2026, 10, 27, 1, 5, tzinfo=BA)
+RESET_0540 = datetime(2026, 10, 27, 5, 40, tzinfo=BA)
+
+
+def _reset_candidate(
+    *, resets_at: datetime | None = RESET_0540, retaken: bool = False, prior: int = 0, **more: Any
+) -> rules.ResumeCandidate:
+    return rules.ResumeCandidate(
+        5,
+        "account_limit",
+        ESCALATED_0105,
+        prior,
+        24,
+        more.pop("chase_prior", prior),
+        resets_at=resets_at,
+        retaken=retaken,
+        **more,
+    )
+
+
+def _reset_plan(resume: rules.ResumeCandidate, now: datetime, launches=()):
+    return rules.poll_plan(
+        closes=[], resumes=[resume], launches=list(launches), available_slots=2, now=now
+    )
+
+
+def test_account_limit_due_is_the_hint_when_no_retake_was_made_yet():
+    due = rules.account_limit_due(
+        ESCALATED_0105,
+        0,
+        24,
+        RESET_0540,
+        schedule=rules.ACCOUNT_LIMIT_SCHEDULE,
+        resets_at=RESET_0540,
+        retaken=False,
+    )
+    assert due == RESET_0540
+
+
+def test_account_limit_due_is_none_a_second_before_the_hint_even_past_the_first_slot():
+    # 04:39:59 is hours past the 15-minute slot after the 01:05 comment: the hint rules.
+    assert (
+        rules.account_limit_due(
+            ESCALATED_0105,
+            0,
+            24,
+            RESET_0540 - timedelta(seconds=1),
+            schedule=rules.ACCOUNT_LIMIT_SCHEDULE,
+            resets_at=RESET_0540,
+            retaken=False,
+        )
+        is None
+    )
+
+
+def test_account_limit_due_without_a_hint_is_next_attempt_at_exactly():
+    now = ESCALATED_0105 + timedelta(minutes=16)
+    kwargs = {"schedule": rules.ACCOUNT_LIMIT_SCHEDULE}
+    assert rules.account_limit_due(
+        ESCALATED_0105, 0, 24, now, resets_at=None, retaken=False, **kwargs
+    ) == rules.next_attempt_at(ESCALATED_0105, 0, 24, now, **kwargs)
+    early = ESCALATED_0105 + timedelta(minutes=14)
+    assert (
+        rules.account_limit_due(
+            ESCALATED_0105, 0, 24, early, resets_at=None, retaken=False, **kwargs
+        )
+        is None
+    )
+
+
+def test_account_limit_due_after_a_retake_follows_the_calendar_not_the_hint():
+    # Escalated again five minutes before the hint's time: the hint (05:40) would say due at
+    # 05:40, the calendar's second slot (+15 min) says 05:50.
+    since = RESET_0540 - timedelta(minutes=5)
+    kwargs = {"schedule": rules.ACCOUNT_LIMIT_SCHEDULE, "resets_at": RESET_0540, "retaken": True}
+    assert rules.account_limit_due(since, 1, 24, RESET_0540, **kwargs) is None
+    assert rules.account_limit_due(since, 1, 24, since + timedelta(minutes=15), **kwargs) == (
+        since + timedelta(minutes=15)
+    )
+    # An exhausted calendar stays exhausted: spacing and exhaustion always apply to a retake.
+    assert rules.account_limit_due(since, 24, 24, RESET_0540 + timedelta(days=1), **kwargs) is None
+
+
+def test_poll_plan_holds_every_round_before_the_reset_and_resumes_at_it():
+    waiting = _reset_candidate()
+    launch = rules.LaunchCandidate(issue=9, blocked=False, since=None, prior=0, limit=6)
+    for now in (
+        ESCALATED_0105 + timedelta(minutes=16),  # past the first calendar slot
+        datetime(2026, 10, 27, 3, 0, tzinfo=BA),
+        RESET_0540 - timedelta(seconds=1),
+    ):
+        assert _reset_plan(waiting, now, [launch]).actions == []  # no retake, no new launch
+        assert rules.account_paused([waiting], now)
+    assert rules.PollAction("resume", 5) in _reset_plan(waiting, RESET_0540, [launch]).actions
+
+
+def test_a_hint_governed_pause_is_not_exhausted_by_the_calendar_it_skips():
+    spent = _reset_candidate(prior=24)
+    assert not rules.resume_exhausted(spent)
+    assert _reset_plan(spent, RESET_0540).actions == [rules.PollAction("resume", 5)]
+
+
+def test_after_the_retake_at_the_reset_the_pause_is_not_due_again_on_the_hint():
+    since = RESET_0540 - timedelta(minutes=5)
+    retaken = replace(_reset_candidate(retaken=True, prior=1), since=since)
+    assert _reset_plan(retaken, RESET_0540).actions == []
+    assert rules.account_paused([retaken], RESET_0540)
+    assert _reset_plan(retaken, since + timedelta(minutes=15)).actions == [
+        rules.PollAction("resume", 5)
+    ]
+
+
+def test_a_persisted_account_limit_is_not_governed_by_a_hint():
+    persisted = _reset_candidate(
+        prior=2, chase_prior=rules.ACCOUNT_LIMIT_CHASE_MAX + len(rules.ACCOUNT_LIMIT_HOURLY)
+    )
+    assert rules.account_limit_persisted(persisted)
+    assert _reset_plan(persisted, RESET_0540).actions == []

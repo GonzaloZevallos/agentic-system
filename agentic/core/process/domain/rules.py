@@ -2693,6 +2693,19 @@ def auto_resumable(state: TaskState) -> FailureReason | None:
     return failures[-1]["value"]
 
 
+def stated_reset(state: TaskState) -> datetime | None:
+    """The latest `resets_at` among the current epoch's `account_limit` failure entries
+    (ADR-0039, addendum GH-381), the latest by time whatever order they were logged in;
+    entries without one, or with one that is not ISO-8601 with an offset, are ignored.
+    `None` when none states a reset: the pause then follows its calendar as ever."""
+    stated = [
+        _instant(entry.get("resets_at"))
+        for entry in _current_epoch(state)
+        if entry["kind"] == "failure" and entry["value"] == "account_limit"
+    ]
+    return max((t for t in stated if t is not None), default=None)
+
+
 def schedule_for(reason: FailureReason, chase_prior: int = 0) -> tuple[int, ...]:
     """The calendar a retake of `reason` follows: the flat `ACCOUNT_LIMIT_SCHEDULE` for
     a 429, the hourly `ACCOUNT_LIMIT_HOURLY` for a 429 whose whole chase (`chase_prior`)
@@ -3207,6 +3220,42 @@ class ResumeCandidate:
     # spent: appended with defaults so a candidate built without them stays valid.
     chase_prior: int = 0
     ceiling_spent: bool = False
+    # An `account_limit` pause's stated reset (ADR-0039, addendum GH-381): the latest
+    # `resets_at` of the current epoch's failures, and whether a retake was already made
+    # after the `Escalated:` comment that followed it. Read only by `account_limit_due`.
+    resets_at: datetime | None = None
+    retaken: bool = False
+
+
+def account_limit_due(
+    since: datetime,
+    prior: int,
+    limit: int,
+    now: datetime,
+    *,
+    schedule: tuple[int, ...],
+    resets_at: datetime | None,
+    retaken: bool,
+) -> datetime | None:
+    """The one place an `account_limit` pause's due time is decided (ADR-0039, addendum
+    GH-381), only once due like `next_attempt_at`: the stated reset `resets_at` for the
+    first retake after the `Escalated:` comment that followed it (never before it, with no
+    margin, and whatever `prior` and `limit` say: the slots before the reset are neither
+    run nor counted); `next_attempt_at(since, prior, limit, now, schedule)` otherwise --
+    no stated reset, or a retake already made (`retaken`) -- so a later retake keeps its
+    spacing and its exhaustion. Reads no clock: `now` arrives as an argument."""
+    if resets_at is not None and not retaken:
+        return resets_at if resets_at <= now else None
+    return next_attempt_at(since, prior, limit, now, schedule=schedule)
+
+
+def _governing_reset(r: ResumeCandidate) -> datetime | None:
+    """The stated reset that decides `r`'s due time, `None` when none does: only an
+    `account_limit` pause that is not yet retaken and has not spent the persisted week
+    (`account_limit_persisted` escalates it, whatever the hint says)."""
+    if r.reason != "account_limit" or r.retaken or account_limit_persisted(r):
+        return None
+    return r.resets_at
 
 
 def retake_calendar(
@@ -3232,15 +3281,26 @@ def retake_due(r: ResumeCandidate, now: datetime) -> datetime | None:
     """The candidate's next automatic attempt, only once due (`next_attempt_at` on the
     calendar `_calendar` names)."""
     schedule, prior, limit = _calendar(r)
-    return next_attempt_at(r.since, prior, limit, now, schedule=schedule)
+    return account_limit_due(
+        r.since,
+        prior,
+        limit,
+        now,
+        schedule=schedule,
+        resets_at=_governing_reset(r),
+        retaken=r.retaken,
+    )
 
 
 def resume_exhausted(r: ResumeCandidate) -> bool:
     """Whether a resume candidate needs a human now: its own calendar is spent
     (`limit` counts window slots only, `0` is just an empty calendar; an `account_limit`
     past `ACCOUNT_LIMIT_CHASE_MAX` has the hourly week) or an interview's ceiling is
-    spent. The one exhaustion decision `poll_plan` takes over a resume."""
+    spent. The one exhaustion decision `poll_plan` takes over a resume. A pause a stated
+    reset governs (`_governing_reset`) is not exhausted by the calendar it skips."""
     schedule, prior, limit = _calendar(r)
+    if _governing_reset(r) is not None:
+        return r.ceiling_spent
     return _schedule_exhausted(prior, limit, schedule=schedule) or r.ceiling_spent
 
 
