@@ -68,7 +68,7 @@ Test at the seams the plan agrees for the subtask; a new test file outside them,
 
 Under this arm a new test file outside the brief's seams with no such reason line is not
 reported: it is an `observation`, which this arm does not carry. A seam the plan itself
-names, broken, is reported as `blocking`, category `standard-seams`, as above.
+names, broken, is reported as `blocking`, category `standard-seams`.
 
 Then read `## Tech Lead: findings`. A row whose `scope` is `plan`, or that came from
 another subtask, is a thing this branch may repeat: check whether it does, and if it

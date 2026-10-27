@@ -14,6 +14,7 @@ and nothing else, and the fan-in goes on."""
 
 from __future__ import annotations
 
+import math
 import time
 from typing import Any
 
@@ -83,7 +84,7 @@ async def full_checks(state: TaskState, cfg: Configuration, ports: Ports) -> Tas
         if breaches := presubmit.budget_breaches(gate.results, ports.stack.check_budgets(base)):
             # A record and a sentence, never a return: a slow suite is not a failed one.
             record["over_budget"] = [
-                {**b, "duration_s": round(b["duration_s"], 1)} for b in breaches
+                {**b, "duration_s": _shown_up(b["duration_s"])} for b in breaches
             ]
             text += f" {_over_budget_sentence(record['over_budget'])}"
     else:
@@ -111,6 +112,13 @@ def _record(
     if not record["passed"]:
         record["failed_step"] = str(merged["failed_step"])
     return record
+
+
+def _shown_up(seconds: float) -> float:
+    """A breach's duration to a tenth, rounded up: the verdict compared the raw figure, so
+    10.04s against a 10s budget must not be written as `10.0s / 10.0s`, which reads as no
+    breach."""
+    return math.ceil(round(seconds * 10, 6)) / 10
 
 
 def _over_budget_sentence(breaches: list[presubmit.BudgetBreach]) -> str:

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from agentic.core.process.application.full_checks import _without_output, full_checks
+from agentic.core.process.application.full_checks import _shown_up, _without_output, full_checks
 from agentic.core.process.application.ports import CommandResult
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.task import INTEGRATION, apply
@@ -260,11 +260,18 @@ async def test_a_green_run_over_a_budget_records_the_breach_and_still_passes():
     assert breach["name"] == "tests"
     assert breach["budget_s"] == OVER
     tests_row = next(r for r in record["results"] if r["name"] == "tests")
-    assert breach["duration_s"] == tests_row["duration_s"]
+    # Rounded up to a tenth, so the figure shown is never at or under the budget it broke.
+    assert tests_row["duration_s"] <= breach["duration_s"] <= tests_row["duration_s"] + 0.1
     assert not {"findings", "changes_requested", "subtasks", "status"} & patch.keys()
     section = patch["sections"]["Full checks"]
     assert section.startswith("Passed on `base`: tests, lint.")
     assert section.endswith(f" Over budget: tests {breach['duration_s']}s / {OVER}s.")
+
+
+def test_a_narrow_breach_is_written_above_its_budget_not_rounded_down_to_it():
+    assert _shown_up(10.04) == 10.1
+    assert _shown_up(10.0) == 10.0
+    assert _shown_up(0.3) == 0.3  # float noise in 0.3 * 10 does not push it up a tenth
 
 
 async def test_a_run_within_budget_or_with_no_budgets_writes_no_over_budget_and_the_same_text():
