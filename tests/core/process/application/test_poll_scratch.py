@@ -3,6 +3,7 @@ floor -- against `MemoryScratch` and `FakeFreeSpace`. No real disk and no real v
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -27,7 +28,7 @@ NOW = datetime(2026, 10, 27, 12, 0, tzinfo=UTC)
 MB = 1024 * 1024
 
 
-def _round(tmp_path, ports, **over):
+def _round(tmp_path, ports, locks=None, **over):
     launcher = FakeLauncher()
     lines = poll.run_once(
         Configuration(product_dir=tmp_path, **over),
@@ -37,7 +38,7 @@ def _round(tmp_path, ports, **over):
         NOW,
         argv0="agentic",
         sleep=lambda _: None,
-        lock=_Locks(),
+        lock=locks or _Locks(),
         current_boot="boot-now",
     )
     return lines, launcher
@@ -114,6 +115,39 @@ def test_a_kept_folder_goes_fourteen_days_after_its_task_closed_not_before():
     _round(Path("/p"), ports)
     assert disk.swept[0].kept == ("GH-1", "GH-3")
     assert [task for task, _ in disk.kept_on_disk] == ["GH-2", "GH-4"]
+
+
+def test_a_discarded_or_split_task_counts_as_closed_from_its_finished_at():
+    ports = memory_ports(scratch=MemoryScratch(), free_space=FakeFreeSpace())
+    old = (NOW - scratch.KEPT_RETENTION).isoformat()
+    ports.documents.save({"id": "GH-6", "status": "discarded", "finished_at": old})
+    ports.documents.save({"id": "GH-7", "status": "split", "finished_at": NOW.isoformat()})
+    ports.documents.save({"id": "GH-8", "status": "developing"})
+    disk = _disk(ports)
+    disk.tasks = ["GH-6", "GH-7", "GH-8"]
+    disk.kept_on_disk = [("GH-6", NOW), ("GH-7", NOW), ("GH-8", NOW - timedelta(days=90))]
+    _round(Path("/p"), ports)
+    assert disk.swept[0].tasks == ("GH-6", "GH-7")
+    assert disk.swept[0].kept == ("GH-6",)
+
+
+def test_a_kept_folder_whose_task_document_cannot_be_read_expires_by_its_own_mtime(monkeypatch):
+    ports = memory_ports(scratch=MemoryScratch(), free_space=FakeFreeSpace())
+
+    def unreadable(task_id):
+        raise ValueError("bad frontmatter")
+
+    monkeypatch.setattr(ports.documents, "load", unreadable)
+    disk = _disk(ports)
+    disk.tasks = ["GH-1"]
+    disk.kept_on_disk = [
+        ("GH-1", NOW - scratch.KEPT_RETENTION - timedelta(days=1)),
+        ("GH-2", NOW),
+    ]
+    _round(Path("/p"), ports)
+    # Its tmp folder stays (nobody can say the task closed); the old kept folder goes.
+    assert disk.swept[0].tasks == ()
+    assert disk.swept[0].kept == ("GH-1",)
 
 
 def test_a_round_with_nothing_to_sweep_says_nothing_and_leaves_the_disk_alone():
@@ -233,3 +267,31 @@ def test_a_volume_that_cannot_be_read_holds_nothing_and_says_so(tmp_path):
     lines, launcher = _round(tmp_path, _busy_ports(_Broken()))
     assert lines[0] == "agentic: poll: free space unreadable: no such volume"
     assert [argv[1] for argv in launcher.spawned][:2] == ["close", "resume"]
+
+
+def test_a_held_round_starts_no_retake_merge_or_reflect_child_and_an_open_one_starts_all(tmp_path):
+    from agentic.core.process.domain import playbook_candidates as pc
+    from tests.core.process.application.test_poll import _dead_lock, _open_task
+    from tests.core.process.application.test_poll_merge import _ports as merge_ports
+
+    def build(free):
+        ports = replace(merge_ports(5), scratch=MemoryScratch(), free_space=free)
+        ports.workspace.files[("HEAD", pc.LEDGER_FILE)] = pc.render_ledger(
+            pc.Ledger(started_at="2026-10-05T00:00:00+00:00")
+        )
+        ports.documents.save({"id": "GH-9", "title": "t", "description": "d"})
+        ports.documents.record_closure(
+            "GH-9", {"closed_at": "2026-10-06T09:00:00.000+00:00", "delivery_outcome": "merged"}
+        )
+        _open_task(ports, "GH-30")
+        return ports
+
+    held_lines, held = _round(
+        tmp_path, build(_free(tmp_path, tmp_mb=10)), _Locks(_dead_lock("GH-30"))
+    )
+    assert held.spawned == []
+    assert held_lines == ["agentic: poll: held: /tmp 10 MB < floor 2048 MB (scratch 380000 MB ok)"]
+
+    _, open_ = _round(tmp_path, build(_free(tmp_path)), _Locks(_dead_lock("GH-30")))
+    kinds = {argv[1] for argv in open_.spawned}
+    assert {"merge", "resume", "reflect"} <= kinds

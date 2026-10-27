@@ -21,22 +21,38 @@ TMP_ROOT = Path("/tmp")
 _MB = 1024 * 1024
 
 
-def _closed_at(ports: Ports, task: str, fallback: datetime) -> datetime | None:
-    """When `task` closed: `None` when it has not (no document, or none with `closed_at`),
-    the document's `closed_at` otherwise, and `fallback` (the folder's mtime) when that
-    value cannot be read."""
-    try:
-        raw = ports.documents.load(task)
-    except (OSError, ValueError):
-        return None
-    value = (raw or {}).get("closed_at")
-    if not value:
-        return None
+# The statuses of a task that ended with no delivery: `rules.finished` writes one of them with
+# `finished_at`, the way a merged or closed task gets `closed_at`.
+_ENDED_WITHOUT_DELIVERY = frozenset({"discarded", "split", "tracker_only"})
+
+
+def _stamp(value: object, fallback: datetime) -> datetime:
+    """`value` as an aware time; `fallback` (the folder's mtime) when it cannot be read."""
     try:
         parsed = datetime.fromisoformat(str(value))
     except ValueError:
         return fallback
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+def _closed_at(
+    ports: Ports, task: str, fallback: datetime, unreadable: datetime | None
+) -> datetime | None:
+    """When `task` closed, or `None` when it has not (or has no document). A task closes with
+    `closed_at` (merged, closed) or, ended without a delivery (discarded, split), with a
+    `status` and `finished_at`; a stamp that cannot be read counts as `fallback`. A document
+    that cannot be read at all answers `unreadable`: the folder's mtime for a kept folder's
+    clock, `None` for the closed set, since a task nobody can read is not known closed."""
+    try:
+        raw = ports.documents.load(task)
+    except (OSError, ValueError):
+        return unreadable
+    raw = raw or {}
+    if raw.get("closed_at"):
+        return _stamp(raw["closed_at"], fallback)
+    if raw.get("status") in _ENDED_WITHOUT_DELIVERY and raw.get("finished_at"):
+        return _stamp(raw["finished_at"], fallback)
+    return None
 
 
 def sweep(ports: Ports, now: datetime) -> list[str]:
@@ -50,9 +66,10 @@ def sweep(ports: Ports, now: datetime) -> list[str]:
         listing = ports.scratch.listing()
         kept_entries = ports.scratch.kept_folders()
         known = {*listing.tasks, *(task for task, _ in kept_entries)}
-        closure = {task: _closed_at(ports, task, now) for task in sorted(known)}
-        closed = {task for task, at in closure.items() if at is not None}
-        kept = [KeptFolder(task, _closed_at(ports, task, mtime)) for task, mtime in kept_entries]
+        closed = {task for task in sorted(known) if _closed_at(ports, task, now, None) is not None}
+        kept = [
+            KeptFolder(task, _closed_at(ports, task, mtime, mtime)) for task, mtime in kept_entries
+        ]
         decision = sweep_decision(listing, closed, kept, now)
         if not decision:
             return []
