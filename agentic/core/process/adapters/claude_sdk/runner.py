@@ -58,7 +58,7 @@ import sys
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
-from contextlib import AbstractContextManager, contextmanager, nullcontext
+from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import IO, Any
@@ -395,7 +395,11 @@ class ClaudeSdkRunner:
         """The lower of the scratch volume's and `/tmp`'s free bytes and free inodes."""
         if self.free_space is None or scratch_dir is None:
             return None
-        readings = [self.free_space.read(scratch_dir), self.free_space.read(Path("/tmp"))]
+        try:
+            readings = [self.free_space.read(scratch_dir), self.free_space.read(Path("/tmp"))]
+        except OSError:
+            # A reading that cannot be taken must not replace the failure it annotates.
+            return None
         return SpaceReading(
             free_bytes=min(r.free_bytes for r in readings),
             free_inodes=min(r.free_inodes for r in readings),
@@ -757,8 +761,20 @@ def _opened(
 
     @contextmanager
     def opened() -> Iterator[tuple[Path, Path]]:
-        with scratch.open(owner_task, "r", token, slug) as directory:
-            yield directory, scratch.ensure_kept(owner_task)
+        with ExitStack() as stack:
+            try:
+                directory = stack.enter_context(scratch.open(owner_task, "r", token, slug))
+                kept = scratch.ensure_kept(owner_task)
+            except OSError as exc:
+                # A full disk is when this matters most: the attempt never started, and
+                # it is the measured errno, not a raw error from `run_once`, that says why.
+                if exc.errno != errno.ENOSPC:
+                    raise
+                raise AttemptFailed(
+                    "the attempt's scratch directory could not be created: no space left",
+                    enospc=True,
+                ) from exc
+            yield directory, kept
 
     return opened()
 

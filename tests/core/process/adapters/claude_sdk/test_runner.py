@@ -2207,3 +2207,47 @@ async def test_other_errors_never_stamp_enospc_whatever_their_text_says(monkeypa
     with pytest.raises(AttemptFailed) as info:
         await run_once(runner, tmp_path)
     assert info.value.enospc is False
+
+
+async def test_a_scratch_that_cannot_be_created_for_lack_of_space_is_an_attempt_failure(
+    monkeypatch, tmp_path
+):
+    class FullScratch(DiskScratch):
+        @contextmanager
+        def open(self, task_key, kind, token, slug):
+            raise OSError(errno.ENOSPC, "No space left on device")
+            yield  # pragma: no cover
+
+    scratch_query(monkeypatch, [result()])
+    runner = make_runner(scratch=FullScratch(tmp_path / "product"), free_space=FakeFreeSpace())
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(runner, tmp_path)
+    assert info.value.enospc is True
+
+
+async def test_a_scratch_that_fails_for_another_reason_is_not_an_enospc_failure(
+    monkeypatch, tmp_path
+):
+    class DeniedScratch(DiskScratch):
+        @contextmanager
+        def open(self, task_key, kind, token, slug):
+            raise OSError(errno.EACCES, "No space left on device")
+            yield  # pragma: no cover
+
+    scratch_query(monkeypatch, [result()])
+    runner = make_runner(scratch=DeniedScratch(tmp_path / "product"), free_space=FakeFreeSpace())
+    with pytest.raises(OSError) as info:
+        await run_once(runner, tmp_path)
+    assert not isinstance(info.value, AttemptFailed)
+
+
+async def test_an_unreadable_free_space_does_not_replace_the_failure(monkeypatch, tmp_path):
+    class Broken:
+        def read(self, path):
+            raise OSError(errno.EIO, "io")
+
+    scratch_query(monkeypatch, [])
+    runner = make_runner(scratch=DiskScratch(tmp_path / "product"), free_space=Broken())
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(runner, tmp_path)
+    assert info.value.space is None
