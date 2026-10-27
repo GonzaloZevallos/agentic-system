@@ -54,6 +54,8 @@ violations, or a guard, a checker or a validator invoked from a check the produc
 declares — one of your tests at a declared seam exercises it on an input it must
 reject, not only on the input it should accept.
 
+Test at the seams the plan agrees for the subtask; a new test file outside them, or at a slower seam than the plan names for that behaviour, needs one line in the delivery's markdown saying why the agreed seam cannot show it.
+
 The product declares its checks, the commands that say its code is sound:
 
 {{checks}}
