@@ -1,4 +1,4 @@
-"""The parallel factor read over task documents: `agentic.core.measurement.domain.parallel_factor`."""
+"""The parallel factor over task documents: `core.measurement.domain.parallel_factor`."""
 
 from datetime import UTC, datetime, timedelta
 
