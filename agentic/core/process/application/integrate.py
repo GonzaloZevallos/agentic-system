@@ -30,6 +30,7 @@ inside a wave a branch cannot know that its sister stopped, and that does not ch
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -45,6 +46,17 @@ from .run_role import finish
 
 
 async def integrate(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
+    # Off the event loop, as the checkouts were (GH-355): making one runs the product's setup,
+    # a command that can last minutes, and the loop must stay free to hear a signal. The
+    # scheduling loop does the same with each turn it runs.
+    return await asyncio.to_thread(integrate_turn, state, cfg, ports)
+
+
+def integrate_turn(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
+    """The turn itself, synchronous (GH-364): the scheduling loop runs it in a worker
+    thread, one at a time, so that nothing else touches the workspace meanwhile. Being in a
+    thread already, it makes its checkouts directly: the `_in_thread` forms are for a node
+    that runs on the event loop."""
     if state.get("escalated"):
         # `escalate` runs next and saves the merged state itself; nothing else may
         # touch the workspace while the task waits for the human. The status is settled

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import dataclasses
 import threading
@@ -12,7 +13,7 @@ from typing import Any
 
 from agentic.core.knowledge.domain import knowledge
 from agentic.core.process.adapters.github.tracker import pull_request_number
-from agentic.core.process.adapters.shell import ShellCommands, ShellReaper
+from agentic.core.process.adapters.shell import NullStopFlag, ShellCommands, ShellReaper
 from agentic.core.process.application.limits import RunLimits
 from agentic.core.process.application.ports import (
     AddedAdr,
@@ -114,6 +115,60 @@ class ScriptedRunner:
         """Which subtask each run of `slug` worked on, in order: the shape of a wave
         without depending on how two concurrent branches interleaved."""
         return [_subtask_of(c.get("cwd")) for c in self.calls if c["slug"] == slug]
+
+
+class BlockingRunner(ScriptedRunner):
+    """A `ScriptedRunner` whose roles can wait on an `asyncio.Event` per `<slug>__<subtask>`
+    key (the subtask of the checkout the role runs in, empty for the task's own), so a test
+    decides which role of which subtask is still running while the others go on (GH-364).
+
+    `hold(key)` makes every run of that key wait until `release(key)`; `started(key)` returns
+    once a run of that key has begun; `began` and `finished` are the keys in order; `peak` is
+    the most subtask roles (those whose key names a subtask) that were running at once."""
+
+    def __init__(self, **queues: list[RawResult | Exception]):
+        super().__init__(**queues)
+        self._held: dict[str, asyncio.Event] = {}
+        self._began: dict[str, asyncio.Event] = {}
+        self.began: list[str] = []
+        self.finished: list[str] = []
+        self.on_call: Callable[[str], None] | None = None
+        self.running = 0
+        self.peak = 0
+
+    def hold(self, *keys: str) -> None:
+        for key in keys:
+            self._held.setdefault(key, asyncio.Event())
+
+    def release(self, *keys: str) -> None:
+        for key in keys:
+            self._held.setdefault(key, asyncio.Event()).set()
+
+    async def started(self, key: str, timeout: float = 20.0) -> None:
+        await asyncio.wait_for(self._began.setdefault(key, asyncio.Event()).wait(), timeout)
+
+    async def run_once(self, role: Role, prompt: str, **kwargs: Any) -> RawResult:
+        subtask = _subtask_of(kwargs.get("cwd"))
+        key = f"{role.slug}__{subtask}"
+        self.began.append(key)
+        self._began.setdefault(key, asyncio.Event()).set()
+        if self.on_call is not None:
+            self.on_call(key)
+        counted = bool(subtask)
+        if counted:
+            self.running += 1
+            self.peak = max(self.peak, self.running)
+        try:
+            if key in self._held:
+                await asyncio.wait_for(self._held[key].wait(), 20.0)
+            else:
+                await asyncio.sleep(0.01)
+            result = await super().run_once(role, prompt, **kwargs)
+            self.finished.append(key)
+            return result
+        finally:
+            if counted:
+                self.running -= 1
 
 
 def _subtask_of(cwd: Path | str | None) -> str:
@@ -285,6 +340,7 @@ class MemoryStack:
         delivery_checks: tuple[str, ...] = (),
         rerun_checks: dict[str, RerunForm] | None = None,
         merge_inert: tuple[str, ...] = (),
+        check_budgets: dict[str, float] | None = None,
     ) -> None:
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -326,6 +382,8 @@ class MemoryStack:
         self.declared_delivery_checks = delivery_checks
         # Empty is a product with no failed-tests-only form (ADR-0066), the gate of today.
         self.declared_rerun_checks = {} if rerun_checks is None else rerun_checks
+        # Empty is a product with no check budget (GH-365): every verdict of today.
+        self.declared_check_budgets = {} if check_budgets is None else check_budgets
         # Empty is a product that declares no `merge_inert`: the merge gate of today.
         self.declared_merge_inert = merge_inert
         # A text that makes `merge_inert` raise it as a `ValueError`, the way a broken key does.
@@ -372,6 +430,10 @@ class MemoryStack:
     def rerun_checks(self, revision: str) -> dict[str, RerunForm]:
         # Not tracked in `revisions` either, `witness`'s own reason.
         return self.declared_rerun_checks
+
+    def check_budgets(self, revision: str) -> dict[str, float]:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_check_budgets
 
     def merge_inert(self, revision: str) -> tuple[str, ...]:
         # Not tracked in `revisions` either, `witness`'s own reason.
@@ -1466,6 +1528,19 @@ class FakePerfRunner:
         return self.script.pop(0) if self.script else Run(None, 0, False, None, None)
 
 
+class FakeStopFlag:
+    """GH-355: the run's stop flag, marked by `set()` and read by `is_set()`."""
+
+    def __init__(self) -> None:
+        self.marked = False
+
+    def is_set(self) -> bool:
+        return self.marked
+
+    def set(self) -> None:
+        self.marked = True
+
+
 class FakePerfLock:
     """GH-318: `acquire` answers `available` and counts; `release` counts."""
 
@@ -1983,7 +2058,9 @@ def ruled(
 def real_commands() -> ShellCommands:
     """`ShellCommands` over real bash with a real reaper whose worktrees root reaches
     nothing: each check reaps its own mark, and no cwd reap can match."""
-    return ShellCommands("tests", ShellReaper("tests", Path("/nonexistent/worktrees")))
+    return ShellCommands(
+        "tests", ShellReaper("tests", Path("/nonexistent/worktrees")), NullStopFlag()
+    )
 
 
 # The texts (README.md, 4): Tech Writer writes a plain `CopyDraft`, its review a `CopyReview`.

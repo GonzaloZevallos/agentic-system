@@ -2,7 +2,10 @@
 escalation, with a scripted runner, the real filesystem adapters in a temporary
 product, and git and GitHub in memory."""
 
+import asyncio
+import time
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
@@ -27,6 +30,7 @@ from agentic.core.process.domain.task import INTEGRATION, WAITING_ON_HUMAN
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
     REPORTS,
+    BlockingRunner,
     MemoryCommands,
     MemoryInbox,
     MemoryKnowledge,
@@ -68,6 +72,18 @@ SOLUTION = "Interview: Tech Lead efímero→Tech Lead"
 @pytest.fixture
 def config(tmp_path):
     return {"configurable": {"product_dir": str(tmp_path), "thread_id": "GH-1"}}
+
+
+def saved(documents: FilesystemTaskDocuments) -> dict:
+    """The document as last saved, for a test reading it while the graph runs: a read that
+    lands in the middle of a write (the turn writes from a worker thread) finds a truncated
+    file, and the next read finds the whole one."""
+    for _ in range(100):
+        try:
+            return documents.load("GH-1") or {}
+        except ValueError:
+            time.sleep(0.01)
+    return documents.load("GH-1") or {}
 
 
 def script_for(**queues) -> ScriptedRunner:
@@ -1463,7 +1479,13 @@ async def test_two_tasks_through_one_graph_do_not_share_what_they_spent(tmp_path
 async def test_what_one_review_found_reaches_the_next_wave_and_the_integration(config):
     """Issue #17: run 4's two integration returns were already in subtask reviews as
     "worth a remark, not a charge", and nobody downstream ever saw them. They travel now,
-    through the fan-in, which is the only place that sees every branch of a wave."""
+    through the system's turn, which writes the findings table after every termination.
+
+    With no wave barrier (GH-364) a returned `domain` restarts as soon as its own turn is
+    done, so what it sees depends on whether `api`'s review has been through a turn yet.
+    The test fixes that order: `domain`'s review is held until `api`'s remark is in the
+    saved table. This is the one existing test edited for the loop: it asserted the order
+    the barrier used to impose."""
     remark = {
         **finding(severity="important", claim="counts subscriptions twice", scope="outside"),
         "location": "revenue.py:12",
@@ -1489,7 +1511,17 @@ async def test_what_one_review_found_reaches_the_next_wave_and_the_integration(c
             tech_lead_review=[reviewed("approved")],  # the integration
         )
     )
-    final = await run_graph(script, config)
+    script = BlockingRunner(**script.queues)
+    script.hold("tech_lead_review__domain")
+    graph = compiled(script)
+    run = asyncio.create_task(graph.ainvoke(TASK, config=config))
+    documents = FilesystemTaskDocuments(Path(config["configurable"]["product_dir"]))
+    while "counts subscriptions twice" not in saved(documents).get("sections", {}).get(
+        FINDINGS, ""
+    ):
+        await asyncio.sleep(0.01)
+    script.release("tech_lead_review__domain")
+    final = await asyncio.wait_for(run, 30)
     assert final["status"] == "ready_for_review"
 
     # The ephemeral proposed; the Tech Lead adopted, and every role that builds or
@@ -1620,3 +1652,83 @@ async def test_a_failed_delivery_of_a_platform_task_resumes_to_deliver_at_no_cos
     first, second = fakes.tracker.attempted_bodies
     assert first == second
     assert fakes.workspace.cleaned == ["GH-1"]
+
+
+# --- GH-373: a run stopped after its approved integration and full checks ----------------------
+
+OWED_HEAD = "f08dfc738de2" + "0" * 28
+OWED_REMOTE = "6269eea" + "0" * 33
+PRE_MERGE_PULL_REQUEST = "https://github.com/o/r/pull/370"
+
+
+def _stopped_before_publishing() -> dict:
+    """GH-361 as its document says: integration approved at H, full checks passed on H, a
+    pull request from an earlier delivery, and status `developing`."""
+    return {
+        **TASK,
+        "type": "feature",
+        "status": "developing",
+        "current_role": "Tech Lead",
+        "branch": "agentic/GH-1",
+        "pull_request": PRE_MERGE_PULL_REQUEST,
+        "task_head": OWED_HEAD,
+        "full_checks": {
+            "version": 1,
+            "head": OWED_HEAD,
+            "passed": True,
+            "duration_s": 1.0,
+            "declared": {"tests": "pytest"},
+            "results": [{"name": "tests", "passed": True}],
+            "witness": {"passed": True},
+        },
+        "cost_usd": 20.0,
+        "runs": [],
+        "subtasks": {
+            "api": {
+                "id": "api",
+                "status": "approved",
+                "branch": "agentic/GH-1.api",
+                "base": "b1",
+                "reviewed_head": "a2",
+            },
+            "integration": {
+                "id": "integration",
+                "status": "approved",
+                "branch": "agentic/GH-1",
+                "base": "b0",
+                "reviewed_head": OWED_HEAD,
+            },
+        },
+    }
+
+
+async def test_a_run_stopped_after_its_approved_checked_head_publishes_it_without_any_role(
+    config, tmp_path
+):
+    fakes = Fakes()
+    fakes.workspace.existing_branches["agentic/GH-1"] = (OWED_HEAD[:7], "b0")
+    fakes.workspace.existing_branches["agentic/GH-1.api"] = ("a2", "b1")
+    # The remote still holds the pre-merge tip, which the branch contains: the push cell.
+    fakes.workspace.remote_tips["agentic/GH-1"] = OWED_REMOTE
+    fakes.workspace.ancestors = {OWED_REMOTE}
+    documents = FilesystemTaskDocuments(tmp_path)
+    documents.save(_stopped_before_publishing())
+    ports = replace(memory_ports(), documents=documents, workspace=fakes.workspace)
+    state = resume.from_document("GH-1", ports)
+    r = resume.prepare("GH-1", state, "document", Configuration(product_dir=tmp_path), ports)
+    assert r.target == "deliver"
+
+    script = ScriptedRunner()  # every role fails if it is called
+    stack = MemoryStack(checks={"tests": "pytest"}, delivery_checks=("tests",))
+    app = compiled(script, fakes=fakes, stack=stack)
+    await app.aupdate_state(config, r.paused, as_node="escalate")
+    final = await app.ainvoke(Command(resume={"decision": None}), config=config)
+
+    assert script.calls == []
+    assert fakes.workspace.pushed == ["agentic/GH-1"]
+    assert fakes.tracker.pull_requests == []  # the pull request from before is kept
+    assert final["status"] == "ready_for_review"
+    assert final["pull_request"] == PRE_MERGE_PULL_REQUEST
+    assert final["pushed_head"]
+    assert not final.get("publish_owed")
+    assert "publish_owed" not in (documents.load("GH-1") or {})

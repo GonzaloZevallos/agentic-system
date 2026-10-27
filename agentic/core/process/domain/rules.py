@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import math
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
@@ -1593,6 +1593,12 @@ def next_archive_run(refs: Sequence[str], live: Sequence[str], task_id: str) -> 
     return None
 
 
+# The graph node that runs the subtasks. The graph's own `PIPELINE` constant has this value
+# and keeps it; the domain cannot import the adapter, so the rule that reads a pending node
+# name holds its own spelling, the way `after_integrate` returns the strings.
+PIPELINE_NODE = "pipeline"
+
+
 def ready_subtasks(state: TaskState) -> list[str]:
     """Subtasks to build now: pending or returned, with every dependency approved."""
     subtasks = state.get("subtasks", {})
@@ -1616,6 +1622,54 @@ def dispatched_subtasks(state: TaskState) -> list[str]:
     """Subtasks the next wave runs: the ones to build, and the ones already delivered
     whose review never happened, which is where a run stopped by the cap resumes."""
     return [*ready_subtasks(state), *delivered_subtasks(state)]
+
+
+def _remaining_path(subtasks: Mapping[str, Subtask]) -> dict[str, int]:
+    """Per subtask, the length of the longest chain of subtasks that transitively depend on
+    it (0 for one nothing depends on). A cycle in a malformed plan is cut where it closes
+    instead of recursing forever."""
+    dependents: dict[str, list[str]] = {sid: [] for sid in subtasks}
+    for sid, sub in subtasks.items():
+        for dep in sub.get("depends_on", []):
+            if dep in dependents:
+                dependents[dep].append(sid)
+    lengths: dict[str, int] = {}
+
+    def length(sid: str, visiting: frozenset[str]) -> int:
+        if sid in lengths:
+            return lengths[sid]
+        below = [length(d, visiting | {sid}) + 1 for d in dependents[sid] if d not in visiting]
+        lengths[sid] = max(below, default=0)
+        return lengths[sid]
+
+    return {sid: length(sid, frozenset()) for sid in subtasks}
+
+
+def next_to_start(state: TaskState, in_flight: Collection[str], limit: int) -> list[str]:
+    """The subtasks the loop starts now (GH-364, ADR-0004's successor): the ones
+    `dispatched_subtasks` names that are not already `in_flight`, the longest remaining
+    dependency chain first and ties in plan order, at most what is left under `limit`. The
+    only place readiness, ordering and the parallel bound are computed together. Nothing
+    starts while the task is escalated; a role already running is never this rule's to stop."""
+    if state.get("escalated"):
+        return []
+    room = max(0, limit - len(in_flight))
+    path = _remaining_path(state.get("subtasks", {}))
+    plan_order = {sid: n for n, sid in enumerate(state.get("subtasks", {}))}
+    waiting = [sid for sid in dispatched_subtasks(state) if sid not in in_flight]
+    waiting.sort(key=lambda sid: (-path[sid], plan_order[sid]))
+    return waiting[:room]
+
+
+def resume_source(
+    next_node: Sequence[str] | str | None, crashed: bool
+) -> Literal["checkpoint", "document"]:
+    """Where a resume rebuilds the task from (GH-364): the document, only for a crash with
+    the pipeline the pending node, because the loop's branches leave no checkpoint of their
+    own; anything else resumes from the checkpoint. Decided from the pending node, never by
+    comparing counts."""
+    pending = (next_node,) if isinstance(next_node, str) else tuple(next_node or ())
+    return "document" if crashed and pending == (PIPELINE_NODE,) else "checkpoint"
 
 
 def pipeline_entry(state: TaskState) -> str:
@@ -2182,7 +2236,8 @@ def resumed_status(state: TaskState) -> Status:
     """The status the task had before the escalation overwrote it, derived from what the
     state holds, since the document keeps only `waiting_on_human` too."""
     if state.get("pull_request") and not landing_open(state):
-        return "ready_for_review"
+        # An owed publication is not delivered yet: `deliver` is what sets the end status.
+        return "developing" if _publication_owed(state) else "ready_for_review"
     if state.get("status") == "discarded":
         # Nothing overwrote it: a discard is an end, not a pause, and the runs it holds
         # (a diagnosis, PM's ruling) would otherwise read as a definition ready to plan.
@@ -2419,11 +2474,67 @@ def landing_open(state: TaskState) -> bool:
     )
 
 
+def approved_head(state: TaskState) -> str | None:
+    """The head the task may publish (GH-373): the one its last review approved. On a tiered
+    product (the fan-in stamped `task_head`) that is `task_head`, only if the reviewed unit's
+    `reviewed_head` is the same commit and `full_checks` passed on it; without tiers it is the
+    reviewed unit's `reviewed_head`. `None` when there is none, and for a head the task moved
+    after its review (a heal, a landing pass): nobody approved that one."""
+    name = reviewed_unit_name(state)
+    reviewed = state.get("subtasks", {}).get(name, {}).get("reviewed_head") if name else None
+    if not reviewed:
+        return None
+    task_head = state.get("task_head")
+    if not task_head:
+        return reviewed
+    recorded = state.get("full_checks")
+    if not same_commit(reviewed, task_head):
+        return None
+    if not (recorded and recorded["passed"] and same_commit(recorded["head"], task_head)):
+        return None
+    return task_head
+
+
+def publication_candidate(state: TaskState) -> str | None:
+    """The head a stopped run may still owe (GH-373): `approved_head` of a task that has a
+    pull request, no landing pass in flight, no escalation, every unit approved and nothing
+    left for the full tier. `None` otherwise."""
+    if not state.get("pull_request") or landing_open(state) or state.get("escalated"):
+        return None
+    if not all_approved(state) or full_checks_due(state):
+        return None
+    return approved_head(state)
+
+
+def owed_publication(state: TaskState, published: bool, branch_at_head: bool) -> str | None:
+    """The `publish_owed` value of a resume (GH-373), from the facts `prepare` read:
+    `published` is whether the remote already holds the candidate, `branch_at_head` whether
+    the task branch is at it or differs only in the task document. The candidate when the
+    branch is there and either the remote lacks it or the status never reached the end of a
+    delivery (`ready_for_review`) or a human's pause; `None` otherwise."""
+    candidate = publication_candidate(state)
+    if candidate is None or not branch_at_head:
+        return None
+    if not published or state.get("status") not in ("ready_for_review", "waiting_on_human"):
+        return candidate
+    return None
+
+
+def _publication_owed(state: TaskState) -> bool:
+    """`publish_owed` names the head the task may publish, and nothing has moved it."""
+    if state.get("escalated") or not all_approved(state) or full_checks_due(state):
+        return False
+    return same_commit(state.get("publish_owed"), approved_head(state))
+
+
 def resume_target(state: TaskState) -> str | None:
     """Where a resumed task goes next, from the same facts the routing reads. A pull
-    request ends the road unless the landing reopened the stage under it."""
-    if state.get("escalated") or (state.get("pull_request") and not landing_open(state)):
+    request ends the road unless the landing reopened the stage under it, or a stopped run
+    still owes it the approved head (`publish_owed`, GH-373): that goes to `deliver`."""
+    if state.get("escalated"):
         return None
+    if state.get("pull_request") and not landing_open(state):
+        return "deliver" if _publication_owed(state) else None
     if state.get("status") == "split":
         return None  # an end like a pull request: the parts are other tasks now
     if state.get("status") == "tracker_only":

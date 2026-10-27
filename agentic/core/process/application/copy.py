@@ -28,7 +28,7 @@ from ..domain.copy import (
 from ..domain.roles import TECH_WRITER, TECH_WRITER_REVIEW
 from ..domain.schemas import CopyReview
 from ..domain.task import INTEGRATION, TaskState, apply
-from .checkouts import SetupFailed, task_base, task_checkout
+from .checkouts import SetupFailed, task_base, task_checkout_in_thread
 from .ports import GitError, Ports
 from .run_role import finish, run_role, with_context
 
@@ -38,7 +38,7 @@ async def write_copy(state: TaskState, cfg: Configuration, ports: Ports) -> Task
     screens. With no `WRITING_STANDARDS.md` in the checkout the system says so at the head of
     the section, the same line-in-front treatment `NO_DESIGN_NOTE` gets."""
     try:
-        task = task_checkout(state, cfg, ports)
+        task = await task_checkout_in_thread(state, cfg, ports)
     except SetupFailed as unprepared:
         return finish(state, unprepared.patch(TECH_WRITER), ports)
     output, patch = await run_role(state, TECH_WRITER, cfg, ports, cwd=task.path)
@@ -54,7 +54,7 @@ async def copy_review(state: TaskState, cfg: Configuration, ports: Ports) -> Tas
     the diff against the task's base, its own open rows by identifier and the corrected texts
     in force; what it finds and settles becomes rows and closures of the table."""
     try:
-        task = task_checkout(state, cfg, ports)
+        task = await task_checkout_in_thread(state, cfg, ports)
     except SetupFailed as unprepared:
         return finish(state, unprepared.patch(TECH_WRITER_REVIEW), ports)
     base = task_base(state, ports)

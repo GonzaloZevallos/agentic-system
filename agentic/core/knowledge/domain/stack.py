@@ -53,6 +53,14 @@ so it is validated here: it compiles, has exactly one group, is at most 200 char
 quantified group that contains a quantifier and no alternation inside a quantified group (the
 shapes that backtrack catastrophically). Absent it reads as `{}`: the gate of today.
 
+**`check_budgets`**: optional (GH-365). A mapping of a check's name, which must also be under
+`checks`, to the seconds the check may take: a positive number (an int or a float, never a bool).
+The budget is compared only by the once-per-task `full_checks` run on the integrated head, never by
+the delivery gate or the merge, so the key requires `delivery_checks`, the tiers that create that
+run. It is per check and never per tier: under `parallel_checks` a tier's wall time is not the sum
+of its checks. Absent it reads as `{}`: no budget, every verdict as before. Present and empty, or
+any shape that is not that, fails at load.
+
 **`performance`**: optional (GH-318, ADR-0059). A mapping of scenario name to the `seed` and
 `measure` one-line commands, the `volume` and its `volume_unit` (`rows|days|months|years`)
 they must run against, and the `limits` of its metrics (`{limit, unit: ms|queries|kb}`; the
@@ -109,6 +117,7 @@ KEYS = (
     "ci",
     "performance",
     "rerun_checks",
+    "check_budgets",
     "merge_inert",
 )
 # The token an affected-only command carries where the task's base sha goes (ADR-0046).
@@ -363,6 +372,41 @@ def rerun_checks(data: object, source: object) -> dict[str, RerunForm]:
             )
         forms[name] = _rerun_form(name, body, source)
     return forms
+
+
+def check_budgets(data: object, source: object) -> dict[str, float]:
+    """Check name -> the seconds it may take on the `full_checks` run, in the file's order
+    (GH-365).
+
+    Empty when the product declares none. Present, a non-empty mapping whose every name is a
+    check declared under `checks` and every figure a positive int or float (never a bool), and
+    the product declares `delivery_checks`: the budget is compared only on the once-per-task
+    full run that tiers create. Every shape that is not that fails at load, naming the key."""
+    declared = _declared(data, source)
+    if "check_budgets" not in declared:
+        return {}
+    found = _declared_nonempty(declared, source, "check_budgets")
+    if not isinstance(found, dict):
+        raise ValueError(f"{source}: expected `check_budgets`, a mapping of checks to seconds")
+    if not delivery_checks(data, source):
+        raise ValueError(
+            f"{source}: `check_budgets` requires `delivery_checks`: a budget is compared only "
+            "on the once-per-task full run on the integrated head that tiers create"
+        )
+    known = _commands(declared, source, "checks")
+    budgets: dict[str, float] = {}
+    for name, seconds in found.items():
+        if name not in known:
+            raise ValueError(
+                f"{source}: {name!r} under `check_budgets` is not a check declared under "
+                f"`checks`; expected one of {', '.join(known)}"
+            )
+        if isinstance(seconds, bool) or not isinstance(seconds, int | float) or seconds <= 0:
+            raise ValueError(
+                f"{source}: {name!r} under `check_budgets` expects a positive number of seconds"
+            )
+        budgets[str(name)] = seconds
+    return budgets
 
 
 def _rerun_form(name: str, body: object, source: object) -> RerunForm:

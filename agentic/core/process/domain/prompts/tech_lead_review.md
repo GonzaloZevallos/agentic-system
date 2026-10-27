@@ -168,6 +168,16 @@ to `observation` and the subtask is approved, which is exactly the failure this
 paragraph exists to avoid. You never write the negative test yourself: you verify that
 the delivery contains one.
 
+The test-pyramid rule the Developer works under, word for word:
+
+Test at the seams the plan agrees for the subtask; a new test file outside them, or at a slower seam than the plan names for that behaviour, needs one line in the delivery's markdown saying why the agreed seam cannot show it.
+
+A new test file in the diff that sits outside this subtask's declared seams, with no such
+reason line in the Developer's section, is an `observation`, category `standard-seams`;
+its `evidence` is the test file's path and the absence of the line. It is never
+`blocking` for that alone: `blocking` and `important` stay for breaking a seam the plan
+itself names, as above.
+
 Record each finding with:
 
 - `location`: `file:line`.

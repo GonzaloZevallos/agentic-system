@@ -13,14 +13,13 @@ hands both to a use case (README.md, 14: every node reads the configuration at t
 start). The rules live in the use cases; this module only wires them, opens and
 finishes the role's span and maps the domain's routing to graph edges.
 
-The technical stage is a wave of `pipeline` branches around the `integrate` node
-(ADR-0004, fifth addendum). `pipeline` is `develop -> review` for one subtask, a
-graph of its own, fanned out with `Send` (one branch per dispatched subtask) so a
-review starts as soon as its own Developer delivers instead of waiting for the
-slowest of the wave. `integrate` is the fan-in: every branch comes back to it, and
-it dispatches the next wave, so a returned subtask is re-reviewed knowing what the
-wave as a whole found. It is also where the workspace is touched alone and where a
-single node saves the document with every branch's work in it.
+The technical stage is the `pipeline` node around the `integrate` node (ADR-0004, fifth
+addendum, whose waves GH-364 replaced). `pipeline` runs the scheduling loop
+(`application/schedule.py`): each subtask is `develop -> review`, a graph of its own, started
+the moment `rules.next_to_start` allows it and reviewed the moment its Developer delivers,
+with the system's turn (`integrate_turn`) after every termination. `integrate` still enters
+the stage and leaves it: it is where the workspace is touched alone before the first
+subtask starts, and where the loop's result comes back to be routed.
 
 `pause` holds the `interrupt()` (ADR-0003, addendum). A resumed node runs again from
 its start, so the interrupt cannot sit in a use case, which would pay the role again,
@@ -42,7 +41,7 @@ from dataclasses import replace
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import Send, interrupt
+from langgraph.types import interrupt
 
 from agentic.shared.configuration import Configuration
 
@@ -57,7 +56,7 @@ from ...application.discard import discard
 from ...application.escalate import escalate
 from ...application.final_validation import final_validation
 from ...application.full_checks import full_checks
-from ...application.integrate import integrate
+from ...application.integrate import integrate, integrate_turn
 from ...application.limits import RunLimits
 from ...application.plan import plan
 from ...application.ports import Ports
@@ -65,6 +64,7 @@ from ...application.pre_pr_fix import fix_important
 from ...application.preflight import product_name
 from ...application.qa_performance import qa_performance
 from ...application.review import review
+from ...application.schedule import run_subtasks
 from ...application.split import split
 from ...application.tracker_only import tracker_only
 from ...application.validate_prd import validate_prd
@@ -87,7 +87,7 @@ from ...domain.roles import (
     UX_LEAD,
     Role,
 )
-from ...domain.task import TaskInput, TaskState, delta
+from ...domain.task import TaskInput, TaskState
 from ..telemetry import NoTelemetry, Telemetry
 
 UseCase = Callable[[TaskState, Configuration, Ports], Awaitable[TaskState]]
@@ -131,7 +131,7 @@ class _PortsPerRun:
         return replace(self.ports_for(cfg), limits=limits.sized(cfg.max_concurrent_roles))
 
 
-PortsOf = _PortsPerRun
+PortsOf = Callable[[Configuration, RunnableConfig | None], Ports]
 
 
 def _node(use_case: UseCase, role: Role, ports_of: PortsOf, telemetry: Telemetry, arm_for: ArmFor):
@@ -196,21 +196,6 @@ def _route(rule: Rule) -> Callable[[TaskState], str]:
     return route
 
 
-def _fanout(rule: Rule) -> Callable[[TaskState], str | list[Send]]:
-    """Like `_route`, but `pipeline` becomes one `Send` per dispatched subtask."""
-    route = _route(rule)
-
-    def fanout(state: TaskState) -> str | list[Send]:
-        target = route(state)
-        if target != PIPELINE:
-            return target
-        return [
-            Send(PIPELINE, {**state, "subtask_id": sid}) for sid in rules.dispatched_subtasks(state)
-        ]
-
-    return fanout
-
-
 def _in_branch(rule: Rule) -> Callable[[TaskState], str]:
     """Routing inside a `pipeline` branch. A branch never goes to `escalate`: it ends,
     and the fan-in tells the human once, after every branch came back."""
@@ -235,18 +220,57 @@ def _pipeline(ports_of: PortsOf, telemetry: Telemetry, arm_for: ArmFor):
     branch.add_conditional_edges(START, rules.pipeline_entry, ["develop", "review"])
     branch.add_conditional_edges("develop", _in_branch(rules.after_develop), ["review", END])
     branch.add_edge("review", END)
-    return branch.compile()
+    return branch.compile(checkpointer=False)
+
+
+BRANCH_DOCUMENTS = "branch_documents"
+
+
+def _branch_ports(ports_of: PortsOf) -> PortsOf:
+    """`ports_of` for the nodes inside a branch: the same ports, with the documents the
+    loop gave the branch (`FoldingDocuments.branch`) in place of the real ones, so that a
+    branch's save is folded with its sisters' instead of replacing them. They travel in
+    the branch's `configurable`, the only thing a node of the branch graph is handed."""
+
+    def ports(cfg: Configuration, config: RunnableConfig | None) -> Ports:
+        configurable = (config or {}).get("configurable") or {}
+        if BRANCH_DOCUMENTS not in configurable:
+            # A branch node run outside the loop would save through the real documents
+            # and erase its sisters' work: refuse instead of falling back.
+            raise RuntimeError(f"a pipeline branch needs the loop's {BRANCH_DOCUMENTS!r}")
+        return replace(ports_of(cfg, config), documents=configurable[BRANCH_DOCUMENTS])
+
+    return ports
 
 
 def _branch_node(ports_of: PortsOf, telemetry: Telemetry, arm_for: ArmFor):
-    """The pipeline as one node of the parent graph. It hands back what the branch
-    added, not the state it ended holding: the parent folds a patch in with the same
-    reducers, and the whole state would count `cost_usd` twice and duplicate every
-    `runs`, `failures` and `change_history` entry (`task.delta`)."""
-    pipeline = _pipeline(ports_of, telemetry, arm_for)
+    """The technical stage as one node of the parent graph (GH-364): the scheduling loop
+    (`run_subtasks`) runs each subtask's `develop -> review` as soon as
+    `rules.next_to_start` allows it, with the system's turn after every termination. The
+    node hands back what the loop added, not the state it ended holding: the parent folds a
+    patch in with the same reducers, and the whole state would count `cost_usd` twice and
+    duplicate every `runs`, `failures` and `change_history` entry (`task.delta`)."""
+    pipeline = _pipeline(_branch_ports(ports_of), telemetry, arm_for)
 
     async def node(state: TaskState, config: RunnableConfig) -> TaskState:
-        return delta(state, await pipeline.ainvoke(state, config))
+        cfg = configuration_from(config)
+
+        async def run_branch(branch_state: TaskState, branch_ports: Ports) -> TaskState:
+            configurable = {
+                **(config.get("configurable") or {}),
+                BRANCH_DOCUMENTS: branch_ports.documents,
+            }
+            return await pipeline.ainvoke(branch_state, {**config, "configurable": configurable})
+
+        return await run_subtasks(
+            state,
+            cfg,
+            ports_of(cfg, config),
+            run_branch,
+            integrate_turn,
+            cfg.parallel_subtasks,
+            rules.next_to_start,
+        )
 
     return node
 
@@ -356,11 +380,11 @@ def build_graph(
     )
     graph.add_conditional_edges("split", _route(rules.after_split), [END, ESCALATE])
     graph.add_conditional_edges("tracker_only", _route(rules.after_tracker_only), [END, ESCALATE])
-    # Every branch of the wave comes back here, once, however many were sent.
+    # The loop comes back here once, when no subtask is left to start or running.
     graph.add_edge(PIPELINE, INTEGRATE)
     graph.add_conditional_edges(
         INTEGRATE,
-        _fanout(rules.after_integrate),
+        _route(rules.after_integrate),
         [
             PIPELINE,
             "fix_important",

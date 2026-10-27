@@ -13,7 +13,9 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
 from agentic import composition
+from agentic.core.process.adapters.shell import EventStopFlag, NullStopFlag
 from agentic.core.process.application import preflight
+from agentic.core.process.application.ports import RunStopped
 from agentic.core.process.application.preflight import RunsOnItsOwnCheckout
 from agentic.core.process.domain.task import TaskState
 from agentic.shared.configuration import Configuration
@@ -230,3 +232,32 @@ def test_with_a_log_path_the_runner_gets_an_open_append_only_handle(tmp_path, mo
         assert log_file.read_text() == "hello\n"
     finally:
         ports.runner.stream.close()
+
+
+def test_ports_built_without_a_flag_get_one_that_never_stops_a_command(tmp_path, monkeypatch):
+    """Only `run`/`resume` pass a markable flag: the ports of every other verb hold one that
+    `set()` cannot mark, so `ShellCommands.run` can never raise `RunStopped` for them."""
+    monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
+    product = a_repository(tmp_path / "product")
+    made: list[NullStopFlag] = []
+
+    class Spy(NullStopFlag):
+        def __init__(self) -> None:
+            made.append(self)
+
+    monkeypatch.setattr(composition, "NullStopFlag", Spy)
+    ports = composition.default_ports(Configuration(product_dir=product))
+    (flag,) = made
+    flag.set()
+    assert not flag.is_set()
+    assert ports.commands.run(product, "echo hi", timeout_s=10).passed
+
+
+def test_a_markable_flag_passed_to_the_composition_reaches_the_commands(tmp_path, monkeypatch):
+    monkeypatch.setattr(preflight, "CHECKOUT", a_repository(tmp_path / "system"))
+    product = a_repository(tmp_path / "product")
+    stop = EventStopFlag()
+    ports = composition.default_ports(Configuration(product_dir=product), stop)
+    stop.set()
+    with pytest.raises(RunStopped):
+        ports.commands.run(product, "echo hi", timeout_s=10)

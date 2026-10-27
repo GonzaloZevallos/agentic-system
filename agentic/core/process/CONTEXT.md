@@ -162,7 +162,7 @@ El código de todas las subtareas unido en la rama de tarea y revisado por Tech 
 _Campo_: sin término de arte
 
 **Ola**:
-El conjunto de subtareas que el sistema despacha junto: cada una con su Developer y su revisión, en paralelo con las demás. Entre dos olas corre el sistema solo. Una devolución se atiende en la ola siguiente, no dentro de la misma.
+El conjunto de subtareas que el sistema despacha junto: cada una con su Developer y su revisión, en paralelo con las demás. Desde el ADR-0068 ya no hay barrera entre olas: una subtarea arranca apenas sus dependencias están aprobadas, sin esperar a las hermanas, hasta la cota `max_parallel_subtasks`. Una devolución se atiende cuando el turno del sistema, que corre solo después de cada terminación, la dejó lista. El nombre queda para el conjunto que `rules.dispatched_subtasks` considera listo en un momento dado.
 _Avoid_: lote, fan-out (el mecanismo, no el concepto)
 _Campo_: super-step — LangGraph, tomado de Pregel: los nodos que corren en paralelo son el mismo super-step. Nombra el paso del grafo, no el conjunto de subtareas
 
@@ -261,6 +261,12 @@ Un nombre de chequeo del CI que los criterios de hecho del issue necesitan en ve
 En el código se llama `ci_required`, `ci_plan_only` y `ci_gate_names`.
 _Avoid_: chequeo declarado (eso es el `ci` del stack), criterio de CI
 
+**Presupuesto de chequeo**:
+Los segundos que un producto declara para un chequeo suyo. Se compara una sola vez, en el *Chequeo completo de la tarea*, contra la duración de la fila que decidió el veredicto de ese chequeo (la del reintento verde si fue un Flake; un pase reutilizado cuenta con la duración guardada; un chequeo que agotó su tiempo nunca se compara), y nunca en la puerta de entrega, la de merge ni el aterrizaje. Si un chequeo lo pasa, el sistema escribe el exceso en el registro del chequeo completo; no devuelve ni bloquea nada, y no es una fila de la tabla de hallazgos. Un producto sin presupuestos se comporta como antes.
+En el código se llama `check_budgets`, la clave del stack, y `over_budget`, el campo del registro `full_checks`.
+_Avoid_: límite de tiempo (el *timeout* de un chequeo corta una corrida; el presupuesto sólo mide), presupuesto por nivel (el tiempo de pared de un nivel no es la suma de sus chequeos)
+_Campo_: performance budget — web.dev y Lighthouse CI, un tope declarado que una corrida mide; acá el tope es del tiempo de un chequeo de la suite
+
 **Resultado reutilizable**:
 El resultado de un chequeo que pasó, guardado bajo el nombre del chequeo, su comando exacto, el árbol (`HEAD^{tree}`) de un checkout limpio sobre el que corrió y una huella de su entorno (comandos de setup, versión de stage0, presupuesto). Cualquier puerta, de entrega, de merge o de aterrizaje, que pida el mismo chequeo con la misma clave toma ese pase en vez de correrlo de nuevo. Sólo se guardan pases, sobre árbol limpio, sin que el entorno haya derivado desde el setup, y valen 24 h; un fallo nunca se reutiliza, porque puede ser flaky. Lo firma un secreto de la máquina: una entrada sin firma válida es como si no existiera. Una fila de reintento (`rerun: true`) nunca se guarda: el primer intento falló, así que de ese chequeo no queda nada.
 En el código se llama `check_key` y `env_drifted` (dominio, `domain/check_results.py`), `CheckResults`, el port, y `FilesystemCheckResults`, el almacén; una fila reutilizada lleva `reused: true`.
@@ -311,7 +317,7 @@ El commit hasta donde llegó la última revisión de una subtarea. Se guarda com
 _Campo_: sin término de arte
 
 **Integración incremental**:
-Traer cada subtarea a la rama de tarea apenas se aprueba, en vez de todas juntas al final. Lo hace el sistema, entre dos olas. Un merge que no aplica no es un fallo: queda anotado para el integrador.
+Traer cada subtarea a la rama de tarea apenas se aprueba, en vez de todas juntas al final. Lo hace el sistema, en su turno serializado después de cada terminación (ADR-0068). Un merge que no aplica no es un fallo: queda anotado para el integrador.
 _Campo_: de la integración continua, de la que toma la idea (integrar seguido y chico) y no el mecanismo
 
 **Invariante**:
@@ -399,6 +405,12 @@ _Campo_: sin término de arte
 La tarea sigue desde donde se pausó. Hace falta una decisión del humano cuando hay preguntas abiertas, un par llegó a su límite o la estimación no cabe (`estimate`: ni el sondeo ni el sondeo periódico la reanudan; solo una decisión, que además deja la revisión de la estimación), y con ella el contador de ese par vuelve a cero; la pregunta de una parte que pasa el doble de la línea (una que pasa la línea sin llegar al doble no pregunta) se hace una sola vez y cualquier reanudación con comentario la construye entera sin planificar de nuevo (detenerla es no reanudar: cerrar el issue como no planificado libera a las partes que dependen de ella); un tope alcanzado o un fallo de rol se reanudan sin decisión, y una corrida interrumpida también. Nada se reanuda bajo un tope ya gastado. Si el estado guardado se perdió, se reconstruye desde el documento de tarea, cruzado con git.
 _Avoid_: reintento (eso es tras un fallo de rol), relanzar (eso es empezar de cero)
 _Campo_: resume — estándar (LangGraph, Temporal, el Claude Agent SDK)
+
+**Publicación debida**:
+La cabeza aprobada de una tarea que su rama remota todavía no tiene, o que tiene sin que la tarea esté en `ready_for_review`: la integración la aprobó (con niveles, además el chequeo completo pasó sobre ella) y la corrida murió antes de empujarla, de actualizar el pull request o de fijar el estado. La comprueba la reanudación desde el documento, que sólo la declara si la rama de tarea sigue en esa cabeza o difiere de ella únicamente en el documento; la saldan la entrega y nada más: se retoma en `deliver`, sin correr ningún rol. Una lectura de origen que falla no la declara: la reanudación lo dice y no sugiere empezar de cero.
+En el código se llama `publish_owed`, el campo del estado, y `approved_head`, la regla pura que dice cuál es esa cabeza.
+_Avoid_: reentrega, re-push (la entrega ya aprobó; sólo falta publicar)
+_Campo_: sin término de arte
 
 **Corrida interrumpida**:
 Una corrida que terminó sin cierre ni escalado porque su proceso murió. No espera a nadie: se reanuda sin decisión del humano, desde el último estado guardado. El poller la retoma sin decisión del humano cuando su lock es de un arranque anterior (una Parada por apagado incluida), como mucho 3 veces por cada decisión del humano; si murió en el mismo arranque, la deja al humano. Una caída por excepción del grafo en el mismo arranque también la retoma el poller, como mucho 2 veces por versión del sistema y 6 en total por cada decisión del humano; una muerte por señal en el mismo arranque sigue siendo del humano. Lo que el rol en curso hizo y no entregó puede estar en su checkout sin commitear, y su costo en dólares no se conoce: el sistema registra los tokens que vio y lo dice, en vez de callarlo.

@@ -434,6 +434,13 @@ class ProductStack(Protocol):
         product with no `delivery_checks`."""
         ...
 
+    def check_budgets(self, revision: str) -> dict[str, float]:
+        """Check name -> the seconds it may take on the `full_checks` run (`core.knowledge`,
+        GH-365), as the commit `revision` declares them. Empty when the product declares none,
+        which is every verdict of today. Raises `ValueError` when the key is malformed, or
+        declared by a product with no `delivery_checks`."""
+        ...
+
     def merge_inert(self, revision: str) -> tuple[str, ...]:
         """The globs of the paths the product promises none of its checks reads
         (`core.knowledge`, ADR-0045 amendment), as the commit `revision` declares them: what
@@ -493,9 +500,30 @@ class CommandResult:
         return self.exit_code == 0 and not self.timed_out
 
 
+class RunStopped(BaseException):
+    """The run was told to stop (SIGTERM or SIGHUP) while a product command was running or
+    about to run. Not an `Exception`: nothing in between may swallow it -- the delivery gate,
+    the flake rerun, the thread pools of the presubmit, the `except Exception` of a graph
+    node -- the same reason `PerfInterrupted` is not one. It is never a `CommandResult`, a
+    rejection, a flake or a line of the task document: the stop is not a verdict on the work."""
+
+
+class StopFlag(Protocol):
+    """Whether the run was told to stop. Only `run` and `resume` own one that can be set;
+    every other verb gets one that never is."""
+
+    def is_set(self) -> bool: ...
+
+    def set(self) -> None: ...
+
+
 class Commands(Protocol):
     """Runs a product's command in a checkout, as a shell would, for the system itself:
-    the presubmit. Never fails for a non-zero exit; that is the result."""
+    the presubmit. Never fails for a non-zero exit; that is the result.
+
+    With the run's stop flag set, `run` raises `RunStopped` instead -- before it launches
+    anything, or after the command it launched has ended -- and never returns a
+    `CommandResult` for a command the stop killed."""
 
     def run(self, cwd: Path, command: str, timeout_s: float) -> CommandResult: ...
 

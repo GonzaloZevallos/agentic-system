@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 import signal
@@ -5285,6 +5286,65 @@ async def test_eval_compare_prints_the_per_role_table_after_an_unchanged_scoreca
     assert "1.5000" in rows[1] and rows[1].split()[1] == "2"
 
 
+def timed_run(role: str, section: str, start: str, end: str) -> dict:
+    return {
+        **compare_run(role.lower(), 0.1),
+        "role": role,
+        "section": section,
+        "started_at": f"2026-10-20T{start}.000Z",
+        "ended_at": f"2026-10-20T{end}.000Z",
+    }
+
+
+@pytest.mark.anyio
+async def test_eval_compare_prints_the_parallel_factor_of_each_baseline(tmp_path, capsys):
+    root = eval_root(tmp_path, eval_set=None)
+    # bl-a: two Developers overlapping for 5 of their 10 minutes each -> 20 min over 15.
+    write_compare_document(
+        root,
+        "GH-1",
+        "bl-a",
+        [
+            timed_run("Developer", "Developer: a", "10:00:00", "10:10:00"),
+            timed_run("Developer", "Developer: b", "10:05:00", "10:15:00"),
+        ],
+    )
+    # bl-b: one Developer, then its review, strictly serial -> 1.0 for the task; a second
+    # task with no timestamps adds nothing to either side of the ratio.
+    write_compare_document(
+        root,
+        "GH-2",
+        "bl-b",
+        [timed_run("Developer", "Developer: a", "10:00:00", "10:10:00")],
+    )
+    write_compare_document(root, "GH-3", "bl-b", [compare_run("developer", 1.0)])
+    cfg = Configuration(product_dir=root)
+
+    await cli._eval_compare(cfg, memory_ports(), "bl-a", "bl-b", None)
+
+    out = capsys.readouterr().out
+    lines = [line for line in out.splitlines() if line.startswith("parallel factor")]
+    assert lines == [
+        "parallel factor -- product / bl-a: 1.3333",
+        "parallel factor -- product / bl-b: 1.0000",
+    ]
+    # It sits after the verdict, beside the other per-baseline reads, never inside a scorecard.
+    assert out.index("verdict:") < out.index(lines[0])
+
+
+@pytest.mark.anyio
+async def test_eval_compare_says_n_a_when_a_baseline_has_no_timed_runs(tmp_path, capsys):
+    root = eval_root(tmp_path, eval_set=None)
+    write_compare_document(root, "GH-1", "bl-a", [compare_run("developer", 1.0)])
+    write_compare_document(root, "GH-2", "bl-b", [compare_run("developer", 1.0)])
+
+    await cli._eval_compare(Configuration(product_dir=root), memory_ports(), "bl-a", "bl-b", None)
+
+    out = capsys.readouterr().out
+    assert "parallel factor -- product / bl-a: n/a" in out
+    assert "parallel factor -- product / bl-b: n/a" in out
+
+
 # --- GH-295: criteria documents past the line cap are said, never refused -----------
 
 
@@ -5424,3 +5484,288 @@ def test_landing_carry_of_an_unreadable_document_carries_nothing(monkeypatch):
 
     monkeypatch.setattr(ports.documents, "load", unreadable)
     assert cli._landing_carry("GH-1", ports) == (None, "")
+
+
+class CrashedPipeline(Delivers):
+    """A graph double whose checkpoint holds a run that crashed (no interrupt, nodes still
+    to run), recording how the CLI seeded and invoked it."""
+
+    def __init__(self, values, nxt=("pipeline",)):
+        super().__init__({"id": "GH-1", "title": "t", "status": "ready_for_review"})
+        self.values, self.next = values, nxt
+        self.seeded: list[tuple[dict, str | None]] = []
+        self.invoked: list[object] = []
+
+    async def aget_state(self, config):
+        return SimpleNamespace(values=self.values, next=self.next, interrupts=())
+
+    async def aupdate_state(self, config, values, as_node=None):
+        self.seeded.append((values, as_node))
+
+    async def ainvoke(self, task, config):
+        self.invoked.append(task)
+        return self.final
+
+
+def _crash_document(ports, reviewed_head="h-a"):
+    """The document a crash in the pipeline leaves: a approved, b delivered, c and d building."""
+    ports.documents.save(
+        {
+            "id": "GH-1",
+            "title": "t",
+            "description": "d",
+            "status": "open",
+            "current_role": "Developer",
+            "cost_usd": 1.0,
+            "subtasks": {
+                "a": {"id": "a", "status": "approved", "branch": "t/a", "reviewed_head": "h-a"},
+                "b": {"id": "b", "status": "delivered", "branch": "t/b", "depends_on": ["a"]},
+                "c": {"id": "c", "status": "pending", "branch": "t/c"},
+                "d": {"id": "d", "status": "pending", "branch": "t/d"},
+            },
+        }
+    )
+    ports.workspace.existing_branches = {
+        "t/a": (reviewed_head, "base"),
+        "t/b": ("h-b", "base"),
+        "t/c": ("h-c-moved", "base"),
+        "t/d": ("h-d", "base"),
+    }
+
+
+@pytest.mark.anyio
+async def test_a_crash_in_the_pipeline_resumes_from_the_document_as_a_crash(monkeypatch, tmp_path):
+    graph = CrashedPipeline({"id": "GH-1", "title": "t", "status": "open"})
+    monkeypatch.setattr(cli, "graph", graph)
+    ports = memory_ports()
+    _crash_document(ports)
+
+    await cli._resume(
+        "GH-1",
+        Configuration(product_dir=tmp_path),
+        ports,
+        yes=True,
+        checkpointer=in_memory,
+        run_lock=FakeLock(),
+    )
+
+    [(seed, as_node)] = graph.seeded
+    assert as_node == "pipeline" and set(seed["subtasks"]) == {"a", "b", "c", "d"}
+    assert graph.invoked == [None]  # a crash: never `Command(resume=...)`, never `pause`
+    [(_, comment)] = ports.tracker.comments
+    assert comment.startswith("Resumed: pipeline, interrupted at Developer,")
+
+
+@pytest.mark.anyio
+async def test_a_dry_run_of_a_crash_in_the_pipeline_reads_the_document(
+    monkeypatch, tmp_path, capsys
+):
+    monkeypatch.setattr(cli, "graph", CrashedPipeline({"id": "GH-1", "status": "open"}))
+    ports = memory_ports()
+    _crash_document(ports)
+
+    await cli._resume(
+        "GH-1",
+        Configuration(product_dir=tmp_path),
+        ports,
+        dry_run=True,
+        checkpointer=in_memory,
+        run_lock=FakeLock(),
+    )
+
+    shown = capsys.readouterr().out
+    assert "from:      document" in shown and "resumes:   pipeline" in shown
+
+
+@pytest.mark.anyio
+async def test_a_crash_elsewhere_than_the_pipeline_still_resumes_from_the_checkpoint(
+    monkeypatch, tmp_path
+):
+    """The input the rule must not send to the document: the same crash, another node."""
+    graph = CrashedPipeline({"id": "GH-1", "title": "t", "status": "open"}, nxt=("integrate",))
+    monkeypatch.setattr(cli, "graph", graph)
+    ports = memory_ports()
+    _crash_document(ports)
+
+    await cli._resume(
+        "GH-1",
+        Configuration(product_dir=tmp_path),
+        ports,
+        yes=True,
+        checkpointer=in_memory,
+        run_lock=FakeLock(),
+    )
+
+    assert graph.seeded == [] and graph.invoked == [None]
+
+
+@pytest.mark.anyio
+async def test_a_crash_whose_approved_branch_moved_after_its_review_is_refused(
+    monkeypatch, tmp_path
+):
+    graph = CrashedPipeline({"id": "GH-1", "status": "open"})
+    monkeypatch.setattr(cli, "graph", graph)
+    ports = memory_ports()
+    _crash_document(ports, reviewed_head="h-a-moved")
+
+    with pytest.raises(cli.CannotStart, match="approved at h-a, but `t/a` is at h-a-moved"):
+        await cli._resume(
+            "GH-1",
+            Configuration(product_dir=tmp_path),
+            ports,
+            yes=True,
+            checkpointer=in_memory,
+            run_lock=FakeLock(),
+        )
+
+    assert graph.seeded == [] and graph.invoked == [] and ports.tracker.comments == []
+
+
+class _Signalling:
+    """A `work` that sends its own process the signal(s) and then waits to be cancelled;
+    `shielded` keeps it from unwinding for that many seconds, a role that outlives the
+    unwinding. Records the reaper's calls at the moment the cancellation reaches it."""
+
+    def __init__(self, reaper, *, times=1, shielded=0.0, lock=None, stop=None):
+        self.reaper, self.times, self.shielded = reaper, times, shielded
+        self.lock, self.stop = lock, stop
+        self.at_cancel: list | None = None
+
+    async def __call__(self):
+        with contextlib.ExitStack() as held:
+            if self.lock is not None:
+                held.enter_context(cli._locked(self.lock, "T-9", self.stop))
+            for _ in range(self.times):
+                signal.raise_signal(signal.SIGTERM)
+            try:
+                await anyio.sleep_forever()
+            except anyio.get_cancelled_exc_class():
+                self.at_cancel = list(self.reaper.calls)
+                with anyio.CancelScope(shield=True):
+                    await anyio.sleep(self.shielded)
+                raise
+
+
+async def _until(condition, seconds=5.0):
+    with anyio.fail_after(seconds):
+        while not condition():
+            await anyio.sleep(0.01)
+
+
+@pytest.mark.anyio
+async def test_a_signal_reaps_only_the_checks_before_it_cancels_and_marks_the_flag():
+    from agentic.core.process.adapters.shell import EventStopFlag
+    from tests.fakes import FakeReaper
+
+    reaper, flag = FakeReaper(), EventStopFlag()
+    stop = cli.StopCause(flag=flag, reaper=reaper)
+    work = _Signalling(reaper)
+    with pytest.raises(SystemExit):
+        await cli._signal_guarded(work, stop)
+    await _until(lambda: len(reaper.calls) >= 1)
+    check = ("run", "check", os.getpid(), None)
+    assert work.at_cancel in ([], [check])  # never a role's processes before the cancel
+    assert reaper.calls == [check]
+    assert flag.is_set()
+    assert stop.signalled
+
+
+@pytest.mark.anyio
+async def test_a_second_signal_starts_no_second_reap_and_no_exit():
+    from agentic.core.process.adapters.shell import EventStopFlag
+    from tests.fakes import FakeReaper
+
+    reaper, exits = FakeReaper(), []
+    stop = cli.StopCause(flag=EventStopFlag(), reaper=reaper)
+    work = _Signalling(reaper, times=3)
+    with pytest.raises(SystemExit):
+        await cli._signal_guarded(work, stop, hard_exit=exits.append)
+    await _until(lambda: len(reaper.calls) >= 1)
+    await anyio.sleep(0.2)
+    assert reaper.calls == [("run", "check", os.getpid(), None)]
+    assert exits == []
+
+
+@pytest.mark.anyio
+async def test_the_deadline_reaps_roles_releases_the_lock_once_and_exits_once():
+    from agentic.core.process.adapters.shell import EventStopFlag
+    from tests.fakes import FakeReaper
+
+    reaper, lock, exits, flushed = FakeReaper(), FakeLock(), [], []
+    stop = cli.StopCause(flag=EventStopFlag(), reaper=reaper)
+    work = _Signalling(reaper, times=2, shielded=0.6, lock=lock, stop=stop)
+    with pytest.raises(SystemExit):
+        await cli._signal_guarded(
+            work,
+            stop,
+            deadline_s=0.05,
+            hard_exit=exits.append,
+            flush=lambda: flushed.append(1),
+        )
+    pid = os.getpid()
+    assert reaper.calls == [
+        ("run", "check", pid, None),
+        ("run", "T-9", pid, None),
+        ("run", "check", pid, None),
+    ]
+    assert lock.released == ["T-9"]  # the deadline released it; `_locked`'s finally did not
+    assert (exits, flushed) == ([1], [1])
+
+
+@pytest.mark.anyio
+async def test_the_deadline_never_fires_when_the_run_unwinds_in_time():
+    from agentic.core.process.adapters.shell import EventStopFlag
+    from tests.fakes import FakeReaper
+
+    reaper, exits = FakeReaper(), []
+    stop = cli.StopCause(flag=EventStopFlag(), reaper=reaper)
+    with pytest.raises(SystemExit):
+        await cli._signal_guarded(_Signalling(reaper), stop, deadline_s=0.3, hard_exit=exits.append)
+    await anyio.sleep(0.5)
+    assert exits == []
+    assert len(reaper.calls) == 1
+
+
+@pytest.mark.anyio
+async def test_the_previous_signal_handlers_come_back_after_the_guard():
+    before = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGHUP)}
+    with pytest.raises(SystemExit):
+        from agentic.core.process.adapters.shell import EventStopFlag
+        from tests.fakes import FakeReaper
+
+        reaper = FakeReaper()
+        await cli._signal_guarded(
+            _Signalling(reaper), cli.StopCause(flag=EventStopFlag(), reaper=reaper)
+        )
+    assert {s: signal.getsignal(s) for s in before} == before
+
+
+@pytest.mark.anyio
+async def test_a_run_stopped_that_reaches_the_guard_is_the_cancellation_not_a_traceback():
+    from agentic.core.process.application.ports import RunStopped
+
+    stop = cli.StopCause()
+
+    async def work():
+        raise RunStopped
+
+    with pytest.raises(SystemExit) as info:
+        await cli._signal_guarded(work, stop)
+    assert info.value.code == 1
+    assert stop.signalled is True
+
+
+@pytest.mark.anyio
+async def test_a_stopped_run_releases_its_lock_once_and_never_marks_it_crashed():
+    lock = FakeLock()
+    stop = cli.StopCause()
+
+    async def work():
+        with cli._locked(lock, "T-9", stop):
+            from agentic.core.process.application.ports import RunStopped
+
+            raise RunStopped
+
+    with pytest.raises(SystemExit):
+        await cli._signal_guarded(work, stop)
+    assert (lock.released, lock.kept, lock.kept_crashed) == (["T-9"], [], [])
