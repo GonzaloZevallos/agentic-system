@@ -66,6 +66,13 @@ affected_fallback:
 # all of `checks`. Read at a task's base, like every key here: it governs from the task after
 # the merge.
 delivery_checks: [tests, lint, format, types]
+# `merge_inert`: the paths master may gain without a recorded check pass going stale (ADR-0045,
+# amendment). Only the task documents: no test or check reads this repo's own
+# `.agentic/tasks/` (the tests build their own under tmp_path, and `scripts/affected_tests.py`
+# IGNOREs it on the same grounds). `docs/**` is NOT declared: tests read `docs/adr/`. Read at
+# the pull request head, like every key here.
+merge_inert:
+  - ".agentic/tasks/*.md"
 witness: uv run python -c "import agentic, pathlib; print(pathlib.Path(agentic.__file__).resolve().parent)"
 forbidden:
   - pattern: '#\s*(type:\s*ignore|noqa)\b'

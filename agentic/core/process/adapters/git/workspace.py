@@ -470,6 +470,17 @@ class GitWorkspace:
         out = self._git("diff", "--name-only", f"{base}...{head}")
         return tuple(line for line in out.splitlines() if line)
 
+    def gain_paths(self, older: str, newer: str) -> tuple[str, ...]:
+        # Two-dot, `--no-renames` (a rename lists both sides, whatever `diff.renames` the
+        # machine has) and `-z` with `core.quotepath` off (a name comes back as it is). The
+        # output is not stripped: a name may end in a blank.
+        result = self._run(
+            *_PLAIN, "diff", "--name-only", "--no-renames", "-z", f"{older}..{newer}"
+        )
+        if result.returncode != 0:
+            raise GitError(f"git diff {older}..{newer} failed: {result.stderr.strip()}")
+        return tuple(path for path in result.stdout.split("\0") if path)
+
     def added_adrs(self, master: str, head: str) -> tuple[AddedAdr, ...]:
         # `--no-renames`: a file renamed into `docs/adr` is an addition of its new path
         # whatever `diff.renames` the machine has. The marker is a control character no

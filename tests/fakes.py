@@ -284,6 +284,7 @@ class MemoryStack:
         performance: dict[str, Scenario] | None = None,
         delivery_checks: tuple[str, ...] = (),
         rerun_checks: dict[str, RerunForm] | None = None,
+        merge_inert: tuple[str, ...] = (),
     ) -> None:
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -325,6 +326,8 @@ class MemoryStack:
         self.declared_delivery_checks = delivery_checks
         # Empty is a product with no failed-tests-only form (ADR-0066), the gate of today.
         self.declared_rerun_checks = {} if rerun_checks is None else rerun_checks
+        # Empty is a product that declares no `merge_inert`: the merge gate of today.
+        self.declared_merge_inert = merge_inert
         # Empty is a product with no performance budget (GH-318), every product until its own
         # file declares one.
         self.declared_performance = {} if performance is None else performance
@@ -367,6 +370,10 @@ class MemoryStack:
     def rerun_checks(self, revision: str) -> dict[str, RerunForm]:
         # Not tracked in `revisions` either, `witness`'s own reason.
         return self.declared_rerun_checks
+
+    def merge_inert(self, revision: str) -> tuple[str, ...]:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_merge_inert
 
     def forbidden(self, revision: str) -> list[Forbidden]:
         # Not tracked in `revisions` either, `witness`'s own reason.
@@ -683,6 +690,11 @@ class MemoryWorkspace:
         self.fetched_commits: list[str] = []
         self.diff_reads: list[tuple[str, str]] = []
         self.diff_paths: tuple[str, ...] = ()
+        # `gain_paths`: what master gained per (older, newer), and every pair asked in order.
+        # A pair with no entry raises `GitError`, the way an unknown sha does; an entry may
+        # also be an exception to raise.
+        self.gains: dict[tuple[str, str], tuple[str, ...] | Exception] = {}
+        self.gain_reads: list[tuple[str, str]] = []
         self.detached: list[str] = []
         # GH-318: the names `checkout_names(prefix)` answers (the `perf-*` a hard kill left), and
         # a text that makes `detached_checkout` raise it as a `GitError`.
@@ -998,6 +1010,15 @@ class MemoryWorkspace:
     def changed_paths(self, base: str, head: str) -> tuple[str, ...]:
         self.diff_reads.append((base, head))
         return self.diff_paths
+
+    def gain_paths(self, older: str, newer: str) -> tuple[str, ...]:
+        self.gain_reads.append((older, newer))
+        gain = self.gains.get((older, newer))
+        if gain is None:
+            raise GitError(f"git diff {older}..{newer} failed: no gain scripted")
+        if isinstance(gain, Exception):
+            raise gain
+        return gain
 
     def checkout_path(self, name: str) -> Path:
         return self.ROOT / name
