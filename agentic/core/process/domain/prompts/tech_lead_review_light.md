@@ -35,6 +35,9 @@ the invariants above. This is {{review}}.
   touches. What that pass approved and this diff does not touch stays approved: do not
   review it again.
 
+A brief item or a done criterion of the issue that the diff does not meet is `blocking`
+with scope `subtask`, never an `observation`.
+
 Verify the invariants above on this diff, as you verify the brief: a delivery that
 breaks one is `blocking` with category `plan-invariant`, whatever else it got right.
 Its `scope` is `subtask`: the category says the rule came from the plan, not that the

@@ -45,7 +45,9 @@ def _unread(why: str) -> CiEvidence:
     return CiEvidence(f"CI was not read: {why}.")
 
 
-def read_ci(state: TaskState, declared: tuple[str, ...], head: str, ports: Ports) -> CiEvidence:
+def read_ci(state: TaskState, names: tuple[str, ...], head: str, ports: Ports) -> CiEvidence:
+    """`names` are the checks that gate a merge (`rules.ci_gate_names`): the stack's and
+    the plan's together, never the stack's alone (GH-371)."""
     reference = state.get("pull_request")
     if not reference:
         return _unread("the task has no pull request yet")
@@ -57,5 +59,5 @@ def read_ci(state: TaskState, declared: tuple[str, ...], head: str, ports: Ports
     if not same_commit(report.head_sha, head):
         return _unread("the pull request's head is not the head under review")
     master = ports.tracker.branch_ci(report.base_ref) if report.base_ref else None
-    lines = [f"- `{name}`: {_line(report, name)}{_master_line(master, name)}" for name in declared]
+    lines = [f"- `{name}`: {_line(report, name)}{_master_line(master, name)}" for name in names]
     return CiEvidence("\n".join(lines), report, master)

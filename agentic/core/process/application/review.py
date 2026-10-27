@@ -27,6 +27,8 @@ verdict, and what it lowered, at the head of the review's section."""
 
 from __future__ import annotations
 
+from typing import Any
+
 from agentic.shared.configuration import Configuration, experiment_snapshot
 
 from ..domain import ci, presubmit, rules
@@ -34,7 +36,7 @@ from ..domain.roles import QA_PERFORMANCE, TECH_LEAD, pair_for, reviewer_for
 from ..domain.task import WAITING_ON_HUMAN, TaskState, apply
 from .checkouts import SetupFailed, subtask_checkout, task_base
 from .ci_review import CI_SECTION, CiEvidence, read_ci
-from .ports import Ports
+from .ports import GitError, Ports
 from .presubmit import declared_checks
 from .run_role import finish, run_role
 
@@ -61,11 +63,12 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
     section = rules.review_section(subtask_id)
     version = rules.next_version(state, section)
     head = ports.workspace.full_head(checkout.path)
-    # A product that declares `ci` has the system's own CI section in front of the
-    # reviewer and its red checks recorded as findings; one that does not is reviewed
-    # exactly as before, with no read of the tracker at all (GH-216).
-    declared = ports.stack.ci(base)
-    evidence: CiEvidence | None = read_ci(state, declared, head, ports) if declared else None
+    # A product that declares `ci`, or a plan that requires a check (GH-371), has the
+    # system's own CI section in front of the reviewer and its red checks recorded as
+    # findings; one that has neither is reviewed exactly as before, with no read of the
+    # tracker at all (GH-216). The names come from the one rule that decides them.
+    names = rules.ci_gate_names(ports.stack.ci(base), state.get("ci_required") or []).names
+    evidence: CiEvidence | None = read_ci(state, names, head, ports) if names else None
     reading = state
     extra_ci: tuple[str, ...] = ()
     if evidence is not None:
@@ -100,7 +103,9 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
     if evidence is not None and evidence.head is not None:
         # After the lowering, so the system's own blocking finding, which always carries
         # its run link, is never lowered; the verdict below is derived from the whole list.
-        findings = ci.ci_findings(evidence.head, evidence.master, declared, findings)
+        findings = ci.ci_findings(evidence.head, evidence.master, names, findings)
+    if subtask_id == rules.reviewed_unit_name(state):
+        findings = _required_paths_findings(state, base, head, findings, ports)
     category = rules.change_category(findings)
     markdown = rules.review_markdown(category, reason, output.text, lowered)
     patch = apply(patch, {"sections": {section: markdown}})
@@ -167,6 +172,41 @@ async def review(state: TaskState, cfg: Configuration, ports: Ports) -> TaskStat
         patch = rules.logged(patch)
         patch["status"] = WAITING_ON_HUMAN
     return finish(state, patch, ports)
+
+
+def _required_paths_findings(
+    state: TaskState, base: str, head: str, findings: list[dict[str, Any]], ports: Ports
+) -> list[dict[str, Any]]:
+    """`findings` plus the system's own blocking one when the plan names paths the issue's
+    done criteria need changed and the integrated diff touches none of them (GH-371).
+    Written after the lowering, like the CI findings, so an approval cannot sit over it.
+    Nothing is required, or a diff git cannot read, adds nothing: reading never fails the
+    review, and a finding that claims a diff it did not see would be false."""
+    required: list[str] = state.get("required_paths") or []
+    if not required:
+        return findings
+    try:
+        touched = ports.workspace.changed_paths(base, head)
+    except GitError:
+        return findings
+    missing = rules.required_paths_missing(required, touched)
+    if not missing:
+        return findings
+    return [
+        *findings,
+        {
+            "location": missing[0],
+            "claim": "the integrated diff touches none of the plan's required paths",
+            "evidence": (
+                f"git diff --name-only {base}...{head} lists: "
+                f"{', '.join(touched) if touched else '(no paths)'}; "
+                f"the plan requires one of: {', '.join(missing)}"
+            ),
+            "severity": "blocking",
+            "scope": "subtask",
+            "category": "spec-scope",
+        },
+    ]
 
 
 def _perf_table(state: TaskState, subtask_id: str) -> tuple[str, ...]:
