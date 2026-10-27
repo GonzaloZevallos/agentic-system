@@ -359,7 +359,10 @@ def announce(r: Resumption, ports: Ports) -> None:
     interrupted emits the exact same bytes as before (subtask `signals`)."""
     if r.source == "document":
         ports.workspace.prune()
-    ports.tracker.unlabel(r.task_id, NEEDS_HUMAN)
+    # `gh issue edit --remove-label` fails for a label the repository never had, and an
+    # account-limit-only pause (GH-381) is never labelled, so it is not unlabelled either.
+    if rules.needs_a_human(r.paused):
+        ports.tracker.unlabel(r.task_id, NEEDS_HUMAN)
     answered = " with your decision" if r.decision else ""
     role = r.paused.get("current_role") or "before any role"
     interrupted = f", interrupted at {role}" if r.interrupted else ""

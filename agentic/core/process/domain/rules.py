@@ -3268,6 +3268,19 @@ def account_limit_persisted_patch() -> dict[str, Any]:
     return logged({**escalation("failure", ACCOUNT_LIMIT_PERSISTED)}, [failure])
 
 
+def needs_a_human(state: TaskState) -> bool:
+    """Whether a pause or escalation adds the `needs-human` label (GH-381): the one
+    decision every site that labels calls. False only for a pause the poller retakes on
+    its own because the account limit alone caused it (`auto_resumable` reads
+    `account_limit`) and that has not spent the hourly week (`ACCOUNT_LIMIT_PERSISTED`,
+    the escalation that is left to the human). Everything else keeps the label: an
+    `upstream` or `network` pause, a mixed set of external and own failures, an
+    escalation that is not a failure."""
+    if state.get("escalated") == ACCOUNT_LIMIT_PERSISTED:
+        return True
+    return auto_resumable(state) != "account_limit"
+
+
 @dataclass(frozen=True)
 class LaunchCandidate:
     """One open, unlaunched `agentic` issue, as `rules.poll_plan` needs it: `blocked`

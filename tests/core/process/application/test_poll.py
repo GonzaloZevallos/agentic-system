@@ -20,6 +20,7 @@ from agentic.core.process.application.ports import (
     TrackerUnreachable,
     Upstream,
 )
+from agentic.core.process.domain import rules
 from agentic.core.process.domain.roles import INTERVIEW_SOLUTION
 from agentic.core.process.domain.task import PullRequest
 from agentic.shared.configuration import Configuration
@@ -946,6 +947,24 @@ def _upstream_ports(comments: list[IssueComment]):
     )
     ports.tracker.timestamped["GH-19"] = comments
     return ports
+
+
+def test_the_persisted_escalation_labels_only_when_the_predicate_says(tmp_path, monkeypatch):
+    probes = 96 + 168
+    comments = _chase_comments(probes=probes, period_min=60)
+    now = ESCALATED_AT + timedelta(minutes=60 * probes + 90)
+    asked: list[dict] = []
+
+    def not_a_human(state):
+        asked.append(dict(state))
+        return False
+
+    monkeypatch.setattr(rules, "needs_a_human", not_a_human)
+    ports = _account_limit_ports("Developer", comments, runs=[])
+    _round(_cfg(tmp_path), ports, MemoryRunRegistry(), FakeLauncher(), now)
+    assert asked and asked[0]["escalated"] == rules.ACCOUNT_LIMIT_PERSISTED
+    assert ports.tracker.labels == []
+    assert len(ports.tracker.comments) == 1  # the escalation is still told (the label is not)
 
 
 def test_a_spent_hourly_week_escalates_the_pause_as_a_failure_once(tmp_path):

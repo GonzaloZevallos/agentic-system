@@ -1851,6 +1851,52 @@ def test_the_persisted_escalation_is_a_failure_class_pause_auto_resumable_does_n
     assert rules.auto_resumable(task.apply(state, patch)) is None
 
 
+def _paused_by(*entries: dict, escalated: str = "Developer failed") -> dict:
+    return {"pause_log": list(entries), "escalated": escalated}
+
+
+def test_an_account_limit_only_pause_needs_no_human():
+    state = _paused_by(_failure_entry("account_limit"), _escalation_entry("failure"))
+    assert rules.auto_resumable(state) == "account_limit"
+    assert not rules.needs_a_human(cast(Any, state))
+
+
+def test_a_persisted_account_limit_needs_a_human():
+    # Rejected input: the pause reads as an account limit, but the hourly week is spent.
+    state = _paused_by(
+        _failure_entry("account_limit"),
+        _escalation_entry("failure"),
+        escalated=rules.ACCOUNT_LIMIT_PERSISTED,
+    )
+    assert rules.needs_a_human(cast(Any, state))
+    patched = task.apply(
+        _paused_by(_failure_entry("account_limit"), _escalation_entry("failure")),
+        rules.account_limit_persisted_patch(),
+    )
+    assert rules.needs_a_human(patched)
+
+
+@pytest.mark.parametrize("reason", ["upstream", "network"])
+def test_an_upstream_or_network_pause_keeps_the_label(reason):
+    state = _paused_by(_failure_entry(reason), _escalation_entry("failure"))
+    assert rules.auto_resumable(state) == reason
+    assert rules.needs_a_human(cast(Any, state))
+
+
+def test_a_mixed_external_and_own_failure_set_needs_a_human():
+    state = _paused_by(
+        _failure_entry("account_limit"), _failure_entry("sdk"), _escalation_entry("failure")
+    )
+    assert rules.needs_a_human(cast(Any, state))
+
+
+@pytest.mark.parametrize("cls", ["cap", "returns"])
+def test_a_non_failure_escalation_needs_a_human(cls):
+    state = _paused_by(_failure_entry("account_limit"), _escalation_entry(cls))
+    assert rules.needs_a_human(cast(Any, state))
+    assert rules.needs_a_human(cast(Any, _paused_by(_escalation_entry("failure"))))
+
+
 def test_low_confidence_type_resolves_every_task_type():
     # `platform_enhancement` has no path of its own to guess into: it is a feature.
     assert rules.low_confidence_type("platform_enhancement") == "feature"

@@ -5,6 +5,7 @@ product, and git and GitHub in memory."""
 import asyncio
 import time
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -953,6 +954,43 @@ async def test_role_failure_escalates_and_keeps_failures(config, tmp_path):
         "main_thread_turns": 0,
     }
     assert doc["status"] == WAITING_ON_HUMAN
+
+
+GH_373_429 = (
+    "You've hit your session limit · resets 5:40am (America/Argentina/Buenos_Aires) "
+    "(terminal reason: api_error, HTTP 429, exit code 1)"
+)
+
+
+async def test_the_gh_373_session_limit_pauses_once_with_its_reset_and_no_label(
+    config, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        "agentic.core.process.application.run_role._now",
+        lambda: datetime(2026, 10, 27, 4, 0, tzinfo=UTC),  # 01:00 -03:00
+    )
+    script = script_for(
+        product_analyst=[AttemptFailed(GH_373_429, 0.0, reason="account_limit")] * 2
+    )
+    fakes = Fakes()
+    final = await run_graph(script, config, fakes=fakes)
+
+    assert final["status"] == WAITING_ON_HUMAN
+    assert script.slugs.count("product_analyst") == 1
+    assert [c for c in fakes.tracker.labels if c[1] == "needs-human"] == []
+    escalated = [text for _, text in fakes.tracker.comments if text.startswith("Escalated:")]
+    assert len(escalated) == 1
+    doc = FilesystemTaskDocuments(tmp_path).load("GH-1")
+    assert doc["pause_log"][-2:] == [
+        {
+            "kind": "failure",
+            "value": "account_limit",
+            "section": "Product Analyst",
+            "resets_at": "2026-10-27T05:40:00-03:00",
+        },
+        {"kind": "escalation", "value": "failure"},
+    ]
+    assert [e["kind"] for e in doc["pause_log"]].count("failure") == 1
 
 
 async def test_the_task_cap_escalates_once_during_a_fan_out(config):

@@ -808,7 +808,8 @@ def escalate_persisted_limits(
             continue
         state = apply(raw, rules.account_limit_persisted_patch())
         ports.documents.save(state)
-        ports.tracker.label(task_id, escalate_module.NEEDS_HUMAN)
+        if rules.needs_a_human(state):
+            ports.tracker.label(task_id, escalate_module.NEEDS_HUMAN)
         ports.tracker.comment(task_id, escalate_module.comment(state, cfg, ports))
         lines.append(
             f"agentic: poll: #{r.issue} {rules.ACCOUNT_LIMIT_PERSISTED} -> left to the human"

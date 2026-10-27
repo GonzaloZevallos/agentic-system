@@ -1001,6 +1001,18 @@ def test_two_account_limit_failures_leave_the_task_ready_with_the_reason_on_its_
     assert rules.auto_resumable(doc) is None
 
 
+def test_the_label_of_a_landing_escalation_is_the_predicates_call(tmp_path, monkeypatch):
+    # The landing labels only through `rules.needs_a_human`: a False answer leaves the
+    # comment and drops the label (the sdk test below is the True side).
+    monkeypatch.setattr(rules, "needs_a_human", lambda state: False)
+    ports = _merge_failed(_ports(5), ScriptedRunner(landing_diagnoser=_cut("sdk")))
+
+    _land_at(ports, tmp_path, START)
+
+    assert ports.tracker.labels == []
+    assert len(ports.tracker.comments) == 1
+
+
 def test_a_sdk_failure_escalates_at_once_labelled_and_commented(tmp_path):
     ports = _merge_failed(_ports(5), ScriptedRunner(landing_diagnoser=_cut("sdk")))
 

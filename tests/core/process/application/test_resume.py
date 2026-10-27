@@ -888,3 +888,15 @@ def test_a_resume_from_the_checkpoint_never_reads_the_remote_and_drops_a_stale_p
     )
     assert r.resumed["publish_owed"] is None
     assert ports.workspace.remote_tip_calls == []
+
+
+def test_announcing_an_account_limit_only_pause_unlabels_nothing_it_never_labelled(cfg):
+    log = [
+        {"kind": "failure", "value": "account_limit", "section": "Developer"},
+        {"kind": "escalation", "value": "failure"},
+    ]
+    ports = memory_ports()
+    r = resume.prepare("GH-12", paused(pause_log=log), "checkpoint", cfg, ports)
+    resume.announce(r, ports)
+    assert ports.tracker.unlabeled == []
+    assert len(ports.tracker.comments) == 1
