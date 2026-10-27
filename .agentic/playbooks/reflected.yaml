@@ -321,3 +321,5 @@ tasks:
       item_id: developer-3
       tasks:
       - GH-371
+  GH-381@review:
+    cost_usd: 0.0595
