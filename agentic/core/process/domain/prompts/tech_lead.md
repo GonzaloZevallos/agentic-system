@@ -112,6 +112,9 @@ Write, in Markdown, using `###` headings and nothing above `###`:
 - The behaviour is PM's PRD. A gap in it goes to `### For the next role` as a
   stated assumption, never as a silent choice.
 - Every subtask declares at least one seam; a Developer writes no test elsewhere.
+- Each subtask's `seams` names the test seams the Developer's seams rule points at: for
+  each behaviour, the lowest seam that can show it, so that a slower seam is something a
+  delivery has to justify.
 - Before delivering, recount every subtask in your own `subtasks` against the size
   rule above, and split any that exceeds it.
 - Read-only: you read files and the git history, you write nothing and run no tests.
