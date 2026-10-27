@@ -1302,3 +1302,52 @@ def test_the_document_of_a_part_over_the_line_round_trips_fit_question_until_it_
     text = document.render(answered)
     assert "fit_question" not in text
     assert document.parse(text)["fit_waived"] is True
+
+
+_PLAN_SETTLED = [
+    {
+        "location": "PM: final validation",
+        "claim": "Nueva venta is 1037px wide",
+        "version": 2,
+        "by": "approved",
+    }
+]
+
+
+def test_a_plan_settlement_survives_the_document_and_keeps_the_row_fixed():
+    """GH-374: `plan_settled` is a `TaskState` field, restored through `STATE_FIELDS`, and the
+    fold over what was read back still closes the PM row it settled."""
+    records = [
+        {
+            "subtask": "api",
+            "version": 1,
+            "location": "PM: final validation",
+            "claim": "Nueva venta is 1037px wide",
+            "severity": "blocking",
+            "scope": "plan",
+            "category": "spec-behaviour",
+            "status": "open",
+        }
+    ]
+    state = {
+        "id": "T-1",
+        "title": "t",
+        "description": "d",
+        "findings": records,
+        "plan_settled": _PLAN_SETTLED,
+    }
+    assert "plan_settled" in resume.STATE_FIELDS
+    back = resume.state_from(document.parse(document.render(state)))
+    assert back["plan_settled"] == _PLAN_SETTLED
+    assert [row["status"] for row in rules.findings_rows(back)] == ["fixed"]
+    assert rules.open_findings(back) == []
+
+
+def test_a_state_without_plan_settled_renders_no_key_for_it():
+    """Written only when non-empty: a document without it is byte-identical to one written
+    before GH-374, whether the key is absent or empty."""
+    state = {"id": "T-1", "title": "t", "description": "d"}
+    plain = document.render(state)
+    assert "plan_settled" not in plain
+    assert document.render({**state, "plan_settled": []}) == plain
+    assert "plan_settled" not in document.parse(plain)
