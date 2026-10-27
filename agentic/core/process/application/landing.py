@@ -463,6 +463,10 @@ def _dispatch(context: LandingContext) -> None:
             landing_fix.diagnose(context)
         case "land_slice":
             landing_slice.land_slice(context)
+        case "settle":
+            landing_fix.settle(context)
+        case "escalate":
+            landing_fix.escalate_ledger(context)
         case "wait" | "none":
             context.log(f"agentic: land: {context.task_id}: {context.head} {kind}: nothing to do")
         case _:

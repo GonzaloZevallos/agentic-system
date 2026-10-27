@@ -21,6 +21,7 @@ from agentic.core.process.application.ports import (
 )
 from agentic.core.process.domain import document, rules
 from agentic.core.process.domain import landing as landing_rules
+from agentic.core.process.domain.roles import PAIR_PM_TECH_LEAD
 from tests.core.process.application.test_merge_ci import _check, _report
 from tests.core.process.application.test_poll import _cfg
 from tests.core.process.application.test_poll_merge import (
@@ -234,6 +235,8 @@ def test_the_executors_that_are_built_are_the_live_steps():
         "renumber",
         "land_slice",
         "diagnose",
+        "settle",
+        "escalate",
     }
 
 
@@ -262,7 +265,7 @@ def test_land_without_a_launcher_logs_it_and_still_reopens(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "kind", ["fix", "fix_important", "rerun", "file_followups_and_land", "diagnose"]
+    "kind", ["fix", "fix_important", "rerun", "file_followups_and_land", "diagnose", "settle"]
 )
 def test_every_live_step_has_an_executor(kind):
     assert callable(getattr(landing_fix, kind))
@@ -1803,3 +1806,71 @@ def test_a_released_diagnose_that_delivers_a_sync_verdict_closes_and_spawns_noth
 
     assert again.step == "sync_master"
     assert _doc(ports)["landing"][-1]["head"] == HEAD
+
+
+# --- GH-374: a refusal that is only PM final validation ledger state -------------------------
+
+
+def _pm_ledger(ports, *, approved: bool = True) -> None:
+    pm = "PM: final validation"
+    runs = [
+        {"role": "PM", "section": pm, "version": v} for v in ((1, 2, 3) if approved else (1, 2))
+    ]
+    rows = [
+        {**_finding("blocking"), "location": pm, "claim": claim, "scope": "plan", "version": v}
+        for claim, v in (("Phone captures exist", 1), ("Phone captures are present", 2))
+    ]
+    ports.documents.record_closure("GH-5", {"findings": rows, "runs": runs})
+    ports.documents.record_closure(
+        "GH-5",
+        {
+            "change_history": [
+                {"pair": PAIR_PM_TECH_LEAD.key, "category": "implementation", "reason": "x"}
+            ]
+            * 2
+        },
+    )
+
+
+def test_a_settle_step_writes_plan_settled_spends_no_pass_and_the_next_decision_merges(tmp_path):
+    ports = _ports(5)
+    _pm_ledger(ports)
+    launcher = FakeLauncher()
+
+    result, _ = _land(ports, tmp_path, launcher)
+
+    assert result.step == "settle"
+    document = _doc(ports)
+    assert [(r["claim"], r["version"], r["by"]) for r in document["plan_settled"]] == [
+        ("Phone captures exist", 3, "approved"),
+        ("Phone captures are present", 3, "approved"),
+    ]
+    [entry] = document["landing"]
+    assert (entry["step"], entry["head"]) == ("settle", HEAD)
+    assert entry["resolved_at"]
+    assert landing_plan.spent(document, HEAD, None, MASTER).passes == 0
+    assert launcher.spawned == []
+    assert document["subtasks"]["only"]["status"] == "approved"
+    assert _candidates(ports) == [5]
+
+
+def test_rows_no_approval_settles_are_asked_once_as_questions_and_never_restart(tmp_path):
+    ports = _ports(5)
+    _pm_ledger(ports, approved=False)
+    launcher = FakeLauncher()
+
+    result, _ = _land(ports, tmp_path, launcher)
+
+    assert result.step == "escalate"
+    document = _doc(ports)
+    assert document["escalation_class"] == "questions"
+    assert document.get("plan_settled", []) == []
+    [question] = document["questions_for_human"]
+    assert "1: Phone captures exist" in question and "2: Phone captures are present" in question
+    assert "by hand" in question
+    assert ports.tracker.labels  # needs-human
+    assert launcher.spawned == []
+
+    again, _ = _land(ports, tmp_path, launcher)
+    assert again.kind == "skipped"
+    assert launcher.spawned == []

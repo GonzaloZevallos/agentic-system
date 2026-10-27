@@ -72,6 +72,43 @@ def on_return(state: TaskState, version: int, claims: Iterable[str]) -> list[Pla
     ]
 
 
+def approved_green(facts: rules.MergeFacts) -> bool:
+    """The reviewed head is the pull request's, approved, and green where the product declares
+    a CI: the shape under which a refusal that is only ledger state is never the code's fault.
+    The CI is read like `rules._ci_gate` reads it (verdict `green` on a full `ci_head` that is the
+    pull request's); a product with no `ci_required` has none to read. Ids compare only through
+    `rules.same_commit`."""
+    if not (
+        facts.reviewed_unit_approved
+        and rules.full_commit_id(facts.pr_head)
+        and rules.same_commit(facts.reviewed_head, facts.pr_head)
+    ):
+        return False
+    if not facts.ci_required:
+        return True
+    verdict = facts.ci_verdict
+    return (
+        verdict is not None
+        and verdict.state == "green"
+        and rules.full_commit_id(facts.ci_head)
+        and rules.same_commit(facts.ci_head, facts.pr_head)
+    )
+
+
+def ledger_only(refusal: rules.MergeRefusal, facts: rules.MergeFacts, state: TaskState) -> bool:
+    """Whether `refusal` is nothing but `PM: final validation` ledger state on an approved,
+    green head: `open_findings_blocking`, `approved_green`, and every open blocking row of
+    `rules.open_findings` a `plan` row at that location. No code change resolves it, so the
+    landing settles or escalates and never fixes or restarts (the only reader of this fact)."""
+    if refusal != "open_findings_blocking" or not approved_green(facts):
+        return False
+    blocking = [row for row in rules.open_findings(state) if row["severity"] == "blocking"]
+    return bool(blocking) and all(
+        row["scope"] == "plan" and rules.finding_key(row["location"], "")[0] == _LOCATION_KEY
+        for row in blocking
+    )
+
+
 def pending(state: TaskState) -> list[PlanSettledRow]:
     """What `on_approval` at the live approval would add that `plan_settled` does not cover
     yet: the backfill of a document written before this existed, and exactly what the landing's
