@@ -22,6 +22,7 @@ from agentic.core.process.domain.roles import (
     TECH_LEAD_EPHEMERAL,
 )
 from agentic.core.process.domain.schemas import FitDecision, TaskType
+from agentic.core.process.domain.scratch import INODE_FLOOR, SpaceReading
 from agentic.core.process.domain.task import INTEGRATION, Carried
 
 PAIR = PAIR_PM_PA
@@ -3968,3 +3969,71 @@ def test_a_persisted_account_limit_is_not_governed_by_a_hint():
     )
     assert rules.account_limit_persisted(persisted)
     assert _reset_plan(persisted, RESET_0540).actions == []
+
+
+# --- GH-391: `disk_full`, the external reason a measured full disk narrows a failure to ---
+
+FLOOR = 2 * 1024**3
+AMPLE = SpaceReading(free_bytes=FLOOR * 10, free_inodes=INODE_FLOOR * 100)
+
+
+def test_space_narrowed_names_a_disk_under_the_byte_floor():
+    low = SpaceReading(free_bytes=FLOOR - 1, free_inodes=AMPLE.free_inodes)
+    assert rules.space_narrowed("schema", low, FLOOR, False) == "disk_full"
+
+
+def test_space_narrowed_names_a_disk_under_the_inode_floor():
+    low = SpaceReading(free_bytes=AMPLE.free_bytes, free_inodes=INODE_FLOOR - 1)
+    assert rules.space_narrowed("other", low, FLOOR, False) == "disk_full"
+
+
+def test_space_narrowed_names_an_enospc_caught_as_data_whatever_the_reading_says():
+    assert rules.space_narrowed("sdk", AMPLE, FLOOR, True) == "disk_full"
+    assert rules.space_narrowed("sdk", None, FLOOR, True) == "disk_full"
+
+
+def test_space_narrowed_keeps_the_reason_when_space_is_ample_or_unread():
+    assert rules.space_narrowed("schema", AMPLE, FLOOR, False) == "schema"
+    assert rules.space_narrowed("schema", None, FLOOR, False) == "schema"
+    exactly = SpaceReading(free_bytes=FLOOR, free_inodes=INODE_FLOOR)
+    assert rules.space_narrowed("schema", exactly, FLOOR, False) == "schema"
+
+
+def test_space_narrowed_never_narrows_limit_whatever_it_is_given():
+    # Rejected input: our own per-attempt cap, with a full disk and an ENOSPC beside it.
+    low = SpaceReading(free_bytes=0, free_inodes=0)
+    assert rules.space_narrowed("limit", low, FLOOR, True) == "limit"
+    assert rules.space_narrowed("limit", low, FLOOR, False) == "limit"
+
+
+def test_disk_full_is_an_external_reason_a_pause_is_retaken_for():
+    assert "disk_full" in rules.EXTERNAL_REASONS
+    state = _paused_by(_failure_entry("disk_full"), _escalation_entry("failure"))
+    assert rules.auto_resumable(state) == "disk_full"
+
+
+def test_a_disk_full_pause_keeps_the_label_and_follows_the_retake_calendar():
+    state = _paused_by(_failure_entry("disk_full"), _escalation_entry("failure"))
+    assert rules.needs_a_human(cast(Any, state))
+    assert rules.schedule_for("disk_full") == rules.RETAKE_SCHEDULE
+
+
+def test_a_disk_full_beside_an_own_failure_is_not_auto_resumable():
+    # Rejected input: the epoch also holds a failure of the role's own.
+    state = _paused_by(
+        _failure_entry("disk_full"), _failure_entry("schema"), _escalation_entry("failure")
+    )
+    assert rules.auto_resumable(state) is None
+
+
+def test_poll_plan_retakes_a_disk_full_pause_on_the_retake_calendar():
+    due = rules.ResumeCandidate(
+        issue=5, reason="disk_full", since=NOW - timedelta(minutes=16), prior=0, limit=6
+    )
+    early = rules.ResumeCandidate(
+        issue=6, reason="disk_full", since=NOW - timedelta(minutes=5), prior=0, limit=6
+    )
+    actions = rules.poll_plan(
+        closes=[], resumes=[due, early], launches=[], available_slots=2, now=NOW
+    ).actions
+    assert actions == [rules.PollAction("resume", 5)]
