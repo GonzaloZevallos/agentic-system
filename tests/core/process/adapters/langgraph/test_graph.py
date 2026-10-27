@@ -1683,8 +1683,9 @@ def _settled(final):
 
 async def test_an_approving_final_validation_settles_the_earlier_rounds_rows(config):
     """GH-374: PM approves at version 3 after two returns; the criteria still standing from both
-    earlier rounds are settled `approved` at 3 (the first round's reworded one was already
-    superseded by the second), and no row of the ledger is left open."""
+    earlier rounds are settled `approved` at 3 (round 2 raises round 1's criterion again,
+    word for word, so nothing is superseded: the approval settles it), and no row of the
+    ledger is left open."""
     final = await _final_validation_rounds(
         config,
         [
