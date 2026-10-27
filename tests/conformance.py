@@ -16,6 +16,8 @@ from typing import NamedTuple
 
 from agentic.core.process.application.limits import RunLimits
 from agentic.core.process.application.ports import (
+    Board,
+    BoardSent,
     CheckResults,
     Commands,
     FlagVocabulary,
@@ -37,6 +39,8 @@ from agentic.core.process.application.ports import (
     Workspace,
 )
 from tests.fakes import (
+    FakeBoard,
+    FakeBoardSent,
     FakeLauncher,
     FakePerfLock,
     FakePerfRunner,
@@ -75,6 +79,8 @@ _reaper: ProcessReaper = FakeReaper()
 _perf_runner: PerfRunner = FakePerfRunner()
 _perf_lock: PerfLock = FakePerfLock()
 _stop_flag: StopFlag = FakeStopFlag()
+_board: Board = FakeBoard()
+_board_sent: BoardSent = FakeBoardSent()
 
 
 def ports_of_doubles() -> Ports:
@@ -116,6 +122,8 @@ COVERED: dict[str, type] = {
     "PerfRunner": FakePerfRunner,
     "PerfLock": FakePerfLock,
     "StopFlag": FakeStopFlag,
+    "Board": FakeBoard,
+    "BoardSent": FakeBoardSent,
 }
 
 
