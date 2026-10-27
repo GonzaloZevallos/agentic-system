@@ -1,4 +1,4 @@
-"""GH-361: the wait for a share is recorded apart from the run (ADR-0069). Seams: the task
+"""GH-361: the wait for a share is recorded apart from the run (ADR-0070). Seams: the task
 document's round trip of the run, merge and full_checks records, and the span attributes of
 the presubmit / full_checks node."""
 

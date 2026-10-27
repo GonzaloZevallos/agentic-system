@@ -1,4 +1,4 @@
-"""`CheckScheduler` over one JSON ledger per machine (GH-361, ADR-0069).
+"""`CheckScheduler` over one JSON ledger per machine (GH-361, ADR-0070).
 
 The ledger lists who holds a share of the machine's cores and who waits for one, across
 every product and every process: an in-process semaphore bounds nothing when the gates are

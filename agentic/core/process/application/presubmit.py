@@ -138,7 +138,7 @@ class CheckoutPresubmit:
         self._wait_max_s = wait_max_s
         # What the scheduler gave the last time the gate ran: `None` until one did. The
         # first `enqueued_at` and the token stay with the instance, so a gate refused and
-        # retried keeps one place in the queue (ADR-0069); `waited_s` is the total wait.
+        # retried keeps one place in the queue (ADR-0070); `waited_s` is the total wait.
         self.grant: Grant | None = None
         self.waited_s = 0.0
         # The product's `parallel_checks`: run the declared checks concurrently. False

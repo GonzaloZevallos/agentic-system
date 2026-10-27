@@ -1534,7 +1534,7 @@ class PerfLock(Protocol):
 
 @dataclass(frozen=True)
 class CheckRequest:
-    """A gate asking for a share of the machine's cores (GH-361, ADR-0069). `enqueued_at`
+    """A gate asking for a share of the machine's cores (GH-361, ADR-0070). `enqueued_at`
     and `token` are `None` on the gate's first call and are the grant's on every later one,
     so a gate keeps its place in the queue across calls. `wait_max_s` is how long this call
     may wait; `expires_after_s` is how long the share may be held before the ledger drops

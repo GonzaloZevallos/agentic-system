@@ -177,7 +177,7 @@ class Configuration(BaseModel):
     # The machine-wide lock two measurements take so they never share a CPU: outside every
     # product, built like `run_registry_dir`.
     perf_lock_path: Path = Field(default_factory=lambda: _default_perf_lock_path())
-    # The machine-wide scheduler of check suites (GH-361, ADR-0069). `check_cores` is what
+    # The machine-wide scheduler of check suites (GH-361, ADR-0070). `check_cores` is what
     # the scheduler may book across every product at once: the cores this process may run
     # on, lowered to leave room for what it does not see (role sessions, lint, types).
     # A quarter of it is a reserve only `integration` and `land` gates may use. A gate gets
