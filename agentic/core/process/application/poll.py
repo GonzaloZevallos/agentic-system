@@ -109,6 +109,18 @@ def _since_last_escalated(comments: Sequence[IssueComment]) -> datetime | None:
     return _parse_timestamp(last.created_at) if last is not None else None
 
 
+def _retaken_since_escalated(comments: Sequence[IssueComment]) -> bool:
+    """Whether an `Auto-resumed:` comment follows the last `Escalated:` one: the pause's
+    first retake after its stated reset (`rules.account_limit_due`) was already made."""
+    from .escalate import ESCALATED
+
+    last = -1
+    for i, comment in enumerate(comments):
+        if comment.body.startswith(ESCALATED):
+            last = i
+    return any(c.body.startswith(AUTO_RESUMED) for c in comments[last + 1 :])
+
+
 def _last_non_system_index(
     comments: Sequence[IssueComment], system_comments: tuple[str, ...]
 ) -> int:
@@ -742,7 +754,9 @@ def gather_merges(
 def gather_resumes(ports: Ports, now: datetime) -> list[rules.ResumeCandidate]:
     """Every paused task `rules.auto_resumable` finds eligible, with the `since`/
     `prior`/`limit` `rules.next_attempt_at` needs, and the `chase_prior`/`ceiling_spent`
-    `rules.resume_exhausted` decides over. A task with no `Escalated:` comment
+    `rules.resume_exhausted` decides over, and for an `account_limit` pause the stated reset
+    (`rules.stated_reset`) and whether it was retaken since (`rules.account_limit_due`'s
+    inputs; ADR-0039, addendum GH-381). A task with no `Escalated:` comment
     at all (its document disagrees with the issue, or it has no issue) is skipped: there
     is no wait to measure `since` from."""
     resumes: list[rules.ResumeCandidate] = []
@@ -768,13 +782,25 @@ def gather_resumes(ports: Ports, now: datetime) -> list[rules.ResumeCandidate]:
             # top of a comment `agentic resume`'s own `--yes` would otherwise run over.
             continue
         chase = _prior_auto_resumes(comments)
+        resets_at = None
         if reason == "account_limit":
             prior, ceiling_spent = _account_limit_counts(raw, comments, chase)
+            resets_at = rules.stated_reset(raw)
         else:
             prior, ceiling_spent = chase, False
         limit = rules.auto_resume_limit(raw, reason)
         resumes.append(
-            rules.ResumeCandidate(number, reason, since, prior, limit, chase, ceiling_spent)
+            rules.ResumeCandidate(
+                number,
+                reason,
+                since,
+                prior,
+                limit,
+                chase,
+                ceiling_spent,
+                resets_at,
+                _retaken_since_escalated(comments),
+            )
         )
     return resumes
 
