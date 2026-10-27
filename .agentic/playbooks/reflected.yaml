@@ -1,0 +1,269 @@
+started_at: '2026-10-25T11:49:24.156+00:00'
+summaries: 6
+summarised: 60
+tasks:
+  GH-344@review:
+    cost_usd: 0.0846
+    decisions: 1
+  GH-346@review:
+    cost_usd: 0.0
+  GH-348@review:
+    cost_usd: 0.0677
+  GH-350@review:
+    cost_usd: 0.0
+  GH-352@review:
+    cost_usd: 0.0386
+  GH-214@review:
+    cost_usd: 0.0464
+  GH-218@review:
+    cost_usd: 0.0314
+  GH-222@review:
+    cost_usd: 0.0315
+  GH-221@review:
+    cost_usd: 0.0365
+  GH-226@review:
+    cost_usd: 0.0
+  GH-223@review:
+    cost_usd: 0.0533
+  GH-239@review:
+    cost_usd: 0.1859
+    applied:
+    - op: add
+      slug: developer
+      category: standard-other
+      lesson: When you create a module, add it to the type-checked file registry in the same change and run the declared type check on it explicitly before you deliver.
+      item_id: ''
+      tasks:
+      - GH-239
+  GH-238@review:
+    cost_usd: 0.0314
+  GH-242@review:
+    cost_usd: 0.0617
+  GH-249@review:
+    cost_usd: 0.0517
+  GH-250@review:
+    cost_usd: 0.0
+  GH-246@review:
+    cost_usd: 0.037
+    decisions: 1
+  GH-243@review:
+    cost_usd: 0.0323
+  GH-227@review:
+    cost_usd: 0.0372
+  GH-255@review:
+    cost_usd: 0.0597
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-other
+      lesson: ''
+      item_id: developer-1
+      tasks:
+      - GH-255
+  GH-257@review:
+    cost_usd: 0.0526
+  GH-259@review:
+    cost_usd: 0.0522
+  GH-229@review:
+    cost_usd: 0.0719
+  GH-263@review:
+    cost_usd: 0.0791
+  GH-262@review:
+    cost_usd: 0.035
+  GH-266@review:
+    cost_usd: 0.0344
+  GH-267@review:
+    cost_usd: 0.0691
+  GH-270@review:
+    cost_usd: 0.051
+  GH-273@review:
+    cost_usd: 0.0515
+  GH-274@review:
+    cost_usd: 0.0931
+  GH-272@review:
+    cost_usd: 0.0
+  GH-276@review:
+    cost_usd: 0.0578
+  GH-278@review:
+    cost_usd: 0.0
+  GH-282@review:
+    cost_usd: 0.0435
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-other
+      lesson: ''
+      item_id: developer-1
+      tasks:
+      - GH-282
+  GH-283@review:
+    cost_usd: 0.0399
+  GH-285@review:
+    cost_usd: 0.0
+  GH-287@review:
+    cost_usd: 0.0
+  GH-290@review:
+    cost_usd: 0.0318
+  GH-292@review:
+    cost_usd: 0.0969
+  GH-294@review:
+    cost_usd: 0.0438
+  GH-293@review:
+    cost_usd: 0.1471
+  GH-301@review:
+    cost_usd: 0.0379
+  GH-304@review:
+    cost_usd: 0.0462
+  GH-297@review:
+    cost_usd: 0.0839
+  GH-298@review:
+    cost_usd: 0.0318
+  GH-295@review:
+    cost_usd: 0.0615
+  GH-296@review:
+    cost_usd: 0.1132
+  GH-299@review:
+    cost_usd: 0.0567
+  GH-310@review:
+    cost_usd: 0.034
+  GH-308@review:
+    cost_usd: 0.0346
+  GH-315@review:
+    cost_usd: 0.0943
+  GH-319@review:
+    cost_usd: 0.0897
+    applied:
+    - op: add
+      slug: developer
+      category: spec-missing-test
+      lesson: Before you deliver, list each acceptance criterion and full-path scenario in the brief and name the test that asserts it at the declared seam, through to its final outcome, not only the first steps.
+      item_id: ''
+      tasks:
+      - GH-319
+  GH-322@review:
+    cost_usd: 0.0611
+  GH-326@review:
+    cost_usd: 0.033
+  GH-328@review:
+    cost_usd: 0.0603
+    applied:
+    - op: add
+      slug: developer
+      category: standard-typing-silenced
+      lesson: Never use cast, a bare ignore or an override to satisfy the type checker. Give the data a precise type at its source, and do not widen a shared signature, which only moves the silencing to every caller.
+      item_id: ''
+      tasks:
+      - GH-328
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-328
+  GH-320@review:
+    cost_usd: 0.0625
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-typing-silenced
+      lesson: ''
+      item_id: developer-3
+      tasks:
+      - GH-320
+    decisions: 1
+  GH-321@review:
+    cost_usd: 0.1384
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-321
+  GH-330@review:
+    cost_usd: 0.0669
+  GH-334@review:
+    cost_usd: 0.0541
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-typing-silenced
+      lesson: ''
+      item_id: developer-3
+      tasks:
+      - GH-334
+  GH-336@review:
+    cost_usd: 0.0464
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-typing-silenced
+      lesson: ''
+      item_id: developer-3
+      tasks:
+      - GH-336
+  GH-338@review:
+    cost_usd: 0.059
+  GH-340@review:
+    cost_usd: 0.0798
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-typing-silenced
+      lesson: ''
+      item_id: developer-3
+      tasks:
+      - GH-340
+  GH-342@review:
+    cost_usd: 0.0395
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-342
+  GH-363@review:
+    cost_usd: 0.0426
+  GH-362@review:
+    cost_usd: 0.0882
+    applied:
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-362
+  GH-358@review:
+    cost_usd: 0.0914
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-typing-silenced
+      lesson: ''
+      item_id: developer-3
+      tasks:
+      - GH-358
+    - op: bump
+      slug: developer
+      category: spec-missing-test
+      lesson: ''
+      item_id: developer-2
+      tasks:
+      - GH-358
+  GH-359@review:
+    cost_usd: 0.0958
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-typing-silenced
+      lesson: ''
+      item_id: developer-3
+      tasks:
+      - GH-359
+  GH-360@review:
+    cost_usd: 0.1061
