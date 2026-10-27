@@ -89,6 +89,28 @@ def test_each_row_of_the_table_gets_its_etapa() -> None:
     assert {w.value for w in board.written if w.field == "fin"} == {date(2026, 10, 20)}
 
 
+def test_cost_and_first_run_day_come_from_the_document_through_the_mirror() -> None:
+    docs = documents(
+        i1={
+            "status": "developing",
+            "cost_usd": 3.456,
+            "landing_cost_carried": 1.0,
+            "runs": [
+                {"role": "developer", "started_at": "2026-10-22T23:30:00-03:00"},
+                {"role": "tech_lead", "started_at": "2026-10-21T10:00:00+00:00"},
+                {"role": "reviewer", "started_at": "not a date"},
+            ],
+        },
+    )
+    board = FakeBoard(open=[row(1), row(2)])
+    ports, _ = ports_with(board, docs)
+    mirror(ports)
+    by_field = {(w.issue, w.field): w.value for w in board.written}
+    assert by_field[(1, "costo")] == 4.46
+    assert by_field[(1, "inicio")] == date(2026, 10, 21)
+    assert (2, "costo") not in by_field and (2, "inicio") not in by_field
+
+
 def test_unreadable_eval_set_keeps_the_pr_with_the_human() -> None:
     board = FakeBoard(open=[row(1)])
     ports, _ = ports_with(board, documents(i1={"status": "ready_for_review"}))

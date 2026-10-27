@@ -300,9 +300,11 @@ def _fields(
 ) -> tuple[str, dict[str, object]]:
     declared = ["$project: ID!"]
     variables: dict[str, object] = {"project": ids.project}
+    used = {write.field for writes in batch.values() for write in writes}
     for key, field_id in ids.fields.items():
-        declared.append(f"$f_{key}: ID!")
-        variables[f"f_{key}"] = field_id
+        if key in used:  # GraphQL rejects a declared variable the query never uses
+            declared.append(f"$f_{key}: ID!")
+            variables[f"f_{key}"] = field_id
     calls = []
     for number, writes in batch.items():
         item = _alias(number, "item")

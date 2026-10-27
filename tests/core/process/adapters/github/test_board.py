@@ -37,6 +37,20 @@ def identity(skip: str | None = None, options: list[str] | None = None) -> dict:
     return {"data": {"repositoryOwner": {"projectV2": project}}}
 
 
+def assert_variables_are_all_used(query: str) -> None:
+    """GraphQL validation (spec 5.8.4): a declared variable the query never uses is an error."""
+    head, _, rest = query.partition(") {")
+    declared = set(re.findall(r"\$(\w+):", head))
+    used = set(re.findall(r"\$(\w+)", rest))
+    assert declared == used, f"declared and used variables differ: {declared ^ used}"
+
+
+def test_the_variable_check_rejects_a_declared_variable_the_query_never_uses():
+    with pytest.raises(AssertionError):
+        assert_variables_are_all_used("mutation($a: ID!, $b: ID!) { x: f(id: $a) { id } }")
+    assert_variables_are_all_used("mutation($a: ID!) { x: f(id: $a) { id } }")
+
+
 class FakeGh:
     """Answers `gh` calls: records the GraphQL bodies it was given (read from the `--input`
     file while it still exists) and answers from `responses`, one per graphql call."""
@@ -51,7 +65,9 @@ class FakeGh:
     def __call__(self, args, cwd, capture_output, text, check):
         self.calls.append(list(args))
         if args[1:3] == ["api", "graphql"]:
-            self.bodies.append(json.loads(Path(args[args.index("--input") + 1]).read_text()))
+            body = json.loads(Path(args[args.index("--input") + 1]).read_text())
+            self.bodies.append(body)
+            assert_variables_are_all_used(body["query"])
             out = self.responses.pop(0)
             out = out if isinstance(out, str) else json.dumps(out)
             return subprocess.CompletedProcess(args, self.returncode, out, "")
@@ -131,6 +147,16 @@ def test_a_batch_is_two_requests_with_every_value_a_typed_variable():
     assert "i7_fin: clearProjectV2ItemFieldValue" in query and "i7_fin" not in variables
     assert variables["i7_item"] == "PVTI_7" and variables["f_etapa"] == "F_etapa"
     assert not any(k in variables for k in ("f_bloque", "f_hito"))
+
+
+def test_a_batch_declares_only_the_field_ids_its_writes_use():
+    gh = FakeGh([identity(), added(7), {"data": {}}])
+    b = board(gh)
+    prime(gh, b, 7)
+    assert b.write([FieldWrite(7, "etapa", "En cola")]) == frozenset({7})
+    fields = gh.bodies[-1]
+    assert "$f_etapa: ID!" in fields["query"] and "$f_bloqueo" not in fields["query"]
+    assert set(fields["variables"]) == {"project", "f_etapa", "i7_item", "i7_etapa"}
 
 
 def test_only_aliases_of_the_fixed_form_are_in_the_query_text():
