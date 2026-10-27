@@ -279,3 +279,5 @@ tasks:
       - GH-353
   GH-354@review:
     cost_usd: 0.1246
+  GH-365@review:
+    cost_usd: 0.0861

@@ -703,3 +703,21 @@ candidates:
   - finding
   - return
   added_at: '2026-10-27T07:16:54.503+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When a doc or reference states a behaviour (e.g. 'fails at load'), trace the code path that enforces it and confirm it is actually called there before you deliver.
+  confidence: medium
+  seen_in:
+  - GH-365
+  sources:
+  - finding
+  added_at: '2026-10-27T09:39:03.186+00:00'
+- slug: developer
+  category: standard-other
+  lesson: After adding a rule to a prompt, re-read the surrounding text for lines it now contradicts and for 'as above' references that point at nothing, and fix them in the same change.
+  confidence: medium
+  seen_in:
+  - GH-365
+  sources:
+  - finding
+  added_at: '2026-10-27T09:39:03.186+00:00'
