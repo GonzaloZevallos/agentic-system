@@ -3659,6 +3659,9 @@ class MergeFacts:
     reads, and `None` unreadable. `ci_required` holds the stack's names joined with the plan's
     (`ci_gate_names`, GH-371) and `ci_plan_only` the plan's that the stack does not declare: a
     green CI that covers only those never decides `merge`, the local checks do.
+    `ci_red_on_base` (GH-371) is the failing required names that are also red on the base
+    branch's latest CI report (`ci.red_on_base`): `()` when none, when that report was not read,
+    or in a `MergeFacts` built without it; only the landing reads it.
     `ci_untrusted` (GH-239) is `None` when `touched_paths` is unknown and `True` when the
     diff touches the CI's own definition (`CI_DEFINITION_PREFIX`): a CI whose definition the
     change itself could have edited proves nothing, so it never decides `merge`.
@@ -3708,6 +3711,7 @@ class MergeFacts:
     perf_head: str | None = None
     criteria_regressed: tuple[str, ...] | None = ()
     ci_plan_only: tuple[str, ...] = ()
+    ci_red_on_base: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

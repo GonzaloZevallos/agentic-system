@@ -116,6 +116,24 @@ def pending_names(report: CiReport, declared: tuple[str, ...]) -> tuple[str, ...
     )
 
 
+def red_on_base(head: CiReport, base: CiReport | None, names: tuple[str, ...]) -> tuple[str, ...]:
+    """The `names` that fail on `head` and also fail on `base`, the base branch's latest
+    report, in `names` order (GH-371). `()` without a base report: a base that was not read
+    proves nothing. Red on both says only that both are red, not that it is the same failure."""
+    if base is None:
+        return ()
+    on_head = {check.name for check in ci_state(head, names).failing}
+    on_base = {check.name for check in ci_state(base, names).failing}
+    return tuple(name for name in dict.fromkeys(names) if name in on_head and name in on_base)
+
+
+def run_link(report: CiReport, name: str) -> str | None:
+    """The link of the first red run of `name` in `report` (its status line when GitHub gave
+    no link), `None` when no run of it is red."""
+    red = _first_red(report, name)
+    return None if red is None else _reference(red)
+
+
 def ci_fresh(
     base_sha: str | None, current_master: str | None, contains: Containment | None
 ) -> bool | None:
