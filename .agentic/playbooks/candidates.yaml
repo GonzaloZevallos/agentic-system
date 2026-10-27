@@ -721,3 +721,12 @@ candidates:
   sources:
   - finding
   added_at: '2026-10-27T09:39:03.186+00:00'
+- slug: developer_integrator
+  category: spec-missing-test
+  lesson: Before you deliver, check each test the wiring brief asks for against the tests that exist, and write the missing ones. A test of a neighbouring end-to-end path does not replace a requested unit test.
+  confidence: medium
+  seen_in:
+  - GH-355
+  sources:
+  - finding
+  added_at: '2026-10-27T10:21:47.869+00:00'
