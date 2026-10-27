@@ -311,6 +311,54 @@ def check_durations(rows: Sequence[CheckResult]) -> dict[str, float]:
     return totals
 
 
+def decided_durations(rows: Sequence[CheckResult]) -> dict[str, float]:
+    """Seconds of the run that decided each passing check, by name (GH-365): the duration of
+    the `final_results` row, when it passed and carries one. `check_durations` answers how long
+    this invocation spent on a check, so it skips a reused row and a rerun; this answers how long
+    the run whose verdict stands took: a flake is its green rerun, and a reused pass is its
+    stored `duration_s`, measured on that same tree. A failed or timed-out check has no entry,
+    and neither has a row without a duration: that is never counted as zero."""
+    return {
+        row["name"]: row["duration_s"]
+        for row in final_results(rows)
+        if row["passed"] and "duration_s" in row
+    }
+
+
+class BudgetBreach(TypedDict):
+    """One check that took longer than its declared budget: a declared name and two numbers,
+    never text taken from a command or a role."""
+
+    name: str
+    duration_s: float
+    budget_s: float
+
+
+def budget_breaches(
+    rows: Sequence[CheckResult], budgets: Mapping[str, float]
+) -> list[BudgetBreach]:
+    """The budgeted checks whose decided duration is strictly above their budget, in the
+    budgets' declared order. A pure verdict of recorded rows and declared budgets; an
+    unbudgeted check never appears."""
+    decided = decided_durations(rows)
+    return [
+        BudgetBreach(name=name, duration_s=decided[name], budget_s=budget)
+        for name, budget in budgets.items()
+        if name in decided and decided[name] > budget
+    ]
+
+
+def over_budget_markdown(breaches: Sequence[BudgetBreach]) -> str:
+    """The pull request's `Checks over budget` part: one row per breach of the record in force,
+    and the one sentence on how to read it. Called only with at least one breach."""
+    rows = [f"| {b['name']} | {b['duration_s']} | {b['budget_s']} |" for b in breaches]
+    table = "\n".join(["| Check | Seconds | Budget (s) |", "|---|---|---|", *rows])
+    return (
+        f"{table}\n\nOnly a breach that repeats across tasks means the suite grew; the remedy "
+        "is the budget in `stack.yaml` or a smaller suite."
+    )
+
+
 def refused(reason: str, count: int) -> str:
     """The reason as the model reads it, with how many refusals are left."""
     limit = REFUSALS if count <= REFUSALS else MOVING_REFUSALS
@@ -398,10 +446,11 @@ def checks_markdown(
     the gate let through after its refusals still shows what it leaves over the cap."""
     moded = any("mode" in r for r in results)
     if moded:
-        header = "| Check | Command | Mode | Result |\n|---|---|---|---|\n"
+        header = "| Check | Command | Mode | Result | Seconds |\n|---|---|---|---|---|\n"
     else:
-        header = "| Check | Command | Result |\n|---|---|---|\n"
+        header = "| Check | Command | Result | Seconds |\n|---|---|---|---|\n"
     verdicts = outcomes(results)
+    seconds = check_durations(results)
     rows = []
     for r in results:
         outcome = "passed" if r["passed"] else "**failed**"
@@ -414,7 +463,8 @@ def checks_markdown(
         cells = [f"`{r['name']}`", f"`{r['command']}`"]
         if moded:
             cells.append(r.get("mode", "-"))
-        rows.append("| " + " | ".join([*cells, outcome]) + " |")
+        shown = f"{seconds[r['name']]:.1f}" if r["name"] in seconds else "-"
+        rows.append("| " + " | ".join([*cells, outcome, shown]) + " |")
     parts = [
         f"### Checks\n\nRun by the system on `{head}` when the Developer delivered.",
         header + "\n".join(rows),
@@ -519,6 +569,8 @@ def merge_checks_record(
     )
     by_name = {result["name"]: result for result in decided}
     verdicts = outcomes(results or [])
+    # The only place a record's per-check seconds come from; absent where there is no sample.
+    seconds = check_durations(results or [])
     entries: list[dict[str, object]] = []
     for name in declared:
         found = by_name.get(name)
@@ -540,6 +592,8 @@ def merge_checks_record(
             if found.get("rerun"):
                 failed["rerun"] = True
             entries.append(failed)
+        if found is not None and name in seconds:
+            entries[-1]["duration_s"] = round(seconds[name], 1)
     if witness is not None and not witness["passed"]:
         entries.append(
             {"name": _WITNESS_ENTRY, "passed": False, "tail": _tail_of(witness["output"])}

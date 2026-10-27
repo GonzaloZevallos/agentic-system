@@ -640,3 +640,54 @@ def test_a_form_without_delivery_checks_is_refused():
     data = rerun_data()
     del data["delivery_checks"]
     reject(data, r"`rerun_checks`.*requires `delivery_checks`")
+
+
+# --- check_budgets (GH-365) ----------------------------------------------------------------
+
+
+def budget_data(budgets=None, **more):
+    return {
+        "checks": {"tests": "pytest", "lint": "ruff check ."},
+        "delivery_checks": ["lint"],
+        "check_budgets": {"tests": 600, "lint": 30.5} if budgets is None else budgets,
+        **more,
+    }
+
+
+def test_an_absent_check_budgets_declares_none():
+    assert stack.check_budgets({"checks": {"tests": "pytest"}}, "x") == {}
+
+
+def test_check_budgets_keep_each_figure_by_check_name_in_order():
+    found = stack.check_budgets(budget_data(), "x")
+    assert list(found.items()) == [("tests", 600), ("lint", 30.5)]
+
+
+def test_check_budgets_is_a_key_the_file_may_declare():
+    assert "check_budgets" in stack.KEYS
+    stack.checks(budget_data(), "x")  # an unknown key would raise here
+
+
+@pytest.mark.parametrize(
+    ("budgets", "match"),
+    [
+        ([("tests", 5)], "mapping of checks to seconds"),
+        ({}, "declared empty"),
+        ({"e2e": 5}, "'e2e' under `check_budgets` is not a check declared under `checks`"),
+        ({"tests": 0}, "positive number of seconds"),
+        ({"tests": -3}, "positive number of seconds"),
+        ({"tests": True}, "positive number of seconds"),
+        ({"tests": "600"}, "positive number of seconds"),
+        ({"tests": None}, "positive number of seconds"),
+    ],
+)
+def test_a_check_budgets_that_is_not_check_to_positive_seconds_fails_at_load(budgets, match):
+    with pytest.raises(ValueError, match=match):
+        stack.check_budgets(budget_data(budgets), "stack.yaml")
+
+
+def test_check_budgets_without_delivery_checks_is_refused_naming_the_full_run():
+    data = budget_data()
+    del data["delivery_checks"]
+    with pytest.raises(ValueError, match="stack.yaml: `check_budgets` requires `delivery_checks`"):
+        stack.check_budgets(data, "stack.yaml")

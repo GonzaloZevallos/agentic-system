@@ -434,6 +434,13 @@ class ProductStack(Protocol):
         product with no `delivery_checks`."""
         ...
 
+    def check_budgets(self, revision: str) -> dict[str, float]:
+        """Check name -> the seconds it may take on the `full_checks` run (`core.knowledge`,
+        GH-365), as the commit `revision` declares them. Empty when the product declares none,
+        which is every verdict of today. Raises `ValueError` when the key is malformed, or
+        declared by a product with no `delivery_checks`."""
+        ...
+
     def merge_inert(self, revision: str) -> tuple[str, ...]:
         """The globs of the paths the product promises none of its checks reads
         (`core.knowledge`, ADR-0045 amendment), as the commit `revision` declares them: what

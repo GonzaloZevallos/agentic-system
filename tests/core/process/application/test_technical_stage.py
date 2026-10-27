@@ -2,6 +2,8 @@
 in its own checkout, the review loop per pair, the integration and the delivery
 (ADR-0011, ADR-0014)."""
 
+import re
+
 import pytest
 
 from agentic.core.process.application.deliver import deliver
@@ -43,6 +45,12 @@ TASK = {
 }
 ASK, ANSWER = "tech_lead_ephemeral", "tech_lead_interviewee"
 TASK_PATH = MemoryWorkspace.ROOT / "GH-12"
+
+
+def _unmeasured(section: str) -> str:
+    """The section with the measured seconds of each check row replaced by `-`: the figure
+    is wall time of a fake command, never an exact value to pin."""
+    return re.sub(r"\| \d+\.\d \|\n", "| - |\n", section)
 
 
 @pytest.fixture
@@ -148,10 +156,10 @@ async def test_develop_runs_the_developer_unattended_in_the_subtask_checkout(cfg
     assert patch["subtasks"] == {
         "api": {**sub("api"), "status": "delivered", "branch": "agentic/GH-12.api", "base": "base1"}
     }
-    assert patch["sections"] == {
+    assert {name: _unmeasured(text) for name, text in patch["sections"].items()} == {
         "Developer: api": "### Checks\n\nRun by the system on `head2` when the Developer "
-        "delivered.\n\n| Check | Command | Result |\n|---|---|---|\n| `tests` | `pytest` "
-        "| passed |\n\n### Changes\n\nx.py"
+        "delivered.\n\n| Check | Command | Result | Seconds |\n|---|---|---|---|\n"
+        "| `tests` | `pytest` | passed | - |\n\n### Changes\n\nx.py"
     }
     assert patch["runs"][0]["section"] == "Developer: api" and patch["status"] == "developing"
     # A Developer run with no `depends_on` produces the same patch keys and the same
@@ -852,7 +860,7 @@ async def test_the_integrator_builds_on_the_task_branch_with_the_branches_listed
     assert patch["subtasks"][INTEGRATION]["status"] == "delivered"
     (section,) = patch["sections"]
     assert section == "Developer: integration"
-    assert patch["sections"][section].endswith("| passed |\n\n### Changes\n\nx.py")
+    assert patch["sections"][section].endswith("\n\n### Changes\n\nx.py")
 
 
 async def test_deliver_pushes_opens_the_pull_request_and_tells_the_issue(cfg):
@@ -1286,7 +1294,7 @@ async def test_the_integrator_never_maps_invariants_and_writes_no_coverage_block
     ports.workspace.moved.add(TASK_PATH)
     patch = await develop(state, cfg, ports)
     assert "Coverage" not in patch["sections"]["Developer: integration"]
-    assert patch["sections"]["Developer: integration"].endswith("| passed |\n\n### Changes\n\nx.py")
+    assert patch["sections"]["Developer: integration"].endswith("\n\n### Changes\n\nx.py")
     assert "### Coverage" not in patch["sections"]["Developer: integration"]
     # Only the schema guard: no map check is wired on the integration.
     assert type(runner.calls[0]["guard"]).__name__ == "RoleSchemaGuard"
@@ -1299,9 +1307,10 @@ async def test_a_plan_with_no_invariants_still_checks_locations_and_writes_no_bl
     ports.workspace.moved.add(ports.workspace.subtask_checkout("GH-12", "api").path)
     patch = await develop(state, cfg, ports)
     # Exactly what the section was before the coverage map existed: checks, then the text.
-    assert patch["sections"]["Developer: api"] == (
+    assert _unmeasured(patch["sections"]["Developer: api"]) == (
         "### Checks\n\nRun by the system on `head2` when the Developer delivered.\n\n"
-        "| Check | Command | Result |\n|---|---|---|\n| `tests` | `pytest` | passed |\n\n"
+        "| Check | Command | Result | Seconds |\n|---|---|---|---|\n"
+        "| `tests` | `pytest` | passed | - |\n\n"
         "### Changes\n\nx.py"
     )
     # The `brief:` locations are checked on every non-integration subtask, so the map check is
