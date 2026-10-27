@@ -52,11 +52,13 @@ cancellation, which stays what it was (GH-299, ADR-0057).
 from __future__ import annotations
 
 import asyncio
+import errno
 import os
 import sys
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import IO, Any
@@ -84,10 +86,12 @@ from agentic.shared.environment import trace_id_of, with_resource_marker
 from ...application.ports import (
     AttemptFailed,
     CheckTool,
+    FreeSpace,
     Presubmit,
     ProcessReaper,
     RawResult,
     SchemaGuard,
+    Scratch,
 )
 from ...domain import reaping
 from ...domain.denials import denial_for
@@ -99,6 +103,7 @@ from ...domain.rules import (
     failure_reason,
     max_turns_motive,
 )
+from ...domain.scratch import SpaceReading
 from ...domain.stall import (
     CHECK_EVERY_S,
     ChildActivity,
@@ -160,6 +165,7 @@ def options_for(
     hook_activity: HookActivity | None = None,
     check_tool: CheckTool | None = None,
     check_results_dir: Path | None = None,
+    writable: tuple[Path, ...] = (),
 ) -> ClaudeAgentOptions:
     tools, allowed = list(role.tools), list(role.allowed)
     if role.skills and SKILL_TOOL not in tools:
@@ -213,6 +219,7 @@ def options_for(
             forbidden,
             hook_activity,
             check_results_dir,
+            writable,
         )
         or None,
         # A role that executes runs under `bypassPermissions`, which already shadows
@@ -287,6 +294,8 @@ class ClaudeSdkRunner:
         stall_timeout_s: float = 2400.0,
         clock: Callable[[], float] = time.monotonic,
         check_results_dir: Path | None = None,
+        scratch: Scratch | None = None,
+        free_space: FreeSpace | None = None,
     ):
         # `verbose` streams each role's generation to `stream` (stderr by default).
         # `env` is added to every role's process: the git identity, for one.
@@ -306,6 +315,11 @@ class ClaudeSdkRunner:
         # The machine's store of check results (ADR-0065): a role that executes may not
         # read or write it (`hooks.store_path_denial`).
         self.check_results_dir = check_results_dir
+        # Where each attempt's temporary files go, and how a failed one measures the
+        # disk (GH-391, ADR-0069). Both `None` is an attempt with the inherited
+        # `TMPDIR` and no reading, as before.
+        self.scratch = scratch
+        self.free_space = free_space
 
     async def run_once(
         self,
@@ -327,35 +341,65 @@ class ClaudeSdkRunner:
         """One attempt, marked with `owner_task` (the parent task, never a subtask) and a
         token of its own, and reaped once its stream is closed, whichever way it ended."""
         token = uuid.uuid4().hex
-        try:
-            raw = await self._session(
-                role,
-                prompt,
-                system_prompt=system_prompt,
-                model=model,
-                json_schema=json_schema,
-                cwd=cwd,
-                owner_mark=reaping.mark(self.product_key, owner_task, os.getpid(), token),
-                owner_task=owner_task,
-                token=token,
-                resume=resume,
-                max_budget_usd=max_budget_usd,
-                presubmit=presubmit,
-                guard=guard,
-                forbidden=forbidden,
-                check_tool=check_tool,
-            )
-        except AttemptFailed as exc:
-            exc.reaped = list(await self._reap(owner_task, token))
-            raise
-        except BaseException:
-            # A cancellation, or the process being asked to die: nothing to record, and
-            # the reap still has to happen (`_reap` finishes it even if this is cancelled
-            # again).
-            await self._reap(owner_task, token)
-            raise
-        reaped = await self._reap(owner_task, token)
+        hooks = HookActivity(self.clock)
+        # Opened before the session and closed after the reap, so the directory outlives
+        # every process of the attempt; its removal, then its record, is the last thing.
+        with self._scratch_for(owner_task, role, token) as (scratch_dir, kept):
+            try:
+                raw = await self._session(
+                    role,
+                    prompt,
+                    system_prompt=system_prompt,
+                    model=model,
+                    json_schema=json_schema,
+                    cwd=cwd,
+                    owner_mark=reaping.mark(self.product_key, owner_task, os.getpid(), token),
+                    owner_task=owner_task,
+                    token=token,
+                    resume=resume,
+                    max_budget_usd=max_budget_usd,
+                    presubmit=presubmit,
+                    guard=guard,
+                    forbidden=forbidden,
+                    check_tool=check_tool,
+                    hooks=hooks,
+                    scratch_dir=scratch_dir,
+                    kept=kept,
+                )
+            except AttemptFailed as exc:
+                exc.reaped = list(await self._reap(owner_task, token))
+                # Only a failing attempt reads the disk, and before its directory is
+                # removed: the space the directory held is not the space it left.
+                exc.space = self._read_space(scratch_dir)
+                exc.enospc = exc.enospc or hooks.enospc or _caused_by_enospc(exc)
+                raise
+            except BaseException:
+                # A cancellation, or the process being asked to die: nothing to record, and
+                # the reap still has to happen (`_reap` finishes it even if this is
+                # cancelled again).
+                await self._reap(owner_task, token)
+                raise
+            reaped = await self._reap(owner_task, token)
         return replace(raw, reaped=list(reaped)) if reaped else raw
+
+    def _scratch_for(
+        self, owner_task: str, role: Role, token: str
+    ) -> AbstractContextManager[tuple[Path | None, Path | None]]:
+        """The attempt's scratch directory and its task's evidence folder, or `(None,
+        None)` when no scratch is composed. The task is the owner task, the root one."""
+        if self.scratch is None:
+            return nullcontext((None, None))
+        return _opened(self.scratch, owner_task, role.slug, token)
+
+    def _read_space(self, scratch_dir: Path | None) -> SpaceReading | None:
+        """The lower of the scratch volume's and `/tmp`'s free bytes and free inodes."""
+        if self.free_space is None or scratch_dir is None:
+            return None
+        readings = [self.free_space.read(scratch_dir), self.free_space.read(Path("/tmp"))]
+        return SpaceReading(
+            free_bytes=min(r.free_bytes for r in readings),
+            free_inodes=min(r.free_inodes for r in readings),
+        )
 
     async def _reap(self, owner_task: str, token: str) -> tuple[reaping.ReapedProcess, ...]:
         """Stops what this attempt left running, off the event loop: the reap waits out a
@@ -385,6 +429,9 @@ class ClaudeSdkRunner:
         guard: SchemaGuard | None,
         forbidden: Sequence[Forbidden] | None,
         check_tool: CheckTool | None,
+        hooks: HookActivity,
+        scratch_dir: Path | None,
+        kept: Path | None,
     ) -> RawResult:
         denials = 0
         notice_firings = 0
@@ -419,9 +466,8 @@ class ClaudeSdkRunner:
         # place below, inside the stream loop's existing `parent_tool_use_id is None`
         # branch -- never by the hook, which only ever reads `.value`.
         turns = TurnCount()
-        # The delivery hooks in flight, one object per attempt like `turns` (never module
-        # state, never shared with another session): the watchdog reads it.
-        hooks = HookActivity(self.clock)
+        # `hooks`, the delivery hooks in flight, is one object per attempt like `turns`
+        # (never module state, never shared with another session): the watchdog reads it.
 
         def _mark_notice() -> None:
             nonlocal notice_firings
@@ -441,7 +487,7 @@ class ClaudeSdkRunner:
             max_budget_usd=max_budget_usd,
             traceparent=self.telemetry.traceparent(),
             partial=self.verbose,
-            env=self.env,
+            env={**self.env, **_scratch_env(scratch_dir, kept)},
             # The real inherited value, not `self.env` (the git identity overlay
             # composition builds on top of it): the process this runner itself is in
             # is the one thing that actually has the ambient `OTEL_RESOURCE_ATTRIBUTES`
@@ -458,6 +504,7 @@ class ClaudeSdkRunner:
             hook_activity=hooks,
             check_tool=check_tool,
             check_results_dir=self.check_results_dir,
+            writable=tuple(p for p in (scratch_dir, kept) if p is not None),
         )
 
         result: ResultMessage | None = None
@@ -701,6 +748,41 @@ class ClaudeSdkRunner:
         stream = self.stream or sys.stderr
         stream.write(text)
         stream.flush()
+
+
+def _opened(
+    scratch: Scratch, owner_task: str, slug: str, token: str
+) -> AbstractContextManager[tuple[Path | None, Path | None]]:
+    """`scratch.open` for a role attempt, yielding `(directory, evidence folder)`."""
+
+    @contextmanager
+    def opened() -> Iterator[tuple[Path, Path]]:
+        with scratch.open(owner_task, "r", token, slug) as directory:
+            yield directory, scratch.ensure_kept(owner_task)
+
+    return opened()
+
+
+def _scratch_env(scratch_dir: Path | None, kept: Path | None) -> dict[str, str]:
+    """What an attempt's processes are told about their disk: `TMPDIR` for what they
+    write and throw away, `TASK_EVIDENCE_DIR` for what they cite. Not `AGENTIC_*`: the
+    composition blanks those for a role."""
+    if scratch_dir is None or kept is None:
+        return {}
+    return {"TMPDIR": str(scratch_dir), "TASK_EVIDENCE_DIR": str(kept)}
+
+
+def _caused_by_enospc(failure: BaseException) -> bool:
+    """Whether the chain behind `failure` holds an `OSError` that carries `ENOSPC`: the
+    errno, a structured fact, never the message."""
+    seen: set[int] = set()
+    error: BaseException | None = failure
+    while error is not None and id(error) not in seen:
+        if isinstance(error, OSError) and error.errno == errno.ENOSPC:
+            return True
+        seen.add(id(error))
+        error = error.__cause__ or error.__context__
+    return False
 
 
 @dataclass
