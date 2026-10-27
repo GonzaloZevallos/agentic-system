@@ -18,6 +18,8 @@ from agentic.core.process.application.limits import RunLimits
 from agentic.core.process.application.ports import (
     AddedAdr,
     AddedLine,
+    Board,
+    BoardSent,
     BranchPullRequest,
     Checkout,
     CheckResults,
@@ -27,6 +29,7 @@ from agentic.core.process.application.ports import (
     GitError,
     Inbox,
     IssueComment,
+    IssueRow,
     IssueState,
     LaunchAttempt,
     ListedPullRequest,
@@ -43,6 +46,7 @@ from agentic.core.process.application.ports import (
     RunRegistration,
     SampleApp,
     SampleAppHandle,
+    SentMemory,
     TaskDocuments,
     Tracker,
     Upstream,
@@ -51,6 +55,7 @@ from agentic.core.process.application.ports import (
 )
 from agentic.core.process.domain import check_results as check_results_domain
 from agentic.core.process.domain import rules
+from agentic.core.process.domain.board import FieldWrite
 from agentic.core.process.domain.ci import CiReport, CiUnreadable, Containment
 from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.performance import Run, Scenario
@@ -1631,6 +1636,78 @@ class FakeLauncher:
         return self.pid
 
 
+class FakeBoard:
+    """GH-375: the Project board, in memory. Records every call as `(name, argument)`.
+    `open` and `closed` are the issues it reads; `fail` (an exception) is raised by every
+    method named in `fail_on` (all of them when empty); `unwritten` are issues `write`
+    leaves out of the set it returns, as a partially failed batch would."""
+
+    def __init__(
+        self,
+        open: Sequence[IssueRow] = (),
+        closed: Sequence[IssueRow] = (),
+        *,
+        project: str = "PVT_1",
+        fail: Exception | None = None,
+        fail_on: Collection[str] = (),
+        unwritten: Collection[int] = (),
+        limit_reached: bool = False,
+    ) -> None:
+        self.open = list(open)
+        self.closed = list(closed)
+        self.project = project
+        self.fail = fail
+        self.fail_on = set(fail_on)
+        self.unwritten = set(unwritten)
+        self.limit_reached = limit_reached
+        self.calls: list[tuple[str, object]] = []
+        self.written: list[FieldWrite] = []
+
+    def _enter(self, name: str, argument: object = None) -> None:
+        self.calls.append((name, argument))
+        if self.fail is not None and (not self.fail_on or name in self.fail_on):
+            raise self.fail
+
+    def project_id(self) -> str:
+        self._enter("project_id")
+        return self.project
+
+    def open_issues(self) -> list[IssueRow]:
+        self._enter("open_issues")
+        return list(self.open)
+
+    def all_issues(self) -> tuple[list[IssueRow], bool]:
+        self._enter("all_issues")
+        return [*self.open, *self.closed], self.limit_reached
+
+    def issue(self, number: int) -> IssueRow:
+        self._enter("issue", number)
+        for row in [*self.open, *self.closed]:
+            if row.number == number:
+                return row
+        raise ValueError(f"no issue #{number}")
+
+    def write(self, writes: Sequence[FieldWrite]) -> frozenset[int]:
+        self._enter("write", list(writes))
+        self.written.extend(writes)
+        return frozenset(w.issue for w in writes) - self.unwritten
+
+
+class FakeBoardSent:
+    """GH-375: the mirror's memory, in memory. `saved` keeps every memory it was given."""
+
+    def __init__(self, memory: SentMemory | None = None) -> None:
+        self.memory = memory if memory is not None else SentMemory()
+        self.saved: list[SentMemory] = []
+
+    def load(self) -> SentMemory:
+        return self.memory
+
+    def save(self, memory: SentMemory) -> None:
+        self.saved.append(memory)
+        self.memory = memory
+
+
 def memory_ports(
     runner: RoleRunner | None = None,
     *,
@@ -1649,6 +1726,8 @@ def memory_ports(
     perf_runner: PerfRunner | None = None,
     perf_lock: PerfLock | None = None,
     check_results: CheckResults | None = None,
+    board: Board | None = None,
+    board_sent: BoardSent | None = None,
 ) -> Ports:
     return Ports(
         runner=runner if runner is not None else ScriptedRunner(),
@@ -1667,6 +1746,8 @@ def memory_ports(
         perf_runner=perf_runner,
         perf_lock=perf_lock,
         check_results=check_results,
+        board=board,
+        board_sent=board_sent,
     )
 
 
