@@ -1979,6 +1979,23 @@ def full_checks_due(state: TaskState) -> bool:
     return not (recorded and recorded["passed"] and same_commit(recorded["head"], head))
 
 
+def pre_pr_important_due(state: TaskState) -> bool:
+    """Whether the important pass runs before the pull request opens (GH-354, ADR-0053
+    amendment): every unit is approved, the final unit (the integration's, or the single
+    subtask's when there is none) has been reviewed, no pull request exists yet, the
+    task's `owned` or `plan` `important` rows (`important_partition`) hold one that was not
+    lowered (`reported_severity`: the system's reading of an unbacked block, never a reason
+    to run a pass), and the pass is not spent. `outside` rows are the follow-up issue's."""
+    target = reviewed_unit_name(state)
+    if target is None or state.get("pull_request") or not all_approved(state):
+        return False
+    if _latest_index(state, review_section(target)) is None or important_pass_spent(state):
+        return False
+    partition = important_partition(state)
+    rows = [*(row for owned in partition.owned.values() for row in owned), *partition.plan]
+    return any("reported_severity" not in row for row in rows)
+
+
 def after_integrate(state: TaskState) -> str | None:
     if state.get("escalated"):
         return None
@@ -1986,6 +2003,8 @@ def after_integrate(state: TaskState) -> str | None:
         return "pipeline"
     if not all_approved(state):
         return None
+    if pre_pr_important_due(state):
+        return FIX_IMPORTANT
     if full_checks_due(state):
         return "full_checks"
     if copy_review_due(state):
@@ -1993,6 +2012,13 @@ def after_integrate(state: TaskState) -> str | None:
     if final_validation_due(state):
         return "final_validation"
     return "qa_performance" if qa_performance_due(state) else "deliver"
+
+
+def after_fix_important(state: TaskState) -> str | None:
+    """Always back to the fan-in: the pass reopened the owning units, which
+    `dispatched_subtasks` picks up; once they and the integration are approved again
+    `important_pass_spent` reads `True` and `after_integrate` goes on to the checks."""
+    return None if state.get("escalated") else "integrate"
 
 
 def after_final_validation(state: TaskState) -> str | None:
@@ -2344,13 +2370,48 @@ def entry_closed(entry: Mapping[str, object]) -> bool:
     )
 
 
+def before_pr(entry: Mapping[str, object]) -> bool:
+    """Whether a `landing` entry was written before the pull request existed (the pre-PR
+    important pass, GH-354): it says nothing about a pull request. The only place the key
+    `before_pr` is read; `returns.before_pr` re-exports it."""
+    return bool(entry.get("before_pr"))
+
+
+LANDING_IMPORTANT_PASSES_MAX = 1
+"""`fix_important` passes per task (GH-294, GH-354), before or after the pull request;
+declared, not measured. `domain.landing` re-exports it."""
+
+FIX_IMPORTANT = "fix_important"
+
+
+def important_pass_spent(state: Mapping[str, object], *, resolved_only: bool = False) -> bool:
+    """Whether the task's important pass (`LANDING_IMPORTANT_PASSES_MAX`) is spent: the
+    `landing` list holds that many `fix_important` entries, written before the pull request
+    (`before_pr`) or after it. With `resolved_only` an entry still in flight does not count --
+    the merge reads the pass as done only once the re-delivery closed it. The one place the
+    entries are counted: the pre-PR route, `landing_plan` and `MergeFacts.important_pass_done`
+    ask this and none counts `fix_important` itself."""
+    entries = state.get("landing")
+    passes = sum(
+        1
+        for entry in (entries if isinstance(entries, list) else [])
+        if isinstance(entry, Mapping)
+        and entry.get("step") == FIX_IMPORTANT
+        and (not resolved_only or entry.get("resolved_at"))
+    )
+    return passes >= LANDING_IMPORTANT_PASSES_MAX
+
+
 def landing_open(state: TaskState) -> bool:
     """A landing pass is in flight (GH-239): the last `landing` entry is not resolved and
     some subtask is reopened for it -- `returned`, `pending` or `delivered` awaiting its
-    review. `domain.landing.landing_open` is this, under the landing's own name."""
+    review. `domain.landing.landing_open` is this, under the landing's own name. An entry
+    written before the pull request existed (`before_pr`) is never one."""
     document: Mapping[str, object] = state  # `landing` is a document key, not a state field
     entries = document.get("landing")
     if not isinstance(entries, list) or not entries or entry_closed(entries[-1]):
+        return False
+    if before_pr(entries[-1]):
         return False
     return any(
         unit.get("status") in ("returned", "pending", "delivered")

@@ -154,6 +154,9 @@ class CheckoutPresubmit:
         # run builds a new instance and starts on affected-only again.
         self.stuck_full: set[str] = set()
         self.refusals = 0
+        # The failed ids each refusal named, in order (None when the product declares no
+        # `rerun_checks`): `presubmit.refusal_allowed` reads the last two.
+        self._refused_ids: list[tuple[str, ...] | None] = []
         # The witness's own budget, separate from `refusals`/`REFUSALS`: a misdeclared
         # witness must never spend the budget the checks need.
         self.witness_refusals = 0
@@ -226,10 +229,32 @@ class CheckoutPresubmit:
         reason = presubmit.refusal(
             moved, clean, presubmit.final_results(self.results or []), self.regressions
         )
-        if reason is None or self.refusals >= presubmit.REFUSALS:
+        if reason is None:
+            return None
+        # A third refusal asks whether the failure moved between the last two refusals.
+        previous, current = ([None, None, *self._refused_ids])[-2:]
+        if not presubmit.refusal_allowed(self.refusals, previous, current):
             return None
         self.refusals += 1
+        self._refused_ids.append(self._failed_ids())
         return presubmit.refused(reason, self.refusals)
+
+    def _failed_ids(self) -> tuple[str, ...] | None:
+        """The test ids the failing checks of this look name, or None when the product declares
+        no failed-tests form (the gate then keeps its budget of before). Read from each failing
+        check's first run, the one that saw the whole failure, never from its rerun."""
+        if not self.rerun_forms:
+            return None
+        ids: list[str] = []
+        for final in presubmit.final_results(self.results or []):
+            form = self.rerun_forms.get(final["name"])
+            if final["passed"] or form is None:
+                continue
+            first = [
+                r for r in self.results or [] if r["name"] == final["name"] and not r.get("rerun")
+            ]
+            ids.extend(presubmit.failed_ids(first[-1]["output"], form.test_id))
+        return tuple(ids)
 
     def _modes(self, plan: AffectedPlan, head: str) -> dict[str, Mode]:
         """Which form each check runs under the plan. A changed-paths lookup that fails

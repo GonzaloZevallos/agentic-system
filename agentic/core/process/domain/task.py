@@ -782,6 +782,10 @@ class LandingEntry(TypedDict, total=False):
     # Resume children actually spawned for this entry, and when the last one was.
     resume_spawns: int
     resume_spawned_at: str
+    # True on the `fix_important` entry the pass writes before the pull request exists
+    # (GH-354): no reader that assumes a pull request treats such an entry as one
+    # (`rules.before_pr`). Absent everywhere else.
+    before_pr: NotRequired[bool]
     # Diagnose entries only (GH-257): `delivered` is written before anything else once the
     # Landing Diagnoser delivered; `failure` is the reason an attempt that did not deliver
     # failed with, which the retry calendar reads. Both optional: a document without them

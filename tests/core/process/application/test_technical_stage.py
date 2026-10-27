@@ -1292,7 +1292,7 @@ async def test_the_integrator_never_maps_invariants_and_writes_no_coverage_block
     assert type(runner.calls[0]["guard"]).__name__ == "RoleSchemaGuard"
 
 
-async def test_a_plan_with_no_invariants_wires_no_map_check_and_writes_no_block(cfg):
+async def test_a_plan_with_no_invariants_still_checks_locations_and_writes_no_block(cfg):
     state = {**TASK, "subtasks": {"api": sub("api"), "b": sub("b")}, "subtask_id": "api"}
     runner = ScriptedRunner(developer=[delivered()])
     ports = memory_ports(runner)
@@ -1304,7 +1304,9 @@ async def test_a_plan_with_no_invariants_wires_no_map_check_and_writes_no_block(
         "| Check | Command | Result |\n|---|---|---|\n| `tests` | `pytest` | passed |\n\n"
         "### Changes\n\nx.py"
     )
-    assert type(runner.calls[0]["guard"]).__name__ == "RoleSchemaGuard"
+    # The `brief:` locations are checked on every non-integration subtask, so the map check is
+    # chained after the schema guard even with nothing to map.
+    assert type(runner.calls[0]["guard"]).__name__ == "GuardChain"
 
 
 class _ShortAndFullHeads(MemoryWorkspace):

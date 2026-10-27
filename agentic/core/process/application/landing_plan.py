@@ -141,7 +141,9 @@ def spent(
         diagnoses=count(lambda e: e.get("step") == "diagnose" and e.get("delivered") is True),
         waited_s=waited_s,
         renumbers=count(lambda e: e.get("step") == "renumber"),
-        important_passes=count(lambda e: e.get("step") == "fix_important"),
+        important_passes=(
+            landing.LANDING_IMPORTANT_PASSES_MAX if rules.important_pass_spent(raw) else 0
+        ),
         unsynced_for_upstream=(
             count_epoch(lambda e: e.get("lacks") == upstream) if upstream is not None else 0
         ),

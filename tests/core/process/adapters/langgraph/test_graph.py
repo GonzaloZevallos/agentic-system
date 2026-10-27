@@ -1154,6 +1154,7 @@ def test_exported_graph_uses_the_default_ports():
         "pipeline",
         "integrate",
         "full_checks",
+        "fix_important",
         "copy_review",
         "final_validation",
         "qa_performance",
@@ -1464,7 +1465,7 @@ async def test_what_one_review_found_reaches_the_next_wave_and_the_integration(c
     "worth a remark, not a charge", and nobody downstream ever saw them. They travel now,
     through the fan-in, which is the only place that sees every branch of a wave."""
     remark = {
-        **finding(severity="important", claim="counts subscriptions twice", scope="plan"),
+        **finding(severity="important", claim="counts subscriptions twice", scope="outside"),
         "location": "revenue.py:12",
     }
     plan = planned(

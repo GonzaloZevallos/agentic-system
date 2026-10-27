@@ -21,7 +21,7 @@ from ..domain.presubmit import AffectedPlan
 from ..domain.roles import DEVELOPER, DEVELOPER_INTEGRATOR
 from ..domain.task import INTEGRATION, TaskState
 from .checkouts import SetupFailed, subtask_checkout, task_base
-from .coverage_guard import InvariantCoverageGuard
+from .coverage_guard import InvariantCoverageGuard, checkout_view
 from .ports import Ports
 from .presubmit import CheckoutPresubmit, declared_checks, fast_tier, reuse_of
 from .run_check import RunCheck
@@ -178,8 +178,9 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             state, role, ports, checkout.path, notice_text, extra_sections, subtask_id
         )
     # The Developer's coverage map (GH-174): only a subtask's own Developer maps the plan's
-    # invariants, never the integrator, and only when the plan has any. Built once per
-    # run, so its one-denial cap survives the retry.
+    # invariants, never the integrator. The guard is built for every non-integration
+    # subtask, also when the plan has no invariants (count 0), because it checks the
+    # `brief:` locations too. Built once per run, so its one-denial cap survives the retry.
     mapped = 0 if subtask_id == INTEGRATION else len(state.get("invariants", []))
     output, patch = await run_role(
         state,
@@ -194,7 +195,11 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         prompt=prompt,
         cold_prompt=cold_prompt,
         presubmit=delivery_presubmit,
-        delivery_check=InvariantCoverageGuard(mapped) if mapped else None,
+        delivery_check=None
+        if subtask_id == INTEGRATION
+        else InvariantCoverageGuard(
+            mapped, checkout_view(ports.workspace, checkout.path, base, before)
+        ),
         forbidden=forbidden,
         check_tool=check_tool,
         tiers=presubmit.tier_section(list(fast), [n for n in checks if n not in fast])

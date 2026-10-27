@@ -3,7 +3,8 @@ before it counts, checked by the system when the model hands it back, not after.
 
 A delivery is committed code on a clean tree whose product checks pass (`core.knowledge`
 declares them). The presubmit refuses at most `REFUSALS` times per Developer run, its retry
-included: the reason goes
+included, plus one more when the product declares `failed_ids` and the failure is moving
+(`refusal_allowed`): the reason goes
 back to the model inside its turn, which is cheaper than a role failure or a review
 that returns it. Past that it lets the delivery through, and what the checks said is in
 the Developer's section, written by the system, for the reviewer to read. The commit and
@@ -22,6 +23,9 @@ from typing import Literal, NotRequired, TypedDict
 Mode = Literal["affected-only", "full"]
 
 REFUSALS = 2
+# The most refusals one run can reach: the one `REFUSALS` extra, earned only when the failure
+# is moving (`refusal_allowed`).
+MOVING_REFUSALS = REFUSALS + 1
 TAIL_LINES = 30
 # The stack file always forces the full form (ADR-0046): a change to what the checks are
 # can never be measured by the selection that file declares.
@@ -123,6 +127,23 @@ def flake_verdict(first: CheckResult, rerun: CheckResult | None) -> FlakeVerdict
     return "fail"
 
 
+def refusal_allowed(
+    refusals: int,
+    previous_ids: Sequence[str] | None,
+    current_ids: Sequence[str] | None,
+) -> bool:
+    """Whether the gate may refuse once more after `refusals` refusals. Below `REFUSALS`
+    always. At exactly `REFUSALS` only when the product declares `failed_ids` (both lists
+    present: the failed ids of the last two refusals) and they differ as sets, so the Developer
+    is fixing something and the failure is moving. Never beyond `MOVING_REFUSALS`. A product
+    without `failed_ids` passes `None` and gets `REFUSALS` exactly."""
+    if refusals < REFUSALS:
+        return True
+    if refusals >= MOVING_REFUSALS or previous_ids is None or current_ids is None:
+        return False
+    return set(previous_ids) != set(current_ids)
+
+
 def failed_ids(output: str, pattern: str) -> tuple[str, ...]:
     """The test ids a failing check's output names: group 1 of `pattern`, over at most the
     last `FAILED_IDS_TAIL_BYTES` bytes, deduplicated in order, at most `FAILED_IDS_MAX`.
@@ -215,12 +236,21 @@ def refusal(
     if failed:
         parts.append("the product's checks fail on your head; fix them, commit, and deliver again.")
         for r in failed:
-            parts.append(
-                f"`{r['name']}` failed: `{r['command']}`\n\n```text\n{tail(r['output'])}\n```"
-            )
+            parts.append(_failed_text(r))
     if regressions:
         parts.append(_regressions_text(regressions))
     return "\n\n".join(parts) or None
+
+
+def _failed_text(r: CheckResult) -> str:
+    body = f"\n\n```text\n{tail(r['output'])}\n```"
+    if r.get("timed_out", False):
+        # A rerun would spend the same time again: the Developer looks at the check first.
+        return (
+            f"`{r['name']}` timed out: `{r['command']}`; look at why it is slow or hangs, "
+            f"do not just rerun it.{body}"
+        )
+    return f"`{r['name']}` failed: `{r['command']}`{body}"
 
 
 def _regressions_text(regressions: Sequence[str]) -> str:
@@ -283,7 +313,8 @@ def check_durations(rows: Sequence[CheckResult]) -> dict[str, float]:
 
 def refused(reason: str, count: int) -> str:
     """The reason as the model reads it, with how many refusals are left."""
-    return f"The presubmit refused this delivery ({count} of {REFUSALS}): {reason}"
+    limit = REFUSALS if count <= REFUSALS else MOVING_REFUSALS
+    return f"The presubmit refused this delivery ({count} of {limit}): {reason}"
 
 
 def witness_refusal(

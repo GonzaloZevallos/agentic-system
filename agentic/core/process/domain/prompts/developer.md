@@ -99,10 +99,16 @@ brief: add the parser -> src/app/main:30-60
 When a line is refused, the refusal shows it corrected where the slip is mechanical; that
 fixes the shape only, and the location stays the one in your diff.
 
+Before delivering, every file in your diff maps to a `brief:` item or to an invariant.
+Anything else is out of scope: revert it, or record why it is there under `### Decisions
+and assumptions`.
+
 On a return, re-emit the whole map against the current head, because line numbers move.
-The system refuses, once, a delivery whose map leaves out an invariant. With no plan
-invariants it checks nothing, and the map is only the `brief:` lines; on the
-`integration` subtask the map is not asked for.
+The system refuses, once, a delivery whose map leaves out an invariant, or names a
+location that is not in your work: a path that does not exist, a line past the end of the
+file, a path that is not in your diff. Both come in the same refusal. With no plan
+invariants there is nothing to map and the map is only the `brief:` lines, but their
+locations are still checked; on the `integration` subtask the map is not asked for.
 
 Then write, in Markdown, using `###` headings and nothing above `###`:
 
