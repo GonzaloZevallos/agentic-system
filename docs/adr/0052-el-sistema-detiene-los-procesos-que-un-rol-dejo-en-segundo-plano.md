@@ -97,31 +97,7 @@ documento; el sistema escribe una línea más en stderr por sobreviviente.
 ## Riesgos conocidos
 
 1. **La compuerta.** Solo el spike verifica que la marca sobrevive al tool Bash del CLI
-   real. Si falla, el reaper no sirve y la fuga sigue. Resultado en `## Adenda GH-355: parar una corrida por señal
-
-SIGTERM o SIGHUP a un `agentic run`/`resume` interrumpía el turno del rol pero la corrida
-seguía: `full_checks` bloqueaba el loop con la suite, la puerta de entrega esperaba al
-hilo de sus chequeos y, como cada chequeo vive en su propia sesión, la señal no les
-llegaba. Cambia esto:
-
-- **Al parar por señal, la invocación reapea primero sus chequeos** (`reap_run(CHECK_TASK,
-  pid)`, desde un hilo que arranca el manejador de Python en el hilo principal, aunque el
-  loop esté bloqueado) y marca la bandera de parada, con la que `ShellCommands.run` levanta
-  `RunStopped` en vez de devolver un resultado. **Deja los procesos de rol al runner**: se
-  cierran al desenrollarse la cancelación, nunca antes de cancelar.
-- **Plazo duro declarado de 40 s** (`reaping.STOP_DEADLINE_S`, no medido): si el proceso
-  sigue vivo, reapea los dos alcances (la tarea y `check`), libera el lock (o lo deja
-  marcado si es un apagado del sistema), vacía la telemetría con un tope corto y sale con
-  código 1. Una segunda señal no arranca otro hilo, otro reap ni otro `os._exit`.
-- **Ni la señal ni el plazo escriben** en el documento de tarea, en el issue ni en git.
-- **Convivencia:** `perf` conserva su `PerfInterrupted`; `merge` y `land` no tienen parada
-  limpia. Un nieto que salió del grupo y perdió la marca de entorno queda vivo; el proceso
-  sale igual.
-- **Prueba:** `tests/test_stop_signal.py` manda SIGTERM real a un proceso hijo en cinco
-  casos (turno de rol, `full_checks`, setup, chequeo que ignora SIGTERM con un rol que
-  ignora la cancelación, y un comando corrido directo en el loop).
-
-## Gate result`.
+   real. Si falla, el reaper no sirve y la fuga sigue. Resultado en `## Gate result`.
 2. **Escapes.** `env -i`, `systemd-run`, contenedores y procesos que cambian de privilegio
    pierden u ocultan la marca.
 3. **Ventana tras un corte duro.** Una corrida matada por falta de memoria deja sus procesos
@@ -174,6 +150,30 @@ que ni el reap por marca ni el de la corrida los encontraban. Cambia esto:
 - **Única señal nueva:** una línea `reaper: stopped <pid> <comando> (<resultado>)` en stderr
   por proceso detenido, más `release: <checkout>: reaped ...` de `release_checkout`. No hay
   métrica, etiqueta ni atributo de span nuevos; `reaped_at_cleanup` conserva su forma.
+
+## Adenda GH-355: parar una corrida por señal
+
+SIGTERM o SIGHUP a un `agentic run`/`resume` interrumpía el turno del rol pero la corrida
+seguía: `full_checks` bloqueaba el loop con la suite, la puerta de entrega esperaba al
+hilo de sus chequeos y, como cada chequeo vive en su propia sesión, la señal no les
+llegaba. Cambia esto:
+
+- **Al parar por señal, la invocación reapea primero sus chequeos** (`reap_run(CHECK_TASK,
+  pid)`, desde un hilo que arranca el manejador de Python en el hilo principal, aunque el
+  loop esté bloqueado) y marca la bandera de parada, con la que `ShellCommands.run` levanta
+  `RunStopped` en vez de devolver un resultado. **Deja los procesos de rol al runner**: se
+  cierran al desenrollarse la cancelación, nunca antes de cancelar.
+- **Plazo duro declarado de 40 s** (`reaping.STOP_DEADLINE_S`, no medido): si el proceso
+  sigue vivo, reapea los dos alcances (la tarea y `check`), libera el lock (o lo deja
+  marcado si es un apagado del sistema), vacía la telemetría con un tope corto y sale con
+  código 1. Una segunda señal no arranca otro hilo, otro reap ni otro `os._exit`.
+- **Ni la señal ni el plazo escriben** en el documento de tarea, en el issue ni en git.
+- **Convivencia:** `perf` conserva su `PerfInterrupted`; `merge` y `land` no tienen parada
+  limpia. Un nieto que salió del grupo y perdió la marca de entorno queda vivo; el proceso
+  sale igual.
+- **Prueba:** `tests/test_stop_signal.py` manda SIGTERM real a un proceso hijo en cinco
+  casos (turno de rol, `full_checks`, setup, chequeo que ignora SIGTERM con un rol que
+  ignora la cancelación, y un comando corrido directo en el loop).
 
 ## Gate result
 
