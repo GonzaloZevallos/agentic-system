@@ -67,6 +67,8 @@ files = [
     "agentic/core/process/adapters/shell/perf_runner.py",
     "agentic/core/process/adapters/filesystem/perf_lock.py",
     "agentic/core/process/adapters/filesystem/check_results.py",
+    "agentic/core/process/adapters/filesystem/board_sent.py",
+    "agentic/core/process/adapters/github/board.py",
     "agentic/core/process/application/perf.py",
     "agentic/core/process/application/presubmit.py",
     "agentic/core/process/application/release.py",
