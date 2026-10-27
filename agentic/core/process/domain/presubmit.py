@@ -398,10 +398,11 @@ def checks_markdown(
     the gate let through after its refusals still shows what it leaves over the cap."""
     moded = any("mode" in r for r in results)
     if moded:
-        header = "| Check | Command | Mode | Result |\n|---|---|---|---|\n"
+        header = "| Check | Command | Mode | Result | Seconds |\n|---|---|---|---|---|\n"
     else:
-        header = "| Check | Command | Result |\n|---|---|---|\n"
+        header = "| Check | Command | Result | Seconds |\n|---|---|---|---|\n"
     verdicts = outcomes(results)
+    seconds = check_durations(results)
     rows = []
     for r in results:
         outcome = "passed" if r["passed"] else "**failed**"
@@ -414,7 +415,8 @@ def checks_markdown(
         cells = [f"`{r['name']}`", f"`{r['command']}`"]
         if moded:
             cells.append(r.get("mode", "-"))
-        rows.append("| " + " | ".join([*cells, outcome]) + " |")
+        shown = f"{seconds[r['name']]:.1f}" if r["name"] in seconds else "-"
+        rows.append("| " + " | ".join([*cells, outcome, shown]) + " |")
     parts = [
         f"### Checks\n\nRun by the system on `{head}` when the Developer delivered.",
         header + "\n".join(rows),
@@ -519,6 +521,8 @@ def merge_checks_record(
     )
     by_name = {result["name"]: result for result in decided}
     verdicts = outcomes(results or [])
+    # The only place a record's per-check seconds come from; absent where there is no sample.
+    seconds = check_durations(results or [])
     entries: list[dict[str, object]] = []
     for name in declared:
         found = by_name.get(name)
@@ -540,6 +544,8 @@ def merge_checks_record(
             if found.get("rerun"):
                 failed["rerun"] = True
             entries.append(failed)
+        if found is not None and name in seconds:
+            entries[-1]["duration_s"] = round(seconds[name], 1)
     if witness is not None and not witness["passed"]:
         entries.append(
             {"name": _WITNESS_ENTRY, "passed": False, "tail": _tail_of(witness["output"])}

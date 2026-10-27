@@ -864,6 +864,9 @@ class FullCheckEntry(TypedDict):
     # True when the check was red and green on its one rerun (ADR-0066): a flake passes, and
     # the record says `flake`, never plain passed. Absent on every other check.
     flake: NotRequired[bool]
+    # Seconds the check ran, as `check_durations` summed them (GH-365); absent when the check
+    # has no sample (a reused pass, or no result).
+    duration_s: NotRequired[float]
 
 
 class FullChecksRecord(TypedDict):

@@ -102,7 +102,10 @@ def test_the_four_old_keys_keep_their_names_and_the_new_one_comes_beside_them():
         "master": MASTER,
         "passed": True,
         "duration_s": 1.5,
-        "checks": [{"name": "lint", "passed": True}, {"name": "tests", "passed": True}],
+        "checks": [
+            {"name": "lint", "passed": True, "duration_s": 0.0},
+            {"name": "tests", "passed": True, "duration_s": 0.0},
+        ],
     }
 
 
@@ -131,8 +134,8 @@ def test_a_failing_check_carries_its_tail_and_a_passing_one_does_not():
     record = _record(results=[_result("lint", True, "fine"), _result("tests", False, "boom")])
 
     assert record["checks"] == [
-        {"name": "lint", "passed": True},
-        {"name": "tests", "passed": False, "tail": ["boom"]},
+        {"name": "lint", "passed": True, "duration_s": 0.0},
+        {"name": "tests", "passed": False, "tail": ["boom"], "duration_s": 0.0},
     ]
 
 

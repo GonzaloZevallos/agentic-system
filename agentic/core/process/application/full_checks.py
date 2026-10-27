@@ -117,7 +117,8 @@ def _shown(name: str, reused: set[str], flaked: set[str]) -> str:
 def _without_output(entries: list[FullCheckEntry]) -> list[FullCheckEntry]:
     """The name and verdict of each check: the record holds no command output (the `tail` the
     merge record keeps is free text); the `Full checks` section is where it is read. A reused
-    row keeps its `reused: true` (ADR-0065) and a flaked one its `flake: true` (ADR-0066)."""
+    row keeps its `reused: true` (ADR-0065) and a flaked one its `flake: true` (ADR-0066); a
+    check with a sample keeps its `duration_s`, the number `check_durations` summed."""
     kept: list[FullCheckEntry] = []
     for entry in entries:
         row: FullCheckEntry = {"name": entry["name"], "passed": entry["passed"]}
@@ -125,6 +126,8 @@ def _without_output(entries: list[FullCheckEntry]) -> list[FullCheckEntry]:
             row["reused"] = True
         if entry.get("flake"):
             row["flake"] = True
+        if "duration_s" in entry:
+            row["duration_s"] = entry["duration_s"]
         kept.append(row)
     return kept
 
