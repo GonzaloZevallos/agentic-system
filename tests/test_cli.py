@@ -5448,7 +5448,7 @@ class CrashedPipeline(Delivers):
 
 
 def _crash_document(ports, reviewed_head="h-a"):
-    """The document a crash in the pipeline leaves: `a` approved, `b` delivered, `c` building."""
+    """The document a crash in the pipeline leaves: a approved, b delivered, c and d building."""
     ports.documents.save(
         {
             "id": "GH-1",
@@ -5461,6 +5461,7 @@ def _crash_document(ports, reviewed_head="h-a"):
                 "a": {"id": "a", "status": "approved", "branch": "t/a", "reviewed_head": "h-a"},
                 "b": {"id": "b", "status": "delivered", "branch": "t/b", "depends_on": ["a"]},
                 "c": {"id": "c", "status": "pending", "branch": "t/c"},
+                "d": {"id": "d", "status": "pending", "branch": "t/d"},
             },
         }
     )
@@ -5468,6 +5469,7 @@ def _crash_document(ports, reviewed_head="h-a"):
         "t/a": (reviewed_head, "base"),
         "t/b": ("h-b", "base"),
         "t/c": ("h-c-moved", "base"),
+        "t/d": ("h-d", "base"),
     }
 
 
@@ -5488,7 +5490,7 @@ async def test_a_crash_in_the_pipeline_resumes_from_the_document_as_a_crash(monk
     )
 
     [(seed, as_node)] = graph.seeded
-    assert as_node == "pipeline" and set(seed["subtasks"]) == {"a", "b", "c"}
+    assert as_node == "pipeline" and set(seed["subtasks"]) == {"a", "b", "c", "d"}
     assert graph.invoked == [None]  # a crash: never `Command(resume=...)`, never `pause`
     [(_, comment)] = ports.tracker.comments
     assert comment.startswith("Resumed: pipeline, interrupted at Developer,")
