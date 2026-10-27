@@ -2599,6 +2599,14 @@ RETAKE_SCHEDULE: tuple[int, ...] = (15, 30, 60, 120, 120, 120)
 # (ADR-0039, 2026-10-05 addendum). Never read off the API's "resets at" prose.
 ACCOUNT_LIMIT_SCHEDULE: tuple[int, ...] = (15,) * 24
 
+# The provider's session window: a stated reset further away than this is not a session
+# reset (ADR-0039, addendum GH-381; `account_reset.reset_at`).
+SESSION_WINDOW = timedelta(hours=5)
+
+# Clock skew between this machine and the provider, added to the window so a reset the
+# provider states at the window's edge is not refused (ADR-0039, addendum GH-381).
+SESSION_WINDOW_MARGIN = timedelta(minutes=10)
+
 # Backstop for a loop the per-window count cannot see: a cheap role keeps delivering
 # runs (each one opens a fresh window) while another role keeps hitting a per-model
 # 429. Compared against the whole-chase count a delivered run never resets, only a
@@ -2611,6 +2619,17 @@ ACCOUNT_LIMIT_CHASE_MAX = 96
 # Never read off the API's "resets at" prose (ADR-0029).
 ACCOUNT_LIMIT_HOURLY: tuple[int, ...] = (60,) * 168
 ACCOUNT_LIMIT_PERSISTED = "account limit persisted 7 days"
+
+
+def _failure_entry(failure: Failure) -> FailurePauseEntry:
+    """The `pause_log` entry of one failed attempt; `resets_at` is copied only when the
+    failure has one, so an entry without a stated reset has no such key."""
+    entry = FailurePauseEntry(
+        kind="failure", value=failure.get("reason", "other"), section=failure.get("section", "")
+    )
+    if "resets_at" in failure:
+        entry["resets_at"] = failure["resets_at"]
+    return entry
 
 
 def logged(
@@ -2628,12 +2647,7 @@ def logged(
     about its own cause must never read as `account_limit` and ease into an automatic
     retry. `lapses` (GH-342) are bookkeeping steps that failed after the work was done, one
     `"lapse"` entry each, after the failures: no reader of the epoch counts them."""
-    entries: list[PauseEntry] = [
-        FailurePauseEntry(
-            kind="failure", value=f.get("reason", "other"), section=f.get("section", "")
-        )
-        for f in failures
-    ]
+    entries: list[PauseEntry] = [_failure_entry(f) for f in failures]
     if (cls := patch.get("escalation_class")) is not None:
         entries.append(EscalationPauseEntry(kind="escalation", value=cls))
     entries.extend(LapsePauseEntry(kind="lapse", value=line) for line in lapses)

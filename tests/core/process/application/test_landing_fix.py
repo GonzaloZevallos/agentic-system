@@ -1017,18 +1017,19 @@ def test_a_sdk_failure_escalates_at_once_labelled_and_commented(tmp_path):
 
 
 def test_a_retry_waits_for_its_slot_then_runs_the_role_again(tmp_path):
-    runner = ScriptedRunner(landing_diagnoser=[*_cut("account_limit"), _delivery()])
+    # An account_limit cut is not retried inside the run (ADR-0039, addendum GH-381): one call.
+    runner = ScriptedRunner(landing_diagnoser=[*_cut("account_limit", times=1), _delivery()])
     ports = _merge_failed(_ports(5), runner)
     wait = timedelta(minutes=rules.ACCOUNT_LIMIT_SCHEDULE[0])
     _land_at(ports, tmp_path, START)
 
     early, _ = _land_at(ports, tmp_path, START + wait - timedelta(seconds=1))
-    assert early.kind == "skipped" and len(runner.calls) == 2
+    assert early.kind == "skipped" and len(runner.calls) == 1
 
     launcher = FakeLauncher()
     due, _ = _land_at(ports, tmp_path, START + wait, launcher)
 
-    assert due.kind == "dispatched" and len(runner.calls) == 3
+    assert due.kind == "dispatched" and len(runner.calls) == 2
     assert [e.get("delivered") for e in _diagnoses(ports)] == [None, True]
     assert launcher.spawned[0][:3] == ["agentic", "run", "--issue"]
 
