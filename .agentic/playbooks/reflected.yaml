@@ -267,3 +267,13 @@ tasks:
       - GH-359
   GH-360@review:
     cost_usd: 0.1061
+  GH-353@review:
+    cost_usd: 0.0963
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-typing-silenced
+      lesson: ''
+      item_id: developer-3
+      tasks:
+      - GH-353
