@@ -9,6 +9,8 @@ import pytest
 
 from agentic.core.process.domain import returns
 
+ROOT = Path(__file__).resolve().parents[4]
+
 # --- is_return -------------------------------------------------------------------------
 
 
@@ -102,10 +104,9 @@ _COMPARISON = re.compile(r"""(\[\s*["']by["']\s*\]|\.get\(\s*["']by["'][^)]*\))\
 
 
 def test_no_module_outside_returns_compares_the_by_key():
-    root = Path(returns.__file__).parents[3]  # the `agentic/` package
     offenders = [
-        f"{path.relative_to(root)}:{n}"
-        for path in sorted(root.rglob("*.py"))
+        f"{path.relative_to(ROOT)}:{n}"
+        for path in sorted((ROOT / "agentic").rglob("*.py"))
         if path.name != "returns.py"
         for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
         if _COMPARISON.search(line)
