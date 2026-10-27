@@ -22,6 +22,7 @@ from agentic.core.process.domain.roles import (
     TECH_LEAD_EPHEMERAL,
 )
 from agentic.core.process.domain.schemas import FitDecision, TaskType
+from agentic.core.process.domain.scratch import INODE_FLOOR, SpaceReading
 from agentic.core.process.domain.task import INTEGRATION, Carried
 
 PAIR = PAIR_PM_PA
@@ -3968,3 +3969,45 @@ def test_a_persisted_account_limit_is_not_governed_by_a_hint():
     )
     assert rules.account_limit_persisted(persisted)
     assert _reset_plan(persisted, RESET_0540).actions == []
+
+
+# GH-391: the free-space floor and what a held round plans.
+_AMPLE = SpaceReading(free_bytes=10**12, free_inodes=10**7)
+_FLOOR = 2048 * 1024 * 1024
+
+
+def test_space_holds_names_each_volume_under_the_byte_floor_or_the_inode_floor():
+    low_bytes = SpaceReading(free_bytes=_FLOOR - 1, free_inodes=10**7)
+    low_inodes = SpaceReading(free_bytes=10**12, free_inodes=INODE_FLOOR - 1)
+    assert rules.space_holds(_AMPLE, _AMPLE, _FLOOR) == ()
+    assert rules.space_holds(_AMPLE, low_bytes, _FLOOR) == ("/tmp",)
+    assert rules.space_holds(low_inodes, _AMPLE, _FLOOR) == ("scratch",)
+    assert rules.space_holds(low_bytes, low_inodes, _FLOOR) == ("scratch", "/tmp")
+
+
+def test_space_holds_at_exactly_the_floor_is_not_a_hold():
+    exact = SpaceReading(free_bytes=_FLOOR, free_inodes=INODE_FLOOR)
+    assert rules.space_holds(exact, exact, _FLOOR) == ()
+
+
+def _busy_plan(held: tuple[str, ...]) -> rules.PollPlan:
+    return rules.poll_plan(
+        closes=[9, 4],
+        resumes=[],
+        launches=[rules.LaunchCandidate(5, False, None, 0, 3)],
+        available_slots=6,
+        now=datetime(2026, 10, 27, tzinfo=UTC),
+        retakes=[6],
+        crash_retakes=[7],
+        merges=[8],
+        lands=[rules.LandCandidate(10, "land_model"), rules.LandCandidate(11, "land_checks")],
+        held=held,
+    )
+
+
+def test_a_held_plan_is_the_closes_alone_and_defers_nothing():
+    open_plan = _busy_plan(())
+    assert {a.kind for a in open_plan.actions} >= {"close", "launch", "retake", "merge", "land"}
+    held = _busy_plan(("/tmp",))
+    assert held.actions == [rules.PollAction("close", 4), rules.PollAction("close", 9)]
+    assert held.deferred == []

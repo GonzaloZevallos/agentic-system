@@ -48,6 +48,7 @@ from .roles import (
     pair_for,
 )
 from .schemas import FitDecision, TaskType
+from .scratch import INODE_FLOOR, SpaceReading
 from .task import (
     INTEGRATION,
     WAITING_ON_HUMAN,
@@ -3493,6 +3494,21 @@ def account_paused(resumes: Sequence[ResumeCandidate], now: datetime) -> bool:
     )
 
 
+SCRATCH_VOLUME = "scratch"
+TMP_VOLUME = "/tmp"
+
+
+def space_holds(scratch: SpaceReading, tmp: SpaceReading, floor_bytes: int) -> tuple[str, ...]:
+    """The names (`SCRATCH_VOLUME`, `TMP_VOLUME`) of the volumes under the floor (GH-391): fewer
+    free bytes than `floor_bytes`, or fewer free inodes than `INODE_FLOOR`. Empty means the round
+    may start children; anything else is what `poll_plan` takes as `held`."""
+    return tuple(
+        name
+        for name, reading in ((SCRATCH_VOLUME, scratch), (TMP_VOLUME, tmp))
+        if reading.free_bytes < floor_bytes or reading.free_inodes < INODE_FLOOR
+    )
+
+
 def poll_plan(
     *,
     closes: Sequence[int],
@@ -3510,6 +3526,7 @@ def poll_plan(
     closeness: Mapping[int, int] = {},
     others_landing: bool = False,
     earlier_land_wait: bool = False,
+    held: Sequence[str] = (),
 ) -> PollPlan:
     """This round's actions, in the order the Tech Lead plan fixes: every close first
     (merging freed the slot it used, if any, so closing never spends one); then what
@@ -3583,8 +3600,15 @@ def poll_plan(
     if `paced_launch_fits` says so, counting this round's retakes and resumes as live
     runs (a launch after one on an empty machine is the second run) against a ceiling of
     `pace.live_runs` plus the `available_slots` received. Closes, retakes and resumes
-    are never gated, and a waiting pause still blocks every launch."""
+    are never gated, and a waiting pause still blocks every launch.
+
+    `held` (GH-391, `space_holds`) names the volumes under the free-space floor. When it is
+    not empty the plan is the closes alone: no launch, resume, retake, land or merge starts,
+    because a start would write scratch to a disk that is almost full. It defers nothing, so
+    it opens no Espera de aterrizaje."""
     actions = [PollAction("close", issue) for issue in sorted(closes)]
+    if held:
+        return PollPlan(actions, [])
     received_slots = available_slots
 
     due_resumes = [r for r in resumes if not resume_exhausted(r) and retake_due(r, now) is not None]

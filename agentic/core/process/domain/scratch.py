@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import PurePosixPath
@@ -143,3 +144,111 @@ class SpaceReading:
 
     free_bytes: int
     free_inodes: int
+
+
+@dataclass(frozen=True)
+class RecordFact:
+    """What the sweep knows of one owner record: when it was last written and whether its
+    owner is alive (`liveness.is_alive` over the record's pid and boot id, computed by the
+    adapter). `alive` is `None` when the record could not be read."""
+
+    mtime: datetime
+    alive: bool | None
+
+
+@dataclass(frozen=True)
+class OwnerEntry:
+    """One owner under `.agentic/tmp/<task>/`: its directory's mtime (`None` when there is
+    no directory) and its record (`None` when there is none)."""
+
+    task: str
+    name: str
+    directory_mtime: datetime | None
+    record: RecordFact | None
+
+
+@dataclass(frozen=True)
+class ScratchListing:
+    """What is on the disk under `.agentic/tmp/`: the task directories (an empty one
+    included) and every owner in them."""
+
+    tasks: tuple[str, ...]
+    owners: tuple[OwnerEntry, ...]
+
+
+@dataclass(frozen=True)
+class KeptFolder:
+    """A task's `.agentic/kept/<task>/`, with when its task closed (`None`: it has not)."""
+
+    task: str
+    closed_at: datetime | None
+
+
+@dataclass(frozen=True)
+class Removal:
+    """One owner to remove: its directory (when `directory`), then its record (when `record`)."""
+
+    task: str
+    name: str
+    directory: bool
+    record: bool
+
+
+@dataclass(frozen=True)
+class SweepDecision:
+    """What a round removes: whole `tmp/<task>/` folders, single owners and `kept/<task>/`
+    folders."""
+
+    tasks: tuple[str, ...] = ()
+    owners: tuple[Removal, ...] = ()
+    kept: tuple[str, ...] = ()
+
+    def __bool__(self) -> bool:
+        return bool(self.tasks or self.owners or self.kept)
+
+
+def task_path_for(task_key: str | None) -> PurePosixPath:
+    """The folder of one task's owners, relative to the product root."""
+    return SCRATCH_DIR / _segment(task_key)
+
+
+def _owner_removal(entry: OwnerEntry, now: datetime) -> Removal | None:
+    has_directory = entry.directory_mtime is not None
+    record = entry.record
+    if record is None:
+        # A directory nobody claims is an orphan once it is older than the grace; a
+        # younger one may be a record being replaced.
+        if entry.directory_mtime is not None and now - entry.directory_mtime > SCRATCH_ORPHAN_GRACE:
+            return Removal(entry.task, entry.name, directory=True, record=False)
+        return None
+    if record.alive is True:
+        return None
+    if record.alive is None and now - record.mtime <= SCRATCH_ORPHAN_GRACE:
+        # Unreadable and young: it may be mid-write, so it counts as alive.
+        return None
+    return Removal(entry.task, entry.name, directory=has_directory, record=True)
+
+
+def sweep_decision(
+    listing: ScratchListing,
+    closed: Collection[str],
+    kept: Sequence[KeptFolder],
+    now: datetime,
+) -> SweepDecision:
+    """What to remove this round. The whole folder of a task in `closed`; of the rest, an
+    owner whose record is dead, an unreadable record older than `SCRATCH_ORPHAN_GRACE`
+    (younger counts as alive) and a directory with no record older than the grace; and a
+    kept folder once `KEPT_RETENTION` has passed since its task closed. An alive owner is
+    never removed."""
+    tasks = tuple(sorted(t for t in listing.tasks if t in closed))
+    owners = tuple(
+        removal
+        for entry in listing.owners
+        if entry.task not in closed and (removal := _owner_removal(entry, now)) is not None
+    )
+    expired = tuple(
+        sorted(
+            k.task for k in kept if k.closed_at is not None and now - k.closed_at >= KEPT_RETENTION
+        )
+    )
+    return SweepDecision(tasks, owners, expired)

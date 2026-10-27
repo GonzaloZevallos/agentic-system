@@ -18,12 +18,33 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from ...domain import scratch
-from ...domain.scratch import OwnerKind, OwnerRecord
-from .liveness import current_boot_id
+from ...domain.scratch import (
+    OwnerEntry,
+    OwnerKind,
+    OwnerRecord,
+    RecordFact,
+    ScratchListing,
+    SweepDecision,
+)
+from .liveness import current_boot_id, is_alive
 
 
 def _utc_now() -> datetime:
     return datetime.fromtimestamp(time.time(), UTC)
+
+
+def _children(directory: Path) -> list[Path]:
+    try:
+        return list(directory.iterdir())
+    except OSError:
+        return []
+
+
+def _mtime(path: Path) -> datetime | None:
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, UTC)
+    except OSError:
+        return None
 
 
 class FilesystemScratch:
@@ -58,6 +79,68 @@ class FilesystemScratch:
         kept = self._root / scratch.kept_path_for(task_key)
         kept.mkdir(parents=True, exist_ok=True)
         return kept
+
+    def listing(self) -> ScratchListing:
+        base = self._root / scratch.SCRATCH_DIR
+        tasks: list[str] = []
+        owners: list[OwnerEntry] = []
+        for task_dir in sorted(_children(base)):
+            if not task_dir.is_dir():
+                continue
+            tasks.append(task_dir.name)
+            owners.extend(self._owners_in(task_dir))
+        return ScratchListing(tuple(tasks), tuple(owners))
+
+    def kept_folders(self) -> list[tuple[str, datetime]]:
+        folders = []
+        for folder in sorted(_children(self._root / scratch.KEPT_DIR)):
+            mtime = _mtime(folder)
+            if folder.is_dir() and mtime is not None:
+                folders.append((folder.name, mtime))
+        return folders
+
+    def sweep(self, decision: SweepDecision) -> None:
+        """Best effort: a path that cannot be removed is left for the next round."""
+        for task in decision.tasks:
+            shutil.rmtree(self._root / scratch.task_path_for(task), ignore_errors=True)
+        for removal in decision.owners:
+            task_dir = self._root / scratch.task_path_for(removal.task)
+            if removal.directory:
+                shutil.rmtree(task_dir / removal.name, ignore_errors=True)
+            if removal.record:
+                # After the directory, never before: a record is what says whose it was.
+                with contextlib.suppress(OSError):
+                    (task_dir / f"{removal.name}.json").unlink()
+        for task in decision.kept:
+            shutil.rmtree(self._root / scratch.KEPT_DIR / task, ignore_errors=True)
+
+    def _owners_in(self, task_dir: Path) -> list[OwnerEntry]:
+        directories: dict[str, datetime] = {}
+        records: dict[str, RecordFact] = {}
+        for child in _children(task_dir):
+            if child.name.startswith("."):
+                continue  # the temp name a record is written under
+            mtime = _mtime(child)
+            if mtime is None:
+                continue
+            if child.is_dir():
+                directories[child.name] = mtime
+            elif child.suffix == ".json":
+                records[child.stem] = RecordFact(mtime, self._alive(child))
+        return [
+            OwnerEntry(task_dir.name, name, directories.get(name), records.get(name))
+            for name in sorted(directories.keys() | records.keys())
+        ]
+
+    def _alive(self, record: Path) -> bool | None:
+        """Whether the owner a record names still runs; `None` when it cannot be read."""
+        try:
+            parsed = OwnerRecord.from_json(record.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError):
+            return None
+        if parsed is None:
+            return None
+        return is_alive(parsed.pid, parsed.boot_id, self._boot_id())
 
     @staticmethod
     def _write_record(record: Path, content: OwnerRecord) -> None:
