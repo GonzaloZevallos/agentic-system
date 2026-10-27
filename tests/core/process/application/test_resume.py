@@ -709,3 +709,194 @@ def test_the_cap_at_twice_the_estimate_keeps_its_message_and_its_flag_usage(cfg)
         "GH-12: the estimate does not fit; decide in comments on the issue "
         "whether to go on, with which estimate, or to stop, then resume"
     )
+
+
+# --- an owed publication (GH-373): prepare reads the facts, rules.resume_target decides ----------
+
+APPROVED = "f08dfc738de2" + "0" * 28
+REMOTE = "6269eea" + "0" * 33
+OWED_BRANCH = "agentic/GH-361"
+OWED_DOCUMENT = ".agentic/tasks/GH-361.md"
+
+
+def owed_full_checks(head=APPROVED, ok=True):
+    return {
+        "version": 1,
+        "head": head,
+        "passed": ok,
+        "duration_s": 1.0,
+        "declared": {"tests": "pytest"},
+        "results": [{"name": "tests", "passed": ok}],
+        "witness": {"passed": True},
+    }
+
+
+def stopped_before_publishing(**more):
+    """GH-361 as its document says: integration approved at H, full checks passed on H, a pull
+    request from an earlier delivery, and a run that died before pushing H."""
+    return {
+        "id": "GH-361",
+        "title": "Speed",
+        "description": "Make it fast.",
+        "type": "feature",
+        "status": "developing",
+        "current_role": "Tech Lead",
+        "branch": OWED_BRANCH,
+        "pull_request": "https://github.com/o/r/pull/370",
+        "task_head": APPROVED,
+        "full_checks": owed_full_checks(),
+        "cost_usd": 20.0,
+        "runs": [],
+        "subtasks": {
+            "api": sub("api", "approved", "agentic/GH-361.api", "b1", reviewed_head="a2"),
+            "integration": sub(
+                "integration", "approved", OWED_BRANCH, "b0", reviewed_head=APPROVED
+            ),
+        },
+        **more,
+    }
+
+
+def git_at_the_stop(ports, *, remote=REMOTE, branch_head=APPROVED[:7], remote_holds_head=False):
+    ports.workspace.existing_branches[OWED_BRANCH] = (branch_head, "b0")
+    ports.workspace.remote_tips[OWED_BRANCH] = remote
+    ports.workspace.ancestors = {APPROVED} if remote_holds_head else set()
+    # The remote tip is an ancestor of the head, which `is_ancestor(root, H, tip)` does not ask.
+
+
+def test_an_unpushed_approved_head_resumes_into_deliver_alone(tmp_path):
+    ports = memory_ports()
+    git_at_the_stop(ports)
+    paused_state = stopped_before_publishing()
+    r = resume.prepare(
+        "GH-361", paused_state, "document", Configuration(product_dir=tmp_path), ports
+    )
+    assert r.target == "deliver"
+    assert r.resumed["publish_owed"] == APPROVED
+    assert r.resumed["status"] == "developing"
+    # Read on the product's root checkout; no worktree is made and no setup runs.
+    assert ports.workspace.remote_tip_calls == [(tmp_path, OWED_BRANCH)]
+    assert {path for path, _, _ in ports.workspace.ancestor_checks} == {tmp_path}
+    assert ports.workspace.checkouts == []
+    assert ports.commands.ran == []
+
+
+def test_a_head_the_remote_holds_with_status_developing_is_still_owed(tmp_path):
+    ports = memory_ports()
+    git_at_the_stop(ports, remote=APPROVED, remote_holds_head=True)
+    r = resume.prepare(
+        "GH-361",
+        stopped_before_publishing(),
+        "document",
+        Configuration(product_dir=tmp_path),
+        ports,
+    )
+    # Pushed but the pull request and the status never moved: the resume finishes the delivery.
+    assert (r.target, r.resumed["publish_owed"]) == ("deliver", APPROVED)
+
+
+@pytest.mark.parametrize("status", ["ready_for_review", "waiting_on_human"])
+def test_a_head_the_remote_holds_and_a_delivered_status_owes_nothing(tmp_path, status):
+    ports = memory_ports()
+    git_at_the_stop(ports, remote=APPROVED, remote_holds_head=True)
+    delivered = stopped_before_publishing(status=status)
+    with pytest.raises(ValueError, match="nothing left to run"):
+        resume.prepare("GH-361", delivered, "document", Configuration(product_dir=tmp_path), ports)
+
+
+def test_a_branch_that_moved_beyond_the_document_owes_nothing_and_says_what_it_said(tmp_path):
+    ports = memory_ports()
+    git_at_the_stop(ports, branch_head="9999999")
+    ports.workspace.outside_differs = True
+    with pytest.raises(ValueError, match=r"nothing left to run \(developing\)"):
+        resume.prepare(
+            "GH-361",
+            stopped_before_publishing(),
+            "document",
+            Configuration(product_dir=tmp_path),
+            ports,
+        )
+    # The document is the only path the question lets through, relative to the task's own.
+    assert ports.workspace.outside_reads == [(tmp_path, APPROVED, "9999999", OWED_DOCUMENT)]
+
+
+def test_a_branch_that_differs_from_the_head_only_in_the_task_document_still_owes_it(tmp_path):
+    ports = memory_ports()
+    git_at_the_stop(ports, branch_head="9999999")
+    ports.workspace.outside_differs = False
+    r = resume.prepare(
+        "GH-361",
+        stopped_before_publishing(),
+        "document",
+        Configuration(product_dir=tmp_path),
+        ports,
+    )
+    assert (r.target, r.resumed["publish_owed"]) == ("deliver", APPROVED)
+
+
+@pytest.mark.parametrize("failing", ["remote", "ancestry"])
+def test_a_read_that_fails_says_the_head_could_not_be_checked_and_never_suggests_fresh(
+    tmp_path, failing
+):
+    ports = memory_ports()
+    git_at_the_stop(ports)
+    if failing == "remote":
+        ports.workspace.remote_tip_error = "git ls-remote failed: unreachable"
+    else:
+        ports.workspace.ancestor_errors = {APPROVED}
+    with pytest.raises(ValueError) as refusal:
+        resume.prepare(
+            "GH-361",
+            stopped_before_publishing(),
+            "document",
+            Configuration(product_dir=tmp_path),
+            ports,
+        )
+    message = str(refusal.value)
+    assert (
+        f"GH-361: approved head {APPROVED[:7]} could not be checked against origin: retry"
+        in message
+    )
+    assert "--fresh" not in message
+
+
+def test_without_a_candidate_prepare_makes_no_remote_call_and_clears_publish_owed(tmp_path):
+    ports = memory_ports()
+    git_at_the_stop(ports)
+    # The integration was not the head the full checks passed on: nobody approved this head.
+    stale = stopped_before_publishing(
+        full_checks=owed_full_checks(head="c" * 40), publish_owed=APPROVED
+    )
+    with pytest.raises(ValueError, match="nothing left to run"):
+        resume.prepare("GH-361", stale, "document", Configuration(product_dir=tmp_path), ports)
+    assert ports.workspace.remote_tip_calls == []
+    assert ports.workspace.ancestor_checks == []
+    assert ports.workspace.outside_reads == []
+
+
+def test_a_resume_from_the_checkpoint_never_reads_the_remote_and_drops_a_stale_publish_owed(
+    tmp_path,
+):
+    ports = memory_ports()
+    git_at_the_stop(ports)
+    r = resume.prepare(
+        "GH-12",
+        paused(publish_owed=APPROVED),
+        "checkpoint",
+        Configuration(product_dir=tmp_path, task_budget_usd=125),
+        ports,
+    )
+    assert r.resumed["publish_owed"] is None
+    assert ports.workspace.remote_tip_calls == []
+
+
+def test_announcing_an_account_limit_only_pause_unlabels_nothing_it_never_labelled(cfg):
+    log = [
+        {"kind": "failure", "value": "account_limit", "section": "Developer"},
+        {"kind": "escalation", "value": "failure"},
+    ]
+    ports = memory_ports()
+    r = resume.prepare("GH-12", paused(pause_log=log), "checkpoint", cfg, ports)
+    resume.announce(r, ports)
+    assert ports.tracker.unlabeled == []
+    assert len(ports.tracker.comments) == 1

@@ -147,6 +147,17 @@ de los chequeos: el rol es parte interesada en no reportarlo. Es la misma forma 
 para que una corrida caraentre se pueda explicar sin abrir logs— y es lo que hace legible
 desde el documento la métrica de turnos gastados después de una negación.
 
+### Un disco lleno es un motivo externo, `disk_full`
+
+Cuando un intento falla con el disco lleno, el fallo se registra con el motivo `disk_full` y
+no con el que el harness habría dado (por ejemplo "no commit on the branch"): la máquina
+falló, no el rol. Se decide solo con lo medido: el espacio libre en bytes o en inodos que el
+runner leyó al fallar el intento, o un `ENOSPC` capturado como dato en el proceso del
+sistema; nunca por el texto del error. `limit`, el tope por intento, nunca se convierte. El
+intento no se reintenta dentro de la corrida (el disco no se vacía entre dos intentos): la
+tarea escala como `failure`, no cuenta como fallo propio en el scorecard, y el poller la
+retoma por su calendario cuando el piso de espacio libre deja arrancar (ADR-0069).
+
 ### Lo que esta definición no cambia
 
 Se dice explícito porque los pedidos que la originaron lo incluían y es comportamiento

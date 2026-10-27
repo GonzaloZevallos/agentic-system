@@ -35,7 +35,7 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     try:
         task = await task_checkout_in_thread(state, cfg, ports)
     except SetupFailed as unprepared:
-        return finish(state, unprepared.patch(DEVELOPER_INTEGRATOR), ports)
+        return _ended(state, unprepared.patch(DEVELOPER_INTEGRATOR), ports)
     relative = document.relative_path(state["id"]).as_posix()
     recorded = state.get("replaced_remote_tip")
     # The commit point is the pull request: everything up to it is a visible escalation
@@ -63,7 +63,7 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             and (recorded == tip or ports.workspace.is_ancestor(task.path, recorded, tip))
         )
     except (GitError, ValueError) as failed:
-        return finish(state, _undelivered(step, failed, state, recorded), ports)
+        return _ended(state, _undelivered(step, failed, state, recorded), ports)
     # Exhaustive on purpose, so a new cell of the table cannot reach the push unhandled.
     match plan.kind:
         case "refuse":
@@ -76,7 +76,7 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     # before anything is posted, committed or pushed, so a refusal leaves no trace.
     refused = _uncovered(state, task.path, relative, ports)
     if refused is not None:
-        return finish(state, refused, ports)
+        return _ended(state, refused, ports)
     # A plan with a tracker checklist tells the human before the pull request exists; the pull
     # request closes the issue all the same (GH-336, ADR-0062, addendum GH-344). None of this
     # runs without one.
@@ -160,7 +160,7 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
             state["id"], task.branch, state["title"], body.text, closes_issue=True
         )
     except (GitError, ValueError) as failed:
-        return finish(
+        return _ended(
             state, {**_undelivered(step, failed, state, replaced), **record, **posted}, ports
         )
     patch: TaskState = {
@@ -197,10 +197,21 @@ async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
         patch["reaped_at_cleanup"] = list(reaped)
     if lapses:
         patch = _with_lapses(patch, lapses)
-    done = finish(state, patch, ports)
+    done = _ended(state, patch, ports)
     if state.get("landing"):
         ports.documents.record_closure(state["id"], {"landing": state["landing"]})
     return done
+
+
+def _ended(state: TaskState, patch: TaskState, ports: Ports) -> TaskState:
+    """The one exit of `deliver` (GH-373): `finish` with the publication no longer owed. The
+    delivery ended -- published, refused, escalated -- so a resume reads the state it left and
+    not the stopped run's debt. The checklist's intermediate save is a plain `finish` and keeps
+    `publish_owed`: the run it belongs to has not ended. A state that owes nothing gets its patch
+    as it was: there is nothing to clear, and every delivery that predates this is unchanged."""
+    return finish(
+        state, {**patch, "publish_owed": None} if state.get("publish_owed") else patch, ports
+    )
 
 
 def _uncovered(state: TaskState, path: Path, relative: str, ports: Ports) -> TaskState | None:
@@ -365,7 +376,7 @@ def _refused(
     if state.get("replaced_remote_tip"):
         # A refusal clears the record (`replace_record`).
         patch["replaced_remote_tip"] = None
-    return finish(state, patch, ports)
+    return _ended(state, patch, ports)
 
 
 def _undelivered(

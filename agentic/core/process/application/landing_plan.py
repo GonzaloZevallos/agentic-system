@@ -44,22 +44,28 @@ LIVE_STEPS: frozenset[LandingStepKind] = frozenset(
         "land_slice",
         "diagnose",
         "settle",
-        "escalate",
+        "escalate_ledger",
     }
 )
 """Every step has its executor: `landing_sync`'s (`sync_master`, `re_review`, `renumber`),
 `landing_fix`'s (`fix`, `fix_important`, `rerun`, `file_followups_and_land`, `diagnose`,
-`settle`, `escalate`) and
+`settle`, `escalate_ledger`) and
 `landing_slice`'s (`land_slice`, GH-297). A
 step outside the set is neither recorded nor spawned, so a refusal whose step is inert logs
 as it always did."""
 
 
+ALWAYS_TAKEN: frozenset[LandingStepKind] = frozenset({"escalate"})
+"""Steps taken whatever `live` says (GH-371): `escalate` runs no model, spends nothing and is
+recorded once per head, so it has no rollout to hold back; its executor is
+`landing_fix.escalate_red_on_base`."""
+
+
 def takes_action(kind: LandingStepKind, live: frozenset[LandingStepKind]) -> bool:
-    """Whether `kind` is a step the system takes now: built (`live`) and not `wait` (the
-    next tick decides again) or `none` (the human's), which are never recorded or spawned
-    whatever `live` says."""
-    return kind in live and kind not in ("wait", "none")
+    """Whether `kind` is a step the system takes now: built (`live`) or one of `ALWAYS_TAKEN`,
+    and not `wait` (the next tick decides again) or `none` (the human's), which are never
+    recorded or spawned whatever `live` says."""
+    return (kind in live or kind in ALWAYS_TAKEN) and kind not in ("wait", "none")
 
 
 def entries(raw: Mapping[str, object]) -> list[dict[str, object]]:
@@ -197,10 +203,10 @@ def step_for(
 
 
 def escalation_recorded(raw: Mapping[str, object], head: str | None, refusal: str) -> bool:
-    """Whether the `landing` list holds an `escalate` entry for this head and refusal: the
+    """Whether the `landing` list holds an `escalate_ledger` entry for this head and refusal: the
     one question the human was asked, never twice."""
     return any(
-        entry.get("step") == "escalate"
+        entry.get("step") == "escalate_ledger"
         and entry.get("head") == head
         and entry.get("refusal") == refusal
         for entry in entries(raw)

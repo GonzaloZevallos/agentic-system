@@ -1,5 +1,5 @@
 """The landing steps that act without moving the head by themselves (GH-239, ADR-0048):
-`fix`, `fix_important`, `rerun`, `file_followups_and_land` and `diagnose`.
+`fix`, `fix_important`, `rerun`, `file_followups_and_land`, `diagnose` and `escalate` (GH-371).
 
 Each executor receives the step `landing.land` already recorded for the head, so none of
 them decides again what to do about the refusal."""
@@ -11,8 +11,8 @@ from collections.abc import Mapping, Sequence
 from contextlib import nullcontext
 from datetime import UTC, datetime
 
+from ..domain import ci, plan_settlement, presubmit, rules
 from ..domain import landing as landing_rules
-from ..domain import plan_settlement, presubmit, rules
 from ..domain.copy import copy_location_parts
 from ..domain.roles import LANDING_DIAGNOSER
 from ..domain.task import (
@@ -307,7 +307,8 @@ def _escalate(
         patch["questions_for_human"] = list(questions)
     escalated = apply(current, state_from(rules.logged(patch)))
     context.ports.documents.save(escalated)
-    context.ports.tracker.label(context.task_id, escalate.NEEDS_HUMAN)
+    if rules.needs_a_human(escalated):
+        context.ports.tracker.label(context.task_id, escalate.NEEDS_HUMAN)
     context.ports.tracker.comment(
         context.task_id, escalate.comment(escalated, context.cfg, context.ports)
     )
@@ -374,6 +375,54 @@ def escalate_failed_diagnosis(context: LandingContext) -> None:
     reason = attempts[-1].get("failure", "other") if attempts else "other"
     noun = "attempt" if len(attempts) == 1 else "attempts"
     _escalate(context, f"Landing Diagnoser did not deliver after {len(attempts)} {noun}: {reason}")
+
+
+def red_on_base_reason(
+    names: Sequence[str], head_links: Mapping[str, str], base_links: Mapping[str, str | None]
+) -> str:
+    """The text of the `escalate` step (GH-371): the checks, and for each the run link on the
+    head and on the base branch. Both red says the failure may not be the task's, never that
+    it is proven external; a base link that could not be read says so."""
+    quoted = ", ".join(f"`{name}`" for name in names)
+    lines = [
+        f"- `{name}`: head {head_links.get(name, 'run link not read')}, "
+        f"base branch {base_links.get(name) or 'base run link not read'}"
+        for name in names
+    ]
+    return (
+        f"CI check(s) {quoted} red on the head and also red on the base branch, so the task "
+        "may not be what broke them; no fix or rerun was attempted:\n" + "\n".join(lines)
+    )
+
+
+def _base_links(
+    context: LandingContext, document: Mapping[str, object], names: Sequence[str]
+) -> dict[str, str | None]:
+    """The run link of each of `names` on the base branch's latest CI report, read through the
+    tracker (`None`: not read). The pull request's report says which branch is the base."""
+    reference = document.get("pull_request")
+    if not reference:
+        return {}
+    report = context.ports.tracker.ci_report(str(reference))
+    if not isinstance(report, ci.CiReport) or not report.base_ref:
+        return {}
+    base = context.ports.tracker.branch_ci(report.base_ref)
+    if not isinstance(base, ci.CiReport):
+        return {}
+    return {name: ci.run_link(base, name) for name in names}
+
+
+def escalate_red_on_base(context: LandingContext) -> None:
+    """The `escalate` step: every failing required check is also red on the base branch, so
+    the task escalates to the human (class `questions`) without a rerun, a Developer pass, a
+    diagnosis, a restart or a slice."""
+    verdict = context.facts.ci_verdict
+    failing = verdict.failing if verdict is not None else ()
+    names = tuple(dict.fromkeys(check.name for check in failing))
+    loaded = context.ports.documents.load(context.task_id) or {}
+    head_links = {check.name: check.link for check in reversed(failing)}
+    reason = red_on_base_reason(names, head_links, _base_links(context, loaded, names))
+    _escalate(context, reason, "questions")
 
 
 def _accounting(patch: TaskState) -> dict[str, object]:

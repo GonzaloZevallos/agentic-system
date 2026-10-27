@@ -12,7 +12,7 @@ from agentic.core.process.application.ports import BranchPullRequest, GitError
 from agentic.core.process.domain import document, rules
 from agentic.core.process.domain.pull_request import github_length
 from agentic.shared.configuration import Configuration
-from tests.fakes import FakeReaper, memory_ports
+from tests.fakes import FakeReaper, MemoryStack, memory_ports
 
 pytestmark = pytest.mark.anyio
 
@@ -1043,3 +1043,91 @@ async def test_the_delivery_pull_request_closes_its_issue_whatever_the_body_carr
     assert patch["status"] == "ready_for_review"
     assert ports.tracker.closes_issue_calls == [True]
     assert ("## Criteria over cap" in ports.tracker.pull_requests[0][2]) is over_cap
+
+
+# --- GH-373: every exit of deliver ends the debt of the publication the stopped run owed --------
+
+OWED = "f08dfc738de2" + "0" * 28
+OWING = {**TASK, "publish_owed": OWED}
+
+
+def _no_longer_owed(ports):
+    assert not ports.documents.last.get("publish_owed")
+
+
+async def test_a_delivery_that_publishes_clears_the_publication_owed(cfg):
+    ports = memory_ports()
+    patch = await deliver(OWING, cfg, ports)
+    assert patch["status"] == "ready_for_review" and patch["publish_owed"] is None
+    _no_longer_owed(ports)
+
+
+async def test_a_replacing_delivery_clears_the_publication_owed(cfg):
+    ports = _diverged([])
+    archive = "archive/run1-abc1234/agentic/GH-12"
+    ports.workspace.existing_branches[archive] = (OLD, "base")
+    ports.workspace.ancestors_by_ref = {archive: {OLD}}
+    patch = await deliver(OWING, cfg, ports)
+    assert ports.workspace.leases == [OLD]
+    assert patch["publish_owed"] is None
+    _no_longer_owed(ports)
+
+
+async def test_a_refused_push_escalates_as_ever_and_clears_the_publication_owed(cfg):
+    ports = _diverged([_pr(91, "OPEN")])
+    patch = await deliver(OWING, cfg, ports)
+    assert patch["escalated"].startswith("push refused: ")
+    assert patch["status"] == "waiting_on_human" and patch["publish_owed"] is None
+    _no_longer_owed(ports)
+
+
+async def test_a_remote_read_that_fails_escalates_and_clears_the_publication_owed(cfg):
+    ports = memory_ports()
+    ports.workspace.remote_tip_error = "git ls-remote failed: unreachable"
+    patch = await deliver(OWING, cfg, ports)
+    assert patch["escalated"].startswith("remote branch read failed: ")
+    assert patch["publish_owed"] is None
+    _no_longer_owed(ports)
+
+
+async def test_a_push_that_fails_escalates_and_clears_the_publication_owed(cfg):
+    ports = memory_ports()
+    ports.workspace.push_failures = 1
+    patch = await deliver(OWING, cfg, ports)
+    assert patch["escalated"].startswith("push failed: ")
+    assert patch["publish_owed"] is None
+    _no_longer_owed(ports)
+
+
+async def test_a_tiered_refusal_heals_and_clears_the_publication_owed(cfg):
+    ports = memory_ports(stack=MemoryStack(checks={"tests": "pytest"}, delivery_checks=("tests",)))
+    patch = await deliver(OWING, cfg, ports)  # no full_checks record: nothing is pushed
+    assert ports.workspace.pushed == [] and patch["full_checks_healed"]
+    assert patch["publish_owed"] is None
+    _no_longer_owed(ports)
+
+
+async def test_the_checklist_save_keeps_the_publication_owed_and_the_last_save_clears_it(cfg):
+    ports = memory_ports()
+    await deliver({**WITH_CHECKLIST, "publish_owed": OWED}, cfg, ports)
+    first, last = ports.documents.saved[0], ports.documents.last
+    assert "tracker_checklist_posted" in first and first["publish_owed"] == OWED
+    assert not last.get("publish_owed")
+
+
+async def test_a_task_that_owes_nothing_gets_the_patch_it_always_got(cfg):
+    patch = await deliver(TASK, cfg, memory_ports())
+    assert "publish_owed" not in patch
+
+
+async def test_a_setup_that_fails_escalates_as_ever_and_clears_the_publication_owed(cfg):
+    from agentic.core.process.application.ports import CommandResult
+    from tests.fakes import MemoryCommands
+
+    ports = memory_ports(
+        stack=MemoryStack(setup={"env": "make env"}),
+        commands=MemoryCommands(**{"make env": [CommandResult(1, "no env")]}),
+    )
+    patch = await deliver(OWING, cfg, ports)
+    assert patch["escalation_class"] == "setup" and patch["publish_owed"] is None
+    _no_longer_owed(ports)

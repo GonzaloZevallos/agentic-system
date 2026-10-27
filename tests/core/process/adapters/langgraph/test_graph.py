@@ -5,6 +5,7 @@ product, and git and GitHub in memory."""
 import asyncio
 import time
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -18,7 +19,11 @@ from agentic import composition
 from agentic.composition import default_ports
 from agentic.core.measurement.adapters.otel import semconv, telemetry
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
-from agentic.core.process.adapters.langgraph.graph import build_graph, configuration_from
+from agentic.core.process.adapters.langgraph.graph import (
+    _PortsPerRun,
+    build_graph,
+    configuration_from,
+)
 from agentic.core.process.adapters.telemetry import NoTelemetry
 from agentic.core.process.application import resume
 from agentic.core.process.application.final_validation import _verdict_patch
@@ -956,6 +961,43 @@ async def test_role_failure_escalates_and_keeps_failures(config, tmp_path):
     assert doc["status"] == WAITING_ON_HUMAN
 
 
+GH_373_429 = (
+    "You've hit your session limit · resets 5:40am (America/Argentina/Buenos_Aires) "
+    "(terminal reason: api_error, HTTP 429, exit code 1)"
+)
+
+
+async def test_the_gh_373_session_limit_pauses_once_with_its_reset_and_no_label(
+    config, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        "agentic.core.process.application.run_role._now",
+        lambda: datetime(2026, 10, 27, 4, 0, tzinfo=UTC),  # 01:00 -03:00
+    )
+    script = script_for(
+        product_analyst=[AttemptFailed(GH_373_429, 0.0, reason="account_limit")] * 2
+    )
+    fakes = Fakes()
+    final = await run_graph(script, config, fakes=fakes)
+
+    assert final["status"] == WAITING_ON_HUMAN
+    assert script.slugs.count("product_analyst") == 1
+    assert [c for c in fakes.tracker.labels if c[1] == "needs-human"] == []
+    escalated = [text for _, text in fakes.tracker.comments if text.startswith("Escalated:")]
+    assert len(escalated) == 1
+    doc = FilesystemTaskDocuments(tmp_path).load("GH-1")
+    assert doc["pause_log"][-2:] == [
+        {
+            "kind": "failure",
+            "value": "account_limit",
+            "section": "Product Analyst",
+            "resets_at": "2026-10-27T05:40:00-03:00",
+        },
+        {"kind": "escalation", "value": "failure"},
+    ]
+    assert [e["kind"] for e in doc["pause_log"]].count("failure") == 1
+
+
 async def test_the_task_cap_escalates_once_during_a_fan_out(config):
     # The definition and the plan spend 0.86; both Developer branches start from that
     # total, both find the cap reached, and the escalation reaches the issue once
@@ -1736,3 +1778,99 @@ def test_the_first_returning_final_validation_writes_no_settlement(config):
     )
     assert "plan_settled" not in patch
     assert [f["claim"] for f in patch["findings"]] == ["a"]
+
+
+# --- GH-373: a run stopped after its approved integration and full checks ----------------------
+
+OWED_HEAD = "f08dfc738de2" + "0" * 28
+OWED_REMOTE = "6269eea" + "0" * 33
+PRE_MERGE_PULL_REQUEST = "https://github.com/o/r/pull/370"
+
+
+def _stopped_before_publishing() -> dict:
+    """GH-361 as its document says: integration approved at H, full checks passed on H, a
+    pull request from an earlier delivery, and status `developing`."""
+    return {
+        **TASK,
+        "type": "feature",
+        "status": "developing",
+        "current_role": "Tech Lead",
+        "branch": "agentic/GH-1",
+        "pull_request": PRE_MERGE_PULL_REQUEST,
+        "task_head": OWED_HEAD,
+        "full_checks": {
+            "version": 1,
+            "head": OWED_HEAD,
+            "passed": True,
+            "duration_s": 1.0,
+            "declared": {"tests": "pytest"},
+            "results": [{"name": "tests", "passed": True}],
+            "witness": {"passed": True},
+        },
+        "cost_usd": 20.0,
+        "runs": [],
+        "subtasks": {
+            "api": {
+                "id": "api",
+                "status": "approved",
+                "branch": "agentic/GH-1.api",
+                "base": "b1",
+                "reviewed_head": "a2",
+            },
+            "integration": {
+                "id": "integration",
+                "status": "approved",
+                "branch": "agentic/GH-1",
+                "base": "b0",
+                "reviewed_head": OWED_HEAD,
+            },
+        },
+    }
+
+
+async def test_a_run_stopped_after_its_approved_checked_head_publishes_it_without_any_role(
+    config, tmp_path
+):
+    fakes = Fakes()
+    fakes.workspace.existing_branches["agentic/GH-1"] = (OWED_HEAD[:7], "b0")
+    fakes.workspace.existing_branches["agentic/GH-1.api"] = ("a2", "b1")
+    # The remote still holds the pre-merge tip, which the branch contains: the push cell.
+    fakes.workspace.remote_tips["agentic/GH-1"] = OWED_REMOTE
+    fakes.workspace.ancestors = {OWED_REMOTE}
+    documents = FilesystemTaskDocuments(tmp_path)
+    documents.save(_stopped_before_publishing())
+    ports = replace(memory_ports(), documents=documents, workspace=fakes.workspace)
+    state = resume.from_document("GH-1", ports)
+    r = resume.prepare("GH-1", state, "document", Configuration(product_dir=tmp_path), ports)
+    assert r.target == "deliver"
+
+    script = ScriptedRunner()  # every role fails if it is called
+    stack = MemoryStack(checks={"tests": "pytest"}, delivery_checks=("tests",))
+    app = compiled(script, fakes=fakes, stack=stack)
+    await app.aupdate_state(config, r.paused, as_node="escalate")
+    final = await app.ainvoke(Command(resume={"decision": None}), config=config)
+
+    assert script.calls == []
+    assert fakes.workspace.pushed == ["agentic/GH-1"]
+    assert fakes.tracker.pull_requests == []  # the pull request from before is kept
+    assert final["status"] == "ready_for_review"
+    assert final["pull_request"] == PRE_MERGE_PULL_REQUEST
+    assert final["pushed_head"]
+    assert not final.get("publish_owed")
+    assert "publish_owed" not in (documents.load("GH-1") or {})
+
+
+def test_the_ports_of_a_node_are_filed_under_the_task_its_thread_is(tmp_path):
+    """GH-391: the thread id is the task, so a node's checks are bound to it; with no thread
+    there is no task to bind. `_PortsPerRun` is the one place that sees the thread."""
+    bound: list[str] = []
+
+    def for_task(ports, task_key):
+        bound.append(task_key)
+        return ports
+
+    cfg = Configuration(product_dir=tmp_path)
+    shared = _PortsPerRun(lambda cfg: memory_ports(), for_task)
+    shared(cfg, {"configurable": {"thread_id": "GH-7"}})
+    shared(cfg, None)
+    assert bound == ["GH-7"]

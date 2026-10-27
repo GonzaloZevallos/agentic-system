@@ -135,7 +135,7 @@ def test_the_gh374_shape_settles_and_then_the_refusal_is_gone():
 def test_without_a_live_approval_it_escalates_once_then_is_none_on_the_same_head():
     s = state(approved=False)
     assert plan_settlement.pending(s) == []
-    assert step_for(s) == LandingStep("escalate", REFUSAL)
+    assert step_for(s) == LandingStep("escalate_ledger", REFUSAL)
     assert step_for(s, escalated=True) == LandingStep("none", REFUSAL)
 
 
@@ -148,7 +148,7 @@ def test_a_subtask_blocking_row_among_them_is_a_fix_as_before():
 def test_an_exhausted_landing_under_ledger_only_never_slices_or_diagnoses(slicing):
     s = state(approved=False)
     full = spent(passes=landing.LANDING_PASSES_MAX)
-    assert step_for(s, spent_=full, slicing=slicing).kind == "escalate"
+    assert step_for(s, spent_=full, slicing=slicing).kind == "escalate_ledger"
     # A verdict sync that the budgets refuse is an exhaustion too.
     due = spent(
         diagnoses=1,
@@ -156,7 +156,7 @@ def test_an_exhausted_landing_under_ledger_only_never_slices_or_diagnoses(slicin
         verdict_sync_due=True,
         syncs=landing.LANDING_SYNCS_MAX,
     )
-    assert step_for(s, spent_=due, slicing=slicing).kind == "escalate"
+    assert step_for(s, spent_=due, slicing=slicing).kind == "escalate_ledger"
 
 
 def test_after_diagnosis_never_restarts_a_ledger_only_refusal():
@@ -194,4 +194,4 @@ def test_a_ledger_only_flag_on_another_refusal_changes_nothing():
 
 def test_the_new_steps_spend_no_model():
     assert landing.run_kind_of("settle", REFUSAL) == "land_checks"
-    assert landing.run_kind_of("escalate", REFUSAL) == "land_checks"
+    assert landing.run_kind_of("escalate_ledger", REFUSAL) == "land_checks"

@@ -50,12 +50,13 @@ LandingStepKind = Literal[
     "land_slice",
     "diagnose",
     "settle",
+    "escalate_ledger",
     "escalate",
     "none",
 ]
-"""What the landing does about a refusal (`settle` and `escalate`, GH-374, spend no model and
-no pass: `settle` writes the `plan_settled` rows the live PM approval covers, `escalate` asks
-the human once about the `PM: final validation` rows it does not cover). `wait` (the next tick
+"""What the landing does about a refusal (`settle` and `escalate_ledger`, GH-374, spend no model
+and no pass: `settle` writes the `plan_settled` rows the live PM approval covers, `escalate_ledger`
+asks the human once about the `PM: final validation` rows it does not cover). `wait` (the next tick
 decides again), `sync_master` (merge the upstream into the task branch), `re_review` (a Tech
 Lead review of the head), `fix` (a Developer pass on `units`), `fix_important` (the one final
 pass on the task's own open `important` findings, GH-294), `rerun` (the CI or the checks, once
@@ -64,7 +65,9 @@ per head), `file_followups_and_land` (file the `outside` findings, then merge), 
 GH-229), `land_slice` (GH-297: land the approved units that apply cleanly on master as a
 slice of their own, then go on with the rest; `LandingStep.units` is the slice), `diagnose`
 (the terminal path: the landing diagnoser, then a restart; `restart_why` says why no slice
-was possible) and `none` (nothing the system can do: the human's)."""
+was possible), `escalate` (GH-371: every failing required check is also red on the base branch,
+so the task escalates to the human with no model run) and `none` (nothing the system can do: the
+human's)."""
 
 RestartWhy = Literal["single_unit", "no_clean_slice", "slice_refused", "unreadable"]
 """Why a landing that exhausted its budgets restarts instead of landing a slice (GH-297):
@@ -95,7 +98,7 @@ def run_kind_of(step: LandingStepKind | None, refusal: rules.MergeRefusal | None
             return "land_checks"
         case "fix_important":
             return "land_model"
-        case "land_slice" | "settle" | "escalate":
+        case "land_slice" | "settle" | "escalate" | "escalate_ledger":
             return "land_checks"
         case _:
             return "land_model"
@@ -227,20 +230,21 @@ def landing_step(
     escalated: bool = False,
 ) -> LandingStep:
     """The step for `refusal`. `ledger_only` (`plan_settlement.ledger_only`), `pending`
-    (`plan_settlement.pending`) and `escalated` (an `escalate` entry for this head and refusal
-    is recorded) are computed by the caller: a ledger-only `open_findings_blocking` is `settle`
-    while `pending` is not empty, then one `escalate`, then `none`; and an exhausted budget under
-    it is that escalation, never a slice or a restart. A model pass or a sync past its budget is
-    the exhaustion: the `land_slice` when `slicing` is a `Slice`, else the `diagnose` carrying
-    `slicing` as its `restart_why` (`None`: as before GH-297). A task whose latest diagnosis is
-    `unlandable` has no step left (`none`); one whose diagnosis said `sync` and has not been
-    synced yet (`verdict_sync_due`) gets the `sync_master` whatever the refusal, within the
-    task-wide and unsynced budgets and exempt from the per-sha conflict cap. `blocking_owners` is
-    the units that own the open blocking records (`blocking_owners`); `important_units` the ones the
-    final important pass reopens (`important_owners`); `slicing` is what the exhaustion
-    decides a slice from: a ready `slice_or_restart` answer, or a provider of the
-    `SliceInputs` that is called, and handed to `slice_or_restart`, only when a budget has run
-    out, so a healthy landing reads no git for it. This is the only place `slice_or_restart`
+    (`plan_settlement.pending`) and `escalated` (an `escalate_ledger` entry for this head and
+    refusal is recorded) are computed by the caller: a ledger-only `open_findings_blocking` is
+    `settle` while `pending` is not empty, then one `escalate_ledger`, then `none`; and an
+    exhausted budget under it is that escalation, never a slice or a restart. A model pass or a
+    sync past its budget is the exhaustion: the `land_slice` when `slicing` is a `Slice`, else
+    the `diagnose` carrying `slicing` as its `restart_why` (`None`: as before GH-297). A task
+    whose latest diagnosis is `unlandable` has no step left (`none`); one whose diagnosis said
+    `sync` and has not been synced yet (`verdict_sync_due`) gets the `sync_master` whatever the
+    refusal, within the task-wide and unsynced budgets and exempt from the per-sha conflict cap.
+    `blocking_owners` is the units that own the open blocking records (`blocking_owners`);
+    `important_units` the ones the final important pass reopens (`important_owners`); `slicing`
+    is what the exhaustion decides a slice from: a ready `slice_or_restart` answer, or a
+    provider of the `SliceInputs` that is called, and handed to `slice_or_restart`, only when a
+    budget has run out, so a healthy landing reads no git for it. This is the only place
+    `slice_or_restart`
     is called."""
 
     # Whatever the caller computed, only this refusal is ledger state (invariant: every other
@@ -251,7 +255,7 @@ def landing_step(
         return LandingStep(kind, refusal, units)
 
     def ask_once() -> LandingStep:
-        return step("none") if escalated else step("escalate")
+        return step("none") if escalated else step("escalate_ledger")
 
     def exhausted() -> LandingStep:
         """The one place every budget that ran out ends (invariant: nothing else lists
@@ -300,6 +304,8 @@ def landing_step(
                 return step("fix_important", important_units)
             return step("file_followups_and_land")
         case "ci_failed":
+            if _red_on_base_only(facts):
+                return step("escalate")
             return step("rerun") if spent.reruns_on_head == 0 else pass_("fix", blocking_owners)
         case "checks_failed":
             if facts.failed_step == "conflict":
@@ -323,6 +329,15 @@ def landing_step(
             return exhausted()
         case "master_moved":
             return step("wait")
+
+
+def _red_on_base_only(facts: rules.MergeFacts) -> bool:
+    """Whether every failing required check is also red on the base branch (GH-371): the
+    refusal is then not the task's to fix. False without a verdict to cover or a name red on
+    the base."""
+    if not facts.ci_red_on_base or facts.ci_verdict is None or not facts.ci_verdict.failing:
+        return False
+    return {check.name for check in facts.ci_verdict.failing} <= set(facts.ci_red_on_base)
 
 
 def _sync(
@@ -618,6 +633,7 @@ def slice_facts(
     merge_failure: rules.MergeFailure | None = None,
     failed_step: presubmit.FailedStep | None = None,
     ci_required: tuple[str, ...] = (),
+    ci_plan_only: tuple[str, ...] = (),
     ci_head: str | None = None,
     ci_verdict: ci.CiVerdict | None = None,
     ci_unreadable: ci.CiUnreadable | None = None,
@@ -670,6 +686,7 @@ def slice_facts(
         merge_failure=merge_failure,
         failed_step=failed_step,
         ci_required=ci_required,
+        ci_plan_only=ci_plan_only,
         ci_head=ci_head,
         ci_verdict=ci_verdict,
         ci_unreadable=ci_unreadable,

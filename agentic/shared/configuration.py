@@ -180,6 +180,10 @@ class Configuration(BaseModel):
     # The machine's store of passing check results (ADR-0065): outside every checkout and
     # shared by every product, built like `run_registry_dir`.
     check_results_dir: Path = Field(default_factory=lambda: _default_check_results_dir())
+    # The free space, in MB, under which a volume holding scratch (the product's disk, or
+    # `/tmp`) counts as full (GH-391, ADR-0069): the poller starts nothing below it.
+    # Declared, not measured: a few parallel runs' worth of build and test scratch.
+    scratch_floor_mb: int = Field(default=2048, ge=0)
 
     @model_validator(mode="after")
     def _parallel_within_role_slots(self) -> Configuration:
@@ -224,6 +228,10 @@ class Configuration(BaseModel):
         if slug in self.model_overrides:
             return self.model_overrides[slug]
         return self.actor_model if kind == "actor" else self.verifier_model
+
+    @property
+    def scratch_floor_bytes(self) -> int:
+        return self.scratch_floor_mb * 1024 * 1024
 
     @property
     def agentic_dir(self) -> Path:

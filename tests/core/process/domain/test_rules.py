@@ -1,6 +1,6 @@
 import re
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any, cast, get_args
 
 import pytest
@@ -22,6 +22,7 @@ from agentic.core.process.domain.roles import (
     TECH_LEAD_EPHEMERAL,
 )
 from agentic.core.process.domain.schemas import FitDecision, TaskType
+from agentic.core.process.domain.scratch import INODE_FLOOR, SpaceReading
 from agentic.core.process.domain.task import INTEGRATION, Carried
 
 PAIR = PAIR_PM_PA
@@ -1851,6 +1852,52 @@ def test_the_persisted_escalation_is_a_failure_class_pause_auto_resumable_does_n
     assert rules.auto_resumable(task.apply(state, patch)) is None
 
 
+def _paused_by(*entries: dict, escalated: str = "Developer failed") -> dict:
+    return {"pause_log": list(entries), "escalated": escalated}
+
+
+def test_an_account_limit_only_pause_needs_no_human():
+    state = _paused_by(_failure_entry("account_limit"), _escalation_entry("failure"))
+    assert rules.auto_resumable(state) == "account_limit"
+    assert not rules.needs_a_human(cast(Any, state))
+
+
+def test_a_persisted_account_limit_needs_a_human():
+    # Rejected input: the pause reads as an account limit, but the hourly week is spent.
+    state = _paused_by(
+        _failure_entry("account_limit"),
+        _escalation_entry("failure"),
+        escalated=rules.ACCOUNT_LIMIT_PERSISTED,
+    )
+    assert rules.needs_a_human(cast(Any, state))
+    patched = task.apply(
+        _paused_by(_failure_entry("account_limit"), _escalation_entry("failure")),
+        rules.account_limit_persisted_patch(),
+    )
+    assert rules.needs_a_human(patched)
+
+
+@pytest.mark.parametrize("reason", ["upstream", "network"])
+def test_an_upstream_or_network_pause_keeps_the_label(reason):
+    state = _paused_by(_failure_entry(reason), _escalation_entry("failure"))
+    assert rules.auto_resumable(state) == reason
+    assert rules.needs_a_human(cast(Any, state))
+
+
+def test_a_mixed_external_and_own_failure_set_needs_a_human():
+    state = _paused_by(
+        _failure_entry("account_limit"), _failure_entry("sdk"), _escalation_entry("failure")
+    )
+    assert rules.needs_a_human(cast(Any, state))
+
+
+@pytest.mark.parametrize("cls", ["cap", "returns"])
+def test_a_non_failure_escalation_needs_a_human(cls):
+    state = _paused_by(_failure_entry("account_limit"), _escalation_entry(cls))
+    assert rules.needs_a_human(cast(Any, state))
+    assert rules.needs_a_human(cast(Any, _paused_by(_escalation_entry("failure"))))
+
+
 def test_low_confidence_type_resolves_every_task_type():
     # `platform_enhancement` has no path of its own to guess into: it is a feature.
     assert rules.low_confidence_type("platform_enhancement") == "feature"
@@ -2970,6 +3017,8 @@ def test_split_tracker_items_pass_the_item_checks_of_a_tech_lead_item():
         "markdown": "### Solution",
         "estimated_cost_usd": 2.0,
         "estimated_files": 0,
+        "ci_required": [],
+        "ci_none_reason": "The work is on the tracker.",
         "tracker_checklist": items,
     }
     assert schemas.validate(schemas.TechPlan, plan, {})["tracker_checklist"] == items
@@ -3797,3 +3846,236 @@ def test_a_pass_before_the_pull_request_does_not_make_the_task_delivered():
     }
     assert rules.CLOSENESS[rules.closeness(state)] != "delivered"
     assert rules.CLOSENESS[rules.closeness({**state, "pull_request": "u"})] == "delivered"
+
+
+# --- GH-381: an account_limit pause is retaken at the reset its failure stated -----------
+
+BA = timezone(timedelta(hours=-3))
+ESCALATED_0105 = datetime(2026, 10, 27, 1, 5, tzinfo=BA)
+RESET_0540 = datetime(2026, 10, 27, 5, 40, tzinfo=BA)
+
+
+def _reset_candidate(
+    *, resets_at: datetime | None = RESET_0540, retaken: bool = False, prior: int = 0, **more: Any
+) -> rules.ResumeCandidate:
+    return rules.ResumeCandidate(
+        5,
+        "account_limit",
+        ESCALATED_0105,
+        prior,
+        24,
+        more.pop("chase_prior", prior),
+        resets_at=resets_at,
+        retaken=retaken,
+        **more,
+    )
+
+
+def _reset_plan(resume: rules.ResumeCandidate, now: datetime, launches=()):
+    return rules.poll_plan(
+        closes=[], resumes=[resume], launches=list(launches), available_slots=2, now=now
+    )
+
+
+def test_account_limit_due_is_the_hint_when_no_retake_was_made_yet():
+    due = rules.account_limit_due(
+        ESCALATED_0105,
+        0,
+        24,
+        RESET_0540,
+        schedule=rules.ACCOUNT_LIMIT_SCHEDULE,
+        resets_at=RESET_0540,
+        retaken=False,
+    )
+    assert due == RESET_0540
+
+
+def test_account_limit_due_is_none_a_second_before_the_hint_even_past_the_first_slot():
+    # 04:39:59 is hours past the 15-minute slot after the 01:05 comment: the hint rules.
+    assert (
+        rules.account_limit_due(
+            ESCALATED_0105,
+            0,
+            24,
+            RESET_0540 - timedelta(seconds=1),
+            schedule=rules.ACCOUNT_LIMIT_SCHEDULE,
+            resets_at=RESET_0540,
+            retaken=False,
+        )
+        is None
+    )
+
+
+def test_account_limit_due_without_a_hint_is_next_attempt_at_exactly():
+    now = ESCALATED_0105 + timedelta(minutes=16)
+    kwargs = {"schedule": rules.ACCOUNT_LIMIT_SCHEDULE}
+    assert rules.account_limit_due(
+        ESCALATED_0105, 0, 24, now, resets_at=None, retaken=False, **kwargs
+    ) == rules.next_attempt_at(ESCALATED_0105, 0, 24, now, **kwargs)
+    early = ESCALATED_0105 + timedelta(minutes=14)
+    assert (
+        rules.account_limit_due(
+            ESCALATED_0105, 0, 24, early, resets_at=None, retaken=False, **kwargs
+        )
+        is None
+    )
+
+
+def test_account_limit_due_after_a_retake_follows_the_calendar_not_the_hint():
+    # Escalated again five minutes before the hint's time: the hint (05:40) would say due at
+    # 05:40, the calendar's second slot (+15 min) says 05:50.
+    since = RESET_0540 - timedelta(minutes=5)
+    kwargs = {"schedule": rules.ACCOUNT_LIMIT_SCHEDULE, "resets_at": RESET_0540, "retaken": True}
+    assert rules.account_limit_due(since, 1, 24, RESET_0540, **kwargs) is None
+    assert rules.account_limit_due(since, 1, 24, since + timedelta(minutes=15), **kwargs) == (
+        since + timedelta(minutes=15)
+    )
+    # An exhausted calendar stays exhausted: spacing and exhaustion always apply to a retake.
+    assert rules.account_limit_due(since, 24, 24, RESET_0540 + timedelta(days=1), **kwargs) is None
+
+
+def test_poll_plan_holds_every_round_before_the_reset_and_resumes_at_it():
+    waiting = _reset_candidate()
+    launch = rules.LaunchCandidate(issue=9, blocked=False, since=None, prior=0, limit=6)
+    for now in (
+        ESCALATED_0105 + timedelta(minutes=16),  # past the first calendar slot
+        datetime(2026, 10, 27, 3, 0, tzinfo=BA),
+        RESET_0540 - timedelta(seconds=1),
+    ):
+        assert _reset_plan(waiting, now, [launch]).actions == []  # no retake, no new launch
+        assert rules.account_paused([waiting], now)
+    assert rules.PollAction("resume", 5) in _reset_plan(waiting, RESET_0540, [launch]).actions
+
+
+def test_a_hint_governed_pause_is_not_exhausted_by_the_calendar_it_skips():
+    spent = _reset_candidate(prior=24)
+    assert not rules.resume_exhausted(spent)
+    assert _reset_plan(spent, RESET_0540).actions == [rules.PollAction("resume", 5)]
+
+
+def test_after_the_retake_at_the_reset_the_pause_is_not_due_again_on_the_hint():
+    since = RESET_0540 - timedelta(minutes=5)
+    retaken = replace(_reset_candidate(retaken=True, prior=1), since=since)
+    assert _reset_plan(retaken, RESET_0540).actions == []
+    assert rules.account_paused([retaken], RESET_0540)
+    assert _reset_plan(retaken, since + timedelta(minutes=15)).actions == [
+        rules.PollAction("resume", 5)
+    ]
+
+
+def test_a_persisted_account_limit_is_not_governed_by_a_hint():
+    persisted = _reset_candidate(
+        prior=2, chase_prior=rules.ACCOUNT_LIMIT_CHASE_MAX + len(rules.ACCOUNT_LIMIT_HOURLY)
+    )
+    assert rules.account_limit_persisted(persisted)
+    assert _reset_plan(persisted, RESET_0540).actions == []
+
+
+# GH-391: the free-space floor and what a held round plans.
+_AMPLE = SpaceReading(free_bytes=10**12, free_inodes=10**7)
+_FLOOR = 2048 * 1024 * 1024
+
+
+def test_space_holds_names_each_volume_under_the_byte_floor_or_the_inode_floor():
+    low_bytes = SpaceReading(free_bytes=_FLOOR - 1, free_inodes=10**7)
+    low_inodes = SpaceReading(free_bytes=10**12, free_inodes=INODE_FLOOR - 1)
+    assert rules.space_holds(_AMPLE, _AMPLE, _FLOOR) == ()
+    assert rules.space_holds(_AMPLE, low_bytes, _FLOOR) == ("/tmp",)
+    assert rules.space_holds(low_inodes, _AMPLE, _FLOOR) == ("scratch",)
+    assert rules.space_holds(low_bytes, low_inodes, _FLOOR) == ("scratch", "/tmp")
+
+
+def test_space_holds_at_exactly_the_floor_is_not_a_hold():
+    exact = SpaceReading(free_bytes=_FLOOR, free_inodes=INODE_FLOOR)
+    assert rules.space_holds(exact, exact, _FLOOR) == ()
+
+
+def _busy_plan(held: tuple[str, ...]) -> rules.PollPlan:
+    return rules.poll_plan(
+        closes=[9, 4],
+        resumes=[],
+        launches=[rules.LaunchCandidate(5, False, None, 0, 3)],
+        available_slots=6,
+        now=datetime(2026, 10, 27, tzinfo=UTC),
+        retakes=[6],
+        crash_retakes=[7],
+        merges=[8],
+        lands=[rules.LandCandidate(10, "land_model"), rules.LandCandidate(11, "land_checks")],
+        held=held,
+    )
+
+
+def test_a_held_plan_is_the_closes_alone_and_defers_nothing():
+    open_plan = _busy_plan(())
+    assert {a.kind for a in open_plan.actions} >= {"close", "launch", "retake", "merge", "land"}
+    held = _busy_plan(("/tmp",))
+    assert held.actions == [rules.PollAction("close", 4), rules.PollAction("close", 9)]
+    assert held.deferred == []
+
+
+# --- GH-391: `disk_full`, the external reason a measured full disk narrows a failure to ---
+
+FLOOR = 2 * 1024**3
+AMPLE = SpaceReading(free_bytes=FLOOR * 10, free_inodes=INODE_FLOOR * 100)
+
+
+def test_space_narrowed_names_a_disk_under_the_byte_floor():
+    low = SpaceReading(free_bytes=FLOOR - 1, free_inodes=AMPLE.free_inodes)
+    assert rules.space_narrowed("schema", low, FLOOR, False) == "disk_full"
+
+
+def test_space_narrowed_names_a_disk_under_the_inode_floor():
+    low = SpaceReading(free_bytes=AMPLE.free_bytes, free_inodes=INODE_FLOOR - 1)
+    assert rules.space_narrowed("other", low, FLOOR, False) == "disk_full"
+
+
+def test_space_narrowed_names_an_enospc_caught_as_data_whatever_the_reading_says():
+    assert rules.space_narrowed("sdk", AMPLE, FLOOR, True) == "disk_full"
+    assert rules.space_narrowed("sdk", None, FLOOR, True) == "disk_full"
+
+
+def test_space_narrowed_keeps_the_reason_when_space_is_ample_or_unread():
+    assert rules.space_narrowed("schema", AMPLE, FLOOR, False) == "schema"
+    assert rules.space_narrowed("schema", None, FLOOR, False) == "schema"
+    exactly = SpaceReading(free_bytes=FLOOR, free_inodes=INODE_FLOOR)
+    assert rules.space_narrowed("schema", exactly, FLOOR, False) == "schema"
+
+
+def test_space_narrowed_never_narrows_limit_whatever_it_is_given():
+    # Rejected input: our own per-attempt cap, with a full disk and an ENOSPC beside it.
+    low = SpaceReading(free_bytes=0, free_inodes=0)
+    assert rules.space_narrowed("limit", low, FLOOR, True) == "limit"
+    assert rules.space_narrowed("limit", low, FLOOR, False) == "limit"
+
+
+def test_disk_full_is_an_external_reason_a_pause_is_retaken_for():
+    assert "disk_full" in rules.EXTERNAL_REASONS
+    state = _paused_by(_failure_entry("disk_full"), _escalation_entry("failure"))
+    assert rules.auto_resumable(state) == "disk_full"
+
+
+def test_a_disk_full_pause_keeps_the_label_and_follows_the_retake_calendar():
+    state = _paused_by(_failure_entry("disk_full"), _escalation_entry("failure"))
+    assert rules.needs_a_human(cast(Any, state))
+    assert rules.schedule_for("disk_full") == rules.RETAKE_SCHEDULE
+
+
+def test_a_disk_full_beside_an_own_failure_is_not_auto_resumable():
+    # Rejected input: the epoch also holds a failure of the role's own.
+    state = _paused_by(
+        _failure_entry("disk_full"), _failure_entry("schema"), _escalation_entry("failure")
+    )
+    assert rules.auto_resumable(state) is None
+
+
+def test_poll_plan_retakes_a_disk_full_pause_on_the_retake_calendar():
+    due = rules.ResumeCandidate(
+        issue=5, reason="disk_full", since=NOW - timedelta(minutes=16), prior=0, limit=6
+    )
+    early = rules.ResumeCandidate(
+        issue=6, reason="disk_full", since=NOW - timedelta(minutes=5), prior=0, limit=6
+    )
+    actions = rules.poll_plan(
+        closes=[], resumes=[due, early], launches=[], available_slots=2, now=NOW
+    ).actions
+    assert actions == [rules.PollAction("resume", 5)]

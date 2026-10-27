@@ -39,7 +39,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import Command
 
 from . import composition
-from .composition import default_ports, graph
+from .composition import bind_task, default_ports, graph
 from .core.knowledge.domain import knowledge
 from .core.knowledge.domain import stack as knowledge_stack
 from .core.measurement.adapters.langfuse.scores import LangfuseScores
@@ -618,6 +618,7 @@ def main() -> None:
         stop: StopCause | None = None
         if args.command == "resume":
             task_id = ports.inbox.task_id(args.issue)
+            ports = bind_task(ports, task_id)
             base = declared_stack_of(task_id, ports)
             if (warning := no_forbidden(ports, base)) is not None:
                 print(f"agentic: {warning}", file=sys.stderr)
@@ -649,9 +650,11 @@ def main() -> None:
                 task_id = ports.inbox.task_id(args.issue)
                 work = partial(_close, task_id, cfg, ports)
         elif args.command == "merge":
-            work = partial(_merge, ports.inbox.task_id(args.issue), args.issue, cfg, ports)
+            task_id = ports.inbox.task_id(args.issue)
+            work = partial(_merge, task_id, args.issue, cfg, bind_task(ports, task_id))
         elif args.command == "land":
-            work = partial(_land, ports.inbox.task_id(args.issue), cfg, ports, args.run_kind)
+            task_id = ports.inbox.task_id(args.issue)
+            work = partial(_land, task_id, cfg, bind_task(ports, task_id), args.run_kind)
         elif args.command == "eval":
             if args.eval_command == "run":
                 log_file = _log_file_for(cfg, "eval")
@@ -730,7 +733,7 @@ def main() -> None:
                 _run,
                 task,
                 cfg,
-                ports,
+                bind_task(ports, task["id"]),
                 args.fresh,
                 log_file=log_file,
                 detach=args.detach,

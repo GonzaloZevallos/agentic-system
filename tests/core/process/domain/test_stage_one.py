@@ -92,6 +92,8 @@ def test_tech_plan_subtasks_are_slugs_with_seams_and_known_dependencies():
         "markdown": "### Solution",
         "estimated_cost_usd": 20.0,
         "estimated_files": 5,
+        "ci_required": [],
+        "ci_none_reason": "No external check.",
         "subtasks": [
             {"id": "domain", "title": "Domain", "brief": "b", "seams": ["Dashboard.compute"]},
             {
