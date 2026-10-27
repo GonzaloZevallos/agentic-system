@@ -14,7 +14,6 @@ Nothing here opens an issue: what the review after the pass raises again lands u
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import cast
 
 from agentic.shared.configuration import Configuration
 
@@ -41,22 +40,21 @@ async def fix_important(state: TaskState, cfg: Configuration, ports: Ports) -> T
     }
     if isinstance(head := state.get("task_head"), str) and head:
         entry["head"] = head
-    # A patch, not a whole state: the reducers merge it (`finish`).
-    patch = cast(
-        TaskState,
-        {
-            "status": reopened["status"],
-            # Only the units the pass reopened: the reducer merges, and `reopen` returns the
-            # whole state with the history already folded in.
-            "subtasks": {
-                name: unit
-                for name, unit in reopened["subtasks"].items()
-                if unit != before.get(name)
-            },
-            "change_history": reopened["change_history"][len(kept) :],
-            "landing": [*(landing_rules.entry_of(e) for e in landing_plan.entries(state)), entry],
+    patch: TaskState = {
+        # `TaskInput` requires these three to type the patch; a task always has them, so
+        # they are written back unchanged.
+        "id": state.get("id", ""),
+        "title": state.get("title", ""),
+        "description": state.get("description", ""),
+        "status": reopened["status"],
+        # Only the units the pass reopened: the reducer merges, and `reopen` returns the
+        # whole state with the history already folded in.
+        "subtasks": {
+            name: unit for name, unit in reopened["subtasks"].items() if unit != before.get(name)
         },
-    )
+        "change_history": reopened["change_history"][len(kept) :],
+        "landing": [*(landing_rules.entry_of(e) for e in landing_plan.entries(state)), entry],
+    }
     return finish(state, patch, ports)
 
 

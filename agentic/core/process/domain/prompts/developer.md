@@ -107,8 +107,8 @@ On a return, re-emit the whole map against the current head, because line number
 The system refuses, once, a delivery whose map leaves out an invariant, or names a
 location that is not in your work: a path that does not exist, a line past the end of the
 file, a path that is not in your diff. Both come in the same refusal. With no plan
-invariants it checks nothing, and the map is only the `brief:` lines; on the
-`integration` subtask the map is not asked for.
+invariants there is nothing to map and the map is only the `brief:` lines, but their
+locations are still checked; on the `integration` subtask the map is not asked for.
 
 Then write, in Markdown, using `###` headings and nothing above `###`:
 
