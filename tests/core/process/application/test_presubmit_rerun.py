@@ -175,3 +175,55 @@ def test_a_flaked_check_stores_nothing_but_a_green_one_still_does():
 )
 def test_timeout_s_includes_the_possible_rerun(parallel, plan, expected):
     assert gate(MemoryCommands(), parallel=parallel, plan=plan).timeout_s == expected
+
+
+def red(*ids: str) -> CommandResult:
+    return CommandResult(1, "".join(f"FAILED {i}\n" for i in ids))
+
+
+def refusing_gate(
+    attempts: list[tuple[str, ...]], *, forms: bool = True
+) -> tuple[CheckoutPresubmit, MemoryCommands]:
+    """A gate whose `tests` check is red on each call with the ids of `attempts[n]`, then green
+    from the call after the last one. `lint` is always green."""
+    commands = MemoryCommands(
+        pytest=[red(*ids) for ids in attempts],
+        **{"pytest --lf": [red(*ids) for ids in attempts]},
+    )
+    return gate(commands, forms={"tests": FORM} if forms else None), commands
+
+
+def verdicts(g: CheckoutPresubmit, calls: int) -> list[bool]:
+    """For each of `calls` deliveries, whether the gate refused it."""
+    return [g() is not None for _ in range(calls)]
+
+
+def test_without_failed_ids_the_gate_stops_after_two_refusals_as_before():
+    g, _ = refusing_gate([("a",), ("b",), ("c",), ("d",)], forms=False)
+    assert verdicts(g, 4) == [True, True, False, False]
+
+
+def test_the_same_failed_ids_stop_the_gate_after_two_refusals():
+    g, _ = refusing_gate([("a", "b")] * 4)
+    assert verdicts(g, 4) == [True, True, False, False]
+
+
+def test_changed_failed_ids_earn_a_third_refusal_and_never_a_fourth():
+    g, _ = refusing_gate([("a", "b"), ("a",), ("a",), ("b",), ("c",)])
+    refused = [g() for _ in range(4)]
+    assert [r is not None for r in refused] == [True, True, True, False]
+    assert refused[2] is not None and "(3 of 3)" in refused[2]
+
+
+def test_a_third_refusal_is_not_earned_when_the_ids_only_change_after_the_second():
+    g, _ = refusing_gate([("a",), ("a",), ("b",), ("c",)])
+    assert verdicts(g, 4) == [True, True, False, False]
+
+
+def test_a_timeout_spends_a_refusal_and_its_reason_says_it_timed_out():
+    commands = MemoryCommands(pytest=[CommandResult(-9, "partial", timed_out=True)] * 3)
+    g = gate(commands, forms={"tests": FORM})
+    first, second, third = g(), g(), g()
+    assert first is not None and "`tests` timed out" in first and "(1 of 2)" in first
+    assert second is not None and "(2 of 2)" in second
+    assert third is None  # no ids parsed from a timeout: the budget is today's

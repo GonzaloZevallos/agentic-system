@@ -409,3 +409,48 @@ def test_merge_checks_record_passes_a_flake_and_marks_it_and_marks_a_double_red(
     assert failed["checks"] == [
         {"name": "tests", "passed": False, "tail": ["second"], "rerun": True}
     ]
+
+
+def test_below_the_budget_a_refusal_is_always_allowed():
+    assert presubmit.refusal_allowed(0, None, None)
+    assert presubmit.refusal_allowed(presubmit.REFUSALS - 1, ("a",), ("a",))
+
+
+def test_without_failed_ids_the_budget_is_today_s_exactly():
+    assert not presubmit.refusal_allowed(presubmit.REFUSALS, None, None)
+    assert not presubmit.refusal_allowed(presubmit.REFUSALS, ("a",), None)
+    assert not presubmit.refusal_allowed(presubmit.REFUSALS, None, ("a",))
+
+
+def test_the_same_failed_ids_stop_at_the_budget():
+    assert not presubmit.refusal_allowed(presubmit.REFUSALS, ("a", "b"), ("a", "b"))
+    assert not presubmit.refusal_allowed(presubmit.REFUSALS, (), ())
+
+
+def test_changed_failed_ids_earn_one_more_refusal_and_never_two():
+    assert presubmit.refusal_allowed(presubmit.REFUSALS, ("a", "b"), ("a",))
+    assert not presubmit.refusal_allowed(presubmit.REFUSALS + 1, ("a", "b"), ("a",))
+    assert not presubmit.refusal_allowed(presubmit.REFUSALS + 2, ("a",), ("b",))
+
+
+def test_the_order_of_failed_ids_is_not_a_change():
+    assert not presubmit.refusal_allowed(presubmit.REFUSALS, ("a", "b"), ("b", "a"))
+
+
+def test_a_timed_out_check_is_refused_saying_it_timed_out_and_not_to_rerun_it():
+    row = result("tests", "pytest", False, "partial\n(timed out after 30 s)")
+    row["timed_out"] = True
+    reason = presubmit.refusal(True, True, [row])
+    assert "`tests` timed out: `pytest`" in reason
+    assert "do not just rerun it" in reason and "partial" in reason
+
+
+def test_a_plain_red_check_keeps_its_wording():
+    reason = presubmit.refusal(True, True, [result("tests", "pytest", False, "boom")])
+    assert "`tests` failed: `pytest`" in reason and "timed out" not in reason
+
+
+def test_the_third_refusal_is_counted_against_the_extended_budget():
+    assert "(1 of 2)" in presubmit.refused("r", 1)
+    assert "(2 of 2)" in presubmit.refused("r", 2)
+    assert "(3 of 3)" in presubmit.refused("r", 3)
