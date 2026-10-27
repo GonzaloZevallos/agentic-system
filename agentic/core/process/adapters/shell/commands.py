@@ -66,6 +66,13 @@ class ShellCommands:
         self._scratch = scratch
         self._task_key = task_key
 
+    def for_task(self, task_key: str) -> ShellCommands:
+        """The same runner filing its scratch under `task_key`, the root task a caller works
+        on (`composition.bind_task`)."""
+        return ShellCommands(
+            self._product, self._reaper, self._stop, scratch=self._scratch, task_key=task_key
+        )
+
     def run(self, cwd: Path, command: str, timeout_s: float) -> CommandResult:
         if self._stop.is_set():
             raise RunStopped

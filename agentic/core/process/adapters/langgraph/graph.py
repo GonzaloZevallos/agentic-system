@@ -92,6 +92,9 @@ from ..telemetry import NoTelemetry, Telemetry
 
 UseCase = Callable[[TaskState, Configuration, Ports], Awaitable[TaskState]]
 PortsFor = Callable[[Configuration], Ports]
+# Files the ports of a node under the task its thread is (GH-391: the scratch of its checks);
+# the graph knows the thread id and not the adapters, so the composition root hands this in.
+ForTask = Callable[[Ports, str], Ports]
 Rule = Callable[[TaskState], str | None]
 # The live arm string for a node's own `Configuration` (`metrics.arm_label`, ADR-0030):
 # injected rather than computed here, the same reason `ports_of` is. `core.process` may
@@ -121,14 +124,18 @@ class _PortsPerRun:
     second task the first one's spend. One per thread id, which is the task id
     (ADR-0003). The CLI is one run per process and never sees the difference."""
 
-    def __init__(self, ports_for: PortsFor):
+    def __init__(self, ports_for: PortsFor, for_task: ForTask):
         self.ports_for = ports_for
+        self.for_task = for_task
         self.limits: dict[str, RunLimits] = {}
 
     def __call__(self, cfg: Configuration, config: RunnableConfig | None) -> Ports:
         thread = str(((config or {}).get("configurable") or {}).get("thread_id", ""))
         limits = self.limits.setdefault(thread, RunLimits())
-        return replace(self.ports_for(cfg), limits=limits.sized(cfg.max_concurrent_roles))
+        ports = self.ports_for(cfg)
+        if thread:
+            ports = self.for_task(ports, thread)
+        return replace(ports, limits=limits.sized(cfg.max_concurrent_roles))
 
 
 PortsOf = Callable[[Configuration, RunnableConfig | None], Ports]
@@ -276,12 +283,16 @@ def _branch_node(ports_of: PortsOf, telemetry: Telemetry, arm_for: ArmFor):
 
 
 def build_graph(
-    ports_for: PortsFor, telemetry: Telemetry = NoTelemetry(), *, arm_for: ArmFor
+    ports_for: PortsFor,
+    telemetry: Telemetry = NoTelemetry(),
+    *,
+    arm_for: ArmFor,
+    for_task: ForTask = lambda ports, task_key: ports,
 ) -> StateGraph:
     # One `RunLimits` per run: every branch of a fan-out shares it, and sharing is the
     # whole point (ADR-0004, fifth addendum). It is not state and not a port, so it
     # rides in `Ports` without the branches ever seeing each other.
-    shared = _PortsPerRun(ports_for)
+    shared = _PortsPerRun(ports_for, for_task)
 
     graph = StateGraph(TaskState, input_schema=TaskInput)
     graph.add_node("classify", _node(classify, PJM, shared, telemetry, arm_for))
