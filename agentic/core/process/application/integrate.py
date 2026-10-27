@@ -39,7 +39,7 @@ from ..domain import rules
 from ..domain.roles import DEVELOPER
 from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, Subtask, TaskState, apply
 from . import pre_pr_fix
-from .checkouts import SetupFailed, subtask_checkout, task_base, task_checkout
+from .checkouts import SetupFailed, subtask_checkout_in_thread, task_base, task_checkout_in_thread
 from .ports import Checkout, Ports
 from .run_role import finish
 
@@ -61,7 +61,7 @@ async def integrate(state: TaskState, cfg: Configuration, ports: Ports) -> TaskS
     # runs and a failing one stops the wave before a Developer is dispatched. Inside a
     # branch it could not be told to the human: a branch never routes to the escalation.
     try:
-        task = task_checkout(state, cfg, ports)
+        task = await task_checkout_in_thread(state, cfg, ports)
         patch: TaskState = {"branch": task.branch, "sections": rules.findings_section(state)}
         conflicts = _merge_approved(state, task.path, ports)
         if (integration := _integration(state, conflicts, task)) is not None:
@@ -82,7 +82,7 @@ async def integrate(state: TaskState, cfg: Configuration, ports: Ports) -> TaskS
         ) is not None:
             patch["landing"] = closed
         for subtask_id in rules.dispatched_subtasks(current):
-            subtask_checkout(current, subtask_id, cfg, ports)
+            await subtask_checkout_in_thread(current, subtask_id, cfg, ports)
     except SetupFailed as unprepared:
         return finish(state, unprepared.patch(DEVELOPER), ports)
     return finish(state, patch, ports)

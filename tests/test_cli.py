@@ -5526,9 +5526,7 @@ async def test_the_deadline_never_fires_when_the_run_unwinds_in_time():
     reaper, exits = FakeReaper(), []
     stop = cli.StopCause(flag=EventStopFlag(), reaper=reaper)
     with pytest.raises(SystemExit):
-        await cli._signal_guarded(
-            _Signalling(reaper), stop, deadline_s=0.3, hard_exit=exits.append
-        )
+        await cli._signal_guarded(_Signalling(reaper), stop, deadline_s=0.3, hard_exit=exits.append)
     await anyio.sleep(0.5)
     assert exits == []
     assert len(reaper.calls) == 1
@@ -5546,3 +5544,34 @@ async def test_the_previous_signal_handlers_come_back_after_the_guard():
             _Signalling(reaper), cli.StopCause(flag=EventStopFlag(), reaper=reaper)
         )
     assert {s: signal.getsignal(s) for s in before} == before
+
+
+@pytest.mark.anyio
+async def test_a_run_stopped_that_reaches_the_guard_is_the_cancellation_not_a_traceback():
+    from agentic.core.process.application.ports import RunStopped
+
+    stop = cli.StopCause()
+
+    async def work():
+        raise RunStopped
+
+    with pytest.raises(SystemExit) as info:
+        await cli._signal_guarded(work, stop)
+    assert info.value.code == 1
+    assert stop.signalled is True
+
+
+@pytest.mark.anyio
+async def test_a_stopped_run_releases_its_lock_once_and_never_marks_it_crashed():
+    lock = FakeLock()
+    stop = cli.StopCause()
+
+    async def work():
+        with cli._locked(lock, "T-9", stop):
+            from agentic.core.process.application.ports import RunStopped
+
+            raise RunStopped
+
+    with pytest.raises(SystemExit):
+        await cli._signal_guarded(work, stop)
+    assert (lock.released, lock.kept, lock.kept_crashed) == (["T-9"], [], [])

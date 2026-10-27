@@ -15,7 +15,7 @@ from agentic.shared.configuration import Configuration
 from ..domain import rules
 from ..domain.roles import PAIR_PM_PA, PM, PM_BUG, Role
 from ..domain.task import WAITING_ON_HUMAN, TaskState
-from .checkouts import SetupFailed, task_checkout
+from .checkouts import SetupFailed, task_checkout_in_thread
 from .ports import Ports
 from .run_role import finish, run_role
 
@@ -23,7 +23,7 @@ from .run_role import finish, run_role
 async def validate_prd(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
     role = validator_for(state)
     try:
-        task = task_checkout(state, cfg, ports)
+        task = await task_checkout_in_thread(state, cfg, ports)
     except SetupFailed as unprepared:
         return finish(state, unprepared.patch(role), ports)
     limit = cfg.max_changes_requested_per_pair

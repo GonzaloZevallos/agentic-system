@@ -6,6 +6,7 @@ import asyncio
 import time
 from pathlib import Path
 
+import anyio
 import pytest
 
 from agentic.core.process.adapters.claude_sdk import hooks
@@ -16,6 +17,7 @@ from agentic.core.process.adapters.claude_sdk.check_server import (
 )
 from agentic.core.process.adapters.claude_sdk.hooks import HookActivity
 from agentic.core.process.adapters.claude_sdk.runner import options_for
+from agentic.core.process.application.ports import RunStopped
 from agentic.core.process.domain.roles import DEVELOPER, DEVELOPER_INTEGRATOR, ROLES
 
 STORE = Path("/state/agentic/check-results")
@@ -155,3 +157,19 @@ def test_the_bash_hook_denies_a_store_command(tmp_path):
     data = {"tool_input": {"command": f"ls {STORE}"}}
     out = asyncio.run(matcher.hooks[0](data, None, None))
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+class StoppedTool(SlowTool):
+    def __call__(self, name: str) -> str:
+        raise RunStopped
+
+
+def test_a_stop_in_the_run_check_tool_gives_no_result_and_waits_for_the_cancellation():
+    async def drive() -> tuple[bool, list]:
+        done: list = []
+        with anyio.move_on_after(0.3) as scope:
+            done.append(await run_check_tool(StoppedTool()).handler({"name": "tests"}))
+        return scope.cancelled_caught, done
+
+    cancelled, done = asyncio.run(drive())
+    assert cancelled and done == []  # no tool result: the stop is not one
