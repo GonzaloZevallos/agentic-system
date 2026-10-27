@@ -63,6 +63,7 @@ def folded():
                 "depends_on": ["a"],
             },
             "c": {"id": "c", "status": "pending", "branch": "t/c", "base": "b0"},
+            "d": {"id": "d", "status": "pending", "branch": "t/d", "base": "b0"},
         },
     }
 
@@ -73,7 +74,7 @@ def branches(**heads):
 
 def saved_through_the_loop(tmp_path):
     """The document after branch `b` delivered and `c` ran, written by the decorator while
-    `b` and `c` were in flight."""
+    `b`, `c` and `d` were in flight."""
     documents = FilesystemTaskDocuments(tmp_path)
     base = folded()
     decorator = FoldingDocuments(documents, base)
@@ -91,6 +92,9 @@ def saved_through_the_loop(tmp_path):
     decorator.branch("c", base).save(
         apply(base, {"subtasks": {"c": {**base["subtasks"]["c"], "status": "pending"}}})
     )
+    decorator.branch("d", base).save(
+        apply(base, {"subtasks": {"d": {**base["subtasks"]["d"], "status": "pending"}}})
+    )
     return documents
 
 
@@ -101,7 +105,7 @@ def ports_for(documents, **heads):
 
 
 def test_every_key_the_loop_and_the_turn_read_survives_the_decorators_document(tmp_path):
-    ports = ports_for(saved_through_the_loop(tmp_path), a="h-a", b="h-b", c="h-c")
+    ports = ports_for(saved_through_the_loop(tmp_path), a="h-a", b="h-b", c="h-c", d="h-d")
 
     state = resume.from_document("GH-1", ports)
 
@@ -116,7 +120,7 @@ def test_every_key_the_loop_and_the_turn_read_survives_the_decorators_document(t
 
 
 def test_a_crash_with_three_in_flight_and_one_approved_resumes_without_rebuilding_it(tmp_path):
-    ports = ports_for(saved_through_the_loop(tmp_path), a="h-a", b="h-b", c="h-c")
+    ports = ports_for(saved_through_the_loop(tmp_path), a="h-a", b="h-b", c="h-c", d="h-d")
     paused = resume.from_document("GH-1", ports)
 
     r = resume.prepare(
@@ -129,9 +133,10 @@ def test_a_crash_with_three_in_flight_and_one_approved_resumes_without_rebuildin
     )
 
     assert (r.source, r.interrupted, r.target) == ("document", True, "pipeline")
-    # `a` is approved and never rebuilt; `b` was delivered and enters at review.
+    # Three were in flight and `a` is approved and never rebuilt; `b` was delivered and
+    # enters at review.
     assert "a" not in rules.dispatched_subtasks(r.resumed)
-    assert {"b", "c"} <= set(rules.dispatched_subtasks(r.resumed))
+    assert {"b", "c", "d"} <= set(rules.dispatched_subtasks(r.resumed))
     assert rules.pipeline_entry({**r.resumed, "subtask_id": "b"}) == "review"
     resume.announce(r, ports)
     [(_, comment)] = ports.tracker.comments
@@ -139,13 +144,15 @@ def test_a_crash_with_three_in_flight_and_one_approved_resumes_without_rebuildin
 
 
 def test_a_commit_on_a_pending_subtasks_branch_does_not_stop_the_resume(tmp_path):
-    ports = ports_for(saved_through_the_loop(tmp_path), a="h-a", b="h-b", c="h-c-after-the-crash")
+    ports = ports_for(
+        saved_through_the_loop(tmp_path), a="h-a", b="h-b", c="h-c-after-the-crash", d="h-d"
+    )
 
     assert resume.from_document("GH-1", ports)["subtasks"]["c"]["status"] == "pending"
 
 
 def test_an_approval_whose_reviewed_head_is_not_the_branch_head_is_refused(tmp_path):
-    ports = ports_for(saved_through_the_loop(tmp_path), a="h-a-moved", b="h-b", c="h-c")
+    ports = ports_for(saved_through_the_loop(tmp_path), a="h-a-moved", b="h-b", c="h-c", d="h-d")
 
     with pytest.raises(ValueError, match=r"a: approved at h-a, but `t/a` is at h-a-moved"):
         resume.from_document("GH-1", ports)
