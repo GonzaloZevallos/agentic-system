@@ -434,6 +434,16 @@ class ProductStack(Protocol):
         product with no `delivery_checks`."""
         ...
 
+    def merge_inert(self, revision: str) -> tuple[str, ...]:
+        """The globs of the paths the product promises none of its checks reads
+        (`core.knowledge`, ADR-0045 amendment), as the commit `revision` declares them: what
+        master may gain without a recorded check pass going stale. Empty when the key is
+        absent -- the merge gate of today -- and also when the revision cannot be read (not
+        fetched, no file, YAML that does not parse): it never raises for those and never
+        falls back to another revision's list. Raises `ValueError` when the key is there but
+        broken, or a glob is refused by `master_gain.glob_refusal`."""
+        ...
+
     def forbidden(self, revision: str) -> Sequence[Forbidden]:
         """The suppressions this product forbids a Developer's Edit or Write from
         adding (`core.knowledge`, issue #38), in file order: first declared rule wins.
@@ -892,6 +902,15 @@ class Workspace(Protocol):
     def changed_paths(self, base: str, head: str) -> tuple[str, ...]:
         """The paths `git diff --name-only <base>...<head>` names (GH-178): what the
         pull request changes against the commit it branched from. Raises `GitError`."""
+        ...
+
+    def gain_paths(self, older: str, newer: str) -> tuple[str, ...]:
+        """Every path that differs between `older` and `newer`, two-dot and with renames
+        off, so a rename lists both its old and its new path: what master gained since a
+        recorded check pass. This is the only read of a master gain's paths; `changed_paths`
+        is the pull request's own three-dot diff and never stands in for it. Names are
+        returned as they are, unquoted. Raises `GitError` on any git failure (an unknown
+        sha included): a gain that cannot be read is the caller's "not covered"."""
         ...
 
     def added_adrs(self, master: str, head: str) -> tuple[AddedAdr, ...]:

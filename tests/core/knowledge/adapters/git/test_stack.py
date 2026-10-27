@@ -168,6 +168,58 @@ def test_a_broken_delivery_checks_at_the_base_is_an_error_naming_key_and_source(
         GitStack(product).delivery_checks(base)
 
 
+def test_merge_inert_is_read_from_the_revision_asked(product):
+    with_key = commit_stack(
+        product,
+        'checks:\n  tests: pytest\nmerge_inert:\n  - " .agentic/tasks/*.md "\n  - notes/**/*.txt\n',
+    )
+    without = commit_stack(product, "checks:\n  tests: pytest\n")
+    assert GitStack(product).merge_inert(with_key) == (".agentic/tasks/*.md", "notes/**/*.txt")
+    assert GitStack(product).merge_inert(without) == ()
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["'*'", "'**'", "'*.md'", "/etc/passwd", "../outside/x", "'a/../b'"],
+)
+def test_a_merge_inert_glob_the_domain_refuses_is_an_error_with_the_reason(product, value):
+    base = commit_stack(product, f"checks:\n  tests: pytest\nmerge_inert:\n  - {value}\n")
+    with pytest.raises(ValueError, match=r"stack.yaml: .*`merge_inert`"):
+        GitStack(product).merge_inert(base)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["[]", "docs/x.md", "[3]", "['']", "{a: b}"],
+    ids=["empty", "string", "int-entry", "blank-entry", "map"],
+)
+def test_a_merge_inert_that_is_not_a_non_empty_list_of_globs_is_an_error(product, value):
+    base = commit_stack(product, f"checks:\n  tests: pytest\nmerge_inert: {value}\n")
+    with pytest.raises(ValueError, match=r"`merge_inert`"):
+        GitStack(product).merge_inert(base)
+
+
+def test_merge_inert_at_a_revision_that_cannot_be_read_is_empty_and_never_raises(product):
+    good = commit_stack(product, "checks:\n  tests: pytest\nmerge_inert: [notes/*.txt]\n")
+    unparsable = commit_stack(product, "checks: [unclosed\nmerge_inert: [a/*.txt\n")
+    not_a_mapping = commit_stack(product, "- merge_inert\n")
+    typo = commit_stack(product, "checks:\n  tests: pytest\nmerge_inret: [notes/*.txt]\n")
+    stack = GitStack(product)
+    assert stack.merge_inert(good) == ("notes/*.txt",)
+    assert stack.merge_inert(unparsable) == ()
+    assert stack.merge_inert(not_a_mapping) == ()
+    assert stack.merge_inert(typo) == ()
+    assert stack.merge_inert("0" * 40) == ()  # a sha this repository never fetched
+    assert stack.merge_inert("no-such-ref") == ()
+
+
+def test_merge_inert_does_not_fall_back_to_another_revisions_list(product):
+    commit_stack(product, "checks:\n  tests: pytest\nmerge_inert: [notes/*.txt]\n")
+    git("rm", "-q", ".agentic/stack.yaml", cwd=product)
+    git("commit", "-q", "-m", "drop the stack", cwd=product)
+    assert GitStack(product).merge_inert("HEAD") == ()
+
+
 PERF = (
     "checks:\n  tests: pytest\n"
     "performance:\n  list:\n    seed: ./seed.sh\n    measure: ./measure.sh\n"

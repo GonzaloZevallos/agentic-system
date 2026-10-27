@@ -60,6 +60,12 @@ metric's name ends with its unit's suffix). Read only by `agentic perf`: it neve
 `checks`, the presubmit, `affected_checks`, `ci` or the merge gate. Absent it reads as `{}`;
 present and empty, or any shape that is not that, fails at load like `design`.
 
+**`merge_inert`**: optional. A non-empty list of path globs the product promises none of its
+checks reads: master's gain since a recorded check pass that touches only those paths cannot
+change the pass, and the merge reuses it (ADR-0045, amendment). Each entry goes through
+`master_gain.glob_refusal` at load, which refuses a glob that would whitelist everything. Absent
+it reads as `()`: the merge gate of today. Present and empty, or a wrong shape, fails at load.
+
 The name is the one part that is not read at the task's base. It says *who* the repository
 is, not what held at a commit: read at the base, a task older than the key would resume
 into a run with no name, and a rename mid-task would split one task's samples across two
@@ -76,6 +82,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Protocol, TypeGuard
 
+from agentic.core.process.domain import master_gain
 from agentic.core.process.domain import performance as perf
 from agentic.core.process.domain.design import Design
 from agentic.core.process.domain.presubmit import FlakeGate as FlakeGate
@@ -102,6 +109,7 @@ KEYS = (
     "ci",
     "performance",
     "rerun_checks",
+    "merge_inert",
 )
 # The token an affected-only command carries where the task's base sha goes (ADR-0046).
 BASE_TOKEN = "{base}"
@@ -225,6 +233,26 @@ def ci(data: object, source: object) -> tuple[str, ...]:
     if len(set(names)) != len(names):
         raise ValueError(f"{source}: `ci` declares the same check-run name twice")
     return tuple(names)
+
+
+def merge_inert(data: object, source: object) -> tuple[str, ...]:
+    """The globs of the paths master may gain without a recorded check pass going stale, in
+    file order. Absent is `()`. Present, it is a non-empty list of non-blank strings, none
+    refused by `master_gain.glob_refusal`: a glob that quietly whitelisted everything would
+    skip checks the product believes run, so every refusal fails at load with its reason."""
+    declared = _declared(data, source)
+    if "merge_inert" not in declared:
+        return ()
+    found = _declared_nonempty(declared, source, "merge_inert")
+    if not isinstance(found, list) or not all(
+        isinstance(glob, str) and glob.strip() for glob in found
+    ):
+        raise ValueError(f"{source}: expected `merge_inert` to be a list of non-blank glob strings")
+    globs = tuple(glob.strip() for glob in found)
+    for glob in globs:
+        if reason := master_gain.glob_refusal(glob):
+            raise ValueError(f"{source}: {glob!r} under `merge_inert` is refused: {reason}")
+    return globs
 
 
 def affected_checks(data: object, source: object) -> dict[str, str]:

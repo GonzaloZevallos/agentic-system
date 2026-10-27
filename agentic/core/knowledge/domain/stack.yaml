@@ -75,6 +75,15 @@ checks:
 #     command: uv run pytest -m "not llm" --lf --lfnf=none
 #     test_id: "(?m)^FAILED (\\S+)"
 #
+# `merge_inert`: optional (ADR-0045, amendment). The globs of the paths none of the checks
+# reads. When master moves, the merge reuses a recorded pass only if everything master gained
+# since matches one of these (never `.agentic/stack.yaml`, `.github/**` or other
+# configuration, whatever is declared). A glob that matches everything (`*`, `**`, `*.md`), an
+# absolute path or a `..` segment is refused. Declare a path only if no test or check reads it.
+#
+# merge_inert:
+#   - "docs/assets/**"
+#
 # `forbidden`: optional. A list of rules the Edit/Write hook denies a Developer from
 # adding: each names a `pattern`, the `extensions` it applies to, and the `reason` a
 # denial carries verbatim. One that was already in the file is not the task's. What a

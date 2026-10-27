@@ -1177,3 +1177,50 @@ def test_checkout_path_is_the_layout_detached_checkout_makes_without_touching_di
     sha = git("rev-parse", "HEAD", cwd=product)
     assert ws.detached_checkout("merge-GH-7", sha) == expected
     assert expected.is_dir()
+
+
+def commit_all(repo: Path, message: str) -> str:
+    git("add", "-A", cwd=repo)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", message, cwd=repo)
+    return git("rev-parse", "HEAD", cwd=repo)
+
+
+def test_gain_paths_lists_both_sides_of_a_rename(product):
+    (product / "src").mkdir()
+    (product / "src/x.py").write_text("".join(f"line {n}\n" for n in range(40)))
+    older = commit_all(product, "add x")
+    (product / "docs").mkdir()
+    git("mv", "src/x.py", "docs/x.py", cwd=product)
+    newer = commit_all(product, "move x")
+    # Even with renames on, as a machine's `diff.renames` may say.
+    git("config", "diff.renames", "true", cwd=product)
+    assert GitWorkspace(product, IDENTITY).gain_paths(older, newer) == ("docs/x.py", "src/x.py")
+
+
+def test_gain_paths_is_two_dot_not_a_merge_base_diff(product):
+    older = git("rev-parse", "HEAD", cwd=product)
+    (product / "later.txt").write_text("x\n")
+    newer = commit_all(product, "later")
+    ws = GitWorkspace(product, IDENTITY)
+    assert ws.gain_paths(older, newer) == ("later.txt",)
+    # Reversed, the two-dot diff still names the path: no merge base hides it.
+    assert ws.gain_paths(newer, older) == ("later.txt",)
+    assert ws.gain_paths(older, older) == ()
+
+
+def test_gain_paths_returns_non_ascii_and_blank_ending_names_as_they_are(product):
+    older = git("rev-parse", "HEAD", cwd=product)
+    (product / "ñandú — notas.md").write_text("x\n")
+    (product / "trailing ").write_text("x\n")
+    newer = commit_all(product, "odd names")
+    got = GitWorkspace(product, IDENTITY).gain_paths(older, newer)
+    assert got == ("trailing ", "ñandú — notas.md")
+
+
+def test_gain_paths_of_an_unknown_sha_raises_git_error(product):
+    head = git("rev-parse", "HEAD", cwd=product)
+    ws = GitWorkspace(product, IDENTITY)
+    with pytest.raises(GitError, match="git diff"):
+        ws.gain_paths("0" * 40, head)
+    with pytest.raises(GitError, match="git diff"):
+        ws.gain_paths(head, "no-such-ref")
