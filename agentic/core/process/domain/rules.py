@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import math
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
@@ -1593,6 +1593,12 @@ def next_archive_run(refs: Sequence[str], live: Sequence[str], task_id: str) -> 
     return None
 
 
+# The graph node that runs the subtasks. The graph's own `PIPELINE` constant has this value
+# and keeps it; the domain cannot import the adapter, so the rule that reads a pending node
+# name holds its own spelling, the way `after_integrate` returns the strings.
+PIPELINE_NODE = "pipeline"
+
+
 def ready_subtasks(state: TaskState) -> list[str]:
     """Subtasks to build now: pending or returned, with every dependency approved."""
     subtasks = state.get("subtasks", {})
@@ -1616,6 +1622,54 @@ def dispatched_subtasks(state: TaskState) -> list[str]:
     """Subtasks the next wave runs: the ones to build, and the ones already delivered
     whose review never happened, which is where a run stopped by the cap resumes."""
     return [*ready_subtasks(state), *delivered_subtasks(state)]
+
+
+def _remaining_path(subtasks: Mapping[str, Subtask]) -> dict[str, int]:
+    """Per subtask, the length of the longest chain of subtasks that transitively depend on
+    it (0 for one nothing depends on). A cycle in a malformed plan is cut where it closes
+    instead of recursing forever."""
+    dependents: dict[str, list[str]] = {sid: [] for sid in subtasks}
+    for sid, sub in subtasks.items():
+        for dep in sub.get("depends_on", []):
+            if dep in dependents:
+                dependents[dep].append(sid)
+    lengths: dict[str, int] = {}
+
+    def length(sid: str, visiting: frozenset[str]) -> int:
+        if sid in lengths:
+            return lengths[sid]
+        below = [length(d, visiting | {sid}) + 1 for d in dependents[sid] if d not in visiting]
+        lengths[sid] = max(below, default=0)
+        return lengths[sid]
+
+    return {sid: length(sid, frozenset()) for sid in subtasks}
+
+
+def next_to_start(state: TaskState, in_flight: Collection[str], limit: int) -> list[str]:
+    """The subtasks the loop starts now (GH-364, ADR-0004's successor): the ones
+    `dispatched_subtasks` names that are not already `in_flight`, the longest remaining
+    dependency chain first and ties in plan order, at most what is left under `limit`. The
+    only place readiness, ordering and the parallel bound are computed together. Nothing
+    starts while the task is escalated; a role already running is never this rule's to stop."""
+    if state.get("escalated"):
+        return []
+    room = max(0, limit - len(in_flight))
+    path = _remaining_path(state.get("subtasks", {}))
+    plan_order = {sid: n for n, sid in enumerate(state.get("subtasks", {}))}
+    waiting = [sid for sid in dispatched_subtasks(state) if sid not in in_flight]
+    waiting.sort(key=lambda sid: (-path[sid], plan_order[sid]))
+    return waiting[:room]
+
+
+def resume_source(
+    next_node: Sequence[str] | str | None, crashed: bool
+) -> Literal["checkpoint", "document"]:
+    """Where a resume rebuilds the task from (GH-364): the document, only for a crash with
+    the pipeline the pending node, because the loop's branches leave no checkpoint of their
+    own; anything else resumes from the checkpoint. Decided from the pending node, never by
+    comparing counts."""
+    pending = (next_node,) if isinstance(next_node, str) else tuple(next_node or ())
+    return "document" if crashed and pending == (PIPELINE_NODE,) else "checkpoint"
 
 
 def pipeline_entry(state: TaskState) -> str:
