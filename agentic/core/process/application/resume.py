@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal, cast, get_type_hints
 
 from agentic.shared.configuration import Configuration
@@ -76,6 +77,27 @@ class WaitingOnHuman(Exception):
 
 
 @dataclass(frozen=True)
+class Increment:
+    """The commits an integration review never saw (GH-392): the task branch `branch` is at
+    `head`, a strict descendant of the `approved` head the review approved. `checkout` is the
+    task's worktree when there is one, and `dirty` whether the stopped run left files in it."""
+
+    approved: str
+    head: str
+    branch: str
+    checkout: Path | None
+    dirty: bool
+
+
+@dataclass(frozen=True)
+class Seed:
+    """A state seeded from the document, and the increment it carries, if any."""
+
+    state: TaskState
+    increment: Increment | None
+
+
+@dataclass(frozen=True)
 class Resumption:
     """What a resume will do, decided before spending anything."""
 
@@ -96,6 +118,9 @@ class Resumption:
     interrupted: bool = False
     # The human's `--estimate`, which the graph's `pause` node puts in force with the decision.
     estimate: float | None = None
+    # GH-392: the commits after the integration's approved head that this resume takes as an
+    # increment to review, when the document was seeded past that head.
+    increment: Increment | None = None
 
     def answer(self) -> dict[str, float | str | None]:
         """What the graph resumes with: the decision, and the `--estimate` when given."""
@@ -109,21 +134,141 @@ def state_from(raw: dict) -> TaskState:
     return cast(TaskState, {k: v for k, v in raw.items() if k in STATE_FIELDS and v is not None})
 
 
-def from_document(task_id: str, ports: Ports) -> TaskState:
-    """The state the document records, checked against git."""
+def load_document(task_id: str, ports: Ports) -> TaskState:
+    """The state the document records, not yet checked against git."""
     raw = ports.documents.load(task_id)
     if raw is None:
         raise ValueError(f"{task_id} has no task document to resume from")
-    state = state_from(raw)
+    return state_from(raw)
+
+
+def _disagree(task_id: str, problems: Sequence[str]) -> ValueError:
+    listed = "\n".join(f"- {p}" for p in problems)
+    return ValueError(f"the document of {task_id} and git disagree:\n{listed}")
+
+
+def from_document(task_id: str, ports: Ports) -> TaskState:
+    """The state the document records, checked against git."""
+    state = load_document(task_id, ports)
     if problems := disagreements(state, ports.workspace):
-        listed = "\n".join(f"- {p}" for p in problems)
-        raise ValueError(f"the document of {task_id} and git disagree:\n{listed}")
+        raise _disagree(task_id, problems)
     return state
 
 
-def disagreements(state: TaskState, workspace: Workspace) -> list[str]:
+def issue_flag(task_id: str, ports: Ports) -> str:
+    """`--issue N` for the task, or `--issue N  # <task_id>` when its issue is not known: the
+    flag every refusal that names a command to run puts in it."""
+    number = ports.inbox.issue_of(task_id)
+    return f"--issue {number}" if number is not None else f"--issue N  # {task_id}"
+
+
+def seed_increment(task_id: str, cfg: Configuration, ports: Ports) -> Seed:
+    """The state a resume from the document starts from (GH-392). Like `from_document`, but a
+    task branch found strictly past the integration's approved head -- a later subtask merge,
+    say, after the run stopped -- is not a disagreement: `rules.integration_increment` decides
+    it, the unit goes back to review from the approved head, and the commits after it are the
+    increment. Reads only; nothing is committed here. Every other disagreement raises exactly
+    what `from_document` raises."""
+    state = load_document(task_id, ports)
+    unit = rules.reviewed_unit_name(state)
+    sub = state.get("subtasks", {}).get(unit) if unit else None
+    approved = sub.get("reviewed_head") if sub and sub.get("status") == "approved" else None
+    branch = sub.get("branch") if sub else None
+    head = ports.workspace.branch_head(branch) if branch else None
+    if unit is None or sub is None or not approved or not branch or head is None:
+        return Seed(_checked(task_id, state, ports), None)
+    if rules.same_commit(head, approved):
+        return Seed(_checked(task_id, state, ports), None)
+    descends, unreadable = False, None
+    if branch == rules.task_branch(task_id):
+        try:
+            descends = ports.workspace.is_ancestor(cfg.product_dir, approved, head)
+        except (GitError, ValueError) as failed:
+            unreadable = failed
+    verdict = "refuse" if unreadable else rules.integration_increment(state, task_id, head, descends)
+    if verdict != "increment":
+        problems = disagreements(state, ports.workspace)
+        today = f"{unit}: approved at {approved}, but `{branch}` is at {head}"
+        if today in problems:
+            problems[problems.index(today)] = _moved_line(
+                task_id, ports, state, (unit, branch, approved, head), descends, unreadable
+            )
+        raise _disagree(task_id, problems)
+    checkout, dirty = _task_checkout(task_id, ports)
+    seeded = apply(state, rules.increment_patch(state))
+    if problems := disagreements(seeded, ports.workspace, exempt=frozenset({unit})):
+        raise _disagree(task_id, problems)
+    return Seed(seeded, Increment(approved, head, branch, checkout, dirty))
+
+
+def _checked(task_id: str, state: TaskState, ports: Ports) -> TaskState:
+    if problems := disagreements(state, ports.workspace):
+        raise _disagree(task_id, problems)
+    return state
+
+
+def _moved_line(
+    task_id: str,
+    ports: Ports,
+    state: TaskState,
+    moved: tuple[str, str, str, str],
+    descends: bool,
+    unreadable: Exception | None,
+) -> str:
+    """The refusal line for the reviewed unit's moved branch: what is wrong and a command that
+    is safe to run. A condition of the rule other than ancestry and the pull request keeps
+    today's line."""
+    unit, branch, approved, head = moved
+    if unreadable is not None:
+        return (
+            f"{unit}: could not check whether `{branch}` descends from {approved} "
+            f"({unreadable}): retry the resume."
+        )
+    if branch == rules.task_branch(task_id) and not descends:
+        return (
+            f"{unit}: `{branch}` is at {head}, which does not contain the approved head "
+            f"{approved} (history rewritten). Inspect it; to discard it, start over with "
+            f"`agentic run {issue_flag(task_id, ports)} --fresh`."
+        )
+    if branch == rules.task_branch(task_id) and state.get("pull_request"):
+        return (
+            f"{task_id} has a pull request: its branch moved after approval, which the "
+            f"landing owns; run `agentic land {issue_flag(task_id, ports)}`."
+        )
+    return f"{unit}: approved at {approved}, but `{branch}` is at {head}"
+
+
+def _task_checkout(task_id: str, ports: Ports) -> tuple[Path | None, bool]:
+    """The task's own worktree, if there is one, and whether the stopped run left files in it.
+    Refuses a checkout holding an unfinished merge or conflicts: a human is in the middle of
+    something, and nothing here commits over it."""
+    path = next((p for p in ports.workspace.worktrees(task_id) if p.name == task_id), None)
+    if path is None:
+        return None, False
+    try:
+        if ports.workspace.merge_in_progress(path):
+            raise _disagree(task_id, [_merge_line(path)])
+        return path, not ports.workspace.is_clean(path)
+    except GitError as failed:
+        raise _disagree(
+            task_id,
+            [f"could not read the integration checkout `{path}` ({failed}): retry the resume."],
+        ) from failed
+
+
+def _merge_line(path: Path) -> str:
+    return (
+        f"the integration checkout `{path}` holds an unfinished merge or conflicts: "
+        "finish or abort it by hand, then resume."
+    )
+
+
+def disagreements(
+    state: TaskState, workspace: Workspace, *, exempt: frozenset[str] = frozenset()
+) -> list[str]:
     """Where git no longer holds what the document says: a branch gone, a base that is
-    not the one git recorded, an approved subtask whose branch moved after its review."""
+    not the one git recorded, an approved subtask whose branch moved after its review. A unit
+    named in `exempt` skips only that last check: its moved branch is an increment (GH-392)."""
     problems = []
     if (branch := state.get("branch")) and workspace.branch_head(branch) is None:
         problems.append(f"task branch `{branch}` does not exist")
@@ -138,7 +283,8 @@ def disagreements(state: TaskState, workspace: Workspace) -> list[str]:
         if sub.get("base") and recorded and not rules.same_commit(sub["base"], recorded):
             problems.append(f"{sid}: base {sub['base']} in the document, {recorded} in git")
         reviewed = sub.get("reviewed_head")
-        if sub.get("status") == "approved" and reviewed and not rules.same_commit(reviewed, head):
+        moved = sub.get("status") == "approved" and reviewed
+        if moved and sid not in exempt and not rules.same_commit(reviewed, head):
             problems.append(f"{sid}: approved at {reviewed}, but `{branch}` is at {head}")
     return problems
 
@@ -187,6 +333,7 @@ def prepare(
     ports: Ports,
     pending: tuple[str, ...] = (),
     estimate: float | None = None,
+    increment: Increment | None = None,
 ) -> Resumption:
     """Decide the resume. `pending` are the nodes a run that crashed left to run: it did
     not pause, so there is no answer to take and nothing to reset. Raises
@@ -265,6 +412,7 @@ def prepare(
         cap,
         interrupted=bool(pending),
         estimate=estimate,
+        increment=increment,
     )
 
 
@@ -340,11 +488,46 @@ def summary(r: Resumption, cfg: Configuration, ports: Ports) -> str:
         f"{DECISION}{_indented(r.decision) if r.decision else 'none'}",
         f"resumes:   {r.target}{_subtasks(r)}",
     ]
+    lines.extend(_increment_lines(r))
     lines.extend(f"session:   {line}" for line in _sessions(r))
     for path in ports.workspace.worktrees(r.task_id):
         dirty = r.interrupted and not ports.workspace.is_clean(path)
         lines.append(f"worktree:  {path}" + ("  (uncommitted changes)" if dirty else ""))
     return "\n".join(lines)
+
+
+def _increment_lines(r: Resumption) -> list[str]:
+    if (inc := r.increment) is None:
+        return []
+    lines = [
+        f"integration: approved at {inc.approved}, `{inc.branch}` is at {inc.head}, a "
+        f"descendant: reviewing the increment {inc.approved}..{inc.head}"
+    ]
+    if inc.dirty:
+        lines.append(
+            f"uncommitted files in `{inc.checkout}` will be committed into the increment"
+        )
+    return lines
+
+
+def _commit_leftovers(r: Resumption, ports: Ports) -> None:
+    """The one commit of what the stopped run left in the task checkout (GH-392), made here
+    and nowhere else: a seed or a dry run never writes. A merge that began since the seed is
+    asked again, and refuses before anything is unlabelled or said."""
+    inc = r.increment
+    if inc is None or not inc.dirty or inc.checkout is None:
+        return
+    try:
+        if ports.workspace.merge_in_progress(inc.checkout):
+            raise ValueError(_merge_line(inc.checkout))
+        ports.workspace.commit_all(
+            inc.checkout, f"{r.task_id}: commit what the stopped run left uncommitted"
+        )
+    except GitError as failed:
+        raise ValueError(
+            f"could not commit what the stopped run left in `{inc.checkout}` ({failed}): "
+            "retry the resume."
+        ) from failed
 
 
 def announce(r: Resumption, ports: Ports) -> None:
@@ -357,6 +540,7 @@ def announce(r: Resumption, ports: Ports) -> None:
     own words) gets an answer without a new comment prefix: `RESUMED` is the only one
     this ever wrote, `SYSTEM_COMMENTS` stays as it is, and a resume that was not
     interrupted emits the exact same bytes as before (subtask `signals`)."""
+    _commit_leftovers(r, ports)
     if r.source == "document":
         ports.workspace.prune()
     # `gh issue edit --remove-label` fails for a label the repository never had, and an
@@ -366,9 +550,12 @@ def announce(r: Resumption, ports: Ports) -> None:
     answered = " with your decision" if r.decision else ""
     role = r.paused.get("current_role") or "before any role"
     interrupted = f", interrupted at {role}" if r.interrupted else ""
+    inc = r.increment
+    increment = f", reviewing the increment {inc.approved}..{inc.head}" if inc else ""
     ports.tracker.comment(
         r.task_id,
-        f"{RESUMED}{r.target}{answered}{interrupted}, under a task cap of {r.cap_usd:.2f} USD.",
+        f"{RESUMED}{r.target}{answered}{interrupted}{increment}, "
+        f"under a task cap of {r.cap_usd:.2f} USD.",
     )
 
 
