@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 import signal
@@ -5424,3 +5425,124 @@ def test_landing_carry_of_an_unreadable_document_carries_nothing(monkeypatch):
 
     monkeypatch.setattr(ports.documents, "load", unreadable)
     assert cli._landing_carry("GH-1", ports) == (None, "")
+
+
+class _Signalling:
+    """A `work` that sends its own process the signal(s) and then waits to be cancelled;
+    `shielded` keeps it from unwinding for that many seconds, a role that outlives the
+    unwinding. Records the reaper's calls at the moment the cancellation reaches it."""
+
+    def __init__(self, reaper, *, times=1, shielded=0.0, lock=None, stop=None):
+        self.reaper, self.times, self.shielded = reaper, times, shielded
+        self.lock, self.stop = lock, stop
+        self.at_cancel: list | None = None
+
+    async def __call__(self):
+        with contextlib.ExitStack() as held:
+            if self.lock is not None:
+                held.enter_context(cli._locked(self.lock, "T-9", self.stop))
+            for _ in range(self.times):
+                signal.raise_signal(signal.SIGTERM)
+            try:
+                await anyio.sleep_forever()
+            except anyio.get_cancelled_exc_class():
+                self.at_cancel = list(self.reaper.calls)
+                with anyio.CancelScope(shield=True):
+                    await anyio.sleep(self.shielded)
+                raise
+
+
+async def _until(condition, seconds=5.0):
+    with anyio.fail_after(seconds):
+        while not condition():
+            await anyio.sleep(0.01)
+
+
+@pytest.mark.anyio
+async def test_a_signal_reaps_only_the_checks_before_it_cancels_and_marks_the_flag():
+    from agentic.core.process.adapters.shell import EventStopFlag
+    from tests.fakes import FakeReaper
+
+    reaper, flag = FakeReaper(), EventStopFlag()
+    stop = cli.StopCause(flag=flag, reaper=reaper)
+    work = _Signalling(reaper)
+    with pytest.raises(SystemExit):
+        await cli._signal_guarded(work, stop)
+    await _until(lambda: len(reaper.calls) >= 1)
+    check = ("run", "check", os.getpid(), None)
+    assert work.at_cancel in ([], [check])  # never a role's processes before the cancel
+    assert reaper.calls == [check]
+    assert flag.is_set()
+    assert stop.signalled
+
+
+@pytest.mark.anyio
+async def test_a_second_signal_starts_no_second_reap_and_no_exit():
+    from agentic.core.process.adapters.shell import EventStopFlag
+    from tests.fakes import FakeReaper
+
+    reaper, exits = FakeReaper(), []
+    stop = cli.StopCause(flag=EventStopFlag(), reaper=reaper)
+    work = _Signalling(reaper, times=3)
+    with pytest.raises(SystemExit):
+        await cli._signal_guarded(work, stop, hard_exit=exits.append)
+    await _until(lambda: len(reaper.calls) >= 1)
+    await anyio.sleep(0.2)
+    assert reaper.calls == [("run", "check", os.getpid(), None)]
+    assert exits == []
+
+
+@pytest.mark.anyio
+async def test_the_deadline_reaps_roles_releases_the_lock_once_and_exits_once():
+    from agentic.core.process.adapters.shell import EventStopFlag
+    from tests.fakes import FakeReaper
+
+    reaper, lock, exits, flushed = FakeReaper(), FakeLock(), [], []
+    stop = cli.StopCause(flag=EventStopFlag(), reaper=reaper)
+    work = _Signalling(reaper, times=2, shielded=0.6, lock=lock, stop=stop)
+    with pytest.raises(SystemExit):
+        await cli._signal_guarded(
+            work,
+            stop,
+            deadline_s=0.05,
+            hard_exit=exits.append,
+            flush=lambda: flushed.append(1),
+        )
+    pid = os.getpid()
+    assert reaper.calls == [
+        ("run", "check", pid, None),
+        ("run", "T-9", pid, None),
+        ("run", "check", pid, None),
+    ]
+    assert lock.released == ["T-9"]  # the deadline released it; `_locked`'s finally did not
+    assert (exits, flushed) == ([1], [1])
+
+
+@pytest.mark.anyio
+async def test_the_deadline_never_fires_when_the_run_unwinds_in_time():
+    from agentic.core.process.adapters.shell import EventStopFlag
+    from tests.fakes import FakeReaper
+
+    reaper, exits = FakeReaper(), []
+    stop = cli.StopCause(flag=EventStopFlag(), reaper=reaper)
+    with pytest.raises(SystemExit):
+        await cli._signal_guarded(
+            _Signalling(reaper), stop, deadline_s=0.3, hard_exit=exits.append
+        )
+    await anyio.sleep(0.5)
+    assert exits == []
+    assert len(reaper.calls) == 1
+
+
+@pytest.mark.anyio
+async def test_the_previous_signal_handlers_come_back_after_the_guard():
+    before = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGHUP)}
+    with pytest.raises(SystemExit):
+        from agentic.core.process.adapters.shell import EventStopFlag
+        from tests.fakes import FakeReaper
+
+        reaper = FakeReaper()
+        await cli._signal_guarded(
+            _Signalling(reaper), cli.StopCause(flag=EventStopFlag(), reaper=reaper)
+        )
+    assert {s: signal.getsignal(s) for s in before} == before
