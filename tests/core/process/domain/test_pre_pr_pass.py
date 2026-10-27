@@ -170,3 +170,20 @@ def test_an_open_pre_pr_entry_is_no_landing_pass_under_a_pull_request():
     assert rules.landing_open(state) is False
     state["landing"] = [_fix()]
     assert rules.landing_open(state) is True
+
+
+def test_the_landing_keeps_the_before_pr_key_when_it_rewrites_an_entry():
+    assert landing.entry_of(_fix(before_pr=True))["before_pr"] is True
+    assert "before_pr" not in landing.entry_of(_fix(before_pr="yes"))
+    assert "before_pr" not in landing.entry_of(_fix())
+
+
+def test_no_resume_child_is_owed_for_a_pass_written_before_the_pull_request():
+    from datetime import UTC, datetime
+
+    entry = _fix(before_pr=True, resume_spawned_at="2026-10-27T00:00:00+00:00", resume_spawns=1)
+    raw = {"landing": [entry], "subtasks": {"api": {"status": "returned"}}}
+    now = datetime(2026, 10, 27, 5, tzinfo=UTC)
+    assert landing.resume_owed(raw, now) is False
+    del entry["before_pr"]
+    assert landing.resume_owed(raw, now) is True

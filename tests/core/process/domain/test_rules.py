@@ -3787,3 +3787,13 @@ def test_anything_but_a_merge_or_closed_slices_does_not_close_the_issue(document
 
 def test_closed_slices_close_the_issue_without_a_merge_commit():
     assert rules.close_after_merge({"closed_by_slices": ["https://github.com/o/r/pull/3"]})
+
+
+def test_a_pass_before_the_pull_request_does_not_make_the_task_delivered():
+    state = {
+        "id": "T",
+        "subtasks": {"api": {"status": "returned"}},
+        "landing": [{"step": "fix_important", "before_pr": True}],
+    }
+    assert rules.CLOSENESS[rules.closeness(state)] != "delivered"
+    assert rules.CLOSENESS[rules.closeness({**state, "pull_request": "u"})] == "delivered"

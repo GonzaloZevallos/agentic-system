@@ -170,7 +170,7 @@ escritura está en la adenda de GH-273 de ADR-0037; esta tabla dice qué trae ca
 | `cost_usd.origin.<Origin>` | `cost_usd`, bajo el origen de la tarea (`original` o `followup`, como `origin`) | numérico | no hay título |
 | `delivered_cost_usd` | `cost_usd` | numérico | la tarea no se entregó (`delivered` no es verdadero) |
 | `findings_important` | filas `important` de `findings`, plegadas por ubicación y reclamo como la tabla de hallazgos | numérico | el documento no tiene `findings` |
-| `followups` | `1` si `followups_filed` (se archivó o comentó el seguimiento de fuera de alcance), `0` si hay registro `landing` sin él | numérico | la tarea no pasó por el aterrizaje (no es "cero", es desconocido) |
+| `followups` | `1` si `followups_filed` (se archivó o comentó el seguimiento de fuera de alcance), `0` si hay registro `landing` de un pull request (sin `before_pr`: el pase previo al pull request no cuenta) sin él | numérico | la tarea no pasó por el aterrizaje (no es "cero", es desconocido) |
 | `checks_red` | entradas de `merge_checks.checks` con `passed: false` (las corridas del presubmit no quedan en el documento) | numérico | no hay registro `merge_checks` |
 
 Reglas para leerlos:

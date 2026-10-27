@@ -119,7 +119,7 @@ def _reason_line(row: FindingRecord) -> str:
     return f"{line} Corrected text: {proposed}" if proposed else line
 
 
-def _important_reason(raw: TaskState) -> tuple[str, ChangeCategory]:
+def important_reason(raw: TaskState) -> tuple[str, ChangeCategory]:
     """The reason the final important pass hands the Developer: the task's own open
     `important` rows by unit, then the plan-scope ones, from the one partition."""
     part = rules.important_partition(raw)
@@ -137,6 +137,10 @@ def _important_reason(raw: TaskState) -> tuple[str, ChangeCategory]:
     return "\n".join(lines), category
 
 
+_important_reason = important_reason
+"""The name the landing's tests first knew `important_reason` by."""
+
+
 def fix_important(context: LandingContext) -> None:
     """The one final pass on the task's own open `important` findings (GH-294): reopens the
     step's units as `returned` and resumes the task, so the graph runs the Developer and an
@@ -147,7 +151,7 @@ def fix_important(context: LandingContext) -> None:
         context.log(f"agentic: land: {context.task_id}: fix_important: no document")
         return
     raw = state_from(document)
-    reason, category = _important_reason(raw)
+    reason, category = important_reason(raw)
     _reopen_and_resume(context, raw, reason, category)
 
 

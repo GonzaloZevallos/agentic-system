@@ -2384,15 +2384,14 @@ declared, not measured. `domain.landing` re-exports it."""
 FIX_IMPORTANT = "fix_important"
 
 
-def important_pass_spent(state: TaskState, *, resolved_only: bool = False) -> bool:
+def important_pass_spent(state: Mapping[str, object], *, resolved_only: bool = False) -> bool:
     """Whether the task's important pass (`LANDING_IMPORTANT_PASSES_MAX`) is spent: the
     `landing` list holds that many `fix_important` entries, written before the pull request
     (`before_pr`) or after it. With `resolved_only` an entry still in flight does not count --
     the merge reads the pass as done only once the re-delivery closed it. The one place the
     entries are counted: the pre-PR route, `landing_plan` and `MergeFacts.important_pass_done`
     ask this and none counts `fix_important` itself."""
-    document: Mapping[str, object] = state  # `landing` is a document key, not a state field
-    entries = document.get("landing")
+    entries = state.get("landing")
     passes = sum(
         1
         for entry in (entries if isinstance(entries, list) else [])
