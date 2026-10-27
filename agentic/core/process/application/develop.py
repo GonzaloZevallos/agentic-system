@@ -20,7 +20,7 @@ from ..domain import coverage, presubmit, rules
 from ..domain.presubmit import AffectedPlan
 from ..domain.roles import DEVELOPER, DEVELOPER_INTEGRATOR
 from ..domain.task import INTEGRATION, TaskState
-from .checkouts import SetupFailed, subtask_checkout, task_base
+from .checkouts import SetupFailed, subtask_checkout_in_thread, task_base
 from .coverage_guard import InvariantCoverageGuard, checkout_view
 from .ports import Ports
 from .presubmit import CheckoutPresubmit, declared_checks, fast_tier, reuse_of
@@ -33,7 +33,7 @@ async def develop(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     subtask = state["subtasks"][subtask_id]
     role = DEVELOPER_INTEGRATOR if subtask_id == INTEGRATION else DEVELOPER
     try:
-        checkout = subtask_checkout(state, subtask_id, cfg, ports)
+        checkout = await subtask_checkout_in_thread(state, subtask_id, cfg, ports)
     except SetupFailed as unprepared:
         return finish(state, unprepared.patch(role), ports)
     # A dependency gates the order and provides the code: its approved branch is

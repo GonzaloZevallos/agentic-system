@@ -4,10 +4,12 @@ run opens, the clean tree it leaves, and the refusals that never run a command."
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from agentic.core.process.application.full_checks import _shown_up, _without_output, full_checks
-from agentic.core.process.application.ports import CommandResult
+from agentic.core.process.application.ports import CommandResult, RunStopped
 from agentic.core.process.domain import rules
 from agentic.core.process.domain.task import INTEGRATION, apply
 from agentic.shared.configuration import Configuration
@@ -208,6 +210,59 @@ async def test_a_second_run_on_the_same_tree_reuses_the_pass_and_runs_no_command
         {"name": "lint", "passed": True, "reused": True},
     ]
     assert "tests (reused)" in second["sections"]["Full checks"]
+
+
+class Stopped(MemoryCommands):
+    """The run is stopped while this command runs: it raises `RunStopped`, and says which
+    thread it ran in."""
+
+    def __init__(self, stops: str | None = None):
+        super().__init__()
+        self.stops = stops
+        self.threads: list[str] = []
+
+    def run(self, cwd, command, timeout_s):
+        self.threads.append(threading.current_thread().name)
+        if command == self.stops:
+            raise RunStopped
+        return super().run(cwd, command, timeout_s)
+
+
+async def test_a_stop_during_the_checks_propagates_restores_the_tree_and_returns_no_patch():
+    workspace = MemoryWorkspace()
+    commands = Stopped(stops="pytest")
+    ports = memory_ports(
+        stack=MemoryStack(checks=CHECKS, delivery_checks=("tests",)),
+        workspace=workspace,
+        commands=commands,
+    )
+    with pytest.raises(RunStopped):
+        await full_checks(state_of(), CFG, ports)
+    assert workspace.restored == [TASK_PATH]  # `finally`, after the command was gone
+    assert ports.documents.load("GH-1") is None  # nothing written for the stop
+
+
+async def test_the_checks_run_off_the_event_loop_thread():
+    commands = Stopped()
+    ports = ports_of(commands)
+    await full_checks(state_of(), CFG, ports)
+    assert commands.threads
+    assert threading.main_thread().name not in commands.threads
+
+
+async def test_a_stop_during_setup_discards_the_checkout_and_is_not_a_setup_failure():
+    commands = Stopped(stops="make env")
+    workspace = MemoryWorkspace()
+    ports = memory_ports(
+        stack=MemoryStack(checks=CHECKS, setup={"env": "make env"}),
+        workspace=workspace,
+        commands=commands,
+    )
+    with pytest.raises(RunStopped):
+        await full_checks(state_of(), CFG, ports)
+    assert workspace.discarded == [TASK_PATH]
+    assert TASK_PATH not in workspace.on_disk  # the next ask makes it again, setup included
+    assert threading.main_thread().name not in commands.threads
 
 
 # -- each check's duration in the record (GH-365) ---------------------------------------

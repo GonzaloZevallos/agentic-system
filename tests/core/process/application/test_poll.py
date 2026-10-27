@@ -2165,3 +2165,27 @@ def test_the_sweep_runs_before_the_registrys_exclusive_section(tmp_path):
 
     assert tracker.entries_at_close == [0]
     assert registry.exclusive_entries == 1
+
+
+# --- GH-355: a run a signal stopped before it wrote anything is not re-launched ---------
+
+
+def test_a_stopped_run_with_a_document_and_no_lock_is_neither_launched_nor_retaken_nor_resumed(
+    tmp_path,
+):
+    ports = memory_ports()
+    ports.tracker._queue = [30]
+    _seed_body(ports, 30)
+    _open_task(ports, "GH-30", status="planned")
+    registry, locks = MemoryRunRegistry(), _Locks()
+    assert poll.gather_launches(_cfg(tmp_path), ports, registry) == []
+    assert poll.gather_retakes(ports, locks, "boot-now") == ([], [])
+    assert poll.gather_resumes(ports, ESCALATED_AT) == []
+
+
+def test_the_same_issue_with_no_document_is_still_a_launch_candidate(tmp_path):
+    ports = memory_ports()
+    ports.tracker._queue = [30]
+    _seed_body(ports, 30)
+    launches = poll.gather_launches(_cfg(tmp_path), ports, MemoryRunRegistry())
+    assert [launch.issue for launch in launches] == [30]

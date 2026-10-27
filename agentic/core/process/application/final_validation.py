@@ -31,7 +31,7 @@ from ..domain import rules
 from ..domain.design import NO_SAMPLE_APP_NOTE, Design, compare_facts, design_facts, design_rules
 from ..domain.roles import PAIR_PM_TECH_LEAD, PM_FINAL, UI_LEAD_FINAL, UX_LEAD_FINAL
 from ..domain.task import INTEGRATION, WAITING_ON_HUMAN, TaskState, apply
-from .checkouts import SetupFailed, task_base, task_checkout
+from .checkouts import SetupFailed, task_base, task_checkout_in_thread
 from .ports import Ports, SampleAppHandle
 from .run_role import Output, finish, run_role, with_context
 
@@ -40,7 +40,7 @@ Started = SampleAppHandle | str | None
 
 async def final_validation(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
     try:
-        task = task_checkout(state, cfg, ports)
+        task = await task_checkout_in_thread(state, cfg, ports)
     except SetupFailed as unprepared:
         return finish(state, unprepared.patch(PM_FINAL), ports)
     design_block = ports.stack.design(task_base(state, ports))

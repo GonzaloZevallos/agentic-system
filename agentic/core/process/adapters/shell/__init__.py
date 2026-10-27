@@ -5,5 +5,6 @@ a role left running (ADR-0052)."""
 from .commands import ShellCommands
 from .reaper import ShellReaper
 from .sample_app import ShellSampleApp
+from .stop import EventStopFlag, NullStopFlag
 
-__all__ = ["ShellCommands", "ShellReaper", "ShellSampleApp"]
+__all__ = ["EventStopFlag", "NullStopFlag", "ShellCommands", "ShellReaper", "ShellSampleApp"]

@@ -36,7 +36,7 @@ from ..domain.roles import (
     Role,
 )
 from ..domain.task import WAITING_ON_HUMAN, TaskState
-from .checkouts import SetupFailed, task_base, task_checkout
+from .checkouts import SetupFailed, task_base, task_checkout_in_thread
 from .ports import Ports
 from .run_role import finish, run_role, with_context
 
@@ -47,7 +47,7 @@ async def ux_flow(state: TaskState, cfg: Configuration, ports: Ports) -> TaskSta
     not among its own declared `reads` (the same seam `develop.py` already uses for a
     Developer's review)."""
     try:
-        task = task_checkout(state, cfg, ports)
+        task = await task_checkout_in_thread(state, cfg, ports)
     except SetupFailed as unprepared:
         return finish(state, unprepared.patch(UX_DESIGNER), ports)
     extra = ("UX Lead",)
@@ -63,7 +63,7 @@ async def ui_screens(state: TaskState, cfg: Configuration, ports: Ports) -> Task
     """UI Designer writes the screens design over the flow UX Lead already validated,
     or rewrites it on a return from UI Lead's own comparisons."""
     try:
-        task = task_checkout(state, cfg, ports)
+        task = await task_checkout_in_thread(state, cfg, ports)
     except SetupFailed as unprepared:
         return finish(state, unprepared.patch(UI_DESIGNER), ports)
     extra = ("UI Lead",)
@@ -85,7 +85,7 @@ async def _lead_walk(
     into `design_items`, from structured output alone, approved or returned alike
     (ADR-0040; a lead never returns to a Developer, README.md, 4, §13)."""
     try:
-        task = task_checkout(state, cfg, ports)
+        task = await task_checkout_in_thread(state, cfg, ports)
     except SetupFailed as unprepared:
         return finish(state, unprepared.patch(role), ports)
     design_block = ports.stack.design(task_base(state, ports))
@@ -133,7 +133,7 @@ async def consolidate(state: TaskState, cfg: Configuration, ports: Ports) -> Tas
     request, never pausing the task. May return to Product Analyst under
     `PAIR_PM_PA`, within its limit, like any other PRD return (ADR-0040)."""
     try:
-        task = task_checkout(state, cfg, ports)
+        task = await task_checkout_in_thread(state, cfg, ports)
     except SetupFailed as unprepared:
         return finish(state, unprepared.patch(PM_CONSOLIDATOR), ports)
     limit = cfg.max_changes_requested_per_pair

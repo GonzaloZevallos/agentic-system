@@ -18,6 +18,7 @@ import math
 import time
 from typing import Any
 
+import anyio
 from pydantic import TypeAdapter
 
 from agentic.shared.configuration import Configuration
@@ -25,7 +26,7 @@ from agentic.shared.configuration import Configuration
 from ..domain import presubmit, rules
 from ..domain.roles import DEVELOPER_INTEGRATOR
 from ..domain.task import WAITING_ON_HUMAN, FullCheckEntry, FullChecksRecord, TaskState
-from .checkouts import SetupFailed, task_base, task_checkout
+from .checkouts import SetupFailed, task_base, task_checkout_in_thread
 from .ports import Ports
 from .presubmit import CheckoutPresubmit, reuse_of
 from .run_role import finish
@@ -37,7 +38,7 @@ _ENTRIES = TypeAdapter(list[FullCheckEntry])
 
 async def full_checks(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
     try:
-        task = task_checkout(state, cfg, ports)
+        task = await task_checkout_in_thread(state, cfg, ports)
     except SetupFailed as unprepared:
         return finish(state, unprepared.patch(DEVELOPER_INTEGRATOR), ports)
     workspace = ports.workspace
@@ -60,11 +61,13 @@ async def full_checks(state: TaskState, cfg: Configuration, ports: Ports) -> Tas
     started = time.monotonic()
     try:
         # Called once, with no refusal loop and no affected plan: the suite as declared.
-        gate()
+        await anyio.to_thread.run_sync(gate)
     finally:
         # A check that edits a tracked file or writes an untracked one must not refuse the
         # next delivery of a reopened unit, nor the landing's own clean-tree checks.
-        workspace.restore_clean(task.path)
+        # Shielded: it must also run when the signal's cancellation is what unwinds us.
+        with anyio.CancelScope(shield=True):
+            await anyio.to_thread.run_sync(workspace.restore_clean, task.path)
     merged = presubmit.merge_checks_record(
         head=head,
         master=base,

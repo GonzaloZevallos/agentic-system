@@ -265,6 +265,36 @@ decisión: resetear el contador sin nada nuevo repite la misma devolución.
 Esto exige estado durable del lado del sistema: el grafo se frena, el estado sobrevive al
 proceso en un checkpointer, y la respuesta del humano lo reanuda donde estaba (ADR-0003).
 
+### Pausar una corrida (GH-355)
+
+Para frenar una corrida `agentic run` o `agentic resume` (por ejemplo para bajar la carga
+de la máquina) se le manda SIGTERM, o SIGHUP, **una sola vez**. No se usa `kill -9`, que
+deja los chequeos y los roles huérfanos.
+
+```
+cat <producto>/.agentic/runs/<tarea>.lock     # el "pid" de la corrida (JSON); o: pgrep -af 'agentic (run|resume)'
+kill -TERM <pid>
+```
+
+Qué pasa: el proceso marca su bandera de parada y mata al instante los chequeos que
+lanzó (`pytest`, `npm run e2e`, navegadores, servidores); el turno del rol en curso se
+cancela y el runner cierra los procesos de ese intento al desenrollarse. En el log se ve
+`[<Rol>] interrupted after N turns` y las líneas `reaper: stopped <pid> …`; el proceso sale
+con código 1. Si algo ignora la cancelación, a los 40 s (`reaping.STOP_DEADLINE_S`,
+declarado, no medido) el plazo duro mata los procesos de los roles, libera el lock y sale.
+En la práctica la corrida muere en menos de un minuto. Una segunda señal no hace nada
+distinto: no hace falta repetirla.
+
+Qué no pasa: no se commitea ni se pushea, no se escribe nada en el documento de tarea ni
+en el issue, el turno interrumpido no se registra como terminado y no se gasta un retake por
+caída (el lock se libera sin marca). El poller no la relanza: una tarea con documento y sin
+lock ni fallo externo no es candidata a retoma.
+
+Para retomarla: `agentic resume <issue>`. El nodo interrumpido no dejó escrituras, así que
+se repite entero (un setup cortado se rehace). Si la corrida todavía no tenía documento (PjM
+clasificando o definiendo), el issue sigue siendo candidato a lanzamiento: sacale la etiqueta
+`agentic` antes de pararla para que el poller no la vuelva a lanzar.
+
 ### Fallo de rol
 
 Distinto de una devolución. Es el rol que se rompe: JSON inválido, salida vacía, se le

@@ -18,7 +18,7 @@ from ..domain import document, landing, presubmit, rules
 from ..domain.pull_request import BoundedBody, bounded_body
 from ..domain.roles import DEVELOPER_INTEGRATOR, PJM, PM, TECH_LEAD
 from ..domain.task import WAITING_ON_HUMAN, TaskState
-from .checkouts import SetupFailed, task_base, task_checkout
+from .checkouts import SetupFailed, task_base, task_checkout_in_thread
 from .ports import BranchPullRequest, GitError, Ports
 from .preflight import over_cap
 from .release import release_task
@@ -33,7 +33,7 @@ _LOG = logging.getLogger(__name__)
 
 async def deliver(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
     try:
-        task = task_checkout(state, cfg, ports)
+        task = await task_checkout_in_thread(state, cfg, ports)
     except SetupFailed as unprepared:
         return finish(state, unprepared.patch(DEVELOPER_INTEGRATOR), ports)
     relative = document.relative_path(state["id"]).as_posix()

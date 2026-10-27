@@ -20,6 +20,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
@@ -62,7 +63,7 @@ from .core.process.adapters.filesystem import (
 )
 from .core.process.adapters.git.workspace import GitError
 from .core.process.adapters.langgraph.graph import ESCALATE
-from .core.process.adapters.shell import inhibitor
+from .core.process.adapters.shell import EventStopFlag, inhibitor
 from .core.process.application import archive, close_issues, reflect_run, release
 from .core.process.application import perf as perfmod
 from .core.process.application import poll as pollmod
@@ -76,8 +77,11 @@ from .core.process.application.ports import (
     LockHeld,
     LockRecord,
     Ports,
+    ProcessReaper,
     RunLock,
     RunRegistry,
+    RunStopped,
+    StopFlag,
     TrackerCallFailed,
     Upstream,
 )
@@ -98,7 +102,7 @@ from .core.process.application.run_role import load_prompt
 from .core.process.application.stack_review import stack_review as run_stack_review
 from .core.process.domain import document as task_document
 from .core.process.domain import landing as landing_rules
-from .core.process.domain import legacy_names, rules, stack_signals
+from .core.process.domain import legacy_names, reaping, rules, stack_signals
 from .core.process.domain import stack_review as stack_review_texts
 from .core.process.domain.playbook import Delta, Playbook
 from .core.process.domain.roles import LANDING_DIAGNOSER, ROLES
@@ -559,7 +563,10 @@ def main() -> None:
         # is exactly the case this one verb exists to run over (ADR-0034, item 4).
         if args.command != "stack" and not cfg.agentic_dir.is_dir():
             raise ValueError(f"{cfg.product_dir} is not a product repo: no .agentic/ directory")
-        ports = default_ports(cfg)
+        # Only `run`/`resume` own a flag a signal can mark; every other verb gets the one
+        # that never is (composition's default), so none can raise `RunStopped`.
+        stop_flag = EventStopFlag() if args.command in ("run", "resume") else None
+        ports = default_ports(cfg) if stop_flag is None else default_ports(cfg, stop_flag)
         if args.command not in (
             "close",
             "eval",
@@ -621,7 +628,7 @@ def main() -> None:
                 print(f"agentic: {problem}", file=sys.stderr)
             log_file = _log_file_for(cfg, task_id)
             options = (args.from_document, args.dry_run, args.yes)
-            stop = StopCause()
+            stop = StopCause(flag=stop_flag, reaper=ports.reaper)
             work: Callable[[], Awaitable[None]] = partial(
                 _resume,
                 task_id,
@@ -717,7 +724,7 @@ def main() -> None:
             if not args.fresh:
                 declared_stack_of(task["id"], ports)
             log_file = _log_file_for(cfg, task["id"])
-            stop = StopCause()
+            stop = StopCause(flag=stop_flag, reaper=ports.reaper)
             work = partial(
                 _run,
                 task,
@@ -821,11 +828,35 @@ class StopCause:
     argument (never module state): `_signal_guarded` sets `signalled` and `at_shutdown`
     before it cancels, `_invoke` sets `crashed` when the graph itself raised, and
     `_locked` reads all three in its `finally` to keep the lock record (marked for the
-    shutdown, or marked as crashed) or release it."""
+    shutdown, or marked as crashed) or release it.
+
+    `flag` and `reaper` are what a signal acts on at once (only `run`/`resume` have them):
+    the flag the commands of the run look at, and the reaper of the checks. `held` is the
+    lock `_locked` took, so the hard deadline can settle it; `settle` makes sure exactly
+    one of the deadline and `_locked`'s `finally` touches it."""
 
     at_shutdown: bool = False
     crashed: bool = False
     signalled: bool = False
+    flag: StopFlag | None = None
+    reaper: ProcessReaper | None = None
+    held: tuple[RunLock, str] | None = None
+    lock_settled: bool = False
+    settle: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def settle_lock(self, lock: RunLock, task_id: str) -> None:
+        """Keep the lock record at a shutdown or release it, once: whoever gets here
+        second finds it done. The crashed-record case belongs to `_locked` alone."""
+        with self.settle:
+            if self.lock_settled:
+                return
+            self.lock_settled = True
+            if self.at_shutdown:
+                lock.keep_at_shutdown(task_id)
+            elif self.crashed and not self.signalled:
+                lock.keep_crashed(task_id, telemetry.system_version())
+            else:
+                lock.release(task_id)
 
 
 def _system_is_stopping() -> bool:
@@ -844,60 +875,138 @@ def _system_is_stopping() -> bool:
     return done.stdout.strip() == "stopping"
 
 
+# Declared, not measured: seconds the hard deadline gives the telemetry flush before it exits.
+_STOP_FLUSH_CAP_S = 5.0
+_STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP)
+
+
 async def _signal_guarded(
     work: Callable[[], Awaitable[None]],
     stop: StopCause | None = None,
     shutdown_probe: Callable[[], bool] = _system_is_stopping,
+    *,
+    deadline_s: float = reaping.STOP_DEADLINE_S,
+    hard_exit: Callable[[int], object] = os._exit,
+    flush: Callable[[], None] = telemetry.flush,
 ) -> None:
     """Wraps `work` (`_run`/`_resume`, built in `main`) in a task group a SIGTERM or a
     SIGHUP cancels (Tech Lead plan, subtask `signals`). This is the one place that
     restructures the `anyio.run(work)` call; every other subtask takes its shape as it
     finds it.
 
-    Cancelling the scope is the only new mechanism: everything the invocation already
-    does in a `finally` -- `_locked`'s lock release, `_invoke`'s telemetry flush,
-    `task_span`'s own context manager exit -- runs exactly as it would on any other
-    exception, since anyio delivers a cancellation as one at the current await point.
-    Nothing is written here to the task document: the only `TaskState` this scope holds
-    is the invocation's own `entering` snapshot (`_invoke`'s docstring), and writing it
-    would erase every section this invocation's nodes already wrote, racing the fan-in
-    (ADR-0004, fifth addendum). No issue comment is added either: `resume.SYSTEM_COMMENTS`
-    is untouched, since an unregistered prefix would read back as a human decision on the
-    next resume (`resume.human_decision`).
+    Cancelling the scope is the mechanism: everything the invocation already does in a
+    `finally` -- `_locked`'s lock release, `_invoke`'s telemetry flush, `task_span`'s own
+    context manager exit -- runs exactly as it would on any other exception, since anyio
+    delivers a cancellation as one at the current await point. Nothing is written here to
+    the task document: the only `TaskState` this scope holds is the invocation's own
+    `entering` snapshot (`_invoke`'s docstring), and writing it would erase every section
+    this invocation's nodes already wrote, racing the fan-in (ADR-0004, fifth addendum). No
+    issue comment is added either: `resume.SYSTEM_COMMENTS` is untouched, since an
+    unregistered prefix would read back as a human decision on the next resume
+    (`resume.human_decision`). No commit and no push either.
+
+    A node that blocks the event loop (a command running synchronously) cannot see the
+    anyio receiver, so the signal also gets a Python handler, which runs on the main
+    thread whatever the loop is doing. It is idempotent: the first signal starts one
+    daemon thread that marks the run's stop flag (so the commands of the run raise
+    `RunStopped`), reaps the run's CHECKS (never a role's processes: the runner closes
+    those as the cancellation unwinds it) and waits `deadline_s`. If the process is still
+    alive then, it reaps the roles too, settles the lock, flushes the telemetry briefly
+    and `hard_exit`s. A second signal does none of it again.
 
     `work`'s own exception -- `CannotStart`, an escalated run's `sys.exit`, anything --
     is caught inside the group and re-raised after it closes, never let escape the
     `async with tg:` block itself: anyio wraps whatever crosses it in an
     `ExceptionGroup`, even a lone exception, which would break `main`'s bare
-    `except CannotStart` and change the exit code the invariants say must not move."""
+    `except CannotStart` and change the exit code the invariants say must not move. A
+    `RunStopped` that reaches here is the signal's cancellation seen from a command."""
     caught: list[BaseException] = []
     interrupted = False
+    previous = {number: signal.getsignal(number) for number in _STOP_SIGNALS}
+    finished = threading.Event()
+    first = threading.Lock()  # taken by the first signal, never released
+
+    def hard_stop(cause: StopCause) -> None:
+        pid = os.getpid()
+        held = cause.held
+        if cause.reaper is not None:
+            if held is not None:
+                cause.reaper.reap_run(held[1], pid)
+            cause.reaper.reap_run(reaping.CHECK_TASK, pid)
+        if held is not None:
+            cause.settle_lock(*held)
+        flusher = threading.Thread(target=flush, daemon=True)
+        flusher.start()
+        flusher.join(_STOP_FLUSH_CAP_S)
+        hard_exit(1)
+
+    def stop_run(cause: StopCause) -> None:
+        if cause.flag is not None:
+            cause.flag.set()
+        if cause.reaper is not None:
+            cause.reaper.reap_run(reaping.CHECK_TASK, os.getpid())
+        if not finished.wait(deadline_s):
+            hard_stop(cause)
+
+    def on_signal(_signum: int, _frame: object) -> None:
+        if stop is None or not first.acquire(blocking=False):
+            return
+        stop.signalled = True
+        threading.Thread(target=stop_run, args=(stop,), daemon=True).start()
+
+    def install() -> None:
+        # Only the main thread may; anywhere else the anyio receiver alone stays.
+        try:
+            for number in _STOP_SIGNALS:
+                signal.signal(number, on_signal)
+        except ValueError:
+            pass
 
     async def watch_signals() -> None:
         nonlocal interrupted
-        with anyio.open_signal_receiver(signal.SIGTERM, signal.SIGHUP) as signals:
-            async for _ in signals:
-                interrupted = True
-                if stop is not None:
-                    # Before the probe and the cancel: `_locked`'s `finally` reads both.
-                    stop.signalled = True
-                    stop.at_shutdown = await anyio.to_thread.run_sync(shutdown_probe)
-                tg.cancel_scope.cancel()
-                return
+        try:
+            with anyio.open_signal_receiver(*_STOP_SIGNALS) as signals:
+                # After the receiver, which installs its own handler over any earlier one.
+                install()
+                async for _ in signals:
+                    interrupted = True
+                    if stop is not None:
+                        # Before the probe and the cancel: `_locked`'s `finally` reads both.
+                        stop.signalled = True
+                        stop.at_shutdown = await anyio.to_thread.run_sync(shutdown_probe)
+                    tg.cancel_scope.cancel()
+                    return
+        finally:
+            # The receiver gave the default back on closing; a second signal while the run
+            # unwinds must still be the no-op above, not the death of the process.
+            install()
 
     async def run_work() -> None:
+        nonlocal interrupted
         try:
             await work()
         except anyio.get_cancelled_exc_class():
             raise
+        except RunStopped:
+            interrupted = True
+            if stop is not None:
+                stop.signalled = True
         except BaseException as exc:
             caught.append(exc)
         finally:
             tg.cancel_scope.cancel()
 
-    async with anyio.create_task_group() as tg:
-        tg.start_soon(watch_signals)
-        tg.start_soon(run_work)
+    try:
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(watch_signals)
+            tg.start_soon(run_work)
+    finally:
+        finished.set()
+        try:
+            for number, handler in previous.items():
+                signal.signal(number, signal.SIG_DFL if handler is None else handler)
+        except ValueError:
+            pass
 
     if caught:
         raise caught[0]
@@ -1093,15 +1202,16 @@ def _locked(
             f"agentic: took over the lock left by pid {taken_over.pid} on "
             f"{taken_over.host} ({taken_over.started_at}), no longer running"
         )
+    if stop is not None:
+        stop.held = (lock, task_id)  # what the hard deadline settles, if this never unwinds
     try:
         yield taken_over
     finally:
-        if stop is not None and stop.at_shutdown:
-            lock.keep_at_shutdown(task_id)
-        elif stop is not None and stop.crashed and not stop.signalled:
-            lock.keep_crashed(task_id, telemetry.system_version())
-        else:
+        if stop is None:
             lock.release(task_id)
+        else:
+            # Once: the hard deadline may have settled it already (`StopCause.settle_lock`).
+            stop.settle_lock(lock, task_id)
 
 
 def _reap_dead_run(ports: Ports, task_id: str, taken_over: LockRecord | None) -> None:
