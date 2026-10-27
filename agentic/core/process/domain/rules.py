@@ -3602,7 +3602,12 @@ class MergeFacts:
     `failed_step` is the step of the recorded `merge_checks` that failed, which only the
     landing reads. `adr_collision` (GH-229) is what `application.adr_collision` found: the
     `Renaming` that fixes an own ADR whose number master took, an `Ambiguous` one, or `None`
-    (no collision, or the diff touches no `docs/adr/` path so nothing was read)."""
+    (no collision, or the diff touches no `docs/adr/` path so nothing was read).
+    `masters_covered` (GH-353, ADR-0045 addendum) is `master_gain.masters_covered`'s verdict on
+    the masters the recorded check rows ran on: `True` every one is the current master or
+    only behind by an inert gain, `False` something is in doubt, and `None` (what a
+    `MergeFacts` built without it reads, the poller's) leaves the recorded `checks_master`
+    to be compared with `current_master`, exactly as before."""
 
     task_id: str
     status: str | None
@@ -3631,6 +3636,7 @@ class MergeFacts:
     followups_filed: bool = False
     failed_step: presubmit.FailedStep | None = None
     adr_collision: adr_numbers.Renaming | adr_numbers.Ambiguous | None = None
+    masters_covered: bool | None = None
     conflicts: bool | None = None
     open_outside: int = 0
     important_pass_done: bool = False
@@ -3723,7 +3729,11 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     otherwise the next check) and
     `attempts_exhausted`. A CI that cannot be decided yet is a `wait` until
     `ci.CI_WAIT_MAX_S` have passed since its anchor, a refusal after. `master_moved` is not
-    here: the merge verb gives it, after its last fetch. The checks last: they are the costly
+    here: the merge verb gives it, after its last fetch. A recorded pass covers the current
+    master when the recorded `checks_master` is it (`masters_covered` None) or when
+    `masters_covered` says every row's master is only behind by an inert gain (GH-353); a
+    `False` is not covered even if `checks_master` is current, since a rerun stamps it with
+    the newest master. The checks last: they are the costly
     fact, so nothing is run for a pull request that is refused anyway, and a run is asked
     for only when the recorded one does not cover this head on this master. `attempts`
     bounds those runs per head (`MERGE_ATTEMPTS_MAX`), here and nowhere else; `merge_failures`
@@ -3772,7 +3782,7 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
         facts.checks_passed is not None
         and facts.checks_head == facts.pr_head
         and facts.current_master is not None
-        and facts.checks_master == facts.current_master
+        and _master_covered(facts)
     )
     if covers:
         if facts.checks_passed:
@@ -3781,6 +3791,14 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     if facts.attempts >= MERGE_ATTEMPTS_MAX:
         return MergeDecision("refuse", "attempts_exhausted")
     return MergeDecision("run_checks", None)
+
+
+def _master_covered(facts: MergeFacts) -> bool:
+    """The master conjunct of a recorded pass covering the head: the verb's reading of the
+    rows' masters when it made one, else the record's own `master` against the current one."""
+    if facts.masters_covered is None:
+        return facts.checks_master == facts.current_master
+    return facts.masters_covered
 
 
 def merge_conflicts_from(
@@ -3822,6 +3840,17 @@ def criteria_probe_wanted(facts: MergeFacts) -> bool:
     `criteria_over_cap` already rules the pull request out."""
     return auto_merge_decision(replace(facts, criteria_regressed=("x",))) == MergeDecision(
         "refuse", "criteria_over_cap"
+    )
+
+
+def gain_probe_wanted(facts: MergeFacts) -> bool:
+    """Whether reading what master gained is worth it for `facts` (GH-353): the only answer
+    to that question, derived from the order of `auto_merge_decision`. It is worth it
+    exactly when a covered verdict would change the decision, that is, when no refusal ahead
+    of the checks and no CI that merges already settles the pull request, and the recorded
+    pass or the attempts left leave it open."""
+    return auto_merge_decision(replace(facts, masters_covered=True)) != auto_merge_decision(
+        replace(facts, masters_covered=False)
     )
 
 
