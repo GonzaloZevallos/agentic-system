@@ -157,3 +157,7 @@ del sistema junto con la de QA Performance (ADR-0060): una fila cuya ubicación 
 la tabla para esto, como `qa_settles` lo es para QA Performance: el único lugar que decide
 cuándo una fila levantada por el sistema está saldada.
 
+
+Una cuarta excepción, de GH-374: una corrida de `PM: final validation` asienta sus propias
+filas anteriores (`plan_settlement`, escritora nombrada que deja `plan_settled` en el parche
+de la corrida). Ver ADR-0069.
