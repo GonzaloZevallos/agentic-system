@@ -29,11 +29,13 @@ from .core.measurement.adapters.otel import telemetry
 from .core.measurement.domain.metrics import arm_label
 from .core.process.adapters.claude_sdk import ClaudeSdkRunner
 from .core.process.adapters.filesystem import FilesystemPrompts, FilesystemTaskDocuments
+from .core.process.adapters.filesystem.board_sent import FilesystemBoardSent
 from .core.process.adapters.filesystem.check_results import FilesystemCheckResults
 from .core.process.adapters.filesystem.perf_lock import FilesystemPerfLock
 from .core.process.adapters.git import GitWorkspace
 from .core.process.adapters.git.workspace import WORKTREES
 from .core.process.adapters.github import GhInbox, GhTracker
+from .core.process.adapters.github.board import GhBoard
 from .core.process.adapters.langgraph.graph import build_graph
 from .core.process.adapters.shell import (
     NullStopFlag,
@@ -157,6 +159,8 @@ def _ports(cfg: Configuration, stop_flag: StopFlag) -> Ports:
     # `Ports` (which reaps on release): a mark is only found by the key it was built with.
     product_key = reaping.product_key(str(cfg.product_dir.resolve()))
     reaper = ShellReaper(product_key, cfg.product_dir / WORKTREES)
+    project = cfg.board_owner_and_number
+    stack = GitStack(cfg.product_dir)
     return Ports(
         # The roles get the configuration the run decided, never the one the human's
         # shell carries: the `AGENTIC_*` of this process are unset for them, which only
@@ -182,14 +186,27 @@ def _ports(cfg: Configuration, stop_flag: StopFlag) -> Ports:
         inbox=GhInbox(cfg.product_dir),
         workspace=GitWorkspace(cfg.product_dir, cfg.git_identity),
         tracker=GhTracker(cfg.product_dir),
-        stack=GitStack(cfg.product_dir),
+        stack=stack,
         commands=ShellCommands(product_key, reaper, stop_flag),
         sample_app=ShellSampleApp(),
         reaper=reaper,
         perf_runner=PerfShellRunner(product_key, reaper),
         perf_lock=FilesystemPerfLock(cfg.perf_lock_path),
         check_results=FilesystemCheckResults(cfg.check_results_dir),
+        # GH-375: the Project mirror exists only when a project is configured; its memory
+        # sits beside the run registry, one file per product.
+        board=None if project is None else GhBoard(cfg.product_dir, *project),
+        board_sent=None
+        if project is None
+        else FilesystemBoardSent(
+            cfg.run_registry_dir.parent / "board" / f"{_file_name(stack.product())}.json"
+        ),
     )
+
+
+def _file_name(product: str) -> str:
+    """A product name as a file name: nothing but letters, digits, `-`, `_` and `.`."""
+    return "".join(c if c.isalnum() or c in "-_." else "_" for c in product)
 
 
 @asynccontextmanager
