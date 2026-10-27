@@ -465,6 +465,7 @@ def merge_checks_record(
     witness: WitnessResult | None,
     failed_step: FailedStep | None = None,
     setup_failure: tuple[str, str] | None = None,
+    row_master: str | None = None,
 ) -> dict[str, object]:
     """The whole `merge_checks` mapping of one run (ADR-0045): the four keys it always
     had, `checks` (one entry per declared check, in declared order, the failing ones with
@@ -474,7 +475,8 @@ def merge_checks_record(
     nothing either; a worktree, a merge or a setup step that failed (`failed_step` says
     which) never passed. `setup_failure` is the failing setup step's name and what it
     said. The tails are the only text taken from a command: sanitized and capped here,
-    displayed and never parsed."""
+    displayed and never parsed. `row_master`, when given, is the master the checks ran on:
+    each entry then carries it as `master`; without it the entries are as they always were."""
     # A check decides by its last row: a flake's first row is red and its rerun green.
     decided = final_results(results or [])
     passed = (
@@ -514,6 +516,9 @@ def merge_checks_record(
     if setup_failure is not None:
         step_name, output = setup_failure
         entries.append({"name": step_name, "passed": False, "tail": _tail_of(output)})
+    if row_master is not None:
+        # Every entry, a reused one and a failing one too, names the master it ran on.
+        entries = [{**entry, "master": row_master} for entry in entries]
     record: dict[str, object] = {
         "head": head,
         "master": master,
@@ -628,11 +633,13 @@ def rerun_record(previous: Mapping[str, object], rerun: Mapping[str, object]) ->
     """The `merge_checks` mapping after only the failed checks ran again (GH-239): the
     rerun's entries replace the previous ones of the same name, the rest stay as recorded,
     and `passed` is every entry passing. A rerun that stopped early (worktree, conflict,
-    setup) proved nothing about the checks: its record stands as it is."""
+    setup) proved nothing about the checks: its record stands as it is. A kept entry keeps
+    the `master` it ran on; the record's own `master` is the rerun's."""
     if rerun.get("failed_step") in _EARLY_STEPS:
         return dict(rerun)
     again = {entry.get("name"): entry for entry in _entries(rerun)}
-    kept = [again.pop(entry.get("name"), entry) for entry in _entries(previous)]
+    earlier = previous.get("master")
+    kept = [again.pop(entry.get("name"), _ran_on(entry, earlier)) for entry in _entries(previous)]
     entries = [*kept, *again.values()]
     passed = bool(entries) and all(entry.get("passed") is True for entry in entries)
     record: dict[str, object] = {**rerun, "checks": entries, "passed": passed}
@@ -641,6 +648,28 @@ def rerun_record(previous: Mapping[str, object], rerun: Mapping[str, object]) ->
     else:
         record["failed_step"] = rerun.get("failed_step") or previous.get("failed_step") or "checks"
     return record
+
+
+def _ran_on(entry: dict[str, object], recorded: object) -> dict[str, object]:
+    """A kept entry as it ran: its own `master` when it has one. An entry written before
+    each row named its master ran on the record's `master`; the rerun replaces that key, so
+    the kept entry takes it now, or it would read as having run on the newer master."""
+    if "master" in entry or not isinstance(recorded, str):
+        return entry
+    return {**entry, "master": recorded}
+
+
+def row_masters(record: Mapping[str, object]) -> tuple[str, ...]:
+    """The distinct masters the entries of a `merge_checks` mapping ran on, in first-seen
+    order. An entry without a `master` takes the record's (a document written before each
+    row named its own); a `master` that is not a string is skipped."""
+    recorded = record.get("master")
+    seen: dict[str, None] = {}
+    for entry in _entries(record):
+        master = entry.get("master", recorded)
+        if isinstance(master, str) and master:
+            seen.setdefault(master)
+    return tuple(seen)
 
 
 def tier_section(fast: Sequence[str], rest: Sequence[str]) -> str:

@@ -376,6 +376,100 @@ def test_a_rerun_record_keeps_the_mark_of_the_entries_it_carries():
     ]
 
 
+def _run(row_master=None, **more):
+    return presubmit.merge_checks_record(
+        head="h",
+        master="m2",
+        duration_s=1.0,
+        declared={"tests": "pytest", "lint": "ruff ."},
+        results=more.pop("results", [_reused("tests"), result("lint", "ruff .")]),
+        witness=None,
+        row_master=row_master,
+        **more,
+    )
+
+
+def test_without_a_row_master_no_entry_names_one():
+    record = _run()
+    assert all("master" not in entry for entry in record["checks"])
+    assert record["master"] == "m2"
+
+
+def test_with_a_row_master_every_entry_carries_it_the_reused_one_too():
+    record = _run("m2")
+    assert record["checks"] == [
+        {"name": "tests", "passed": True, "reused": True, "master": "m2"},
+        {"name": "lint", "passed": True, "master": "m2"},
+    ]
+
+
+def test_with_a_row_master_a_failing_and_a_missing_entry_carry_it_too():
+    record = _run("m2", results=[result("tests", "pytest", False, "boom")])
+    assert record["passed"] is False
+    assert [entry["master"] for entry in record["checks"]] == ["m2", "m2"]
+
+
+def test_a_rerun_keeps_the_master_of_the_kept_rows_and_stamps_only_its_own():
+    previous = {
+        "master": "m1",
+        "passed": False,
+        "failed_step": "checks",
+        "checks": [
+            {"name": "lint", "passed": True, "master": "m1"},
+            {"name": "tests", "passed": False, "master": "m1", "tail": ["boom"]},
+        ],
+    }
+    rerun = {
+        "master": "m2",
+        "passed": True,
+        "checks": [{"name": "tests", "passed": True, "master": "m2"}],
+    }
+    record = presubmit.rerun_record(previous, rerun)
+    assert record["master"] == "m2"
+    assert record["checks"] == [
+        {"name": "lint", "passed": True, "master": "m1"},
+        {"name": "tests", "passed": True, "master": "m2"},
+    ]
+    assert presubmit.row_masters(record) == ("m1", "m2")
+
+
+def test_a_rerun_over_an_old_record_does_not_move_its_kept_rows_to_the_newer_master():
+    """Invariant 3: a row written before rows named a master ran on the record's master;
+    the rerun replaces that key, so the kept row takes it before it is lost."""
+    previous = {
+        "master": "m1",
+        "passed": False,
+        "failed_step": "checks",
+        "checks": [_entry("lint", True), _entry("tests", False)],
+    }
+    rerun = {"master": "m2", "passed": True, "checks": [{**_entry("tests", True), "master": "m2"}]}
+    record = presubmit.rerun_record(previous, rerun)
+    assert presubmit.row_masters(record) == ("m1", "m2")
+
+
+def test_row_masters_of_an_old_record_is_the_record_master():
+    old = {"master": "m1", "checks": [_entry("lint", True), _entry("tests", True)]}
+    assert presubmit.row_masters(old) == ("m1",)
+
+
+def test_row_masters_of_a_mixed_record_lists_both_in_first_seen_order():
+    mixed = {
+        "master": "m2",
+        "checks": [
+            {"name": "a", "passed": True, "master": "m1"},
+            {"name": "b", "passed": True},
+            {"name": "c", "passed": True, "master": "m1"},
+        ],
+    }
+    assert presubmit.row_masters(mixed) == ("m1", "m2")
+
+
+def test_row_masters_reads_nothing_it_cannot_and_returns_no_master():
+    assert presubmit.row_masters({}) == ()
+    assert presubmit.row_masters({"master": "m", "checks": "bad"}) == ()
+    assert presubmit.row_masters({"checks": [{"name": "a"}, {"name": "b", "master": 3}]}) == ()
+
+
 def test_merge_checks_record_passes_a_flake_and_marks_it_and_marks_a_double_red():
     """The rerun rows of ADR-0066 decide by the last row per check: a flake passes the
     record, flagged, and a check red twice stays failed with the rerun's tail."""

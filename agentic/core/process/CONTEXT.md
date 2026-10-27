@@ -268,6 +268,12 @@ En el código se llama `flake_verdict` (dominio, `domain/presubmit.py`) y `Flake
 _Avoid_: test intermitente
 _Campo_: flaky test — Software Engineering at Google, cap. 11; retries de Playwright y `pytest-rerunfailures`, que reintentan pero no registran la cabeza
 
+**Ganancia inerte del master**:
+Lo que el master ganó desde que corrió un pase registrado, cuando ningún camino de esa ganancia puede cambiar el resultado de los chequeos: todos coinciden con un glob que el producto declara en `merge_inert` (leído de la cabeza del PR) y ninguno cae en el conjunto nunca-inerte (`.agentic/stack.yaml`, `.agentic/**` salvo `.agentic/tasks/*.md`, `.github/**`, `CODING_STANDARDS.md`, manifiestos y locks). Si lo es, el pase sigue valiendo sobre el master nuevo y el merge no corre la suite; ante cualquier duda (diff ilegible, master que no es ancestro, ganancia vacía, stack ilegible) no lo es y se corre. El sistema no declara nada por defecto (ADR-0045, adenda GH-353).
+En el código se llama `gain_inert` y `masters_covered` (dominio, `domain/master_gain.py`); la ganancia la lee `Workspace.gain_paths`.
+_Avoid_: diff del master que no toca la tarea (la regla de solapamiento, que ADR-0045 rechaza), caché de merge
+_Campo_: sin término de arte; lo más cerca es el path filtering de CI (`paths-ignore` en GitHub Actions), que mira los archivos de un cambio para saltar un trabajo, aunque acá la lista la declara el producto y la miran sólo los caminos que el master ganó
+
 **Testigo del checkout**:
 El comando con que un producto dice dónde vive el código que sus chequeos acaban de medir: la Puerta de entrega lo corre en el checkout del Developer, antes de los chequeos y dentro de la misma mirada (hay commit y el árbol está limpio), y exige que la última línea no vacía de su salida sea una ruta absoluta que, resuelta, caiga adentro de ese checkout. Lo declara el producto en su stack, es opcional, y un producto que no lo declara tiene la puerta de siempre, byte a byte. Afirma menos de lo que parece y eso está escrito: prueba que el testigo, corrido en el mismo checkout y con el mismo entorno que reciben los chequeos, resolvió adentro; no prueba nada sobre el proceso que corrió `pytest` un minuto antes. Rechaza una sola vez, con su propio contador: el presupuesto de rechazos de los chequeos no se toca. Un desacuerdo que la puerta dejó pasar queda igual escrito en la sección del Developer, que es lo único que cruza hacia el revisor.
 En el código se llama `witness`, la clave del stack, y `witness_refusal`, el veredicto puro en `domain/presubmit.py`.

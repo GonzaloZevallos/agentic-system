@@ -663,3 +663,15 @@ def test_a_stack_with_a_rerun_form_passes_preflight(stage0):
         rerun_checks={"tests": RerunForm(command="pytest --lf", test_id=r"(\S+)")},
     )
     preflight(Configuration(product_dir=PRODUCT), replace(ports, stack=stack_))
+
+
+def test_a_refused_merge_inert_glob_refuses_before_spending(stage0):
+    """`*` would whitelist every path; the loader refuses it, and preflight reports it at
+    load instead of leaving the merge gate to read it as "not covered" (GH-353)."""
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    stack_ = MemoryStack()
+    stack_.merge_inert_error = "stack.yaml: '*' under `merge_inert` is refused: wildcard_root"
+    with pytest.raises(ValueError, match=r"under `merge_inert` is refused"):
+        preflight(Configuration(product_dir=PRODUCT), replace(ports, stack=stack_))
+    with pytest.raises(ValueError, match=r"under `merge_inert` is refused"):
+        declared_stack(replace(ports, stack=stack_), "abc123")

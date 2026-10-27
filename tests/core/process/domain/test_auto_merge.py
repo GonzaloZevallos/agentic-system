@@ -657,3 +657,97 @@ def test_account_paused_reads_a_pending_account_limit_pause_of_this_product(resu
 
 def test_account_paused_with_no_pause_is_false():
     assert rules.account_paused([], NOW) is False
+
+
+# GH-353: a recorded pass over a moved master. `masters_covered` is the verb's reading of
+# whether every row's master is current or only behind by an inert gain; None is a facts
+# object built without it, which decides exactly as it always did.
+MOVED = "d" * 40
+
+
+@pytest.mark.parametrize(
+    ("covered", "decision"),
+    [
+        (None, MergeDecision("run_checks", None)),
+        (False, MergeDecision("run_checks", None)),
+        (True, MergeDecision("merge", None)),
+    ],
+    ids=["unset", "not_covered", "covered"],
+)
+def test_a_moved_master_merges_on_the_recorded_pass_only_when_covered(covered, decision):
+    facts = _facts(current_master=MOVED, attempts=1, masters_covered=covered)
+    assert rules.auto_merge_decision(facts) == decision
+
+
+def test_a_covered_master_still_needs_a_pass_on_this_head_and_a_known_master():
+    assert rules.auto_merge_decision(
+        _facts(current_master=MOVED, checks_head="c" * 40, masters_covered=True)
+    ) == MergeDecision("run_checks", None)
+    assert rules.auto_merge_decision(
+        _facts(current_master=None, masters_covered=True)
+    ) == MergeDecision("run_checks", None)
+    assert rules.auto_merge_decision(
+        _facts(current_master=MOVED, checks_passed=None, masters_covered=True)
+    ) == MergeDecision("run_checks", None)
+
+
+def test_a_covered_failed_pass_is_checks_failed_and_an_uncovered_one_is_run_again():
+    failed = _facts(current_master=MOVED, checks_passed=False)
+    assert rules.auto_merge_decision(replace(failed, masters_covered=True)) == MergeDecision(
+        "refuse", "checks_failed"
+    )
+    assert rules.auto_merge_decision(replace(failed, masters_covered=False)) == MergeDecision(
+        "run_checks", None
+    )
+
+
+def test_an_uncovered_master_with_the_budget_spent_is_attempts_exhausted():
+    spent = _facts(current_master=MOVED, attempts=rules.MERGE_ATTEMPTS_MAX)
+    assert rules.auto_merge_decision(spent) == MergeDecision("refuse", "attempts_exhausted")
+    assert rules.auto_merge_decision(replace(spent, masters_covered=False)) == MergeDecision(
+        "refuse", "attempts_exhausted"
+    )
+
+
+def test_a_rerun_record_whose_kept_rows_are_uncovered_is_not_the_current_master_by_name():
+    # The rerun stamps the record's master with the newest one, which is the current one:
+    # unset, that reads as covering; set to False it does not.
+    facts = _facts(checks_master=MASTER, current_master=MASTER)
+    assert rules.auto_merge_decision(facts) == MergeDecision("merge", None)
+    assert rules.auto_merge_decision(replace(facts, masters_covered=False)) == MergeDecision(
+        "run_checks", None
+    )
+
+
+def test_the_gain_probe_is_wanted_when_a_covered_verdict_would_change_the_decision():
+    assert rules.gain_probe_wanted(_facts(current_master=MOVED)) is True
+    assert rules.gain_probe_wanted(_facts(current_master=MOVED, checks_passed=False)) is True
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"reviewed_unit_approved": False},
+        {"status": "developing"},
+        {"open_blocking": 1},
+        {"checks_head": "c" * 40},
+        {"current_master": None},
+    ],
+    ids=["not_approved", "not_ready", "blocking", "other_head", "no_master"],
+)
+def test_the_gain_probe_is_not_wanted_when_the_decision_does_not_depend_on_it(over):
+    assert rules.gain_probe_wanted(_facts(**{"current_master": MOVED, **over})) is False
+
+
+def test_the_gain_probe_is_not_wanted_for_a_fresh_green_ci_that_merges_on_its_own():
+    facts = _facts(
+        current_master=MOVED,
+        ci_required=("web",),
+        ci_untrusted=False,
+        ci_head=HEAD,
+        ci_verdict=ci.CiVerdict("green", (), ()),
+        ci_fresh=True,
+        ci_waited_s=10.0,
+    )
+    assert rules.auto_merge_decision(facts) == MergeDecision("merge", None)
+    assert rules.gain_probe_wanted(facts) is False

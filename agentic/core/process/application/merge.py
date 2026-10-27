@@ -19,7 +19,7 @@ from typing import Literal
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import adr_numbers, ci, presubmit, rules
+from ..domain import adr_numbers, ci, master_gain, presubmit, rules
 from ..domain import landing as landing_rules
 from ..domain.task import PullRequest, TaskState, add_flakes
 from . import adr_collision, landing_flakes, landing_plan
@@ -134,6 +134,9 @@ def merge_task(
             fresh = ci.ci_fresh(report.base_sha, master, ports.workspace.contains(head, master))
 
     criteria: list[tuple[str, ...] | None] = []
+    # GH-353: the declared globs and each row master's gain, read at most once per verb call.
+    globs: list[tuple[str, ...]] = []
+    gains: dict[str, tuple[str, ...] | None] = {}
 
     def decide(document: TaskState) -> rules.MergeFacts:
         base_facts = _facts(task_id, document, pull_request, eval_set, number, master, touched)
@@ -153,6 +156,12 @@ def merge_task(
             if not criteria:
                 criteria.append(read_criteria(ports, head, master))
             facts = replace(facts, criteria_regressed=criteria[0])
+        # GH-353: what master gained since the rows' masters, read once and only when no
+        # refusal ahead of the checks has ruled the pull request out and the answer would
+        # change the decision.
+        if head is not None and rules.gain_probe_wanted(facts):
+            covered = _masters_covered(ports, document, head, master, base, touched, globs, gains)
+            facts = replace(facts, masters_covered=covered)
         return facts
 
     facts = decide(raw)
@@ -177,6 +186,7 @@ def merge_task(
     landing_flakes.file_flakes(ports, task_id, head, landing_flakes.rerun_checks_on(raw, head), log)
     landing_flakes.file_task_flakes(ports, task_id, raw, log)
     relied = _ci_links(report, declared) if _merges_on_ci(facts) else None
+    inert_from = _inert_from(raw, master) if facts.masters_covered is True else None
     return _merge(
         task_id,
         number,
@@ -189,7 +199,80 @@ def merge_task(
         relied,
         bool(declared),
         pull_request,
+        inert_from,
     )
+
+
+def _recorded_masters(record: object) -> tuple[str, ...] | None:
+    """The masters the rows of a `merge_checks` record ran on (`presubmit.row_masters`), or
+    None when any row names none it can read: that is a record in doubt (invariant 2), never
+    one `row_masters` quietly shortens. A record with no row at all gives `()`."""
+    if not isinstance(record, Mapping):
+        return ()
+    rows = record.get("checks")
+    if not isinstance(rows, list):
+        return ()
+    seen: dict[str, None] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            return None
+        one = presubmit.row_masters({"master": record.get("master"), "checks": [row]})
+        if not one:
+            return None
+        seen.setdefault(one[0])
+    return tuple(seen)
+
+
+def _inert_from(document: TaskState, master: str) -> list[str]:
+    """The row masters, other than the current one, a merge on a covered pass rested on."""
+    return [m for m in _recorded_masters(document.get("merge_checks")) or () if m != master]
+
+
+def _masters_covered(
+    ports: Ports,
+    document: TaskState,
+    head: str,
+    master: str,
+    base: str,
+    touched: tuple[str, ...] | None,
+    globs: list[tuple[str, ...]],
+    gains: dict[str, tuple[str, ...] | None],
+) -> bool | None:
+    """`MergeFacts.masters_covered` (GH-353) for the recorded rows against `master`: None
+    when every row ran on it (or there is no row), so the decision compares the record's
+    master as it always did; else `master_gain.masters_covered`'s verdict. The head's
+    declared globs are read once, and a gain only when some are declared; whatever cannot be
+    read -- a broken declaration, a master that is not an ancestor, a failed diff -- is a
+    gain of None, which is not covered."""
+    masters = _recorded_masters(document.get("merge_checks"))
+    if masters is None:
+        return False
+    behind = [m for m in masters if m != master]
+    if not behind:
+        return None
+    if not globs:
+        try:
+            globs.append(ports.stack.merge_inert(head))
+        except ValueError:
+            globs.append(())
+    if globs[0]:
+        for row_master in behind:
+            if row_master not in gains:
+                gains[row_master] = _gain(ports, row_master, master)
+    return master_gain.masters_covered(
+        master, masters, gains, globs[0], list(ports.stack.setup(base).values()), touched
+    )
+
+
+def _gain(ports: Ports, row_master: str, master: str) -> tuple[str, ...] | None:
+    """What `master` gained since `row_master`: None unless `master` has it as an ancestor
+    and git could list the difference."""
+    if ports.workspace.contains(master, row_master) != "yes":
+        return None
+    try:
+        return ports.workspace.gain_paths(row_master, master)
+    except GitError:
+        return None
 
 
 def _merges_on_ci(facts: rules.MergeFacts) -> bool:
@@ -312,6 +395,7 @@ def run_checks(
         witness=gate.witness_result if gate is not None else None,
         failed_step=failed_step,
         setup_failure=setup_failure,
+        row_master=master,
     )
     previous = raw.get("merge_checks")
     if only is not None and isinstance(previous, Mapping):
@@ -351,10 +435,12 @@ def _merge(
     relied: list[dict[str, str]] | None = None,
     ci_declared: bool = False,
     pull_request: PullRequest | None = None,
+    inert_from: list[str] | None = None,
 ) -> MergeResult:
     """`relied` is the CI links a merge on the CI rested on (None: it rested on the local
     checks); `ci_declared` says the product declares its CI, which is the only case that
-    records how the merge was decided (`auto_merge_via`)."""
+    records how the merge was decided (`auto_merge_via`). `inert_from` is the older row
+    masters the recorded pass rested on through an inert gain (GH-353), if any."""
     # A `merge` rests on recorded checks, or on a fresh CI: either way on this master.
     master = facts.current_master
     assert master is not None
@@ -390,6 +476,8 @@ def _merge(
     guarded = [path for path in facts.touched_paths or () if rules.guarded_path(path, task_id)]
     if guarded:
         intent["auto_merge_guarded"] = guarded
+    if inert_from:
+        intent["auto_merge_inert_from"] = inert_from
     ports.documents.record_closure(task_id, intent)
     try:
         method = ports.tracker.merge(reference, head)
