@@ -2236,7 +2236,8 @@ def resumed_status(state: TaskState) -> Status:
     """The status the task had before the escalation overwrote it, derived from what the
     state holds, since the document keeps only `waiting_on_human` too."""
     if state.get("pull_request") and not landing_open(state):
-        return "ready_for_review"
+        # An owed publication is not delivered yet: `deliver` is what sets the end status.
+        return "developing" if _publication_owed(state) else "ready_for_review"
     if state.get("status") == "discarded":
         # Nothing overwrote it: a discard is an end, not a pause, and the runs it holds
         # (a diagnosis, PM's ruling) would otherwise read as a definition ready to plan.
@@ -2473,11 +2474,67 @@ def landing_open(state: TaskState) -> bool:
     )
 
 
+def approved_head(state: TaskState) -> str | None:
+    """The head the task may publish (GH-373): the one its last review approved. On a tiered
+    product (the fan-in stamped `task_head`) that is `task_head`, only if the reviewed unit's
+    `reviewed_head` is the same commit and `full_checks` passed on it; without tiers it is the
+    reviewed unit's `reviewed_head`. `None` when there is none, and for a head the task moved
+    after its review (a heal, a landing pass): nobody approved that one."""
+    name = reviewed_unit_name(state)
+    reviewed = state.get("subtasks", {}).get(name, {}).get("reviewed_head") if name else None
+    if not reviewed:
+        return None
+    task_head = state.get("task_head")
+    if not task_head:
+        return reviewed
+    recorded = state.get("full_checks")
+    if not same_commit(reviewed, task_head):
+        return None
+    if not (recorded and recorded["passed"] and same_commit(recorded["head"], task_head)):
+        return None
+    return task_head
+
+
+def publication_candidate(state: TaskState) -> str | None:
+    """The head a stopped run may still owe (GH-373): `approved_head` of a task that has a
+    pull request, no landing pass in flight, no escalation, every unit approved and nothing
+    left for the full tier. `None` otherwise."""
+    if not state.get("pull_request") or landing_open(state) or state.get("escalated"):
+        return None
+    if not all_approved(state) or full_checks_due(state):
+        return None
+    return approved_head(state)
+
+
+def owed_publication(state: TaskState, published: bool, branch_at_head: bool) -> str | None:
+    """The `publish_owed` value of a resume (GH-373), from the facts `prepare` read:
+    `published` is whether the remote already holds the candidate, `branch_at_head` whether
+    the task branch is at it or differs only in the task document. The candidate when the
+    branch is there and either the remote lacks it or the status never reached the end of a
+    delivery (`ready_for_review`) or a human's pause; `None` otherwise."""
+    candidate = publication_candidate(state)
+    if candidate is None or not branch_at_head:
+        return None
+    if not published or state.get("status") not in ("ready_for_review", "waiting_on_human"):
+        return candidate
+    return None
+
+
+def _publication_owed(state: TaskState) -> bool:
+    """`publish_owed` names the head the task may publish, and nothing has moved it."""
+    if state.get("escalated") or not all_approved(state) or full_checks_due(state):
+        return False
+    return same_commit(state.get("publish_owed"), approved_head(state))
+
+
 def resume_target(state: TaskState) -> str | None:
     """Where a resumed task goes next, from the same facts the routing reads. A pull
-    request ends the road unless the landing reopened the stage under it."""
-    if state.get("escalated") or (state.get("pull_request") and not landing_open(state)):
+    request ends the road unless the landing reopened the stage under it, or a stopped run
+    still owes it the approved head (`publish_owed`, GH-373): that goes to `deliver`."""
+    if state.get("escalated"):
         return None
+    if state.get("pull_request") and not landing_open(state):
+        return "deliver" if _publication_owed(state) else None
     if state.get("status") == "split":
         return None  # an end like a pull request: the parts are other tasks now
     if state.get("status") == "tracker_only":
