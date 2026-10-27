@@ -248,7 +248,7 @@ def findings_rows(state: TaskState) -> list[FindingRecord]:
                 _covered(record, key, approved)
                 or qa_settles(record, qa_approved)
                 or full_checks_settles(record, green)
-                or record["version"] < plan_settled.get(key, 0)
+                or (key in plan_settled and record["version"] < plan_settled[key])
                 for record in open_records[key]
             )
         )
