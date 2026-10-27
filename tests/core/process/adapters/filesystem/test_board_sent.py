@@ -1,4 +1,4 @@
-"""GH-375, ADR-0069: the board mirror's memory on disk, over a tmp_path."""
+"""GH-375, ADR-0070: the board mirror's memory on disk, over a tmp_path."""
 
 import json
 import os

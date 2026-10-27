@@ -153,4 +153,4 @@ tiene checklist: el reintento repetía el plan y la tarea escalaba.
 El §2 ("el código del sistema toca el tracker solo por el puerto `Tracker`") se refiere a
 issues, PRs, comentarios y etiquetas. El GitHub Project que espeja el estado no pasa por
 `Tracker`: tiene su propio puerto, `Board`, y es una salida que nunca se lee como entrada de
-una decisión. Lo registra ADR-0069.
+una decisión. Lo registra ADR-0070.
