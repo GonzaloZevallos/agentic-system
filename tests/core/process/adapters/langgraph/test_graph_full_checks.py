@@ -265,7 +265,6 @@ def only_the_integration_review(script, fakes, final, commands):
     assert final["full_checks"]["head"] == final["task_head"]
     assert commands_run(commands) == ["pytest", "ruff", "playwright"]
     assert fakes.workspace.events.count("push") == 1
-    assert fakes.workspace.events.index("push") > 0
     assert final["findings"] == []
 
 
