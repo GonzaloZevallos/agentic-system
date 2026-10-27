@@ -43,6 +43,12 @@ from .run_role import finish
 
 
 async def integrate(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
+    return integrate_turn(state, cfg, ports)
+
+
+def integrate_turn(state: TaskState, cfg: Configuration, ports: Ports) -> TaskState:
+    """The turn itself, synchronous (GH-364): the scheduling loop runs it in a worker
+    thread, one at a time, so that nothing else touches the workspace meanwhile."""
     if state.get("escalated"):
         # `escalate` runs next and saves the merged state itself; nothing else may
         # touch the workspace while the task waits for the human. The status is settled
