@@ -45,6 +45,13 @@ it got right. They are the rules that hold across every subtask, and this Develo
 could not see the others. Its `scope` is `subtask`: the category says the rule came from
 the plan, not that the fix does. This branch broke it, so this branch fixes it.
 
+A brief item or a done criterion of the issue that the diff does not meet is `blocking`
+with scope `subtask`, never an `observation` and never a `plan` finding: a criterion
+that depends on GitHub (a check green, a flag flipped in a named file) is met only when
+the CI section or the diff shows it. If it cannot be met for a reason outside the task,
+report it `blocking` all the same, with that reason in the evidence; the system escalates
+it instead of merging.
+
 The one exception: an invariant recorded as unsatisfiable, with evidence. On a subtask
 review, the record lives in the Developer's own `### Decisions and assumptions`,
 naming the invariant, the command or test with its output that shows it cannot hold as

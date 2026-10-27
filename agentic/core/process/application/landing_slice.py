@@ -22,7 +22,7 @@ from ..domain.task import TaskState, add_flakes
 from . import landing_plan
 from .checkouts import task_base
 from .landing_plan import LandingContext
-from .poll import read_criteria
+from .poll import ci_gate, read_criteria
 from .ports import GitError, MergeCallFailed, TrackerUnreachable
 from .presubmit import CheckoutPresubmit, reuse_of
 from .release import release_checkout
@@ -254,7 +254,8 @@ def _decide(
     ci_verdict: ci.CiVerdict | None = None
     ci_unreadable: ci.CiUnreadable | None = None
     ci_waited_s: float | None = None
-    if declared:
+    gate = ci_gate(raw, declared)
+    if gate.names:
         report = ports.tracker.ci_report(reference)
         opened_at = None if isinstance(report, ci.CiUnreadable) else report.opened_at
         anchor = ci.ci_wait_anchor(head, str(entry.get("at", "")) or None, head, opened_at)
@@ -262,7 +263,7 @@ def _decide(
         if isinstance(report, ci.CiUnreadable):
             ci_unreadable = report
         else:
-            ci_head, ci_verdict = report.head_sha, ci.ci_state(report, declared)
+            ci_head, ci_verdict = report.head_sha, ci.ci_state(report, gate.names)
     facts = landing_rules.slice_facts(
         landing_rules.Slice(units),
         raw,
@@ -279,7 +280,8 @@ def _decide(
         checks_head=head,
         checks_master=master,
         checks_passed=True,
-        ci_required=declared,
+        ci_required=gate.names,
+        ci_plan_only=gate.plan_only,
         ci_head=ci_head,
         ci_verdict=ci_verdict,
         ci_unreadable=ci_unreadable,

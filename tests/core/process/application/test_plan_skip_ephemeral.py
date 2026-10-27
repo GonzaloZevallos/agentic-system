@@ -88,6 +88,8 @@ async def test_a_plan_with_no_subtasks_heading_is_repaired_not_retried(cfg):
             "integration": "",
             "estimated_cost_usd": 20.0,
             "estimated_files": 5,
+            "ci_required": [],
+            "ci_none_reason": "The issue requires no external check.",
         },
         0.2,
         1,

@@ -2970,6 +2970,8 @@ def test_split_tracker_items_pass_the_item_checks_of_a_tech_lead_item():
         "markdown": "### Solution",
         "estimated_cost_usd": 2.0,
         "estimated_files": 0,
+        "ci_required": [],
+        "ci_none_reason": "The work is on the tracker.",
         "tracker_checklist": items,
     }
     assert schemas.validate(schemas.TechPlan, plan, {})["tracker_checklist"] == items

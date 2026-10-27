@@ -256,6 +256,11 @@ La corrida de todos los `checks` del producto, sin forma afectada, una sola vez 
 En el código se llama `full_checks`, el nodo y el registro del frontmatter.
 _Avoid_: suite final, gate completo
 
+**Chequeo exigido por el plan**:
+Un nombre de chequeo del CI que los criterios de hecho del issue necesitan en verde sobre la cabeza del pull request. Lo declara el plan (`ci_required`) y es distinto del `ci` del stack. Es condición necesaria de un merge, nunca suficiente: un CI verde que cubre sólo chequeos exigidos por el plan no decide el merge, lo deciden los chequeos locales (ADR-0045, adenda GH-371).
+En el código se llama `ci_required`, `ci_plan_only` y `ci_gate_names`.
+_Avoid_: chequeo declarado (eso es el `ci` del stack), criterio de CI
+
 **Presupuesto de chequeo**:
 Los segundos que un producto declara para un chequeo suyo. Se compara una sola vez, en el *Chequeo completo de la tarea*, contra la duración de la fila que decidió el veredicto de ese chequeo (la del reintento verde si fue un Flake; un pase reutilizado cuenta con la duración guardada; un chequeo que agotó su tiempo nunca se compara), y nunca en la puerta de entrega, la de merge ni el aterrizaje. Si un chequeo lo pasa, el sistema escribe el exceso en el registro del chequeo completo; no devuelve ni bloquea nada, y no es una fila de la tabla de hallazgos. Un producto sin presupuestos se comporta como antes.
 En el código se llama `check_budgets`, la clave del stack, y `over_budget`, el campo del registro `full_checks`.

@@ -49,6 +49,7 @@ LandingStepKind = Literal[
     "renumber",
     "land_slice",
     "diagnose",
+    "escalate",
     "none",
 ]
 """What the landing does about a refusal: `wait` (the next tick decides again), `sync_master`
@@ -60,7 +61,9 @@ ADR whose number master took and rewrite the references inside the branch's own 
 GH-229), `land_slice` (GH-297: land the approved units that apply cleanly on master as a
 slice of their own, then go on with the rest; `LandingStep.units` is the slice), `diagnose`
 (the terminal path: the landing diagnoser, then a restart; `restart_why` says why no slice
-was possible) and `none` (nothing the system can do: the human's)."""
+was possible), `escalate` (GH-371: every failing required check is also red on the base branch,
+so the task escalates to the human with no model run) and `none` (nothing the system can do: the
+human's)."""
 
 RestartWhy = Literal["single_unit", "no_clean_slice", "slice_refused", "unreadable"]
 """Why a landing that exhausted its budgets restarts instead of landing a slice (GH-297):
@@ -91,7 +94,7 @@ def run_kind_of(step: LandingStepKind | None, refusal: rules.MergeRefusal | None
             return "land_checks"
         case "fix_important":
             return "land_model"
-        case "land_slice":
+        case "land_slice" | "escalate":
             return "land_checks"
         case _:
             return "land_model"
@@ -278,6 +281,8 @@ def landing_step(
                 return step("fix_important", important_units)
             return step("file_followups_and_land")
         case "ci_failed":
+            if _red_on_base_only(facts):
+                return step("escalate")
             return step("rerun") if spent.reruns_on_head == 0 else pass_("fix", blocking_owners)
         case "checks_failed":
             if facts.failed_step == "conflict":
@@ -301,6 +306,15 @@ def landing_step(
             return exhausted()
         case "master_moved":
             return step("wait")
+
+
+def _red_on_base_only(facts: rules.MergeFacts) -> bool:
+    """Whether every failing required check is also red on the base branch (GH-371): the
+    refusal is then not the task's to fix. False without a verdict to cover or a name red on
+    the base."""
+    if not facts.ci_red_on_base or facts.ci_verdict is None or not facts.ci_verdict.failing:
+        return False
+    return {check.name for check in facts.ci_verdict.failing} <= set(facts.ci_red_on_base)
 
 
 def _sync(
@@ -590,6 +604,7 @@ def slice_facts(
     merge_failure: rules.MergeFailure | None = None,
     failed_step: presubmit.FailedStep | None = None,
     ci_required: tuple[str, ...] = (),
+    ci_plan_only: tuple[str, ...] = (),
     ci_head: str | None = None,
     ci_verdict: ci.CiVerdict | None = None,
     ci_unreadable: ci.CiUnreadable | None = None,
@@ -642,6 +657,7 @@ def slice_facts(
         merge_failure=merge_failure,
         failed_step=failed_step,
         ci_required=ci_required,
+        ci_plan_only=ci_plan_only,
         ci_head=ci_head,
         ci_verdict=ci_verdict,
         ci_unreadable=ci_unreadable,

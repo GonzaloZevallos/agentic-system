@@ -42,6 +42,12 @@ Each round, in `markdown`:
   or splitting subtasks is always a question, never an invariant: no single subtask's
   diff can break it, so nobody could check it there. Nothing this round uncovered,
   nothing to write.
+- Check the plan's `ci_required`, `ci_none_reason` and `required_paths` against the
+  issue's done criteria, and ask about every gap: a criterion that names a CI check
+  must be in `ci_required` under the job id the product's workflow uses; one that
+  demands a change to a named file must be in `required_paths`; an empty `ci_required`
+  needs a `ci_none_reason` that holds. A brief item that waits on tracker work or on a
+  fact that exists only after the pull request is a concrete way the plan fails.
 - Attack the provisional `### Estimate` the Tech Lead closes each round with: read the
   closed task documents under `.agentic/tasks/` (their `cost_usd`, how many `subtasks`
   they had, and for the newer ones their `estimate` against `actual_files`) and say

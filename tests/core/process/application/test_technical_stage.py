@@ -115,6 +115,8 @@ async def test_plan_repairs_a_markdown_missing_the_subtasks_heading(cfg):
             "integration": "",
             "estimated_cost_usd": 20.0,
             "estimated_files": 5,
+            "ci_required": [],
+            "ci_none_reason": "The issue requires no external check.",
         },
         0.3,
         2,
