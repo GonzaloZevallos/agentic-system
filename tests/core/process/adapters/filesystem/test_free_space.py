@@ -1,5 +1,5 @@
 """`StatvfsFreeSpace`: what a real volume reports, read through `os.statvfs` (GH-391).
-Only the shape is asserted on the real filesystem: no test depends on how much is free."""
+`statvfs` is always faked: no test depends on how much is free on a real volume."""
 
 import os
 
@@ -7,7 +7,11 @@ from agentic.core.process.adapters.filesystem.free_space import StatvfsFreeSpace
 from agentic.core.process.domain.scratch import SpaceReading
 
 
-def test_a_real_directory_reports_positive_bytes_and_inodes(tmp_path):
+def test_a_directory_reports_positive_bytes_and_inodes_as_a_reading(tmp_path, monkeypatch):
+    # The volume is faked: no test reads the real filesystem's free space (invariant 7),
+    # and a real read would fail on the very full disk this adapter exists to detect.
+    fake = os.statvfs_result((4096, 4096, 100, 90, 25, 20, 9, 7, 0, 255))
+    monkeypatch.setattr(os, "statvfs", lambda _path: fake)
     reading = StatvfsFreeSpace().read(tmp_path)
     assert isinstance(reading, SpaceReading)
     assert reading.free_bytes > 0 and reading.free_inodes > 0
