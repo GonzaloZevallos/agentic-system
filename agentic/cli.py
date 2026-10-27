@@ -49,6 +49,7 @@ from .core.measurement.application import dashboards as dashboards_app
 from .core.measurement.domain import (
     evaluation,
     findings_report,
+    parallel_factor,
     playbook_window,
     role_usage,
     scorecard,
@@ -62,7 +63,7 @@ from .core.process.adapters.filesystem import (
     liveness,
 )
 from .core.process.adapters.git.workspace import GitError
-from .core.process.adapters.langgraph.graph import ESCALATE
+from .core.process.adapters.langgraph.graph import ESCALATE, PIPELINE
 from .core.process.adapters.shell import EventStopFlag, inhibitor
 from .core.process.application import archive, close_issues, reflect_run, release
 from .core.process.application import perf as perfmod
@@ -1533,6 +1534,14 @@ async def _resume(
                         raise ValueError(f"{_LEGACY_DISAGREEMENT_CAUSE}\n{listed}") from exc
                     raise
                 r = resuming.prepare(task_id, paused, "document", cfg, ports, estimate=estimate)
+            elif not snapshot.interrupts and (
+                rules.resume_source(snapshot.next, crashed=True) == "document"
+            ):
+                # A crash with the pipeline pending (GH-364): its branches leave no checkpoint
+                # of their own, so the state is rebuilt from the document -- checked against
+                # git as every document seed is -- and prepared as the crash it is.
+                paused = resuming.from_document(task_id, ports)
+                r = resuming.prepare(task_id, paused, "document", cfg, ports, (PIPELINE,), estimate)
             else:
                 # No interrupt with nodes still to run: the run crashed rather than paused.
                 pending = () if snapshot.interrupts else tuple(snapshot.next)
@@ -1573,8 +1582,11 @@ async def _resume(
                 await saver.adelete_thread(task_id)
                 async with open_checkpointer(cfg, task_id) as migrated_saver:
                     migrated_app = graph.compile(checkpointer=migrated_saver)
-                    await migrated_app.aupdate_state(config, r.paused, as_node=ESCALATE)
-                    crashed = r.source == "checkpoint" and not snapshot.interrupts
+                    # A crash seeds as the node it crashed in and runs on (GH-364); a pause
+                    # seeds as if `escalate` had just run, as before.
+                    seed = PIPELINE if r.interrupted else ESCALATE
+                    await migrated_app.aupdate_state(config, r.paused, as_node=seed)
+                    crashed = r.interrupted
                     command: Command | None = None if crashed else Command(resume=r.answer())
                     resuming.announce(r, ports)
                     final = await _invoke(
@@ -1589,7 +1601,7 @@ async def _resume(
                         stop=stop,
                     )
             else:
-                crashed = r.source == "checkpoint" and not snapshot.interrupts
+                crashed = r.interrupted
                 command = None if crashed else Command(resume=r.answer())
                 resuming.announce(r, ports)
                 final = await _invoke(
@@ -2743,6 +2755,19 @@ def _print_role_usage(
         )
 
 
+def _print_parallel_factor(
+    product: str, baseline: str, tasks: list[tuple[str, scorecard.TaskFigures]]
+) -> None:
+    """How many Developer sessions ran at once over one baseline's tasks (GH-364): the
+    recorded attempts' time over the wall time they occupied, summed over the tasks. One
+    line, `n/a` when no run of the baseline carries both timestamps. Not the transcript
+    figure the issue quotes (ADR-0068); nothing is recorded for it."""
+    factor = parallel_factor.aggregate({"runs": figures.runs} for _, figures in tasks)
+    print(
+        f"parallel factor -- {product} / {baseline}: {'n/a' if factor is None else f'{factor:.4f}'}"
+    )
+
+
 async def _eval_findings(cfg: Configuration, ports: Ports, since: date, until: date) -> None:
     """`agentic eval findings --since --until`: `findings_report` over the product's task
     documents closed in the window, as Markdown. Reads documents only: no lock, no `gh`, no
@@ -2803,6 +2828,8 @@ async def _eval_compare(
     _print_scorecard(product, to, to_sc)
     v = scorecard.verdict(frm_sc, frm, to_sc, to)
     print(f"verdict: {v.outcome} ({v.reason})")
+    _print_parallel_factor(product, frm, buckets[frm])
+    _print_parallel_factor(product, to, buckets[to])
     _print_role_usage(product, frm, buckets[frm])
     _print_role_usage(product, to, buckets[to])
 

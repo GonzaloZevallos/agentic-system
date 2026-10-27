@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import dataclasses
 import threading
@@ -114,6 +115,60 @@ class ScriptedRunner:
         """Which subtask each run of `slug` worked on, in order: the shape of a wave
         without depending on how two concurrent branches interleaved."""
         return [_subtask_of(c.get("cwd")) for c in self.calls if c["slug"] == slug]
+
+
+class BlockingRunner(ScriptedRunner):
+    """A `ScriptedRunner` whose roles can wait on an `asyncio.Event` per `<slug>__<subtask>`
+    key (the subtask of the checkout the role runs in, empty for the task's own), so a test
+    decides which role of which subtask is still running while the others go on (GH-364).
+
+    `hold(key)` makes every run of that key wait until `release(key)`; `started(key)` returns
+    once a run of that key has begun; `began` and `finished` are the keys in order; `peak` is
+    the most subtask roles (those whose key names a subtask) that were running at once."""
+
+    def __init__(self, **queues: list[RawResult | Exception]):
+        super().__init__(**queues)
+        self._held: dict[str, asyncio.Event] = {}
+        self._began: dict[str, asyncio.Event] = {}
+        self.began: list[str] = []
+        self.finished: list[str] = []
+        self.on_call: Callable[[str], None] | None = None
+        self.running = 0
+        self.peak = 0
+
+    def hold(self, *keys: str) -> None:
+        for key in keys:
+            self._held.setdefault(key, asyncio.Event())
+
+    def release(self, *keys: str) -> None:
+        for key in keys:
+            self._held.setdefault(key, asyncio.Event()).set()
+
+    async def started(self, key: str, timeout: float = 20.0) -> None:
+        await asyncio.wait_for(self._began.setdefault(key, asyncio.Event()).wait(), timeout)
+
+    async def run_once(self, role: Role, prompt: str, **kwargs: Any) -> RawResult:
+        subtask = _subtask_of(kwargs.get("cwd"))
+        key = f"{role.slug}__{subtask}"
+        self.began.append(key)
+        self._began.setdefault(key, asyncio.Event()).set()
+        if self.on_call is not None:
+            self.on_call(key)
+        counted = bool(subtask)
+        if counted:
+            self.running += 1
+            self.peak = max(self.peak, self.running)
+        try:
+            if key in self._held:
+                await asyncio.wait_for(self._held[key].wait(), 20.0)
+            else:
+                await asyncio.sleep(0.01)
+            result = await super().run_once(role, prompt, **kwargs)
+            self.finished.append(key)
+            return result
+        finally:
+            if counted:
+                self.running -= 1
 
 
 def _subtask_of(cwd: Path | str | None) -> str:

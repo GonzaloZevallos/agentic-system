@@ -5286,6 +5286,65 @@ async def test_eval_compare_prints_the_per_role_table_after_an_unchanged_scoreca
     assert "1.5000" in rows[1] and rows[1].split()[1] == "2"
 
 
+def timed_run(role: str, section: str, start: str, end: str) -> dict:
+    return {
+        **compare_run(role.lower(), 0.1),
+        "role": role,
+        "section": section,
+        "started_at": f"2026-10-20T{start}.000Z",
+        "ended_at": f"2026-10-20T{end}.000Z",
+    }
+
+
+@pytest.mark.anyio
+async def test_eval_compare_prints_the_parallel_factor_of_each_baseline(tmp_path, capsys):
+    root = eval_root(tmp_path, eval_set=None)
+    # bl-a: two Developers overlapping for 5 of their 10 minutes each -> 20 min over 15.
+    write_compare_document(
+        root,
+        "GH-1",
+        "bl-a",
+        [
+            timed_run("Developer", "Developer: a", "10:00:00", "10:10:00"),
+            timed_run("Developer", "Developer: b", "10:05:00", "10:15:00"),
+        ],
+    )
+    # bl-b: one Developer, then its review, strictly serial -> 1.0 for the task; a second
+    # task with no timestamps adds nothing to either side of the ratio.
+    write_compare_document(
+        root,
+        "GH-2",
+        "bl-b",
+        [timed_run("Developer", "Developer: a", "10:00:00", "10:10:00")],
+    )
+    write_compare_document(root, "GH-3", "bl-b", [compare_run("developer", 1.0)])
+    cfg = Configuration(product_dir=root)
+
+    await cli._eval_compare(cfg, memory_ports(), "bl-a", "bl-b", None)
+
+    out = capsys.readouterr().out
+    lines = [line for line in out.splitlines() if line.startswith("parallel factor")]
+    assert lines == [
+        "parallel factor -- product / bl-a: 1.3333",
+        "parallel factor -- product / bl-b: 1.0000",
+    ]
+    # It sits after the verdict, beside the other per-baseline reads, never inside a scorecard.
+    assert out.index("verdict:") < out.index(lines[0])
+
+
+@pytest.mark.anyio
+async def test_eval_compare_says_n_a_when_a_baseline_has_no_timed_runs(tmp_path, capsys):
+    root = eval_root(tmp_path, eval_set=None)
+    write_compare_document(root, "GH-1", "bl-a", [compare_run("developer", 1.0)])
+    write_compare_document(root, "GH-2", "bl-b", [compare_run("developer", 1.0)])
+
+    await cli._eval_compare(Configuration(product_dir=root), memory_ports(), "bl-a", "bl-b", None)
+
+    out = capsys.readouterr().out
+    assert "parallel factor -- product / bl-a: n/a" in out
+    assert "parallel factor -- product / bl-b: n/a" in out
+
+
 # --- GH-295: criteria documents past the line cap are said, never refused -----------
 
 
@@ -5425,6 +5484,141 @@ def test_landing_carry_of_an_unreadable_document_carries_nothing(monkeypatch):
 
     monkeypatch.setattr(ports.documents, "load", unreadable)
     assert cli._landing_carry("GH-1", ports) == (None, "")
+
+
+class CrashedPipeline(Delivers):
+    """A graph double whose checkpoint holds a run that crashed (no interrupt, nodes still
+    to run), recording how the CLI seeded and invoked it."""
+
+    def __init__(self, values, nxt=("pipeline",)):
+        super().__init__({"id": "GH-1", "title": "t", "status": "ready_for_review"})
+        self.values, self.next = values, nxt
+        self.seeded: list[tuple[dict, str | None]] = []
+        self.invoked: list[object] = []
+
+    async def aget_state(self, config):
+        return SimpleNamespace(values=self.values, next=self.next, interrupts=())
+
+    async def aupdate_state(self, config, values, as_node=None):
+        self.seeded.append((values, as_node))
+
+    async def ainvoke(self, task, config):
+        self.invoked.append(task)
+        return self.final
+
+
+def _crash_document(ports, reviewed_head="h-a"):
+    """The document a crash in the pipeline leaves: a approved, b delivered, c and d building."""
+    ports.documents.save(
+        {
+            "id": "GH-1",
+            "title": "t",
+            "description": "d",
+            "status": "open",
+            "current_role": "Developer",
+            "cost_usd": 1.0,
+            "subtasks": {
+                "a": {"id": "a", "status": "approved", "branch": "t/a", "reviewed_head": "h-a"},
+                "b": {"id": "b", "status": "delivered", "branch": "t/b", "depends_on": ["a"]},
+                "c": {"id": "c", "status": "pending", "branch": "t/c"},
+                "d": {"id": "d", "status": "pending", "branch": "t/d"},
+            },
+        }
+    )
+    ports.workspace.existing_branches = {
+        "t/a": (reviewed_head, "base"),
+        "t/b": ("h-b", "base"),
+        "t/c": ("h-c-moved", "base"),
+        "t/d": ("h-d", "base"),
+    }
+
+
+@pytest.mark.anyio
+async def test_a_crash_in_the_pipeline_resumes_from_the_document_as_a_crash(monkeypatch, tmp_path):
+    graph = CrashedPipeline({"id": "GH-1", "title": "t", "status": "open"})
+    monkeypatch.setattr(cli, "graph", graph)
+    ports = memory_ports()
+    _crash_document(ports)
+
+    await cli._resume(
+        "GH-1",
+        Configuration(product_dir=tmp_path),
+        ports,
+        yes=True,
+        checkpointer=in_memory,
+        run_lock=FakeLock(),
+    )
+
+    [(seed, as_node)] = graph.seeded
+    assert as_node == "pipeline" and set(seed["subtasks"]) == {"a", "b", "c", "d"}
+    assert graph.invoked == [None]  # a crash: never `Command(resume=...)`, never `pause`
+    [(_, comment)] = ports.tracker.comments
+    assert comment.startswith("Resumed: pipeline, interrupted at Developer,")
+
+
+@pytest.mark.anyio
+async def test_a_dry_run_of_a_crash_in_the_pipeline_reads_the_document(
+    monkeypatch, tmp_path, capsys
+):
+    monkeypatch.setattr(cli, "graph", CrashedPipeline({"id": "GH-1", "status": "open"}))
+    ports = memory_ports()
+    _crash_document(ports)
+
+    await cli._resume(
+        "GH-1",
+        Configuration(product_dir=tmp_path),
+        ports,
+        dry_run=True,
+        checkpointer=in_memory,
+        run_lock=FakeLock(),
+    )
+
+    shown = capsys.readouterr().out
+    assert "from:      document" in shown and "resumes:   pipeline" in shown
+
+
+@pytest.mark.anyio
+async def test_a_crash_elsewhere_than_the_pipeline_still_resumes_from_the_checkpoint(
+    monkeypatch, tmp_path
+):
+    """The input the rule must not send to the document: the same crash, another node."""
+    graph = CrashedPipeline({"id": "GH-1", "title": "t", "status": "open"}, nxt=("integrate",))
+    monkeypatch.setattr(cli, "graph", graph)
+    ports = memory_ports()
+    _crash_document(ports)
+
+    await cli._resume(
+        "GH-1",
+        Configuration(product_dir=tmp_path),
+        ports,
+        yes=True,
+        checkpointer=in_memory,
+        run_lock=FakeLock(),
+    )
+
+    assert graph.seeded == [] and graph.invoked == [None]
+
+
+@pytest.mark.anyio
+async def test_a_crash_whose_approved_branch_moved_after_its_review_is_refused(
+    monkeypatch, tmp_path
+):
+    graph = CrashedPipeline({"id": "GH-1", "status": "open"})
+    monkeypatch.setattr(cli, "graph", graph)
+    ports = memory_ports()
+    _crash_document(ports, reviewed_head="h-a-moved")
+
+    with pytest.raises(cli.CannotStart, match="approved at h-a, but `t/a` is at h-a-moved"):
+        await cli._resume(
+            "GH-1",
+            Configuration(product_dir=tmp_path),
+            ports,
+            yes=True,
+            checkpointer=in_memory,
+            run_lock=FakeLock(),
+        )
+
+    assert graph.seeded == [] and graph.invoked == [] and ports.tracker.comments == []
 
 
 class _Signalling:

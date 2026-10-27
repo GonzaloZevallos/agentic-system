@@ -2,7 +2,10 @@
 escalation, with a scripted runner, the real filesystem adapters in a temporary
 product, and git and GitHub in memory."""
 
+import asyncio
+import time
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
@@ -27,6 +30,7 @@ from agentic.core.process.domain.task import INTEGRATION, WAITING_ON_HUMAN
 from agentic.shared.configuration import Configuration
 from tests.fakes import (
     REPORTS,
+    BlockingRunner,
     MemoryCommands,
     MemoryInbox,
     MemoryKnowledge,
@@ -68,6 +72,18 @@ SOLUTION = "Interview: Tech Lead efímero→Tech Lead"
 @pytest.fixture
 def config(tmp_path):
     return {"configurable": {"product_dir": str(tmp_path), "thread_id": "GH-1"}}
+
+
+def saved(documents: FilesystemTaskDocuments) -> dict:
+    """The document as last saved, for a test reading it while the graph runs: a read that
+    lands in the middle of a write (the turn writes from a worker thread) finds a truncated
+    file, and the next read finds the whole one."""
+    for _ in range(100):
+        try:
+            return documents.load("GH-1") or {}
+        except ValueError:
+            time.sleep(0.01)
+    return documents.load("GH-1") or {}
 
 
 def script_for(**queues) -> ScriptedRunner:
@@ -1463,7 +1479,13 @@ async def test_two_tasks_through_one_graph_do_not_share_what_they_spent(tmp_path
 async def test_what_one_review_found_reaches_the_next_wave_and_the_integration(config):
     """Issue #17: run 4's two integration returns were already in subtask reviews as
     "worth a remark, not a charge", and nobody downstream ever saw them. They travel now,
-    through the fan-in, which is the only place that sees every branch of a wave."""
+    through the system's turn, which writes the findings table after every termination.
+
+    With no wave barrier (GH-364) a returned `domain` restarts as soon as its own turn is
+    done, so what it sees depends on whether `api`'s review has been through a turn yet.
+    The test fixes that order: `domain`'s review is held until `api`'s remark is in the
+    saved table. This is the one existing test edited for the loop: it asserted the order
+    the barrier used to impose."""
     remark = {
         **finding(severity="important", claim="counts subscriptions twice", scope="outside"),
         "location": "revenue.py:12",
@@ -1489,7 +1511,17 @@ async def test_what_one_review_found_reaches_the_next_wave_and_the_integration(c
             tech_lead_review=[reviewed("approved")],  # the integration
         )
     )
-    final = await run_graph(script, config)
+    script = BlockingRunner(**script.queues)
+    script.hold("tech_lead_review__domain")
+    graph = compiled(script)
+    run = asyncio.create_task(graph.ainvoke(TASK, config=config))
+    documents = FilesystemTaskDocuments(Path(config["configurable"]["product_dir"]))
+    while "counts subscriptions twice" not in saved(documents).get("sections", {}).get(
+        FINDINGS, ""
+    ):
+        await asyncio.sleep(0.01)
+    script.release("tech_lead_review__domain")
+    final = await asyncio.wait_for(run, 30)
     assert final["status"] == "ready_for_review"
 
     # The ephemeral proposed; the Tech Lead adopted, and every role that builds or
