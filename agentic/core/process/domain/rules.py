@@ -960,6 +960,25 @@ def failure_reason(report: ReportedFailure) -> FailureReason:
     return "sdk"
 
 
+def space_narrowed(
+    reason: FailureReason, space: SpaceReading | None, floor_bytes: int, enospc: bool
+) -> FailureReason:
+    """`reason` narrowed to `disk_full` when the disk, not the role, broke the attempt
+    (GH-391, ADR-0069): an `ENOSPC` caught as structured data in the system's own process
+    (`enospc`), or a reading taken after the attempt broke that shows free bytes under
+    `floor_bytes` or free inodes under `INODE_FLOOR`. Derived only from those measured
+    facts, never from the error's text. `limit` is our own per-attempt cap, a fact about
+    our configuration that no disk reading outranks: it is returned unchanged, as is any
+    reason when there is no reading and no `ENOSPC`."""
+    if reason == "limit":
+        return reason
+    if enospc:
+        return "disk_full"
+    if space is not None and (space.free_bytes < floor_bytes or space.free_inodes < INODE_FLOOR):
+        return "disk_full"
+    return reason
+
+
 def max_turns_motive(max_turns: int, report: ReportedFailure) -> str:
     """The motive for an attempt the harness cut for `error_max_turns`
     (`docs/product/role-failures.md` §1; issues #69, #81): the cutoff, named first, so
@@ -2578,13 +2597,14 @@ def resume_target(state: TaskState) -> str | None:
 # and every fact it decides over arrive as arguments (README.md, 14), never a port, a
 # `subprocess` or a `Path`.
 
-# The three `FailureReason`s a pause never needed a human for (ADR-0029, extended by
-# issue #137's own `network`): the account's own quota, the provider's own server, or
-# the network down. `rules.auto_resumable` is the only reader of this tuple; the
-# scorecard's own exclusion (`core.measurement.domain.scorecard.EXTERNAL_FAILURE_
-# REASONS`) is a separate copy of the same three literals -- hexagonal keeps
-# `core.process.domain` from importing `core.measurement`, so nothing here imports it.
-EXTERNAL_REASONS: tuple[FailureReason, ...] = ("account_limit", "upstream", "network")
+# The four `FailureReason`s a pause never needed a human for (ADR-0029, extended by
+# issue #137's own `network` and GH-391's `disk_full`): the account's own quota, the
+# provider's own server, the network down, or the disk full. `rules.auto_resumable` is the
+# only reader of this tuple; the scorecard's own exclusion (`core.measurement.domain.
+# scorecard.EXTERNAL_FAILURE_REASONS`) is a separate copy of the same literals --
+# hexagonal keeps `core.process.domain` from importing `core.measurement`, so nothing
+# here imports it.
+EXTERNAL_REASONS: tuple[FailureReason, ...] = ("account_limit", "upstream", "network", "disk_full")
 
 # Minutes before each of the poller's own automatic attempts, first to last (ADR-0029's
 # addendum, issue #137): never read off an API's own "resets 7:30pm" prose. Indexed by
