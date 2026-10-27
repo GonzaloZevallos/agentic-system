@@ -162,7 +162,7 @@ El código de todas las subtareas unido en la rama de tarea y revisado por Tech 
 _Campo_: sin término de arte
 
 **Ola**:
-El conjunto de subtareas que el sistema despacha junto: cada una con su Developer y su revisión, en paralelo con las demás. Entre dos olas corre el sistema solo. Una devolución se atiende en la ola siguiente, no dentro de la misma.
+El conjunto de subtareas que el sistema despacha junto: cada una con su Developer y su revisión, en paralelo con las demás. Desde el ADR-0067 ya no hay barrera entre olas: una subtarea arranca apenas sus dependencias están aprobadas, sin esperar a las hermanas, hasta la cota `max_parallel_subtasks`. Una devolución se atiende cuando el turno del sistema, que corre solo después de cada terminación, la dejó lista. El nombre queda para el conjunto que `rules.dispatched_subtasks` considera listo en un momento dado.
 _Avoid_: lote, fan-out (el mecanismo, no el concepto)
 _Campo_: super-step — LangGraph, tomado de Pregel: los nodos que corren en paralelo son el mismo super-step. Nombra el paso del grafo, no el conjunto de subtareas
 
@@ -306,7 +306,7 @@ El commit hasta donde llegó la última revisión de una subtarea. Se guarda com
 _Campo_: sin término de arte
 
 **Integración incremental**:
-Traer cada subtarea a la rama de tarea apenas se aprueba, en vez de todas juntas al final. Lo hace el sistema, entre dos olas. Un merge que no aplica no es un fallo: queda anotado para el integrador.
+Traer cada subtarea a la rama de tarea apenas se aprueba, en vez de todas juntas al final. Lo hace el sistema, en su turno serializado después de cada terminación (ADR-0067). Un merge que no aplica no es un fallo: queda anotado para el integrador.
 _Campo_: de la integración continua, de la que toma la idea (integrar seguido y chico) y no el mecanismo
 
 **Invariante**:

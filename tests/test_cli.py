@@ -5424,3 +5424,136 @@ def test_landing_carry_of_an_unreadable_document_carries_nothing(monkeypatch):
 
     monkeypatch.setattr(ports.documents, "load", unreadable)
     assert cli._landing_carry("GH-1", ports) == (None, "")
+
+
+class CrashedPipeline(Delivers):
+    """A graph double whose checkpoint holds a run that crashed (no interrupt, nodes still
+    to run), recording how the CLI seeded and invoked it."""
+
+    def __init__(self, values, nxt=("pipeline",)):
+        super().__init__({"id": "GH-1", "title": "t", "status": "ready_for_review"})
+        self.values, self.next = values, nxt
+        self.seeded: list[tuple[dict, str | None]] = []
+        self.invoked: list[object] = []
+
+    async def aget_state(self, config):
+        return SimpleNamespace(values=self.values, next=self.next, interrupts=())
+
+    async def aupdate_state(self, config, values, as_node=None):
+        self.seeded.append((values, as_node))
+
+    async def ainvoke(self, task, config):
+        self.invoked.append(task)
+        return self.final
+
+
+def _crash_document(ports, reviewed_head="h-a"):
+    """The document a crash in the pipeline leaves: `a` approved, `b` delivered, `c` building."""
+    ports.documents.save(
+        {
+            "id": "GH-1",
+            "title": "t",
+            "description": "d",
+            "status": "open",
+            "current_role": "Developer",
+            "cost_usd": 1.0,
+            "subtasks": {
+                "a": {"id": "a", "status": "approved", "branch": "t/a", "reviewed_head": "h-a"},
+                "b": {"id": "b", "status": "delivered", "branch": "t/b", "depends_on": ["a"]},
+                "c": {"id": "c", "status": "pending", "branch": "t/c"},
+            },
+        }
+    )
+    ports.workspace.existing_branches = {
+        "t/a": (reviewed_head, "base"),
+        "t/b": ("h-b", "base"),
+        "t/c": ("h-c-moved", "base"),
+    }
+
+
+@pytest.mark.anyio
+async def test_a_crash_in_the_pipeline_resumes_from_the_document_as_a_crash(monkeypatch, tmp_path):
+    graph = CrashedPipeline({"id": "GH-1", "title": "t", "status": "open"})
+    monkeypatch.setattr(cli, "graph", graph)
+    ports = memory_ports()
+    _crash_document(ports)
+
+    await cli._resume(
+        "GH-1",
+        Configuration(product_dir=tmp_path),
+        ports,
+        yes=True,
+        checkpointer=in_memory,
+        run_lock=FakeLock(),
+    )
+
+    [(seed, as_node)] = graph.seeded
+    assert as_node == "pipeline" and set(seed["subtasks"]) == {"a", "b", "c"}
+    assert graph.invoked == [None]  # a crash: never `Command(resume=...)`, never `pause`
+    [(_, comment)] = ports.tracker.comments
+    assert comment.startswith("Resumed: pipeline, interrupted at Developer,")
+
+
+@pytest.mark.anyio
+async def test_a_dry_run_of_a_crash_in_the_pipeline_reads_the_document(
+    monkeypatch, tmp_path, capsys
+):
+    monkeypatch.setattr(cli, "graph", CrashedPipeline({"id": "GH-1", "status": "open"}))
+    ports = memory_ports()
+    _crash_document(ports)
+
+    await cli._resume(
+        "GH-1",
+        Configuration(product_dir=tmp_path),
+        ports,
+        dry_run=True,
+        checkpointer=in_memory,
+        run_lock=FakeLock(),
+    )
+
+    shown = capsys.readouterr().out
+    assert "from:      document" in shown and "resumes:   pipeline" in shown
+
+
+@pytest.mark.anyio
+async def test_a_crash_elsewhere_than_the_pipeline_still_resumes_from_the_checkpoint(
+    monkeypatch, tmp_path
+):
+    """The input the rule must not send to the document: the same crash, another node."""
+    graph = CrashedPipeline({"id": "GH-1", "title": "t", "status": "open"}, nxt=("integrate",))
+    monkeypatch.setattr(cli, "graph", graph)
+    ports = memory_ports()
+    _crash_document(ports)
+
+    await cli._resume(
+        "GH-1",
+        Configuration(product_dir=tmp_path),
+        ports,
+        yes=True,
+        checkpointer=in_memory,
+        run_lock=FakeLock(),
+    )
+
+    assert graph.seeded == [] and graph.invoked == [None]
+
+
+@pytest.mark.anyio
+async def test_a_crash_whose_approved_branch_moved_after_its_review_is_refused(
+    monkeypatch, tmp_path
+):
+    graph = CrashedPipeline({"id": "GH-1", "status": "open"})
+    monkeypatch.setattr(cli, "graph", graph)
+    ports = memory_ports()
+    _crash_document(ports, reviewed_head="h-a-moved")
+
+    with pytest.raises(cli.CannotStart, match="approved at h-a, but `t/a` is at h-a-moved"):
+        await cli._resume(
+            "GH-1",
+            Configuration(product_dir=tmp_path),
+            ports,
+            yes=True,
+            checkpointer=in_memory,
+            run_lock=FakeLock(),
+        )
+
+    assert graph.seeded == [] and graph.invoked == [] and ports.tracker.comments == []

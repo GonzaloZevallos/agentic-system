@@ -60,7 +60,7 @@ from .core.process.adapters.filesystem import (
     liveness,
 )
 from .core.process.adapters.git.workspace import GitError
-from .core.process.adapters.langgraph.graph import ESCALATE
+from .core.process.adapters.langgraph.graph import ESCALATE, PIPELINE
 from .core.process.adapters.shell import inhibitor
 from .core.process.application import archive, close_issues, reflect_run, release
 from .core.process.application import perf as perfmod
@@ -1401,6 +1401,14 @@ async def _resume(
                         raise ValueError(f"{_LEGACY_DISAGREEMENT_CAUSE}\n{listed}") from exc
                     raise
                 r = resuming.prepare(task_id, paused, "document", cfg, ports, estimate=estimate)
+            elif not snapshot.interrupts and (
+                rules.resume_source(snapshot.next, crashed=True) == "document"
+            ):
+                # A crash with the pipeline pending (GH-364): its branches leave no checkpoint
+                # of their own, so the state is rebuilt from the document -- checked against
+                # git as every document seed is -- and prepared as the crash it is.
+                paused = resuming.from_document(task_id, ports)
+                r = resuming.prepare(task_id, paused, "document", cfg, ports, (PIPELINE,), estimate)
             else:
                 # No interrupt with nodes still to run: the run crashed rather than paused.
                 pending = () if snapshot.interrupts else tuple(snapshot.next)
@@ -1441,8 +1449,11 @@ async def _resume(
                 await saver.adelete_thread(task_id)
                 async with open_checkpointer(cfg, task_id) as migrated_saver:
                     migrated_app = graph.compile(checkpointer=migrated_saver)
-                    await migrated_app.aupdate_state(config, r.paused, as_node=ESCALATE)
-                    crashed = r.source == "checkpoint" and not snapshot.interrupts
+                    # A crash seeds as the node it crashed in and runs on (GH-364); a pause
+                    # seeds as if `escalate` had just run, as before.
+                    seed = PIPELINE if r.interrupted else ESCALATE
+                    await migrated_app.aupdate_state(config, r.paused, as_node=seed)
+                    crashed = r.interrupted
                     command: Command | None = None if crashed else Command(resume=r.answer())
                     resuming.announce(r, ports)
                     final = await _invoke(
@@ -1457,7 +1468,7 @@ async def _resume(
                         stop=stop,
                     )
             else:
-                crashed = r.source == "checkpoint" and not snapshot.interrupts
+                crashed = r.interrupted
                 command = None if crashed else Command(resume=r.answer())
                 resuming.announce(r, ports)
                 final = await _invoke(
