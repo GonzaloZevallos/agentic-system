@@ -312,6 +312,7 @@ def run_checks(
         witness=gate.witness_result if gate is not None else None,
         failed_step=failed_step,
         setup_failure=setup_failure,
+        row_master=master,
     )
     previous = raw.get("merge_checks")
     if only is not None and isinstance(previous, Mapping):

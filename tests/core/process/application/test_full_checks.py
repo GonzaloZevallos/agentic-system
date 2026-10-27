@@ -88,6 +88,14 @@ async def test_a_green_run_writes_a_passed_record_and_no_rows():
     assert ports.documents.saved
 
 
+async def test_a_passed_record_names_no_master_on_any_result():
+    """Invariant 6: the run's rows are not `merge_checks` rows, so none carries a master."""
+    patch = await full_checks(state_of(), CFG, ports_of())
+    assert patch["full_checks"]["results"]
+    assert all("master" not in row for row in patch["full_checks"]["results"])
+    assert "master" not in patch["full_checks"]
+
+
 async def test_a_green_run_of_a_later_version_follows_the_previous_record():
     previous = {
         "version": 2,
