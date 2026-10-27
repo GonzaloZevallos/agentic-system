@@ -11,9 +11,14 @@ from pathlib import Path
 
 import pytest
 
-from agentic.core.process.adapters.shell import ShellCommands, ShellReaper
+from agentic.core.process.adapters.shell import (
+    EventStopFlag,
+    NullStopFlag,
+    ShellCommands,
+    ShellReaper,
+)
 from agentic.core.process.adapters.shell import commands as commands_module
-from agentic.core.process.application.ports import CommandResult
+from agentic.core.process.application.ports import CommandResult, RunStopped, StopFlag
 from agentic.core.process.domain import reaping
 from agentic.core.process.domain.reaping import ReapedProcess
 from agentic.core.process.domain.stall import ChildActivity
@@ -43,7 +48,7 @@ def checkout(worktrees: Path) -> Path:
 
 @pytest.fixture
 def commands(worktrees: Path) -> ShellCommands:
-    return ShellCommands(PRODUCT, ShellReaper(PRODUCT, worktrees))
+    return ShellCommands(PRODUCT, ShellReaper(PRODUCT, worktrees), NullStopFlag())
 
 
 class _NoopReaper:
@@ -174,7 +179,7 @@ def test_an_unmarked_escapee_outside_the_worktrees_root_is_left_alone(
 def test_without_a_reaper_the_setsid_escapee_outlives_the_check(worktrees, checkout, monkeypatch):
     """Control: what the reaper changes. It is reaped by the fixture teardown."""
     monkeypatch.setattr(commands_module, "_DRAIN_S", 0.5)  # the escapee holds the pipe
-    commands = ShellCommands(PRODUCT, _NoopReaper())
+    commands = ShellCommands(PRODUCT, _NoopReaper(), NullStopFlag())
     pidfile = checkout / "pid"
     result, alive, fd = _run_watching(commands, checkout, _escapee(pidfile, SETSID), pidfile)
     try:
@@ -231,3 +236,133 @@ def test_a_command_past_its_time_is_stopped_with_its_children(commands, checkout
 def test_output_that_is_not_utf8_is_kept_readable(commands, checkout):
     result = commands.run(checkout, "printf 'bad \\377 byte'", timeout_s=10)
     assert result.passed and result.output.startswith("bad ")
+
+
+class _FlipsAfterFirstLook:
+    """A flag that is clear the first time it is read and set from then on: the stop that
+    lands between the check's pre-launch look and the launch itself."""
+
+    def __init__(self) -> None:
+        self.looks = 0
+
+    def is_set(self) -> bool:
+        self.looks += 1
+        return self.looks > 1
+
+    def set(self) -> None:
+        self.looks = 2
+
+
+def _in_thread(commands: ShellCommands, cwd: Path, command: str, timeout_s: float):
+    """Runs `commands.run` on a thread; returns the thread and a box with what it ended in."""
+    box: list[object] = []
+
+    def target() -> None:
+        try:
+            box.append(commands.run(cwd, command, timeout_s))
+        except BaseException as exc:  # the test reads what escaped, RunStopped included
+            box.append(exc)
+
+    thread = threading.Thread(target=target)
+    thread.start()
+    return thread, box
+
+
+def _pid_of(pidfile: Path) -> int:
+    deadline = time.monotonic() + 10
+    while not (pidfile.exists() and pidfile.read_text().strip()):
+        assert time.monotonic() < deadline, "the check never wrote its pid"
+        time.sleep(0.02)
+    return int(pidfile.read_text())
+
+
+def _stoppable(worktrees: Path, stop: StopFlag) -> ShellCommands:
+    return ShellCommands(PRODUCT, ShellReaper(PRODUCT, worktrees), stop)
+
+
+def test_a_stop_during_a_check_raises_run_stopped_and_leaves_nothing_alive(worktrees, checkout):
+    """The stop handler's whole move: mark the flag, reap the checks' scope. The run raises
+    `RunStopped` instead of returning the -15 result of the killed command."""
+    stop = EventStopFlag()
+    commands = _stoppable(worktrees, stop)
+    pidfile = checkout / "pid"
+    thread, box = _in_thread(commands, checkout, f"echo $$ > {pidfile}; exec {SLEEP} 300", 60)
+    fd = os.pidfd_open(_pid_of(pidfile))
+    try:
+        assert not _gone(fd)
+        stop.set()
+        ShellReaper(PRODUCT, worktrees).reap_run(reaping.CHECK_TASK, os.getpid())
+        thread.join(timeout=15)
+        assert not thread.is_alive()
+        assert len(box) == 1 and isinstance(box[0], RunStopped)
+        assert _gone(fd, 5)
+    finally:
+        _kill(fd)
+        os.close(fd)
+
+
+def test_a_stop_flagged_before_the_call_launches_nothing(worktrees, checkout):
+    stop = EventStopFlag()
+    stop.set()
+    with pytest.raises(RunStopped):
+        _stoppable(worktrees, stop).run(checkout, f"touch {checkout}/launched", timeout_s=10)
+    assert not (checkout / "launched").exists()
+
+
+def test_a_stop_between_the_look_and_the_launch_reaps_the_check_it_just_started(
+    worktrees, checkout
+):
+    """The race the second look closes: the signal's reap ran before the `Popen`, found
+    nothing, and the command would otherwise run on."""
+    pidfile = checkout / "pid"
+    commands = _stoppable(worktrees, _FlipsAfterFirstLook())
+    with pytest.raises(RunStopped):
+        commands.run(checkout, f"echo $$ > {pidfile}; exec {SLEEP} 300", timeout_s=60)
+    if pidfile.exists() and pidfile.read_text().strip():
+        try:
+            fd = os.pidfd_open(int(pidfile.read_text()))
+        except ProcessLookupError:
+            return
+        try:
+            assert _gone(fd, 5)
+        finally:
+            _kill(fd)
+            os.close(fd)
+
+
+def test_a_stop_that_meets_the_timeout_is_a_stop_not_a_timed_out_result(worktrees, checkout):
+    stop = EventStopFlag()
+    commands = _stoppable(worktrees, stop)
+    pidfile = checkout / "pid"
+    thread, box = _in_thread(commands, checkout, f"echo $$ > {pidfile}; exec {SLEEP} 300", 1.0)
+    fd = os.pidfd_open(_pid_of(pidfile))
+    try:
+        stop.set()  # no reap: the timeout kills the check and the flag is read after
+        thread.join(timeout=30)
+        assert len(box) == 1 and isinstance(box[0], RunStopped)
+        assert _gone(fd, 5)
+    finally:
+        _kill(fd)
+        os.close(fd)
+
+
+def test_a_check_that_ends_by_itself_after_the_stop_is_still_a_stop(worktrees, checkout):
+    """No `CommandResult` is returned once the flag is set, whatever the command answered."""
+    stop = EventStopFlag()
+    commands = _stoppable(worktrees, stop)
+    pidfile = checkout / "pid"
+    thread, box = _in_thread(commands, checkout, f"echo $$ > {pidfile}; {SLEEP} 1; exit 0", 60)
+    _pid_of(pidfile)
+    stop.set()
+    thread.join(timeout=15)
+    assert len(box) == 1 and isinstance(box[0], RunStopped)
+
+
+def test_the_null_flag_never_stops_a_check_even_when_set(worktrees, checkout):
+    flag = NullStopFlag()
+    flag.set()
+    assert not flag.is_set()
+    result = _stoppable(worktrees, flag).run(checkout, "echo hi; exit 3", timeout_s=10)
+    assert result == CommandResult(3, "hi\n", timed_out=False)
+    timed_out = _stoppable(worktrees, flag).run(checkout, f"{SLEEP} 30", timeout_s=0.5)
+    assert timed_out.timed_out

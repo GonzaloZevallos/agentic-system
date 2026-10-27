@@ -12,7 +12,7 @@ from typing import Any
 
 from agentic.core.knowledge.domain import knowledge
 from agentic.core.process.adapters.github.tracker import pull_request_number
-from agentic.core.process.adapters.shell import ShellCommands, ShellReaper
+from agentic.core.process.adapters.shell import NullStopFlag, ShellCommands, ShellReaper
 from agentic.core.process.application.limits import RunLimits
 from agentic.core.process.application.ports import (
     AddedAdr,
@@ -1466,6 +1466,19 @@ class FakePerfRunner:
         return self.script.pop(0) if self.script else Run(None, 0, False, None, None)
 
 
+class FakeStopFlag:
+    """GH-355: the run's stop flag, marked by `set()` and read by `is_set()`."""
+
+    def __init__(self) -> None:
+        self.marked = False
+
+    def is_set(self) -> bool:
+        return self.marked
+
+    def set(self) -> None:
+        self.marked = True
+
+
 class FakePerfLock:
     """GH-318: `acquire` answers `available` and counts; `release` counts."""
 
@@ -1977,7 +1990,9 @@ def ruled(
 def real_commands() -> ShellCommands:
     """`ShellCommands` over real bash with a real reaper whose worktrees root reaches
     nothing: each check reaps its own mark, and no cwd reap can match."""
-    return ShellCommands("tests", ShellReaper("tests", Path("/nonexistent/worktrees")))
+    return ShellCommands(
+        "tests", ShellReaper("tests", Path("/nonexistent/worktrees")), NullStopFlag()
+    )
 
 
 # The texts (README.md, 4): Tech Writer writes a plain `CopyDraft`, its review a `CopyReview`.
