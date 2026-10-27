@@ -1,4 +1,4 @@
-"""Gate duration as concurrency grows (GH-361, ADR-0066): the table that measures the check
+"""Gate duration as concurrency grows (GH-361, ADR-0069): the table that measures the check
 scheduler, the same way before and after it.
 
 Usage: `python scripts/gate_concurrency.py [--transcripts DIR] [--documents DIR]`. The script
