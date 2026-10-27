@@ -51,6 +51,18 @@ def test_the_needs_human_label_is_necesita_humano_without_a_reason_to_assert():
     assert (got.etapa, got.bloqueo) == ("Necesita humano", None)
 
 
+def test_the_precedence_puts_closed_over_live_over_the_needs_human_label():
+    labels = AGENTIC | {"needs-human"}
+    assert board.card(_facts(labels=labels, live=True)).etapa == "Corriendo"
+    assert board.card(_facts(labels=labels, live=True, closed=True)).etapa == "Hecha"
+
+
+def test_the_needs_human_label_takes_the_reason_the_document_holds():
+    doc = _doc("developing", escalated="stuck on a choice\nmore")
+    got = board.card(_facts(labels=AGENTIC | {"needs-human"}, document=doc))
+    assert (got.etapa, got.bloqueo) == ("Necesita humano", "stuck on a choice")
+
+
 def test_a_paused_task_with_no_live_process_is_trabada_with_a_neutral_text():
     got = board.card(_facts(document=_doc("developing")))
     assert (got.etapa, got.bloqueo) == ("Trabada", "sin proceso vivo: retomar o esperar cupo")
