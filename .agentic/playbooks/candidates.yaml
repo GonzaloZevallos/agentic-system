@@ -749,3 +749,23 @@ candidates:
   sources:
   - finding
   added_at: '2026-10-27T15:52:57.174+00:00'
+- slug: developer
+  category: plan-invariant
+  lesson: Before you deliver, re-read each plan invariant and check every test and wiring change against it, for example a test that reads real system state, or a task key that is never passed down to the composed adapter.
+  confidence: medium
+  seen_in:
+  - GH-391
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-27T21:08:39.243+00:00'
+- slug: developer
+  category: spec-behaviour
+  lesson: When the brief lists states or cases (such as merged, closed, discarded, split), handle each one in the code and seed a test for each, including the fallback the brief names for unreadable data.
+  confidence: medium
+  seen_in:
+  - GH-391
+  sources:
+  - finding
+  - return
+  added_at: '2026-10-27T21:08:39.243+00:00'

@@ -323,3 +323,13 @@ tasks:
       - GH-371
   GH-381@review:
     cost_usd: 0.0595
+  GH-391@review:
+    cost_usd: 0.1691
+    applied:
+    - op: bump
+      slug: developer
+      category: standard-typing-silenced
+      lesson: ''
+      item_id: developer-3
+      tasks:
+      - GH-391
