@@ -160,9 +160,7 @@ def merge_task(
         # refusal ahead of the checks has ruled the pull request out and the answer would
         # change the decision.
         if head is not None and rules.gain_probe_wanted(facts):
-            covered = _masters_covered(
-                ports, document, head, master, base, touched, globs, gains
-            )
+            covered = _masters_covered(ports, document, head, master, base, touched, globs, gains)
             facts = replace(facts, masters_covered=covered)
         return facts
 

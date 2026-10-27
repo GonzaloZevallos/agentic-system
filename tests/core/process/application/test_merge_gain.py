@@ -259,3 +259,51 @@ def test_the_last_look_at_master_still_refuses_a_covered_merge_when_master_moved
     result = world.merge()
     assert (result.kind, result.reason) == ("refused", "master_moved")
     assert "auto_merge_head" not in world.doc()
+
+
+def test_the_runs_own_full_checks_pass_is_reused_by_the_merge_gate_when_the_tree_is_the_same():
+    """Point 2 of GH-353, through ADR-0065: master has not moved since the base, so the merged
+    tree is the head's; every `merge_checks` row is the `full_checks` pass, reused, and the
+    `full_checks` result is not itself read as a `merge_checks` record."""
+    import anyio
+
+    from agentic.core.process.application.full_checks import full_checks
+    from agentic.core.process.domain.task import INTEGRATION
+    from tests.fakes import MemoryCheckResults
+
+    checks = {"tests": "pytest", "lint": "ruff check ."}
+    store, commands = MemoryCheckResults(), MemoryCommands()
+    ports = memory_ports(
+        tracker=MemoryTracker(),
+        stack=MemoryStack(checks=checks, delivery_checks=("tests",)),
+        commands=commands,
+        check_results=store,
+    )
+    cfg = Configuration(product_dir=ports.workspace.ROOT)
+    subtask = {
+        "id": INTEGRATION,
+        "title": "integration",
+        "brief": "b",
+        "seams": ["s"],
+        "depends_on": [],
+        "status": "approved",
+        "branch": "agentic/GH-7",
+        "base": "b",
+    }
+    state = {"id": "GH-7", "title": "t", "description": "d", "type": "feature"}
+    state |= {"sections": {"PM": "### Consolidated definition\n\nx"}, "task_head": "base"}
+    state["subtasks"] = {INTEGRATION: subtask}
+    ports.workspace.trees[ports.workspace.ROOT / "GH-7"] = "tree:integrated"
+    patch = anyio.run(full_checks, state, cfg, ports)
+    assert patch["full_checks"]["passed"] is True
+    assert len(commands.ran) == 2
+    ports.documents.save({"id": "GH-7", "status": "ready_for_review", **patch})
+    ports.workspace.trees[ports.workspace.checkout_path(merge._name("GH-7"))] = "tree:integrated"
+    merge.run_checks("GH-7", {}, HEAD, NEW, "base", cfg, ports, None, lambda _: None)
+    assert len(commands.ran) == 2
+    record = ports.documents.load("GH-7")["merge_checks"]
+    assert [(row["name"], row.get("reused"), row["master"]) for row in record["checks"]] == [
+        ("tests", True, NEW),
+        ("lint", True, NEW),
+    ]
+    assert "master" not in ports.documents.load("GH-7")["full_checks"]
