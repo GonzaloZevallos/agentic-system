@@ -21,7 +21,7 @@ from typing import Literal, cast, get_type_hints
 
 from agentic.shared.configuration import Configuration
 
-from ..domain import rules
+from ..domain import document, rules
 from ..domain.task import TaskState, apply
 from .archive import STARTED_OVER
 from .deliver import READY
@@ -37,7 +37,7 @@ from .poll import (
     RETAKEN,
     RETAKEN_AFTER_CRASH,
 )
-from .ports import Ports, Workspace
+from .ports import GitError, Ports, Workspace
 from .run_role import task_cap
 from .tracker_only import TRACKER_WORK
 
@@ -236,6 +236,8 @@ def prepare(
                 f"{task_id}: {pair} hit its return limit; decide in comments on the issue "
                 "what the next attempt must do, then resume"
             )
+        owed = _owed_publication(task_id, paused, source, cfg, ports)
+        paused = apply(paused, {"publish_owed": owed})
         resumed = apply(paused, rules.resumed(paused, decision, estimate))
         if paused.get("escalation_class") == "estimate":
             _refuse_spent_estimate(task_id, resumed, paused.get("cost_usd", 0.0))
@@ -264,6 +266,37 @@ def prepare(
         interrupted=bool(pending),
         estimate=estimate,
     )
+
+
+def _owed_publication(
+    task_id: str, paused: TaskState, source: Source, cfg: Configuration, ports: Ports
+) -> str | None:
+    """The `publish_owed` a resume writes (GH-373): the approved head a stopped run never
+    published, from three facts read through the workspace on the product's root checkout --
+    whether the remote holds it, and whether the task branch is at it or differs only in the
+    task document. Only a task seeded from its document is asked (the checkpoint knows where
+    it stopped), and never a worktree or a setup is made to find out: `rules` decides, this
+    only reads. A read that fails is its own error, a retry and never a fresh start."""
+    candidate = rules.publication_candidate(paused) if source == "document" else None
+    if candidate is None:
+        return None
+    root, branch = cfg.product_dir, rules.task_branch(task_id)
+    try:
+        tip = ports.workspace.remote_tip(root, branch)
+        published = tip is not None and ports.workspace.is_ancestor(root, candidate, tip)
+        head = ports.workspace.branch_head(branch)
+        at_head = head is not None and (
+            rules.same_commit(head, candidate)
+            or not ports.workspace.differs_outside(
+                root, candidate, head, document.relative_path(task_id).as_posix()
+            )
+        )
+    except (GitError, ValueError) as failed:
+        raise ValueError(
+            f"{task_id}: approved head {candidate[:7]} could not be checked against origin: "
+            f"retry ({failed})"
+        ) from failed
+    return rules.owed_publication(paused, published, at_head)
 
 
 def _fit_question(task_id: str, paused: TaskState) -> str:
