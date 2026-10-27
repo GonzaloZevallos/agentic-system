@@ -62,6 +62,14 @@ still verify each invariant against the diff yourself. It may be cited as a find
 - A `Not mapped` number is unverified by the Developer: check it as you would without a
   map.
 
+The test-pyramid rule the Developer works under, word for word:
+
+Test at the seams the plan agrees for the subtask; a new test file outside them, or at a slower seam than the plan names for that behaviour, needs one line in the delivery's markdown saying why the agreed seam cannot show it.
+
+Under this arm a new test file outside the brief's seams with no such reason line is not
+reported: it is an `observation`, which this arm does not carry. A seam the plan itself
+names, broken, is reported as `blocking`, category `standard-seams`.
+
 Then read `## Tech Lead: findings`. A row whose `scope` is `plan`, or that came from
 another subtask, is a thing this branch may repeat: check whether it does, and if it
 does, it is a finding of yours, in your own words, with your own evidence. A row this

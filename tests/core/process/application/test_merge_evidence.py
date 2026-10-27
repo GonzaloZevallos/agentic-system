@@ -60,6 +60,8 @@ def test_one_failing_check_is_named_with_its_tail_in_the_record_the_log_and_the_
     record = _record(ports)
     assert record["passed"] is False and record["failed_step"] == "checks"
     on = record["master"]  # each entry names the master it ran on
+    for entry in record["checks"]:
+        assert isinstance(entry.pop("duration_s"), float)  # a measured figure, never pinned
     assert record["checks"] == [
         {"name": "lint", "passed": True, "master": on},
         {

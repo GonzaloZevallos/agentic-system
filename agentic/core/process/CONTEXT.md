@@ -256,6 +256,12 @@ La corrida de todos los `checks` del producto, sin forma afectada, una sola vez 
 En el código se llama `full_checks`, el nodo y el registro del frontmatter.
 _Avoid_: suite final, gate completo
 
+**Presupuesto de chequeo**:
+Los segundos que un producto declara para un chequeo suyo. Se compara una sola vez, en el *Chequeo completo de la tarea*, contra la duración de la fila que decidió el veredicto de ese chequeo (la del reintento verde si fue un Flake; un pase reutilizado cuenta con la duración guardada; un chequeo que agotó su tiempo nunca se compara), y nunca en la puerta de entrega, la de merge ni el aterrizaje. Si un chequeo lo pasa, el sistema escribe el exceso en el registro del chequeo completo; no devuelve ni bloquea nada, y no es una fila de la tabla de hallazgos. Un producto sin presupuestos se comporta como antes.
+En el código se llama `check_budgets`, la clave del stack, y `over_budget`, el campo del registro `full_checks`.
+_Avoid_: límite de tiempo (el *timeout* de un chequeo corta una corrida; el presupuesto sólo mide), presupuesto por nivel (el tiempo de pared de un nivel no es la suma de sus chequeos)
+_Campo_: performance budget — web.dev y Lighthouse CI, un tope declarado que una corrida mide; acá el tope es del tiempo de un chequeo de la suite
+
 **Resultado reutilizable**:
 El resultado de un chequeo que pasó, guardado bajo el nombre del chequeo, su comando exacto, el árbol (`HEAD^{tree}`) de un checkout limpio sobre el que corrió y una huella de su entorno (comandos de setup, versión de stage0, presupuesto). Cualquier puerta, de entrega, de merge o de aterrizaje, que pida el mismo chequeo con la misma clave toma ese pase en vez de correrlo de nuevo. Sólo se guardan pases, sobre árbol limpio, sin que el entorno haya derivado desde el setup, y valen 24 h; un fallo nunca se reutiliza, porque puede ser flaky. Lo firma un secreto de la máquina: una entrada sin firma válida es como si no existiera. Una fila de reintento (`rerun: true`) nunca se guarda: el primer intento falló, así que de ese chequeo no queda nada.
 En el código se llama `check_key` y `env_drifted` (dominio, `domain/check_results.py`), `CheckResults`, el port, y `FilesystemCheckResults`, el almacén; una fila reutilizada lleva `reused: true`.

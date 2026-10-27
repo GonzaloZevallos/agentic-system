@@ -14,6 +14,7 @@ and nothing else, and the fan-in goes on."""
 
 from __future__ import annotations
 
+import math
 import time
 from typing import Any
 
@@ -83,6 +84,12 @@ async def full_checks(state: TaskState, cfg: Configuration, ports: Ports) -> Tas
         flaked = {entry["name"] for entry in record["results"] if entry.get("flake")}
         shown = [_shown(name, reused, flaked) for name in declared]
         text = f"Passed on `{head}`: {', '.join(shown)}."
+        if breaches := presubmit.budget_breaches(gate.results, ports.stack.check_budgets(base)):
+            # A record and a sentence, never a return: a slow suite is not a failed one.
+            record["over_budget"] = [
+                {**b, "duration_s": _shown_up(b["duration_s"])} for b in breaches
+            ]
+            text += f" {_over_budget_sentence(record['over_budget'])}"
     else:
         patch = rules.full_checks_return(state, record, cfg.max_changes_requested_per_pair)
         text = text or f"Failed on `{head}`: no check output was recorded."
@@ -110,6 +117,22 @@ def _record(
     return record
 
 
+def _shown_up(seconds: float) -> float:
+    """A breach's duration to a tenth, rounded up: the verdict compared the raw figure, so
+    10.04s against a 10s budget must not be written as `10.0s / 10.0s`, which reads as no
+    breach."""
+    return math.ceil(round(seconds * 10, 6)) / 10
+
+
+def _over_budget_sentence(breaches: list[presubmit.BudgetBreach]) -> str:
+    """`Over budget: <name> <N>s / <M>s, ...`: declared names and numbers only."""
+    return (
+        "Over budget: "
+        + ", ".join(f"{b['name']} {b['duration_s']}s / {b['budget_s']}s" for b in breaches)
+        + "."
+    )
+
+
 def _shown(name: str, reused: set[str], flaked: set[str]) -> str:
     """A check in the passing section: a reused one says so, and a flake says `flake` (red
     on its first run, green on the one rerun), never plain passed (ADR-0066)."""
@@ -120,7 +143,8 @@ def _shown(name: str, reused: set[str], flaked: set[str]) -> str:
 def _without_output(entries: list[FullCheckEntry]) -> list[FullCheckEntry]:
     """The name and verdict of each check: the record holds no command output (the `tail` the
     merge record keeps is free text); the `Full checks` section is where it is read. A reused
-    row keeps its `reused: true` (ADR-0065) and a flaked one its `flake: true` (ADR-0066)."""
+    row keeps its `reused: true` (ADR-0065) and a flaked one its `flake: true` (ADR-0066); a
+    check with a sample keeps its `duration_s`, the number `check_durations` summed."""
     kept: list[FullCheckEntry] = []
     for entry in entries:
         row: FullCheckEntry = {"name": entry["name"], "passed": entry["passed"]}
@@ -128,6 +152,8 @@ def _without_output(entries: list[FullCheckEntry]) -> list[FullCheckEntry]:
             row["reused"] = True
         if entry.get("flake"):
             row["flake"] = True
+        if "duration_s" in entry:
+            row["duration_s"] = entry["duration_s"]
         kept.append(row)
     return kept
 

@@ -665,6 +665,31 @@ def test_a_stack_with_a_rerun_form_passes_preflight(stage0):
     preflight(Configuration(product_dir=PRODUCT), replace(ports, stack=stack_))
 
 
+class BrokenCheckBudgetsStack(MemoryStack):
+    """A stack whose base declares `check_budgets` with no `delivery_checks`, read by the
+    real domain function, so the message is the one a product would see."""
+
+    def check_budgets(self, revision: str) -> dict[str, float]:
+        return stack.check_budgets(
+            {"checks": {"tests": "pytest"}, "check_budgets": {"tests": 30}}, "stack.yaml"
+        )
+
+
+def test_a_broken_check_budgets_refuses_before_spending_and_at_a_tasks_base(stage0):
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    broken = replace(ports, stack=BrokenCheckBudgetsStack())
+    with pytest.raises(ValueError, match=r"`check_budgets` requires `delivery_checks`"):
+        preflight(Configuration(product_dir=PRODUCT), broken)
+    with pytest.raises(ValueError, match=r"`check_budgets` requires `delivery_checks`"):
+        declared_stack(broken, "abc123")
+
+
+def test_a_stack_with_check_budgets_passes_preflight(stage0):
+    ports = ports_where(**{str(stage0): "/r/.git", str(PRODUCT): "/other/.git"})
+    stack_ = MemoryStack(delivery_checks=("tests",), check_budgets={"tests": 30.0})
+    preflight(Configuration(product_dir=PRODUCT), replace(ports, stack=stack_))
+
+
 def test_a_refused_merge_inert_glob_refuses_before_spending(stage0):
     """`*` would whitelist every path; the loader refuses it, and preflight reports it at
     load instead of leaving the merge gate to read it as "not covered" (GH-353)."""

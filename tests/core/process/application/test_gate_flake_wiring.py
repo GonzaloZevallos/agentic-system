@@ -99,6 +99,7 @@ def test_a_flake_at_the_merge_gate_is_recorded_as_a_flake_then_filed_at_the_deci
     assert result.kind == "merged"
     flaked = {**document["merge_checks"]["checks"][-1]}
     assert flaked.pop("master") == document["merge_checks"]["master"]
+    assert isinstance(flaked.pop("duration_s"), float)
     assert flaked == {"name": "tests", "passed": True, "flake": True}
     # The head the gate ran on: the checkout of the pull request's head merged with master.
     assert document["flakes"] == [{"check": "tests", "head": "base", "gate": "merge", "tests": []}]

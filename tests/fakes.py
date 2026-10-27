@@ -285,6 +285,7 @@ class MemoryStack:
         delivery_checks: tuple[str, ...] = (),
         rerun_checks: dict[str, RerunForm] | None = None,
         merge_inert: tuple[str, ...] = (),
+        check_budgets: dict[str, float] | None = None,
     ) -> None:
         self.declared = {"tests": "pytest"} if checks is None else checks
         self.declared_setup = {} if setup is None else setup
@@ -326,6 +327,8 @@ class MemoryStack:
         self.declared_delivery_checks = delivery_checks
         # Empty is a product with no failed-tests-only form (ADR-0066), the gate of today.
         self.declared_rerun_checks = {} if rerun_checks is None else rerun_checks
+        # Empty is a product with no check budget (GH-365): every verdict of today.
+        self.declared_check_budgets = {} if check_budgets is None else check_budgets
         # Empty is a product that declares no `merge_inert`: the merge gate of today.
         self.declared_merge_inert = merge_inert
         # A text that makes `merge_inert` raise it as a `ValueError`, the way a broken key does.
@@ -372,6 +375,10 @@ class MemoryStack:
     def rerun_checks(self, revision: str) -> dict[str, RerunForm]:
         # Not tracked in `revisions` either, `witness`'s own reason.
         return self.declared_rerun_checks
+
+    def check_budgets(self, revision: str) -> dict[str, float]:
+        # Not tracked in `revisions` either, `witness`'s own reason.
+        return self.declared_check_budgets
 
     def merge_inert(self, revision: str) -> tuple[str, ...]:
         # Not tracked in `revisions` either, `witness`'s own reason.
