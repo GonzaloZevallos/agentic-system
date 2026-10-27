@@ -22,6 +22,7 @@ from typing import Any, Literal, get_args, get_origin
 
 from agentic.core.process.domain import roles, rules
 from agentic.core.process.domain.landing import FOLLOWUP_TITLE_PREFIX
+from agentic.core.process.domain.returns import is_return
 from agentic.core.process.domain.schemas import TaskType
 from agentic.core.process.domain.task import (
     ChangeCategory,
@@ -278,11 +279,7 @@ def _returns_by_category(document: Mapping[str, Any]) -> dict[str, float]:
     """The categories of `change_history`, without the landing's own reopens (the same
     rule `metrics.changes_by_category` follows), so the parts sum to `returns` whenever
     the history is complete."""
-    history = (
-        e.get("category")
-        for e in _entries(document.get("change_history"))
-        if e.get("by") != "landing"
-    )
+    history = (e.get("category") for e in _entries(document.get("change_history")) if is_return(e))
     return _counts(history, "returns")
 
 
