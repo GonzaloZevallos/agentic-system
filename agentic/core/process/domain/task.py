@@ -950,6 +950,11 @@ class TaskState(TaskInput, total=False):
     # `PerfScenario` dumped; absent or empty when not convened. The only source of
     # "convened": never the branch's stack.
     performance: list[dict[str, Any]]
+    # The CI check names the plan says the issue's done criteria need green on the pull
+    # request head, and the paths of which the integrated diff must touch one (GH-371).
+    # Absent in a document written before, which reads as empty.
+    ci_required: list[str]
+    required_paths: list[str]
     # What the plan says has to be done to make the subtasks work together beyond
     # merging them; empty when merging is enough and no integrator runs.
     integration_brief: str

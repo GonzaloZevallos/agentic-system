@@ -256,6 +256,11 @@ La corrida de todos los `checks` del producto, sin forma afectada, una sola vez 
 En el código se llama `full_checks`, el nodo y el registro del frontmatter.
 _Avoid_: suite final, gate completo
 
+**Chequeo exigido por el plan**:
+Un nombre de chequeo del CI que los criterios de hecho del issue necesitan en verde sobre la cabeza del pull request. Lo declara el plan (`ci_required`) y es distinto del `ci` del stack. Es condición necesaria de un merge, nunca suficiente: un CI verde que cubre sólo chequeos exigidos por el plan no decide el merge, lo deciden los chequeos locales (ADR-0045, adenda GH-371).
+En el código se llama `ci_required`, `ci_plan_only` y `ci_gate_names`.
+_Avoid_: chequeo declarado (eso es el `ci` del stack), criterio de CI
+
 **Resultado reutilizable**:
 El resultado de un chequeo que pasó, guardado bajo el nombre del chequeo, su comando exacto, el árbol (`HEAD^{tree}`) de un checkout limpio sobre el que corrió y una huella de su entorno (comandos de setup, versión de stage0, presupuesto). Cualquier puerta, de entrega, de merge o de aterrizaje, que pida el mismo chequeo con la misma clave toma ese pase en vez de correrlo de nuevo. Sólo se guardan pases, sobre árbol limpio, sin que el entorno haya derivado desde el setup, y valen 24 h; un fallo nunca se reutiliza, porque puede ser flaky. Lo firma un secreto de la máquina: una entrada sin firma válida es como si no existiera. Una fila de reintento (`rerun: true`) nunca se guarda: el primer intento falló, así que de ese chequeo no queda nada.
 En el código se llama `check_key` y `env_drifted` (dominio, `domain/check_results.py`), `CheckResults`, el port, y `FilesystemCheckResults`, el almacén; una fila reutilizada lleva `reused: true`.

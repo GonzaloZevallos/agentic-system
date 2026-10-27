@@ -19,6 +19,8 @@ def _plan(markdown: str, *ids: str) -> dict:
             {"id": i, "title": i, "brief": "b", "seams": ["x"], "depends_on": []} for i in ids
         ],
         "markdown": markdown,
+        "ci_required": [],
+        "ci_none_reason": "The issue requires no external check.",
     }
 
 
@@ -527,6 +529,8 @@ def _tracker_only(files=0, cost=2.0, checklist=None, **more):
         "subtasks": [],
         "parts": [],
         "tracker_checklist": CHECKLIST if checklist is None else checklist,
+        "ci_required": [],
+        "ci_none_reason": "The work is on the tracker.",
         **more,
     }
 
@@ -598,6 +602,8 @@ def test_a_checklist_item_must_be_one_line():
                     "markdown": "m",
                     "estimated_cost_usd": 1,
                     "estimated_files": 0,
+                    "ci_required": [],
+                    "ci_none_reason": "The work is on the tracker.",
                     "tracker_checklist": [bad],
                 }
             )
@@ -843,3 +849,66 @@ def test_the_plan_schema_does_not_offer_parts_to_a_task_that_is_a_part():
         text = props[name]["description"]
         assert "never" in text and "part of a split" in text, name
     assert "Empty ONLY when" not in props["subtasks"]["description"]
+
+
+# The plan names the checks the issue needs (GH-371): exactly one of a non-empty list with
+# no reason, or an empty list with a one-line reason.
+
+
+def _ci_plan(**more):
+    base = {
+        key: value
+        for key, value in _plan("m", "api").items()
+        if key not in ("ci_required", "ci_none_reason")
+    }
+    return {**base, "estimated_cost_usd": 3, "estimated_files": 4, **more}
+
+
+def test_a_plan_with_checks_and_no_reason_is_valid():
+    data = schemas.validate(TechPlan, _ci_plan(ci_required=["web", "e2e"], ci_none_reason=""), {})
+    assert data["ci_required"] == ["web", "e2e"]
+    assert data["required_paths"] == []
+
+
+def test_a_plan_with_no_checks_and_a_reason_is_valid_and_keeps_its_required_paths():
+    data = schemas.validate(
+        TechPlan,
+        _ci_plan(
+            ci_required=[], ci_none_reason="Docs only.", required_paths=[".agentic/stack.yaml"]
+        ),
+        {},
+    )
+    assert data["ci_none_reason"] == "Docs only."
+    assert data["required_paths"] == [".agentic/stack.yaml"]
+
+
+@pytest.mark.parametrize(
+    ("more", "message"),
+    [
+        ({"ci_required": ["web"], "ci_none_reason": "not needed"}, "must be empty"),
+        ({"ci_required": [], "ci_none_reason": ""}, "one non-empty line"),
+        ({"ci_required": [], "ci_none_reason": "two\nlines"}, "one non-empty line"),
+        ({"ci_required": ["web\ne2e"], "ci_none_reason": ""}, "one non-empty line"),
+        (
+            {"ci_required": [], "ci_none_reason": "x", "required_paths": ["a\nb"]},
+            "one non-empty line",
+        ),
+    ],
+)
+def test_a_plan_that_neither_names_checks_nor_excuses_them_is_refused(more, message):
+    with pytest.raises(ValueError, match=message):
+        schemas.validate(TechPlan, _ci_plan(**more), {})
+
+
+@pytest.mark.parametrize("missing", ["ci_required", "ci_none_reason"])
+def test_a_plan_missing_a_ci_key_is_refused(missing):
+    raw = _ci_plan(ci_required=[], ci_none_reason="Docs only.")
+    del raw[missing]
+    with pytest.raises(ValueError, match=missing):
+        schemas.validate(TechPlan, raw, {})
+
+
+def test_the_plan_schema_requires_the_ci_keys_and_leaves_required_paths_optional():
+    plan = schemas.json_schema(TechPlan, VOCAB)
+    assert {"ci_required", "ci_none_reason"} <= set(plan["required"])
+    assert "required_paths" not in plan["required"]

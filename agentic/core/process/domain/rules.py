@@ -3656,7 +3656,9 @@ class MergeFacts:
     convened, and decides as it always did. `criteria_regressed` (GH-334) is the messages of the
     criteria documents the head pushes past their cap (`application.preflight.criteria_regressed`
     against the merge base): `()` none, which is also what a `MergeFacts` built without it
-    reads, and `None` unreadable.
+    reads, and `None` unreadable. `ci_required` holds the stack's names joined with the plan's
+    (`ci_gate_names`, GH-371) and `ci_plan_only` the plan's that the stack does not declare: a
+    green CI that covers only those never decides `merge`, the local checks do.
     `ci_untrusted` (GH-239) is `None` when `touched_paths` is unknown and `True` when the
     diff touches the CI's own definition (`CI_DEFINITION_PREFIX`): a CI whose definition the
     change itself could have edited proves nothing, so it never decides `merge`.
@@ -3705,6 +3707,33 @@ class MergeFacts:
     perf_verdict: Literal["approved", "returned", "unverified"] | None = None
     perf_head: str | None = None
     criteria_regressed: tuple[str, ...] | None = ()
+    ci_plan_only: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class CiGate:
+    """The check names that gate a merge: `names` the stack's declared ones first, then the
+    plan's, without duplicates; `plan_only` the plan's that the stack does not declare."""
+
+    names: tuple[str, ...]
+    plan_only: tuple[str, ...]
+
+
+def ci_gate_names(declared: tuple[str, ...], plan_required: Sequence[str]) -> CiGate:
+    """The one place the names that gate a merge are decided (GH-371, ADR-0045 addendum):
+    every `MergeFacts.ci_required`, `MergeFacts.ci_plan_only` and the review's CI read takes
+    them from here. The plan's names are joined to the stack's, never replacing them."""
+    names = tuple(dict.fromkeys(declared))
+    plan_only = tuple(name for name in dict.fromkeys(plan_required) if name not in names)
+    return CiGate((*names, *plan_only), plan_only)
+
+
+def required_paths_missing(required: Sequence[str], touched: Sequence[str]) -> tuple[str, ...]:
+    """The plan's `required_paths` when the integrated diff touches none of them, else the
+    empty tuple (also when nothing is required)."""
+    if not required or any(path in touched for path in required):
+        return ()
+    return tuple(required)
 
 
 @dataclass(frozen=True)
@@ -3783,9 +3812,11 @@ def auto_merge_decision(facts: MergeFacts) -> MergeDecision:
     (`criteria_regressed is None`), `criteria_over_cap` (it is not empty), `open_findings_blocking`,
     `open_findings`, `eval_set_unreadable`, `eval_set`, `merge_conflict` (only when
     `conflicts is True`; unread or clean change nothing), `merge_failed`, then, only when the
-    product declares its CI (`ci_required`): `ci_unreadable`, a `wait` for a head that is not the
-    reviewed one, `ci_failed` and
-    `ci_missing`, a green and fresh CI being the `merge` itself (a green stale one goes on);
+    product declares its CI or the plan requires checks (`ci_required`): `ci_unreadable`, a `wait`
+    for a head that is not the reviewed one, `ci_failed` and
+    `ci_missing`, a green and fresh CI being the `merge` itself when it covers a name the stack
+    declares (a green stale one, or one that covers only the plan's names -- `ci_plan_only` --
+    goes on to the checks, GH-371);
     then `checks_failed` (only when the recorded checks cover this head on this master;
     otherwise the next check) and
     `attempts_exhausted`. A CI that cannot be decided yet is a `wait` until
@@ -3929,7 +3960,9 @@ def adr_probe_wanted(facts: MergeFacts) -> bool:
 
 def _ci_gate(facts: MergeFacts) -> MergeDecision | None:
     """The CI's part of `auto_merge_decision`: `None` means a green CI that is not fresh,
-    which goes on to the local checks, as does any green CI whose definition is untrusted."""
+    which goes on to the local checks, as does any green CI whose definition is untrusted and
+    any green CI that covers only names the plan required (`ci_plan_only`): those are a
+    necessary condition of a merge, never a sufficient one (GH-371)."""
     spent = facts.ci_waited_s is not None and facts.ci_waited_s >= ci.CI_WAIT_MAX_S
     if facts.ci_unreadable is not None:
         return MergeDecision("refuse", "ci_unreadable") if spent else MergeDecision("wait", None)
@@ -3942,7 +3975,8 @@ def _ci_gate(facts: MergeFacts) -> MergeDecision | None:
         return MergeDecision("refuse", "ci_failed")
     if verdict.state == "pending":
         return MergeDecision("refuse", "ci_missing") if spent else MergeDecision("wait", None)
-    if facts.ci_fresh is True and facts.ci_untrusted is False:
+    declared = set(facts.ci_required) - set(facts.ci_plan_only)
+    if declared and facts.ci_fresh is True and facts.ci_untrusted is False:
         return MergeDecision("merge", None)
     return None
 
