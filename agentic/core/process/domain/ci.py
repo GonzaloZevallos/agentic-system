@@ -116,6 +116,12 @@ def pending_names(report: CiReport, declared: tuple[str, ...]) -> tuple[str, ...
     )
 
 
+def reported_names(report: CiReport) -> tuple[str, ...]:
+    """The distinct check names `report` carries, in report order: what a refusal for a
+    required name that never reported shows next to the names that were missing (GH-371)."""
+    return tuple(dict.fromkeys(check.name for check in report.checks))
+
+
 def red_on_base(head: CiReport, base: CiReport | None, names: tuple[str, ...]) -> tuple[str, ...]:
     """The `names` that fail on `head` and also fail on `base`, the base branch's latest
     report, in `names` order (GH-371). `()` without a base report: a base that was not read
