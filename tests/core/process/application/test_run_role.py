@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import get_args
+from typing import Any, cast, get_args
 
 import anyio
 import pytest
@@ -43,6 +43,7 @@ from agentic.core.process.domain.roles import (
     reads_by_index,
     render,
 )
+from agentic.core.process.domain.scratch import SpaceReading
 from agentic.core.process.domain.task import FailureReason, apply, delta
 from agentic.shared.configuration import Configuration
 from tests.fakes import ScriptedRunner, classified, delivered, memory_ports, questions, tech_answers
@@ -69,6 +70,7 @@ async def run_pjm(
     task_cap_usd=None,
     resume=None,
     cold_prompt=None,
+    floor_bytes=0,
 ):
     return await run_with_retry(
         PJM,
@@ -85,6 +87,7 @@ async def run_pjm(
         task_cap_usd=task_cap_usd,
         resume=resume,
         cold_prompt=cold_prompt,
+        floor_bytes=floor_bytes,
     )
 
 
@@ -408,7 +411,8 @@ async def test_a_max_turns_cut_with_no_session_appends_the_message_to_the_prompt
 
 
 @pytest.mark.parametrize(
-    "reason", [r for r in get_args(FailureReason) if r not in ("max_turns", "account_limit")]
+    "reason",
+    [r for r in get_args(FailureReason) if r not in ("max_turns", "account_limit", "disk_full")],
 )
 async def test_every_other_failure_reason_keeps_todays_retry_message_byte_for_byte(reason):
     cut = AttemptFailed("something broke", 0.05, session_id="sess-1", reason=reason)
@@ -455,6 +459,70 @@ async def test_a_later_account_limit_after_another_reason_is_still_not_retried()
         await run_pjm(runner)
     assert len(runner.calls) == 2
     assert [f["reason"] for f in caught.value.failures] == ["schema", "account_limit"]
+
+
+FLOOR_BYTES = 2 * 1024**3
+LOW = SpaceReading(free_bytes=1024, free_inodes=10**6)
+AMPLE = SpaceReading(free_bytes=10 * FLOOR_BYTES, free_inodes=10**6)
+
+
+async def test_an_ordinary_failure_stamped_with_low_space_is_disk_full_and_not_retried():
+    # The measured reading, not the text ("no commit on the branch"), makes it a full disk.
+    cut = AttemptFailed("no commit on the branch", 0.0, reason="schema", space=LOW)
+    runner = ScriptedRunner(pjm=[cut, OK])
+    with pytest.raises(RoleFailure) as caught:
+        await run_pjm(runner, floor_bytes=FLOOR_BYTES)
+    assert len(runner.calls) == 1
+    assert [f["reason"] for f in caught.value.failures] == ["disk_full"]
+
+
+async def test_an_enospc_stamped_on_a_failure_with_ample_space_is_disk_full():
+    cut = AttemptFailed("boom", 0.0, reason="sdk", space=AMPLE, enospc=True)
+    runner = ScriptedRunner(pjm=[cut, OK])
+    with pytest.raises(RoleFailure) as caught:
+        await run_pjm(runner, floor_bytes=FLOOR_BYTES)
+    assert len(runner.calls) == 1
+    assert [f["reason"] for f in caught.value.failures] == ["disk_full"]
+
+
+async def test_a_failure_with_ample_space_and_no_enospc_keeps_its_reason_and_its_retry():
+    # Rejected input: a reading above the floor must not narrow anything.
+    cut = AttemptFailed("no commit on the branch", 0.0, reason="schema", space=AMPLE)
+    runner = ScriptedRunner(pjm=[cut, cut])
+    with pytest.raises(RoleFailure) as caught:
+        await run_pjm(runner, floor_bytes=FLOOR_BYTES)
+    assert len(runner.calls) == 2
+    assert [f["reason"] for f in caught.value.failures] == ["schema", "schema"]
+
+
+async def test_a_limit_failure_with_low_space_stays_limit_and_keeps_its_retry():
+    cut = AttemptFailed("over the cap", 0.0, reason="limit", space=LOW)
+    runner = ScriptedRunner(pjm=[cut, cut])
+    with pytest.raises(RoleFailure) as caught:
+        await run_pjm(runner, floor_bytes=FLOOR_BYTES)
+    assert len(runner.calls) == 2
+    assert [f["reason"] for f in caught.value.failures] == ["limit", "limit"]
+
+
+@pytest.mark.parametrize(
+    "cut",
+    [
+        AttemptFailed("no commit on the branch", 0.0, reason="schema", space=LOW),
+        AttemptFailed("boom", 0.0, reason="sdk", space=AMPLE, enospc=True),
+    ],
+    ids=["low space", "enospc"],
+)
+async def test_a_full_disk_pauses_the_task_for_the_poller_and_counts_no_own_failure(cut, tmp_path):
+    cfg = Configuration(product_dir=tmp_path)
+    runner = ScriptedRunner(pjm=[cut, OK])
+    output, patch = await run_role(
+        {"id": "T-1", "title": "t", "description": "d"}, PJM, cfg, memory_ports(runner), product="x"
+    )
+    assert output is None
+    assert patch["escalation_class"] == "failure"
+    assert patch["pause_log"][0] == {"kind": "failure", "value": "disk_full", "section": "PjM"}
+    assert rules.auto_resumable(cast(Any, patch)) == "disk_full"
+    assert rules.needs_a_human(cast(Any, patch))
 
 
 ISSUE_429 = (

@@ -1,6 +1,7 @@
 """The SDK adapter with `query` replaced. No model involved."""
 
 import asyncio
+import errno
 import io
 import os
 import signal
@@ -8,6 +9,7 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import fields as dataclass_fields
 from dataclasses import replace
 from pathlib import Path
@@ -27,14 +29,17 @@ from claude_agent_sdk import (
 )
 
 from agentic.core.process.adapters.claude_sdk import runner as module
+from agentic.core.process.adapters.claude_sdk.hooks import DELIVERY_TOOL
 from agentic.core.process.adapters.claude_sdk.runner import ClaudeSdkRunner, options_for
+from agentic.core.process.adapters.filesystem.scratch import FilesystemScratch
 from agentic.core.process.adapters.shell import ShellReaper
 from agentic.core.process.application.ports import AttemptFailed
 from agentic.core.process.domain import reaping
 from agentic.core.process.domain.denials import denial_for
 from agentic.core.process.domain.roles import DEVELOPER, PJM, ROLES, TECH_LEAD_REVIEWER
+from agentic.core.process.domain.scratch import SpaceReading
 from agentic.shared.environment import RESOURCE_ROLE_SLUG_KEY, RESOURCE_TRACE_ID_KEY
-from tests.fakes import FakeReaper
+from tests.fakes import FakeFreeSpace, FakeReaper
 
 pytestmark = pytest.mark.anyio
 
@@ -1936,3 +1941,319 @@ async def test_a_default_runner_never_stalls_an_attempt_that_keeps_talking(monke
     fake_query(monkeypatch, [INIT, tool_call("t1"), tool_result("t1"), result()])
     raw = await run_once(make_runner(), tmp_path)
     assert raw.session_id == "sess-123"
+
+
+# --- GH-391: every attempt has its own scratch on the disk and its task's evidence folder
+
+
+class DiskScratch:
+    """`Scratch` over a real directory, with the events that matter to the order test:
+    `events` is appended to when the directory is made and when it is removed."""
+
+    def __init__(self, root: Path, events: list[str] | None = None) -> None:
+        self.inner = FilesystemScratch(root)
+        self.events = events if events is not None else []
+
+    @contextmanager
+    def open(self, task_key, kind, token, slug):
+        try:
+            with self.inner.open(task_key, kind, token, slug) as directory:
+                self.events.append("made")
+                try:
+                    yield directory
+                finally:
+                    self.events.append("removing")
+        finally:
+            self.events.append("removed")
+
+    def ensure_kept(self, task_key):
+        return self.inner.ensure_kept(task_key)
+
+
+def scratch_query(monkeypatch, messages, during=None):
+    """A `query` that records the options and runs `during(options)` while the attempt is
+    live, the way the CLI would use the directories it was handed."""
+    seen: list[ClaudeAgentOptions] = []
+
+    async def query(prompt, options):
+        seen.append(options)
+        if during is not None:
+            await during(options)
+        for message in messages:
+            yield message
+
+    monkeypatch.setattr(module, "query", query)
+    return seen
+
+
+async def test_an_attempt_sees_its_scratch_and_its_evidence_folder_and_they_exist_before_it_starts(
+    monkeypatch, tmp_path
+):
+    existed: list[tuple[bool, bool]] = []
+
+    async def during(options):
+        existed.append(
+            (Path(options.env["TMPDIR"]).is_dir(), Path(options.env["TASK_EVIDENCE_DIR"]).is_dir())
+        )
+
+    seen = scratch_query(monkeypatch, [result()], during)
+    runner = make_runner(scratch=DiskScratch(tmp_path / "product"), free_space=FakeFreeSpace())
+    await run_once(runner, tmp_path)
+    env = seen[0].env
+    root = (tmp_path / "product").resolve()
+    scratch_dir, kept = Path(env["TMPDIR"]), Path(env["TASK_EVIDENCE_DIR"])
+    assert scratch_dir.parent == root / ".agentic/tmp/GH-1" and scratch_dir.name.startswith("r-")
+    assert kept == root / ".agentic/kept/GH-1"
+    assert existed == [(True, True)]
+    # The shared environment of the runner is not the attempt's.
+    assert "TMPDIR" not in runner.env and "TASK_EVIDENCE_DIR" not in runner.env
+
+
+@pytest.mark.parametrize("fails", [False, True])
+async def test_the_scratch_and_its_record_are_gone_after_the_attempt_and_the_evidence_stays(
+    monkeypatch, tmp_path, fails
+):
+    async def during(options):
+        (Path(options.env["TMPDIR"]) / "junk").write_text("x")
+        (Path(options.env["TASK_EVIDENCE_DIR"]) / "GH-1.b-home.png").write_text("png")
+
+    seen = scratch_query(monkeypatch, [] if fails else [result()], during)
+    runner = make_runner(scratch=DiskScratch(tmp_path / "product"), free_space=FakeFreeSpace())
+    if fails:
+        with pytest.raises(AttemptFailed):
+            await run_once(runner, tmp_path)
+    else:
+        await run_once(runner, tmp_path)
+    task_scratch = Path(seen[0].env["TMPDIR"]).parent
+    assert not Path(seen[0].env["TMPDIR"]).exists()
+    assert list(task_scratch.iterdir()) == []  # the record went too
+    assert (Path(seen[0].env["TASK_EVIDENCE_DIR"]) / "GH-1.b-home.png").read_text() == "png"
+
+
+async def test_an_attempt_that_is_cancelled_still_has_its_scratch_removed(monkeypatch, tmp_path):
+    async def during(options):
+        raise asyncio.CancelledError
+
+    seen = scratch_query(monkeypatch, [], during)
+    runner = make_runner(scratch=DiskScratch(tmp_path / "product"), free_space=FakeFreeSpace())
+    with pytest.raises(asyncio.CancelledError):
+        await run_once(runner, tmp_path)
+    assert not Path(seen[0].env["TMPDIR"]).exists()
+
+
+async def test_the_guard_of_an_attempt_allows_exactly_its_scratch_and_its_evidence_folder(
+    monkeypatch, tmp_path
+):
+    seen = scratch_query(monkeypatch, [result()])
+    runner = make_runner(scratch=DiskScratch(tmp_path / "product"), free_space=FakeFreeSpace())
+    developer = replace(PJM, tools=("Write",), executes=True)
+    await runner.run_once(
+        developer,
+        "p",
+        system_prompt="s",
+        model="m",
+        json_schema={},
+        cwd=tmp_path / "checkout",
+        owner_task="GH-1",
+    )
+    env = seen[0].env
+    (edit,) = [m for m in seen[0].hooks["PreToolUse"] if m.matcher == "Edit|Write"]
+
+    async def write(path: str) -> bool:
+        payload = {"tool_name": "Write", "tool_input": {"file_path": path, "content": ""}}
+        out = await edit.hooks[0](payload, "t", {"signal": None})
+        return out.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+
+    assert not await write(env["TASK_EVIDENCE_DIR"] + "/x.png")
+    assert not await write(env["TMPDIR"] + "/y")
+    other = Path(env["TASK_EVIDENCE_DIR"]).parent / "GH-2/x.png"
+    assert await write(str(other))
+    assert await write(str(Path(env["TMPDIR"]).parent / "r-other/y"))
+    assert await write(str(Path(env["TMPDIR"]).parents[2] / "worktrees/GH-1.other/x.py"))
+    # With no scratch composed, the guard is the checkout alone.
+    seen = scratch_query(monkeypatch, [result()])
+    await make_runner().run_once(
+        developer,
+        "p",
+        system_prompt="s",
+        model="m",
+        json_schema={},
+        cwd=tmp_path / "checkout",
+        owner_task="GH-1",
+    )
+    assert "TMPDIR" not in seen[0].env and "TASK_EVIDENCE_DIR" not in seen[0].env
+
+
+class LowUntilRemoved:
+    """A `FreeSpace` that reports a full volume until the scratch removal has run, then an
+    ample one: the reading the failure carries tells which came first."""
+
+    LOW = SpaceReading(free_bytes=1000, free_inodes=50)
+
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    def read(self, path: Path) -> SpaceReading:
+        self.events.append(f"read {path}")
+        return FakeFreeSpace.AMPLE if "removed" in self.events else self.LOW
+
+
+async def test_free_space_is_read_after_the_reap_and_before_the_scratch_is_removed(
+    monkeypatch, tmp_path
+):
+    events: list[str] = []
+
+    class RecordingReaper(FakeReaper):
+        def reap_attempt(self, *args):
+            events.append("reap")
+            return super().reap_attempt(*args)
+
+    scratch_query(monkeypatch, [])
+    runner = make_runner(
+        reaper=RecordingReaper(),
+        scratch=DiskScratch(tmp_path / "product", events),
+        free_space=LowUntilRemoved(events),
+    )
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(runner, tmp_path)
+    assert info.value.space == LowUntilRemoved.LOW
+    assert [e.split()[0] for e in events] == ["made", "reap", "read", "read", "removing", "removed"]
+
+
+async def test_the_failure_keeps_the_lower_reading_of_the_scratch_volume_and_of_tmp(
+    monkeypatch, tmp_path
+):
+    scratch_query(monkeypatch, [])
+    ample = FakeFreeSpace.AMPLE
+    space = FakeFreeSpace(
+        ample,
+        by_path={
+            Path("/tmp"): SpaceReading(free_bytes=5, free_inodes=ample.free_inodes),
+            (tmp_path / "product").resolve(): SpaceReading(
+                free_bytes=ample.free_bytes, free_inodes=7
+            ),
+        },
+    )
+    runner = make_runner(scratch=DiskScratch(tmp_path / "product"), free_space=space)
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(runner, tmp_path)
+    assert info.value.space == SpaceReading(free_bytes=5, free_inodes=7)
+    assert info.value.enospc is False
+
+
+async def test_a_successful_attempt_reads_no_free_space(monkeypatch, tmp_path):
+    scratch_query(monkeypatch, [result()])
+    space = FakeFreeSpace()
+    await run_once(
+        make_runner(scratch=DiskScratch(tmp_path / "product"), free_space=space), tmp_path
+    )
+    assert space.asked == []
+
+
+async def test_a_failure_without_a_scratch_composed_carries_no_reading(monkeypatch, tmp_path):
+    scratch_query(monkeypatch, [])
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(make_runner(), tmp_path)
+    assert info.value.space is None and info.value.enospc is False
+
+
+async def test_a_hook_that_raises_enospc_stamps_the_failure(monkeypatch, tmp_path):
+    full = OSError(errno.ENOSPC, "No space left on device")
+
+    class FullPresubmit:
+        timeout_s = 1.0
+        wait_max_s = 0.0
+
+        def __call__(self):
+            raise full
+
+    async def during(options):
+        (gate,) = [m for m in options.hooks["PreToolUse"] if m.matcher == DELIVERY_TOOL]
+        payload = {"tool_name": DELIVERY_TOOL, "tool_input": {}}
+        with pytest.raises(OSError):  # the SDK would answer the CLI with an error
+            await gate.hooks[0](payload, "t", {"signal": None})
+
+    scratch_query(monkeypatch, [result(is_error=True, subtype="error_during_execution")], during)
+    runner = make_runner(scratch=DiskScratch(tmp_path / "product"), free_space=FakeFreeSpace())
+    with pytest.raises(AttemptFailed) as info:
+        await runner.run_once(
+            PJM,
+            "p",
+            system_prompt="s",
+            model="m",
+            json_schema={},
+            cwd=tmp_path,
+            owner_task="GH-1",
+            presubmit=FullPresubmit(),
+        )
+    assert info.value.enospc is True
+
+
+async def test_a_stream_write_that_hits_enospc_stamps_the_failure(monkeypatch, tmp_path):
+    class FullStream(io.StringIO):
+        def write(self, text):
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+    fake_query(monkeypatch, [result()])
+    runner = make_runner(
+        stream=FullStream(), scratch=DiskScratch(tmp_path / "product"), free_space=FakeFreeSpace()
+    )
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(runner, tmp_path)
+    assert info.value.enospc is True
+
+
+async def test_other_errors_never_stamp_enospc_whatever_their_text_says(monkeypatch, tmp_path):
+    class Stream(io.StringIO):
+        def write(self, text):
+            raise OSError(errno.EACCES, "No space left on device")
+
+    fake_query(monkeypatch, [result()])
+    runner = make_runner(stream=Stream(), free_space=FakeFreeSpace())
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(runner, tmp_path)
+    assert info.value.enospc is False
+
+
+async def test_a_scratch_that_cannot_be_created_for_lack_of_space_is_an_attempt_failure(
+    monkeypatch, tmp_path
+):
+    class FullScratch(DiskScratch):
+        @contextmanager
+        def open(self, task_key, kind, token, slug):
+            raise OSError(errno.ENOSPC, "No space left on device")
+            yield  # pragma: no cover
+
+    scratch_query(monkeypatch, [result()])
+    runner = make_runner(scratch=FullScratch(tmp_path / "product"), free_space=FakeFreeSpace())
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(runner, tmp_path)
+    assert info.value.enospc is True
+
+
+async def test_a_scratch_that_fails_for_another_reason_is_not_an_enospc_failure(
+    monkeypatch, tmp_path
+):
+    class DeniedScratch(DiskScratch):
+        @contextmanager
+        def open(self, task_key, kind, token, slug):
+            raise OSError(errno.EACCES, "No space left on device")
+            yield  # pragma: no cover
+
+    scratch_query(monkeypatch, [result()])
+    runner = make_runner(scratch=DeniedScratch(tmp_path / "product"), free_space=FakeFreeSpace())
+    with pytest.raises(OSError) as info:
+        await run_once(runner, tmp_path)
+    assert not isinstance(info.value, AttemptFailed)
+
+
+async def test_an_unreadable_free_space_does_not_replace_the_failure(monkeypatch, tmp_path):
+    class Broken:
+        def read(self, path):
+            raise OSError(errno.EIO, "io")
+
+    scratch_query(monkeypatch, [])
+    runner = make_runner(scratch=DiskScratch(tmp_path / "product"), free_space=Broken())
+    with pytest.raises(AttemptFailed) as info:
+        await run_once(runner, tmp_path)
+    assert info.value.space is None

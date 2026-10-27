@@ -265,7 +265,7 @@ class CheckoutPresubmit:
     def _run_holding_a_share(self, head: str) -> str | None:
         """The witness and the checks, under a share of the machine's cores. `__call__` is
         its only caller; the acquire itself is `_share`, the one place that asks the
-        scheduler (ADR-0069). The time spent waiting for the share is over before any
+        scheduler (ADR-0070). The time spent waiting for the share is over before any
         command starts, so it is never part of a check's timeout."""
         asked_at = datetime.now(UTC).isoformat(timespec="milliseconds")
         with self._share() as grant:

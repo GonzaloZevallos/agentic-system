@@ -20,6 +20,7 @@ from agentic.core.process.application.ports import (
     CheckScheduler,
     Commands,
     FlagVocabulary,
+    FreeSpace,
     Inbox,
     Launcher,
     PerfLock,
@@ -32,6 +33,7 @@ from agentic.core.process.application.ports import (
     RoleRunner,
     RunRegistry,
     SampleApp,
+    Scratch,
     StopFlag,
     TaskDocuments,
     Tracker,
@@ -39,6 +41,7 @@ from agentic.core.process.application.ports import (
 )
 from tests.fakes import (
     FakeCheckScheduler,
+    FakeFreeSpace,
     FakeLauncher,
     FakePerfLock,
     FakePerfRunner,
@@ -53,6 +56,7 @@ from tests.fakes import (
     MemoryPrompts,
     MemoryRunRegistry,
     MemorySampleApp,
+    MemoryScratch,
     MemoryStack,
     MemoryTracker,
     MemoryWorkspace,
@@ -77,6 +81,8 @@ _reaper: ProcessReaper = FakeReaper()
 _perf_runner: PerfRunner = FakePerfRunner()
 _perf_lock: PerfLock = FakePerfLock()
 _check_scheduler: CheckScheduler = FakeCheckScheduler()
+_scratch: Scratch = MemoryScratch()
+_free_space: FreeSpace = FakeFreeSpace()
 _stop_flag: StopFlag = FakeStopFlag()
 
 
@@ -97,6 +103,8 @@ def ports_of_doubles() -> Ports:
         check_scheduler=_check_scheduler,
         limits=RunLimits(),
         check_results=_check_results,
+        scratch=_scratch,
+        free_space=_free_space,
     )
 
 
@@ -120,6 +128,8 @@ COVERED: dict[str, type] = {
     "PerfRunner": FakePerfRunner,
     "PerfLock": FakePerfLock,
     "CheckScheduler": FakeCheckScheduler,
+    "Scratch": MemoryScratch,
+    "FreeSpace": FakeFreeSpace,
     "StopFlag": FakeStopFlag,
 }
 

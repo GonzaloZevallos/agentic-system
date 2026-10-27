@@ -159,7 +159,7 @@ def test_a_failed_comparison_of_trees_is_not_recorded_and_never_raises():
 def test_the_timeout_of_one_call_covers_every_declared_check_and_the_witness():
     handler, _, _, _ = tool(witness="witness")
     # Two checks and the witness, the one rerun each check may take (ADR-0066), and the wait
-    # for a share (ADR-0069).
+    # for a share (ADR-0070).
     assert handler.timeout_s == 30.0 * (2 + 1 + 2) + handler.gate.wait_max_s
 
 
@@ -219,7 +219,7 @@ def test_a_store_that_cannot_be_written_is_reported_and_never_raises():
     assert run.passed and run.unrecorded == "the store could not be written"
 
 
-# -- under a share of the machine's cores (GH-361, ADR-0069) --------------------------
+# -- under a share of the machine's cores (GH-361, ADR-0070) --------------------------
 
 
 def scheduled_tool(commands, scheduler, store=None, check="pytest -n {workers}"):

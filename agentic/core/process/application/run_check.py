@@ -46,7 +46,7 @@ class RunCheck:
         """The longest one call may take: every declared check could be asked for, and the
         witness runs before it (ADR-0065's `MCP_TOOL_TIMEOUT` assumption), plus the one
         rerun the gate's own allowance gives each declared check (ADR-0066), so the harness
-        never kills a call that is inside one, plus the wait for a share (ADR-0069)."""
+        never kills a call that is inside one, plus the wait for a share (ADR-0070)."""
         checks = len(self.gate.checks)
         return self.gate.check_timeout_s * (checks + 1 + checks) + self.gate.wait_max_s
 
@@ -66,7 +66,7 @@ class RunCheck:
         # call left, so nothing is read or written for a tree that is not the head's.
         gate._prepare_reuse(committed and clean)
         # The witness and the check run under a share of the machine's cores, like the gate's
-        # (ADR-0069): without one a `{workers}` in the command would reach the shell as text.
+        # (ADR-0070): without one a `{workers}` in the command would reach the shell as text.
         # Its place in the queue is its own, apart from the delivery gate's.
         with gate._share(fresh=True):
             # The witness runs before the check, in this same call: its agreement is what

@@ -42,6 +42,7 @@ from . import (
     preflight,
     reflect_run,
     release,
+    scratch_sweep,
     tracker_only,
 )
 from . import escalate as escalate_module
@@ -1444,6 +1445,10 @@ def run_once(
     # GH-348: before the launches, so a dependent sees its blocker CLOSED this same round;
     # outside the exclusive section, since it takes no slot. Only the closes are said.
     swept = close_issues.sweep(ports, report_failures=False)
+    # GH-391: first the scratch of closed tasks and dead owners goes, then both volumes are
+    # read, so a round that frees room starts its children in the same round.
+    swept = [*scratch_sweep.sweep(ports, now), *swept]
+    held, hold_lines = scratch_sweep.read_holds(cfg, ports)
     resumes = gather_resumes(ports, now)
     crash_retakes: dict[int, CrashRetake] = {}
     retakes, human_lines = gather_retakes(
@@ -1537,6 +1542,7 @@ def run_once(
             closeness=ranks,
             others_landing=others_landing,
             earlier_land_wait=rules.land_queued_behind(previous, own_key, others),
+            held=held,
         )
         # Right after the decision and before `execute`, so no exit path leaves the previous
         # round's record in place: a round with no waiting land removes it.
@@ -1565,7 +1571,9 @@ def run_once(
         deferral_lines = [deferred_line(d) for d in plan.deferred]
     # Outside the registry's exclusive section: reflecting takes no slot of the cap and
     # touches no task.
-    lines += reflect_lines(cfg, ports, launcher, argv0)
-    lines = [*swept, *human_lines, *merge_lines, *lines, *deferral_lines]
+    # A held round starts no child at all, and the reflect child is one.
+    if not held:
+        lines += reflect_lines(cfg, ports, launcher, argv0)
+    lines = [*swept, *hold_lines, *human_lines, *merge_lines, *lines, *deferral_lines]
     idle = rules.queue_blocked_line(blocker_reports) or "agentic: poll: nothing to do this round"
     return [*notes, *(lines or [idle])]

@@ -71,6 +71,7 @@ narrow what the role may run.
 
 from __future__ import annotations
 
+import errno
 import os
 import re
 import shlex
@@ -165,6 +166,9 @@ class HookActivity:
     def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
         self.in_flight = 0
         self.last_exit: float | None = None
+        # Whether any hook of this attempt raised `OSError(ENOSPC)` (GH-391); the SDK
+        # answers the CLI with an error and the runner would otherwise never know.
+        self.enospc = False
         self._clock = clock
 
     @contextmanager
@@ -198,12 +202,19 @@ def git_denial(
     return _DENIED + reason if reason else None
 
 
-def path_denial(file_path: str, cwd: Path, relative_to: Path | None = None) -> str | None:
-    """Why an Edit or Write of `file_path` may not happen, or None."""
+def path_denial(
+    file_path: str,
+    cwd: Path,
+    relative_to: Path | None = None,
+    allowed: tuple[Path, ...] = (),
+) -> str | None:
+    """Why an Edit or Write of `file_path` may not happen, or None. `allowed` are the
+    directories outside the checkout this attempt may write to (GH-391): its own scratch
+    and its task's evidence folder, nothing wider; empty is the guard as it always was."""
     path = _normal(file_path, relative_to or cwd)
     if ".git" in Path(path).parts:
         return _DENIED + GIT_PATH
-    if not _inside(path, cwd):
+    if not _inside(path, cwd) and not any(_really_inside(path, root) for root in allowed):
         return _DENIED + OUTSIDE_PATH
     return None
 
@@ -252,6 +263,7 @@ def hooks_for(
     forbidden: Sequence[Forbidden] | None = None,
     activity: HookActivity | None = None,
     store: Path | None = None,
+    allowed: tuple[Path, ...] = (),
 ) -> dict[str, list[HookMatcher]]:
     """The hooks of one run: the cage for a role that executes, the schema guard and
     the presubmit sharing one matcher on the delivery tool when either is given, and
@@ -264,13 +276,19 @@ def hooks_for(
     empty is the explicit no-op -- the Edit/Write matcher is installed either way (the
     path cage still applies), and denies no suppression when there is none declared.
     It never fails closed or open on a broken declaration, because a broken one never
-    reaches here (`stack.forbidden` raises at load, in `preflight`)."""
+    reaches here (`stack.forbidden` raises at load, in `preflight`).
+
+    `allowed` are the directories outside the checkout an Edit/Write may reach
+    (`path_denial`); the store's own matcher does not read it, so it denies inside them
+    too. With `activity`, every hook also notes an `OSError(ENOSPC)` it raises there."""
     matchers: list[HookMatcher] = []
     if role.executes:
         matchers += [
             HookMatcher(matcher="Bash", hooks=[_bash(cwd, store)], timeout=GUARD_TIMEOUT_S),
             HookMatcher(
-                matcher="Edit|Write", hooks=[_edit(cwd, forbidden or ())], timeout=GUARD_TIMEOUT_S
+                matcher="Edit|Write",
+                hooks=[_edit(cwd, forbidden or (), allowed)],
+                timeout=GUARD_TIMEOUT_S,
             ),
         ]
         if store is not None:
@@ -301,6 +319,10 @@ def hooks_for(
         hooks["PreToolUse"] = matchers
     if (notice_hook := _turn_notice(role, turns, on_notice)) is not None:
         hooks["PostToolUse"] = [HookMatcher(hooks=[notice_hook], timeout=GUARD_TIMEOUT_S)]
+    if activity is not None:
+        for installed in hooks.values():
+            for matcher in installed:
+                matcher.hooks = [_noting_enospc(hook, activity) for hook in matcher.hooks]
     return hooks
 
 
@@ -349,14 +371,16 @@ def _owner(pid: int) -> Path | None:
     return None if str(target).endswith(" (deleted)") else target
 
 
-def _edit(cwd: Path, forbidden: Sequence[Forbidden]) -> HookCallback:
+def _edit(
+    cwd: Path, forbidden: Sequence[Forbidden], allowed: tuple[Path, ...] = ()
+) -> HookCallback:
     async def hook(
         data: HookInput, tool_use_id: str | None, context: HookContext
     ) -> HookJSONOutput:
         tool_input = _tool_input(data)
         file_path = str(tool_input.get("file_path", ""))
         here = _where(data, cwd)
-        reason = path_denial(file_path, cwd, here)
+        reason = path_denial(file_path, cwd, here, allowed)
         if reason is None and forbidden:
             if "content" in tool_input:  # Write: the whole file replaces what was there
                 target = Path(_normal(file_path, here))
@@ -463,6 +487,23 @@ def _delivery_gate(
         return {}
 
     return hook
+
+
+def _noting_enospc(hook: HookCallback, activity: HookActivity) -> HookCallback:
+    """`hook`, noting on `activity` that it raised `OSError(ENOSPC)` before the error
+    goes on to the SDK, which only tells the CLI and keeps nothing for the runner."""
+
+    async def noting(
+        data: HookInput, tool_use_id: str | None, context: HookContext
+    ) -> HookJSONOutput:
+        try:
+            return await hook(data, tool_use_id, context)
+        except OSError as exc:
+            if exc.errno == errno.ENOSPC:
+                activity.enospc = True
+            raise
+
+    return noting
 
 
 def _deny(reason: str) -> HookJSONOutput:
@@ -625,3 +666,9 @@ def _normal(file_path: str, relative_to: Path) -> str:
 def _inside(path: str, cwd: Path) -> bool:
     root = os.path.normpath(cwd)
     return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def _really_inside(path: str, root: Path) -> bool:
+    """`_inside` for a directory outside the checkout, and again on the real paths: a
+    symlink under it that points elsewhere does not carry the write along."""
+    return _inside(path, root) and _inside(os.path.realpath(path), Path(os.path.realpath(root)))

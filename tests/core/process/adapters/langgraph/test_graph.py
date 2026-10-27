@@ -19,7 +19,11 @@ from agentic import composition
 from agentic.composition import default_ports
 from agentic.core.measurement.adapters.otel import semconv, telemetry
 from agentic.core.process.adapters.filesystem import FilesystemTaskDocuments
-from agentic.core.process.adapters.langgraph.graph import build_graph, configuration_from
+from agentic.core.process.adapters.langgraph.graph import (
+    _PortsPerRun,
+    build_graph,
+    configuration_from,
+)
 from agentic.core.process.adapters.telemetry import NoTelemetry
 from agentic.core.process.application import resume
 from agentic.core.process.application.ports import AttemptFailed
@@ -1770,3 +1774,19 @@ async def test_a_run_stopped_after_its_approved_checked_head_publishes_it_withou
     assert final["pushed_head"]
     assert not final.get("publish_owed")
     assert "publish_owed" not in (documents.load("GH-1") or {})
+
+
+def test_the_ports_of_a_node_are_filed_under_the_task_its_thread_is(tmp_path):
+    """GH-391: the thread id is the task, so a node's checks are bound to it; with no thread
+    there is no task to bind. `_PortsPerRun` is the one place that sees the thread."""
+    bound: list[str] = []
+
+    def for_task(ports, task_key):
+        bound.append(task_key)
+        return ports
+
+    cfg = Configuration(product_dir=tmp_path)
+    shared = _PortsPerRun(lambda cfg: memory_ports(), for_task)
+    shared(cfg, {"configurable": {"thread_id": "GH-7"}})
+    shared(cfg, None)
+    assert bound == ["GH-7"]
