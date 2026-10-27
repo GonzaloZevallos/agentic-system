@@ -1,4 +1,45 @@
+import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
 import pytest
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_configure(config):
+    """A run whose temp directory sits inside a git repository (the system's own runs keep
+    `TMPDIR` under the product's `.agentic/`) makes every `tmp_path` a directory of that
+    repository: `refuse_its_own_checkout` then refuses each graph test, a test that polls
+    for a document the failed run never writes spins until the check times out, and "not a
+    repository" tests find one. The base temp goes outside any repository for such a run;
+    `--basetemp` given on the command line is the caller's and is left alone."""
+    if config.option.basetemp is not None:
+        return
+    here = Path(tempfile.gettempdir())
+    try:
+        inside = (
+            subprocess.run(
+                ["git", "-C", str(here), "rev-parse", "--git-dir"], capture_output=True, timeout=30
+            ).returncode
+            == 0
+        )
+    except (OSError, subprocess.SubprocessError):
+        return
+    if not inside:
+        return
+    root = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "agentic-pytest"
+    root.mkdir(parents=True, exist_ok=True)
+    scratch = Path(tempfile.mkdtemp(prefix="run-", dir=root))
+    config.option.basetemp = scratch
+    config.stash_scratch = scratch
+
+
+def pytest_unconfigure(config):
+    scratch = getattr(config, "stash_scratch", None)
+    if scratch is not None:
+        shutil.rmtree(scratch, ignore_errors=True)
 
 
 @pytest.fixture
