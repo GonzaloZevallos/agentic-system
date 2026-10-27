@@ -7,8 +7,8 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from langgraph.types import Command
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command
 
 from agentic import composition
 from agentic.composition import default_ports
