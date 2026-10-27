@@ -1573,6 +1573,11 @@ class MemoryScratch:
         self.opened: list[tuple[str | None, str, str, str]] = []
         self.live: set[Path] = set()
         self.kept: list[Path] = []
+        # What a sweep sees on the "disk", and every decision it was asked to carry out.
+        self.tasks: list[str] = []
+        self.owners: list[scratch_domain.OwnerEntry] = []
+        self.kept_on_disk: list[tuple[str, datetime]] = []
+        self.swept: list[scratch_domain.SweepDecision] = []
 
     @contextmanager
     def open(self, task_key: str | None, kind: OwnerKind, token: str, slug: str) -> Iterator[Path]:
@@ -1588,6 +1593,22 @@ class MemoryScratch:
         kept = self.root / scratch_domain.kept_path_for(task_key)
         self.kept.append(kept)
         return kept
+
+    def listing(self) -> scratch_domain.ScratchListing:
+        """The `tasks` and `owners` a test put on the "disk" (no disk is read)."""
+        return scratch_domain.ScratchListing(tuple(self.tasks), tuple(self.owners))
+
+    def kept_folders(self) -> list[tuple[str, datetime]]:
+        return list(self.kept_on_disk)
+
+    def sweep(self, decision: scratch_domain.SweepDecision) -> None:
+        """Records the decision and takes what it names off the "disk", as the adapter does."""
+        self.swept.append(decision)
+        self.tasks = [t for t in self.tasks if t not in decision.tasks]
+        self.owners = [o for o in self.owners if o.task not in decision.tasks]
+        gone = {(r.task, r.name) for r in decision.owners if r.directory and r.record}
+        self.owners = [o for o in self.owners if (o.task, o.name) not in gone]
+        self.kept_on_disk = [k for k in self.kept_on_disk if k[0] not in decision.kept]
 
 
 class FakeFreeSpace:

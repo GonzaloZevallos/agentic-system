@@ -23,7 +23,7 @@ from ..domain.presubmit import CheckResult, RerunForm
 from ..domain.reaping import ReapedProcess
 from ..domain.roles import Role
 from ..domain.rules import LandWait, MergeFailure, RunKind, SpendRun, motive
-from ..domain.scratch import OwnerKind, SpaceReading
+from ..domain.scratch import OwnerKind, ScratchListing, SpaceReading, SweepDecision
 from ..domain.stall import ChildActivity
 from ..domain.suppressions import Forbidden
 from ..domain.task import (
@@ -1536,6 +1536,22 @@ class Scratch(Protocol):
     def ensure_kept(self, task_key: str | None) -> Path:
         """The task's evidence folder, `.agentic/kept/<task>/`, created if missing and
         never removed by this port."""
+        ...
+
+    def listing(self) -> ScratchListing:
+        """What is on the disk under `.agentic/tmp/`: each task folder and each owner in
+        it, with the mtimes and the liveness of its record already read (the poller's
+        sweep decides on these facts; it touches no filesystem itself)."""
+        ...
+
+    def kept_folders(self) -> Sequence[tuple[str, datetime]]:
+        """Each `.agentic/kept/<task>/` with its mtime, which stands in for the close time of
+        a task whose document cannot say."""
+        ...
+
+    def sweep(self, decision: SweepDecision) -> None:
+        """Removes what `decision` names: for an owner its directory, then its record. A path
+        already gone is not an error."""
         ...
 
 

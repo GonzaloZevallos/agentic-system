@@ -106,3 +106,82 @@ def test_a_space_reading_is_frozen():
     reading = scratch.SpaceReading(free_bytes=5, free_inodes=7)
     with pytest.raises(AttributeError):
         reading.free_bytes = 1  # type: ignore[misc]
+
+
+NOW = datetime(2026, 10, 27, 12, 0, tzinfo=UTC)
+GRACE = scratch.SCRATCH_ORPHAN_GRACE
+
+
+def _entry(name="c-aaaaaaaa", task="GH-1", directory_age=None, record=None):
+    mtime = None if directory_age is None else NOW - directory_age
+    return scratch.OwnerEntry(task, name, mtime, record)
+
+
+def _record(alive, age=timedelta(0)):
+    return scratch.RecordFact(NOW - age, alive)
+
+
+def _decide(*entries, tasks=("GH-1",), closed=(), kept=()):
+    listing = scratch.ScratchListing(tuple(tasks), tuple(entries))
+    return scratch.sweep_decision(listing, set(closed), list(kept), NOW)
+
+
+def test_the_whole_folder_of_a_closed_task_goes_and_an_open_one_stays():
+    decision = _decide(
+        _entry(task="GH-1", directory_age=timedelta(0), record=_record(True)),
+        _entry(task="GH-2", directory_age=timedelta(0), record=_record(True)),
+        tasks=("GH-1", "GH-2", "GH-3"),
+        closed={"GH-1", "GH-3"},
+    )
+    assert decision.tasks == ("GH-1", "GH-3")
+    assert decision.owners == ()
+
+
+def test_a_dead_owner_loses_its_directory_and_its_record_an_alive_one_keeps_both():
+    dead = _entry("c-dead0000", directory_age=timedelta(0), record=_record(False))
+    alive = _entry("c-live0000", directory_age=timedelta(days=3), record=_record(True))
+    assert _decide(dead, alive).owners == (scratch.Removal("GH-1", "c-dead0000", True, True),)
+
+
+def test_a_dead_record_with_no_directory_is_removed_alone():
+    entry = _entry("r-gone0000", record=_record(False))
+    assert _decide(entry).owners == (scratch.Removal("GH-1", "r-gone0000", False, True),)
+
+
+def test_an_orphan_directory_is_kept_inside_the_grace_and_removed_after_it():
+    young = _entry("c-young000", directory_age=GRACE)
+    old = _entry("c-old00000", directory_age=GRACE + timedelta(seconds=1))
+    assert _decide(young, old).owners == (scratch.Removal("GH-1", "c-old00000", True, False),)
+
+
+def test_a_directory_recreated_after_its_record_was_removed_is_an_orphan_once_old():
+    # The record is gone (the owner removed it last) and a late writer made the directory
+    # again: nothing names an owner, so only the age decides.
+    recreated = _entry("c-again000", directory_age=timedelta(hours=1), record=None)
+    assert _decide(recreated).owners == (scratch.Removal("GH-1", "c-again000", True, False),)
+
+
+def test_an_unreadable_record_counts_as_alive_when_young_and_an_orphan_when_old():
+    young = _entry("c-young000", directory_age=timedelta(0), record=_record(None, GRACE))
+    old = _entry("c-old00000", directory_age=timedelta(0), record=_record(None, GRACE * 2))
+    assert _decide(young, old).owners == (scratch.Removal("GH-1", "c-old00000", True, True),)
+
+
+def test_a_kept_folder_goes_only_once_its_task_closed_longer_ago_than_the_retention():
+    kept = [
+        scratch.KeptFolder("GH-1", NOW - scratch.KEPT_RETENTION),
+        scratch.KeptFolder("GH-2", NOW - scratch.KEPT_RETENTION + timedelta(seconds=1)),
+        scratch.KeptFolder("GH-3", None),
+    ]
+    assert _decide(kept=kept).kept == ("GH-1",)
+
+
+def test_nothing_to_remove_is_a_falsy_decision():
+    assert not _decide(_entry(directory_age=timedelta(0), record=_record(True)))
+    assert _decide(_entry(directory_age=timedelta(days=1)))
+
+
+def test_a_task_key_that_could_name_two_directories_has_no_folder():
+    assert scratch.task_path_for("GH-9") == PurePosixPath(".agentic/tmp/GH-9")
+    with pytest.raises(ValueError):
+        scratch.task_path_for("../x")

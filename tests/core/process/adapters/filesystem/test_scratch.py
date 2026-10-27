@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from agentic.core.process.adapters.filesystem.scratch import FilesystemScratch
-from agentic.core.process.domain.scratch import OwnerRecord
+from agentic.core.process.domain.scratch import OwnerRecord, Removal, ScratchListing, SweepDecision
 
 NOW = datetime(2026, 10, 27, 12, 0, tzinfo=UTC)
 TOKEN = "0123456789abcdef"
@@ -146,3 +146,76 @@ def test_the_default_boot_id_is_the_kernels(tmp_path):
     with FilesystemScratch(tmp_path).open("GH-391", "c", TOKEN, "tests") as directory:
         record = OwnerRecord.from_json(Path(f"{directory}.json").read_text())
     assert record is not None and record.pid == os.getpid()
+
+
+# The sweep's side of the port (GH-391, c-poller-sweep-floor): listing reads facts, `sweep`
+# carries a decision out. The decision itself is the domain's.
+
+
+def _make_owner(product: Path, task: str, name: str, record: str | None) -> Path:
+    directory = product / ".agentic/tmp" / task / name
+    directory.mkdir(parents=True)
+    if record is not None:
+        (product / ".agentic/tmp" / task / f"{name}.json").write_text(record)
+    return directory
+
+
+def _record(pid: int, boot: str = "boot-a") -> str:
+    return OwnerRecord(pid, boot, "tests", "c", NOW).to_json()
+
+
+def test_listing_reports_the_liveness_of_each_record_and_the_unreadable_ones(tmp_path):
+    _make_owner(tmp_path, "GH-1", "c-alive000", _record(os.getpid()))
+    _make_owner(tmp_path, "GH-1", "c-otherboot", _record(os.getpid(), "boot-b"))
+    _make_owner(tmp_path, "GH-1", "c-garbage0", "not json")
+    _make_owner(tmp_path, "GH-1", "c-norecord", None)
+    (tmp_path / ".agentic/tmp/GH-2").mkdir()
+    listing = scratch_at(tmp_path).listing()
+    assert listing.tasks == ("GH-1", "GH-2")
+    seen = {e.name: e for e in listing.owners}
+    assert seen["c-alive000"].record is not None and seen["c-alive000"].record.alive is True
+    assert seen["c-otherboot"].record is not None and seen["c-otherboot"].record.alive is False
+    assert seen["c-garbage0"].record is not None and seen["c-garbage0"].record.alive is None
+    assert seen["c-norecord"].record is None and seen["c-norecord"].directory_mtime is not None
+
+
+def test_listing_an_empty_product_is_empty(tmp_path):
+    assert scratch_at(tmp_path).listing() == ScratchListing((), ())
+    assert scratch_at(tmp_path).kept_folders() == []
+
+
+def test_sweep_removes_what_the_decision_names_and_nothing_else(tmp_path):
+    keep = _make_owner(tmp_path, "GH-1", "c-keep0000", _record(os.getpid()))
+    gone = _make_owner(tmp_path, "GH-1", "c-gone0000", _record(1, "boot-b"))
+    orphan = _make_owner(tmp_path, "GH-1", "c-orphan00", None)
+    closed = _make_owner(tmp_path, "GH-2", "c-closed000", _record(os.getpid()))
+    (tmp_path / ".agentic/kept/GH-2").mkdir(parents=True)
+    (tmp_path / ".agentic/kept/GH-3").mkdir()
+    scratch_at(tmp_path).sweep(
+        SweepDecision(
+            tasks=("GH-2",),
+            owners=(
+                Removal("GH-1", "c-gone0000", True, True),
+                Removal("GH-1", "c-orphan00", True, False),
+            ),
+            kept=("GH-2",),
+        )
+    )
+    assert keep.is_dir() and keep.with_name("c-keep0000.json").is_file()
+    assert not gone.exists() and not gone.with_name("c-gone0000.json").exists()
+    assert not orphan.exists()
+    assert not closed.parent.exists()
+    assert not (tmp_path / ".agentic/kept/GH-2").exists()
+    assert (tmp_path / ".agentic/kept/GH-3").is_dir()
+
+
+def test_sweeping_what_is_already_gone_is_not_an_error(tmp_path):
+    scratch_at(tmp_path).sweep(
+        SweepDecision(("GH-9",), (Removal("GH-1", "c-none0000", True, True),), ("GH-9",))
+    )
+
+
+def test_kept_folders_are_listed_with_their_mtime(tmp_path):
+    (tmp_path / ".agentic/kept/GH-5").mkdir(parents=True)
+    ((task, mtime),) = scratch_at(tmp_path).kept_folders()
+    assert task == "GH-5" and mtime.tzinfo is not None
