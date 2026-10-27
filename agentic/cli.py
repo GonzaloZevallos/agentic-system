@@ -47,6 +47,7 @@ from .core.measurement.adapters.otel.telemetry import InvocationKind
 from .core.measurement.application import dashboards as dashboards_app
 from .core.measurement.domain import (
     evaluation,
+    findings_report,
     playbook_window,
     role_usage,
     scorecard,
@@ -365,6 +366,19 @@ def main() -> None:
         help="the system checkout to resolve a document's own system_commit against "
         "(defaults to the pinned stage0 checkout)",
     )
+    eval_findings = eval_sub.add_parser(
+        "findings",
+        help="where important findings and returns come from, over the task documents "
+        "closed in a window (GH-354); reads documents only",
+    )
+    eval_findings.add_argument("--since", required=True, metavar="DATE", help="first day, ISO")
+    eval_findings.add_argument("--until", required=True, metavar="DATE", help="last day, ISO")
+    eval_findings.add_argument(
+        "--product-dir",
+        "--product",
+        dest="product_dir",
+        help="root of the product repo (AGENTIC_PRODUCT_DIR)",
+    )
     stack = sub.add_parser("stack", help="the product's own stack (ADR-0034)")
     stack_sub = stack.add_subparsers(dest="stack_command", required=True)
     stack_review = stack_sub.add_parser(
@@ -647,6 +661,14 @@ def main() -> None:
                 )
             elif args.eval_command == "score":
                 work = partial(_eval_score, cfg, ports, args.set, args.out)
+            elif args.eval_command == "findings":
+                work = partial(
+                    _eval_findings,
+                    cfg,
+                    ports,
+                    date.fromisoformat(args.since),
+                    date.fromisoformat(args.until),
+                )
             else:
                 work = partial(_eval_compare, cfg, ports, args.frm, args.to, args.system_repo)
         elif args.command == "reflect":
@@ -2609,6 +2631,33 @@ def _print_role_usage(
             f"{slug:<24}{u.runs:>6}{u.turns:>7}{u.input_tokens:>10}{u.cache_read_tokens:>13}"
             f"{u.cache_write_tokens:>13}{u.output_tokens:>10}{u.cost_usd:>11.4f}"
         )
+
+
+async def _eval_findings(cfg: Configuration, ports: Ports, since: date, until: date) -> None:
+    """`agentic eval findings --since --until`: `findings_report` over the product's task
+    documents closed in the window, as Markdown. Reads documents only: no lock, no `gh`, no
+    network, and the window is explicit, so the figure does not move with the day it runs."""
+    try:
+        product = ports.stack.product()
+    except (ValueError, OSError) as exc:
+        raise CannotStart(str(exc)) from exc
+    tasks_dir = cfg.product_dir / task_document.TASKS_SUBDIR
+    documents: list[findings_report.FindingsDocument] = []
+    unreadable = 0
+    for path in sorted(tasks_dir.glob("*.md")) if tasks_dir.is_dir() else []:
+        try:
+            raw = task_document.parse(path.read_text(encoding="utf-8"), path)
+        except (ValueError, OSError, yaml.YAMLError):
+            unreadable += 1
+            continue
+        documents.append(cast(findings_report.FindingsDocument, {"id": path.stem, **raw}))
+    if unreadable:
+        print(f"agentic: {unreadable} document(s) could not be read; excluded")
+    print(
+        findings_report.render(
+            findings_report.build(documents, since, until), product, since, until
+        )
+    )
 
 
 async def _eval_compare(

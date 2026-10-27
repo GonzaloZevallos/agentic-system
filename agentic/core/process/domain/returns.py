@@ -70,7 +70,6 @@ def _moment(text: object) -> datetime | None:
     return moment if moment.tzinfo is not None else moment.replace(tzinfo=UTC)
 
 
-
 def before_pr(entry: Mapping[str, object]) -> bool:
     """Whether a `landing` entry was written before the pull request existed (the pre-PR
     important pass): such an entry says nothing about a pull request."""

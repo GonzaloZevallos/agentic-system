@@ -176,9 +176,14 @@ def _scopes(state: TaskState, rows: list[FindingRecord]) -> dict[tuple[str, str]
     """The scope of every row, fixed ones too: `important_partition` reads open rows only,
     so it is asked about the same rows with their status held open."""
     held: list[FindingRecord] = [{**row, "status": "open"} for row in rows]
-    split = rules.important_partition(
-        TaskState(subtasks=state.get("subtasks", {}), findings=held)
+    probe = TaskState(
+        id=state.get("id", "?"),
+        title=state.get("title", ""),
+        description=state.get("description", ""),
+        subtasks=state.get("subtasks", {}),
+        findings=held,
     )
+    split = rules.important_partition(probe)
     found: dict[tuple[str, str], Scope] = {}
     for owned in split.owned.values():
         for row in owned:
@@ -256,9 +261,7 @@ def _figures(documents: Sequence[FindingsDocument], lines: Sequence[FindingLine]
 
 
 def _fixed_after_pr(document: FindingsDocument) -> bool:
-    return any(
-        e.get("step") == FIX_STEP and not before_pr(e) for e in document.get("landing", [])
-    )
+    return any(e.get("step") == FIX_STEP and not before_pr(e) for e in document.get("landing", []))
 
 
 def _seconds(value: object) -> float | None:
@@ -314,7 +317,9 @@ def render(report: FindingsReport, product: str, since: date, until: date) -> st
         "| Origin | Scope | Category | Lowered | Outcome | Count |",
         "|---|---|---|---|---|---|",
     ]
-    grouped = Counter((x.origin, x.scope, x.category, x.lowered, x.outcome) for x in report.findings)
+    grouped = Counter(
+        (x.origin, x.scope, x.category, x.lowered, x.outcome) for x in report.findings
+    )
     for (origin, scope, category, lowered, outcome), count in sorted(grouped.items()):
         mark = "yes" if lowered else "no"
         out.append(f"| {origin} | {scope} | {category} | {mark} | {outcome} | {count} |")

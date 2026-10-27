@@ -279,11 +279,7 @@ def _returns_by_category(document: Mapping[str, Any]) -> dict[str, float]:
     """The categories of `change_history`, without the landing's own reopens (the same
     rule `metrics.changes_by_category` follows), so the parts sum to `returns` whenever
     the history is complete."""
-    history = (
-        e.get("category")
-        for e in _entries(document.get("change_history"))
-        if is_return(e)
-    )
+    history = (e.get("category") for e in _entries(document.get("change_history")) if is_return(e))
     return _counts(history, "returns")
 
 

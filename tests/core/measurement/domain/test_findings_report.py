@@ -40,6 +40,8 @@ def _review(subtask: str, version: int, started: str) -> dict[str, Any]:
 def _doc(task_id: str = "T-1", **extra: Any) -> Any:
     return {
         "id": task_id,
+        "title": "t",
+        "description": "d",
         "closed_at": "2026-10-20T12:00:00+00:00",
         "delivery_outcome": "merged",
         "subtasks": {"a": {}},
