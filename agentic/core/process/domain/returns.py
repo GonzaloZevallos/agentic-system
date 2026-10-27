@@ -23,8 +23,9 @@ Origin = Literal["owner_review", "integration_review", "landing_review"]
 
 
 def is_return(entry: Mapping[str, object]) -> bool:
-    """Whether `entry` is a real return: it names a pair and the landing did not write it."""
-    return bool(entry.get("pair")) and entry.get("by") != LANDING
+    """Whether `entry` is a real return: the landing did not write it. A legacy entry with no
+    pair is still one, as every reader counted it before this function existed."""
+    return entry.get("by") != LANDING
 
 
 def finding_origin(row: FindingRecord, state: TaskState) -> Origin:

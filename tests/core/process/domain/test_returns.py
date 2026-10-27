@@ -22,9 +22,8 @@ def test_a_review_return_is_a_return():
     assert returns.is_return(entry) is True
 
 
-def test_an_entry_with_no_pair_is_not_a_return():
-    assert returns.is_return({"category": "spec-scope"}) is False
-    assert returns.is_return({"pair": "", "category": "spec-scope"}) is False
+def test_a_legacy_entry_with_no_pair_is_still_a_return():
+    assert returns.is_return({"category": "definition"}) is True
 
 
 # --- finding_origin --------------------------------------------------------------------
