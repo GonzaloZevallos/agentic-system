@@ -159,6 +159,7 @@ def _ports(cfg: Configuration, stop_flag: StopFlag) -> Ports:
     # `Ports` (which reaps on release): a mark is only found by the key it was built with.
     product_key = reaping.product_key(str(cfg.product_dir.resolve()))
     reaper = ShellReaper(product_key, cfg.product_dir / WORKTREES)
+    scratch = FilesystemScratch(cfg.product_dir)
     return Ports(
         # The roles get the configuration the run decided, never the one the human's
         # shell carries: the `AGENTIC_*` of this process are unset for them, which only
@@ -185,13 +186,16 @@ def _ports(cfg: Configuration, stop_flag: StopFlag) -> Ports:
         workspace=GitWorkspace(cfg.product_dir, cfg.git_identity),
         tracker=GhTracker(cfg.product_dir),
         stack=GitStack(cfg.product_dir),
-        commands=ShellCommands(product_key, reaper, stop_flag),
+        # The composition has no task: a port is built per node, not per task, so the
+        # scratch of a check is filed under `_untasked` (`ShellCommands` takes a task key
+        # for a caller that has one).
+        commands=ShellCommands(product_key, reaper, stop_flag, scratch=scratch),
         sample_app=ShellSampleApp(),
         reaper=reaper,
         perf_runner=PerfShellRunner(product_key, reaper),
         perf_lock=FilesystemPerfLock(cfg.perf_lock_path),
         check_results=FilesystemCheckResults(cfg.check_results_dir),
-        scratch=FilesystemScratch(cfg.product_dir),
+        scratch=scratch,
         free_space=StatvfsFreeSpace(),
     )
 
