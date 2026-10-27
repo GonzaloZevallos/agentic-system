@@ -236,3 +236,16 @@ def test_the_checkout_view_has_no_answer_before_a_commit_or_when_git_fails():
     broken = BrokenDiff()
     broken.moved.add(Path("/p"))
     assert checkout_view(broken, Path("/p"), "base", "base")({"a.py"}) is None
+
+
+def test_a_plan_with_no_invariants_still_denies_a_brief_location_that_is_not_in_the_diff():
+    guard = InvariantCoverageGuard(0, View({"a.py": 5}, set()))
+    reason = guard({**BARE, "coverage": ["brief: add the parser -> a.py:1"]})
+    assert reason is not None and "a.py:1" in reason and "not in your diff" in reason
+    assert guard.refusals == 1
+    assert (
+        InvariantCoverageGuard(0, View({"a.py": 5}, {"a.py"}))(
+            {**BARE, "coverage": ["brief: add the parser -> a.py:1"]}
+        )
+        is None
+    )

@@ -105,9 +105,28 @@ de dos clases que una subtarea no puede ver: las de alcance `plan` y las que lev
 revisión de `integration`. Una revisión por subtarea más estricta no las alcanza, y un pase
 dentro de cada subtarea tampoco. El lector `agentic eval findings` separa el origen de cada
 fila (revisión de la dueña, de la integración o re-revisión del aterrizaje) y su alcance
-(`owned`/`plan`/`outside`); es la fuente de esa separación y de las cifras de éxito, que se
-miden con él sobre una ventana fijada y no se citan aquí sin su salida. La cifra gruesa de
-tareas que corrieron `fix_important` mezclaba `outside` con `plan` y no se usa.
+(`owned`/`plan`/`outside`); es la fuente de esa separación y de las cifras de éxito.
+
+Salida de `agentic eval findings --product apostrophe --since 2026-10-13 --until 2026-10-27`
+(100 documentos cerrados en la ventana, ids impresos por el lector; filas `important`, sumadas
+por origen y alcance):
+
+| Origen | `owned` | `plan` | `outside` |
+|---|---|---|---|
+| Revisión de la dueña | 131 | 136 | 2 |
+| Revisión de la integración | 30 | 26 | 2 |
+| Re-revisión del aterrizaje | 15 | 8 | 2 |
+| Total | 176 | 170 | 6 |
+
+Cifras de la misma salida, línea de base "antes": 55 % de los PR abren con importantes
+`owned`/`plan` abiertas; 21 % corren `fix_important` después del PR; mediana de PR abierto a
+merge 1,30 h; mediana de inicio de tarea a merge 8,02 h; 145 devoluciones en 290 subtareas
+(0,50 por subtarea). Casi la mitad de las filas son de alcance `plan` (170 de 352): una subtarea no puede
+corregirlas, y eso es lo que descarta el pase dentro de cada subtarea. Las `owned` de la
+revisión de la dueña se corrigen en su mayoría en la subtarea (`fixed_in_subtask`); las que llegan
+al final son las `plan` y las de integración. La cifra gruesa de tareas que corrieron
+`fix_important` mezclaba `outside` con `plan` y no se usa. La cifra "después" se mide con el
+mismo comando sobre las siguientes 10 tareas de apostrophe bajo el nuevo `bl-*`.
 
 **Qué lleva la entrada.** Una entrada de `landing` con `step: "fix_important"`,
 `refusal: "open_findings"`, `before_pr: true`, `at`, `cost_base` y, si se conoce, `head`. La
