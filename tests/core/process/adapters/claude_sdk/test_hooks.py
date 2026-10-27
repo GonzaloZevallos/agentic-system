@@ -445,7 +445,9 @@ def test_path_denial_allows_the_scratch_and_the_evidence_folder_it_is_given(layo
     for path in (layout.kept / "GH-1.b-home.png", layout.scratch / "y", layout.scratch / "a/b/c"):
         assert hooks.path_denial(str(path), layout.cwd, allowed=layout.allowed) is None
     # Relative to where the call runs, as a path in the checkout is.
-    assert hooks.path_denial("../../tmp/GH-1/r-aaaaaaaa/z", layout.cwd, allowed=layout.allowed) is None
+    assert (
+        hooks.path_denial("../../tmp/GH-1/r-aaaaaaaa/z", layout.cwd, allowed=layout.allowed) is None
+    )
 
 
 @pytest.mark.parametrize(

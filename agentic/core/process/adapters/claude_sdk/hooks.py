@@ -71,6 +71,7 @@ narrow what the role may run.
 
 from __future__ import annotations
 
+import errno
 import os
 import re
 import shlex
@@ -165,6 +166,9 @@ class HookActivity:
     def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
         self.in_flight = 0
         self.last_exit: float | None = None
+        # Whether any hook of this attempt raised `OSError(ENOSPC)` (GH-391); the SDK
+        # answers the CLI with an error and the runner would otherwise never know.
+        self.enospc = False
         self._clock = clock
 
     @contextmanager
@@ -276,7 +280,7 @@ def hooks_for(
 
     `allowed` are the directories outside the checkout an Edit/Write may reach
     (`path_denial`); the store's own matcher does not read it, so it denies inside them
-    too."""
+    too. With `activity`, every hook also notes an `OSError(ENOSPC)` it raises there."""
     matchers: list[HookMatcher] = []
     if role.executes:
         matchers += [
@@ -312,6 +316,10 @@ def hooks_for(
         hooks["PreToolUse"] = matchers
     if (notice_hook := _turn_notice(role, turns, on_notice)) is not None:
         hooks["PostToolUse"] = [HookMatcher(hooks=[notice_hook], timeout=GUARD_TIMEOUT_S)]
+    if activity is not None:
+        for installed in hooks.values():
+            for matcher in installed:
+                matcher.hooks = [_noting_enospc(hook, activity) for hook in matcher.hooks]
     return hooks
 
 
@@ -476,6 +484,23 @@ def _delivery_gate(
         return {}
 
     return hook
+
+
+def _noting_enospc(hook: HookCallback, activity: HookActivity) -> HookCallback:
+    """`hook`, noting on `activity` that it raised `OSError(ENOSPC)` before the error
+    goes on to the SDK, which only tells the CLI and keeps nothing for the runner."""
+
+    async def noting(
+        data: HookInput, tool_use_id: str | None, context: HookContext
+    ) -> HookJSONOutput:
+        try:
+            return await hook(data, tool_use_id, context)
+        except OSError as exc:
+            if exc.errno == errno.ENOSPC:
+                activity.enospc = True
+            raise
+
+    return noting
 
 
 def _deny(reason: str) -> HookJSONOutput:

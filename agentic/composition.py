@@ -159,6 +159,10 @@ def _ports(cfg: Configuration, stop_flag: StopFlag) -> Ports:
     # `Ports` (which reaps on release): a mark is only found by the key it was built with.
     product_key = reaping.product_key(str(cfg.product_dir.resolve()))
     reaper = ShellReaper(product_key, cfg.product_dir / WORKTREES)
+    # One scratch and one reader of free space for the runner (which gives each attempt its
+    # directory) and for `Ports` (GH-391).
+    scratch = FilesystemScratch(cfg.product_dir)
+    free_space = StatvfsFreeSpace()
     return Ports(
         # The roles get the configuration the run decided, never the one the human's
         # shell carries: the `AGENTIC_*` of this process are unset for them, which only
@@ -172,6 +176,8 @@ def _ports(cfg: Configuration, stop_flag: StopFlag) -> Ports:
             product_key=product_key,
             stall_timeout_s=cfg.stall_timeout_s,
             check_results_dir=cfg.check_results_dir,
+            scratch=scratch,
+            free_space=free_space,
         ),
         documents=FilesystemTaskDocuments(
             cfg.product_dir,
@@ -191,8 +197,8 @@ def _ports(cfg: Configuration, stop_flag: StopFlag) -> Ports:
         perf_runner=PerfShellRunner(product_key, reaper),
         perf_lock=FilesystemPerfLock(cfg.perf_lock_path),
         check_results=FilesystemCheckResults(cfg.check_results_dir),
-        scratch=FilesystemScratch(cfg.product_dir),
-        free_space=StatvfsFreeSpace(),
+        scratch=scratch,
+        free_space=free_space,
     )
 
 
