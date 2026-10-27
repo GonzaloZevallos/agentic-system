@@ -562,7 +562,7 @@ USD" para una revisión de stack.
 
 ## Adenda (2026-10-27): las subtareas ya no son un nodo cada una ni van en olas
 
-GH-364. Dos frases de este ADR quedan superadas por el ADR-0067: "un nodo por subtarea,
+GH-364. Dos frases de este ADR quedan superadas por el ADR-0068: "un nodo por subtarea,
 checkpointeado" (el nodo `pipeline` corre ahora un loop propio, y se pierde el checkpoint por
 rama, que reemplazan el documento y `rules.resume_source`) y, en la adenda quinta, "Cuesta una
 barrera por ola" (una subtarea arranca cuando `rules.next_to_start` la habilita, sin esperar

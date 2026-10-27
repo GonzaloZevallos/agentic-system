@@ -2629,7 +2629,7 @@ def _print_parallel_factor(
     """How many Developer sessions ran at once over one baseline's tasks (GH-364): the
     recorded attempts' time over the wall time they occupied, summed over the tasks. One
     line, `n/a` when no run of the baseline carries both timestamps. Not the transcript
-    figure the issue quotes (ADR-0067); nothing is recorded for it."""
+    figure the issue quotes (ADR-0068); nothing is recorded for it."""
     factor = parallel_factor.aggregate({"runs": figures.runs} for _, figures in tasks)
     print(
         f"parallel factor -- {product} / {baseline}: {'n/a' if factor is None else f'{factor:.4f}'}"
