@@ -4,6 +4,7 @@ whatever the siblings are doing. The roles block on an event per subtask (`Block
 so each test says which role of which subtask is still running while another one starts."""
 
 import asyncio
+from pathlib import Path
 
 import pytest
 
@@ -15,6 +16,7 @@ from tests.core.process.adapters.langgraph.test_graph import (
     Fakes,
     MemoryWorkspace,
     compiled,
+    saved,
     script_for,
     technical,
 )
@@ -117,8 +119,9 @@ async def test_a_returned_subtask_restarts_after_the_turn_wrote_the_findings(con
 
     def on_call(key: str) -> None:
         if key == "developer__domain" and runner.began.count(key) == 2:
-            doc = FilesystemTaskDocuments(tmp_path).load("GH-1")
-            seen.append(doc["sections"].get(FINDINGS, ""))
+            seen.append(
+                saved(FilesystemTaskDocuments(tmp_path)).get("sections", {}).get(FINDINGS, "")
+            )
 
     runner.on_call = on_call
     final = await asyncio.wait_for(start(runner, fakes, config), 30)
@@ -138,9 +141,11 @@ async def test_an_escalation_stops_new_starts_drains_the_siblings_and_tells_once
     run = start(runner, fakes, config)
 
     await runner.started("tech_lead_review__api")
-    while runner.began.count("developer__domain") < 2:  # domain fails twice and escalates
+    documents = FilesystemTaskDocuments(Path(config["configurable"]["product_dir"]))
+    while not saved(documents).get("escalated"):  # domain failed twice
         await asyncio.sleep(0.01)
-    await asyncio.sleep(0.2)
+    for _ in range(50):  # let its branch end and the loop fold the escalation in
+        await asyncio.sleep(0)
     runner.release("tech_lead_review__api")  # the sibling in flight is drained, not killed
     final = await asyncio.wait_for(run, 20)
 

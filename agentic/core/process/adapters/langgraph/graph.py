@@ -232,9 +232,12 @@ def _branch_ports(ports_of: PortsOf) -> PortsOf:
     the branch's `configurable`, the only thing a node of the branch graph is handed."""
 
     def ports(cfg: Configuration, config: RunnableConfig | None) -> Ports:
-        base = ports_of(cfg, config)
-        documents = ((config or {}).get("configurable") or {}).get(BRANCH_DOCUMENTS)
-        return base if documents is None else replace(base, documents=documents)
+        configurable = (config or {}).get("configurable") or {}
+        if BRANCH_DOCUMENTS not in configurable:
+            # A branch node run outside the loop would save through the real documents
+            # and erase its sisters' work: refuse instead of falling back.
+            raise RuntimeError(f"a pipeline branch needs the loop's {BRANCH_DOCUMENTS!r}")
+        return replace(ports_of(cfg, config), documents=configurable[BRANCH_DOCUMENTS])
 
     return ports
 
