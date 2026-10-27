@@ -11,7 +11,7 @@ import re
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, NamedTuple, Protocol, assert_never, cast, get_args
+from typing import Any, Literal, NamedTuple, Protocol, assert_never, get_args
 
 from . import adr_numbers, ci, presubmit
 from .copy import copy_location_parts
@@ -2625,7 +2625,7 @@ def integration_increment(
     return "increment"
 
 
-def increment_patch(state: TaskState) -> TaskState:
+def increment_patch(state: TaskState) -> dict[str, Any]:
     """The patch that sends the reviewed unit back to review on an increment: its status is
     `delivered`, and its `reviewed_head` stays the approved head the next review is incremental
     from. The reducer replaces a subtask whole, so the unit goes back with all its keys. Nothing
@@ -2634,7 +2634,8 @@ def increment_patch(state: TaskState) -> TaskState:
     if unit is None:
         raise ValueError("a task with no reviewed unit has no increment to review")
     sub = state["subtasks"][unit]
-    return cast(TaskState, {"subtasks": {unit: {**sub, "status": "delivered"}}})
+    patch: dict[str, Any] = {"subtasks": {unit: {**sub, "status": "delivered"}}}
+    return patch
 
 
 # The poller (issue #137, README.md, 14; ADR-0003's own forward reference: "the poller

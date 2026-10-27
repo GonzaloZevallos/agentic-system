@@ -253,6 +253,18 @@ APPROVED = "a" * 40
 MOVED = "b" * 40
 
 
+def watch_the_reviews(fakes, script, monkeypatch):
+    """The integrated checkout answers `MOVED`, and the order of the review and the push is kept."""
+    monkeypatch.setattr(fakes.workspace, "full_head", lambda path: MOVED)
+    run_once = script.run_once
+
+    async def spy(role, prompt, **kwargs):
+        fakes.workspace.events.append(f"role:{role.slug}")
+        return await run_once(role, prompt, **kwargs)
+
+    monkeypatch.setattr(script, "run_once", spy)
+
+
 def only_the_integration_review(script, fakes, final, commands):
     assert final["status"] == "ready_for_review"
     # Only the integration review ran: no Developer, no other role, and it was incremental.
@@ -262,14 +274,19 @@ def only_the_integration_review(script, fakes, final, commands):
     assert f"from the commit `{APPROVED}`" in review
     assert final["subtasks"]["integration"]["status"] == "approved"
     # The full suite ran on the head the fan-in stamped, before the one push.
-    assert final["full_checks"]["head"] == final["task_head"]
+    assert final["task_head"] == MOVED
+    assert final["full_checks"]["head"] == MOVED
+    # The review covered the increment: the head it records is the moved one, over base H.
+    assert final["subtasks"]["integration"]["reviewed_head"] == MOVED
     assert commands_run(commands) == ["pytest", "ruff", "playwright"]
-    assert fakes.workspace.events.count("push") == 1
+    events = fakes.workspace.events
+    assert events.count("push") == 1
+    assert events.index("role:tech_lead_review") < events.index("push")  # nothing pushed before
     assert final["findings"] == []
 
 
 async def test_an_increment_on_a_tiered_product_is_reviewed_checked_on_its_head_then_delivered(
-    config, tmp_path
+    config, tmp_path, monkeypatch
 ):
     """GH-392: the resume sends only the integration back to an incremental review from the
     approved head; the fan-in stamps `task_head`, and the full suite runs before `deliver`."""
@@ -280,6 +297,7 @@ async def test_an_increment_on_a_tiered_product_is_reviewed_checked_on_its_head_
     graph, fakes, script = build(
         script_for(tech_lead_review=[reviewed("approved")]), stack, commands
     )
+    watch_the_reviews(fakes, script, monkeypatch)
     ports, cfg = increment_world(tmp_path)
     seed = resume.seed_increment("GH-1", cfg, ports)
     r = resume.prepare("GH-1", seed.state, "document", cfg, ports, increment=seed.increment)
@@ -303,6 +321,7 @@ async def test_resume_from_the_document_reviews_the_increment_through_the_cli(
     commands = MemoryCommands()
     stack = MemoryStack(checks=CHECKS, delivery_checks=FAST)
     app, fakes, script = build(script_for(tech_lead_review=[reviewed("approved")]), stack, commands)
+    watch_the_reviews(fakes, script, monkeypatch)
     monkeypatch.setattr(cli, "graph", SimpleNamespace(compile=lambda checkpointer: app))
     monkeypatch.setattr(cli, "_configurable", lambda task_id, log_file: config["configurable"])
     ports, cfg = increment_world(tmp_path)

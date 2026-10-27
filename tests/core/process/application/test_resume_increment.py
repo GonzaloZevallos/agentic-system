@@ -242,9 +242,26 @@ def test_a_merge_that_began_after_the_seed_refuses_the_announce_before_anything_
     seed = resume.seed_increment("GH-12", cfg, ports)
     r = resume.prepare("GH-12", seed.state, "document", cfg, ports, increment=seed.increment)
     ports.workspace.merges_in_progress.add(CHECKOUT)
-    with pytest.raises(ValueError, match="unfinished merge or conflicts"):
+    with pytest.raises(ValueError) as info:
         resume.announce(r, ports)
+    (line,) = lines(str(info.value))
+    assert "unfinished merge or conflicts" in line
     assert ports.workspace.commits == []
+    assert ports.tracker.comments == [] and ports.tracker.unlabeled == []
+
+
+def test_a_commit_that_fails_at_the_announce_keeps_the_prefix_and_says_to_retry(cfg):
+    ports = world()
+    with_checkout(ports, dirty=True)
+    seed = resume.seed_increment("GH-12", cfg, ports)
+    r = resume.prepare("GH-12", seed.state, "document", cfg, ports, increment=seed.increment)
+    ports.workspace.commit_all_error = "index.lock exists"
+    with pytest.raises(ValueError) as info:
+        resume.announce(r, ports)
+    (line,) = lines(str(info.value))
+    assert "could not commit what the stopped run left" in line
+    assert "index.lock exists" in line and "retry the resume" in line
+    assert "reset" not in line and "branch -f" not in line
     assert ports.tracker.comments == [] and ports.tracker.unlabeled == []
 
 

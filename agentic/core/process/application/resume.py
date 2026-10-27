@@ -519,14 +519,17 @@ def _commit_leftovers(r: Resumption, ports: Ports) -> None:
         return
     try:
         if ports.workspace.merge_in_progress(inc.checkout):
-            raise ValueError(_merge_line(inc.checkout))
+            raise _disagree(r.task_id, [_merge_line(inc.checkout)])
         ports.workspace.commit_all(
             inc.checkout, f"{r.task_id}: commit what the stopped run left uncommitted"
         )
     except GitError as failed:
-        raise ValueError(
-            f"could not commit what the stopped run left in `{inc.checkout}` ({failed}): "
-            "retry the resume."
+        raise _disagree(
+            r.task_id,
+            [
+                f"could not commit what the stopped run left in `{inc.checkout}` ({failed}): "
+                "retry the resume."
+            ],
         ) from failed
 
 

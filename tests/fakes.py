@@ -654,6 +654,7 @@ class MemoryWorkspace:
         self.merges_in_progress: set[Path] = set()
         self.merge_in_progress_asks: list[Path] = []
         self.merge_in_progress_error: str | None = None
+        self.commit_all_error: str | None = None
         self.aborted: list[Path] = []
         self.conflict_paths: dict[str, tuple[str, ...]] = {}
         self.refused_branches: set[str] = set()
@@ -925,6 +926,8 @@ class MemoryWorkspace:
         return queue.pop(0) if len(queue) > 1 else queue[0]
 
     def commit_all(self, path: Path, message: str) -> str | None:
+        if self.commit_all_error is not None:
+            raise GitError(self.commit_all_error)
         self.commits.append((path, message))
         return "c1"
 
