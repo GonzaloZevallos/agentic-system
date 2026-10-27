@@ -75,6 +75,15 @@ checks:
 #     command: uv run pytest -m "not llm" --lf --lfnf=none
 #     test_id: "(?m)^FAILED (\\S+)"
 #
+# `check_budgets`: optional (GH-365). The seconds each check may take, by the name it has under
+# `checks`: a positive number. It is compared only by the once-per-task `full_checks` run on
+# the integrated head -- never by the delivery gate or the merge -- so it requires
+# `delivery_checks`. Per check, never per tier: under `parallel_checks` a tier's wall time is
+# not the sum of its checks. A check over its budget is recorded, it blocks nothing.
+#
+# check_budgets:
+#   tests: 600
+#
 # `merge_inert`: optional (ADR-0045, amendment). The globs of the paths none of the checks
 # reads. When master moves, the merge reuses a recorded pass only if everything master gained
 # since matches one of these (never `.agentic/stack.yaml`, `.github/**` or other

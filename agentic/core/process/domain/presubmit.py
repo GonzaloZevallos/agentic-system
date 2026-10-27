@@ -311,6 +311,43 @@ def check_durations(rows: Sequence[CheckResult]) -> dict[str, float]:
     return totals
 
 
+def decided_durations(rows: Sequence[CheckResult]) -> dict[str, float]:
+    """Seconds of the run that decided each passing check, by name (GH-365): the duration of
+    the `final_results` row, when it passed and carries one. `check_durations` answers how long
+    this invocation spent on a check, so it skips a reused row and a rerun; this answers how long
+    the run whose verdict stands took: a flake is its green rerun, and a reused pass is its
+    stored `duration_s`, measured on that same tree. A failed or timed-out check has no entry,
+    and neither has a row without a duration: that is never counted as zero."""
+    return {
+        row["name"]: row["duration_s"]
+        for row in final_results(rows)
+        if row["passed"] and "duration_s" in row
+    }
+
+
+class BudgetBreach(TypedDict):
+    """One check that took longer than its declared budget: a declared name and two numbers,
+    never text taken from a command or a role."""
+
+    name: str
+    duration_s: float
+    budget_s: float
+
+
+def budget_breaches(
+    rows: Sequence[CheckResult], budgets: Mapping[str, float]
+) -> list[BudgetBreach]:
+    """The budgeted checks whose decided duration is strictly above their budget, in the
+    budgets' declared order. A pure verdict of recorded rows and declared budgets; an
+    unbudgeted check never appears."""
+    decided = decided_durations(rows)
+    return [
+        BudgetBreach(name=name, duration_s=decided[name], budget_s=budget)
+        for name, budget in budgets.items()
+        if name in decided and decided[name] > budget
+    ]
+
+
 def refused(reason: str, count: int) -> str:
     """The reason as the model reads it, with how many refusals are left."""
     limit = REFUSALS if count <= REFUSALS else MOVING_REFUSALS

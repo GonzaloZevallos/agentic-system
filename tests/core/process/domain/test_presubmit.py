@@ -628,3 +628,69 @@ def test_the_seconds_column_is_in_the_mode_table_too():
     text = presubmit.checks_markdown("abc123", rows, base="b")
     assert "| Check | Command | Mode | Result | Seconds |" in text
     assert "| `tests` | `cmd` | full | passed | 2.0 |" in text
+
+
+# --- decided_durations and budget_breaches (GH-365) -----------------------------------------
+
+
+def test_decided_durations_reads_the_row_that_decided_each_passing_check():
+    rows = [
+        _timed("tests", 7.0, passed=False),
+        _timed("tests", 3.0, rerun=True),
+        _timed("lint", 1.0),
+    ]
+    assert presubmit.decided_durations(rows) == {"tests": 3.0, "lint": 1.0}
+
+
+def test_decided_durations_keeps_a_reused_pass_with_its_stored_duration():
+    assert presubmit.decided_durations([_reused("tests")]) == {"tests": 99.0}
+
+
+def test_decided_durations_drops_a_failed_check_and_a_row_without_duration():
+    rows = [_timed("tests", 5.0, passed=False), result("lint"), _timed("types", 2.0)]
+    assert presubmit.decided_durations(rows) == {"types": 2.0}
+
+
+def test_decided_durations_differs_from_check_durations_on_the_same_rows():
+    rows = [_timed("tests", 7.0, passed=False), _timed("tests", 3.0, rerun=True), _reused("lint")]
+    assert presubmit.check_durations(rows) == {"tests": 7.0}
+    assert presubmit.decided_durations(rows) == {"tests": 3.0, "lint": 99.0}
+
+
+def test_a_first_green_run_over_budget_breaches_and_one_at_the_budget_does_not():
+    rows = [_timed("tests", 10.5), _timed("lint", 5.0)]
+    assert presubmit.budget_breaches(rows, {"tests": 10.0, "lint": 5.0}) == [
+        {"name": "tests", "duration_s": 10.5, "budget_s": 10.0}
+    ]
+
+
+def test_a_flake_is_judged_on_its_green_rerun_not_on_the_red_first_run():
+    rows = [_timed("tests", 500.0, passed=False), _timed("tests", 4.0, rerun=True)]
+    assert presubmit.budget_breaches(rows, {"tests": 10.0}) == []
+    slow = [_timed("tests", 5.0, passed=False), _timed("tests", 40.0, rerun=True)]
+    assert presubmit.budget_breaches(slow, {"tests": 10.0}) == [
+        {"name": "tests", "duration_s": 40.0, "budget_s": 10.0}
+    ]
+
+
+def test_a_failed_or_timed_out_check_never_breaches():
+    rows = [
+        _timed("tests", 900.0, passed=False, timed_out=True),
+        _timed("lint", 900.0, passed=False),
+    ]
+    assert presubmit.budget_breaches(rows, {"tests": 10.0, "lint": 10.0}) == []
+
+
+def test_a_reused_pass_over_budget_breaches_and_one_without_duration_does_not():
+    assert presubmit.budget_breaches([_reused("tests")], {"tests": 10.0}) == [
+        {"name": "tests", "duration_s": 99.0, "budget_s": 10.0}
+    ]
+    bare = {**result("tests"), "reused": True}
+    assert presubmit.budget_breaches([bare], {"tests": 10.0}) == []
+
+
+def test_an_unbudgeted_check_never_appears_and_breaches_follow_the_budget_order():
+    rows = [_timed("tests", 50.0), _timed("lint", 50.0), _timed("types", 50.0)]
+    found = presubmit.budget_breaches(rows, {"types": 1.0, "tests": 1.0})
+    assert [b["name"] for b in found] == ["types", "tests"]
+    assert presubmit.budget_breaches(rows, {}) == []
