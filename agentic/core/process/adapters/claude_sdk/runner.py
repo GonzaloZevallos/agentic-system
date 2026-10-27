@@ -57,8 +57,8 @@ import os
 import sys
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
-from contextlib import contextmanager, nullcontext
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import IO, Any
@@ -382,7 +382,9 @@ class ClaudeSdkRunner:
             reaped = await self._reap(owner_task, token)
         return replace(raw, reaped=list(reaped)) if reaped else raw
 
-    def _scratch_for(self, owner_task: str, role: Role, token: str) -> Any:
+    def _scratch_for(
+        self, owner_task: str, role: Role, token: str
+    ) -> AbstractContextManager[tuple[Path | None, Path | None]]:
         """The attempt's scratch directory and its task's evidence folder, or `(None,
         None)` when no scratch is composed. The task is the owner task, the root one."""
         if self.scratch is None:
@@ -748,11 +750,13 @@ class ClaudeSdkRunner:
         stream.flush()
 
 
-def _opened(scratch: Scratch, owner_task: str, slug: str, token: str) -> Any:
+def _opened(
+    scratch: Scratch, owner_task: str, slug: str, token: str
+) -> AbstractContextManager[tuple[Path | None, Path | None]]:
     """`scratch.open` for a role attempt, yielding `(directory, evidence folder)`."""
 
     @contextmanager
-    def opened() -> Any:
+    def opened() -> Iterator[tuple[Path, Path]]:
         with scratch.open(owner_task, "r", token, slug) as directory:
             yield directory, scratch.ensure_kept(owner_task)
 
