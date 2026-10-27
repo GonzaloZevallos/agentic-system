@@ -49,14 +49,18 @@ LandingStepKind = Literal[
     "renumber",
     "land_slice",
     "diagnose",
+    "settle",
+    "escalate",
     "none",
 ]
-"""What the landing does about a refusal: `wait` (the next tick decides again), `sync_master`
-(merge the upstream into the task branch), `re_review` (a Tech Lead review of the head),
-`fix` (a Developer pass on `units`), `fix_important` (the one final pass on the task's own
-open `important` findings, GH-294), `rerun` (the CI or the checks, once per head),
-`file_followups_and_land` (file the `outside` findings, then merge), `renumber` (rename the
-ADR whose number master took and rewrite the references inside the branch's own work,
+"""What the landing does about a refusal (`settle` and `escalate`, GH-374, spend no model and
+no pass: `settle` writes the `plan_settled` rows the live PM approval covers, `escalate` asks
+the human once about the `PM: final validation` rows it does not cover). `wait` (the next tick
+decides again), `sync_master` (merge the upstream into the task branch), `re_review` (a Tech
+Lead review of the head), `fix` (a Developer pass on `units`), `fix_important` (the one final
+pass on the task's own open `important` findings, GH-294), `rerun` (the CI or the checks, once
+per head), `file_followups_and_land` (file the `outside` findings, then merge), `renumber`
+(rename the ADR whose number master took and rewrite the references inside the branch's own work,
 GH-229), `land_slice` (GH-297: land the approved units that apply cleanly on master as a
 slice of their own, then go on with the rest; `LandingStep.units` is the slice), `diagnose`
 (the terminal path: the landing diagnoser, then a restart; `restart_why` says why no slice
@@ -91,7 +95,7 @@ def run_kind_of(step: LandingStepKind | None, refusal: rules.MergeRefusal | None
             return "land_checks"
         case "fix_important":
             return "land_model"
-        case "land_slice":
+        case "land_slice" | "settle" | "escalate":
             return "land_checks"
         case _:
             return "land_model"
@@ -218,26 +222,42 @@ def landing_step(
     *,
     important_units: tuple[str, ...] = (),
     slicing: Slice | RestartWhy | Callable[[], SliceInputs] | None = None,
+    ledger_only: bool = False,
+    pending: Sequence[object] = (),
+    escalated: bool = False,
 ) -> LandingStep:
-    """The step for `refusal`. A model pass or a sync past its budget is the exhaustion: the
-    `land_slice` when `slicing` is a `Slice`, else the `diagnose` carrying `slicing` as its
-    `restart_why` (`None`: as before GH-297). A task whose latest diagnosis is `unlandable`
-    has no step left (`none`); one whose diagnosis said `sync` and has not been synced yet
-    (`verdict_sync_due`) gets the `sync_master` whatever the refusal, within the task-wide and
-    unsynced budgets and exempt from the per-sha conflict cap. `blocking_owners` is the units
-    that own the open blocking records (`blocking_owners`); `important_units` the ones the
+    """The step for `refusal`. `ledger_only` (`plan_settlement.ledger_only`), `pending`
+    (`plan_settlement.pending`) and `escalated` (an `escalate` entry for this head and refusal
+    is recorded) are computed by the caller: a ledger-only `open_findings_blocking` is `settle`
+    while `pending` is not empty, then one `escalate`, then `none`; and an exhausted budget under
+    it is that escalation, never a slice or a restart. A model pass or a sync past its budget is
+    the exhaustion: the `land_slice` when `slicing` is a `Slice`, else the `diagnose` carrying
+    `slicing` as its `restart_why` (`None`: as before GH-297). A task whose latest diagnosis is
+    `unlandable` has no step left (`none`); one whose diagnosis said `sync` and has not been
+    synced yet (`verdict_sync_due`) gets the `sync_master` whatever the refusal, within the
+    task-wide and unsynced budgets and exempt from the per-sha conflict cap. `blocking_owners` is
+    the units that own the open blocking records (`blocking_owners`); `important_units` the ones the
     final important pass reopens (`important_owners`); `slicing` is what the exhaustion
     decides a slice from: a ready `slice_or_restart` answer, or a provider of the
     `SliceInputs` that is called, and handed to `slice_or_restart`, only when a budget has run
     out, so a healthy landing reads no git for it. This is the only place `slice_or_restart`
     is called."""
 
+    # Whatever the caller computed, only this refusal is ledger state (invariant: every other
+    # refusal keeps its output).
+    ledger_only = ledger_only and refusal == "open_findings_blocking"
+
     def step(kind: LandingStepKind, units: tuple[str, ...] = ()) -> LandingStep:
         return LandingStep(kind, refusal, units)
+
+    def ask_once() -> LandingStep:
+        return step("none") if escalated else step("escalate")
 
     def exhausted() -> LandingStep:
         """The one place every budget that ran out ends (invariant: nothing else lists
         the conditions of a slice or a restart)."""
+        if ledger_only:
+            return ask_once()
         answer = slice_or_restart(slicing()) if callable(slicing) else slicing
         if isinstance(answer, Slice):
             return step("land_slice", answer.units)
@@ -268,6 +288,8 @@ def landing_step(
         case "not_approved" | "head_not_reviewed":
             return pass_("re_review")
         case "open_findings_blocking":
+            if ledger_only:
+                return step("settle") if pending else ask_once()
             return pass_("fix", blocking_owners)
         case "open_findings":
             if (
@@ -332,13 +354,17 @@ def _verdict_sync(
 
 
 def after_diagnosis(
-    verdict: DiagnosisVerdict | None, spent: LandingSpent, restart_depth: int
+    verdict: DiagnosisVerdict | None,
+    spent: LandingSpent,
+    restart_depth: int,
+    ledger_only: bool = False,
 ) -> Literal["sync_master", "restart", "escalate"]:
     """What a delivered diagnosis leads to, the only place a verdict becomes an action
     (GH-330): `sync_master` for a `sync` verdict while the sha's verdict-sync budget and the
     task-wide and unsynced ones last; otherwise `restart` while `restart_depth` is under
     `RESTART_DEPTH_MAX`, else `escalate`. `unlandable` and a missing verdict (a document
-    written before verdicts) take the second path."""
+    written before verdicts) take the second path. A `ledger_only` refusal (GH-374) never
+    restarts: no code change resolves ledger state, so it escalates."""
     if (
         verdict == VERDICT_SYNC
         and spent.verdict_sync_due
@@ -347,6 +373,8 @@ def after_diagnosis(
         and spent.unsynced_for_upstream < LANDING_UNSYNCED_MAX
     ):
         return "sync_master"
+    if ledger_only:
+        return "escalate"
     return "restart" if restart_depth < RESTART_DEPTH_MAX else "escalate"
 
 

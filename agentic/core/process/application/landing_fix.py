@@ -12,10 +12,18 @@ from contextlib import nullcontext
 from datetime import UTC, datetime
 
 from ..domain import landing as landing_rules
-from ..domain import presubmit, rules
+from ..domain import plan_settlement, presubmit, rules
 from ..domain.copy import copy_location_parts
 from ..domain.roles import LANDING_DIAGNOSER
-from ..domain.task import VERDICT_KEY, ChangeCategory, FindingRecord, TaskState, apply
+from ..domain.task import (
+    VERDICT_KEY,
+    ChangeCategory,
+    EscalationClass,
+    FindingRecord,
+    PlanSettledRow,
+    TaskState,
+    apply,
+)
 from . import escalate, landing_plan, landing_sync, merge
 from .checkouts import task_base
 from .landing_plan import LandingContext
@@ -282,19 +290,80 @@ def _stamp(context: LandingContext, **keys: object) -> None:
     context.ports.documents.record_closure(context.task_id, {"landing": entries})
 
 
-def _escalate(context: LandingContext, reason: str) -> None:
-    """The one way the landing escalates a task: `failure`, with no failure entries in the
-    log (so `rules.auto_resumable` stays false), `needs-human` and the comment."""
+def _escalate(
+    context: LandingContext,
+    reason: str,
+    cls: EscalationClass = "failure",
+    questions: Sequence[str] = (),
+) -> None:
+    """The one way the landing escalates a task: `failure` unless said otherwise, with no
+    failure entries in the log (so `rules.auto_resumable` stays false), `needs-human` and the
+    comment, which lists `questions` for the human when there are any."""
     current = _state(context)
     if current is None:
         return
-    escalated = apply(current, state_from(rules.logged(dict(rules.escalation("failure", reason)))))
+    patch: dict[str, object] = dict(rules.escalation(cls, reason))
+    if questions:
+        patch["questions_for_human"] = list(questions)
+    escalated = apply(current, state_from(rules.logged(patch)))
     context.ports.documents.save(escalated)
     context.ports.tracker.label(context.task_id, escalate.NEEDS_HUMAN)
     context.ports.tracker.comment(
         context.task_id, escalate.comment(escalated, context.cfg, context.ports)
     )
-    context.log(f"agentic: land: {context.task_id}: diagnose: escalated, {reason}")
+    context.log(f"agentic: land: {context.task_id}: {context.step.kind}: escalated, {reason}")
+
+
+def settle(context: LandingContext) -> None:
+    """Writes the `plan_settled` rows the live `PM: final validation` approval covers
+    (`plan_settlement.pending`, the same list the decision read) into the document and
+    resolves the step's entry. Nothing else: no pull request change, no model, no pass."""
+    document = context.ports.documents.load(context.task_id)
+    if document is None:
+        context.log(f"agentic: land: {context.task_id}: settle: no document")
+        return
+    raw = state_from(document)
+    rows: list[PlanSettledRow] = plan_settlement.pending(raw)
+    patch = state_from({"plan_settled": rows})
+    cost = document.get("cost_usd", 0.0)
+    resolved = landing_rules.resolve_open(
+        landing_plan.entries(document),
+        (context.clock or _now)(),
+        cost if isinstance(cost, int | float) else 0.0,
+    )
+    context.ports.documents.save({**apply(raw, patch), "landing": resolved})
+    landing_sync.record_landing(context, resolved)
+    context.log(f"agentic: land: {context.task_id}: settled {len(rows)} PM final row(s)")
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def escalate_ledger(context: LandingContext) -> None:
+    """The one question the landing asks when only `PM: final validation` ledger rows block an
+    approved, green head and no live approval settles them (GH-374): each still-open row as
+    `version: claim`, and the way out. The entry is resolved: it is asked once per head."""
+    raw = _state(context)
+    if raw is None:
+        return
+    rows = [
+        f"{row['version']}: {row['claim']}"
+        for row in rules.open_findings(raw)
+        if row["severity"] == "blocking" and row["scope"] == "plan"
+    ]
+    question = (
+        "These `PM: final validation` acceptance rows are still open on a head that is approved "
+        "and green, and no approval of PM settles them:\n"
+        + "\n".join(f"- {line}" for line in rows)
+        + "\nMerge the pull request by hand, or decide on this issue, as with any escalation."
+    )
+    _escalate(
+        context,
+        f"{len(rows)} PM final validation row(s) block an approved, green head",
+        "questions",
+        [question],
+    )
 
 
 def escalate_failed_diagnosis(context: LandingContext) -> None:
@@ -391,7 +460,8 @@ def diagnose(context: LandingContext) -> None:
     # reason or the Markdown (GH-330).
     stamped = context.ports.documents.load(context.task_id) or {}
     spent = landing_plan.spent(stamped, context.head, None, context.upstream.sha)
-    action = landing_rules.after_diagnosis(verdict, spent, depth)
+    ledger = plan_settlement.ledger_only(context.step.refusal, context.facts, state_from(stamped))
+    action = landing_rules.after_diagnosis(verdict, spent, depth, ledger_only=ledger)
     if action == "sync_master":
         context.log(
             f"agentic: land: {context.task_id}: diagnose: verdict {verdict}, "
