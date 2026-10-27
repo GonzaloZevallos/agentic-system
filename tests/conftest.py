@@ -1,4 +1,23 @@
+import os
+import tempfile
+from pathlib import Path
+
 import pytest
+
+
+def pytest_configure(config):
+    """Pytest's temp dir must not sit inside this repository. Some tests ask whether a
+    directory is a repository, or whether the product is the checkout the code runs from
+    (`RunsOnItsOwnCheckout`); under a worktree-scoped `TMPDIR` every `tmp_path` is, and the
+    graph tests then fail and one of them hangs. Only when no `--basetemp` was given."""
+    if config.option.basetemp is not None:
+        return
+    here = Path(tempfile.gettempdir()).resolve()
+    if not any((parent / ".git").exists() for parent in (here, *here.parents)):
+        return
+    cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    cache.mkdir(parents=True, exist_ok=True)
+    config.option.basetemp = Path(tempfile.mkdtemp(prefix="agentic-pytest-", dir=cache))
 
 
 @pytest.fixture
