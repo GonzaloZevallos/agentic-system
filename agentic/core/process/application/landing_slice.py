@@ -156,6 +156,7 @@ def _checks_pass(
         witness=gate.witness_result if gate is not None else None,
         failed_step=failed_step,
         setup_failure=setup_failure,
+        row_master=master,
     )
     if gate is not None and (flakes := gate.flakes()):
         # ADR-0066: a flake on the slice is recorded like the merge gate's, and never changes

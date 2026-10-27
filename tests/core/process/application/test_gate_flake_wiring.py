@@ -97,7 +97,9 @@ def test_a_flake_at_the_merge_gate_is_recorded_as_a_flake_then_filed_at_the_deci
     result, _ = merge_once(ports, tmp_path)
     document = ports.documents.load("GH-5") or {}
     assert result.kind == "merged"
-    assert {"name": "tests", "passed": True, "flake": True} in document["merge_checks"]["checks"]
+    flaked = {**document["merge_checks"]["checks"][-1]}
+    assert flaked.pop("master") == document["merge_checks"]["master"]
+    assert flaked == {"name": "tests", "passed": True, "flake": True}
     # The head the gate ran on: the checkout of the pull request's head merged with master.
     assert document["flakes"] == [{"check": "tests", "head": "base", "gate": "merge", "tests": []}]
     [(title, body)] = ports.tracker.opened_issues

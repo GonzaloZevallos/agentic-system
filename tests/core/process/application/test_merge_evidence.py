@@ -59,9 +59,16 @@ def test_one_failing_check_is_named_with_its_tail_in_the_record_the_log_and_the_
     assert result == merge.MergeResult("refused", "checks_failed")
     record = _record(ports)
     assert record["passed"] is False and record["failed_step"] == "checks"
+    on = record["master"]  # each entry names the master it ran on
     assert record["checks"] == [
-        {"name": "lint", "passed": True},
-        {"name": "tests", "passed": False, "tail": ["ran", "FAILED x"], "rerun": True},
+        {"name": "lint", "passed": True, "master": on},
+        {
+            "name": "tests",
+            "passed": False,
+            "tail": ["ran", "FAILED x"],
+            "rerun": True,
+            "master": on,
+        },
     ]
     assert any("Failed: tests" in line for line in logged)
     assert "    FAILED x" in logged
@@ -108,7 +115,9 @@ def test_a_conflict_a_setup_step_and_a_worktree_error_each_record_where_it_stopp
     _, logged = _run(setup, tmp_path)
     record = _record(setup)
     assert record["failed_step"] == "setup" and record["passed"] is False
-    assert record["checks"] == [{"name": "install", "passed": False, "tail": ["E404"]}]
+    assert record["checks"] == [
+        {"name": "install", "passed": False, "tail": ["E404"], "master": record["master"]}
+    ]
     assert [command for _, command in setup.commands.ran] == ["npm i"]  # stops at the first
     assert any("Failed at setup: install" in line for line in logged)
 
