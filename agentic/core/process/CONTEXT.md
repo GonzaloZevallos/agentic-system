@@ -401,6 +401,12 @@ La tarea sigue desde donde se pausó. Hace falta una decisión del humano cuando
 _Avoid_: reintento (eso es tras un fallo de rol), relanzar (eso es empezar de cero)
 _Campo_: resume — estándar (LangGraph, Temporal, el Claude Agent SDK)
 
+**Publicación debida**:
+La cabeza aprobada de una tarea que su rama remota todavía no tiene, o que tiene sin que la tarea esté en `ready_for_review`: la integración la aprobó (con niveles, además el chequeo completo pasó sobre ella) y la corrida murió antes de empujarla, de actualizar el pull request o de fijar el estado. La comprueba la reanudación desde el documento, que sólo la declara si la rama de tarea sigue en esa cabeza o difiere de ella únicamente en el documento; la saldan la entrega y nada más: se retoma en `deliver`, sin correr ningún rol. Una lectura de origen que falla no la declara: la reanudación lo dice y no sugiere empezar de cero.
+En el código se llama `publish_owed`, el campo del estado, y `approved_head`, la regla pura que dice cuál es esa cabeza.
+_Avoid_: reentrega, re-push (la entrega ya aprobó; sólo falta publicar)
+_Campo_: sin término de arte
+
 **Corrida interrumpida**:
 Una corrida que terminó sin cierre ni escalado porque su proceso murió. No espera a nadie: se reanuda sin decisión del humano, desde el último estado guardado. El poller la retoma sin decisión del humano cuando su lock es de un arranque anterior (una Parada por apagado incluida), como mucho 3 veces por cada decisión del humano; si murió en el mismo arranque, la deja al humano. Una caída por excepción del grafo en el mismo arranque también la retoma el poller, como mucho 2 veces por versión del sistema y 6 en total por cada decisión del humano; una muerte por señal en el mismo arranque sigue siendo del humano. Lo que el rol en curso hizo y no entregó puede estar en su checkout sin commitear, y su costo en dólares no se conoce: el sistema registra los tokens que vio y lo dice, en vez de callarlo.
 _Avoid_: cortada, abortada, crash (el estado de telemetría, no el concepto)
